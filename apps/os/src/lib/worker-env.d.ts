@@ -1,4 +1,5 @@
 import type { workers } from "../../alchemy.run.ts";
+import type * as CloudflareBindings from "alchemy/Cloudflare";
 
 /**
  * OS deploys as many small workers (alchemy.run.ts `workers`), each with its
@@ -10,19 +11,24 @@ import type { workers } from "../../alchemy.run.ts";
  * can run where a binding is absent must feature-check it.
  */
 type W = typeof workers;
+type NormalizeEnv<T> = {
+  [K in keyof T]: T[K] extends CloudflareBindings.Worker ? Fetcher : T[K];
+};
 
-type AppWorkerEnv = W["app"]["Env"];
-type AgentWorkerEnv = W["agent"]["Env"];
-type IngressWorkerEnv = W["ingress"]["Env"];
-type ItxWorkerEnv = W["itx"]["Env"];
-type McpWorkerEnv = W["mcp"]["Env"];
-type ProjectWorkerEnv = W["project"]["Env"];
-type RepoWorkerEnv = W["repo"]["Env"];
-type SlackAgentWorkerEnv = W["slackAgent"]["Env"];
-type SlackIntegrationWorkerEnv = W["slackIntegration"]["Env"];
-type StreamWorkerEnv = W["stream"]["Env"];
-type WorkspaceWorkerEnv = W["workspace"]["Env"];
-type DebugSubscriberWorkerEnv = Partial<NonNullable<W["debugSubscriber"]>["Env"]>;
+type AppWorkerEnv = NormalizeEnv<CloudflareBindings.InferEnv<W["app"]>>;
+type AgentWorkerEnv = NormalizeEnv<CloudflareBindings.InferEnv<W["agent"]>>;
+type IngressWorkerEnv = NormalizeEnv<CloudflareBindings.InferEnv<W["ingress"]>>;
+type ItxWorkerEnv = NormalizeEnv<CloudflareBindings.InferEnv<W["itx"]>>;
+type McpWorkerEnv = NormalizeEnv<CloudflareBindings.InferEnv<W["mcp"]>>;
+type ProjectWorkerEnv = NormalizeEnv<CloudflareBindings.InferEnv<W["project"]>>;
+type RepoWorkerEnv = NormalizeEnv<CloudflareBindings.InferEnv<W["repo"]>>;
+type SlackAgentWorkerEnv = NormalizeEnv<CloudflareBindings.InferEnv<W["slackAgent"]>>;
+type SlackIntegrationWorkerEnv = NormalizeEnv<CloudflareBindings.InferEnv<W["slackIntegration"]>>;
+type StreamWorkerEnv = NormalizeEnv<CloudflareBindings.InferEnv<W["stream"]>>;
+type WorkspaceWorkerEnv = NormalizeEnv<CloudflareBindings.InferEnv<W["workspace"]>>;
+type DebugSubscriberWorkerEnv = Partial<
+  NormalizeEnv<CloudflareBindings.InferEnv<W["debugSubscriber"]>>
+>;
 
 // An interface (not a type alias) so TypeScript resolves the extends clauses
 // lazily: Env feeds the Durable Object classes' own types, which feed the
@@ -42,7 +48,9 @@ export interface CloudflareEnv
     SlackIntegrationWorkerEnv,
     StreamWorkerEnv,
     WorkspaceWorkerEnv,
-    DebugSubscriberWorkerEnv {}
+    DebugSubscriberWorkerEnv {
+  AI: Ai;
+}
 
 /**
  * The `ctx.exports` surface itx-hosting workers share: the loopback

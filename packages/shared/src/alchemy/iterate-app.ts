@@ -1,48 +1,12 @@
-import { fileURLToPath } from "node:url";
-import alchemy from "alchemy";
-import { Route, TanStackStart, Tunnel, createCloudflareApi } from "alchemy/cloudflare";
-import type { Bindings, WorkerProps } from "alchemy/cloudflare";
+import * as Cloudflare from "alchemy/Cloudflare";
+import { adopt } from "alchemy/AdoptPolicy";
+import { retain } from "alchemy/RemovalPolicy";
+import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import type { BaseAppConfig } from "../config.ts";
-import { slugify } from "../slugify.ts";
-import type { initAlchemy } from "./init.ts";
+import { appConfigBinding, type AlchemyBootstrap } from "./init.ts";
 import { startCloudflared } from "./start-cloudflared.ts";
 
-/**
- * Create a standard Iterate app worker with automatic route derivation, DNS,
- * observability, and dev tunnel support.
- *
- * This is the standard way to deploy an Iterate app to Cloudflare Workers. It
- * wraps alchemy's TanStackStart (https://alchemy.run/providers/cloudflare/tanstack-start/)
- * and adds our conventions on top:
- *
- * **Route + DNS derivation from `baseUrl`:**
- * Each environment (dev, preview, prod) sets `APP_CONFIG_BASE_URL` in Doppler.
- * This function extracts the hostname and creates both a Cloudflare worker route
- * and a proxied CNAME DNS record pointing to the worker. Worker routes alone are
- * not enough — Cloudflare requires a DNS record on the zone for the proxied
- * hostname to resolve. See https://developers.cloudflare.com/workers/configuration/routing/routes/
- *
- * **Dev tunnel (local development):**
- * When running locally with a real `baseUrl` (not localhost), creates a Cloudflare
- * Tunnel so the app is reachable at the configured domain. The tunnel resource
- * auto-creates DNS CNAMEs for each ingress hostname. See
- * https://alchemy.run/providers/cloudflare/tunnel/ and
- * docs/devops-cloudflare-doppler-alchemy-setup.md.
- *
- * **Observability:**
- * All Iterate workers use the same observability config: full sampling with
- * persistent logs and traces. See https://developers.cloudflare.com/workers/observability/
- *
- * ```ts
- * const ctx = await initAlchemy("my-app", AppConfig, process.env);
- * const db = await D1Database("db", { name: `${ctx.workerName}-db` });
- * const { worker, afterFinalize } = await IterateApp(ctx, {
- *   bindings: { DB: db },
- * });
- * await ctx.app.finalize();
- * await afterFinalize();
- * ```
- */
 /**
  * The observability config every Iterate worker uses: full sampling with
  * persistent logs and traces.
@@ -53,345 +17,381 @@ export const ITERATE_WORKER_OBSERVABILITY = {
   headSamplingRate: 1,
   logs: { enabled: true, headSamplingRate: 1, persist: true, invocationLogs: true },
   traces: { enabled: true, persist: true, headSamplingRate: 1 },
-} as const;
+} satisfies Cloudflare.WorkerObservability;
 
-type IterateCtx = Awaited<ReturnType<typeof initAlchemy>>;
+type IterateCtx = AlchemyBootstrap<BaseAppConfig>;
 
-export type IterateAppProps<B extends Bindings> = {
-  /** App-specific worker bindings (D1, DOs, etc). APP_CONFIG is added automatically. */
-  bindings: B;
-  /**
-   * Additional compatibility flags. `nodejs_compat` is always included because
-   * TanStack Start and several shared packages depend on Node-compatible APIs.
-   * Events adds `enable_request_signal` for oRPC abort detection:
-   * https://developers.cloudflare.com/workers/runtime-apis/request/
-   */
+export type IterateWorkerProps<B extends Cloudflare.WorkerBindingProps> = Omit<
+  Cloudflare.WorkerProps<B>,
+  "compatibility" | "dev" | "env" | "observability"
+> & {
+  /** Runtime env/bindings. APP_CONFIG is added automatically unless disabled. */
+  env: B;
+  /** Additional compatibility flags. `nodejs_compat` is included by default. */
   compatibilityFlags?: string[];
   /** Worker compatibility date. Defaults to Alchemy's current Workers runtime date. */
   compatibilityDate?: string;
-  /**
-   * Additional hostnames to route to this worker beyond `baseUrl`.
-   * Each hostname gets a worker route and (for non-local deploys) a DNS CNAME.
-   * For example, os passes `["iterate.app", "*.iterate.app"]` for project
-   * subdomain routing.
-   */
-  extraRouteHostnames?: string[];
-  /** Worker entry module (default: `./src/entry.workerd.ts`). */
-  main?: string;
-  /**
-   * Deployed worker name (default: `ctx.workerName`). Apps fronted by a
-   * router worker (apps/os) give the router the canonical `ctx.workerName`
-   * and pass a distinct name here (e.g. `${ctx.workerName}-app`).
-   */
-  name?: string;
-  /** Override build command (default: `pnpm exec vite build --config vite.config.ts`). */
-  build?: string;
-  /** Override dev command (default: `pnpm exec vite dev --config vite.config.ts`). */
-  dev?: { command: string };
-  /**
-   * Event sources this worker consumes, e.g. queues. Passed through to
-   * alchemy's Worker. https://alchemy.run/providers/cloudflare/queue/
-   */
-  eventSources?: WorkerProps<B>["eventSources"];
-  /** Hook to modify the generated wrangler config for bindings Alchemy does not model yet. */
-  wranglerTransform?: (
-    spec: Record<string, unknown>,
-  ) => Record<string, unknown> | Promise<Record<string, unknown>>;
-  /**
-   * Whether the worker gets a public workers.dev URL (alchemy default when
-   * unset). Apps fronted by a router worker (apps/os) pass `false` so the
-   * app worker is reachable only via service bindings — that unreachability
-   * is what makes the router's internal headers trustworthy.
-   */
-  url?: boolean;
+  /** Override local worker dev settings. Defaults to PORT/HOST in local mode. */
+  dev?: Cloudflare.WorkerProps<B>["dev"];
+  /** Override Iterate's standard observability settings. */
+  observability?: Cloudflare.WorkerObservability;
+  /** Disable automatic APP_CONFIG injection for tiny routing workers. */
+  includeAppConfig?: boolean;
+  /** Disable the default `nodejs_compat` flag. */
+  nodeCompat?: boolean;
 };
 
-export async function IterateApp<B extends Bindings>(ctx: IterateCtx, props: IterateAppProps<B>) {
-  const runtimeConfig = ctx.runtimeConfig as BaseAppConfig;
-  const routeHosts = deriveWorkerRouteHosts(runtimeConfig.baseUrl, props.extraRouteHostnames);
+export type IterateViteWorkerProps<B extends Cloudflare.WorkerBindingProps> = Omit<
+  Cloudflare.ViteProps<B>,
+  "compatibility" | "dev" | "env" | "observability"
+> & {
+  /** Runtime env/bindings. APP_CONFIG is added automatically unless disabled. */
+  env: B;
+  /** Additional compatibility flags. `nodejs_compat` is included by default. */
+  compatibilityFlags?: string[];
+  /** Worker compatibility date. Defaults to Alchemy's current Workers runtime date. */
+  compatibilityDate?: string;
+  /** Override local worker dev settings. Defaults to PORT/HOST in local mode. */
+  dev?: Cloudflare.ViteProps<B>["dev"];
+  /** Override Iterate's standard observability settings. */
+  observability?: Cloudflare.WorkerObservability;
+  /** Disable automatic APP_CONFIG injection for tiny routing workers. */
+  includeAppConfig?: boolean;
+  /** Disable the default `nodejs_compat` flag. */
+  nodeCompat?: boolean;
+};
 
-  const worker = await IterateAppWorker(ctx, props);
-  const { afterFinalize } = await IterateDevTunnel(ctx, {
-    extraRouteHostnames: props.extraRouteHostnames,
-    worker,
-  });
-  await IterateRoutes(ctx, { hostnames: routeHosts, worker });
-
-  console.dir(
-    {
-      config: runtimeConfig,
-      url: runtimeConfig.baseUrl ?? worker.url,
-      workersDevUrl: worker.url,
-    },
-    { depth: null },
-  );
-
-  return { worker, afterFinalize };
+export function iterateCompatibility(input: {
+  compatibilityDate?: string;
+  compatibilityFlags?: string[];
+  nodeCompat?: boolean;
+}): Cloudflare.WorkerProps["compatibility"] {
+  const flags = [
+    ...new Set([
+      ...(input.nodeCompat === false ? [] : ["nodejs_compat"]),
+      ...(input.compatibilityFlags ?? []),
+    ]),
+  ];
+  return {
+    ...(input.compatibilityDate ? { date: input.compatibilityDate } : {}),
+    ...(flags.length > 0 ? { flags } : {}),
+  };
 }
 
-/**
- * The app worker with Iterate conventions — TanStack Start build via Vite,
- * APP_CONFIG injection, standard observability, asset preupload + server
- * bundle pruning — but no routes, DNS, or tunnel. Apps that put a router
- * worker in front (apps/os) call this directly and give the routes to the
- * router via {@link IterateRoutes}.
- */
-export async function IterateAppWorker<B extends Bindings>(
-  ctx: IterateCtx,
-  props: Omit<IterateAppProps<B>, "extraRouteHostnames">,
+export function iterateWorkerEnv<B extends Cloudflare.WorkerBindingProps>(
+  ctx: AlchemyBootstrap,
+  env: B,
+  opts: { includeAppConfig?: boolean } = {},
 ) {
-  const { app, rawRuntimeConfig, slug } = ctx;
-  const workerName = props.name ?? ctx.workerName;
-  const compatibilityFlags = [...new Set(["nodejs_compat", ...(props.compatibilityFlags ?? [])])];
-  const buildCommand = withSequentialCloudflareAssetPreupload({
-    command: props.build ?? "pnpm exec vite build --config vite.config.ts",
-    workerName,
-  });
+  if (opts.includeAppConfig === false) return env;
+  return {
+    ...env,
+    APP_CONFIG: appConfigBinding(ctx),
+  };
+}
 
-  const worker = await TanStackStart(slug, {
-    name: workerName,
-    // adopt: take ownership of existing resources instead of failing on conflict.
-    // Needed because dev/preview workers persist across alchemy runs.
-    // See https://alchemy.run/concepts/resources/ (adopt section)
-    adopt: true,
-    ...(props.url === undefined ? {} : { url: props.url }),
-    compatibilityDate: props.compatibilityDate,
-    compatibilityFlags,
-    eventSources: props.eventSources,
-    bindings: {
-      ...props.bindings,
-      APP_CONFIG: app.local
-        ? JSON.stringify(rawRuntimeConfig, null, 2)
-        : alchemy.secret(JSON.stringify(rawRuntimeConfig, null, 2)),
-    },
-    wrangler: {
-      main: props.main ?? "./src/entry.workerd.ts",
-      transform: props.wranglerTransform,
-    },
-    observability: ITERATE_WORKER_OBSERVABILITY,
-    build: buildCommand,
-    dev: props.dev ?? {
-      // --strictPort: fail loudly if the port is taken instead of vite silently
-      // falling through to the next one. The local-dev flow bakes a specific
-      // port into APP_CONFIG_BASE_URL + the discovery file, so a silent drift
-      // would leave the running server, base URL, and OAuth resource pointing
-      // at different ports.
-      command:
-        "pnpm exec vite dev --config vite.config.ts --strictPort --host ${HOST:-127.0.0.1} --port ${PORT:-5173}",
-    },
-  });
+export function iterateLocalWorkerDev(
+  ctx: Pick<AlchemyBootstrap, "local">,
+): Cloudflare.WorkerProps["dev"] {
+  if (!ctx.local) return undefined;
+  return {
+    host: process.env.HOST ?? "127.0.0.1",
+    port: Number(process.env.PORT ?? 5173),
+    strictPort: true,
+  };
+}
 
-  return worker;
+export function iterateWorkerProps<B extends Cloudflare.WorkerBindingProps>(
+  ctx: AlchemyBootstrap,
+  props: IterateWorkerProps<B>,
+): Cloudflare.WorkerProps<Cloudflare.WorkerBindingProps> {
+  const workerProps = stripIterateWorkerProps(props);
+  return {
+    ...workerProps,
+    compatibility: iterateCompatibility(props),
+    dev: props.dev ?? iterateLocalWorkerDev(ctx),
+    env: iterateWorkerEnv(ctx, props.env, { includeAppConfig: props.includeAppConfig }),
+    observability: props.observability ?? ITERATE_WORKER_OBSERVABILITY,
+  };
+}
+
+export function iterateViteWorkerProps<B extends Cloudflare.WorkerBindingProps>(
+  ctx: AlchemyBootstrap,
+  props: IterateViteWorkerProps<B>,
+): Cloudflare.ViteProps<Cloudflare.WorkerBindingProps> {
+  const workerProps = stripIterateWorkerProps(props);
+  return {
+    ...workerProps,
+    compatibility: iterateCompatibility(props),
+    dev: props.dev ?? iterateLocalWorkerDev(ctx),
+    env: iterateWorkerEnv(ctx, props.env, { includeAppConfig: props.includeAppConfig }),
+    observability: props.observability ?? ITERATE_WORKER_OBSERVABILITY,
+  };
+}
+
+function stripIterateWorkerProps<T extends object>(
+  props: T,
+): Omit<T, "compatibilityDate" | "compatibilityFlags" | "includeAppConfig" | "nodeCompat"> {
+  const cloudflareProps = { ...props } as T & {
+    compatibilityDate?: unknown;
+    compatibilityFlags?: unknown;
+    includeAppConfig?: unknown;
+    nodeCompat?: unknown;
+  };
+  delete cloudflareProps.compatibilityDate;
+  delete cloudflareProps.compatibilityFlags;
+  delete cloudflareProps.includeAppConfig;
+  delete cloudflareProps.nodeCompat;
+  return cloudflareProps as Omit<
+    T,
+    "compatibilityDate" | "compatibilityFlags" | "includeAppConfig" | "nodeCompat"
+  >;
+}
+
+export function IterateWorker<B extends Cloudflare.WorkerBindingProps>(
+  ctx: AlchemyBootstrap,
+  id: string,
+  props: IterateWorkerProps<B>,
+) {
+  return Cloudflare.Worker(id, iterateWorkerProps(ctx, props)).pipe(adopt(true));
 }
 
 /**
- * Dev tunnel: route real domains to the local vite server.
+ * Standard Iterate Vite/TanStack Start worker for Alchemy v2.
  *
- * When baseUrl points to a real domain (not localhost) in local mode, create
- * a Cloudflare Tunnel so the app is reachable at that domain during dev.
- * The Tunnel resource auto-creates DNS CNAMEs for each ingress hostname.
- * https://alchemy.run/providers/cloudflare/tunnel/
- *
- * Returns `afterFinalize` — call it after `app.finalize()` to start
- * cloudflared. No-op (and no tunnel resource) outside tunnel-backed dev.
+ * V2's `Cloudflare.Vite` owns the build and asset upload path. The old v1
+ * `TanStackStart` wrapper, wrangler transforms, custom build command, and
+ * asset preupload workaround intentionally do not survive this helper.
  */
-export async function IterateDevTunnel(
+export function IterateAppWorker<B extends Cloudflare.WorkerBindingProps>(
+  ctx: AlchemyBootstrap,
+  props: IterateViteWorkerProps<B>,
+) {
+  return Cloudflare.Vite("app", iterateViteWorkerProps(ctx, props)).pipe(adopt(true));
+}
+
+export function IterateApp<B extends Cloudflare.WorkerBindingProps>(
+  ctx: IterateCtx,
+  props: IterateViteWorkerProps<B> & { extraRouteHostnames?: string[] },
+) {
+  return Effect.gen(function* () {
+    const workerName = props.name ?? ctx.workerName;
+    const worker = yield* IterateAppWorker(ctx, props);
+    const routeHosts = deriveWorkerRouteHosts(ctx.runtimeConfig.baseUrl, props.extraRouteHostnames);
+    yield* IterateRoutes(ctx, { hostnames: routeHosts, workerName });
+    const tunnel = yield* IterateDevTunnel(ctx, {
+      extraRouteHostnames: props.extraRouteHostnames,
+      targetPort: Number(process.env.PORT ?? 5173),
+    });
+
+    yield* Effect.sync(() => {
+      console.dir(
+        {
+          config: ctx.runtimeConfig,
+          url: ctx.runtimeConfig.baseUrl,
+          workerName,
+        },
+        { depth: null },
+      );
+    });
+
+    return { afterDeploy: tunnel.afterDeploy, worker };
+  });
+}
+
+/**
+ * Dev tunnel: route real domains to the local dev server.
+ *
+ * In v2 this is an Effect helper that declares a `Cloudflare.Tunnel` resource
+ * with `retain(true)` so dev tunnels survive stack destroys and keep DNS
+ * stable. Call the returned `afterDeploy` after the stack has been applied to
+ * start the long-running `cloudflared` connector.
+ */
+export function IterateDevTunnel(
   ctx: IterateCtx,
   props: {
+    baseUrl?: string;
     extraRouteHostnames?: string[];
-    /** The locally-served worker the tunnel points at (its url carries the vite port). */
-    worker: { url?: string };
-  },
+    targetOrigin?: string;
+    targetPort?: number;
+  } = {},
 ) {
-  const { app, slug } = ctx;
-  const runtimeConfig = ctx.runtimeConfig as BaseAppConfig;
-  const { worker } = props;
+  return Effect.gen(function* () {
+    const baseUrl = props.baseUrl ?? ctx.runtimeConfig.baseUrl;
+    const baseUrlHostname = baseUrl ? new URL(baseUrl).hostname : undefined;
+    const targetPort = props.targetPort ?? Number(process.env.PORT ?? 5173);
+    const targetOrigin = props.targetOrigin ?? `http://localhost:${targetPort}`;
 
-  let tunnelToken: string | undefined;
-  let tunnelVitePort: number | undefined;
-
-  const baseUrlHostname = runtimeConfig.baseUrl
-    ? new URL(runtimeConfig.baseUrl).hostname
-    : undefined;
-  // `*.localhost` resolves to loopback in every browser (RFC 6761) — those
-  // base URLs are fully local and never need a tunnel.
-  const baseUrlIsLoopback =
-    !!baseUrlHostname &&
-    (baseUrlHostname === "localhost" ||
-      baseUrlHostname.endsWith(".localhost") ||
-      baseUrlHostname === "127.0.0.1" ||
-      baseUrlHostname === "::1");
-
-  if (app.local && baseUrlHostname && !baseUrlIsLoopback && worker.url) {
-    tunnelVitePort = Number(new URL(worker.url).port || "5173");
+    if (!ctx.local || !baseUrlHostname || isLoopbackHostname(baseUrlHostname)) {
+      return { afterDeploy: async () => {} };
+    }
 
     const tunnelExtraHosts = (props.extraRouteHostnames ?? []).filter(
       (hostname) => hostname !== baseUrlHostname,
     );
 
-    console.log(
-      `Creating dev tunnel: ${[baseUrlHostname, ...tunnelExtraHosts].join(", ")} -> localhost:${tunnelVitePort}`,
-    );
+    yield* Effect.sync(() => {
+      console.log(
+        `Creating dev tunnel: ${[baseUrlHostname, ...tunnelExtraHosts].join(", ")} -> ${targetOrigin}`,
+      );
+    });
 
-    const tunnel = await Tunnel(`dev-tunnel-${app.stage}`, {
-      name: `dev-${app.stage}-${slug}`,
-      adopt: true,
-      // Don't auto-delete dev tunnels — they persist across sessions so
-      // DNS records stay stable and cloudflared reconnects instantly.
-      delete: false,
+    const tunnel = yield* Cloudflare.Tunnel(`dev-tunnel-${ctx.stage}`, {
+      name: `dev-${ctx.stage}-${ctx.slug}`,
+      configSrc: "cloudflare",
       ingress: [
-        { hostname: baseUrlHostname, service: `http://localhost:${tunnelVitePort}` },
-        ...tunnelExtraHosts.map((hostname) => ({
-          hostname,
-          service: `http://localhost:${tunnelVitePort}`,
-        })),
-        // Catch-all rule required by the Cloudflare tunnel API.
-        { service: "http_status:404" as const },
+        { hostname: baseUrlHostname, service: targetOrigin },
+        ...tunnelExtraHosts.map((hostname) => ({ hostname, service: targetOrigin })),
+        { service: "http_status:404" },
       ],
+    }).pipe(adopt(true), retain(true));
+
+    const tunnelId = yield* tunnel.tunnelId;
+    const tunnelToken = yield* tunnel.token;
+
+    yield* Effect.promise(async () => {
+      const cloudflareApi = createCloudflareApi();
+      await Promise.all(
+        tunnelExtraHosts
+          .filter((hostname) => hostname.startsWith("*."))
+          .map(async (hostname) => {
+            const { zoneId } = await findActiveZoneForHostname(cloudflareApi, hostname);
+            await ensureDevTunnelWildcardDnsRecord({
+              cloudflareApi,
+              zoneId,
+              name: hostname,
+              target: `${tunnelId}.cfargotunnel.com`,
+              comment: `Managed by ${ctx.slug} dev tunnel (${ctx.stage}).`,
+            });
+          }),
+      );
     });
 
-    const cloudflareApi = await createCloudflareApi({});
-    await Promise.all(
-      tunnelExtraHosts
-        .filter((hostname) => hostname.startsWith("*."))
-        .map(async (hostname) => {
-          const { zoneId } = await findActiveZoneForHostname(cloudflareApi, hostname);
-          await ensureDevTunnelWildcardDnsRecord({
-            cloudflareApi,
-            zoneId,
-            name: hostname,
-            target: `${tunnel.tunnelId}.cfargotunnel.com`,
-            comment: `Managed by ${slug} dev tunnel (${app.stage}).`,
-          });
-        }),
-    );
-
-    tunnelToken = tunnel.token.unencrypted;
-  }
-
-  /** Call after `app.finalize()` to start cloudflared. No-op when no tunnel is active. */
-  async function afterFinalize() {
-    if (!tunnelToken || !tunnelVitePort) return;
-    await startCloudflared({
-      tunnelToken,
-      vitePort: tunnelVitePort,
-      displayUrl: runtimeConfig.baseUrl ?? `localhost:${tunnelVitePort}`,
-    });
-  }
-
-  return { afterFinalize };
+    return {
+      afterDeploy: async () => {
+        await startCloudflared({
+          tunnelToken: Redacted.value(tunnelToken),
+          vitePort: targetPort,
+          displayUrl: baseUrl ?? targetOrigin,
+        });
+      },
+    };
+  });
 }
 
 /**
  * Routes + DNS for a deployed worker.
  *
- * Worker routes tell Cloudflare "send requests matching this pattern to this
- * worker", but the hostname still needs a proxied DNS record. We create
- * routes only after the worker script is uploaded and visible; Cloudflare
- * rejects route creation for scripts that do not exist yet. We then create
- * originless dummy A records so Cloudflare can terminate DNS/TLS and invoke
- * the route without trying to resolve the worker's workers.dev hostname as
- * an origin. No-op in local mode.
- * https://developers.cloudflare.com/workers/configuration/routing/routes/#subdomains-must-have-a-dns-record
- * https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/get-started/hostname-routing/
+ * Alchemy v2 has `Worker.domain` for custom hostnames, but OS still needs
+ * Cloudflare Worker route patterns plus proxied DNS records. This helper keeps
+ * that custom API behavior in deploy-space as an Effect, outside Worker
+ * runtime code.
  */
-export async function IterateRoutes(
-  ctx: IterateCtx,
+export function IterateRoutes(
+  ctx: Pick<AlchemyBootstrap, "local" | "slug" | "stage">,
   props: {
     hostnames: string[];
-    /** The worker the routes point at (an alchemy Worker resource). */
-    worker: { name: string; url?: string };
+    workerName: string;
   },
 ) {
-  const { app, slug } = ctx;
-  const { worker } = props;
-  const routeHosts = props.hostnames;
+  return Effect.promise(async () => {
+    if (ctx.local || props.hostnames.length === 0) return;
 
-  if (!app.local && routeHosts.length > 0) {
-    const cloudflareApi = await createCloudflareApi({});
-
+    const cloudflareApi = createCloudflareApi();
     await waitForCloudflareWorkerScript({
       cloudflareApi,
-      workerName: worker.name,
+      workerName: props.workerName,
     });
 
     const routeZoneIds = new Map<string, string>();
-    for (const hostname of routeHosts) {
+    for (const hostname of props.hostnames) {
       const { zoneId } = await findActiveZoneForHostname(cloudflareApi, hostname);
       routeZoneIds.set(hostname, zoneId);
 
       await retryCloudflareWorkerRouteCreation(() =>
-        Route(routeResourceIdForHostname(hostname), {
+        ensureCloudflareWorkerRoute({
+          cloudflareApi,
           pattern: `${hostname}/*`,
-          script: worker.name,
-          adopt: true,
+          script: props.workerName,
           zoneId,
         }),
       );
     }
 
-    const dnsRouteHosts = routeHosts.filter(shouldCreateDnsRecordForRouteHostname);
+    const dnsRouteHosts = props.hostnames.filter(shouldCreateDnsRecordForRouteHostname);
     await Promise.all(
       dnsRouteHosts.map(async (hostname) => {
         const zoneId =
           routeZoneIds.get(hostname) ??
           (await findActiveZoneForHostname(cloudflareApi, hostname)).zoneId;
-        const record = {
-          type: "A" as const,
-          name: hostname,
-          content: "192.0.2.1",
-          proxied: true,
-          ttl: 1,
-          comment: `Managed by ${slug} alchemy (${app.stage}).`,
-        };
-
         await ensureCloudflareDnsRecord({
           cloudflareApi,
-          record,
+          record: {
+            type: "A",
+            name: hostname,
+            content: "192.0.2.1",
+            proxied: true,
+            ttl: 1,
+            comment: `Managed by ${ctx.slug} alchemy (${ctx.stage}).`,
+          },
           zoneId,
         });
       }),
     );
-  }
+  });
 }
 
 /**
  * Ensure proxied originless DNS records exist for worker-route hostnames.
- *
- * Worker routes only fire when the hostname has a proxied DNS record on the
- * zone. IterateApp does this automatically from `baseUrl`; apps that declare
- * routes directly (apps/auth via WORKER_ROUTES) call this after deploy so new
- * hostnames like auth.iterate-preview-N.com resolve without manual DNS work.
  */
-export async function ensureProxiedDnsForHostnames(input: {
+export function ensureProxiedDnsForHostnames(input: {
   hostnames: readonly string[];
   comment: string;
 }) {
-  if (input.hostnames.length === 0) return;
-  const cloudflareApi = await createCloudflareApi({});
-  await Promise.all(
-    input.hostnames.map(async (hostname) => {
-      const { zoneId } = await findActiveZoneForHostname(cloudflareApi, hostname);
-      await ensureCloudflareDnsRecord({
-        cloudflareApi,
-        record: {
-          type: "A" as const,
-          name: hostname,
-          content: "192.0.2.1",
-          proxied: true,
-          ttl: 1,
-          comment: input.comment,
-        },
-        zoneId,
-      });
-    }),
-  );
+  return Effect.promise(async () => {
+    if (input.hostnames.length === 0) return;
+    const cloudflareApi = createCloudflareApi();
+    await Promise.all(
+      input.hostnames.map(async (hostname) => {
+        const { zoneId } = await findActiveZoneForHostname(cloudflareApi, hostname);
+        await ensureCloudflareDnsRecord({
+          cloudflareApi,
+          record: {
+            type: "A",
+            name: hostname,
+            content: "192.0.2.1",
+            proxied: true,
+            ttl: 1,
+            comment: input.comment,
+          },
+          zoneId,
+        });
+      }),
+    );
+  });
 }
 
-function routeResourceIdForHostname(hostname: string) {
-  return hostname.startsWith("*.")
-    ? `route-wildcard-${slugify(hostname.slice(2))}`
-    : `route-${slugify(hostname)}`;
+/**
+ * Derive the set of Cloudflare worker route hostnames from the app's `baseUrl`
+ * and any extra hostnames.
+ */
+export function deriveWorkerRouteHosts(
+  baseUrl: string | undefined,
+  extraRouteHostnames: string[] = [],
+) {
+  const baseUrlHostname = baseUrl ? new URL(baseUrl).hostname : undefined;
+  return [
+    ...new Set([...(baseUrlHostname ? [baseUrlHostname] : []), ...extraRouteHostnames]),
+  ].filter((hostname) => !hostname.endsWith(".workers.dev"));
+}
+
+function isLoopbackHostname(hostname: string) {
+  return (
+    hostname === "localhost" ||
+    hostname.endsWith(".localhost") ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1"
+  );
 }
 
 function shouldCreateDnsRecordForRouteHostname(hostname: string) {
@@ -402,17 +402,68 @@ function shouldCreateDnsRecordForRouteHostname(hostname: string) {
   return !hostname.startsWith("*") || hostname.startsWith("*.");
 }
 
-/**
- * Verify the DNS record exists after Worker route creation.
- *
- * Worker routes only require a proxied DNS record for the hostname. Some zones
- * already use a proxied CNAME to the worker's workers.dev hostname, while newer
- * routes use an originless dummy A record. Keep either shape instead of trying
- * to convert CNAMEs into A records and failing on Cloudflare's record conflict
- * rules.
- */
+type CloudflareApi = ReturnType<typeof createCloudflareApi>;
+
+function createCloudflareApi() {
+  const accountId = requireEnv("CLOUDFLARE_ACCOUNT_ID");
+  const apiToken = requireEnv("CLOUDFLARE_API_TOKEN");
+  const baseUrl = "https://api.cloudflare.com/client/v4";
+
+  async function request(path: string, init: RequestInit = {}) {
+    return fetch(`${baseUrl}${path}`, {
+      ...init,
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+        ...(init.body ? { "Content-Type": "application/json" } : {}),
+        ...init.headers,
+      },
+    });
+  }
+
+  return {
+    accountId,
+    get: (path: string) => request(path),
+    post: (path: string, body: unknown) =>
+      request(path, { method: "POST", body: JSON.stringify(body) }),
+    put: (path: string, body: unknown) =>
+      request(path, { method: "PUT", body: JSON.stringify(body) }),
+  };
+}
+
+async function ensureCloudflareWorkerRoute(input: {
+  cloudflareApi: CloudflareApi;
+  pattern: string;
+  script: string;
+  zoneId: string;
+}) {
+  const params = new URLSearchParams({ pattern: input.pattern });
+  const listResponse = await input.cloudflareApi.get(
+    `/zones/${input.zoneId}/workers/routes?${params.toString()}`,
+  );
+  if (!listResponse.ok) {
+    throw new Error(
+      `Failed to check Worker route ${input.pattern}: ${listResponse.status} ${await listResponse.text()}`,
+    );
+  }
+
+  const listResult = (await listResponse.json()) as {
+    result?: Array<{ id: string; pattern?: string; script?: string }>;
+  };
+  const existing = listResult.result?.find((route) => route.pattern === input.pattern);
+  const body = { pattern: input.pattern, script: input.script };
+  const response = existing
+    ? await input.cloudflareApi.put(`/zones/${input.zoneId}/workers/routes/${existing.id}`, body)
+    : await input.cloudflareApi.post(`/zones/${input.zoneId}/workers/routes`, body);
+
+  if (!response.ok) {
+    throw new Error(
+      `Failed to upsert Worker route ${input.pattern}: ${response.status} ${await response.text()}`,
+    );
+  }
+}
+
 async function ensureCloudflareDnsRecord(input: {
-  cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>;
+  cloudflareApi: CloudflareApi;
   record: {
     comment: string;
     content: string;
@@ -459,7 +510,7 @@ async function ensureCloudflareDnsRecord(input: {
 }
 
 async function ensureDevTunnelWildcardDnsRecord(input: {
-  cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>;
+  cloudflareApi: CloudflareApi;
   comment: string;
   name: string;
   target: string;
@@ -516,10 +567,7 @@ async function ensureDevTunnelWildcardDnsRecord(input: {
   }
 }
 
-async function findActiveZoneForHostname(
-  cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>,
-  hostname: string,
-) {
+async function findActiveZoneForHostname(cloudflareApi: CloudflareApi, hostname: string) {
   let page = 1;
   let totalPages = 1;
   const zones: CloudflareZone[] = [];
@@ -586,54 +634,8 @@ export function selectBestCloudflareZoneForHostname(input: {
   );
 }
 
-function withSequentialCloudflareAssetPreupload(input: { command: string; workerName: string }) {
-  const preuploadScriptPath = fileURLToPath(
-    new URL("./preupload-worker-assets.ts", import.meta.url),
-  );
-  const pruneScriptPath = fileURLToPath(new URL("./prune-server-bundle.ts", import.meta.url));
-
-  // The prune step keeps the uploaded worker script small: alchemy's noBundle
-  // upload globs everything under dist/server, but the Vite SSR build also
-  // emits browser-only modules (web workers, wasm) the server graph never
-  // imports. Script size is what every cold Durable Object isolate pays to
-  // start, and our request paths chain several DOs — see
-  // prune-server-bundle.ts for the measured impact.
-  //
-  // Alchemy's Cloudflare Assets helper currently uploads multiple asset buckets
-  // concurrently. The Cloudflare Assets API returns the final completion JWT only
-  // from the bucket that completes the upload session, so concurrent buckets can
-  // race and leave the later Worker upload with an `ASSETS` binding but no
-  // completed asset set. This pre-upload uses the same manifest shape as
-  // Cloudflare's documented direct-upload flow, but uploads buckets
-  // sequentially before Alchemy creates the Worker. Alchemy then opens its own
-  // session, sees no remaining buckets, and attaches a stable completion token.
-  // https://developers.cloudflare.com/workers/static-assets/direct-upload/
-  return [
-    input.command,
-    `pnpm exec tsx ${JSON.stringify(pruneScriptPath)} --server-dir ${JSON.stringify("dist/server")} --entrypoint ${JSON.stringify("index.js")}`,
-    `pnpm exec tsx ${JSON.stringify(preuploadScriptPath)} --worker-name ${JSON.stringify(input.workerName)} --assets ${JSON.stringify("dist/client")}`,
-  ].join(" && ");
-}
-
-/**
- * Wait until Cloudflare's Workers Scripts API can read the just-uploaded
- * script before creating zone routes for it.
- *
- * Alchemy's `TanStackStart` returns after the upload step, but in CI we have
- * seen the immediately-following Routes API call fail with Cloudflare error
- * 10019 ("Worker does not exist"). Polling the first-party script-read endpoint
- * catches the ordinary upload lag. Requiring a second successful read after a
- * short pause also covers the awkward edge where the Scripts API can see the
- * Worker but the Routes API has not accepted it yet.
- *
- * Cloudflare routes docs:
- * https://developers.cloudflare.com/workers/configuration/routing/routes/
- *
- * Workers Scripts API:
- * https://developers.cloudflare.com/workers/api/
- */
 async function waitForCloudflareWorkerScript(params: {
-  cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>;
+  cloudflareApi: CloudflareApi;
   workerName: string;
 }) {
   const deadline = Date.now() + 120_000;
@@ -688,44 +690,17 @@ async function retryCloudflareWorkerRouteCreation(createRoute: () => Promise<unk
 
 function isCloudflareWorkerRouteMissingError(error: unknown) {
   const maybeError = error as {
-    errorData?: unknown;
     message?: unknown;
-    status?: unknown;
   };
-  const details = `${String(maybeError.message ?? "")}\n${JSON.stringify(maybeError.errorData ?? "")}`;
-
-  return details.includes("10019") && details.includes("Worker which does not exist");
+  return String(maybeError.message ?? "").includes("10019");
 }
 
 async function sleep(ms: number) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Derive the set of Cloudflare worker route hostnames from the app's `baseUrl`
- * and any extra hostnames.
- *
- * Cloudflare worker routes use `hostname/*` patterns to match incoming requests.
- * We derive these from two sources:
- *
- * 1. `baseUrl` — the app's canonical URL (e.g. `https://os.iterate.com`).
- *    The hostname (`os.iterate.com`) becomes a route.
- * 2. `extraRouteHostnames` — additional hostnames passed by the caller.
- *    os uses this for project subdomain routing (`iterate.app`, `*.iterate.app`).
- *
- * Returns a deduplicated array of hostnames. Returns empty if no routes are
- * configured (localhost-only dev, or workers.dev-only previews).
- *
- * @see https://developers.cloudflare.com/workers/configuration/routing/routes/
- * @see https://developers.cloudflare.com/workers/configuration/routing/workers-dev/
- */
-function deriveWorkerRouteHosts(baseUrl: string | undefined, extraRouteHostnames: string[] = []) {
-  const baseUrlHostname = baseUrl ? new URL(baseUrl).hostname : undefined;
-  return [
-    ...new Set([...(baseUrlHostname ? [baseUrlHostname] : []), ...extraRouteHostnames]),
-  ].filter((hostname) => !hostname.endsWith(".workers.dev"));
+function requireEnv(name: string) {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing ${name}`);
+  return value;
 }

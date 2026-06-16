@@ -129,28 +129,24 @@ browser ──► <n> ────┼────────────► <n>
   hostnames. Operator tooling and the itx e2e fixtures already target the
   app base URL.
 
-## Local dev: one workerd, twelve workers
+## Local dev: Alchemy v2 dev
 
-`pnpm dev` runs **all** workers inside vite's single workerd via
-`@cloudflare/vite-plugin`'s `auxiliaryWorkers`:
+`pnpm dev` keeps the public app command but now delegates to
+`alchemy dev ./alchemy.run.ts --stage <doppler-config>`.
 
-1. `alchemy.run.ts` (local mode) writes a wrangler config per worker under
-   `.alchemy/local/workers/` plus a manifest (`.alchemy/local/aux-workers.json`),
-   and gives each Worker resource a `dev.url` so alchemy does not also run
-   it in its own miniflare.
-2. `vite.config.ts` reads the manifest and passes the configs as
-   `auxiliaryWorkers`.
-3. The browser talks to vite directly (`http://localhost:<port>`,
-   project hosts as `<slug>.localhost:<port>`); the app worker's embedded
-   router handles the project-host/MCP lanes over the same service bindings
-   the ingress uses in production. The ingress worker isn't part of the dev
-   loop (it would be a no-op hop in front of vite).
+Alchemy v2 dev mode is cloud-backed: infrastructure resources are reconciled in
+Cloudflare while Worker code runs locally in workerd with hot reload. The app's
+Vite config is no longer responsible for reading `.alchemy/local/aux-workers.json`
+or installing the old Alchemy v1 TanStack Start plugin; v2 owns the local
+Worker runtime path from the stack.
 
-Why one workerd instead of wrangler's cross-process dev registry: the
-registry proxy dials remote Durable Objects **by hex id**, which loses
-`ctx.id.name` — and Stream and itx DOs derive their identity from their
-name. In one workerd, cross-script `getByName` keeps names intact, exactly
-like production.
+The Doppler config still selects secrets, runtime app config, account, and
+stage. `scripts/dev.ts` passes the same config name as the Alchemy stage, so
+`dev`, `dev_<user>`, and preview configs keep the same physical naming
+convention used by deploys. Local discovery files such as
+`.alchemy/dev-server.json` are still an app-level contract when the v2 stack
+writes them; browser and CLI tooling should continue to read that file instead
+of assuming a fixed port.
 
 ## Fresh-stage bootstrap (two-pass deploy)
 
@@ -160,8 +156,7 @@ stream↔subscriber cycle is therefore unsatisfiable in one pass.
 `alchemy.run.ts` handles this automatically: it checks which worker scripts
 exist, omits cross-script bindings whose target is missing (with a loud
 warning), and re-executes itself once after finalize to wire them up.
-Steady-state deploys (all scripts exist) never take this path; local dev
-never needs it (one workerd, lazy resolution).
+Steady-state deploys (all scripts exist) never take this path.
 
 So: `pnpm cf:deploy` against a fresh stage just works — it deploys twice
 under the hood.

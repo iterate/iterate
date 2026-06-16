@@ -1,27 +1,11 @@
-import { spawnSync } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
-import alchemy from "alchemy";
-import {
-  Ai,
-  D1Database,
-  DurableObjectNamespace,
-  Queue,
-  R2Bucket,
-  Worker,
-  WorkerLoader,
-  WranglerJson,
-  createCloudflareApi,
-} from "alchemy/cloudflare";
-import type { Bindings, WorkerProps } from "alchemy/cloudflare";
-import { Artifacts } from "@iterate-com/shared/alchemy/artifacts";
-import { initAlchemy } from "@iterate-com/shared/alchemy/init";
-import {
-  ITERATE_WORKER_OBSERVABILITY,
-  IterateAppWorker,
-  IterateDevTunnel,
-  IterateRoutes,
-} from "@iterate-com/shared/alchemy/iterate-app";
+import * as Alchemy from "alchemy";
+import { adopt } from "alchemy/AdoptPolicy";
+import * as Cloudflare from "alchemy/Cloudflare";
+import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
+import { z } from "zod";
+import { compileRawAppConfigFromEnv } from "@iterate-com/shared/config";
+import { slugify } from "@iterate-com/shared/slugify";
 import { prepareLocalDevServer } from "@iterate-com/shared/alchemy/local-dev-server";
 import { ensureLocalDevOAuthClient } from "./src/auth/dev-oauth-client-bootstrap.ts";
 import { AppConfig } from "./src/config.ts";
@@ -34,19 +18,547 @@ import type { RepoDurableObject } from "./src/domains/repos/durable-objects/repo
 import type { SlackAgentDurableObject } from "./src/domains/slack/durable-objects/slack-agent-durable-object.ts";
 import type { SlackIntegrationDurableObject } from "./src/domains/slack/durable-objects/slack-integration-durable-object.ts";
 import type { WorkspaceDurableObject } from "./src/domains/workspaces/durable-objects/workspace-durable-object.ts";
-import { eventDocsHostnameForAppBaseUrl } from "./src/lib/event-docs-host.ts";
-import type { Stream } from "~/domains/streams/engine/workers/durable-objects/stream.ts";
+import type { Stream } from "./src/domains/streams/engine/workers/durable-objects/stream.ts";
+
+const ITERATE_WORKER_OBSERVABILITY = {
+  enabled: true,
+  headSamplingRate: 1,
+  logs: { enabled: true, headSamplingRate: 1, persist: true, invocationLogs: true },
+  traces: { enabled: true, persist: true, headSamplingRate: 1 },
+} as const;
 
 const resolvedAuthIssuer =
   process.env.APP_CONFIG_ITERATE_AUTH__ISSUER ?? process.env.ITERATE_OAUTH_ISSUER;
 
-// A static JWKS lets the worker verify auth JWTs without any runtime
-// roundtrip to the auth worker, including on cold isolate starts. Fetch it
-// from the issuer at deploy time; an explicit env value overrides. A static
-// JWKS only verifies tokens from the issuer it was exported from, so a
-// loopback issuer (local dev auth server with its own keys) never uses a
-// Doppler-provided production JWKS. Key rotation in auth requires an OS
-// redeploy. On fetch failure the worker falls back to remote JWKS at runtime.
+const AlchemyEnv = z.object({
+  ALCHEMY_LOCAL: z.stringbool(),
+  ALCHEMY_STAGE: z
+    .string()
+    .trim()
+    .min(1, "ALCHEMY_STAGE is required")
+    .regex(/^[\w-]+$/, "ALCHEMY_STAGE must contain only letters, numbers, underscores, or hyphens"),
+  CLOUDFLARE_ACCOUNT_ID: z.string().trim().min(1, "CLOUDFLARE_ACCOUNT_ID is required"),
+});
+
+async function loadBootstrap() {
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    APP_CONFIG_ITERATE_AUTH__ISSUER: resolvedAuthIssuer,
+    APP_CONFIG_ITERATE_AUTH__CLIENT_ID:
+      process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID ?? process.env.ITERATE_OAUTH_CLIENT_ID,
+    APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET:
+      process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET ?? process.env.ITERATE_OAUTH_CLIENT_SECRET,
+    APP_CONFIG_ITERATE_AUTH__JWKS: await resolveStaticAuthJwks(resolvedAuthIssuer),
+    APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN:
+      process.env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN ?? process.env.ITERATE_AUTH_SERVICE_TOKEN,
+  };
+
+  const localDevServer = await prepareLocalDevServer(env);
+  if (localDevServer && !env.APP_CONFIG_PROJECT_HOSTNAME_BASES) {
+    env.APP_CONFIG_PROJECT_HOSTNAME_BASES = JSON.stringify(["localhost"]);
+  }
+  if (localDevServer) {
+    env.APP_CONFIG_ITERATE_AUTH__RESOURCE ||= `http://${new URL(localDevServer.baseUrl).hostname}`;
+  }
+
+  await ensureLocalDevOAuthClient(env);
+
+  const rawRuntimeConfig = compileRawAppConfigFromEnv({
+    configSchema: AppConfig,
+    prefix: "APP_CONFIG_",
+    env,
+  }) as Record<string, unknown>;
+
+  return {
+    alchemyEnv: AlchemyEnv.parse(env),
+    rawRuntimeConfig,
+    runtimeConfig: AppConfig.parse(rawRuntimeConfig),
+  };
+}
+
+const bootstrap = await loadBootstrap();
+
+const workerName = slugify(`os-${bootstrap.alchemyEnv.ALCHEMY_STAGE}`);
+const appConfigBinding = bootstrap.alchemyEnv.ALCHEMY_LOCAL
+  ? JSON.stringify(bootstrap.rawRuntimeConfig, null, 2)
+  : Redacted.make(JSON.stringify(bootstrap.rawRuntimeConfig, null, 2));
+const slackBotToken = bootstrap.runtimeConfig.slackBotToken?.exposeSecret();
+const artifactsAccountId = bootstrap.alchemyEnv.CLOUDFLARE_ACCOUNT_ID;
+const artifactsNamespace = `${workerName}-repos`;
+const globalStreamNamespace = `${workerName}-global`;
+
+const workerNames = {
+  agent: `${workerName}-agent`,
+  app: `${workerName}-app`,
+  debugSubscriber: `${workerName}-debug-subscriber`,
+  ingress: workerName,
+  itx: `${workerName}-itx`,
+  mcp: `${workerName}-mcp`,
+  project: `${workerName}-project`,
+  repo: `${workerName}-repo`,
+  slackAgent: `${workerName}-slack-agent`,
+  slackIntegration: `${workerName}-slack-integration`,
+  stream: `${workerName}-stream`,
+  workspace: `${workerName}-workspace`,
+} as const;
+
+export const db = Cloudflare.D1Database("os-db", {
+  name: `${workerName}-db`,
+  migrationsDir: "./src/db/migrations",
+}).pipe(adopt(true));
+
+export const artifactEventsQueue = Cloudflare.Queue("artifact-events", {
+  name: `${workerName}-artifact-events`,
+}).pipe(adopt(true));
+
+export const itxBuildCache = Cloudflare.R2Bucket("itx-build-cache", {
+  name: `${workerName}-itx-build-cache`,
+}).pipe(adopt(true));
+
+const artifacts = Cloudflare.Artifacts("ARTIFACTS", {
+  namespace: artifactsNamespace,
+});
+// Alchemy v2 beta does not currently expose the v1 native Workers AI marker.
+// Its public AiGateway resource emits the same Worker binding shape, but also
+// provisions/reads an AI Gateway. OS only needs runtime `env.AI.run(...)`, so
+// the stack binds the raw native `ai` binding onto the concrete Workers below.
+const loader = Cloudflare.DynamicWorkerLoader("LOADER");
+
+const stream = Cloudflare.DurableObjectNamespace<Stream>("stream", {
+  className: "StreamDurableObject",
+  scriptName: workerNames.stream,
+});
+const itxContext = Cloudflare.DurableObjectNamespace<ItxDurableObject>("itx-context", {
+  className: "ItxDurableObject",
+  scriptName: workerNames.itx,
+});
+const projectMcpServerConnection = Cloudflare.DurableObjectNamespace<ProjectMcpServerConnection>(
+  "project-mcp-server-connection-local",
+  {
+    className: "ProjectMcpServerConnection",
+    scriptName: workerNames.mcp,
+  },
+);
+const project = Cloudflare.DurableObjectNamespace<ProjectDurableObject>("project", {
+  className: "ProjectDurableObject",
+  scriptName: workerNames.project,
+});
+const repo = Cloudflare.DurableObjectNamespace<RepoDurableObject>("repo", {
+  className: "RepoDurableObject",
+  scriptName: workerNames.repo,
+});
+const workspace = Cloudflare.DurableObjectNamespace<WorkspaceDurableObject>("workspace", {
+  className: "WorkspaceDurableObject",
+  scriptName: workerNames.workspace,
+});
+const agent = Cloudflare.DurableObjectNamespace<AgentDurableObject>("agent", {
+  className: "AgentDurableObject",
+  scriptName: workerNames.agent,
+});
+const slackIntegration = Cloudflare.DurableObjectNamespace<SlackIntegrationDurableObject>(
+  "slack-integration",
+  {
+    className: "SlackIntegrationDurableObject",
+    scriptName: workerNames.slackIntegration,
+  },
+);
+const slackAgent = Cloudflare.DurableObjectNamespace<SlackAgentDurableObject>("slack-agent", {
+  className: "SlackAgentDurableObject",
+  scriptName: workerNames.slackAgent,
+});
+const debugAppendChainSubscriber = bootstrap.alchemyEnv.ALCHEMY_LOCAL
+  ? Cloudflare.DurableObjectNamespace<DebugAppendChainSubscriber>("debug-append-chain-subscriber", {
+      className: "DebugAppendChainSubscriber",
+      scriptName: workerNames.debugSubscriber,
+    })
+  : undefined;
+
+const missingScripts = bootstrap.alchemyEnv.ALCHEMY_LOCAL
+  ? new Set<string>()
+  : await findMissingWorkerScripts(
+      Object.entries(workerNames)
+        .filter(([id]) => id !== "debugSubscriber")
+        .map(([, name]) => name),
+    );
+if (missingScripts.size > 0) {
+  console.warn(
+    `[alchemy.run] Bootstrap: ${[...missingScripts].join(", ")} not deployed yet; ` +
+      "cross-script bindings to them are omitted until the next deploy.",
+  );
+}
+
+function withoutBindingsToMissingScripts<const B extends Cloudflare.WorkerBindingProps>(
+  owner: string,
+  bindings: B,
+): B {
+  if (missingScripts.size === 0) return bindings;
+  return Object.fromEntries(
+    Object.entries(bindings).filter(([name, value]) => {
+      const resolved = value as { scriptName?: string } | null | undefined;
+      if (
+        !resolved?.scriptName ||
+        resolved.scriptName === owner ||
+        !missingScripts.has(resolved.scriptName)
+      ) {
+        return true;
+      }
+      console.warn(`[alchemy.run]   ${owner}: omitting ${name} -> ${resolved.scriptName}`);
+      return false;
+    }),
+  ) as B;
+}
+
+function osWorker<const Env extends Cloudflare.WorkerBindingProps>(
+  id: keyof typeof workerNames,
+  props: {
+    compatibilityFlags?: string[];
+    env: Env;
+    main: string;
+  },
+) {
+  const name = workerNames[id];
+  return Cloudflare.Worker(id, {
+    name,
+    main: props.main,
+    url: false,
+    compatibility: { flags: props.compatibilityFlags },
+    env: {
+      ...withoutBindingsToMissingScripts(name, props.env),
+      APP_CONFIG: appConfigBinding,
+    },
+    observability: ITERATE_WORKER_OBSERVABILITY,
+  }).pipe(adopt(true));
+}
+
+const slackBotTokenBinding: Cloudflare.WorkerBindingProps =
+  slackBotToken == null ? {} : { APP_CONFIG_SLACK_BOT_TOKEN: Redacted.make(slackBotToken) };
+
+const loopbackUnionBindings = {
+  AGENT: agent,
+  DB: db,
+  DO_CATALOG: db,
+  ITX_BUILD_CACHE: itxBuildCache,
+  ITX_CONTEXT: itxContext,
+  LOADER: loader,
+  PROJECT: project,
+  REPO: repo,
+  STREAM: stream,
+  WORKSPACE: workspace,
+  ...slackBotTokenBinding,
+};
+
+const workspaceWorker = osWorker("workspace", {
+  main: "./src/workers/workspace.ts",
+  compatibilityFlags: ["nodejs_compat"],
+  env: { DO_CATALOG: db, WORKSPACE: workspace },
+});
+
+const slackAgentWorker = osWorker("slackAgent", {
+  main: "./src/workers/slack-agent.ts",
+  env: {
+    AGENT: agent,
+    DO_CATALOG: db,
+    SLACK_AGENT: slackAgent,
+    STREAM: stream,
+    ...slackBotTokenBinding,
+  },
+});
+
+const repoWorker = osWorker("repo", {
+  main: "./src/workers/repo.ts",
+  compatibilityFlags: ["nodejs_compat"],
+  env: {
+    ...(bootstrap.alchemyEnv.ALCHEMY_LOCAL ? {} : { ARTIFACTS: artifacts }),
+    ARTIFACTS_ACCOUNT_ID: artifactsAccountId,
+    ARTIFACTS_NAMESPACE: artifactsNamespace,
+    DO_CATALOG: db,
+    GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
+    REPO: repo,
+    STREAM: stream,
+  },
+});
+
+const itxWorker = osWorker("itx", {
+  main: "./src/workers/itx.ts",
+  compatibilityFlags: ["global_fetch_strictly_public"],
+  env: loopbackUnionBindings,
+});
+
+const agentWorker = osWorker("agent", {
+  main: "./src/workers/agent.ts",
+  compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"],
+  env: loopbackUnionBindings,
+});
+
+const slackIntegrationWorker = osWorker("slackIntegration", {
+  main: "./src/workers/slack-integration.ts",
+  env: {
+    AGENT: agent,
+    DB: db,
+    DO_CATALOG: db,
+    SLACK_AGENT: slackAgent,
+    SLACK_INTEGRATION: slackIntegration,
+    STREAM: stream,
+    ...slackBotTokenBinding,
+  },
+});
+
+const mcpWorker = osWorker("mcp", {
+  main: "./src/workers/mcp.ts",
+  compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"],
+  env: {
+    ...loopbackUnionBindings,
+    PROJECT_MCP_SERVER_CONNECTION: projectMcpServerConnection,
+  },
+});
+
+const projectWorker = osWorker("project", {
+  main: "./src/workers/project.ts",
+  compatibilityFlags: ["nodejs_als", "global_fetch_strictly_public"],
+  env: loopbackUnionBindings,
+});
+
+const debugSubscriberWorker = bootstrap.alchemyEnv.ALCHEMY_LOCAL
+  ? osWorker("debugSubscriber", {
+      main: "./src/workers/debug-append-chain-subscriber.ts",
+      env: {
+        DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber!,
+        STREAM: stream,
+      },
+    })
+  : undefined;
+
+const streamWorker = osWorker("stream", {
+  main: "./src/workers/stream.ts",
+  env: {
+    AGENT: agent,
+    ITX_CONTEXT: itxContext,
+    PROJECT: project,
+    REPO: repo,
+    SLACK_AGENT: slackAgent,
+    SLACK_INTEGRATION: slackIntegration,
+    STREAM: stream,
+    ...(debugAppendChainSubscriber == null
+      ? {}
+      : { DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber }),
+  },
+});
+
+const appWorker = Cloudflare.Vite("app", {
+  name: workerNames.app,
+  url: false,
+  rootDir: process.cwd(),
+  compatibility: { flags: ["nodejs_compat", "global_fetch_strictly_public"] },
+  env: {
+    ...loopbackUnionBindings,
+    AGENT: agent,
+    ARTIFACTS: artifacts,
+    ARTIFACTS_ACCOUNT_ID: artifactsAccountId,
+    ARTIFACTS_NAMESPACE: artifactsNamespace,
+    GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
+    MCP: mcpWorker,
+    PROJECT_HOST: projectWorker,
+    PROJECT_MCP_SERVER_CONNECTION: projectMcpServerConnection,
+    SLACK_AGENT: slackAgent,
+    SLACK_INTEGRATION: slackIntegration,
+    ...(debugAppendChainSubscriber == null
+      ? {}
+      : { DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber }),
+    APP_CONFIG: appConfigBinding,
+  },
+  dev: bootstrap.alchemyEnv.ALCHEMY_LOCAL
+    ? {
+        host: process.env.HOST ?? "127.0.0.1",
+        port: Number(process.env.PORT ?? 5173),
+        strictPort: true,
+      }
+    : undefined,
+}).pipe(adopt(true));
+
+const ingressWorker = osWorker("ingress", {
+  main: "./src/workers/ingress.ts",
+  env: {
+    APP: appWorker,
+    DB: db,
+    MCP: mcpWorker,
+    PROJECT_HOST: projectWorker,
+  },
+});
+
+export const workers = {
+  agent: agentWorker,
+  app: appWorker,
+  debugSubscriber: debugSubscriberWorker,
+  ingress: ingressWorker,
+  itx: itxWorker,
+  mcp: mcpWorker,
+  project: projectWorker,
+  repo: repoWorker,
+  slackAgent: slackAgentWorker,
+  slackIntegration: slackIntegrationWorker,
+  stream: streamWorker,
+  workspace: workspaceWorker,
+};
+
+const baseUrlHostname = bootstrap.runtimeConfig.baseUrl
+  ? new URL(bootstrap.runtimeConfig.baseUrl).hostname
+  : undefined;
+const eventDocsRouteHostname = eventDocsHostnameForAppBaseUrl(bootstrap.runtimeConfig.baseUrl);
+const mcpRouteHostname = routeHostnameForUrl(bootstrap.runtimeConfig.mcp?.baseUrl);
+const routeHostnames = [
+  ...new Set(
+    [
+      ...(baseUrlHostname ? [baseUrlHostname] : []),
+      ...(eventDocsRouteHostname ? [eventDocsRouteHostname] : []),
+      ...(mcpRouteHostname ? [mcpRouteHostname] : []),
+      ...(bootstrap.runtimeConfig.projectHostnameBases ?? []).flatMap(projectRouteHostnamesForBase),
+    ].filter((hostname) => !hostname.endsWith(".workers.dev")),
+  ),
+];
+const localApplyConcurrency = bootstrap.alchemyEnv.ALCHEMY_LOCAL ? 1 : "unbounded";
+
+export default Alchemy.Stack(
+  "os",
+  {
+    providers: Cloudflare.providers(),
+    state: bootstrap.alchemyEnv.ALCHEMY_LOCAL ? Alchemy.localState() : Cloudflare.state(),
+  },
+  Effect.gen(function* () {
+    const deployed = yield* Effect.all(
+      {
+        agent: agentWorker,
+        app: appWorker,
+        ingress: ingressWorker,
+        itx: itxWorker,
+        mcp: mcpWorker,
+        project: projectWorker,
+        repo: repoWorker,
+        slackAgent: slackAgentWorker,
+        slackIntegration: slackIntegrationWorker,
+        stream: streamWorker,
+        workspace: workspaceWorker,
+        ...(debugSubscriberWorker == null ? {} : { debugSubscriber: debugSubscriberWorker }),
+      },
+      { concurrency: localApplyConcurrency },
+    );
+
+    yield* Effect.all(
+      [deployed.agent, deployed.app, deployed.itx, deployed.mcp, deployed.project].map(
+        bindNativeWorkersAi,
+      ),
+      { concurrency: localApplyConcurrency },
+    );
+
+    yield* Cloudflare.QueueConsumer("artifact-events-consumer", {
+      queueId: (yield* artifactEventsQueue).queueId,
+      scriptName: deployed.repo.workerName,
+    }).pipe(adopt(true));
+
+    yield* EnsureWorkerRoutes({
+      hostnames: routeHostnames,
+      local: bootstrap.alchemyEnv.ALCHEMY_LOCAL,
+      slug: "os",
+      stage: bootstrap.alchemyEnv.ALCHEMY_STAGE,
+      workerName: deployed.ingress.workerName,
+    });
+
+    return {
+      baseUrl: bootstrap.runtimeConfig.baseUrl,
+      local: bootstrap.alchemyEnv.ALCHEMY_LOCAL,
+      workers: Object.fromEntries(
+        Object.entries(deployed).map(([id, worker]) => [id, worker.workerName]),
+      ),
+    };
+  }),
+);
+
+function bindNativeWorkersAi(worker: Cloudflare.Worker) {
+  return worker.bind("AI", { bindings: [{ type: "ai", name: "AI" }] });
+}
+
+const EnsureWorkerRoutes = Alchemy.Action<
+  "Iterate.WorkerRoutes",
+  {
+    hostnames: string[];
+    local: boolean;
+    slug: string;
+    stage: string;
+    workerName: string;
+  },
+  { hostnames: string[] }
+>("Iterate.WorkerRoutes", (input) =>
+  Effect.promise(async () => {
+    if (input.local || input.hostnames.length === 0) return { hostnames: [] };
+
+    const cloudflareApi = createCloudflareApi();
+    await waitForCloudflareWorkerScript({
+      cloudflareApi,
+      workerName: input.workerName,
+    });
+
+    const routeZoneIds = new Map<string, string>();
+    for (const hostname of input.hostnames) {
+      const { zoneId } = await findActiveZoneForHostname(cloudflareApi, hostname);
+      routeZoneIds.set(hostname, zoneId);
+      await ensureCloudflareWorkerRoute({
+        cloudflareApi,
+        pattern: `${hostname}/*`,
+        script: input.workerName,
+        zoneId,
+      });
+    }
+
+    await Promise.all(
+      input.hostnames.filter(shouldCreateDnsRecordForRouteHostname).map(async (hostname) => {
+        const zoneId =
+          routeZoneIds.get(hostname) ??
+          (await findActiveZoneForHostname(cloudflareApi, hostname)).zoneId;
+        await ensureCloudflareDnsRecord({
+          cloudflareApi,
+          record: {
+            type: "A",
+            name: hostname,
+            content: "192.0.2.1",
+            proxied: true,
+            ttl: 1,
+            comment: `Managed by ${input.slug} alchemy (${input.stage}).`,
+          },
+          zoneId,
+        });
+      }),
+    );
+
+    return { hostnames: input.hostnames };
+  }),
+);
+
+type CloudflareApi = ReturnType<typeof createCloudflareApi>;
+
+function createCloudflareApi() {
+  const token = requireEnv("CLOUDFLARE_API_TOKEN");
+  const accountId = requireEnv("CLOUDFLARE_ACCOUNT_ID");
+  const baseUrl = "https://api.cloudflare.com/client/v4";
+
+  async function request(method: string, path: string, body?: unknown) {
+    const response = await fetch(`${baseUrl}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    return response;
+  }
+
+  return {
+    accountId,
+    get: (path: string) => request("GET", path),
+    post: (path: string, body: unknown) => request("POST", path, body),
+    put: (path: string, body: unknown) => request("PUT", path, body),
+  };
+}
+
 async function fetchJwksWithRetry(url: string): Promise<{ keys: unknown[] }> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -84,54 +596,28 @@ async function resolveStaticAuthJwks(issuer: string | undefined) {
   if (explicit && !issuerIsLoopback) return withForgePublicKey(explicit);
 
   try {
-    // Retried: this one fetch decides the whole deploy on forge-enabled
-    // envs, and the auth worker may be cold (slot auths are hand-deployed) —
-    // a single timeout aborted a preview deploy on 2026-06-12.
     const jwks = await fetchJwksWithRetry(`${issuer.replace(/\/+$/, "")}/jwks`);
     return withForgePublicKey(JSON.stringify(jwks));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    // A forge-enabled env (dev/preview) needs the forge pubkey in a baked
-    // static JWKS — the runtime remote fetch only returns issuer keys, never
-    // the forge key, so silently falling back would leave minting broken.
-    // Fail the deploy loudly instead. (Loopback issuers — local auth dev —
-    // legitimately may be down at deploy and use runtime fetch, so skip them.)
     if (process.env.AUTH_FORGE_PRIVATE_JWK?.trim() && !issuerIsLoopback) {
       throw new Error(
         `[alchemy.run] Forge key is set but the deploy-time JWKS fetch from ${issuer} failed ` +
-          `(${message}). The forge pubkey can only be trusted via a baked static JWKS, so this ` +
-          `would deploy a worker where minted tokens fail to verify. Aborting — retry the deploy.`,
+          `(${message}). The forge pubkey can only be trusted via a baked static JWKS.`,
       );
     }
     console.warn(
       `[alchemy.run] Could not fetch JWKS from ${issuer} at deploy time; ` +
-        `the worker will fetch it at runtime instead.`,
+        "the worker will fetch it at runtime instead.",
       message,
     );
     return undefined;
   }
 }
 
-// Identity forging: when the Doppler config carries the forge private JWK
-// (`AUTH_FORGE_PRIVATE_JWK`, from `_shared/dev` / `_shared/preview`, and `os/prd`),
-// its PUBLIC half joins the worker's trusted JWKS so minted JWTs
-// (scripts/auth/mint-session.ts) verify exactly like issuer-signed ones.
-//
-// The forge key is a master key: whoever holds it can mint a session as any
-// user, including admins. In dev/preview that's the whole point. In PRODUCTION
-// it is also allowed (you can `pnpm auth:mint` against os.iterate.com to poke
-// around as any user) but is gated behind an explicit opt-in so a forge key
-// that *accidentally* lands in a prod config still fails the deploy loudly
-// instead of silently arming god-mode. Enabling prod minting takes two
-// deliberate Doppler values in `os/prd`: AUTH_FORGE_PRIVATE_JWK *and*
-// AUTH_FORGE_ALLOW_PRODUCTION=true. (TODO: replace with an audited mint
-// endpoint on the auth worker — see docs/dev-environments.md.)
 function withForgePublicKey(jwksJson: string) {
   const forgePrivateJwk = process.env.AUTH_FORGE_PRIVATE_JWK?.trim();
   if (!forgePrivateJwk) return jwksJson;
-  // Detect a production-serving deploy two independent ways — stage name AND
-  // issuer identity — so a prod deploy under a non-"prd" stage (hotfix stage,
-  // custom hostname) is still caught by the issuer check.
   const isProdStage = process.env.ALCHEMY_STAGE?.trim() === "prd";
   const isProdIssuer = (resolvedAuthIssuer ?? "").includes("auth.iterate.com");
   const allowProduction = /^(1|true|yes)$/i.test(
@@ -141,8 +627,7 @@ function withForgePublicKey(jwksJson: string) {
     throw new Error(
       "AUTH_FORGE_PRIVATE_JWK is present in a production config " +
         `(stage=${process.env.ALCHEMY_STAGE}, issuer=${resolvedAuthIssuer}) without ` +
-        "AUTH_FORGE_ALLOW_PRODUCTION=true. Set that flag in the same config to deliberately " +
-        "enable production minting, or remove the forge key if it landed there by accident.",
+        "AUTH_FORGE_ALLOW_PRODUCTION=true.",
     );
   }
   try {
@@ -163,526 +648,6 @@ function withForgePublicKey(jwksJson: string) {
   }
 }
 
-const env: Record<string, string | undefined> = {
-  ...process.env,
-  APP_CONFIG_ITERATE_AUTH__ISSUER: resolvedAuthIssuer,
-  APP_CONFIG_ITERATE_AUTH__CLIENT_ID:
-    process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID ?? process.env.ITERATE_OAUTH_CLIENT_ID,
-  APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET:
-    process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET ?? process.env.ITERATE_OAUTH_CLIENT_SECRET,
-  APP_CONFIG_ITERATE_AUTH__JWKS: await resolveStaticAuthJwks(resolvedAuthIssuer),
-  APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN:
-    process.env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN ?? process.env.ITERATE_AUTH_SERVICE_TOKEN,
-};
-
-// Fully-local dev: no tunnel, no per-user domain. Picks a free port, bakes
-// APP_CONFIG_BASE_URL=http://localhost:<port>, and writes
-// .alchemy/dev-server.json so CLIs can find the running server. No-op for
-// deploy/preview configs and explicit APP_CONFIG_BASE_URL overrides.
-const localDevServer = await prepareLocalDevServer(env);
-if (localDevServer && !env.APP_CONFIG_PROJECT_HOSTNAME_BASES) {
-  // Project hosts resolve as <proj-slug>.localhost:<port> in browsers. The app
-  // base URL stays plain localhost so curl/Node clients work without local DNS.
-  env.APP_CONFIG_PROJECT_HOSTNAME_BASES = JSON.stringify(["localhost"]);
-}
-if (localDevServer) {
-  // The OAuth resource (RFC 8707) must be a registered audience at the auth
-  // worker, which can't enumerate arbitrary local ports — use the stable
-  // portless loopback origin (mirrored in auth's getOsResourceBases).
-  env.APP_CONFIG_ITERATE_AUTH__RESOURCE ||= `http://${new URL(localDevServer.baseUrl).hostname}`;
-}
-
-await ensureLocalDevOAuthClient(env);
-
-const ctx = await initAlchemy("os", AppConfig, env);
-const slackBotToken = ctx.runtimeConfig.slackBotToken?.exposeSecret();
-
-// ---------------------------------------------------------------------------
-// Worker topology
-//
-// OS deploys as MANY small workers instead of one big one, so every cold
-// Durable Object isolate loads only the code it runs (apps/os/docs/
-// worker-topology.md). `${ctx.workerName}` (os-prd, os-preview-N,
-// os-dev-<user>) is the tiny ingress router that owns all routes; the
-// dashboard app and each Durable Object class get their own worker. Durable
-// Object classes exported from one worker are bound as cross-script
-// namespaces (`scriptName`) in every worker that dials them.
-// ---------------------------------------------------------------------------
-
-const workerNames = {
-  agent: `${ctx.workerName}-agent`,
-  app: `${ctx.workerName}-app`,
-  debugSubscriber: `${ctx.workerName}-debug-subscriber`,
-  ingress: ctx.workerName,
-  itx: `${ctx.workerName}-itx`,
-  mcp: `${ctx.workerName}-mcp`,
-  project: `${ctx.workerName}-project`,
-  repo: `${ctx.workerName}-repo`,
-  slackAgent: `${ctx.workerName}-slack-agent`,
-  slackIntegration: `${ctx.workerName}-slack-integration`,
-  stream: `${ctx.workerName}-stream`,
-  workspace: `${ctx.workerName}-workspace`,
-};
-
-const db = await D1Database("os-db", {
-  name: `${ctx.workerName}-db`,
-  migrationsDir: "./src/db/migrations",
-  adopt: true,
-});
-
-// os serves project hosts at <slug>.iterate.app (prod),
-// <slug>.iterate-dev-jonas.app (dev), and <slug>.iterate-preview-N.app
-// (preview). The preview app shell deliberately lives on the sibling
-// iterate-preview-N.com zone (`os.iterate-preview-N.com`) so project/MCP hosts
-// can own the iterate-preview-N.app zone cleanly.
-const projectHostnameBases = ctx.runtimeConfig.projectHostnameBases ?? [];
-const mcpRouteHostname = routeHostnameForUrl(ctx.runtimeConfig.mcp?.baseUrl);
-const eventDocsRouteHostname = eventDocsHostnameForAppBaseUrl(ctx.runtimeConfig.baseUrl);
-const artifactsAccountId = requireEnv("CLOUDFLARE_ACCOUNT_ID");
-const artifactsNamespace = `${ctx.workerName}-repos`;
-// Stream namespace for worker-global (non-project-scoped) streams, such as the
-// raw Cloudflare event capture stream at /cloudflare/events.
-const globalStreamNamespace = `${ctx.workerName}-global`;
-
-// ---- Durable Object namespaces ---------------------------------------------
-// One declaration per class, `scriptName` = the OWNING worker. Alchemy strips
-// `script_name` (and runs class migrations) when the namespace is bound on its
-// owner, and emits a cross-script binding everywhere else — so the same
-// object is passed to owner and consumers alike.
-
-const stream = DurableObjectNamespace<Stream>("stream", {
-  className: "StreamDurableObject",
-  scriptName: workerNames.stream,
-  sqlite: true,
-});
-// itx generic context hosts: one instance per extended context, addressed
-// by its journal coordinate (src/itx/journal.ts).
-const itxContext = DurableObjectNamespace<ItxDurableObject>("itx-context", {
-  className: "ItxDurableObject",
-  scriptName: workerNames.itx,
-  sqlite: true,
-});
-const projectMcpServerConnection = DurableObjectNamespace<ProjectMcpServerConnection>(
-  "project-mcp-server-connection-local",
-  {
-    className: "ProjectMcpServerConnection",
-    scriptName: workerNames.mcp,
-    sqlite: true,
-  },
-);
-const project = DurableObjectNamespace<ProjectDurableObject>("project", {
-  className: "ProjectDurableObject",
-  scriptName: workerNames.project,
-  sqlite: true,
-});
-const repo = DurableObjectNamespace<RepoDurableObject>("repo", {
-  className: "RepoDurableObject",
-  scriptName: workerNames.repo,
-  sqlite: true,
-});
-const workspace = DurableObjectNamespace<WorkspaceDurableObject>("workspace", {
-  className: "WorkspaceDurableObject",
-  scriptName: workerNames.workspace,
-  sqlite: true,
-});
-const agent = DurableObjectNamespace<AgentDurableObject>("agent", {
-  className: "AgentDurableObject",
-  scriptName: workerNames.agent,
-  sqlite: true,
-});
-const slackIntegration = DurableObjectNamespace<SlackIntegrationDurableObject>(
-  "slack-integration",
-  {
-    className: "SlackIntegrationDurableObject",
-    scriptName: workerNames.slackIntegration,
-    sqlite: true,
-  },
-);
-const slackAgent = DurableObjectNamespace<SlackAgentDurableObject>("slack-agent", {
-  className: "SlackAgentDurableObject",
-  scriptName: workerNames.slackAgent,
-  sqlite: true,
-});
-const debugAppendChainSubscriber = ctx.app.local
-  ? DurableObjectNamespace<DebugAppendChainSubscriber>("debug-append-chain-subscriber", {
-      className: "DebugAppendChainSubscriber",
-      scriptName: workerNames.debugSubscriber,
-      sqlite: true,
-    })
-  : undefined;
-
-const artifactEventsQueue = await Queue("artifact-events", {
-  name: `${ctx.workerName}-artifact-events`,
-  adopt: true,
-});
-// Build memo for repo-sourced itx workers (src/itx/source-build.ts):
-// hash-keyed immutable bundles, reproducible from their keys — safe to wipe.
-const itxBuildCache = await R2Bucket("itx-build-cache", {
-  name: `${ctx.workerName}-itx-build-cache`,
-  adopt: true,
-  empty: true,
-});
-
-// ---- Fresh-stage bootstrap --------------------------------------------------
-// Cloudflare rejects a cross-script DO binding whose target script does not
-// exist yet (error 10061), and the stream worker and its subscriber workers
-// reference each other — a legitimate cycle once everything is deployed, but
-// unsatisfiable on the FIRST deploy of a fresh stage. So: bindings whose
-// target script is missing are omitted this pass, and the run re-executes
-// itself once at the end to wire them up. Steady-state deploys (all scripts
-// exist) never take this path. Local dev resolves bindings lazily through
-// miniflare's dev registry, so it never needs it either.
-const missingScripts = ctx.app.local
-  ? new Set<string>()
-  : await findMissingWorkerScripts(
-      // debugSubscriber is local-only and never deploys — counting it as
-      // missing would put every deploy into (harmless but pointless)
-      // bootstrap double-pass mode forever.
-      Object.entries(workerNames)
-        .filter(([id]) => id !== "debugSubscriber")
-        .map(([, name]) => name),
-    );
-if (missingScripts.size > 0) {
-  console.warn(
-    `[alchemy.run] Bootstrap: ${[...missingScripts].join(", ")} not deployed yet — ` +
-      `cross-script bindings to them are omitted this pass and wired by a second pass.`,
-  );
-}
-
-function withoutBindingsToMissingScripts<B extends Bindings>(owner: string, bindings: B): B {
-  if (missingScripts.size === 0) return bindings;
-  return Object.fromEntries(
-    Object.entries(bindings).filter(([name, value]) => {
-      const scriptName = (value as { scriptName?: string } | null | undefined)?.scriptName;
-      if (!scriptName || scriptName === owner || !missingScripts.has(scriptName)) return true;
-      console.warn(`[alchemy.run]   ${owner}: omitting ${name} -> ${scriptName}`);
-      return false;
-    }),
-  ) as B;
-}
-
-// ---- The workers -------------------------------------------------------------
-
-// Local dev hosts EVERY worker inside vite's single workerd as auxiliary
-// workers (@cloudflare/vite-plugin `auxiliaryWorkers`): osWorker writes a
-// wrangler config per worker, the manifest below hands the list to
-// vite.config.ts, and the Worker resources skip alchemy's own miniflare via
-// `dev.url`. One workerd means cross-script DO bindings resolve in-process —
-// the wrangler dev-registry proxy dials remote objects by hex id, which
-// loses `ctx.id.name`, and Stream/itx DOs derive their identity from it.
-const LOCAL_AUX_WORKERS_MANIFEST = ".alchemy/local/aux-workers.json";
-const localAuxWorkerConfigPaths: string[] = [];
-
-/** A small non-app OS worker: esbuild-bundled, no routes, no workers.dev URL,
- * standard observability, APP_CONFIG injected. */
-async function osWorker<B extends Bindings>(
-  id: keyof typeof workerNames,
-  props: {
-    bindings: B;
-    compatibilityFlags?: string[];
-    entrypoint: string;
-    eventSources?: WorkerProps["eventSources"];
-  },
-) {
-  const name = workerNames[id];
-  const worker = await Worker(id, {
-    name,
-    adopt: true,
-    entrypoint: props.entrypoint,
-    bundle: { minify: true },
-    compatibilityFlags: props.compatibilityFlags,
-    eventSources: props.eventSources,
-    bindings: {
-      ...withoutBindingsToMissingScripts(name, props.bindings),
-      APP_CONFIG: ctx.app.local
-        ? JSON.stringify(ctx.rawRuntimeConfig, null, 2)
-        : alchemy.secret(JSON.stringify(ctx.rawRuntimeConfig, null, 2)),
-    },
-    observability: ITERATE_WORKER_OBSERVABILITY,
-    url: false,
-    // Local: vite hosts this worker (see LOCAL_AUX_WORKERS_MANIFEST); a dev
-    // url makes alchemy skip starting it in its own miniflare.
-    ...(ctx.app.local ? { dev: { url: ctx.runtimeConfig.baseUrl ?? "http://localhost:0" } } : {}),
-  });
-  if (ctx.app.local) {
-    const configPath = `.alchemy/local/workers/${name}.wrangler.jsonc`;
-    await WranglerJson({ worker, path: configPath, secrets: true });
-    localAuxWorkerConfigPaths.push(configPath);
-  }
-  return worker;
-}
-
-// Bindings needed by the loopback capability surface (workers/shared/
-// loopback-exports.ts) — every itx-hosting worker (project, agent, itx, mcp,
-// app) carries these so any capability can be provided on any context.
-const loopbackUnionBindings = {
-  AI: Ai(),
-  AGENT: agent,
-  DB: db,
-  DO_CATALOG: db,
-  ITX_BUILD_CACHE: itxBuildCache,
-  ITX_CONTEXT: itxContext,
-  LOADER: WorkerLoader(),
-  PROJECT: project,
-  REPO: repo,
-  STREAM: stream,
-  WORKSPACE: workspace,
-  ...(slackBotToken == null ? {} : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
-};
-
-// The Durable Object workers deploy CONCURRENTLY: cross-script DO bindings
-// are name-strings (no resource ordering), and the bootstrap filter works
-// off the missing-set computed above, so ordering between them never
-// matters. Only the app worker (service-binds mcp + project) and the
-// ingress worker (service-binds the app) order after them.
-const [
-  workspaceWorker,
-  slackAgentWorker,
-  repoWorker,
-  itxWorker,
-  agentWorker,
-  slackIntegrationWorker,
-  mcpWorker,
-  projectWorker,
-  debugSubscriberWorker,
-  streamWorker,
-] = await Promise.all([
-  osWorker("workspace", {
-    entrypoint: "./src/workers/workspace.ts",
-    // @cloudflare/shell needs Node APIs.
-    compatibilityFlags: ["nodejs_compat"],
-    bindings: { DO_CATALOG: db, WORKSPACE: workspace },
-  }),
-  osWorker("slackAgent", {
-    entrypoint: "./src/workers/slack-agent.ts",
-    bindings: {
-      AGENT: agent,
-      DO_CATALOG: db,
-      SLACK_AGENT: slackAgent,
-      STREAM: stream,
-      ...(slackBotToken == null
-        ? {}
-        : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
-    },
-  }),
-  osWorker("repo", {
-    entrypoint: "./src/workers/repo.ts",
-    // isomorphic-git + @cloudflare/shell need Node APIs.
-    compatibilityFlags: ["nodejs_compat"],
-    eventSources: [artifactEventsQueue],
-    bindings: {
-      // The artifacts binding type only exists on deployed workers (the local
-      // dev pipeline has no Cloudflare Artifacts emulation); repo code
-      // feature-checks env.ARTIFACTS, same as before the worker split.
-      ...(ctx.app.local ? {} : { ARTIFACTS: Artifacts({ namespace: artifactsNamespace }) }),
-      ARTIFACTS_ACCOUNT_ID: artifactsAccountId,
-      ARTIFACTS_NAMESPACE: artifactsNamespace,
-      DO_CATALOG: db,
-      GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
-      REPO: repo,
-      STREAM: stream,
-    },
-  }),
-  osWorker("itx", {
-    entrypoint: "./src/workers/itx.ts",
-    // Own-zone fetches (EgressPipe dialing project hosts) must go
-    // through Worker routes, not origin — same reason as the app worker.
-    compatibilityFlags: ["global_fetch_strictly_public"],
-    bindings: loopbackUnionBindings,
-  }),
-  osWorker("agent", {
-    entrypoint: "./src/workers/agent.ts",
-    // openai needs Node APIs.
-    compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"],
-    bindings: loopbackUnionBindings,
-  }),
-  osWorker("slackIntegration", {
-    entrypoint: "./src/workers/slack-integration.ts",
-    bindings: {
-      AGENT: agent,
-      DB: db,
-      DO_CATALOG: db,
-      SLACK_AGENT: slackAgent,
-      SLACK_INTEGRATION: slackIntegration,
-      STREAM: stream,
-      ...(slackBotToken == null
-        ? {}
-        : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
-    },
-  }),
-  osWorker("mcp", {
-    entrypoint: "./src/workers/mcp.ts",
-    // McpAgent (agents) and @iterate-com/auth (better-auth) need Node APIs.
-    compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"],
-    bindings: {
-      ...loopbackUnionBindings,
-      PROJECT_MCP_SERVER_CONNECTION: projectMcpServerConnection,
-    },
-  }),
-  osWorker("project", {
-    entrypoint: "./src/workers/project.ts",
-    // nodejs_als for evlog's AsyncLocalStorage — full nodejs_compat not needed.
-    compatibilityFlags: ["nodejs_als", "global_fetch_strictly_public"],
-    bindings: loopbackUnionBindings,
-  }),
-  ctx.app.local
-    ? osWorker("debugSubscriber", {
-        entrypoint: "./src/workers/debug-append-chain-subscriber.ts",
-        bindings: {
-          DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber!,
-          STREAM: stream,
-        },
-      })
-    : Promise.resolve(undefined),
-  osWorker("stream", {
-    entrypoint: "./src/workers/stream.ts",
-    bindings: {
-      AGENT: agent,
-      // Context streams dial their ItxDurableObject subscriber through this
-      // binding (itx/coordinates.ts createContext).
-      ITX_CONTEXT: itxContext,
-      PROJECT: project,
-      REPO: repo,
-      SLACK_AGENT: slackAgent,
-      SLACK_INTEGRATION: slackIntegration,
-      STREAM: stream,
-      ...(debugAppendChainSubscriber == null
-        ? {}
-        : { DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber }),
-    },
-  }),
-]);
-
-// ---- The app worker (TanStack Start dashboard) -------------------------------
-
-// Hand vite the auxiliary worker list BEFORE TanStackStart spawns it. The
-// ingress worker is deliberately absent: it is created after the app worker
-// (it service-binds it), and in dev the browser talks to vite directly — the
-// app worker runs the same shared router, so the ingress hop adds nothing.
-if (ctx.app.local) {
-  await mkdir(new URL("./.alchemy/local", import.meta.url), { recursive: true });
-  await writeFile(
-    new URL(`./${LOCAL_AUX_WORKERS_MANIFEST}`, import.meta.url),
-    `${JSON.stringify(localAuxWorkerConfigPaths, null, 2)}\n`,
-  );
-}
-
-const appWorker = await IterateAppWorker(ctx, {
-  // `${ctx.workerName}` itself is the ingress router (it owns the routes);
-  // the dashboard app deploys under its own name.
-  name: workerNames.app,
-  main: "./src/workers/app.ts",
-  bindings: {
-    ...loopbackUnionBindings,
-    // The artifacts debug route (admin-gated base-repo seeding) lives on the
-    // app worker; everything else artifacts-related is the repo worker's.
-    ARTIFACTS: Artifacts({ namespace: artifactsNamespace }),
-    ARTIFACTS_ACCOUNT_ID: artifactsAccountId,
-    ARTIFACTS_NAMESPACE: artifactsNamespace,
-    GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
-    MCP: mcpWorker,
-    PROJECT_HOST: projectWorker,
-    PROJECT_MCP_SERVER_CONNECTION: projectMcpServerConnection,
-    SLACK_AGENT: slackAgent,
-    SLACK_INTEGRATION: slackIntegration,
-    ...(debugAppendChainSubscriber == null
-      ? {}
-      : { DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber }),
-  },
-  // OAuth login/refresh/logout, and JWT verification when static JWKS is not
-  // configured, can still talk to auth.iterate.com from inside the Worker.
-  // Without this flag, same-zone subrequests bypass Worker routes and go to
-  // origin, which breaks auth-worker discovery on production iterate.com
-  // hostnames.
-  compatibilityFlags: ["global_fetch_strictly_public"],
-  // No workers.dev URL: the app worker is reachable only through the ingress
-  // worker's service binding, which is what makes the internal routing
-  // headers (workers/shared/router.ts) trustworthy.
-  url: false,
-});
-
-// ---- The ingress router -------------------------------------------------------
-// The ONLY worker with routes. Tiny on purpose: one config parse, at most one
-// D1 lookup, then a service-binding forward (workers/ingress.ts).
-
-const ingressWorker = await osWorker("ingress", {
-  entrypoint: "./src/workers/ingress.ts",
-  bindings: {
-    APP: appWorker,
-    DB: db,
-    MCP: mcpWorker,
-    PROJECT_HOST: projectWorker,
-  },
-});
-
-const baseUrlHostname = ctx.runtimeConfig.baseUrl
-  ? new URL(ctx.runtimeConfig.baseUrl).hostname
-  : undefined;
-await IterateRoutes(ctx, {
-  worker: ingressWorker,
-  hostnames: [
-    ...new Set(
-      [
-        ...(baseUrlHostname ? [baseUrlHostname] : []),
-        ...(eventDocsRouteHostname ? [eventDocsRouteHostname] : []),
-        ...(mcpRouteHostname ? [mcpRouteHostname] : []),
-        ...projectHostnameBases.flatMap(projectRouteHostnamesForBase),
-      ].filter((hostname) => !hostname.endsWith(".workers.dev")),
-    ),
-  ],
-});
-
-// Dev tunnel (tunnel-backed dev_<user> configs): real domains -> local vite.
-// The browser-facing dev entry is the app worker (it runs the same router),
-// so the tunnel points at vite, exactly as before the split.
-const { afterFinalize } = await IterateDevTunnel(ctx, {
-  extraRouteHostnames: [
-    ...(eventDocsRouteHostname ? [eventDocsRouteHostname] : []),
-    ...(mcpRouteHostname ? [mcpRouteHostname] : []),
-    ...projectHostnameBases.flatMap(projectRouteHostnamesForBase),
-  ],
-  worker: appWorker,
-});
-
-/** Per-worker Env types for src/lib/worker-env.d.ts. */
-export const workers = {
-  agent: agentWorker,
-  app: appWorker,
-  debugSubscriber: debugSubscriberWorker,
-  ingress: ingressWorker,
-  itx: itxWorker,
-  mcp: mcpWorker,
-  project: projectWorker,
-  repo: repoWorker,
-  slackAgent: slackAgentWorker,
-  slackIntegration: slackIntegrationWorker,
-  stream: streamWorker,
-  workspace: workspaceWorker,
-};
-
-await ctx.app.finalize();
-await afterFinalize();
-
-// Second bootstrap pass (fresh stages only): every script now exists, so
-// re-running wires the cross-script bindings that were omitted above.
-if (missingScripts.size > 0 && !process.env.OS_BOOTSTRAP_SECOND_PASS) {
-  console.warn("[alchemy.run] Bootstrap: re-running to wire deferred cross-script bindings…");
-  const result = spawnSync("pnpm", ["exec", "tsx", fileURLToPath(import.meta.url)], {
-    cwd: fileURLToPath(new URL(".", import.meta.url)),
-    env: { ...process.env, OS_BOOTSTRAP_SECOND_PASS: "1" },
-    stdio: "inherit",
-  });
-  process.exit(result.status ?? 1);
-}
-
-if (!ctx.app.local) process.exit(0);
-
-/**
- * Convert OS project-host bases into Cloudflare route host patterns.
- *
- * Normal bases use dotted project subdomains (`<slug>.<base>`). OS preview
- * project bases are normal bases too: `<slug>.iterate-preview-N.app`.
- */
 function projectRouteHostnamesForBase(base: string) {
   return [base, `*.${base}`];
 }
@@ -692,20 +657,32 @@ function routeHostnameForUrl(url: string | undefined) {
   return new URL(url).hostname;
 }
 
+function eventDocsHostnameForAppBaseUrl(baseUrl: string | undefined) {
+  if (!baseUrl) return null;
+
+  const hostname = new URL(baseUrl).hostname.toLowerCase().replace(/\.$/, "");
+  if (hostname.startsWith("localhost") || hostname === "127.0.0.1" || hostname === "::1") {
+    return null;
+  }
+
+  if (hostname === "os.iterate.com") return "events.iterate.com";
+  if (hostname.startsWith("os.")) return `events.${hostname.slice("os.".length)}`;
+  return null;
+}
+
 function requireEnv(name: string) {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is required.`);
   return value;
 }
 
-/** Which of the given worker scripts do not exist on the account yet. */
 async function findMissingWorkerScripts(names: string[]) {
-  const api = await createCloudflareApi({});
+  const cloudflareApi = createCloudflareApi();
   const missing = new Set<string>();
   await Promise.all(
     names.map(async (name) => {
-      const response = await api.get(
-        `/accounts/${api.accountId}/workers/scripts/${encodeURIComponent(name)}/settings`,
+      const response = await cloudflareApi.get(
+        `/accounts/${cloudflareApi.accountId}/workers/scripts/${encodeURIComponent(name)}/settings`,
       );
       if (response.status === 404) {
         missing.add(name);
@@ -719,4 +696,140 @@ async function findMissingWorkerScripts(names: string[]) {
     }),
   );
   return missing;
+}
+
+async function waitForCloudflareWorkerScript(input: {
+  cloudflareApi: CloudflareApi;
+  workerName: string;
+}) {
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    const response = await input.cloudflareApi.get(
+      `/accounts/${input.cloudflareApi.accountId}/workers/scripts/${encodeURIComponent(input.workerName)}/settings`,
+    );
+    if (response.ok) return;
+    if (response.status !== 404) {
+      throw new Error(
+        `Failed to check worker script ${input.workerName}: ${response.status} ${await response.text()}`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+  throw new Error(`Worker script ${input.workerName} was not visible after deploy.`);
+}
+
+async function ensureCloudflareWorkerRoute(input: {
+  cloudflareApi: CloudflareApi;
+  pattern: string;
+  script: string;
+  zoneId: string;
+}) {
+  const response = await input.cloudflareApi.post(`/zones/${input.zoneId}/workers/routes`, {
+    pattern: input.pattern,
+    script: input.script,
+  });
+  if (response.ok) return;
+
+  const body = await response.text();
+  if (!body.includes("already exists") && !body.includes("workers.api.error.route_found")) {
+    throw new Error(`Failed to create route ${input.pattern}: ${response.status} ${body}`);
+  }
+
+  const listResponse = await input.cloudflareApi.get(`/zones/${input.zoneId}/workers/routes`);
+  if (!listResponse.ok) {
+    throw new Error(
+      `Failed to list routes for ${input.pattern}: ${listResponse.status} ${await listResponse.text()}`,
+    );
+  }
+  const listResult = (await listResponse.json()) as {
+    result?: Array<{ id: string; pattern?: string }>;
+  };
+  const existing = listResult.result?.find((route) => route.pattern === input.pattern);
+  if (!existing) return;
+
+  const updateResponse = await input.cloudflareApi.put(
+    `/zones/${input.zoneId}/workers/routes/${existing.id}`,
+    {
+      pattern: input.pattern,
+      script: input.script,
+    },
+  );
+  if (!updateResponse.ok) {
+    throw new Error(
+      `Failed to update route ${input.pattern}: ${updateResponse.status} ${await updateResponse.text()}`,
+    );
+  }
+}
+
+function shouldCreateDnsRecordForRouteHostname(hostname: string) {
+  return !hostname.startsWith("*") || hostname.startsWith("*.");
+}
+
+async function ensureCloudflareDnsRecord(input: {
+  cloudflareApi: CloudflareApi;
+  record: {
+    comment: string;
+    content: string;
+    name: string;
+    proxied: boolean;
+    ttl: number;
+    type: "A";
+  };
+  zoneId: string;
+}) {
+  const params = new URLSearchParams({ name: input.record.name });
+  const listResponse = await input.cloudflareApi.get(
+    `/zones/${input.zoneId}/dns_records?${params.toString()}`,
+  );
+  if (!listResponse.ok) {
+    throw new Error(
+      `Failed to check DNS record ${input.record.name}: ${listResponse.status} ${await listResponse.text()}`,
+    );
+  }
+
+  const listResult = (await listResponse.json()) as {
+    result?: Array<{ id: string; name?: string; proxied?: boolean; type?: string }>;
+  };
+  const existingProxiedRecord = listResult.result?.find(
+    (record) => record.name === input.record.name && record.proxied,
+  );
+  if (existingProxiedRecord) return;
+
+  const existingRecordId = listResult.result?.find(
+    (record) => record.name === input.record.name && record.type === input.record.type,
+  )?.id;
+  const response = existingRecordId
+    ? await input.cloudflareApi.put(
+        `/zones/${input.zoneId}/dns_records/${existingRecordId}`,
+        input.record,
+      )
+    : await input.cloudflareApi.post(`/zones/${input.zoneId}/dns_records`, input.record);
+
+  if (!response.ok) {
+    throw new Error(
+      `Failed to upsert DNS record ${input.record.name}: ${response.status} ${await response.text()}`,
+    );
+  }
+}
+
+async function findActiveZoneForHostname(
+  cloudflareApi: CloudflareApi,
+  hostname: string,
+): Promise<{ zoneId: string; zoneName: string }> {
+  const normalized = hostname.replace(/^\*\./, "");
+  const labels = normalized.split(".");
+  for (let i = 0; i < labels.length - 1; i++) {
+    const zoneName = labels.slice(i).join(".");
+    const params = new URLSearchParams({ name: zoneName, status: "active" });
+    const response = await cloudflareApi.get(`/zones?${params.toString()}`);
+    if (!response.ok) {
+      throw new Error(
+        `Failed to find Cloudflare zone for ${hostname}: ${response.status} ${await response.text()}`,
+      );
+    }
+    const body = (await response.json()) as { result?: Array<{ id: string; name: string }> };
+    const zone = body.result?.find((candidate) => candidate.name === zoneName);
+    if (zone) return { zoneId: zone.id, zoneName: zone.name };
+  }
+  throw new Error(`No active Cloudflare zone found for hostname ${hostname}.`);
 }

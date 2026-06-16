@@ -116,7 +116,10 @@
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^6.0.1",
     "@vitest/browser-playwright": "^4.1.7",
-    "alchemy": "^0.83.3",
+    "@effect/platform-bun": "beta",
+    "@effect/platform-node": "beta",
+    "alchemy": "next",
+    "effect": "beta",
     "esbuild": "^0.27.4",
     "iterate": "workspace:*",
     "jsdom": "27.4.0",
@@ -125,9 +128,9 @@
     "tinyexec": "^1.0.2",
     "tsx": "^4.20.3",
     "typescript": "^5.9.3",
-    "vite": "^8.0.0",
+    "vite": "^8.0.7",
     "vitest": "^4.1.7",
     "wrangler": "catalog:cloudflare",
-    "ws": "8.19.0"
+    "ws": "^8.20.0"
   }
 }

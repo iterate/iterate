@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import alchemy, { type Scope } from "alchemy";
-import { D1Database, DurableObjectNamespace, Worker } from "alchemy/cloudflare";
-import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
+import * as Alchemy from "alchemy";
+import { adopt } from "alchemy/AdoptPolicy";
+import * as Cloudflare from "alchemy/Cloudflare";
+import * as Effect from "effect/Effect";
 import { z } from "zod";
 import { slugify } from "../../slugify.ts";
 import type {
@@ -13,7 +14,6 @@ import type {
 const APP_NAME = "shared-durable-object-utils-e2e";
 
 const AlchemyEnv = z.object({
-  ALCHEMY_PASSWORD: z.string().trim().min(1, "ALCHEMY_PASSWORD is required"),
   ALCHEMY_LOCAL: z.stringbool().default(false),
   ALCHEMY_STAGE: z
     .string()
@@ -46,73 +46,57 @@ const AlchemyEnv = z.object({
 });
 
 const env = AlchemyEnv.parse(process.env);
-const stateStore = (scope: Scope) =>
-  scope.local ? new SQLiteStateStore(scope, { engine: "libsql" }) : new CloudflareStateStore(scope);
+const workerName = makeWorkerName(APP_NAME, env.ALCHEMY_STAGE);
 
-// Alchemy treats CI as non-interactive by default. Local Alchemy runs are a
-// developer workflow, so let Alchemy use its local behavior when requested.
-if (env.ALCHEMY_LOCAL) delete process.env.CI;
-
-const app = await alchemy(APP_NAME, {
-  stage: env.ALCHEMY_STAGE,
-  local: env.ALCHEMY_LOCAL,
-  password: env.ALCHEMY_PASSWORD,
-  stateStore,
-});
-
-const workerName = makeWorkerName(APP_NAME, app.stage);
-const rooms = DurableObjectNamespace<InitializeTestRoom>("rooms", {
-  className: "InitializeTestRoom",
-  // The lifecycle hooks mixin relies on SQLite-backed DO synchronous KV.
-  sqlite: true,
-});
-const inspectors = DurableObjectNamespace<InspectorTestRoom>("inspectors", {
-  className: "InspectorTestRoom",
-  // The inspector routes exercise both `ctx.storage.sql` and synchronous KV.
-  sqlite: true,
-});
-const listedRooms = DurableObjectNamespace<ListedRoom>("listed-rooms", {
-  className: "ListedRoom",
-  // The listed room combines local SQLite-backed init state with a D1 mirror.
-  sqlite: true,
-});
-const catalog = await D1Database("catalog", {
-  name: `${workerName}-catalog`,
-  // E2E stages are intentionally reusable by name. `adopt` lets reruns cleanly
-  // take ownership instead of failing if a previous run left resources behind.
-  adopt: true,
-});
-
-export const worker = await Worker(APP_NAME, {
-  name: workerName,
-  adopt: true,
-  bindings: {
-    ROOMS: rooms,
-    INSPECTORS: inspectors,
-    LISTED_ROOMS: listedRooms,
-    DO_CATALOG: catalog,
+export default Alchemy.Stack(
+  APP_NAME,
+  {
+    providers: Cloudflare.providers() as never,
+    state: env.ALCHEMY_LOCAL ? Alchemy.localState() : Cloudflare.state(),
   },
-  entrypoint: "./src/durable-object-utils/test-harness/initialize-fronting-worker.ts",
-  // Optional routes let CI or a developer bind the ephemeral worker to a real
-  // hostname. Without them, tests use the workers.dev URL returned by Alchemy.
-  routes: env.DURABLE_OBJECT_UTILS_E2E_WORKER_ROUTES.map((hostname) => ({
-    pattern: `${hostname}/*`,
-    adopt: true,
-  })),
-});
+  Effect.gen(function* () {
+    const rooms = Cloudflare.DurableObjectNamespace<InitializeTestRoom>("rooms", {
+      className: "InitializeTestRoom",
+    });
+    const inspectors = Cloudflare.DurableObjectNamespace<InspectorTestRoom>("inspectors", {
+      className: "InspectorTestRoom",
+    });
+    const listedRooms = Cloudflare.DurableObjectNamespace<ListedRoom>("listed-rooms", {
+      className: "ListedRoom",
+    });
+    const catalog = yield* Cloudflare.D1Database("catalog", {
+      name: `${workerName}-catalog`,
+    }).pipe(adopt(true));
 
-const deployment = {
-  url: worker.url,
-  routes: env.DURABLE_OBJECT_UTILS_E2E_WORKER_ROUTES,
-};
+    const worker = yield* Cloudflare.Worker(APP_NAME, {
+      name: workerName,
+      domain:
+        env.DURABLE_OBJECT_UTILS_E2E_WORKER_ROUTES.length === 0
+          ? undefined
+          : env.DURABLE_OBJECT_UTILS_E2E_WORKER_ROUTES,
+      env: {
+        ROOMS: rooms,
+        INSPECTORS: inspectors,
+        LISTED_ROOMS: listedRooms,
+        DO_CATALOG: catalog,
+      },
+      main: "./src/durable-object-utils/test-harness/initialize-fronting-worker.ts",
+    }).pipe(adopt(true));
 
-if (env.DURABLE_OBJECT_UTILS_E2E_OUTPUT_JSON) {
-  console.log(JSON.stringify(deployment));
-} else {
-  console.dir(deployment, { depth: null });
-}
+    const deployment = {
+      url: worker.url,
+      routes: env.DURABLE_OBJECT_UTILS_E2E_WORKER_ROUTES,
+    };
 
-await app.finalize();
+    if (env.DURABLE_OBJECT_UTILS_E2E_OUTPUT_JSON) {
+      console.log(JSON.stringify(deployment));
+    } else {
+      console.dir(deployment, { depth: null });
+    }
+
+    return deployment;
+  }),
+);
 
 function makeWorkerName(appName: string, stage: string): string {
   const name = slugify(`${appName}-${stage}`);

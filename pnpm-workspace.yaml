@@ -83,7 +83,7 @@ overrides:
   "@orpc/tanstack-query": "1.13.14"
   "@orpc/shared": "1.13.14"
   "srvx": "0.11.12"
-  "ws": "8.19.0"
+  "ws": "^8.20.0"
   "baseline-browser-mapping": "^2.9.14"
   "@babel/parser": "^7.28.0"
   "@tanstack/query-core": "5.91.0"
@@ -92,5 +92,4 @@ overrides:
   "wrangler": "4.85.0"
 
 patchedDependencies:
-  "alchemy@0.83.3": "patches/alchemy@0.83.3.patch"
   "@better-auth/oauth-provider@1.6.9": "patches/@better-auth__oauth-provider@1.6.9.patch"

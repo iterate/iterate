@@ -13,7 +13,7 @@ const logPath = resolve(appRoot, ".alchemy", "dev-server.log");
 
 const args = parseArgs(process.argv.slice(2));
 const config = args.config ?? resolveDopplerConfig();
-const command = args.doppler ? "doppler" : "tsx";
+const command = args.doppler ? "doppler" : "pnpm";
 const commandArgs = args.doppler
   ? [
       "run",
@@ -22,11 +22,16 @@ const commandArgs = args.doppler
       "--config",
       config,
       "--",
-      "tsx",
+      "pnpm",
+      "exec",
+      "alchemy",
+      "dev",
       "./alchemy.run.ts",
+      "--stage",
+      config,
       ...args.alchemyArgs,
     ]
-  : ["./alchemy.run.ts", ...args.alchemyArgs];
+  : ["exec", "alchemy", "dev", "./alchemy.run.ts", "--stage", config, ...args.alchemyArgs];
 
 mkdirSync(resolve(appRoot, ".alchemy"), { recursive: true });
 
@@ -38,6 +43,7 @@ log.write(`# Command: ${[command, ...commandArgs].join(" ")}\n\n`);
 const child = spawn(command, commandArgs, {
   env: {
     ...process.env,
+    CI: "1",
     DEV_SERVER_LOG_PATH: logPath,
   },
   stdio: ["inherit", "pipe", "pipe"],

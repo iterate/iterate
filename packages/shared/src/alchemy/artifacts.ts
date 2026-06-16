@@ -1,11 +1,6 @@
-export type ArtifactsBinding = {
-  type: "artifacts";
-  namespace: string;
-};
-
-export function Artifacts(input: { namespace: string }): ArtifactsBinding {
-  return {
-    type: "artifacts",
-    namespace: input.namespace,
-  };
-}
+export {
+  Artifacts,
+  isArtifacts,
+  type Artifacts as ArtifactsBinding,
+  type ArtifactsProps,
+} from "alchemy/Cloudflare";

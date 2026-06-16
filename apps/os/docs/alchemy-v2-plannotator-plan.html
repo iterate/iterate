@@ -1,0 +1,651 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OS Alchemy v2 Migration Plan</title>
+    <style>
+      :root {
+        --bg: #f7f5ef;
+        --ink: #181510;
+        --muted: #625c51;
+        --line: #d8d0c2;
+        --panel: #fffdf8;
+        --accent: #2f6f63;
+        --accent-2: #b44b3f;
+        --accent-3: #4f67a5;
+        --soft: #ece5d7;
+        --ok: #1f7a5b;
+        --warn: #a65f1b;
+        --risk: #a83d36;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family:
+          Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+        line-height: 1.45;
+      }
+
+      main {
+        max-width: 1180px;
+        margin: 0 auto;
+        padding: 32px 20px 56px;
+      }
+
+      h1,
+      h2,
+      h3 {
+        margin: 0;
+        line-height: 1.1;
+        letter-spacing: 0;
+      }
+
+      h1 {
+        max-width: 860px;
+        font-size: clamp(2.2rem, 6vw, 5.2rem);
+      }
+
+      h2 {
+        font-size: 1.55rem;
+      }
+
+      h3 {
+        font-size: 1rem;
+      }
+
+      p {
+        margin: 0;
+        color: var(--muted);
+      }
+
+      code {
+        border-radius: 4px;
+        background: #ece5d7;
+        padding: 1px 5px;
+        font-family: "SFMono-Regular", Consolas, monospace;
+        font-size: 0.92em;
+      }
+
+      a {
+        color: var(--accent-3);
+      }
+
+      .hero {
+        display: grid;
+        gap: 24px;
+        min-height: 62vh;
+        align-content: center;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .kicker {
+        color: var(--accent);
+        font-size: 0.78rem;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .deck {
+        max-width: 780px;
+        color: var(--muted);
+        font-size: 1.15rem;
+      }
+
+      .summary-grid,
+      .trade-grid,
+      .timeline,
+      .checks {
+        display: grid;
+        gap: 12px;
+      }
+
+      .summary-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
+      .tile,
+      .panel,
+      .step,
+      .check {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+      }
+
+      .tile {
+        min-height: 128px;
+        padding: 16px;
+      }
+
+      .tile strong {
+        display: block;
+        margin-bottom: 8px;
+        font-size: 1.35rem;
+      }
+
+      .tile span {
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+
+      section {
+        padding: 36px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .section-head {
+        display: flex;
+        gap: 18px;
+        align-items: end;
+        justify-content: space-between;
+        margin-bottom: 18px;
+      }
+
+      .section-head p {
+        max-width: 660px;
+      }
+
+      .diagram {
+        display: grid;
+        grid-template-columns: 1fr 54px 1fr 54px 1fr;
+        gap: 10px;
+        align-items: stretch;
+      }
+
+      .node {
+        min-height: 164px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        padding: 16px;
+      }
+
+      .node h3 {
+        margin-bottom: 10px;
+      }
+
+      .node ul,
+      .panel ul,
+      .step ul {
+        margin: 10px 0 0;
+        padding-left: 18px;
+        color: var(--muted);
+      }
+
+      .node li,
+      .panel li,
+      .step li {
+        margin: 6px 0;
+      }
+
+      .arrow {
+        display: grid;
+        place-items: center;
+        color: var(--accent);
+        font-weight: 900;
+        font-size: 1.4rem;
+      }
+
+      .trade-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .panel {
+        padding: 18px;
+      }
+
+      .panel h3 {
+        margin-bottom: 8px;
+      }
+
+      .good {
+        border-top: 4px solid var(--ok);
+      }
+
+      .hard {
+        border-top: 4px solid var(--warn);
+      }
+
+      .risk {
+        border-top: 4px solid var(--risk);
+      }
+
+      .timeline {
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+      }
+
+      .step {
+        position: relative;
+        min-height: 210px;
+        padding: 16px;
+      }
+
+      .num {
+        display: inline-grid;
+        width: 28px;
+        height: 28px;
+        place-items: center;
+        margin-bottom: 12px;
+        border-radius: 50%;
+        background: var(--ink);
+        color: white;
+        font-size: 0.8rem;
+        font-weight: 800;
+      }
+
+      .checks {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .check {
+        padding: 14px 16px;
+      }
+
+      .check b {
+        display: block;
+        margin-bottom: 6px;
+      }
+
+      .status-ok {
+        color: var(--ok);
+      }
+
+      .status-warn {
+        color: var(--warn);
+      }
+
+      .callout {
+        border-left: 5px solid var(--accent-2);
+        background: #fff8ee;
+        padding: 16px 18px;
+      }
+
+      .source-list {
+        columns: 2;
+        column-gap: 32px;
+      }
+
+      @media (max-width: 900px) {
+        .summary-grid,
+        .trade-grid,
+        .timeline,
+        .checks,
+        .diagram {
+          grid-template-columns: 1fr;
+        }
+
+        .arrow {
+          transform: rotate(90deg);
+          min-height: 36px;
+        }
+
+        .section-head {
+          display: grid;
+        }
+
+        .source-list {
+          columns: 1;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header class="hero">
+        <div class="kicker">Plannotator plan · apps/os · June 15, 2026</div>
+        <h1>Move OS deploy infrastructure to Alchemy v2, keep Effect out of runtime code.</h1>
+        <p class="deck">
+          This spike has been implemented in-place. The runtime Workers remain plain async modules.
+          Effect is used only in Alchemy stack construction, deploy-time custom actions, and
+          resource orchestration.
+        </p>
+        <div class="summary-grid">
+          <div class="tile">
+            <strong>v2 beta</strong>
+            <span
+              ><code>alchemy@next</code> resolves to <code>2.0.0-beta.55</code> with Effect 4
+              beta.</span
+            >
+          </div>
+          <div class="tile">
+            <strong>no compat</strong>
+            <span>v1 state and helper APIs are removed rather than shimmed.</span>
+          </div>
+          <div class="tile">
+            <strong>local proven</strong>
+            <span><code>pnpm --dir apps/os dev</code> served SSR sign-in locally.</span>
+          </div>
+          <div class="tile">
+            <strong>risk remains</strong>
+            <span
+              >Several service-worker local <code>workerd</code> spawns still report
+              <code>EBADF</code>.</span
+            >
+          </div>
+        </div>
+      </header>
+
+      <section>
+        <div class="section-head">
+          <h2>Architecture</h2>
+          <p>
+            The migration is a deploy-system rewrite, not an app-runtime rewrite. Worker handlers,
+            Durable Objects, stream code, oRPC, and TanStack routes still execute as normal
+            Cloudflare Worker modules.
+          </p>
+        </div>
+        <div class="diagram" aria-label="Migration architecture">
+          <div class="node">
+            <h3>Before</h3>
+            <ul>
+              <li>v1 top-level <code>await alchemy(...)</code></li>
+              <li><code>alchemy/cloudflare</code> resources</li>
+              <li>patched Alchemy for Artifacts</li>
+              <li>Vite auxiliary-worker manifest</li>
+            </ul>
+          </div>
+          <div class="arrow">→</div>
+          <div class="node">
+            <h3>Now</h3>
+            <ul>
+              <li><code>Alchemy.Stack("os", ...)</code></li>
+              <li><code>Cloudflare.Worker</code> and <code>Cloudflare.Vite</code></li>
+              <li><code>Cloudflare.Artifacts</code> native binding</li>
+              <li><code>Cloudflare.QueueConsumer</code></li>
+            </ul>
+          </div>
+          <div class="arrow">→</div>
+          <div class="node">
+            <h3>Runtime Boundary</h3>
+            <ul>
+              <li>Effect stays in <code>alchemy.run.ts</code></li>
+              <li>Workers keep async <code>fetch</code></li>
+              <li>Env types use <code>InferEnv</code></li>
+              <li>AI uses a raw native binding shim</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Local Development</h2>
+          <p>
+            The user-facing command remains <code>pnpm dev</code>. Under the hood it now launches
+            <code>alchemy dev ./alchemy.run.ts --stage &lt;doppler-config&gt;</code> through
+            Doppler.
+          </p>
+        </div>
+        <div class="trade-grid">
+          <div class="panel good">
+            <h3>What the developer does</h3>
+            <ul>
+              <li>Run <code>pnpm dev</code> from the repo root or <code>apps/os</code>.</li>
+              <li>The script resolves the Doppler config, normally <code>dev_jonas</code> here.</li>
+              <li>
+                It writes <code>apps/os/.alchemy/dev-server.json</code> with the chosen localhost
+                URL.
+              </li>
+              <li>
+                The browser opens the local app URL, for example
+                <code>http://localhost:52011</code>.
+              </li>
+            </ul>
+          </div>
+          <div class="panel hard">
+            <h3>What changed underneath</h3>
+            <ul>
+              <li>Alchemy v2 provisions or reads cloud-backed resources during local dev.</li>
+              <li>
+                Local Workers run in Alchemy's v2 local runtime rather than the old generated
+                wrangler topology.
+              </li>
+              <li>
+                There is no <code>.alchemy/local/aux-workers.json</code> Vite integration anymore.
+              </li>
+              <li>
+                <code>CI=1</code> is passed so Cloudflare auth uses Doppler credentials
+                non-interactively.
+              </li>
+            </ul>
+          </div>
+          <div class="panel good">
+            <h3>What gets easier</h3>
+            <ul>
+              <li>One deploy primitive covers dev, previews, and production.</li>
+              <li>Native Artifacts and QueueConsumer remove local patch surface.</li>
+              <li>The app Worker can be typed directly from Alchemy v2 resources.</li>
+              <li>
+                First-run adoption is expressed with resource policy instead of ad hoc v1 flags.
+              </li>
+            </ul>
+          </div>
+          <div class="panel risk">
+            <h3>What gets harder</h3>
+            <ul>
+              <li>Local dev now depends on Cloudflare credentials and reachable cloud APIs.</li>
+              <li>
+                Remote-backed D1/R2/AI behavior is less isolated than the old fully-local default.
+              </li>
+              <li>
+                Alchemy v2 beta currently logs <code>spawn EBADF</code> for some service Workers in
+                this topology.
+              </li>
+              <li>
+                Workers AI needs a raw <code>{ type: "ai" }</code> binding until Alchemy exposes a
+                public marker.
+              </li>
+            </ul>
+          </div>
+        </div>
+        <div class="callout" style="margin-top: 16px">
+          <p>
+            Demonstrated locally: <code>pnpm --dir apps/os dev</code> selected
+            <code>http://localhost:52011</code>. A probe of <code>/</code> followed the expected
+            <code>307</code> redirect to <code>/sign-in?redirect_url=%2F</code> and returned
+            <code>200</code> with a 9601 byte SSR HTML response containing the sign-in UI.
+          </p>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Preview And Production</h2>
+          <p>
+            Previews and production should keep the repo's current Doppler-driven environment
+            contract: config selects secrets, Cloudflare account, app hostnames, and the Alchemy
+            stage.
+          </p>
+        </div>
+        <div class="timeline">
+          <div class="step">
+            <span class="num">1</span>
+            <h3>Doppler config</h3>
+            <ul>
+              <li>
+                <code>dev_*</code>, <code>preview_N</code>, and <code>prd</code> set
+                <code>ALCHEMY_STAGE</code>.
+              </li>
+              <li>App config is serialized into <code>APP_CONFIG</code>.</li>
+            </ul>
+          </div>
+          <div class="step">
+            <span class="num">2</span>
+            <h3>Stack apply</h3>
+            <ul>
+              <li>Resources are declared in one <code>Alchemy.Stack</code>.</li>
+              <li>
+                Durable Object namespaces, D1, queues, R2, loader, and Workers deploy together.
+              </li>
+            </ul>
+          </div>
+          <div class="step">
+            <span class="num">3</span>
+            <h3>Routes</h3>
+            <ul>
+              <li>v2 lacks the old route helper we used.</li>
+              <li>OS keeps a custom <code>EnsureWorkerRoutes</code> action for DNS and routes.</li>
+            </ul>
+          </div>
+          <div class="step">
+            <span class="num">4</span>
+            <h3>Adoption</h3>
+            <ul>
+              <li>No backwards compatibility layer is kept.</li>
+              <li>First preview/prod run must be treated as explicit resource adoption.</li>
+            </ul>
+          </div>
+          <div class="step">
+            <span class="num">5</span>
+            <h3>Verification</h3>
+            <ul>
+              <li>Use the app CLI against preview slots after deploy.</li>
+              <li>Confirm route ownership, queue consumer attachment, and Durable Object state.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Execution Plan</h2>
+          <p>
+            The spike implemented the first pass. The remaining work is hardening the beta local
+            runtime and preview/prod adoption path before this should be treated as shippable.
+          </p>
+        </div>
+        <div class="checks">
+          <div class="check">
+            <b class="status-ok">Done: dependency and entrypoint migration</b>
+            <p><code>apps/os</code> and shared Alchemy helpers use v2 imports and stack style.</p>
+          </div>
+          <div class="check">
+            <b class="status-ok">Done: app local SSR proof</b>
+            <p>Local <code>/</code> renders through the OS wrapper and auth middleware.</p>
+          </div>
+          <div class="check">
+            <b class="status-warn">Next: local service-worker startup</b>
+            <p>
+              Investigate Alchemy v2 <code>workerd</code> <code>spawn EBADF</code> under many-worker
+              OS local dev.
+            </p>
+          </div>
+          <div class="check">
+            <b class="status-warn">Next: preview dry run</b>
+            <p>
+              Run one disposable <code>preview_N</code> adoption and validate CLI RPC, routes, and
+              queue consumer.
+            </p>
+          </div>
+          <div class="check">
+            <b class="status-warn">Next: Workers AI upstream shape</b>
+            <p>
+              Replace the raw AI binding shim once Alchemy v2 exposes a native non-Gateway AI
+              resource.
+            </p>
+          </div>
+          <div class="check">
+            <b class="status-warn">Next: pin or track beta</b>
+            <p>
+              <code>alchemy@next</code> is fast moving. Prefer pinning the exact beta before a
+              production PR.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Verification Log</h2>
+          <p>Commands run on this worktree after the migration.</p>
+        </div>
+        <div class="panel">
+          <ul>
+            <li>
+              <code>pnpm install</code> completed with expected peer warnings for Vite 8 and Alchemy
+              beta.
+            </li>
+            <li><code>pnpm --dir apps/os typecheck</code> passed.</li>
+            <li>
+              <code>pnpm --dir packages/shared typecheck</code> passed after migrating the
+              durable-object e2e Alchemy entry.
+            </li>
+            <li>
+              <code>pnpm exec oxlint ... --deny-warnings</code> passed for touched deploy files.
+            </li>
+            <li>
+              <code
+                >pnpm --dir packages/shared exec vitest run src/alchemy/local-dev-server.test.ts
+                src/alchemy/iterate-app.test.ts</code
+              >
+              passed.
+            </li>
+            <li>
+              <code>pnpm --dir apps/os dev</code> served local SSR sign-in at
+              <code>http://localhost:52011</code>.
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Sources</h2>
+          <p>Primary upstream references used for the migration research.</p>
+        </div>
+        <ul class="source-list">
+          <li><a href="https://v2.alchemy.run/getting-started/">Alchemy v2 Getting Started</a></li>
+          <li>
+            <a href="https://v2.alchemy.run/guides/migrating-from-v1/"
+              >Alchemy v2 Migrating From v1</a
+            >
+          </li>
+          <li>
+            <a href="https://v2.alchemy.run/providers/cloudflare/worker/"
+              >Alchemy v2 Cloudflare Worker</a
+            >
+          </li>
+          <li>
+            <a href="https://v2.alchemy.run/providers/cloudflare/d1database/"
+              >Alchemy v2 D1Database</a
+            >
+          </li>
+          <li>
+            <a href="https://v2.alchemy.run/providers/cloudflare/durableobjectnamespace/"
+              >Alchemy v2 DurableObjectNamespace</a
+            >
+          </li>
+          <li>
+            <a href="https://v2.alchemy.run/providers/cloudflare/queueconsumer/"
+              >Alchemy v2 QueueConsumer</a
+            >
+          </li>
+          <li>
+            <a href="https://v2.alchemy.run/concepts/local-development/"
+              >Alchemy v2 Local Development</a
+            >
+          </li>
+          <li>
+            <a href="https://v2.alchemy.run/guides/circular-bindings/"
+              >Alchemy v2 Circular Bindings</a
+            >
+          </li>
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>
