@@ -563,8 +563,7 @@ describe("plain objects ARE capabilities", () => {
     // originals. This fake mirrors a member stub's protocol surface.
     const disposed: string[] = [];
     const memberStub = (label: string) => {
-      const fn = (...args: unknown[]) => ({ args, from: label });
-      return Object.assign(fn, {
+      return Object.assign((...args: unknown[]) => ({ args, from: label }), {
         dup: () => memberStub(`${label}+dup`),
         [Symbol.dispose]: () => disposed.push(label),
       });

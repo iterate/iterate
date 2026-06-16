@@ -1,8 +1,8 @@
 # Streams Domain
 
-Streams is the OS domain for namespace/path event streams.
+Streams is the OS domain for project/path event streams.
 
-OS uses the stable Project ID as the stream namespace for project streams, but
+OS uses the stable Project ID as the owner key for project streams, but
 stream paths remain project-local and must not encode `/projects/{projectId}`.
 
 The stream Durable Object is bound as `STREAM`. The lower-level runtime that

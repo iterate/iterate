@@ -1,14 +1,5 @@
 import OpenAI from "openai";
-import type { ResponsesClientEvent } from "openai/resources/responses/responses";
-import { ResponsesWSBase } from "openai/resources/responses/ws-base";
-import { z } from "zod";
-import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
-import {
-  getInitializedDoStub,
-  NotInitializedError,
-} from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import type { ProcessorStreamApi } from "@iterate-com/shared/streams/stream-processors";
-import type { Event, EventInput, StreamCursor } from "@iterate-com/shared/streams/types";
+import { DurableObject } from "cloudflare:workers";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import type { StreamEvent } from "@iterate-com/shared/streams/stream-event";
 import type { StreamRpc } from "~/domains/streams/engine/types.ts";
@@ -31,13 +22,8 @@ import {
   CloudflareAiProcessor,
   type CloudflareAiBinding,
 } from "~/domains/agents/stream-processors/cloudflare-ai/implementation.ts";
-import {
-  OpenAiWsProcessor,
-  type OpenAiResponsesWebSocket,
-  type OpenAiResponsesWebSocketStreamMessage,
-} from "~/domains/agents/stream-processors/openai-ws/implementation.ts";
-import { JsonataReactorProcessorContract } from "~/domains/agents/stream-processors/jsonata-reactor/contract.ts";
-import { JsonataReactorProcessor } from "~/domains/agents/stream-processors/jsonata-reactor/implementation.ts";
+import { OpenAiWsProcessor } from "~/domains/agents/stream-processors/openai-ws/implementation.ts";
+import { createOpenAiResponsesWebSocketClient } from "~/domains/agents/stream-processors/openai-ws/cloudflare-responses-websocket.ts";
 import {
   getInitializedStreamStub,
   getStreamDurableObjectName,
@@ -50,43 +36,37 @@ import {
   type RepoInfo,
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import { getReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
-import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-backend.ts";
-import {
-  type WorkspaceDurableObject,
-  type WorkspaceStructuredName,
-} from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
+import { getStreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
+import type { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 import { stripArtifactTokenQuery } from "~/domains/repos/artifact-token.ts";
 import {
-  OS_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE,
+  AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE,
   type AgentLlmProvider,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
 import {
   AGENTS_STREAM_PATH,
-  AgentDurableObjectName,
-  AgentDurableObjectStructuredName,
+  type AgentDurableObjectName,
   agentLlmProcessorSlug,
-  agentProcessorSubscriptionConfiguredEvents,
-  getAgentDurableObjectName,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
+import { AGENT_CHAT_CAPABILITY_INSTRUCTIONS } from "~/domains/agents/agent-prompt-guidance.ts";
 import { buildProjectStreamViewerUrl } from "~/lib/stream-viewer-url.ts";
+import { formatDurableObjectName, parseDurableObjectName } from "~/domains/durable-object-names.ts";
 
 export {
   AGENTS_STREAM_PATH,
-  AgentDurableObjectStructuredName,
   agentLlmProcessorSlug,
   agentProcessorSubscriptionKey,
   getAgentDurableObjectName,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
 
 export type AgentDurableObjectEnv = {
-  AGENT: DurableObjectNamespace<AgentDurableObject>;
   AI: CloudflareAiBinding;
   APP_CONFIG: string;
   ITX_CONTEXT: DurableObjectNamespace<ItxDurableObject>;
   // Shared app D1 — read-only here, for the `itx.debug()` project-slug lookup.
   // The agent writes NO object-catalog projection: it is listed by walking the
   // /agents stream tree and addressed by its self-describing name.
-  DO_CATALOG: D1Database;
+  DB: D1Database;
   REPO: DurableObjectNamespace<RepoDurableObject>;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
   WORKSPACE: DurableObjectNamespace<WorkspaceDurableObject>;
@@ -101,65 +81,25 @@ export type CloneProjectRepoInput = {
   workspace: DurableObjectStub<WorkspaceDurableObject>;
 };
 
-type AgentStreamApi = Omit<
-  ProcessorStreamApi<{
-    emits: readonly string[];
-    events: Record<string, unknown>;
-    processorDeps?: readonly unknown[];
-  }>,
-  "append" | "appendBatch" | "read"
-> & {
-  append(args: { event: EventInput; streamPath?: string }): Promise<Event>;
-  appendBatch(args: { events: EventInput[]; streamPath?: string }): Promise<Event[]>;
-  read(args?: {
-    streamPath?: string;
-    afterOffset?: StreamCursor;
-    beforeOffset?: StreamCursor;
-  }): Promise<Event[]>;
-};
-
-// An agent IS a context, and its identity IS its stream coordinate:
-// `{projectId}:{agentPath}` (no opaque JSON name). The lifecycle base parses
-// that directly via the AgentDurableObjectName codec. No D1 object catalog —
-// agents are listed by walking the `/agents` stream tree (the UI is just the
-// stream explorer scoped to /agents), and addressed by their self-describing
-// coordinate; nothing enumerates them through a catalog.
-const AgentLifecycleBase = createIterateDurableObjectBase<
-  typeof AgentDurableObjectName,
-  AgentDurableObjectEnv
->({
-  className: "AgentDurableObject",
-  nameSchema: AgentDurableObjectName,
-});
-
 /** Bump when agentContextCapabilities changes — re-provides the agent's tools
  * onto its own context (each provide appends an itx/capability-provided event
  * that both folds into the capability table and renders into the LLM's view). */
 const AGENT_CONTEXT_CAPABILITIES_VERSION = "8";
 
-export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv> {
+export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
+  readonly name = parseDurableObjectName(this.ctx.id.name!);
+
   host = createStreamProcessorHost(this.ctx);
   agentProcessor = this.host.add(
     "agent",
     (deps) =>
       new AgentProcessor({
         ...deps,
-        ensureChildAgentRunner: async (childPath) => {
-          const params = await this.ensureStartedOrInitializeFromRuntimeName();
-          const agentPath = StreamPath.safeParse(childPath);
-          if (!agentPath.success) return;
-          const name = getAgentDurableObjectName({
-            agentPath: agentPath.data,
-            projectId: params.projectId,
-          });
-          await this.env.AGENT.getByName(name).initialize({ name });
-        },
-        ensureItxContext: async () => {
-          const params = await this.ensureStartedOrInitializeFromRuntimeName();
-          return await this.ensureItxContext(params);
-        },
-        isAgentsRootStream: () => this.structuredName.agentPath === AGENTS_STREAM_PATH,
+        isAgentsRootStream: () => this.name.path === AGENTS_STREAM_PATH,
         readStreamEvents: () => this.readSubscribedStreamEvents("agent"),
+        setupAgentRuntime: async () => {
+          await this.setupAgentRuntime(this.projectScopedName());
+        },
       }),
   );
   openAiWsProcessor = this.host.add("openai-ws", (deps) => {
@@ -189,93 +129,66 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
         readStreamEvents: () => this.readSubscribedStreamEvents("cloudflare-ai"),
       }),
   );
-  jsonataReactorProcessor = this.host.add(
-    "jsonata-reactor",
-    (deps) => new JsonataReactorProcessor(deps),
-  );
+  // eslint-disable-next-line no-unused-private-class-members -- oxlint false positive: read and assigned via ??=.
+  #runtimeSetup: Promise<void> | undefined;
 
-  constructor(ctx: DurableObjectState, env: AgentDurableObjectEnv) {
-    super(ctx, env);
-
-    this.registerOnInstanceWake(async (params) => {
-      if (params.agentPath === AGENTS_STREAM_PATH) {
-        await this.ensureAgentSubscriptions(params, [
-          JsonataReactorProcessorContract.slug,
-          AgentProcessorContract.slug,
-        ]);
-      } else {
-        await this.ensureAgentStreamExists(params);
-        this.ctx.waitUntil(
-          this.ensureAgentWorkspace(params).catch((error) => {
-            console.error("[agent-workspace-setup] failed", error);
-          }),
-        );
-        // Deliberately NOT awaited: context provisioning probes each rpc
-        // capability for self-description, and those loopback dials can only
-        // make progress once this wake hook releases the input gate — awaiting
-        // here deadlocks until the probes' deadlines and blows the 30s
-        // blockConcurrencyWhile budget. Script runs ensure the context lazily
-        // via getItxContextId() (single-flighted), so nothing needs it
-        // synchronously at wake.
-        this.ctx.waitUntil(
-          this.ensureItxContext(params).catch((error) => {
-            console.error("[agent-itx-context-setup] failed", error);
-          }),
-        );
-      }
-      // Deliberately no catch-up wait here: wake hooks run inside
-      // `blockConcurrencyWhile`, and the processors are co-hosted on this DO,
-      // so the Stream DO's subscription handshake and event delivery are
-      // inbound calls that cannot land while the input gate is closed. A wait
-      // here can never observe progress and would burn its full timeout.
-      // Public methods await `ensureStartedAndCaughtUp()` instead, which runs
-      // the same wait once per instance wake, outside the gate.
+  private async setupAgentRuntime(params: AgentDurableObjectName): Promise<void> {
+    this.#runtimeSetup ??= this.setupAgentRuntimeOnce(params).finally(() => {
+      this.#runtimeSetup = undefined;
     });
+    await this.#runtimeSetup;
   }
 
-  private async ensureAgentStreamExists(params: AgentDurableObjectStructuredName) {
+  private async setupAgentRuntimeOnce(params: AgentDurableObjectName): Promise<void> {
+    await this.ensureAgentStreamExists(params);
+    await this.ensureItxContext(params);
+    await this.ensureAgentWorkspace(params);
+  }
+
+  private projectScopedName(): AgentDurableObjectName {
+    if (this.name.projectId === null) {
+      throw new Error("Agent Durable Object must be project-scoped.");
+    }
+    if (!String(this.name.path).startsWith("/agents")) {
+      throw new Error(
+        `Agent Durable Object path must start with "/agents", got ${this.name.path}.`,
+      );
+    }
+    return { path: this.name.path, projectId: this.name.projectId };
+  }
+
+  private projectId(): string {
+    return this.projectScopedName().projectId;
+  }
+
+  private async ensureAgentStreamExists(params: AgentDurableObjectName) {
     const stream = await getInitializedStreamStub({
       durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: params.projectId,
-      path: params.agentPath,
+      projectId: params.projectId,
+      path: params.path,
     });
     await stream.getState();
   }
 
-  /** See the wake hook comment: the wake-time catch-up runs outside the lifecycle gate. */
-  // eslint-disable-next-line no-unused-private-class-members -- oxlint false positive: read and assigned via ??=.
-  #wakeCatchUp: Promise<void> | undefined;
-
-  private async ensureStartedAndCaughtUp(): Promise<AgentDurableObjectStructuredName> {
-    const params = await this.ensureStarted();
-    this.#wakeCatchUp ??= this.waitForAgentProcessorsCatchUp(params).catch((error: unknown) => {
-      this.#wakeCatchUp = undefined;
-      throw error;
-    });
-    await this.#wakeCatchUp;
-    return params;
-  }
-
   /**
    * Subscription callables on agent streams dial this host entry point.
-   * Initialize from the runtime name first: a cold instance can receive the
-   * handshake before anything else has touched it, and the wake hook is what
-   * seeds the agent's own subscriptions and setup events.
+   * The stream already owns setup through subscription facts; this method only
+   * validates that the DO name is a project-scoped agent coordinate.
    */
   async requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
-    await this.ensureStartedOrInitializeFromRuntimeName();
+    this.projectScopedName();
     return await this.host.requestStreamSubscription(args);
   }
 
   async getRuntimeState() {
-    const params = await this.ensureStartedAndCaughtUp();
+    const params = this.projectScopedName();
     return await this.getAgentRuntimeState(params);
   }
 
   async sendMessage(input: { message: string; channel?: string }) {
-    const params = await this.ensureStartedAndCaughtUp();
+    const params = this.projectScopedName();
     const origin = parseAgentMessageOrigin(input.channel);
-    const event = await this.streamsEntrypoint(params.agentPath).append({
+    const event = await this.streamsEntrypoint(params.path).append({
       event: {
         type: "events.iterate.com/agents/user-message-received",
         payload: {
@@ -299,9 +212,9 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   }
 
   async doThing(input: { label: string; value: number }) {
-    await this.ensureStartedAndCaughtUp();
+    this.projectScopedName();
     return {
-      agentName: this.name,
+      agentName: this.ctx.id.name,
       label: input.label,
       value: input.value,
       doubled: input.value * 2,
@@ -314,7 +227,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     path: string[];
     tool: "chat" | "debug";
   }) {
-    await this.ensureStartedAndCaughtUp();
+    this.projectScopedName();
     if (input.tool === "debug") {
       return await this.createDebugSnapshot();
     }
@@ -332,30 +245,11 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     return { event };
   }
 
-  private async ensureAgentSubscriptions(
-    params: AgentDurableObjectStructuredName,
-    processorSlugs: readonly string[],
-  ) {
+  private async waitForAgentProcessorsCatchUp(params: AgentDurableObjectName) {
     const stream = await getInitializedStreamStub({
       durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: params.projectId,
-      path: params.agentPath,
-    });
-
-    await stream.appendBatch(
-      agentProcessorSubscriptionConfiguredEvents({
-        agentPath: params.agentPath,
-        processorSlugs,
-        projectId: params.projectId,
-      }),
-    );
-  }
-
-  private async waitForAgentProcessorsCatchUp(params: AgentDurableObjectStructuredName) {
-    const stream = await getInitializedStreamStub({
-      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: params.projectId,
-      path: params.agentPath,
+      projectId: params.projectId,
+      path: params.path,
     });
     const events = await stream.history({ before: "end" });
     const maxOffset = events.at(-1)?.offset ?? 0;
@@ -391,19 +285,19 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   }
 
   /** Per-processor checkpoints. */
-  private async getAgentRuntimeState(params: AgentDurableObjectStructuredName) {
+  private async getAgentRuntimeState(params: AgentDurableObjectName) {
     const processorSlugs = await this.agentProcessorSlugs(params);
     return {
-      agentPath: String(params.agentPath),
+      agentPath: String(params.path),
       processors: Object.fromEntries(
         processorSlugs.map((slug) => [slug, this.host.runtimeState(slug).snapshot ?? null]),
       ),
     };
   }
 
-  private async agentProcessorSlugs(params: AgentDurableObjectStructuredName) {
-    if (params.agentPath === AGENTS_STREAM_PATH) {
-      return [JsonataReactorProcessorContract.slug, AgentProcessorContract.slug];
+  private async agentProcessorSlugs(params: AgentDurableObjectName) {
+    if (params.path === AGENTS_STREAM_PATH) {
+      return [AgentProcessorContract.slug];
     }
     return [
       AgentProcessorContract.slug,
@@ -417,7 +311,6 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       agent: this.agentProcessor,
       "openai-ws": this.openAiWsProcessor,
       "cloudflare-ai": this.cloudflareAiProcessor,
-      "jsonata-reactor": this.jsonataReactorProcessor,
     };
     const processor = processors[processorSlug];
     if (processor === undefined) {
@@ -439,7 +332,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       );
     }
     return {
-      projectId: subscription.namespace,
+      projectId: subscription.projectId,
       streamPath: StreamPath.parse(subscription.path),
     };
   }
@@ -448,20 +341,9 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   private async readSubscribedStreamEvents(processorSlug: string): Promise<StreamEvent[]> {
     const { projectId, streamPath } = this.subscribedStreamContext(processorSlug);
     const stream = this.env.STREAM.getByName(
-      getStreamDurableObjectName({ namespace: projectId, path: streamPath }),
+      getStreamDurableObjectName({ projectId, path: streamPath }),
     ) as unknown as StreamRpc;
     return await stream.getEvents({ afterOffset: 0, beforeOffset: null });
-  }
-
-  private async ensureStartedOrInitializeFromRuntimeName() {
-    try {
-      return await this.ensureStarted();
-    } catch (error) {
-      if (!(error instanceof NotInitializedError)) throw error;
-      const runtimeName = this.getDurableObjectName();
-      if (runtimeName == null) throw error;
-      return await this.initialize({ name: runtimeName });
-    }
   }
 
   /**
@@ -473,8 +355,8 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
    * catalog: the provide events fold into the capability table (resolution)
    * while the agent processor renders them for the LLM (visibility).
    */
-  async ensureItxContext(
-    params: AgentDurableObjectStructuredName,
+  private async ensureItxContext(
+    params: AgentDurableObjectName,
   ): Promise<{ context: string; contextAddress: CapabilityAddress }> {
     this.#ensureItxContextPromise ??= this.#ensureItxContextOnce(params).finally(() => {
       this.#ensureItxContextPromise = undefined;
@@ -487,7 +369,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     | undefined;
 
   async #ensureItxContextOnce(
-    params: AgentDurableObjectStructuredName,
+    params: AgentDurableObjectName,
   ): Promise<{ context: string; contextAddress: CapabilityAddress }> {
     const context = agentContextRef(params);
     const selfAddress = agentContextAddress(params);
@@ -501,13 +383,13 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     // parent is the project context.
     await createContext({
       env: this.env as unknown as Env,
-      name: String(params.agentPath),
-      namespace: params.projectId,
+      name: String(params.path),
+      projectId: params.projectId,
       parent: {
         address: contextAddress(projectContextRef(params.projectId)),
         ref: projectContextRef(params.projectId),
       },
-      path: String(params.agentPath),
+      path: String(params.path),
     });
 
     // Provide the agent's tools onto its OWN context — the one and only door
@@ -518,7 +400,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     // processor renders that same event into the LLM's visible context (so the
     // model knows the tool exists). One abstraction, one event, two readers.
     const node = dialContext(this.env as unknown as Env, selfAddress).itx();
-    const caps = this.agentContextCapabilities(params, context);
+    const caps = this.agentContextCapabilities(params);
     for (const cap of caps) {
       await node.provideCapability({
         capability: cap.capability,
@@ -530,7 +412,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     return { context, contextAddress: selfAddress };
   }
 
-  private async ensureAgentWorkspace(params: AgentDurableObjectStructuredName) {
+  private async ensureAgentWorkspace(params: AgentDurableObjectName) {
     const workspace = await this.getAgentWorkspace(params);
 
     if (await workspace.hasFile(AGENT_PROJECT_REPO_CLONE_COMPLETE_PATH)) {
@@ -544,13 +426,17 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       let cloneIsUsable = true;
       try {
         await git.status({ dir: AGENT_PROJECT_REPO_DIR });
+        cloneIsUsable = await this.projectRepoCloneIsOnDefaultBranch({
+          git,
+          repo,
+        });
       } catch {
         cloneIsUsable = false;
       }
 
       if (cloneIsUsable) {
         await workspace.writeFile({
-          content: `${repo.slug}\n`,
+          content: `${repo.path}\n`,
           path: AGENT_PROJECT_REPO_CLONE_COMPLETE_PATH,
         });
         return;
@@ -564,7 +450,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     });
     await this.cloneProjectRepo({ git, repo, workspace });
     await workspace.writeFile({
-      content: `${repo.slug}\n`,
+      content: `${repo.path}\n`,
       path: AGENT_PROJECT_REPO_CLONE_COMPLETE_PATH,
     });
   }
@@ -579,24 +465,62 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       branch: input.repo.defaultBranch,
       depth: 1,
     });
+    await this.ensureProjectRepoBranch({ git: input.git, repo: input.repo });
   }
 
-  private async getOrCreateProjectRepo(
-    params: AgentDurableObjectStructuredName,
-  ): Promise<RepoInfo> {
+  private async projectRepoCloneIsOnDefaultBranch(input: {
+    git: CloneProjectRepoInput["git"];
+    repo: RepoInfo;
+  }) {
+    const branch = await input.git.branch({ dir: AGENT_PROJECT_REPO_DIR, list: true });
+    return (
+      branch.current === input.repo.defaultBranch && (await this.projectRepoBranchHasHead(input))
+    );
+  }
+
+  private async ensureProjectRepoBranch(input: {
+    git: CloneProjectRepoInput["git"];
+    repo: RepoInfo;
+  }) {
+    const branch = await input.git.branch({ dir: AGENT_PROJECT_REPO_DIR, list: true });
+    const branchHasHead = await this.projectRepoBranchHasHead(input);
+
+    if (!branch.branches?.includes(input.repo.defaultBranch) || !branchHasHead) {
+      await input.git.branch({ dir: AGENT_PROJECT_REPO_DIR, name: input.repo.defaultBranch });
+    }
+    await input.git.checkout({
+      dir: AGENT_PROJECT_REPO_DIR,
+      force: true,
+      ref: input.repo.defaultBranch,
+    });
+  }
+
+  private async projectRepoBranchHasHead(input: {
+    git: CloneProjectRepoInput["git"];
+    repo: RepoInfo;
+  }) {
+    try {
+      const log = await input.git.log({
+        depth: 1,
+        dir: AGENT_PROJECT_REPO_DIR,
+        ref: input.repo.defaultBranch,
+      });
+      return log.length > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  private async getOrCreateProjectRepo(params: AgentDurableObjectName): Promise<RepoInfo> {
     return await getReposCapability({
       exports: this.ctx.exports,
       props: { projectId: params.projectId },
-    }).ensureProjectRepoInfo({ projectSlug: null });
+    }).ensureProjectRepoInfo();
   }
 
-  private async getAgentWorkspace(params: AgentDurableObjectStructuredName) {
-    const { context: contextId } = await this.ensureItxContext(params);
-    return await getInitializedDoStub({
-      allowCreate: true,
-      namespace: this.env.WORKSPACE,
-      name: agentWorkspaceName({ contextId, params }),
-    });
+  private async getAgentWorkspace(params: AgentDurableObjectName) {
+    await this.ensureItxContext(params);
+    return this.env.WORKSPACE.getByName(agentWorkspaceName(params));
   }
 
   private async createDebugSnapshot() {
@@ -606,19 +530,19 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       ? buildProjectStreamViewerUrl({
           baseUrl: config.baseUrl,
           projectSlug: project.slug,
-          streamPath: this.structuredName.agentPath,
+          streamPath: this.name.path,
         })
       : (config.baseUrl ?? "https://os.iterate.com");
     const snapshot = {
       project:
         project == null
-          ? { id: this.structuredName.projectId }
+          ? { id: this.projectId() }
           : {
-              id: this.structuredName.projectId,
+              id: this.projectId(),
               organizationSlug: project.organizationSlug ?? undefined,
               slug: project.slug,
             },
-      streamPath: this.structuredName.agentPath,
+      streamPath: this.name.path,
       streamUrl,
     };
     return formatDebugMessage(snapshot);
@@ -626,13 +550,13 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
 
   private async readDebugProjectInfo(): Promise<DebugProjectInfo | null> {
     try {
-      const row = await this.env.DO_CATALOG.prepare(
+      const row = await this.env.DB.prepare(
         `select p.id, p.slug
          from projects p
          where p.id = ?
          limit 1`,
       )
-        .bind(this.structuredName.projectId)
+        .bind(this.projectId())
         .first<{ id: string; slug: string }>();
       if (row == null) return null;
       return {
@@ -641,8 +565,8 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
         slug: row.slug,
       };
     } catch (error) {
-      console.error("[os-agent] failed to read project debug info", {
-        agentName: this.name,
+      console.error("[agent] failed to read project debug info", {
+        agentName: this.ctx.id.name,
         error,
       });
       return null;
@@ -658,7 +582,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     idempotencyKey: string;
     message: string;
   }) {
-    return await this.streamsEntrypoint(this.structuredName.agentPath).append({
+    return await this.streamsEntrypoint(this.name.path).append({
       event: {
         type:
           parseAgentMessageOrigin(input.channel) === "tui"
@@ -672,10 +596,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     });
   }
 
-  private agentContextCapabilities(
-    params: AgentDurableObjectStructuredName,
-    contextId: string,
-  ): Array<{
+  private agentContextCapabilities(params: AgentDurableObjectName): Array<{
     name: string;
     instructions: string;
     capability: CapabilityAddress;
@@ -683,7 +604,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     // Every agent gets a rich toolset. The only thing that varies by agent is
     // the channel — how it talks to its user. Channel-specific prompting lives
     // in project-owned setup events appended by the project processor.
-    const channel = isSlackAgentPath(params.agentPath)
+    const channel = isSlackAgentPath(params.path)
       ? {
           capability: {
             entrypoint: "SlackCapability",
@@ -700,12 +621,11 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       : {
           capability: {
             entrypoint: "AgentToolsCapability",
-            props: { agentPath: params.agentPath, tool: "chat" },
+            props: { agentPath: params.path, tool: "chat" },
             type: "rpc",
             worker: { type: "loopback" },
           } satisfies CapabilityAddress,
-          instructions:
-            "itx.chat.sendMessage({ message }) sends a visible reply to the user in the web chat.",
+          instructions: AGENT_CHAT_CAPABILITY_INSTRUCTIONS,
           name: "chat",
         };
 
@@ -714,7 +634,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       {
         capability: {
           entrypoint: "AgentToolsCapability",
-          props: { agentPath: params.agentPath, tool: "debug" },
+          props: { agentPath: params.path, tool: "debug" },
           type: "rpc",
           worker: { type: "loopback" },
         },
@@ -742,7 +662,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       {
         capability: {
           entrypoint: "WorkspaceCapability",
-          props: { workspaceId: contextId },
+          props: { path: String(params.path) },
           type: "rpc",
           worker: { type: "loopback" },
         },
@@ -754,15 +674,13 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     ];
   }
 
-  private async resolveLlmProvider(
-    params: AgentDurableObjectStructuredName,
-  ): Promise<AgentLlmProvider> {
-    const events = await this.streamsEntrypoint(params.agentPath).read({
+  private async resolveLlmProvider(params: AgentDurableObjectName): Promise<AgentLlmProvider> {
+    const events = await this.streamsEntrypoint(params.path).read({
       afterOffset: "start",
       beforeOffset: "end",
     });
     for (const event of events.toReversed()) {
-      if (event.type !== OS_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE) continue;
+      if (event.type !== AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE) continue;
       const provider = (event.payload as { provider?: unknown }).provider;
       if (provider === "cloudflare-ai" || provider === "openai-ws") return provider;
     }
@@ -770,10 +688,13 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   }
 
   private streamsEntrypoint(streamPath: StreamPath) {
-    return agentStreamApiFromNamespace({
-      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: this.structuredName.projectId,
-      streamPath,
+    return getStreamsBackend({
+      exports: this.ctx.exports,
+      props: {
+        appendPolicy: { mode: "stream" },
+        projectId: this.projectId(),
+        streamPath: String(streamPath),
+      },
     });
   }
 }
@@ -793,98 +714,24 @@ export function readOpenAiApiKey(env: Record<string, unknown>) {
   }
 }
 
-function agentStreamApiFromNamespace(args: {
-  durableObjectNamespace: StreamDurableObjectNamespace;
-  namespace: string;
-  streamPath: StreamPath;
-}): AgentStreamApi {
-  return {
-    async append(input) {
-      const stream = await getInitializedStreamStub({
-        durableObjectNamespace: args.durableObjectNamespace,
-        namespace: args.namespace,
-        path: resolveProcessorStreamPath({
-          basePath: args.streamPath,
-          pathInput: input.streamPath,
-        }),
-      });
-      return await stream.append(input.event);
-    },
-    async appendBatch(input) {
-      const stream = await getInitializedStreamStub({
-        durableObjectNamespace: args.durableObjectNamespace,
-        namespace: args.namespace,
-        path: resolveProcessorStreamPath({
-          basePath: args.streamPath,
-          pathInput: input.streamPath,
-        }),
-      });
-      return await stream.appendBatch(input.events);
-    },
-    async read(input = {}) {
-      const stream = await getInitializedStreamStub({
-        durableObjectNamespace: args.durableObjectNamespace,
-        namespace: args.namespace,
-        path: resolveProcessorStreamPath({
-          basePath: args.streamPath,
-          pathInput: input.streamPath,
-        }),
-      });
-      return await stream.history({
-        after: input.afterOffset,
-        before: input.beforeOffset ?? "end",
-      });
-    },
-    async *subscribe(input = {}) {
-      void input;
-      yield* [];
-      throw new Error("Agent processors receive live events through afterAppend RPC.");
-    },
-  };
-}
-
-function resolveProcessorStreamPath(input: { basePath: StreamPath; pathInput?: string }) {
-  if (input.pathInput == null) {
-    return input.basePath;
-  }
-
-  const trimmedPath = input.pathInput.trim();
-  if (!trimmedPath) {
-    throw new Error("Stream path is required.");
-  }
-
-  if (trimmedPath.startsWith("/")) {
-    return resolveStreamPath(trimmedPath);
-  }
-
-  const relativePath = trimmedPath.replace(/^\.\//, "").replace(/^\/+/, "");
-  return StreamPath.parse(
-    input.basePath === "/" ? `/${relativePath}` : `${input.basePath}/${relativePath}`,
-  );
-}
-
 /** AN AGENT IS A CONTEXT: its ref and address are projections of the
  * agent's stream coordinate — no mint, no catalog. The agent DO's own name
  * (#1513) is the SAME string: one coordinate, two doors. The context node
  * is the generic ItxDurableObject named with the ref. */
-function agentContextRef(name: AgentDurableObjectStructuredName): string {
-  return formatContextRef({ namespace: name.projectId, path: String(name.agentPath) });
+function agentContextRef(name: AgentDurableObjectName): string {
+  return formatContextRef({ projectId: name.projectId, path: String(name.path) });
 }
 
-function agentContextAddress(name: AgentDurableObjectStructuredName): CapabilityAddress {
+/** Address form of the same agent context coordinate used by agentContextRef. */
+function agentContextAddress(name: AgentDurableObjectName): CapabilityAddress {
   return contextAddress(agentContextRef(name));
 }
 
-function agentWorkspaceName(input: {
-  contextId: string;
-  params: AgentDurableObjectStructuredName;
-}): WorkspaceStructuredName {
-  return {
-    projectId: input.params.projectId,
-    // Must match the workspace capability this agent provides on its own
-    // context (agentContextCapabilities): the context id IS the workspace id.
-    workspaceId: input.contextId,
-  };
+function agentWorkspaceName(params: AgentDurableObjectName): string {
+  return formatDurableObjectName({
+    path: String(params.path),
+    projectId: params.projectId,
+  });
 }
 
 function remoteWithToken(input: { remote: string; token: string }) {
@@ -938,223 +785,4 @@ function parseChatToolMessage(value: unknown) {
 function isSlackAgentPath(agentPath: string) {
   const normalized = agentPath.toLowerCase();
   return normalized === "/agents/slack" || normalized.startsWith("/agents/slack/");
-}
-
-type CloudflareSocketEventName = "open" | "message" | "close" | "error" | string;
-type JsonValue = z.infer<ReturnType<typeof z.json>>;
-
-export function createOpenAiResponsesWebSocketClient(client: OpenAI): OpenAiResponsesWebSocket {
-  const sdkWebSocket = new CloudflareResponsesWebSocket(client);
-
-  return {
-    get url() {
-      return sdkWebSocket.url;
-    },
-    get socket() {
-      return sdkWebSocket.socket;
-    },
-    send(event) {
-      sdkWebSocket.send(event as unknown as ResponsesClientEvent);
-    },
-    stream() {
-      return streamOpenAiResponsesWebSocket(sdkWebSocket);
-    },
-    close(props) {
-      sdkWebSocket.close(props);
-    },
-  };
-}
-
-async function* streamOpenAiResponsesWebSocket(
-  sdkWebSocket: CloudflareResponsesWebSocket,
-): AsyncIterableIterator<OpenAiResponsesWebSocketStreamMessage> {
-  for await (const event of sdkWebSocket.stream()) {
-    switch (event.type) {
-      case "connecting":
-      case "open":
-      case "closing":
-      case "reconnected":
-        yield { type: event.type };
-        break;
-      case "close":
-        yield { type: "close", code: event.code, reason: event.reason };
-        break;
-      case "reconnecting":
-        yield { type: "reconnecting", reconnect: toJsonValue(event.reconnect) };
-        break;
-      case "message":
-        yield { type: "message", message: toJsonValue(event.message) };
-        break;
-      case "raw":
-        yield { type: "raw", data: event.data };
-        break;
-      case "error":
-        yield { type: "error", error: event.error };
-        break;
-      default:
-        event satisfies never;
-    }
-  }
-}
-
-function toJsonValue(value: unknown): JsonValue {
-  return z.json().parse(value);
-}
-
-class CloudflareResponsesWebSocket extends ResponsesWSBase<CloudflareFetchWebSocket> {
-  constructor(client: OpenAI) {
-    super(client, { reconnect: null });
-    this._connectInitial();
-  }
-
-  protected _createSocket(url: URL, authHeaders: Record<string, string>): CloudflareFetchWebSocket {
-    return new CloudflareFetchWebSocket(url, {
-      ...authHeaders,
-      "OpenAI-Beta": "responses_websockets=2026-02-06",
-    });
-  }
-}
-
-class CloudflareFetchWebSocket {
-  #listeners = new Map<CloudflareSocketEventName, Set<unknown>>();
-  #onceListeners = new Map<CloudflareSocketEventName, Map<unknown, unknown>>();
-  #readyState = 0;
-  #socket: WebSocket | undefined;
-
-  constructor(
-    private readonly url: URL,
-    private readonly authHeaders: Record<string, string>,
-  ) {
-    void this.#connect();
-  }
-
-  get readyState(): number {
-    return this.#socket?.readyState ?? this.#readyState;
-  }
-
-  send(data: string | ArrayBufferLike | ArrayBufferView): void {
-    if (this.#socket == null) throw new Error("OpenAI WebSocket is not open.");
-    this.#socket.send(data);
-  }
-
-  close(code?: number, reason?: string): void {
-    this.#readyState = 2;
-    this.#socket?.close(code, reason);
-  }
-
-  on(event: "open", listener: () => void): void;
-  on(
-    event: "message",
-    listener: (data: string | ArrayBuffer | ArrayBufferView, isBinary: boolean) => void,
-  ): void;
-  on(event: "close", listener: (code: number, reason: string) => void): void;
-  on(event: "error", listener: (error: Error) => void): void;
-  on(event: CloudflareSocketEventName, listener: (...args: never[]) => void): void;
-  on(event: CloudflareSocketEventName, listener: unknown): void {
-    this.#listenersFor(event).add(listener);
-  }
-
-  off(event: "open", listener: () => void): void;
-  off(
-    event: "message",
-    listener: (data: string | ArrayBuffer | ArrayBufferView, isBinary: boolean) => void,
-  ): void;
-  off(event: "close", listener: (code: number, reason: string) => void): void;
-  off(event: "error", listener: (error: Error) => void): void;
-  off(event: CloudflareSocketEventName, listener: (...args: never[]) => void): void;
-  off(event: CloudflareSocketEventName, listener: unknown): void {
-    this.#removeListener(event, listener);
-  }
-
-  once(event: "open", listener: () => void): void;
-  once(
-    event: "message",
-    listener: (data: string | ArrayBuffer | ArrayBufferView, isBinary: boolean) => void,
-  ): void;
-  once(event: "close", listener: (code: number, reason: string) => void): void;
-  once(event: "error", listener: (error: Error) => void): void;
-  once(event: CloudflareSocketEventName, listener: (...args: never[]) => void): void;
-  once(event: CloudflareSocketEventName, listener: unknown): void {
-    const onceListener = (...args: never[]) => {
-      this.#removeListener(event, listener);
-      (listener as (...args: never[]) => void)(...args);
-    };
-    this.#onceListenersFor(event).set(listener, onceListener);
-    this.on(event, onceListener);
-  }
-
-  get socket(): { readonly readyState: number } {
-    return { readyState: this.readyState };
-  }
-
-  async #connect() {
-    try {
-      const response = (await fetch(this.url.toString().replace("wss://", "https://"), {
-        headers: {
-          ...this.authHeaders,
-          Upgrade: "websocket",
-        },
-      })) as Response & { webSocket?: WebSocket | null };
-
-      if (response.webSocket == null) {
-        throw new Error(`OpenAI WebSocket upgrade failed with status ${response.status}.`);
-      }
-
-      this.#socket = response.webSocket;
-      this.#socket.accept();
-      this.#bindSocket(this.#socket);
-      this.#readyState = this.#socket.readyState;
-      this.#emit("open");
-    } catch (error) {
-      this.#readyState = 3;
-      this.#emit("error", error instanceof Error ? error : new Error(String(error)));
-      this.#emit("close", 1006, "OpenAI WebSocket upgrade failed.");
-    }
-  }
-
-  #bindSocket(socket: WebSocket) {
-    socket.addEventListener("message", (event) => {
-      this.#emit("message", event.data, event.data instanceof ArrayBuffer);
-    });
-    socket.addEventListener("close", (event) => {
-      this.#readyState = 3;
-      this.#emit("close", event.code, event.reason);
-    });
-    socket.addEventListener("error", () => {
-      this.#emit("error", new Error("OpenAI WebSocket errored."));
-    });
-  }
-
-  #listenersFor(event: CloudflareSocketEventName): Set<unknown> {
-    const existing = this.#listeners.get(event);
-    if (existing != null) return existing;
-
-    const listeners = new Set<unknown>();
-    this.#listeners.set(event, listeners);
-    return listeners;
-  }
-
-  #onceListenersFor(event: CloudflareSocketEventName): Map<unknown, unknown> {
-    const existing = this.#onceListeners.get(event);
-    if (existing != null) return existing;
-
-    const listeners = new Map<unknown, unknown>();
-    this.#onceListeners.set(event, listeners);
-    return listeners;
-  }
-
-  #removeListener(event: CloudflareSocketEventName, listener: unknown) {
-    const listeners = this.#listeners.get(event);
-    listeners?.delete(listener);
-    const onceListener = this.#onceListeners.get(event)?.get(listener);
-    if (onceListener == null) return;
-    listeners?.delete(onceListener);
-    this.#onceListeners.get(event)?.delete(listener);
-  }
-
-  #emit(event: CloudflareSocketEventName, ...args: unknown[]) {
-    for (const listener of this.#listeners.get(event) ?? []) {
-      (listener as (...args: unknown[]) => void)(...args);
-    }
-  }
 }

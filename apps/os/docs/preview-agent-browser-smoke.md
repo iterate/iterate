@@ -7,13 +7,13 @@ real browser, Iterate Auth Worker, TanStack Start routing, and the app UI.
 
 `pnpm e2e -t "OS preview smoke"` runs `apps/os/e2e/vitest/preview-smoke.e2e.test.ts`.
 It verifies the preview worker, unauthenticated redirect behavior, admin-token project setup, and
-MCP/codemode metadata wiring.
+MCP and itx metadata wiring.
 
 Slack is covered by
-`apps/os/e2e/vitest/codemode-mcp-provider-stack.e2e.test.ts`. When
+`apps/os/e2e/vitest/agents.itx.e2e.test.ts`. When
 `APP_CONFIG_SLACK_BOT_TOKEN` is present in the test process, the test discovers
 `#slack-agent-e2e-test` and sends a real Slack message through the deployed
-codemode Slack capability.
+itx Slack capability.
 
 ## Authenticated Browser Smoke
 
@@ -128,8 +128,9 @@ AB click @<send-button>
 Verify the agent actually answered (the live UI may not update — see gotchas):
 
 ```bash
-doppler run --config preview_N -- pnpm cli rpc project agents runtime-state \
-  --project-slug-or-id my-smoke --agent-path /my-agent   # state contains the LLM reply
+doppler run --config preview_N -- pnpm cli itx run \
+  --context my-smoke \
+  -e 'return await itx.agents.create().getRuntimeState({ agentPath: "/agents/my-agent" })'
 ```
 
 ### Gotchas (hit and confirmed 2026-06-10)
@@ -138,11 +139,9 @@ doppler run --config preview_N -- pnpm cli rpc project agents runtime-state \
   `Project <id> not found` in the error boundary, the access token expired —
   re-run the sign-in flow. It is NOT a data/permissions bug; the same procedures
   succeed over direct RPC with a fresh cookie.
-- **Live stream display needs WebSocket.** On preview hosts the stream
-  subscription WebSocket failed (`subscribe failed: WebSocket connection
-failed`; `/api/orpc-ws` returned 500), so sent messages and agent replies do
+- **Live stream display uses WebSocket.** If sent messages and agent replies do
   not render live in the browser even though the conversation completes
-  server-side (verify via `runtime-state`). The worker's WS-upgrade code is
-  unchanged from main — treat as a preview-infra item to confirm.
+  server-side, verify the agent state through `pnpm cli itx run` and inspect the
+  `/api/itx` WebSocket path in Workers logs.
 - Don't `agent-browser close` the `--cdp` instance (it kills the browser);
   `pkill -f ab-own` to clean up.

@@ -13,6 +13,7 @@ import {
 import { replayPathCall } from "./path-proxy.ts";
 import { wireIsolateEnv } from "./isolate.ts";
 import { resolveWorkerSource, type SourceBuildEnv } from "./source-build.ts";
+import { formatDurableObjectName } from "~/domains/durable-object-names.ts";
 
 /** The Worker Loader binding as every itx load site uses it — the dial here
  * and the project worker's non-dial loaders (project-worker-runtime.ts). */
@@ -207,13 +208,16 @@ export function makeDial(host: DialHost): CapabilityDial {
             `Capability "${name}": "${worker.binding}" is not a Durable Object namespace on this host.`,
           );
         }
-        // Names are scoped under the owning project, so two projects naming
-        // the same instance get DISJOINT objects — an allowlisted namespace
-        // never lets one project dial another's instances. The stub is remote
-        // (never concrete here), so the DO class itself must implement
-        // call({ path, args }) — namespaces opt in via config and are
-        // designed to be reached this way.
-        return namespace.getByName(`itx:${host.projectId}:${worker.name}`) as PathCallable;
+        // Names are scoped under the owning project via the same
+        // `{ projectId, path }` durable-object naming convention as domain
+        // objects. The stub is remote (never concrete here), so the DO class
+        // itself must implement call({ path, args }) and explicitly opt in.
+        return namespace.getByName(
+          formatDurableObjectName({
+            projectId: host.projectId,
+            path: itxDurableObjectPath(worker.name),
+          }),
+        ) as PathCallable;
       }
     }
   };
@@ -322,14 +326,21 @@ const DIALABLE_LOOPBACKS: ReadonlySet<string> = new Set([
 
 /**
  * Durable Object namespace bindings dialable via `{ type: "durable-object" }`
- * refs. The dial scopes every instance name under the owning project
- * (`itx:<projectId>:<name>`), so an allowlisted namespace's itx-reachable
+ * refs. The dial scopes every instance name under the owning project using
+ * `/itx/durable-objects/<name>`, so an allowlisted namespace's itx-reachable
  * instances are disjoint per project. Still empty by default: namespaces
  * whose EXISTING instances matter (PROJECT, STREAM, …) must not be
  * allowlisted — itx-created instances would be fresh/empty objects under the
  * scoped name, not the real ones.
  */
 const DIALABLE_DURABLE_OBJECTS: ReadonlySet<string> = new Set();
+
+function itxDurableObjectPath(name: string) {
+  if (!/^[A-Za-z0-9_-]+$/.test(name)) {
+    throw new Error(`Durable Object capability name must be one path segment, got "${name}".`);
+  }
+  return `/itx/durable-objects/${name}`;
+}
 
 /** The dial allowlists a host resolves once (defaults ∪ deployment config). */
 export type DialableTargets = {

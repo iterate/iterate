@@ -5,8 +5,8 @@ import {
   cloudflarePreviewSharedPaths,
 } from "./apps.ts";
 import {
-  batchPreviewAppsByDependencies,
   expandPreviewDependencies,
+  orderPreviewDeployBatches,
   resolvePreviewReadinessUrls,
   resolvePreviewCompareBaseSha,
   selectPreviewAppsNeedingRetry,
@@ -26,14 +26,21 @@ describe("preview app dependency expansion", () => {
   });
 });
 
-describe("preview app dependency batches", () => {
+describe("preview deploy ordering", () => {
   it("keeps independent apps in the same batch", () => {
     expect(
-      batchPreviewAppsByDependencies([
-        cloudflarePreviewApps.os,
-        cloudflarePreviewApps.semaphore,
-      ]).map((batch) => batch.map((app) => app.slug)),
-    ).toEqual([["os", "semaphore"]]);
+      orderPreviewDeployBatches([cloudflarePreviewApps.semaphore]).map((batch) =>
+        batch.map((app) => app.slug),
+      ),
+    ).toEqual([["semaphore"]]);
+  });
+
+  it("deploys auth before OS when both are selected", () => {
+    expect(
+      orderPreviewDeployBatches([cloudflarePreviewApps.os, cloudflarePreviewApps.auth]).map(
+        (batch) => batch.map((app) => app.slug),
+      ),
+    ).toEqual([["auth"], ["os"]]);
   });
 });
 
@@ -55,8 +62,9 @@ describe("preview readiness URLs", () => {
       resolvePreviewReadinessUrls({
         publicUrl: "https://os.iterate-preview-2.com",
         projectHostnameBases: ["iterate-preview-2.app", "*.iterate-preview-2.app"],
+        readyUrlPath: cloudflarePreviewApps.os.previewReadyUrlPath,
       }).map((url) => url.toString()),
-    ).toEqual(["https://os.iterate-preview-2.com/api/__internal/health"]);
+    ).toEqual(["https://os.iterate-preview-2.com/api/health"]);
   });
 });
 

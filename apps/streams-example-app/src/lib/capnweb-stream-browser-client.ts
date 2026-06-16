@@ -1,5 +1,5 @@
 import {
-  DEFAULT_STREAM_NAMESPACE,
+  DEFAULT_STREAM_PROJECT_ID,
   streamRpcPath,
   withStreamConnectionFromBrowser,
 } from "./stream-rpc.ts";
@@ -16,7 +16,7 @@ export const createCapnwebStreamClient: BrowserStreamClientFactory = async (
       args.streamUrl ??
       streamRpcPath({
         path: args.streamPath,
-        namespace: args.namespace === DEFAULT_STREAM_NAMESPACE ? undefined : args.namespace,
+        projectId: args.projectId === DEFAULT_STREAM_PROJECT_ID ? undefined : args.projectId,
       }),
     onConnectionStatusChange: args.onConnectionStatusChange,
   });

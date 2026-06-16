@@ -131,7 +131,7 @@ function preserveRedirectSearchParams(
   response: Response,
   paramNames: Iterable<string>,
 ) {
-  if (!isRedirectStatus(response.status)) return response;
+  if (response.status < 300 || response.status >= 400) return response;
 
   const requestUrl = new URL(request.url);
   const location = response.headers.get("Location");
@@ -157,10 +157,6 @@ function preserveRedirectSearchParams(
     statusText: response.statusText,
     headers,
   });
-}
-
-function isRedirectStatus(status: number) {
-  return status >= 300 && status < 400;
 }
 
 export default app;

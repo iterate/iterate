@@ -80,7 +80,7 @@ type Itx = RpcStub<ItxHandle>;
 /**
  * How you address an itx connection — a plain, comparable value (that's what lets
  * the provider hold it in context and `useItx` resolve it with `??`). The empty
- * address `{}` is the global context. `projectId` is the stream namespace (a
+ * address `{}` is the global context. `projectId` is the stream owner key (a
  * project slug); `path`/`baseUrl` are reserved (not yet used to key the socket).
  */
 export type ItxAddress = { projectId?: string; path?: string; baseUrl?: string };

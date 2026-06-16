@@ -39,7 +39,7 @@ export class AgentToolsCapability extends WorkerEntrypoint<Env, AgentToolsCapabi
       throw new Error("AgentToolsCapability needs dial-injected projectId props.");
     }
     const name = getAgentDurableObjectName({
-      agentPath: props.agentPath as never,
+      path: props.agentPath as never,
       projectId: props.projectId,
     });
     const agent = this.env.AGENT.getByName(name) as unknown as AgentDurableObject;

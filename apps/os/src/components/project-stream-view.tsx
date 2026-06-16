@@ -72,6 +72,7 @@ import { AgentPillComposer, type AgentComposerMode } from "~/components/agent-pi
 import { ExampleEventsPanel } from "~/components/example-events-panel.tsx";
 import { openGlobalCommandPalette } from "~/components/global-command-palette-events.ts";
 import { PresenceAvatar, StreamProcessorsPanel } from "~/components/stream-processors-panel.tsx";
+import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/domains/durable-object-names.ts";
 import { useItx } from "~/itx/itx-react.tsx";
 import {
   itxStreamBrowserClient,
@@ -109,7 +110,7 @@ export function ProjectStreamView({
   headerAccessory,
   messageComposer,
   projectSlug,
-  projectSlugOrId,
+  projectId,
   renderStreamPathLink,
   showCommandPaletteTrigger = false,
   streamSource,
@@ -121,7 +122,7 @@ export function ProjectStreamView({
   headerAccessory?: ReactNode;
   messageComposer?: ProjectStreamMessageComposer;
   projectSlug: string;
-  projectSlugOrId: string;
+  projectId: string | null;
   renderStreamPathLink?: StreamPathLinkRenderer;
   showCommandPaletteTrigger?: boolean;
   streamSource?: ItxStreamSource;
@@ -129,6 +130,7 @@ export function ProjectStreamView({
 }) {
   const itx = useItx();
   const streamPathText = streamPath.toString();
+  const streamRuntimeProjectKey = projectId ?? NULL_DURABLE_OBJECT_PROJECT_ID;
   // The agent-ui processor (presence, live state) runs on every stream; the
   // chat-shaped Agent view only makes sense for streams under /agents — those
   // default to it, everything else defaults to the plain feed.
@@ -146,7 +148,7 @@ export function ProjectStreamView({
     () =>
       acquireStreamRuntime({
         createStreamClient: streamClientFactory,
-        namespace: projectSlugOrId,
+        projectId: streamRuntimeProjectKey,
         streamPath: streamPathText,
         slug: BrowserRawEventsContract.slug,
         schemaVersion: BROWSER_RAW_EVENTS_SCHEMA_VERSION,
@@ -165,7 +167,7 @@ export function ProjectStreamView({
           });
         },
       }),
-    [projectSlugOrId, streamClientFactory, streamPathText],
+    [streamRuntimeProjectKey, streamClientFactory, streamPathText],
   );
   const snapshot = useSyncExternalStore(
     store.subscribe,
@@ -174,7 +176,7 @@ export function ProjectStreamView({
   );
   const countResult = useStreamQuery(store.streamDatabase, `SELECT COUNT(*) AS count FROM events`);
   const eventCount = Number(countResult.data[0]?.count ?? 0);
-  const reductionKey = `${projectSlugOrId}:${streamPathText}`;
+  const reductionKey = `${streamRuntimeProjectKey}:${streamPathText}`;
 
   // A second browser-hosted processor on the same stream (and same per-path
   // SQLite database): folds agent events into settled `agent_feed_items` rows
@@ -185,7 +187,7 @@ export function ProjectStreamView({
     () =>
       acquireStreamRuntime({
         createStreamClient: streamClientFactory,
-        namespace: projectSlugOrId,
+        projectId: streamRuntimeProjectKey,
         streamPath: streamPathText,
         slug: AgentUiProcessorContract.slug,
         schemaVersion: AGENT_UI_SCHEMA_VERSION,
@@ -205,7 +207,7 @@ export function ProjectStreamView({
           });
         },
       }),
-    [projectSlugOrId, streamClientFactory, streamPathText],
+    [streamRuntimeProjectKey, streamClientFactory, streamPathText],
   );
   const agentSnapshot = useSyncExternalStore(
     agentStore.subscribe,
@@ -227,10 +229,6 @@ export function ProjectStreamView({
   const defaultTab: ProjectStreamViewTab = isAgentStream ? "agent" : "feed";
   const activeTab: ProjectStreamViewTab =
     search.tab == null || (search.tab === "agent" && !isAgentStream) ? defaultTab : search.tab;
-  // Omit the tab from the URL while it equals the stream's default.
-  const setActiveTab = (tab: ProjectStreamViewTab) =>
-    setSearch({ tab: tab === defaultTab ? undefined : tab });
-
   const toolsOpen = search.filter === true;
   const feedSearch = search.q ?? "";
   const focusedProcessorKey = search.processor ?? null;
@@ -240,8 +238,6 @@ export function ProjectStreamView({
   const focusProcessor = (subscriptionKey: string) =>
     setSearch({ panel: true, processor: subscriptionKey });
   const openProcessorsOverview = () => setSearch({ panel: true, processor: undefined });
-  const closeProcessors = () => setSearch({ panel: undefined, processor: undefined });
-
   const feedSearchInputRef = useRef<HTMLInputElement>(null);
   const [composerMode, setComposerMode] = useState<AgentComposerMode>(
     defaultComposerMode ?? (messageComposer ? "message" : "raw"),
@@ -441,7 +437,10 @@ export function ProjectStreamView({
           </Button>
           <Tabs
             value={activeTab}
-            onValueChange={(value) => setActiveTab(value as ProjectStreamViewTab)}
+            onValueChange={(value) => {
+              const tab = value as ProjectStreamViewTab;
+              setSearch({ tab: tab === defaultTab ? undefined : tab });
+            }}
           >
             <TabsList className="h-8">
               {isAgentStream ? (
@@ -553,7 +552,7 @@ export function ProjectStreamView({
             focusedKey={focusedProcessorKey}
             onFocus={focusProcessor}
             onBack={openProcessorsOverview}
-            onClose={closeProcessors}
+            onClose={() => setSearch({ panel: undefined, processor: undefined })}
             onClearClientDatabase={clearClientDatabases}
             getProcessorRuntimeState={getProcessorRuntimeState}
           />
@@ -716,10 +715,6 @@ function useAgentUiReducedState(database: StreamBrowserDatabase): AgentUiState |
   }, [result.data]);
 }
 
-function initialStreamViewState(): EventsStreamViewState {
-  return getInitialProcessorState(StreamViewProcessorContract);
-}
-
 function reduceStreamViewEvent(state: EventsStreamViewState, event: Event): EventsStreamViewState {
   const reduction = runProcessorReduce({
     processor: { contract: StreamViewProcessorContract },
@@ -748,7 +743,7 @@ function ProjectStreamFeedView({
     database,
     reductionKey,
     cacheScope: StreamViewProcessorContract.slug,
-    initialState: initialStreamViewState,
+    initialState: () => getInitialProcessorState(StreamViewProcessorContract),
     reduceEvent: reduceStreamViewEvent,
   });
   const [rendererMode, setRendererMode] = useState<EventsStreamRendererMode>("raw-pretty");

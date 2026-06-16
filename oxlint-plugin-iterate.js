@@ -145,6 +145,89 @@ function isFunctionLikeDeclaration(node) {
   });
 }
 
+/**
+ * Counts the source lines spanned by a function's body content: the statements between the
+ * braces, or the expression of a concise arrow. Brace-only lines don't count, so
+ * `function f() {\n  return x;\n}` is 1 line.
+ *
+ * @param {import("eslint").SourceCode} sourceCode
+ * @param {import("estree").Function} fn
+ */
+function getFunctionBodyLineCount(sourceCode, fn) {
+  const body = fn.body;
+  if (!body) return Infinity; // overload signatures / declare function
+  let start;
+  let end;
+  if (body.type === "BlockStatement") {
+    const statements = body.body;
+    if (statements.length === 0) return 0;
+    start = statements[0].range?.[0];
+    end = statements[statements.length - 1].range?.[1];
+  } else {
+    start = body.range?.[0];
+    end = body.range?.[1];
+  }
+  if (start === undefined || end === undefined) return Infinity;
+  return sourceCode.getText().slice(start, end).split("\n").length;
+}
+
+/**
+ * @param {import("eslint").SourceCode} sourceCode
+ * @param {import("estree").Function} fn
+ */
+function hasCommentInsideFunction(sourceCode, fn) {
+  const bodyRange = fn.body?.range;
+  if (!bodyRange) return false;
+
+  return sourceCode.getAllComments().some((comment) => {
+    if (!comment.range) return false;
+    return comment.range[0] > bodyRange[0] && comment.range[1] < bodyRange[1];
+  });
+}
+
+/**
+ * @param {import("eslint").SourceCode} sourceCode
+ * @param {import("estree").Node} node
+ */
+function hasLeadingJsDocComment(sourceCode, node) {
+  const nodeStartLine = node.loc?.start.line;
+
+  return sourceCode.getCommentsBefore(node).some((comment) => {
+    if (comment.type !== "Block") return false;
+    if (!comment.value.trim().startsWith("*")) return false;
+    return !nodeStartLine || comment.loc?.end.line === nodeStartLine - 1;
+  });
+}
+
+/**
+ * @param {import("eslint").SourceCode} sourceCode
+ * @param {import("estree").Function} fn
+ */
+function hasTypePredicateReturnType(sourceCode, fn) {
+  const returnType = fn.returnType || fn.typeAnnotation;
+  if (!returnType) return false;
+
+  const returnTypeText = sourceCode.getText(returnType);
+  return /\basserts\b/.test(returnTypeText) || /\bis\b/.test(returnTypeText);
+}
+
+/** @param {import("estree").Function} fn */
+function hasIfStatement(fn) {
+  return esquery.match(fn, esquery.parse("IfStatement")).length > 0;
+}
+
+/**
+ * @param {import("eslint").Scope.Scope | null} scope
+ * @param {string} name
+ */
+function findVariableInScopeChain(scope, name) {
+  for (let current = scope; current; current = current.upper) {
+    const variable = current.variables.find((v) => v.name === name);
+    if (variable) return variable;
+  }
+  return undefined;
+}
+
 /** @param {string} text */
 function compactTypeText(text) {
   return text.replace(/\s+/g, "");
@@ -581,6 +664,91 @@ const plugin = {
               message:
                 "Avoid vi.mock/vi.doMock in tests. Prefer dependency injection or a controllable fake dependency.",
             });
+          },
+        };
+      },
+    },
+    "no-single-use-helpers": {
+      meta: {
+        type: "suggestion",
+        docs: {
+          description:
+            "Flag undocumented tiny non-exported helper functions that are only used once. Inline them so the reader can see what's actually happening instead of chasing an indirection.",
+        },
+      },
+      create(context) {
+        const MAX_BODY_LINES = 1;
+
+        /**
+         * @param {import("estree").Identifier} id the helper's name binding
+         * @param {import("estree").Function} fn the function node
+         * @param {import("estree").Node} statement the enclosing declaration statement
+         */
+        function checkHelper(id, fn, statement) {
+          const exportParent = statement.parent?.type;
+          if (
+            exportParent === "ExportNamedDeclaration" ||
+            exportParent === "ExportDefaultDeclaration"
+          ) {
+            return;
+          }
+
+          const bodyLines = getFunctionBodyLineCount(context.sourceCode, fn);
+          if (bodyLines > MAX_BODY_LINES) return;
+          if (
+            statement.type === "VariableDeclaration" &&
+            (statement.kind === "let" || statement.kind === "var")
+          ) {
+            return;
+          }
+          if (hasIfStatement(fn)) return;
+          if (hasLeadingJsDocComment(context.sourceCode, statement)) return;
+          if (hasCommentInsideFunction(context.sourceCode, fn)) return;
+          if (hasTypePredicateReturnType(context.sourceCode, fn)) return;
+
+          const scope = context.sourceCode.getScope(statement);
+          const variable = findVariableInScopeChain(scope, id.name);
+          if (!variable) return;
+
+          const reads = variable.references.filter((ref) => ref.isRead());
+          // `export { helper }` / `export default helper` make it part of the module's surface
+          const isExportedReference = reads.some((ref) => {
+            const parentType = ref.identifier.parent?.type;
+            return parentType === "ExportSpecifier" || parentType === "ExportDefaultDeclaration";
+          });
+          if (isExportedReference) return;
+
+          // a recursive helper can't be inlined, so any self-reference disqualifies it
+          const hasSelfReference = reads.some((ref) => {
+            const referenceStart = ref.identifier.range?.[0];
+            if (referenceStart === undefined || !fn.range) return false;
+            return referenceStart >= fn.range[0] && referenceStart < fn.range[1];
+          });
+          if (hasSelfReference) return;
+          if (reads.length !== 1) return;
+
+          context.report({
+            node: id,
+            message:
+              `${id.name} is a single-use helper with a ${bodyLines}-line body. ` +
+              `Inline it at the call site so the reader can see what's actually happening.`,
+          });
+        }
+
+        return {
+          FunctionDeclaration(node) {
+            if (!node.id) return;
+            checkHelper(node.id, node, node);
+          },
+          VariableDeclarator(node) {
+            if (node.id.type !== "Identifier" || !node.init) return;
+            if (
+              node.init.type !== "ArrowFunctionExpression" &&
+              node.init.type !== "FunctionExpression"
+            ) {
+              return;
+            }
+            checkHelper(node.id, node.init, node.parent);
           },
         };
       },

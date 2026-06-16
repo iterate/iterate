@@ -15,7 +15,6 @@
     "deploy": "doppler run --project semaphore --config prd -- pnpm exec tsx ./alchemy.run.ts",
     "rpc": "pnpm cli rpc",
     "seed:environment-config-leases": "pnpm cli seed-environment-config-leases",
-    "seed:tunnel-pool": "pnpm cli seed-cloudflare-tunnel-pool",
     "typecheck": "tsc --noEmit",
     "test": "pnpm typecheck",
     "test:e2e": "node -e \"if (!process.env.SEMAPHORE_BASE_URL) { console.error('SEMAPHORE_BASE_URL is required for semaphore e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts",

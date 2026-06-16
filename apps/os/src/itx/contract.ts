@@ -48,7 +48,7 @@ const WorkerSourceRecord = z.discriminatedUnion("type", [
       .optional(),
     commit: z.string(),
     path: z.string(),
-    repo: z.string(),
+    repoPath: z.string(),
     type: z.literal("repo"),
   }),
 ]) satisfies z.ZodType<WorkerSource, unknown>;

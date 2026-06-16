@@ -3,7 +3,6 @@ import { CircuitBreakerContract } from "~/domains/streams/engine/processors/circ
 import { CoreProcessorContract } from "~/domains/streams/engine/processors/core/contract.ts";
 import { AgentProcessorContract } from "~/domains/agents/stream-processors/agent/contract.ts";
 import { CloudflareAiProcessorContract } from "~/domains/agents/stream-processors/cloudflare-ai/contract.ts";
-import { JsonataReactorProcessorContract } from "~/domains/agents/stream-processors/jsonata-reactor/contract.ts";
 import { OpenAiWsProcessorContract } from "~/domains/agents/stream-processors/openai-ws/contract.ts";
 import { ProjectProcessorContract } from "~/domains/projects/stream-processors/project/contract.ts";
 import { RepoStreamProcessorContract } from "~/domains/repos/stream-processors/repo-stream-processor.ts";
@@ -36,7 +35,6 @@ const processorContracts = [
   RepoStreamProcessorContract,
   AgentProcessorContract,
   CloudflareAiProcessorContract,
-  JsonataReactorProcessorContract,
   OpenAiWsProcessorContract,
   SlackProcessorContract,
   SlackAgentProcessorContract,

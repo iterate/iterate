@@ -17,7 +17,7 @@ import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { durableObjectProcessorSubscriber } from "../../shared/callable-subscriber.ts";
 import type { StreamEvent } from "../../shared/event.ts";
-import type { StreamProcessorRunner } from "./stream-processor-runner.ts";
+import type { StreamProcessorRunner } from "../test-support/stream-processor-runner.ts";
 import type { Stream } from "./stream.ts";
 
 const STREAM = (env as unknown as { STREAM: DurableObjectNamespace<Stream> }).STREAM;

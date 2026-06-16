@@ -2,7 +2,7 @@ import { expect, test } from "@microsoft/tui-test";
 
 const streamPath = `/microsoft-tui-test-${Date.now()}`;
 const streamPathPrefix = "/microsoft-tui-test-";
-const projectSlugOrId = process.env.OS_TUI_TEST_PROJECT_SLUG_OR_ID || "missing-os-tui-project";
+const projectId = process.env.OS_TUI_TEST_PROJECT_ID || "missing-os-tui-project";
 const testWithProject = process.env.OS_TUI_TEST_PROJECT_SLUG_OR_ID ? test : test.skip;
 const snapshotTest =
   process.env.OS_TUI_TEST_PROJECT_SLUG_OR_ID && process.env.OS_TUI_SNAPSHOT === "1"
@@ -19,7 +19,7 @@ test.use({
   // Primary API reference: https://github.com/microsoft/tui-test#terminal-program
   program: {
     file: "pnpm",
-    args: ["-w", "iterate", "chat", "--project", projectSlugOrId, "--stream-path", streamPath],
+    args: ["-w", "iterate", "chat", "--project", projectId, "--stream-path", streamPath],
   },
 });
 

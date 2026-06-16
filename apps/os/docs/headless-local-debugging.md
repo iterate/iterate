@@ -10,18 +10,21 @@ a _deployed_ preview against _production_ auth.
 
 - **Deployed preview** (`os.iterate-preview-N.com`): uses production auth. No
   test OTP — you sign in as a real allowlisted user. Best for final proof.
-- **Local stack** (this doc): `pnpm dev` runs OS on a random localhost port
-  and Auth on `http://localhost:7101`, against a local D1 (miniflare) you can
-  read and write directly. Best for fast iteration and for bugs that need many
-  synthetic events / fresh orgs.
+- **Normal OS local dev**: `pnpm dev` or `pnpm cli dev start --detach` runs OS
+  on a random localhost port and uses shared dev auth at
+  `auth.iterate-dev.com`.
+- **Local OS + Auth stack** (this doc): `pnpm dev-all` runs Auth on
+  `http://localhost:7101` and OS on a random localhost port, against local D1
+  (miniflare) state you can read and write directly. Best for fast iteration
+  and for bugs that need many synthetic events / fresh orgs.
 
 ## Bring up the local stack
 
 ```bash
-pnpm dev   # monorepo root: starts apps/auth (localhost:7101) AND apps/os (localhost)
+pnpm dev-all   # monorepo root: starts apps/auth (localhost:7101) AND apps/os (localhost)
 ```
 
-`pnpm dev` exports `ITERATE_OAUTH_ISSUER=http://localhost:7101/api/auth` and
+`pnpm dev-all` exports `ITERATE_OAUTH_ISSUER=http://localhost:7101/api/auth` and
 points OS at it. OS writes its chosen base URL to
 `apps/os/.alchemy/dev-server.json`; drive the browser against that localhost
 URL.
@@ -29,7 +32,7 @@ URL.
 Gotchas:
 
 - The Doppler scope for `apps/auth` must resolve to a config that exists. If
-  `pnpm dev` dies with `Could not find requested config 'dev_<you>'`, point it
+  `pnpm dev-all` dies with `Could not find requested config 'dev_<you>'`, point it
   at the shared dev config: `doppler configure set config dev --scope apps/auth`.
 - A loopback issuer signs tokens with the **local** auth keys, so a static
   production JWKS can't verify them. `apps/os/alchemy.run.ts` detects a loopback
@@ -117,26 +120,15 @@ EOF
 - **Org**: the post-login `/project-access` page has a "Create organization"
   form; fill it and submit. Or call the auth contract
   (`internal.organization.createForUser`) with a service token.
-- **Project**: the OS UI route is `/new-project`, but you can create directly
-  against the OS oRPC REST surface from the authenticated page:
-
-```bash
-cat <<'EOF' | ab eval --stdin
-(async () => {
-  const res = await fetch("/api/projects", {
-    method: "POST", headers: { "content-type": "application/json" }, credentials: "include",
-    body: JSON.stringify({ slug: "dbgproj" }),
-  });
-  return { status: res.status, body: await res.text() };
-})()
-EOF
-```
+- **Project**: use the OS UI route `/new-project`, fill the slug form, and
+  submit. The dashboard create flow runs through the current itx-backed server
+  function and refreshes the auth session before navigating to the project.
 
 Project claims only land in the JWT on token refresh (or a fresh sign-in), so
 the OS create-project UI forces an auth session refresh after creation before it
-navigates to the project. If you create directly through `fetch`, call
-`/api/iterate-auth/session?refresh=force` afterward before testing cold reloads
-or WebSocket-backed project routes.
+navigates to the project. If you bypass the UI in a one-off debugging script,
+call `/api/iterate-auth/session?refresh=force` afterward before testing cold
+reloads or WebSocket-backed project routes.
 
 ## Read local server state directly
 

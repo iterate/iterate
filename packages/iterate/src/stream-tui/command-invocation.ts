@@ -44,7 +44,7 @@ export function parseSlashCommandInput(args: {
   }
 
   for (const flag of args.input.flags ?? []) {
-    if (hasFlag(remainingArgs, flag.flag)) {
+    if (remainingArgs.split(/\s+/).includes(flag.flag)) {
       input[flag.name] = flag.value;
       remainingArgs = removeFlag(remainingArgs, flag.flag);
     }
@@ -94,10 +94,6 @@ function matchStringOption(rawArgs: string, optionName: string) {
   };
 }
 
-function hasFlag(rawArgs: string, flagName: string) {
-  return rawArgs.split(/\s+/).includes(flagName);
-}
-
 function removeFlag(rawArgs: string, flagName: string) {
   return rawArgs
     .split(/\s+/)
@@ -106,6 +102,7 @@ function removeFlag(rawArgs: string, flagName: string) {
     .trim();
 }
 
+/** Escape a user-supplied option name before embedding it in the option parser regexp. */
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

@@ -106,6 +106,7 @@ function compileBrowserReplStatements(code: string) {
   ) as ReplFunction;
 }
 
+/** Top-level declarations must run in statement mode so their bindings persist in scope. */
 function startsWithTopLevelDeclaration(code: string) {
   return /^\s*(?:async\s+function|function|class)\s+[A-Za-z_$][\w$]*/.test(code);
 }
@@ -543,6 +544,7 @@ function isTopLevelStatementBoundary(code: string, index: number) {
   return [";", "}"].includes(code[previous] ?? "");
 }
 
+/** Scope capture only starts when the next token is an identifier, not punctuation or whitespace. */
 function isIdentifierStart(value: string) {
   return /^[A-Za-z_$]$/.test(value);
 }
@@ -613,11 +615,7 @@ function formatBrowserReplConsoleOutput(logs: BrowserReplConsoleLog[]) {
   return logs
     .map((log) => {
       const prefix = log.method === "log" ? "" : `${log.method}: `;
-      return `${prefix}${log.args.map(formatBrowserReplConsoleArg).join(" ")}`;
+      return `${prefix}${log.args.map((arg) => formatBrowserReplResult(arg).text).join(" ")}`;
     })
     .join("\n");
-}
-
-function formatBrowserReplConsoleArg(arg: unknown) {
-  return formatBrowserReplResult(arg).text;
 }

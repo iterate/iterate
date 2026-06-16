@@ -1,5 +1,5 @@
 // ItxDurableObject: THE context host — one instance per context, named by
-// the context's REF (`<namespace>:<path>`, coordinates.ts). The project
+// the context's REF (`<projectId>:<path>`, coordinates.ts). The project
 // context, agent contexts, MCP-session contexts, and anonymous extensions
 // are all instances of this one class; no other Durable Object hosts an Itx.
 //
@@ -42,7 +42,10 @@ export class ItxDurableObject extends DurableObject<Env> {
   #itx: Itx = this.host.add(ItxContract.slug, (deps) => {
     const ref = this.#ref();
     const coordinate = parseContextRef(ref);
-    const projectId = coordinate.namespace;
+    const projectId = coordinate.projectId;
+    if (projectId === null) {
+      throw new Error("ItxDurableObject contexts must be project-scoped.");
+    }
     const selfAddress = contextAddress(ref);
     return new Itx({
       ...deps,

@@ -58,13 +58,8 @@ const WorkersAiChatResponse = z.object({
   response: z.string(),
 });
 
-/**
- * Cloudflare's Workers AI binding accepts `AI.run(model, body, options)`;
- * Gateway metadata such as `gateway.id` travels in the options argument.
- * https://developers.cloudflare.com/ai-gateway/providers/workersai/
- */
 export type CloudflareAiBinding = {
-  run(model: string, body: unknown, runOpts?: unknown): Promise<unknown>;
+  run(model: string, body: unknown): Promise<unknown>;
   aiGatewayLogId?: string;
 };
 
@@ -173,6 +168,7 @@ export class CloudflareAiProcessor extends StreamProcessor<
     state: CloudflareAiState;
     runInBackground: (work: () => Promise<unknown>) => void;
   }) {
+    if (args.event.payload.provider !== CloudflareAiProcessorContract.slug) return;
     const llmRequestId = args.event.offset;
     this.#executedLlmRequestIds.add(llmRequestId);
     args.runInBackground(async () => {
@@ -303,7 +299,6 @@ export class CloudflareAiProcessor extends StreamProcessor<
       payload: {
         llmRequestId,
         model: args.event.payload.model,
-        runOpts: args.event.payload.runOpts,
       },
     });
 
@@ -321,11 +316,7 @@ export class CloudflareAiProcessor extends StreamProcessor<
     let raw: unknown;
     let streamed: StreamedCloudflareAiResponse | null = null;
     try {
-      raw = await ai.run(
-        args.event.payload.model,
-        { ...body, stream: true },
-        args.event.payload.runOpts,
-      );
+      raw = await ai.run(args.event.payload.model, { ...body, stream: true });
       if (raw instanceof ReadableStream) {
         streamed = await this.#consumeCloudflareAiStream({
           body: raw,

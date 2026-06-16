@@ -4,8 +4,8 @@
 // the primitive the dashboard's live stream views are built on.
 
 import { expect, test } from "vitest";
+import { coreStateToStreamState } from "../../domains/streams/stream-runtime.ts";
 import { connectGlobal, registerCreatedProjectCleanup } from "./e2e-env.ts";
-import { coreStateToStreamState } from "~/domains/streams/stream-runtime.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const PROJECT_SLUG = `itx-sub-e2e-${RUN_SUFFIX}`;
@@ -26,7 +26,7 @@ test("subscribe replays history, tails live appends, and unsubscribes", async ()
 
   // The callback lives in THIS Node process; batches are pushed to it.
   const seen: { marker: string; offset: number }[] = [];
-  const batchStates: { eventCount: number; namespace: string; path: string }[] = [];
+  const batchStates: { eventCount: number; projectId: string | null; path: string }[] = [];
   const subscription = await stream.subscribe({
     replayAfterOffset: 0,
     processEventBatch: (batch) => {
@@ -57,7 +57,7 @@ test("subscribe replays history, tails live appends, and unsubscribes", async ()
   // the one subscription primitive serves events AND reduced state.
   expect(batchStates.length).toBeGreaterThanOrEqual(1);
   for (const state of batchStates) {
-    expect(state.namespace).toBe(project.id);
+    expect(state.projectId).toBe(project.id);
     expect(state.path).toBe(STREAM_PATH);
   }
   expect(batchStates.at(-1)!.eventCount).toBeGreaterThanOrEqual(Math.max(...offsets));
@@ -80,7 +80,7 @@ test("onStateChange pushes initial state immediately, then state after appends",
   const stream = projectItx.streams.get(STREAM_PATH);
   await stream.append({ event: { type: EVENT_TYPE, payload: { marker: `seed-${RUN_SUFFIX}` } } });
 
-  const states: { eventCount: number; namespace: string; path: string }[] = [];
+  const states: { eventCount: number; projectId: string | null; path: string }[] = [];
   const subscription = await stream.subscribe({
     events: false,
     processEventBatch: (batch) => {
@@ -91,7 +91,7 @@ test("onStateChange pushes initial state immediately, then state after appends",
   // The initial push: state arrives with NO post-subscribe append, so the
   // first render needs no separate getState call.
   await waitFor(() => states.length >= 1, "initial state push");
-  expect(states[0]!.namespace).toBe(project.id);
+  expect(states[0]!.projectId).toBe(project.id);
   expect(states[0]!.path).toBe(STREAM_PATH);
   const initialEventCount = states[0]!.eventCount;
   expect(initialEventCount).toBeGreaterThanOrEqual(3); // created + woken + seed

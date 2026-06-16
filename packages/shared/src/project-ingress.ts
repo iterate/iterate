@@ -10,13 +10,11 @@
  *
  * 1. **OS worker host** — where the control plane lives.
  *    - prod: `os.iterate.com`
- *    - dev w/ tunnel: `$DEV_TUNNEL.dev.iterate.com`
- *    - dev w/o tunnel: `os.iterate.com.localhost`
+ *    - local dev: `localhost` or a Captun public hostname
  *
  * 2. **Project ingress domain** — base domain for machine ingress.
  *    - prod: `iterate.app`
- *    - dev w/ tunnel: `$DEV_TUNNEL.dev.iterate.app`
- *    - dev w/o tunnel: `iterate.app.localhost`
+ *    - local dev: `localhost` or a Captun public hostname
  *
  * Project ingress hostnames follow the pattern:
  *    `<project-slug>.<PROJECT_INGRESS_DOMAIN>`       → port 3000 (default)
@@ -393,7 +391,7 @@ function isStandardIngressDomain(hostname: string): boolean {
 
 /**
  * System domain suffixes that must never be used as custom domains.
- * Prevents hijacking the control plane, ingress, or dev tunnel domains.
+ * Prevents hijacking the control plane and ingress domains.
  */
 const BLOCKED_DOMAIN_SUFFIXES = ["iterate.com", "iterate.app", "nustom.com", "nustom.app"];
 

@@ -49,7 +49,7 @@ export function EventFeedView({ streamView }: { streamView: StreamViewSearch }) 
     () =>
       acquireStreamRuntime({
         streamPath: streamView.path,
-        namespace: streamView.namespace,
+        projectId: streamView.projectId,
         createStreamClient: createCapnwebStreamClient,
         slug: BrowserEventFeedContract.slug,
         schemaVersion: BROWSER_EVENT_FEED_SCHEMA_VERSION,
@@ -68,7 +68,7 @@ export function EventFeedView({ streamView }: { streamView: StreamViewSearch }) 
           });
         },
       }),
-    [streamView.namespace, streamView.path],
+    [streamView.projectId, streamView.path],
   );
   const snapshot = useSyncExternalStore(
     store.subscribe,
@@ -583,7 +583,7 @@ function ChildStreamCreatedFeedItem({
       ? undefined
       : streamViewSearch({
           path: childPath,
-          namespace: streamView.namespace,
+          projectId: streamView.projectId,
           view: "browser-event-feed",
         });
 

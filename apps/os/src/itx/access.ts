@@ -21,7 +21,7 @@ export function accessForPrincipal(principal: Principal): ProjectAccess {
 /**
  * Resolve a connect/run target to a context ref the caller may hold. The
  * access check happens HERE (auth boundary) and nowhere deeper: a context is
- * accessible iff its namespace (the owning project) is. Accepts a full ref
+ * accessible iff its project id is. Accepts a full ref
  * (`<projectId>:/<path>`) or a project id/slug (→ the project root context).
  */
 export async function resolveAccessibleContextRef(input: {
@@ -30,11 +30,12 @@ export async function resolveAccessibleContextRef(input: {
   target: string;
 }): Promise<string | null> {
   if (isContextRef(input.target)) {
-    const { namespace } = parseContextRef(input.target);
-    if (input.access !== "all" && !input.access.includes(namespace)) return null;
-    // The namespace must be a real project (a ref grants nothing, but a
-    // typo'd namespace should 404 here, not at first dispatch).
-    if (!(await getProjectById(input.db, { id: namespace }))) return null;
+    const { projectId } = parseContextRef(input.target);
+    if (projectId === null) return null;
+    if (input.access !== "all" && !input.access.includes(projectId)) return null;
+    // The project id must be real (a ref grants nothing, but a typo'd project
+    // id should 404 here, not at first dispatch).
+    if (!(await getProjectById(input.db, { id: projectId }))) return null;
     return input.target;
   }
 

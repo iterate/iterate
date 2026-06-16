@@ -35,6 +35,9 @@ export const CloudflarePreviewAppEntry = z.object({
   publicUrl: z.string().trim().url().nullable().optional(),
   runUrl: z.string().trim().url().nullable().optional(),
   shortSha: z.string().trim().min(1).nullable().optional(),
+  cleanupDurationMs: z.number().nonnegative().finite().nullable().optional(),
+  deployDurationMs: z.number().nonnegative().finite().nullable().optional(),
+  testDurationMs: z.number().nonnegative().finite().nullable().optional(),
 });
 
 export const CloudflarePreviewState = z.object({
@@ -144,6 +147,7 @@ function renderPreviewAppEntry(entry: CloudflarePreviewAppEntry) {
     `Status: ${renderStatusLabel(entry.status)}`,
     entry.shortSha ? `Commit: \`${entry.shortSha}\`` : null,
     entry.publicUrl ? `Preview: ${entry.publicUrl}` : null,
+    ...renderPreviewDurations(entry),
     summary ? `Summary: ${summary}` : null,
     entry.runUrl ? `[Workflow run](${entry.runUrl})` : null,
     `Updated: ${entry.updatedAt}`,
@@ -161,6 +165,28 @@ function renderPreviewAppEntry(entry: CloudflarePreviewAppEntry) {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function renderPreviewDurations(entry: CloudflarePreviewAppEntry) {
+  return [
+    entry.deployDurationMs != null
+      ? `Deploy duration: ${formatDurationMs(entry.deployDurationMs)}`
+      : null,
+    entry.testDurationMs != null
+      ? `Test duration: ${formatDurationMs(entry.testDurationMs)}`
+      : null,
+    entry.cleanupDurationMs != null
+      ? `Cleanup duration: ${formatDurationMs(entry.cleanupDurationMs)}`
+      : null,
+  ].filter((line): line is string => line != null);
+}
+
+export function formatDurationMs(durationMs: number) {
+  if (durationMs < 1_000) {
+    return `${Math.round(durationMs)}ms`;
+  }
+
+  return `${(durationMs / 1_000).toFixed(1)}s`;
 }
 
 function readPreviewMessage(message: string | null | undefined) {
@@ -212,10 +238,12 @@ function renderStatusLabel(status: CloudflarePreviewAppEntry["status"]) {
   }
 }
 
+/** Escape command output before embedding it in the preview status markdown block. */
 function escapeHtml(value: string) {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
+/** Pair with unwrapHiddenStateBlock: serialize preview state into a hidden markdown comment. */
 function wrapHiddenStateBlock(state: CloudflarePreviewState) {
   return ["<!--", JSON.stringify(state, null, 2), "-->"].join("\n");
 }

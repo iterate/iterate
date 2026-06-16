@@ -2,40 +2,36 @@ import { createAuthContractClient } from "@iterate-com/auth-contract";
 
 const RETRY_DELAY_MS = 1_000;
 const MAX_RETRIES = 30;
-const DEV_STAGE_PREFIX = "dev-";
 const DEV_TARGET_PREFIX = "dev_";
-const DEV_HOST_PREFIX = "os.iterate-dev-";
-const DEV_HOST_SUFFIX = ".com";
+const DEV_STAGE_PATTERN = /^dev[-_](.+)$/;
+const DEV_AUTH_ORIGIN = "https://auth.iterate-dev.com";
+
+export type LocalDevOAuthClientBootstrap = {
+  authOrigin: string;
+  existingClientId: string | undefined;
+  existingClientSecret: string | undefined;
+  redirectURI: string;
+  serviceToken: string;
+  target: string;
+};
 
 export function resolveDevAuthClientSyncTarget(env: Record<string, string | undefined>) {
-  const baseUrl = env.APP_CONFIG_BASE_URL?.trim();
-  if (baseUrl && URL.canParse(baseUrl)) {
-    const hostname = new URL(baseUrl).hostname.toLowerCase();
-    if (hostname.startsWith(DEV_HOST_PREFIX) && hostname.endsWith(DEV_HOST_SUFFIX)) {
-      const user = hostname.slice(DEV_HOST_PREFIX.length, -DEV_HOST_SUFFIX.length);
-      if (user.length > 0) {
-        return `${DEV_TARGET_PREFIX}${user}`;
-      }
-    }
-  }
-
   const stage = env.ALCHEMY_STAGE?.trim().toLowerCase();
-  if (stage?.startsWith(DEV_STAGE_PREFIX)) {
-    const user = stage.slice(DEV_STAGE_PREFIX.length);
-    if (user.length > 0) {
-      return `${DEV_TARGET_PREFIX}${user}`;
-    }
-  }
+  if (!stage) return null;
 
-  return null;
+  const match = DEV_STAGE_PATTERN.exec(stage);
+  const user = match?.[1]?.replaceAll("-", "_");
+  return user ? `${DEV_TARGET_PREFIX}${user}` : null;
 }
 
-export async function ensureLocalDevOAuthClient(env: Record<string, string | undefined>) {
+export function resolveLocalDevOAuthClientBootstrap(
+  env: Record<string, string | undefined>,
+): LocalDevOAuthClientBootstrap | null {
   const target = resolveDevAuthClientSyncTarget(env);
-  if (!target) return;
+  if (!target) return null;
 
   const authIssuer = env.APP_CONFIG_ITERATE_AUTH__ISSUER ?? env.ITERATE_OAUTH_ISSUER;
-  const baseUrl = env.APP_CONFIG_BASE_URL?.trim();
+  const baseUrl = env.APP_CONFIG_BASE_URL;
   const serviceToken = env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN ?? env.ITERATE_AUTH_SERVICE_TOKEN;
 
   if (
@@ -45,30 +41,42 @@ export async function ensureLocalDevOAuthClient(env: Record<string, string | und
     !URL.canParse(authIssuer) ||
     !URL.canParse(baseUrl)
   ) {
-    return;
+    return null;
   }
 
   const authOrigin = new URL(authIssuer).origin;
-  if (!isLoopbackOrigin(authOrigin)) {
-    return;
-  }
+  if (authOrigin !== DEV_AUTH_ORIGIN && !isLoopbackOrigin(authOrigin)) return null;
 
-  const authClient = createAuthClient(authOrigin, serviceToken);
-  const redirectURI = `${baseUrl.replace(/\/+$/, "")}/api/iterate-auth/callback`;
-  const existingClientId =
-    env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID ?? env.ITERATE_OAUTH_CLIENT_ID ?? undefined;
-  const existingClientSecret =
-    env.APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET ?? env.ITERATE_OAUTH_CLIENT_SECRET ?? undefined;
+  return {
+    authOrigin,
+    existingClientId:
+      env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID ?? env.ITERATE_OAUTH_CLIENT_ID ?? undefined,
+    existingClientSecret:
+      env.APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET ?? env.ITERATE_OAUTH_CLIENT_SECRET ?? undefined,
+    redirectURI: `${baseUrl.replace(/\/+$/, "")}/api/iterate-auth/callback`,
+    serviceToken,
+    target,
+  };
+}
+
+export async function ensureLocalDevOAuthClient(env: Record<string, string | undefined>) {
+  const bootstrap = resolveLocalDevOAuthClientBootstrap(env);
+  if (!bootstrap) return;
+
+  const authClient = createAuthContractClient({
+    baseUrl: bootstrap.authOrigin,
+    serviceToken: bootstrap.serviceToken,
+  });
 
   let lastError: unknown;
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt += 1) {
     try {
       const client = await authClient.internal.oauth.ensureClient({
-        referenceId: `os:${target}:web`,
-        clientName: `OS ${target} web`,
-        redirectURIs: [redirectURI],
-        existingClientId,
-        existingClientSecret,
+        referenceId: `os:${bootstrap.target}:web`,
+        clientName: `OS ${bootstrap.target} web`,
+        redirectURIs: [bootstrap.redirectURI],
+        existingClientId: bootstrap.existingClientId,
+        existingClientSecret: bootstrap.existingClientSecret,
         rotateClientSecret: false,
       });
 
@@ -81,19 +89,17 @@ export async function ensureLocalDevOAuthClient(env: Record<string, string | und
       lastError = error;
       if (attempt === MAX_RETRIES || !isRetryableBootstrapError(error)) {
         throw new Error(
-          `Failed to bootstrap local OAuth client for ${target} against ${authOrigin}`,
+          `Failed to bootstrap local OAuth client for ${bootstrap.target} against ${bootstrap.authOrigin}`,
           { cause: error },
         );
       }
-      await sleep(RETRY_DELAY_MS);
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
     }
   }
 
-  throw new Error(`Failed to bootstrap local OAuth client for ${target}`, { cause: lastError });
-}
-
-function createAuthClient(authOrigin: string, serviceToken: string) {
-  return createAuthContractClient({ baseUrl: authOrigin, serviceToken });
+  throw new Error(`Failed to bootstrap local OAuth client for ${bootstrap.target}`, {
+    cause: lastError,
+  });
 }
 
 function isLoopbackOrigin(origin: string) {
@@ -111,8 +117,4 @@ function isRetryableBootstrapError(error: unknown) {
     message.includes("socket") ||
     message.includes("timed out")
   );
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

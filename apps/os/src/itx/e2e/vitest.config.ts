@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 import { playwright } from "@vitest/browser-playwright";
@@ -32,6 +33,11 @@ const sharedProvide = {
   [E2E_RUN_ROOT_KEY]: vitestRunRoot,
   [E2E_RUN_SLUG_KEY]: vitestRunSlug,
 };
+const sharedResolve = {
+  alias: {
+    "~": resolve(appRoot, "src"),
+  },
+};
 
 export default defineConfig({
   test: {
@@ -44,6 +50,7 @@ export default defineConfig({
     passWithNoTests: true,
     projects: [
       {
+        resolve: sharedResolve,
         test: {
           environment: "node",
           hookTimeout: 45_000,
@@ -64,6 +71,7 @@ export default defineConfig({
             baseUrl,
           }),
         },
+        resolve: sharedResolve,
         test: {
           browser: {
             commands: {

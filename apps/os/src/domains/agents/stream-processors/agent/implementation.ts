@@ -16,6 +16,7 @@ import {
 } from "@iterate-com/shared/streams/stream-processors";
 import {
   AgentProcessorContract,
+  DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
   reduceAgentEvent,
   reduceAgentEvents,
   type AgentConsumedEvent,
@@ -29,8 +30,8 @@ export { AgentProcessorContract } from "./contract.ts";
 export type AgentProcessorContract = typeof AgentProcessorContract;
 
 export type AgentProcessorDeps = {
-  ensureChildAgentRunner(childPath: string): Promise<unknown>;
   isAgentsRootStream(): boolean;
+  setupAgentRuntime(): Promise<unknown>;
   /**
    * Reads the full committed history of the agent's stream. The debounce-timer
    * handoff rebuilds agent state from durable history at the last possible
@@ -38,11 +39,6 @@ export type AgentProcessorDeps = {
    * potentially stale warm reduction (see `#requestScheduledLlmWork`).
    */
   readStreamEvents(): Promise<StreamEvent[]>;
-  /**
-   * Ensures the agent's Itx context and its own stream subscription exist
-   * before the agent enqueues script work for that context.
-   */
-  ensureItxContext(): Promise<unknown>;
 };
 
 type LlmRequestPolicy = Extract<
@@ -88,17 +84,34 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     const { event, previousState, state } = args;
     switch (event.type) {
       case "events.iterate.com/agent/system-prompt-updated":
-      case "events.iterate.com/agent/llm-config-updated":
+      case "events.iterate.com/agent/config-updated":
+      case "events.iterate.com/agent/llm-provider-selected":
       case "events.iterate.com/agent/llm-request-scheduled":
       case "events.iterate.com/agent/status-updated":
       case "events.iterate.com/agent/llm-request-queued":
-        return;
-      case "events.iterate.com/stream/child-stream-created":
-        args.blockProcessorWhile(() => this.deps.ensureChildAgentRunner(event.payload.childPath));
+        if (event.type === "events.iterate.com/agent/config-updated") {
+          args.blockProcessorWhile(async () => {
+            await this.deps.setupAgentRuntime();
+            if (event.payload.systemPrompt !== undefined) {
+              await this.ctx.stream.append({
+                event: {
+                  type: "events.iterate.com/agent/system-prompt-updated",
+                  idempotencyKey: buildProcessorIdempotencyKey({
+                    processor: AgentProcessorContract,
+                    key: "apply-config/system-prompt",
+                    sourceEvent: event,
+                  }),
+                  payload: { systemPrompt: event.payload.systemPrompt },
+                },
+              });
+            }
+          });
+        }
         return;
       case "events.iterate.com/agents/user-message-received":
         if (this.deps.isAgentsRootStream()) return;
         args.blockProcessorWhile(async () => {
+          await this.deps.setupAgentRuntime();
           await this.#appendEventTypeExplanation({ eventType: event.type });
           await this.ctx.stream.append({
             event: {
@@ -306,6 +319,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   }) {
     const { event, state, policy } = args;
     if (policy.behaviour === "dont-trigger-request") return;
+    if (state.llmProvider === null) return;
 
     this.#triggerSchedulingInProgress.add(event.offset);
     try {
@@ -326,7 +340,6 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
 
         this.#resetScheduledLlmRequestTimer({
           requestId: state.currentRequest.requestId,
-          debounceMs: state.llmConfig.debounceMs,
           scheduledOffset: state.currentRequest.scheduledOffset,
         });
         return;
@@ -353,7 +366,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     const script = extractCodemodeScript(event.payload.content);
     if (script == null) return;
 
-    await this.deps.ensureItxContext();
+    await this.deps.setupAgentRuntime();
     await this.ctx.stream.append({
       event: {
         type: ITX_EVENT_TYPES.scriptExecutionRequested,
@@ -431,7 +444,6 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   }
 
   async #appendLlmRequestScheduled(args: { sourceEvent: { offset: number }; state: AgentState }) {
-    const debounceMs = args.state.llmConfig.debounceMs;
     this.#llmRequestSeq += 1;
     const requestId = `req_${Date.now()}_${this.#llmRequestSeq}`;
     const scheduledEvent = (await this.ctx.stream.append({
@@ -444,7 +456,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         }),
         payload: {
           requestId,
-          debounceMs,
+          debounceMs: DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
           model: args.state.llmConfig.model,
         },
       },
@@ -459,7 +471,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       (scheduledEvent.payload as { requestId?: string }).requestId ?? requestId;
     this.#armLlmRequestDebounceTimer({
       requestId: committedRequestId,
-      debounceMs,
+      debounceMs: DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
       scheduledEvent,
     });
   }
@@ -513,11 +525,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     });
   }
 
-  #resetScheduledLlmRequestTimer(args: {
-    requestId: string;
-    debounceMs: number;
-    scheduledOffset: number;
-  }) {
+  #resetScheduledLlmRequestTimer(args: { requestId: string; scheduledOffset: number }) {
     // The durable scheduledOffset lets a fresh instance re-arm without losing
     // the idempotency key for the original scheduled event.
     const scheduledEvent = this.#scheduledLlmRequest?.scheduledEvent ?? {
@@ -526,7 +534,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     this.#cancelScheduledLlmRequest({ requestId: args.requestId });
     this.#armLlmRequestDebounceTimer({
       requestId: args.requestId,
-      debounceMs: args.debounceMs,
+      debounceMs: DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
       scheduledEvent,
     });
   }
@@ -589,6 +597,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     }
 
     try {
+      if (stateAtRequest.llmProvider === null) return;
       // Request-by-reference: no body. Providers rebuild the chat request from
       // committed history up to this event's offset.
       await this.ctx.stream.append({
@@ -601,7 +610,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           }),
           payload: {
             model: stateAtRequest.llmConfig.model,
-            runOpts: stateAtRequest.llmConfig.runOpts,
+            provider: stateAtRequest.llmProvider,
           },
         },
       });
@@ -715,7 +724,7 @@ function eventTypeExplanation(eventType: string): string | null {
     return eventTypeExplanationBlock({
       type: eventType,
       meaning:
-        "A capability is now available to your scripts. Call it as `itx.<name>.<method>(args)` in a code block. If you're not sure about the shape of a result, just return it and you'll be shown it on your next turn. The event below shows the capability's name and usage instructions.",
+        "A capability is now available to your scripts. Call it as `itx.<name>.<method>(args)` in a code block. Return a value only when you need to inspect it on your next turn. For side-effect-only calls such as `itx.chat.sendMessage(...)`, await the call but do not return it. The event below shows the capability's name and usage instructions.",
     });
   }
   return null;
@@ -764,10 +773,12 @@ function yamlScalar(value: string | number): string {
   return JSON.stringify(value);
 }
 
+/** Render a multi-line YAML field as a block scalar with the indentation expected by the prompt. */
 function yamlBlockScalar(key: string, value: string): string[] {
   return [`  ${key}: |-`, ...value.split("\n").map((line) => `    ${line}`)];
 }
 
+/** Human-readable body for the system event that teaches an agent about a newly provided cap. */
 function capabilityProvidedEventBlock(args: {
   instructions: string;
   name: string;

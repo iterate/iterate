@@ -1,16 +1,7 @@
-import { Suspense, useMemo } from "react";
-import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
-import { StreamPath } from "@iterate-com/shared/streams/types";
 import { buttonVariants } from "@iterate-com/ui/components/button";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { buildProjectMcpUrl } from "~/lib/project-host-routing.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
-import { StreamExplorerTreePage } from "~/components/stream-explorer.tsx";
-import { useItx } from "~/itx/itx-react.tsx";
-
-// Inbound MCP sessions live under this stream root (project-mcp-server-connection.ts
-// names each session `/mcp-server-sessions/<slug>`).
-const MCP_SESSIONS_ROOT = StreamPath.parse("/mcp-server-sessions");
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/mcp")({
   ssr: false,
@@ -54,100 +45,61 @@ function ProjectMcpPage() {
       : "Run from the repo root. Uses the admin token for auth and disables all other MCP servers.";
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col">
-      <div className="max-w-md space-y-4 p-4">
-        <div className="space-y-1">
-          <h2 className="text-sm font-semibold">MCP</h2>
-          <p className="text-sm text-muted-foreground">
-            Connect MCP clients to Iterate OS. The auth flow lets you choose which projects this
-            client can access.
-          </p>
-        </div>
-
-        <div className="space-y-2 rounded-lg border bg-card p-4">
-          <p className="text-xs uppercase tracking-wide text-muted-foreground">Endpoint</p>
-          <code className="block break-all rounded-md bg-muted p-3 font-mono text-xs">
-            {mcpUrl}
-          </code>
-        </div>
-
-        <div className="space-y-2 rounded-lg border bg-card p-4">
-          <p className="text-xs uppercase tracking-wide text-muted-foreground">Claude Code</p>
-          <code className="block whitespace-pre-wrap break-all rounded-md bg-muted p-3 font-mono text-xs">
-            {claudeCommand}
-          </code>
-          <p className="text-sm text-muted-foreground">
-            Then run <code>/mcp</code> in Claude Code and authenticate the server in the browser.
-          </p>
-          <a
-            className={buttonVariants({ size: "sm", variant: "outline" })}
-            href="https://docs.anthropic.com/en/docs/claude-code/mcp"
-            target="_blank"
-            rel="noreferrer"
-          >
-            Claude Code docs
-          </a>
-        </div>
-
-        <div className="space-y-2 rounded-lg border bg-card p-4">
-          <p className="text-xs uppercase tracking-wide text-muted-foreground">CLI Script</p>
-          <code className="block whitespace-pre-wrap break-all rounded-md bg-muted p-3 font-mono text-xs">
-            {cliCommand}
-          </code>
-          <p className="text-sm text-muted-foreground">{cliCommandHint}</p>
-        </div>
-
-        <div className="space-y-2 rounded-lg border bg-card p-4">
-          <p className="text-xs uppercase tracking-wide text-muted-foreground">Cursor</p>
-          <p className="text-sm text-muted-foreground">
-            Add a remote MCP server using the endpoint above. Cursor will use the server&apos;s
-            OAuth metadata to start the Iterate Auth sign-in flow.
-          </p>
-          <a
-            className={buttonVariants({ size: "sm", variant: "outline" })}
-            href="https://docs.cursor.com/advanced/model-context-protocol"
-            target="_blank"
-            rel="noreferrer"
-          >
-            Cursor MCP docs
-          </a>
-        </div>
-
-        <div className="space-y-1">
-          <h2 className="text-sm font-semibold">Server Sessions</h2>
-          <p className="text-sm text-muted-foreground">
-            Inbound MCP connections for this project, as live streams under{" "}
-            <code className="text-xs">/mcp-server-sessions</code>.
-          </p>
-        </div>
+    <section className="max-w-md space-y-4 p-4">
+      <div className="space-y-1">
+        <h2 className="text-sm font-semibold">MCP</h2>
+        <p className="text-sm text-muted-foreground">
+          Connect MCP clients to Iterate OS. The auth flow lets you choose which projects this
+          client can access.
+        </p>
       </div>
 
-      <Suspense
-        fallback={<div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>}
-      >
-        <McpSessionsExplorer />
-      </Suspense>
+      <div className="space-y-2 rounded-lg border bg-card p-4">
+        <p className="text-xs uppercase tracking-wide text-muted-foreground">Endpoint</p>
+        <code className="block break-all rounded-md bg-muted p-3 font-mono text-xs">{mcpUrl}</code>
+      </div>
+
+      <div className="space-y-2 rounded-lg border bg-card p-4">
+        <p className="text-xs uppercase tracking-wide text-muted-foreground">Claude Code</p>
+        <code className="block whitespace-pre-wrap break-all rounded-md bg-muted p-3 font-mono text-xs">
+          {claudeCommand}
+        </code>
+        <p className="text-sm text-muted-foreground">
+          Then run <code>/mcp</code> in Claude Code and authenticate the server in the browser.
+        </p>
+        <a
+          className={buttonVariants({ size: "sm", variant: "outline" })}
+          href="https://docs.anthropic.com/en/docs/claude-code/mcp"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Claude Code docs
+        </a>
+      </div>
+
+      <div className="space-y-2 rounded-lg border bg-card p-4">
+        <p className="text-xs uppercase tracking-wide text-muted-foreground">CLI Script</p>
+        <code className="block whitespace-pre-wrap break-all rounded-md bg-muted p-3 font-mono text-xs">
+          {cliCommand}
+        </code>
+        <p className="text-sm text-muted-foreground">{cliCommandHint}</p>
+      </div>
+
+      <div className="space-y-2 rounded-lg border bg-card p-4">
+        <p className="text-xs uppercase tracking-wide text-muted-foreground">Cursor</p>
+        <p className="text-sm text-muted-foreground">
+          Add a remote MCP server using the endpoint above. Cursor will use the server&apos;s OAuth
+          metadata to start the Iterate Auth sign-in flow.
+        </p>
+        <a
+          className={buttonVariants({ size: "sm", variant: "outline" })}
+          href="https://docs.cursor.com/advanced/model-context-protocol"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Cursor MCP docs
+        </a>
+      </div>
     </section>
-  );
-}
-
-function McpSessionsExplorer() {
-  const params = Route.useParams();
-  const navigate = useNavigate();
-  const itx = useItx();
-  const source = useMemo(() => (streamPath: StreamPathType) => itx.streams.get(streamPath), [itx]);
-
-  function openStream(streamPath: StreamPathType) {
-    void navigate({
-      to: "/projects/$projectSlug/streams/$",
-      params: {
-        projectSlug: params.projectSlug,
-        _splat: streamPath,
-      },
-    });
-  }
-
-  return (
-    <StreamExplorerTreePage source={source} rootPath={MCP_SESSIONS_ROOT} onOpenPath={openStream} />
   );
 }

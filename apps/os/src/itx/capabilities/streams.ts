@@ -2,14 +2,14 @@
 // a project context is an ordinary platform:project definition dialing the
 // StreamsCapability loopback below — shadowable like every other default. The
 // collection/stream classes here are shared with the handle's GLOBAL branch
-// (the deployment-wide "global" namespace stays kernel: it is gated on the
+// (the deployment-wide global stream scope stays kernel: it is gated on the
 // connect-time access set, which no cap definition can express).
 //
-// Scope model: a StreamsScope carries the namespaces this surface may
+// Scope model: a StreamsScope carries the project ids this surface may
 // resolve. The cap pins it to the owning project (dial-injected
 // projectId — a provider can never point it elsewhere); the global kernel
 // branch passes the handle's access set through. Absolute refs
-// ("ns:/path") are sugar through ONE access check either way.
+// ("projectId:/path") are sugar through ONE access check either way.
 //
 // Chaining note: `itx.streams.get("/x").append(e)` relies on RPC promise
 // pipelining (capnweb from browsers/Node, jsrpc from loaded isolates) —
@@ -18,12 +18,16 @@
 // itx.agents.create().doThing() already proves out.
 
 import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
-import { StreamNamespace } from "@iterate-com/shared/streams/types";
 import { ItxError } from "../errors.ts";
 import { replayPathCall, type PathCall } from "../itx.ts";
 import type { ProjectAccess } from "../refs.ts";
 import { getStreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
 import type { StreamRpc } from "~/domains/streams/engine/types.ts";
+import {
+  formatDurableObjectName,
+  normalizeDurableObjectProjectId,
+  parseDurableObjectName,
+} from "~/domains/durable-object-names.ts";
 
 type StreamsClient = ReturnType<typeof getStreamsBackend>;
 type StreamsExports = Parameters<typeof getStreamsBackend>[0]["exports"];
@@ -36,7 +40,7 @@ export type StreamsScope = {
 
 export type StreamsCapabilityProps = {
   /** The owning project — dial-injected at dial time, never provider
-   * props, so a `streams` cap can only ever scope to its own namespace. */
+   * props, so a `streams` cap can only ever scope to its own project. */
   projectId?: string;
   /** Attribution, injected by the dial. */
   context?: string;
@@ -44,7 +48,7 @@ export type StreamsCapabilityProps = {
 };
 
 /**
- * The platform:project `streams` default: get/namespace/create against a
+ * The platform:project `streams` default: get/project/create against a
  * project-pinned collection. Only ever reached through the one calling
  * convention (the dial), so `call` replays straight onto the collection —
  * its surface IS this capability's surface, no forwarders.
@@ -65,47 +69,54 @@ export class StreamsCapability extends WorkerEntrypoint<Env, StreamsCapabilityPr
 }
 
 /**
- * A namespace-pinned streams collection. Thin: every method resolves the
- * streams domain entrypoint with the namespace in props and forwards. The
+ * A project-pinned streams collection. Thin: every method resolves the
+ * streams domain entrypoint with the project id in props and forwards. The
  * append policies are decided here (collection-level appends may target any
- * path in the namespace; a single stream handle is pinned to its path).
+ * path in the project; a single stream handle is pinned to its path).
  */
 export class ItxStreams extends RpcTarget {
   constructor(
     private readonly scope: StreamsScope,
-    private readonly namespaceId: string,
+    private readonly projectId: string | null,
   ) {
     super();
   }
 
   /**
    * Relative or absolute (itx-next.md §3). `"/path"` resolves in this
-   * collection's namespace; `"ns:/path"` and `{ namespace, path }` are
+   * collection's project; `"proj_123:/path"` and `{ projectId, path }` are
    * absolute refs. Sugar rule: absolute forms construct the narrowed
    * collection and call through — ONE code path, so the access check never
    * diverges.
    */
-  get(ref: string | { namespace?: string; path: string }): ItxStream {
-    const { namespace, path } = parseStreamRef(ref);
-    if (namespace === undefined || namespace === this.namespaceId) {
-      return new ItxStream(this.scope, this.namespaceId, path);
+  get(ref: string | { projectId: string | null; path: string }): ItxStream {
+    const { projectId, path } = parseStreamRef(ref);
+    if (projectId === undefined || projectId === this.projectId) {
+      return new ItxStream(this.scope, this.projectId, path);
     }
-    return this.namespace(namespace).get(path);
+    if (projectId === null) {
+      return this.project(null).get(path);
+    }
+    return this.project(projectId).get(path);
   }
 
-  namespace(namespace: string): ItxStreams {
-    const parsed = StreamNamespace.parse(namespace);
+  project(projectId: string | null): ItxStreams {
+    const normalizedProjectId = normalizeDurableObjectProjectId(projectId);
     // Resolution checks access (§3 rule 2): refs are pure names, restoring
     // them is the capability. Masked as NOT_FOUND like projects.get — a
-    // caller can never probe which namespaces exist. A project-scoped
+    // caller can never probe which projects exist. A project-scoped
     // surface cannot fully-qualify its way out of its access set.
-    if (this.scope.access !== "all" && !this.scope.access.includes(parsed)) {
+    if (
+      normalizedProjectId === null
+        ? this.scope.access !== "all"
+        : this.scope.access !== "all" && !this.scope.access.includes(normalizedProjectId)
+    ) {
       throw new ItxError({
         code: "NOT_FOUND",
-        message: `No stream namespace ${JSON.stringify(parsed)} for this handle.`,
+        message: `No stream project ${JSON.stringify(normalizedProjectId)} for this handle.`,
       });
     }
-    return new ItxStreams(this.scope, parsed);
+    return new ItxStreams(this.scope, normalizedProjectId);
   }
 
   async create(input: { streamPath: string }) {
@@ -115,39 +126,40 @@ export class ItxStreams extends RpcTarget {
   private client(): StreamsClient {
     return getStreamsBackend({
       exports: this.scope.exports,
-      props: { appendPolicy: { mode: "any" }, projectId: this.namespaceId },
+      props: { appendPolicy: { mode: "any" }, projectId: this.projectId },
     });
   }
 }
 
 /**
  * The two absolute StreamRef spellings, plus the relative one:
- * `"/path"` (relative), `"ns:/path"` (absolute string), and
- * `{ namespace?, path }` (absolute structured). Refs are unauthenticated
+ * `"/path"` (relative), `"proj_123:/path"` (absolute string), and
+ * `{ projectId, path }` (absolute structured). Refs are unauthenticated
  * names — authority comes from who restores them, never from their content.
  */
-function parseStreamRef(ref: string | { namespace?: string; path: string }): {
-  namespace?: string;
+function parseStreamRef(ref: string | { projectId: string | null; path: string }): {
+  projectId?: string | null;
   path: string;
 } {
   if (typeof ref !== "string") {
-    return { namespace: ref.namespace, path: ref.path };
+    return parseDurableObjectName(formatDurableObjectName(ref));
   }
   if (ref.startsWith("/")) return { path: ref };
-  const colon = ref.indexOf(":");
-  if (colon > 0 && ref[colon + 1] === "/") {
-    return { namespace: ref.slice(0, colon), path: ref.slice(colon + 1) };
+  try {
+    return parseDurableObjectName(ref);
+  } catch {
+    // Fall through to the user-facing error below.
   }
   throw new ItxError({
     code: "BAD_REQUEST",
-    message: `Stream ref ${JSON.stringify(ref)} must be "/path", "namespace:/path", or { namespace?, path }.`,
+    message: `Stream ref ${JSON.stringify(ref)} must be "/path", "projectId:/path", or { projectId, path }.`,
   });
 }
 
 export class ItxStream extends RpcTarget {
   constructor(
     private readonly scope: StreamsScope,
-    private readonly namespaceId: string,
+    private readonly projectId: string | null,
     private readonly path: string,
   ) {
     super();
@@ -194,8 +206,21 @@ export class ItxStream extends RpcTarget {
   }
 
   async subscribe(input: Parameters<StreamRpc["subscribe"]>[0]): Promise<ItxStreamSubscription> {
-    const handle = await this.client().subscribe(input as never);
-    return new ItxStreamSubscription(handle);
+    const processEventBatch = input.processEventBatch;
+    const retainedProcessEventBatch =
+      (processEventBatch as { dup?(): typeof processEventBatch }).dup?.() ?? processEventBatch;
+    try {
+      const handle = await this.client().subscribe({
+        ...input,
+        processEventBatch: retainedProcessEventBatch,
+      } as never);
+      return new ItxStreamSubscription(handle, () => {
+        (retainedProcessEventBatch as Partial<Disposable>)[Symbol.dispose]?.();
+      });
+    } catch (error) {
+      (retainedProcessEventBatch as Partial<Disposable>)[Symbol.dispose]?.();
+      throw error;
+    }
   }
 
   private client(): StreamsClient {
@@ -203,7 +228,7 @@ export class ItxStream extends RpcTarget {
       exports: this.scope.exports,
       props: {
         appendPolicy: { mode: "stream" },
-        projectId: this.namespaceId,
+        projectId: this.projectId,
         streamPath: this.path,
       },
     });
@@ -212,11 +237,18 @@ export class ItxStream extends RpcTarget {
 
 /** Disposer for ItxStream.subscribe — callable from any execution mode. */
 export class ItxStreamSubscription extends RpcTarget {
-  constructor(private readonly handle: { unsubscribe(): void }) {
+  constructor(
+    private readonly handle: { unsubscribe(): void },
+    private readonly release: () => void = () => {},
+  ) {
     super();
   }
 
-  unsubscribe() {
-    this.handle.unsubscribe();
+  async unsubscribe() {
+    try {
+      await Promise.resolve((this.handle.unsubscribe as () => unknown)());
+    } finally {
+      this.release();
+    }
   }
 }

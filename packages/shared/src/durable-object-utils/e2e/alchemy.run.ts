@@ -46,8 +46,6 @@ const AlchemyEnv = z.object({
 });
 
 const env = AlchemyEnv.parse(process.env);
-const stateStore = (scope: Scope) =>
-  scope.local ? new SQLiteStateStore(scope, { engine: "libsql" }) : new CloudflareStateStore(scope);
 
 // Alchemy treats CI as non-interactive by default. Local Alchemy runs are a
 // developer workflow, so let Alchemy use its local behavior when requested.
@@ -57,7 +55,10 @@ const app = await alchemy(APP_NAME, {
   stage: env.ALCHEMY_STAGE,
   local: env.ALCHEMY_LOCAL,
   password: env.ALCHEMY_PASSWORD,
-  stateStore,
+  stateStore: (scope: Scope) =>
+    scope.local
+      ? new SQLiteStateStore(scope, { engine: "libsql" })
+      : new CloudflareStateStore(scope),
 });
 
 const workerName = makeWorkerName(APP_NAME, app.stage);

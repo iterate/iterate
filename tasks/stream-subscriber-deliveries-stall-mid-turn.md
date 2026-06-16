@@ -30,8 +30,8 @@ machinery "properly" creates the stream is orphaned by that creation
 
 ## What the browser already does (mitigation, shipped in #1501)
 
-`packages/streams/src/browser/stream-browser-store.ts` self-heals: the 10s
-liveness probe reconnects when the incarnation under the subscription changed
+`apps/os/src/domains/streams/engine/browser/stream-browser-store.ts`
+self-heals: the 10s liveness probe reconnects when the incarnation under the subscription changed
 or when the server's `maxOffset` is ahead while no delivery arrived for a
 whole probe interval; parked `reconcile`/`subscribe` calls time out after
 15s. Net effect: a stalled page catches up in ~30–60s instead of wedging

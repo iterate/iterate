@@ -31,11 +31,11 @@ function NewAgentPage() {
 
   const createAgent = useMutation({
     mutationFn: async (content: string) => {
-      const agentPath = newWebAgentPath();
+      const agentPath = StreamPath.parse(`/agents/web/${slugifyCreationTime(new Date())}`);
       // connectItx (imperative, not the suspending hook) lands on the project
-      // provider's socket. Agent setup is seeded server-side now (#1524): create
-      // the stream, wait for the project-agent-setup processor to write the
-      // system prompt, then append the user's first input.
+      // provider's socket. Agent setup is seeded server-side: create the
+      // stream, wait for the project processor to write the agent config fact,
+      // then append the user's first input.
       const itx = await connectItx({ projectId: params.projectSlug });
       await itx.streams.create({ streamPath: agentPath });
       await waitForProjectAgentSetup(itx, agentPath);
@@ -117,10 +117,6 @@ function NewAgentPage() {
   );
 }
 
-function newWebAgentPath() {
-  return StreamPath.parse(`/agents/web/${slugifyCreationTime(new Date())}`);
-}
-
 async function waitForProjectAgentSetup(
   itx: Awaited<ReturnType<typeof connectItx>>,
   streamPath: string,
@@ -131,8 +127,7 @@ async function waitForProjectAgentSetup(
     if (
       events.some(
         (event) =>
-          (event as { idempotencyKey?: string }).idempotencyKey ===
-          "project-agent-setup:system-prompt",
+          (event as { idempotencyKey?: string }).idempotencyKey === "project-agent-setup:config",
       )
     ) {
       return;

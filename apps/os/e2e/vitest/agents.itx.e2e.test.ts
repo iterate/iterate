@@ -1,17 +1,16 @@
 /**
  * Deployment-targeted tests for OS project agents, driven through itx (the same
- * handle the browser/REPL/CLI use). These replace the oRPC originals preserved
- * as agents.orpc-legacy.ts.
+ * handle the browser/REPL/CLI use).
  *
  *   doppler run --project os --config preview_2 -- \
  *   pnpm --dir apps/os e2e -t "agent"
  *
  * Transport mapping from the oRPC reference:
  *   - agents.runtimeState({agentPath})  → itx.streams.create({streamPath})
- *       (the fresh-agent bootstrap door the dashboard new-agent flow uses;
- *        it wires the agent's default processor subscriptions)
+ *       (fresh agent setup is now project-processor owned: child-stream-created
+ *        drives default config/provider/subscription facts on the agent stream)
  *   - agents.sendMessage({agentPath,…}) → itx.agents.sendMessage({agentPath,…})
- *       (force-wakes the agent DO via ensureStartedAndCaughtUp)
+ *       (appends the user-message fact; setup is stream-processor owned)
  *   - agents.kill(…)                    → no itx door exists; the crash-recovery
  *       case is skipped below until the agents capability exposes a kill.
  *   - project.streams.{append,appendBatch,read} → itx.streams.get(path).{append,appendBatch,getEvents};
@@ -28,8 +27,6 @@ import { durableObjectProcessorSubscriber } from "~/domains/streams/engine/share
 type ProjectItx = ReturnType<Awaited<ReturnType<typeof createTestProject>>["itx"]>;
 
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
-const DEFAULT_AGENT_DEBOUNCE_MS = 200;
-
 type SlackChannel = {
   id: string;
   is_member?: boolean;
@@ -62,7 +59,6 @@ test("can configure Cloudflare AI Gateway as the provider for an agent stream", 
     model: DEFAULT_WORKERS_AI_AGENT_MODEL,
     projectId: fixture.project.id,
     provider: "cloudflare-ai",
-    runOpts: { gateway: { id: "default" } },
     systemPrompt: [
       "For every user message, reply with exactly one fenced JavaScript code block and no surrounding prose.",
       "The block must evaluate to an async function.",
@@ -91,8 +87,8 @@ test("can configure Cloudflare AI Gateway as the provider for an agent stream", 
 
   expect(events).toContainEqual(
     expect.objectContaining({
-      type: "events.iterate.com/os-agent/llm-provider-selected",
-      payload: { provider: "cloudflare-ai" },
+      type: "events.iterate.com/agent/llm-provider-selected",
+      payload: { model: DEFAULT_WORKERS_AI_AGENT_MODEL, provider: "cloudflare-ai" },
     }),
   );
   expect(events).toContainEqual(
@@ -150,6 +146,19 @@ test("a web agent holds a real conversation: user message in, visible reply out"
   const agentPath = `/agents/web-convo-${suffix}`;
   const marker = `pong-${suffix}`;
 
+  await appendAgentSetup({
+    agentPath,
+    itx,
+    model: "gpt-5.5",
+    projectId: fixture.project.id,
+    provider: "openai-ws",
+    systemPrompt: [
+      "Reply to every user message with exactly one fenced JavaScript code block and no surrounding prose.",
+      "The code block must contain a single async arrow function: async (itx) => { ... }.",
+      "Inside that function, send exactly one visible web chat message through await itx.chat.sendMessage({ message }).",
+    ].join("\n"),
+  });
+
   await itx.agents.sendMessage({
     agentPath,
     message: `Please reply in this chat with a short message that contains exactly this token: ${marker}`,
@@ -196,11 +205,85 @@ test("a web agent holds a real conversation: user message in, visible reply out"
   expect(events.filter((event) => event.type.endsWith("error-occurred"))).toEqual([]);
 }, 180_000);
 
-test("uses OpenAI for unconfigured agent chats by default", async () => {
+test("the default onboarding agent created with a project can hold a real conversation", async () => {
+  await using fixture = await createTestProject({ slugPrefix: "agent-onboarding" });
+  using itx = fixture.itx();
+  const agentPath = "/agents/onboarding";
+  const marker = `onboarding-pong-${uniqueSuffix()}`;
+
+  await waitForAgentProcessorSetup({ agentPath, itx, projectId: fixture.project.id });
+  await waitForAgentProcessorSetup({
+    agentPath,
+    itx,
+    processorSlug: "openai-ws",
+    projectId: fixture.project.id,
+  });
+
+  await itx.agents.sendMessage({
+    agentPath,
+    message: [
+      `Please send a visible web chat message containing exactly this token: ${marker}`,
+      "Use the chat tool. Do not only describe what you would do.",
+    ].join("\n"),
+  });
+
+  const events = await readUntil({
+    agentPath,
+    itx,
+    afterOffset: "start",
+    predicate: (event) =>
+      event.type === "events.iterate.com/agents/web-message-sent" &&
+      typeof (event.payload as { message?: unknown }).message === "string" &&
+      (event.payload as { message: string }).message.includes(marker),
+    timeoutMs: 180_000,
+  });
+
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: "events.iterate.com/agent/llm-provider-selected",
+      payload: expect.objectContaining({
+        model: DEFAULT_WORKERS_AI_AGENT_MODEL,
+        provider: "openai-ws",
+      }),
+    }),
+  );
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: "events.iterate.com/stream/subscriber-connected",
+      payload: expect.objectContaining({
+        subscriptionKey: `agent:${fixture.project.id}:${agentPath}:openai-ws`,
+      }),
+    }),
+  );
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: "events.iterate.com/agents/web-message-sent",
+      payload: expect.objectContaining({
+        message: expect.stringContaining(marker),
+      }),
+    }),
+  );
+  expect(events.filter((event) => event.type.endsWith("error-occurred"))).toEqual([]);
+}, 210_000);
+
+test("uses OpenAI for explicitly configured agent chats", async () => {
   await using fixture = await createTestProject({ slugPrefix: "agent-default-openai" });
   using itx = fixture.itx();
   const suffix = uniqueSuffix();
   const agentPath = `/agents/default-openai-${suffix}`;
+
+  await appendAgentSetup({
+    agentPath,
+    itx,
+    model: "gpt-5.5",
+    projectId: fixture.project.id,
+    provider: "openai-ws",
+    systemPrompt: [
+      "Reply to every user message with exactly one fenced JavaScript code block and no surrounding prose.",
+      "The code block must contain a single async arrow function: async (itx) => { ... }.",
+      "Inside that function, send exactly one visible web chat message through await itx.chat.sendMessage({ message }).",
+    ].join("\n"),
+  });
 
   await itx.agents.sendMessage({
     agentPath,
@@ -218,16 +301,8 @@ test("uses OpenAI for unconfigured agent chats by default", async () => {
 
   expect(events).toContainEqual(
     expect.objectContaining({
-      type: "events.iterate.com/os-agent/llm-provider-selected",
-      payload: { provider: "openai-ws" },
-    }),
-  );
-  expect(events).toContainEqual(
-    expect.objectContaining({
-      type: "events.iterate.com/openai-ws/config-updated",
-      payload: expect.objectContaining({
-        model: "gpt-5.5",
-      }),
+      type: "events.iterate.com/agent/llm-provider-selected",
+      payload: { model: "gpt-5.5", provider: "openai-ws" },
     }),
   );
   expect(events).toContainEqual(
@@ -269,6 +344,7 @@ test("lets agent scripts send visible agent responses through itx.chat.sendMessa
   // Bootstrap the fresh agent (wires its default subscriptions) before driving
   // it with a directly-appended output event.
   await itx.streams.create({ streamPath: agentPath });
+  await waitForAgentProcessorSetup({ agentPath, itx, projectId: fixture.project.id });
 
   // append returns the bare appended Event (offset, createdAt, …); the cast
   // steps past capnweb's lossy stub-type projection of the branded Event type.
@@ -276,13 +352,13 @@ test("lets agent scripts send visible agent responses through itx.chat.sendMessa
     event: {
       type: "events.iterate.com/agent/output-added",
       payload: {
-        content: dedent`
-          \`\`\`js
-            async (itx) => {
-              await itx.chat.sendMessage({ message: ${JSON.stringify(message)} });
-            }
-            \`\`\`
-        `,
+        content: [
+          "```js",
+          "async (itx) => {",
+          `  await itx.chat.sendMessage({ message: ${JSON.stringify(message)} });`,
+          "}",
+          "```",
+        ].join("\n"),
       },
     },
   })) as unknown as Event;
@@ -323,113 +399,84 @@ test("lets agent scripts send visible agent responses through itx.chat.sendMessa
   );
 });
 
-test("project config worker customizes fresh agents by appending events", async () => {
+test("project processor configures fresh agent streams from child-stream-created", async () => {
   await using fixture = await createTestProject({ slugPrefix: "agent-context-config" });
   using itx = fixture.itx();
-  const suffix = uniqueSuffix();
-  const pusherPath = `/agents/config-pusher-${suffix}`;
-  const customizedPath = `/agents/customized-${suffix}`;
-  const promptMarker = `CUSTOM CONTEXT PROMPT ${suffix}`;
-  const capabilityName = `acmeTool${suffix.replace(/-/g, "")}`;
+  const agentPath = `/agents/configured-${uniqueSuffix()}`;
 
-  // Phase 1: push a config worker whose afterAppend reacts to new agent
-  // streams. Deterministic: the push script is injected as agent output (no
-  // LLM) and executed against the pusher agent's prepared workspace.
-  await itx.streams.create({ streamPath: pusherPath });
-
-  const configWorkerSource = [
-    "export default {",
-    '  async fetch() { return new Response("ok"); },',
-    "",
-    "  // The config worker is a stream processor: this receives every event on",
-    "  // the project root stream. New agent streams announce themselves as",
-    "  // child-stream-created; react by appending agent context events.",
-    "  async processEvent({ event }, env) {",
-    '    if (event.type !== "events.iterate.com/stream/child-stream-created") return;',
-    "    const agentPath = event.payload.childPath;",
-    `    if (!agentPath.startsWith(${JSON.stringify(`/agents/customized-`)})) return;`,
-    "    await env.STREAMS.append({",
-    "      streamPath: agentPath,",
-    "      event: {",
-    '        type: "events.iterate.com/agent/system-prompt-updated",',
-    `        payload: { systemPrompt: ${JSON.stringify(promptMarker)} + " for " + agentPath },`,
-    "      },",
-    "    });",
-    "    await env.STREAMS.append({",
-    "      streamPath: agentPath,",
-    "      event: {",
-    '        type: "events.iterate.com/itx/capability-provided",',
-    `        payload: { path: [${JSON.stringify(capabilityName)}], kind: "rpc", address: { type: "rpc", worker: { type: "loopback" }, entrypoint: "WorkerCapability" }, meta: { instructions: "Use itx.worker.${capabilityName}() (custom ${suffix})." } },`,
-    "      },",
-    "    });",
-    "  },",
-    "};",
-    "",
-  ].join("\n");
-  const pushScript = [
-    "async (itx) => {",
-    `  await itx.workspace.writeFile('/project/worker.js', ${JSON.stringify(configWorkerSource)});`,
-    "  await itx.workspace.git.add({ dir: '/project', filepath: 'worker.js' });",
-    "  await itx.workspace.git.commit({ dir: '/project', message: 'add agent context config', author: { name: 'Agent', email: 'agent@iterate.com' } });",
-    "  await itx.workspace.git.push({ dir: '/project', remote: 'origin', ref: 'main' });",
-    "}",
-  ].join("\n");
-  await itx.streams.get(pusherPath).append({
-    event: {
-      type: "events.iterate.com/agent/output-added",
-      payload: { content: ["```js", pushScript, "```"].join("\n") },
-    },
-  });
-  const pushEvents = await readUntil({
-    agentPath: pusherPath,
-    itx,
-    afterOffset: "start",
-    predicate: (event) => event.type === "events.iterate.com/itx/script-execution-completed",
-    timeoutMs: 120_000,
-  });
-  expect(
-    requiredEvent(pushEvents, "events.iterate.com/itx/script-execution-completed").payload,
-  ).toMatchObject({ ok: true });
-
-  // Phase 2: a FRESH agent path wakes. Its stream creation announces a
-  // child-stream-created on the project root stream; the project-config-worker
-  // processor forwards it (blocking on a fresh checkout, so the just-pushed
-  // worker sees it); the config worker appends the custom context.
-  await itx.streams.create({ streamPath: customizedPath });
+  await itx.streams.create({ streamPath: agentPath });
   const events = await readUntil({
-    agentPath: customizedPath,
+    agentPath,
     itx,
     afterOffset: "start",
     predicate: (event) =>
-      event.type === "events.iterate.com/agent/system-prompt-updated" &&
-      typeof (event.payload as { systemPrompt?: unknown }).systemPrompt === "string" &&
-      ((event.payload as { systemPrompt?: string }).systemPrompt ?? "").includes(promptMarker),
+      event.type === "events.iterate.com/stream/subscription-configured" &&
+      ((event.payload as { subscriptionKey?: string }).subscriptionKey?.endsWith(":agent") ??
+        false),
     timeoutMs: 120_000,
   });
 
-  // The custom prompt must be what the agent actually runs with: either the
-  // platform defaults yielded to it (config worker won the race) or it landed
-  // after them (last-wins reducer). Both orders leave it as the LAST prompt.
-  const lastPrompt = requiredEvent(
-    [...events].reverse(),
-    "events.iterate.com/agent/system-prompt-updated",
-  );
-  const lastPromptText = requiredStringPayload(lastPrompt, "systemPrompt");
-  expect(lastPromptText).toContain(promptMarker);
-  expect(lastPromptText).toContain(customizedPath);
+  const config = requiredEvent(events, "events.iterate.com/agent/config-updated");
+  expect(requiredStringPayload(config, "systemPrompt")).toContain(agentPath);
   expect(events).toContainEqual(
     expect.objectContaining({
-      type: "events.iterate.com/itx/capability-provided",
-      payload: expect.objectContaining({ path: [capabilityName] }),
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: expect.objectContaining({
+        subscriptionKey: `agent:${fixture.project.id}:${agentPath}:agent`,
+      }),
     }),
   );
-}, 240_000);
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: "events.iterate.com/agent/llm-provider-selected",
+      payload: expect.objectContaining({
+        ifUnset: true,
+        model: DEFAULT_WORKERS_AI_AGENT_MODEL,
+        provider: "openai-ws",
+      }),
+    }),
+  );
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: expect.objectContaining({
+        subscriptionKey: `agent:${fixture.project.id}:${agentPath}:openai-ws`,
+      }),
+    }),
+  );
+}, 120_000);
 
 test("lets agent chat update the project repo through the prepared workspace", async () => {
   await using fixture = await createTestProject({ slugPrefix: "agent-workspace" });
   using itx = fixture.itx();
   const suffix = uniqueSuffix();
   const agentPath = `/agents/workspace-${suffix}`;
+
+  await appendAgentSetup({
+    agentPath,
+    itx,
+    model: "gpt-5.5",
+    projectId: fixture.project.id,
+    provider: "openai-ws",
+    systemPrompt: [
+      "For every user request, reply with exactly one fenced JavaScript code block and no surrounding prose.",
+      "Use this exact code body:",
+      dedent`
+        async (itx) => {
+          ${workspaceReadyFunctionSource()}
+          await waitForWorkspace(itx);
+          await itx.workspace.writeFile("/project/folder/banana.txt", "banana");
+          await itx.workspace.gitAdd({ dir: "/project", filepath: "folder/banana.txt" });
+          await itx.workspace.gitCommit({
+            dir: "/project",
+            message: "add folder/banana.txt",
+            author: { name: "Agent", email: "agent@iterate.com" }
+          });
+          await itx.workspace.gitPush({ dir: "/project", remote: "origin", ref: "main" });
+        }
+      `,
+    ].join("\n"),
+  });
 
   await itx.agents.sendMessage({
     agentPath,
@@ -491,6 +538,7 @@ test("renders codemode completions as direct auto-triggering agent inputs", asyn
   const threwScriptExecutionId = `threw-${suffix}`;
 
   await itx.streams.create({ streamPath: agentPath });
+  await waitForAgentProcessorSetup({ agentPath, itx, projectId: fixture.project.id });
 
   await itx.streams.get(agentPath).append({
     event: {
@@ -571,7 +619,6 @@ itIfSlackBotToken(
       model: "gpt-5.5",
       projectId: fixture.project.id,
       provider: "openai-ws",
-      runOpts: {},
       systemPrompt: [
         "For every user message, reply with exactly one fenced JavaScript code block and no surrounding prose.",
         "The block must evaluate to an async function.",
@@ -737,28 +784,6 @@ itIfSlackBotToken(
         }),
       }),
     );
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "events.iterate.com/os-agent/llm-provider-selected",
-        payload: { provider: "openai-ws" },
-      }),
-    );
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "events.iterate.com/openai-ws/config-updated",
-        payload: expect.objectContaining({
-          model: "gpt-5.5",
-        }),
-      }),
-    );
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "events.iterate.com/agent/llm-config-updated",
-        payload: expect.objectContaining({
-          model: "gpt-5.5",
-        }),
-      }),
-    );
     expect(events.filter((event) => event.type.startsWith("events.iterate.com/agents/"))).toEqual(
       [],
     );
@@ -855,6 +880,16 @@ itIfSlackBotToken(
     const routedAgentPath = slackAgentPath({
       channel: slackChannelId,
       threadTs: rootMessage.ts,
+    });
+
+    await appendAgentSetup({
+      agentPath: routedAgentPath,
+      itx,
+      model: "gpt-5.5",
+      projectId: fixture.project.id,
+      provider: "openai-ws",
+      systemPrompt:
+        "For Slack messages, reply with exactly one visible Slack response through the available Slack capability.",
     });
 
     await itx.streams.get("/integrations/slack").append({
@@ -1002,7 +1037,7 @@ async function readUntil(input: {
       .get(input.agentPath)
       .getEvents({ afterOffset })) as unknown as Event[];
     if (events.some(input.predicate)) return events;
-    await delay(1_000);
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
 
   const events = (await input.itx.streams
@@ -1011,38 +1046,55 @@ async function readUntil(input: {
   throw new Error(`Timed out waiting for agent stream event. Saw: ${JSON.stringify(events)}`);
 }
 
+async function waitForAgentProcessorSetup(input: {
+  agentPath: string;
+  itx: ProjectItx;
+  processorSlug?: string;
+  projectId: string;
+}) {
+  const processorSlug = input.processorSlug ?? "agent";
+  await readUntil({
+    agentPath: input.agentPath,
+    itx: input.itx,
+    afterOffset: "start",
+    predicate: (event) =>
+      event.type === "events.iterate.com/stream/subscriber-connected" &&
+      (event.payload as { subscriptionKey?: unknown }).subscriptionKey ===
+        `agent:${input.projectId}:${input.agentPath}:${processorSlug}`,
+  });
+}
+
+function workspaceReadyFunctionSource() {
+  return [
+    "  async function waitForWorkspace(itx) {",
+    "    let lastError;",
+    "    for (let attempt = 0; attempt < 30; attempt += 1) {",
+    "      try {",
+    "        await itx.workspace.gitStatus({ dir: '/project' });",
+    "        return;",
+    "      } catch (error) {",
+    "        lastError = error;",
+    "        await new Promise((resolve) => setTimeout(resolve, 1000));",
+    "      }",
+    "    }",
+    "    throw lastError;",
+    "  }",
+  ].join("\n");
+}
+
 async function appendAgentSetup(input: {
   agentPath: string;
   itx: ProjectItx;
   model: string;
   projectId: string;
   provider: "openai-ws" | "cloudflare-ai";
-  runOpts?: Record<string, unknown>;
   systemPrompt: string;
 }) {
   const events: EventInput[] = [
     {
-      type: "events.iterate.com/os-agent/llm-provider-selected",
+      type: "events.iterate.com/agent/llm-provider-selected",
       idempotencyKey: "e2e-agent-setup:provider",
-      payload: { provider: input.provider },
-    },
-    ...(input.provider === "openai-ws"
-      ? [
-          {
-            type: "events.iterate.com/openai-ws/config-updated",
-            idempotencyKey: "e2e-agent-setup:openai-ws-config",
-            payload: { model: input.model },
-          } satisfies EventInput,
-        ]
-      : []),
-    {
-      type: "events.iterate.com/agent/llm-config-updated",
-      idempotencyKey: "e2e-agent-setup:llm-config",
-      payload: {
-        debounceMs: DEFAULT_AGENT_DEBOUNCE_MS,
-        model: input.model,
-        runOpts: input.runOpts ?? {},
-      },
+      payload: { model: input.model, provider: input.provider },
     },
     {
       type: "events.iterate.com/agent/system-prompt-updated",
@@ -1139,8 +1191,4 @@ function maxGapAfter(events: readonly Event[], afterOffset: number) {
 
 function uniqueSuffix() {
   return `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
-}
-
-async function delay(ms: number) {
-  await new Promise((resolve) => setTimeout(resolve, ms));
 }

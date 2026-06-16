@@ -400,11 +400,11 @@ longest-prefix provider resolution IS registry dispatch.
 
 The plan:
 
-- A session = `itx.fork()` → a `ctx_…` context.
+- A session = `itx.extend()` → a child context on a stream path.
 - Tool providers = caps on that context. The three codemode provider families
   map exactly onto §1:
-  - `ctx.ai` → `{ type: "rpc", worker: { type: "binding" | "loopback" } }` (§2),
-  - `ctx.mcp.*` / `connectToMcpServer` → first-party `McpClient` entrypoint
+  - `itx.ai` → `{ type: "rpc", worker: { type: "binding" | "loopback" } }` (§2),
+  - `itx.mcp.*` / `connectToMcpServer` → first-party `McpClient` entrypoint
     via `{ type: "rpc", worker: { type: "loopback" }, props: { serverUrl, headers } }`,
   - OpenAPI providers → user-space `OpenApiClient` exported from the
     project worker, via `{ type: "rpc", worker: { type: "project-worker" } }`.
@@ -657,12 +657,11 @@ Open: the splice API shape on fork; ref naming for code contexts
 (`platform:` prefix?); can a context _revoke_ (not just shadow) a code
 default — tombstone rows? Defer until someone needs them.
 
-## 9. Egress is a capability; the intercept tunnel is a live cap — SHIPPED (D23)
+## 9. Egress is a capability; interception is a live cap — SHIPPED (D23)
 
 Where PR #1466 left it (DECISIONS D22): `project.fetch` IS egress, ingress
 never touches the Project DO, but `egressFetch` itself still lives on the DO
-because two things live in its memory — the captun intercept tunnel and the
-per-request "is a tunnel active?" decision that gates secret substitution.
+because interception state and the secret-substitution decision live there.
 
 The claim: **egress is just another capability**, and once you say that, the
 captun machinery dissolves.
@@ -678,10 +677,9 @@ captun machinery dissolves.
   human (or rule) appends the verdict; the pipe resumes. Egress policy
   becomes data the same way cap definitions are.
 
-- **The intercept tunnel is `provide`, not a protocol.** Today: a bespoke
-  WebSocket endpoint on the DO's fetch path + the captun library + tunnel
-  lifecycle code. With capnweb-over-WebSocket (github.com/iterate/capnweb
-  fork), a connected client just provides a live cap that shadows egress:
+- **Interception is `provide`, not a protocol.** With
+  capnweb-over-WebSocket (github.com/iterate/capnweb fork), a connected client
+  just provides a live cap that shadows egress:
 
   ```ts
   using itx = await connectItx({ context: projectId });
@@ -692,8 +690,8 @@ captun machinery dissolves.
   });
   ```
 
-  Session-bound semantics come free (live caps die with the connection —
-  exactly the tunnel's disconnect behavior, no `onDisconnect` bookkeeping).
+  Session-bound semantics come free (live caps die with the connection, no
+  `onDisconnect` bookkeeping).
   The secret-withholding rule ("an active interceptor never sees real
   material") stops being a special case in `substituteProjectEgressSecretHeaders`
   and becomes a property of the egress cap's policy: requests routed to a
@@ -706,20 +704,20 @@ captun machinery dissolves.
   stateless `ProjectEgress` pipe) so `live` shadowing works with zero new
   concepts — this is also a §8 code-context default. SHIPPED in the
   consolidation pass (2026-06-10): the cap is named `fetch`, not `egress` —
-  it shadows the very name both doors dispatch. (3) Delete captun + the DO's
-  tunnel accept + the `fetch` WS exception; at that point the Project DO has
+  it shadows the very name both doors dispatch. (3) Delete the old DO
+  accept path + the `fetch` WS exception; at that point the Project DO has
   NO fetch surface at all ("maybe there's a scenario where the project DO
   has neither fetch nor ingressFetch nor egressFetch — that might be nice,
-  just nothing"). SHIPPED (D23): the intercept tunnel is dead and the
+  just nothing"). SHIPPED (D23): the intercept path is dead and the
   default pipe is the stateless EgressPipe — the Project DO supervises
   dispatch but never sees secret material (secrets are D1 rows; substitution
-  and the terminal fetch run in a plain isolate). captun remains only for
+  and the terminal fetch run in a plain isolate). Captun remains only for
   the public `/__iterate/captun` relay.
 
 Open: where does a held request park while awaiting approval (DO alarm?
 queue? the egress stream itself)? Does the live `fetch` shadow apply to
 ALL callers on the context or only for the session that provided it
-(current: all callers, like the old tunnel)? Latency budget for
+(current: all callers, like the old path)? Latency budget for
 policy-cache reads on the hot path?
 
 ## Consolidation pass (2026-06-10 night)
@@ -754,9 +752,7 @@ Three collapses, no new concepts:
   (children still pass none — their misses walk the real chain).
 
 The kernel is now `caps, streams, fork, project, projects, describe` plus
-sugar (`fetch`, `cap()`). Follow-up debt: the captun egress intercept
-tunnel is now expressible as fetch-cap shadowing and should be deleted (see
-New debts).
+sugar (`fetch`, `cap()`).
 
 ## Follow-ups pass (2026-06-11)
 
@@ -769,7 +765,7 @@ New debts).
   (`itx.streams.get("/x").append(e)`) ride RPC promise pipelining in every
   real execution mode (capnweb and jsrpc both pipeline onto returned
   targets); the subscribe path through the extra registry hop is e2e-proven.
-- **The egress intercept tunnel is DELETED** — fetch-cap shadowing is the
+- **The egress intercept path is DELETED** — fetch-cap shadowing is the
   intercept mechanism (the e2e fixture's `egressFetch` option survives,
   reimplemented as a live `fetch` cap on a dedicated itx session).
 - **Durable-object dials are name-scoped**: the registry dials
@@ -1174,26 +1170,27 @@ origin })`, set by the first delegating hop, preserved upward; the
 
 ## New debts (2026-06-10 evening)
 
-- ~~The captun egress intercept tunnel
+- ~~The old egress intercept path
   (`acceptProjectEgressInterceptTunnel`, the DO `fetch` WS exception, the
   intercept-aware branch of `substituteProjectEgressSecretHeaders`) is now
   expressible as cap shadowing — a live `fetch` cap intercepts both egress
   doors with session-bound semantics for free (consolidation pass, §9 step
-  2 shipped). Delete the tunnel machinery in a follow-up once its remaining
+  2 shipped). Delete that machinery in a follow-up once its remaining
   users move over.~~ → DELETED, replaced by fetch-cap shadowing: the DO's
-  tunnel accept/route, the ingress forward, the
+  accept route, the ingress forward, the
   `projectEgressInterceptActive` substitution branch, and the e2e fixture's
-  captun tunnel are gone (the fixture's `egressFetch` option now defines a
+  old transport are gone (the fixture's `egressFetch` option now defines a
   live `fetch` cap over an itx session). captun itself stays for the
-  public-tunnel relay (`/__iterate/captun/`).
+  public local relay (`/__iterate/captun/`).
 - ~~`itx.workspace.git.*` nested RpcTarget broken~~ → DELETED. The flat
   `gitClone`/`gitAdd`/`gitCommit`/`gitPush`/`gitStatus` methods are the
   surface; nested RpcTargets returned from entrypoint getters do not
   survive RPC boundaries reliably, so don't ship one.
-- ~~Vite allowedHosts blocks the dev tunnel host~~ → Misdiagnosis. The
-  config is `allowedHosts: true`; the 403/502s came from a wedged vite
-  process behind the still-connected cloudflared tunnel. Restarting the
-  dev server fixes it; e2e through `os.iterate-dev-<user>.com` passes.
+- ~~Vite allowedHosts blocks the old public dev host~~ → Historical
+  misdiagnosis. The config is `allowedHosts: true`; the 403/502s came from a
+  wedged vite process. Restarting the dev server fixed it. Current local dev uses
+  `localhost:<port>` plus `<slug>.localhost:<port>` project hosts; use captun
+  or preview when a public URL is required.
 - prd cleanup after tombstone soak: CodemodeSession class + stale stream
   subscriber events, then namespace deletion (mechanically proven safe).
 - Legacy `executeCodemodeFunctionCall` methods on capability entrypoints —

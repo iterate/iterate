@@ -15,7 +15,7 @@ During `apps/os2` → `apps/os` rename:
 - Doppler `os` → `os` (product app configs).
 - Legacy monorepo bucket `os` → `os-legacy-backup`.
 
-Audit **`_shared`** and the **renamed product `os`** project for stale keys, duplicate inheritance, prd/dev leakage, and secrets that no longer match `apps/os/src/app.ts` `AppConfig`.
+Audit **`_shared`** and the **renamed product `os`** project for stale keys, duplicate inheritance, prd/dev leakage, and secrets that no longer match `apps/os/src/config.ts` `AppConfig`.
 
 ## Projects in scope
 
@@ -43,7 +43,7 @@ SEMAPHORE_API_TOKEN, SEMAPHORE_BASE_URL
 
 ### `os` / `prd` — 28 keys (aligned with AppConfig)
 
-Expected product keys (compare to `AppConfig` in `apps/os/src/app.ts`):
+Expected product keys (compare to `AppConfig` in `apps/os/src/config.ts`):
 
 | Key                                           | Required for prd                                                    |
 | --------------------------------------------- | ------------------------------------------------------------------- |
@@ -61,7 +61,9 @@ Expected product keys (compare to `AppConfig` in `apps/os/src/app.ts`):
 | `SEMAPHORE_*`                                 | duplicated on `_shared` — keep one place (recommend `_shared` only) |
 | `POSTHOG_PERSONAL_*`                          | operator keys — confirm still needed on app project                 |
 
-Per-user overrides (`dev_jonas`, etc.) should only add: `APP_CONFIG_BASE_URL`, `APP_CONFIG_PROJECT_HOSTNAME_BASES`, Clerk keys, integration keys — **not** extra legacy keys.
+Per-user overrides (`dev_<user>`, etc.) should only carry personal integration
+secrets or a stable `CAPTUN_TUNNEL_NAME`; they should not carry app/MCP/project
+host URL overrides, Clerk keys, or extra legacy keys.
 
 ### Legacy `os` / `prd` — 104 keys, **84 not in `os/prd`**
 
@@ -97,7 +99,7 @@ doppler secrets --project os --config prd --only-names > /tmp/product.txt
 ### Product `os` (was `os`)
 
 - [ ] Each `preview_N`: `APP_CONFIG_BASE_URL` uses `https://os.iterate-preview-N.com` (not `os.`).
-- [ ] Each `dev_*`: hostnames `os.iterate-dev-<user>.com` + `iterate-dev-<user>.app`.
+- [ ] `dev` / `dev_*`: fully local by default (`APP_CONFIG_BASE_URL=http://localhost:<port>`, project hosts under `localhost`, local MCP at `<baseUrl>/api/__mcp`).
 - [ ] `prd`: `https://os.iterate.com` + `["iterate.app"]`.
 - [ ] No keys from legacy `os` bucket (run diff above after rename).
 - [ ] Drop deprecated Clerk OAuth static keys if unset (`oauthClientId` / `oauthClientSecret` in schema).

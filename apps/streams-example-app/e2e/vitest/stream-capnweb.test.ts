@@ -44,7 +44,7 @@ describe("stream capnweb protocol", () => {
     });
   });
 
-  e2eIt("appends events after the stream-created event over capnweb", async () => {
+  e2eIt("appends events after the stream-created event over capnweb @preview", async () => {
     const path = e2eStreamPathLabel("stream-capnweb-append");
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
 
@@ -396,7 +396,7 @@ describe("stream capnweb protocol", () => {
           type: "events.iterate.com/stream/created",
           offset: 1,
           payload: {
-            namespace: runtime.coreProcessorState.namespace,
+            projectId: runtime.coreProcessorState.projectId,
             path,
           },
         }),
@@ -483,7 +483,7 @@ describe("stream capnweb protocol", () => {
     expect(callbackA.batches.length).toBe(callbackABatchesBeforeUnsubscribe);
   });
 
-  e2eIt("runs a hosted outbound processor from subscription-configured", async () => {
+  e2eIt("runs a hosted outbound processor from subscription-configured @preview", async () => {
     const path = e2eStreamPathLabel("stream-capnweb-processor");
     const subscriptionKey = `hosted-echo-${crypto.randomUUID()}`;
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
@@ -661,6 +661,7 @@ function outboundFrames(messages: WebSocketFrame[], afterFrameIndex: number) {
     .map((frame) => frame.data);
 }
 
+/** Protocol predicate for inbound frames that are allowed during subscribe teardown. */
 function isPushOrReleaseFrame(value: unknown) {
   return isPushFrame(value) || (Array.isArray(value) && value[0] === "release");
 }

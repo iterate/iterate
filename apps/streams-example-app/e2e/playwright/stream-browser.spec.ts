@@ -30,7 +30,7 @@ test.beforeEach(async ({ page }) => {
 // Baseline end-to-end smoke test for the simplified browser mirror: a composer append must
 // go to the server, be delivered back through the single elected subscriber, land in SQLite,
 // and show up through the visible-range SQL query.
-test("stream page appends through the shared browser mirror", async ({ page }) => {
+test("stream page appends through the shared browser mirror @preview", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
   await page.goto(streamRoute({ path: streamPath }));
 
@@ -252,7 +252,7 @@ test("event feed view starts at the bottom on first visit while replay fills the
     timeout: 30_000,
   });
   await expect(page.getByTestId("stream-status")).toHaveText("subscribed", { timeout: 30_000 });
-  await expectAtFeedEnd(page);
+  await expect.poll(() => feedDistanceFromEnd(page)).toBeLessThanOrEqual(2);
   await expect(page.getByTestId("feed-scroll-to-bottom-affordance")).toHaveCount(0);
   await freshContext.close();
 });
@@ -869,11 +869,11 @@ test("event-feed view renders specific renderers as singletons and groups by typ
 
 // The state view has no processor or table: it reads the stream's reduced + runtime state
 // live over the runtimeState() RPC and renders it in a fixed-width block.
-test("state view renders the stream runtime state over RPC", async ({ page }) => {
+test("state view renders the stream runtime state over RPC @preview", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
   await page.goto(streamRoute({ path: streamPath, view: "browser-state" }));
   await expect(page.getByTestId("stream-state")).toContainText("maxOffset", { timeout: 20_000 });
-  await expect(page.getByTestId("stream-state")).toContainText("namespace");
+  await expect(page.getByTestId("stream-state")).toContainText("projectId");
 });
 
 // Regression for the root stream route: `/streams` is its own TanStack route, not the splat
@@ -985,10 +985,6 @@ async function feedDistanceFromEnd(page: Page) {
       throw new Error("event feed scroller must be an HTMLElement");
     return Math.round(element.scrollHeight - element.clientHeight - element.scrollTop);
   });
-}
-
-async function expectAtFeedEnd(page: Page) {
-  await expect.poll(() => feedDistanceFromEnd(page)).toBeLessThanOrEqual(2);
 }
 
 async function composerDistanceFromScrollerBottom(page: Page) {

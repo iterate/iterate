@@ -52,7 +52,10 @@ export async function resolveItx(input: {
     });
   }
 
-  const projectId = parseContextRef(ref).namespace;
+  const projectId = parseContextRef(ref).projectId;
+  if (projectId === null) {
+    throw new Error("Resolved project contexts must have a project id.");
+  }
   return new ItxHandle({
     access: [projectId],
     capabilityPath: input.props.capabilityPath,

@@ -22,8 +22,8 @@ Reviewed against `docs/jonasland-rules.md`, diffed against merge-base with
 ### F1 (high, correctness) — stale assertion fails the codemode-session test
 
 `apps/os/src/durable-objects/codemode-session.test.ts:375` still asserts
-`functionCallRequested(["os", "streams", "list"], ...)` but the script under
-test (line 345) now calls `ctx.os.streams.read(...)`. Verified failing.
+`functionCallRequested(["os", "streams", "list"], ...)` but the legacy
+ctx-era script under test had moved to the stream read path. Verified failing.
 
 - **A (chosen):** assert `["os", "streams", "read"]` — keeps coverage that
   nested `os.streams.*` paths produce function-call events.
@@ -73,8 +73,7 @@ reintroduce the bug.
 
 ### F6 (low, rule: explicit names) — `rootStreamState` holds read events
 
-`codemode-session.test.ts:345` names the result of `ctx.os.streams.read`
-(`{ events }`) `rootStreamState`.
+`codemode-session.test.ts:345` names the stream read result `rootStreamState`.
 
 - **A (chosen):** rename to `rootStreamRead` (matches the docs/examples which
   use `rootEvents` for the same call).

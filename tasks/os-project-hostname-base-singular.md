@@ -15,11 +15,11 @@ tags: [os, appconfig, doppler, cleanup]
 
 Every environment uses **exactly one** base:
 
-| Config       | Value                        |
-| ------------ | ---------------------------- |
-| `prd`        | `["iterate.app"]`            |
-| `preview_N`  | `["iterate-preview-N.app"]`  |
-| `dev_<user>` | `["iterate-dev-<user>.app"]` |
+| Config               | Value                                                                          |
+| -------------------- | ------------------------------------------------------------------------------ |
+| `prd`                | `["iterate.app"]`                                                              |
+| `preview_N`          | `["iterate-preview-N.app"]`                                                    |
+| `dev` / `dev_<user>` | `["localhost"]` in fully-local dev; use captun or preview for public callbacks |
 
 Nothing passes multiple bases in production. Call sites already treat it as
 singular: `projectHostnameBases[0]` (DNS, MCP URLs, settings UI, oRPC), and
@@ -44,12 +44,12 @@ array).
 
 ## Scope
 
-- `apps/os/src/app.ts` — schema + rename
+- `apps/os/src/config.ts` — schema + rename
 - `apps/os/alchemy.run.ts` — `projectRouteHostnamesForBase(projectHostnameBase)`
-- Ingress / routing: `project-host-routing.ts`, `entry.workerd.ts`,
+- Ingress / routing: `project-host-routing.ts`, worker entrypoints,
   `project-platform-host-routing.ts`, `project-durable-object.ts`
 - oRPC context, `auth.ts`, UI (`settings`, `app-sidebar`, project list)
-- `apps/os/scripts/claude-mcp.ts`, `sync-clerk-apps.ts`
+- `packages/iterate/src/os/claude-mcp.ts`, `apps/os/scripts/sync-auth-clients.ts`
 - `scripts/preview/preview.ts` parse helpers
 - Tests: replace array fixtures with a single string
 - Doppler: migrate all `os` configs from JSON array to string (prd, preview*N,

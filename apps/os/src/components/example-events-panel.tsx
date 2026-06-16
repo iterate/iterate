@@ -64,7 +64,9 @@ export function ExampleEventsPanel({
                     onClick={() => onLoadExample(exampleYaml(event))}
                     className="min-w-0 rounded-xl border bg-background px-4 py-3 text-left transition-colors hover:border-foreground/20 hover:bg-muted/40"
                   >
-                    <div className="truncate font-mono text-sm">{shortEventType(event.type)}</div>
+                    <div className="truncate font-mono text-sm">
+                      {event.type.replace("events.iterate.com/", "")}
+                    </div>
                     {event.description == null ? null : (
                       <div className="mt-0.5 truncate text-sm text-muted-foreground">
                         {event.description}
@@ -98,8 +100,4 @@ function buildGroups(presence: readonly AgentUiPresenceEntry[]): ExampleGroup[] 
 function exampleYaml(event: EventDoc): string {
   const payload = event.examples[0]?.payload ?? {};
   return stringifyYaml({ type: event.type, payload });
-}
-
-function shortEventType(type: string): string {
-  return type.replace("events.iterate.com/", "");
 }

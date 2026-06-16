@@ -81,11 +81,11 @@ export class StreamBrowserDatabase implements Disposable {
   readonly #changeListeners = new Set<(change: StreamDbChange) => void>();
 
   constructor(
-    readonly namespace: string,
+    readonly projectId: string,
     readonly streamPath: string,
   ) {
-    this.databasePath = databasePathFor(namespace, streamPath);
-    this.downloadFilename = downloadFilenameFor(namespace, streamPath);
+    this.databasePath = databasePathFor(projectId, streamPath);
+    this.downloadFilename = downloadFilenameFor(projectId, streamPath);
     this.#worker = new Worker(new URL("./stream-db.worker.ts", import.meta.url), {
       type: "module",
     });
@@ -100,7 +100,7 @@ export class StreamBrowserDatabase implements Disposable {
       else pending.reject(new Error(error ?? "stream db worker error"));
     };
     this.#channel = new BroadcastChannel(
-      `stream-db:${encodeURIComponent(namespace)}:${encodeURIComponent(streamPath)}`,
+      `stream-db:${encodeURIComponent(projectId)}:${encodeURIComponent(streamPath)}`,
     );
     this.#channel.onmessage = (event: MessageEvent<StreamDbChange>) => this.#onChange(event.data);
     this.#ready = this.#call("init", { databasePath: this.databasePath }).then(() => undefined);
@@ -349,7 +349,7 @@ export class StreamBrowserDatabase implements Disposable {
       const data = await this.exec(entry.sql, entry.params);
       next = { data, status: "ok", error: undefined };
     } catch (error) {
-      if (isMissingTableError(error)) {
+      if (error instanceof Error && error.message.includes("no such table")) {
         // A view's table may not exist until its processor's first write creates it. Treat
         // that as an empty result (count 0 / no rows) rather than a surfaced error.
         next = { data: emptyTableRows(entry.sql), status: "ok", error: undefined };
@@ -434,17 +434,19 @@ export class StreamBrowserDatabase implements Disposable {
   }
 }
 
-// OPFS layout: one folder per namespace, one SQLite file per stream path inside it.
+// OPFS layout: one folder per projectId, one SQLite file per stream path inside it.
 // Bump this when the local mirror file itself can be wedged by browser OPFS state;
 // the mirror is a cache and will be replayed from the durable stream.
 const DATABASE_CACHE_VERSION = "v3";
 
-function databasePathFor(namespace: string, streamPath: string) {
-  return `${encodeURIComponent(namespace)}/${DATABASE_CACHE_VERSION}/${databaseSlugForStreamPath(streamPath)}.sqlite3`;
+/** OPFS directory path for the cached SQLite mirror of one stream. */
+function databasePathFor(projectId: string, streamPath: string) {
+  return `${encodeURIComponent(projectId)}/${DATABASE_CACHE_VERSION}/${databaseSlugForStreamPath(streamPath)}.sqlite3`;
 }
 
-function downloadFilenameFor(namespace: string, streamPath: string) {
-  return `${encodeURIComponent(namespace)}__${DATABASE_CACHE_VERSION}-${databaseSlugForStreamPath(streamPath)}.sqlite3`;
+/** Download filename paired with databasePathFor's project/version/stream identity. */
+function downloadFilenameFor(projectId: string, streamPath: string) {
+  return `${encodeURIComponent(projectId)}__${DATABASE_CACHE_VERSION}-${databaseSlugForStreamPath(streamPath)}.sqlite3`;
 }
 
 function databaseSlugForStreamPath(streamPath: string) {
@@ -476,10 +478,6 @@ function isSqlValue(value: unknown): value is SqlValue {
     value instanceof Uint8Array ||
     (Array.isArray(value) && value.every((item) => typeof item === "number"))
   );
-}
-
-function isMissingTableError(error: unknown) {
-  return error instanceof Error && error.message.includes("no such table");
 }
 
 /**

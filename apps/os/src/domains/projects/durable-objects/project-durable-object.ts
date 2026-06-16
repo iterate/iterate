@@ -34,6 +34,7 @@ import {
   type StreamDurableObject,
 } from "~/domains/streams/stream-runtime.ts";
 import { parseConfig } from "~/config.ts";
+import { parseDurableObjectName } from "~/domains/durable-object-names.ts";
 import type { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
 import {
   PROJECT_STREAM_PATH,
@@ -44,8 +45,9 @@ import {
 import { ProjectProcessor } from "~/domains/projects/stream-processors/project/implementation.ts";
 import {
   isMissingProjectWorkerError,
-  loadProjectWorker,
-} from "~/domains/projects/project-worker-runtime.ts";
+  isMissingProjectWorkerProcessEventError,
+} from "~/domains/projects/project-worker-errors.ts";
+import { loadProjectWorker } from "~/domains/projects/project-worker-runtime.ts";
 import { type RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import type { SlackAgentDurableObject } from "~/domains/slack/durable-objects/slack-agent-durable-object.ts";
 import { createContext } from "~/itx/coordinates.ts";
@@ -129,15 +131,19 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
   // agents can create unclaimed projects that a user or organization claims
   // later, similar to Stripe sandboxes.
 
-  /** The DO name IS the project id (see getProjectDurableObjectName). */
+  /** The DO name is the project's root Durable Object name (see getProjectDurableObjectName). */
   private get projectId(): string {
     const name = this.ctx.id.name;
-    if (!name) throw new Error("ProjectDurableObject must be addressed by name (the project id).");
-    return name;
+    if (!name) throw new Error("ProjectDurableObject must be addressed by name.");
+    const parsed = parseDurableObjectName(name);
+    if (parsed.projectId === null || parsed.path !== "/") {
+      throw new Error(`ProjectDurableObject must be addressed as "{projectId}:/", got ${name}.`);
+    }
+    return parsed.projectId;
   }
 
   async createProject(input: CreateProjectInput): Promise<ProjectSummary> {
-    // The DO's name IS the project id; a mismatched input would wire the
+    // The DO name carries the project id; a mismatched input would wire the
     // subscription and creation events to another project's stream.
     if (input.projectId !== this.projectId) {
       throw new Error(
@@ -154,7 +160,7 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
     await createContext({
       env: this.env as unknown as Env,
       name: input.slug,
-      namespace: input.projectId,
+      projectId: input.projectId,
       parent: { address: PLATFORM_PROJECT_CONTEXT_ADDRESS, ref: DEFAULTS_DESCRIBE_FROM },
       path: "/",
     });
@@ -166,10 +172,10 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
     });
 
     // That's it — no waiting. The creation steps (D1 projection, repo,
-    // example secret, agents root, created/create-completed events) run in
+    // onboarding agent setup, created/create-completed events) run in
     // ProjectProcessor and leave a trail on the root stream; callers redirect
     // to the project immediately and watch `processor.snapshot()`
-    // (phase: creating → ready) if they care about progress.
+    // (phase: creating -> ready) if they care about progress.
     return toSummary(projectFacts({ config: this.getAppConfig(), ...input }));
   }
 
@@ -233,6 +239,7 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
         streamPath: PROJECT_STREAM_PATH,
       });
     } catch (error) {
+      if (isMissingProjectWorkerProcessEventError(error)) return;
       console.error("Project worker processEvent failed.", error);
     }
   }
@@ -263,7 +270,7 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
   private async projectStream(projectId: string) {
     return await getInitializedStreamStub({
       durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: projectId,
+      projectId,
       path: PROJECT_STREAM_PATH,
     });
   }

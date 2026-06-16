@@ -1,58 +1,41 @@
-import { z } from "zod";
+import { DurableObject } from "cloudflare:workers";
 import { Workspace, WorkspaceFileSystem, createWorkspaceStateBackend } from "@cloudflare/shell";
 import { createGit, type Git } from "@cloudflare/shell/git";
-import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
-import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-
-export type WorkspaceStructuredName = {
-  projectId: string;
-  workspaceId: string;
-};
+import { parseDurableObjectName } from "~/domains/durable-object-names.ts";
+import {
+  getInitializedStreamStub,
+  type StreamDurableObject,
+  type StreamDurableObjectNamespace,
+} from "~/domains/streams/stream-runtime.ts";
 
 export type CloudflareShellState = import("@cloudflare/shell").StateBackend & {
   git: import("@cloudflare/shell/git").Git;
 };
 
-const WorkspaceStructuredName = z.object({
-  projectId: z.string().trim().min(1),
-  workspaceId: z.string().trim().min(1),
-});
-
 type WorkspaceEnv = {
-  DO_CATALOG: D1Database;
+  STREAM: DurableObjectNamespace<StreamDurableObject>;
 };
 
-const WorkspaceBase = createIterateDurableObjectBase<
-  typeof WorkspaceStructuredName,
-  Pick<WorkspaceEnv, "DO_CATALOG">
->({
-  className: "WorkspaceDurableObject",
-  getDatabase: (env) => env.DO_CATALOG,
-  indexes: {
-    projectId: (params) => params.projectId,
-    workspaceId: (params) => params.workspaceId,
-  },
-  nameSchema: WorkspaceStructuredName,
-});
+export class WorkspaceDurableObject extends DurableObject<WorkspaceEnv> {
+  readonly name = parseDurableObjectName(this.ctx.id.name!);
 
-export class WorkspaceDurableObject extends WorkspaceBase<WorkspaceEnv> {
   #workspace: Workspace | null = null;
   #filesystem: WorkspaceFileSystem | null = null;
   #git: Git | null = null;
   #state: CloudflareShellState | null = null;
 
   async cloudflareShellState(): Promise<CloudflareShellState> {
-    await this.ensureStarted();
+    await this.ensureStreamExists();
     return this.getShellState();
   }
 
   async cloudflareShellGit(): Promise<Git> {
-    await this.ensureStarted();
+    await this.ensureStreamExists();
     return this.getShellGit();
   }
 
   async hasFile(path: string): Promise<boolean> {
-    await this.ensureStarted();
+    await this.ensureStreamExists();
     const state = this.getShellState();
     const readFile = state.readFile;
     if (typeof readFile !== "function") {
@@ -72,7 +55,7 @@ export class WorkspaceDurableObject extends WorkspaceBase<WorkspaceEnv> {
   }
 
   async removePath(input: { force: boolean; path: string; recursive: boolean }): Promise<void> {
-    await this.ensureStarted();
+    await this.ensureStreamExists();
     const state = this.getShellState();
     const rm = state.rm;
     if (typeof rm !== "function") {
@@ -86,7 +69,7 @@ export class WorkspaceDurableObject extends WorkspaceBase<WorkspaceEnv> {
   }
 
   async writeFile(input: { content: string; path: string }): Promise<void> {
-    await this.ensureStarted();
+    await this.ensureStreamExists();
     const state = this.getShellState();
     const writeFile = state.writeFile;
     if (typeof writeFile !== "function") {
@@ -100,7 +83,7 @@ export class WorkspaceDurableObject extends WorkspaceBase<WorkspaceEnv> {
     if (this.#workspace === null) {
       this.#workspace = new Workspace({
         sql: this.ctx.storage.sql,
-        name: () => this.name,
+        name: () => this.ctx.id.name,
       });
     }
 
@@ -131,12 +114,17 @@ export class WorkspaceDurableObject extends WorkspaceBase<WorkspaceEnv> {
 
     return this.#state;
   }
-}
 
-export function getWorkspaceDurableObjectName(name: WorkspaceStructuredName) {
-  return deriveDurableObjectNameFromStructuredName({
-    structuredName: name,
-  });
+  private async ensureStreamExists(): Promise<void> {
+    if (this.name.projectId === null) {
+      throw new Error("Workspace Durable Object must be project-scoped.");
+    }
+    await getInitializedStreamStub({
+      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+      path: this.name.path,
+      projectId: this.name.projectId,
+    });
+  }
 }
 
 function createPlainMethodObject(target: object): CloudflareShellState {

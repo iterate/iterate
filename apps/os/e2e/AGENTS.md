@@ -1,7 +1,7 @@
 # os e2e test infrastructure
 
 Use this folder for Vitest end-to-end tests that exercise OS through public routes against a live
-deployment (dev tunnel, preview, or prod).
+deployment (local dev, preview, or prod).
 
 ## Shape
 
@@ -18,32 +18,17 @@ REPL, and CLI use. The oRPC product surface is gone; nothing here talks to oRPC 
   through it (`itx.streams.get(path).{append,appendBatch,read,subscribe}`,
   `itx.streams.create(...)`, `itx.agents.sendMessage(...)`).
 
-### Preserved oRPC reference (`*.orpc-legacy.ts`)
-
-Misha's original oRPC e2e coverage is kept verbatim as reference material, **not** as active tests:
-
-- `vitest/agents.orpc-legacy.ts`, `vitest/admin-project.orpc-legacy.ts`,
-  `test-support/create-test-project.orpc-legacy.ts`, `test-support/os-client.orpc-legacy.ts`.
-- These are intentionally **not** named `.test.ts`, so Vitest never collects them, and they are
-  never imported by active code. They still reference the removed oRPC stack (`@orpc/*`,
-  `@iterate-com/os-contract`, `~/orpc/...`), so each carries `// @ts-nocheck` + `/* eslint-disable */`
-  and knip is told to ignore `e2e/**/*.orpc-legacy.ts`.
-- Treat them as the porting spec for the active `*.itx.e2e.test.ts` equivalents — any oRPC or
-  WebSocket helper you see in them is legacy-only and not the active testing surface. The
-  crash-recovery case (agent host DO killed mid-turn) has no itx port yet: `itx.agents` exposes
-  only `sendMessage`, with no `kill` door.
-
 ## Lanes
 
 All Vitest lanes require a base URL plus an admin credential (one of
 `OS_E2E_ADMIN_API_SECRET`, `OS_ADMIN_API_SECRET`, `APP_CONFIG_ADMIN_API_SECRET`; some helpers also
 accept `OS_E2E_BEARER_TOKEN` or `OS_E2E_COOKIE`). The usual invocation is
-`doppler run --config <config> -- pnpm e2e [-t <filter>]` from `apps/os` — the config supplies the
-base URL: `prd` → `os.iterate.com`, `preview_N` → `os.iterate-preview-N.com`, `dev_<you>` → your
-tunnel. For fully-local `dev`, the helpers read `.alchemy/dev-server.json` from the running
-`pnpm dev` process.
+`doppler run --config <config> -- pnpm e2e [-t <filter>]` from `apps/os`. Deployed configs supply
+the base URL: `prd` → `os.iterate.com`, `preview_N` → `os.iterate-preview-N.com`. Local configs
+(`dev` and `dev_<you>`) read `.alchemy/dev-server.json` from the running CLI-managed dev server
+(`pnpm dev` or `pnpm cli dev start --detach`).
 
-If you need to target something other than the discovered local server, override explicitly:
+If you need to target captun or another custom target, override explicitly:
 `OS_ITX_E2E_BASE_URL=http://localhost:<port> doppler run --config dev -- pnpm e2e`.
 
 - Live deployment tests: `pnpm e2e` (agents, admin-project suites).

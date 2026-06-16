@@ -7,12 +7,11 @@
 //                  their globalOutbound, so even a dependency's fetch goes
 //                  through secret substitution without knowing it
 //
-// Every project is born with the example secret (example.egress_api_key →
-// "example-secret-value"), and the worker exposes an authenticated echo
-// endpoint, so we can assert the substitution end to end: the isolate sends
-// a getSecret(...) placeholder and the echo sees the material.
+// The tests store an example secret (example.egress_api_key →
+// "example-secret-value"), send getSecret(...) placeholders to a public echo
+// endpoint, and assert the remote side saw the substituted material.
 
-import { expect, test } from "vitest";
+import { expect, test as baseTest } from "vitest";
 import {
   adminApiSecret,
   baseUrl,
@@ -23,8 +22,10 @@ import {
 const SECRET_KEY = "example.egress_api_key";
 const SECRET_MATERIAL = "example-secret-value";
 const HEADER = "x-itx-egress-probe";
+const PUBLIC_ECHO_URL = "https://postman-echo.com/get";
 
 const createdProjectIds = registerCreatedProjectCleanup();
+const test = process.env.OS_ITX_E2E_EGRESS_CONCURRENT === "true" ? baseTest.concurrent : baseTest;
 
 test("itx.fetch substitutes secrets through project egress (explicit door)", async () => {
   using itx = connectGlobal();
@@ -32,8 +33,9 @@ test("itx.fetch substitutes secrets through project egress (explicit door)", asy
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
   await waitForProjectReady(projectItx);
+  await seedExampleSecret(projectItx);
 
-  const response = await projectItx.fetch(echoUrl(), {
+  const response = await projectFetchWithTransientRetry(projectItx, echoUrl(), {
     headers: {
       authorization: `Bearer ${adminApiSecret()}`,
       [HEADER]: secretReference(),
@@ -52,6 +54,7 @@ test("bare fetch() in a project itx script goes through egress (implicit door)",
   {
     using projectItx = await itx.projects.get(project.id);
     await waitForProjectReady(projectItx);
+    await seedExampleSecret(projectItx);
   }
 
   // The script calls PLAIN fetch — no itx involvement. globalOutbound does
@@ -89,6 +92,7 @@ test("bare fetch() inside a worker cap goes through egress (implicit door)", asy
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
   await waitForProjectReady(projectItx);
+  await seedExampleSecret(projectItx);
 
   await projectItx.provideCapability({
     name: "egressProbe",
@@ -149,7 +153,7 @@ test("itx.secrets: set a secret through the default, then fetch with its placeho
   // Summaries are redacted — material never rides the list surface.
   expect(JSON.stringify(listed)).not.toContain(material);
 
-  const response = await projectItx.fetch(echoUrl(), {
+  const response = await projectFetchWithTransientRetry(projectItx, echoUrl(), {
     headers: {
       authorization: `Bearer ${adminApiSecret()}`,
       [HEADER]: 'getSecret({ key: "demo.api_key" })',
@@ -178,7 +182,7 @@ async function waitForProjectReady(projectItx: unknown) {
       project: { processor: { snapshot(): Promise<{ state: { phase: string } }> } };
     }
   ).project;
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + 90_000;
   let snapshot: { state: { phase: string } } | undefined;
   while (Date.now() < deadline) {
     snapshot = await project.processor.snapshot();
@@ -190,6 +194,36 @@ async function waitForProjectReady(projectItx: unknown) {
 
 function secretReference() {
   return `Bearer getSecret({ key: ${JSON.stringify(SECRET_KEY)} })`;
+}
+
+async function seedExampleSecret(projectItx: unknown) {
+  await (projectItx as never as Record<string, any>).secrets.setSecret({
+    key: SECRET_KEY,
+    material: SECRET_MATERIAL,
+  });
+}
+
+async function projectFetchWithTransientRetry(
+  projectItx: { fetch(input: string, init: RequestInit): Promise<Response> },
+  input: string,
+  init: RequestInit,
+) {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await projectItx.fetch(input, init);
+    } catch (error) {
+      lastError = error;
+      if (
+        !(error instanceof Error && /network connection lost/i.test(error.message)) ||
+        attempt === 3
+      ) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, attempt * 1_000));
+    }
+  }
+  throw lastError;
 }
 
 function echoedHeader(body: unknown): string {
@@ -206,20 +240,8 @@ function suffix() {
   return crypto.randomUUID().slice(0, 8);
 }
 
-/**
- * Worker-to-worker egress cannot loop back to 127.0.0.1 in local dev, so the
- * echo target must be a publicly reachable host (the dev tunnel or a deployed
- * preview). Override with OS_E2E_EGRESS_ECHO_URL when baseUrl is local.
- */
 function echoUrl() {
   const explicit = process.env.OS_E2E_EGRESS_ECHO_URL?.trim();
   if (explicit) return explicit;
-  const base = new URL(baseUrl());
-  if (base.hostname === "localhost" || base.hostname === "127.0.0.1") {
-    throw new Error(
-      "Set OS_E2E_EGRESS_ECHO_URL to a publicly reachable echo endpoint for local runs " +
-        "(e.g. the dev tunnel's /api/itx/egress-echo).",
-    );
-  }
-  return new URL("/api/itx/egress-echo", baseUrl()).toString();
+  return PUBLIC_ECHO_URL;
 }

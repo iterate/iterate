@@ -39,7 +39,7 @@ export const claudeMcpScript = os
   })
   .handler(async ({ input }) => {
     const adminToken = requireEnv("APP_CONFIG_ADMIN_API_SECRET");
-    const mcpUrl = input.baseHost ? mcpUrlFromBaseHost(input.baseHost) : defaultMcpUrlFromEnv();
+    const mcpUrl = input.baseHost ? normalizeBaseUrl(input.baseHost) : defaultMcpUrlFromEnv();
     await assertMcpAdminBearerAccepted({ mcpUrl, token: adminToken });
     const command = buildClaudeShellCommand([
       "--mcp-config",
@@ -94,10 +94,6 @@ function requireEnv(name: string) {
     throw new Error(`claude-mcp requires ${name} in the current environment.`);
   }
   return value;
-}
-
-function mcpUrlFromBaseHost(value: string) {
-  return normalizeBaseUrl(value);
 }
 
 function normalizeBaseUrl(value: string) {

@@ -1,8 +1,6 @@
 # Dev environments
 
-How local development, preview environments, and identities work. The design
-rationale lives in [dev-environments-redesign-context.md](dev-environments-redesign-context.md);
-this is the operating manual.
+How local development, preview environments, and identities work.
 
 ## The core model (read this much at minimum)
 
@@ -38,16 +36,16 @@ doppler setup --config dev --no-interactive       # or --config dev_<you>
 pnpm dev          # fully-local OS dev server on http://localhost:<port>
 ```
 
-- **Config selection**: `pnpm dev` resolves its Doppler config as
-  `DOPPLER_CONFIG` env var → `doppler setup` scope for the worktree → shared
-  `dev`. The scope (via the repo's `doppler.yaml`) is the intended mechanism;
-  the env var is a one-off override.
+- **Config selection**: `pnpm dev` preserves an existing `doppler run`
+  environment; otherwise it enters Doppler using the `apps/os` local setup. For
+  a one-off config, use
+  `doppler run --project os --config dev_<you> -- pnpm dev`; do not set
+  `DOPPLER_CONFIG` by hand.
 - **Which config?** `dev`, `dev_jonas`, `dev_misha`, and `dev_rahul` all run
   the same fully-local OS server: random localhost port, per-worktree
   `.alchemy/` state, and human sign-in through `auth.iterate-dev.com`.
   Personal `dev_<you>` configs may still carry personal integration secrets,
-  but they should not carry app/MCP/project-host URL overrides. The old
-  `os.iterate-dev-<you>.com` hostnames are no longer part of local dev.
+  but they should not carry app/MCP/project-host URL overrides.
 
   Don't (re)introduce legacy `ITERATE_OAUTH_*` / `ITERATE_AUTH_JWKS` vars in
   these configs: an explicit JWKS in Doppler overrides the deploy-time fetch
@@ -56,14 +54,20 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   all `dev_<user>` and preview logins once; cleaned out of `dev_*` and the
   `preview` root on 2026-06-12.)
 
-- The chosen port is baked into the env (`APP_CONFIG_BASE_URL`) at startup and
-  recorded in **`apps/os/.alchemy/dev-server.json`**
+- The chosen port is recorded in **`apps/os/.alchemy/dev-server.json`**
   (`{pid, port, baseUrl, logPath, stoppedAt?}`).
+  When no public app URL is configured, local dev also exposes that URL through
+  `APP_CONFIG_BASE_URL`; when `APP_CONFIG.baseUrl` is already set to a public
+  captun URL, runtime config keeps the public URL and the discovery file remains
+  the local target.
   Scripts and CLIs that need "the local dev server" read that file — no
-  flags, no guessing. One dev server per worktree: a second `pnpm dev` refuses
-  while the first is alive. The file appears ~10–15s before the port actually
-  accepts connections (Vite is still booting) — poll the base URL until it
-  returns a response before driving it.
+  flags, no guessing. `pnpm dev` is the attached shorthand for
+  `cd apps/os && pnpm cli dev start`; extra args forward, so
+  `pnpm dev status`, `pnpm dev attach`, and `pnpm dev restart --detach` are the
+  short forms for `pnpm cli dev ...`. A second start attaches to the existing
+  live server; use `restart` to replace it. The file appears ~10–15s before
+  the port actually accepts connections (Vite is still booting) — poll the
+  base URL until it returns a response before driving it.
 - Dev server output is mirrored to the gitignored
   **`apps/os/.alchemy/dev-server.log`**. Tail it from another terminal with
   `tail -f apps/os/.alchemy/dev-server.log` from the repo root, or
@@ -166,10 +170,10 @@ agent lands on a Google login and is stuck. `--admin` does not bypass this.
 The working recipe to browse OS as a minted identity:
 
 ```bash
-# 1. create a project via the operator path (admin API secret; from apps/os)
-cd apps/os
-doppler run --project os --config dev -- pnpm cli --base-url http://localhost:<port> \
+# 1. create a project via the operator path (admin API secret)
+(cd apps/os && doppler run --project os --config dev -- pnpm cli --base-url http://localhost:<port> \
   rpc projects create --slug my-proj      # → note the returned "id"
+)
 
 # 2. mint with BOTH org and project claims (the org can be any made-up id —
 #    OS authorizes from claims; only auth-worker round-trips reject fakes)
@@ -252,9 +256,11 @@ auth flows specifically, always start with a fresh profile + `cookies clear`.
 Each preview slot N is a complete, isolated stack on the dev/preview
 Cloudflare account: `os.iterate-preview-N.com`, `auth.iterate-preview-N.com`,
 and `<proj-slug>.iterate-preview-N.app`. Slots are leased via semaphore
-(`environment-config-lease`, slugs `preview-1..9`); CI acquires a lease per
-PR, deploys the slot's auth first (OS bakes its JWKS from it), then OS, runs
-e2e, and destroys + releases on PR close.
+(`environment-config-lease`, slugs `preview-1..9`). CI acquires a lease per PR,
+deploys the apps touched by the PR, runs e2e, and destroys the PR's deployed
+apps and releases the lease on PR close. OS preview deploys include auth and
+wait for the slot's auth deployment before OS starts because OS bakes auth JWKS
+during deployment.
 
 The slot's OS↔auth OAuth client credentials are **constants in Doppler**
 (`auth/preview_N` carries `AUTH_SEED_OAUTH_CLIENTS`; `os/preview_N` carries
@@ -273,17 +279,17 @@ doppler run --project _shared --config prd -- pnpm preview status              #
 doppler run --project _shared --config prd -- pnpm preview acquire --slot 9    # lease it (3h default)
 # → prints leaseId + the matching release command
 
-# 2. Deploy (same primitive as everything else; auth first — OS bakes its JWKS from it):
-cd apps/auth && doppler run --project auth --config preview_9 -- pnpm alchemy:up
-cd ../os     && doppler run --project os   --config preview_9 -- pnpm alchemy:up
+# 2. Deploy (same primitive as everything else; auth first because OS bakes its JWKS):
+(cd apps/auth && doppler run --project auth --config preview_9 -- pnpm alchemy:up)
+(cd apps/os   && doppler run --project os   --config preview_9 -- pnpm run deploy)
 
 # 3. Point a browser at it (same org-claims requirement as local dev — see
 #    "Acting as users" above; bare --admin lands on the auth login page):
 doppler run --project os --config preview_9 -- pnpm auth:mint --admin --browser-url
 
 # 4. Tear down and release when done:
-cd apps/os   && doppler run --project os   --config preview_9 -- pnpm alchemy:down
-cd ../auth   && doppler run --project auth --config preview_9 -- pnpm alchemy:down
+(cd apps/os   && doppler run --project os   --config preview_9 -- pnpm run destroy)
+(cd apps/auth && doppler run --project auth --config preview_9 -- pnpm alchemy:down)
 doppler run --project _shared --config prd -- pnpm preview release --slot 9 --lease-id <leaseId>
 ```
 
@@ -295,11 +301,11 @@ For the PR-centric flow (managed PR comment, tests, cleanup) use
 ## Tunnels and webhooks
 
 Inbound webhooks (Slack, GitHub) and third-party OAuth callbacks need a
-public HTTPS hostname — that's the only reason to reach for a tunnel from
+public HTTPS hostname — that's the only reason to add a public local URL to
 fully-local dev.
 
-The **iterate tunnel gateway** (`apps/tunnels`, deployed at
-`tunnels.iterate.com`) mints public tunnels on demand: any caller dials it
+The **iterate public local gateway** (`apps/tunnels`, deployed at
+`tunnels.iterate.com`) mints public local URLs on demand: any caller dials it
 with the shared gateway secret (`CAPTUN_TOKEN`, in Doppler `_shared/dev` and
 `_shared/preview`) and gets `<name>.tunnels.iterate.com` in ~200ms. It's a
 standalone captun worker — deliberately not embedded in OS, so it stays tiny
@@ -307,34 +313,26 @@ and outlives any app deploy. Enable it for your dev server with env vars only
 (no code change):
 
 ```bash
-CAPTUN_ENABLED=true pnpm dev          # random tunnel name on the default gateway
-CAPTUN_TUNNEL_NAME=jonas pnpm dev     # stable name → https://jonas.tunnels.iterate.com
+CAPTUN_TUNNEL_NAME=jonas pnpm dev     # https://jonas.tunnels.iterate.com
 ```
 
 The captun Vite plugin (`apps/os/vite.config.ts`) activates when
-`CAPTUN_ENABLED`/`CAPTUN_TUNNEL_NAME` is set and forwards public **HTTP** to
-your local dev server. Its forwarder is plain `fetch`, so it does **not** carry
-WebSockets — HMR and itx (`/api/itx`, capnweb-over-WS) stay on the local URL.
+`CAPTUN_TUNNEL_NAME` is set. Local dev also uses that name to derive
+`APP_CONFIG_BASE_URL` (`https://<name>.tunnels.iterate.com`) unless
+`APP_CONFIG.baseUrl` is set explicitly. The plugin forwards public HTTP and
+WebSockets to your local dev server, so HMR and itx can use the same public
+URL.
 
-For WebSocket traffic over the tunnel (e.g. driving itx against a local dev
-server from outside), use the captun **CLI** instead, which forwards WS via
-captun@27's `connectWebSocket` hook:
+For personal `dev_<user>` configs, startup also ensures the shared dev auth
+client accepts `https://<name>.tunnels.iterate.com/api/iterate-auth/callback`.
+Shared `dev` does not mutate auth client state; use a personal dev config when
+you need human OAuth through a public local URL. Tests that need public local
+URLs use the same gateway.
 
-```bash
-captun tunnel http://127.0.0.1:<port> \
-  --name <name> --gateway https://tunnels.iterate.com --token "$CAPTUN_TOKEN"
-# → https://<name>.tunnels.iterate.com  (HTTP + WebSockets)
-# then: withItx({ baseUrl: "https://<name>.tunnels.iterate.com", token: <admin> })
-```
-
-(Wiring `connectWebSocket` into the Vite plugin so `pnpm dev` carries WS too is
-a small captun follow-up.) Tests open tunnels via `createPublicTunnel`
-(`apps/os/e2e/test-support/create-test-project.ts`) against the same gateway.
-
-Tunnels are not scarce. The genuinely scarce thing is the webhook-source
+Public local URLs are not scarce. The genuinely scarce thing is the webhook-source
 configuration — a Slack app points at exactly one delivery URL at a time —
-so set a stable `CAPTUN_TUNNEL_NAME` per person (held in `dev_<user>`) to
-keep that URL working.
+so set a stable `CAPTUN_TUNNEL_NAME` per person (held in `dev_<user>`) to keep
+that URL working.
 
 ## Slack end-to-end testing
 

@@ -25,6 +25,7 @@ import { spendCircuitBreakerToken } from "./processors/circuit-breaker/contract.
 
 const iso = (ms = 0) => new Date(ms).toISOString();
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+/** Minimal stream context mock; leaving it named avoids contextual typing of the no-op methods. */
 const iterateContext = () => ({ stream: { append() {}, appendBatch() {} } });
 
 // A minimal counting processor whose batch hook can be made to throw once.
@@ -119,14 +120,14 @@ function fakeStream() {
     cursor = batch.at(-1)!.offset;
     void Promise.resolve(
       deliver({
-        namespace: "stream",
+        projectId: "stream",
         path: "/r",
         events: batch,
         streamMaxOffset: log.at(-1)?.offset ?? 0,
         // Hosts under test never read batch state; a stub keeps the fake honest
         // to the StreamEventBatch shape without dragging in the core reducer.
         state: {
-          namespace: "stream",
+          projectId: "stream",
           path: "/r",
           maxOffset: log.at(-1)?.offset ?? 0,
         } as StreamEventBatch["state"],
@@ -179,11 +180,10 @@ function fakeStream() {
     },
   };
 
-  // External producer: append a user event to the stream (drives delivery).
-  const produce = (input: StreamEventInput) => push(input);
   return {
     stream,
-    produce,
+    // External producer: append a user event to the stream (drives delivery).
+    produce: (input: StreamEventInput) => push(input),
     hostAppends,
     failNextSubscribes: (count: number) => {
       subscribeFailures = count;
@@ -195,7 +195,7 @@ const subscribeArgs = (stream: ReturnType<typeof fakeStream>["stream"]) => ({
   stream: stream as never,
   subscriptionKey: "k",
   streamMaxOffset: 0,
-  streamRuntimeState: { coreProcessorState: { namespace: "stream", path: "/r" } as never },
+  streamRuntimeState: { coreProcessorState: { projectId: "stream", path: "/r" } as never },
 });
 
 describe("T0 — hosted processors run side effects during catch-up replay", () => {

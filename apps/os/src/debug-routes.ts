@@ -1,17 +1,9 @@
-import { StreamPath } from "@iterate-com/shared/streams/types.ts";
-import {
-  getInitializedStreamStub,
-  type StreamDurableObjectNamespace,
-} from "~/domains/streams/stream-runtime.ts";
 import type { AppConfig } from "~/config.ts";
 import type { CloudflareArtifactsBinding } from "~/domains/repos/artifacts.ts";
 import { seedIterateConfigBaseRepo } from "~/domains/repos/iterate-config-base-seed.ts";
-import { DEBUG_APPEND_CHAIN_EVENT_TYPE } from "~/durable-objects/debug-append-chain-subscriber.ts";
 import { authenticateAdminBearer } from "~/auth/admin.ts";
 
-const EGRESS_ECHO_PATH = "/api/itx/egress-echo";
 const OPENAPI_FIXTURE_BASE = "/api/itx/openapi-fixture";
-const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
 /**
  * Admin-token-gated debug and operations endpoints that bypass the normal
@@ -24,39 +16,16 @@ export async function handleDebugRoutes(input: {
   config: AppConfig;
 }): Promise<Response | null> {
   return (
-    handleEgressEchoFetch(input) ??
-    (await handleOpenApiFixtureFetch(input)) ??
-    (await handleDebugAppendChainFetch(input)) ??
-    (await handleSeedIterateConfigBaseFetch(input))
+    (await handleOpenApiFixtureFetch(input)) ?? (await handleSeedIterateConfigBaseFetch(input))
   );
-}
-
-/** Echo request metadata back, for verifying worker egress paths end to end. */
-function handleEgressEchoFetch(input: { request: Request; config: AppConfig }) {
-  const url = new URL(input.request.url);
-  if (url.pathname !== EGRESS_ECHO_PATH) return null;
-
-  const expectedToken = input.config.adminApiSecret?.exposeSecret();
-  if (
-    expectedToken == null ||
-    input.request.headers.get("authorization") !== `Bearer ${expectedToken}`
-  ) {
-    return Response.json({ error: "Unauthorized." }, { status: 401 });
-  }
-
-  return Response.json({
-    headers: Object.fromEntries(input.request.headers),
-    method: input.request.method,
-    url: url.toString(),
-  });
 }
 
 /**
  * A tiny, deterministic OpenAPI service — the spec document plus the API it
  * describes — so the OpenApiClient e2e never depends on a live third-party
- * demo server. Admin-token-gated like the egress echo: the e2e provides the
- * capability with an admin bearer in props.headers, which also proves that
- * headers ride every API call (nothing here answers without them).
+ * demo server. The e2e provides the capability with an admin bearer in
+ * props.headers, which also proves that headers ride every API call (nothing
+ * here answers without them).
  */
 async function handleOpenApiFixtureFetch(input: {
   request: Request;
@@ -176,133 +145,6 @@ function openApiFixtureSpec() {
   };
 }
 
-async function handleDebugAppendChainFetch(input: {
-  request: Request;
-  env: Env;
-  config: AppConfig;
-}) {
-  const { request, env, config } = input;
-  const url = new URL(request.url);
-  if (url.pathname !== "/__debug/append-chain") return null;
-
-  const expectedToken = config.adminApiSecret?.exposeSecret();
-  if (expectedToken == null) {
-    return Response.json({ error: "Debug endpoint is disabled." }, { status: 404 });
-  }
-
-  if (
-    !authenticateAdminBearer({
-      authorizationHeader: request.headers.get("authorization"),
-      config,
-    })
-  ) {
-    return Response.json({ error: "Unauthorized." }, { status: 401 });
-  }
-
-  if (!hasDebugAppendChainSubscriber(env)) {
-    return Response.json({ error: "Debug append-chain endpoint is disabled." }, { status: 404 });
-  }
-
-  const action = parseDebugAppendChainAction(url.searchParams.get("action"));
-  const mode = parseDebugAppendChainMode(url.searchParams.get("mode"));
-  const chainId = normalizeDebugChainId(url.searchParams.get("chainId"));
-  const max = parseDebugPositiveInt(url.searchParams.get("max"), {
-    defaultValue: 4,
-    max: 200,
-    name: "max",
-  });
-  const projectId = `debug-append-chain-${chainId}`;
-  const streamPath = StreamPath.parse(`/debug/append-chain/${chainId}`);
-  const stream = await getInitializedStreamStub({
-    durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
-    namespace: projectId,
-    path: streamPath,
-  });
-
-  const startedAt = Date.now();
-  if (action === "status") {
-    const history = await stream.history({ after: "start" });
-    const tickEvents = history.filter((event) => event.type === DEBUG_APPEND_CHAIN_EVENT_TYPE);
-    return Response.json({
-      chainId,
-      durationMs: Date.now() - startedAt,
-      eventCount: history.length,
-      max,
-      mode,
-      streamPath,
-      tickCount: tickEvents.length,
-      tickOffsets: tickEvents.map((event) => event.offset),
-      ticks: tickEvents.map((event) => ({
-        offset: event.offset,
-        payload: event.payload,
-      })),
-    });
-  }
-
-  try {
-    await stream.append({
-      type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `debug-append-chain-subscription:${chainId}`,
-      payload: {
-        slug: `debug-append-chain:${chainId}`,
-        type: "callable",
-        callable: {
-          type: "workers-rpc",
-          via: {
-            type: "env-binding",
-            bindingType: "durable-object-namespace",
-            bindingName: "DEBUG_APPEND_CHAIN_SUBSCRIBER",
-            durableObject: { name: chainId },
-          },
-          rpcMethod: "afterAppend",
-          argsMode: "object",
-        },
-      },
-    });
-
-    const triggerEvent = await stream.append({
-      type: DEBUG_APPEND_CHAIN_EVENT_TYPE,
-      payload: {
-        chainId,
-        count: 1,
-        max,
-        mode,
-        projectId,
-        streamPath,
-      },
-    });
-
-    const responseBody = {
-      action,
-      chainId,
-      durationMs: Date.now() - startedAt,
-      max,
-      mode,
-      streamPath,
-      triggerOffset: triggerEvent.offset,
-    };
-
-    console.log("[DEBUG-append-chain] endpoint.started", responseBody);
-    return Response.json(responseBody);
-  } catch (error) {
-    return Response.json(
-      {
-        action,
-        chainId,
-        durationMs: Date.now() - startedAt,
-        error: {
-          name: error instanceof Error ? error.name : "Error",
-          message: error instanceof Error ? error.message : String(error),
-        },
-        max,
-        mode,
-        streamPath,
-      },
-      { status: 500 },
-    );
-  }
-}
-
 async function handleSeedIterateConfigBaseFetch(input: {
   request: Request;
   env: Env;
@@ -406,47 +248,6 @@ export async function handleDurableObjectDebugFetch(input: {
   targetUrl.pathname = targetPath;
   const stub = namespace.getByName(objectName);
   return await stub.fetch(new Request(targetUrl, input.request));
-}
-
-function hasDebugAppendChainSubscriber(env: Env) {
-  return (
-    (env as Partial<Env> & { DEBUG_APPEND_CHAIN_SUBSCRIBER?: DurableObjectNamespace })
-      .DEBUG_APPEND_CHAIN_SUBSCRIBER != null
-  );
-}
-
-function parseDebugAppendChainAction(value: string | null): "start" | "status" {
-  if (value == null || value === "" || value === "start") return "start";
-  if (value === "status") return "status";
-  throw new Error('action must be "start" or "status".');
-}
-
-function parseDebugAppendChainMode(value: string | null): "alarm" | "sync" {
-  if (value == null || value === "" || value === "sync") return "sync";
-  if (value === "alarm") return "alarm";
-  throw new Error('mode must be "sync" or "alarm".');
-}
-
-function parseDebugPositiveInt(
-  value: string | null,
-  options: { defaultValue: number; max: number; name: string },
-) {
-  if (value == null || value === "") return options.defaultValue;
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > options.max) {
-    throw new Error(`${options.name} must be an integer from 1 to ${options.max}.`);
-  }
-  return parsed;
-}
-
-function normalizeDebugChainId(value: string | null) {
-  const candidate = value ?? crypto.randomUUID().replaceAll("-", "");
-  const normalized = candidate
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]/g, "-")
-    .slice(0, 64);
-  if (!normalized) throw new Error("chainId must contain at least one URL-safe character.");
-  return normalized;
 }
 
 type DebugDurableObjectNamespace = {

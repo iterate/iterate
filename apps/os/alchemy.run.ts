@@ -19,14 +19,12 @@ import { initAlchemy } from "@iterate-com/shared/alchemy/init";
 import {
   ITERATE_WORKER_OBSERVABILITY,
   IterateAppWorker,
-  IterateDevTunnel,
   IterateRoutes,
 } from "@iterate-com/shared/alchemy/iterate-app";
 import { prepareLocalDevServer } from "@iterate-com/shared/alchemy/local-dev-server";
 import { ensureLocalDevOAuthClient } from "./src/auth/dev-oauth-client-bootstrap.ts";
 import { AppConfig } from "./src/config.ts";
 import type { ItxDurableObject } from "./src/itx/itx-durable-object.ts";
-import type { DebugAppendChainSubscriber } from "./src/durable-objects/debug-append-chain-subscriber.ts";
 import type { ProjectDurableObject } from "./src/domains/projects/durable-objects/project-durable-object.ts";
 import type { ProjectMcpServerConnection } from "./src/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 import type { AgentDurableObject } from "./src/domains/agents/durable-objects/agent-durable-object.ts";
@@ -175,10 +173,10 @@ const env: Record<string, string | undefined> = {
     process.env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN ?? process.env.ITERATE_AUTH_SERVICE_TOKEN,
 };
 
-// Fully-local dev: no tunnel, no per-user domain. Picks a free port, bakes
-// APP_CONFIG_BASE_URL=http://localhost:<port>, and writes
-// .alchemy/dev-server.json so CLIs can find the running server. No-op for
-// deploy/preview configs and explicit APP_CONFIG_BASE_URL overrides.
+// Fully-local dev: no Cloudflare resources. Picks a free port and writes
+// .alchemy/dev-server.json so CLIs can find the running server. If Doppler
+// provides APP_CONFIG.baseUrl (for example a captun URL), runtime config keeps
+// that public URL and the discovery file remains the local target.
 const localDevServer = await prepareLocalDevServer(env);
 if (localDevServer && !env.APP_CONFIG_PROJECT_HOSTNAME_BASES) {
   // Project hosts resolve as <proj-slug>.localhost:<port> in browsers. The app
@@ -212,7 +210,6 @@ const slackBotToken = ctx.runtimeConfig.slackBotToken?.exposeSecret();
 const workerNames = {
   agent: `${ctx.workerName}-agent`,
   app: `${ctx.workerName}-app`,
-  debugSubscriber: `${ctx.workerName}-debug-subscriber`,
   ingress: ctx.workerName,
   itx: `${ctx.workerName}-itx`,
   mcp: `${ctx.workerName}-mcp`,
@@ -230,9 +227,9 @@ const db = await D1Database("os-db", {
   adopt: true,
 });
 
-// os serves project hosts at <slug>.iterate.app (prod),
-// <slug>.iterate-dev-jonas.app (dev), and <slug>.iterate-preview-N.app
-// (preview). The preview app shell deliberately lives on the sibling
+// os serves project hosts at <slug>.iterate.app (prod), <slug>.localhost:<port>
+// (local dev), and <slug>.iterate-preview-N.app (preview).
+// The preview app shell deliberately lives on the sibling
 // iterate-preview-N.com zone (`os.iterate-preview-N.com`) so project/MCP hosts
 // can own the iterate-preview-N.app zone cleanly.
 const projectHostnameBases = ctx.runtimeConfig.projectHostnameBases ?? [];
@@ -240,9 +237,6 @@ const mcpRouteHostname = routeHostnameForUrl(ctx.runtimeConfig.mcp?.baseUrl);
 const eventDocsRouteHostname = eventDocsHostnameForAppBaseUrl(ctx.runtimeConfig.baseUrl);
 const artifactsAccountId = requireEnv("CLOUDFLARE_ACCOUNT_ID");
 const artifactsNamespace = `${ctx.workerName}-repos`;
-// Stream namespace for worker-global (non-project-scoped) streams, such as the
-// raw Cloudflare event capture stream at /cloudflare/events.
-const globalStreamNamespace = `${ctx.workerName}-global`;
 
 // ---- Durable Object namespaces ---------------------------------------------
 // One declaration per class, `scriptName` = the OWNING worker. Alchemy strips
@@ -303,13 +297,6 @@ const slackAgent = DurableObjectNamespace<SlackAgentDurableObject>("slack-agent"
   scriptName: workerNames.slackAgent,
   sqlite: true,
 });
-const debugAppendChainSubscriber = ctx.app.local
-  ? DurableObjectNamespace<DebugAppendChainSubscriber>("debug-append-chain-subscriber", {
-      className: "DebugAppendChainSubscriber",
-      scriptName: workerNames.debugSubscriber,
-      sqlite: true,
-    })
-  : undefined;
 
 const artifactEventsQueue = await Queue("artifact-events", {
   name: `${ctx.workerName}-artifact-events`,
@@ -335,11 +322,12 @@ const itxBuildCache = await R2Bucket("itx-build-cache", {
 const missingScripts = ctx.app.local
   ? new Set<string>()
   : await findMissingWorkerScripts(
-      // debugSubscriber is local-only and never deploys — counting it as
-      // missing would put every deploy into (harmless but pointless)
-      // bootstrap double-pass mode forever.
+      // Only cross-script Durable Object target workers need bootstrap
+      // probing. app/ingress are service-bound downstream workers, and
+      // debugSubscriber is local-only; counting any of them here makes a fresh
+      // stage do app/route work in a throwaway first pass.
       Object.entries(workerNames)
-        .filter(([id]) => id !== "debugSubscriber")
+        .filter(([id]) => id !== "app" && id !== "debugSubscriber" && id !== "ingress")
         .map(([, name]) => name),
     );
 if (missingScripts.size > 0) {
@@ -445,14 +433,13 @@ const [
   slackIntegrationWorker,
   mcpWorker,
   projectWorker,
-  debugSubscriberWorker,
   streamWorker,
 ] = await Promise.all([
   osWorker("workspace", {
     entrypoint: "./src/workers/workspace.ts",
     // @cloudflare/shell needs Node APIs.
     compatibilityFlags: ["nodejs_compat"],
-    bindings: { DO_CATALOG: db, WORKSPACE: workspace },
+    bindings: { DO_CATALOG: db, STREAM: stream, WORKSPACE: workspace },
   }),
   osWorker("slackAgent", {
     entrypoint: "./src/workers/slack-agent.ts",
@@ -479,7 +466,6 @@ const [
       ARTIFACTS_ACCOUNT_ID: artifactsAccountId,
       ARTIFACTS_NAMESPACE: artifactsNamespace,
       DO_CATALOG: db,
-      GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
       REPO: repo,
       STREAM: stream,
     },
@@ -526,15 +512,6 @@ const [
     compatibilityFlags: ["nodejs_als", "global_fetch_strictly_public"],
     bindings: loopbackUnionBindings,
   }),
-  ctx.app.local
-    ? osWorker("debugSubscriber", {
-        entrypoint: "./src/workers/debug-append-chain-subscriber.ts",
-        bindings: {
-          DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber!,
-          STREAM: stream,
-        },
-      })
-    : Promise.resolve(undefined),
   osWorker("stream", {
     entrypoint: "./src/workers/stream.ts",
     bindings: {
@@ -547,21 +524,31 @@ const [
       SLACK_AGENT: slackAgent,
       SLACK_INTEGRATION: slackIntegration,
       STREAM: stream,
-      ...(debugAppendChainSubscriber == null
-        ? {}
-        : { DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber }),
     },
   }),
 ]);
 
-if (!ctx.app.local) {
-  const cloudflareApi = await createCloudflareApi({});
-  await waitForCloudflareWorkerScript({ cloudflareApi, workerName: workerNames.repo });
-  await ensureCloudflareQueueConsumer({
-    cloudflareApi,
-    queueId: artifactEventsQueue.id,
-    scriptName: workerNames.repo,
-  });
+const artifactEventsQueueConsumerReady = ctx.app.local
+  ? Promise.resolve()
+  : (async () => {
+      const cloudflareApi = await createCloudflareApi({});
+      await waitForCloudflareWorkerScript({ cloudflareApi, workerName: workerNames.repo });
+      await ensureCloudflareQueueConsumer({
+        cloudflareApi,
+        queueId: artifactEventsQueue.id,
+        scriptName: workerNames.repo,
+      });
+    })();
+void artifactEventsQueueConsumerReady.catch(() => {});
+
+// Second bootstrap pass (fresh stages only): the cross-script Durable Object
+// target workers now exist, so re-running wires the bindings omitted above.
+// Do this before the dashboard app, ingress, and routes so a fresh preview
+// builds/routes them once instead of once per bootstrap pass.
+if (missingScripts.size > 0 && !process.env.OS_BOOTSTRAP_SECOND_PASS) {
+  await artifactEventsQueueConsumerReady;
+  await ctx.app.finalize();
+  await runBootstrapSecondPass();
 }
 
 // ---- The app worker (TanStack Start dashboard) -------------------------------
@@ -590,15 +577,11 @@ const appWorker = await IterateAppWorker(ctx, {
     ARTIFACTS: Artifacts({ namespace: artifactsNamespace }),
     ARTIFACTS_ACCOUNT_ID: artifactsAccountId,
     ARTIFACTS_NAMESPACE: artifactsNamespace,
-    GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
     MCP: mcpWorker,
     PROJECT_HOST: projectWorker,
     PROJECT_MCP_SERVER_CONNECTION: projectMcpServerConnection,
     SLACK_AGENT: slackAgent,
     SLACK_INTEGRATION: slackIntegration,
-    ...(debugAppendChainSubscriber == null
-      ? {}
-      : { DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber }),
   },
   // OAuth login/refresh/logout, and JWT verification when static JWKS is not
   // configured, can still talk to auth.iterate.com from inside the Worker.
@@ -643,23 +626,10 @@ await IterateRoutes(ctx, {
   ],
 });
 
-// Dev tunnel (tunnel-backed dev_<user> configs): real domains -> local vite.
-// The browser-facing dev entry is the app worker (it runs the same router),
-// so the tunnel points at vite, exactly as before the split.
-const { afterFinalize } = await IterateDevTunnel(ctx, {
-  extraRouteHostnames: [
-    ...(eventDocsRouteHostname ? [eventDocsRouteHostname] : []),
-    ...(mcpRouteHostname ? [mcpRouteHostname] : []),
-    ...projectHostnameBases.flatMap(projectRouteHostnamesForBase),
-  ],
-  worker: appWorker,
-});
-
 /** Per-worker Env types for src/lib/worker-env.d.ts. */
 export const workers = {
   agent: agentWorker,
   app: appWorker,
-  debugSubscriber: debugSubscriberWorker,
   ingress: ingressWorker,
   itx: itxWorker,
   mcp: mcpWorker,
@@ -671,20 +641,8 @@ export const workers = {
   workspace: workspaceWorker,
 };
 
+await artifactEventsQueueConsumerReady;
 await ctx.app.finalize();
-await afterFinalize();
-
-// Second bootstrap pass (fresh stages only): every script now exists, so
-// re-running wires the cross-script bindings that were omitted above.
-if (missingScripts.size > 0 && !process.env.OS_BOOTSTRAP_SECOND_PASS) {
-  console.warn("[alchemy.run] Bootstrap: re-running to wire deferred cross-script bindings…");
-  const result = spawnSync("pnpm", ["exec", "tsx", fileURLToPath(import.meta.url)], {
-    cwd: fileURLToPath(new URL(".", import.meta.url)),
-    env: { ...process.env, OS_BOOTSTRAP_SECOND_PASS: "1" },
-    stdio: "inherit",
-  });
-  process.exit(result.status ?? 1);
-}
 
 if (!ctx.app.local) process.exit(0);
 
@@ -707,6 +665,16 @@ function requireEnv(name: string) {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is required.`);
   return value;
+}
+
+function runBootstrapSecondPass(): never {
+  console.warn("[alchemy.run] Bootstrap: re-running to wire deferred cross-script bindings…");
+  const result = spawnSync("pnpm", ["exec", "tsx", fileURLToPath(import.meta.url)], {
+    cwd: fileURLToPath(new URL(".", import.meta.url)),
+    env: { ...process.env, OS_BOOTSTRAP_SECOND_PASS: "1" },
+    stdio: "inherit",
+  });
+  process.exit(result.status ?? 1);
 }
 
 /** Which of the given worker scripts do not exist on the account yet. */
@@ -749,7 +717,7 @@ async function waitForCloudflareWorkerScript(input: {
     if (response.ok) {
       visibleChecks += 1;
       if (visibleChecks >= 2) return;
-      await new Promise((resolve) => setTimeout(resolve, 5_000));
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
       continue;
     }
 
@@ -762,7 +730,7 @@ async function waitForCloudflareWorkerScript(input: {
       );
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 5_000));
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
 
   throw new Error(
@@ -784,7 +752,7 @@ async function ensureCloudflareQueueConsumer(input: {
       const updated = await updateCloudflareQueueConsumer({ ...input, consumerId: existing.id });
       if (updated) return;
       lastError = `consumer ${existing.id} disappeared before it could be updated`;
-      await new Promise((resolve) => setTimeout(resolve, 5_000));
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
       continue;
     }
 
@@ -804,7 +772,7 @@ async function ensureCloudflareQueueConsumer(input: {
       );
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 5_000));
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
   }
 
   throw new Error(

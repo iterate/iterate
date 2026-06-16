@@ -74,6 +74,25 @@ describe("OpenAiWsProcessor", () => {
     expect(eventTypes(appended)).toContain("events.iterate.com/agent/llm-request-completed");
   });
 
+  it("ignores LLM requests addressed to another provider", async () => {
+    const { stream, appended } = memoryStream();
+    const sockets: FakeOpenAiResponsesWebSocket[] = [];
+    const processor = newProcessor({
+      stream,
+      appended,
+      sockets,
+      snapshot: { offset: 0, state: testState() },
+    });
+
+    await processor.ingest({
+      events: [llmRequestRequestedEvent({ offset: 11, provider: "cloudflare-ai" })],
+      streamMaxOffset: 11,
+    });
+
+    expect(sockets).toEqual([]);
+    expect(appended).toEqual([]);
+  });
+
   it("rebuilds the request input from history up to the request's offset", async () => {
     const { stream, appended } = memoryStream();
     const sockets: FakeOpenAiResponsesWebSocket[] = [];
@@ -501,10 +520,13 @@ function currentAgentRequestEvents(appended: readonly StreamEventInput[]): Strea
   return [llmRequestRequestedEvent({ offset: llmRequestId })];
 }
 
-function llmRequestRequestedEvent(args: { offset: number }): StreamEvent {
+function llmRequestRequestedEvent(args: {
+  offset: number;
+  provider?: "cloudflare-ai" | "openai-ws";
+}): StreamEvent {
   return {
     type: "events.iterate.com/agent/llm-request-requested",
-    payload: { model: "ignored-provider-owned-model", runOpts: {} },
+    payload: { model: "ignored-provider-owned-model", provider: args.provider ?? "openai-ws" },
     offset: args.offset,
     createdAt: "2026-01-01T00:00:00.000Z",
   };

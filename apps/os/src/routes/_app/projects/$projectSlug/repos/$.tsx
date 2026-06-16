@@ -1,0 +1,104 @@
+import { Copy } from "lucide-react";
+import { createFileRoute } from "@tanstack/react-router";
+import { Button } from "@iterate-com/ui/components/button";
+import { toast } from "@iterate-com/ui/components/sonner";
+import { ItxBoundary } from "~/components/itx-boundary.tsx";
+import { useItxQuery } from "~/itx/itx-react.tsx";
+
+export const Route = createFileRoute("/_app/projects/$projectSlug/repos/$")({
+  ssr: false,
+  loader: ({ context, params }) => ({
+    breadcrumb: repoPathFromSplat(params._splat),
+    project: context.project,
+  }),
+  component: ProjectRepoDetailPage,
+});
+
+function ProjectRepoDetailPage() {
+  return (
+    <ItxBoundary>
+      <ProjectRepoDetailContent />
+    </ItxBoundary>
+  );
+}
+
+function ProjectRepoDetailContent() {
+  const params = Route.useParams();
+  const repoPath = repoPathFromSplat(params._splat);
+  const repo = useItxQuery({
+    key: ["repo", repoPath],
+    query: (itx) => itx.repos.getInfo({ path: repoPath }),
+  });
+
+  return (
+    <section className="w-full space-y-4 p-4">
+      <div className="rounded-lg border bg-card">
+        <InfoRow label="Path" value={repo.path} />
+        <InfoRow label="Remote" value={repo.remote} copyValue={repo.remote} />
+        <InfoRow label="Default branch" value={repo.defaultBranch} />
+        <InfoRow label="Token expires" value={repo.tokenExpiresAt ?? "No expiry returned"} />
+        <InfoRow label="Token" value={repo.token} copyValue={repo.token} />
+        <InfoRow
+          label="Authorization header"
+          value={repo.git.authorizationHeader}
+          copyValue={repo.git.authorizationHeader}
+        />
+      </div>
+
+      <CommandBlock title="Clone locally" command={repo.git.cloneCommand} />
+      <CommandBlock title="Commit README change" command={repo.git.commitExampleCommand} />
+      <CommandBlock title="Push" command={repo.git.pushCommand} />
+    </section>
+  );
+}
+
+function repoPathFromSplat(splat: string | undefined) {
+  const suffix = splat?.replace(/^\/+/, "") ?? "";
+  return `/repos/${suffix}`;
+}
+
+function InfoRow(input: { copyValue?: string; label: string; value: string }) {
+  return (
+    <div className="grid gap-2 border-b p-4 last:border-b-0 md:grid-cols-[10rem_minmax(0,1fr)_auto] md:items-center">
+      <div className="text-xs font-medium text-muted-foreground">{input.label}</div>
+      <code className="min-w-0 break-all rounded bg-muted px-2 py-1 font-mono text-xs">
+        {input.value}
+      </code>
+      {input.copyValue ? <CopyButton value={input.copyValue} /> : <div />}
+    </div>
+  );
+}
+
+function CommandBlock(input: { command: string; title: string }) {
+  return (
+    <section className="space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-sm font-semibold">{input.title}</h2>
+        <CopyButton value={input.command} />
+      </div>
+      <pre className="overflow-x-auto rounded-lg border bg-muted p-3 font-mono text-xs whitespace-pre-wrap">
+        {input.command}
+      </pre>
+    </section>
+  );
+}
+
+function CopyButton(input: { value: string }) {
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="icon"
+      className="h-8 w-8 shrink-0"
+      aria-label="Copy"
+      onClick={() => {
+        void navigator.clipboard.writeText(input.value).then(
+          () => toast.success("Copied"),
+          () => toast.error("Could not copy"),
+        );
+      }}
+    >
+      <Copy className="h-4 w-4" />
+    </Button>
+  );
+}

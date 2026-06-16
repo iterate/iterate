@@ -1,0 +1,35 @@
+name: Build Preview CI Image
+
+on:
+  schedule:
+    # Keep the baked dependency tree fresh for fast PR preview trials.
+    - cron: "17 4 * * *"
+  workflow_dispatch: {}
+
+env:
+  PREVIEW_CI_IMAGE: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+
+jobs:
+  build-image:
+    name: Build preview CI image
+    runs-on: depot-ubuntu-24.04-64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Bake preview CI image contents
+        run: ./scripts/depot-ci/bake-preview-ci-image.sh
+
+      # Keep node_modules and the pnpm store in the image. Consumers must use
+      # actions/checkout with clean:false so checkout does not delete the baked
+      # install tree before pnpm can validate/reuse it.
+      - name: Snapshot preview CI image
+        uses: depot/snapshot-action@v1
+        with:
+          image: ${{ env.PREVIEW_CI_IMAGE }}

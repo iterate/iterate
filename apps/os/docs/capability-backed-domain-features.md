@@ -1,13 +1,14 @@
 # Capability-backed domain features
 
 Use this pattern when adding an OS project-scoped domain that should be
-available both through the browser/API and through codemode.
+available both through the browser/API and through itx.
 
 ## Rule
 
-Put domain behavior in a project-bound capability first. Make oRPC a thin adapter
-around the capability. Let codemode call the capability directly when live
-Workers RPC handles matter.
+Put domain behavior in a project-bound capability first. Make any HTTP or
+server-function surface a thin adapter around the capability when one still
+exists. Let itx call the capability directly when live Workers RPC handles
+matter.
 
 ## Shape
 
@@ -25,9 +26,9 @@ Workers RPC handles matter.
 5. Put collection behavior on the capability.
 6. Put long-lived object behavior on a Durable Object when the feature needs a
    live handle or durable local state.
-7. Make project oRPC procedures call the capability rather than duplicating
-   lifecycle logic.
-8. Register the capability as a codemode Tool Provider when scripts should use
+7. Make browser, HTTP, or server-function adapters call the capability rather
+   than duplicating lifecycle logic.
+8. Register the capability on the project itx context when scripts should use
    it.
 
 ## Collection semantics
@@ -37,14 +38,14 @@ Do not let selector methods create durable product state by accident.
 Prefer:
 
 ```ts
-await ctx.things.create({ slug });
-await ctx.things.get({ slug }).getInfo();
+await itx.things.create({ slug });
+await itx.things.get({ slug }).getInfo();
 ```
 
 Avoid:
 
 ```ts
-await ctx.things.get({ slug }); // creates if missing
+await itx.things.get({ slug }); // creates if missing
 ```
 
 Creation should be an explicit capability operation. Selection should fail when
@@ -75,26 +76,26 @@ in the `events` object, `consumes`, `emits`, and reducer. Do not add a separate
 `eventTypes` object just to avoid repeating the string inside one processor
 definition.
 
-## oRPC
+## Browser and HTTP Adapters
 
 External project APIs should stay narrow and shaped for browser/API needs:
 
 ```ts
-os.project.{domain}.list(...)
-os.project.{domain}.create(...)
-os.project.{domain}.get(...)
+itx.{domain}.list(...)
+itx.{domain}.create(...)
+itx.{domain}.get(...)
 ```
 
-Do not add oRPC methods only so codemode can reach a capability method. Codemode
-can use the capability directly.
+Do not add browser or HTTP methods only so scripts can reach a capability
+method. itx can use the capability directly.
 
-## Codemode
+## itx
 
 If a capability returns a live handle, that handle's public methods become the
-codemode API. Prefer a tiny `RpcTarget` wrapper when the underlying implementation
-is a Durable Object stub: Cloudflare Workers RPC can pipeline calls through an
-`RpcTarget`, while a raw Durable Object stub is not a reliable return value across
-every capability/session boundary.
+itx API. Prefer a tiny `RpcTarget` wrapper when the underlying implementation is
+a Durable Object stub: Cloudflare Workers RPC can pipeline calls through an
+`RpcTarget`, while a raw Durable Object stub is not a reliable return value
+across every capability/session boundary.
 
 Internal lifecycle helpers should be private or reached through a separate
 control surface, not exposed on the handle.
@@ -104,10 +105,10 @@ control surface, not exposed on the handle.
 Repos follow this pattern:
 
 - `ReposCapability` is bound to one Project ID.
-- `os.project.repos.*` is an adapter around `ReposCapability`.
-- `ctx.repos.create({ slug })` explicitly creates a Repo.
-- `ctx.repos.get({ slug })` selects an existing Repo and returns a tiny Repo
+- Repo dashboard routes use `itx.repos` directly through the itx React hooks.
+- `itx.repos.create({ path })` explicitly creates a Repo.
+- `itx.repos.get({ path })` selects an existing Repo and returns a tiny Repo
   handle backed by the Durable Object.
-- `ctx.repos.get({ slug }).getInfo()` reads Repo details, including the remote
+- `itx.repos.get({ path }).getInfo()` reads Repo details, including the remote
   Git URL backed by Cloudflare Artifacts.
 - The Repo detail UI shows clone/push commands from `getInfo()`.

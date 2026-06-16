@@ -17,24 +17,26 @@ Keep `package.json` simple:
 
 Put the environment bootstrap in a small, documented TypeScript script:
 
-- If `DOPPLER_CONFIG` is already set, run the tool directly.
+- If the process is already inside `doppler run` (`DOPPLER_CONFIG` is present),
+  run the tool directly.
 - If not, run `doppler run -- ...` with no `--project` and no `--config`.
 - Let local `doppler setup` choose the default project/config.
 - Let explicit wrappers choose production or preview.
+- Do not set `DOPPLER_CONFIG` by hand; that does not hydrate Doppler secrets.
 
 ## Usage
 
 From an app directory that has Doppler setup:
 
 ```bash
-pnpm cli rpc --help
+pnpm cli itx --help
 ```
 
 Target a specific config explicitly:
 
 ```bash
-doppler run --config prd -- pnpm cli rpc --help
-doppler run --config preview_3 -- pnpm cli rpc --help
+doppler run --config prd -- pnpm cli itx --help
+doppler run --config preview_3 -- pnpm cli itx --help
 ```
 
 Local operational commands should also live under `pnpm cli`, not as
@@ -43,7 +45,7 @@ Artifact repair command runs through the local script router:
 
 ```bash
 pnpm cli artifacts seed-config-base
-doppler run --project os --config dev_jonas -- pnpm cli artifacts seed-config-base
+doppler run --project os --config dev -- pnpm cli artifacts seed-config-base
 ```
 
 Do not put `--project os` or `--config prd` in the default script. That makes
@@ -87,7 +89,7 @@ const server = http.createServer(async (_req, res) => {
   const setCookie = response.headers.get("set-cookie");
   if (setCookie) res.setHeader("set-cookie", setCookie);
   res.statusCode = response.ok ? 302 : 502;
-  res.setHeader("location", `${target}/admin/streams/global`);
+  res.setHeader("location", `${target}/admin/streams/__null__`);
   res.end(response.ok ? "admin cookie set" : "admin cookie bridge failed");
   server.close();
 });

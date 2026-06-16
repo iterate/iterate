@@ -5,11 +5,11 @@ describe("stream viewer URLs", () => {
   it("builds dashboard stream links on the configured app base URL", () => {
     expect(
       buildProjectStreamViewerUrl({
-        baseUrl: "https://os.iterate-dev-jonas.com",
+        baseUrl: "http://localhost:5173",
         projectSlug: "test",
         streamPath: "/integrations/slack",
       }),
-    ).toBe("https://os.iterate-dev-jonas.com/projects/test/streams/integrations/slack");
+    ).toBe("http://localhost:5173/projects/test/streams/integrations/slack");
   });
 
   it("encodes route params and stream path segments", () => {

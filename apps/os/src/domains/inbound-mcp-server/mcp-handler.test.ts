@@ -65,20 +65,20 @@ describe("matchMcpRequestUrl", () => {
     ).toBeNull();
   });
 
-  it("matches tunnel requests using the forwarded public MCP host", () => {
+  it("matches forwarded public MCP host requests", () => {
     const requestUrl = publicMcpRequestUrl(
       new Request("http://localhost:5173/", {
         headers: {
-          "x-forwarded-host": "mcp.iterate-dev-rahul.com",
+          "x-forwarded-host": "mcp.iterate-preview-3.com",
           "x-forwarded-proto": "https",
         },
       }),
     );
 
-    expect(requestUrl).toBe("https://mcp.iterate-dev-rahul.com/");
+    expect(requestUrl).toBe("https://mcp.iterate-preview-3.com/");
     expect(
       matchMcpRequestUrl({
-        mcpBaseUrl: "https://mcp.iterate-dev-rahul.com",
+        mcpBaseUrl: "https://mcp.iterate-preview-3.com",
         requestUrl,
       }),
     ).toEqual({ relativePathname: "/" });

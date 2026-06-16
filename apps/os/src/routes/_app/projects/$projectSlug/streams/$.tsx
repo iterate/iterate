@@ -73,7 +73,7 @@ function ProjectStreamDetailContent() {
           placeholder: "Message this stream",
         },
         projectSlug: params.projectSlug,
-        projectSlugOrId: project.id,
+        projectId: project.id,
       }}
     />
   );

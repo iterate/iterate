@@ -8,9 +8,10 @@ export type CloudflarePreviewApp = {
   slug: CloudflarePreviewAppSlug;
   displayName: string;
   appPath: `apps/${string}`;
+  deployCommandArgs?: readonly [string, ...string[]];
+  destroyCommandArgs?: readonly [string, ...string[]];
   dopplerProject: string;
   paths: string[];
-  deploymentDependencies?: CloudflarePreviewAppSlug[];
   previewDependencies?: CloudflarePreviewAppSlug[];
   /** Readiness probe path on the app's public URL (default /api/__internal/health). */
   previewReadyUrlPath?: string;
@@ -46,6 +47,8 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     slug: "os",
     displayName: "OS",
     appPath: "apps/os",
+    deployCommandArgs: ["pnpm", "run-script", "deploy"],
+    destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "os",
     // oRPC's /api/__internal/health is gone with the teardown — readiness now
     // probes the plain /api/health route that replaced it. Without this, the
@@ -57,8 +60,8 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "apps/auth-contract/**",
       "apps/os/src/domains/streams/**",
     ],
-    // The slot's auth deploys before OS so OS's deploy-time JWKS bake (issuer
-    // keys + forge pubkey) can fetch from auth.iterate-preview-N.com.
+    // OS bakes auth JWKS during deployment, so the slot's auth deployment must
+    // finish before OS deploy starts.
     previewDependencies: ["auth"],
     previewTestBaseUrlEnvVar: "OS_BASE_URL",
     // The itx e2e (node project only — the browser project needs a Playwright
@@ -70,12 +73,19 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "-c",
       [
         'pnpm e2e -t "OS preview smoke" & smoke_pid=$!',
-        "OS_ITX_E2E_FILE_PARALLELISM=true pnpm e2e:itx --project node & itx_pid=$!",
+        // Keep the catalogue matrix out of the broad file-parallel run: mixing
+        // both forms of parallelism in one Vitest process overloaded preview
+        // workers in probes. Start it after a short delay so its setup overlaps
+        // the broad phase's tail without hitting the initial worker burst.
+        "OS_ITX_E2E_FILE_PARALLELISM=true OS_ITX_E2E_EGRESS_CONCURRENT=true OS_ITX_E2E_LIVE_CONCURRENT=true OS_ITX_E2E_SKIP_MATRIX=true pnpm e2e:itx --project node & itx_pid=$!",
+        "(sleep ${OS_ITX_E2E_MATRIX_DELAY_SECONDS:-20}; pnpm e2e:itx --project node src/itx/e2e/itx.e2e.test.ts -t 'catalogue example') & matrix_pid=$!",
         "smoke_status=0",
         "itx_status=0",
+        "matrix_status=0",
         'wait "$smoke_pid" || smoke_status=$?',
         'wait "$itx_pid" || itx_status=$?',
-        'if [ "$smoke_status" -ne 0 ] || [ "$itx_status" -ne 0 ]; then exit 1; fi',
+        'wait "$matrix_pid" || matrix_status=$?',
+        'if [ "$smoke_status" -ne 0 ] || [ "$itx_status" -ne 0 ] || [ "$matrix_status" -ne 0 ]; then exit 1; fi',
       ].join("; "),
     ],
   },
@@ -92,7 +102,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
   // so e2e starts from a completely clean, controlled slate. OAuth client
   // credentials are constants in Doppler (provision-auth-preview-configs.ts);
   // the auth deploy reseeds them into its database on every run, so auth and
-  // OS deploy concurrently with nothing minted at deploy time.
+  // OS tests can run after both apps have finished deploying.
   auth: {
     slug: "auth",
     displayName: "Auth",
@@ -119,10 +129,15 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "bash",
       "-c",
       [
-        "STREAM_STAGING_E2E=true pnpm vitest",
-        "pnpm exec playwright install --with-deps chromium",
-        "pnpm playwright",
-      ].join(" && "),
+        "pnpm exec playwright install chromium & install_pid=$!",
+        "STREAM_STAGING_E2E=true pnpm vitest -t @preview & vitest_pid=$!",
+        "install_status=0",
+        "vitest_status=0",
+        'wait "$install_pid" || install_status=$?',
+        'wait "$vitest_pid" || vitest_status=$?',
+        'if [ "$install_status" -ne 0 ] || [ "$vitest_status" -ne 0 ]; then exit 1; fi',
+        "pnpm playwright --grep @preview --reporter=list",
+      ].join("; "),
     ],
   },
 };

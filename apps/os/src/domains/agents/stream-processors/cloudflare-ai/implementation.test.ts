@@ -36,6 +36,20 @@ describe("CloudflareAiProcessor", () => {
     expect(eventTypes(appended)).toContain("events.iterate.com/cloudflare-ai/llm-request-started");
   });
 
+  it("ignores LLM requests addressed to another provider", async () => {
+    const { stream, appended } = memoryStream();
+    const runs: string[] = [];
+    const processor = newProcessor({ stream, runs });
+
+    await processor.ingest({
+      events: [llmRequestRequestedEvent({ offset: 11, provider: "openai-ws" })],
+      streamMaxOffset: 11,
+    });
+
+    expect(runs).toEqual([]);
+    expect(appended).toEqual([]);
+  });
+
   it("rebuilds the chat request from history up to the request's offset", async () => {
     const { stream, appended } = memoryStream();
     const runs: string[] = [];
@@ -287,10 +301,13 @@ function sseStream(lines: string[]): ReadableStream<Uint8Array> {
   });
 }
 
-function llmRequestRequestedEvent(args: { offset: number }): StreamEvent {
+function llmRequestRequestedEvent(args: {
+  offset: number;
+  provider?: "cloudflare-ai" | "openai-ws";
+}): StreamEvent {
   return {
     type: "events.iterate.com/agent/llm-request-requested",
-    payload: { model: "test-model", runOpts: {} },
+    payload: { model: "test-model", provider: args.provider ?? "cloudflare-ai" },
     offset: args.offset,
     createdAt: "2026-01-01T00:00:00.000Z",
   };

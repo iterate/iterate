@@ -1,26 +1,34 @@
 // Implements the "project" processor (see ./contract.ts for the event
-// taxonomy), hosted on ProjectDurableObject via createStreamProcessorHost.
+// taxonomy), hosted by ProjectDurableObject.
 //
-// `reduce` projects the lifecycle events into state (the DO keeps no project
-// table of its own — this snapshot IS the project's durable state).
-// `processEvent` owns the creation side effects END TO END: the one D1
-// `projects` projection (platform-host routing reads it), the project
-// repo, the example egress secret, the agents root, and a cross-post of
-// create-requested onto the deployment-wide `global` namespace's /projects
-// stream (the global audit surface for project lifecycle). Each step leaves
-// its fact on the stream and is idempotent, so at-least-once delivery is
-// safe. The worker build deliberately does NOT gate
-// create-completed: ingress requests build on demand, so a failed build
-// self-heals on the next request.
+// In OS, processors make things happen by reacting to facts on streams and
+// appending more facts to streams. The important pattern here is:
 //
-// This processor also forwards project-root facts to the project's own worker
+//   1. A project-root stream receives `stream/child-stream-created`.
+//   2. The project processor recognizes the child path as one of its domains.
+//   3. It appends a tiny setup batch to the CHILD stream: processor
+//      subscriptions plus any project-owned birth-certificate facts.
+//
+// No separate Durable Object initializer is involved. Durable Object instances
+// are just hosts for processors and RPC tools; the durable state is the event
+// log plus each processor's reduced snapshot.
+//
+// `reduce` projects project lifecycle and child-stream facts into state. The
+// one remaining D1 write is the `projects` projection used by hostname routing;
+// domain state such as repos/agents/workspaces is reduced from stream facts.
+//
+// `processEventBatch` owns idempotent project creation effects: routing
+// projection, project repo setup, onboarding stream setup, and cross-posting the
+// create-requested fact to the global /projects audit stream. Each effect leaves
+// a fact on a stream so replay and at-least-once delivery are safe.
+//
+// The processor also forwards project-root facts to the project's own worker
 // processEvent hook, with checkpointed at-least-once delivery. The platform's
 // create-requested trigger is consumed here to bootstrap the project; the
-// worker starts from the emitted facts.
+// project worker starts from the emitted facts.
 
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import type { StreamEvent } from "@iterate-com/shared/streams/stream-event";
-import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { projectFacts, ProjectProcessorContract, type ProjectProcessorState } from "./contract.ts";
 import { StreamProcessor } from "~/domains/streams/engine/stream-processor.ts";
 import { durableObjectProcessorSubscriber } from "~/domains/streams/engine/shared/callable-subscriber.ts";
@@ -30,38 +38,52 @@ import {
   type StreamDurableObject,
 } from "~/domains/streams/stream-runtime.ts";
 import type { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
-import {
-  AGENTS_STREAM_PATH,
-  agentProcessorSubscriptionConfiguredEvents,
-  OS_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE,
-  getAgentDurableObjectName,
-} from "~/domains/agents/agent-stream-subscriptions.ts";
+import { agentProcessorSubscriptionConfiguredEvents } from "~/domains/agents/agent-stream-subscriptions.ts";
+import { SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE } from "~/domains/agents/agent-prompt-guidance.ts";
+import { DEFAULT_WORKERS_AI_AGENT_MODEL } from "~/domains/agents/stream-processors/agent/contract.ts";
 import {
   getSlackAgentDurableObjectName,
   type SlackAgentDurableObject,
 } from "~/domains/slack/durable-objects/slack-agent-durable-object.ts";
+import { getSlackIntegrationDurableObjectName } from "~/domains/slack/slack-naming.ts";
 import { SlackAgentProcessorContract } from "~/domains/slack/stream-processors/slack-agent/contract.ts";
-import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
-import {
-  EXAMPLE_EGRESS_SECRET_KEY,
-  EXAMPLE_EGRESS_SECRET_MATERIAL,
-  EXAMPLE_EGRESS_SECRET_METADATA,
-} from "~/domains/secrets/example-secret.ts";
+import { SlackProcessorContract } from "~/domains/slack/stream-processors/slack/contract.ts";
 import { ensureProjectRepoInfoForProject } from "~/domains/repos/entrypoints/repo-capability.ts";
 import type { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
-import { PROJECT_REPO_SLUG } from "~/domains/repos/project-repo.ts";
-import {
-  ONBOARDING_AGENT_INPUT,
-  projectOnboardingBootstrapMarkdown,
-} from "~/domains/repos/project-repo-template.ts";
 import type { AppConfig } from "~/config.ts";
+import { SLACK_INTEGRATION_STREAM_PATH } from "~/domains/secrets/integration-stream-constants.ts";
 
 export { PROJECT_STREAM_PATH, projectFacts, ProjectProcessorContract } from "./contract.ts";
 export type { ProjectFacts, ProjectProcessorState } from "./contract.ts";
 
 const ONBOARDING_AGENT_PATH = StreamPath.parse("/agents/onboarding");
-const DEFAULT_OPENAI_AGENT_MODEL = "gpt-5.5";
-const DEFAULT_AGENT_DEBOUNCE_MS = 200;
+function reduceChildStreamCreated(
+  state: ProjectProcessorState,
+  event: StreamEvent,
+): ProjectProcessorState {
+  const path = StreamPath.safeParse((event.payload as { childPath?: unknown }).childPath);
+  if (!path.success) return state;
+
+  const child = { createdAt: event.createdAt, path: path.data };
+  if (path.data.startsWith("/agents/")) {
+    return { ...state, agents: appendChildStream(state.agents, child) };
+  }
+  if (path.data.startsWith("/repos/")) {
+    return { ...state, repos: appendChildStream(state.repos, child) };
+  }
+  if (path.data.startsWith("/workspaces/")) {
+    return { ...state, workspaces: appendChildStream(state.workspaces, child) };
+  }
+  return state;
+}
+
+function appendChildStream(
+  children: ProjectProcessorState["repos"],
+  child: ProjectProcessorState["repos"][number],
+) {
+  if (children.some((existing) => existing.path === child.path)) return children;
+  return [...children, child];
+}
 
 /**
  * High-level deps from the hosting DO: bindings, its loopback exports, and
@@ -75,7 +97,7 @@ export type ProjectProcessorDeps = {
     SLACK_AGENT: DurableObjectNamespace<SlackAgentDurableObject>;
     STREAM: DurableObjectNamespace<StreamDurableObject>;
   };
-  /** The hosting DO's `ctx.exports` (loopback entrypoints, e.g. secrets). */
+  /** The hosting DO's `ctx.exports` (loopback entrypoints for project-owned side effects). */
   exports: unknown;
   /** The hosting DO's own project id — payloads must match (see #ownEvent). */
   projectId: () => string;
@@ -98,7 +120,7 @@ export class ProjectProcessor extends StreamProcessor<
    * Anyone holding the project's itx handle can append arbitrary events to
    * its streams, so creation events are only honored when their payload
    * names THIS project — otherwise a crafted create-requested on project A's
-   * stream could run creation side effects (D1 upsert, repo, secrets) for an
+   * stream could run creation side effects (D1 upsert, repo setup) for an
    * arbitrary project id.
    */
   #ownEvent(payload: { projectId: string }): boolean {
@@ -122,6 +144,8 @@ export class ProjectProcessor extends StreamProcessor<
       case "events.iterate.com/project/onboarding-completed":
         if (!this.#ownEvent(event.payload)) return state;
         return { ...state, onboarding: "completed" };
+      case "events.iterate.com/stream/child-stream-created":
+        return reduceChildStreamCreated(state, event);
       default:
         return state;
     }
@@ -144,13 +168,7 @@ export class ProjectProcessor extends StreamProcessor<
   }) {
     const { event, state } = args;
     if (event.type === "events.iterate.com/stream/child-stream-created") {
-      const childPath = StreamPath.safeParse(event.payload.childPath);
-      if (childPath.success && isAgentStreamPath(childPath.data)) {
-        await this.#ensureAgentStreamSetup({
-          agentPath: childPath.data,
-          projectId: this.deps.projectId(),
-        });
-      }
+      await this.#reactToChildStreamCreated(event);
     }
 
     if (event.type === "events.iterate.com/project/create-requested") {
@@ -185,12 +203,10 @@ export class ProjectProcessor extends StreamProcessor<
       },
     });
     await this.#ensureProjectRepo({ projectId, slug });
-    await this.#seedOnboardingBootstrap({ projectId, slug });
-    await this.#ensureExampleEgressSecret(projectId);
-    await this.#ensureAgentsRoot(projectId);
-    await this.#ensureOnboardingAgent(projectId);
-    await this.#ensureAgentStreamSetup({ agentPath: ONBOARDING_AGENT_PATH, projectId });
-    await this.#appendOnboardingAgentInput(projectId);
+    await this.#appendAgentStreamBirthCertificate({
+      agentPath: ONBOARDING_AGENT_PATH,
+      projectId,
+    });
     await this.ctx.stream.append({
       event: {
         type: "events.iterate.com/project/create-completed",
@@ -221,12 +237,12 @@ export class ProjectProcessor extends StreamProcessor<
 
   /**
    * The deployment-wide audit surface for project lifecycle: every
-   * create-requested is cross-posted to /projects in the "global" namespace.
+   * create-requested is cross-posted to /projects in the global project scope.
    */
   async #crossPostToGlobalProjects(input: { projectId: string; slug: string }) {
     const stream = await getInitializedStreamStub({
       durableObjectNamespace: this.deps.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: "global",
+      projectId: null,
       path: StreamPath.parse("/projects"),
     });
     await stream.append({
@@ -236,133 +252,89 @@ export class ProjectProcessor extends StreamProcessor<
     });
   }
 
-  /** The project's repo (slug `project`), with its own fact on the stream. */
+  /** The project's repo (`/repos/project`), with its own fact on the stream. */
   async #ensureProjectRepo(input: { projectId: string; slug: string }) {
     const repo = await ensureProjectRepoInfoForProject({
       env: this.deps.env,
       projectId: input.projectId,
-      projectSlug: input.slug,
     });
     await this.ctx.stream.append({
       event: {
         type: "events.iterate.com/project/repo-initialized",
-        idempotencyKey: `project-repo-initialized:${input.projectId}:${repo.slug}`,
+        idempotencyKey: `project-repo-initialized:${input.projectId}:${repo.path}`,
         payload: {
           defaultBranch: repo.defaultBranch,
           projectId: input.projectId,
-          repoSlug: repo.slug,
+          repoPath: repo.path,
         },
       },
     });
   }
 
-  async #seedOnboardingBootstrap(input: { projectId: string; slug: string }) {
-    const repo = await getInitializedDoStub({
-      allowCreate: false,
-      namespace: this.deps.env.REPO,
-      name: {
-        projectId: input.projectId,
-        repoSlug: PROJECT_REPO_SLUG,
-      },
-    });
-    if (!repo) throw new Error(`Project repo for ${input.projectId} was not initialized.`);
+  /**
+   * Child stream creation is the project processor's domain hook.
+   *
+   * The Stream DO emits `child-stream-created` on the parent when a child path
+   * first exists. That event is the only signal this processor needs. For
+   * known project-local domains, it appends the domain's setup facts onto the
+   * child stream itself. Unknown child streams are still tracked in the reduced
+   * child lists when they match a known prefix, but they do not get setup here.
+   */
+  async #reactToChildStreamCreated(event: Extract<StreamEvent, { type: string }>) {
+    const childPath = StreamPath.safeParse((event.payload as { childPath?: unknown }).childPath);
+    if (!childPath.success) return;
 
-    await repo.commitFiles({
-      author: { name: "Iterate", email: "support@iterate.com" },
-      changes: [
-        {
-          path: "BOOTSTRAP.md",
-          content: projectOnboardingBootstrapMarkdown(input),
-        },
-      ],
-      message: "Seed onboarding bootstrap",
-    });
+    if (childPath.data.startsWith("/agents/")) {
+      await this.#appendAgentStreamBirthCertificate({
+        agentPath: childPath.data,
+        projectId: this.deps.projectId(),
+      });
+      return;
+    }
+
+    if (childPath.data === SLACK_INTEGRATION_STREAM_PATH) {
+      await this.#appendSlackIntegrationBirthCertificate({
+        projectId: this.deps.projectId(),
+      });
+    }
   }
 
-  async #ensureExampleEgressSecret(projectId: string) {
-    const secrets = getSecretsCapability({
-      exports: this.deps.exports as Parameters<typeof getSecretsCapability>[0]["exports"],
-      props: { projectId },
-    });
-
-    const existing = await secrets.getSecretSummaryByKeyOrNull({
-      key: EXAMPLE_EGRESS_SECRET_KEY,
-    });
-    if (existing) return;
-
-    await secrets.setSecret({
-      key: EXAMPLE_EGRESS_SECRET_KEY,
-      material: EXAMPLE_EGRESS_SECRET_MATERIAL,
-      metadata: EXAMPLE_EGRESS_SECRET_METADATA,
-    });
-  }
-
-  async #ensureAgentsRoot(projectId: string) {
-    await getInitializedDoStub({
-      allowCreate: true,
-      namespace: this.deps.env.AGENT,
-      name: getAgentDurableObjectName({
-        agentPath: AGENTS_STREAM_PATH,
-        projectId,
-      }),
-    });
-  }
-
-  async #ensureOnboardingAgent(projectId: string) {
-    await getInitializedDoStub({
-      allowCreate: true,
-      namespace: this.deps.env.AGENT,
-      name: getAgentDurableObjectName({
-        agentPath: ONBOARDING_AGENT_PATH,
-        projectId,
-      }),
-    });
-  }
-
-  async #appendOnboardingAgentInput(projectId: string) {
-    const stream = await getInitializedStreamStub({
-      durableObjectNamespace: this.deps.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: projectId,
-      path: ONBOARDING_AGENT_PATH,
-    });
-
-    await stream.append({
-      type: "events.iterate.com/agent/input-added",
-      idempotencyKey: `project-onboarding-agent-input:${projectId}`,
-      payload: {
-        content: ONBOARDING_AGENT_INPUT,
-      },
-    });
-  }
-
-  async #ensureAgentStreamSetup(input: { agentPath: StreamPath; projectId: string }) {
+  /**
+   * Project-authored birth certificate for an agent stream.
+   *
+   * This is intentionally just event appends. It does not instantiate an agent
+   * Durable Object, call an initializer, or write a side table. The appended
+   * facts say:
+   *
+   * - the main agent processor should consume this stream;
+   * - the default OpenAI provider processor should consume LLM requests;
+   * - Slack-routed agent streams also get the Slack-agent processor;
+   * - the project contributes the default visible configuration.
+   *
+   * The default provider selection is `ifUnset`, so a domain-specific
+   * `agent/llm-provider-selected` fact appended by the UI, a project config
+   * worker, or another processor wins when it arrives first. LLM request
+   * events carry their selected provider, so extra subscribed provider
+   * processors can safely ignore requests addressed to another provider.
+   */
+  async #appendAgentStreamBirthCertificate(input: { agentPath: StreamPath; projectId: string }) {
     await this.ctx.stream.appendBatch({
       streamPath: input.agentPath,
       events: [
         {
-          type: OS_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE,
-          idempotencyKey: "project-agent-setup:provider",
-          payload: { provider: "openai-ws" },
-        },
-        {
-          type: "events.iterate.com/openai-ws/config-updated",
-          idempotencyKey: "project-agent-setup:openai-ws-config",
-          payload: { model: DEFAULT_OPENAI_AGENT_MODEL },
-        },
-        {
-          type: "events.iterate.com/agent/llm-config-updated",
-          idempotencyKey: "project-agent-setup:llm-config",
+          type: "events.iterate.com/agent/config-updated",
+          idempotencyKey: "project-agent-setup:config",
           payload: {
-            debounceMs: DEFAULT_AGENT_DEBOUNCE_MS,
-            model: DEFAULT_OPENAI_AGENT_MODEL,
-            runOpts: {},
+            systemPrompt: defaultAgentSystemPrompt(input.agentPath),
           },
         },
         {
-          type: "events.iterate.com/agent/system-prompt-updated",
-          idempotencyKey: "project-agent-setup:system-prompt",
+          type: "events.iterate.com/agent/llm-provider-selected",
+          idempotencyKey: "project-agent-setup:llm-provider",
           payload: {
-            systemPrompt: defaultAgentSystemPrompt(input.agentPath),
+            ifUnset: true,
+            model: DEFAULT_WORKERS_AI_AGENT_MODEL,
+            provider: "openai-ws",
           },
         },
         ...agentProcessorSubscriptionConfiguredEvents({
@@ -376,10 +348,24 @@ export class ProjectProcessor extends StreamProcessor<
       ],
     });
   }
-}
 
-function isAgentStreamPath(path: string) {
-  return path.startsWith("/agents/") && path !== AGENTS_STREAM_PATH;
+  async #appendSlackIntegrationBirthCertificate(input: { projectId: string }) {
+    await this.ctx.stream.append({
+      streamPath: SLACK_INTEGRATION_STREAM_PATH,
+      event: {
+        type: "events.iterate.com/stream/subscription-configured",
+        idempotencyKey: `slack-subscription:${input.projectId}:workers-rpc:callable`,
+        payload: {
+          subscriptionKey: `slack:${input.projectId}`,
+          subscriber: durableObjectProcessorSubscriber({
+            bindingName: "SLACK_INTEGRATION",
+            durableObjectName: getSlackIntegrationDurableObjectName(input.projectId),
+            processorName: SlackProcessorContract.slug,
+          }),
+        },
+      },
+    });
+  }
 }
 
 function isSlackAgentPath(agentPath: string) {
@@ -387,7 +373,7 @@ function isSlackAgentPath(agentPath: string) {
   return normalized === "/agents/slack" || normalized.startsWith("/agents/slack/");
 }
 
-function defaultAgentSystemPrompt(agentPath: string) {
+export function defaultAgentSystemPrompt(agentPath: string) {
   const isSlack = isSlackAgentPath(agentPath);
   return [
     `You are the iterate AI agent running on stream ${agentPath}.`,
@@ -395,8 +381,8 @@ function defaultAgentSystemPrompt(agentPath: string) {
     "The code block must contain a single async arrow function: async (itx) => { ... }.",
     "Use capabilities announced as itx/capability-provided events.",
     isSlack
-      ? "For Slack, reply only when mentioned, directly asked, or clearly needed. Use itx.slack.chat.postMessage({ channel, thread_ts, text }) on the same thread."
-      : "For web chat, reply with itx.chat.sendMessage({ message }).",
+      ? `For Slack, reply only when mentioned, directly asked, or clearly needed. Use await itx.slack.chat.postMessage({ channel, thread_ts, text }) on the same thread. ${SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE}`
+      : `For web chat, reply with await itx.chat.sendMessage({ message }). ${SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE}`,
     "Use itx.streams.get(path) to read and append project stream events.",
     "Use the project repo as durable memory for stable project knowledge.",
   ].join("\n\n");
@@ -415,7 +401,7 @@ function slackAgentProcessorSubscriptionConfiguredEvent(input: {
         bindingName: "SLACK_AGENT",
         durableObjectName: getSlackAgentDurableObjectName({
           projectId: input.projectId,
-          streamPath: input.agentPath,
+          path: input.agentPath,
         }),
         processorName: SlackAgentProcessorContract.slug,
       }),

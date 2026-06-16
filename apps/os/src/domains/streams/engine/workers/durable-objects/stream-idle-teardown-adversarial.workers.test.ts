@@ -9,7 +9,7 @@ import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { durableObjectProcessorSubscriber } from "../../shared/callable-subscriber.ts";
 import type { StreamEvent } from "../../shared/event.ts";
-import type { StreamProcessorRunner } from "./stream-processor-runner.ts";
+import type { StreamProcessorRunner } from "../test-support/stream-processor-runner.ts";
 import type { Stream } from "./stream.ts";
 
 const STREAM = (env as unknown as { STREAM: DurableObjectNamespace<Stream> }).STREAM;
@@ -32,12 +32,17 @@ async function appendEvent(
 ) {
   return await runInDurableObject(stream, (instance) => instance.append({ event }));
 }
+
+/** Read all durable stream events without exposing test assertions to runInDurableObject plumbing. */
 async function getEvents(stream: DurableObjectStub<Stream>): Promise<StreamEvent[]> {
   return await runInDurableObject(stream, (instance) => instance.getEvents({ afterOffset: 0 }));
 }
+
 async function severProducer(stream: DurableObjectStub<Stream>) {
   await runInDurableObject(stream, (instance) => instance.runIdleTeardownNow());
 }
+
+/** Force the subscriber runner idle-disconnect path from inside the Durable Object instance. */
 async function severSubscriber(runner: DurableObjectStub<StreamProcessorRunner>) {
   await runInDurableObject(runner, (instance) => instance.runIdleDisconnectNow());
 }

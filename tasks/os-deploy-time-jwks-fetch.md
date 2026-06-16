@@ -17,7 +17,7 @@ breaks until someone updates the secrets and redeploys.
 
 - In `apps/os/alchemy.run.ts`, fetch `<issuer>/jwks` at deploy time and feed it
   into `APP_CONFIG_ITERATE_AUTH__JWKS` so it stays typesafe via the `AppConfig`
-  zod schema (`iterateAuth.jwks`, already defined in `apps/os/src/app.ts`).
+  zod schema (`iterateAuth.jwks`, already defined in `apps/os/src/config.ts`).
 - Keep the `ITERATE_AUTH_JWKS` / `APP_CONFIG_ITERATE_AUTH__JWKS` env vars as an
   explicit override.
 - Fall back gracefully (no static JWKS → runtime `createRemoteJWKSet`) when the
