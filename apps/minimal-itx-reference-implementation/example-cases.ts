@@ -31,7 +31,7 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   "agent-builtin": {
     assert: (result) => {
       expect(typeof result).toBe("string");
-      expect(result as string).toMatch(/^agent shared\/agents\//);
+      expect(result as string).toMatch(/^agent shared:\/agents\//);
     },
   },
   "project-builtin-inherited": {

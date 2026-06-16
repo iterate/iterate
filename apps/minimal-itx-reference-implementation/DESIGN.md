@@ -115,8 +115,8 @@ resolves own fold → built-ins, then on a miss retries through
 `itx.itxParent.fetch(...)` use the same dial/replay machinery. A child **shadows**
 its parent by late binding (re-resolved per call), never by copy.
 
-Topology: an **agent** (`prj:<id>/agents/<name>`) gets an `itxParent` built-in
-pointing to its **project** (`prj:<id>`); a project gets an `itxParent` built-in
+Topology: an **agent** (`<projectId>:/agents/<name>`) gets an `itxParent` built-in
+pointing to its **project** (`<projectId>:/`); a project gets an `itxParent` built-in
 pointing to the **`__global__` root**. Parentage is derived from the context
 **coordinate** by the host, not folded from the log — nothing reads a folded
 copy, so it isn't stored.

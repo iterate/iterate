@@ -149,6 +149,51 @@ function hashString(s: string): string {
   return (h >>> 0).toString(36);
 }
 
+const NULL_DURABLE_OBJECT_PROJECT_ID = "__null__";
+const PROJECT_REPO_PATH = "/repos/project";
+
+type DurableObjectNameParts = { projectId: string | null; path: string };
+
+function normalizeDurableObjectProjectId(projectId: string | null): string | null {
+  return projectId === NULL_DURABLE_OBJECT_PROJECT_ID ? null : projectId;
+}
+
+function normalizeDurableObjectPath(path: string): string {
+  return path === "" ? "/" : path.startsWith("/") ? path : `/${path}`;
+}
+
+// Keep the reference app's internal DO names in the same shape as apps/os:
+// object-form `{ projectId, path }` at call sites, encoded only at the Worker
+// binding edge. `__global__` is still stateless, so it never gets an ITX DO name.
+function formatDurableObjectName(input: DurableObjectNameParts): string {
+  const projectId =
+    normalizeDurableObjectProjectId(input.projectId) ?? NULL_DURABLE_OBJECT_PROJECT_ID;
+  if (projectId.includes(":")) {
+    throw new Error(`Durable Object projectId must not contain ":", got ${projectId}.`);
+  }
+  return `${projectId}:${normalizeDurableObjectPath(input.path)}`;
+}
+
+function parseDurableObjectName(name: string): DurableObjectNameParts {
+  const colon = name.indexOf(":");
+  if (colon <= 0 || name[colon + 1] !== "/") {
+    throw new Error(`Durable Object name must be "{projectId}:{path}", got ${name}.`);
+  }
+  return {
+    projectId: normalizeDurableObjectProjectId(name.slice(0, colon)),
+    path: normalizeDurableObjectPath(name.slice(colon + 1)),
+  };
+}
+
+function itxLogName(contextName: string | undefined): string {
+  if (!contextName) return formatDurableObjectName({ projectId: null, path: "/itx" });
+  const context = parseDurableObjectName(contextName);
+  return formatDurableObjectName({
+    projectId: context.projectId,
+    path: context.path === "/" ? "/itx" : `/itx${context.path}`,
+  });
+}
+
 type DynamicWorkerSource =
   | {
       type: "inline";
@@ -209,12 +254,9 @@ export class ItxDurableObject extends DurableObject<Env> {
   #subscriptionConfigured = false;
   #dynamicDurableObjectVersions = new Map<string, string>();
 
-  // A context is named by its coordinate: "prj:<id>" is the project context,
-  // "prj:<id>/agents/<name>" is an agent context under it. This extracts the
-  // project id; null for any other (standalone) coordinate.
-  #project(): string | null {
-    const name = this.ctx.id.name ?? "";
-    return name.startsWith("prj:") ? name.slice("prj:".length).split("/")[0] : null;
+  #nameParts(): DurableObjectNameParts | null {
+    const name = this.ctx.id.name;
+    return name ? parseDurableObjectName(name) : null;
   }
 
   // A context is born with built-in capabilities defined by the DOMAIN object it
@@ -223,15 +265,14 @@ export class ItxDurableObject extends DurableObject<Env> {
   // coordinate maps to WHICH domain object; the domain object defines WHAT it
   // offers.
   #contextBuiltinCapabilities(): ProvideArgs[] {
-    const name = this.ctx.id.name ?? "";
-    const projectId = this.#project();
-    if (!projectId) return [];
-    if (name === `prj:${projectId}`) {
+    const parts = this.#nameParts();
+    const projectId = parts?.projectId;
+    if (!parts || !projectId) return [];
+    if (parts.path === "/") {
       return ProjectDurableObject.builtinCapabilities(projectId);
     }
-    if (/^prj:[^/]+\/agents\/.+$/.test(name)) {
-      const agentName = name.slice("prj:".length);
-      return AgentDurableObject.builtinCapabilities(agentName);
+    if (parts.path.startsWith("/agents/")) {
+      return AgentDurableObject.builtinCapabilities({ projectId, path: parts.path });
     }
     return [];
   }
@@ -316,7 +357,9 @@ export class ItxDurableObject extends DurableObject<Env> {
       compatibilityFlags: ["nodejs_compat"],
       env: {
         ITX: ((this.ctx as any).exports as any).ItxBindingEntrypoint({
-          props: { context: this.ctx.id.name ?? "itx" },
+          props: {
+            context: this.ctx.id.name ?? formatDurableObjectName({ projectId: null, path: "/itx" }),
+          },
         }),
       },
       mainModule: resolved.mainModule,
@@ -374,7 +417,7 @@ export class ItxDurableObject extends DurableObject<Env> {
   // context IS its stream coordinate. Re-resolve the stub per call so it stays
   // valid across the log's lifecycle.
   #coordinate(): string {
-    return `refimpl:/${this.ctx.id.name ?? "itx"}`;
+    return itxLogName(this.ctx.id.name);
   }
   #log() {
     // `as any` on the stream stub avoids a deep StreamProcessor-generic
@@ -393,7 +436,7 @@ export class ItxDurableObject extends DurableObject<Env> {
   #ensureSubscriptionConfigured(): void {
     if (this.#subscriptionConfigured) return;
     this.#subscriptionConfigured = true;
-    const name = this.ctx.id.name ?? "itx";
+    const name = this.ctx.id.name ?? formatDurableObjectName({ projectId: null, path: "/itx" });
     const event: any = {
       type: "events.iterate.com/stream/subscription-configured",
       idempotencyKey: `itx-subscription:${name}`,
@@ -514,13 +557,15 @@ export class ProjectDurableObject extends DurableObject<Env> {
     return {
       status: response.status,
       body: await response.text(),
-      viaProject: this.ctx.id.name ?? "?",
+      viaProject: this.ctx.id.name
+        ? (parseDurableObjectName(this.ctx.id.name).projectId ?? "?")
+        : "?",
     };
   }
 
   // The capabilities a context scoped to THIS project is born with — same shape
   // as a provideCapability call. A built-in is a capability pre-provided in code.
-  static builtinCapabilities(name: string): ProvideArgs[] {
+  static builtinCapabilities(projectId: string): ProvideArgs[] {
     return [
       {
         path: ["itxParent"],
@@ -536,7 +581,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
         capability: {
           type: "durable-object",
           namespace: "project",
-          name,
+          name: formatDurableObjectName({ projectId, path: "/" }),
           path: ["egress"],
         },
         instructions: "the project's HTTP egress",
@@ -546,7 +591,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
         capability: {
           type: "durable-object",
           namespace: "repo",
-          name,
+          name: formatDurableObjectName({ projectId, path: PROJECT_REPO_PATH }),
         },
         instructions: "the project's fake repo: getWorkerSource({ path: 'counter.js' })",
       },
@@ -560,18 +605,18 @@ export class ProjectDurableObject extends DurableObject<Env> {
 // call its own `whoami` AND the project's inherited `fetch`.
 export class AgentDurableObject extends DurableObject<Env> {
   whoami(): string {
-    return `agent ${this.ctx.id.name ?? "?"}`;
+    const parts = this.ctx.id.name ? parseDurableObjectName(this.ctx.id.name) : null;
+    return parts ? `agent ${parts.projectId}:${parts.path}` : "agent ?";
   }
 
-  static builtinCapabilities(name: string): ProvideArgs[] {
-    const [projectId] = name.split("/");
+  static builtinCapabilities(parts: { projectId: string; path: string }): ProvideArgs[] {
     return [
       {
         path: ["itxParent"],
         capability: {
           type: "worker-entrypoint",
           entrypoint: "ItxEntrypoint",
-          props: { projectId, path: "/" },
+          props: { projectId: parts.projectId, path: "/" },
         },
         instructions: "the parent project context",
       },
@@ -580,7 +625,7 @@ export class AgentDurableObject extends DurableObject<Env> {
         capability: {
           type: "durable-object",
           namespace: "agent",
-          name,
+          name: formatDurableObjectName(parts),
           path: ["whoami"],
         },
         instructions: "the agent's own identity",
@@ -626,8 +671,7 @@ export class RepoDurableObject extends DurableObject<Env> {
 
 function contextFromProjectPath(projectId: string, path: string): string {
   if (projectId === "") return "__global__";
-  const normalizedPath = path === "" ? "/" : path.startsWith("/") ? path : `/${path}`;
-  return normalizedPath === "/" ? `prj:${projectId}` : `prj:${projectId}${normalizedPath}`;
+  return formatDurableObjectName({ projectId, path });
 }
 
 async function readScriptCode(request: Request): Promise<string> {

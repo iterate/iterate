@@ -6,8 +6,8 @@
   "compatibility_flags": ["nodejs_compat"],
   "durable_objects": {
     "bindings": [
-      // The itx context host: one DO per context coordinate ("prj:<id>" or
-      // "prj:<id>/agents/<name>"). Hosts the Itx StreamProcessor.
+      // The itx context host: one DO per encoded { projectId, path } coordinate
+      // ("<projectId>:/" or "<projectId>:/agents/<name>"). Hosts the Itx StreamProcessor.
       { "name": "ITX", "class_name": "ItxDurableObject" },
       // The domain objects a context attaches to (they define its built-in caps).
       { "name": "PROJECT", "class_name": "ProjectDurableObject" },

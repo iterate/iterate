@@ -66,7 +66,7 @@ export class GlobalItx implements ItxContext {
             if (!this.#reachable().includes(id)) throw new Error(`no access to project "${id}"`);
             // Production narrows to a live project itx HANDLE here; the reference
             // impl returns the project's context ref to stay simple.
-            return { id, ref: `prj:${id}` };
+            return { id, ref: `${id}:/` };
           },
         },
         path.slice(1),

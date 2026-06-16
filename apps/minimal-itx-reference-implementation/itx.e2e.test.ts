@@ -6,8 +6,8 @@
 // catalogue (examples.ts) across every server-side runtime. The browser leg of
 // the matrix is itx.browser.test.ts (vitest's browser project).
 //
-// Each capability test uses a FRESH agent coordinate (prj:shared/agents/<rand>)
-// so durable state never bleeds between runs. The chain test reuses prj:shared
+// Each capability test uses a FRESH agent coordinate (shared:/agents/<rand>)
+// so durable state never bleeds between runs. The chain test reuses shared:/
 // as the parent context but only with sturdy/replace-safe provides.
 
 import { describe, expect, it } from "vitest";
@@ -150,7 +150,7 @@ describe("itx reference implementation", () => {
     using g = connect({ projectId: "", path: "/" });
     const list = await g.projects.list();
     expect([...list].sort()).toEqual(["alice", "shared"]);
-    expect(await g.projects.get("shared")).toEqual({ id: "shared", ref: "prj:shared" });
+    expect(await g.projects.get("shared")).toEqual({ id: "shared", ref: "shared:/" });
     await expectRejects(() => g.projects.get("bob")).toThrow();
     await expectRejects(() => g.provideCapability({ path: ["x"], capability: () => 1 })).toThrow();
   });
@@ -299,10 +299,14 @@ describe("itx reference implementation", () => {
       props: { path: "/", projectId: "shared" },
       type: "worker-entrypoint",
     });
+    const whoami = d.builtins.find((c: any) => c.path.join(".") === "whoami");
+    expect(whoami?.address?.name).toMatch(/^shared:\/agents\//);
 
     const project = await agent.itxParent.describe();
     expect(project.builtins.some((c: any) => c.path.join(".") === "fetch")).toBe(true);
     expect(project.builtins.some((c: any) => c.path.join(".") === "repo")).toBe(true);
+    const repo = project.builtins.find((c: any) => c.path.join(".") === "repo");
+    expect(repo?.address?.name).toBe("shared:/repos/project");
     const root = await agent.itxParent.itxParent.describe();
     expect(root.builtins.some((c: any) => c.path.join(".") === "projects")).toBe(true);
     expect(root.builtins.some((c: any) => c.path.join(".") === "itxParent")).toBe(false);
