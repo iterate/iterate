@@ -145,11 +145,7 @@ export class ProjectProcessor extends StreamProcessor<
     const { event, state } = args;
     if (event.type === "events.iterate.com/stream/child-stream-created") {
       const childPath = StreamPath.safeParse(event.payload.childPath);
-      if (
-        childPath.success &&
-        childPath.data.startsWith("/agents/") &&
-        childPath.data !== AGENTS_STREAM_PATH
-      ) {
+      if (childPath.success && childPath.data.startsWith("/agents/")) {
         await this.#ensureAgentStreamSetup({
           agentPath: childPath.data,
           projectId: this.deps.projectId(),

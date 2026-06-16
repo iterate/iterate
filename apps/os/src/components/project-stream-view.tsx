@@ -435,7 +435,6 @@ export function ProjectStreamView({
           </Button>
           <Tabs
             value={activeTab}
-            // Omit the tab from the URL while it equals the stream's default.
             onValueChange={(value) => {
               const tab = value as ProjectStreamViewTab;
               setSearch({ tab: tab === defaultTab ? undefined : tab });

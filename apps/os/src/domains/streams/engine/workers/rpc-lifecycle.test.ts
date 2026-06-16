@@ -66,11 +66,9 @@ describe("retainProcessEventBatch onRpcBroken wiring (M1)", () => {
 describe("retainProcessEventBatch delivery rejection (M1)", () => {
   it("reports a rejected delivery through onDeliveryError", async () => {
     const failure = new Error("Durable Object reset because its code was updated");
-    /** Delivery probe that rejects like a broken Durable Object call. */
-    const dead: ProcessEventBatch = () => Promise.reject(failure);
 
     const onDeliveryError = vi.fn();
-    const retained = retainProcessEventBatch(dead, { onDeliveryError });
+    const retained = retainProcessEventBatch(() => Promise.reject(failure), { onDeliveryError });
     retained(batch);
 
     await vi.waitFor(() => expect(onDeliveryError).toHaveBeenCalledWith(failure));
@@ -81,11 +79,11 @@ describe("retainProcessEventBatch delivery rejection (M1)", () => {
     const result = Object.assign(Promise.resolve(undefined), {
       [Symbol.dispose]: disposed,
     });
-    /** Delivery probe that settles successfully and exposes disposal. */
-    const alive: ProcessEventBatch = () => result as unknown as Promise<void>;
 
     const onDeliveryError = vi.fn();
-    const retained = retainProcessEventBatch(alive, { onDeliveryError });
+    const retained = retainProcessEventBatch(() => result as unknown as Promise<void>, {
+      onDeliveryError,
+    });
     retained(batch);
 
     await vi.waitFor(() => expect(disposed).toHaveBeenCalled());
@@ -100,10 +98,8 @@ describe("retainProcessEventBatch delivery rejection (M1)", () => {
     const disposed = vi.fn();
     const then = vi.fn();
     const result = { then, [Symbol.dispose]: disposed };
-    /** Delivery probe with a thenable result that must not be observed. */
-    const alive: ProcessEventBatch = () => result as unknown as Promise<void>;
 
-    const retained = retainProcessEventBatch(alive);
+    const retained = retainProcessEventBatch(() => result as unknown as Promise<void>);
     retained(batch);
 
     expect(disposed).toHaveBeenCalledTimes(1);
@@ -112,10 +108,10 @@ describe("retainProcessEventBatch delivery rejection (M1)", () => {
 
   it("handles synchronous (non-thenable) callback results", () => {
     const calls: unknown[] = [];
-    /** Delivery probe that completes synchronously rather than returning a promise. */
-    const sync: ProcessEventBatch = (delivered) => void calls.push(delivered);
 
-    const retained = retainProcessEventBatch(sync, { onDeliveryError: vi.fn() });
+    const retained = retainProcessEventBatch((delivered) => void calls.push(delivered), {
+      onDeliveryError: vi.fn(),
+    });
     expect(() => retained(batch)).not.toThrow();
     expect(calls).toEqual([batch]);
   });

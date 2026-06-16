@@ -203,8 +203,6 @@ export function getAuthPlugins(env: Record<string, unknown>) {
         const isProjectScopedToken = scopes.includes(ITERATE_PROJECT_SELECTION_SCOPE);
         const selectedProjectIds = isProjectScopedToken ? (selection?.projectIds ?? []) : null;
         const [organizations, projects] = await Promise.all([
-          // the org claims double as the access-token organizations claim
-          // (IterateAuthAccessTokenOrganizationClaim, where name is optional)
           listOrganizationClaims(user),
           listProjectClaims(user, selectedProjectIds),
         ]);

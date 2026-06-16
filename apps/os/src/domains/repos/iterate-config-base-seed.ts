@@ -188,7 +188,7 @@ export async function seedIterateConfigBaseRepo(input: {
     });
     await ensureBranchRef({ branch: defaultBranch, git });
   } catch (error) {
-    if (!(error instanceof Error && /nothing to commit|no changes/i.test(error.message))) {
+    if (!String(error).match(/nothing to commit|no changes/i)) {
       throw error;
     }
     committed = false;
@@ -220,7 +220,7 @@ async function ensureBranchRef(input: { branch: string; git: ReturnType<typeof c
       name: input.branch,
     });
   } catch (error) {
-    if (!(error instanceof Error && /already exists/i.test(error.message))) throw error;
+    if (!String(error).match(/already exists/i)) throw error;
   }
 }
 

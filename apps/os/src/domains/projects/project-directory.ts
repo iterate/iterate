@@ -143,7 +143,7 @@ export class ProjectsCapability extends RpcTarget {
         slug,
       });
     } catch (error) {
-      if (error instanceof Error && error.message.includes("UNIQUE constraint failed")) {
+      if (String(error).includes("UNIQUE constraint failed")) {
         throw new ORPCError("CONFLICT", {
           message: `A project with slug ${slug} already exists.`,
         });

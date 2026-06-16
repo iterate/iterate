@@ -211,6 +211,11 @@ function hasTypePredicateReturnType(sourceCode, fn) {
   return /\basserts\b/.test(returnTypeText) || /\bis\b/.test(returnTypeText);
 }
 
+/** @param {import("estree").Function} fn */
+function hasIfStatement(fn) {
+  return esquery.match(fn, esquery.parse("IfStatement")).length > 0;
+}
+
 /**
  * @param {import("eslint").Scope.Scope | null} scope
  * @param {string} name
@@ -690,6 +695,13 @@ const plugin = {
 
           const bodyLines = getFunctionBodyLineCount(context.sourceCode, fn);
           if (bodyLines > MAX_BODY_LINES) return;
+          if (
+            statement.type === "VariableDeclaration" &&
+            (statement.kind === "let" || statement.kind === "var")
+          ) {
+            return;
+          }
+          if (hasIfStatement(fn)) return;
           if (hasLeadingJsDocComment(context.sourceCode, statement)) return;
           if (hasCommentInsideFunction(context.sourceCode, fn)) return;
           if (hasTypePredicateReturnType(context.sourceCode, fn)) return;

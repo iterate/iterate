@@ -36,7 +36,6 @@ export function handleDocsMarkdownFetch(input: {
       "content-signal": "ai-train=yes, search=yes, ai-input=yes",
       "content-type": "text/markdown; charset=utf-8",
       vary: "accept",
-      // Estimated token count: ~1.35 tokens per whitespace-separated word.
       "x-markdown-tokens": Math.ceil(
         markdown.split(/\s+/).filter(Boolean).length * 1.35,
       ).toString(),
