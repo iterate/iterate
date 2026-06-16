@@ -555,21 +555,25 @@ const [
   }),
 ]);
 
-if (!ctx.app.local) {
-  const cloudflareApi = await createCloudflareApi({});
-  await waitForCloudflareWorkerScript({ cloudflareApi, workerName: workerNames.repo });
-  await ensureCloudflareQueueConsumer({
-    cloudflareApi,
-    queueId: artifactEventsQueue.id,
-    scriptName: workerNames.repo,
-  });
-}
+const artifactEventsQueueConsumerReady = ctx.app.local
+  ? Promise.resolve()
+  : (async () => {
+      const cloudflareApi = await createCloudflareApi({});
+      await waitForCloudflareWorkerScript({ cloudflareApi, workerName: workerNames.repo });
+      await ensureCloudflareQueueConsumer({
+        cloudflareApi,
+        queueId: artifactEventsQueue.id,
+        scriptName: workerNames.repo,
+      });
+    })();
+void artifactEventsQueueConsumerReady.catch(() => {});
 
 // Second bootstrap pass (fresh stages only): the cross-script Durable Object
 // target workers now exist, so re-running wires the bindings omitted above.
 // Do this before the dashboard app, ingress, and routes so a fresh preview
 // builds/routes them once instead of once per bootstrap pass.
 if (missingScripts.size > 0 && !process.env.OS_BOOTSTRAP_SECOND_PASS) {
+  await artifactEventsQueueConsumerReady;
   await ctx.app.finalize();
   await runBootstrapSecondPass();
 }
@@ -681,6 +685,7 @@ export const workers = {
   workspace: workspaceWorker,
 };
 
+await artifactEventsQueueConsumerReady;
 await ctx.app.finalize();
 await afterFinalize();
 
@@ -757,7 +762,7 @@ async function waitForCloudflareWorkerScript(input: {
     if (response.ok) {
       visibleChecks += 1;
       if (visibleChecks >= 2) return;
-      await new Promise((resolve) => setTimeout(resolve, 5_000));
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
       continue;
     }
 
@@ -770,7 +775,7 @@ async function waitForCloudflareWorkerScript(input: {
       );
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 5_000));
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
 
   throw new Error(
@@ -792,7 +797,7 @@ async function ensureCloudflareQueueConsumer(input: {
       const updated = await updateCloudflareQueueConsumer({ ...input, consumerId: existing.id });
       if (updated) return;
       lastError = `consumer ${existing.id} disappeared before it could be updated`;
-      await new Promise((resolve) => setTimeout(resolve, 5_000));
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
       continue;
     }
 
@@ -812,7 +817,7 @@ async function ensureCloudflareQueueConsumer(input: {
       );
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 5_000));
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
   }
 
   throw new Error(

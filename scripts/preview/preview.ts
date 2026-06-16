@@ -213,16 +213,35 @@ export async function deployCloudflarePreviewForPullRequest(
     semaphoreBaseUrl: params.semaphoreBaseUrl ?? defaultSemaphoreBaseUrl,
     waitMs: params.waitMs,
   });
-  await updatePreviewState(params, (state) => ({
+  const leaseUpdate = await updatePreviewState(params, (state) => ({
     ...state,
     environmentConfigLease,
   }));
 
   let ok = true;
-  let latestState = current.state;
-  for (const batch of batchPreviewAppsByDependencies(selectedApps)) {
-    const entries = await mapWithConcurrency(batch, defaultPreviewAppConcurrency, async (app) => {
-      return await deployPreviewAppWithStatus({
+  let latestState = leaseUpdate.state;
+  let stateWriteQueue = Promise.resolve();
+
+  const queueDeployStateUpdate = (entry: CloudflarePreviewAppEntry) => {
+    stateWriteQueue = stateWriteQueue.then(async () => {
+      const update = await updatePreviewState(params, (state) => ({
+        ...state,
+        environmentConfigLease,
+        apps: {
+          ...state.apps,
+          [entry.appSlug]: entry,
+        },
+      }));
+      latestState = update.state;
+    });
+    void stateWriteQueue.catch(() => {});
+  };
+
+  await mapPreviewAppsByDependencyReadiness(
+    selectedApps,
+    defaultPreviewAppConcurrency,
+    async (app) => {
+      const entry = await deployPreviewAppWithStatus({
         app,
         commandEnvironment: params.commandEnvironment,
         dopplerConfig: environmentConfigLease.dopplerConfig,
@@ -231,21 +250,12 @@ export async function deployCloudflarePreviewForPullRequest(
         runUrl: params.workflowRunUrl ?? null,
         signal: params.signal,
       });
-    });
-    if (entries.some((entry) => entry.status === "deploy-failed")) {
-      ok = false;
-    }
-
-    const update = await updatePreviewState(params, (state) => ({
-      ...state,
-      environmentConfigLease,
-      apps: {
-        ...state.apps,
-        ...Object.fromEntries(entries.map((entry) => [entry.appSlug, entry])),
-      },
-    }));
-    latestState = update.state;
-  }
+      if (entry.status === "deploy-failed") ok = false;
+      queueDeployStateUpdate(entry);
+      return entry;
+    },
+  );
+  await stateWriteQueue;
 
   return {
     ok,
