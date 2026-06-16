@@ -307,13 +307,15 @@ export class ProjectProcessor extends StreamProcessor<
    * facts say:
    *
    * - the main agent processor should consume this stream;
+   * - the default OpenAI provider processor should consume LLM requests;
    * - Slack-routed agent streams also get the Slack-agent processor;
    * - the project contributes the default visible configuration.
    *
-   * LLM provider subscriptions are deliberately absent. An agent starts doing
-   * LLM work only after a domain-specific configuration fact, such as
-   * `agent/llm-provider-selected` or a future `agent/config-updated`, is
-   * appended by the UI, a project config worker, or another processor.
+   * The default provider selection is `ifUnset`, so a domain-specific
+   * `agent/llm-provider-selected` fact appended by the UI, a project config
+   * worker, or another processor wins when it arrives first. LLM request
+   * events carry their selected provider, so extra subscribed provider
+   * processors can safely ignore requests addressed to another provider.
    */
   async #appendAgentStreamBirthCertificate(input: { agentPath: StreamPath; projectId: string }) {
     await this.ctx.stream.appendBatch({
