@@ -7,8 +7,8 @@
  *
  * Transport mapping from the oRPC reference:
  *   - agents.runtimeState({agentPath})  → itx.streams.create({streamPath})
- *       (the fresh-agent bootstrap door the dashboard new-agent flow uses;
- *        it wires the agent's default processor subscriptions)
+ *       (fresh agent setup is now project-processor owned: child-stream-created
+ *        drives default config/provider/subscription facts on the agent stream)
  *   - agents.sendMessage({agentPath,…}) → itx.agents.sendMessage({agentPath,…})
  *       (appends the user-message fact; setup is stream-processor owned)
  *   - agents.kill(…)                    → no itx door exists; the crash-recovery
@@ -205,6 +205,67 @@ test("a web agent holds a real conversation: user message in, visible reply out"
   expect(events.filter((event) => event.type.endsWith("error-occurred"))).toEqual([]);
 }, 180_000);
 
+test("the default onboarding agent created with a project can hold a real conversation", async () => {
+  await using fixture = await createTestProject({ slugPrefix: "agent-onboarding" });
+  using itx = fixture.itx();
+  const agentPath = "/agents/onboarding";
+  const marker = `onboarding-pong-${uniqueSuffix()}`;
+
+  await waitForAgentProcessorSetup({ agentPath, itx, projectId: fixture.project.id });
+  await waitForAgentProcessorSetup({
+    agentPath,
+    itx,
+    processorSlug: "openai-ws",
+    projectId: fixture.project.id,
+  });
+
+  await itx.agents.sendMessage({
+    agentPath,
+    message: [
+      `Please send a visible web chat message containing exactly this token: ${marker}`,
+      "Use the chat tool. Do not only describe what you would do.",
+    ].join("\n"),
+  });
+
+  const events = await readUntil({
+    agentPath,
+    itx,
+    afterOffset: "start",
+    predicate: (event) =>
+      event.type === "events.iterate.com/agents/web-message-sent" &&
+      typeof (event.payload as { message?: unknown }).message === "string" &&
+      (event.payload as { message: string }).message.includes(marker),
+    timeoutMs: 180_000,
+  });
+
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: "events.iterate.com/agent/llm-provider-selected",
+      payload: expect.objectContaining({
+        model: DEFAULT_WORKERS_AI_AGENT_MODEL,
+        provider: "openai-ws",
+      }),
+    }),
+  );
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: "events.iterate.com/stream/subscriber-connected",
+      payload: expect.objectContaining({
+        subscriptionKey: `agent:${fixture.project.id}:${agentPath}:openai-ws`,
+      }),
+    }),
+  );
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: "events.iterate.com/agents/web-message-sent",
+      payload: expect.objectContaining({
+        message: expect.stringContaining(marker),
+      }),
+    }),
+  );
+  expect(events.filter((event) => event.type.endsWith("error-occurred"))).toEqual([]);
+}, 210_000);
+
 test("uses OpenAI for explicitly configured agent chats", async () => {
   await using fixture = await createTestProject({ slugPrefix: "agent-default-openai" });
   using itx = fixture.itx();
@@ -365,9 +426,22 @@ test("project processor configures fresh agent streams from child-stream-created
       }),
     }),
   );
-  expect(events).not.toContainEqual(
+  expect(events).toContainEqual(
     expect.objectContaining({
       type: "events.iterate.com/agent/llm-provider-selected",
+      payload: expect.objectContaining({
+        ifUnset: true,
+        model: DEFAULT_WORKERS_AI_AGENT_MODEL,
+        provider: "openai-ws",
+      }),
+    }),
+  );
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: expect.objectContaining({
+        subscriptionKey: `agent:${fixture.project.id}:${agentPath}:openai-ws`,
+      }),
     }),
   );
 }, 120_000);
@@ -975,8 +1049,10 @@ async function readUntil(input: {
 async function waitForAgentProcessorSetup(input: {
   agentPath: string;
   itx: ProjectItx;
+  processorSlug?: string;
   projectId: string;
 }) {
+  const processorSlug = input.processorSlug ?? "agent";
   await readUntil({
     agentPath: input.agentPath,
     itx: input.itx,
@@ -984,7 +1060,7 @@ async function waitForAgentProcessorSetup(input: {
     predicate: (event) =>
       event.type === "events.iterate.com/stream/subscriber-connected" &&
       (event.payload as { subscriptionKey?: unknown }).subscriptionKey ===
-        `agent:${input.projectId}:${input.agentPath}:agent`,
+        `agent:${input.projectId}:${input.agentPath}:${processorSlug}`,
   });
 }
 

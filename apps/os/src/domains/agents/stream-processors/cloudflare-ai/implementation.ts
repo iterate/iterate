@@ -168,6 +168,7 @@ export class CloudflareAiProcessor extends StreamProcessor<
     state: CloudflareAiState;
     runInBackground: (work: () => Promise<unknown>) => void;
   }) {
+    if (args.event.payload.provider !== CloudflareAiProcessorContract.slug) return;
     const llmRequestId = args.event.offset;
     this.#executedLlmRequestIds.add(llmRequestId);
     args.runInBackground(async () => {

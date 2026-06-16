@@ -198,6 +198,7 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-provider-selected": {
       description: "Selects the LLM provider processor and model for future LLM requests.",
       payloadSchema: z.object({
+        ifUnset: z.boolean().optional(),
         model: z.string().min(1),
         provider: z.enum(["openai-ws", "cloudflare-ai"]),
       }),
@@ -215,6 +216,7 @@ export const AgentProcessorContract = defineProcessorContract({
         "The agent has prepared an LLM request. A subscribed LLM request processor must execute it and respond with agent output and a terminal llm-request-completed event. The llmRequestId used by response events is this event's stream offset. REQUEST-BY-REFERENCE: the event carries no conversation body — embedding it would store a full copy of the growing history in every request (O(N²) stream growth). Providers rebuild the chat request by reducing committed history up to this event's offset (buildLlmChatRequest), which reproduces the exact model-visible context from the stream forever.",
       payloadSchema: z.strictObject({
         model: z.string().min(1),
+        provider: z.enum(["openai-ws", "cloudflare-ai"]),
       }),
     },
     "events.iterate.com/agent/llm-request-completed": {
@@ -350,6 +352,7 @@ export function reduceAgentEvent(args: { state: AgentState; event: AgentConsumed
         history: [...state.history, { role: "assistant" as const, content: event.payload.content }],
       };
     case "events.iterate.com/agent/llm-provider-selected":
+      if (event.payload.ifUnset === true && state.llmProvider !== null) return state;
       return {
         ...state,
         llmConfig: { model: event.payload.model },

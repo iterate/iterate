@@ -40,6 +40,7 @@ import {
 import type { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
 import { agentProcessorSubscriptionConfiguredEvents } from "~/domains/agents/agent-stream-subscriptions.ts";
 import { SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE } from "~/domains/agents/agent-prompt-guidance.ts";
+import { DEFAULT_WORKERS_AI_AGENT_MODEL } from "~/domains/agents/stream-processors/agent/contract.ts";
 import {
   getSlackAgentDurableObjectName,
   type SlackAgentDurableObject,
@@ -325,9 +326,18 @@ export class ProjectProcessor extends StreamProcessor<
             systemPrompt: defaultAgentSystemPrompt(input.agentPath),
           },
         },
+        {
+          type: "events.iterate.com/agent/llm-provider-selected",
+          idempotencyKey: "project-agent-setup:llm-provider",
+          payload: {
+            ifUnset: true,
+            model: DEFAULT_WORKERS_AI_AGENT_MODEL,
+            provider: "openai-ws",
+          },
+        },
         ...agentProcessorSubscriptionConfiguredEvents({
           agentPath: input.agentPath,
-          processorSlugs: ["agent"],
+          processorSlugs: ["agent", "openai-ws"],
           projectId: input.projectId,
         }),
         ...(isSlackAgentPath(input.agentPath)

@@ -374,6 +374,7 @@ describe("AgentProcessor", () => {
           type: "events.iterate.com/agent/llm-request-requested",
           payload: {
             model: "test-model",
+            provider: "openai-ws",
           },
           offset: 43,
         }),
@@ -516,10 +517,12 @@ describe("AgentProcessor", () => {
         offset: 7,
         state: {
           ...initialState(),
+          llmProvider: "openai-ws",
           currentRequest: { phase: "scheduled", requestId: "req_lost", scheduledOffset: 7 },
         },
       },
       readStreamEvents: async () => [
+        providerSelectedEvent({ offset: 1 }),
         agentEvent({
           type: "events.iterate.com/agent/input-added",
           payload: { content: "hi", llmRequestPolicy: { behaviour: "after-current-request" } },
@@ -541,6 +544,7 @@ describe("AgentProcessor", () => {
         // the (dead) timer path converge on the same idempotency key — if the
         // timer somehow fired before the crash landed its append, this dedups.
         idempotencyKey: "agent/llm-request-requested@7",
+        payload: expect.objectContaining({ provider: "openai-ws" }),
       }),
     ]);
   });
@@ -649,6 +653,7 @@ describe("AgentProcessor", () => {
         },
       },
       readStreamEvents: async () => [
+        providerSelectedEvent({ offset: 1 }),
         agentEvent({
           type: "events.iterate.com/agent/llm-request-scheduled",
           payload: { requestId: "req_lost", debounceMs: 1000, model: "test-model" },
@@ -677,6 +682,7 @@ describe("AgentProcessor", () => {
       expect.objectContaining({
         type: "events.iterate.com/agent/llm-request-requested",
         idempotencyKey: "agent/llm-request-requested@7",
+        payload: expect.objectContaining({ provider: "openai-ws" }),
       }),
     ]);
   });
@@ -746,6 +752,7 @@ describe("AgentProcessor", () => {
         },
       },
       readStreamEvents: async () => [
+        providerSelectedEvent({ offset: 1 }),
         agentEvent({
           type: "events.iterate.com/agent/llm-request-scheduled",
           payload: { requestId: "req_retry", debounceMs: 1000, model: "test-model" },
@@ -770,6 +777,7 @@ describe("AgentProcessor", () => {
       expect.objectContaining({
         type: "events.iterate.com/agent/llm-request-requested",
         idempotencyKey: "agent/llm-request-requested@7",
+        payload: expect.objectContaining({ provider: "openai-ws" }),
       }),
     ]);
   });
@@ -817,7 +825,7 @@ describe("AgentProcessor", () => {
     // up to this event's own offset (see llm-request-helpers.ts).
     expect(appended[1]).toMatchObject({
       type: "events.iterate.com/agent/llm-request-requested",
-      payload: { model: expect.any(String) },
+      payload: { model: expect.any(String), provider: "openai-ws" },
     });
     expect(appended[1]!.payload).not.toHaveProperty("body");
   });

@@ -597,6 +597,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     }
 
     try {
+      if (stateAtRequest.llmProvider === null) return;
       // Request-by-reference: no body. Providers rebuild the chat request from
       // committed history up to this event's offset.
       await this.ctx.stream.append({
@@ -609,6 +610,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           }),
           payload: {
             model: stateAtRequest.llmConfig.model,
+            provider: stateAtRequest.llmProvider,
           },
         },
       });
