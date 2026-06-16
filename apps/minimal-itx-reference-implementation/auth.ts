@@ -5,6 +5,12 @@
 // principal, the principal may reach a set of projects, and the server only
 // completes the WebSocket if the requested context is in reach.
 //
+// Node and CLI clients send `Authorization: Bearer ...`. Browsers cannot set
+// headers on a WebSocket upgrade, so the reference browser client may send the
+// same demo token as `?token=...`. Production should use a real cookie/JWT
+// bridge; this app keeps auth visible and tiny so the runtime tests can run
+// without importing the OS admin-cookie machinery.
+//
 // A real system resolves principal → project access from an auth service and
 // the token is a signed JWT. Here it is a static map and a plain string — the
 // CHECK is the point, not the store.
@@ -19,14 +25,16 @@ export const PRINCIPALS: Record<string, { name: string; projects: string[] }> = 
 export const KNOWN_PROJECTS = [...new Set(Object.values(PRINCIPALS).flatMap((p) => p.projects))];
 
 export type AuthResult =
-  | { ok: true; principal: string }
+  | { ok: true; principal: string; projects: string[] }
   | { ok: false; status: 401 | 403; message: string };
 
 /** Authenticate the upgrade request to a principal — WITHOUT a project. The
  *  __global__ root is not project-scoped, so it only needs to know WHO you are (and
  *  which projects you may reach). */
 export function authenticate(request: Request): { name: string; projects: string[] } | null {
-  const token = (request.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "");
+  const headerToken = (request.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "");
+  const queryToken = new URL(request.url).searchParams.get("token") ?? "";
+  const token = headerToken || queryToken;
   return PRINCIPALS[token] ?? null;
 }
 
@@ -42,5 +50,5 @@ export function authorizeProjectAccess(request: Request, project: string): AuthR
       message: `principal "${principal.name}" has no access to project "${project}"`,
     };
   }
-  return { ok: true, principal: principal.name };
+  return { ok: true, principal: principal.name, projects: principal.projects };
 }

@@ -31,7 +31,10 @@ export { Stream } from "@iterate-com/os/src/domains/streams/engine/workers/durab
 
 export class ItxBindingEntrypoint extends WorkerEntrypoint<Env, { context: string }> {
   async get(): Promise<ItxContext> {
-    return (this.env.ITX.getByName(this.ctx.props.context) as any).itx as ItxContext;
+    const node = this.env.ITX.getByName(this.ctx.props.context);
+    return pathCallable({
+      rpcTarget: new ItxRpcTarget(node as unknown as ItxContext, (args) => node.runScript(args)),
+    }) as ItxContext;
   }
 }
 
@@ -113,13 +116,16 @@ function pathCallable({ rpcTarget, path = [] }: { rpcTarget: any; path?: string[
 
 class ItxRpcTarget extends RpcTarget {
   #runScript?: (args: { code: string }) => Promise<unknown>;
+  #globalAccess?: string[];
 
   constructor(
     readonly itx: ItxContext,
     runScript?: (args: { code: string }) => Promise<unknown>,
+    globalAccess?: string[],
   ) {
     super();
     this.#runScript = runScript;
+    this.#globalAccess = globalAccess;
   }
 
   provideCapability(args: ProvideArgs) {
@@ -127,6 +133,9 @@ class ItxRpcTarget extends RpcTarget {
   }
 
   invokeCapability(args: { path: string[]; args?: unknown[] }) {
+    if (this.#globalAccess && args.path[0] === "projects") {
+      return new GlobalItx({ access: this.#globalAccess }).invokeCapability(args);
+    }
     return this.itx.invokeCapability(args);
   }
 
@@ -229,7 +238,7 @@ export class ItxDurableObject extends DurableObject<Env> {
       new ItxProcessor({
         ...deps,
         iterateContext: { stream: this.#log() },
-        dial: (address) => this.#dial(address), // capabilities AND the parent
+        dial: (address, mountPath) => this.#dial(address, mountPath), // capabilities AND the parent
         builtinCapabilities: this.#contextBuiltinCapabilities(), // from the domain object
         parentAddress: this.#parentAddress(), // the chain, as data
       }),
@@ -284,7 +293,7 @@ export class ItxDurableObject extends DurableObject<Env> {
   // door because the reference impl is unauthed within a connection. (Production
   // gates provider-supplied capability addresses and leaves trusted context
   // addresses ungated — two dials. Auth lives at the connect door instead.)
-  #dial(address: any): any {
+  #dial(address: any, mountPath?: string[]): any {
     // a parent: another context node (an agent's project), dialed by coordinate.
     if (address?.type === "context" && typeof address.ref === "string") {
       // `as any` breaks a deep StreamProcessor-generic instantiation that tsc
@@ -305,7 +314,9 @@ export class ItxDurableObject extends DurableObject<Env> {
       return localPathProxy(entrypoint);
     }
     if (address?.type === "dynamic-durable-object") {
-      const facetName = `dynamic-durable-object:${address.className}`;
+      const facetName = `dynamic-durable-object:${hashString(
+        JSON.stringify({ source: address.source, className: address.className, mountPath }),
+      )}`;
       const facet = (this.ctx as any).facets.get(facetName, async () => {
         const worker = await this.#loadDynamicWorker(address.source);
         const klass = worker.getDurableObjectClass?.(address.className);
@@ -469,14 +480,12 @@ export class ItxDurableObject extends DurableObject<Env> {
       mainModule: "main.js",
       modules: { "main.js": source },
     }));
-    // The itx handle the script receives — bag-of-props, the same protocol as
-    // everywhere else. The methods become RPC stubs in the loaded isolate.
-    const itxHandle = {
-      provideCapability: (args: ProvideArgs) => this.#itx.provideCapability(args),
-      invokeCapability: (args: { path: string[]; args?: unknown[] }) =>
-        this.#itx.invokeCapability(args),
-      describe: () => this.#itx.describe(),
-    };
+    // The itx handle the script receives is the same shape as a WebSocket
+    // handle: root verbs plus arbitrary dotted capability paths. If this were a
+    // plain `{ invokeCapability }` object, `itx.whoami()` would work in Node and
+    // browser but fail in codemode, which is exactly the runtime drift ITX is
+    // meant to avoid.
+    const itxHandle = pathCallable({ rpcTarget: new ItxRpcTarget(this.#itx) });
     try {
       const result = await loaded.getEntrypoint("ScriptEntrypoint").run(itxHandle);
       const completed = await log.append({
@@ -700,7 +709,11 @@ export default {
     return newWorkersRpcResponse(
       request,
       pathCallable({
-        rpcTarget: new ItxRpcTarget(node as unknown as ItxContext, (args) => node.runScript(args)),
+        rpcTarget: new ItxRpcTarget(
+          node as unknown as ItxContext,
+          (args) => node.runScript(args),
+          auth.projects,
+        ),
       }) as RpcTarget,
     );
   },

@@ -2,8 +2,7 @@
 
 A single, minimal, coherent reference implementation of **itx** — Iterate's
 capability layer over Cap'n Web. A context is the fold of a durable event log,
-served over a naked Cap'n Web stub against real workerd + a real `Stream`
-Durable Object.
+served over Cap'n Web against real workerd + a real `Stream` Durable Object.
 
 Read **[DESIGN.md](./DESIGN.md)** for the model and the file map.
 
@@ -29,7 +28,18 @@ import { withItx } from "./client.ts";
 
 using itx = withItx({ projectId: "shared", path: "/", token: "alice-token" });
 await itx.provideCapability({ path: ["greeter"], capability: (n) => `hi ${n}` });
-await itx.greeter("alice"); // "hi alice" — naked deep path, no client library
+await itx.greeter("alice"); // "hi alice" — naked deep path, no client path proxy
+```
+
+`withItx` also normalizes raw local SDK objects at provide time. Bare Cap'n Web
+cannot serialize arbitrary class instances such as `new Slack.WebClient()` by
+value; the client keeps the object local and exposes one live
+`invokeCapability({ path, args })` provider for it:
+
+```ts
+const slack = new Slack.WebClient(process.env.SLACK_TOKEN);
+await itx.provideCapability({ path: ["slack"], capability: slack });
+await itx.slack.chat.postMessage({ channel: "C123", text: "hi" });
 ```
 
 The HTTP shape is `projectId` plus `path`: `projectId=shared&path=/` opens the

@@ -57,12 +57,20 @@ pass-through. `describe()` is the only read verb (there is no `list`); it return
 the raw folded `capabilities`, the injected `builtins`, and the parent nested
 under `parentCapabilities`.
 
-## The naked stub — no client-side path proxy
+## The client — naked path calls, normalized live provides
 
-The client holds a **bare Cap'n Web session stub**. Cap'n Web already turns
-`stub.a.b.c(args)` into one pipelined message (the stub accumulates the path
-locally, zero round trips). So `client.ts` is just a socket opener; there is no
-consumer-side library.
+For reads and calls, the client holds a **bare Cap'n Web session stub**. Cap'n
+Web already turns `stub.a.b.c(args)` into one pipelined message (the stub
+accumulates the path locally, zero round trips). There is no client-side path
+proxy for `itx.slack.chat.postMessage(...)`; the server collapses that path.
+
+There is one client-side write convenience: `withItx` intercepts
+`provideCapability`. Raw local SDK instances such as `new Slack.WebClient()` are
+not serializable Cap'n Web values, so the client keeps the SDK object in the
+provider process and sends a tiny live path-call provider instead:
+`{ invokeCapability({ path, args }) { ... } }`. The kernel still sees the same
+simple live shape as every other provider. When the socket closes, that function
+stub dies and the folded live row becomes offline.
 
 For DO-backed itx contexts, the load-bearing piece is **server-side**:
 capabilities are registered at runtime, so the served main object can't be a
@@ -185,7 +193,7 @@ for internal Workers RPC use.
 | `global-itx.ts` | `GlobalItx` — the stateless, read-only root (`RpcTarget` + `implements ItxContext`)                                                                                                            |
 | `auth.ts`       | the connect-door access map and checks                                                                                                                                                         |
 | `server.ts`     | the Worker: `ItxRpcTarget`, `pathCallable`, `ItxDurableObject`, `ProjectDurableObject`/`AgentDurableObject`/`RepoDurableObject`, `dial`, the `/api/itx` route; re-exports the real `Stream` DO |
-| `client.ts`     | `withItx` + `connect` — the naked-stub socket opener                                                                                                                                           |
+| `client.ts`     | `withItx` + `connect` — socket opener, naked path calls, and provide-time normalization for raw local SDK objects                                                                              |
 | `harness.ts`    | the e2e test (run against `npm run dev`)                                                                                                                                                       |
 
 ## What this deliberately omits

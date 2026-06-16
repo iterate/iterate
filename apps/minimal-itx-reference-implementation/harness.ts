@@ -12,6 +12,18 @@
 //   7. auth at the connect door: bad token / no access are refused
 //   8. codemode: a loaded script gets an itx handle and calls back
 //   9. POST /api/itx runs a script and folds requested/completed events
+//   10. runtime matrix: same scripts from Node, CLI, POST script, dynamic
+//       worker, and a real browser
+//   11. client-normalized raw SDK-shaped live providers and disconnect/offline
+//   12. dynamic worker nested RpcTarget auto-proxying
+//   13. worker-to-worker composition through env.ITX.get()
+//   14. dynamic Durable Object facets are isolated per mounted capability path
+//   15. inherited __global__ catalog stays scoped to the socket principal
+//   16. describe() exposes the agent → project → __global__ capability chain
+//   17. own capabilities shadow built-ins, and revoke restores the built-in
+//   18. trusted durable-object.path built-ins replay their prefix
+//   19. failed scripts still fold a completed error record
+//   20. codemode can durably provide a capability for later callers
 //
 // Each capability test uses a FRESH agent coordinate (prj:shared/agents/<rand>)
 // so durable state never bleeds between runs. The chain test reuses prj:shared
@@ -19,6 +31,7 @@
 
 import assert from "node:assert";
 import { withItx } from "./client.ts";
+import { MATRIX_EXAMPLES, MATRIX_RUNTIMES, runRuntimeMatrix } from "./runtime-matrix.ts";
 
 const TOKEN = "alice-token"; // principal "alice" → projects ["alice", "shared"]
 const BASE_URL = process.env.ITX_BASE ?? "http://127.0.0.1:8788";
@@ -56,6 +69,98 @@ const repoCounter = {
     path: "counter.js",
   },
   className: "CounterDurableObject",
+};
+
+const nestedKitWorker = {
+  type: "dynamic-worker",
+  source: {
+    type: "inline",
+    mainModule: "kit.js",
+    modules: {
+      "kit.js": `
+        import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+        class MathTarget extends RpcTarget {
+          add(a, b) { return a + b; }
+        }
+        export class KitEntrypoint extends WorkerEntrypoint {
+          echo(value) { return { echoed: value }; }
+          get math() { return new MathTarget(); }
+        }
+      `,
+    },
+  },
+  entrypoint: "KitEntrypoint",
+  props: {},
+};
+
+const inventoryWorker = {
+  type: "dynamic-worker",
+  source: {
+    type: "inline",
+    mainModule: "inventory.js",
+    modules: {
+      "inventory.js": `
+        import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+        class Skus extends RpcTarget {
+          priceOf({ sku }) { return sku === "ABC" ? 42 : 0; }
+        }
+        export class InventoryEntrypoint extends WorkerEntrypoint {
+          count() { return 7; }
+          get skus() { return new Skus(); }
+        }
+      `,
+    },
+  },
+  entrypoint: "InventoryEntrypoint",
+  props: {},
+};
+
+const reportWorker = {
+  type: "dynamic-worker",
+  source: {
+    type: "inline",
+    mainModule: "report.js",
+    modules: {
+      "report.js": `
+        import { WorkerEntrypoint } from "cloudflare:workers";
+        export class ReportEntrypoint extends WorkerEntrypoint {
+          async build({ sku }) {
+            const itx = await this.env.ITX.get();
+            const count = await itx.inventory.count();
+            const price = await itx.inventory.skus.priceOf({ sku });
+            return { count, price, total: count * price };
+          }
+        }
+      `,
+    },
+  },
+  entrypoint: "ReportEntrypoint",
+  props: {},
+};
+
+const scopedRunnerWorker = {
+  type: "dynamic-worker",
+  source: {
+    type: "inline",
+    mainModule: "runner.js",
+    modules: {
+      "runner.js": `
+        import { WorkerEntrypoint } from "cloudflare:workers";
+        export class RunnerEntrypoint extends WorkerEntrypoint {
+          async run() {
+            const itx = await this.env.ITX.get();
+            return {
+              hasIterate: "ITERATE" in this.env,
+              props: this.ctx.props,
+              whoami: await itx.whoami(),
+            };
+          }
+        }
+      `,
+    },
+  },
+  entrypoint: "RunnerEntrypoint",
+  props: { userConfig: "ok" },
 };
 
 let pass = 0;
@@ -252,6 +357,218 @@ await check("9. POST /api/itx runs a script and folds requested/completed events
   );
   assert.equal(execution?.status, "completed");
   assert.equal(execution?.result, "curlable");
+});
+
+await check(
+  `10. runtime matrix: ${MATRIX_EXAMPLES.length} examples × ${MATRIX_RUNTIMES.length} runtimes`,
+  async () => {
+    await runRuntimeMatrix(rid);
+  },
+);
+
+await check("11. raw SDK-shaped live provider is client-normalized and goes offline", async () => {
+  const path = agentPath("live-sdk");
+  const provider = withItx({ projectId: "shared", path, token: TOKEN });
+  try {
+    // This is deliberately a raw class instance, like `new Slack.WebClient()`,
+    // not a pre-shaped plain object. Bare Cap'n Web cannot serialize this kind
+    // of object by value; `withItx` wraps it into a live
+    // invokeCapability({ path, args }) provider before it crosses the socket.
+    class SlackLikeWebClient {
+      #token = "xoxb-test";
+      chat = {
+        postMessage: (body: unknown) => ({
+          args: [body],
+          method: "chat.postMessage",
+          provider: "live-session",
+          token: this.#token,
+        }),
+      };
+    }
+
+    await provider.provideCapability({ path: ["slack"], capability: new SlackLikeWebClient() });
+    assert.deepEqual(await provider.slack.chat.postMessage({ text: "hi" }), {
+      args: [{ text: "hi" }],
+      method: "chat.postMessage",
+      provider: "live-session",
+      token: "xoxb-test",
+    });
+  } finally {
+    dispose(provider);
+  }
+
+  // The event log still records the live row (`address: null`), but its stub was
+  // in the disconnected provider session, so later consumers see an offline cap.
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  const consumer = withItx({ projectId: "shared", path, token: TOKEN });
+  try {
+    const row = (await consumer.describe()).capabilities.find(
+      (c: any) => c.path.join(".") === "slack",
+    );
+    assert.equal(row?.address, null);
+    await assert.rejects(
+      async () => await consumer.slack.chat.postMessage({ text: "after disconnect" }),
+      /offline|closed|broken|disposed|disconnect|no longer running/i,
+    );
+  } finally {
+    dispose(consumer);
+  }
+});
+
+await check("12. dynamic worker auto-proxy reaches nested RpcTarget members", async () => {
+  const itx = agentItx("nested-worker");
+  try {
+    // This is stronger than the calc smoke test: the dynamic worker returns a
+    // nested RpcTarget (`math`) and callers still use one naked dotted path.
+    await itx.provideCapability({ path: ["kit"], capability: nestedKitWorker });
+    assert.deepEqual(await itx.kit.echo({ hi: 1 }), { echoed: { hi: 1 } });
+    assert.equal(await itx.kit.math.add(2, 3), 5);
+  } finally {
+    dispose(itx);
+  }
+});
+
+await check("13. worker-to-worker composition uses the worker's scoped env.ITX.get()", async () => {
+  const itx = agentItx("worker-to-worker");
+  try {
+    // `report` has no direct binding to `inventory`; it discovers it through
+    // its own ITX handle, exactly like an agent-authored dynamic worker should.
+    await itx.provideCapability({ path: ["inventory"], capability: inventoryWorker });
+    await itx.provideCapability({ path: ["report"], capability: reportWorker });
+    assert.deepEqual(await itx.report.build({ sku: "ABC" }), {
+      count: 7,
+      price: 42,
+      total: 294,
+    });
+  } finally {
+    dispose(itx);
+  }
+});
+
+await check(
+  "14. dynamic Durable Object facets are isolated per mounted capability path",
+  async () => {
+    const itx = agentItx("facet-isolation");
+    try {
+      // Same repo source and same DO class, but two capability mounts. The mount
+      // path is part of the host-owned identity, so each counter has separate
+      // storage.
+      await itx.provideCapability({ path: ["counterA"], capability: repoCounter });
+      await itx.provideCapability({ path: ["counterB"], capability: repoCounter });
+      assert.equal(await itx.counterA.increment(), 1);
+      assert.equal(await itx.counterB.increment(), 1);
+      assert.equal(await itx.counterA.current(), 1);
+      assert.equal(await itx.counterB.current(), 1);
+    } finally {
+      dispose(itx);
+    }
+  },
+);
+
+await check("15. inherited __global__ projects catalog is principal-scoped", async () => {
+  const project = projectItx();
+  try {
+    // The project context parents to __global__, but the edge session still
+    // scopes that inherited catalog to Alice's projects.
+    assert.deepEqual([...(await project.projects.list())].sort(), ["alice", "shared"]);
+    await assert.rejects(async () => await project.projects.get("bob"));
+  } finally {
+    dispose(project);
+  }
+});
+
+await check("16. describe nests agent → project → __global__ built-ins", async () => {
+  const agent = agentItx("describe-chain");
+  try {
+    // describe() is the one read verb: local folded caps, local built-ins, then
+    // parentCapabilities recursively until the stateless root.
+    const d = await agent.describe();
+    assert.ok(d.builtins.some((c: any) => c.path.join(".") === "whoami"));
+    assert.ok(d.parentCapabilities?.builtins.some((c: any) => c.path.join(".") === "fetch"));
+    assert.ok(d.parentCapabilities?.builtins.some((c: any) => c.path.join(".") === "repo"));
+    assert.ok(
+      d.parentCapabilities?.parentCapabilities?.builtins.some(
+        (c: any) => c.path.join(".") === "projects",
+      ),
+    );
+    assert.equal(d.parentCapabilities?.parentCapabilities?.parentCapabilities, undefined);
+  } finally {
+    dispose(agent);
+  }
+});
+
+await check("17. own capability shadows and then restores a built-in", async () => {
+  const agent = agentItx("shadow-builtin");
+  try {
+    // Own folded capabilities resolve before constructor-injected built-ins. An
+    // exact revoke removes only the own row, so the built-in resurfaces.
+    const original = await agent.whoami();
+    await agent.provideCapability({ path: ["whoami"], capability: () => "shadowed" });
+    assert.equal(await agent.whoami(), "shadowed");
+    await agent.revokeCapability({ path: ["whoami"] });
+    assert.equal(await agent.whoami(), original);
+  } finally {
+    dispose(agent);
+  }
+});
+
+await check("18. trusted durable-object built-in replays its path prefix", async () => {
+  const project = projectItx();
+  try {
+    // Project `fetch` is a trusted durable-object address whose stored prefix is
+    // ["egress"]. The caller invokes `fetch(...)`; dial replays egress first.
+    assert.deepEqual(await project.fetch("data:text/plain,hello"), {
+      body: "hello",
+      status: 200,
+      viaProject: "shared",
+    });
+  } finally {
+    dispose(project);
+  }
+});
+
+await check("19. failed scripts still fold a completed error record", async () => {
+  const itx = agentItx("script-error");
+  try {
+    // Script executions are durable audit records even when the code throws.
+    const code = `async () => { throw new Error("boom"); }`;
+    await assert.rejects(async () => await itx.runScript({ code }), /boom/);
+    const execution = (await itx.describe()).scriptExecutions.find((x: any) => x.code === code);
+    assert.equal(execution?.status, "completed");
+    assert.match(execution?.error ?? "", /boom/);
+  } finally {
+    dispose(itx);
+  }
+});
+
+await check("20. codemode can durably provide a capability for later callers", async () => {
+  const path = agentPath("script-provide");
+  const response = await fetch(
+    `${BASE_URL}/api/itx?projectId=shared&path=${encodeURIComponent(path)}`,
+    {
+      body: `async (itx) => {
+        await itx.provideCapability({
+          path: ["calc2"],
+          capability: ${JSON.stringify(dynamicCalc)},
+        });
+        return "provided";
+      }`,
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "text/plain" },
+      method: "POST",
+    },
+  );
+  assert.equal(response.status, 200);
+  const body = (await response.json()) as any;
+  assert.equal(body.result, "provided");
+
+  const itx = withItx({ projectId: "shared", path, token: TOKEN });
+  try {
+    assert.equal(await itx.calc2.add(20, 22), 42);
+    const row = (await itx.describe()).capabilities.find((c: any) => c.path.join(".") === "calc2");
+    assert.equal(row?.address?.type, "dynamic-worker");
+  } finally {
+    dispose(itx);
+  }
 });
 
 console.log(`\n${pass}/${pass + fail} passed`);
