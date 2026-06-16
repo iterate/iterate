@@ -192,10 +192,11 @@ props? }` maps to trusted `type: "env-binding"` only when direct replay is
   untrusted `type: "dynamic-worker"` or `type: "dynamic-durable-object"`.
   Repo-backed sources use the current production shape
   `{ type: "repo", repo, commit, path, bundle? }`.
-- Current v1 dynamic durable source behavior maps directly: v1 creates
-  `ctx.facets.get("cap:<name>", getClass)` through the dialer. v2 should create
-  an equivalent host-owned dynamic durable object facet, preferably named
-  `dynamic-durable-object:<mounted-capability-name>`.
+- Current v1 dynamic durable source behavior maps directly: v1 creates a
+  host-owned facet through the dialer. v2 should create an equivalent dynamic
+  durable object facet keyed by the canonical mounted capability path, e.g.
+  `dynamic-durable-object:<hash-of-mounted-path>`. There is no separate
+  "capability name" concept in v2.
 
 ## Out of Scope
 

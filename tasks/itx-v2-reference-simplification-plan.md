@@ -25,19 +25,20 @@ same target shape. Integrate the cuts manually; the branches overlap in
      `Map<string, LiveInvoker>`.
    - A `LiveInvoker` owns replay mode: normal object replay vs
      `invokeCapability({ path, args })`.
-   - Inject parent traversal as `#parent: ItxContext | null`, not as a
-     pseudo-address.
+   - Express parent traversal as a host-created `itxParent` built-in path, not
+     as a hidden injected `#parent` dependency.
    - Keep `#dial(address)` capability-only.
    - Attach host-owned mount identity before dialing dynamic DO addresses.
 
 2. **Serving edge (`server.ts`)**
    - Delete `ItxRpcTarget extends RpcTarget`.
-   - Serve all WebSocket contexts as `pathCallable({ invokeCapability })`.
+   - Serve all WebSocket contexts as
+     `pathProxyToInvokeCapability({ invokeCapability })`.
    - Keep the proxy ignorant of root control names; the context handles
      `["provideCapability"]`, `["invokeCapability"]`, `["revokeCapability"]`,
      and `["describe"]` inside `invokeCapability`.
    - Reserve those root control names so user capabilities cannot shadow them.
-   - Keep `pathCallable`; it is the load-bearing Cap'n Web proxy.
+   - Keep `pathProxyToInvokeCapability`; it is the load-bearing Cap'n Web proxy.
    - Keep `runScript` out of the Cap'n Web ITX model; POST remains the script
      execution surface.
 
@@ -64,7 +65,8 @@ same target shape. Integrate the cuts manually; the branches overlap in
 - Do not take the dial branch's `server.ts` wholesale; it predates the edge
   simplification and can reintroduce `ItxRpcTarget`.
 - Do not keep `#pathCallCapabilities`.
-- Remove `{ type: "context" }` and `{ type: "code" }` parent pseudo-addresses.
+- Remove `{ type: "context" }` and `{ type: "code" }` parent-address
+  pseudo-types.
 - Keep dynamic DO `mountPath` host-owned/internal; it should not feel like
   provider-facing address vocabulary.
 - Do not reintroduce `itxVerbs` or another root-verb object. The only serving
@@ -74,9 +76,10 @@ same target shape. Integrate the cuts manually; the branches overlap in
 
 - Durable state: stream-folded capability rows.
 - Live runtime state: retained live invokers.
-- Parent topology: host-injected context handles.
+- Parent topology: host-created `itxParent` built-in paths backed by trusted
+  addresses.
 - Dial: durable capability address to callable stub.
-- Serving edge: `{ invokeCapability }` plus `pathCallable`.
+- Serving edge: `{ invokeCapability }` plus `pathProxyToInvokeCapability`.
 - Client: socket plus provide-time raw SDK normalization.
 
 ## Part two: follow-ups after the simplification
@@ -110,10 +113,14 @@ Backburner:
 - **Read-your-writes**: investigate production's append-then-catch-up model
   before promoting this reference shape. The reference now uses the shared
   StreamProcessor delivered-offset wait instead of a local polling loop.
-- **Parent as capability**: explore whether parent traversal is actually just a
-  special built-in capability/address behind the scenes, e.g. `parent` or
-  `parentItx`, instead of a separate injected `#parent` concept. This might
-  simplify the model further or reveal why parent topology must stay host-owned.
+- **Parent as capability**: resolved in the reference implementation as a
+  host-created sturdy built-in, not as a hidden injected `#parent` handle. The
+  public spelling is `itxParent`, deliberately not `parent`, because it is ITX
+  topology syntax rather than a normal provider member. User capability paths
+  cannot contain `itxParent` anywhere, and user-provided capabilities cannot be
+  replayed through an `itxParent` member. Built-in parent traversal is still
+  allowed, so `itx.itxParent.itxParent.projects.list()` is valid topology, but
+  `itx.toolbox.itxParent...` is not a user-extension point.
 - **Processor construction/deps shape**: clean up how host dependencies are
   injected into `ItxProcessor`. The current constructor shape is convenient for
   the reference implementation, but it risks hiding which pieces are kernel
@@ -125,6 +132,74 @@ Backburner:
   client and kernel. `CAPABILITY_ADDRESS_TYPES` is duplicated, and the current
   accepted set includes loose shapes such as `"rpc"` that the v2 reference
   dialer may not really support.
+
+### Parent and dynamic-DO adversarial review notes
+
+The intentionally-red adversarial tests split into cheap model-aligned fixes and
+larger policy/lifecycle decisions:
+
+- **Forged trusted worker-entrypoint addresses**: cheap for the blessed client
+  path (reject class instances carrying trusted `type` values before SDK
+  normalization), but not a complete server-side security boundary because a
+  custom Cap'n Web client can always provide a live `{ invokeCapability }`
+  provider.
+- **Caller-scoped dynamic workers**: expensive. Today a dynamic worker receives
+  `env.ITX.get()` for the mounted context, not the external WebSocket caller.
+  Making `itxParent` traversal caller-scoped would require carrying invocation
+  authority through `invokeCapability`, the dialer, Worker Loader props/env, and
+  `ItxEntrypoint`. This should remain a design decision, not a drive-by test
+  fix.
+- **Nested parent shadowing**: cheap once the spelling is `itxParent`. Reserve
+  that segment everywhere in user-provided capability paths and provider replay,
+  while still allowing host-created `itxParent` built-ins to chain.
+- **Dynamic DO class rename**: model-aligned. Facet identity should be the
+  canonical mounted path, not source/class. Source module and class name are
+  rebindable attributes of what is mounted at that path.
+- **Invalid dynamic DO upgrade rollback**: medium/high complexity. A reliable
+  fix needs provide-time validation or rollback semantics, which cuts against
+  the clean "provide appends a structural row" kernel.
+- **Revoke/re-provide storage freshness**: medium complexity. Without a generic
+  facet deletion primitive, the practical fix is a folded per-path generation
+  included in the facet name. That rotates storage but does not prove physical
+  deletion.
+
+### Caller/calling context options for dynamic workers
+
+Current v2 wiring: dynamic workers receive `env.ITX` from
+`ItxDurableObject.#loadResolvedDynamicWorker()`. The binding is
+`ItxBindingEntrypoint({ props: { context: this.ctx.id.name ?? "itx" } })`, so
+`await env.ITX.get()` restores the mounted context only. It does not know which
+external WebSocket principal triggered the later invocation. `ItxEntrypoint`
+uses `{ projectId, path }` props and currently constructs `GlobalItx({
+access: "all" })` for the root; the WebSocket edge separately strips leading
+`itxParent` segments to scope direct external catalog reads.
+
+Buffet, lightest to most principled:
+
+- **Document context authority**: dynamic workers run as the context they are
+  mounted into. `itxParent` traversal inside them is host/context authority, not
+  caller-session authority. LOC: 0; leaves the caller-scope adversarial test red.
+- **Project-scoped `env.ITX` props**: pass `{ access: [projectId] }` or
+  `{ projectId }` through `ItxBindingEntrypoint` / `ItxEntrypoint` when loading
+  dynamic workers. LOC: roughly 20-40. This prevents global widening to every
+  project, but it is project authority, not exact caller authority.
+- **Connection-scoped invocation wrapper**: the WebSocket route wraps
+  `node.invokeCapability` with a caller/access bag, and the dialer uses that bag
+  when constructing Worker Loader env props. LOC: roughly 60-100. The cache
+  boundary is the hard part: caller authority must be per invocation, not baked
+  into a content-addressed worker.
+- **Explicit invocation context object**: change the protocol to carry
+  host-only invocation context alongside `{ path, args }`, then thread it
+  through dial, `ItxBindingEntrypoint`, and `ItxEntrypoint`. LOC: roughly
+  100-160. Cleaner, but expands the kernel API and every caller.
+- **Production-style origin/access model**: port the apps/os origin/access split
+  so invocations carry origin, context refs, and narrowed access. LOC: 200+ in
+  the reference, more in production integration. This unlocks future egress,
+  middleware, and audit semantics, but it is not the lightweight v2 kernel.
+
+Recommendation: keep context authority in the clean reference until product
+semantics force caller authority. If we want a small hardening without changing
+the model, do project-scoped dynamic worker authority and name it that.
 
 ### Do later / security and production hardening
 
@@ -145,7 +220,7 @@ Backburner:
   if ITX2 promises production session/middleware semantics.
 - Production defaults are ordinary inherited contexts, not constructor built-ins.
   Consider whether `ProjectDurableObject`/`AgentDurableObject` built-ins should
-  eventually become parent contexts too.
+  eventually become itxParent contexts too.
 - Production egress is richer: shadowable `fetch`, `super.fetch`, bare `fetch`
   inside loaded isolates, and terminal secret substitution.
 - Production exposes live disconnected state in `describe()`; ITX2 currently

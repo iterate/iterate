@@ -30,7 +30,7 @@ export type CapabilityAddress = z.infer<typeof CapabilityAddress>;
 
 /** One row of the capability table: the path it is mounted at, its address
  *  (null ⟺ live), and the metadata it was provided with. This same shape
- *  describes a folded provide, a built-in, and a parent's capability — there is
+ *  describes a folded provide, a built-in, and a parent-path capability — there is
  *  one capability-descriptor type, everywhere. */
 export const CapabilityRecord = z.object({
   path: z.array(z.string()),
@@ -62,7 +62,7 @@ export const ItxContract = defineProcessorContract({
   // derived from the log, never the source of truth.
   //
   // There is no `context`/parentage field here: host topology appears as the
-  // reserved `parent` built-in capability, not as folded state. Nothing reads a
+  // reserved `itxParent` built-in capability, not as folded state. Nothing reads a
   // folded parentage copy, so it does not exist.
   stateSchema: z.object({
     capabilities: z.array(CapabilityRecord).default([]),

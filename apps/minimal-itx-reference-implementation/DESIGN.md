@@ -18,8 +18,8 @@ capability table is their reduction. The log is the single source of truth; the
 table is derived and reconstructible by replay. A capability is either **live**
 (an in-memory stub that dies with its provider) or **sturdy** (a plain-data
 address that can be re-dialed into a callable). Contexts form a **chain**: on a
-miss, resolution falls through to a parent context, bottoming out at the
-stateless **`__global__` root**.
+miss, resolution falls through via the reserved `itxParent` built-in, bottoming
+out at the stateless **`__global__` root**.
 
 ## Capabilities: live vs sturdy
 
@@ -58,7 +58,7 @@ those reserved root names and dispatches them before ordinary capability
 resolution. User capabilities cannot be mounted under those names, so the
 control surface cannot be shadowed. `describe()` is the only read verb (there is
 no `list`); it returns the raw folded `capabilities`, the injected `builtins`,
-including the reserved `parent` built-in when this context has one.
+including the reserved `itxParent` built-in when this context has one.
 
 ## The client — naked path calls, normalized live provides
 
@@ -100,23 +100,23 @@ dispatched on `address.type`:
 - `{ type: "durable-object", namespace, name, path? }` → a trusted
   namespace/name/path Durable Object ref, used for domain built-ins
 - `{ type: "worker-entrypoint", entrypoint, props }` → a trusted loopback
-  WorkerEntrypoint with props, used here for the reserved `parent` built-in
+  WorkerEntrypoint with props, used here for the reserved `itxParent` built-in
 
 Provider code cannot provide `worker-entrypoint` addresses. They are trusted
 host-created built-ins only.
 
 ## The chain — inheritance by late binding
 
-A context with a parent is born with a reserved built-in capability named
-`parent`, backed by a sturdy `{ type: "worker-entrypoint", entrypoint:
+A context with a parent is born with a reserved built-in mounted at path
+`["itxParent"]`, backed by a sturdy `{ type: "worker-entrypoint", entrypoint:
 "ItxEntrypoint", props: { projectId, path } }` address. `invokeCapability`
 resolves own fold → built-ins, then on a miss retries through
-`["parent", ...path]`. So implicit inheritance and explicit
-`itx.parent.fetch(...)` use the same dial/replay machinery. A child **shadows**
-a parent by late binding (re-resolved per call), never by copy.
+`["itxParent", ...path]`. So implicit inheritance and explicit
+`itx.itxParent.fetch(...)` use the same dial/replay machinery. A child **shadows**
+its parent by late binding (re-resolved per call), never by copy.
 
-Topology: an **agent** (`prj:<id>/agents/<name>`) gets a `parent` built-in
-pointing to its **project** (`prj:<id>`); a project gets a `parent` built-in
+Topology: an **agent** (`prj:<id>/agents/<name>`) gets an `itxParent` built-in
+pointing to its **project** (`prj:<id>`); a project gets an `itxParent` built-in
 pointing to the **`__global__` root**. Parentage is derived from the context
 **coordinate** by the host, not folded from the log — nothing reads a folded
 copy, so it isn't stored.
@@ -126,7 +126,7 @@ copy, so it isn't stored.
 A context is born with capabilities defined by the **domain object** at its
 coordinate. `ProjectDurableObject` offers `fetch` (its egress) and `repo`;
 `AgentDurableObject` offers `whoami`. Contexts with a parent also get the
-reserved `parent` built-in. Built-ins are handed to the
+reserved `itxParent` built-in. Built-ins are handed to the
 `ItxProcessor` constructor as an array of the same `ProvideArgs` shape a provide
 uses, and the built-ins here are literal trusted Durable Object addresses such
 as `{ type: "durable-object", namespace: "agent", name, path: ["whoami"] }`.

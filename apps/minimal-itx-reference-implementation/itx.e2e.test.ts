@@ -8,7 +8,7 @@
 //
 // Each capability test uses a FRESH agent coordinate (prj:shared/agents/<rand>)
 // so durable state never bleeds between runs. The chain test reuses prj:shared
-// as the parent but only with sturdy/replace-safe provides.
+// as the parent context but only with sturdy/replace-safe provides.
 
 import { describe, expect, it } from "vitest";
 import { withItx } from "./client.ts";
@@ -129,7 +129,7 @@ describe("itx reference implementation", () => {
     {
       using agent = agentItx("chain");
       expect(await agent.calc.add(2, 3)).toBe(5);
-      expect(await agent.parent.calc.add(2, 3)).toBe(5);
+      expect(await agent.itxParent.calc.add(2, 3)).toBe(5);
       expect((await agent.whoami()).startsWith("agent ")).toBe(true);
       // Shadow the inherited cap locally; the project is unaffected.
       await agent.provideCapability({
@@ -137,7 +137,7 @@ describe("itx reference implementation", () => {
         capability: { add: (a: number, b: number) => a * b },
       });
       expect(await agent.calc.add(2, 3)).toBe(6);
-      expect(await agent.parent.calc.add(2, 3)).toBe(5);
+      expect(await agent.itxParent.calc.add(2, 3)).toBe(5);
     }
 
     {
@@ -285,27 +285,27 @@ describe("itx reference implementation", () => {
   it("16. inherited __global__ projects catalog is principal-scoped", async () => {
     using project = projectItx();
     expect([...(await project.projects.list())].sort()).toEqual(["alice", "shared"]);
-    expect([...(await project.parent.projects.list())].sort()).toEqual(["alice", "shared"]);
+    expect([...(await project.itxParent.projects.list())].sort()).toEqual(["alice", "shared"]);
     await expectRejects(() => project.projects.get("bob")).toThrow();
   });
 
-  it("17. parent is a sturdy built-in entrypoint", async () => {
+  it("17. itxParent is a sturdy built-in entrypoint", async () => {
     using agent = agentItx("describe-chain");
     const d = await agent.describe();
     expect(d.builtins.some((c: any) => c.path.join(".") === "whoami")).toBe(true);
-    const parent = d.builtins.find((c: any) => c.path.join(".") === "parent");
-    expect(parent?.address).toMatchObject({
+    const itxParent = d.builtins.find((c: any) => c.path.join(".") === "itxParent");
+    expect(itxParent?.address).toMatchObject({
       entrypoint: "ItxEntrypoint",
       props: { path: "/", projectId: "shared" },
       type: "worker-entrypoint",
     });
 
-    const project = await agent.parent.describe();
+    const project = await agent.itxParent.describe();
     expect(project.builtins.some((c: any) => c.path.join(".") === "fetch")).toBe(true);
     expect(project.builtins.some((c: any) => c.path.join(".") === "repo")).toBe(true);
-    const root = await agent.parent.parent.describe();
+    const root = await agent.itxParent.itxParent.describe();
     expect(root.builtins.some((c: any) => c.path.join(".") === "projects")).toBe(true);
-    expect(root.builtins.some((c: any) => c.path.join(".") === "parent")).toBe(false);
+    expect(root.builtins.some((c: any) => c.path.join(".") === "itxParent")).toBe(false);
     expect((d as any).parentCapabilities).toBeUndefined();
   });
 
@@ -367,19 +367,31 @@ describe("itx reference implementation", () => {
     using itx = agentItx("reserved-control-name");
     await expectRejects(() =>
       itx.provideCapability({ path: ["describe"], capability: () => "shadow" }),
-    ).toThrow(/reserved ITX capability root/);
+    ).toThrow(/reserved ITX control root/);
     await expectRejects(() =>
-      itx.provideCapability({ path: ["parent"], capability: () => "shadow" }),
-    ).toThrow(/reserved ITX capability root/);
+      itx.provideCapability({ path: ["itxParent"], capability: () => "shadow" }),
+    ).toThrow(/reserved ITX path segment/);
     await expectRejects(() =>
-      itx.provideCapability({ path: ["parent", "fetch"], capability: () => "shadow" }),
-    ).toThrow(/reserved ITX capability root/);
+      itx.provideCapability({ path: ["itxParent", "fetch"], capability: () => "shadow" }),
+    ).toThrow(/reserved ITX path segment/);
+    await expectRejects(() =>
+      itx.provideCapability({ path: ["toolbox", "itxParent"], capability: () => "shadow" }),
+    ).toThrow(/reserved ITX path segment/);
+    await itx.provideCapability({
+      path: ["pathCallToolbox"],
+      capability: {
+        invokeCapability: () => "forged",
+      },
+    });
+    await expectRejects(() => itx.pathCallToolbox.itxParent.projects.list()).toThrow(
+      /reserved ITX path segment "itxParent"/,
+    );
     const description = await itx.describe();
     expect(typeof description).toBe("object");
     expect(description.capabilities.some((cap: any) => cap.path.join(".") === "describe")).toBe(
       false,
     );
-    expect(description.capabilities.some((cap: any) => cap.path.join(".") === "parent")).toBe(
+    expect(description.capabilities.some((cap: any) => cap.path.join(".") === "itxParent")).toBe(
       false,
     );
   });

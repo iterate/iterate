@@ -40,8 +40,8 @@ export type ProvideArgs = {
 };
 
 /** What `describe()` returns: this context's folded capability table and its
- *  host-created built-ins. The parent is visible as a reserved built-in named
- *  `parent`, not as a separate nested field. */
+ *  host-created built-ins. Parent traversal is visible as the reserved built-in
+ *  path `itxParent`, not as a separate nested field. */
 export type DescribeResult = {
   capabilities: CapabilityRecord[];
   builtins: CapabilityRecord[];
@@ -49,7 +49,7 @@ export type DescribeResult = {
 };
 
 /**
- * The itx context protocol. A served context AND a dialable parent both answer
+ * The itx context protocol. A served context and a dialable parent context both answer
  * it. `ItxProcessor` and `GlobalItx` each `implements` this, so the two
  * cannot drift apart: change one method's shape and the other stops compiling.
  *
@@ -74,7 +74,8 @@ export const ITX_CONTROL_NAMES = new Set([
   "revokeCapability",
   "describe",
 ]);
-const RESERVED_CAPABILITY_ROOT_NAMES = new Set([...ITX_CONTROL_NAMES, "parent"]);
+export const ITX_PARENT_PATH_SEGMENT = "itxParent";
+const RESERVED_CONTROL_ROOTS = ITX_CONTROL_NAMES;
 
 // Capability paths are also JavaScript property paths on the Cap'n Web surface:
 // `itx.slack.chat.postMessage()` becomes
@@ -106,6 +107,14 @@ export function assertCapabilityPath(path: string[]) {
     ) {
       throw new Error(`invalid capability path segment "${String(segment)}"`);
     }
+  }
+}
+
+function assertNoReservedProviderSegments(path: string[]) {
+  if (path.includes(ITX_PARENT_PATH_SEGMENT)) {
+    throw new Error(
+      `reserved ITX path segment "${ITX_PARENT_PATH_SEGMENT}" cannot appear inside user capability paths`,
+    );
   }
 }
 
@@ -455,11 +464,11 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
     if (local) return await local(args);
 
     // Parentage is now expressed as an ordinary host-created built-in at
-    // ["parent"], usually a sturdy worker-entrypoint address. A miss is just a
+    // ["itxParent"], usually a sturdy worker-entrypoint address. A miss is just a
     // retry through that built-in with the original path appended, so implicit
-    // inheritance and explicit `itx.parent.foo()` use the same dial/replay path.
-    const parent = this.#resolveLocal(this.#builtins, ["parent", ...path]);
-    if (parent) return await parent(args);
+    // inheritance and explicit `itx.itxParent.foo()` use the same dial/replay path.
+    const itxParent = this.#resolveLocal(this.#builtins, [ITX_PARENT_PATH_SEGMENT, ...path]);
+    if (itxParent) return await itxParent(args);
 
     throw new Error(`no capability "${path.join(".")}"`);
   }
@@ -470,6 +479,13 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
     const hit = resolveLongestPrefix(caps, path);
     if (!hit) return null;
     const { record, rest } = hit;
+    // `itxParent` is topology syntax. Only the host-created `["itxParent"]`
+    // built-in may consume it; user providers never see it in replay suffixes.
+    if (record.path[0] !== ITX_PARENT_PATH_SEGMENT && rest.includes(ITX_PARENT_PATH_SEGMENT)) {
+      throw new Error(
+        `reserved ITX path segment "${ITX_PARENT_PATH_SEGMENT}" cannot be provided by a capability`,
+      );
+    }
     if (record.address) {
       // Dynamic Durable Object facets need the mount path in their facet
       // identity, so replacing/reproviding the same dynamic DO at a different
@@ -494,11 +510,10 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
 
   #assertUserCapabilityPath(path: string[]) {
     assertCapabilityPath(path);
+    assertNoReservedProviderSegments(path);
     const control = path[0];
-    if (control && RESERVED_CAPABILITY_ROOT_NAMES.has(control)) {
-      throw new Error(
-        `reserved ITX capability root "${control}" cannot be provided as a capability`,
-      );
+    if (control && RESERVED_CONTROL_ROOTS.has(control)) {
+      throw new Error(`reserved ITX control root "${control}" cannot be provided as a capability`);
     }
   }
 

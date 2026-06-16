@@ -27,8 +27,8 @@ already running. `npm test` needs `npm run dev` up (or set `ITX_BASE` /
 
 Together they exercise, end to end: live capabilities, dynamic workers, a
 repo-backed dynamic Durable Object facet from `counter.js`, trusted Durable
-Object built-ins, deep dotted paths + longest-prefix shadowing, the parent
-chain via the reserved sturdy `parent` built-in, the stateless `__global__`
+Object built-ins, deep dotted paths + longest-prefix shadowing, the itxParent
+chain via the reserved sturdy `itxParent` built-in, the stateless `__global__`
 root, auth at the connect door, and codemode.
 
 Run one project with `npm test -- --project node` (or `--project browser`).
@@ -44,7 +44,7 @@ await itx.greeter("alice"); // "hi alice" — naked deep path, no client path pr
 ```
 
 The root ITX control names (`provideCapability`, `invokeCapability`,
-`revokeCapability`, `describe`) and the reserved `parent` built-in root cannot
+`revokeCapability`, `describe`) and the reserved `itxParent` built-in root cannot
 be mounted as user capabilities. Script execution is intentionally HTTP-only:
 use `POST /api/itx` rather than `itx.runScript()` over the WebSocket model.
 

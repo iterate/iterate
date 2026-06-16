@@ -53,7 +53,7 @@ export const ITX_EXAMPLES: ItxExample[] = [
     id: "project-builtin-inherited",
     title: "Reach a project built-in inherited by an agent",
     description:
-      "An agent context has a reserved sturdy `parent` built-in pointing at its project context, so the project's `repo` built-in resolves through the chain without the agent providing anything.",
+      "An agent context has a reserved sturdy `itxParent` built-in pointing at its project context, so the project's `repo` built-in resolves through the chain without the agent providing anything.",
     context: "agent",
     runtimes: ALL_RUNTIMES,
     code: `

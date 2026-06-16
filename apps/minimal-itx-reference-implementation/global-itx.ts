@@ -1,6 +1,6 @@
 // global-itx.ts — the __global__ platform capability root.
 //
-// The chain bottoms out here: every project context's parent, and itself
+// The chain bottoms out here: every project context's `itxParent`, and itself
 // parentless. It is the ONE context that is NOT a Durable Object and NOT a
 // StreamProcessor — there is no stream to fold and nothing to persist, so it is
 // just CONSTRUCTED IN CODE (per connection) and answers the SAME `ItxContext`
@@ -9,7 +9,7 @@
 //   • READ-ONLY: `provideCapability` / `revokeCapability` throw. You cannot
 //     append to a context that has no log — so "you cannot provide into the
 //     root" is structural, not a guard someone must remember.
-//   • NO PARENT: a capability miss has nowhere left to climb, so it throws.
+//   • NO ITX PARENT: a capability miss has nowhere left to climb, so it throws.
 //
 // Its capabilities are fixed, project-agnostic "catalog" caps wired in as code.
 // A single `projects` cap exposes `{ list, get }`.
@@ -34,8 +34,8 @@ export class GlobalItx implements ItxContext {
   }
 
   // Read side: longest registered prefix wins, then replay the remainder onto the
-  // resolved cap — the same primitive `Itx` uses. The root has NO parent, so a
-  // miss bottoms out here.
+  // resolved cap — the same primitive `Itx` uses. The root has no `itxParent`,
+  // so a miss bottoms out here.
   async invokeCapability({
     path,
     args = [],
@@ -74,12 +74,12 @@ export class GlobalItx implements ItxContext {
       );
     }
     throw new Error(
-      `no capability "${path.join(".")}" (the __global__ root context has no parent)`,
+      `no capability "${path.join(".")}" (the __global__ root context has no itxParent)`,
     );
   }
 
   // Same `DescribeResult` shape as any context (enforced by `implements
-  // ItxContext`). The root has no fold and no parent built-in, so
+  // ItxContext`). The root has no fold and no `itxParent` built-in, so
   // `capabilities` is empty and `builtins` contains only the project catalog.
   async describe(): Promise<DescribeResult> {
     return {

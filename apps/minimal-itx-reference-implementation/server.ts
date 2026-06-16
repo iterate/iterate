@@ -218,8 +218,8 @@ export class ItxDurableObject extends DurableObject<Env> {
   }
 
   // A context is born with built-in capabilities defined by the DOMAIN object it
-  // is scoped to. The project context gets `parent` + Project DO built-ins; an
-  // agent context gets `parent` + Agent DO built-ins. The host decides WHICH
+  // is scoped to. The project context gets `itxParent` + Project DO built-ins; an
+  // agent context gets `itxParent` + Agent DO built-ins. The host decides WHICH
   // coordinate maps to WHICH domain object; the domain object defines WHAT it
   // offers.
   #contextBuiltinCapabilities(): ProvideArgs[] {
@@ -245,8 +245,8 @@ export class ItxDurableObject extends DurableObject<Env> {
       // `ItxEntrypoint` is a path-call surface: it exposes
       // invokeCapability({ path, args }), not a literal method for every
       // inherited capability. Wrap that shape with the same server-side proxy the
-      // WebSocket edge uses, so a sturdy parent address can answer
-      // `itx.parent.fetch(...)` and implicit miss fallback identically.
+      // WebSocket edge uses, so a sturdy itxParent address can answer
+      // `itx.itxParent.fetch(...)` and implicit miss fallback identically.
       if (typeof entrypoint.invokeCapability === "function") {
         return pathProxyToInvokeCapability({
           invokeCapability: (args: { path: string[]; args?: unknown[] }) =>
@@ -523,7 +523,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
   static builtinCapabilities(name: string): ProvideArgs[] {
     return [
       {
-        path: ["parent"],
+        path: ["itxParent"],
         capability: {
           type: "worker-entrypoint",
           entrypoint: "ItxEntrypoint",
@@ -556,7 +556,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
 // The Agent DO. Lives UNDER a project (coordinate "<id>/agents/<name>"). Owns its
 // identity and defines its own built-ins (whoami). An agent context is born with
-// these AND a reserved `parent` built-in pointing at its project, so an agent can
+// these AND a reserved `itxParent` built-in pointing at its project, so an agent can
 // call its own `whoami` AND the project's inherited `fetch`.
 export class AgentDurableObject extends DurableObject<Env> {
   whoami(): string {
@@ -567,7 +567,7 @@ export class AgentDurableObject extends DurableObject<Env> {
     const [projectId] = name.split("/");
     return [
       {
-        path: ["parent"],
+        path: ["itxParent"],
         capability: {
           type: "worker-entrypoint",
           entrypoint: "ItxEntrypoint",
@@ -704,17 +704,17 @@ export default {
     // The WebSocket surface is intentionally one operation: invokeCapability.
     // That keeps root control-name dispatch in the context, not in the Cap'n Web
     // proxy. The only edge policy here is principal-scoping inherited global
-    // catalog reads. `projects.*`, `parent.projects.*`, and
-    // `parent.parent.projects.*` are the same global catalog from an external
-    // caller's point of view, so strip leading `parent` segments before applying
-    // the existing catalog scope. Internal parent entrypoints still run wider,
+    // catalog reads. `projects.*`, `itxParent.projects.*`, and
+    // `itxParent.itxParent.projects.*` are the same global catalog from an external
+    // caller's point of view, so strip leading `itxParent` segments before applying
+    // the existing catalog scope. Internal itxParent entrypoints still run wider,
     // which is tracked as a later hardening task.
     return newWorkersRpcResponse(
       request,
       pathProxyToInvokeCapability({
         invokeCapability: (args: { path: string[]; args?: unknown[] }) => {
           const globalCatalogPath = args.path.slice();
-          while (globalCatalogPath[0] === "parent") globalCatalogPath.shift();
+          while (globalCatalogPath[0] === "itxParent") globalCatalogPath.shift();
           if (globalCatalogPath[0] === "projects") {
             return new GlobalItx({ access: auth.projects }).invokeCapability({
               ...args,
