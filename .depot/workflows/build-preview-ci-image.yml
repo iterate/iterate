@@ -8,7 +8,7 @@ on:
 
 env:
   PREVIEW_CI_IMAGE: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-  PNPM_CONFIG_STORE_DIR: /mnt/cache/pnpm-store
+  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
 
 jobs:
   build-image:
@@ -17,13 +17,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Mount pnpm cache disk
-        uses: depot/cache-mount@v1
-        with:
-          name: iterate-preview-pnpm-store
-          path: /mnt/cache/pnpm-store
-          write-lock: /mnt/cache/pnpm-store
 
       - name: Setup Node
         uses: actions/setup-node@v4

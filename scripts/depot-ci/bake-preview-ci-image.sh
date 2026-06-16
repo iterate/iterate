@@ -5,7 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
 pnpm_version="${PNPM_VERSION:-10.24.0}"
-export PNPM_CONFIG_STORE_DIR="${PNPM_CONFIG_STORE_DIR:-/mnt/cache/pnpm-store}"
+export PNPM_CONFIG_STORE_DIR="${PNPM_CONFIG_STORE_DIR:-/home/runner/.pnpm-store}"
 
 run_as_root() {
   if [[ "${EUID}" -eq 0 ]]; then
