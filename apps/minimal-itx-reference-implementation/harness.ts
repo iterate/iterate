@@ -15,16 +15,17 @@
 //   10. runtime matrix: same scripts from Node, CLI, POST script, dynamic
 //       worker, and a real browser
 //   11. client-normalized raw SDK-shaped live providers and disconnect/offline
-//   12. dynamic worker nested RpcTarget auto-proxying
-//   13. worker-to-worker composition through env.ITX.get()
-//   14. dynamic Durable Object facets are isolated per mounted capability path
-//   15. inherited __global__ catalog stays scoped to the socket principal
-//   16. describe() exposes the agent → project → __global__ capability chain
-//   17. own capabilities shadow built-ins, and revoke restores the built-in
-//   18. trusted durable-object.path built-ins replay their prefix
-//   19. failed scripts still fold a completed error record
-//   20. codemode can durably provide a capability for later callers
-//   21. root ITX control names are reserved and cannot be shadowed
+//   12. Slack-shaped non-live provider backed by a stored dynamic-worker address
+//   13. dynamic worker nested RpcTarget auto-proxying
+//   14. worker-to-worker composition through env.ITX.get()
+//   15. dynamic Durable Object facets are isolated per mounted capability path
+//   16. inherited __global__ catalog stays scoped to the socket principal
+//   17. describe() exposes the agent → project → __global__ capability chain
+//   18. own capabilities shadow built-ins, and revoke restores the built-in
+//   19. trusted durable-object.path built-ins replay their prefix
+//   20. failed scripts still fold a completed error record
+//   21. codemode can durably provide a capability for later callers
+//   22. root ITX control names are reserved and cannot be shadowed
 //
 // Each capability test uses a FRESH agent coordinate (prj:shared/agents/<rand>)
 // so durable state never bleeds between runs. The chain test reuses prj:shared
@@ -67,6 +68,33 @@ const nestedKitWorker = {
     },
   },
   entrypoint: "KitEntrypoint",
+  props: {},
+};
+
+const addressedSlackWorker = {
+  type: "dynamic-worker",
+  source: {
+    type: "inline",
+    mainModule: "slack.js",
+    modules: {
+      "slack.js": `
+        import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+        class ChatTarget extends RpcTarget {
+          postMessage(body) {
+            return {
+              args: [body],
+              method: "chat.postMessage",
+              provider: "dynamic-worker-address",
+            };
+          }
+        }
+        export class SlackEntrypoint extends WorkerEntrypoint {
+          get chat() { return new ChatTarget(); }
+        }
+      `,
+    },
+  },
+  entrypoint: "SlackEntrypoint",
   props: {},
 };
 
@@ -145,6 +173,18 @@ const postScript = (path: string, code: string) =>
 await check("1. live capability: provide → invoke → describe → revoke", async () => {
   const itx = agentItx("live");
   try {
+    let called = 0;
+    await itx.provideCapability({
+      path: ["logsomething"],
+      capability: () => {
+        called++;
+        console.log("called");
+        return "logged";
+      },
+    });
+    assert.equal(await itx.logsomething(), "logged");
+    assert.equal(called, 1, "a bare function capability is still a callable leaf");
+
     await itx.provideCapability({
       path: ["greeter"],
       capability: (name: string) => `hi ${name}`,
@@ -371,7 +411,32 @@ await check("11. raw SDK-shaped live provider is client-normalized and goes offl
   }
 });
 
-await check("12. dynamic worker auto-proxy reaches nested RpcTarget members", async () => {
+await check("12. Slack-shaped non-live provider is a stored dynamic-worker address", async () => {
+  const itx = agentItx("addressed-slack");
+  try {
+    // Same caller shape as the live SDK test above:
+    //   await itx.slack.chat.postMessage(...)
+    //
+    // The difference is the lifetime. This provided value is plain address data,
+    // so `provideCapability` writes the address into the event log and stores no
+    // in-memory live stub. Later calls dial the dynamic worker from that address,
+    // then replay the unresolved suffix `chat.postMessage` on the loaded entrypoint.
+    await itx.provideCapability({ path: ["slack"], capability: addressedSlackWorker });
+    assert.deepEqual(await itx.slack.chat.postMessage({ text: "hi from address" }), {
+      args: [{ text: "hi from address" }],
+      method: "chat.postMessage",
+      provider: "dynamic-worker-address",
+    });
+
+    const row = (await itx.describe()).capabilities.find((c: any) => c.path.join(".") === "slack");
+    assert.equal(row?.address?.type, "dynamic-worker");
+    assert.equal(row?.address?.entrypoint, "SlackEntrypoint");
+  } finally {
+    dispose(itx);
+  }
+});
+
+await check("13. dynamic worker auto-proxy reaches nested RpcTarget members", async () => {
   const itx = agentItx("nested-worker");
   try {
     // This is stronger than the calc smoke test: the dynamic worker returns a
@@ -384,7 +449,7 @@ await check("12. dynamic worker auto-proxy reaches nested RpcTarget members", as
   }
 });
 
-await check("13. worker-to-worker composition uses the worker's scoped env.ITX.get()", async () => {
+await check("14. worker-to-worker composition uses the worker's scoped env.ITX.get()", async () => {
   const itx = agentItx("worker-to-worker");
   try {
     // `report` has no direct binding to `inventory`; it discovers it through
@@ -402,7 +467,7 @@ await check("13. worker-to-worker composition uses the worker's scoped env.ITX.g
 });
 
 await check(
-  "14. dynamic Durable Object facets are isolated per mounted capability path",
+  "15. dynamic Durable Object facets are isolated per mounted capability path",
   async () => {
     const itx = agentItx("facet-isolation");
     try {
@@ -421,7 +486,7 @@ await check(
   },
 );
 
-await check("15. inherited __global__ projects catalog is principal-scoped", async () => {
+await check("16. inherited __global__ projects catalog is principal-scoped", async () => {
   const project = projectItx();
   try {
     // The project context parents to __global__, but the edge session still
@@ -433,7 +498,7 @@ await check("15. inherited __global__ projects catalog is principal-scoped", asy
   }
 });
 
-await check("16. describe nests agent → project → __global__ built-ins", async () => {
+await check("17. describe nests agent → project → __global__ built-ins", async () => {
   const agent = agentItx("describe-chain");
   try {
     // describe() is the one read verb: local folded caps, local built-ins, then
@@ -453,7 +518,7 @@ await check("16. describe nests agent → project → __global__ built-ins", asy
   }
 });
 
-await check("17. own capability shadows and then restores a built-in", async () => {
+await check("18. own capability shadows and then restores a built-in", async () => {
   const agent = agentItx("shadow-builtin");
   try {
     // Own folded capabilities resolve before constructor-injected built-ins. An
@@ -468,7 +533,7 @@ await check("17. own capability shadows and then restores a built-in", async () 
   }
 });
 
-await check("18. trusted durable-object built-in replays its path prefix", async () => {
+await check("19. trusted durable-object built-in replays its path prefix", async () => {
   const project = projectItx();
   try {
     // Project `fetch` is a trusted durable-object address whose stored prefix is
@@ -483,7 +548,7 @@ await check("18. trusted durable-object built-in replays its path prefix", async
   }
 });
 
-await check("19. failed scripts still fold a completed error record", async () => {
+await check("20. failed scripts still fold a completed error record", async () => {
   const path = agentPath("script-error");
   const itx = agentItx("script-error");
   try {
@@ -500,7 +565,7 @@ await check("19. failed scripts still fold a completed error record", async () =
   }
 });
 
-await check("20. codemode can durably provide a capability for later callers", async () => {
+await check("21. codemode can durably provide a capability for later callers", async () => {
   const path = agentPath("script-provide");
   const response = await postScript(
     path,
@@ -526,7 +591,7 @@ await check("20. codemode can durably provide a capability for later callers", a
   }
 });
 
-await check("21. root ITX control names are reserved and cannot be shadowed", async () => {
+await check("22. root ITX control names are reserved and cannot be shadowed", async () => {
   const itx = agentItx("reserved-control-name");
   try {
     // The ergonomic dotted surface uses the same namespace for control calls
