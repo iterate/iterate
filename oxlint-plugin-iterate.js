@@ -172,6 +172,46 @@ function getFunctionBodyLineCount(sourceCode, fn) {
 }
 
 /**
+ * @param {import("eslint").SourceCode} sourceCode
+ * @param {import("estree").Function} fn
+ */
+function hasCommentInsideFunction(sourceCode, fn) {
+  const bodyRange = fn.body?.range;
+  if (!bodyRange) return false;
+
+  return sourceCode.getAllComments().some((comment) => {
+    if (!comment.range) return false;
+    return comment.range[0] > bodyRange[0] && comment.range[1] < bodyRange[1];
+  });
+}
+
+/**
+ * @param {import("eslint").SourceCode} sourceCode
+ * @param {import("estree").Node} node
+ */
+function hasLeadingJsDocComment(sourceCode, node) {
+  const nodeStartLine = node.loc?.start.line;
+
+  return sourceCode.getCommentsBefore(node).some((comment) => {
+    if (comment.type !== "Block") return false;
+    if (!comment.value.trim().startsWith("*")) return false;
+    return !nodeStartLine || comment.loc?.end.line === nodeStartLine - 1;
+  });
+}
+
+/**
+ * @param {import("eslint").SourceCode} sourceCode
+ * @param {import("estree").Function} fn
+ */
+function hasTypePredicateReturnType(sourceCode, fn) {
+  const returnType = fn.returnType || fn.typeAnnotation;
+  if (!returnType) return false;
+
+  const returnTypeText = sourceCode.getText(returnType);
+  return /\basserts\b/.test(returnTypeText) || /\bis\b/.test(returnTypeText);
+}
+
+/**
  * @param {import("eslint").Scope.Scope | null} scope
  * @param {string} name
  */
@@ -628,7 +668,7 @@ const plugin = {
         type: "suggestion",
         docs: {
           description:
-            "Flag tiny non-exported helper functions that are only used once. Inline them so the reader can see what's actually happening instead of chasing an indirection.",
+            "Flag undocumented tiny non-exported helper functions that are only used once. Inline them so the reader can see what's actually happening instead of chasing an indirection.",
         },
       },
       create(context) {
@@ -650,6 +690,9 @@ const plugin = {
 
           const bodyLines = getFunctionBodyLineCount(context.sourceCode, fn);
           if (bodyLines > MAX_BODY_LINES) return;
+          if (hasLeadingJsDocComment(context.sourceCode, statement)) return;
+          if (hasCommentInsideFunction(context.sourceCode, fn)) return;
+          if (hasTypePredicateReturnType(context.sourceCode, fn)) return;
 
           const scope = context.sourceCode.getScope(statement);
           const variable = findVariableInScopeChain(scope, id.name);
