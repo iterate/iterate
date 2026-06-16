@@ -76,6 +76,39 @@ export const ITX_CONTROL_NAMES = new Set([
   "describe",
 ]);
 
+// Capability paths are also JavaScript property paths on the Cap'n Web surface:
+// `itx.slack.chat.postMessage()` becomes
+// `invokeCapability({ path: ["slack", "chat", "postMessage"], ... })`.
+// Keep them boring. Empty paths have no root capability, non-identifiers cannot
+// be called with dotted syntax, and prototype/RPC probe names would collide with
+// the proxy/runtime rather than name a real capability.
+const INVALID_PATH_SEGMENTS = new Set([
+  "__proto__",
+  "constructor",
+  "prototype",
+  "then",
+  "apply",
+  "call",
+  "bind",
+  "dup",
+  "onRpcBroken",
+]);
+
+export function assertCapabilityPath(path: string[]) {
+  if (!Array.isArray(path) || path.length === 0) {
+    throw new Error("capability path must contain at least one segment");
+  }
+  for (const segment of path) {
+    if (
+      typeof segment !== "string" ||
+      !/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(segment) ||
+      INVALID_PATH_SEGMENTS.has(segment)
+    ) {
+      throw new Error(`invalid capability path segment "${String(segment)}"`);
+    }
+  }
+}
+
 const CAPABILITY_ADDRESS_TYPES = new Set([
   "rpc",
   "dynamic-worker",
@@ -141,6 +174,21 @@ export function retain(target: any): any {
   return target;
 }
 
+function disposeLiveValue(target: any, seen = new Set<unknown>()) {
+  if (!target || seen.has(target)) return;
+  seen.add(target);
+  try {
+    target[Symbol.dispose]?.();
+  } catch {
+    // Best-effort cleanup: releasing a stale live provider should never mask the
+    // provide/revoke that made it stale. A later call will fail through normal
+    // offline/no-capability paths if the provider is already gone.
+  }
+  if (typeof target === "object") {
+    for (const value of Object.values(target)) disposeLiveValue(value, seen);
+  }
+}
+
 /** The bridge (live-stub map) is keyed by path. A Map needs a primitive key,
  *  so we derive one from the path ARRAY — `JSON.stringify` is unambiguous even
  *  if a segment contains the separator we'd otherwise pick. ONE definition, used
@@ -185,11 +233,19 @@ export async function replayPath(target: any, rest: string[], args: unknown[]) {
   return await receiver[rest.at(-1)!](...args);
 }
 
-const liveInvoker = (capability: unknown) => {
+type LiveInvoker = ((rest: string[], args: unknown[]) => unknown) & {
+  [Symbol.dispose]?: () => void;
+};
+
+const liveInvoker = (capability: unknown): LiveInvoker => {
   const retained = retain(capability);
-  return isPathCallProvider(capability)
-    ? (rest: string[], args: unknown[]) => retained.invokeCapability({ path: rest, args })
-    : (rest: string[], args: unknown[]) => replayPath(retained, rest, args);
+  const invoke = (
+    isPathCallProvider(capability)
+      ? (rest: string[], args: unknown[]) => retained.invokeCapability({ path: rest, args })
+      : (rest: string[], args: unknown[]) => replayPath(retained, rest, args)
+  ) as LiveInvoker;
+  invoke[Symbol.dispose] = () => disposeLiveValue(retained);
+  return invoke;
 };
 
 // ---------------------------------------------------------------------------
@@ -202,7 +258,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
   // Live capabilities are in-memory retained invokers keyed by mount path. The
   // durable fold stores only `address: null`; this map holds the actual callable
   // and whether the provider is member-replayed or path-called.
-  #liveCapabilities = new Map<string, ReturnType<typeof liveInvoker>>();
+  #liveCapabilities = new Map<string, LiveInvoker>();
 
   // Injected dialer: sturdy capability address → callable stub. Parent contexts
   // are host-injected handles, so the dialer only knows addresses that can appear
@@ -243,7 +299,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
     this.#builtins = (args.builtinCapabilities ?? []).map((b) => {
       const address = isCapabilityAddress(b.capability) ? b.capability : null;
       if (address === null) {
-        this.#liveCapabilities.set(bridgeKey(b.path), liveInvoker(b.capability));
+        this.#setLiveCapability(b.path, b.capability);
       }
       return {
         path: b.path,
@@ -337,11 +393,10 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
   async provideCapability({ path, capability, instructions, types }: ProvideArgs) {
     this.#assertUserCapabilityPath(path);
     const address = isCapabilityAddress(capability) ? capability : null;
-    const key = bridgeKey(path);
     if (address === null) {
-      this.#liveCapabilities.set(key, liveInvoker(capability));
+      this.#setLiveCapability(path, capability);
     } else {
-      this.#liveCapabilities.delete(key);
+      this.#deleteLiveCapability(path);
     }
     const committed = await this.ctx.stream.append({
       event: {
@@ -355,7 +410,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
 
   async revokeCapability({ path }: { path: string[] }) {
     this.#assertUserCapabilityPath(path);
-    this.#liveCapabilities.delete(bridgeKey(path));
+    this.#deleteLiveCapability(path);
     const committed = await this.ctx.stream.append({
       event: { type: "events.iterate.com/itx/capability-revoked", payload: { path } },
     });
@@ -386,6 +441,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
     path: string[];
     args?: unknown[];
   }): Promise<unknown> {
+    assertCapabilityPath(path);
     const control = path[0];
     if (control && ITX_CONTROL_NAMES.has(control)) {
       if (path.length !== 1) throw new Error(`reserved ITX control path "${control}"`);
@@ -439,9 +495,22 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
   }
 
   #assertUserCapabilityPath(path: string[]) {
+    assertCapabilityPath(path);
     const control = path[0];
     if (control && ITX_CONTROL_NAMES.has(control)) {
       throw new Error(`reserved ITX control path "${control}" cannot be provided as a capability`);
     }
+  }
+
+  #setLiveCapability(path: string[], capability: unknown) {
+    const key = bridgeKey(path);
+    this.#liveCapabilities.get(key)?.[Symbol.dispose]?.();
+    this.#liveCapabilities.set(key, liveInvoker(capability));
+  }
+
+  #deleteLiveCapability(path: string[]) {
+    const key = bridgeKey(path);
+    this.#liveCapabilities.get(key)?.[Symbol.dispose]?.();
+    this.#liveCapabilities.delete(key);
   }
 }

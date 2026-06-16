@@ -194,6 +194,7 @@ export class ItxDurableObject extends DurableObject<Env> {
       }),
   );
   #subscriptionConfigured = false;
+  #dynamicDurableObjectVersions = new Map<string, string>();
 
   // A context is named by its coordinate: "prj:<id>" is the project context,
   // "prj:<id>/agents/<name>" is an agent context under it. This extracts the
@@ -248,20 +249,11 @@ export class ItxDurableObject extends DurableObject<Env> {
     if (address?.type === "dynamic-durable-object") {
       const facetName = `dynamic-durable-object:${hashString(
         JSON.stringify({
-          source: address.source,
           className: address.className,
           mountPath: address.mountPath,
         }),
       )}`;
-      const facet = (this.ctx as any).facets.get(facetName, async () => {
-        const worker = await this.#loadDynamicWorker(address.source);
-        const klass = worker.getDurableObjectClass?.(address.className);
-        if (!klass) {
-          throw new Error(`Dynamic worker did not export DurableObject ${address.className}.`);
-        }
-        return { class: klass };
-      });
-      return localPathProxy(facet);
+      return localPathProxy(this.#dynamicDurableObjectFacet(facetName, address));
     }
     if (address?.type === "durable-object") {
       const namespace = this.#durableObjectNamespace(address.namespace);
@@ -301,8 +293,7 @@ export class ItxDurableObject extends DurableObject<Env> {
     };
   }
 
-  async #loadDynamicWorker(source: DynamicWorkerSource) {
-    const resolved = await this.#resolveWorkerSource(source);
+  #loadResolvedDynamicWorker(resolved: ResolvedWorkerSource) {
     return this.env.LOADER.get(`dynamic-worker:${resolved.cacheKey}`, () => ({
       compatibilityDate: resolved.compatibilityDate ?? "2026-05-01",
       compatibilityFlags: ["nodejs_compat"],
@@ -314,6 +305,52 @@ export class ItxDurableObject extends DurableObject<Env> {
       mainModule: resolved.mainModule,
       modules: resolved.modules,
     }));
+  }
+
+  async #loadDynamicWorker(source: DynamicWorkerSource) {
+    const resolved = await this.#resolveWorkerSource(source);
+    return this.#loadResolvedDynamicWorker(resolved);
+  }
+
+  async #dynamicDurableObjectFacet(facetName: string, address: any) {
+    const resolved = await this.#resolveWorkerSource(address.source);
+    const version = JSON.stringify({ cacheKey: resolved.cacheKey, className: address.className });
+    const versionKey = `itx:dynamic-do-facet-version:${facetName}`;
+    const previous =
+      this.#dynamicDurableObjectVersions.get(facetName) ??
+      ((await this.ctx.storage.get(versionKey)) as string | undefined);
+
+    // Cloudflare facets deliberately split durable identity from loaded code:
+    // the facet NAME owns the SQLite database, while abort(name) stops the
+    // current class without deleting that database. So the name excludes source
+    // (storage survives repo/source upgrades), and the source hash is tracked as
+    // supervisor metadata. When it changes, abort first; the next get() starts
+    // the same named facet with the new class and the old storage.
+    if (previous && previous !== version) {
+      (this.ctx as any).facets.abort(
+        facetName,
+        `dynamic Durable Object source changed for ${facetName}`,
+      );
+    }
+    this.#dynamicDurableObjectVersions.set(facetName, version);
+    // This marker is supervisor metadata, not user data. We need it durably so a
+    // freshly-started ItxDurableObject can tell whether an already-running facet
+    // is on the source/class version it is about to serve. But once the in-memory
+    // map has seen the current version, writing the same marker on every method
+    // call is pure hot-path storage churn. Persist only the first observation for
+    // this isolate or an actual version change.
+    if (previous !== version) {
+      await this.ctx.storage.put(versionKey, version);
+    }
+
+    return (this.ctx as any).facets.get(facetName, async () => {
+      const worker = this.#loadResolvedDynamicWorker(resolved);
+      const klass = worker.getDurableObjectClass?.(address.className);
+      if (!klass) {
+        throw new Error(`Dynamic worker did not export DurableObject ${address.className}.`);
+      }
+      return { class: klass };
+    });
   }
 
   // This context's durable event log is its OWN stream, named by coordinate — a

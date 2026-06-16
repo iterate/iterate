@@ -184,15 +184,23 @@ exposed as the `itx` getter for internal Workers RPC use.
 
 ## Files
 
-| File            | What                                                                                                                                                                           |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `contract.ts`   | the itx event log: event schemas + reduced state (`defineProcessorContract`)                                                                                                   |
-| `itx.ts`        | `ItxProcessor extends StreamProcessor` (the fold + verbs + bridge + chain), the shared vocabulary (`replayPath`, `retain`, prefix matching), the `ItxContext` protocol         |
-| `global-itx.ts` | `GlobalItx` — the stateless, read-only root (`implements ItxContext`)                                                                                                          |
-| `auth.ts`       | the connect-door access map and checks                                                                                                                                         |
-| `server.ts`     | the Worker: `pathCallable`, `ItxDurableObject`, `ProjectDurableObject`/`AgentDurableObject`/`RepoDurableObject`, `dial`, the `/api/itx` route; re-exports the real `Stream` DO |
-| `client.ts`     | `withItx` + `connect` — socket opener, naked path calls, and provide-time normalization for raw local SDK objects                                                              |
-| `harness.ts`    | the e2e test (run against `npm run dev`)                                                                                                                                       |
+| File                  | What                                                                                                                                                                           |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `contract.ts`         | the itx event log: event schemas + reduced state (`defineProcessorContract`)                                                                                                   |
+| `itx.ts`              | `ItxProcessor extends StreamProcessor` (the fold + verbs + bridge + chain), the shared vocabulary (`replayPath`, `retain`, prefix matching), the `ItxContext` protocol         |
+| `global-itx.ts`       | `GlobalItx` — the stateless, read-only root (`implements ItxContext`)                                                                                                          |
+| `auth.ts`             | the connect-door access map and checks                                                                                                                                         |
+| `server.ts`           | the Worker: `pathCallable`, `ItxDurableObject`, `ProjectDurableObject`/`AgentDurableObject`/`RepoDurableObject`, `dial`, the `/api/itx` route; re-exports the real `Stream` DO |
+| `client.ts`           | `withItx` + `connect` — socket opener, naked path calls, and provide-time normalization for raw local SDK objects                                                              |
+| `cli.ts`              | a tiny command-line itx runner — the matrix's process-boundary runtime                                                                                                         |
+| `e2e-env.ts`          | which running worker to talk to + which demo principal to authenticate as (the suite never starts a server; mirrors apps/os)                                                   |
+| `examples.ts`         | the catalogue: pure-data script bodies (`itx` + `vars` in scope, explicit `return`) the matrix runs across every runtime                                                       |
+| `example-cases.ts`    | test-only setup + `vars` + assertions per catalogue entry (so `examples.ts` stays pure data, and examples can't silently rot)                                                  |
+| `example-matrix.ts`   | runs a catalogue body through every server-side runtime (node, cli, post-script, dynamic-worker)                                                                               |
+| `itx-scripts.ts`      | reusable sturdy capability sources shared by the tests (dynamic workers, repo-backed DO facets, …)                                                                             |
+| `itx.e2e.test.ts`     | the node vitest project: every core concept, then the catalogue matrix across server runtimes                                                                                  |
+| `itx.browser.test.ts` | the browser vitest project: the catalogue in a real Chromium tab (token-in-query auth)                                                                                         |
+| `vitest.config.ts`    | the two-project (node + browser) config                                                                                                                                        |
 
 ## What this deliberately omits
 

@@ -86,19 +86,24 @@ tests first for anything where production already taught us a failure mode.
 
 ### Regression-test first
 
-- **Live lifecycle**: write a test that shows retained live stubs are released on
-  revoke/replacement and that disconnected live capabilities have the intended
-  offline behavior. Then fix the lifecycle around release/borrow/disconnect.
-- **Dynamic DO source upgrade**: write a test that mounts a stateful dynamic DO,
-  mutates state, changes the source/cache key, and expects the same mounted
-  durable capability to keep its storage. Then fix facet identity if needed.
+Done in the reference implementation:
+
+- **Live lifecycle**: regression coverage now proves replacement/revoke do not
+  leave stale live invokers callable, and the bridge disposes retained live
+  values on replacement/revoke.
+- **Dynamic DO source upgrade**: regression coverage now mounts a stateful
+  dynamic DO, mutates storage, changes source, and proves the same mounted
+  durable capability keeps storage while running the new code.
+- **Path validation**: regression coverage now rejects empty paths,
+  prototype/RPC-probe segments, and reserved root control paths through both
+  `provideCapability` and direct `invokeCapability`.
+
+Backburner:
+
 - **Origin-scoped dynamic workers**: first write a small scenario that makes the
   problem concrete. The likely bug is an inherited dynamic worker receiving an
   ITX handle scoped to the provider context instead of the invoking child
-  context.
-- **Path validation**: write negative tests for empty paths, non-identifiers, and
-  reserved names through both `provideCapability` and direct
-  `invokeCapability`, then add server-side validation.
+  context. Defer until we pick up richer egress/`super`/origin semantics.
 
 ### Double-click separately
 
@@ -109,6 +114,10 @@ tests first for anything where production already taught us a failure mode.
   special built-in capability/address behind the scenes, e.g. `parent` or
   `parentItx`, instead of a separate injected `#parent` concept. This might
   simplify the model further or reveal why parent topology must stay host-owned.
+- **Processor construction/deps shape**: clean up how host dependencies are
+  injected into `ItxProcessor`. The current constructor shape is convenient for
+  the reference implementation, but it risks hiding which pieces are kernel
+  dependencies, which are host topology, and which are domain-object built-ins.
 - **Project egress fetcher POC**: add a real-ish project egress fetch capability
   later. It should prove the important production idea without pulling in all of
   prod egress: `itx.fetch(...)`, shadowability, and eventually `super.fetch`.

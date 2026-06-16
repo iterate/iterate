@@ -12,14 +12,25 @@ Read **[DESIGN.md](./DESIGN.md)** for the model and the file map.
 pnpm install
 npm run typecheck        # tsc --noEmit
 npm run dev              # terminal 1: wrangler dev (real workerd) on :8788
-npm run e2e              # terminal 2: the Node client harness, ✓/✗ per concept
+npm test                 # terminal 2: the vitest e2e suite (node + browser)
 ```
 
-`npm run e2e` needs `npm run dev` running. It exercises, end to end: live
-capabilities, dynamic workers, a repo-backed dynamic Durable Object facet from
-`counter.js`, trusted Durable Object built-ins, deep dotted paths +
-longest-prefix shadowing, the parent chain, the stateless `__global__` root, auth at
-the connect door, and codemode.
+Like `apps/os`, the suite never starts a server — it points at one that is
+already running. `npm test` needs `npm run dev` up (or set `ITX_BASE` /
+`APP_CONFIG_BASE_URL` to a deployed worker). It is a two-project vitest config:
+
+- **node** (`itx.e2e.test.ts`) — every core concept through a naked Cap'n Web
+  stub, then the catalogue (`examples.ts`) across every server-side runtime
+  (node, cli, post-script, dynamic-worker).
+- **browser** (`itx.browser.test.ts`) — the browser leg of the same matrix, in
+  a real Chromium tab via Playwright.
+
+Together they exercise, end to end: live capabilities, dynamic workers, a
+repo-backed dynamic Durable Object facet from `counter.js`, trusted Durable
+Object built-ins, deep dotted paths + longest-prefix shadowing, the parent
+chain, the stateless `__global__` root, auth at the connect door, and codemode.
+
+Run one project with `npm test -- --project node` (or `--project browser`).
 
 ## Connect
 
