@@ -248,8 +248,8 @@ ingress worker for the app base URL, the MCP base URL, the event-docs host,
 and each project hostname base. Fresh stages bootstrap with an automatic
 two-pass deploy (cross-script bindings to not-yet-existing scripts are wired
 by the second pass). Deploys must name the Doppler config explicitly, for
-example `doppler run --project os --config preview_9 -- pnpm deploy` or
-`doppler run --project os --config prd -- pnpm deploy`.
+example `doppler run --project os --config preview_9 -- pnpm run deploy` or
+`doppler run --project os --config prd -- pnpm run deploy`.
 
 ## Smoke Tests
 

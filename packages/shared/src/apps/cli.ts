@@ -79,20 +79,29 @@ export async function runAppCli() {
     );
   }
 
+  const requestedRootCommand = firstNonFlagArgument(process.argv.slice(2));
+  const rpcRequested = requestedRootCommand === REMOTE_GROUP_NAME;
+  const localRootCommandRequested =
+    requestedRootCommand !== undefined &&
+    isLocalRouterRootCommand(localRouter, requestedRootCommand);
   const apiBaseUrlInput =
     baseUrlFlag ??
     process.env.APP_CONFIG_BASE_URL ??
     process.env[config.remote.baseUrlEnvVar] ??
     readLocalDevServerInfo(cwd, { requireLive: true })?.baseUrl ??
     config.remote.defaultBaseUrl;
-  const rpcRequested = firstNonFlagArgument(process.argv.slice(2)) === REMOTE_GROUP_NAME;
 
-  const remoteRouterResult = await loadRemoteRouter({
-    apiBaseUrlInput,
-    config,
-    cwd,
-    packageJson,
-  });
+  const remoteRouterResult = localRootCommandRequested
+    ? ({
+        ok: false,
+        message: `Remote ${REMOTE_GROUP_NAME} commands are not loaded while running local command ${requestedRootCommand}.`,
+      } as const)
+    : await loadRemoteRouter({
+        apiBaseUrlInput,
+        config,
+        cwd,
+        packageJson,
+      });
 
   if (rpcRequested && !remoteRouterResult.ok) {
     throw new Error(remoteRouterResult.message);
@@ -296,6 +305,13 @@ function firstNonFlagArgument(args: string[]) {
   }
 
   return undefined;
+}
+
+export function isLocalRouterRootCommand(
+  localRouter: Record<string, unknown> | undefined,
+  command: string,
+) {
+  return localRouter !== undefined && Object.prototype.hasOwnProperty.call(localRouter, command);
 }
 
 function consumeCliStringFlag(flagName: string): string | undefined {

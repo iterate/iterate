@@ -13,7 +13,6 @@ import { describe, expect, test } from "vitest";
 
 const appRoot = dirname(fileURLToPath(import.meta.url));
 const CF_DEV_PORT = 3015;
-const hasCfWranglerLocal = existsSync(join(appRoot, ".alchemy/local/wrangler.jsonc"));
 const runFullSmoke = process.env.RUNTIME_SMOKE_FULL === "1";
 const describeRuntimeSmoke = process.env.CI ? describe.skip : describe.sequential;
 /**
@@ -229,26 +228,39 @@ describe("sqlfu assets", () => {
 });
 
 describeRuntimeSmoke("runtime smoke", () => {
-  test.skipIf(!runFullSmoke || !hasCfWranglerLocal)("pnpm cf:dev", async () => {
+  test.skipIf(!runFullSmoke)("OS local dev server", async () => {
     const base = `http://127.0.0.1:${CF_DEV_PORT}`;
-    await withServer("pnpm", ["run", "cf:dev"], smokeEnv, base, () => assertFullStack(base));
+    await withServer(
+      "pnpm",
+      ["exec", "tsx", "./scripts/dev.ts", "--no-doppler"],
+      {
+        ...smokeEnv,
+        ALCHEMY_LOCAL: "true",
+        ALCHEMY_STAGE: "runtime-smoke",
+        PORT: String(CF_DEV_PORT),
+      },
+      base,
+      () => assertFullStack(base),
+    );
   });
 
   test.skipIf(!runFullSmoke)(
-    "pnpm cf:deploy",
+    "pnpm run deploy",
     async () => {
-      const { code, output } = await runWithDrainedOutput("pnpm", ["run", "cf:deploy"], {
+      const { code, output } = await runWithDrainedOutput("pnpm", ["run", "deploy"], {
         cwd: appRoot,
         env: { ...stripInheritedAppConfig(process.env), ...smokeEnv },
       });
 
       if (code !== 0) {
-        throw new Error(`cf:deploy exited with code ${code}`);
+        throw new Error(`pnpm run deploy exited with code ${code}`);
       }
 
       const deployUrl = parseAlchemyDeployUrl(output);
       if (!deployUrl) {
-        throw new Error(`Could not find deployed workers.dev URL in cf:deploy output:\n${output}`);
+        throw new Error(
+          `Could not find deployed workers.dev URL in pnpm run deploy output:\n${output}`,
+        );
       }
 
       await assertFullStack(deployUrl);

@@ -241,7 +241,18 @@ async function killDevServer() {
 
   // SIGTERM gives alchemy/vite a chance to mark dev-server.json stopped. We
   // keep SIGKILL out of the public CLI so normal usage has fewer foot-guns.
-  process.kill(info.pid, "SIGTERM");
+  try {
+    process.kill(info.pid, "SIGTERM");
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ESRCH") {
+      releaseLocalDevServerInfo(APP_ROOT, info.pid);
+      return {
+        killed: false,
+        message: `Recorded OS dev server pid ${info.pid} is no longer running.`,
+      };
+    }
+    throw error;
+  }
   const stopped = await waitUntil(() => !isPidAlive(info.pid), DEFAULT_KILL_TIMEOUT_MS, 100);
   if (!stopped) {
     throw new Error(

@@ -162,7 +162,7 @@ warning), and re-executes itself once after finalize to wire them up.
 Steady-state deploys (all scripts exist) never take this path; local dev
 never needs it (one workerd, lazy resolution).
 
-So: `doppler run --project os --config <config> -- pnpm deploy` against a
+So: `doppler run --project os --config <config> -- pnpm run deploy` against a
 fresh stage just works — it deploys twice under the hood.
 
 ## Operational notes

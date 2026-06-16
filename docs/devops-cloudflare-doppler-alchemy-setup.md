@@ -11,8 +11,8 @@ environment it is targeting by branching on hard-coded names.
   `iterate-com`, etc.
 - The repo uses Doppler's monorepo setup in `doppler.yaml`; the current working
   directory chooses the project unless a command explicitly passes `--project`.
-- The Doppler config chooses the environment. Typical configs are `dev_<user>`,
-  `preview_N`, and `prd`.
+- The Doppler config chooses the environment. Typical configs are shared `dev`,
+  personal `dev_<user>`, `preview_N`, and `prd`.
 - `_shared` owns values that are inherited by apps, including Cloudflare account
   credentials and `ALCHEMY_STAGE=${DOPPLER_CONFIG}`.
 - Do not use Doppler `dev_personal` configs. Turn them off whenever you see
@@ -95,22 +95,25 @@ Run the app's deploy script through an explicit Doppler config:
 
 ```bash
 cd apps/os
-doppler run --project os --config dev_jonas -- pnpm deploy
-doppler run --project os --config preview_2 -- pnpm deploy
-doppler run --project os --config prd -- pnpm deploy
+doppler run --project os --config preview_2 -- pnpm run deploy
+doppler run --project os --config prd -- pnpm run deploy
 ```
 
-The same primitive starts local dev, deploys a preview, or deploys production
-depending on the config. Destroy uses the same config:
+Use `pnpm run deploy`, not `pnpm deploy`: pnpm has a built-in `deploy`
+command, so the `run` is required to invoke the package script.
+
+Destroy uses the same explicit config:
 
 ```bash
-doppler run --project os --config preview_2 -- pnpm destroy
+doppler run --project os --config preview_2 -- pnpm run destroy
 ```
 
 ## Local Development
 
 Use `pnpm dev` for normal local OS development. It is the attached shorthand
 for `cd apps/os && pnpm cli dev start`, which wraps Doppler and Alchemy.
+Additional args forward to the CLI dev group, so `pnpm dev status`,
+`pnpm dev attach`, and `pnpm dev restart --detach` are supported.
 
 ```bash
 pnpm install
@@ -123,14 +126,14 @@ The default config is the shared root `dev`: a **fully-local** environment
 external dependency is the dev-global auth at `auth.iterate-dev.com`. Any
 number of worktrees/agents run this concurrently without contention. See
 [Dev environments](dev-environments.md) for lifecycle controls such as
-`pnpm cli dev start --detach`, `attach`, `restart`, and `kill`. Use captun,
-preview, or production when a flow needs a public callback URL.
+`pnpm dev start --detach`, `attach`, `restart`, and `kill`. Use captun, preview,
+or production when a flow needs a public callback URL.
 
 For an explicit app/config:
 
 ```bash
 cd apps/os
-doppler run --project os --config dev_jonas -- pnpm cli dev start
+doppler run --project os --config dev -- pnpm cli dev start
 ```
 
 OS dev configs run fully locally on `http://localhost:<port>`. Personal configs
@@ -283,7 +286,7 @@ same Doppler config and Alchemy entrypoint.
 
 ```bash
 cd apps/os
-doppler run --project os --config prd -- pnpm deploy
+doppler run --project os --config prd -- pnpm run deploy
 ```
 
 ## OS Hostnames

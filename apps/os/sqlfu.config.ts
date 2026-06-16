@@ -10,7 +10,7 @@ const persistRoot = path.join(here, "..", "..", ".alchemy", "miniflare", "v3");
 async function openAlchemyLocalD1(): Promise<DisposableAsyncClient> {
   if (!fs.existsSync(wranglerPath)) {
     throw new Error(
-      `sqlfu.config.ts: ${wranglerPath} not found. Run \`pnpm alchemy:up\` or \`pnpm dev\` once to materialize alchemy's local wrangler config, then retry.`,
+      `sqlfu.config.ts: ${wranglerPath} not found. Run \`pnpm dev\` once to materialize alchemy's local wrangler config, then retry.`,
     );
   }
 

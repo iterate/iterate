@@ -6,8 +6,9 @@ Assume we are debugging:
 2. project ingress under `iterate.app`
 3. project slug `iterate`
 
-The same patterns work for `preview_N` and `dev_<user>` Doppler configs by
-swapping the Doppler config. Run CLI commands from `apps/os`; plain
+Use `preview_N` or `prd` configs for deployed workers. For local dev, use
+`dev` or `dev_<user>` with `pnpm dev`; scripts discover the running server from
+`.alchemy/dev-server.json`. Run CLI commands from `apps/os`; plain
 `pnpm cli ...` uses local Doppler setup, and
 `doppler run --config <config> -- pnpm cli ...` targets a specific deployment.
 
@@ -60,8 +61,11 @@ doppler run --config prd -- pnpm cli itx run \
 
 ### Project MCP
 
-The OS MCP resource is served by the OS app at `/mcp`. Admin-token sessions
-expose all projects and the `exec_js` tool requires a project slug when it runs.
+The OS MCP transport is served at the configured MCP base URL. Production is
+`https://mcp.iterate.com`; fully-local dev defaults to `<baseUrl>/api/__mcp`.
+`/projects/:slug/mcp` is the dashboard UI, not the transport URL. Admin-token
+sessions expose all projects and the `exec_js` tool requires a project slug when
+it runs.
 
 ```text
 https://mcp.iterate.com

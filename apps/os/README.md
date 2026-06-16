@@ -44,7 +44,7 @@ project-local, such as `/agents/default` or `/integrations/slack`.
 Run from `apps/os`.
 
 ```bash
-pnpm dev                 # local Cloudflare/TanStack dev through Doppler
+pnpm dev                 # local OS/TanStack dev through Doppler
 pnpm typecheck           # TypeScript
 pnpm test                # unit tests
 pnpm e2e -t "OS preview smoke"
@@ -52,11 +52,13 @@ pnpm e2e -t "OS preview smoke"
 pnpm cli claude-mcp      # open Claude against the OS MCP server in your local Doppler config
 pnpm sqlfu:generate      # regenerate sqlfu migrations/query wrappers
 pnpm sqlfu:check         # compare migrations to definitions.sql
-doppler run --project os --config preview_9 -- pnpm deploy
+doppler run --project os --config preview_9 -- pnpm run deploy
                          # deploy the explicitly selected Doppler config
-doppler run --project os --config prd -- pnpm deploy
+doppler run --project os --config prd -- pnpm run deploy
                          # production deploy
 ```
+
+Use `pnpm run deploy`, not `pnpm deploy`; `deploy` is also a pnpm built-in.
 
 ## Running Real-Worker Tests
 
@@ -68,38 +70,40 @@ the matching Doppler config. For local dev configs, test helpers read
 `.alchemy/dev-server.json` to find the selected port; deployed configs still
 get `APP_CONFIG_BASE_URL` from Doppler.
 
-Local dev works with the shared `dev` config or a personal `dev_<user>` config.
-For Jonas:
+Local dev normally uses the shared `dev` config. Use a personal `dev_<user>`
+config only when you need personal integration secrets.
 
 ```bash
 # Terminal 1: starts OS locally on http://localhost:<port>.
-# If your local Doppler setup for apps/os is dev_jonas, this is enough:
 pnpm dev
 
 # Equivalent explicit form:
-doppler run --project os --config dev_jonas -- pnpm cli dev start
+doppler run --project os --config dev -- pnpm cli dev start
 
 # Terminal 2: run real-worker e2e against the discovered local server.
-doppler run --project os --config dev_jonas -- pnpm e2e
+doppler run --project os --config dev -- pnpm e2e
 ```
 
 `pnpm dev` is the shorthand for the local Doppler/Alchemy dev flow. It uses the
 local Doppler setup for `apps/os`; inside Doppler, `DOPPLER_CONFIG` is set to
-values such as `dev_jonas`. The dev wrapper writes output to
+values such as `dev` or `dev_<user>`. The dev wrapper writes output to
 `.alchemy/dev-server.log`, so a second terminal can follow it with
 `tail -f .alchemy/dev-server.log`.
 
 The same local server lifecycle is also available through the app CLI:
 
 ```bash
-pnpm cli dev status
-pnpm cli dev start                     # attached, same as pnpm dev
-pnpm cli dev start --detach            # background; prints the selected URL
-pnpm cli dev attach                    # follow a pre-existing server log
-pnpm cli dev restart
-pnpm cli dev restart --detach
-pnpm cli dev kill
+pnpm dev status
+pnpm dev start                         # attached, same as plain pnpm dev
+pnpm dev start --detach                # background; prints the selected URL
+pnpm dev attach                        # follow a pre-existing server log
+pnpm dev restart
+pnpm dev restart --detach
+pnpm dev kill
 ```
+
+`pnpm dev <action> [flags]` forwards to `pnpm cli dev <action> [flags]`; use
+the longer form only when you are already working in the app CLI.
 
 The shared `dev` config behaves the same way:
 

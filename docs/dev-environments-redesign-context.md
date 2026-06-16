@@ -1,15 +1,16 @@
 # Dev environments redesign — working context doc
 
-Status: **working draft** (grilling session 2026-06-11). Nothing implemented yet. Captures the
-problem, decisions, user stories, trade-offs, and remaining recommendations-pending-confirm.
+Status: **implemented runbook context**. The current instructions live in
+[Dev environments](dev-environments.md); this file preserves the design context
+and must not contradict that runbook.
 
 ## Problem statement
 
-1. **Parallel agents collide.** Many AI agents work on one machine in separate worktrees, but
-   default dev shares contested resources: one cloudflared tunnel name, a dev OAuth client
-   whose secret is **rotated on every `alchemy.run.ts` run** (`ensureLocalDevOAuthClient` →
-   `ensureClient` rotates any referenceId containing `:dev_`), fixed ports (auth hardcodes
-   7101, OS defaults 5173), per-user dev domains.
+1. **Parallel agents collide.** Many AI agents work on one machine in separate
+   worktrees. Old default dev shared contested resources: one tunnel name, a dev
+   OAuth client, fixed ports, and per-user dev domains. Current default dev
+   avoids those resources by using localhost and per-worktree `.alchemy/`
+   state.
 2. **Local dev requires too much infrastructure.** Default dev should be fully local
    (miniflare D1/DOs, localhost, auto-picked port) with minimal external dependencies.
 3. **Agent-facing runbooks are missing or scattered**: admin session in prod, impersonation,
@@ -106,10 +107,10 @@ stoppedAt?}`); on a second `pnpm dev` it refuses (or offers takeover) if the rec
    `os.iterate-preview-N.com` + `auth.iterate-preview-N.com` + `<proj>.iterate-preview-N.app`.
 10. **OAuth client credentials are constants in Doppler; the seed enforces Doppler → auth DB**
     on every deploy (idempotent, declarative upsert of id + secret + redirect URIs).
-    Consequences: auth and OS deploy **concurrently**; every deploy stays reproducible as
-    plain `doppler run --config X -- tsx alchemy.run.ts`; drift impossible (Doppler is the
-    single source of truth; nothing else may rewrite clients — the `:dev_` rotation logic
-    dies). Pipeline-minting was rejected: right only for arbitrary-cardinality envs; if those
+    Consequences: every OS deploy stays reproducible as
+    `doppler run --project os --config X -- pnpm run deploy`; drift impossible
+    (Doppler is the single source of truth; nothing else may rewrite clients —
+    the `:dev_` rotation logic dies). Pipeline-minting was rejected: right only for arbitrary-cardinality envs; if those
     arrive, the semaphore _lease provisioner_ mints creds into a Doppler config at
     lease-creation time, keeping deploys parallel and pure.
     10a. **Preview orchestration lives in repo-root `scripts/` as oRPC handlers, runnable in any
@@ -188,10 +189,10 @@ stoppedAt?}`); on a second `pnpm dev` it refuses (or offers takeover) if the rec
    `session-from-token?token=…` in headless agent-browser, clicks around as that user. Needs
    admin oRPC? Same forge with `platformAdmin: true`. Twenty sibling agents do the same
    simultaneously; nothing is shared but CPU.
-2. **Human does product work.** Same, but `--config dev_jonas` (branch diff) and you sign in
-   once with Google via `auth.iterate-dev.com`; your identity works in every env on your
-   machine.
-3. **Human tests Slack flows.** `dev_jonas` carries your personal Slack app + stable captun
+2. **Human does product work.** Same, but use a personal `dev_<you>` config only
+   when you need personal integration secrets; your identity works in every env
+   on your machine.
+3. **Human tests Slack flows.** `dev_<you>` carries your personal Slack app + stable captun
    hostname; `pnpm dev` + captun named tunnel; Slack events arrive at the tunnel; smoke-test
    per `docs/slack-smoke-testing.md`. Inherently one-at-a-time per Slack app — that's the
    third party's constraint, not ours.
@@ -270,9 +271,9 @@ agent configs. The decision tree:
 
 - Root `pnpm dev` already runs only OS; `pnpm dev-all` is the auth+OS shell one-liner (root
   `package.json:6`) using the `ITERATE_OAUTH_ISSUER` alias + `--preserve-env`.
-- Auth vite port 7101 hardcoded in `apps/auth/alchemy.run.ts:121`; OS defaults 5173.
-- Preview today does **not** deploy auth; preview OS uses prd auth (issuer default in
-  `apps/os/src/config.ts:71`).
+- Auth vite port 7101 is hardcoded in `apps/auth/alchemy.run.ts`; OS local dev
+  auto-picks a localhost port and records it in `.alchemy/dev-server.json`.
+- Preview deploys auth per slot before OS so OS can bake the slot auth JWKS.
 - Auth: better-auth on D1; bootstrap admin `admin@nustom.com` (password = `SERVICE_AUTH_TOKEN`)
   seeded via `apps/auth/scripts/render-admin-seed.ts`; OTP `424242` for `/\+.*test@/i` in dev
   configs; `X-Iterate-As-User` + `X-Iterate-Service-Token` minting synthetic 1-hour sessions

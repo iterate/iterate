@@ -671,6 +671,11 @@ async function runPreviewAlchemyCommand(input: {
   repositoryRoot: string;
   signal?: AbortSignal;
 }) {
+  const commandArgs =
+    input.operation === "down"
+      ? (input.app.destroyCommandArgs ?? ["pnpm", "tsx", "./alchemy.run.ts", "--destroy"])
+      : (input.app.deployCommandArgs ?? ["pnpm", "tsx", "./alchemy.run.ts"]);
+
   return await runCommand({
     args: [
       "run",
@@ -679,10 +684,7 @@ async function runPreviewAlchemyCommand(input: {
       "--config",
       input.dopplerConfig,
       "--",
-      "pnpm",
-      "tsx",
-      "./alchemy.run.ts",
-      ...(input.operation === "down" ? ["--destroy"] : []),
+      ...commandArgs,
     ],
     command: "doppler",
     environment: input.commandEnvironment,
