@@ -809,7 +809,9 @@ async function selectPreviewAppsForPullRequest(input: {
     }
   }
 
-  return expandPreviewDependencies([...selectedSlugs]).map((slug) => cloudflarePreviewApps[slug]);
+  return expandPreviewDependencies([...selectedSlugs], input.previousState).map(
+    (slug) => cloudflarePreviewApps[slug],
+  );
 }
 
 export function selectPreviewAppsNeedingRetry(params: {
@@ -821,14 +823,22 @@ export function selectPreviewAppsNeedingRetry(params: {
     .filter((entry) => ["awaiting-tests", "deploy-failed", "tests-failed"].includes(entry.status))
     .map((entry) => CloudflarePreviewAppSlug.parse(entry.appSlug));
 
-  return expandPreviewDependencies(retrySlugs).map((slug) => cloudflarePreviewApps[slug]);
+  return expandPreviewDependencies(retrySlugs, params.previousState).map(
+    (slug) => cloudflarePreviewApps[slug],
+  );
 }
 
-export function expandPreviewDependencies(appSlugs: readonly CloudflarePreviewAppSlugType[]) {
+export function expandPreviewDependencies(
+  appSlugs: readonly CloudflarePreviewAppSlugType[],
+  state?: CloudflarePreviewState,
+) {
   const selected = new Set(appSlugs);
   const visit = (appSlug: CloudflarePreviewAppSlugType) => {
     const app = cloudflarePreviewApps[appSlug];
     for (const dependency of app.previewDependencies ?? []) {
+      if (state && previewAppHasReadyRoute(state, dependency)) {
+        continue;
+      }
       if (selected.has(dependency)) {
         continue;
       }
@@ -851,10 +861,11 @@ export function resolvePreviewAppsWithReadyDependencies(
   apps: readonly PreviewAppRuntime[],
   state: CloudflarePreviewState,
 ) {
+  const selectedSlugs = new Set(apps.map((app) => app.slug));
   return apps.map((app) => ({
     ...app,
     previewDependencies: (app.previewDependencies ?? []).filter(
-      (dependency) => !previewAppHasReadyRoute(state, dependency),
+      (dependency) => selectedSlugs.has(dependency) || !previewAppHasReadyRoute(state, dependency),
     ),
   }));
 }

@@ -4,7 +4,7 @@ on:
   workflow_dispatch: {}
 
 env:
-  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+  PNPM_CONFIG_STORE_DIR: /mnt/cache/pnpm-store
 
 jobs:
   setup:
@@ -21,6 +21,13 @@ jobs:
         with:
           clean: false
 
+      - name: Mount pnpm cache disk
+        uses: depot/cache-mount@v1
+        with:
+          name: iterate-preview-pnpm-store
+          path: /mnt/cache/pnpm-store
+          write-lock: /mnt/cache/pnpm-store
+
       - name: Verify baked tools
         run: |-
           set -euo pipefail
@@ -33,7 +40,7 @@ jobs:
           du -sh /home/runner/.cache/ms-playwright || true
 
       - name: Validate dependency tree
-        run: pnpm install --frozen-lockfile --prefer-offline
+        run: pnpm install
 
       - name: Verify preview browser
         run: pnpm --dir apps/streams-example-app exec playwright install chromium

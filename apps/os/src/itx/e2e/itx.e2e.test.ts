@@ -48,6 +48,7 @@ const matrixTest =
     : process.env.OS_ITX_E2E_MATRIX_CONCURRENT === "true"
       ? baseTest.concurrent
       : baseTest;
+const matrixRunsConcurrently = process.env.OS_ITX_E2E_MATRIX_CONCURRENT === "true";
 const test = process.env.OS_ITX_E2E_LIVE_CONCURRENT === "true" ? baseTest.concurrent : baseTest;
 const solo = baseTest;
 
@@ -61,27 +62,39 @@ test("every catalogue example is either matrix-tested or explicitly excluded", (
   }
 });
 
-let matrixSetupPromise: Promise<{ projectId: string }> | null = null;
-function ensureMatrixProject(): Promise<{ projectId: string }> {
-  matrixSetupPromise ??= (async () => {
-    using itx = connectGlobal();
-    const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-mx` })) as {
-      id: string;
-      slug: string;
-    };
-    createdProjectIds.push(project.id);
-    await pushProjectRepoFiles({
-      commitMessage: "bake catalogue examples into the config worker",
-      files: {
-        "worker.js": configWorkerRunnerSource(
-          MATRIX_EXAMPLES.filter((example) => example.runtimes.includes("config-worker")),
-        ),
-      },
-      projectId: project.id,
-      projectSlug: project.slug,
-    });
-    return { projectId: project.id };
-  })();
+const matrixSetupPromises = new Map<string, Promise<{ projectId: string }>>();
+function ensureMatrixProject(
+  example: (typeof MATRIX_EXAMPLES)[number],
+): Promise<{ projectId: string }> {
+  const matrixKey = matrixRunsConcurrently ? example.id : "shared";
+  let matrixSetupPromise = matrixSetupPromises.get(matrixKey);
+  if (!matrixSetupPromise) {
+    matrixSetupPromise = (async () => {
+      const matrixExamples = matrixRunsConcurrently ? [example] : MATRIX_EXAMPLES;
+      using itx = connectGlobal();
+      const project = (await itx.projects.create({
+        slug: `${PROJECT_SLUG}-mx-${slugFragment(matrixKey)}`,
+      })) as {
+        id: string;
+        slug: string;
+      };
+      createdProjectIds.push(project.id);
+      await pushProjectRepoFiles({
+        commitMessage: "bake catalogue examples into the config worker",
+        files: {
+          "worker.js": configWorkerRunnerSource(
+            matrixExamples.filter((matrixExample) =>
+              matrixExample.runtimes.includes("config-worker"),
+            ),
+          ),
+        },
+        projectId: project.id,
+        projectSlug: project.slug,
+      });
+      return { projectId: project.id };
+    })();
+    matrixSetupPromises.set(matrixKey, matrixSetupPromise);
+  }
   return matrixSetupPromise;
 }
 
@@ -95,7 +108,7 @@ for (const example of MATRIX_EXAMPLES) {
       timeout: 240_000,
     },
     async () => {
-      const { projectId } = await ensureMatrixProject();
+      const { projectId } = await ensureMatrixProject(example);
       const runtimes = MATRIX_RUNTIMES.filter((runtime) => example.runtimes.includes(runtime));
       expect(runtimes.length).toBeGreaterThan(0);
 
@@ -121,6 +134,14 @@ for (const example of MATRIX_EXAMPLES) {
       }
     },
   );
+}
+
+function slugFragment(value: string) {
+  return value
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9-]+/g, "-")
+    .replaceAll(/^-|-$/g, "")
+    .slice(0, 32);
 }
 
 test("the five-step capability flow: provide live, call, promote durable, call from a script", async () => {

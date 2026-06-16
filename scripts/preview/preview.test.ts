@@ -19,6 +19,24 @@ describe("preview app dependency expansion", () => {
     expect(expandPreviewDependencies(["os"])).toEqual(["os", "auth"]);
   });
 
+  it("does not add an already-routed dependency to the deploy set", () => {
+    expect(
+      expandPreviewDependencies(["os"], {
+        apps: {
+          auth: {
+            appDisplayName: "Auth",
+            appSlug: "auth",
+            headSha: "previous-head",
+            publicUrl: "https://auth.iterate-preview-1.com",
+            status: "deployed",
+            updatedAt: "2026-06-16T00:00:00.000Z",
+          },
+        },
+        environmentConfigLease: null,
+      }),
+    ).toEqual(["os"]);
+  });
+
   it("keeps independent apps as-is", () => {
     expect(expandPreviewDependencies(["semaphore"])).toEqual(["semaphore"]);
   });
@@ -89,6 +107,27 @@ describe("preview deploy dependencies", () => {
         environmentConfigLease: null,
       })[0]?.previewDependencies,
     ).toEqual([]);
+  });
+
+  it("keeps serialization when the dependency is redeploying in this run", () => {
+    expect(
+      resolvePreviewAppsWithReadyDependencies(
+        [cloudflarePreviewApps.os, cloudflarePreviewApps.auth],
+        {
+          apps: {
+            auth: {
+              appDisplayName: "Auth",
+              appSlug: "auth",
+              headSha: "previous-head",
+              publicUrl: "https://auth.iterate-preview-1.com",
+              status: "deployed",
+              updatedAt: "2026-06-16T00:00:00.000Z",
+            },
+          },
+          environmentConfigLease: null,
+        },
+      )[0]?.previewDependencies,
+    ).toEqual(["auth"]);
   });
 
   it("keeps the dependency for first-time preview bootstrap", () => {

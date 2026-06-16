@@ -30,7 +30,7 @@ permissions:
   pull-requests: write
 
 env:
-  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+  PNPM_CONFIG_STORE_DIR: /mnt/cache/pnpm-store
 
 jobs:
   preview:
@@ -48,13 +48,20 @@ jobs:
           clean: false
           ref: ${{ inputs.pull_request_head_sha }}
 
+      - name: Mount pnpm cache disk
+        uses: depot/cache-mount@v1
+        with:
+          name: iterate-preview-pnpm-store
+          path: /mnt/cache/pnpm-store
+          write-lock: /mnt/cache/pnpm-store
+
       - name: Validate baked dependency tree
         run: |-
           set -euo pipefail
           node --version
           pnpm --version
           doppler --version
-          pnpm install --frozen-lockfile --prefer-offline
+          pnpm install
 
       - name: Preview / deploy
         env:
