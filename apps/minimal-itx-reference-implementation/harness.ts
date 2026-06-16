@@ -24,6 +24,7 @@
 //   18. trusted durable-object.path built-ins replay their prefix
 //   19. failed scripts still fold a completed error record
 //   20. codemode can durably provide a capability for later callers
+//   21. root ITX control names are reserved and cannot be shadowed
 //
 // Each capability test uses a FRESH agent coordinate (prj:shared/agents/<rand>)
 // so durable state never bleeds between runs. The chain test reuses prj:shared
@@ -31,7 +32,13 @@
 
 import assert from "node:assert";
 import { withItx } from "./client.ts";
-import { MATRIX_EXAMPLES, MATRIX_RUNTIMES, runRuntimeMatrix } from "./runtime-matrix.ts";
+import {
+  dynamicCalc,
+  MATRIX_EXAMPLES,
+  MATRIX_RUNTIMES,
+  repoCounter,
+  runRuntimeMatrix,
+} from "./runtime-matrix.ts";
 
 const TOKEN = "alice-token"; // principal "alice" → projects ["alice", "shared"]
 const BASE_URL = process.env.ITX_BASE ?? "http://127.0.0.1:8788";
@@ -40,36 +47,6 @@ const agentPath = (label: string) => `/agents/${label}-${rid}`;
 const projectItx = () => withItx({ projectId: "shared", path: "/", token: TOKEN });
 const agentItx = (label: string) =>
   withItx({ projectId: "shared", path: agentPath(label), token: TOKEN });
-
-// A dynamic-worker capability: plain data describing code to build + run on demand.
-const dynamicCalc = {
-  type: "dynamic-worker",
-  source: {
-    type: "inline",
-    mainModule: "calc.js",
-    modules: {
-      "calc.js": `
-      import { WorkerEntrypoint } from "cloudflare:workers";
-      export class CounterEntrypoint extends WorkerEntrypoint {
-        add(a, b) { return a + b; }
-      }
-    `,
-    },
-  },
-  entrypoint: "CounterEntrypoint",
-  props: {},
-};
-
-const repoCounter = {
-  type: "dynamic-durable-object",
-  source: {
-    type: "repo",
-    repo: "shared",
-    commit: "latest",
-    path: "counter.js",
-  },
-  className: "CounterDurableObject",
-};
 
 const nestedKitWorker = {
   type: "dynamic-worker",
@@ -324,12 +301,20 @@ await check("7. auth at the connect door", async () => {
 });
 
 await check("8. codemode: a loaded script gets an itx handle and calls back", async () => {
+  const path = agentPath("code");
   const itx = agentItx("code");
   try {
     await itx.provideCapability({ path: ["calc"], capability: dynamicCalc });
-    const output = await itx.runScript({
-      code: `async (itx) => itx.invokeCapability({ path: ["calc", "add"], args: [10, 20] })`,
-    });
+    const response = await fetch(
+      `${BASE_URL}/api/itx?projectId=shared&path=${encodeURIComponent(path)}`,
+      {
+        body: `async (itx) => itx.invokeCapability({ path: ["calc", "add"], args: [10, 20] })`,
+        headers: { authorization: `Bearer ${TOKEN}`, "content-type": "text/plain" },
+        method: "POST",
+      },
+    );
+    assert.equal(response.status, 200);
+    const output = (await response.json()) as any;
     assert.equal(output.result, 30, "the script invoked a capability against its own context");
     const d = await itx.describe();
     const execution = d.scriptExecutions.find((x: any) => x.executionId === output.executionId);
@@ -408,7 +393,7 @@ await check("11. raw SDK-shaped live provider is client-normalized and goes offl
     assert.equal(row?.address, null);
     await assert.rejects(
       async () => await consumer.slack.chat.postMessage({ text: "after disconnect" }),
-      /offline|closed|broken|disposed|disconnect|no longer running/i,
+      /offline|closed|broken|disposed|disconnect|no longer running|network connection lost/i,
     );
   } finally {
     dispose(consumer);
@@ -528,11 +513,21 @@ await check("18. trusted durable-object built-in replays its path prefix", async
 });
 
 await check("19. failed scripts still fold a completed error record", async () => {
+  const path = agentPath("script-error");
   const itx = agentItx("script-error");
   try {
     // Script executions are durable audit records even when the code throws.
     const code = `async () => { throw new Error("boom"); }`;
-    await assert.rejects(async () => await itx.runScript({ code }), /boom/);
+    const response = await fetch(
+      `${BASE_URL}/api/itx?projectId=shared&path=${encodeURIComponent(path)}`,
+      {
+        body: code,
+        headers: { authorization: `Bearer ${TOKEN}`, "content-type": "text/plain" },
+        method: "POST",
+      },
+    );
+    assert.equal(response.status, 400);
+    assert.match(await response.text(), /boom/);
     const execution = (await itx.describe()).scriptExecutions.find((x: any) => x.code === code);
     assert.equal(execution?.status, "completed");
     assert.match(execution?.error ?? "", /boom/);
@@ -566,6 +561,28 @@ await check("20. codemode can durably provide a capability for later callers", a
     assert.equal(await itx.calc2.add(20, 22), 42);
     const row = (await itx.describe()).capabilities.find((c: any) => c.path.join(".") === "calc2");
     assert.equal(row?.address?.type, "dynamic-worker");
+  } finally {
+    dispose(itx);
+  }
+});
+
+await check("21. root ITX control names are reserved and cannot be shadowed", async () => {
+  const itx = agentItx("reserved-control-name");
+  try {
+    // The ergonomic dotted surface uses the same namespace for control calls
+    // (`itx.describe()`) and capability calls (`itx.slack.send()`). Keep that
+    // understandable by reserving the root ITX control names outright instead
+    // of allowing user capabilities to shadow them.
+    await assert.rejects(
+      async () => itx.provideCapability({ path: ["describe"], capability: () => "shadow" }),
+      /reserved ITX control path/,
+    );
+    const description = await itx.describe();
+    assert.equal(typeof description, "object");
+    assert.equal(
+      description.capabilities.some((cap: any) => cap.path.join(".") === "describe"),
+      false,
+    );
   } finally {
     dispose(itx);
   }

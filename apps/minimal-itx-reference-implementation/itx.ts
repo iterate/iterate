@@ -69,6 +69,13 @@ export interface ItxContext {
 // Shared vocabulary.
 // ---------------------------------------------------------------------------
 
+export const ITX_CONTROL_NAMES = new Set([
+  "provideCapability",
+  "invokeCapability",
+  "revokeCapability",
+  "describe",
+]);
+
 const CAPABILITY_ADDRESS_TYPES = new Set([
   "rpc",
   "dynamic-worker",
@@ -182,6 +189,15 @@ export async function replayPath(target: any, rest: string[], args: unknown[]) {
   return await receiver[rest.at(-1)!](...args);
 }
 
+const liveInvoker = (capability: unknown) => {
+  const retained = retain(capability);
+  return {
+    invoke: isPathCallProvider(capability)
+      ? (rest: string[], args: unknown[]) => retained.invokeCapability({ path: rest, args })
+      : (rest: string[], args: unknown[]) => replayPath(retained, rest, args),
+  };
+};
+
 // ---------------------------------------------------------------------------
 // The core: ItxProcessor.
 // ---------------------------------------------------------------------------
@@ -189,40 +205,15 @@ export async function replayPath(target: any, rest: string[], args: unknown[]) {
 export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements ItxContext {
   readonly contract = ItxContract;
 
-  // The bridge: live stubs, keyed by the capability's path (via `bridgeKey`). In
-  // memory, NOT durable — a live cap dies with its provider, which is exactly why
-  // the fold records it with `address: null` while the real stub lives here. The
-  // key is derived from the path ARRAY, the same way at every site, so the fold
-  // and the bridge cannot disagree on what a capability is called.
-  #liveCapabilities = new Map<string, any>();
+  // Live capabilities are in-memory retained invokers keyed by mount path. The
+  // durable fold stores only `address: null`; this map holds the actual callable
+  // and whether the provider is member-replayed or path-called.
+  #liveCapabilities = new Map<string, ReturnType<typeof liveInvoker>>();
 
-  // Subset of `#liveCapabilities` whose mounted object is a path-call root.
-  //
-  // Why this has to be separate state:
-  // - The durable capability table deliberately stores only `{ path, address }`.
-  //   For live providers the address is `null`; the table says "there is a live
-  //   capability mounted here", but it cannot hold the actual RPC stub or any
-  //   non-serializable metadata about that stub.
-  // - The bridge map holds the retained live stub, but invocation also needs to
-  //   know HOW to replay the leftover path. Normal live objects use property
-  //   replay (`stub.chat.postMessage(...)`). Path-call providers use
-  //   `stub.invokeCapability({ path: ["chat", "postMessage"], args })`.
-  // - We capture that replay mode at provide time, while we still have the
-  //   original live object shape in hand, and key it by the same bridge key as
-  //   `#liveCapabilities`.
-  //
-  // This set is intentionally in-memory. If the provider disconnects, both the
-  // retained stub and this replay-mode bit disappear; the folded row remains as
-  // `address: null`, so later calls correctly fail as "offline".
-  #pathCallCapabilities = new Set<string>();
-
-  // Injected dialer: a sturdy ADDRESS → a callable stub. ONE dialer serves both
-  // a capability's sturdy address AND a parent context's address — they are the
-  // same operation, "address → stub". Optional: a context with only live caps
-  // and no parent never needs it. (Production splits this into a gated capability
-  // dial and an ungated context dial for the auth boundary; the reference impl is
-  // unauthed within a connection, so one dial. Auth lives at the connect door.)
-  #dial: (address: any, mountPath?: string[]) => any;
+  // Injected dialer: sturdy capability address → callable stub. Parent contexts
+  // are host-injected handles, so the dialer only knows addresses that can appear
+  // in capability rows.
+  #dial: (address: any) => any;
 
   // Built-in capabilities, handed to the constructor instead of appended to the
   // log (e.g. a project context's `fetch`, backed by its Project DO). They arrive
@@ -235,17 +226,16 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
   // a code change, not a log rewrite.
   #builtins: CapabilityRecord[];
 
-  // The chain: an Itx is born with a PARENT address (an agent's parent is its
-  // project; a project's is the __global__ root). On a capability MISS, resolution
-  // falls through to the parent. The parent is a sturdy address — the same plain
-  // data a capability uses — dialed by the same `#dial`. null when there is none.
-  #parentAddress: any | null;
+  // The chain: an Itx is born with a parent handle (an agent's parent is its
+  // project; a project's is the __global__ root). On a capability miss,
+  // resolution falls through to that handle. null when there is none.
+  #parent: ItxContext | null;
 
   constructor(
     args: ConstructorParameters<typeof StreamProcessor<typeof ItxContract>>[0] & {
-      dial?: (address: any, mountPath?: string[]) => any;
+      dial?: (address: any) => any;
       builtinCapabilities?: ProvideArgs[];
-      parentAddress?: any;
+      parent?: ItxContext | null;
     },
   ) {
     super(args);
@@ -259,14 +249,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
     this.#builtins = (args.builtinCapabilities ?? []).map((b) => {
       const address = addressOf(b.capability);
       if (address === null) {
-        const key = bridgeKey(b.path);
-        this.#liveCapabilities.set(key, retain(b.capability));
-        // Built-ins can be live too. If a built-in is mounted as a path-call
-        // root, record that replay mode beside the retained stub for the same
-        // reason `provideCapability` does: the durable/builtin record only knows
-        // the mount path and `address: null`, not whether the leftover path
-        // should be property-replayed or passed through to `.invokeCapability`.
-        if (isPathCallProvider(b.capability)) this.#pathCallCapabilities.add(key);
+        this.#liveCapabilities.set(bridgeKey(b.path), liveInvoker(b.capability));
       }
       return {
         path: b.path,
@@ -275,7 +258,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
         types: b.types ?? null,
       };
     });
-    this.#parentAddress = args.parentAddress ?? null;
+    this.#parent = args.parent ?? null;
   }
 
   // The fold: one pure projection of an event into the next capability table.
@@ -358,32 +341,13 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
   // subscription delivers it back into the fold. We then wait for that delivery
   // so the write is immediately readable (read-your-writes).
   async provideCapability({ path, capability, instructions, types }: ProvideArgs) {
+    this.#assertUserCapabilityPath(path);
     const address = addressOf(capability);
-    // dup at THIS layer too: the stub arrived as an argument to this call and is
-    // disposed when the call returns; the bridge must keep its own retained copy.
     const key = bridgeKey(path);
     if (address === null) {
-      this.#liveCapabilities.set(key, retain(capability));
-      // Live provider, no sturdy address:
-      //
-      // The event we append below will contain `address: null`, so after replay
-      // the folded table can only tell us that this path is backed by a live
-      // provider. It cannot tell us whether that provider is a normal object
-      // graph or an SDK-shaped path-call root.
-      //
-      // Capture the replay mode here, at the same time as we retain the stub.
-      // This makes the three pieces line up by one key:
-      // - fold row:       path exists, `address: null`
-      // - live bridge:    path key -> retained live RPC stub
-      // - path-call set:  path key is present only when leftover path goes to
-      //                   `stub.invokeCapability({ path: rest, args })`
-      if (isPathCallProvider(capability)) this.#pathCallCapabilities.add(key);
-      else this.#pathCallCapabilities.delete(key);
+      this.#liveCapabilities.set(key, liveInvoker(capability));
     } else {
-      // Sturdy capability. It is resolved by `#dial(address, ...)`, so any old
-      // live-provider replay metadata at this mount must be cleared. This matters
-      // when a path is first provided live and later replaced by a sturdy address.
-      this.#pathCallCapabilities.delete(key);
+      this.#liveCapabilities.delete(key);
     }
     const committed = await this.ctx.stream.append({
       event: {
@@ -396,9 +360,8 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
   }
 
   async revokeCapability({ path }: { path: string[] }) {
-    const key = bridgeKey(path);
-    this.#liveCapabilities.delete(key);
-    this.#pathCallCapabilities.delete(key);
+    this.#assertUserCapabilityPath(path);
+    this.#liveCapabilities.delete(bridgeKey(path));
     const committed = await this.ctx.stream.append({
       event: { type: "events.iterate.com/itx/capability-revoked", payload: { path } },
     });
@@ -414,34 +377,47 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
       capabilities: this.state.capabilities,
       builtins: this.#builtins,
       scriptExecutions: this.state.scriptExecutions,
-      ...(this.#parentAddress
-        ? { parentCapabilities: await this.#dial(this.#parentAddress).describe() }
-        : {}),
+      ...(this.#parent ? { parentCapabilities: await this.#parent.describe() } : {}),
     };
   }
 
-  // invoke is a precedence cascade: own fold → built-ins → parent → miss. The
-  // first two are the same local lookup over two lists (own shadows a built-in
-  // because it is tried first); the third re-dispatches the whole path UP the
-  // chain, so a child shadows a parent by late binding (re-resolved per call),
-  // not by copy.
-  async invokeCapability({ path, args = [] }: { path: string[]; args?: unknown[] }) {
+  // Every dotted Cap'n Web call arrives as invokeCapability({ path, args }).
+  // Single-segment root paths that name the ITX control surface are handled here
+  // first, so pathCallable does not need to know those names. They are reserved:
+  // users cannot mount or shadow capabilities under them.
+  async invokeCapability({
+    path,
+    args = [],
+  }: {
+    path: string[];
+    args?: unknown[];
+  }): Promise<unknown> {
+    const control = path[0];
+    if (control && ITX_CONTROL_NAMES.has(control)) {
+      if (path.length !== 1) throw new Error(`reserved ITX control path "${control}"`);
+      switch (control) {
+        case "provideCapability":
+          return await this.provideCapability(args[0] as ProvideArgs);
+        case "invokeCapability":
+          return await this.invokeCapability(args[0] as { path: string[]; args?: unknown[] });
+        case "revokeCapability":
+          return await this.revokeCapability(args[0] as { path: string[] });
+        case "describe":
+          return await this.describe();
+      }
+    }
+
     const local =
       this.#resolveLocal(this.state.capabilities, path) ?? this.#resolveLocal(this.#builtins, path);
     if (local) return await local.invoke(args);
-    if (this.#parentAddress) {
-      return await this.#dial(this.#parentAddress).invokeCapability({ path, args });
+    if (this.#parent) {
+      return await this.#parent.invokeCapability({ path, args });
     }
     throw new Error(`no capability "${path.join(".")}"`);
   }
 
-  // Resolve a path against ONE capability list — the fold or the built-ins; the
-  // constructor normalized built-ins to the same `CapabilityRecord` shape, so
-  // both resolve identically. Returns a tiny invoker closure: normal/sturdy caps
-  // use `replayPath(target, rest, args)`, while SDK-shaped live providers receive
-  // the leftover path as data through `invokeCapability({ path: rest, args })`.
-  // Returns null on no match, so `invokeCapability` falls through to the next
-  // source in the cascade.
+  // Resolve one capability list — folded rows or built-ins. Sturdy rows are
+  // dialed and property-replayed; live rows use their retained invoker.
   #resolveLocal(
     caps: CapabilityRecord[],
     path: string[],
@@ -450,29 +426,32 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
     if (!hit) return null;
     const { record, rest } = hit;
     if (record.address) {
-      const target = this.#dial(record.address, record.path);
+      // Dynamic Durable Object facets need the mount path in their facet
+      // identity, so replacing/reproviding the same dynamic DO at a different
+      // path gets distinct storage. The mount path is host-owned metadata, not
+      // provider-facing address vocabulary, so attach it here immediately before
+      // dialing instead of storing it in the folded capability row.
+      const address =
+        record.address.type === "dynamic-durable-object"
+          ? { ...record.address, mountPath: record.path }
+          : record.address;
+      const target = this.#dial(address);
       return { invoke: (args) => replayPath(target, rest, args) };
     }
-    const stub = this.#liveCapabilities.get(bridgeKey(record.path));
-    if (!stub) {
+    const target = this.#liveCapabilities.get(bridgeKey(record.path));
+    if (!target) {
       throw new Error(
         `capability "${record.path.join(".")}" is offline (live provider disconnected)`,
       );
     }
-    if (this.#pathCallCapabilities.has(bridgeKey(record.path))) {
-      // The mounted capability is not a nested object graph; it is a path-call
-      // root. `rest` is therefore NOT replayed as properties on the stub. Instead
-      // the unresolved suffix is sent directly to the provider as data:
-      //
-      //   mount: ["slack"]
-      //   invoke: ["slack", "chat", "postMessage"], args: [{ text: "hi" }]
-      //   provider receives: { path: ["chat", "postMessage"], args: [{...}] }
-      //
-      return {
-        invoke: (args) => stub.invokeCapability({ path: rest, args }),
-      };
+    return { invoke: (args) => target.invoke(rest, args) };
+  }
+
+  #assertUserCapabilityPath(path: string[]) {
+    const control = path[0];
+    if (control && ITX_CONTROL_NAMES.has(control)) {
+      throw new Error(`reserved ITX control path "${control}" cannot be provided as a capability`);
     }
-    return { invoke: (args) => replayPath(stub, rest, args) };
   }
 
   // Read-your-writes without self-ingest: after appending, wait for the stream's

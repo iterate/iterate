@@ -16,13 +16,13 @@
 // `orgs`, …) is just another entry — which is the whole reason the catalog rides
 // the capability protocol instead of being bespoke handle code.
 //
-// Extending RpcTarget means the stateless root is already a Cap'n Web-safe main
-// target. Unlike a Durable Object stub, it does not need an extra ItxRpcTarget
-// membrane or the pathCallable proxy.
+// The WebSocket route still serves it through pathCallable so the global root,
+// project contexts, agent contexts, and codemode handles all share one dotted
+// call rule: every terminal call becomes invokeCapability({ path, args }).
 
 import { RpcTarget } from "capnweb";
 import { KNOWN_PROJECTS } from "./auth.ts";
-import { type DescribeResult, type ItxContext, replayPath } from "./itx.ts";
+import { ITX_CONTROL_NAMES, type DescribeResult, type ItxContext, replayPath } from "./itx.ts";
 
 class GlobalProjects extends RpcTarget {
   constructor(readonly reachable: () => string[]) {
@@ -65,7 +65,28 @@ export class GlobalItx extends RpcTarget implements ItxContext {
   // Read side: longest registered prefix wins, then replay the remainder onto the
   // resolved cap — the same primitive `Itx` uses. The root has NO parent, so a
   // miss bottoms out here.
-  async invokeCapability({ path, args = [] }: { path: string[]; args?: unknown[] }) {
+  async invokeCapability({
+    path,
+    args = [],
+  }: {
+    path: string[];
+    args?: unknown[];
+  }): Promise<unknown> {
+    const control = path[0];
+    if (control && ITX_CONTROL_NAMES.has(control)) {
+      if (path.length !== 1) throw new Error(`reserved ITX control path "${control}"`);
+      switch (control) {
+        case "provideCapability":
+          return await this.provideCapability();
+        case "invokeCapability":
+          return await this.invokeCapability(args[0] as { path: string[]; args?: unknown[] });
+        case "revokeCapability":
+          return await this.revokeCapability();
+        case "describe":
+          return await this.describe();
+      }
+    }
+
     for (let i = path.length; i >= 1; i--) {
       const cap = this.#capabilities[path.slice(0, i).join(".")];
       if (cap) return await replayPath(cap, path.slice(i), args);

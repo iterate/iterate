@@ -48,7 +48,7 @@ type MatrixContext = {
   projectId: string;
 };
 
-const dynamicCalc = {
+export const dynamicCalc = {
   type: "dynamic-worker",
   source: {
     type: "inline",
@@ -66,7 +66,7 @@ const dynamicCalc = {
   props: {},
 };
 
-const repoCounter = {
+export const repoCounter = {
   type: "dynamic-durable-object",
   source: { type: "repo", repo: "shared", commit: "latest", path: "counter.js" },
   className: "CounterDurableObject",

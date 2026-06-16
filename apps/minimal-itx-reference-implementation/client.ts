@@ -59,15 +59,13 @@ export const normalizeProvidedCapability = (capability: any): any => {
   if (isCapabilityAddress(capability)) return capability;
 
   if (capability && typeof capability === "object" && !isPlainObject(capability)) {
-    if (typeof capability.invokeCapability === "function") {
-      return {
-        invokeCapability: (input: { path: string[]; args?: unknown[] }) =>
-          capability.invokeCapability(input),
-      };
-    }
+    const invoke =
+      typeof capability.invokeCapability === "function"
+        ? (input: { path: string[]; args?: unknown[] }) => capability.invokeCapability(input)
+        : (input: { path: string[]; args?: unknown[] }) =>
+            replayLocalPath(capability, input.path, input.args ?? []);
     return {
-      invokeCapability: (input: { path: string[]; args?: unknown[] }) =>
-        replayLocalPath(capability, input.path, input.args ?? []),
+      invokeCapability: invoke,
     };
   }
 

@@ -196,6 +196,10 @@ export abstract class StreamProcessor<
     snapshot: StreamProcessorSnapshot<ProcessorState<Contract>>,
   ) => MaybePromise<void>;
   readonly #stateChangeCallbacks = new Set<RetainedStateChangeCallback<ProcessorState<Contract>>>();
+  readonly #eventWaiters = new Set<{
+    predicate: (event: StreamEvent) => boolean;
+    resolve: () => void;
+  }>();
 
   constructor(args: StreamProcessorConstructorArgs<Contract, Deps, IterateContext>) {
     super();
@@ -273,6 +277,48 @@ export abstract class StreamProcessor<
     }
 
     return unsubscribe;
+  }
+
+  /**
+   * Resolve once the processor INGESTS an event matching `predicate` — or, with
+   * the `{ offset }` form, once the fold has caught up to that stream offset.
+   *
+   * The promise settles inside the serialized ingest section AFTER the batch is
+   * durably checkpointed, so by the time it resolves `this.state` already
+   * reflects the matched event. That is what makes the `{ offset }` form a
+   * read-your-writes barrier: append an event, then `await
+   * waitUntilEvent({ offset })` on the offset `append` returned, and your next
+   * read is guaranteed to see your write. It replaces the usual spin-poll on
+   * `checkpointOffset`.
+   *
+   * `{ offset }` is implemented in terms of `{ predicate }`: it short-circuits
+   * when the checkpoint is already at/past the offset, otherwise it waits for
+   * the first delivered event at or beyond it. The predicate form only observes
+   * FUTURE deliveries (it does not scan history), so the offset form is what can
+   * also answer "this already happened". Keying on the delivered event — not on
+   * a state change — matters: the checkpoint advances for every event including
+   * ones `reduce` ignores, so this resolves even when the matched event produced
+   * no state change (where waiting on `onStateChange` would hang).
+   *
+   * `predicate` runs on every newly delivered event (consumed or not) inside the
+   * ingest loop, so keep it cheap and total — a throw would fail the batch.
+   */
+  waitUntilEvent(args: { predicate: (event: StreamEvent) => boolean }): Promise<void>;
+  waitUntilEvent(args: { offset: number }): Promise<void>;
+  async waitUntilEvent(
+    args: { predicate: (event: StreamEvent) => boolean } | { offset: number },
+  ): Promise<void> {
+    if ("offset" in args) {
+      await this.#loadState();
+      if (this.#checkpointOffset >= args.offset) return;
+      const { offset } = args;
+      // No await between the check above and registering the waiter below, so a
+      // batch cannot advance the checkpoint past `offset` in the gap and be missed.
+      return await this.waitUntilEvent({ predicate: (event) => event.offset >= offset });
+    }
+    await new Promise<void>((resolve) => {
+      this.#eventWaiters.add({ predicate: args.predicate, resolve });
+    });
   }
 
   /**
@@ -404,6 +450,19 @@ export abstract class StreamProcessor<
     this.#state = state;
     this.#checkpointOffset = checkpointOffset;
     if (!Object.is(previousState, state)) this.#notifyStateChange(state);
+    this.#resolveEventWaiters(events);
+  }
+
+  // Settle `waitUntilEvent` waiters whose predicate matches a just-delivered
+  // event. Runs after the durable write + checkpoint advance, so `this.state` is
+  // current when a waiter's promise resolves (the read-your-writes guarantee).
+  #resolveEventWaiters(events: readonly StreamEvent[]): void {
+    for (const waiter of this.#eventWaiters) {
+      if (events.some(waiter.predicate)) {
+        this.#eventWaiters.delete(waiter);
+        waiter.resolve();
+      }
+    }
   }
 
   #notifyStateChange(state: ProcessorState<Contract>): void {

@@ -50,12 +50,15 @@ revokeCapability({ path })                                     → void
 describe()                                                     → DescribeResult
 ```
 
-Every verb takes a **single bag-of-props** argument — the same shape on the
-wire, in the bridge, up the chain, and inside codemode. Because there is one
-convention, the serving edge never translates between shapes; it is a near-pure
-pass-through. `describe()` is the only read verb (there is no `list`); it returns
-the raw folded `capabilities`, the injected `builtins`, and the parent nested
-under `parentCapabilities`.
+Every verb takes a **single bag-of-props** argument. On the Cap'n Web dotted
+surface, even these verbs arrive as `invokeCapability({ path, args })`:
+`itx.describe()` is path `["describe"]`, and
+`itx.provideCapability(args)` is path `["provideCapability"]`. The context owns
+those reserved root names and dispatches them before ordinary capability
+resolution. User capabilities cannot be mounted under those names, so the
+control surface cannot be shadowed. `describe()` is the only read verb (there is
+no `list`); it returns the raw folded `capabilities`, the injected `builtins`,
+and the parent nested under `parentCapabilities`.
 
 ## The client — naked path calls, normalized live provides
 
@@ -75,22 +78,20 @@ stub dies and the folded live row becomes offline.
 For DO-backed itx contexts, the load-bearing piece is **server-side**:
 capabilities are registered at runtime, so the served main object can't be a
 fixed method-only class. `pathCallable` (`server.ts`) is a `Proxy` over a
-**function** wrapping the `ItxRpcTarget` membrane. It answers any name and, on
-the terminal call, collapses the accumulated path into one
-`invokeCapability({ path, args })`. Three requirements (each a real debugging
-round) are encoded there: the target must be function-typed (Cap'n Web forbids
-fabricated instance properties on rpc-targets), `getOwnPropertyDescriptor` must
-answer (Cap'n Web does `Object.hasOwn` before reading), and `has` must answer for
-non-reserved names. A `RESERVED` set blocks names that would derail it (`then`,
-`__proto__`, …).
+**function**. It answers any non-reserved name and, on the terminal call,
+collapses the accumulated path into one `invokeCapability({ path, args })`.
+It does not know about `describe` or `provideCapability`; those are just paths
+until the context receives them. Three requirements (each a real debugging
+round) are encoded there: the target must be function-typed,
+`getOwnPropertyDescriptor` must answer (Cap'n Web does `Object.hasOwn` before
+reading), and `has` must answer for non-reserved names. A `RESERVED` set blocks
+names that would derail it (`then`, `__proto__`, ...).
 
 ## dial — address → stub
 
-`ItxDurableObject.#dial` is the **one** function that turns a sturdy address
-back into a callable, dispatched on `address.type`:
+`ItxDurableObject.#dial` turns a durable capability address back into a callable,
+dispatched on `address.type`:
 
-- `{ type: "context", ref }` → another context DO (`env.ITX.getByName(ref).itx`)
-- `{ type: "code", context: "__global__" }` → the `__global__` root, constructed inline
 - `{ type: "dynamic-worker", source, entrypoint, props }` → build + run a
   WorkerEntrypoint via the **Worker Loader**, cached by content hash
 - `{ type: "dynamic-durable-object", source, className }` → load a Durable
@@ -98,19 +99,18 @@ back into a callable, dispatched on `address.type`:
 - `{ type: "durable-object", namespace, name, path? }` → a trusted
   namespace/name/path Durable Object ref, used for domain built-ins
 
-The same `dial` serves both capability addresses and parent addresses — they are
-the same operation. (Production splits this into a gated capability dial and an
-ungated context dial for the auth boundary; here the boundary is the connect
-door, so one dial. See _Auth_.)
+Parent traversal is not part of `dial`. The host injects a parent `ItxContext`
+handle directly when it constructs the processor. That keeps provider-supplied
+capability addresses separate from topology the host owns.
 
 ## The chain — inheritance by late binding
 
-A context is born with a **parent address** (host-injected). `invokeCapability`
+A context is born with a **parent context handle** (host-injected). `invokeCapability`
 resolves own fold → built-ins → parent, re-dispatching the whole path into the
 parent's `invokeCapability` on a miss. So a child **shadows** a parent by late
 binding (re-resolved per call), never by copy.
 
-Topology (`ItxDurableObject.#parentAddress`): an **agent** (`prj:<id>/agents/<name>`)
+Topology (`ItxDurableObject.#parentContext`): an **agent** (`prj:<id>/agents/<name>`)
 parents to its **project** (`prj:<id>`); a project parents to the
 **`__global__` root**. Parentage is derived from the context **coordinate** by
 the host, not folded from the log — nothing reads a folded copy, so it isn't
@@ -137,9 +137,10 @@ pulling in real Artifacts or bundling machinery.
 `GlobalItx` (`global-itx.ts`) is the chain's `__global__` root: every project's
 parent, itself parentless. It is the one context that is **not** a DO and **not**
 a StreamProcessor — there is nothing to persist, so it is constructed in code per
-connection and answers the same `ItxContext` protocol. It extends `RpcTarget`,
-so the WebSocket path serves it directly with no `pathCallable`. Two structural
-properties:
+connection and answers the same `ItxContext` protocol. The WebSocket route
+serves it through the same `pathCallable` as DO-backed contexts, so `projects`,
+`describe`, and every other terminal call use the same
+`invokeCapability({ path, args })` rule. Two structural properties:
 
 - **read-only** — `provideCapability` / `revokeCapability` throw; there is no log
   to append to, so "you cannot provide into the root" is structural.
@@ -150,17 +151,18 @@ capability protocol so adding a sibling (`users`, `orgs`) is just another entry.
 
 ## Codemode — a capability that is a program
 
-`ItxDurableObject.runScript({ code })` loads an `async (itx) => …` program as a worker
-(same Worker Loader as `dial`) and hands it an **itx handle** so it can invoke
-and provide against the very context that launched it. The run is bracketed by
-durable `script-execution-requested` / `-completed` records — events the fold
-does **not** consume, demonstrating that a log holds both state changes and
-plain audit records. `runScript` needs the Worker Loader (only a DO context has
-it), so it is an optional callback on the serving edge, not part of `ItxContext`.
+`POST /api/itx?...` loads an `async (itx) => ...` program as a worker via
+`ItxDurableObject.runScript({ code })` (same Worker Loader as `dial`) and hands
+it an **itx handle** so it can invoke and provide against the very context that
+launched it. The run is bracketed by durable `script-execution-requested` /
+`-completed` records — events the fold does **not** consume, demonstrating that
+a log holds both state changes and plain audit records. `runScript` needs the
+Worker Loader and is intentionally not part of the Cap'n Web ITX model.
 
 ## Auth — at the connect door
 
-itx is unauthed **within** a connection (one `dial`, no per-capability gating).
+itx is unauthed **within** a connection (the reference dialer is not a policy
+surface, and there is no per-capability gating).
 The trust boundary is the WebSocket handshake (`auth.ts`): a bearer token names a
 principal, the principal may reach a set of projects, and the server only
 upgrades the socket if the requested context is in reach. The `__global__` root is not
@@ -172,29 +174,25 @@ that principal's reach.
 The route uses Cap'n Web's Worker helper directly:
 `newWorkersRpcResponse(request, target)`.
 
-For `__global__`, the target is just `new GlobalItx(...)` because it already
-extends `RpcTarget` and exposes `projects` as a real RpcTarget getter. For
-DO-backed contexts, the target is
-`pathCallable(new ItxRpcTarget(env.ITX.getByName(...)))`. That tiny wrapper
-exists because raw Durable Object stubs make arbitrary properties look callable.
-If `pathCallable` receives the raw DO stub, `itx.greeter()` is misread as a root
-method call instead of a capability path. The wrapper exposes only the real itx
-verbs; `pathCallable` treats everything else as
-`invokeCapability({ path, args })`. The DO still exposes the itx verbs directly
-for Workers RPC and POST. The durable processor is exposed as the `itx` getter
-for internal Workers RPC use.
+Every WebSocket target is `pathCallable({ invokeCapability })`. For project and
+agent contexts, that object forwards into the selected `ItxDurableObject`; for
+`__global__`, it forwards into a `GlobalItx`. Do not pass a raw Durable Object
+stub straight to `pathCallable`: DO stubs make arbitrary properties look
+callable, which is precisely the ambiguity this proxy avoids. The DO still
+exposes the itx verbs directly for Workers RPC and POST. The durable processor is
+exposed as the `itx` getter for internal Workers RPC use.
 
 ## Files
 
-| File            | What                                                                                                                                                                                           |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `contract.ts`   | the itx event log: event schemas + reduced state (`defineProcessorContract`)                                                                                                                   |
-| `itx.ts`        | `ItxProcessor extends StreamProcessor` (the fold + verbs + bridge + chain), the shared vocabulary (`replayPath`, `retain`, prefix matching), the `ItxContext` protocol                         |
-| `global-itx.ts` | `GlobalItx` — the stateless, read-only root (`RpcTarget` + `implements ItxContext`)                                                                                                            |
-| `auth.ts`       | the connect-door access map and checks                                                                                                                                                         |
-| `server.ts`     | the Worker: `ItxRpcTarget`, `pathCallable`, `ItxDurableObject`, `ProjectDurableObject`/`AgentDurableObject`/`RepoDurableObject`, `dial`, the `/api/itx` route; re-exports the real `Stream` DO |
-| `client.ts`     | `withItx` + `connect` — socket opener, naked path calls, and provide-time normalization for raw local SDK objects                                                                              |
-| `harness.ts`    | the e2e test (run against `npm run dev`)                                                                                                                                                       |
+| File            | What                                                                                                                                                                           |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `contract.ts`   | the itx event log: event schemas + reduced state (`defineProcessorContract`)                                                                                                   |
+| `itx.ts`        | `ItxProcessor extends StreamProcessor` (the fold + verbs + bridge + chain), the shared vocabulary (`replayPath`, `retain`, prefix matching), the `ItxContext` protocol         |
+| `global-itx.ts` | `GlobalItx` — the stateless, read-only root (`RpcTarget` + `implements ItxContext`)                                                                                            |
+| `auth.ts`       | the connect-door access map and checks                                                                                                                                         |
+| `server.ts`     | the Worker: `pathCallable`, `ItxDurableObject`, `ProjectDurableObject`/`AgentDurableObject`/`RepoDurableObject`, `dial`, the `/api/itx` route; re-exports the real `Stream` DO |
+| `client.ts`     | `withItx` + `connect` — socket opener, naked path calls, and provide-time normalization for raw local SDK objects                                                              |
+| `harness.ts`    | the e2e test (run against `npm run dev`)                                                                                                                                       |
 
 ## What this deliberately omits
 

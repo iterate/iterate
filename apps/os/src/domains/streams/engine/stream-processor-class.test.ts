@@ -554,3 +554,66 @@ describe("wildcard consumption", () => {
     expect(processor.checkpointOffset).toBe(0);
   });
 });
+
+describe("waitUntilEvent", () => {
+  it("resolves { offset } once the fold reaches it, with state already applied", async () => {
+    const processor = new CounterProcessor({ iterateContext: iterateContext() });
+
+    let resolvedAtOffset: number | undefined;
+    const waited = processor.waitUntilEvent({ offset: 2 }).then(() => {
+      resolvedAtOffset = processor.checkpointOffset;
+    });
+
+    await tick();
+    expect(resolvedAtOffset).toBeUndefined(); // nothing ingested yet
+
+    await processor.ingest({ events: [add(1, 5), add(2, 7)], streamMaxOffset: 2 });
+    await waited;
+
+    expect(resolvedAtOffset).toBe(2);
+    // read-your-writes: the matched event is folded by the time the promise settles.
+    expect(processor.state).toEqual({ total: 12 });
+  });
+
+  it("resolves { offset } immediately when the checkpoint is already past it", async () => {
+    const processor = new CounterProcessor({
+      iterateContext: iterateContext(),
+      readState: () => ({ offset: 5, state: { total: 9 } }),
+    });
+
+    await expect(processor.waitUntilEvent({ offset: 3 })).resolves.toBeUndefined();
+  });
+
+  it("resolves { offset } even when the event at that offset is not consumed", async () => {
+    // `ignored` is outside `consumes`, so reduce never runs and state never
+    // changes — but the checkpoint still advances, so the barrier must resolve
+    // (keying on delivery, not on a state change).
+    const processor = new CounterProcessor({ iterateContext: iterateContext() });
+
+    let resolved = false;
+    const waited = processor.waitUntilEvent({ offset: 1 }).then(() => void (resolved = true));
+
+    await processor.ingest({ events: [ignored(1)], streamMaxOffset: 1 });
+    await waited;
+
+    expect(resolved).toBe(true);
+    expect(processor.checkpointOffset).toBe(1);
+  });
+
+  it("resolves { predicate } on the first matching delivered event, not before", async () => {
+    const processor = new CounterProcessor({ iterateContext: iterateContext() });
+
+    let resolved = false;
+    const waited = processor
+      .waitUntilEvent({ predicate: (event) => event.offset === 2 })
+      .then(() => void (resolved = true));
+
+    await processor.ingest({ events: [add(1, 5)], streamMaxOffset: 1 });
+    await tick();
+    expect(resolved).toBe(false); // offset 1 does not match the predicate
+
+    await processor.ingest({ events: [add(2, 7)], streamMaxOffset: 2 });
+    await waited;
+    expect(resolved).toBe(true);
+  });
+});

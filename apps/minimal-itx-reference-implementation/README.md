@@ -31,6 +31,11 @@ await itx.provideCapability({ path: ["greeter"], capability: (n) => `hi ${n}` })
 await itx.greeter("alice"); // "hi alice" — naked deep path, no client path proxy
 ```
 
+The root ITX control names (`provideCapability`, `invokeCapability`,
+`revokeCapability`, `describe`) are reserved and cannot be mounted as user
+capabilities. Script execution is intentionally HTTP-only: use `POST /api/itx`
+rather than `itx.runScript()` over the WebSocket model.
+
 `withItx` also normalizes raw local SDK objects at provide time. Bare Cap'n Web
 cannot serialize arbitrary class instances such as `new Slack.WebClient()` by
 value; the client keeps the object local and exposes one live

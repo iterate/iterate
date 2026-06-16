@@ -7,14 +7,15 @@
 //   /api/itx?projectId=<id>&path=/agents/<name>    -> an agent context
 //   /api/itx?projectId=&path=/                     -> the stateless platform root
 //
-// A NAKED Cap'n Web stub drives every context: the client calls the verbs
-// directly (`itx.provideCapability({…})`) AND pipelines deep dotted paths
-// (`itx.slack.chat.postMessage(msg)`) with NO client-side library. The trick is
-// entirely server-side — `pathCallable` (below) collapses a pipelined path into
-// one `invokeCapability({ path, args })` against the live context.
+// A NAKED Cap'n Web stub drives every context: `itx.provideCapability({…})` and
+// `itx.slack.chat.postMessage(msg)` are both just pipelined property paths that
+// end in a call. The trick is entirely server-side — `pathCallable` (below)
+// collapses every terminal call into one `invokeCapability({ path, args })`.
+// The context, not the proxy, decides whether that path is a reserved ITX
+// control name or a user capability.
 
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
-import { RpcTarget, newWorkersRpcResponse } from "capnweb";
+import { newWorkersRpcResponse } from "capnweb";
 import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
@@ -33,7 +34,8 @@ export class ItxBindingEntrypoint extends WorkerEntrypoint<Env, { context: strin
   async get(): Promise<ItxContext> {
     const node = this.env.ITX.getByName(this.ctx.props.context);
     return pathCallable({
-      rpcTarget: new ItxRpcTarget(node as unknown as ItxContext, (args) => node.runScript(args)),
+      invokeCapability: (args: { path: string[]; args?: unknown[] }) =>
+        (node as any).invokeCapability(args),
     }) as ItxContext;
   }
 }
@@ -45,8 +47,10 @@ export class ItxBindingEntrypoint extends WorkerEntrypoint<Env, { context: strin
 // Capabilities are registered at RUNTIME and change over a context's life, so
 // the served main object cannot be a class with fixed methods. It must answer
 // names it has never heard of and collapse an accumulated dotted path into one
-// `invokeCapability`. Three non-obvious requirements, each a real debugging
-// round (and the reason an earlier draft wrongly concluded this "doesn't work"):
+// `invokeCapability`. The processor decides whether that path is an ITX control
+// call (`describe`, `provideCapability`, ...) or a user capability. Three
+// non-obvious requirements, each a real debugging round (and the reason an
+// earlier draft wrongly concluded this "doesn't work"):
 //
 //   1. The target must be FUNCTION-typed (a Proxy over `function(){}`), NOT a
 //      Proxy over an RpcTarget. Cap'n Web classifies an rpc-target by prototype
@@ -72,26 +76,11 @@ const RESERVED = new Set([
   "onRpcBroken",
 ]);
 
-const ROOT_VERBS = new Set([
-  "provideCapability",
-  "invokeCapability",
-  "revokeCapability",
-  "describe",
-  "runScript",
-]);
-
-function pathCallable({ rpcTarget, path = [] }: { rpcTarget: any; path?: string[] }): any {
-  // A name is a VERB iff the served handle actually has a method by that name
-  // (provideCapability / invokeCapability / …) AND we are at the root (path
-  // empty). Anything else extends the accumulating path.
-  const verbAt = (key: string) =>
-    path.length === 0 && !RESERVED.has(key) && typeof rpcTarget[key] === "function";
-  const valueFor = (key: string) =>
-    verbAt(key)
-      ? (...args: unknown[]) => {
-          return rpcTarget[key](...args);
-        }
-      : pathCallable({ rpcTarget, path: [...path, key] });
+function pathCallable(
+  target: { invokeCapability(args: { path: string[]; args?: unknown[] }): unknown },
+  path: string[] = [],
+): any {
+  const valueFor = (key: string) => pathCallable(target, [...path, key]);
   return new Proxy(function () {}, {
     get(t, key) {
       if (typeof key === "symbol") return Reflect.get(t, key);
@@ -107,50 +96,11 @@ function pathCallable({ rpcTarget, path = [] }: { rpcTarget: any; path?: string[
       return typeof key === "symbol" ? key in t : !RESERVED.has(key as string);
     },
     apply(_t, _s, args) {
-      // A bare-stub deep path lands here: invoke the accumulated path. One bag,
-      // the same convention as every other verb.
-      return rpcTarget.invokeCapability({ path, args: args as unknown[] });
+      // Every terminal call becomes one path invocation. The target, not this
+      // proxy, owns the meaning of root paths like ["describe"].
+      return target.invokeCapability({ path, args: args as unknown[] });
     },
   });
-}
-
-class ItxRpcTarget extends RpcTarget {
-  #runScript?: (args: { code: string }) => Promise<unknown>;
-  #globalAccess?: string[];
-
-  constructor(
-    readonly itx: ItxContext,
-    runScript?: (args: { code: string }) => Promise<unknown>,
-    globalAccess?: string[],
-  ) {
-    super();
-    this.#runScript = runScript;
-    this.#globalAccess = globalAccess;
-  }
-
-  provideCapability(args: ProvideArgs) {
-    return this.itx.provideCapability(args);
-  }
-
-  invokeCapability(args: { path: string[]; args?: unknown[] }) {
-    if (this.#globalAccess && args.path[0] === "projects") {
-      return new GlobalItx({ access: this.#globalAccess }).invokeCapability(args);
-    }
-    return this.itx.invokeCapability(args);
-  }
-
-  revokeCapability(args: { path: string[] }) {
-    return this.itx.revokeCapability(args);
-  }
-
-  describe() {
-    return this.itx.describe();
-  }
-
-  runScript(args: { code: string }) {
-    if (!this.#runScript) throw new Error("this context does not support codemode (runScript)");
-    return this.#runScript(args);
-  }
 }
 
 interface Env {
@@ -238,9 +188,9 @@ export class ItxDurableObject extends DurableObject<Env> {
       new ItxProcessor({
         ...deps,
         iterateContext: { stream: this.#log() },
-        dial: (address, mountPath) => this.#dial(address, mountPath), // capabilities AND the parent
+        dial: (address) => this.#dial(address),
         builtinCapabilities: this.#contextBuiltinCapabilities(), // from the domain object
-        parentAddress: this.#parentAddress(), // the chain, as data
+        parent: this.#parentContext(), // the chain, as a handle
       }),
   );
   #subscriptionConfigured = false;
@@ -263,48 +213,30 @@ export class ItxDurableObject extends DurableObject<Env> {
     const projectId = this.#project();
     if (!projectId) return [];
     if (name === `prj:${projectId}`) {
-      return ProjectDurableObject.builtinCapabilities(
-        this.env.PROJECT.getByName(projectId),
-        projectId,
-      );
+      return ProjectDurableObject.builtinCapabilities(projectId);
     }
     if (/^prj:[^/]+\/agents\/.+$/.test(name)) {
       const agentName = name.slice("prj:".length);
-      return AgentDurableObject.builtinCapabilities(this.env.AGENT.getByName(agentName), agentName);
+      return AgentDurableObject.builtinCapabilities(agentName);
     }
     return [];
   }
 
-  // A context's PARENT, as a sturdy ADDRESS the core dials to climb on a miss.
-  // An agent parents to its project (a DO-backed context); a project root parents
-  // to the __global__ root (a code address). A standalone context has no parent. The
-  // host derives parentage from the coordinate topology — it is NOT folded from
-  // the log (nothing reads a folded copy), so it lives only here.
-  #parentAddress(): any | null {
+  // A context's parent, as the handle the core climbs on a miss. An agent
+  // parents to its project (a DO-backed context); a project root parents to the
+  // __global__ root. Parentage is host topology, not provider-supplied address
+  // data and not folded from the log.
+  #parentContext(): ItxContext | null {
     const name = this.ctx.id.name ?? "";
     const projectId = this.#project();
     if (!projectId) return null;
-    if (name === `prj:${projectId}`) return { type: "code", context: "__global__" };
-    return { type: "context", ref: `prj:${projectId}` };
+    if (name === `prj:${projectId}`) return new GlobalItx({ access: "all" });
+    return (this.env.ITX.getByName(`prj:${projectId}`) as any).itx;
   }
 
-  // The ONE dialer: a sturdy ADDRESS → a callable stub. Address kinds are
-  // dispatched on `type` — and capabilities and parent contexts share this one
-  // door because the reference impl is unauthed within a connection. (Production
-  // gates provider-supplied capability addresses and leaves trusted context
-  // addresses ungated — two dials. Auth lives at the connect door instead.)
-  #dial(address: any, mountPath?: string[]): any {
-    // a parent: another context node (an agent's project), dialed by coordinate.
-    if (address?.type === "context" && typeof address.ref === "string") {
-      // `as any` breaks a deep StreamProcessor-generic instantiation that tsc
-      // otherwise flags as "excessively deep" through the DO stub's return type.
-      return (this.env.ITX.getByName(address.ref) as any).itx;
-    }
-    // a parent: the code-rooted __global__ root — STATELESS, so constructed inline.
-    // Needing no DO is exactly why it is the root. (Prod dials it as a loopback.)
-    if (address?.type === "code" && address.context === "__global__") {
-      return new GlobalItx({ access: "all" });
-    }
+  // Capability address → callable stub. Parent traversal is injected separately,
+  // so this dialer only handles addresses that can be stored in capability rows.
+  #dial(address: any): any {
     if (address?.type === "dynamic-worker") {
       const loaded = this.#loadDynamicWorker(address.source);
       const entrypoint = loaded.then((worker) =>
@@ -315,7 +247,11 @@ export class ItxDurableObject extends DurableObject<Env> {
     }
     if (address?.type === "dynamic-durable-object") {
       const facetName = `dynamic-durable-object:${hashString(
-        JSON.stringify({ source: address.source, className: address.className, mountPath }),
+        JSON.stringify({
+          source: address.source,
+          className: address.className,
+          mountPath: address.mountPath,
+        }),
       )}`;
       const facet = (this.ctx as any).facets.get(facetName, async () => {
         const worker = await this.#loadDynamicWorker(address.source);
@@ -335,18 +271,15 @@ export class ItxDurableObject extends DurableObject<Env> {
   }
 
   #durableObjectNamespace(namespace: string): { getByName(name: string): unknown } {
-    switch (namespace) {
-      case "project":
-        return this.env.PROJECT;
-      case "agent":
-        return this.env.AGENT;
-      case "repo":
-        return this.env.REPO;
-      case "itx":
-        return this.env.ITX;
-      default:
-        throw new Error(`unknown trusted Durable Object namespace "${namespace}"`);
-    }
+    const namespaces: Record<string, { getByName(name: string): unknown }> = {
+      agent: this.env.AGENT,
+      itx: this.env.ITX,
+      project: this.env.PROJECT,
+      repo: this.env.REPO,
+    };
+    const binding = namespaces[namespace];
+    if (!binding) throw new Error(`unknown trusted Durable Object namespace "${namespace}"`);
+    return binding;
   }
 
   async #resolveWorkerSource(source: DynamicWorkerSource): Promise<ResolvedWorkerSource> {
@@ -481,11 +414,11 @@ export class ItxDurableObject extends DurableObject<Env> {
       modules: { "main.js": source },
     }));
     // The itx handle the script receives is the same shape as a WebSocket
-    // handle: root verbs plus arbitrary dotted capability paths. If this were a
-    // plain `{ invokeCapability }` object, `itx.whoami()` would work in Node and
-    // browser but fail in codemode, which is exactly the runtime drift ITX is
-    // meant to avoid.
-    const itxHandle = pathCallable({ rpcTarget: new ItxRpcTarget(this.#itx) });
+    // handle: arbitrary dotted calls all collapse to invokeCapability. If this
+    // were a plain `{ invokeCapability }` object, `itx.whoami()` would work in
+    // Node and browser but fail in codemode, which is exactly the runtime drift
+    // ITX is meant to avoid.
+    const itxHandle = pathCallable(this.#itx);
     try {
       const result = await loaded.getEntrypoint("ScriptEntrypoint").run(itxHandle);
       const completed = await log.append({
@@ -536,10 +469,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
   // The capabilities a context scoped to THIS project is born with — same shape
   // as a provideCapability call. A built-in is a capability pre-provided in code.
-  static builtinCapabilities(
-    _project: DurableObjectStub<ProjectDurableObject>,
-    name: string,
-  ): ProvideArgs[] {
+  static builtinCapabilities(name: string): ProvideArgs[] {
     return [
       {
         path: ["fetch"],
@@ -573,10 +503,7 @@ export class AgentDurableObject extends DurableObject<Env> {
     return `agent ${this.ctx.id.name ?? "?"}`;
   }
 
-  static builtinCapabilities(
-    _agent: DurableObjectStub<AgentDurableObject>,
-    name: string,
-  ): ProvideArgs[] {
+  static builtinCapabilities(name: string): ProvideArgs[] {
     return [
       {
         path: ["whoami"],
@@ -677,7 +604,10 @@ export default {
           { status: 400 },
         );
       }
-      return newWorkersRpcResponse(request, new GlobalItx({ access: principal.projects }));
+      return newWorkersRpcResponse(
+        request,
+        pathCallable(new GlobalItx({ access: principal.projects })),
+      );
     }
 
     // A project or agent context. Authorize the principal for the project, then
@@ -701,20 +631,21 @@ export default {
       }
     }
     if (request.method !== "GET") return new Response("method not allowed", { status: 405 });
-    // Do not pass the raw Durable Object stub straight to pathCallable. A DO
-    // stub's arbitrary properties look callable, so `itx.greeter()` gets
-    // mistaken for a root method call instead of a capability path. The tiny
-    // RpcTarget membrane exposes only the real itx verbs; pathCallable handles
-    // everything else as `invokeCapability({ path })`.
+    // The WebSocket surface is intentionally one operation: invokeCapability.
+    // That keeps root control-name dispatch in the context, not in the Cap'n Web
+    // proxy. The only edge policy here is principal-scoping inherited global
+    // catalog reads; the reference processor still injects its internal project
+    // parent with wider access, which is tracked as a later hardening task.
     return newWorkersRpcResponse(
       request,
       pathCallable({
-        rpcTarget: new ItxRpcTarget(
-          node as unknown as ItxContext,
-          (args) => node.runScript(args),
-          auth.projects,
-        ),
-      }) as RpcTarget,
+        invokeCapability: (args: { path: string[]; args?: unknown[] }) => {
+          if (args.path[0] === "projects") {
+            return new GlobalItx({ access: auth.projects }).invokeCapability(args);
+          }
+          return node.invokeCapability(args);
+        },
+      }),
     );
   },
 };
