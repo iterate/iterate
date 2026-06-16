@@ -30,7 +30,6 @@ export type ReposCapabilityProps = {
 export type RepoRecord = {
   createdAt: string;
   lastWokenAt: string;
-  name: string;
   path: string;
   projectId: string;
 };
@@ -135,7 +134,6 @@ export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposC
     return {
       createdAt: repo.createdAt,
       lastWokenAt: repo.createdAt,
-      name: this.repoName(repo.path),
       path: repo.path,
       projectId: this.ctx.props.projectId,
     };

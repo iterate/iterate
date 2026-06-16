@@ -119,7 +119,7 @@ function ProjectReposIndexContent() {
     return repos
       .filter((repo) => {
         if (!query) return true;
-        return repo.path.toLowerCase().includes(query) || repo.name.toLowerCase().includes(query);
+        return repo.path.toLowerCase().includes(query);
       })
       .toSorted((left, right) => {
         const direction = sort.direction === "asc" ? 1 : -1;
@@ -249,7 +249,7 @@ function ProjectReposIndexContent() {
                   const repoSplat = repoPathToSplat(repo.path);
 
                   return (
-                    <TableRow key={repo.name}>
+                    <TableRow key={repo.path}>
                       <TableCell className="min-w-[18rem] py-3">
                         <Link
                           className="block min-w-0 truncate rounded-sm text-sm font-medium hover:underline"
