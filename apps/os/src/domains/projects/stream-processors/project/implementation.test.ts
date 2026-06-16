@@ -20,9 +20,9 @@ vi.mock("~/domains/slack/durable-objects/slack-agent-durable-object.ts", () => (
     `${input.projectId}:${input.streamPath}`,
 }));
 
+import { ProjectProcessor, defaultAgentSystemPrompt } from "./implementation.ts";
 import { SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE } from "~/domains/agents/agent-prompt-guidance.ts";
 import { projectOnboardingBootstrapMarkdown } from "~/domains/repos/project-repo-template.ts";
-import { ProjectProcessor, defaultAgentSystemPrompt } from "./implementation.ts";
 
 describe("project agent prompts", () => {
   it("tells web agents to await chat sends without returning side-effect results", () => {
