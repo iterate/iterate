@@ -8,8 +8,8 @@ import { defineProcessorContract } from "@iterate-com/shared/streams/stream-proc
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import { StreamProcessor } from "~/domains/streams/engine/stream-processor.ts";
 
-export function repoStreamPath(repoSlug: string) {
-  return StreamPath.parse(`/repos/${repoSlug}`);
+export function repoStreamPath(path: string) {
+  return StreamPath.parse(path);
 }
 
 export const RepoStreamProcessorContract = defineProcessorContract({
@@ -20,8 +20,8 @@ export const RepoStreamProcessorContract = defineProcessorContract({
     repo: z
       .object({
         defaultBranch: z.string().trim().min(1),
+        path: z.string().trim().min(1),
         remote: z.string().url(),
-        slug: z.string().trim().min(1),
         tokenExpiresAt: z.iso.datetime().nullable(),
       })
       .nullable()
@@ -35,8 +35,8 @@ export const RepoStreamProcessorContract = defineProcessorContract({
       description: "A Repo was created and its initial Git access details were recorded.",
       payloadSchema: z.object({
         defaultBranch: z.string().trim().min(1),
+        path: z.string().trim().min(1),
         remote: z.string().url(),
-        slug: z.string().trim().min(1),
         tokenExpiresAt: z.iso.datetime().nullable(),
       }),
     },

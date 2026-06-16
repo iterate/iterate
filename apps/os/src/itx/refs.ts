@@ -10,7 +10,7 @@
  * identity, never composition or authority-by-content).
  *
  * - `context` is the sturdy ref: "global" (a connect-minted view with no
- *   node) or a context's stream coordinate `<namespace>:<path>`. Identity,
+ *   node) or a context's stream coordinate `<projectId>:<path>`. Identity,
  *   node address, and owning project are all projections of it — there is
  *   nothing else to resolve (coordinates.ts).
  * - `access` is the simplified access model: which projects a GLOBAL handle

@@ -38,7 +38,7 @@ describe("agent-ui reducer", () => {
       {
         type: "events.iterate.com/agent/llm-request-requested",
         offset: 10,
-        payload: { model: "gpt-test", runOpts: {} },
+        payload: { model: "gpt-test" },
       },
       {
         type: "events.iterate.com/openai-ws/websocket-message-received",
@@ -91,7 +91,7 @@ describe("agent-ui reducer", () => {
       {
         type: "events.iterate.com/agent/llm-request-requested",
         offset: 5,
-        payload: { model: "gpt-test", runOpts: {} },
+        payload: { model: "gpt-test" },
       },
       {
         type: "events.iterate.com/itx/script-execution-requested",
@@ -145,7 +145,7 @@ describe("agent-ui reducer", () => {
       {
         type: "events.iterate.com/agent/llm-request-requested",
         offset: 3,
-        payload: { model: "test-model", runOpts: {} },
+        payload: { model: "test-model" },
       },
       {
         type: "events.iterate.com/cloudflare-ai/llm-response-chunk",
@@ -218,7 +218,7 @@ describe("agent-ui reducer", () => {
       {
         type: "events.iterate.com/agent/llm-request-requested",
         offset: 7,
-        payload: { model: "gpt-test", runOpts: {} },
+        payload: { model: "gpt-test" },
       },
       {
         type: "events.iterate.com/itx/script-execution-requested",
@@ -236,7 +236,7 @@ describe("agent-ui reducer", () => {
       {
         type: "events.iterate.com/agent/llm-request-requested",
         offset: 20,
-        payload: { model: "gpt-test", runOpts: {} },
+        payload: { model: "gpt-test" },
       },
       {
         type: "events.iterate.com/itx/script-execution-requested",
@@ -261,7 +261,7 @@ describe("agent-ui reducer", () => {
       {
         type: "events.iterate.com/agent/llm-request-requested",
         offset: 7,
-        payload: { model: "gpt-test", runOpts: {} },
+        payload: { model: "gpt-test" },
       },
       {
         type: "events.iterate.com/agent/status-updated",
@@ -278,7 +278,7 @@ describe("agent-ui reducer", () => {
       {
         type: "events.iterate.com/agent/llm-request-requested",
         offset: 7,
-        payload: { model: "gpt-test", runOpts: {} },
+        payload: { model: "gpt-test" },
       },
       {
         type: "events.iterate.com/agents/user-message-received",
@@ -302,7 +302,7 @@ describe("agent-ui reducer", () => {
       {
         type: "events.iterate.com/agent/llm-request-requested",
         offset: 7,
-        payload: { model: "gpt-test", runOpts: {} },
+        payload: { model: "gpt-test" },
       },
       {
         type: "events.iterate.com/agents/user-message-received",
@@ -320,7 +320,7 @@ describe("agent-ui reducer", () => {
       {
         type: "events.iterate.com/agent/llm-request-requested",
         offset: 12,
-        payload: { model: "gpt-test", runOpts: {} },
+        payload: { model: "gpt-test" },
       },
     ]);
 
@@ -339,7 +339,7 @@ describe("agent-ui reducer", () => {
       {
         type: "events.iterate.com/agent/llm-request-requested",
         offset: 7,
-        payload: { model: "gpt-test", runOpts: {} },
+        payload: { model: "gpt-test" },
       },
       {
         type: "events.iterate.com/openai-ws/websocket-message-received",
@@ -374,7 +374,7 @@ describe("agent-ui reducer", () => {
       {
         type: "events.iterate.com/agent/llm-request-requested",
         offset: 12,
-        payload: { model: "gpt-test", runOpts: {} },
+        payload: { model: "gpt-test" },
       },
     ]);
 
@@ -404,7 +404,7 @@ describe("agent-ui reducer", () => {
       {
         type: "events.iterate.com/agent/llm-request-requested",
         offset: 7,
-        payload: { model: "gpt-test", runOpts: {} },
+        payload: { model: "gpt-test" },
       },
       {
         type: "events.iterate.com/agent/llm-request-cancelled",

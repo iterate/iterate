@@ -181,7 +181,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
         }
         next = {
           ...next,
-          namespace: args.event.payload.namespace,
+          projectId: args.event.payload.projectId,
           path: args.event.payload.path,
           createdAt: args.event.createdAt,
         };
@@ -656,7 +656,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
           // https://github.com/cloudflare/capnweb#memory-management
           const currentState = this.#currentState();
           const pendingBatch = processEventBatch({
-            namespace: currentState.namespace,
+            projectId: currentState.projectId,
             path: currentState.path,
             events,
             streamMaxOffset: currentState.maxOffset,

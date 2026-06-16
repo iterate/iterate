@@ -2,7 +2,7 @@
   // Wrangler config for the vitest-pool-workers harness (vitest.workers.config.ts).
   // Mirrors example-app/wrangler.jsonc: the Stream DO needs the STREAM binding
   // (it resolves sibling streams via env.STREAM.getByName), and the runner needs
-  // its own namespace for outbound subscription handshakes.
+  // its own projectId for outbound subscription handshakes.
   "name": "streams-vitest",
   "main": "workers/test-entry.ts",
   "compatibility_date": "2026-04-28",

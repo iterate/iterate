@@ -302,26 +302,26 @@ describe("decideIngressRoute", () => {
 test("creating a stream registers childPaths on its ancestor streams", async () => {
   const { getInitializedStreamStub } = await import("~/domains/streams/stream-runtime.ts");
   const { StreamPath } = await import("@iterate-com/shared/streams/types");
-  const namespace = "proj__local__childpaths";
-  const streamNamespace = env.STREAM as unknown as Parameters<
+  const projectId = "proj__local__childpaths";
+  const streamDurableObjectNamespace = env.STREAM as unknown as Parameters<
     typeof getInitializedStreamStub
   >[0]["durableObjectNamespace"];
 
   const child = await getInitializedStreamStub({
-    durableObjectNamespace: streamNamespace,
-    namespace,
+    durableObjectNamespace: streamDurableObjectNamespace,
+    projectId,
     path: StreamPath.parse("/probe/a"),
   });
   await child.getState();
 
   const root = await getInitializedStreamStub({
-    durableObjectNamespace: streamNamespace,
-    namespace,
+    durableObjectNamespace: streamDurableObjectNamespace,
+    projectId,
     path: StreamPath.parse("/"),
   });
   const intermediate = await getInitializedStreamStub({
-    durableObjectNamespace: streamNamespace,
-    namespace,
+    durableObjectNamespace: streamDurableObjectNamespace,
+    projectId,
     path: StreamPath.parse("/probe"),
   });
 
@@ -372,7 +372,7 @@ describe("Project ingress routing", () => {
         type: "events.iterate.com/project/repo-initialized",
         payload: expect.objectContaining({
           projectId: "proj__local__test",
-          repoSlug: "project",
+          repoPath: "/repos/project",
         }),
       }),
       expect.objectContaining({
@@ -439,7 +439,7 @@ describe("Project ingress routing", () => {
     expect(["none", "creating", "ready"]).toContain(phase);
 
     // Creation cross-posts create-requested onto the deployment-wide global
-    // audit stream (namespace "global", path /projects).
+    // audit stream (projectId null, path /projects).
     const globalResponse = await SELF.fetch(
       "https://os.iterate.localhost/__test/global-projects-stream",
     );

@@ -65,7 +65,7 @@ export type HostedProcessorRuntimeState = {
   processorName: string;
   snapshot: StreamProcessorSnapshot<unknown> | undefined;
   runtime: {
-    subscription: { subscriptionKey: string; namespace: string; path: string } | undefined;
+    subscription: { subscriptionKey: string; projectId: string | null; path: string } | undefined;
   };
 };
 
@@ -91,7 +91,7 @@ type HostedEntry = {
   /** Live stream stub retained across the subscription lifetime. */
   stream: RetainedStreamRpc | undefined;
   handle: StreamSubscriptionHandle | undefined;
-  namespace: string | undefined;
+  projectId: string | null | undefined;
   path: string | undefined;
   /** Consecutive ingest failures since the last successful batch. */
   consecutiveIngestFailures: number;
@@ -219,7 +219,7 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
       // closes the connection and disposes its callback stub, freeing THIS DO —
       // and dispose our retained stream stub, freeing the producer Stream DO.
       // The durable checkpoint + subscription-key persist (we only clear the
-      // in-memory handle/stream/namespace/path), so the producer's next re-dial
+      // in-memory handle/stream/projectId/path), so the producer's next re-dial
       // re-handshakes us from where we left off.
       entry.generation += 1;
       try {
@@ -230,7 +230,7 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
       entry.handle = undefined;
       stream[Symbol.dispose]();
       entry.stream = undefined;
-      entry.namespace = undefined;
+      entry.projectId = undefined;
       entry.path = undefined;
     }
   }
@@ -373,7 +373,7 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
         processor,
         stream: undefined,
         handle: undefined,
-        namespace: undefined,
+        projectId: undefined,
         path: undefined,
         consecutiveIngestFailures: 0,
         generation: 0,
@@ -400,7 +400,7 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
       // stream capability until the next handshake replaces it.
       // https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
       entry.stream = retainStreamRpc(args.stream);
-      entry.namespace = args.streamRuntimeState.coreProcessorState.namespace;
+      entry.projectId = args.streamRuntimeState.coreProcessorState.projectId;
       entry.path = args.streamRuntimeState.coreProcessorState.path;
       entry.consecutiveIngestFailures = 0;
 
@@ -417,12 +417,12 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
         runtime: {
           subscription:
             subscriptionKey === undefined ||
-            entry.namespace === undefined ||
+            entry.projectId === undefined ||
             entry.path === undefined
               ? undefined
               : {
                   subscriptionKey,
-                  namespace: entry.namespace,
+                  projectId: entry.projectId,
                   path: entry.path,
                 },
         },

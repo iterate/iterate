@@ -66,15 +66,15 @@ export function acquireWriterRole(args: { lockName: string }): WriterRole {
 }
 
 /**
- * The Web Lock name electing the single writer for one (namespace, path, processor).
+ * The Web Lock name electing the single writer for one (projectId, path, processor).
  * Versioned by the processor's schema so a deploy that migrates the shared OPFS DB lets a
  * fresh tab take over instead of waiting forever behind an old tab's lock.
  */
 export function streamWriterLockName(args: {
-  namespace: string;
+  projectId: string;
   streamPath: string;
   slug: string;
   schemaVersion: number;
 }): string {
-  return `stream-writer:${args.namespace}:${args.streamPath}:${args.slug}:v${args.schemaVersion}`;
+  return `stream-writer:${args.projectId}:${args.streamPath}:${args.slug}:v${args.schemaVersion}`;
 }

@@ -146,7 +146,7 @@ export function ProjectStreamView({
     () =>
       acquireStreamRuntime({
         createStreamClient: streamClientFactory,
-        namespace: projectSlugOrId,
+        projectId: projectSlugOrId,
         streamPath: streamPathText,
         slug: BrowserRawEventsContract.slug,
         schemaVersion: BROWSER_RAW_EVENTS_SCHEMA_VERSION,
@@ -185,7 +185,7 @@ export function ProjectStreamView({
     () =>
       acquireStreamRuntime({
         createStreamClient: streamClientFactory,
-        namespace: projectSlugOrId,
+        projectId: projectSlugOrId,
         streamPath: streamPathText,
         slug: AgentUiProcessorContract.slug,
         schemaVersion: AGENT_UI_SCHEMA_VERSION,

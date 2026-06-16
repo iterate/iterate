@@ -12,8 +12,9 @@ import {
   type RepoInfo,
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import type { CommitRepoFilesInput, CommitRepoFilesResult } from "~/domains/repos/repo-git.ts";
-import { PROJECT_REPO_SLUG } from "~/domains/repos/project-repo.ts";
+import { PROJECT_REPO_PATH } from "~/domains/repos/project-repo.ts";
 import { PROJECT_REPO_AGENTS_MD } from "~/domains/repos/project-repo-template.ts";
+import { isRepoNotCreatedError } from "~/domains/repos/repo-errors.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 import { normalizeIngressHost } from "~/ingress/host-headers.ts";
 import { resolveItx } from "~/itx/entrypoint.ts";
@@ -117,9 +118,7 @@ export class RepoDurableObject extends RealRepoDurableObject {
       const info = await this.getInfo();
       return info.remote.startsWith(MOCK_ARTIFACT_REMOTE_BASE);
     } catch (error) {
-      if (error instanceof Error && error.name === "NotInitializedError") {
-        return true;
-      }
+      if (isRepoNotCreatedError(error)) return true;
       throw error;
     }
   }
@@ -257,7 +256,7 @@ export default {
     if (url.pathname === "/__test/append-project-event") {
       const stream = await getInitializedStreamStub({
         durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
-        namespace: "proj__local__test",
+        projectId: "proj__local__test",
         path: PROJECT_STREAM_PATH,
       });
       const n = Number(url.searchParams.get("n") ?? "0");
@@ -268,7 +267,7 @@ export default {
     if (url.pathname === "/__test/append-onboarding-completed") {
       const stream = await getInitializedStreamStub({
         durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
-        namespace: "proj__local__test",
+        projectId: "proj__local__test",
         path: PROJECT_STREAM_PATH,
       });
       const appended = await stream.append({
@@ -286,7 +285,7 @@ export default {
       const path = url.searchParams.get("path") ?? PROJECT_STREAM_PATH;
       const stream = await getInitializedStreamStub({
         durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
-        namespace: "proj__local__test",
+        projectId: "proj__local__test",
         path: StreamPath.parse(path),
       });
       return Response.json({ events: await stream.history({ before: "end" }) });
@@ -295,7 +294,7 @@ export default {
     if (url.pathname === "/__test/project-stream") {
       const stream = await getInitializedStreamStub({
         durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
-        namespace: "proj__local__test",
+        projectId: "proj__local__test",
         path: PROJECT_STREAM_PATH,
       });
 
@@ -305,7 +304,7 @@ export default {
     if (url.pathname === "/__test/global-projects-stream") {
       const stream = await getInitializedStreamStub({
         durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
-        namespace: "global",
+        projectId: null,
         path: StreamPath.parse("/projects"),
       });
 
@@ -335,7 +334,7 @@ export default {
       // must ignore it (see ProjectProcessor #ownEvent).
       const stream = await getInitializedStreamStub({
         durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
-        namespace: "proj__local__test",
+        projectId: "proj__local__test",
         path: PROJECT_STREAM_PATH,
       });
       const appended = await stream.append({
@@ -360,8 +359,8 @@ export default {
     if (url.pathname === "/__test/project-repo") {
       const repo = await env.REPO.getByName(
         getRepoDurableObjectName({
+          path: PROJECT_REPO_PATH,
           projectId: "proj__local__test",
-          repoSlug: PROJECT_REPO_SLUG,
         }),
       ).getInfo();
 

@@ -47,7 +47,7 @@ import {
   PLATFORM_PROJECT_CONTEXT_ADDRESS,
   PLATFORM_PROJECT_CONTEXT_ID,
 } from "./platform-context.ts";
-import { GLOBAL_CONTEXT_ID, type ProjectAccess } from "./refs.ts";
+import type { ProjectAccess } from "./refs.ts";
 import type {
   CapabilityProvision as CapabilityProvisionContract,
   KnownCapabilities,
@@ -87,14 +87,14 @@ export type ItxRuntime = {
    * the dotted route, not a display name. */
   capabilityPath?: string;
   config: AppConfig;
-  /** "global", a context ref (`<namespace>:<path>`), or the
+  /** "global", a context ref (`<projectId>:<path>`), or the
    * platform:project chain root. */
   contextRef: string;
   /** How to dial the context node — a projection of the ref for context
    * nodes, the loopback address at the chain root; null only on global
    * handles. */
   contextAddress: CapabilityAddress | null;
-  /** The owning project — the ref's namespace; null only on global handles. */
+  /** The owning project from the ref; null only on global handles. */
   projectId: string | null;
   env: Env;
   /** The parent worker's loopback exports (ctx.exports). */
@@ -227,7 +227,7 @@ export class ItxHandle extends RpcTarget {
     if (projectId !== null) {
       return this.capability("streams") as ItxStreams;
     }
-    // The deployment-wide "global" namespace stays KERNEL: it is gated on
+    // The deployment-wide global stream scope stays KERNEL: it is gated on
     // the connect-time access set ("all" = the admin API secret / admin
     // cookie), which no cap definition can express — a user's global handle
     // must narrow to a project first, otherwise any logged-in user could
@@ -241,7 +241,7 @@ export class ItxHandle extends RpcTarget {
     }
     return new ItxStreams(
       { access: this.#runtime.access, exports: this.#runtime.exports as never },
-      GLOBAL_CONTEXT_ID,
+      null,
     );
   }
 
@@ -352,7 +352,7 @@ export class ItxHandle extends RpcTarget {
     const created = await createContext({
       env: this.#runtime.env,
       name: opts.name,
-      namespace: projectId,
+      projectId,
       parent: { address, ref: this.#runtime.contextRef },
       path: opts.path ?? generatedContextPath(this.#runtime.config.typeIdPrefix),
     });

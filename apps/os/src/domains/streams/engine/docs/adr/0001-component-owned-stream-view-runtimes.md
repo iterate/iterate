@@ -6,11 +6,11 @@
 ## Current model (as shipped)
 
 Browser stream runtimes are module-level singletons keyed by
-`(namespace, streamPath, processorSlug)` — the `runtimeRegistry` in
+`(projectId, streamPath, processorSlug)` — the `runtimeRegistry` in
 `src/browser/stream-browser-store.ts`. Every React view that mounts the same key
 shares one runtime and one capnweb connection, **including two panes of
 `/split-stream` that point at the same path + processor**. The OPFS SQLite mirror
-is shared one level higher, per `(namespace, streamPath)` (the `databaseRegistry`),
+is shared one level higher, per `(projectId, streamPath)` (the `databaseRegistry`),
 so a stream's processors share one OPFS file.
 
 Cross-tab, Web Locks elect a single writer per key; follower tabs read the mirror

@@ -14,8 +14,8 @@ describe("Repo stream processor", () => {
           offset: 1,
           payload: {
             defaultBranch: "main",
+            path: "/repos/banana",
             remote: "https://git.cloudflare.com/artifacts/os/project--banana.git",
-            slug: "banana",
             tokenExpiresAt: "2036-05-09T12:00:00.000Z",
           },
           type: "events.iterate.com/repo/created",
@@ -26,8 +26,8 @@ describe("Repo stream processor", () => {
 
     expect(processor.state.repo).toEqual({
       defaultBranch: "main",
+      path: "/repos/banana",
       remote: "https://git.cloudflare.com/artifacts/os/project--banana.git",
-      slug: "banana",
       tokenExpiresAt: "2036-05-09T12:00:00.000Z",
     });
   });

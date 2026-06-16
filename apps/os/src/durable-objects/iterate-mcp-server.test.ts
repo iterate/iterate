@@ -207,10 +207,10 @@ function extractTextContent(content: unknown) {
   );
 }
 
-async function readCurrentStreamEvents(streamPath: StreamPath, namespace = projectId) {
+async function readCurrentStreamEvents(streamPath: StreamPath, streamProjectId = projectId) {
   const stream = await getInitializedStreamStub({
     durableObjectNamespace: (env as TestEnv).STREAM,
-    namespace,
+    projectId: streamProjectId,
     path: streamPath,
   });
   const events = await stream.history({ before: "end" });

@@ -11,7 +11,7 @@
  *
  * **A context** is an addressable node that holds named capabilities — and
  * a context IS a stream coordinate: its identity is the ref
- * `<namespace>:<path>` of an ordinary event stream (the project context is
+ * `<projectId>:<path>` of an ordinary event stream (the project context is
  * the project's root stream; an agent's context is the agent's stream).
  * Contexts form a prototype chain: capability lookup walks child → parent
  * with shadowing, writes land on the node your handle points at, and
@@ -218,10 +218,10 @@ export interface ItxBuiltins {
   invoke(input: { path: string[]; args: unknown[] }): Promise<unknown>;
 
   /**
-   * Event streams, keyed by `(namespace, path)`. On a PROJECT handle this
+   * Event streams, keyed by `{ projectId, path }`. On a PROJECT handle this
    * is a default cap (StreamsCapability loopback, shadowable) pinned to
-   * the project's namespace; on a GLOBAL handle it is kernel — the
-   * deployment-wide `"global"` namespace gated on the connect-time access
+   * the project; on a GLOBAL handle it is kernel — the
+   * deployment-wide global stream scope gated on the connect-time access
    * set, which no cap definition can express. See {@link StreamRef} for
    * the relative/absolute addressing forms.
    */
@@ -346,7 +346,7 @@ export interface KnownCapabilities {}
  * we can possibly give you — this should always be the best starting point
  * for exploring what exists. */
 export type ItxDescription = {
-  /** "global", or the context's stream coordinate (`<namespace>:<path>` —
+  /** "global", or the context's stream coordinate (`<projectId>:<path>` —
    * the project context is `<projectId>:/`). */
   context: ContextRef;
   /** What this handle may narrow to: "all" (admin) or named project ids. */
@@ -457,12 +457,12 @@ export type WorkerSource = (
   | {
       /** The code lives in one of the project's repos. Built per COMMIT —
        * never per call — through @cloudflare/worker-bundler, memoized in R2
-       * by hash(repo, sha, path, bundle). A pinned commit sha makes the
+       * by hash(repoPath, sha, path, bundle). A pinned commit sha makes the
        * journal entry fully determine behavior; "latest" tracks pushes
        * (the platform `worker` default uses it). With no `bundle`, the
        * file at `path` IS the worker, verbatim. */
       type: "repo";
-      repo: string;
+      repoPath: string;
       commit: string | "latest";
       path: string;
       bundle?: { minify?: boolean; externals?: string[] };
@@ -593,15 +593,14 @@ export type CapabilityDescription = {
 // ---------------------------------------------------------------------------
 
 /**
- * How a stream is addressed. Streams are keyed by `(namespace, path)`; a
- * project's id happens to be usable as a namespace, and `"global"` is the
- * deployment-wide namespace. All of these reach the same stream:
+ * How a stream is addressed. Streams are keyed by `{ projectId, path }`;
+ * `projectId: null` is the deployment-wide global scope. All of these reach
+ * the same project stream:
  *
  * ```ts
  * itx.streams.get("proj_123:/chat")                         // absolute, string
- * itx.streams.get({ namespace: "proj_123", path: "/chat" }) // absolute, structured
+ * itx.streams.get({ projectId: "proj_123", path: "/chat" }) // absolute, structured
  * itx.projects.get("proj_123").streams.get("/chat")         // narrow, then relative
- * itx.projects.get("proj_123").streams.get({ path: "/chat" })
  * ```
  *
  * Absolute forms are sugar: they internally construct the narrowed handle
@@ -609,7 +608,7 @@ export type CapabilityDescription = {
  * against the handle's authority (a project handle cannot fully-qualify its
  * way out).
  */
-export type StreamRef = string | { namespace?: string; path: string };
+export type StreamRef = string | { projectId: string | null; path: string };
 
 /** An event as read back from a stream. */
 export type StreamEvent = {
@@ -685,7 +684,7 @@ export interface ItxStream {
   }): Promise<StreamSubscriptionHandle>;
 }
 
-/** The streams collection, namespace-bound by the handle. */
+/** The streams collection, project-bound by the handle. */
 export interface ItxStreams {
   /** Resolve a stream ref — relative or absolute, see {@link StreamRef}. */
   get(ref: StreamRef): ItxStream;
@@ -758,7 +757,7 @@ export type Stubify<T> = T extends (...args: infer A) => infer R
 
 /**
  * A context's sturdy ref: `"global"`, or the context's stream coordinate
- * `<namespace>:<path>` — identity, stream, and node address as one string
+ * `<projectId>:<path>` — identity, stream, and node address as one string
  * (the project context is `<projectId>:/`; an agent's is
  * `<projectId>:<agentPath>`).
  */

@@ -15,7 +15,7 @@ import { CoreProcessorContract } from "../processors/core/contract.ts";
 import { retainProcessEventBatch } from "./rpc-lifecycle.ts";
 
 const batch = {
-  namespace: "test",
+  projectId: "test",
   path: "/p",
   events: [],
   streamMaxOffset: 0,

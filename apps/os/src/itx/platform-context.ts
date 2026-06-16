@@ -43,7 +43,7 @@ export const PROJECT_WORKER_SOURCE = {
   bundle: {},
   commit: "latest",
   path: "worker.js",
-  repo: "project",
+  repoPath: "/repos/project",
   type: "repo",
 } as const satisfies import("./itx.ts").WorkerSource;
 
@@ -98,7 +98,7 @@ const PLATFORM_PROJECT_CAPABILITIES: PlatformCapability[] = [
   {
     address: { entrypoint: "StreamsCapability", type: "rpc", worker: { type: "loopback" } },
     instructions:
-      "Event streams in this project's namespace: itx.streams.get('/path') returns a " +
+      "Event streams in this project: itx.streams.get('/path') returns a " +
       "stream handle with append/read/getState/subscribe; get also takes absolute " +
       "refs ('ns:/path') checked against this project's access. Chained calls ride " +
       "RPC promise pipelining.",
@@ -138,7 +138,7 @@ const PLATFORM_PROJECT_CAPABILITIES: PlatformCapability[] = [
     address: { entrypoint: "ReposCapability", type: "rpc", worker: { type: "loopback" } },
     instructions:
       "The project's git repos: itx.repos.ensureProjectRepoInfo({ projectSlug }), " +
-      "list(), create({ slug }), get({ slug }) — repo handles expose commitFiles/readFiles/readLog.",
+      "list(), create({ path }), get({ path }) — repo handles expose commitFiles/readFiles/readLog.",
     name: "repos",
   },
   {
@@ -153,13 +153,13 @@ const PLATFORM_PROJECT_CAPABILITIES: PlatformCapability[] = [
     name: "agents",
   },
   {
-    // The workspace is provided EXPLICITLY (props.workspaceId) — workspaces
+    // The workspace is provided EXPLICITLY (props.path) — workspaces
     // are not itx's concern: every context that wants its own workspace gets
     // one from its HOST (the agent provides its own on its context), and
     // everything else shares the project workspace through the chain.
     address: {
       entrypoint: "WorkspaceCapability",
-      props: { workspaceId: "project" },
+      props: { path: "/workspaces/project" },
       type: "rpc",
       worker: { type: "loopback" },
     },

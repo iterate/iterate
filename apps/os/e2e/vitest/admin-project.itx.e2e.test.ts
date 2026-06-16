@@ -19,10 +19,13 @@ test("creates a disposable project and uses project streams through itx", async 
   const stream = itx.streams.get(streamPath);
 
   // Creating the stream proves the disposable project exists and is reachable
-  // on this admin handle; the namespace is the project id.
-  const created = (await itx.streams.create({ streamPath })) as { namespace: string; path: string };
+  // on this admin handle; the project id is the stream owner.
+  const created = (await itx.streams.create({ streamPath })) as {
+    projectId: string | null;
+    path: string;
+  };
   expect(created).toMatchObject({
-    namespace: handle.project.id,
+    projectId: handle.project.id,
     path: streamPath,
   });
 

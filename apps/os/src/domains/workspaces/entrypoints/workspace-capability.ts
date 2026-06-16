@@ -1,9 +1,8 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import {
   type CloudflareShellState,
+  getWorkspaceDurableObjectName,
   type WorkspaceDurableObject,
-  type WorkspaceStructuredName,
 } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 import { replayPathCall } from "~/itx/path-proxy.ts";
 import type { PathCall } from "~/itx/itx.ts";
@@ -14,12 +13,12 @@ type WorkspaceCapabilityEnv = {
 
 export type WorkspaceCapabilityProps = {
   projectId: string;
-  /** The workspace this capability is bound to — EXPLICIT, decided by
-   * whoever provides the capability: the platform context provides the
-   * project's shared workspace ("project"); an agent host provides one
-   * bound to its own context's identity. Workspaces are not itx's concern —
-   * there is no per-context derivation magic here. */
-  workspaceId: string;
+  /**
+   * The workspace stream path this capability is bound to. This is explicit:
+   * whoever provides the capability chooses the canonical `{ projectId, path }`
+   * identity, for example `{ projectId: "proj_123", path: "/workspaces/project" }`.
+   */
+  path: string;
   /** Attribution, injected at dial time. */
   context?: string;
   capabilityPath?: string;
@@ -64,7 +63,7 @@ export class WorkspaceCapability extends WorkerEntrypoint<
     return await callMethod({
       args: [path],
       method: "readFile",
-      namespace: "ctx.workspace",
+      targetName: "itx.workspace",
       target: state as {},
     });
   }
@@ -74,29 +73,25 @@ export class WorkspaceCapability extends WorkerEntrypoint<
     return await callMethod({
       args: [path, content],
       method: "writeFile",
-      namespace: "ctx.workspace",
+      targetName: "itx.workspace",
       target: state as {},
     });
   }
 
   private async workspace(): Promise<WorkspaceRpcStub> {
     const namespace = this.requireWorkspaceNamespace();
-    const name = this.workspaceName();
-    return (await getInitializedDoStub({
-      allowCreate: true,
-      namespace,
-      name,
-    })) as unknown as WorkspaceRpcStub;
+    const name = getWorkspaceDurableObjectName(this.workspaceName());
+    return namespace.getByName(name) as unknown as WorkspaceRpcStub;
   }
 
-  private workspaceName(): WorkspaceStructuredName {
+  private workspaceName(): { path: string; projectId: string } {
     const props = this.ctx.props;
-    if (!props.workspaceId) {
-      throw new Error("WorkspaceCapability needs provider props.workspaceId.");
+    if (!props.path) {
+      throw new Error("WorkspaceCapability needs provider props.path.");
     }
     return {
+      path: props.path,
       projectId: props.projectId,
-      workspaceId: props.workspaceId,
     };
   }
 
@@ -113,7 +108,7 @@ export class WorkspaceCapability extends WorkerEntrypoint<
     return await callMethod({
       args: [input],
       method,
-      namespace: "ctx.workspace.git",
+      targetName: "itx.workspace.git",
       target: git,
     });
   }
@@ -122,12 +117,12 @@ export class WorkspaceCapability extends WorkerEntrypoint<
 async function callMethod(input: {
   args: unknown[];
   method: string;
-  namespace: string;
+  targetName: string;
   target: Record<string, unknown>;
 }) {
   const fn = input.target[input.method];
   if (typeof fn !== "function") {
-    throw new Error(`${input.namespace} does not implement ${input.method}.`);
+    throw new Error(`${input.targetName} does not implement ${input.method}.`);
   }
 
   return await fn(...input.args);

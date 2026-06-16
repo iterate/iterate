@@ -290,7 +290,7 @@ function sseStream(lines: string[]): ReadableStream<Uint8Array> {
 function llmRequestRequestedEvent(args: { offset: number }): StreamEvent {
   return {
     type: "events.iterate.com/agent/llm-request-requested",
-    payload: { model: "test-model", runOpts: {} },
+    payload: { model: "test-model" },
     offset: args.offset,
     createdAt: "2026-01-01T00:00:00.000Z",
   };

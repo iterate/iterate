@@ -34,7 +34,7 @@ type ProjectCreateOrganization = {
   slug?: string;
 };
 
-const PROJECT_REPO_SLUG = "iterate-config";
+const PROJECT_REPO_PATH = "/repos/iterate-config";
 const PROJECT_WORKSPACE_SLUG = "main";
 
 type AuthProps = {
@@ -163,7 +163,7 @@ export class ProjectCapability extends RpcTarget {
   }
 
   get repo() {
-    return this.repos.get({ slug: PROJECT_REPO_SLUG });
+    return this.repos.get({ path: PROJECT_REPO_PATH });
   }
 
   get repos() {
@@ -306,7 +306,7 @@ export class ReposCapability extends RpcTarget {
     super();
   }
 
-  create(input: { namespace: string; slug: string }) {
+  create(input: { namespace: string; path: string }) {
     assertAdmin(this.input.props.auth);
     return new RepoCapability({
       env: this.input.env,
@@ -314,7 +314,7 @@ export class ReposCapability extends RpcTarget {
     });
   }
 
-  get(input: { namespace: string; slug: string }) {
+  get(input: { namespace: string; path: string }) {
     assertAdmin(this.input.props.auth);
     return new RepoCapability({
       env: this.input.env,
@@ -339,25 +339,25 @@ export class ProjectReposCapability extends RpcTarget {
     super();
   }
 
-  create(input: { slug: string }) {
+  create(input: { path: string }) {
     return new RepoCapability({
       env: this.input.env,
       props: {
         auth: this.input.props.auth,
         namespace: this.input.props.namespace,
-        slug: input.slug,
+        path: input.path,
       },
     });
   }
 
-  get(input: { slug: string } | string) {
-    const slug = typeof input === "string" ? input : input.slug;
+  get(input: { path: string } | string) {
+    const path = typeof input === "string" ? input : input.path;
     return new RepoCapability({
       env: this.input.env,
       props: {
         auth: this.input.props.auth,
         namespace: this.input.props.namespace,
-        slug,
+        path,
       },
     });
   }
@@ -372,7 +372,7 @@ export class RepoCapability extends RpcTarget {
   constructor(
     private readonly input: {
       env: CapabilityEnv;
-      props: AuthProps & { namespace: string; slug: string };
+      props: AuthProps & { namespace: string; path: string };
     },
   ) {
     super();
@@ -383,7 +383,7 @@ export class RepoCapability extends RpcTarget {
   }
 
   private repo() {
-    return this.input.env.REPO.getByName(`${this.input.props.namespace}:${this.input.props.slug}`);
+    return this.input.env.REPO.getByName(`${this.input.props.namespace}:${this.input.props.path}`);
   }
 }
 
@@ -578,11 +578,11 @@ export class ProjectDurableObject extends DurableObject {
   }
 
   get repo() {
-    return this.env.REPO.getByName(`${this.address.projectId}:${PROJECT_REPO_SLUG}`);
+    return this.env.REPO.getByName(`${this.address.projectId}:${PROJECT_REPO_PATH}`);
   }
 
-  repoBySlug(slug: string) {
-    return this.env.REPO.getByName(`${this.address.projectId}:${slug}`);
+  repoByPath(path: string) {
+    return this.env.REPO.getByName(`${this.address.projectId}:${path}`);
   }
 
   get workspace() {
@@ -639,8 +639,8 @@ export class StreamDurableObject extends DurableObject {
 
 export class RepoDurableObject extends DurableObject {
   get address() {
-    const [namespace, slug] = this.ctx.id.name!.split(":", 2);
-    return { namespace, slug };
+    const [namespace, path] = this.ctx.id.name!.split(/:(?=\/)/);
+    return { namespace, path };
   }
 
   describe(): Promise<RepoInfo> {

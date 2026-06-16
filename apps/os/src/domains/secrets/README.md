@@ -22,7 +22,7 @@ Slack is the first concrete claim:
 - Provider: `slack`
 - Webhook Provider Identifier: Slack `team_id`
 - Claim owner: exactly one `ProjectId`
-- Integration stream: that project's stream namespace at `/integrations/slack`
+- Integration stream: that project's stream path `/integrations/slack`
 - Processor slug: `slack`
 
 This means one Slack team cannot forward signed webhooks into two projects at
@@ -38,7 +38,7 @@ that provider, and route inbound webhooks by resolving that claim to a ProjectId
 Google is project-scoped for this slice:
 
 - Provider: `google`
-- Lifecycle stream: that project's stream namespace at `/integrations/google`
+- Lifecycle stream: that project's stream path `/integrations/google`
 - Future processor slug: `google-integration`
 
 OAuth callbacks append `events.iterate.com/slack/connected` and

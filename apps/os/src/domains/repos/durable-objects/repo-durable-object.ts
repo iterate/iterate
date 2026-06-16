@@ -1,5 +1,4 @@
-import { z } from "zod";
-import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
+import { DurableObject } from "cloudflare:workers";
 import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
@@ -12,18 +11,17 @@ import {
 } from "~/domains/streams/stream-runtime.ts";
 import {
   REPO_DEFAULT_BRANCH,
-  REPO_README_PATH,
   REPO_WRITE_TOKEN_TTL_SECONDS,
   type CloudflareArtifactRepo,
   type CloudflareArtifactsBinding,
   artifactRemoteUrl,
   createCloudflareArtifactsRestBinding,
   createArtifactToken,
-  pushInitialReadme,
   repoArtifactName,
   stripArtifactTokenQuery,
 } from "~/domains/repos/artifacts.ts";
 import { parseConfig } from "~/config.ts";
+import { parseDurableObjectName } from "~/domains/durable-object-names.ts";
 import { RepoNotCreatedError } from "~/domains/repos/repo-errors.ts";
 import {
   CommitRepoFilesInput,
@@ -47,10 +45,10 @@ import {
 } from "~/domains/repos/stream-processors/repo-stream-processor.ts";
 import {
   getRepoDurableObjectName,
-  type RepoStructuredName,
+  type RepoDurableObjectName,
 } from "~/domains/repos/repo-durable-object-name.ts";
 
-export { getRepoDurableObjectName, type RepoStructuredName };
+export { getRepoDurableObjectName, type RepoDurableObjectName };
 
 export type RepoInfo = {
   defaultBranch: string;
@@ -61,9 +59,8 @@ export type RepoInfo = {
     pushCommand: string;
     remote: string;
   };
-  readmePath: string;
+  path: string;
   remote: string;
-  slug: string;
   token: string;
   tokenExpiresAt: string | null;
   credentials: { username: string; password: string };
@@ -72,7 +69,7 @@ export type RepoInfo = {
 export type CreateRepoInput = {
   projectSlug?: string;
   source?:
-    | { kind: "initial-readme" }
+    | { kind: "empty" }
     | {
         artifactName: string;
         defaultBranchOnly?: boolean;
@@ -81,67 +78,52 @@ export type CreateRepoInput = {
       };
 };
 
-const RepoStructuredName = z.object({
-  projectId: z.string().trim().min(1),
-  repoSlug: z
-    .string()
-    .trim()
-    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Repo slug must be lowercase kebab-case"),
-});
-
 type RepoEnv = {
   APP_CONFIG?: string;
   ARTIFACTS?: CloudflareArtifactsBinding;
   ARTIFACTS_ACCOUNT_ID?: string;
   ARTIFACTS_NAMESPACE?: string;
-  DO_CATALOG: D1Database;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
 };
 
-const RepoLifecycleBase = createIterateDurableObjectBase<
-  typeof RepoStructuredName,
-  Pick<RepoEnv, "DO_CATALOG">
->({
-  className: "RepoDurableObject",
-  getDatabase: (env) => env.DO_CATALOG,
-  indexes: {
-    projectId: (params) => params.projectId,
-    repoSlug: (params) => params.repoSlug,
-  },
-  nameSchema: RepoStructuredName,
-});
-
-const REPO_WRITE_TOKEN_STORAGE_KEY = "repo.writeToken";
-const REPO_WRITE_TOKEN_EXPIRES_AT_STORAGE_KEY = "repo.writeTokenExpiresAt";
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
-export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
+export class RepoDurableObject extends DurableObject<RepoEnv> {
+  readonly name = parseDurableObjectName(this.ctx.id.name!);
+
   host = createStreamProcessorHost(this.ctx);
   repo = this.host.add(RepoStreamProcessorContract.slug, (deps) => new RepoStreamProcessor(deps));
-
-  constructor(ctx: DurableObjectState, env: RepoEnv) {
-    super(ctx, env);
-    this.registerOnFirstInitialize(async (params) => {
-      await this.ensureRepoSubscription(params);
-    });
-  }
 
   /** Subscription callables on the repo stream dial this. */
   requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
     return this.host.requestStreamSubscription(args);
   }
 
+  private async ensureRepoStreamSetup(): Promise<void> {
+    await this.ensureRepoSubscription();
+  }
+
+  private repoName(): RepoDurableObjectName {
+    if (this.name.projectId === null) {
+      throw new Error("Repo Durable Object must be project-scoped.");
+    }
+    if (!String(this.name.path).startsWith("/repos/")) {
+      throw new Error(`Repo Durable Object path must start with "/repos/", got ${this.name.path}.`);
+    }
+    return { path: this.name.path, projectId: this.name.projectId };
+  }
+
   async createRepo(input: CreateRepoInput = {}): Promise<RepoInfo> {
-    await this.ensureStarted();
+    await this.ensureRepoStreamSetup();
     await this.waitForRepoProcessorCatchUp();
 
     if ((await this.currentRepo()) !== null) {
-      throw new Error(`Repo ${this.structuredName.repoSlug} already exists.`);
+      throw new Error(`Repo ${this.repoName().path} already exists.`);
     }
 
-    const artifactName = repoArtifactName(this.structuredName);
+    const artifactName = repoArtifactName(this.repoName());
     const artifacts = this.requireArtifacts();
-    const source = input.source ?? { kind: "initial-readme" as const };
+    const source = input.source ?? { kind: "empty" as const };
     const artifact =
       source.kind === "artifact-fork"
         ? await this.forkArtifactRepo({
@@ -152,36 +134,17 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
         : await artifacts.create(artifactName, {
             setDefaultBranch: REPO_DEFAULT_BRANCH,
           });
-    const token = await createArtifactToken({
-      artifact,
-      artifacts,
-      name: artifactName,
-      scope: "write",
-      ttlSeconds: REPO_WRITE_TOKEN_TTL_SECONDS,
-    });
     const remote = (await readArtifactString(artifact.remote)) ?? this.artifactRemote(artifactName);
     const defaultBranch =
       (await readArtifactString(artifact.defaultBranch)) ??
       (await readArtifactString(artifact.default_branch)) ??
       REPO_DEFAULT_BRANCH;
 
-    if (source.kind === "initial-readme") {
-      await pushInitialReadme({
-        defaultBranch,
-        projectId: this.structuredName.projectId,
-        projectSlug: input.projectSlug,
-        remote,
-        repoSlug: this.structuredName.repoSlug,
-        token: token.plaintext,
-      });
-    }
-
-    await this.ctx.storage.put(REPO_WRITE_TOKEN_STORAGE_KEY, token.plaintext);
     const event = await this.appendRepoCreatedEvent({
       defaultBranch,
+      path: this.repoName().path,
       remote,
-      slug: this.structuredName.repoSlug,
-      tokenExpiresAt: token.expiresAt,
+      tokenExpiresAt: null,
     });
     await this.waitForRepoProcessorCatchUp(event.offset);
 
@@ -189,32 +152,14 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
   }
 
   async getInfo(): Promise<RepoInfo> {
-    await this.ensureStarted();
+    await this.ensureRepoStreamSetup();
     await this.waitForRepoProcessorCatchUp();
     return await this.requireInfo();
   }
 
   async refreshWriteToken(): Promise<RepoInfo> {
-    await this.ensureStarted();
+    await this.ensureRepoStreamSetup();
     await this.waitForRepoProcessorCatchUp();
-
-    if ((await this.currentRepo()) === null) {
-      throw new RepoNotCreatedError(`Repo ${this.structuredName.repoSlug} has not been created.`);
-    }
-
-    const artifactName = repoArtifactName(this.structuredName);
-    const artifacts = this.requireArtifacts();
-    const token = await createArtifactToken({
-      artifact: await artifacts.get(artifactName),
-      artifacts,
-      name: artifactName,
-      scope: "write",
-      ttlSeconds: REPO_WRITE_TOKEN_TTL_SECONDS,
-    });
-
-    await this.ctx.storage.put(REPO_WRITE_TOKEN_STORAGE_KEY, token.plaintext);
-    await this.ctx.storage.put(REPO_WRITE_TOKEN_EXPIRES_AT_STORAGE_KEY, token.expiresAt);
-
     return await this.requireInfo();
   }
 
@@ -312,28 +257,28 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
     });
   }
 
-  /** Runs a git operation with the stored write token, refreshing it once on auth failure. */
+  /** Runs a git operation with an on-demand artifact token, retrying once on auth failure. */
   private async withRepoGitCredentials<T>(operation: (info: RepoInfo) => Promise<T>): Promise<T> {
-    await this.ensureStarted();
+    await this.ensureRepoStreamSetup();
     await this.waitForRepoProcessorCatchUp();
     const info = await this.requireInfo();
     try {
       return await operation(info);
     } catch (error) {
       if (!isGitAuthError(error)) throw error;
-      return await operation(await this.refreshWriteToken());
+      return await operation(await this.requireInfo());
     }
   }
 
   async getArtifact(): Promise<CloudflareArtifactRepo> {
-    await this.ensureStarted();
+    await this.ensureRepoStreamSetup();
     await this.waitForRepoProcessorCatchUp();
 
     if ((await this.currentRepo()) === null) {
-      throw new RepoNotCreatedError(`Repo ${this.structuredName.repoSlug} has not been created.`);
+      throw new RepoNotCreatedError(`Repo ${this.repoName().path} has not been created.`);
     }
 
-    return this.requireArtifacts().get(repoArtifactName(this.structuredName));
+    return this.requireArtifacts().get(repoArtifactName(this.repoName()));
   }
 
   private async currentRepo() {
@@ -368,8 +313,8 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
   private async currentConsumedEventMaxOffset() {
     const stream = await getInitializedStreamStub({
       durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: this.structuredName.projectId,
-      path: repoStreamPath(this.structuredName.repoSlug),
+      projectId: this.repoName().projectId,
+      path: repoStreamPath(this.repoName().path),
     });
     const consumed = new Set<string>(this.repo.contract.consumes);
     const events = await stream.history({ before: "end" });
@@ -379,32 +324,32 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
   private async requireInfo(): Promise<RepoInfo> {
     const repo = await this.currentRepo();
     if (repo === null) {
-      throw new RepoNotCreatedError(`Repo ${this.structuredName.repoSlug} has not been created.`);
+      throw new RepoNotCreatedError(`Repo ${this.repoName().path} has not been created.`);
     }
 
-    const token = await this.ctx.storage.get<string>(REPO_WRITE_TOKEN_STORAGE_KEY);
-    if (!token) {
-      throw new Error(`Repo ${this.structuredName.repoSlug} write token is not available.`);
-    }
-
-    const tokenExpiresAt =
-      (await this.ctx.storage.get<string | null>(REPO_WRITE_TOKEN_EXPIRES_AT_STORAGE_KEY)) ??
-      repo.tokenExpiresAt;
+    const artifactName = repoArtifactName(this.repoName());
+    const artifacts = this.requireArtifacts();
+    const token = await createArtifactToken({
+      artifact: await artifacts.get(artifactName),
+      artifacts,
+      name: artifactName,
+      scope: "write",
+      ttlSeconds: REPO_WRITE_TOKEN_TTL_SECONDS,
+    });
 
     return {
       defaultBranch: repo.defaultBranch,
       git: gitInfo({
         defaultBranch: repo.defaultBranch,
+        path: repo.path,
         remote: repo.remote,
-        slug: repo.slug,
-        token,
+        token: token.plaintext,
       }),
-      readmePath: REPO_README_PATH,
+      path: repo.path,
       remote: repo.remote,
-      slug: repo.slug,
-      token,
-      tokenExpiresAt,
-      credentials: { username: "x", password: stripArtifactTokenQuery(token) },
+      token: token.plaintext,
+      tokenExpiresAt: token.expiresAt,
+      credentials: { username: "x", password: stripArtifactTokenQuery(token.plaintext) },
     };
   }
 
@@ -455,45 +400,46 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
       defaultBranchOnly: input.source.defaultBranchOnly ?? true,
       description:
         input.source.description ??
-        `Fork of ${input.source.artifactName} for ${this.structuredName.repoSlug}`,
+        `Fork of ${input.source.artifactName} for ${this.repoName().path}`,
       readOnly: false,
     });
   }
 
   private async appendRepoCreatedEvent(input: {
     defaultBranch: string;
+    path: string;
     remote: string;
-    slug: string;
     tokenExpiresAt: string | null;
   }) {
     const stream = await getInitializedStreamStub({
       durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: this.structuredName.projectId,
-      path: repoStreamPath(this.structuredName.repoSlug),
+      projectId: this.repoName().projectId,
+      path: repoStreamPath(this.repoName().path),
     });
 
     return await stream.append({
       type: "events.iterate.com/repo/created",
-      idempotencyKey: `repo-created:${this.structuredName.projectId}:${this.structuredName.repoSlug}`,
+      idempotencyKey: `repo-created:${this.repoName().projectId}:${this.repoName().path}`,
       payload: input,
     });
   }
 
-  private async ensureRepoSubscription(params: RepoStructuredName) {
+  private async ensureRepoSubscription() {
+    const name = this.repoName();
     const stream = await getInitializedStreamStub({
       durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: params.projectId,
-      path: repoStreamPath(params.repoSlug),
+      projectId: name.projectId,
+      path: repoStreamPath(name.path),
     });
 
     await stream.append({
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `repo-subscription:${params.projectId}:${params.repoSlug}:workers-rpc:callable`,
+      idempotencyKey: `repo-subscription:${name.projectId}:${name.path}:workers-rpc:callable`,
       payload: {
-        subscriptionKey: repoProcessorSubscriptionKey(params),
+        subscriptionKey: repoProcessorSubscriptionKey(name),
         subscriber: durableObjectProcessorSubscriber({
           bindingName: "REPO",
-          durableObjectName: getRepoDurableObjectName(params),
+          durableObjectName: getRepoDurableObjectName(name),
           processorName: RepoStreamProcessorContract.slug,
         }),
       },
@@ -503,8 +449,8 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
 
 type RepoInfoSource = {
   defaultBranch: string;
+  path: string;
   remote: string;
-  slug: string;
   tokenExpiresAt: string | null;
 };
 
@@ -514,24 +460,25 @@ type RepoProcessorRuntimeState = {
 };
 
 /** Subscription coordinate used by the repo processor within a project stream. */
-function repoProcessorSubscriptionKey(input: RepoStructuredName) {
-  return `repo:${input.projectId}:${input.repoSlug}`;
+function repoProcessorSubscriptionKey(input: RepoDurableObjectName) {
+  return `repo:${input.projectId}:${input.path}`;
 }
 
-function gitInfo(input: { defaultBranch: string; remote: string; slug: string; token: string }) {
+function gitInfo(input: { defaultBranch: string; path: string; remote: string; token: string }) {
   const token = stripArtifactTokenQuery(input.token);
   const authorizationHeader = `Authorization: Bearer ${token}`;
   const quotedHeader = shellQuote(authorizationHeader);
   const quotedRemote = shellQuote(input.remote);
-  const quotedSlug = shellQuote(input.slug);
+  const directory = input.path.split("/").filter(Boolean).at(-1) ?? "repo";
+  const quotedDirectory = shellQuote(directory);
 
   return {
     authorizationHeader,
-    cloneCommand: `git -c http.extraHeader=${quotedHeader} clone ${quotedRemote} ${quotedSlug}`,
+    cloneCommand: `git -c http.extraHeader=${quotedHeader} clone ${quotedRemote} ${quotedDirectory}`,
     commitExampleCommand: [
-      `cd ${shellQuote(input.slug)}`,
-      `printf ${shellQuote(`# ${input.slug}\n`)} > ${shellQuote(REPO_README_PATH)}`,
-      `git add ${shellQuote(REPO_README_PATH)}`,
+      `cd ${quotedDirectory}`,
+      `printf ${shellQuote(`# ${input.path}\n`)} > README.md`,
+      "git add README.md",
       `git commit -m ${shellQuote("Update README")}`,
     ].join("\n"),
     pushCommand: `git -c http.extraHeader=${quotedHeader} push origin ${shellQuote(

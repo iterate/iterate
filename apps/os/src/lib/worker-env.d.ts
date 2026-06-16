@@ -22,7 +22,6 @@ type SlackAgentWorkerEnv = W["slackAgent"]["Env"];
 type SlackIntegrationWorkerEnv = W["slackIntegration"]["Env"];
 type StreamWorkerEnv = W["stream"]["Env"];
 type WorkspaceWorkerEnv = W["workspace"]["Env"];
-type DebugSubscriberWorkerEnv = Partial<NonNullable<W["debugSubscriber"]>["Env"]>;
 
 // An interface (not a type alias) so TypeScript resolves the extends clauses
 // lazily: Env feeds the Durable Object classes' own types, which feed the
@@ -41,8 +40,7 @@ export interface CloudflareEnv
     SlackAgentWorkerEnv,
     SlackIntegrationWorkerEnv,
     StreamWorkerEnv,
-    WorkspaceWorkerEnv,
-    DebugSubscriberWorkerEnv {}
+    WorkspaceWorkerEnv {}
 
 /**
  * The `ctx.exports` surface itx-hosting workers share: the loopback

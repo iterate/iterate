@@ -1,11 +1,10 @@
-// Pure naming helpers for the slack domain's Durable Objects. Kept free of any
+// Pure naming helpers for the Slack domain's Durable Objects. Kept free of any
 // DO module imports so Node-side code (e2e tests, CLIs) can derive DO names
 // without dragging `cloudflare:workers` into its module graph.
 
-import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { formatDurableObjectName } from "~/domains/durable-object-names.ts";
+import { SLACK_INTEGRATION_STREAM_PATH } from "~/domains/secrets/integration-streams.ts";
 
 export function getSlackIntegrationDurableObjectName(projectId: string) {
-  return deriveDurableObjectNameFromStructuredName({
-    structuredName: { projectId },
-  });
+  return formatDurableObjectName({ path: SLACK_INTEGRATION_STREAM_PATH, projectId });
 }

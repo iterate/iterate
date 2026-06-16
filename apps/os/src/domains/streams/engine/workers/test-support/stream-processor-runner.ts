@@ -1,6 +1,7 @@
-// Generic processor host DO for the streams staging worker. Hosts the example
-// processors (echo, circuit-breaker) on the class-based model so the streams
-// e2e suite exercises the same Callable subscription path real apps use.
+// Test/example processor host DO for the streams worker harness. It hosts only
+// the echo and circuit-breaker example processors so stream-engine tests and
+// the streams example app can exercise Callable subscription delivery without
+// implying that apps/os production uses a standalone StreamProcessorRunner.
 
 import { newWorkersRpcResponse } from "capnweb";
 import { DurableObject } from "cloudflare:workers";

@@ -4,7 +4,7 @@ import type { StreamEvent } from "@iterate-com/shared/streams/stream-event";
 vi.mock("~/domains/repos/entrypoints/repo-capability.ts", () => ({
   ensureProjectRepoInfoForProject: async () => ({
     defaultBranch: "main",
-    slug: "project",
+    path: "/repos/project",
   }),
 }));
 
@@ -16,8 +16,8 @@ vi.mock("~/domains/secrets/entrypoints/secrets-capability.ts", () => ({
 }));
 
 vi.mock("~/domains/slack/durable-objects/slack-agent-durable-object.ts", () => ({
-  getSlackAgentDurableObjectName: (input: { projectId: string; streamPath: string }) =>
-    `${input.projectId}:${input.streamPath}`,
+  getSlackAgentDurableObjectName: (input: { path: string; projectId: string }) =>
+    `${input.projectId}:${input.path}`,
 }));
 
 import { ProjectProcessor } from "./implementation.ts";
@@ -64,6 +64,44 @@ describe("ProjectProcessor worker forwarding", () => {
 
     expect(forwarded).toEqual([]);
     expect(processor.checkpointOffset).toBe(4);
+  });
+
+  it("indexes child repo, agent, and workspace streams in reduced state", async () => {
+    const processor = newProcessor({ forwardToProjectWorker: async () => undefined });
+
+    await processor.ingest({
+      events: [
+        childStreamCreated({
+          childPath: "/repos/project",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          offset: 3,
+        }),
+        childStreamCreated({
+          childPath: "/agents/onboarding",
+          createdAt: "2026-01-01T00:00:01.000Z",
+          offset: 4,
+        }),
+        childStreamCreated({
+          childPath: "/workspaces/project",
+          createdAt: "2026-01-01T00:00:02.000Z",
+          offset: 5,
+        }),
+        childStreamCreated({
+          childPath: "/repos/project",
+          createdAt: "2026-01-01T00:00:03.000Z",
+          offset: 6,
+        }),
+      ],
+      streamMaxOffset: 6,
+    });
+
+    await expect(processor.snapshot()).resolves.toMatchObject({
+      state: {
+        agents: [{ createdAt: "2026-01-01T00:00:01.000Z", path: "/agents/onboarding" }],
+        repos: [{ createdAt: "2026-01-01T00:00:00.000Z", path: "/repos/project" }],
+        workspaces: [{ createdAt: "2026-01-01T00:00:02.000Z", path: "/workspaces/project" }],
+      },
+    });
   });
 
   it("does not advance the checkpoint past a failed project worker forward", async () => {
@@ -133,12 +171,17 @@ function newProcessor(deps: { forwardToProjectWorker: (event: StreamEvent) => Pr
   });
 }
 
-function event(args: { offset: number; payload?: unknown; type: string }): StreamEvent {
+function event(args: {
+  createdAt?: string;
+  offset: number;
+  payload?: unknown;
+  type: string;
+}): StreamEvent {
   return {
     type: args.type,
     payload: args.payload ?? {},
     offset: args.offset,
-    createdAt: "2026-01-01T00:00:00.000Z",
+    createdAt: args.createdAt ?? "2026-01-01T00:00:00.000Z",
   };
 }
 
@@ -152,5 +195,18 @@ function projectCreated(offset: number): StreamEvent {
       slug: "project",
     },
     type: "events.iterate.com/project/created",
+  });
+}
+
+function childStreamCreated(input: {
+  childPath: string;
+  createdAt: string;
+  offset: number;
+}): StreamEvent {
+  return event({
+    createdAt: input.createdAt,
+    offset: input.offset,
+    payload: { childPath: input.childPath },
+    type: "events.iterate.com/stream/child-stream-created",
   });
 }

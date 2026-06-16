@@ -16,6 +16,7 @@ import {
 } from "@iterate-com/shared/streams/stream-processors";
 import {
   AgentProcessorContract,
+  DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
   reduceAgentEvent,
   reduceAgentEvents,
   type AgentConsumedEvent,
@@ -88,7 +89,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     const { event, previousState, state } = args;
     switch (event.type) {
       case "events.iterate.com/agent/system-prompt-updated":
-      case "events.iterate.com/agent/llm-config-updated":
+      case "events.iterate.com/agent/llm-provider-selected":
       case "events.iterate.com/agent/llm-request-scheduled":
       case "events.iterate.com/agent/status-updated":
       case "events.iterate.com/agent/llm-request-queued":
@@ -306,6 +307,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   }) {
     const { event, state, policy } = args;
     if (policy.behaviour === "dont-trigger-request") return;
+    if (state.llmProvider === null) return;
 
     this.#triggerSchedulingInProgress.add(event.offset);
     try {
@@ -326,7 +328,6 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
 
         this.#resetScheduledLlmRequestTimer({
           requestId: state.currentRequest.requestId,
-          debounceMs: state.llmConfig.debounceMs,
           scheduledOffset: state.currentRequest.scheduledOffset,
         });
         return;
@@ -431,7 +432,6 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   }
 
   async #appendLlmRequestScheduled(args: { sourceEvent: { offset: number }; state: AgentState }) {
-    const debounceMs = args.state.llmConfig.debounceMs;
     this.#llmRequestSeq += 1;
     const requestId = `req_${Date.now()}_${this.#llmRequestSeq}`;
     const scheduledEvent = (await this.ctx.stream.append({
@@ -444,7 +444,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         }),
         payload: {
           requestId,
-          debounceMs,
+          debounceMs: DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
           model: args.state.llmConfig.model,
         },
       },
@@ -459,7 +459,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       (scheduledEvent.payload as { requestId?: string }).requestId ?? requestId;
     this.#armLlmRequestDebounceTimer({
       requestId: committedRequestId,
-      debounceMs,
+      debounceMs: DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
       scheduledEvent,
     });
   }
@@ -513,11 +513,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     });
   }
 
-  #resetScheduledLlmRequestTimer(args: {
-    requestId: string;
-    debounceMs: number;
-    scheduledOffset: number;
-  }) {
+  #resetScheduledLlmRequestTimer(args: { requestId: string; scheduledOffset: number }) {
     // The durable scheduledOffset lets a fresh instance re-arm without losing
     // the idempotency key for the original scheduled event.
     const scheduledEvent = this.#scheduledLlmRequest?.scheduledEvent ?? {
@@ -526,7 +522,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     this.#cancelScheduledLlmRequest({ requestId: args.requestId });
     this.#armLlmRequestDebounceTimer({
       requestId: args.requestId,
-      debounceMs: args.debounceMs,
+      debounceMs: DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
       scheduledEvent,
     });
   }
@@ -601,7 +597,6 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           }),
           payload: {
             model: stateAtRequest.llmConfig.model,
-            runOpts: stateAtRequest.llmConfig.runOpts,
           },
         },
       });

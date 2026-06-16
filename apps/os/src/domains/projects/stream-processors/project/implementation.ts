@@ -6,7 +6,7 @@
 // `processEvent` owns the creation side effects END TO END: the one D1
 // `projects` projection (platform-host routing reads it), the project
 // repo, the example egress secret, the agents root, and a cross-post of
-// create-requested onto the deployment-wide `global` namespace's /projects
+// create-requested onto the deployment-wide global project scope's /projects
 // stream (the global audit surface for project lifecycle). Each step leaves
 // its fact on the stream and is idempotent, so at-least-once delivery is
 // safe. The worker build deliberately does NOT gate
@@ -20,7 +20,6 @@
 
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import type { StreamEvent } from "@iterate-com/shared/streams/stream-event";
-import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { projectFacts, ProjectProcessorContract, type ProjectProcessorState } from "./contract.ts";
 import { StreamProcessor } from "~/domains/streams/engine/stream-processor.ts";
 import { durableObjectProcessorSubscriber } from "~/domains/streams/engine/shared/callable-subscriber.ts";
@@ -31,10 +30,8 @@ import {
 } from "~/domains/streams/stream-runtime.ts";
 import type { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
 import {
-  AGENTS_STREAM_PATH,
   agentProcessorSubscriptionConfiguredEvents,
-  OS_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE,
-  getAgentDurableObjectName,
+  AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
 import {
   getSlackAgentDurableObjectName,
@@ -49,7 +46,8 @@ import {
 } from "~/domains/secrets/example-secret.ts";
 import { ensureProjectRepoInfoForProject } from "~/domains/repos/entrypoints/repo-capability.ts";
 import type { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
-import { PROJECT_REPO_SLUG } from "~/domains/repos/project-repo.ts";
+import { getRepoDurableObjectName } from "~/domains/repos/repo-durable-object-name.ts";
+import { PROJECT_REPO_PATH } from "~/domains/repos/project-repo.ts";
 import {
   ONBOARDING_AGENT_INPUT,
   projectOnboardingBootstrapMarkdown,
@@ -61,7 +59,34 @@ export type { ProjectFacts, ProjectProcessorState } from "./contract.ts";
 
 const ONBOARDING_AGENT_PATH = StreamPath.parse("/agents/onboarding");
 const DEFAULT_OPENAI_AGENT_MODEL = "gpt-5.5";
-const DEFAULT_AGENT_DEBOUNCE_MS = 200;
+
+function reduceChildStreamCreated(
+  state: ProjectProcessorState,
+  event: StreamEvent,
+): ProjectProcessorState {
+  const path = StreamPath.safeParse((event.payload as { childPath?: unknown }).childPath);
+  if (!path.success) return state;
+
+  const child = { createdAt: event.createdAt, path: path.data };
+  if (path.data.startsWith("/agents/")) {
+    return { ...state, agents: appendChildStream(state.agents, child) };
+  }
+  if (path.data.startsWith("/repos/")) {
+    return { ...state, repos: appendChildStream(state.repos, child) };
+  }
+  if (path.data.startsWith("/workspaces/")) {
+    return { ...state, workspaces: appendChildStream(state.workspaces, child) };
+  }
+  return state;
+}
+
+function appendChildStream(
+  children: ProjectProcessorState["repos"],
+  child: ProjectProcessorState["repos"][number],
+) {
+  if (children.some((existing) => existing.path === child.path)) return children;
+  return [...children, child];
+}
 
 /**
  * High-level deps from the hosting DO: bindings, its loopback exports, and
@@ -122,6 +147,8 @@ export class ProjectProcessor extends StreamProcessor<
       case "events.iterate.com/project/onboarding-completed":
         if (!this.#ownEvent(event.payload)) return state;
         return { ...state, onboarding: "completed" };
+      case "events.iterate.com/stream/child-stream-created":
+        return reduceChildStreamCreated(state, event);
       default:
         return state;
     }
@@ -187,8 +214,6 @@ export class ProjectProcessor extends StreamProcessor<
     await this.#ensureProjectRepo({ projectId, slug });
     await this.#seedOnboardingBootstrap({ projectId, slug });
     await this.#ensureExampleEgressSecret(projectId);
-    await this.#ensureAgentsRoot(projectId);
-    await this.#ensureOnboardingAgent(projectId);
     await this.#ensureAgentStreamSetup({ agentPath: ONBOARDING_AGENT_PATH, projectId });
     await this.#appendOnboardingAgentInput(projectId);
     await this.ctx.stream.append({
@@ -221,12 +246,12 @@ export class ProjectProcessor extends StreamProcessor<
 
   /**
    * The deployment-wide audit surface for project lifecycle: every
-   * create-requested is cross-posted to /projects in the "global" namespace.
+   * create-requested is cross-posted to /projects in the global project scope.
    */
   async #crossPostToGlobalProjects(input: { projectId: string; slug: string }) {
     const stream = await getInitializedStreamStub({
       durableObjectNamespace: this.deps.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: "global",
+      projectId: null,
       path: StreamPath.parse("/projects"),
     });
     await stream.append({
@@ -236,7 +261,7 @@ export class ProjectProcessor extends StreamProcessor<
     });
   }
 
-  /** The project's repo (slug `project`), with its own fact on the stream. */
+  /** The project's repo (`/repos/project`), with its own fact on the stream. */
   async #ensureProjectRepo(input: { projectId: string; slug: string }) {
     const repo = await ensureProjectRepoInfoForProject({
       env: this.deps.env,
@@ -246,26 +271,23 @@ export class ProjectProcessor extends StreamProcessor<
     await this.ctx.stream.append({
       event: {
         type: "events.iterate.com/project/repo-initialized",
-        idempotencyKey: `project-repo-initialized:${input.projectId}:${repo.slug}`,
+        idempotencyKey: `project-repo-initialized:${input.projectId}:${repo.path}`,
         payload: {
           defaultBranch: repo.defaultBranch,
           projectId: input.projectId,
-          repoSlug: repo.slug,
+          repoPath: repo.path,
         },
       },
     });
   }
 
   async #seedOnboardingBootstrap(input: { projectId: string; slug: string }) {
-    const repo = await getInitializedDoStub({
-      allowCreate: false,
-      namespace: this.deps.env.REPO,
-      name: {
+    const repo = this.deps.env.REPO.getByName(
+      getRepoDurableObjectName({
+        path: PROJECT_REPO_PATH,
         projectId: input.projectId,
-        repoSlug: PROJECT_REPO_SLUG,
-      },
-    });
-    if (!repo) throw new Error(`Project repo for ${input.projectId} was not initialized.`);
+      }),
+    );
 
     await repo.commitFiles({
       author: { name: "Iterate", email: "support@iterate.com" },
@@ -297,32 +319,10 @@ export class ProjectProcessor extends StreamProcessor<
     });
   }
 
-  async #ensureAgentsRoot(projectId: string) {
-    await getInitializedDoStub({
-      allowCreate: true,
-      namespace: this.deps.env.AGENT,
-      name: getAgentDurableObjectName({
-        agentPath: AGENTS_STREAM_PATH,
-        projectId,
-      }),
-    });
-  }
-
-  async #ensureOnboardingAgent(projectId: string) {
-    await getInitializedDoStub({
-      allowCreate: true,
-      namespace: this.deps.env.AGENT,
-      name: getAgentDurableObjectName({
-        agentPath: ONBOARDING_AGENT_PATH,
-        projectId,
-      }),
-    });
-  }
-
   async #appendOnboardingAgentInput(projectId: string) {
     const stream = await getInitializedStreamStub({
       durableObjectNamespace: this.deps.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: projectId,
+      projectId,
       path: ONBOARDING_AGENT_PATH,
     });
 
@@ -340,23 +340,9 @@ export class ProjectProcessor extends StreamProcessor<
       streamPath: input.agentPath,
       events: [
         {
-          type: OS_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE,
+          type: AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE,
           idempotencyKey: "project-agent-setup:provider",
-          payload: { provider: "openai-ws" },
-        },
-        {
-          type: "events.iterate.com/openai-ws/config-updated",
-          idempotencyKey: "project-agent-setup:openai-ws-config",
-          payload: { model: DEFAULT_OPENAI_AGENT_MODEL },
-        },
-        {
-          type: "events.iterate.com/agent/llm-config-updated",
-          idempotencyKey: "project-agent-setup:llm-config",
-          payload: {
-            debounceMs: DEFAULT_AGENT_DEBOUNCE_MS,
-            model: DEFAULT_OPENAI_AGENT_MODEL,
-            runOpts: {},
-          },
+          payload: { model: DEFAULT_OPENAI_AGENT_MODEL, provider: "openai-ws" },
         },
         {
           type: "events.iterate.com/agent/system-prompt-updated",
@@ -411,7 +397,7 @@ function slackAgentProcessorSubscriptionConfiguredEvent(input: {
         bindingName: "SLACK_AGENT",
         durableObjectName: getSlackAgentDurableObjectName({
           projectId: input.projectId,
-          streamPath: input.agentPath,
+          path: input.agentPath,
         }),
         processorName: SlackAgentProcessorContract.slug,
       }),

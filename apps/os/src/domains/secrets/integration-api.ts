@@ -15,10 +15,7 @@ import {
   upsertProjectConnection,
   upsertProjectSecret,
 } from "~/domains/secrets/secrets-store.ts";
-import {
-  getSlackIntegrationDurableObjectName,
-  getSlackIntegrationStub,
-} from "~/domains/slack/durable-objects/slack-integration-durable-object.ts";
+import { getSlackIntegrationStub } from "~/domains/slack/durable-objects/slack-integration-durable-object.ts";
 import {
   oauthRedirectUri,
   providerSecretKey,
@@ -382,15 +379,13 @@ async function handleVerifiedSlackWebhook(input: {
     // Workers observability rather than scraping logs.
     return Response.json({ ok: true, ignored: "team-not-claimed" });
   }
-  const slackIntegrationName = getSlackIntegrationDurableObjectName(connection.projectId);
   const slackIntegration = getSlackIntegrationStub(connection.projectId) as unknown as {
     ensureReady(): Promise<unknown>;
-    initialize(input: { name: string }): Promise<unknown>;
   };
 
   const stream = await getInitializedStreamStub({
     durableObjectNamespace: env.STREAM as never,
-    namespace: connection.projectId,
+    projectId: connection.projectId,
     path: SLACK_INTEGRATION_STREAM_PATH,
   });
   await stream.append({
@@ -411,15 +406,10 @@ async function handleVerifiedSlackWebhook(input: {
     },
   });
   // Only the durable append gates the 200: Slack retries webhooks that take
-  // longer than ~3s, and awaiting the integration DO's initialize here used to
-  // serialize a cold DO chain ahead of the ack (observed at 8s in prd, with
-  // the retry queueing behind the same cold gate). Initialization is
-  // order-independent: an existing integration already has its
-  // subscription-configured event on the stream, and a brand-new one picks the
-  // webhook up via replay once the background initialize lands it.
+  // longer than ~3s, so integration processor catch-up stays in the background.
+  // `ensureReady()` appends the idempotent subscription fact and then catches up.
   input.context.waitUntil?.(
     (async () => {
-      await slackIntegration.initialize({ name: slackIntegrationName });
       await slackIntegration.ensureReady();
     })().catch((error) => {
       console.error("[slack-integration-webhook] background catch-up failed", error);

@@ -396,7 +396,7 @@ describe("stream capnweb protocol", () => {
           type: "events.iterate.com/stream/created",
           offset: 1,
           payload: {
-            namespace: runtime.coreProcessorState.namespace,
+            projectId: runtime.coreProcessorState.projectId,
             path,
           },
         }),

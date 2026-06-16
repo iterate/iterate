@@ -31,18 +31,18 @@ import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
 
 const CreateRepoForm = z.object({
-  slug: z
+  path: z
     .string()
     .trim()
-    .min(1, "Repo slug is required")
-    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Use lowercase letters, numbers, and hyphens."),
+    .min(1, "Repo path is required")
+    .regex(/^\/repos\/.+$/, 'Use a repo path like "/repos/project".'),
 });
 
 const DEFAULT_CREATE_REPO_FORM_VALUES = {
-  slug: "",
+  path: "/repos/",
 };
 
-type SortKey = "repoSlug" | "createdAt" | "lastWokenAt";
+type SortKey = "path" | "createdAt" | "lastWokenAt";
 type SortDirection = "asc" | "desc";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/repos/")({
@@ -82,18 +82,18 @@ function ProjectReposIndexContent() {
   const reposKey = ["repos", project.slug];
   const reposList = useItxQuery({ key: reposKey, query: (itx) => itx.repos.list() });
   const createRepo = useMutation({
-    mutationFn: async (input: { slug: string }) => {
-      await itx.repos.create({ projectSlug: params.projectSlug, slug: input.slug });
-      return input.slug;
+    mutationFn: async (input: { path: string }) => {
+      await itx.repos.create({ path: input.path, projectSlug: params.projectSlug });
+      return input.path;
     },
-    onSuccess: async (slug) => {
+    onSuccess: async (path) => {
       await queryClient.invalidateQueries({ queryKey: ["itx", ...reposKey] });
       form.reset();
       void navigate({
-        to: "/projects/$projectSlug/repos/$repoSlug",
+        to: "/projects/$projectSlug/repos/$",
         params: {
           projectSlug: params.projectSlug,
-          repoSlug: slug,
+          _splat: repoPathToSplat(path),
         },
       });
     },
@@ -109,7 +109,7 @@ function ProjectReposIndexContent() {
     },
     onSubmit: async ({ value }) => {
       const parsed = CreateRepoForm.parse(value);
-      await createRepo.mutateAsync({ slug: parsed.slug });
+      await createRepo.mutateAsync({ path: parsed.path });
     },
   });
 
@@ -119,9 +119,7 @@ function ProjectReposIndexContent() {
     return repos
       .filter((repo) => {
         if (!query) return true;
-        return (
-          repo.repoSlug.toLowerCase().includes(query) || repo.name.toLowerCase().includes(query)
-        );
+        return repo.path.toLowerCase().includes(query) || repo.name.toLowerCase().includes(query);
       })
       .toSorted((left, right) => {
         const direction = sort.direction === "asc" ? 1 : -1;
@@ -141,23 +139,23 @@ function ProjectReposIndexContent() {
           }}
         >
           <FieldGroup>
-            <form.Field name="slug">
+            <form.Field name="path">
               {(field) => {
                 const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid;
 
                 return (
                   <Field data-invalid={isInvalid}>
-                    <FieldLabel htmlFor={field.name}>Slug</FieldLabel>
+                    <FieldLabel htmlFor={field.name}>Path</FieldLabel>
                     <Input
                       id={field.name}
                       name={field.name}
-                      placeholder="banana"
+                      placeholder="/repos/project"
                       value={field.state.value}
                       onBlur={field.handleBlur}
                       onChange={(event) => field.handleChange(event.target.value)}
                       aria-invalid={isInvalid}
                     />
-                    <FieldDescription>Lowercase letters, numbers, and hyphens.</FieldDescription>
+                    <FieldDescription>Project-local repo path.</FieldDescription>
                     {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
                   </Field>
                 );
@@ -212,10 +210,10 @@ function ProjectReposIndexContent() {
             <TableHeader>
               <TableRow>
                 <SortableHead
-                  active={sort.key === "repoSlug"}
+                  active={sort.key === "path"}
                   direction={sort.direction}
                   label="Repo"
-                  onClick={() => setSort(nextSort(sort, "repoSlug"))}
+                  onClick={() => setSort(nextSort(sort, "path"))}
                 />
                 <SortableHead
                   active={sort.key === "createdAt"}
@@ -245,22 +243,23 @@ function ProjectReposIndexContent() {
                     appBaseUrl: routeConfig.baseUrl,
                     artifactName: repoArtifactName({
                       projectId: repo.projectId,
-                      repoSlug: repo.repoSlug,
+                      path: repo.path,
                     }),
                   });
+                  const repoSplat = repoPathToSplat(repo.path);
 
                   return (
                     <TableRow key={repo.name}>
                       <TableCell className="min-w-[18rem] py-3">
                         <Link
                           className="block min-w-0 truncate rounded-sm text-sm font-medium hover:underline"
-                          to="/projects/$projectSlug/repos/$repoSlug"
+                          to="/projects/$projectSlug/repos/$"
                           params={{
                             projectSlug: params.projectSlug,
-                            repoSlug: repo.repoSlug,
+                            _splat: repoSplat,
                           }}
                         >
-                          {repo.repoSlug}
+                          {repo.path}
                         </Link>
                       </TableCell>
                       <TableCell className="w-40 text-muted-foreground">
@@ -322,10 +321,14 @@ function nextSort(current: { key: SortKey; direction: SortDirection }, key: Sort
 }
 
 function compareRepoRows(
-  left: { repoSlug: string; createdAt: string; lastWokenAt: string },
-  right: { repoSlug: string; createdAt: string; lastWokenAt: string },
+  left: { path: string; createdAt: string; lastWokenAt: string },
+  right: { path: string; createdAt: string; lastWokenAt: string },
   key: SortKey,
 ) {
-  if (key === "repoSlug") return left.repoSlug.localeCompare(right.repoSlug);
+  if (key === "path") return left.path.localeCompare(right.path);
   return new Date(left[key]).getTime() - new Date(right[key]).getTime();
+}
+
+function repoPathToSplat(path: string) {
+  return path.startsWith("/repos/") ? path.slice("/repos/".length) : path;
 }

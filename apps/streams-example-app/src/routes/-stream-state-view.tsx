@@ -21,7 +21,7 @@ export function StreamStateView({ streamView }: { streamView: StreamViewSearch }
       try {
         connection = await withStreamConnectionFromBrowser({
           url: new URL(
-            streamRpcPath({ path: streamView.path, namespace: streamView.namespace }),
+            streamRpcPath({ path: streamView.path, projectId: streamView.projectId }),
             window.location.href,
           ),
           onConnectionStatusChange: (next) => {
@@ -54,7 +54,7 @@ export function StreamStateView({ streamView }: { streamView: StreamViewSearch }
       if (timer !== undefined) clearTimeout(timer);
       connection?.[Symbol.dispose]();
     };
-  }, [streamView.namespace, streamView.path]);
+  }, [streamView.projectId, streamView.path]);
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">

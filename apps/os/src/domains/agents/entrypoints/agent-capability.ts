@@ -1,5 +1,4 @@
 import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
-import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import type { AgentDurableObject } from "../durable-objects/agent-durable-object.ts";
 import { getAgentDurableObjectName } from "../agent-stream-subscriptions.ts";
@@ -76,14 +75,10 @@ class AgentHandle extends RpcTarget {
 
   private async getAgent(agentPathInput: string): Promise<AgentRpcStub> {
     const name = {
-      agentPath: StreamPath.parse(agentPathInput),
+      path: StreamPath.parse(agentPathInput),
       projectId: this.#projectId,
     };
-    return (await getInitializedDoStub({
-      allowCreate: true,
-      namespace: this.#namespace,
-      name: getAgentDurableObjectName(name),
-    })) as unknown as AgentRpcStub;
+    return this.#namespace.getByName(getAgentDurableObjectName(name)) as unknown as AgentRpcStub;
   }
 }
 

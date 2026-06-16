@@ -1,5 +1,4 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import type { Event } from "@iterate-com/shared/streams/types";
 import { getAgentDurableObjectName } from "~/domains/agents/durable-objects/agent-durable-object.ts";
@@ -55,14 +54,12 @@ export class AgentsCapability extends WorkerEntrypoint<AgentsCapabilityEnv, Agen
     if (!this.env.AGENT) {
       throw new Error("AGENT Durable Object namespace is not configured.");
     }
-    return (await getInitializedDoStub({
-      allowCreate: true,
-      namespace: this.env.AGENT,
-      name: getAgentDurableObjectName({
-        agentPath: StreamPath.parse(agentPathInput),
+    return this.env.AGENT.getByName(
+      getAgentDurableObjectName({
+        path: StreamPath.parse(agentPathInput),
         projectId: this.projectId(),
       }),
-    })) as unknown as AgentRpcStub;
+    ) as unknown as AgentRpcStub;
   }
 
   private projectId(): string {

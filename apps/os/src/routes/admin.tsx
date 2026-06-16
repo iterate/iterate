@@ -273,7 +273,7 @@ function AdminSidebar() {
                 <SidebarMenuButton
                   tooltip="Global streams"
                   isActive={pathname.startsWith("/admin/streams/global")}
-                  render={<Link to="/admin/streams/$namespace" params={{ namespace: "global" }} />}
+                  render={<Link to="/admin/streams/$projectId" params={{ projectId: "global" }} />}
                 >
                   <RadioTowerIcon aria-hidden="true" />
                   <span>Global streams</span>

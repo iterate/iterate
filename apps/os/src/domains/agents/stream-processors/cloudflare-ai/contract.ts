@@ -40,7 +40,6 @@ export const CloudflareAiProcessorContract = defineProcessorContract({
       payloadSchema: z.object({
         llmRequestId: LlmRequestId,
         model: z.string().min(1),
-        runOpts: z.json().default({}),
       }),
     },
     "events.iterate.com/cloudflare-ai/llm-response-chunk": {

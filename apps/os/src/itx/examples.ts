@@ -247,7 +247,7 @@ await itx.provideCapability({
       type: "source",
       source: {
         type: "repo",
-        repo: "project",
+        repoPath: "/repos/project",
         commit: "latest",
         path: "caps/greeter.js",
         entrypoint: "Greeter",

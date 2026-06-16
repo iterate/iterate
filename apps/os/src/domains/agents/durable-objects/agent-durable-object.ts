@@ -2,11 +2,7 @@ import OpenAI from "openai";
 import type { ResponsesClientEvent } from "openai/resources/responses/responses";
 import { ResponsesWSBase } from "openai/resources/responses/ws-base";
 import { z } from "zod";
-import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
-import {
-  getInitializedDoStub,
-  NotInitializedError,
-} from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { DurableObject } from "cloudflare:workers";
 import type { ProcessorStreamApi } from "@iterate-com/shared/streams/stream-processors";
 import type { Event, EventInput, StreamCursor } from "@iterate-com/shared/streams/types";
 import { StreamPath } from "@iterate-com/shared/streams/types";
@@ -52,27 +48,26 @@ import {
 import { getReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-backend.ts";
 import {
+  getWorkspaceDurableObjectName,
   type WorkspaceDurableObject,
-  type WorkspaceStructuredName,
 } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 import { stripArtifactTokenQuery } from "~/domains/repos/artifact-token.ts";
 import {
-  OS_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE,
+  AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE,
   type AgentLlmProvider,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
 import {
   AGENTS_STREAM_PATH,
-  AgentDurableObjectName,
-  AgentDurableObjectStructuredName,
+  type AgentDurableObjectName,
   agentLlmProcessorSlug,
   agentProcessorSubscriptionConfiguredEvents,
   getAgentDurableObjectName,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
 import { buildProjectStreamViewerUrl } from "~/lib/stream-viewer-url.ts";
+import { parseDurableObjectName } from "~/domains/durable-object-names.ts";
 
 export {
   AGENTS_STREAM_PATH,
-  AgentDurableObjectStructuredName,
   agentLlmProcessorSlug,
   agentProcessorSubscriptionKey,
   getAgentDurableObjectName,
@@ -118,26 +113,14 @@ type AgentStreamApi = Omit<
   }): Promise<Event[]>;
 };
 
-// An agent IS a context, and its identity IS its stream coordinate:
-// `{projectId}:{agentPath}` (no opaque JSON name). The lifecycle base parses
-// that directly via the AgentDurableObjectName codec. No D1 object catalog —
-// agents are listed by walking the `/agents` stream tree (the UI is just the
-// stream explorer scoped to /agents), and addressed by their self-describing
-// coordinate; nothing enumerates them through a catalog.
-const AgentLifecycleBase = createIterateDurableObjectBase<
-  typeof AgentDurableObjectName,
-  AgentDurableObjectEnv
->({
-  className: "AgentDurableObject",
-  nameSchema: AgentDurableObjectName,
-});
-
 /** Bump when agentContextCapabilities changes — re-provides the agent's tools
  * onto its own context (each provide appends an itx/capability-provided event
  * that both folds into the capability table and renders into the LLM's view). */
 const AGENT_CONTEXT_CAPABILITIES_VERSION = "8";
 
-export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv> {
+export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
+  readonly name = parseDurableObjectName(this.ctx.id.name!);
+
   host = createStreamProcessorHost(this.ctx);
   agentProcessor = this.host.add(
     "agent",
@@ -145,20 +128,20 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       new AgentProcessor({
         ...deps,
         ensureChildAgentRunner: async (childPath) => {
-          const params = await this.ensureStartedOrInitializeFromRuntimeName();
+          const params = await this.ensureStarted();
           const agentPath = StreamPath.safeParse(childPath);
           if (!agentPath.success) return;
           const name = getAgentDurableObjectName({
-            agentPath: agentPath.data,
+            path: agentPath.data,
             projectId: params.projectId,
           });
-          await this.env.AGENT.getByName(name).initialize({ name });
+          await this.env.AGENT.getByName(name).ensureStreamSetup();
         },
         ensureItxContext: async () => {
-          const params = await this.ensureStartedOrInitializeFromRuntimeName();
+          const params = await this.ensureStarted();
           return await this.ensureItxContext(params);
         },
-        isAgentsRootStream: () => this.structuredName.agentPath === AGENTS_STREAM_PATH,
+        isAgentsRootStream: () => this.name.path === AGENTS_STREAM_PATH,
         readStreamEvents: () => this.readSubscribedStreamEvents("agent"),
       }),
   );
@@ -194,50 +177,61 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     (deps) => new JsonataReactorProcessor(deps),
   );
 
-  constructor(ctx: DurableObjectState, env: AgentDurableObjectEnv) {
-    super(ctx, env);
+  #setup: Promise<AgentDurableObjectName> | undefined;
 
-    this.registerOnInstanceWake(async (params) => {
-      if (params.agentPath === AGENTS_STREAM_PATH) {
-        await this.ensureAgentSubscriptions(params, [
-          JsonataReactorProcessorContract.slug,
-          AgentProcessorContract.slug,
-        ]);
-      } else {
-        await this.ensureAgentStreamExists(params);
-        this.ctx.waitUntil(
-          this.ensureAgentWorkspace(params).catch((error) => {
-            console.error("[agent-workspace-setup] failed", error);
-          }),
-        );
-        // Deliberately NOT awaited: context provisioning probes each rpc
-        // capability for self-description, and those loopback dials can only
-        // make progress once this wake hook releases the input gate — awaiting
-        // here deadlocks until the probes' deadlines and blows the 30s
-        // blockConcurrencyWhile budget. Script runs ensure the context lazily
-        // via getItxContextId() (single-flighted), so nothing needs it
-        // synchronously at wake.
-        this.ctx.waitUntil(
-          this.ensureItxContext(params).catch((error) => {
-            console.error("[agent-itx-context-setup] failed", error);
-          }),
-        );
-      }
-      // Deliberately no catch-up wait here: wake hooks run inside
-      // `blockConcurrencyWhile`, and the processors are co-hosted on this DO,
-      // so the Stream DO's subscription handshake and event delivery are
-      // inbound calls that cannot land while the input gate is closed. A wait
-      // here can never observe progress and would burn its full timeout.
-      // Public methods await `ensureStartedAndCaughtUp()` instead, which runs
-      // the same wait once per instance wake, outside the gate.
-    });
+  async ensureStreamSetup(): Promise<void> {
+    await this.ensureStarted();
   }
 
-  private async ensureAgentStreamExists(params: AgentDurableObjectStructuredName) {
+  private async ensureStarted(): Promise<AgentDurableObjectName> {
+    const name = this.projectScopedName();
+    this.#setup ??= this.ensureAgentSetup(name).then(() => name);
+    return await this.#setup;
+  }
+
+  private async ensureAgentSetup(params: AgentDurableObjectName): Promise<void> {
+    if (params.path === AGENTS_STREAM_PATH) {
+      await this.ensureAgentSubscriptions(params, [
+        JsonataReactorProcessorContract.slug,
+        AgentProcessorContract.slug,
+      ]);
+      return;
+    }
+
+    await this.ensureAgentStreamExists(params);
+    this.ctx.waitUntil(
+      this.ensureAgentWorkspace(params).catch((error) => {
+        console.error("[agent-workspace-setup] failed", error);
+      }),
+    );
+    this.ctx.waitUntil(
+      this.ensureItxContext(params).catch((error) => {
+        console.error("[agent-itx-context-setup] failed", error);
+      }),
+    );
+  }
+
+  private projectScopedName(): AgentDurableObjectName {
+    if (this.name.projectId === null) {
+      throw new Error("Agent Durable Object must be project-scoped.");
+    }
+    if (!String(this.name.path).startsWith("/agents")) {
+      throw new Error(
+        `Agent Durable Object path must start with "/agents", got ${this.name.path}.`,
+      );
+    }
+    return { path: this.name.path, projectId: this.name.projectId };
+  }
+
+  private projectId(): string {
+    return this.projectScopedName().projectId;
+  }
+
+  private async ensureAgentStreamExists(params: AgentDurableObjectName) {
     const stream = await getInitializedStreamStub({
       durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: params.projectId,
-      path: params.agentPath,
+      projectId: params.projectId,
+      path: params.path,
     });
     await stream.getState();
   }
@@ -246,7 +240,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   // eslint-disable-next-line no-unused-private-class-members -- oxlint false positive: read and assigned via ??=.
   #wakeCatchUp: Promise<void> | undefined;
 
-  private async ensureStartedAndCaughtUp(): Promise<AgentDurableObjectStructuredName> {
+  private async ensureStartedAndCaughtUp(): Promise<AgentDurableObjectName> {
     const params = await this.ensureStarted();
     this.#wakeCatchUp ??= this.waitForAgentProcessorsCatchUp(params).catch((error: unknown) => {
       this.#wakeCatchUp = undefined;
@@ -263,7 +257,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
    * seeds the agent's own subscriptions and setup events.
    */
   async requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
-    await this.ensureStartedOrInitializeFromRuntimeName();
+    await this.ensureStarted();
     return await this.host.requestStreamSubscription(args);
   }
 
@@ -275,7 +269,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   async sendMessage(input: { message: string; channel?: string }) {
     const params = await this.ensureStartedAndCaughtUp();
     const origin = parseAgentMessageOrigin(input.channel);
-    const event = await this.streamsEntrypoint(params.agentPath).append({
+    const event = await this.streamsEntrypoint(params.path).append({
       event: {
         type: "events.iterate.com/agents/user-message-received",
         payload: {
@@ -301,7 +295,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   async doThing(input: { label: string; value: number }) {
     await this.ensureStartedAndCaughtUp();
     return {
-      agentName: this.name,
+      agentName: this.ctx.id.name,
       label: input.label,
       value: input.value,
       doubled: input.value * 2,
@@ -333,29 +327,29 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   }
 
   private async ensureAgentSubscriptions(
-    params: AgentDurableObjectStructuredName,
+    params: AgentDurableObjectName,
     processorSlugs: readonly string[],
   ) {
     const stream = await getInitializedStreamStub({
       durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: params.projectId,
-      path: params.agentPath,
+      projectId: params.projectId,
+      path: params.path,
     });
 
     await stream.appendBatch(
       agentProcessorSubscriptionConfiguredEvents({
-        agentPath: params.agentPath,
+        agentPath: params.path,
         processorSlugs,
         projectId: params.projectId,
       }),
     );
   }
 
-  private async waitForAgentProcessorsCatchUp(params: AgentDurableObjectStructuredName) {
+  private async waitForAgentProcessorsCatchUp(params: AgentDurableObjectName) {
     const stream = await getInitializedStreamStub({
       durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: params.projectId,
-      path: params.agentPath,
+      projectId: params.projectId,
+      path: params.path,
     });
     const events = await stream.history({ before: "end" });
     const maxOffset = events.at(-1)?.offset ?? 0;
@@ -391,18 +385,18 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   }
 
   /** Per-processor checkpoints. */
-  private async getAgentRuntimeState(params: AgentDurableObjectStructuredName) {
+  private async getAgentRuntimeState(params: AgentDurableObjectName) {
     const processorSlugs = await this.agentProcessorSlugs(params);
     return {
-      agentPath: String(params.agentPath),
+      agentPath: String(params.path),
       processors: Object.fromEntries(
         processorSlugs.map((slug) => [slug, this.host.runtimeState(slug).snapshot ?? null]),
       ),
     };
   }
 
-  private async agentProcessorSlugs(params: AgentDurableObjectStructuredName) {
-    if (params.agentPath === AGENTS_STREAM_PATH) {
+  private async agentProcessorSlugs(params: AgentDurableObjectName) {
+    if (params.path === AGENTS_STREAM_PATH) {
       return [JsonataReactorProcessorContract.slug, AgentProcessorContract.slug];
     }
     return [
@@ -439,7 +433,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       );
     }
     return {
-      projectId: subscription.namespace,
+      projectId: subscription.projectId,
       streamPath: StreamPath.parse(subscription.path),
     };
   }
@@ -448,20 +442,9 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   private async readSubscribedStreamEvents(processorSlug: string): Promise<StreamEvent[]> {
     const { projectId, streamPath } = this.subscribedStreamContext(processorSlug);
     const stream = this.env.STREAM.getByName(
-      getStreamDurableObjectName({ namespace: projectId, path: streamPath }),
+      getStreamDurableObjectName({ projectId, path: streamPath }),
     ) as unknown as StreamRpc;
     return await stream.getEvents({ afterOffset: 0, beforeOffset: null });
-  }
-
-  private async ensureStartedOrInitializeFromRuntimeName() {
-    try {
-      return await this.ensureStarted();
-    } catch (error) {
-      if (!(error instanceof NotInitializedError)) throw error;
-      const runtimeName = this.getDurableObjectName();
-      if (runtimeName == null) throw error;
-      return await this.initialize({ name: runtimeName });
-    }
   }
 
   /**
@@ -474,7 +457,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
    * while the agent processor renders them for the LLM (visibility).
    */
   async ensureItxContext(
-    params: AgentDurableObjectStructuredName,
+    params: AgentDurableObjectName,
   ): Promise<{ context: string; contextAddress: CapabilityAddress }> {
     this.#ensureItxContextPromise ??= this.#ensureItxContextOnce(params).finally(() => {
       this.#ensureItxContextPromise = undefined;
@@ -487,7 +470,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     | undefined;
 
   async #ensureItxContextOnce(
-    params: AgentDurableObjectStructuredName,
+    params: AgentDurableObjectName,
   ): Promise<{ context: string; contextAddress: CapabilityAddress }> {
     const context = agentContextRef(params);
     const selfAddress = agentContextAddress(params);
@@ -501,13 +484,13 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     // parent is the project context.
     await createContext({
       env: this.env as unknown as Env,
-      name: String(params.agentPath),
-      namespace: params.projectId,
+      name: String(params.path),
+      projectId: params.projectId,
       parent: {
         address: contextAddress(projectContextRef(params.projectId)),
         ref: projectContextRef(params.projectId),
       },
-      path: String(params.agentPath),
+      path: String(params.path),
     });
 
     // Provide the agent's tools onto its OWN context — the one and only door
@@ -518,7 +501,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     // processor renders that same event into the LLM's visible context (so the
     // model knows the tool exists). One abstraction, one event, two readers.
     const node = dialContext(this.env as unknown as Env, selfAddress).itx();
-    const caps = this.agentContextCapabilities(params, context);
+    const caps = this.agentContextCapabilities(params);
     for (const cap of caps) {
       await node.provideCapability({
         capability: cap.capability,
@@ -530,7 +513,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     return { context, contextAddress: selfAddress };
   }
 
-  private async ensureAgentWorkspace(params: AgentDurableObjectStructuredName) {
+  private async ensureAgentWorkspace(params: AgentDurableObjectName) {
     const workspace = await this.getAgentWorkspace(params);
 
     if (await workspace.hasFile(AGENT_PROJECT_REPO_CLONE_COMPLETE_PATH)) {
@@ -550,7 +533,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
 
       if (cloneIsUsable) {
         await workspace.writeFile({
-          content: `${repo.slug}\n`,
+          content: `${repo.path}\n`,
           path: AGENT_PROJECT_REPO_CLONE_COMPLETE_PATH,
         });
         return;
@@ -564,7 +547,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     });
     await this.cloneProjectRepo({ git, repo, workspace });
     await workspace.writeFile({
-      content: `${repo.slug}\n`,
+      content: `${repo.path}\n`,
       path: AGENT_PROJECT_REPO_CLONE_COMPLETE_PATH,
     });
   }
@@ -581,22 +564,16 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     });
   }
 
-  private async getOrCreateProjectRepo(
-    params: AgentDurableObjectStructuredName,
-  ): Promise<RepoInfo> {
+  private async getOrCreateProjectRepo(params: AgentDurableObjectName): Promise<RepoInfo> {
     return await getReposCapability({
       exports: this.ctx.exports,
       props: { projectId: params.projectId },
     }).ensureProjectRepoInfo({ projectSlug: null });
   }
 
-  private async getAgentWorkspace(params: AgentDurableObjectStructuredName) {
-    const { context: contextId } = await this.ensureItxContext(params);
-    return await getInitializedDoStub({
-      allowCreate: true,
-      namespace: this.env.WORKSPACE,
-      name: agentWorkspaceName({ contextId, params }),
-    });
+  private async getAgentWorkspace(params: AgentDurableObjectName) {
+    await this.ensureItxContext(params);
+    return this.env.WORKSPACE.getByName(agentWorkspaceName(params));
   }
 
   private async createDebugSnapshot() {
@@ -606,19 +583,19 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       ? buildProjectStreamViewerUrl({
           baseUrl: config.baseUrl,
           projectSlug: project.slug,
-          streamPath: this.structuredName.agentPath,
+          streamPath: this.name.path,
         })
       : (config.baseUrl ?? "https://os.iterate.com");
     const snapshot = {
       project:
         project == null
-          ? { id: this.structuredName.projectId }
+          ? { id: this.projectId() }
           : {
-              id: this.structuredName.projectId,
+              id: this.projectId(),
               organizationSlug: project.organizationSlug ?? undefined,
               slug: project.slug,
             },
-      streamPath: this.structuredName.agentPath,
+      streamPath: this.name.path,
       streamUrl,
     };
     return formatDebugMessage(snapshot);
@@ -632,7 +609,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
          where p.id = ?
          limit 1`,
       )
-        .bind(this.structuredName.projectId)
+        .bind(this.projectId())
         .first<{ id: string; slug: string }>();
       if (row == null) return null;
       return {
@@ -641,8 +618,8 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
         slug: row.slug,
       };
     } catch (error) {
-      console.error("[os-agent] failed to read project debug info", {
-        agentName: this.name,
+      console.error("[agent] failed to read project debug info", {
+        agentName: this.ctx.id.name,
         error,
       });
       return null;
@@ -658,7 +635,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     idempotencyKey: string;
     message: string;
   }) {
-    return await this.streamsEntrypoint(this.structuredName.agentPath).append({
+    return await this.streamsEntrypoint(this.name.path).append({
       event: {
         type:
           parseAgentMessageOrigin(input.channel) === "tui"
@@ -672,10 +649,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     });
   }
 
-  private agentContextCapabilities(
-    params: AgentDurableObjectStructuredName,
-    contextId: string,
-  ): Array<{
+  private agentContextCapabilities(params: AgentDurableObjectName): Array<{
     name: string;
     instructions: string;
     capability: CapabilityAddress;
@@ -683,7 +657,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     // Every agent gets a rich toolset. The only thing that varies by agent is
     // the channel — how it talks to its user. Channel-specific prompting lives
     // in project-owned setup events appended by the project processor.
-    const channel = isSlackAgentPath(params.agentPath)
+    const channel = isSlackAgentPath(params.path)
       ? {
           capability: {
             entrypoint: "SlackCapability",
@@ -700,7 +674,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       : {
           capability: {
             entrypoint: "AgentToolsCapability",
-            props: { agentPath: params.agentPath, tool: "chat" },
+            props: { agentPath: params.path, tool: "chat" },
             type: "rpc",
             worker: { type: "loopback" },
           } satisfies CapabilityAddress,
@@ -714,7 +688,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       {
         capability: {
           entrypoint: "AgentToolsCapability",
-          props: { agentPath: params.agentPath, tool: "debug" },
+          props: { agentPath: params.path, tool: "debug" },
           type: "rpc",
           worker: { type: "loopback" },
         },
@@ -742,7 +716,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       {
         capability: {
           entrypoint: "WorkspaceCapability",
-          props: { workspaceId: contextId },
+          props: { path: String(params.path) },
           type: "rpc",
           worker: { type: "loopback" },
         },
@@ -754,15 +728,13 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     ];
   }
 
-  private async resolveLlmProvider(
-    params: AgentDurableObjectStructuredName,
-  ): Promise<AgentLlmProvider> {
-    const events = await this.streamsEntrypoint(params.agentPath).read({
+  private async resolveLlmProvider(params: AgentDurableObjectName): Promise<AgentLlmProvider> {
+    const events = await this.streamsEntrypoint(params.path).read({
       afterOffset: "start",
       beforeOffset: "end",
     });
     for (const event of events.toReversed()) {
-      if (event.type !== OS_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE) continue;
+      if (event.type !== AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE) continue;
       const provider = (event.payload as { provider?: unknown }).provider;
       if (provider === "cloudflare-ai" || provider === "openai-ws") return provider;
     }
@@ -770,9 +742,9 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   }
 
   private streamsEntrypoint(streamPath: StreamPath) {
-    return agentStreamApiFromNamespace({
+    return agentStreamApiFromProject({
       durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: this.structuredName.projectId,
+      projectId: this.projectId(),
       streamPath,
     });
   }
@@ -793,16 +765,16 @@ export function readOpenAiApiKey(env: Record<string, unknown>) {
   }
 }
 
-function agentStreamApiFromNamespace(args: {
+function agentStreamApiFromProject(args: {
   durableObjectNamespace: StreamDurableObjectNamespace;
-  namespace: string;
+  projectId: string;
   streamPath: StreamPath;
 }): AgentStreamApi {
   return {
     async append(input) {
       const stream = await getInitializedStreamStub({
         durableObjectNamespace: args.durableObjectNamespace,
-        namespace: args.namespace,
+        projectId: args.projectId,
         path: resolveProcessorStreamPath({
           basePath: args.streamPath,
           pathInput: input.streamPath,
@@ -813,7 +785,7 @@ function agentStreamApiFromNamespace(args: {
     async appendBatch(input) {
       const stream = await getInitializedStreamStub({
         durableObjectNamespace: args.durableObjectNamespace,
-        namespace: args.namespace,
+        projectId: args.projectId,
         path: resolveProcessorStreamPath({
           basePath: args.streamPath,
           pathInput: input.streamPath,
@@ -824,7 +796,7 @@ function agentStreamApiFromNamespace(args: {
     async read(input = {}) {
       const stream = await getInitializedStreamStub({
         durableObjectNamespace: args.durableObjectNamespace,
-        namespace: args.namespace,
+        projectId: args.projectId,
         path: resolveProcessorStreamPath({
           basePath: args.streamPath,
           pathInput: input.streamPath,
@@ -867,25 +839,20 @@ function resolveProcessorStreamPath(input: { basePath: StreamPath; pathInput?: s
  * agent's stream coordinate — no mint, no catalog. The agent DO's own name
  * (#1513) is the SAME string: one coordinate, two doors. The context node
  * is the generic ItxDurableObject named with the ref. */
-function agentContextRef(name: AgentDurableObjectStructuredName): string {
-  return formatContextRef({ namespace: name.projectId, path: String(name.agentPath) });
+function agentContextRef(name: AgentDurableObjectName): string {
+  return formatContextRef({ projectId: name.projectId, path: String(name.path) });
 }
 
 /** Address form of the same agent context coordinate used by agentContextRef. */
-function agentContextAddress(name: AgentDurableObjectStructuredName): CapabilityAddress {
+function agentContextAddress(name: AgentDurableObjectName): CapabilityAddress {
   return contextAddress(agentContextRef(name));
 }
 
-function agentWorkspaceName(input: {
-  contextId: string;
-  params: AgentDurableObjectStructuredName;
-}): WorkspaceStructuredName {
-  return {
-    projectId: input.params.projectId,
-    // Must match the workspace capability this agent provides on its own
-    // context (agentContextCapabilities): the context id IS the workspace id.
-    workspaceId: input.contextId,
-  };
+function agentWorkspaceName(params: AgentDurableObjectName): string {
+  return getWorkspaceDurableObjectName({
+    path: String(params.path),
+    projectId: params.projectId,
+  });
 }
 
 function remoteWithToken(input: { remote: string; token: string }) {

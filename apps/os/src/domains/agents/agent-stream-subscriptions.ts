@@ -1,7 +1,7 @@
-import { z } from "zod";
 import type { EventInput, StreamPath } from "@iterate-com/shared/streams/types";
 import { StreamPath as StreamPathSchema } from "@iterate-com/shared/streams/types";
 import { durableObjectProcessorSubscriber } from "~/domains/streams/engine/shared/callable-subscriber.ts";
+import { formatDurableObjectName } from "~/domains/durable-object-names.ts";
 import { AgentProcessorContract } from "~/domains/agents/stream-processors/agent/contract.ts";
 import { CloudflareAiProcessorContract } from "~/domains/agents/stream-processors/cloudflare-ai/contract.ts";
 import { OpenAiWsProcessorContract } from "~/domains/agents/stream-processors/openai-ws/contract.ts";
@@ -9,58 +9,18 @@ import { OpenAiWsProcessorContract } from "~/domains/agents/stream-processors/op
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
 export const AGENTS_STREAM_PATH = StreamPathSchema.parse("/agents");
-export const OS_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE =
-  "events.iterate.com/os-agent/llm-provider-selected";
+export const AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE =
+  "events.iterate.com/agent/llm-provider-selected";
 export type AgentLlmProvider = "openai-ws" | "cloudflare-ai";
 
-export type AgentDurableObjectStructuredName = {
-  agentPath: StreamPath;
+export type AgentDurableObjectName = {
+  path: StreamPath;
   projectId: string;
 };
 
-export const AgentDurableObjectStructuredName = z.object({
-  agentPath: StreamPathSchema,
-  projectId: z.string().trim().min(1),
-});
-
-/**
- * An agent Durable Object's identity IS its stream coordinate:
- * `{projectId}:{agentPath}` (e.g. `prj_abc:/agents/hahaha`) — the same shape a
- * stream uses (`{namespace}:{path}`), not an opaque JSON blob. projectId has no
- * colon and agentPath is colon-free, so splitting on the FIRST colon is exact.
- * This makes the name self-describing: any holder can recover (projectId,
- * agentPath) — and the agent context's address — from the id alone, with no
- * out-of-band catalog or passed-down address.
- */
-export function getAgentDurableObjectName(input: AgentDurableObjectStructuredName) {
-  return `${input.projectId}:${input.agentPath}`;
-}
-
-/** The DO-name codec: parse `{projectId}:{agentPath}` back to its parts. The
- * lifecycle base hands the raw name string to this schema (see parseName). */
-export const AgentDurableObjectName = z
-  .string()
-  .transform((value, ctx): AgentDurableObjectStructuredName => {
-    const parsed = parseAgentDurableObjectName(value);
-    if (!parsed) {
-      ctx.addIssue({
-        code: "custom",
-        message: `Agent DO name must be "{projectId}:{agentPath}", got ${JSON.stringify(value)}.`,
-      });
-      return z.NEVER;
-    }
-    return parsed;
-  });
-
-export function parseAgentDurableObjectName(
-  value: string,
-): AgentDurableObjectStructuredName | null {
-  const colon = value.indexOf(":");
-  if (colon <= 0) return null;
-  const projectId = value.slice(0, colon);
-  const agentPath = value.slice(colon + 1);
-  const parsed = AgentDurableObjectStructuredName.safeParse({ agentPath, projectId });
-  return parsed.success ? parsed.data : null;
+/** Formats the Agent Durable Object name from its project-local stream path. */
+export function getAgentDurableObjectName(input: { path: StreamPath | string; projectId: string }) {
+  return formatDurableObjectName({ path: input.path, projectId: input.projectId });
 }
 
 export function agentLlmProcessorSlug(provider: AgentLlmProvider) {
@@ -101,7 +61,7 @@ export function agentProcessorSubscriptionConfiguredEvent(input: {
       subscriber: durableObjectProcessorSubscriber({
         bindingName: "AGENT",
         durableObjectName: getAgentDurableObjectName({
-          agentPath,
+          path: agentPath,
           projectId: input.projectId,
         }),
         processorName: input.processorSlug,

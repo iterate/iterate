@@ -11,29 +11,28 @@ import {
 } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { StreamNamespace } from "@iterate-com/shared/streams/types";
 
 export const Route = createFileRoute("/admin/streams/")({
-  component: AdminStreamsNamespacePicker,
+  component: AdminStreamsProjectPicker,
 });
 
-function AdminStreamsNamespacePicker() {
+function AdminStreamsProjectPicker() {
   const navigate = useNavigate();
-  const [namespace, setNamespace] = useState("global");
+  const [projectId, setProjectId] = useState("global");
   const [error, setError] = useState<string | null>(null);
 
   function submit() {
-    const parsed = StreamNamespace.safeParse(namespace);
-    if (!parsed.success) {
-      setError("Namespace must be a non-empty stream namespace.");
-      toast.error("Namespace must be a non-empty stream namespace.");
+    const parsed = projectId.trim();
+    if (parsed.length === 0) {
+      setError("Project id is required.");
+      toast.error("Project id is required.");
       return;
     }
     setError(null);
 
     void navigate({
-      to: "/admin/streams/$namespace",
-      params: { namespace: parsed.data },
+      to: "/admin/streams/$projectId",
+      params: { projectId: parsed },
     });
   }
 
@@ -42,7 +41,7 @@ function AdminStreamsNamespacePicker() {
       <div className="flex flex-col gap-1">
         <h1 className="text-base font-semibold">Streams explorer</h1>
         <p className="text-sm text-muted-foreground">
-          Open any stream namespace by namespace id, including project ids.
+          Open streams by project id. Use global for deployment-wide streams.
         </p>
       </div>
       <form
@@ -54,11 +53,11 @@ function AdminStreamsNamespacePicker() {
       >
         <FieldGroup>
           <Field data-invalid={error != null}>
-            <FieldLabel htmlFor="admin-stream-namespace">Namespace</FieldLabel>
+            <FieldLabel htmlFor="admin-stream-project-id">Project ID</FieldLabel>
             <Input
-              id="admin-stream-namespace"
-              value={namespace}
-              onChange={(event) => setNamespace(event.currentTarget.value)}
+              id="admin-stream-project-id"
+              value={projectId}
+              onChange={(event) => setProjectId(event.currentTarget.value)}
               placeholder="global or prj_..."
               aria-invalid={error != null}
               className="font-mono"
@@ -68,7 +67,7 @@ function AdminStreamsNamespacePicker() {
           </Field>
         </FieldGroup>
         <Button type="submit" className="self-start">
-          Open namespace
+          Open project
           <ArrowRightIcon data-icon="inline-end" aria-hidden="true" />
         </Button>
       </form>

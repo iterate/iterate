@@ -27,8 +27,6 @@ import { DEFAULT_WORKERS_AI_AGENT_MODEL } from "~/domains/agents/stream-processo
 import { getSlackIntegrationDurableObjectName } from "~/domains/slack/slack-naming.ts";
 
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
-const DEFAULT_AGENT_DEBOUNCE_MS = 200;
-
 type SlackChannel = {
   id: string;
   is_member?: boolean;
@@ -61,7 +59,6 @@ test("can configure Cloudflare AI Gateway as the provider for an agent stream", 
     model: DEFAULT_WORKERS_AI_AGENT_MODEL,
     projectId: project.id,
     provider: "cloudflare-ai",
-    runOpts: { gateway: { id: "default" } },
     systemPrompt: [
       "For every user message, reply with exactly one fenced JavaScript code block and no surrounding prose.",
       "The block must evaluate to an async function.",
@@ -96,8 +93,8 @@ test("can configure Cloudflare AI Gateway as the provider for an agent stream", 
 
   expect(events).toContainEqual(
     expect.objectContaining({
-      type: "events.iterate.com/os-agent/llm-provider-selected",
-      payload: { provider: "cloudflare-ai" },
+      type: "events.iterate.com/agent/llm-provider-selected",
+      payload: { model: DEFAULT_WORKERS_AI_AGENT_MODEL, provider: "cloudflare-ai" },
     }),
   );
   expect(events).toContainEqual(
@@ -235,16 +232,8 @@ test("uses OpenAI for unconfigured agent chats by default", async () => {
 
   expect(events).toContainEqual(
     expect.objectContaining({
-      type: "events.iterate.com/os-agent/llm-provider-selected",
-      payload: { provider: "openai-ws" },
-    }),
-  );
-  expect(events).toContainEqual(
-    expect.objectContaining({
-      type: "events.iterate.com/openai-ws/config-updated",
-      payload: expect.objectContaining({
-        model: "gpt-5.5",
-      }),
+      type: "events.iterate.com/agent/llm-provider-selected",
+      payload: { model: "gpt-5.5", provider: "openai-ws" },
     }),
   );
   expect(events).toContainEqual(
@@ -692,7 +681,6 @@ itIfSlackBotToken(
       model: "gpt-5.5",
       projectId: project.id,
       provider: "openai-ws",
-      runOpts: {},
       systemPrompt: [
         "For every user message, reply with exactly one fenced JavaScript code block and no surrounding prose.",
         "The block must evaluate to an async function.",
@@ -871,24 +859,8 @@ itIfSlackBotToken(
     );
     expect(events).toContainEqual(
       expect.objectContaining({
-        type: "events.iterate.com/os-agent/llm-provider-selected",
-        payload: { provider: "openai-ws" },
-      }),
-    );
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "events.iterate.com/openai-ws/config-updated",
-        payload: expect.objectContaining({
-          model: "gpt-5.5",
-        }),
-      }),
-    );
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "events.iterate.com/agent/llm-config-updated",
-        payload: expect.objectContaining({
-          model: "gpt-5.5",
-        }),
+        type: "events.iterate.com/agent/llm-provider-selected",
+        payload: { model: "gpt-5.5", provider: "openai-ws" },
       }),
     );
     expect(events.filter((event) => event.type.startsWith("events.iterate.com/agents/"))).toEqual(
@@ -1162,32 +1134,13 @@ async function appendAgentSetup(input: {
   model: string;
   projectId: string;
   provider: "openai-ws" | "cloudflare-ai";
-  runOpts?: Record<string, unknown>;
   systemPrompt: string;
 }) {
   const events: EventInput[] = [
     {
-      type: "events.iterate.com/os-agent/llm-provider-selected",
+      type: "events.iterate.com/agent/llm-provider-selected",
       idempotencyKey: "e2e-agent-setup:provider",
-      payload: { provider: input.provider },
-    },
-    ...(input.provider === "openai-ws"
-      ? [
-          {
-            type: "events.iterate.com/openai-ws/config-updated",
-            idempotencyKey: "e2e-agent-setup:openai-ws-config",
-            payload: { model: input.model },
-          } satisfies EventInput,
-        ]
-      : []),
-    {
-      type: "events.iterate.com/agent/llm-config-updated",
-      idempotencyKey: "e2e-agent-setup:llm-config",
-      payload: {
-        debounceMs: DEFAULT_AGENT_DEBOUNCE_MS,
-        model: input.model,
-        runOpts: input.runOpts ?? {},
-      },
+      payload: { model: input.model, provider: input.provider },
     },
     {
       type: "events.iterate.com/agent/system-prompt-updated",

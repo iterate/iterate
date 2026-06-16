@@ -1,9 +1,7 @@
-import { env } from "cloudflare:workers";
-import { z } from "zod";
-import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
-import { NotInitializedError } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { DurableObject, env } from "cloudflare:workers";
 
 import { getSlackIntegrationDurableObjectName } from "../slack-naming.ts";
+import { parseDurableObjectName } from "~/domains/durable-object-names.ts";
 import { durableObjectProcessorSubscriber } from "~/domains/streams/engine/shared/callable-subscriber.ts";
 import {
   createStreamProcessorHost,
@@ -25,14 +23,6 @@ import { callSlackWebApi } from "~/domains/slack/entrypoints/slack-capability.ts
 
 export { getSlackIntegrationDurableObjectName };
 
-export type SlackIntegrationDurableObjectStructuredName = {
-  projectId: string;
-};
-
-const SlackIntegrationDurableObjectStructuredName = z.object({
-  projectId: z.string().trim().min(1),
-});
-
 /** Mint a Slack-integration DO stub from a trusted domain file (see lint rule). */
 export function getSlackIntegrationStub(projectId: string) {
   return env.SLACK_INTEGRATION.getByName(getSlackIntegrationDurableObjectName(projectId));
@@ -45,21 +35,11 @@ type SlackIntegrationEnv = {
   STREAM: DurableObjectNamespace<StreamDurableObject>;
 };
 
-const SlackIntegrationLifecycleBase = createIterateDurableObjectBase<
-  typeof SlackIntegrationDurableObjectStructuredName,
-  Pick<SlackIntegrationEnv, "DO_CATALOG">
->({
-  className: "SlackIntegrationDurableObject",
-  getDatabase: (env) => env.DO_CATALOG,
-  indexes: {
-    projectId: (params) => params.projectId,
-  },
-  nameSchema: SlackIntegrationDurableObjectStructuredName,
-});
-
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
-export class SlackIntegrationDurableObject extends SlackIntegrationLifecycleBase<SlackIntegrationEnv> {
+export class SlackIntegrationDurableObject extends DurableObject<SlackIntegrationEnv> {
+  readonly name = parseDurableObjectName(this.ctx.id.name!);
+
   host = createStreamProcessorHost(this.ctx);
   slack = this.host.add(SlackProcessorContract.slug, (deps) => {
     return new SlackProcessor({
@@ -67,7 +47,7 @@ export class SlackIntegrationDurableObject extends SlackIntegrationLifecycleBase
       acknowledgeRoutedWebhook: async ({ payload }) => {
         const ack = eyesReactionTargetFromWebhookPayload(payload);
         if (ack == null) return;
-        const { projectId } = await this.ensureStartedOrInitializeFromRuntimeName();
+        const projectId = this.projectId();
         const token = await readSlackToken({ db: this.env.DO_CATALOG, env: this.env, projectId });
         if (!token) return;
         try {
@@ -90,24 +70,16 @@ export class SlackIntegrationDurableObject extends SlackIntegrationLifecycleBase
     });
   });
 
-  constructor(ctx: DurableObjectState, env: SlackIntegrationEnv) {
-    super(ctx, env);
-
-    this.registerOnFirstInitialize(async (params) => {
-      await this.ensureIntegrationSubscription(params.projectId);
-    });
-  }
-
   /** The stream subscription callable dials this (see `durableObjectProcessorSubscriber`). */
   async requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
-    await this.ensureStartedOrInitializeFromRuntimeName();
+    await this.ensureIntegrationSetup();
     return await this.host.requestStreamSubscription(args);
   }
 
   async ensureReady() {
-    const params = await this.ensureStartedOrInitializeFromRuntimeName();
-    await this.ensureIntegrationSubscription(params.projectId);
-    await this.waitForSlackIntegrationProcessorCatchUp(params.projectId);
+    const projectId = this.projectId();
+    await this.ensureIntegrationSetup();
+    await this.waitForSlackIntegrationProcessorCatchUp(projectId);
     return await this.slack.snapshot();
   }
 
@@ -125,7 +97,7 @@ export class SlackIntegrationDurableObject extends SlackIntegrationLifecycleBase
   private async currentStreamMaxConsumedOffset(projectId: string) {
     const stream = await getInitializedStreamStub({
       durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: projectId,
+      projectId,
       path: SLACK_INTEGRATION_STREAM_PATH,
     });
     const consumedTypes = new Set<string>(this.slack.contract.consumes);
@@ -133,21 +105,26 @@ export class SlackIntegrationDurableObject extends SlackIntegrationLifecycleBase
     return events.filter((event) => consumedTypes.has(event.type)).at(-1)?.offset ?? 0;
   }
 
-  private async ensureStartedOrInitializeFromRuntimeName() {
-    try {
-      return await this.ensureStarted();
-    } catch (error) {
-      if (!(error instanceof NotInitializedError)) throw error;
-      const runtimeName = this.getDurableObjectName();
-      if (runtimeName == null) throw error;
-      return await this.initialize({ name: runtimeName });
+  private async ensureIntegrationSetup() {
+    await this.ensureIntegrationSubscription(this.projectId());
+  }
+
+  private projectId(): string {
+    if (this.name.projectId === null) {
+      throw new Error("Slack integration Durable Object must be project-scoped.");
     }
+    if (this.name.path !== SLACK_INTEGRATION_STREAM_PATH) {
+      throw new Error(
+        `Slack integration Durable Object path must be ${SLACK_INTEGRATION_STREAM_PATH}.`,
+      );
+    }
+    return this.name.projectId;
   }
 
   private async ensureIntegrationSubscription(projectId: string) {
     const stream = await getInitializedStreamStub({
       durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: projectId,
+      projectId,
       path: SLACK_INTEGRATION_STREAM_PATH,
     });
 

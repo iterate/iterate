@@ -250,6 +250,7 @@ describe("AgentProcessor", () => {
 
     await processor.ingest({
       events: [
+        providerSelectedEvent({ offset: 41 }),
         agentEvent({
           type: "events.iterate.com/agent/input-added",
           payload: {
@@ -282,6 +283,7 @@ describe("AgentProcessor", () => {
         offset: 12,
         state: {
           ...initialState(),
+          llmProvider: "openai-ws",
           currentRequest: { phase: "requested", llmRequestId: 12 },
         },
       },
@@ -318,6 +320,7 @@ describe("AgentProcessor", () => {
         offset: 12,
         state: {
           ...initialState(),
+          llmProvider: "openai-ws",
           currentRequest: { phase: "requested", llmRequestId: 12 },
         },
       },
@@ -364,7 +367,6 @@ describe("AgentProcessor", () => {
           type: "events.iterate.com/agent/llm-request-requested",
           payload: {
             model: "test-model",
-            runOpts: {},
           },
           offset: 43,
         }),
@@ -542,6 +544,7 @@ describe("AgentProcessor", () => {
         state: {
           ...initialState(),
           history: [{ role: "user", content: "hi" }],
+          llmProvider: "openai-ws",
           pendingTriggerOffset: 42,
         },
       },
@@ -606,6 +609,7 @@ describe("AgentProcessor", () => {
 
     await processor.ingest({
       events: [
+        providerSelectedEvent({ offset: 41 }),
         agentEvent({
           type: "events.iterate.com/agent/input-added",
           payload: { content: "hello" },
@@ -630,6 +634,7 @@ describe("AgentProcessor", () => {
         offset: 7,
         state: {
           ...initialState(),
+          llmProvider: "openai-ws",
           currentRequest: { phase: "scheduled", requestId: "req_lost", scheduledOffset: 7 },
         },
       },
@@ -669,6 +674,7 @@ describe("AgentProcessor", () => {
   it("does not re-request on connect when the live instance already owns the schedule", async () => {
     vi.useFakeTimers();
     const { stream, appended } = memoryStream();
+    const selectedProvider = providerSelectedEvent({ offset: 1 });
     const triggeringInput = agentEvent({
       type: "events.iterate.com/agent/input-added",
       payload: { content: "hi", llmRequestPolicy: { behaviour: "after-current-request" } },
@@ -677,6 +683,7 @@ describe("AgentProcessor", () => {
     const processor = newAgentProcessor({
       stream,
       readStreamEvents: async () => [
+        selectedProvider,
         triggeringInput,
         ...appended
           .filter((event) => event.type === "events.iterate.com/agent/llm-request-scheduled")
@@ -690,7 +697,7 @@ describe("AgentProcessor", () => {
     // timer. A subscriber-connected fact arriving afterwards (any other
     // processor or a browser attaching) must not fire the request early or
     // double-request — the live timer owns the schedule.
-    await processor.ingest({ events: [triggeringInput], streamMaxOffset: 3 });
+    await processor.ingest({ events: [selectedProvider, triggeringInput], streamMaxOffset: 3 });
     await processor.ingest({
       events: [subscriberConnectedEvent({ offset: 5 })],
       streamMaxOffset: 5,
@@ -760,6 +767,7 @@ describe("AgentProcessor", () => {
   it("hands a scheduled LLM request to providers by reference, without a body", async () => {
     vi.useFakeTimers();
     const { stream, appended } = memoryStream();
+    const selectedProvider = providerSelectedEvent({ offset: 1 });
     const triggeringInput = agentEvent({
       type: "events.iterate.com/agent/input-added",
       payload: { content: "hi", llmRequestPolicy: { behaviour: "after-current-request" } },
@@ -772,6 +780,7 @@ describe("AgentProcessor", () => {
       // processor appended (the request handoff re-verifies the schedule is
       // still current against history).
       readStreamEvents: async () => [
+        selectedProvider,
         agentEvent({
           type: "events.iterate.com/agent/input-added",
           payload: {
@@ -789,16 +798,16 @@ describe("AgentProcessor", () => {
       ],
     });
 
-    await processor.ingest({ events: [triggeringInput], streamMaxOffset: 3 });
+    await processor.ingest({ events: [selectedProvider, triggeringInput], streamMaxOffset: 3 });
     await vi.advanceTimersByTimeAsync(1000);
 
     expect(appended).toHaveLength(2);
-    // Request-by-reference: the handoff records which model to run and how,
+    // Request-by-reference: the handoff records which model to run,
     // but never embeds the conversation — providers rebuild it from history
     // up to this event's own offset (see llm-request-helpers.ts).
     expect(appended[1]).toMatchObject({
       type: "events.iterate.com/agent/llm-request-requested",
-      payload: { model: expect.any(String), runOpts: {} },
+      payload: { model: expect.any(String) },
     });
     expect(appended[1]!.payload).not.toHaveProperty("body");
   });
@@ -864,6 +873,17 @@ function subscriberConnectedEvent(args: { offset: number }): StreamEvent {
     offset: args.offset,
     createdAt: "2026-01-01T00:00:00.000Z",
   };
+}
+
+function providerSelectedEvent(args: { offset: number }): StreamEvent {
+  return agentEvent({
+    type: "events.iterate.com/agent/llm-provider-selected",
+    payload: {
+      model: "@cf/moonshotai/kimi-k2.6",
+      provider: "openai-ws",
+    },
+    offset: args.offset,
+  });
 }
 
 function agentEvent(args: {

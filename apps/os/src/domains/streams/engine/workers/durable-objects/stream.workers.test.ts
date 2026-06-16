@@ -379,13 +379,13 @@ describe("stale-version KV snapshots rebuild from the event log", () => {
       state.storage.kv.put("stateVersion", 3);
 
       const rebuilt = (
-        stream as unknown as { readCoreProcessorState(): { namespace: string; maxOffset: number } }
+        stream as unknown as { readCoreProcessorState(): { projectId: string; maxOffset: number } }
       ).readCoreProcessorState();
 
       // Rebuilt from the log, not parsed from the stale snapshot.
-      expect(rebuilt.namespace).toBe(before.coreProcessorState.namespace);
+      expect(rebuilt.projectId).toBe(before.coreProcessorState.projectId);
       expect(rebuilt.maxOffset).toBe(before.coreProcessorState.maxOffset);
-      expect(state.storage.kv.get("stateVersion")).toBe(4);
+      expect(state.storage.kv.get("stateVersion")).toBe(5);
     });
   });
 });

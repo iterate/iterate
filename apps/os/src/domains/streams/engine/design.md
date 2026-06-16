@@ -96,7 +96,7 @@ Stream processor: A consumer that uses our library to define a well defined mani
 - its reducer function (pure function of the current state and new event - safe to import anywhere)
 - a separate implementation function for side effects (e.g. appending more events)
 
-Stream processor runner: A program that connects a stream processor to a subscription connection. For example, we might have a nodejs stream processor runner that creates an inbound subscription connection on a stream and then runs the stream processor against it. In production the main stream processor runner we use is a durable object called StreamProcessorRunner, which streams connect to via an outbound subscription connection.
+Stream processor runner: A program that connects a stream processor to a subscription connection. For example, a nodejs stream processor runner might create an inbound subscription connection on a stream and run the stream processor against it. In `apps/os`, production domain processors are hosted by their domain Durable Objects through `StreamProcessorHost`; the standalone `StreamProcessorRunner` Durable Object lives under `workers/test-support` for stream-engine worker tests and the streams example app.
 
 # Requirements
 
@@ -117,7 +117,7 @@ Each stream contains an append-only log of events with
 
 ### `events.iterate.com/stream/created`
 
-The first event in every stream. It has offset `1`, records the stream namespace/path, and lets the
+The first event in every stream. It has offset `1`, records the stream projectId/path, and lets the
 built-in core processor reduce `createdAt` from the event timestamp.
 
 ```ts
@@ -125,7 +125,7 @@ built-in core processor reduce `createdAt` from the event timestamp.
   offset: 1,
   type: "events.iterate.com/stream/created",
   payload: {
-    namespace: "stream",
+    projectId: "stream",
     path: "/audio/uploads/123",
   },
   createdAt: "2026-06-01T12:00:00.000Z",

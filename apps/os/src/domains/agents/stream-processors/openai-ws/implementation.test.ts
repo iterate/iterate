@@ -504,7 +504,7 @@ function currentAgentRequestEvents(appended: readonly StreamEventInput[]): Strea
 function llmRequestRequestedEvent(args: { offset: number }): StreamEvent {
   return {
     type: "events.iterate.com/agent/llm-request-requested",
-    payload: { model: "ignored-provider-owned-model", runOpts: {} },
+    payload: { model: "ignored-provider-owned-model" },
     offset: args.offset,
     createdAt: "2026-01-01T00:00:00.000Z",
   };

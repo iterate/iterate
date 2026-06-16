@@ -38,7 +38,7 @@ is private to this project and is the right place for this knowledge.
 Read files from the project repo with the pipelined repo handle:
 
 \`\`\`js
-const { files } = await itx.repos.get({ slug: "project" }).readFiles({
+const { files } = await itx.repos.get({ path: "/repos/project" }).readFiles({
   paths: ["AGENTS.md", "USER.md", "SOUL.md", "MEMORY.md"],
 })
 \`\`\`
@@ -50,7 +50,7 @@ Missing files return \`content: null\`.
 Write durable memory with \`commitFiles\`:
 
 \`\`\`js
-await itx.repos.get({ slug: "project" }).commitFiles({
+await itx.repos.get({ path: "/repos/project" }).commitFiles({
   message: "Record onboarding notes",
   author: { name: "Agent", email: "agent@iterate.com" },
   changes: [
@@ -63,7 +63,7 @@ await itx.repos.get({ slug: "project" }).commitFiles({
 You can delete files in the same commit:
 
 \`\`\`js
-await itx.repos.get({ slug: "project" }).commitFiles({
+await itx.repos.get({ path: "/repos/project" }).commitFiles({
   message: "Remove obsolete notes",
   author: { name: "Agent", email: "agent@iterate.com" },
   changes: [{ path: "old-notes.md", delete: true }],
@@ -92,7 +92,7 @@ deleted \`BOOTSTRAP.md\`, and appended the project completion event.
 Your final onboarding commit should include a delete change:
 
 \`\`\`js
-const result = await itx.repos.get({ slug: "project" }).commitFiles({
+const result = await itx.repos.get({ path: "/repos/project" }).commitFiles({
   message: "Complete onboarding",
   author: { name: "Agent", email: "agent@iterate.com" },
   changes: [
@@ -122,7 +122,7 @@ await itx.streams.get("/").append({
 export const ONBOARDING_AGENT_INPUT = `Please read BOOTSTRAP.md in the project repo and follow it. Start by reading it with:
 
 \`\`\`js
-const { files } = await itx.repos.get({ slug: "project" }).readFiles({
+const { files } = await itx.repos.get({ path: "/repos/project" }).readFiles({
   paths: ["BOOTSTRAP.md"],
 })
 \`\`\`

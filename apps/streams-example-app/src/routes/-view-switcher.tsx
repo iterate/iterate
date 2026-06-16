@@ -2,7 +2,7 @@ import { Link } from "@tanstack/react-router";
 import { streamViewSearch, type StreamViewSearch } from "../lib/stream-view-search.ts";
 import { STREAM_VIEWS } from "./-stream-views.ts";
 
-/** Links between the three sibling views of one stream, preserving path and namespace. */
+/** Links between the three sibling views of one stream, preserving path and projectId. */
 export function ViewSwitcher({ streamView }: { streamView: StreamViewSearch }) {
   return (
     <nav
@@ -16,7 +16,7 @@ export function ViewSwitcher({ streamView }: { streamView: StreamViewSearch }) {
           to="/streams"
           search={streamViewSearch({
             path: streamView.path,
-            namespace: streamView.namespace,
+            projectId: streamView.projectId,
             view: slug,
           })}
           aria-current={slug === streamView.view ? "page" : undefined}

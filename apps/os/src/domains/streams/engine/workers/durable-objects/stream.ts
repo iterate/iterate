@@ -15,6 +15,10 @@ import type { LiveStreamSubscriberDescriptor, StreamRpc } from "../../types.ts";
 import { createStreamSubscription } from "../../subscription.ts";
 import { makeRpcTargetClass, type RpcTargetClass } from "../../shared/rpc-target.ts";
 import { disposeIgnoredRpcResult, retainProcessEventBatch } from "../rpc-lifecycle.ts";
+import {
+  formatDurableObjectName,
+  parseDurableObjectName,
+} from "../../../../durable-object-names.ts";
 
 /**
  * Durable stream storage and Workers RPC surface.
@@ -43,7 +47,8 @@ const textEncoder = new TextEncoder();
 // - 4: subscriber presence — connectionsByKey roster added; processorsBySlug
 //      reshaped to fold contract announcements from subscriber-connected
 //      events instead of the removed processor-registered event.
-const CORE_STATE_VERSION = 4;
+// - 5: stream coordinate field renamed from projectId to projectId.
+const CORE_STATE_VERSION = 5;
 
 // How long a stream may hold idle OUTBOUND delivery connections before the
 // Stream DO severs them so it (and its subscribers) can hibernate instead of
@@ -56,6 +61,8 @@ const CORE_STATE_VERSION = 4;
 const DEFAULT_STREAM_IDLE_TEARDOWN_MS = 5 * 60_000;
 
 export class Stream extends DurableObject<Env> implements StreamRpc {
+  readonly name = parseStreamDurableObjectName(this.ctx.id.name);
+
   #coreProcessorState: StreamCoreProcessorState;
   /** In-memory idle teardown timer; armed only while outbound connections exist. */
   #idleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -90,13 +97,10 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     // its post-commit side effect, so a stream that wakes with configured
     // subscriptions but no new appends still reconnects.
     if (this.#coreProcessorState.eventCount === 0) {
-      // stream durable objects have names like "namespace:/some/stream/path"
-      if (!ctx.id.name) throw new Error("ctx.id.name is falsey - this should never happen");
-      const [namespace, path] = ctx.id.name.split(":");
       this.append({
         event: {
           type: "events.iterate.com/stream/created",
-          payload: { namespace, path },
+          payload: { projectId: this.name.projectId, path: this.name.path },
         },
       });
     }
@@ -347,7 +351,12 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
   #resolveStream(streamPath: string): Pick<StreamRpc, "append" | "appendBatch"> {
     const resolvedPath = resolveStreamPath(this.#coreProcessorState.path, streamPath);
     if (resolvedPath === resolveStreamPath(this.#coreProcessorState.path, ".")) return this;
-    return this.env.STREAM.getByName(`${this.#coreProcessorState.namespace}:${resolvedPath}`);
+    return this.env.STREAM.getByName(
+      formatDurableObjectName({
+        path: resolvedPath,
+        projectId: this.name.projectId,
+      }),
+    );
   }
 
   /**
@@ -445,8 +454,8 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
       // `processReducedEvent` side effects (e.g. announcing this stream to its
       // ancestors) call back into `append`/`#resolveStream`, which read
       // `this.#coreProcessorState` — running them mid-batch would observe the
-      // stale pre-append state (on a brand-new stream that is the
-      // "uninitialized" placeholder namespace/path).
+      // stale pre-append state (on a brand-new stream that still has the
+      // placeholder project/path).
       reducedSideEffects.push({
         event: committed,
         previousState: previousCoreProcessorState,
@@ -503,7 +512,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     // already reconciled via the core's reduced-event side effect (so the check
     // is a no-op), and `subscriber-connected` only lands while its key is
     // connected/connecting (also a no-op). We deliberately do NOT exclude the
-    // whole `stream/*` namespace — only this single self-undoing event.
+    // whole `stream/*` event family — only this single self-undoing event.
     const SUBSCRIBER_DISCONNECTED_TYPE = "events.iterate.com/stream/subscriber-disconnected";
     const hasRedialTriggeringAppend = newEvents.some(
       (event) => event.type !== SUBSCRIBER_DISCONNECTED_TYPE,
@@ -851,7 +860,7 @@ function installSubscribeRpcTargetOverride(target: RpcTargetClass<StreamRpc, Str
 
 /**
  * Resolves `streamPath` against the current stream's path into a canonical
- * leading-slash path used for the target DO name (`${namespace}:${path}`).
+ * leading-slash path used for the target Durable Object name.
  *
  * Stream identity uses leading-slash paths everywhere — DO names, ancestor paths
  * and runner names all keep it — so resolution preserves
@@ -876,6 +885,13 @@ export function resolveStreamPath(basePath: string, streamPath: string): string 
     segments.push(segment);
   }
   return `/${segments.join("/")}`;
+}
+
+function parseStreamDurableObjectName(name: string | undefined) {
+  if (!name) {
+    throw new Error("Stream Durable Object must be addressed by name.");
+  }
+  return parseDurableObjectName(name);
 }
 
 function* chunkBytes(value: Uint8Array, chunkSize: number): Generator<[number, ArrayBuffer]> {

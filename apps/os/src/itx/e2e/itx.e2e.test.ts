@@ -412,7 +412,7 @@ export class PetstoreClient extends WorkerEntrypoint {
           commit: "latest",
           entrypoint: "PetstoreClient",
           path: "caps/petstore.js",
-          repo: "project",
+          repoPath: "/repos/project",
           type: "repo",
         },
       },
@@ -601,7 +601,7 @@ test("absolute stream refs are sugar through the one access check", async () => 
   using projectItx = await itx.projects.get(project.id);
 
   // Absolute string ref from the admin global handle (access "all") writes
-  // into the project's namespace…
+  // into the project stream scope…
   const marker = crypto.randomUUID().slice(0, 8);
   await itx.streams.get(`${project.id}:/itx-e2e/refs`).append({
     event: {
@@ -612,12 +612,12 @@ test("absolute stream refs are sugar through the one access check", async () => 
 
   // …and the structured form on the project handle reads it back.
   const events = (await projectItx.streams
-    .get({ namespace: project.id, path: "/itx-e2e/refs" })
+    .get({ projectId: project.id, path: "/itx-e2e/refs" })
     .getEvents()) as Array<{ payload: { marker?: string } }>;
   expect(events.map((event) => event.payload.marker)).toContain(marker);
 
   // A project handle cannot fully-qualify its way out of its access set —
-  // masked as NOT_FOUND, indistinguishable from a namespace that exists.
+  // masked as NOT_FOUND, indistinguishable from a project that exists.
   // Probed in-isolate (a script on the project context) where the throw is
   // synchronous: capnweb pipelining onto a rejected intermediate stub would
   // replace the real error with a local follow-up one.

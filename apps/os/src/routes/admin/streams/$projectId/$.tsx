@@ -5,7 +5,7 @@ import { StreamExplorerDetail } from "~/components/stream-explorer.tsx";
 import { useItx } from "~/itx/itx-react.tsx";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 
-export const Route = createFileRoute("/admin/streams/$namespace/$")({
+export const Route = createFileRoute("/admin/streams/$projectId/$")({
   params: {
     parse: (raw) => ({
       _splat: streamPathFromSplat(raw._splat),
@@ -19,18 +19,19 @@ export const Route = createFileRoute("/admin/streams/$namespace/$")({
 });
 
 function AdminStreamDetailPage() {
-  const { namespace, _splat: streamPath } = Route.useParams();
+  const { projectId, _splat: streamPath } = Route.useParams();
   const itx = useItx();
   const navigate = useNavigate();
+  const streamProjectId = projectId === "global" ? null : projectId;
   const source = useMemo(
-    () => (path: StreamPathType) => itx.streams.namespace(namespace).get(path),
-    [itx, namespace],
+    () => (path: StreamPathType) => itx.streams.project(streamProjectId).get(path),
+    [itx, streamProjectId],
   );
 
   function openStream(path: StreamPathType) {
     void navigate({
-      to: "/admin/streams/$namespace/$",
-      params: { namespace, _splat: path },
+      to: "/admin/streams/$projectId/$",
+      params: { projectId, _splat: path },
     });
   }
 
@@ -41,18 +42,18 @@ function AdminStreamDetailPage() {
       source={source}
       streamView={{
         emptyLabel: "No events in this stream yet.",
-        projectSlug: namespace,
-        projectSlugOrId: namespace,
+        projectSlug: projectId,
+        projectSlugOrId: projectId,
         renderStreamPathLink: ({ path, children, className }) => (
           <Link
-            to="/admin/streams/$namespace/$"
-            params={{ namespace, _splat: path }}
+            to="/admin/streams/$projectId/$"
+            params={{ projectId, _splat: path }}
             {...(className == null ? {} : { className })}
           >
             {children}
           </Link>
         ),
-        streamSource: (path) => itx.streams.namespace(namespace).get(path),
+        streamSource: (path) => itx.streams.project(streamProjectId).get(path),
       }}
     />
   );

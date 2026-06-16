@@ -1,11 +1,11 @@
 // The coordinate system: A CONTEXT IS A STREAM COORDINATE.
 //
-// Every context is `(namespace, path)` — an ordinary event stream. The
+// Every context is `{ projectId, path }` — an ordinary event stream. The
 // project context lives at `(projectId, "/")`, an agent's at
 // `(projectId, agentPath)`, an MCP session's at its session stream path, and
 // anonymous extensions default to `/itx/<generated>` (a plain convention,
 // not a reserved segment — any stream path can be a context). There are no
-// context ids: the REF string `<namespace>:<path>` is the identity, and it
+// context ids: the REF string `<projectId>:<path>` is the identity, and it
 // is also the ItxDurableObject's name, so identity, stream, and address are
 // the same fact spelled three ways.
 //
@@ -28,26 +28,31 @@ import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
 } from "~/domains/streams/stream-runtime.ts";
+import { formatDurableObjectName, parseDurableObjectName } from "~/domains/durable-object-names.ts";
 
 /** Where one context lives: an ordinary stream coordinate. */
-export type ItxCoordinate = { namespace: string; path: string };
+export type ItxCoordinate = { projectId: string | null; path: string };
 
 const ITX_CONTEXT_BINDING = "ITX_CONTEXT";
 
-/** The context REF: `<namespace>:<path>` — identity, stream coordinate, and
+/** The context REF: `<projectId>:<path>` — identity, stream coordinate, and
  * the ItxDurableObject name, all one string. */
 export function formatContextRef(coordinate: ItxCoordinate): string {
-  return `${coordinate.namespace}:${StreamPath.parse(coordinate.path)}`;
+  return formatDurableObjectName({
+    path: coordinate.path,
+    projectId: coordinate.projectId,
+  });
 }
 
 export function parseContextRef(ref: string): ItxCoordinate {
-  const colon = ref.indexOf(":");
-  if (colon <= 0 || ref[colon + 1] !== "/") {
+  try {
+    const parsed = parseDurableObjectName(ref);
+    return { projectId: parsed.projectId, path: parsed.path };
+  } catch {
     throw new Error(
-      `A context ref is its stream coordinate ("<namespace>:/<path>"), got ${JSON.stringify(ref)}.`,
+      `A context ref is its stream coordinate ("<projectId>:/<path>"), got ${JSON.stringify(ref)}.`,
     );
   }
-  return { namespace: ref.slice(0, colon), path: ref.slice(colon + 1) };
 }
 
 export function isContextRef(value: string): boolean {
@@ -55,14 +60,14 @@ export function isContextRef(value: string): boolean {
   return colon > 0 && value[colon + 1] === "/";
 }
 
-/** The project context's ref: the root of its own stream namespace. */
+/** The project context's ref: the root stream for that project. */
 export function projectContextRef(projectId: string): string {
-  return formatContextRef({ namespace: projectId, path: "/" });
+  return formatContextRef({ projectId, path: "/" });
 }
 
-/** The owning project of a context ref: its stream NAMESPACE. */
-export function projectIdOfContextRef(ref: string): string {
-  return parseContextRef(ref).namespace;
+/** The owning project of a context ref. */
+export function projectIdOfContextRef(ref: string): string | null {
+  return parseContextRef(ref).projectId;
 }
 
 /** How to dial the node that owns a ref — the save() half of the SturdyRef
@@ -116,13 +121,13 @@ export type ContextDescriptor = {
  */
 export function dialContext(env: Env, target: string | CapabilityAddress): ContextNodeStub {
   const ref = typeof target === "string" ? target : contextRefOfAddress(target);
-  const namespace = (env as unknown as Record<string, unknown>)[ITX_CONTEXT_BINDING] as
+  const durableObjectNamespace = (env as unknown as Record<string, unknown>)[ITX_CONTEXT_BINDING] as
     | { getByName(name: string): unknown }
     | undefined;
-  if (typeof namespace?.getByName !== "function") {
+  if (typeof durableObjectNamespace?.getByName !== "function") {
     throw new Error(`The ${ITX_CONTEXT_BINDING} binding is not available on this host.`);
   }
-  return namespace.getByName(ref) as ContextNodeStub;
+  return durableObjectNamespace.getByName(ref) as ContextNodeStub;
 }
 
 /**
@@ -156,7 +161,7 @@ export function contextStream(env: Env, coordinate: ItxCoordinate): ContextStrea
   const stub = () =>
     getInitializedStreamStub({
       durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: coordinate.namespace,
+      projectId: coordinate.projectId,
       path: StreamPath.parse(coordinate.path),
     });
   return {
@@ -188,7 +193,7 @@ export function generatedContextPath(typeIdPrefix: string): string {
  */
 export async function createContext(input: {
   env: Env;
-  namespace: string;
+  projectId: string | null;
   path: string;
   name?: string | null;
   /** The parent link recorded in the birth certificate — chain delegation
@@ -196,13 +201,13 @@ export async function createContext(input: {
   parent: { ref: string; address: CapabilityAddress };
 }): Promise<{ ref: string; address: CapabilityAddress }> {
   const coordinate: ItxCoordinate = {
-    namespace: input.namespace,
+    projectId: input.projectId,
     path: StreamPath.parse(input.path),
   };
   const ref = formatContextRef(coordinate);
   const stream = await getInitializedStreamStub({
     durableObjectNamespace: input.env.STREAM as unknown as StreamDurableObjectNamespace,
-    namespace: coordinate.namespace,
+    projectId: coordinate.projectId,
     path: StreamPath.parse(coordinate.path),
   });
   await stream.append({

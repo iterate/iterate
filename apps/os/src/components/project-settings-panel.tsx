@@ -85,7 +85,7 @@ export function ProjectSettingsPanel({
         <SettingsField label="Project ID">
           <Identifier value={project.id} />
         </SettingsField>
-        <SettingsField label="Stream namespace">
+        <SettingsField label="Streams">
           <StreamDebugLink label="Open project stream" projectSlug={project.slug} streamPath="/" />
         </SettingsField>
       </SettingsSection>

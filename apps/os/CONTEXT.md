@@ -93,6 +93,14 @@ _Avoid_: Raw projectId handler, unchecked project route
 The Worker environment binding used by server code to obtain Project Durable Object stubs.
 _Avoid_: project context, resolved project
 
+**Durable Object Name**:
+The canonical OS Durable Object identity string, encoded as `${projectId ?? "__global__"}:${path}` from required object-form `{ projectId, path }`.
+_Avoid_: namespace name, JSON structured name, Durable Object catalog name
+
+**Durable Object Name Codec**:
+The small OS module that converts between object-form `{ projectId, path }` names and encoded string names such as `proj_123:/repos/project` or `__global__:/repos/project`.
+_Avoid_: domain-specific name helper, structured JSON name, namespace parser
+
 **Project MCP Route**:
 The OS `/mcp` resource for project-scoped MCP sessions. OAuth access tokens
 expose projects granted by token claims and scopes; admin-token sessions expose
@@ -294,18 +302,6 @@ _Avoid_: withStreamProcessorHost, host mixin, dynamic processor registry
 A StreamProcessorRunner-provided best-effort in-memory function that lets processor hooks keep async work alive until a promise settles.
 _Avoid_: Durable Object `ctx.waitUntil`, durable scheduler, alarm-backed task
 
-**Stream Namespace**:
-The stream runtime's stable owner key for a group of Event Stream Paths. OS uses the stable Project ID as the namespace; future runtime users may use non-project namespaces such as `platform`.
-_Avoid_: Project ID inside shared stream runtime, tenant path prefix
-
-**Repo Namespace**:
-The stable owner key for a group of Repos, such as one Project ID or a global repo owner.
-_Avoid_: Project ID field, repo owner object
-
-**Workspace Namespace**:
-The stable owner key for a group of Workspaces, such as one Project ID or a global workspace owner.
-_Avoid_: Project ID field, workspace owner object
-
 **Project Lifecycle Stream**:
 The Project-owned root Event Stream Path `/` that records durable Project lifecycle facts.
 _Avoid_: Project UI state stream, project activity log
@@ -325,13 +321,15 @@ _Avoid_: Project source of truth, frontend state, Project Projection
 ### itx and Capabilities
 
 **Event Stream Path**:
-The namespace-local stream address that an itx script or processor reads from
-and appends to. In OS these paths are project-local because the Project ID is
-already the Stream Namespace; they must not start with `/projects/{projectId}`.
+The project-local stream address that an itx script or processor reads from
+and appends to. OS stream coordinates are explicit `{ projectId, path }`; paths
+must not start with `/projects/{projectId}`.
 _Avoid_: global path, Durable Object name
 
 **StreamsBackend**:
-A Project ID-backed RPC capability for stream operations. Its props bind the shared stream namespace to the Project ID, and optional `streamPath` props narrow calls to one namespace-local Event Stream Path.
+A Project ID-backed RPC capability for stream operations. Its props bind stream
+operations to the Project ID, and optional `streamPath` props narrow calls to
+one project-local Event Stream Path.
 _Avoid_: Generic stream client, cross-app stream client
 
 **ReposCapability**:
@@ -408,15 +406,15 @@ surface after the original Path Call returns.
 _Avoid_: nested provider proxy, serialized data object
 
 **Repo**:
-A project-scoped versioned file tree identified by one Project ID and one Repo Slug.
+A project-scoped versioned file tree identified by one Project ID and one Repo Path.
 _Avoid_: Repository row, GitHub repo, Cloudflare Artifacts repo
 
-**Repo Slug**:
-The project-local human-readable slug that identifies one Repo inside a Project.
-_Avoid_: Repo ID, Artifact name, GitHub repo name
+**Repo Path**:
+The full project-local Event Stream Path that identifies one Repo inside a Project, such as `/repos/project`.
+_Avoid_: Repo slug, Repo ID, Artifact name, GitHub repo name, relative repo path
 
 **Repo Stream**:
-The Project-owned Event Stream Path `/repos/{repoSlug}` that records durable Repo lifecycle facts.
+The Project-owned Event Stream Path at the Repo Path that records durable Repo lifecycle facts.
 _Avoid_: Artifact log, repo activity feed, repo UI state
 
 **Repo Lifecycle Event**:
@@ -435,31 +433,30 @@ _Avoid_: Repo service, Artifact wrapper, UI reducer
 The current Repo state derived by reducing Repo Lifecycle Events from one Repo Stream.
 _Avoid_: Repo row, Durable Object fields, frontend state
 
-**Repo Token**:
-A long-lived Cloudflare Artifacts write token stored in Repo Reduced State so a user or script can access a Repo's Git remote in the v1 prototype.
-_Avoid_: API key, separate secret, token row
-
 **Project Repo**:
-The project-created Repo with slug `project` that stores project-local Iterate configuration.
+The project-created Repo at Repo Path `/repos/project` that stores project-local Iterate configuration.
 _Avoid_: config artifact, project settings row, GitHub config repo
 
 **Iterate Config Base Repo**:
-The Cloudflare Artifacts repo named `iterate-config-base` that seeds each Project's Project Repo by Artifact fork.
+The global Repo Reference `{ projectId: null, path: "/repos/iterate-config-base" }` that seeds each Project's Project Repo by Artifact fork.
 _Avoid_: template row, default config object, GitHub template
+
+**Repo Reference**:
+An object-form reference to one Repo using `{ projectId, path }`, where `projectId: null` identifies a global Repo.
+_Avoid_: artifact name, alternate repo id, stringly repo locator
 
 **Cloudflare Artifacts**:
 The Cloudflare-hosted Git-compatible storage service currently used as backing storage for OS Repos.
 _Avoid_: Repo, GitHub repo, Artifact repo
 
 **Repo Durable Object**:
-A project-scoped Durable Object selected by Project ID and repo slug and exposed
-through itx as a Live Tool Handle.
+An event-backed Durable Object selected by Project ID and Repo Path and exposed
+through itx as a live handle.
 _Avoid_: Repository row, repo provider, GitHub repo
 
 **Workspace Durable Object**:
-A project-scoped Durable Object selected by Project ID and workspace slug and
-exposed through itx as a Live Tool Handle.
-_Avoid_: Organization, Project, workspace alias
+A minimal agent-associated durable tool provider that owns Cloudflare Shell workspace state for one Project-local workspace.
+_Avoid_: Organization, Project, event-sourced workspace
 
 **Workspace**:
 A project-scoped live work surface exposed through `itx.workspace`.
@@ -507,23 +504,25 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - An **Organization** owns zero or more **Projects**.
 - A **Project** belongs to exactly one **Organization**.
 - The **Project Durable Object** is the lifecycle authority for a **Project**.
-- Every **Project** has one **Project Lifecycle Stream** at root Event Stream Path `/` in that Project's **Stream Namespace**.
+- Every **Project** has one **Project Lifecycle Stream** at root Event Stream Path `/` for that Project ID.
 - The **Project Lifecycle Stream** records **Project Lifecycle Events** as facts, not frontend view state.
-- Resource streams such as `/repos/{repoSlug}` are child Event Stream Paths inside the same Project Stream Namespace.
+- Resource streams such as `/repos/project` are child Event Stream Paths under the same Project ID.
 - The **Project Lifecycle Processor** may use **Project Lifecycle Reduced State** to decide follow-up work, but **Project Lifecycle Events** remain the shared durable facts.
 - The OS frontend may reduce **Project Lifecycle Events** with the same reducer as the **Project Lifecycle Processor**, but it does not own the Project lifecycle model.
 - The **Project Listing Projection** is derived query state and should be written by the **Project Durable Object** as part of Project lifecycle commands.
 - A **Project** owns zero or more **Repos**.
 - A **Repo** belongs to exactly one **Project**.
-- A **Repo** is identified in OS by **Project ID** and **Repo Slug**; **Cloudflare Artifacts** is backing storage, not OS domain identity.
-- A **Repo Durable Object** uses a structured Durable Object name derived from **Project ID** and **Repo Slug**.
-- Every **Repo** has one **Repo Stream** at Event Stream Path `/repos/{repoSlug}` in that Project's **Stream Namespace**; the stream path is derived from **Repo Slug** and is not separate Repo identity.
+- A **Repo** is identified in OS by required `projectId` and **Repo Path**; **Cloudflare Artifacts** is backing storage, not OS domain identity.
+- A **Repo Reference** always uses `{ projectId, path }`; it does not use a Repo slug or Cloudflare Artifact name.
+- The **Iterate Config Base Repo** is referenced as a global **Repo Reference** with `projectId: null`.
+- A **Repo Durable Object** uses a canonical **Durable Object Name** whose path identifies the Repo inside its **Project**.
+- Every **Repo** has one **Repo Stream** at its **Repo Path** for that Project ID; the Repo Path is the Repo identity, not a projection of another identifier.
 - A **Repo Stream** records **Repo Lifecycle Events** as facts, not frontend view state.
 - A **Repo Created Event** records the initial facts for one **Repo** and is consumed by the **Repo Stream Processor**.
 - **Repo Reduced State** is derived from the **Repo Stream Processor**, not from ad hoc Durable Object fields or frontend state.
-- The **Repo Created Event** payload is project-local; Project ID comes from the **Stream Namespace**, not the event payload.
-- The initial long-lived **Repo Token** and Git remote details are part of the **Repo Created Event** and therefore part of **Repo Reduced State** returned by Repo info reads.
-- Every new **Project** gets a **Project Repo** with Repo Slug `project`.
+- The **Repo Created Event** payload is project-local; Project ID comes from stream coordinates, not the event payload.
+- Git access tokens are minted on demand and are not part of the **Repo Created Event** or **Repo Reduced State**.
+- Every new **Project** gets a **Project Repo** with Repo Path `/repos/project`.
 - The **Project Repo** is forked from the **Iterate Config Base Repo** during Project creation and then behaves like an ordinary **Repo**.
 - **ReposCapability** owns Repo collection semantics for one **Project**; repo
   dashboard routes and scripts call it through itx instead of duplicating Repo
@@ -536,7 +535,7 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - A **Project Route** resolves its **Project Slug** before rendering
   Project-local UI. Project-scoped itx handles accept a slug or stable Project
   ID at connect time and then operate on the resolved Project ID.
-- The **Project Slug** used in the **Project Route** is browser-facing route identity, not stream namespace identity.
+- The **Project Slug** used in the **Project Route** is browser-facing route identity, not stream coordinate identity.
 - Every external **Project-Scoped itx Handle** accepts `projectIdOrSlug`,
   resolving globally unique Project Slugs and stable Project IDs through the
   same project-scope access path.
@@ -639,7 +638,7 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - `/api/itx/run` records requested/completed script events around a synchronous run; an enqueued requested event asks the context processor to run it later.
 - Individual itx capability calls do not create durable function-call-requested/completed events. The dotted path is captured by the path proxy and dispatched once through the itx supervisor.
 - A provided capability may be a live object/function, a Worker RPC address, or a path-call target implementing `call({ path, args })`.
-- A returned live handle, such as a Repo handle from `itx.repos.get({ slug })`, exposes its own Workers RPC methods after the original path call returns.
+- A returned live handle, such as a Repo handle from `itx.repos.get({ path })`, exposes its own Workers RPC methods after the original path call returns.
 - `itx.describe()` is the capability discovery surface. Providers attach instructions and optional types to each capability entry.
 - Dynamic MCP and OpenAPI tools should be exposed as itx capabilities whose exact external tool names or operation IDs remain path segments; use bracket syntax when a segment contains dots.
 - Project default capabilities include `fetch`, `streams`, `secrets`, `integrations`, `repos`, `agents`, `workspace`, `worker`, and `ai` as defined by `PLATFORM_PROJECT_CAPABILITIES`.
@@ -662,7 +661,7 @@ Slack is a provided itx capability. `SlackCapability.call` receives the dotted
 path as data and maps it to the Slack Web API method path.
 
 ```ts
-const repo = await itx.repos.get({ slug: "project" });
+const repo = await itx.repos.get({ path: "/repos/project" });
 const info = await repo.getInfo();
 ```
 
@@ -727,7 +726,7 @@ context while the provider remains connected.
 > **Dev:** "Is `itx.streams.get(path).append(...)` a special stream API?"
 > **Domain expert:** "No. `streams` is a default project capability, and the returned stream handle is a live Workers RPC value."
 
-> **Dev:** "Does `itx.repos.get({ slug }).getInfo()` make two itx capability calls?"
+> **Dev:** "Does `itx.repos.get({ path }).getInfo()` make two itx capability calls?"
 > **Domain expert:** "The `repos.get` path call returns a repo handle; `getInfo` is a Workers RPC method on that returned handle."
 
 > **Dev:** "How does a script learn what is available?"
@@ -868,8 +867,8 @@ context while the provider remains connected.
   Resolved: use **Capability Instructions** for the string-form guidance
   registered with a capability.
 - "Workspace" is usually avoided for Organization or Project. Resolved:
-  **Workspace Durable Object** is a separate live-resource concept selected by
-  Project ID and workspace slug.
+  **Workspace Durable Object** is a minimal agent-associated durable tool
+  provider, not an event-sourced workspace domain object.
 - "`itx.workspaces.get`" made Workspace look like a repo-style collection
   lookup. Resolved: use singular `itx.workspace` for the Workspace surface.
 - "root tool" could imply a special non-provider mechanism. Resolved: subagent
@@ -896,7 +895,8 @@ context while the provider remains connected.
 - `externalEgressProxyUrl` was a persisted Project configuration field for test-time outbound interception. Resolved: remove it instead of preserving backwards compatibility; the **Project Egress Intercept Tunnel** is ephemeral runtime state.
 - `"/__intercept-egress-fetch"` and `"/__iterate/intercept-project-egress"` were both considered as the tunnel connection path. Resolved: use the namespaced **Project Egress Intercept Route** `"/__iterate/intercept-project-egress"`.
 - "Cloudflare Artifacts repo" introduced a second repo concept. Resolved: use **Repo** for the OS domain object and **Cloudflare Artifacts** for the backing service.
-- "stream path" sounded like independent Repo identity. Resolved: **Repo Stream** path is derived from **Repo Slug** as `/repos/{repoSlug}`.
-- "token" originally meant a one-time response secret. Resolved for the Repo v1 prototype: an initial long-lived **Repo Token** is stored in **Repo Reduced State** so `getInfo()` can return clone and push details.
-- First-party Cloudflare Artifacts docs recommend short-lived, least-privilege tokens. The v1 **Repo Token** decision intentionally optimizes for a simple clone/push prototype and should be revisited before broad availability.
-- The **Project Lifecycle Stream** path was ambiguous between `/project` and `/`. Resolved: use root `/`; resource streams such as `/repos/{repoSlug}` are child streams in the Project Stream Namespace.
+- "namespace" was used in OS code for the first component of stream and Durable Object identity. Resolved: object-form APIs should require a `projectId` field, using `null` for global scope, and encode Durable Object identity with a **Durable Object Name**.
+- Earlier Repo identifiers and relative repo paths made a Project-local stream child look like it had an identifier separate from its stream. Resolved: use **Repo Path** for the full Event Stream Path that identifies the Repo.
+- "base repo" sounded like a Cloudflare Artifact name or special case. Resolved: the **Iterate Config Base Repo** is a global **Repo Reference** with `projectId: null`.
+- Repo creation source used Artifact names and README bootstrap modes. Resolved: **Repo Creation Source** is only empty repo or fork from a **Repo Reference**; README writes are normal repo writes after creation.
+- The **Project Lifecycle Stream** path was ambiguous between `/project` and `/`. Resolved: use root `/`; resource streams such as `/repos/project` are child streams under the same Project ID.

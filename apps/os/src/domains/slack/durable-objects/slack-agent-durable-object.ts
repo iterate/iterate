@@ -1,10 +1,5 @@
 import { createD1Client } from "sqlfu";
-import { z } from "zod";
-import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
-import {
-  deriveDurableObjectNameFromStructuredName,
-  NotInitializedError,
-} from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { DurableObject } from "cloudflare:workers";
 import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import {
   createStreamProcessorHost,
@@ -19,6 +14,7 @@ import {
   getAgentDurableObjectName,
   type AgentDurableObject,
 } from "~/domains/agents/durable-objects/agent-durable-object.ts";
+import { formatDurableObjectName, parseDurableObjectName } from "~/domains/durable-object-names.ts";
 import { getProjectSecret } from "~/domains/secrets/secrets-store.ts";
 import { callSlackWebApi } from "~/domains/slack/entrypoints/slack-capability.ts";
 import {
@@ -26,20 +22,13 @@ import {
   SlackAgentProcessorContract,
 } from "~/domains/slack/stream-processors/slack-agent/implementation.ts";
 
-export type SlackAgentDurableObjectStructuredName = {
+export type SlackAgentDurableObjectName = {
+  path: StreamPathType | string;
   projectId: string;
-  streamPath: StreamPathType;
 };
 
-const SlackAgentDurableObjectStructuredName = z.object({
-  projectId: z.string().trim().min(1),
-  streamPath: StreamPath,
-});
-
-export function getSlackAgentDurableObjectName(input: SlackAgentDurableObjectStructuredName) {
-  return deriveDurableObjectNameFromStructuredName({
-    structuredName: input,
-  });
+export function getSlackAgentDurableObjectName(input: SlackAgentDurableObjectName) {
+  return formatDurableObjectName({ path: input.path, projectId: input.projectId });
 }
 
 type SlackAgentEnv = {
@@ -50,26 +39,15 @@ type SlackAgentEnv = {
   STREAM: DurableObjectNamespace<StreamDurableObject>;
 };
 
-const SlackAgentLifecycleBase = createIterateDurableObjectBase<
-  typeof SlackAgentDurableObjectStructuredName,
-  Pick<SlackAgentEnv, "DO_CATALOG">
->({
-  className: "SlackAgentDurableObject",
-  getDatabase: (env) => env.DO_CATALOG,
-  indexes: {
-    projectId: (params) => params.projectId,
-    streamPath: (params) => params.streamPath,
-  },
-  nameSchema: SlackAgentDurableObjectStructuredName,
-});
+export class SlackAgentDurableObject extends DurableObject<SlackAgentEnv> {
+  readonly name = parseDurableObjectName(this.ctx.id.name!);
 
-export class SlackAgentDurableObject extends SlackAgentLifecycleBase<SlackAgentEnv> {
   host = createStreamProcessorHost(this.ctx);
   slackAgent = this.host.add(SlackAgentProcessorContract.slug, (deps) => {
     return new SlackAgentProcessor({
       ...deps,
       callSlackApi: async (method, body) => {
-        const { projectId, streamPath } = await this.ensureStartedOrInitializeFromRuntimeName();
+        const { projectId, path } = this.slackAgentName();
         const token = await readSlackToken({
           db: this.env.DO_CATALOG,
           env: this.env,
@@ -84,18 +62,18 @@ export class SlackAgentDurableObject extends SlackAgentLifecycleBase<SlackAgentE
           console.error("[os-slack-agent] Slack side effect failed", {
             error,
             method,
-            streamPath,
+            path,
           });
         }
       },
       ensureItxContext: async () => {
-        const params = await this.ensureStartedOrInitializeFromRuntimeName();
+        const params = this.slackAgentName();
         const agentName = getAgentDurableObjectName({
-          agentPath: params.streamPath,
+          path: params.path,
           projectId: params.projectId,
         });
         await this.env.AGENT.getByName(agentName).ensureItxContext({
-          agentPath: params.streamPath,
+          path: params.path,
           projectId: params.projectId,
         });
       },
@@ -104,12 +82,12 @@ export class SlackAgentDurableObject extends SlackAgentLifecycleBase<SlackAgentE
 
   /** The stream subscription callable dials this (see `durableObjectProcessorSubscriber`). */
   async requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
-    await this.ensureStartedOrInitializeFromRuntimeName();
+    this.slackAgentName();
     return await this.host.requestStreamSubscription(args);
   }
 
   async ensureReady() {
-    await this.ensureStartedOrInitializeFromRuntimeName();
+    this.slackAgentName();
     await this.waitForSlackAgentProcessorCatchUp();
     return await this.slackAgent.snapshot();
   }
@@ -128,23 +106,19 @@ export class SlackAgentDurableObject extends SlackAgentLifecycleBase<SlackAgentE
   private async currentStreamMaxConsumedOffset() {
     const stream = await getInitializedStreamStub({
       durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: this.structuredName.projectId,
-      path: this.structuredName.streamPath,
+      projectId: this.slackAgentName().projectId,
+      path: this.slackAgentName().path,
     });
     const consumedTypes = new Set<string>(this.slackAgent.contract.consumes);
     const events = await stream.history({ before: "end" });
     return events.filter((event) => consumedTypes.has(event.type)).at(-1)?.offset ?? 0;
   }
 
-  private async ensureStartedOrInitializeFromRuntimeName() {
-    try {
-      return await this.ensureStarted();
-    } catch (error) {
-      if (!(error instanceof NotInitializedError)) throw error;
-      const runtimeName = this.getDurableObjectName();
-      if (runtimeName == null) throw error;
-      return await this.initialize({ name: runtimeName });
+  private slackAgentName(): { path: StreamPathType; projectId: string } {
+    if (this.name.projectId === null) {
+      throw new Error("Slack agent Durable Object must be project-scoped.");
     }
+    return { path: this.name.path, projectId: this.name.projectId };
   }
 }
 

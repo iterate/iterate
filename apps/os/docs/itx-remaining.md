@@ -35,8 +35,7 @@ a preview slot before treating them as regressions.
 5. ~~`{ revoke }`-only provide returns~~ (the core returns void; the
    handle's `CapabilityProvision` is the one provision object) ·
 6. ~~`parent` → `super`~~ (the journal's `parent` payload field stays —
-   that is data) · 8. ~~repo slug → `project`~~ (base template artifact
-   `iterate-config-base` kept: pre-provisioned remote) ·
+   that is data) · 8. ~~repo identity → `/repos/project`~~ ·
 7. ~~README use-case-first rewrite~~ (three scenes + appendix).
    Also landed: the oRPC capability surface (`OrpcCapability`/itx.os)
    deleted; the adversarial review applied — unreachable surfaces

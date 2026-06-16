@@ -34,7 +34,7 @@ test("creates a disposable project and uses project streams through oRPC", async
   });
 
   expect(created).toMatchObject({
-    namespace: handle.project.id,
+    projectId: handle.project.id,
     path: streamPath,
   });
 

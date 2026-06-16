@@ -1,17 +1,9 @@
 import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
-import {
-  getInitializedDoStub,
-  listD1ObjectCatalogRecordsByIndex,
-  type D1ObjectCatalogRecord,
-} from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import type {
   RepoInfo,
   RepoDurableObject,
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
-import {
-  getRepoDurableObjectName,
-  type RepoStructuredName,
-} from "~/domains/repos/repo-durable-object-name.ts";
+import { getRepoDurableObjectName } from "~/domains/repos/repo-durable-object-name.ts";
 import {
   isRepoAlreadyExistsError,
   isRepoNotCreatedError,
@@ -19,7 +11,7 @@ import {
 } from "~/domains/repos/repo-errors.ts";
 import {
   ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME,
-  PROJECT_REPO_SLUG,
+  PROJECT_REPO_PATH,
 } from "~/domains/repos/project-repo.ts";
 import type {
   CommitRepoFilesInput,
@@ -27,11 +19,12 @@ import type {
   ReadRepoFilesInput,
   ReadRepoLogInput,
 } from "~/domains/repos/repo-git.ts";
+import { getProjectDurableObjectStub } from "~/domains/projects/durable-objects/project-durable-object-ref.ts";
+import type { ProjectProcessorState } from "~/domains/projects/stream-processors/project/contract.ts";
 import { replayPathCall } from "~/itx/path-proxy.ts";
 import type { PathCall } from "~/itx/itx.ts";
 
 export type ReposCapabilityEnv = {
-  DO_CATALOG?: D1Database;
   REPO?: DurableObjectNamespace<RepoDurableObject>;
 };
 
@@ -43,15 +36,14 @@ export type RepoCatalogRecord = {
   createdAt: string;
   lastWokenAt: string;
   name: string;
+  path: string;
   projectId: string;
-  repoSlug: string;
 };
 
 type ReposCapabilityClient = Pick<
   ReposCapability,
   "create" | "createInfo" | "ensureProjectRepoInfo" | "get" | "getInfo" | "list"
 >;
-type RepoLifecycleCatalogRecord = D1ObjectCatalogRecord<RepoStructuredName>;
 const projectRepoInfoPromises = new Map<string, Promise<RepoInfo>>();
 
 export class RepoHandle extends RpcTarget {
@@ -97,57 +89,38 @@ export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposC
     return replayPathCall(this, input);
   }
 
-  async create(input: { projectSlug?: string; slug: string }) {
+  async create(input: { path: string; projectSlug?: string }) {
     const namespace = this.requireRepoNamespace();
-    const name = this.repoName(input.slug);
-    const existing = await getInitializedDoStub({
-      allowCreate: false,
-      namespace,
-      name,
-    });
+    const repo = namespace.getByName(this.repoName(input.path));
 
-    if (existing !== null) {
-      let existingRepoIsUncreated = false;
-      try {
-        await existing.getInfo();
-      } catch (error) {
-        if (!isRepoNotCreatedError(error)) throw error;
-        existingRepoIsUncreated = true;
-      }
-
-      if (!existingRepoIsUncreated) {
-        throw new Error(`Repo ${input.slug} already exists.`);
-      }
+    try {
+      await repo.getInfo();
+      throw new Error(`Repo ${input.path} already exists.`);
+    } catch (error) {
+      if (!isRepoNotCreatedError(error)) throw error;
     }
 
-    const repo = await getInitializedDoStub({
-      allowCreate: true,
-      namespace,
-      name,
-    });
     await repo.createRepo({ projectSlug: input.projectSlug });
     return new RepoHandle(repo);
   }
 
-  async createInfo(input: { projectSlug?: string; slug: string }): Promise<RepoInfo> {
+  async createInfo(input: { path: string; projectSlug?: string }): Promise<RepoInfo> {
     return await (await this.create(input)).getInfo();
   }
 
-  async get(input: { slug: string }) {
-    const repo = await getInitializedDoStub({
-      allowCreate: false,
-      namespace: this.requireRepoNamespace(),
-      name: this.repoName(input.slug),
-    });
-
-    if (repo === null) {
-      throw new Error(`Repo ${input.slug} not found.`);
+  async get(input: { path: string }) {
+    const repo = this.requireRepoNamespace().getByName(this.repoName(input.path));
+    try {
+      await repo.getInfo();
+    } catch (error) {
+      if (!isRepoNotCreatedError(error)) throw error;
+      throw new Error(`Repo ${input.path} not found.`);
     }
 
     return new RepoHandle(repo);
   }
 
-  async getInfo(input: { slug: string }): Promise<RepoInfo> {
+  async getInfo(input: { path: string }): Promise<RepoInfo> {
     return await (await this.get(input)).getInfo();
   }
 
@@ -160,24 +133,13 @@ export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposC
   }
 
   async list(): Promise<RepoCatalogRecord[]> {
-    if (!this.env.DO_CATALOG) {
-      throw new Error("DO_CATALOG binding is required to list Repos.");
-    }
-
-    const records = await listD1ObjectCatalogRecordsByIndex<RepoStructuredName>(
-      this.env.DO_CATALOG,
-      {
-        className: "RepoDurableObject",
-        indexName: "projectId",
-        indexValue: this.ctx.props.projectId,
-      },
-    );
+    const state = await readProjectProcessorState(this.ctx.props.projectId);
 
     const repos = await Promise.all(
-      records.map(async (record) => {
-        const repo = toRepoCatalogRecord(record);
+      state.repos.map(async (child) => {
+        const repo = this.toRepoCatalogRecord(child);
         try {
-          await this.getInfo({ slug: repo.repoSlug });
+          await this.getInfo({ path: repo.path });
           return repo;
         } catch (error) {
           if (isRepoNotCreatedError(error) || isRepoNotFoundError(error)) return null;
@@ -197,10 +159,20 @@ export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposC
     return this.env.REPO;
   }
 
-  private repoName(repoSlug: string): RepoStructuredName {
-    return {
+  private repoName(path: string): string {
+    return getRepoDurableObjectName({
+      path,
       projectId: this.ctx.props.projectId,
-      repoSlug,
+    });
+  }
+
+  private toRepoCatalogRecord(repo: ProjectProcessorState["repos"][number]): RepoCatalogRecord {
+    return {
+      createdAt: repo.createdAt,
+      lastWokenAt: repo.createdAt,
+      name: this.repoName(repo.path),
+      path: repo.path,
+      projectId: this.ctx.props.projectId,
     };
   }
 }
@@ -212,7 +184,7 @@ export async function ensureProjectRepoInfoForProject(input: {
   projectId: string;
   projectSlug: string | null;
 }): Promise<RepoInfo> {
-  const key = `${input.projectId}:${PROJECT_REPO_SLUG}`;
+  const key = `${input.projectId}:${PROJECT_REPO_PATH}`;
   const existingPromise = projectRepoInfoPromises.get(key);
   if (existingPromise) return await existingPromise;
 
@@ -233,31 +205,19 @@ async function createOrReadProjectRepoInfoForProject(input: {
   projectSlug: string | null;
 }): Promise<RepoInfo> {
   const namespace = requireRepoNamespace(input.env);
-  const name: RepoStructuredName = {
+  const name = getRepoDurableObjectName({
+    path: PROJECT_REPO_PATH,
     projectId: input.projectId,
-    repoSlug: PROJECT_REPO_SLUG,
-  };
-  const existing = await getInitializedDoStub({
-    allowCreate: false,
-    namespace,
-    name,
   });
+  const repo = namespace.getByName(name);
 
-  if (existing !== null) {
-    try {
-      return await existing.getInfo();
-    } catch (error) {
-      if (!isRepoNotCreatedError(error)) {
-        throw error;
-      }
+  try {
+    return await repo.getInfo();
+  } catch (error) {
+    if (!isRepoNotCreatedError(error)) {
+      throw error;
     }
   }
-
-  const repo = await getInitializedDoStub({
-    allowCreate: true,
-    namespace,
-    name,
-  });
 
   try {
     return await repo.createRepo({
@@ -292,16 +252,6 @@ export function getReposCapability(input: {
   return reposCapability({ props: input.props });
 }
 
-function toRepoCatalogRecord(record: RepoLifecycleCatalogRecord): RepoCatalogRecord {
-  return {
-    createdAt: record.createdAt,
-    lastWokenAt: record.lastWokenAt,
-    name: record.name,
-    projectId: record.structuredName.projectId,
-    repoSlug: record.structuredName.repoSlug,
-  };
-}
-
 function requireRepoNamespace(env: Pick<ReposCapabilityEnv, "REPO">) {
   if (!env.REPO) {
     throw new Error("REPO Durable Object namespace is not configured.");
@@ -311,3 +261,9 @@ function requireRepoNamespace(env: Pick<ReposCapabilityEnv, "REPO">) {
 }
 
 export { getRepoDurableObjectName };
+
+async function readProjectProcessorState(projectId: string): Promise<ProjectProcessorState> {
+  const project = getProjectDurableObjectStub(projectId);
+  const processor = await project.processor;
+  return (await processor.snapshot()).state;
+}
