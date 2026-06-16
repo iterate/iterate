@@ -14,9 +14,10 @@
 // Its capabilities are fixed, project-agnostic "catalog" caps wired in as code.
 // A single `projects` cap exposes `{ list, get }`.
 //
-// The WebSocket route still serves it through pathCallable so the global root,
-// project contexts, agent contexts, and codemode handles all share one dotted
-// call rule: every terminal call becomes invokeCapability({ path, args }).
+// The WebSocket route still serves it through pathProxyToInvokeCapability so
+// the global root, project contexts, agent contexts, and codemode handles all
+// share one dotted call rule: every terminal call becomes
+// invokeCapability({ path, args }).
 
 import { KNOWN_PROJECTS } from "./auth.ts";
 import { ITX_CONTROL_NAMES, type DescribeResult, type ItxContext, replayPath } from "./itx.ts";
@@ -78,10 +79,8 @@ export class GlobalItx implements ItxContext {
   }
 
   // Same `DescribeResult` shape as any context (enforced by `implements
-  // ItxContext`), so it nests under a child's `parentCapabilities` uniformly —
-  // except the root has no fold, so `capabilities` is empty and there is no
-  // parent. Its `projects` catalog is reported as a built-in, listed the same way
-  // a project lists its `fetch` or an agent its `whoami`.
+  // ItxContext`). The root has no fold and no parent built-in, so
+  // `capabilities` is empty and `builtins` contains only the project catalog.
   async describe(): Promise<DescribeResult> {
     return {
       capabilities: [],

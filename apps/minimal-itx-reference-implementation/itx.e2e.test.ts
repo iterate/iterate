@@ -129,6 +129,7 @@ describe("itx reference implementation", () => {
     {
       using agent = agentItx("chain");
       expect(await agent.calc.add(2, 3)).toBe(5);
+      expect(await agent.parent.calc.add(2, 3)).toBe(5);
       expect((await agent.whoami()).startsWith("agent ")).toBe(true);
       // Shadow the inherited cap locally; the project is unaffected.
       await agent.provideCapability({
@@ -136,6 +137,7 @@ describe("itx reference implementation", () => {
         capability: { add: (a: number, b: number) => a * b },
       });
       expect(await agent.calc.add(2, 3)).toBe(6);
+      expect(await agent.parent.calc.add(2, 3)).toBe(5);
     }
 
     {
@@ -283,23 +285,28 @@ describe("itx reference implementation", () => {
   it("16. inherited __global__ projects catalog is principal-scoped", async () => {
     using project = projectItx();
     expect([...(await project.projects.list())].sort()).toEqual(["alice", "shared"]);
+    expect([...(await project.parent.projects.list())].sort()).toEqual(["alice", "shared"]);
     await expectRejects(() => project.projects.get("bob")).toThrow();
   });
 
-  it("17. describe nests agent → project → __global__ built-ins", async () => {
+  it("17. parent is a sturdy built-in entrypoint", async () => {
     using agent = agentItx("describe-chain");
     const d = await agent.describe();
     expect(d.builtins.some((c: any) => c.path.join(".") === "whoami")).toBe(true);
-    expect(d.parentCapabilities?.builtins.some((c: any) => c.path.join(".") === "fetch")).toBe(
-      true,
-    );
-    expect(d.parentCapabilities?.builtins.some((c: any) => c.path.join(".") === "repo")).toBe(true);
-    expect(
-      d.parentCapabilities?.parentCapabilities?.builtins.some(
-        (c: any) => c.path.join(".") === "projects",
-      ),
-    ).toBe(true);
-    expect(d.parentCapabilities?.parentCapabilities?.parentCapabilities).toBeUndefined();
+    const parent = d.builtins.find((c: any) => c.path.join(".") === "parent");
+    expect(parent?.address).toMatchObject({
+      entrypoint: "ItxEntrypoint",
+      props: { path: "/", projectId: "shared" },
+      type: "worker-entrypoint",
+    });
+
+    const project = await agent.parent.describe();
+    expect(project.builtins.some((c: any) => c.path.join(".") === "fetch")).toBe(true);
+    expect(project.builtins.some((c: any) => c.path.join(".") === "repo")).toBe(true);
+    const root = await agent.parent.parent.describe();
+    expect(root.builtins.some((c: any) => c.path.join(".") === "projects")).toBe(true);
+    expect(root.builtins.some((c: any) => c.path.join(".") === "parent")).toBe(false);
+    expect((d as any).parentCapabilities).toBeUndefined();
   });
 
   it("18. own capability shadows and then restores a built-in", async () => {
@@ -360,10 +367,19 @@ describe("itx reference implementation", () => {
     using itx = agentItx("reserved-control-name");
     await expectRejects(() =>
       itx.provideCapability({ path: ["describe"], capability: () => "shadow" }),
-    ).toThrow(/reserved ITX control path/);
+    ).toThrow(/reserved ITX capability root/);
+    await expectRejects(() =>
+      itx.provideCapability({ path: ["parent"], capability: () => "shadow" }),
+    ).toThrow(/reserved ITX capability root/);
+    await expectRejects(() =>
+      itx.provideCapability({ path: ["parent", "fetch"], capability: () => "shadow" }),
+    ).toThrow(/reserved ITX capability root/);
     const description = await itx.describe();
     expect(typeof description).toBe("object");
     expect(description.capabilities.some((cap: any) => cap.path.join(".") === "describe")).toBe(
+      false,
+    );
+    expect(description.capabilities.some((cap: any) => cap.path.join(".") === "parent")).toBe(
       false,
     );
   });

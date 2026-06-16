@@ -61,9 +61,9 @@ export const ItxContract = defineProcessorContract({
   // a provide at a path already present REPLACES that entry. The table is
   // derived from the log, never the source of truth.
   //
-  // There is no `context`/parentage field here: a context's PARENT is injected
-  // by the host (which knows the context-coordinate topology — see server.ts),
-  // not folded from the log. Nothing read the folded copy, so it does not exist.
+  // There is no `context`/parentage field here: host topology appears as the
+  // reserved `parent` built-in capability, not as folded state. Nothing reads a
+  // folded parentage copy, so it does not exist.
   stateSchema: z.object({
     capabilities: z.array(CapabilityRecord).default([]),
     scriptExecutions: z.array(ScriptExecutionRecord).default([]),

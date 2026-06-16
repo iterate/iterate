@@ -39,14 +39,13 @@ export type ProvideArgs = {
   types?: string;
 };
 
-/** What `describe()` returns: this context's folded capability table, its
- *  built-ins (which are not in the fold, so listed separately), and the parent
- *  context nested under `parentCapabilities` — recursively, up to the root. */
+/** What `describe()` returns: this context's folded capability table and its
+ *  host-created built-ins. The parent is visible as a reserved built-in named
+ *  `parent`, not as a separate nested field. */
 export type DescribeResult = {
   capabilities: CapabilityRecord[];
   builtins: CapabilityRecord[];
   scriptExecutions: ScriptExecutionRecord[];
-  parentCapabilities?: DescribeResult;
 };
 
 /**
@@ -75,6 +74,7 @@ export const ITX_CONTROL_NAMES = new Set([
   "revokeCapability",
   "describe",
 ]);
+const RESERVED_CAPABILITY_ROOT_NAMES = new Set([...ITX_CONTROL_NAMES, "parent"]);
 
 // Capability paths are also JavaScript property paths on the Cap'n Web surface:
 // `itx.slack.chat.postMessage()` becomes
@@ -114,6 +114,7 @@ const CAPABILITY_ADDRESS_TYPES = new Set([
   "dynamic-worker",
   "dynamic-durable-object",
   "durable-object",
+  "worker-entrypoint",
 ]);
 
 /** Structural live-vs-sturdy test: a sturdy provided capability is plain
@@ -260,9 +261,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
   // and whether the provider is member-replayed or path-called.
   #liveCapabilities = new Map<string, LiveInvoker>();
 
-  // Injected dialer: sturdy capability address → callable stub. Parent contexts
-  // are host-injected handles, so the dialer only knows addresses that can appear
-  // in capability rows.
+  // Injected dialer: sturdy capability address → callable stub.
   #dial: (address: any) => any;
 
   // Built-in capabilities, handed to the constructor instead of appended to the
@@ -276,16 +275,10 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
   // a code change, not a log rewrite.
   #builtins: CapabilityRecord[];
 
-  // The chain: an Itx is born with a parent handle (an agent's parent is its
-  // project; a project's is the __global__ root). On a capability miss,
-  // resolution falls through to that handle. null when there is none.
-  #parent: ItxContext | null;
-
   constructor(
     args: ConstructorParameters<typeof StreamProcessor<typeof ItxContract>>[0] & {
       dial?: (address: any) => any;
       builtinCapabilities?: ProvideArgs[];
-      parent?: ItxContext | null;
     },
   ) {
     super(args);
@@ -308,7 +301,6 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
         types: b.types ?? null,
       };
     });
-    this.#parent = args.parent ?? null;
   }
 
   // The fold: one pure projection of an event into the next capability table.
@@ -393,6 +385,9 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
   async provideCapability({ path, capability, instructions, types }: ProvideArgs) {
     this.#assertUserCapabilityPath(path);
     const address = isCapabilityAddress(capability) ? capability : null;
+    if (address?.type === "worker-entrypoint") {
+      throw new Error("trusted worker-entrypoint addresses can only be host built-ins");
+    }
     if (address === null) {
       this.#setLiveCapability(path, capability);
     } else {
@@ -418,21 +413,19 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
   }
 
   // describe() is the ONE read verb (there is no separate `list`). It hands back
-  // this context's RAW folded table, its constructor-injected `builtins`, and
-  // nests the parent under `parentCapabilities` recursively to the root. Every
-  // row — folded or built-in — is the same `CapabilityRecord` shape.
+  // this context's RAW folded table and its constructor-injected `builtins`.
+  // Every row — folded or built-in — is the same `CapabilityRecord` shape.
   async describe(): Promise<DescribeResult> {
     return {
       capabilities: this.state.capabilities,
       builtins: this.#builtins,
       scriptExecutions: this.state.scriptExecutions,
-      ...(this.#parent ? { parentCapabilities: await this.#parent.describe() } : {}),
     };
   }
 
   // Every dotted Cap'n Web call arrives as invokeCapability({ path, args }).
   // Single-segment root paths that name the ITX control surface are handled here
-  // first, so pathCallable does not need to know those names. They are reserved:
+  // first, so pathProxyToInvokeCapability does not need to know those names. They are reserved:
   // users cannot mount or shadow capabilities under them.
   async invokeCapability({
     path,
@@ -460,9 +453,14 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
     const local =
       this.#resolveLocal(this.state.capabilities, path) ?? this.#resolveLocal(this.#builtins, path);
     if (local) return await local(args);
-    if (this.#parent) {
-      return await this.#parent.invokeCapability({ path, args });
-    }
+
+    // Parentage is now expressed as an ordinary host-created built-in at
+    // ["parent"], usually a sturdy worker-entrypoint address. A miss is just a
+    // retry through that built-in with the original path appended, so implicit
+    // inheritance and explicit `itx.parent.foo()` use the same dial/replay path.
+    const parent = this.#resolveLocal(this.#builtins, ["parent", ...path]);
+    if (parent) return await parent(args);
+
     throw new Error(`no capability "${path.join(".")}"`);
   }
 
@@ -497,8 +495,10 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
   #assertUserCapabilityPath(path: string[]) {
     assertCapabilityPath(path);
     const control = path[0];
-    if (control && ITX_CONTROL_NAMES.has(control)) {
-      throw new Error(`reserved ITX control path "${control}" cannot be provided as a capability`);
+    if (control && RESERVED_CAPABILITY_ROOT_NAMES.has(control)) {
+      throw new Error(
+        `reserved ITX capability root "${control}" cannot be provided as a capability`,
+      );
     }
   }
 

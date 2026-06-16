@@ -9,10 +9,10 @@
 //
 // A NAKED Cap'n Web stub drives every context: `itx.provideCapability({…})` and
 // `itx.slack.chat.postMessage(msg)` are both just pipelined property paths that
-// end in a call. The trick is entirely server-side — `pathCallable` (below)
-// collapses every terminal call into one `invokeCapability({ path, args })`.
-// The context, not the proxy, decides whether that path is a reserved ITX
-// control name or a user capability.
+// end in a call. The trick is entirely server-side:
+// `pathProxyToInvokeCapability` (below) collapses every terminal call into one
+// `invokeCapability({ path, args })`. The context, not the proxy, decides
+// whether that path is a reserved ITX control name or a user capability.
 
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import { newWorkersRpcResponse } from "capnweb";
@@ -33,15 +33,29 @@ export { Stream } from "@iterate-com/os/src/domains/streams/engine/workers/durab
 export class ItxBindingEntrypoint extends WorkerEntrypoint<Env, { context: string }> {
   async get(): Promise<ItxContext> {
     const node = this.env.ITX.getByName(this.ctx.props.context);
-    return pathCallable({
+    return pathProxyToInvokeCapability({
       invokeCapability: (args: { path: string[]; args?: unknown[] }) =>
         (node as any).invokeCapability(args),
     }) as ItxContext;
   }
 }
 
+export class ItxEntrypoint extends WorkerEntrypoint<Env, { projectId: string; path: string }> {
+  invokeCapability(args: { path: string[]; args?: unknown[] }) {
+    const context = contextFromProjectPath(this.ctx.props.projectId, this.ctx.props.path);
+    if (context === "__global__") {
+      return new GlobalItx({ access: "all" }).invokeCapability(args);
+    }
+    return this.env.ITX.getByName(context).invokeCapability(args);
+  }
+
+  describe() {
+    return this.invokeCapability({ path: ["describe"], args: [] });
+  }
+}
+
 // ---------------------------------------------------------------------------
-// The server-side path-callable main target — the load-bearing trick.
+// The server-side path proxy — the load-bearing trick.
 // ---------------------------------------------------------------------------
 //
 // Capabilities are registered at RUNTIME and change over a context's life, so
@@ -76,11 +90,11 @@ const RESERVED = new Set([
   "onRpcBroken",
 ]);
 
-function pathCallable(
+function pathProxyToInvokeCapability(
   target: { invokeCapability(args: { path: string[]; args?: unknown[] }): unknown },
   path: string[] = [],
 ): any {
-  const valueFor = (key: string) => pathCallable(target, [...path, key]);
+  const valueFor = (key: string) => pathProxyToInvokeCapability(target, [...path, key]);
   return new Proxy(function () {}, {
     get(t, key) {
       if (typeof key === "symbol") return Reflect.get(t, key);
@@ -190,7 +204,6 @@ export class ItxDurableObject extends DurableObject<Env> {
         iterateContext: { stream: this.#log() },
         dial: (address) => this.#dial(address),
         builtinCapabilities: this.#contextBuiltinCapabilities(), // from the domain object
-        parent: this.#parentContext(), // the chain, as a handle
       }),
   );
   #subscriptionConfigured = false;
@@ -205,10 +218,10 @@ export class ItxDurableObject extends DurableObject<Env> {
   }
 
   // A context is born with built-in capabilities defined by the DOMAIN object it
-  // is scoped to. The project context gets the Project DO's built-ins (fetch); an
-  // agent context gets the Agent DO's (whoami) AND inherits the project's via the
-  // chain. The host decides WHICH coordinate maps to WHICH domain object; the
-  // domain object defines WHAT it offers.
+  // is scoped to. The project context gets `parent` + Project DO built-ins; an
+  // agent context gets `parent` + Agent DO built-ins. The host decides WHICH
+  // coordinate maps to WHICH domain object; the domain object defines WHAT it
+  // offers.
   #contextBuiltinCapabilities(): ProvideArgs[] {
     const name = this.ctx.id.name ?? "";
     const projectId = this.#project();
@@ -223,21 +236,25 @@ export class ItxDurableObject extends DurableObject<Env> {
     return [];
   }
 
-  // A context's parent, as the handle the core climbs on a miss. An agent
-  // parents to its project (a DO-backed context); a project root parents to the
-  // __global__ root. Parentage is host topology, not provider-supplied address
-  // data and not folded from the log.
-  #parentContext(): ItxContext | null {
-    const name = this.ctx.id.name ?? "";
-    const projectId = this.#project();
-    if (!projectId) return null;
-    if (name === `prj:${projectId}`) return new GlobalItx({ access: "all" });
-    return (this.env.ITX.getByName(`prj:${projectId}`) as any).itx;
-  }
-
-  // Capability address → callable stub. Parent traversal is injected separately,
-  // so this dialer only handles addresses that can be stored in capability rows.
+  // Capability address → callable stub.
   #dial(address: any): any {
+    if (address?.type === "worker-entrypoint") {
+      const entrypoint = ((this.ctx as any).exports as any)[address.entrypoint]({
+        props: address.props ?? {},
+      });
+      // `ItxEntrypoint` is a path-call surface: it exposes
+      // invokeCapability({ path, args }), not a literal method for every
+      // inherited capability. Wrap that shape with the same server-side proxy the
+      // WebSocket edge uses, so a sturdy parent address can answer
+      // `itx.parent.fetch(...)` and implicit miss fallback identically.
+      if (typeof entrypoint.invokeCapability === "function") {
+        return pathProxyToInvokeCapability({
+          invokeCapability: (args: { path: string[]; args?: unknown[] }) =>
+            entrypoint.invokeCapability(args),
+        });
+      }
+      return localPathProxy(entrypoint);
+    }
     if (address?.type === "dynamic-worker") {
       const loaded = this.#loadDynamicWorker(address.source);
       const entrypoint = loaded.then((worker) =>
@@ -464,7 +481,7 @@ export class ItxDurableObject extends DurableObject<Env> {
     // were a plain `{ invokeCapability }` object, `itx.whoami()` would work in
     // Node and browser but fail in codemode, which is exactly the runtime drift
     // ITX is meant to avoid.
-    const itxHandle = pathCallable(this.#itx);
+    const itxHandle = pathProxyToInvokeCapability(this.#itx);
     try {
       const result = await loaded.getEntrypoint("ScriptEntrypoint").run(itxHandle);
       await appendCompleted({ result });
@@ -482,7 +499,7 @@ export class ItxDurableObject extends DurableObject<Env> {
 // an agent under it is an `Agent`. Each owns its resources AND defines the
 // built-in capabilities a context scoped to it is born with — the production
 // shape in miniature (apps/os has Project and Agent DOs; the itx context
-// attaches to them by coordinate, and the agent's itx parent is the project's).
+// attaches to them by coordinate, and parentage is a reserved built-in).
 // ---------------------------------------------------------------------------
 
 // The Project DO. Owns the project's egress AND defines a project context's
@@ -505,6 +522,15 @@ export class ProjectDurableObject extends DurableObject<Env> {
   // as a provideCapability call. A built-in is a capability pre-provided in code.
   static builtinCapabilities(name: string): ProvideArgs[] {
     return [
+      {
+        path: ["parent"],
+        capability: {
+          type: "worker-entrypoint",
+          entrypoint: "ItxEntrypoint",
+          props: { projectId: "", path: "/" },
+        },
+        instructions: "the stateless __global__ parent context",
+      },
       {
         path: ["fetch"],
         capability: {
@@ -530,15 +556,25 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
 // The Agent DO. Lives UNDER a project (coordinate "<id>/agents/<name>"). Owns its
 // identity and defines its own built-ins (whoami). An agent context is born with
-// these AND, on a miss, climbs to its project's context (the chain) — so an agent
-// can call its own `whoami` AND the project's inherited `fetch`.
+// these AND a reserved `parent` built-in pointing at its project, so an agent can
+// call its own `whoami` AND the project's inherited `fetch`.
 export class AgentDurableObject extends DurableObject<Env> {
   whoami(): string {
     return `agent ${this.ctx.id.name ?? "?"}`;
   }
 
   static builtinCapabilities(name: string): ProvideArgs[] {
+    const [projectId] = name.split("/");
     return [
+      {
+        path: ["parent"],
+        capability: {
+          type: "worker-entrypoint",
+          entrypoint: "ItxEntrypoint",
+          props: { projectId, path: "/" },
+        },
+        instructions: "the parent project context",
+      },
       {
         path: ["whoami"],
         capability: {
@@ -640,7 +676,7 @@ export default {
       }
       return newWorkersRpcResponse(
         request,
-        pathCallable(new GlobalItx({ access: principal.projects })),
+        pathProxyToInvokeCapability(new GlobalItx({ access: principal.projects })),
       );
     }
 
@@ -668,14 +704,22 @@ export default {
     // The WebSocket surface is intentionally one operation: invokeCapability.
     // That keeps root control-name dispatch in the context, not in the Cap'n Web
     // proxy. The only edge policy here is principal-scoping inherited global
-    // catalog reads; the reference processor still injects its internal project
-    // parent with wider access, which is tracked as a later hardening task.
+    // catalog reads. `projects.*`, `parent.projects.*`, and
+    // `parent.parent.projects.*` are the same global catalog from an external
+    // caller's point of view, so strip leading `parent` segments before applying
+    // the existing catalog scope. Internal parent entrypoints still run wider,
+    // which is tracked as a later hardening task.
     return newWorkersRpcResponse(
       request,
-      pathCallable({
+      pathProxyToInvokeCapability({
         invokeCapability: (args: { path: string[]; args?: unknown[] }) => {
-          if (args.path[0] === "projects") {
-            return new GlobalItx({ access: auth.projects }).invokeCapability(args);
+          const globalCatalogPath = args.path.slice();
+          while (globalCatalogPath[0] === "parent") globalCatalogPath.shift();
+          if (globalCatalogPath[0] === "projects") {
+            return new GlobalItx({ access: auth.projects }).invokeCapability({
+              ...args,
+              path: globalCatalogPath,
+            });
           }
           return node.invokeCapability(args);
         },
