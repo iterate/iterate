@@ -10,6 +10,7 @@ export type CloudflarePreviewApp = {
   appPath: `apps/${string}`;
   dopplerProject: string;
   paths: string[];
+  previewDependencies?: CloudflarePreviewAppSlug[];
   /** Readiness probe path on the app's public URL (default /api/__internal/health). */
   previewReadyUrlPath?: string;
   previewTestBaseUrlEnvVar: string;
@@ -55,6 +56,9 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "apps/auth-contract/**",
       "apps/os/src/domains/streams/**",
     ],
+    // OS bakes auth JWKS during deployment, so the slot's auth deployment must
+    // finish before OS deploy starts.
+    previewDependencies: ["auth"],
     previewTestBaseUrlEnvVar: "OS_BASE_URL",
     // The itx e2e (node project only — the browser project needs a Playwright
     // chromium install the preview e2e job doesn't have) reads
@@ -70,7 +74,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // workers in probes. Start it after a short delay so its setup overlaps
         // the broad phase's tail without hitting the initial worker burst.
         "OS_ITX_E2E_FILE_PARALLELISM=true OS_ITX_E2E_EGRESS_CONCURRENT=true OS_ITX_E2E_LIVE_CONCURRENT=true OS_ITX_E2E_SKIP_MATRIX=true pnpm e2e:itx --project node & itx_pid=$!",
-        "(sleep ${OS_ITX_E2E_MATRIX_DELAY_SECONDS:-20}; OS_ITX_E2E_MATRIX_CONCURRENT=true pnpm e2e:itx --project node src/itx/e2e/itx.e2e.test.ts -t 'catalogue example') & matrix_pid=$!",
+        "(sleep ${OS_ITX_E2E_MATRIX_DELAY_SECONDS:-20}; pnpm e2e:itx --project node src/itx/e2e/itx.e2e.test.ts -t 'catalogue example') & matrix_pid=$!",
         "smoke_status=0",
         "itx_status=0",
         "matrix_status=0",
