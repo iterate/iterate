@@ -57,9 +57,12 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   all `dev_<user>` and preview logins once; cleaned out of `dev_*` and the
   `preview` root on 2026-06-12.)
 
-- The chosen port is baked into the env (`APP_CONFIG_BASE_URL`) at startup and
-  recorded in **`apps/os/.alchemy/dev-server.json`**
+- The chosen port is recorded in **`apps/os/.alchemy/dev-server.json`**
   (`{pid, port, baseUrl, logPath, stoppedAt?}`).
+  When no public app URL is configured, local dev also exposes that URL through
+  `APP_CONFIG_BASE_URL`; when `APP_CONFIG.baseUrl` is already set to a public
+  captun URL, runtime config keeps the public URL and the discovery file remains
+  the local target.
   Scripts and CLIs that need "the local dev server" read that file — no
   flags, no guessing. `pnpm dev` is the attached shorthand for
   `cd apps/os && pnpm cli dev start`; extra args forward, so
@@ -313,34 +316,27 @@ and outlives any app deploy. Enable it for your dev server with env vars only
 (no code change):
 
 ```bash
-CAPTUN_ENABLED=true pnpm dev          # random tunnel name on the default gateway
-CAPTUN_TUNNEL_NAME=jonas pnpm dev     # stable name → https://jonas.tunnels.iterate.com
+CAPTUN_TUNNEL_NAME=jonas pnpm dev     # https://jonas.tunnels.iterate.com
 ```
 
 The captun Vite plugin (`apps/os/vite.config.ts`) activates when
-`CAPTUN_ENABLED`/`CAPTUN_TUNNEL_NAME` is set and forwards public **HTTP** to
-your local dev server. Its forwarder is plain `fetch`, so it does **not** carry
-WebSockets — HMR and itx (`/api/itx`, capnweb-over-WS) stay on the local URL.
+`CAPTUN_TUNNEL_NAME` is set. Local dev also uses that name to derive
+`APP_CONFIG_BASE_URL` (`https://<name>.tunnels.iterate.com`) unless
+`APP_CONFIG.baseUrl` is set explicitly. The plugin forwards public HTTP and
+WebSockets to your local dev server, so HMR and itx can use the same public
+tunnel URL.
 
-For WebSocket traffic over the tunnel (e.g. driving itx against a local dev
-server from outside), use the captun **CLI** instead, which forwards WS via
-captun@27's `connectWebSocket` hook:
-
-```bash
-captun tunnel http://127.0.0.1:<port> \
-  --name <name> --gateway https://tunnels.iterate.com --token "$CAPTUN_TOKEN"
-# → https://<name>.tunnels.iterate.com  (HTTP + WebSockets)
-# then: withItx({ baseUrl: "https://<name>.tunnels.iterate.com", token: <admin> })
-```
-
-(Wiring `connectWebSocket` into the Vite plugin so `pnpm dev` carries WS too is
-a small captun follow-up.) Tests open tunnels via `createPublicTunnel`
-(`apps/os/e2e/test-support/create-test-project.ts`) against the same gateway.
+For personal `dev_<user>` configs, startup also ensures the shared dev auth
+client accepts `https://<name>.tunnels.iterate.com/api/iterate-auth/callback`.
+Shared `dev` does not mutate auth client state; use a personal dev config when
+you need human OAuth through a tunnel. Tests open tunnels via
+`createPublicTunnel` (`apps/os/e2e/test-support/create-test-project.ts`)
+against the same gateway.
 
 Tunnels are not scarce. The genuinely scarce thing is the webhook-source
 configuration — a Slack app points at exactly one delivery URL at a time —
-so set a stable `CAPTUN_TUNNEL_NAME` per person (held in `dev_<user>`) to
-keep that URL working.
+so set a stable `CAPTUN_TUNNEL_NAME` per person (held in `dev_<user>`) to keep
+that URL working.
 
 ## Slack end-to-end testing
 
