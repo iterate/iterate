@@ -1,5 +1,11 @@
+type ProjectWorkerEnv = {
+  STREAMS: {
+    append(input: { event: unknown; streamPath: string }): Promise<unknown>;
+  };
+};
+
 export default {
-  async fetch(request, env) {
+  async fetch(request: Request, env: ProjectWorkerEnv) {
     if (request.headers.get("x-iterate-app-slug") !== "webhooks") return;
     const url = new URL(request.url);
 

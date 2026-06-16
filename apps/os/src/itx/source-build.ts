@@ -150,7 +150,9 @@ async function buildFromTree(input: {
   source: WorkerSource & { type: "repo" };
 }): Promise<StoredBuild> {
   const { source } = input;
-  const files = Object.fromEntries(input.files.map((file) => [file.path, file.content]));
+  const files = withIterateWorkerPackage(
+    Object.fromEntries(input.files.map((file) => [file.path, file.content])),
+  );
 
   // Typed for BOTH branches: a missing/empty entry file is the normal
   // "no worker yet" state, never a build failure (the bundler would surface
@@ -244,4 +246,40 @@ function assertJsonSafeModules(
     );
   }
   return modules;
+}
+
+const ITERATE_WORKER_PACKAGE_FILES: Record<string, string> = {
+  "node_modules/iterate/package.json": JSON.stringify({
+    exports: {
+      "./worker": "./worker.ts",
+    },
+    name: "iterate",
+    type: "module",
+    version: "0.0.0-iterate-platform",
+  }),
+  "node_modules/iterate/worker.ts": `import { WorkerEntrypoint } from "cloudflare:workers";
+
+export class IterateProjectEntrypoint extends WorkerEntrypoint {
+  get itx() {
+    return this.env.ITERATE;
+  }
+
+  get streams() {
+    return this.env.STREAMS;
+  }
+
+  async processEvent(input) {
+    await this.onProjectEvent(input);
+  }
+
+  async onProjectEvent(_input) {}
+}
+`,
+};
+
+function withIterateWorkerPackage(files: Record<string, string>): Record<string, string> {
+  return {
+    ...ITERATE_WORKER_PACKAGE_FILES,
+    ...files,
+  };
 }

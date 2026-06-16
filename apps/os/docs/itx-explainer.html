@@ -1794,8 +1794,8 @@
           export const PROJECT_WORKER_SOURCE = {
             bundle: {},
             commit: "latest",
-            path: "worker.js",
-            repo: "project",
+            path: "worker.ts",
+            repoPath: "/repos/project",
             type: "repo",
           } as const satisfies WorkerSource;
         </script>
@@ -3249,7 +3249,7 @@
           {
             name: "worker",
             blurb:
-              "an ordinary repo source: { repo: 'project', commit: 'latest', path: 'worker.js' }",
+              "an ordinary repo source: { repoPath: '/repos/project', commit: 'latest', path: 'worker.ts' }",
             instructions:
               "The project's own worker, built per commit and tracking pushes: itx.worker.someExportedFunction(args).",
           },
