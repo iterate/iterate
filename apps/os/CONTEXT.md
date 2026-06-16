@@ -671,7 +671,7 @@ calls onto its WorkerEntrypoint methods; repo handles expose live Workers RPC
 methods such as `getInfo`, `commitFiles`, `readFiles`, and `readLog`.
 
 ```ts
-await itx.workspace.writeFile("/project/worker.js", source);
+await itx.workspace.writeFile("/project/worker.ts", source);
 await itx.workspace.gitCommit({ dir: "/project", message, author });
 ```
 

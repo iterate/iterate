@@ -323,7 +323,7 @@ test("lets agent scripts send visible agent responses through itx.chat.sendMessa
   );
 });
 
-test("project config worker customizes fresh agents by appending events", async () => {
+test("project worker customizes fresh agents by appending events", async () => {
   await using fixture = await createTestProject({ slugPrefix: "agent-context-config" });
   using itx = fixture.itx();
   const suffix = uniqueSuffix();
@@ -332,44 +332,46 @@ test("project config worker customizes fresh agents by appending events", async 
   const promptMarker = `CUSTOM CONTEXT PROMPT ${suffix}`;
   const capabilityName = `acmeTool${suffix.replace(/-/g, "")}`;
 
-  // Phase 1: push a config worker whose afterAppend reacts to new agent
+  // Phase 1: push a project worker whose event hook reacts to new agent
   // streams. Deterministic: the push script is injected as agent output (no
   // LLM) and executed against the pusher agent's prepared workspace.
   await itx.streams.create({ streamPath: pusherPath });
 
-  const configWorkerSource = [
-    "export default {",
-    '  async fetch() { return new Response("ok"); },',
+  const projectWorkerSource = [
+    'import { IterateProjectEntrypoint } from "iterate/worker";',
     "",
-    "  // The config worker is a stream processor: this receives every event on",
+    "export default class ProjectWorker extends IterateProjectEntrypoint {",
+    '  async fetch() { return new Response("ok"); }',
+    "",
+    "  // The project worker is a stream processor: this receives every event on",
     "  // the project root stream. New agent streams announce themselves as",
     "  // child-stream-created; react by appending agent context events.",
-    "  async processEvent({ event }, env) {",
+    "  async onProjectEvent({ event }) {",
     '    if (event.type !== "events.iterate.com/stream/child-stream-created") return;',
     "    const agentPath = event.payload.childPath;",
     `    if (!agentPath.startsWith(${JSON.stringify(`/agents/customized-`)})) return;`,
-    "    await env.STREAMS.append({",
+    "    await this.streams.append({",
     "      streamPath: agentPath,",
     "      event: {",
     '        type: "events.iterate.com/agent/system-prompt-updated",',
     `        payload: { systemPrompt: ${JSON.stringify(promptMarker)} + " for " + agentPath },`,
     "      },",
     "    });",
-    "    await env.STREAMS.append({",
+    "    await this.streams.append({",
     "      streamPath: agentPath,",
     "      event: {",
     '        type: "events.iterate.com/itx/capability-provided",',
     `        payload: { path: [${JSON.stringify(capabilityName)}], kind: "rpc", address: { type: "rpc", worker: { type: "loopback" }, entrypoint: "WorkerCapability" }, meta: { instructions: "Use itx.worker.${capabilityName}() (custom ${suffix})." } },`,
     "      },",
     "    });",
-    "  },",
-    "};",
+    "  }",
+    "}",
     "",
   ].join("\n");
   const pushScript = [
     "async (itx) => {",
-    `  await itx.workspace.writeFile('/project/worker.js', ${JSON.stringify(configWorkerSource)});`,
-    "  await itx.workspace.git.add({ dir: '/project', filepath: 'worker.js' });",
+    `  await itx.workspace.writeFile('/project/worker.ts', ${JSON.stringify(projectWorkerSource)});`,
+    "  await itx.workspace.git.add({ dir: '/project', filepath: 'worker.ts' });",
     "  await itx.workspace.git.commit({ dir: '/project', message: 'add agent context config', author: { name: 'Agent', email: 'agent@iterate.com' } });",
     "  await itx.workspace.git.push({ dir: '/project', remote: 'origin', ref: 'main' });",
     "}",
@@ -392,9 +394,9 @@ test("project config worker customizes fresh agents by appending events", async 
   ).toMatchObject({ ok: true });
 
   // Phase 2: a FRESH agent path wakes. Its stream creation announces a
-  // child-stream-created on the project root stream; the project-config-worker
+  // child-stream-created on the project root stream; the project processor
   // processor forwards it (blocking on a fresh checkout, so the just-pushed
-  // worker sees it); the config worker appends the custom context.
+  // worker sees it); the project worker appends the custom context.
   await itx.streams.create({ streamPath: customizedPath });
   const events = await readUntil({
     agentPath: customizedPath,
@@ -408,7 +410,7 @@ test("project config worker customizes fresh agents by appending events", async 
   });
 
   // The custom prompt must be what the agent actually runs with: either the
-  // platform defaults yielded to it (config worker won the race) or it landed
+  // platform defaults yielded to it (project worker won the race) or it landed
   // after them (last-wins reducer). Both orders leave it as the LAST prompt.
   const lastPrompt = requiredEvent(
     [...events].reverse(),

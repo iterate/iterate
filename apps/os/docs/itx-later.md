@@ -69,7 +69,7 @@ commit, path, bundleConfig) → modules` is a pure function; its output
 - **dist-in-git is a supported convention, not a mandate**: a repo may
   check in its built output and point `path` at it (bundle step =
   identity; maximum debuggability — one commit addresses source AND
-  bytes). Cost is repo size/churn; fine for small config workers, wrong
+  bytes). Cost is repo size/churn; fine for small project workers, wrong
   for big apps; per-repo choice, same address form either way.
 
 ## The project repo is the only special thing
@@ -129,7 +129,7 @@ checkout pipeline — `workerHost`/checkout storage dies with it.
 - workerHost build machinery in the Project DO (build chains, checkout
   keys, background rebuilds, ready flags): deleted — building is the
   generic repo→R2 memo, owned by no DO.
-- Rebuilt per CALL with worker.js verbatim → built per COMMIT, really
+- Rebuilt per CALL with worker.ts verbatim → built per COMMIT, really
   bundled (TS, multi-file, deps), pinnable.
 - `worker` = one ordinary provide:
   `{ type: "repo", repo: "iterate-config", commit: "latest", path: "worker.ts", bundle: {…} }`.

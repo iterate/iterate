@@ -1,6 +1,6 @@
 // `pnpm cli itx run -e "<script body>"` — the CLI execution runtime for itx
 // scripts. The script body is the SAME shape every other runtime accepts
-// (browser REPL, /api/itx/run, config workers, the e2e suite): it runs with
+// (browser REPL, /api/itx/run, project workers, the e2e suite): it runs with
 // `itx` and `vars` in scope and ends with an explicit `return`.
 //
 // Evaluation happens HERE, in this Node process, over a Cap'n Web WebSocket —

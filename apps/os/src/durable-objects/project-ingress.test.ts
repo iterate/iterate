@@ -669,7 +669,7 @@ describe("Project ingress routing", () => {
   });
 });
 
-test("project config worker receives root-stream events and appends facts back", async () => {
+test("project worker receives root-stream events and appends facts back", async () => {
   await createProject();
 
   // No build gate anymore: the forwarder loads the worker from its repo
@@ -679,8 +679,8 @@ test("project config worker receives root-stream events and appends facts back",
   ]);
 
   // Append a fact to the project root stream. ProjectProcessor forwards it to
-  // the config worker's processEvent export, which echoes it onto
-  // /config-worker-saw — proving the whole chain: subscription wiring,
+  // the project worker's processEvent export, which echoes it onto
+  // /project-worker-saw — proving the whole chain: subscription wiring,
   // checkpointed forward, entrypoint resolution, and the object-export env
   // argument, all in real workerd.
   const appendResponse = await SELF.fetch(
@@ -692,18 +692,18 @@ test("project config worker receives root-stream events and appends facts back",
   let latest: unknown;
   while (Date.now() < deadline) {
     const response = await SELF.fetch(
-      "https://os.iterate.localhost/__test/read-stream?path=/config-worker-saw",
+      "https://os.iterate.localhost/__test/read-stream?path=/project-worker-saw",
     );
     latest = await response.json();
     const body = latest as { events: Array<{ type: string; payload: Record<string, unknown> }> };
-    const saw = body.events.find((event) => event.type === "test.project/config-worker-saw");
+    const saw = body.events.find((event) => event.type === "test.project/project-worker-saw");
     if (saw) {
       expect(saw.payload).toMatchObject({ n: 42 });
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  throw new Error(`config worker never saw the ping: ${JSON.stringify(latest)}`);
+  throw new Error(`project worker never saw the ping: ${JSON.stringify(latest)}`);
 });
 
 async function createProject() {

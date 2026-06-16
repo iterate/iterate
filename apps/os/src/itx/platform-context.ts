@@ -42,7 +42,7 @@ export const PLATFORM_PROJECT_CONTEXT_ID = "platform:project";
 export const PROJECT_WORKER_SOURCE = {
   bundle: {},
   commit: "latest",
-  path: "worker.js",
+  path: "worker.ts",
   repo: "project",
   type: "repo",
 } as const satisfies import("./itx.ts").WorkerSource;
@@ -177,7 +177,7 @@ const PLATFORM_PROJECT_CAPABILITIES: PlatformCapability[] = [
     address: { type: "rpc", worker: { type: "source", source: PROJECT_WORKER_SOURCE } },
     instructions:
       "The project's own worker — the code in the project's repo " +
-      "(worker.js), built per commit and tracking pushes: " +
+      "(worker.ts), built per commit and tracking pushes: " +
       "itx.worker.someExportedFunction(args) reaches any public method of its default export.",
     name: "worker",
   },

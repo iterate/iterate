@@ -22,50 +22,110 @@ import { repoSourceMemoKey } from "~/itx/source-build.ts";
 import { decideIngressRoute } from "~/workers/shared/router.ts";
 
 const MOCK_ARTIFACT_REMOTE_BASE = "https://artifacts.example.test/";
-const TEST_PROJECT_WORKER_SOURCE = `import app1 from "./apps/app1/worker.js";
-import app2 from "./apps/app2/worker.js";
+const TEST_PROJECT_WORKER_SOURCE = `import {
+  IterateProjectEntrypoint,
+  type IterateProjectEventInput,
+} from "iterate/worker";
+import app1 from "./apps/app1/worker.ts";
+import app2 from "./apps/app2/worker.ts";
 
 const apps = [app1, app2];
 
-export default {
-  async fetch(request) {
+export default class ProjectWorker extends IterateProjectEntrypoint {
+  async fetch(request: Request) {
     for (const app of apps) {
-      const response = await app.fetch(request);
+      const response = await app.fetch(request, this.env);
       if (response) return response;
     }
 
     return new Response("Bundled project worker");
-  },
+  }
 
-  // The config worker is a stream processor: every project root-stream event
-  // is forwarded here. Echo pings back as facts so tests can observe the
-  // whole forwarding chain end to end.
-  async processEvent({ event, streamPath }, env) {
+  protected override async onProjectEvent({ event, streamPath }: IterateProjectEventInput) {
     if (streamPath !== "/") return;
+    if (!event || typeof event !== "object" || !("type" in event)) return;
     if (event.type !== "test.project/ping") return;
-    await env.STREAMS.append({
-      streamPath: "/config-worker-saw",
+    const payload = "payload" in event && event.payload && typeof event.payload === "object" ? event.payload : {};
+    await this.streams.append({
+      streamPath: "/project-worker-saw",
       event: {
-        type: "test.project/config-worker-saw",
-        payload: { pingOffset: event.offset, n: event.payload.n },
+        type: "test.project/project-worker-saw",
+        payload: { pingOffset: "offset" in event ? event.offset : undefined, n: "n" in payload ? payload.n : undefined },
       },
     });
-  },
-};
+  }
+}
 `;
 const TEST_APP_ONE_WORKER_SOURCE = `export default {
-  async fetch(request) {
+  async fetch(request: Request) {
     if (request.headers.get("x-iterate-app-slug") !== "app1") return;
     return new Response("hello from app one");
   },
 };
 `;
 const TEST_APP_TWO_WORKER_SOURCE = `export default {
+  async fetch(request: Request) {
+    if (request.headers.get("x-iterate-app-slug") !== "app2") return;
+    return new Response("hello from app two");
+  },
+};
+`;
+const TEST_PROJECT_WORKER_BUNDLED_SOURCE = `import { WorkerEntrypoint } from "cloudflare:workers";
+
+const app1 = {
+  async fetch(request) {
+    if (request.headers.get("x-iterate-app-slug") !== "app1") return;
+    return new Response("hello from app one");
+  },
+};
+
+const app2 = {
   async fetch(request) {
     if (request.headers.get("x-iterate-app-slug") !== "app2") return;
     return new Response("hello from app two");
   },
 };
+
+const apps = [app1, app2];
+
+class IterateProjectEntrypoint extends WorkerEntrypoint {
+  get itx() {
+    return this.env.ITERATE;
+  }
+
+  get streams() {
+    return this.env.STREAMS;
+  }
+
+  async processEvent(input) {
+    await this.onProjectEvent(input);
+  }
+
+  async onProjectEvent(_input) {}
+}
+
+export default class ProjectWorker extends IterateProjectEntrypoint {
+  async fetch(request) {
+    for (const app of apps) {
+      const response = await app.fetch(request, this.env);
+      if (response) return response;
+    }
+
+    return new Response("Bundled project worker");
+  }
+
+  async onProjectEvent({ event, streamPath }) {
+    if (streamPath !== "/") return;
+    if (event.type !== "test.project/ping") return;
+    await this.streams.append({
+      streamPath: "/project-worker-saw",
+      event: {
+        type: "test.project/project-worker-saw",
+        payload: { pingOffset: event.offset, n: event.payload.n },
+      },
+    });
+  }
+}
 `;
 
 // A deterministic fake head commit for the mock remote — any 40-hex oid.
@@ -97,12 +157,12 @@ export class RepoDurableObject extends RealRepoDurableObject {
     return {
       commitOid: MOCK_TREE_COMMIT,
       files: [
-        { content: TEST_APP_ONE_WORKER_SOURCE, path: "apps/app1/worker.js" },
-        { content: TEST_APP_TWO_WORKER_SOURCE, path: "apps/app2/worker.js" },
+        { content: TEST_APP_ONE_WORKER_SOURCE, path: "apps/app1/worker.ts" },
+        { content: TEST_APP_TWO_WORKER_SOURCE, path: "apps/app2/worker.ts" },
         { content: PROJECT_REPO_AGENTS_MD, path: "AGENTS.md" },
         { content: '{\n  "version": 1\n}\n', path: "iterate.config.jsonc" },
         { content: '{\n  "type": "module"\n}\n', path: "package.json" },
-        { content: TEST_PROJECT_WORKER_SOURCE, path: "worker.js" },
+        { content: TEST_PROJECT_WORKER_SOURCE, path: "worker.ts" },
       ],
     };
   }
@@ -169,8 +229,8 @@ export default {
       // cannot run under vitest-pool-workers (its internal esbuild.wasm
       // import doesn't resolve in the test module runner), so the memo-hit
       // path is what these tests exercise — the loader still consumes the
-      // multi-module output for real. Bundler-in-workerd is covered by the
-      // itx e2e litmus against deployed environments.
+      // bundled output for real. Bundler-in-workerd is covered by the itx
+      // e2e litmus against deployed environments.
       await env.ITX_BUILD_CACHE.put(
         await repoSourceMemoKey({
           oid: MOCK_TREE_COMMIT,
@@ -178,11 +238,9 @@ export default {
           source: PROJECT_WORKER_SOURCE,
         }),
         JSON.stringify({
-          mainModule: "worker.js",
+          mainModule: "worker-bundle.js",
           modules: {
-            "apps/app1/worker.js": TEST_APP_ONE_WORKER_SOURCE,
-            "apps/app2/worker.js": TEST_APP_TWO_WORKER_SOURCE,
-            "worker.js": TEST_PROJECT_WORKER_SOURCE,
+            "worker-bundle.js": TEST_PROJECT_WORKER_BUNDLED_SOURCE,
           },
         }),
       );
