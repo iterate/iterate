@@ -2,13 +2,7 @@ import { os } from "@orpc/server";
 
 // This router is only ever loaded from a repo checkout (via iterateAppCli.localRouterPaths),
 // so it can reach into apps/os for scripts that depend on OS domain internals.
-import {
-  devServerAttachScript,
-  devServerKillScript,
-  devServerRestartScript,
-  devServerStartScript,
-  devServerStatusScript,
-} from "../../../../apps/os/scripts/dev-server.ts";
+import { devServerScripts } from "../../../../apps/os/scripts/dev-server.ts";
 import { itxAgentSmokeScript } from "../../../../apps/os/scripts/itx-agent-smoke.ts";
 import { itxRunScript } from "../../../../apps/os/scripts/itx-run.ts";
 import { seedIterateConfigBaseRepoScript } from "../../../../apps/os/scripts/seed-iterate-config-base-repo.ts";
@@ -21,13 +15,7 @@ export const router = os.router({
     "setup-event-subscriptions": setupArtifactEventSubscriptionsScript,
   },
   "claude-mcp": claudeMcpScript,
-  dev: {
-    attach: devServerAttachScript,
-    kill: devServerKillScript,
-    restart: devServerRestartScript,
-    start: devServerStartScript,
-    status: devServerStatusScript,
-  },
+  dev: devServerScripts,
   itx: {
     "agent-smoke": itxAgentSmokeScript,
     run: itxRunScript,
