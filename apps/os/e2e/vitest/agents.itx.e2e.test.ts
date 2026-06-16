@@ -152,8 +152,11 @@ test("a web agent holds a real conversation: user message in, visible reply out"
     model: "gpt-5.5",
     projectId: fixture.project.id,
     provider: "openai-ws",
-    systemPrompt:
-      "Reply to every user message by sending exactly one visible web chat message through itx.chat.sendMessage.",
+    systemPrompt: [
+      "Reply to every user message with exactly one fenced JavaScript code block and no surrounding prose.",
+      "The code block must contain a single async arrow function: async (itx) => { ... }.",
+      "Inside that function, send exactly one visible web chat message through await itx.chat.sendMessage({ message }).",
+    ].join("\n"),
   });
 
   await itx.agents.sendMessage({
@@ -214,8 +217,11 @@ test("uses OpenAI for explicitly configured agent chats", async () => {
     model: "gpt-5.5",
     projectId: fixture.project.id,
     provider: "openai-ws",
-    systemPrompt:
-      "Reply to every user message by sending exactly one visible web chat message through itx.chat.sendMessage.",
+    systemPrompt: [
+      "Reply to every user message with exactly one fenced JavaScript code block and no surrounding prose.",
+      "The code block must contain a single async arrow function: async (itx) => { ... }.",
+      "Inside that function, send exactly one visible web chat message through await itx.chat.sendMessage({ message }).",
+    ].join("\n"),
   });
 
   await itx.agents.sendMessage({
