@@ -30,46 +30,8 @@ jobs:
         with:
           node-version: 24
 
-      - name: Install pnpm
-        run: |-
-          set -euo pipefail
-          npm install --global pnpm@10.24.0
-          pnpm config set store-dir "$PNPM_CONFIG_STORE_DIR"
-          pnpm --version
-          pnpm store path
-
-      - name: Install dependencies
-        run: pnpm install
-
-      - name: Bake Node and pnpm onto PATH
-        run: |-
-          set -euo pipefail
-          node_root="$(dirname "$(dirname "$(command -v node)")")"
-          sudo rm -rf /opt/iterate-node
-          sudo cp -a "$node_root" /opt/iterate-node
-          sudo ln -sf /opt/iterate-node/bin/node /usr/local/bin/node
-          sudo ln -sf /opt/iterate-node/bin/npm /usr/local/bin/npm
-          sudo ln -sf /opt/iterate-node/bin/npx /usr/local/bin/npx
-          sudo ln -sf /opt/iterate-node/bin/pnpm /usr/local/bin/pnpm
-          node --version
-          pnpm --version
-
-      - name: Install Doppler CLI
-        run: |-
-          curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager
-          doppler --version
-
-      - name: Install preview browser
-        run: pnpm --dir apps/streams-example-app exec playwright install chromium
-
-      - name: Report baked cache size
-        run: |-
-          set -euo pipefail
-          echo "pnpm-store=$(pnpm store path)"
-          du -sh "$(pnpm store path)" || true
-          du -sh node_modules || true
-          du -sh apps/streams-example-app/node_modules || true
-          du -sh /home/runner/.cache/ms-playwright || true
+      - name: Bake preview CI image contents
+        run: ./scripts/depot-ci/bake-preview-ci-image.sh
 
       # Keep node_modules and the pnpm store in the image. Consumers must use
       # actions/checkout with clean:false so checkout does not delete the baked
