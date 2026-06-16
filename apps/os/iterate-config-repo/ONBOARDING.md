@@ -1,18 +1,4 @@
-export const PROJECT_REPO_AGENTS_MD = `# Project Agent Notes
-
-This private repo is the durable brain for the project's agents.
-
-Agents should keep useful, stable project knowledge here: user preferences,
-working agreements, product decisions, research summaries, unresolved questions,
-and implementation notes that future agents should inherit. Prefer concise
-markdown files that are easy to scan and update.
-
-The project worker entrypoint is \`worker.js\`. The root project stream can call
-\`processEvent({ event, streamPath }, env)\` on that worker for committed
-project events.
-`;
-
-export const PROJECT_REPO_ONBOARDING_MD = `# Onboarding Agent
+# Onboarding Agent
 
 The onboarding agent helps a new project owner turn a blank Iterate project into
 a useful working space.
@@ -36,4 +22,3 @@ During onboarding:
   stream with payload { agentPath: "/agents/onboarding" }.
 
 Do not mark onboarding complete just because the first message was answered.
-`;

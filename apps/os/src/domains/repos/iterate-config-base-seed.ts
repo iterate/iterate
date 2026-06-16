@@ -10,7 +10,10 @@ import {
   stripArtifactTokenQuery,
 } from "~/domains/repos/artifacts.ts";
 import { ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME } from "~/domains/repos/project-repo.ts";
-import { PROJECT_REPO_AGENTS_MD } from "~/domains/repos/project-repo-template.ts";
+import {
+  PROJECT_REPO_AGENTS_MD,
+  PROJECT_REPO_ONBOARDING_MD,
+} from "~/domains/repos/project-repo-template.ts";
 
 const ITERATE_CONFIG_REPO_DIR = "/repo";
 const ITERATE_CONFIG_JSONC = '{\n  "version": 1\n}\n';
@@ -152,6 +155,10 @@ export async function seedIterateConfigBaseRepo(input: {
     ITERATE_CONFIG_PACKAGE_JSON,
   );
   await filesystem.writeFile(`${ITERATE_CONFIG_REPO_DIR}/AGENTS.md`, PROJECT_REPO_AGENTS_MD);
+  await filesystem.writeFile(
+    `${ITERATE_CONFIG_REPO_DIR}/ONBOARDING.md`,
+    PROJECT_REPO_ONBOARDING_MD,
+  );
   await filesystem.mkdir(`${ITERATE_CONFIG_REPO_DIR}/apps/app1`, { recursive: true });
   await filesystem.mkdir(`${ITERATE_CONFIG_REPO_DIR}/apps/app2`, { recursive: true });
   await filesystem.mkdir(`${ITERATE_CONFIG_REPO_DIR}/apps/webhooks`, { recursive: true });
@@ -171,6 +178,7 @@ export async function seedIterateConfigBaseRepo(input: {
   await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "iterate.config.jsonc" });
   await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "package.json" });
   await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "AGENTS.md" });
+  await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "ONBOARDING.md" });
   await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "worker.js" });
   await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "apps/app1/worker.js" });
   await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "apps/app2/worker.js" });

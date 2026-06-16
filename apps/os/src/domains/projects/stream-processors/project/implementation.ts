@@ -50,6 +50,7 @@ import { SlackAgentProcessorContract } from "~/domains/slack/stream-processors/s
 import { SlackProcessorContract } from "~/domains/slack/stream-processors/slack/contract.ts";
 import { ensureProjectRepoInfoForProject } from "~/domains/repos/entrypoints/repo-capability.ts";
 import type { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
+import { PROJECT_REPO_ONBOARDING_MD } from "~/domains/repos/project-repo-template.ts";
 import type { AppConfig } from "~/config.ts";
 import { SLACK_INTEGRATION_STREAM_PATH } from "~/domains/secrets/integration-stream-constants.ts";
 
@@ -345,6 +346,19 @@ export class ProjectProcessor extends StreamProcessor<
         ...(isSlackAgentPath(input.agentPath)
           ? [slackAgentProcessorSubscriptionConfiguredEvent(input)]
           : []),
+        ...(input.agentPath === ONBOARDING_AGENT_PATH
+          ? [
+              {
+                type: "events.iterate.com/agent/input-added",
+                idempotencyKey: "project-onboarding:start",
+                payload: {
+                  content:
+                    "Start onboarding now. Send the first onboarding message for this new project. " +
+                    "Follow ONBOARDING.md and ask exactly one focused question.",
+                },
+              },
+            ]
+          : []),
       ],
     });
   }
@@ -375,8 +389,15 @@ function isSlackAgentPath(agentPath: string) {
 
 export function defaultAgentSystemPrompt(agentPath: string) {
   const isSlack = isSlackAgentPath(agentPath);
+  const isOnboarding = agentPath === ONBOARDING_AGENT_PATH;
   return [
     `You are the iterate AI agent running on stream ${agentPath}.`,
+    ...(isOnboarding
+      ? [
+          "You are this project's onboarding agent. Follow the project repo file ONBOARDING.md exactly:",
+          PROJECT_REPO_ONBOARDING_MD,
+        ]
+      : []),
     "Respond with exactly one fenced JavaScript code block and no surrounding prose.",
     "The code block must contain a single async arrow function: async (itx) => { ... }.",
     "Use capabilities announced as itx/capability-provided events.",

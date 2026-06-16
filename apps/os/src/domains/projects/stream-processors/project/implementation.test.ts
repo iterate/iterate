@@ -19,11 +19,20 @@ import { DEFAULT_WORKERS_AI_AGENT_MODEL } from "~/domains/agents/stream-processo
 
 describe("project agent prompts", () => {
   it("tells web agents to await chat sends without returning side-effect results", () => {
-    const prompt = defaultAgentSystemPrompt("/agents/onboarding");
+    const prompt = defaultAgentSystemPrompt("/agents/web/demo");
 
     expect(prompt).toContain("await itx.chat.sendMessage({ message })");
     expect(prompt).toContain(SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE);
     expect(prompt).not.toContain("return await itx.chat.sendMessage");
+    expect(prompt).not.toContain("ONBOARDING.md");
+  });
+
+  it("includes onboarding markdown instructions for the onboarding agent", () => {
+    const prompt = defaultAgentSystemPrompt("/agents/onboarding");
+
+    expect(prompt).toContain("ONBOARDING.md");
+    expect(prompt).toContain("Ask one focused question");
+    expect(prompt).toContain("events.iterate.com/project/onboarding-completed");
   });
 
   it("tells slack agents to await replies without returning side-effect results", () => {
@@ -169,8 +178,47 @@ describe("ProjectProcessor worker forwarding", () => {
             subscriptionKey: "agent:project_1:/agents/onboarding:openai-ws",
           }),
         }),
+        expect.objectContaining({
+          type: "events.iterate.com/agent/input-added",
+          idempotencyKey: "project-onboarding:start",
+          payload: expect.objectContaining({
+            content: expect.stringContaining("Start onboarding now"),
+          }),
+        }),
       ],
     });
+  });
+
+  it("does not proactively trigger ordinary fresh agent streams", async () => {
+    const appendedBatches: Array<{ events: unknown[]; streamPath?: string }> = [];
+    const processor = newProcessor({
+      forwardToProjectWorker: async () => undefined,
+      stream: {
+        append: async () => undefined,
+        appendBatch: async (batch) => {
+          appendedBatches.push(batch);
+        },
+      },
+    });
+
+    await processor.ingest({
+      events: [
+        childStreamCreated({
+          childPath: "/agents/web/demo",
+          createdAt: "2026-01-01T00:00:01.000Z",
+          offset: 4,
+        }),
+      ],
+      streamMaxOffset: 4,
+    });
+
+    expect(appendedBatches).toHaveLength(1);
+    expect(appendedBatches[0]?.events).not.toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/agent/input-added",
+        idempotencyKey: "project-onboarding:start",
+      }),
+    );
   });
 
   it("does not advance the checkpoint past a failed project worker forward", async () => {
