@@ -8,11 +8,10 @@
 //                  through secret substitution without knowing it
 //
 // Every project is born with the example secret (example.egress_api_key →
-// "example-secret-value"), and the worker exposes an authenticated echo
-// endpoint, so we can assert the substitution end to end: the isolate sends
-// a getSecret(...) placeholder and the echo sees the material.
+// "example-secret-value"). The tests send getSecret(...) placeholders to a
+// public echo endpoint and assert the remote side saw the substituted material.
 
-import { expect, test } from "vitest";
+import { expect, test as baseTest } from "vitest";
 import {
   adminApiSecret,
   baseUrl,
@@ -23,8 +22,10 @@ import {
 const SECRET_KEY = "example.egress_api_key";
 const SECRET_MATERIAL = "example-secret-value";
 const HEADER = "x-itx-egress-probe";
+const PUBLIC_ECHO_URL = "https://postman-echo.com/get";
 
 const createdProjectIds = registerCreatedProjectCleanup();
+const test = process.env.OS_ITX_E2E_EGRESS_CONCURRENT === "true" ? baseTest.concurrent : baseTest;
 
 test("itx.fetch substitutes secrets through project egress (explicit door)", async () => {
   using itx = connectGlobal();
@@ -206,20 +207,8 @@ function suffix() {
   return crypto.randomUUID().slice(0, 8);
 }
 
-/**
- * Worker-to-worker egress cannot loop back to 127.0.0.1 in local dev, so the
- * echo target must be a publicly reachable host (the dev tunnel or a deployed
- * preview). Override with OS_E2E_EGRESS_ECHO_URL when baseUrl is local.
- */
 function echoUrl() {
   const explicit = process.env.OS_E2E_EGRESS_ECHO_URL?.trim();
   if (explicit) return explicit;
-  const base = new URL(baseUrl());
-  if (base.hostname === "localhost" || base.hostname === "127.0.0.1") {
-    throw new Error(
-      "Set OS_E2E_EGRESS_ECHO_URL to a publicly reachable echo endpoint for local runs " +
-        "(e.g. the dev tunnel's /api/itx/egress-echo).",
-    );
-  }
-  return new URL("/api/itx/egress-echo", baseUrl()).toString();
+  return PUBLIC_ECHO_URL;
 }

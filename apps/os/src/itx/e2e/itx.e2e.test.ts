@@ -7,7 +7,7 @@
 // RpcTarget provider. The browser runtime runs the same catalogue in
 // itx.browser.test.ts.
 
-import { expect, test } from "vitest";
+import { expect, test as baseTest } from "vitest";
 import { RpcTarget } from "capnweb";
 import { getItxErrorCode } from "../errors.ts";
 import { ITX_EXAMPLES } from "../examples.ts";
@@ -42,6 +42,15 @@ const MATRIX_EXAMPLES = ITX_EXAMPLES.filter(
     example.runtimes.some((runtime) => (MATRIX_RUNTIMES as readonly string[]).includes(runtime)) &&
     EXAMPLE_CASES[example.id] !== undefined,
 );
+const matrixTest =
+  process.env.OS_ITX_E2E_SKIP_MATRIX === "true"
+    ? baseTest.skip
+    : process.env.OS_ITX_E2E_MATRIX_CONCURRENT === "true"
+      ? baseTest.concurrent
+      : baseTest;
+const matrixRunsConcurrently = process.env.OS_ITX_E2E_MATRIX_CONCURRENT === "true";
+const test = process.env.OS_ITX_E2E_LIVE_CONCURRENT === "true" ? baseTest.concurrent : baseTest;
+const solo = baseTest;
 
 test("every catalogue example is either matrix-tested or explicitly excluded", () => {
   for (const example of ITX_EXAMPLES) {
@@ -53,27 +62,39 @@ test("every catalogue example is either matrix-tested or explicitly excluded", (
   }
 });
 
-let matrixSetupPromise: Promise<{ projectId: string }> | null = null;
-function ensureMatrixProject(): Promise<{ projectId: string }> {
-  matrixSetupPromise ??= (async () => {
-    using itx = connectGlobal();
-    const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-mx` })) as {
-      id: string;
-      slug: string;
-    };
-    createdProjectIds.push(project.id);
-    await pushProjectRepoFiles({
-      commitMessage: "bake catalogue examples into the config worker",
-      files: {
-        "worker.js": configWorkerRunnerSource(
-          MATRIX_EXAMPLES.filter((example) => example.runtimes.includes("config-worker")),
-        ),
-      },
-      projectId: project.id,
-      projectSlug: project.slug,
-    });
-    return { projectId: project.id };
-  })();
+const matrixSetupPromises = new Map<string, Promise<{ projectId: string }>>();
+function ensureMatrixProject(
+  example: (typeof MATRIX_EXAMPLES)[number],
+): Promise<{ projectId: string }> {
+  const matrixKey = matrixRunsConcurrently ? example.id : "shared";
+  let matrixSetupPromise = matrixSetupPromises.get(matrixKey);
+  if (!matrixSetupPromise) {
+    matrixSetupPromise = (async () => {
+      const matrixExamples = matrixRunsConcurrently ? [example] : MATRIX_EXAMPLES;
+      using itx = connectGlobal();
+      const project = (await itx.projects.create({
+        slug: `${PROJECT_SLUG}-mx-${slugFragment(matrixKey)}`,
+      })) as {
+        id: string;
+        slug: string;
+      };
+      createdProjectIds.push(project.id);
+      await pushProjectRepoFiles({
+        commitMessage: "bake catalogue examples into the config worker",
+        files: {
+          "worker.js": configWorkerRunnerSource(
+            matrixExamples.filter((matrixExample) =>
+              matrixExample.runtimes.includes("config-worker"),
+            ),
+          ),
+        },
+        projectId: project.id,
+        projectSlug: project.slug,
+      });
+      return { projectId: project.id };
+    })();
+    matrixSetupPromises.set(matrixKey, matrixSetupPromise);
+  }
   return matrixSetupPromise;
 }
 
@@ -81,13 +102,13 @@ for (const example of MATRIX_EXAMPLES) {
   const exampleCase = EXAMPLE_CASES[example.id]!;
   // Cold isolates, a config-worker rebuild per call, and a spawned CLI per
   // cli-tagged example make these the slowest tests in the suite.
-  test(
+  matrixTest(
     `catalogue example "${example.id}" runs identically across runtimes`,
     {
       timeout: 240_000,
     },
     async () => {
-      const { projectId } = await ensureMatrixProject();
+      const { projectId } = await ensureMatrixProject(example);
       const runtimes = MATRIX_RUNTIMES.filter((runtime) => example.runtimes.includes(runtime));
       expect(runtimes.length).toBeGreaterThan(0);
 
@@ -113,6 +134,14 @@ for (const example of MATRIX_EXAMPLES) {
       }
     },
   );
+}
+
+function slugFragment(value: string) {
+  return value
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9-]+/g, "-")
+    .replaceAll(/^-|-$/g, "")
+    .slice(0, 32);
 }
 
 test("the five-step capability flow: provide live, call, promote durable, call from a script", async () => {
@@ -299,7 +328,7 @@ const MCP_TEST_SERVER_URL =
     ? `${process.env.MOCK_PROVIDER_BASE_URL.replace(/\/+$/, "")}/mcp`
     : "");
 
-test.skipIf(!MCP_TEST_SERVER_URL)(
+baseTest.skipIf(!MCP_TEST_SERVER_URL)(
   "the first-party McpClient cap bridges a remote MCP server",
   async () => {
     using itx = connectGlobal();
@@ -394,12 +423,11 @@ export class PetstoreClient extends WorkerEntrypoint {
   // the 10s "latest" probe window of a pre-push head — poll briefly until
   // the freshly pushed module is what answers.
   const handle = projectItx as never as Record<string, any>;
-  await expect
-    .poll(async () => handle.petstore.listOperations().catch((error: unknown) => error), {
-      interval: 1_000,
-      timeout: 30_000,
-    })
-    .toEqual({ marker, operations: ["getPet", "listPets"] });
+  await waitForEqual(
+    () => handle.petstore.listOperations().catch((error: unknown) => error),
+    { marker, operations: ["getPet", "listPets"] },
+    { intervalMs: 1_000, timeoutMs: 30_000 },
+  );
 
   const echoed = (await handle.petstore.echo({ hello: 1 })) as Record<string, unknown>;
   expect(echoed).toEqual({ marker, value: { hello: 1 } });
@@ -612,7 +640,7 @@ test("absolute stream refs are sugar through the one access check", async () => 
 });
 
 // Cold first-run of the isolate + stream DO can take >45s on a fresh preview.
-test(
+solo(
   "script executions leave a two-event record on the context's stream",
   { timeout: 90_000 },
   async () => {
@@ -876,4 +904,26 @@ function authHeaders() {
     authorization: `Bearer ${adminApiSecret()}`,
     "content-type": "application/json",
   };
+}
+
+async function waitForEqual<T>(
+  read: () => Promise<T>,
+  expected: T,
+  options: {
+    intervalMs: number;
+    timeoutMs: number;
+  },
+) {
+  const deadline = Date.now() + options.timeoutMs;
+  let last: T | undefined;
+  while (Date.now() < deadline) {
+    last = await read();
+    try {
+      expect(last).toEqual(expected);
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, options.intervalMs));
+    }
+  }
+  expect(last).toEqual(expected);
 }

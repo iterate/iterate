@@ -201,9 +201,9 @@ stoppedAt?}`); on a second `pnpm dev` it refuses (or offers takeover) if the rec
 5. **Debugging prd as a specific user.** `doppler run --config prd -- pnpm cli auth mint
 --sub usr_x --browser-url` → audited mint with `act: jonas`, paste URL, you're them.
    This _is_ the impersonation mechanism; `X-Iterate-As-User` is gone.
-6. **Preview e2e in CI.** Slot leased → auth + OS deploy concurrently from `preview_N`
-   config → seed enforces OAuth clients from Doppler → tests forge JWTs with the preview
-   forge key (no OAuth dance → Playwright suites get much faster).
+6. **Preview e2e in CI.** Slot leased → auth and OS deploy from `preview_N`
+   config → seed enforces OAuth clients from Doppler → tests run after deployment and
+   forge JWTs with the preview forge key (no OAuth dance → Playwright suites get much faster).
 7. **Agent needs inbound webhooks (rare).** Enable the captun Vite plugin (or call captun
    programmatically) to get `<worktree-name>.tunnels.iterate.com`; no lease, no contention;
    tears down with the dev server. The scarce step, if any, is pointing a webhook source
