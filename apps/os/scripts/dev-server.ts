@@ -65,6 +65,7 @@ export const devServerScripts = {
     .meta({ description: "Restart the OS local dev server." })
     .input(StartOptions)
     .handler(async ({ input }) => {
+      assertLocalAlchemyDev();
       await killDevServer();
       return startDevServer(input);
     }),
@@ -131,11 +132,11 @@ export async function runDevServerCommand(argv: string[]): Promise<number> {
 }
 
 async function startDevServer({
-  alchemyArgs = [],
   attach = true,
   detach = false,
   timeoutMs = DEFAULT_START_TIMEOUT_MS,
-}: StartOptions & { alchemyArgs?: string[]; timeoutMs?: number }) {
+}: StartOptions & { timeoutMs?: number }) {
+  assertLocalAlchemyDev();
   const shouldStream = !detach && attach;
   const existing = readLocalDevServerInfo(APP_ROOT, { requireLive: true });
   if (existing) {
@@ -147,16 +148,16 @@ async function startDevServer({
   }
 
   if (shouldStream) {
-    return startAttachedDevServer(alchemyArgs);
+    return startAttachedDevServer();
   }
 
-  return startDetachedDevServer(alchemyArgs, timeoutMs);
+  return startDetachedDevServer(timeoutMs);
 }
 
-async function startAttachedDevServer(alchemyArgs: string[]) {
+async function startAttachedDevServer() {
   mkdirSync(ALCHEMY_DIR, { recursive: true });
   const command = "tsx";
-  const commandArgs = ["./alchemy.run.ts", ...alchemyArgs];
+  const commandArgs = ["./alchemy.run.ts"];
   const log = createWriteStream(LOG_PATH, { flags: "w" });
 
   // Attach mode tees the child output to both the terminal and the log file so
@@ -195,10 +196,10 @@ async function startAttachedDevServer(alchemyArgs: string[]) {
   });
 }
 
-async function startDetachedDevServer(alchemyArgs: string[], timeoutMs: number) {
+async function startDetachedDevServer(timeoutMs: number) {
   mkdirSync(ALCHEMY_DIR, { recursive: true });
   const command = "tsx";
-  const commandArgs = ["./alchemy.run.ts", ...alchemyArgs];
+  const commandArgs = ["./alchemy.run.ts"];
   const logFd = openSync(LOG_PATH, "w");
   writeSync(logFd, logHeader(command, commandArgs));
 
@@ -266,13 +267,12 @@ async function attachToDevServer(info: DevServerInfo) {
   writeAttachPreamble(info, logPath);
   if (!existsSync(logPath)) {
     console.info("Waiting for log file...");
-  } else {
-    // Show the boot header/config warnings at the start and the recent tail,
-    // without dumping thousands of middle lines from a long-running server.
-    writeLogExcerpt(logPath);
   }
 
-  let offset = existsSync(logPath) ? statSync(logPath).size : 0;
+  // Start following from the exact byte length we read for the excerpt. Lines
+  // appended while the excerpt is being printed will still be picked up below.
+  let offset = existsSync(logPath) ? writeLogExcerpt(logPath) : 0;
+
   await new Promise<void>((resolve) => {
     let done = false;
 
@@ -356,6 +356,18 @@ function isPidAlive(pid: number) {
   }
 }
 
+function assertLocalAlchemyDev() {
+  const isLocal = /^(1|true|yes)$/i.test(process.env.ALCHEMY_LOCAL?.trim() ?? "");
+  if (!isLocal) {
+    throw new Error(
+      "Refusing to run the OS dev server because ALCHEMY_LOCAL is not true. " +
+        `Doppler config ${process.env.DOPPLER_CONFIG ?? "(unset)"} would run ` +
+        `stage ${process.env.ALCHEMY_STAGE ?? "(unset)"} as a deploy. ` +
+        "Use doppler run --project os --config <config> -- pnpm deploy for intentional deployments.",
+    );
+  }
+}
+
 function writeAttachPreamble(info: DevServerInfo, logPath: string) {
   const baseUrl = new URL(info.baseUrl);
   const parentPid = spawnSync("ps", ["-o", "ppid=", "-p", String(info.pid)], {
@@ -381,15 +393,18 @@ function writeAttachPreamble(info: DevServerInfo, logPath: string) {
 }
 
 function writeLogExcerpt(path: string) {
-  const content = readFileSync(path, "utf8");
-  if (content.trim().length === 0) return;
+  const log = readFileSync(path);
+  const content = log.toString("utf8");
+  if (content.trim().length === 0) return log.byteLength;
 
   const lines = content.split(/\r?\n/);
   if (lines.length <= DEFAULT_HEAD_LINES + DEFAULT_TAIL_LINES) {
     process.stdout.write(content.endsWith("\n") ? content : `${content}\n`);
-    return;
+    return log.byteLength;
   }
 
+  // Show the boot header/config warnings at the start and the recent tail,
+  // without dumping thousands of middle lines from a long-running server.
   const head = lines.slice(0, DEFAULT_HEAD_LINES).join("\n");
   const tail = lines.slice(-DEFAULT_TAIL_LINES).join("\n");
   const omitted = lines.length - DEFAULT_HEAD_LINES - DEFAULT_TAIL_LINES;
@@ -399,6 +414,7 @@ function writeLogExcerpt(path: string) {
   process.stdout.write(`----- omitted ${omitted} log lines -----\n`);
   process.stdout.write(`----- log tail: last ${DEFAULT_TAIL_LINES} lines -----\n`);
   process.stdout.write(tail.endsWith("\n") ? tail : `${tail}\n`);
+  return log.byteLength;
 }
 
 function logHeader(command: string, commandArgs: string[]) {
@@ -437,11 +453,8 @@ const DIRECT_ACTIONS = ["attach", "kill", "restart", "start", "status"] as const
 type DirectAction = (typeof DIRECT_ACTIONS)[number];
 
 function parseDirectArgs(argv: string[]) {
-  const separatorIndex = argv.indexOf("--");
-  const beforeSeparator = separatorIndex === -1 ? argv : argv.slice(0, separatorIndex);
-  const afterSeparator = separatorIndex === -1 ? [] : argv.slice(separatorIndex + 1);
   const { values, positionals } = parseArgs({
-    args: beforeSeparator,
+    args: argv,
     allowPositionals: true,
     options: {
       attach: { type: "boolean", default: true },
@@ -452,24 +465,20 @@ function parseDirectArgs(argv: string[]) {
   });
   const first = positionals[0];
   const action = isDirectAction(first) ? first : "start";
-  const alchemyArgs = [
-    ...(action === "start"
-      ? positionals.slice(isDirectAction(first) ? 1 : 0)
-      : positionals.slice(1)),
-    ...afterSeparator,
-  ];
+  const extraPositionals = positionals.slice(isDirectAction(first) ? 1 : 0);
+  if (extraPositionals.length > 0) {
+    throw new Error(
+      `Unexpected argument ${JSON.stringify(extraPositionals[0])}. Use doppler run --project os --config <config> -- pnpm deploy for intentional deployments.`,
+    );
+  }
   const attach = !values.detach && values.attach;
-  const forwardedArgv = [
-    ...(action === "start" ? [] : [action]),
-    ...(attach ? [] : ["--detach"]),
-    ...(alchemyArgs.length > 0 ? ["--", ...alchemyArgs] : []),
-  ];
+  const forwardedArgv = [...(action === "start" ? [] : [action]), ...(attach ? [] : ["--detach"])];
 
   return {
     action,
     config: values.config,
     forwardedArgv,
-    start: { alchemyArgs, attach, detach: !attach, timeoutMs: DEFAULT_START_TIMEOUT_MS },
+    start: { attach, detach: !attach, timeoutMs: DEFAULT_START_TIMEOUT_MS },
     useDoppler: !values["no-doppler"],
   };
 }

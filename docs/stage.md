@@ -44,13 +44,15 @@ For `apps/iterate-com`, replace `os` with `www`.
 
 ## Usage
 
-```bash
-# Deploy to a numbered preview stage
-pnpm deploy --stage preview_2
+For current OS deploys, choose the Doppler config explicitly:
 
-# Local dev with your stage
-pnpm dev --stage dev-jonas
+```bash
+doppler run --project os --config preview_2 -- pnpm deploy
+doppler run --project os --config prd -- pnpm deploy
 ```
+
+Older Alchemy-only tooling used explicit `--stage` flags; do not use that path
+for current OS deploys.
 
 ## Principles
 

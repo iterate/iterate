@@ -247,9 +247,9 @@ everywhere else), a `WorkerLoader`, the Workers AI binding, and routes on the
 ingress worker for the app base URL, the MCP base URL, the event-docs host,
 and each project hostname base. Fresh stages bootstrap with an automatic
 two-pass deploy (cross-script bindings to not-yet-existing scripts are wired
-by the second pass). The ambient Doppler config selects the stage: `pnpm cf:deploy`
-deploys to whatever stage your environment points at; `pnpm deploy` is the
-production wrapper (`doppler run --config prd`).
+by the second pass). Deploys must name the Doppler config explicitly, for
+example `doppler run --project os --config preview_9 -- pnpm deploy` or
+`doppler run --project os --config prd -- pnpm deploy`.
 
 ## Smoke Tests
 

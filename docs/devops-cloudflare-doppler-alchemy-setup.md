@@ -91,20 +91,20 @@ Deployments use Alchemy v1. For new-style Cloudflare apps, do not pass a stage
 separately. Select the Doppler config and let `_shared` provide
 `ALCHEMY_STAGE=${DOPPLER_CONFIG}`.
 
-Run the app's `alchemy.run.ts` through Doppler:
+Run the app's deploy script through an explicit Doppler config:
 
 ```bash
 cd apps/os
-doppler run --project os --config dev_jonas -- pnpm exec tsx ./alchemy.run.ts
-doppler run --project os --config preview_2 -- pnpm exec tsx ./alchemy.run.ts
-doppler run --project os --config prd -- pnpm exec tsx ./alchemy.run.ts
+doppler run --project os --config dev_jonas -- pnpm deploy
+doppler run --project os --config preview_2 -- pnpm deploy
+doppler run --project os --config prd -- pnpm deploy
 ```
 
 The same primitive starts local dev, deploys a preview, or deploys production
 depending on the config. Destroy uses the same config:
 
 ```bash
-doppler run --project os --config preview_2 -- pnpm exec tsx ./alchemy.run.ts --destroy
+doppler run --project os --config preview_2 -- pnpm destroy
 ```
 
 ## Local Development
@@ -283,7 +283,7 @@ same Doppler config and Alchemy entrypoint.
 
 ```bash
 cd apps/os
-doppler run --project os --config prd -- pnpm exec tsx ./alchemy.run.ts
+doppler run --project os --config prd -- pnpm deploy
 ```
 
 ## OS Hostnames

@@ -280,14 +280,14 @@ doppler run --project _shared --config prd -- pnpm preview acquire --slot 9    #
 
 # 2. Deploy (same primitive as everything else; auth first because OS bakes its JWKS):
 cd apps/auth && doppler run --project auth --config preview_9 -- pnpm alchemy:up
-cd ../os     && doppler run --project os   --config preview_9 -- pnpm alchemy:up
+cd ../os     && doppler run --project os   --config preview_9 -- pnpm deploy
 
 # 3. Point a browser at it (same org-claims requirement as local dev — see
 #    "Acting as users" above; bare --admin lands on the auth login page):
 doppler run --project os --config preview_9 -- pnpm auth:mint --admin --browser-url
 
 # 4. Tear down and release when done:
-cd apps/os   && doppler run --project os   --config preview_9 -- pnpm alchemy:down
+cd apps/os   && doppler run --project os   --config preview_9 -- pnpm destroy
 cd ../auth   && doppler run --project auth --config preview_9 -- pnpm alchemy:down
 doppler run --project _shared --config prd -- pnpm preview release --slot 9 --lease-id <leaseId>
 ```

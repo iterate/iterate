@@ -52,8 +52,10 @@ pnpm e2e -t "OS preview smoke"
 pnpm cli claude-mcp      # open Claude against the OS MCP server in your local Doppler config
 pnpm sqlfu:generate      # regenerate sqlfu migrations/query wrappers
 pnpm sqlfu:check         # compare migrations to definitions.sql
-pnpm cf:deploy           # deploy to whatever Doppler/Alchemy stage is ambient
-pnpm deploy              # production deploy (wraps cf:deploy in doppler --config prd)
+doppler run --project os --config preview_9 -- pnpm deploy
+                         # deploy the explicitly selected Doppler config
+doppler run --project os --config prd -- pnpm deploy
+                         # production deploy
 ```
 
 ## Running Real-Worker Tests
