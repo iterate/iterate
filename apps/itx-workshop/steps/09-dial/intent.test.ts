@@ -44,14 +44,14 @@ async function main() {
   });
 
   // Invoking it dials the ref → builds + runs the worker → calls the method.
-  const sum = await itx.invoke(["calc", "add"], [2, 3]);
+  const sum = await itx.invokeCapability(["calc", "add"], [2, 3]);
   check(
     "dial built + ran a worker from source; props applied",
     sum === 105,
     `calc.add(2,3) with props.base=100 -> ${sum} (computed inside the loaded isolate)`,
   );
 
-  const base = await itx.invoke(["calc", "base"], []);
+  const base = await itx.invokeCapability(["calc", "base"], []);
   check(
     "a second method on the dialed entrypoint (cached isolate)",
     base === 100,

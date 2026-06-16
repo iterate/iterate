@@ -2,19 +2,19 @@
 //
 // This is Step 10 for real: `Itx extends StreamProcessor<ItxContract>` from the
 // platform streams engine (apps/os/src/domains/streams/engine). We override exactly one pure method,
-// `reduce` (the fold), and add the two verbs (`provideCapability` / `invoke`)
+// `reduce` (the fold), and add the two verbs (`provideCapability` / `invokeCapability`)
 // plus revoke. Everything durable — what names exist, each one's kind and
 // address — is the fold of the event log; the only non-durable state is the
 // in-memory bridge of live stubs, which is precisely the live-vs-sturdy line.
 //
 // Built-in capabilities (e.g. `itx.fetch`) are NOT special-cased in a handle and
 // are NOT appended to the stream as events — they're handed to the constructor by
-// whoever builds the context (the host). `invoke` falls back to them after the
-// fold; own provides shadow them; they show up in describe/list. Changing them is
+// whoever builds the context (the host). `invokeCapability` falls back to them after
+// the fold; own provides shadow them; they show up in describe(). Changing them is
 // a code change, not a rewrite of every project's stream.
 
 import { StreamProcessor } from "@iterate-com/os/src/domains/streams/engine/stream-processor.ts";
-import { ITX_EVENTS, ItxContract } from "./itx-contract.ts";
+import { ItxContract, type CapabilityRecord, type ItxState } from "./itx-contract.ts";
 
 /**
  * The one capability-descriptor shape. `provideCapability(args)` takes it, and the
@@ -27,6 +27,23 @@ export type ProvideArgs = {
   instructions?: string;
   types?: string;
 };
+
+/** What describe() returns: this context's reduced state, its built-ins, and the
+ * parent context nested under `parentCapabilities` (recursively). */
+export type DescribeResult = ItxState & {
+  builtins: CapabilityRecord[];
+  parentCapabilities?: unknown;
+};
+
+/** The itx context protocol — what a served context AND a dialable parent answer.
+ * `Itx` and `GlobalContext` both `implements` this, so the two cannot drift apart:
+ * change one's shape and the other stops compiling. */
+export interface ItxContext {
+  invokeCapability(input: { path: string[]; args?: unknown[] }): Promise<unknown>;
+  describe(): Promise<DescribeResult>;
+  provideCapability(args: ProvideArgs): Promise<{ path: string[] }>;
+  revokeCapability(args: { path: string[] }): Promise<unknown>;
+}
 
 /** Structural live-vs-sturdy discriminator: a sturdy address is plain `{ type: "rpc", … }` data. */
 const isCapabilityAddress = (c: any): boolean => !!c && typeof c === "object" && c.type === "rpc";
@@ -47,24 +64,35 @@ function retainLiveProvider(target: any): any {
   return target;
 }
 
-/** The longest registered path-prefix wins (so a deep shadow beats a broad mount). */
-function resolveLongestPrefix(caps: Record<string, any>, path: string[]) {
-  for (let i = path.length; i >= 1; i--) {
-    const name = path.slice(0, i).join(".");
-    if (caps[name]) return { name, record: caps[name], rest: path.slice(i) };
+/** Two capability paths are the same iff their segments match exactly. */
+const samePath = (a: string[], b: string[]) =>
+  a.length === b.length && a.every((seg, i) => seg === b[i]);
+
+/** `prefix` is a prefix of `path` (so a cap at `prefix` answers calls to `path`). */
+const isPrefixOf = (prefix: string[], path: string[]) =>
+  prefix.length <= path.length && prefix.every((seg, i) => seg === path[i]);
+
+/** The longest registered path-prefix wins (so a deep shadow beats a broad mount).
+ * All matching is on the path ARRAYS — there is no dotted-string key anywhere. */
+function resolveLongestPrefix(caps: { path: string[] }[], path: string[]) {
+  let best: { record: any; rest: string[] } | null = null;
+  for (const record of caps) {
+    if (isPrefixOf(record.path, path) && (!best || record.path.length > best.record.path.length)) {
+      best = { record, rest: path.slice(record.path.length) };
+    }
   }
-  return null;
+  return best;
 }
 
 /** Walk the remainder of the path on the resolved target, then call the leaf on its receiver. */
-async function replayPath(target: any, rest: string[], args: unknown[]) {
+export async function replayPath(target: any, rest: string[], args: unknown[]) {
   if (rest.length === 0) return typeof target === "function" ? await target(...args) : target;
   let receiver = target;
   for (let i = 0; i < rest.length - 1; i++) receiver = receiver[rest[i]];
   return await receiver[rest.at(-1)!](...args);
 }
 
-export class Itx extends StreamProcessor<typeof ItxContract> {
+export class Itx extends StreamProcessor<typeof ItxContract> implements ItxContext {
   readonly contract = ItxContract;
 
   // The Step-4 bridge: name → live stub. In memory, NOT durable — a live cap
@@ -72,8 +100,13 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
   // address: null and the actual stub lives here beside the fold.
   #liveCapabilities = new Map<string, any>();
 
-  // Injected restorer for sturdy addresses (Step 7's dial). Optional: a context
-  // with only live caps never needs it.
+  // Injected dialer: a sturdy ADDRESS → a callable stub. ONE dialer for both a
+  // capability's sturdy ref (Step 7) and a parent context's address (Step 11) —
+  // they're the same operation, "address → stub". Optional: a context with only
+  // live caps and no parent never needs it. (Production splits this into a gated
+  // capability dial and an ungated context dial for the auth boundary — provider-
+  // supplied cap addresses are allowlisted, trusted context refs are not. The toy
+  // is unauthed, so one dial; we solve for auth later.)
   #dial: (address: any) => any;
 
   // Built-in capabilities (Step 10): the SAME shape as a `provideCapability` call —
@@ -82,26 +115,28 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
   // by its Project DO. Own provides (the fold) shadow a built-in at the same path.
   #builtinCapabilities: ProvideArgs[];
 
-  // The chain (Step 9): a child context (e.g. an agent) climbs to its parent
-  // (e.g. its project) on a capability MISS. Returns the parent's processor stub,
-  // or null at the top of the chain. A child's own caps + built-ins shadow the parent.
-  #parentItx: () => { invoke(input: { path: string[]; args: unknown[] }): any } | null;
+  // The chain (Step 9): an Itx is born with a PARENT (e.g. an agent's parent is its
+  // project; a project's is the global root). On a capability MISS, resolution
+  // falls through to the parent. The parent is a sturdy ADDRESS — the same plain
+  // data a capability uses, dialed by the same `dial`, recorded in the birth
+  // certificate (Step 11). Optional: null when there is no parent.
+  #parentAddress: any | null;
 
   constructor(
     args: ConstructorParameters<typeof StreamProcessor<typeof ItxContract>>[0] & {
       dial?: (address: any) => any;
       builtinCapabilities?: ProvideArgs[];
-      parentItx?: () => { invoke(input: { path: string[]; args: unknown[] }): any } | null;
+      parentAddress?: any;
     },
   ) {
     super(args);
     this.#dial =
       (args as any).dial ??
       (() => {
-        throw new Error("this context has no dial configured (no sturdy capabilities)");
+        throw new Error("this context has no dial configured (no sturdy addresses)");
       });
     this.#builtinCapabilities = (args as any).builtinCapabilities ?? [];
-    this.#parentItx = (args as any).parentItx ?? (() => null);
+    this.#parentAddress = (args as any).parentAddress ?? null;
   }
 
   // The fold: one pure projection of an event into the next capability table.
@@ -109,32 +144,36 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
   protected override reduce(args: Parameters<StreamProcessor<typeof ItxContract>["reduce"]>[0]) {
     const { event, state } = args as { event: any; state: any };
     switch (event.type) {
-      case ITX_EVENTS.capabilityProvided: {
+      case "events.iterate.com/itx/capability-provided": {
         const { path, kind, address, instructions, types } = event.payload;
-        const name = path.join(".");
+        // `instructions` (what the cap is for) is provided alongside the cap;
+        // `types` is optional and not yet used — it's just carried.
+        const row = {
+          path,
+          kind,
+          address: address ?? null,
+          instructions: instructions ?? null,
+          types: types ?? null,
+        };
+        // A provide at an existing path REPLACES that row in place; otherwise it
+        // appends. The list is the capabilities in arrival order, deduped by path.
+        const exists = state.capabilities.some((c: any) => samePath(c.path, path));
         return {
           ...state,
-          capabilities: {
-            ...state.capabilities,
-            // `instructions` (what the cap is for) is provided alongside the cap;
-            // `types` is optional and not yet used for anything — it's just carried.
-            [name]: {
-              name,
-              kind,
-              address: address ?? null,
-              instructions: instructions ?? null,
-              types: types ?? null,
-            },
-          },
+          capabilities: exists
+            ? state.capabilities.map((c: any) => (samePath(c.path, path) ? row : c))
+            : [...state.capabilities, row],
         };
       }
-      case ITX_EVENTS.capabilityRevoked: {
-        const name = event.payload.path.join(".");
-        const capabilities = { ...state.capabilities };
-        delete capabilities[name];
-        return { ...state, capabilities };
+      case "events.iterate.com/itx/capability-revoked": {
+        return {
+          ...state,
+          capabilities: state.capabilities.filter(
+            (c: any) => !samePath(c.path, event.payload.path),
+          ),
+        };
       }
-      case ITX_EVENTS.contextCreated: {
+      case "events.iterate.com/itx/context-created": {
         if (state.context) return state; // get-or-create: first one wins
         return {
           ...state,
@@ -158,7 +197,7 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
     if (kind === "live") this.#liveCapabilities.set(path.join("."), retainLiveProvider(capability));
     const committed = await this.ctx.stream.append({
       event: {
-        type: ITX_EVENTS.capabilityProvided,
+        type: "events.iterate.com/itx/capability-provided",
         payload: { path, kind, address: kind === "rpc" ? capability : null, instructions, types },
       },
     });
@@ -175,63 +214,47 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
     }
   }
 
-  /** The capability table is the fold — plus the constructor's built-in capabilities (Step 10). */
-  listCapabilities(): string[] {
-    const builtins = this.#builtinCapabilities.map((b) => b.path.join("."));
-    return [...new Set([...builtins, ...Object.keys(this.state.capabilities)])];
-  }
-
-  // The self-describing view: every capability with the `instructions` (what it's
-  // for) and `types` (its surface) it was provided WITH. This is why there's no
-  // separate per-capability "describe" verb — a cap describes itself at provide
-  // time and the fold carries that metadata forward. Built-ins describe themselves
-  // too (their instructions/types come from the constructor array); an own provide
-  // shadows a built-in at the same name. (Production calls this describe.)
-  describeCapabilities(): Record<
-    string,
-    { name: string; kind: string; instructions: string | null; types: string | null }
-  > {
-    const out: Record<
-      string,
-      { name: string; kind: string; instructions: string | null; types: string | null }
-    > = {};
-    for (const b of this.#builtinCapabilities) {
-      const name = b.path.join(".");
-      out[name] = {
-        name,
-        kind: isCapabilityAddress(b.capability) ? "rpc" : "live",
-        instructions: b.instructions ?? null,
-        types: b.types ?? null,
-      };
-    }
-    for (const [name, rec] of Object.entries(this.state.capabilities)) {
-      out[name] = {
-        name,
-        kind: rec.kind,
-        instructions: rec.instructions ?? null,
-        types: rec.types ?? null,
-      };
-    }
-    return out;
+  // describe() is the ONE read verb (there is no separate `list`). It hands back
+  // this context's RAW reduced state — `{ capabilities, context }` straight from the
+  // fold (`context` is the `{ name, parent }` birth certificate) — plus `builtins`,
+  // its constructor-injected capabilities (NOT in the fold, so listed separately),
+  // and nests the parent under `parentCapabilities`, recursively to the root. Every
+  // row, folded or built-in, is the same `CapabilityRecord` shape.
+  async describe(): Promise<DescribeResult> {
+    return {
+      ...this.state,
+      builtins: this.#builtinCapabilities.map(
+        (b): CapabilityRecord => ({
+          path: b.path,
+          kind: isCapabilityAddress(b.capability) ? "rpc" : "live",
+          address: isCapabilityAddress(b.capability) ? b.capability : null,
+          instructions: b.instructions ?? null,
+          types: b.types ?? null,
+        }),
+      ),
+      ...(this.#parentAddress
+        ? { parentCapabilities: await this.#dial(this.#parentAddress).describe() }
+        : {}),
+    };
   }
 
   async revokeCapability({ path }: { path: string[] }) {
     const committed = await this.ctx.stream.append({
-      event: { type: ITX_EVENTS.capabilityRevoked, payload: { path } },
+      event: { type: "events.iterate.com/itx/capability-revoked", payload: { path } },
     });
     await this.#awaitDelivered((committed as any).offset);
   }
 
-  // invoke resolves over the FOLD (this.state) first — own caps win — then falls
-  // back to the constructor's built-in capabilities. Then it borrows: a live entry's stub from the
-  // bridge, a sturdy entry's address via dial; the remaining path is replayed.
-  async invoke({ path, args = [] }: { path: string[]; args?: unknown[] }) {
+  // invokeCapability resolves over the FOLD (this.state) first — own caps win — then
+  // falls back to the constructor's built-in capabilities. Then it borrows: a live
+  // entry's stub from the bridge, a sturdy entry's address via dial; the rest is replayed.
+  async invokeCapability({ path, args = [] }: { path: string[]; args?: unknown[] }) {
     const hit = resolveLongestPrefix(this.state.capabilities, path);
     if (hit) {
+      const key = hit.record.path.join("."); // the bridge is keyed by the joined path
       if (hit.record.kind === "live") {
-        const stub = this.#liveCapabilities.get(hit.name);
-        if (!stub)
-          throw new Error(`capability "${hit.name}" is offline (live provider disconnected)`);
+        const stub = this.#liveCapabilities.get(key);
+        if (!stub) throw new Error(`capability "${key}" is offline (live provider disconnected)`);
         return await replayPath(stub, hit.rest, args);
       }
       return await replayPath(this.#dial(hit.record.address), hit.rest, args);
@@ -245,9 +268,13 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
       );
       if (builtin) return await replayPath(builtin.capability, path.slice(i), args);
     }
-    // chain (Step 9): climb to the parent context on a miss (super).
-    const parent = this.#parentItx();
-    if (parent) return await parent.invoke({ path, args });
+    // chain (Step 9): on a miss, resolve against the PARENT context. The parent is
+    // a sturdy ADDRESS dialed by the SAME `dial` as a capability — the only
+    // difference is the call: we re-dispatch the WHOLE path into the parent's
+    // `invokeCapability` (recurse up the chain), instead of replaying a leaf.
+    if (this.#parentAddress) {
+      return await this.#dial(this.#parentAddress).invokeCapability({ path, args });
+    }
     throw new Error(`no capability "${path.join(".")}"`);
   }
 }

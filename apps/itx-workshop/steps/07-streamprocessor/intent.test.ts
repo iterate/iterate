@@ -36,7 +36,7 @@ async function main() {
   });
   check(
     "provide → fold → invoke (read-your-writes)",
-    (await itx.invoke(["greeter"], ["ada"])) === "hi ada",
+    (await itx.invokeCapability(["greeter"], ["ada"])) === "hi ada",
   );
 
   // THE POINT of this step: write an event STRAIGHT to the durable log, bypassing
@@ -53,7 +53,7 @@ async function main() {
 
   let deliveredAfterMs = -1;
   for (let i = 0; i < 60; i++) {
-    if ((await itx.list()).includes("external")) {
+    if ((await itx.describe()).capabilities.some((c: any) => c.path.join(".") === "external")) {
       deliveredAfterMs = i * 100;
       break;
     }

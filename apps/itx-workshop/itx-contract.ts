@@ -20,19 +20,10 @@ import { defineProcessorContract } from "@iterate-com/shared/streams/stream-proc
 /** A sturdy capability address — plain data; `dial` turns it back into a callable. */
 export const CapabilityAddress = z.looseObject({ type: z.string() });
 
-/** The itx event types. The `events.iterate.com/itx/*` naming is the platform convention. */
-export const ITX_EVENTS = {
-  contextCreated: "events.iterate.com/itx/context-created",
-  capabilityProvided: "events.iterate.com/itx/capability-provided",
-  capabilityRevoked: "events.iterate.com/itx/capability-revoked",
-  capabilityDisconnected: "events.iterate.com/itx/capability-disconnected",
-  scriptExecutionRequested: "events.iterate.com/itx/script-execution-requested",
-  scriptExecutionCompleted: "events.iterate.com/itx/script-execution-completed",
-} as const;
-
-/** One folded row of the capability table. */
-const CapabilityRecord = z.object({
-  name: z.string(),
+/** One row of the capability table — a folded provide, a built-in, anything that
+ * describes a capability. Keyed in the fold's list by `path.join(".")`. */
+export const CapabilityRecord = z.object({
+  path: z.array(z.string()),
   kind: z.enum(["live", "rpc"]),
   address: CapabilityAddress.nullable().default(null),
   // Every capability is provided with `instructions` (what it's for, for an agent
@@ -41,6 +32,7 @@ const CapabilityRecord = z.object({
   instructions: z.string().nullable().default(null),
   types: z.string().nullable().default(null),
 });
+export type CapabilityRecord = z.infer<typeof CapabilityRecord>;
 
 /** A parent context reference — the chain link the birth certificate records. */
 const ParentRef = z.looseObject({
@@ -53,9 +45,11 @@ export const ItxContract = defineProcessorContract({
   version: "0.1.0",
   description: "A context: its capability table, folded from its own durable event log.",
   // State is a PLAIN OBJECT (the StreamProcessor checkpoints + validates it; a
-  // Map cannot be the reduced state). The table is derived, never the source.
+  // Map cannot be the reduced state). `capabilities` is a LIST of provided
+  // capabilities in arrival order; a provide at a path already present REPLACES
+  // that entry (never appends a duplicate). The table is derived, never the source.
   stateSchema: z.object({
-    capabilities: z.record(z.string(), CapabilityRecord).default({}),
+    capabilities: z.array(CapabilityRecord).default([]),
     context: z
       .object({
         name: z.string().nullable().default(null),
@@ -64,9 +58,9 @@ export const ItxContract = defineProcessorContract({
       .nullable()
       .default(null),
   }),
-  initialState: { capabilities: {}, context: null },
+  initialState: { capabilities: [], context: null },
   events: {
-    [ITX_EVENTS.contextCreated]: {
+    "events.iterate.com/itx/context-created": {
       description:
         "The context's birth certificate, appended by its creator: naming + parentage. The fold takes the first one and ignores any later one (create is get-or-create).",
       payloadSchema: z.looseObject({
@@ -74,7 +68,7 @@ export const ItxContract = defineProcessorContract({
         parent: ParentRef.nullable().optional(),
       }),
     },
-    [ITX_EVENTS.capabilityProvided]: {
+    "events.iterate.com/itx/capability-provided": {
       description:
         "A capability was provided at a path. THE write: the fold projects it into the capability table. A live provide appends this too (kind: live, address: null) while its stub stays an in-memory bridge entry.",
       payloadSchema: z.looseObject({
@@ -85,39 +79,34 @@ export const ItxContract = defineProcessorContract({
         types: z.string().optional(),
       }),
     },
-    [ITX_EVENTS.capabilityRevoked]: {
-      description: "A capability entry was removed (exact path match, never prefix).",
-      payloadSchema: z.looseObject({ path: z.array(z.string()) }),
-    },
-    [ITX_EVENTS.capabilityDisconnected]: {
+    "events.iterate.com/itx/capability-revoked": {
       description:
-        "A live capability's provider session broke. Record only: the entry survives (describe() reports it offline) until revoked or re-provided.",
+        "A capability entry was removed (exact path match, never prefix). Also how a live cap goes away — there's no separate 'disconnected' event; you revoke it.",
       payloadSchema: z.looseObject({ path: z.array(z.string()) }),
     },
     // Codemode (Step 12). These are durable RECORDS, not state changes — the
     // fold doesn't consume them; together they bracket a script run. Declared
     // here so they're known events on the contract-validated stream, not strays.
-    [ITX_EVENTS.scriptExecutionRequested]: {
+    "events.iterate.com/itx/script-execution-requested": {
       description: "A script run was requested: `code` is the `async (itx) => …` program.",
       payloadSchema: z.looseObject({ executionId: z.string(), code: z.string().optional() }),
     },
-    [ITX_EVENTS.scriptExecutionCompleted]: {
+    "events.iterate.com/itx/script-execution-completed": {
       description: "A script run settled. With the requested event, this is the durable record.",
       payloadSchema: z.looseObject({ executionId: z.string() }),
     },
   },
   consumes: [
-    ITX_EVENTS.contextCreated,
-    ITX_EVENTS.capabilityProvided,
-    ITX_EVENTS.capabilityRevoked,
+    "events.iterate.com/itx/context-created",
+    "events.iterate.com/itx/capability-provided",
+    "events.iterate.com/itx/capability-revoked",
   ],
   emits: [
-    ITX_EVENTS.contextCreated,
-    ITX_EVENTS.capabilityProvided,
-    ITX_EVENTS.capabilityRevoked,
-    ITX_EVENTS.capabilityDisconnected,
-    ITX_EVENTS.scriptExecutionRequested,
-    ITX_EVENTS.scriptExecutionCompleted,
+    "events.iterate.com/itx/context-created",
+    "events.iterate.com/itx/capability-provided",
+    "events.iterate.com/itx/capability-revoked",
+    "events.iterate.com/itx/script-execution-requested",
+    "events.iterate.com/itx/script-execution-completed",
   ],
 });
 

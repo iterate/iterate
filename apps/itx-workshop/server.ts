@@ -26,7 +26,13 @@ import {
   type RequestStreamSubscriptionArgs,
 } from "@iterate-com/os/src/domains/streams/engine/workers/stream-processor-host.ts";
 import { durableObjectProcessorSubscriber } from "@iterate-com/os/src/domains/streams/engine/shared/callable-subscriber.ts";
-import { Itx, type ProvideArgs } from "./itx-processor.ts";
+import {
+  Itx,
+  replayPath,
+  type DescribeResult,
+  type ItxContext,
+  type ProvideArgs,
+} from "./itx-processor.ts";
 import { ItxContract } from "./itx-contract.ts";
 // Incremental step folders (steps/README.md). Each is mounted under
 // /steps/<id>/* so earlier and half-built steps stay live alongside the rest.
@@ -133,7 +139,7 @@ function dynamicHandle({ rpcTarget, path = [] }: { rpcTarget: any; path?: string
     },
     apply(_t, _s, args) {
       // A bare-stub deep path lands here: invoke the accumulated path.
-      return rpcTarget.invoke(path, args as unknown[]);
+      return rpcTarget.invokeCapability(path, args as unknown[]);
     },
   });
 }
@@ -185,12 +191,13 @@ export class ItxDO extends DurableObject<Env> {
       new Itx({
         ...deps,
         iterateContext: { stream: this.#log() },
-        dial: (address) => this.#dial(address), // Step 09: restore a sturdy ref
+        dial: (address) => this.#dial(address), // Step 09/11: restore any sturdy address
         builtinCapabilities: this.#contextBuiltinCapabilities(), // Step 10: from the Project/Agent DO
-        parentItx: () => this.#parentContext(), // Step 11: climb to the parent
+        parentAddress: this.#parentRef()?.address ?? null, // Step 11: the parent, as data
       }),
   );
   #subscriptionConfigured = false;
+  #contextCreated = false;
 
   // A context is a project id + a path (Step 12). We name the host DO by that
   // coordinate: "prj:<id>" is the project itx; "prj:<id>/agents/<name>" is an
@@ -221,36 +228,57 @@ export class ItxDO extends DurableObject<Env> {
     return [];
   }
 
-  // Step 11: the parent context. An agent ("prj:<id>/agents/<name>") climbs to
-  // its project ("prj:<id>") on a miss; the project root has no parent here.
-  #parentContext(): { invoke(input: { path: string[]; args: unknown[] }): any } | null {
+  // Step 11 + 13: a context's PARENT, as DATA — a `{ ref, address }` birth-
+  // certificate link, not a closure. An agent ("prj:<id>/agents/<name>") parents
+  // to its project ("prj:<id>"), a DO-backed context node; the PROJECT root
+  // parents to the GLOBAL context — the stateless, read-only platform capability
+  // root (Step 13), a code address. A non-project context (the shared "itx") is
+  // standalone and has no chain. The host knows the parentage at creation; it both
+  // RECORDS it in the birth certificate and hands the address to the core to dial.
+  #parentRef(): { ref: string; address: any } | null {
     const name = this.ctx.id.name ?? "";
     const projectId = this.#project();
-    if (!projectId || name === `prj:${projectId}`) return null; // project root: top of the chain
-    return this.env.ITX.getByName(`prj:${projectId}`).itx();
+    if (!projectId) return null; // standalone context (e.g. the shared "itx"): no chain
+    if (name === `prj:${projectId}`) {
+      return { ref: "global", address: { type: "code", context: "global" } };
+    }
+    return { ref: `prj:${projectId}`, address: { type: "context", ref: `prj:${projectId}` } };
   }
 
-  // dial (Step 09): turn a sturdy address into a callable by BUILDING AND RUNNING
-  // its worker via the Worker Loader. `{ type: "rpc", worker: { type: "source",
-  // source }, entrypoint, props }` → a live entrypoint stub whose methods run in
-  // the loaded isolate, with `props` arriving as `this.ctx.props`. The isolate is
-  // cached by content (same source → same isolate, no rebuild).
+  // The ONE dialer: a sturdy ADDRESS → a callable stub. Three address kinds,
+  // dispatched on `type` — two are CAPABILITIES, two are PARENT contexts, and they
+  // share this one door because the toy is unauthed. (Production gates capability
+  // addresses, which are provider-supplied, and leaves context addresses, which
+  // are trusted, ungated — two dials. We solve for auth later.)
   #dial(address: any): any {
-    if (address?.type !== "rpc") throw new Error("capability address is not dialable");
-    const worker = address.worker;
-    if (worker?.type !== "source") {
-      throw new Error(`worker type "${worker?.type}" is not supported here (only "source")`);
+    // a parent: another context node (an agent's project), dialed by coordinate.
+    if (address?.type === "context" && typeof address.ref === "string") {
+      return this.env.ITX.getByName(address.ref).itx();
     }
-    const loaded = this.env.LOADER.get(
-      `src:${address.entrypoint}:${hashString(worker.source)}`,
-      () => ({
-        compatibilityDate: "2025-04-27",
-        compatibilityFlags: ["nodejs_compat"],
-        mainModule: "main.js",
-        modules: { "main.js": worker.source },
-      }),
-    );
-    return loaded.getEntrypoint(address.entrypoint, { props: address.props ?? {} });
+    // a parent: the code-rooted global root (Step 13) — STATELESS, so constructed
+    // inline; needing no DO is exactly why it's the root. The climb is project-
+    // agnostic, so it gets full catalog access. (Prod dials it as a loopback.)
+    if (address?.type === "code" && address.context === "global") {
+      return new GlobalContext({ access: "all" });
+    }
+    // a capability (Step 09): BUILD AND RUN its worker via the Worker Loader.
+    // `{ type: "rpc", worker: { type: "source", source }, entrypoint, props }` → a
+    // live entrypoint stub whose methods run in the loaded isolate, `props` arriving
+    // as `this.ctx.props`. The isolate is cached by content (same source → reused).
+    if (address?.type === "rpc" && address.worker?.type === "source") {
+      const worker = address.worker;
+      const loaded = this.env.LOADER.get(
+        `src:${address.entrypoint}:${hashString(worker.source)}`,
+        () => ({
+          compatibilityDate: "2025-04-27",
+          compatibilityFlags: ["nodejs_compat"],
+          mainModule: "main.js",
+          modules: { "main.js": worker.source },
+        }),
+      );
+      return loaded.getEntrypoint(address.entrypoint, { props: address.props ?? {} });
+    }
+    throw new Error(`address is not dialable: ${JSON.stringify(address)}`);
   }
 
   // This context's durable event log is its OWN stream, named by coordinate —
@@ -293,9 +321,32 @@ export class ItxDO extends DurableObject<Env> {
     );
   }
 
+  // The birth certificate (Step 11), appended ONCE (idempotent — the fold takes
+  // the first one). It records the context's name and PARENTAGE as data: the same
+  // `{ ref, address }` the core dials to climb. The core climbs off the address
+  // the host injected (so the very first climb never races this append's delivery
+  // — the toy creates contexts lazily on connect, unlike production's "two appends
+  // by the creator before first use"); this durable copy is for replay + audit.
+  #ensureContextCreated(): void {
+    if (this.#contextCreated) return;
+    this.#contextCreated = true;
+    const name = this.ctx.id.name ?? "itx";
+    const parent = this.#parentRef();
+    this.ctx.waitUntil(
+      this.env.STREAM.getByName(this.#coordinate()).append({
+        event: {
+          type: "events.iterate.com/itx/context-created",
+          idempotencyKey: `itx-context-created:${name}`,
+          payload: { name, parent },
+        },
+      } as any),
+    );
+  }
+
   // A METHOD that returns the processor (workerd can't pipeline through a property).
   itx(): Itx {
     this.#ensureSubscriptionConfigured();
+    this.#ensureContextCreated();
     return this.#itx;
   }
 
@@ -343,15 +394,15 @@ export class ItxDO extends DurableObject<Env> {
     // The itx handle the script receives — it can invoke and provide against this
     // very context (the methods become RPC stubs in the loaded isolate).
     const itxHandle = {
-      invoke: (path: string[], args: unknown[] = []) => this.#itx.invoke({ path, args }),
+      invokeCapability: (path: string[], args: unknown[] = []) =>
+        this.#itx.invokeCapability({ path, args }),
       provideCapability: (args: {
         path: string[];
         capability: any;
         instructions?: string;
         types?: string;
       }) => this.#itx.provideCapability(args),
-      list: () => this.#itx.listCapabilities(),
-      describe: () => this.#itx.describeCapabilities(),
+      describe: () => this.#itx.describe(),
     };
     const result = await loaded.getEntrypoint("Script").run(itxHandle);
     await log.append({
@@ -382,7 +433,7 @@ export class ItxDO extends DurableObject<Env> {
       },
     });
     await fresh.ingest({ events, streamMaxOffset: events.at(-1)?.offset ?? 0 });
-    return fresh.listCapabilities();
+    return (await fresh.describe()).capabilities.map((c) => c.path.join("."));
   }
 }
 
@@ -414,19 +465,17 @@ class WorkerHandle extends RpcTarget {
     // would break the DO's copy. dup() retains it so client→Worker→DO survives.
     return this.#node.itx().provideCapability({ ...args, capability: retain(args.capability) });
   }
-  invoke(path: string[], args: unknown[]) {
-    return this.#node.itx().invoke({ path, args });
+  invokeCapability(path: string[], args: unknown[]) {
+    return this.#node.itx().invokeCapability({ path, args });
   }
   revokeCapability(path: string[]) {
     return this.#node.itx().revokeCapability({ path });
   }
-  list() {
-    return this.#node.itx().listCapabilities();
-  }
-  // The self-describing view: each capability with the instructions/types it was
-  // provided with (built-ins included). The metadata round-trips client→DO→fold→here.
+  // The one read verb: each reachable capability with the instructions/types it
+  // was provided with (built-ins included, parent chain merged in). The metadata
+  // round-trips client→DO→fold→here.
   describe() {
-    return this.#node.itx().describeCapabilities();
+    return this.#node.itx().describe();
   }
   rebuildFromLog() {
     return this.#node.rebuildFromLog();
@@ -503,6 +552,130 @@ export class Agent extends DurableObject<Env> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Step 13 — the platform capability root. The root of the chain: every project
+// context's parent, and itself parentless. It is the ONE context that is NOT a
+// Durable Object and NOT a StreamProcessor — there is no stream to fold and
+// nothing to persist, so it is just CONSTRUCTED IN CODE (per connection) and
+// answers the SAME itx protocol (invokeCapability / describe) as any other
+// context. What makes it the root:
+//
+//   - READ-ONLY: `provideCapability` / `revokeCapability` throw. You cannot
+//     append to a context that has no log — so "you cannot provide into the
+//     root" is structural, not a guard someone has to remember.
+//   - NO PARENT: a capability miss has nowhere left to climb, so it just throws.
+//
+// Its capabilities are fixed, project-agnostic "catalog" caps, wired in as code:
+// here a single `projects` cap (a { list, get }) — list the projects you can
+// reach, get(id) to narrow into one. Adding a sibling (users, orgs, …) is just
+// another entry, which is the whole reason the catalog rides the capability
+// protocol instead of being bespoke handle code.
+//
+// (Production serves this from a named worker entrypoint dialed as a loopback,
+// alongside the per-project defaults context; the toy constructs it inline
+// because it is stateless and n-of-1. The catalog there narrows to a live
+// project itx HANDLE and scopes `list` to the connect-time principal's access;
+// the toy returns the context ref and scopes by a plain access list.)
+// ---------------------------------------------------------------------------
+
+// The catalog: every project any principal could reach (derived from the auth
+// map). A global handle scoped to `access` only ever sees a subset of this.
+const KNOWN_PROJECTS = [...new Set(Object.values(step08.PRINCIPALS).flatMap((p) => p.projects))];
+
+export class GlobalContext implements ItxContext {
+  #access: "all" | string[];
+  // The fixed catalog capabilities. ONE cap `projects` whose deep path
+  // (projects.list / projects.get(id)) replays onto this object — the exact same
+  // deep-path shape as the mounted Slack SDK in Step 6.
+  #capabilities: Record<string, any>;
+
+  constructor(args: { access: "all" | string[] }) {
+    this.#access = args.access;
+    const reachable = () => (this.#access === "all" ? KNOWN_PROJECTS : this.#access);
+    this.#capabilities = {
+      projects: {
+        list: () => reachable(),
+        get: (id: string) => {
+          if (!reachable().includes(id)) throw new Error(`no access to project "${id}"`);
+          // Production narrows to a live project itx HANDLE here; the toy returns
+          // the project's context ref (the narrowing target) to stay naked-stub simple.
+          return { id, ref: `prj:${id}` };
+        },
+      },
+    };
+  }
+
+  // The itx protocol — read side. Longest registered prefix wins, then the
+  // remainder of the path is replayed onto the resolved cap (the same primitive
+  // the StreamProcessor uses). The root has NO parent: the chain bottoms out here.
+  async invokeCapability({ path, args = [] }: { path: string[]; args?: unknown[] }) {
+    for (let i = path.length; i >= 1; i--) {
+      const cap = this.#capabilities[path.slice(0, i).join(".")];
+      if (cap) return await replayPath(cap, path.slice(i), args);
+    }
+    throw new Error(`no capability "${path.join(".")}" (the global root context has no parent)`);
+  }
+
+  // Same `DescribeResult` shape as a real context (enforced by `implements
+  // ItxContext`), so it nests under a child's `parentCapabilities` uniformly —
+  // except the root has no fold, so its capabilities are empty and it has no parent.
+  async describe(): Promise<DescribeResult> {
+    return {
+      capabilities: [],
+      // The root has no fold; its `projects` catalog is a built-in, listed the
+      // same way a project context lists its `fetch` or an agent its `whoami`.
+      builtins: [
+        {
+          path: ["projects"],
+          kind: "live",
+          address: null,
+          instructions:
+            "the project catalog: list() what you can reach, get(id) to narrow into one",
+          types: null,
+        },
+      ],
+      context: { name: "global", parent: null },
+    };
+  }
+
+  // READ-ONLY — there is no log to append to.
+  async provideCapability(): Promise<never> {
+    throw new Error(
+      "the global root context is stateless and read-only — you cannot provide a capability into it",
+    );
+  }
+  async revokeCapability(): Promise<never> {
+    throw new Error(
+      "the global root context is stateless and read-only — there is nothing to revoke",
+    );
+  }
+}
+
+// The edge adapter for serving the global context directly to a client (the
+// same role WorkerHandle plays for the ItxDO): it translates the dynamic proxy's
+// positional `invokeCapability(path, args)` into the context's bag
+// `invokeCapability({ path, args })` and forwards the verbs (so `provideCapability`
+// throws over the wire). A naked stub can then call `global.projects.list()` and friends.
+class GlobalItxRpcTarget extends RpcTarget {
+  #global: GlobalContext;
+  constructor(global: GlobalContext) {
+    super();
+    this.#global = global;
+  }
+  invokeCapability(path: string[], args: unknown[]) {
+    return this.#global.invokeCapability({ path, args });
+  }
+  describe() {
+    return this.#global.describe();
+  }
+  provideCapability() {
+    return this.#global.provideCapability();
+  }
+  revokeCapability() {
+    return this.#global.revokeCapability();
+  }
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -543,7 +716,7 @@ export default {
 
     // Step 11 — the chain: open a project context (?project=alice) or an agent
     // context under it (?project=alice&agent=foo). The agent's parent is the
-    // project; a miss on the agent climbs to the project (super). Auth is the
+    // project; a miss on the agent resolves against the project. Auth is the
     // same project check as Step 08.
     if (path === "/steps/11-chain") {
       const project = url.searchParams.get("project") ?? "";
@@ -554,6 +727,25 @@ export default {
       const coordinate = agent ? `prj:${project}/agents/${agent}` : `prj:${project}`;
       const node = env.ITX.getByName(coordinate);
       const main = dynamicHandle({ rpcTarget: new WorkerHandle(node) });
+      const pair = new WebSocketPair();
+      const server = pair[0];
+      server.accept();
+      newWebSocketRpcSession(server as unknown as WebSocket, main);
+      ctx.waitUntil(
+        new Promise<void>((resolve) => server.addEventListener("close", () => resolve())),
+      );
+      return new Response(null, { status: 101, webSocket: pair[1] });
+    }
+
+    // Step 13 — the platform capability root. Authenticate the principal (no
+    // project: the root is not project-scoped) and serve the STATELESS global
+    // context, scoped to the projects that principal may reach. There is no DO
+    // and no stream here — the context is constructed per connection.
+    if (path === "/steps/13-platform-root") {
+      const principal = step08.authenticate(request);
+      if (!principal) return new Response("missing or invalid token", { status: 401 });
+      const global = new GlobalContext({ access: principal.projects });
+      const main = dynamicHandle({ rpcTarget: new GlobalItxRpcTarget(global) });
       const pair = new WebSocketPair();
       const server = pair[0];
       server.accept();

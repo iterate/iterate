@@ -24,20 +24,21 @@ A ✅ row is a folder you can `cd` into and run; a ⏳ row is **not yet extracte
 into its own folder — that step's behavior is built and proven today in the
 shared core (`../server.ts` + `../harness.ts`), and the folder is a TODO.
 
-| Folder                   | Status | Adds                                                                                                                   |
-| ------------------------ | ------ | ---------------------------------------------------------------------------------------------------------------------- |
-| `01-socket`              | ✅     | a method call over a Cap'n Web socket — the whole primitive                                                            |
-| `02-server-calls-client` | ✅     | bidirectional stubs: the server calls back a capability the client passed                                              |
-| `03-provide-invoke`      | ✅     | `provide`/`invoke` — a runtime capability registry (per-connection; motivates 04)                                      |
-| `04-durable-object`      | ✅     | the registry in a Durable Object; two clients rendezvous on a live cap (shared `RegistryDO`)                           |
-| `05-dynamic-proxy`       | ⏳     | the server-side dynamic proxy: naked-stub deep paths + a real SDK, no client proxy                                     |
-| `06-live-vs-sturdy`      | ⏳     | the two capability kinds: a live stub vs a serializable address                                                        |
-| `07-streamprocessor`     | ✅     | the context IS a durable event log folded by the real platform StreamProcessor, delivered by the stream's subscription |
-| `08-auth`                | ✅     | an auth token → the projects you may access → an itx scoped to them                                                    |
-| `09-dial`                | ✅     | `dial`: real code-loading via the Worker Loader (run an entrypoint from a ref)                                         |
-| `10-project-fetch`       | ✅     | a **Project Durable Object** with a `fetch` method, provided as `itx.fetch`                                            |
-| `11-chain`               | ✅     | the context chain: a project itx → an agent itx, with `extend`/`super`                                                 |
-| `12-codemode`            | ✅     | the flourish: `script-execution-requested`/`-completed`, run a program in a loaded isolate                             |
+| Folder                   | Status | Adds                                                                                                                                 |
+| ------------------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `01-socket`              | ✅     | a method call over a Cap'n Web socket — the whole primitive                                                                          |
+| `02-server-calls-client` | ✅     | bidirectional stubs: the server calls back a capability the client passed                                                            |
+| `03-provide-invoke`      | ✅     | `provide`/`invoke` — a runtime capability registry (per-connection; motivates 04)                                                    |
+| `04-durable-object`      | ✅     | the registry in a Durable Object; two clients rendezvous on a live cap (shared `RegistryDO`)                                         |
+| `05-dynamic-proxy`       | ⏳     | the server-side dynamic proxy: naked-stub deep paths + a real SDK, no client proxy                                                   |
+| `06-live-vs-sturdy`      | ⏳     | the two capability kinds: a live stub vs a serializable address                                                                      |
+| `07-streamprocessor`     | ✅     | the context IS a durable event log folded by the real platform StreamProcessor, delivered by the stream's subscription               |
+| `08-auth`                | ✅     | an auth token → the projects you may access → an itx scoped to them                                                                  |
+| `09-dial`                | ✅     | `dial`: real code-loading via the Worker Loader (run an entrypoint from a ref)                                                       |
+| `10-project-fetch`       | ✅     | a **Project Durable Object** with a `fetch` method, provided as `itx.fetch`                                                          |
+| `11-chain`               | ✅     | the context chain: a project itx → an agent itx, with `extend`/`super`                                                               |
+| `12-codemode`            | ✅     | the flourish: `script-execution-requested`/`-completed`, run a program in a loaded isolate                                           |
+| `13-platform-root`       | ✅     | the top of the chain: a stateless, read-only context (no DO, no StreamProcessor) every project climbs to; provide/extend/super throw |
 
 The bar for "done": each step **actually runs** (intent test green over real
 workerd) and its story is told **coherently** — not edge-case hardening or
@@ -48,7 +49,7 @@ production paranoia.
 This `steps/` sequence is the **runnable build order**. The narrative explainer
 `../itx-explainer.md` has its own **prose** step numbers (0–13) that do NOT line
 up one-to-one — it spends Steps 8–11 on the StreamProcessor that is one folder
-here (`07`), and folds auth/dial/project/chain/codemode into its Step 12.
+here (`07`), and folds auth/dial/project/chain/codemode into its Step 11.
 Crosswalk:
 
 | `steps/` folder                                               | explainer prose           |
@@ -60,7 +61,8 @@ Crosswalk:
 | 05 dynamic-proxy                                              | Steps 5–6                 |
 | 06 live-vs-sturdy                                             | Step 7                    |
 | 07 streamprocessor                                            | Steps 8–11                |
-| 08 auth · 09 dial · 10 project-fetch · 11 chain · 12 codemode | Step 12 (platform layers) |
+| 08 auth · 09 dial · 10 project-fetch · 11 chain · 12 codemode | Step 11 (platform layers) |
+| 13 platform-root                                              | Step 12 (capability root) |
 
 (`validate-steps.mjs` prints the **explainer** numbers; the intent tests use the
 **folder** numbers. Same idea, two labels.)

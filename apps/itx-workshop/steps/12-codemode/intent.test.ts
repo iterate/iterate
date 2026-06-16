@@ -30,7 +30,7 @@ async function main() {
 
   // The PROGRAM: it invokes an existing cap AND provides a new one, then returns.
   const code = `async (itx) => {
-    const greeting = await itx.invoke(["greeter"], ["from-the-script"]);
+    const greeting = await itx.invokeCapability(["greeter"], ["from-the-script"]);
     await itx.provideCapability({ path: ["scriptMade"], capability: async () => "made inside the script" });
     return greeting;
   }`;
@@ -42,7 +42,7 @@ async function main() {
     `runScript(...) -> ${JSON.stringify(result)}`,
   );
 
-  const names = await itx.list();
+  const names = (await itx.describe()).capabilities.map((c: any) => c.path.join("."));
   check(
     "the script provided a new capability into the context",
     names.includes("scriptMade"),

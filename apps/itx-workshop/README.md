@@ -135,8 +135,13 @@ is a stub whose `.apply` is a path segment, not a function.
   **`Project extends DurableObject`** (owns egress; its `builtinCapabilities` give a
   project context `fetch`) and **`Agent extends DurableObject`** (owns its identity;
   its `builtinCapabilities` give an agent context `whoami`) — the agent's itx parent
-  is its project's itx, so the project↔agent chain is concrete and runnable.
-  `/itx?ctx=<name>` selects a context.
+  is its project's itx, so the project↔agent chain is concrete and runnable. At the
+  TOP of the chain sits **`GlobalContext`** (Step 13): a stateless, read-only context
+  that is NOT a DO and NOT a StreamProcessor — constructed in code, serving the
+  `projects` catalog as capabilities, with `provideCapability`/`revokeCapability`
+  throwing (read-only) and no parent of its own. Every project context resolves
+  against it on a miss. `/itx?ctx=<name>` selects a
+  context; `/steps/13-platform-root` opens the global root directly.
 - `itx-contract.ts` — the itx event log defined as a real `defineProcessorContract`
   (the platform streams engine (now in apps/os/src/domains/streams)): the `events.iterate.com/itx/*` event schemas + plain-object
   state. Step 8's "it's just a durable event log."

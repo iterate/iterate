@@ -13,14 +13,14 @@ const url = (project: string) => `${WS}/steps/08-auth?project=${encodeURICompone
 const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
 
 interface ItxCore {
-  list(): Promise<string[]>;
+  describe(): Promise<Record<string, unknown>>;
   provideCapability(args: {
     path: string[];
     capability: any;
     instructions?: string;
     types?: string;
   }): Promise<any>;
-  invoke(path: string[], args: unknown[]): Promise<any>;
+  invokeCapability(path: string[], args: unknown[]): Promise<any>;
 }
 
 let failures = 0;
@@ -35,7 +35,7 @@ async function canOpen(token: string | null, project: string): Promise<boolean> 
   try {
     using itx = connect<ItxCore>(url(project), token ? bearer(token) : undefined);
     await Promise.race([
-      itx.list(),
+      itx.describe(),
       new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 5000)),
     ]);
     return true;
@@ -58,7 +58,7 @@ async function main() {
     await itx.provideCapability({ path: ["ping"], capability: (async () => "pong") as any });
     check(
       "a scoped itx provides + invokes within its project",
-      (await itx.invoke(["ping"], [])) === "pong",
+      (await itx.invokeCapability(["ping"], [])) === "pong",
     );
   } catch (e) {
     check("a scoped itx provides + invokes within its project", false, (e as Error).message);

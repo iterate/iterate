@@ -19,10 +19,17 @@ export type AuthResult =
   | { ok: true; principal: string }
   | { ok: false; status: 401 | 403; message: string };
 
+/** Authenticate the upgrade request to a principal — WITHOUT a project. The
+ * global context (the platform capability root) is not project-scoped, so it
+ * only needs to know WHO you are (and which projects you may reach). */
+export function authenticate(request: Request): { name: string; projects: string[] } | null {
+  const token = (request.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "");
+  return PRINCIPALS[token] ?? null;
+}
+
 /** Authenticate the upgrade request, then check the principal may reach `project`. */
 export function authorizeProjectAccess(request: Request, project: string): AuthResult {
-  const token = (request.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "");
-  const principal = PRINCIPALS[token];
+  const principal = authenticate(request);
   if (!principal) return { ok: false, status: 401, message: "missing or invalid token" };
   if (!project) return { ok: false, status: 403, message: "no project specified" };
   if (!principal.projects.includes(project)) {

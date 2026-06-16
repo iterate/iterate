@@ -51,7 +51,7 @@ async function main() {
 
     check(
       "agent inherits the project's cap via super (chain climb)",
-      (await agent.invoke(["db"], ["q1"])) === "project-db:q1",
+      (await agent.invokeCapability(["db"], ["q1"])) === "project-db:q1",
     );
 
     const f = await agent.fetch(`${mock.url}?msg=chain`);
@@ -89,13 +89,13 @@ async function main() {
     await sleep(50);
     check(
       "the agent's own cap shadows the inherited one",
-      (await agent.invoke(["db"], ["q2"])) === "agent-db:q2",
+      (await agent.invokeCapability(["db"], ["q2"])) === "agent-db:q2",
     );
 
     // The project is unaffected by the agent's shadow.
     check(
       "the project still sees its own cap (shadowing is child-local)",
-      (await project.invoke(["db"], ["q3"])) === "project-db:q3",
+      (await project.invokeCapability(["db"], ["q3"])) === "project-db:q3",
     );
   } finally {
     mock.close();

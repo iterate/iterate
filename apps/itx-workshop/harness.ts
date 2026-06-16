@@ -54,15 +54,11 @@ interface ItxCore {
     instructions?: string;
     types?: string;
   }): Promise<any>;
-  invoke(path: string[], args: unknown[]): Promise<any>;
+  invokeCapability(path: string[], args: unknown[]): Promise<any>;
   revokeCapability(path: string[]): Promise<any>;
-  list(): Promise<string[]>;
-  describe(): Promise<
-    Record<
-      string,
-      { name: string; kind: string; instructions: string | null; types: string | null }
-    >
-  >;
+  // describe() returns the raw reduced state ({ capabilities, context }) + a nested
+  // `super` for the parent chain. Loosely typed here — the harness reads into it.
+  describe(): Promise<any>;
   rebuildFromLog(): Promise<string[]>; // replay the durable log into a fresh processor
 }
 
@@ -185,14 +181,14 @@ async function main() {
     await sleep(50);
 
     using b = openItx<ItxCore>(); // client B (dashboard): a SEPARATE socket
-    const names = await b.list();
-    const out = await b.invoke(["runSwift"], [`print((2...7).reduce(1, *))`]);
+    const names = (await b.describe()).capabilities.map((c: any) => c.path.join("."));
+    const out = await b.invokeCapability(["runSwift"], [`print((2...7).reduce(1, *))`]);
     const ok = /\b5040\b/.test(String(out)) && names.includes("runSwift");
     record(
       "Step 4: client B invokes A's live runSwift; real Swift runs on A",
       ok ? "PASS" : "FAIL",
       `B saw caps=${JSON.stringify(names)}; ` +
-        `B.invoke(["runSwift"],["print((2...7).reduce(1,*))"]) -> ${JSON.stringify(out)}`,
+        `B.invokeCapability(["runSwift"],["print((2...7).reduce(1,*))"]) -> ${JSON.stringify(out)}`,
     );
   } catch (e) {
     record("Step 4: rendezvous", "FAIL", `threw: ${(e as Error).message}`);
@@ -203,7 +199,7 @@ async function main() {
     using c = openItx<ItxCore>();
     let threw = "";
     try {
-      await c.invoke(["totallyUnknownCap"], []);
+      await c.invokeCapability(["totallyUnknownCap"], []);
     } catch (e) {
       threw = (e as Error).message;
     }
@@ -339,22 +335,24 @@ async function main() {
       capability: (async (to: string) => `sent to ${to}`) as any,
     });
 
-    const listed = await itx.list();
+    const listed = (await itx.describe()).capabilities.map((c: any) => c.path.join("."));
     const replayed = await itx.rebuildFromLog(); // fresh processor, same durable log
-    const dbCall = await itx.invoke(["db", "query"], ["select 1"]);
+    const dbCall = await itx.invokeCapability(["db", "query"], ["select 1"]);
 
     // The instructions/types provided WITH the cap survived the wire → fold → here.
     // Both are OPTIONAL: db carries instructions + types; mailer was provided bare,
-    // so it round-trips as { instructions: null, types: null }.
-    const described = await itx.describe();
+    // so it round-trips as { instructions: null, types: null }. describe() returns
+    // the raw reduced state — `.capabilities` is the LIST of rows, found by path.
+    const caps = (await itx.describe()).capabilities;
+    const byPath = (p: string) => caps.find((c: any) => c.path.join(".") === p);
     const metaRoundTrips =
-      described.db?.instructions === "the project's primary database" &&
-      described.db?.types === "{ query(sql: string): Promise<{ rows: string[] }> }" &&
-      described.mailer?.instructions === null &&
-      described.mailer?.types === null;
+      byPath("db")?.instructions === "the project's primary database" &&
+      byPath("db")?.types === "{ query(sql: string): Promise<{ rows: string[] }> }" &&
+      byPath("mailer")?.instructions === null &&
+      byPath("mailer")?.types === null;
 
     await itx.revokeCapability(["mailer"]);
-    const afterRevoke = await itx.list();
+    const afterRevoke = (await itx.describe()).capabilities.map((c: any) => c.path.join("."));
 
     const ok =
       listed.includes("db") &&
@@ -372,7 +370,7 @@ async function main() {
     record(
       "Step 2: provide carries optional instructions + types (both round-trip via describe; bare = null/null)",
       metaRoundTrips ? "PASS" : "FAIL",
-      `describe(db)=${JSON.stringify(described.db)}; describe(mailer)=${JSON.stringify(described.mailer)}`,
+      `describe(db)=${JSON.stringify(byPath("db"))}; describe(mailer)=${JSON.stringify(byPath("mailer"))}`,
     );
   } catch (e) {
     record("Step 8/10: StreamProcessor", "FAIL", `threw: ${(e as Error).message}`);

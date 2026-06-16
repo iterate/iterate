@@ -138,7 +138,7 @@ A `provide` can carry two pieces of metadata, **both optional**: **`instructions
 
 The stored `name → capability` pairing has no special label in the codebase — the act is a **provide** and what it registers is a **capability entry**. A capability is one of just two kinds: a live **stub** or, later (Step 7), a serializable **address**. (Step 6 will generalize this addressing field from a `name` to a `path`.)
 
-(We call the verbs `provide` / `invoke` here; production spells `provide` as `provideCapability`. They may eventually move under a namespace — `itx.caps.provide`, `itx.caps.invoke`, `itx.caps.revoke`, `itx.caps.get` — to free up the bare names. `invoke` does double duty on purpose: it's the public verb _and_ the one calling convention every capability bottoms out in — `invoke({ path, args })`, the same operation one layer apart. We deliberately use `invoke` rather than `call`: `call` is a `Function.prototype` member (`fn.call(...)`), so a `call` verb/convention would collide with it — both as a reserved path segment and as a member name on the function-typed proxy. `invoke` isn't on any prototype, so it stays clean.)
+(We call the verbs `provide` / `invoke` here while deriving them; the runnable toy spells them `provideCapability` / `invokeCapability` / `revokeCapability` (+ `describe`) — flat verbs on the handle, kept consistent and matching production, _not_ namespaced under `itx.caps.*`. `invoke`/`invokeCapability` does double duty on purpose: it's the public verb _and_ the one calling convention every capability bottoms out in — `invoke({ path, args })`, the same operation one layer apart. We deliberately use `invoke` rather than `call`: `call` is a `Function.prototype` member (`fn.call(...)`), so a `call` verb/convention would collide with it — both as a reserved path segment and as a member name on the function-typed proxy. `invoke` isn't on any prototype, so it stays clean.)
 
 ### 🚧 Why this isn't enough yet
 
@@ -512,7 +512,6 @@ export const ItxContract = defineProcessorContract({
     },
     "events.iterate.com/itx/capability-revoked": { payloadSchema: z.looseObject({ path: z.array(z.string()) }) },
     "events.iterate.com/itx/context-created": { payloadSchema: /* name + parent */ },
-    // …capability-disconnected (a live provider's session broke)
   },
 });
 ```
@@ -545,20 +544,20 @@ A context wants the platform's defaults (`fetch`, `ai`, `secrets`) — and to bu
 
 ---
 
-## Step 9 — extend & super: the context chain
+## Step 9 — the context chain: a parent for resolution
 
-> **the one new idea** — a context can `extend` a parent. On a capability **miss**, dispatch climbs to `super` (the parent context). A child **shadow** wins over the parent — child capabilities shadow parent ones the same way a deeper path shadowed a shallower one in Step 6, now up the chain.
+> **the one new idea** — a context is born with a **parent**. On a capability **miss**, resolution falls through to the parent (recursively). A child **shadow** wins over the parent — child capabilities shadow parent ones the same way a deeper path shadowed a shallower one in Step 6, now up the chain. (No OOP "extend"/"super" — just a parent the constructor is handed.)
 
 ```ts
 invoke({ path, args }) {
   const hit = findCapabilityByPath({ caps: this.#caps, path });
   if (hit) return invokeCapabilityAtPath({ capability: hit.capability, path: hit.rest, args }); // self wins
-  if (this.super) return this.super.invoke({ path, args }); // miss → climb to the parent context
+  if (this.parent) return this.parent.invoke({ path, args }); // miss → resolve against the parent
   throw new Error(`no capability "${path.join(".")}"`);
 }
 ```
 
-A child provides `slack`; the parent provides `fetch` and `ai`. The child sees all three; if the child also provides `fetch`, its version shadows the parent's. The chain bottoms out at a code-rooted, read-only platform context whose defaults are loopback refs — so they update the instant you deploy.
+A child provides `slack`; the parent provides `fetch` and `ai`. The child sees all three; if the child also provides `fetch`, its version shadows the parent's. The chain bottoms out at a code-rooted, read-only platform context whose defaults are loopback refs — so they update the instant you deploy. That root is **Step 12**.
 
 ### 🎯 Nothing breaks — this is the punchline
 
@@ -614,7 +613,7 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
 
 ### Built-in capabilities are injected at construction, not appended
 
-`fetch`/`streams`/`ai` are not special-cased in a handle — but they're also _not_ provided as events on every context's stream. Appending a `capability-provided` for each one would mean rewriting thousands of streams (one per project) every time we change what the built-ins are. Instead the `Itx` StreamProcessor takes its **built-in capabilities as a constructor argument** — an **array of capability descriptors in the exact same `{ path, capability, instructions? }` shape as a `provideCapability` call** (a built-in is just a capability pre-provided in code instead of via an event). The host wires them in when it builds the context, `invoke` falls back to them on a miss (after the fold, before the parent), and they appear in `describe`/`list` so they're self-describing.
+`fetch`/`streams`/`ai` are not special-cased in a handle — but they're also _not_ provided as events on every context's stream. Appending a `capability-provided` for each one would mean rewriting thousands of streams (one per project) every time we change what the built-ins are. Instead the `Itx` StreamProcessor takes its **built-in capabilities as a constructor argument** — an **array of capability descriptors in the exact same `{ path, capability, instructions? }` shape as a `provideCapability` call** (a built-in is just a capability pre-provided in code instead of via an event). The host wires them in when it builds the context, `invoke` falls back to them on a miss (after the fold, before the parent), and they appear in `describe` so they're self-describing.
 
 ```ts
 // the host builds a context with its built-in capabilities wired in — no events appended.
@@ -649,14 +648,84 @@ The whole thing is one idea seen from a few angles: a name → a stub or an addr
 - [x] **Auth & access** ([`steps/08-auth`](./steps/08-auth)) — a bearer token names a principal → the projects it may access → an itx scoped to one project; others refused at the door.
 - [x] **dial / code-loading** ([`steps/09-dial`](./steps/09-dial)) — a sturdy ref is restored by **building + running its worker** via the Worker Loader (`env.LOADER`), `props` → `this.ctx.props`.
 - [x] **Project & Agent DOs + built-ins** ([`steps/10-project-fetch`](./steps/10-project-fetch)) — a **`Project extends DurableObject`** owns egress, provided to a project context as the `fetch` root; an **`Agent extends DurableObject`** under it owns its identity, provided to an agent context as `whoami`. The toy ships both so the project↔agent picture is concrete and runnable.
-- [x] **The context chain** ([`steps/11-chain`](./steps/11-chain)) — an agent itx extends its project itx; on a miss it climbs to super across the two real DOs (so an agent reaches its own `whoami` AND the project's inherited `fetch`); a child shadow wins (late binding).
+- [x] **The context chain** ([`steps/11-chain`](./steps/11-chain)) — a context records its **parent as data** (`{ ref, address }`) in the birth certificate; on a miss the core **dials that address with the same `dial` as a capability** and climbs (an agent's parent is its project — a DO-backed `{ type: "context" }`; a project's parent is the global root — a code `{ type: "code" }`). A child shadow wins (late binding). A parent is just an itx provided at the fallback slot: the only thing that sets it apart from a capability is the call — the whole path is re-dispatched into the parent's `invoke` (recurse), not replayed onto a leaf. (Production splits the dialer in two — gated for provider-supplied capability addresses, ungated for trusted context refs; the toy is unauthed, so one dial. Auth comes later.)
 - [x] **Codemode** ([`steps/12-codemode`](./steps/12-codemode)) — `script-execution-requested`/`-completed`; run an `async (itx) => …` program in a loaded isolate with the context's itx in scope.
-- [x] **Root capabilities are injected at construction** — passed to the `Itx` constructor (e.g. `itx.fetch`), not special-cased in a handle and not appended as events; `invoke` falls back to them, own provides shadow them, and they're surfaced in `describe`/`list`.
-- [ ] **The platform capability root above the project** — where defaults bottom out at a code-rooted read-only root. _(still TODO.)_
+- [x] **Root capabilities are injected at construction** — passed to the `Itx` constructor (e.g. `itx.fetch`), not special-cased in a handle and not appended as events; `invoke` falls back to them, own provides shadow them, and they're surfaced in `describe`.
+- [x] **The platform capability root above the project** ([`steps/13-platform-root`](./steps/13-platform-root)) — every project context's parent is a code-rooted, read-only root; see Step 12.
 
 ---
 
-## Step 12 — client libraries 🚧 TODO (skeleton)
+## Step 12 — the platform capability root: the top of the chain
+
+> **the last layer** — the chain (Step 9) bottoms out somewhere. That somewhere is a **stateless, read-only context** that is every project context's parent. It is the one context that is **not** a Durable Object and **not** a StreamProcessor.
+
+There is no stream to fold and nothing to persist, so the root is just
+**constructed in code**, per connection, and answers the **same itx protocol**
+(`invoke` / `describe`) as any context. Two properties make it _the root_:
+
+- **Read-only.** `provideCapability` / `revokeCapability` throw. You cannot
+  append to a context that has no log — so "you cannot provide into the root" is
+  _structural_, not a guard someone remembers to write.
+- **Top of the chain.** It has no parent, so `super` throws; and you cannot
+  branch a child off the root, so `extend` throws.
+
+Its capabilities are fixed, project-agnostic **catalog** caps, wired in as code —
+here a single `projects` (a `{ list, get }`): `list()` the projects you can
+reach, `get(id)` to narrow into one. A sibling (`users`, `orgs`, …) is just
+another entry — which is the whole reason the catalog rides the **capability
+protocol** rather than being bespoke handle code.
+
+```ts
+// the root is a plain object — no DO, no stream, no fold. A project records it as
+// its parent in the birth certificate (a `{ type: "code" }` address); on a miss
+// the project's core dials that address and climbs here (Step 9/11), so the
+// catalog is reachable from inside any project. The dialer constructs it inline —
+// being stateless is exactly what lets you build it anywhere (which is why it
+// needs no DO).
+class GlobalContext {
+  #capabilities = {
+    projects: {
+      list: () => this.#reachableProjectIds(), // scoped to the principal's access
+      get: (id) => ({ id, ref: `prj:${id}` }), // narrows to a project context
+    },
+  };
+  // same dispatch as the StreamProcessor: longest registered prefix wins, then
+  // replay the rest of the path onto the cap. The root has no parent — the chain
+  // bottoms out here, so a miss is a hard error rather than another climb.
+  async invoke({ path, args }) {
+    const hit = resolveLongestPrefix(this.#capabilities, path);
+    if (hit) return replayPath(hit.record, hit.rest, args);
+    throw new Error(`no capability "${path.join(".")}" (the root is the top of the chain)`);
+  }
+  // structurally read-only, and structurally the top:
+  async provideCapability() {
+    throw new Error("the root is stateless and read-only");
+  }
+  async super() {
+    throw new Error("the root is the top of the chain — no super");
+  }
+  async extend() {
+    throw new Error("you cannot extend the root");
+  }
+}
+```
+
+This runs: [`steps/13-platform-root`](./steps/13-platform-root) opens the root
+(scoped to a principal's access), proves `projects.list/get` resolve, proves
+`provideCapability` / `super` / `extend` all throw, and proves a **project
+context climbs to it on a miss** — the chain bottoms out at the global root.
+
+Production serves this from a **named worker entrypoint** dialed as a loopback
+(alongside the per-project _defaults_ context that supplies `fetch`/`ai`/`streams`
+— those are project-scoped, so they live one rung _below_ the global root, not on
+it); `projects.get` narrows to a live project itx **handle**, and `list` is
+access-scoped at the connect door. The toy keeps the shape — a code-rooted,
+read-only context at the top of the chain whose catalog is capabilities — and
+drops the rest.
+
+---
+
+## Step 13 — client libraries 🚧 TODO (skeleton)
 
 > the ergonomics each runtime gets on top of the naked stub.
 
@@ -692,7 +761,7 @@ All real, all in the actual files; none of it changes the inner model. Each entr
 
 - **The server-side proxy's sharp edges** — `then` reads as `undefined` (so a path node is never mistaken for a thenable), and protocol-level segments (`__proto__`, `apply`, `call`, `dup`, Cap'n Web stub controls) are refused on intermediate nodes — the same reserved set guards both the proxy and `replayPathCall`.
 
-- **Live-stub retention** — `dup()` provided stubs (deep-walk plain-object providers); teardown appends a `capability-disconnected` event so `describe()` shows it offline.
+- **Live-stub retention** — `dup()` provided stubs (deep-walk plain-object providers). A live provider going away isn't a special event: the durable row still shows in `describe()` (`kind: "live"`), and `invoke` just fails because the in-memory bridge has no stub — you `revokeCapability` to remove the row. (Production records a `capability-disconnected` event; the toy doesn't bother.)
 
 - **The handle is more than the proxy** — today's `ItxHandle` also carries built-ins (`projects`, `streams`, `fetch`, `extend`, `super`) that don't fall through to `invoke`, plus reserved-name gating; it's what the Worker serves (a thin wrapper dialing the DO node's `itx()`). 🔄 **we want to change this** — those shouldn't be privileged names baked into a handle; they're **built-in capabilities** handed to the `Itx` constructor by whoever builds the context (Step 10), resolved as an `invoke` fallback. No special handle.
 
