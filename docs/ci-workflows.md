@@ -36,15 +36,14 @@ Useful entry points:
 The preview workflow is deliberately simple:
 
 - select the apps affected by the PR diff;
-- deploy the selected apps concurrently;
-- when auth and OS are both selected, deploy auth before OS because OS bakes
-  auth JWKS during deployment;
+- include declared preview dependencies, currently OS -> auth;
+- deploy the selected apps in dependency batches;
 - after deployment has finished, run tests for every deployed app concurrently.
 
 The preview script does not try to prove dependency freshness or start each app's
 tests as soon as it is individually ready. That lost little in the measured case
-and keeps the behavior easy to reason about. Ordinary OS-only changes probe the
-slot's existing auth worker and only redeploy auth first if that probe fails.
+and keeps the behavior easy to reason about. OS deploys only after the slot's
+auth deployment is ready because OS bakes auth JWKS during deployment.
 
 To run the same deploy-then-test lifecycle from your machine:
 
