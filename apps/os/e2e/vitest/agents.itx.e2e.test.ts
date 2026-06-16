@@ -1,7 +1,6 @@
 /**
  * Deployment-targeted tests for OS project agents, driven through itx (the same
- * handle the browser/REPL/CLI use). These replace the oRPC originals preserved
- * as agents.orpc-legacy.ts.
+ * handle the browser/REPL/CLI use).
  *
  *   doppler run --project os --config preview_2 -- \
  *   pnpm --dir apps/os e2e -t "agent"
@@ -11,7 +10,7 @@
  *       (the fresh-agent bootstrap door the dashboard new-agent flow uses;
  *        it wires the agent's default processor subscriptions)
  *   - agents.sendMessage({agentPath,…}) → itx.agents.sendMessage({agentPath,…})
- *       (force-wakes the agent DO via ensureStartedAndCaughtUp)
+ *       (appends the user-message fact; setup is stream-processor owned)
  *   - agents.kill(…)                    → no itx door exists; the crash-recovery
  *       case is skipped below until the agents capability exposes a kill.
  *   - project.streams.{append,appendBatch,read} → itx.streams.get(path).{append,appendBatch,getEvents};
@@ -333,114 +332,39 @@ test("lets agent scripts send visible agent responses through itx.chat.sendMessa
   );
 });
 
-test("project config worker customizes fresh agents by appending events", async () => {
+test("project processor configures fresh agent streams from child-stream-created", async () => {
   await using fixture = await createTestProject({ slugPrefix: "agent-context-config" });
   using itx = fixture.itx();
-  const suffix = uniqueSuffix();
-  const pusherPath = `/agents/config-pusher-${suffix}`;
-  const customizedPath = `/agents/customized-${suffix}`;
-  const promptMarker = `CUSTOM CONTEXT PROMPT ${suffix}`;
-  const capabilityName = `acmeTool${suffix.replace(/-/g, "")}`;
+  const agentPath = `/agents/configured-${uniqueSuffix()}`;
 
-  // Phase 1: push a config worker whose afterAppend reacts to new agent
-  // streams. Deterministic: the push script is injected as agent output (no
-  // LLM) and executed against the pusher agent's prepared workspace.
-  await itx.streams.create({ streamPath: pusherPath });
-  await waitForAgentProcessorSetup({
-    agentPath: pusherPath,
-    itx,
-    projectId: fixture.project.id,
-  });
-
-  const configWorkerSource = [
-    "export default {",
-    '  async fetch() { return new Response("ok"); },',
-    "",
-    "  // The config worker is a stream processor: this receives every event on",
-    "  // the project root stream. New agent streams announce themselves as",
-    "  // child-stream-created; react by appending agent context events.",
-    "  async processEvent({ event }, env) {",
-    '    if (event.type !== "events.iterate.com/stream/child-stream-created") return;',
-    "    const agentPath = event.payload.childPath;",
-    `    if (!agentPath.startsWith(${JSON.stringify(`/agents/customized-`)})) return;`,
-    "    await env.STREAMS.append({",
-    "      streamPath: agentPath,",
-    "      event: {",
-    '        type: "events.iterate.com/agent/system-prompt-updated",',
-    `        payload: { systemPrompt: ${JSON.stringify(promptMarker)} + " for " + agentPath },`,
-    "      },",
-    "    });",
-    "    await env.STREAMS.append({",
-    "      streamPath: agentPath,",
-    "      event: {",
-    '        type: "events.iterate.com/itx/capability-provided",',
-    `        payload: { path: [${JSON.stringify(capabilityName)}], kind: "rpc", address: { type: "rpc", worker: { type: "loopback" }, entrypoint: "WorkerCapability" }, meta: { instructions: "Use itx.worker.${capabilityName}() (custom ${suffix})." } },`,
-    "      },",
-    "    });",
-    "  },",
-    "};",
-    "",
-  ].join("\n");
-  const pushScript = [
-    "async (itx) => {",
-    workspaceReadyFunctionSource(),
-    "  await waitForWorkspace(itx);",
-    `  await itx.workspace.writeFile('/project/worker.js', ${JSON.stringify(configWorkerSource)});`,
-    "  await itx.workspace.gitAdd({ dir: '/project', filepath: 'worker.js' });",
-    "  await itx.workspace.gitCommit({ dir: '/project', message: 'add agent context config', author: { name: 'Agent', email: 'agent@iterate.com' } });",
-    "  await itx.workspace.gitPush({ dir: '/project', remote: 'origin', ref: 'main' });",
-    "}",
-  ].join("\n");
-  await itx.streams.get(pusherPath).append({
-    event: {
-      type: "events.iterate.com/agent/output-added",
-      payload: { content: ["```js", pushScript, "```"].join("\n") },
-    },
-  });
-  const pushEvents = await readUntil({
-    agentPath: pusherPath,
-    itx,
-    afterOffset: "start",
-    predicate: (event) => event.type === "events.iterate.com/itx/script-execution-completed",
-    timeoutMs: 120_000,
-  });
-  expect(
-    requiredEvent(pushEvents, "events.iterate.com/itx/script-execution-completed").payload,
-  ).toMatchObject({ ok: true });
-
-  // Phase 2: a FRESH agent path wakes. Its stream creation announces a
-  // child-stream-created on the project root stream; the project-config-worker
-  // processor forwards it (blocking on a fresh checkout, so the just-pushed
-  // worker sees it); the config worker appends the custom context.
-  await itx.streams.create({ streamPath: customizedPath });
+  await itx.streams.create({ streamPath: agentPath });
   const events = await readUntil({
-    agentPath: customizedPath,
+    agentPath,
     itx,
     afterOffset: "start",
     predicate: (event) =>
-      event.type === "events.iterate.com/agent/system-prompt-updated" &&
-      typeof (event.payload as { systemPrompt?: unknown }).systemPrompt === "string" &&
-      ((event.payload as { systemPrompt?: string }).systemPrompt ?? "").includes(promptMarker),
+      event.type === "events.iterate.com/stream/subscription-configured" &&
+      ((event.payload as { subscriptionKey?: string }).subscriptionKey?.endsWith(":agent") ??
+        false),
     timeoutMs: 120_000,
   });
 
-  // The custom prompt must be what the agent actually runs with: either the
-  // platform defaults yielded to it (config worker won the race) or it landed
-  // after them (last-wins reducer). Both orders leave it as the LAST prompt.
-  const lastPrompt = requiredEvent(
-    [...events].reverse(),
-    "events.iterate.com/agent/system-prompt-updated",
-  );
-  const lastPromptText = requiredStringPayload(lastPrompt, "systemPrompt");
-  expect(lastPromptText).toContain(promptMarker);
-  expect(lastPromptText).toContain(customizedPath);
+  const config = requiredEvent(events, "events.iterate.com/agent/config-updated");
+  expect(requiredStringPayload(config, "systemPrompt")).toContain(agentPath);
   expect(events).toContainEqual(
     expect.objectContaining({
-      type: "events.iterate.com/itx/capability-provided",
-      payload: expect.objectContaining({ path: [capabilityName] }),
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: expect.objectContaining({
+        subscriptionKey: `agent:${fixture.project.id}:${agentPath}:agent`,
+      }),
     }),
   );
-}, 240_000);
+  expect(events).not.toContainEqual(
+    expect.objectContaining({
+      type: "events.iterate.com/agent/llm-provider-selected",
+    }),
+  );
+}, 120_000);
 
 test("lets agent chat update the project repo through the prepared workspace", async () => {
   await using fixture = await createTestProject({ slugPrefix: "agent-workspace" });

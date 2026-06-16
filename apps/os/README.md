@@ -35,8 +35,8 @@ project-scoped:
 ```
 
 Project slugs are globally unique and exist for readable URLs. Runtime work uses
-stable project IDs. OS binds shared stream capabilities to a stream
-`namespace`; today that namespace is the project ID, so stream paths stay
+stable project IDs. Streams are addressed by `{ projectId, path }`; use
+`projectId: null`/`__global__` only for deployment-wide streams. Paths stay
 project-local, such as `/agents/default` or `/integrations/slack`.
 
 ## Common Commands

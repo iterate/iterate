@@ -57,10 +57,8 @@ function ProjectAgentDetailContent() {
   const params = Route.useParams();
   const { project, streamPath } = Route.useLoaderData();
   // The stream view subscribes live, so a send needs no cache invalidation —
-  // the new events arrive over the socket. agents.sendMessage routes through
-  // the agent DO's own sendMessage, which force-wakes it
-  // (ensureStartedAndCaughtUp) so cold/legacy agents respond, not just freshly
-  // created ones.
+  // the new events arrive over the socket. Agent setup is owned by project and
+  // agent processor facts; sendMessage only appends the user-facing input fact.
   async function submitAgentMessage(message: string) {
     const itx = await connectItx({ projectId: params.projectSlug });
     await itx.agents.sendMessage({ agentPath: streamPath, message, channel: "web" });
@@ -90,7 +88,7 @@ function ProjectAgentDetailContent() {
         placeholder: "Message this agent",
       }}
       projectSlug={params.projectSlug}
-      projectSlugOrId={project.id}
+      projectId={project.id}
       showCommandPaletteTrigger
       streamPath={streamPath}
     />

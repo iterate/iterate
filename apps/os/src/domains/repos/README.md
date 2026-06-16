@@ -74,17 +74,16 @@ token expiry, Git command snippets, and username/password credentials.
 `ReposCapability` (`WorkerEntrypoint`, props `{ projectId: string }`) is the
 shared surface for UI, oRPC, and itx:
 
-- `create({ path, projectSlug? })` / `get({ path })` — return a `RepoHandle`.
-- `createInfo({ path, projectSlug? })` / `getInfo({ path })` — return
+- `create({ path })` / `get({ path })` — return a `RepoHandle`.
+- `createInfo({ path })` / `getInfo({ path })` — return
   serialized `RepoInfo`.
-- `ensureProjectRepoInfo({ projectSlug })` — create-or-read `/repos/project`.
-- `list()` — reads D1 lifecycle catalog rows by the `projectId` index, then
-  filters out rows whose DO exists but was never fully created.
+- `ensureProjectRepoInfo()` — create-or-read `/repos/project`.
+- `list()` — reads the project processor's reduced child-stream state and
+  filters out repos whose stream has not completed `repo/created`.
 - `call(input)` — itx path-call dispatch for the methods above.
 
-Selection uses `getInitializedDoStub({ allowCreate, namespace, name })`, with
-`name` always derived from `{ projectId, path }`.
-`allowCreate: false` returns `null` when no initialized Repo DO exists.
+Selection uses the repo Durable Object namespace with `name` always derived
+from `{ projectId, path }`.
 
 The project itx context exposes the capability as `itx.repos`. The repo
 dashboard routes (`src/routes/_app/projects/$projectSlug/repos`) call

@@ -5,13 +5,6 @@ import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
 } from "~/domains/streams/engine/workers/stream-processor-host.ts";
-import {
-  getInitializedStreamStub,
-  type StreamDurableObjectNamespace,
-  type StreamDurableObject,
-} from "~/domains/streams/stream-runtime.ts";
-import type { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
-import { getAgentDurableObjectName } from "~/domains/agents/agent-stream-subscriptions.ts";
 import { formatDurableObjectName, parseDurableObjectName } from "~/domains/durable-object-names.ts";
 import { getProjectSecret } from "~/domains/secrets/secrets-store.ts";
 import { callSlackWebApi } from "~/domains/slack/entrypoints/slack-capability.ts";
@@ -30,11 +23,9 @@ export function getSlackAgentDurableObjectName(input: SlackAgentDurableObjectNam
 }
 
 type SlackAgentEnv = {
-  AGENT: DurableObjectNamespace<AgentDurableObject>;
   APP_CONFIG_SLACK_BOT_TOKEN?: string;
-  DO_CATALOG: D1Database;
+  DB: D1Database;
   SLACK_BOT_TOKEN?: string;
-  STREAM: DurableObjectNamespace<StreamDurableObject>;
 };
 
 export class SlackAgentDurableObject extends DurableObject<SlackAgentEnv> {
@@ -47,7 +38,7 @@ export class SlackAgentDurableObject extends DurableObject<SlackAgentEnv> {
       callSlackApi: async (method, body) => {
         const { projectId, path } = this.slackAgentName();
         const token = await readSlackToken({
-          db: this.env.DO_CATALOG,
+          db: this.env.DB,
           env: this.env,
           projectId,
         });
@@ -64,17 +55,6 @@ export class SlackAgentDurableObject extends DurableObject<SlackAgentEnv> {
           });
         }
       },
-      ensureItxContext: async () => {
-        const params = this.slackAgentName();
-        const agentName = getAgentDurableObjectName({
-          path: params.path,
-          projectId: params.projectId,
-        });
-        await this.env.AGENT.getByName(agentName).ensureItxContext({
-          path: params.path,
-          projectId: params.projectId,
-        });
-      },
     });
   });
 
@@ -82,34 +62,6 @@ export class SlackAgentDurableObject extends DurableObject<SlackAgentEnv> {
   async requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
     this.slackAgentName();
     return await this.host.requestStreamSubscription(args);
-  }
-
-  async ensureReady() {
-    this.slackAgentName();
-    await this.waitForSlackAgentProcessorCatchUp();
-    return await this.slackAgent.snapshot();
-  }
-
-  private async waitForSlackAgentProcessorCatchUp() {
-    // The checkpoint only advances on delivered (consumed-type) events, so the
-    // catch-up target is the newest consumed event, not the stream head.
-    const maxConsumedOffset = await this.currentStreamMaxConsumedOffset();
-    const deadline = Date.now() + 5_000;
-    while (Date.now() < deadline) {
-      if ((await this.slackAgent.snapshot()).offset >= maxConsumedOffset) return;
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-  }
-
-  private async currentStreamMaxConsumedOffset() {
-    const stream = await getInitializedStreamStub({
-      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      projectId: this.slackAgentName().projectId,
-      path: this.slackAgentName().path,
-    });
-    const consumedTypes = new Set<string>(this.slackAgent.contract.consumes);
-    const events = await stream.history({ before: "end" });
-    return events.filter((event) => consumedTypes.has(event.type)).at(-1)?.offset ?? 0;
   }
 
   private slackAgentName(): { path: StreamPathType; projectId: string } {

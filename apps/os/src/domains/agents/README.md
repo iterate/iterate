@@ -20,11 +20,9 @@ processor subscriptions.
 - `stream-processors/` — the processor contracts + implementations:
   - `agent/` — the agent core: chat ingress, inputs, outputs, script
     enqueue/completion rendering, and LLM request lifecycle.
-  - `openai-ws/` / `cloudflare-ai/` — the two LLM providers. Today project
-    setup subscribes `openai-ws` by default; the target model is that a
-    separate agent-stream provider-selection fact declares which provider
-    processor should be subscribed.
-  - `jsonata-reactor/` — rule-driven event reactions.
+  - `openai-ws/` / `cloudflare-ai/` — the two LLM providers. A separate
+    agent-stream provider-selection fact declares which provider processor
+    should be subscribed.
 - `agent-stream-subscriptions.ts` — structured DO name, default processor
   slugs per LLM provider, and the `stream/subscription-configured` events that
   attach the processors to an agent stream.

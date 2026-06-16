@@ -4,7 +4,7 @@ export const Route = createFileRoute("/admin/")({
   beforeLoad: () => {
     throw redirect({
       to: "/admin/streams/$projectId",
-      params: { projectId: "global" },
+      params: { projectId: "__global__" },
     });
   },
 });

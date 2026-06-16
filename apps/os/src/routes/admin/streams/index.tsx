@@ -18,7 +18,7 @@ export const Route = createFileRoute("/admin/streams/")({
 
 function AdminStreamsProjectPicker() {
   const navigate = useNavigate();
-  const [projectId, setProjectId] = useState("global");
+  const [projectId, setProjectId] = useState("__global__");
   const [error, setError] = useState<string | null>(null);
 
   function submit() {
@@ -41,7 +41,7 @@ function AdminStreamsProjectPicker() {
       <div className="flex flex-col gap-1">
         <h1 className="text-base font-semibold">Streams explorer</h1>
         <p className="text-sm text-muted-foreground">
-          Open streams by project id. Use global for deployment-wide streams.
+          Open streams by project id. Use __global__ for deployment-wide streams.
         </p>
       </div>
       <form
@@ -58,7 +58,7 @@ function AdminStreamsProjectPicker() {
               id="admin-stream-project-id"
               value={projectId}
               onChange={(event) => setProjectId(event.currentTarget.value)}
-              placeholder="global or prj_..."
+              placeholder="__global__ or prj_..."
               aria-invalid={error != null}
               className="font-mono"
             />

@@ -14,7 +14,7 @@ function AdminStreamProjectPage() {
   const { projectId } = Route.useParams();
   const itx = useItx();
   const navigate = useNavigate();
-  const streamProjectId = projectId === "global" ? null : projectId;
+  const streamProjectId = projectId === "__global__" ? null : projectId;
   const source = useMemo(
     () => (streamPath: StreamPathType) => itx.streams.project(streamProjectId).get(streamPath),
     [itx, streamProjectId],
@@ -46,13 +46,15 @@ function AdminStreamProjectPage() {
               <ArrowLeftIcon data-icon="inline-start" aria-hidden="true" />
               Project
             </Button>
-            {projectId === "global" ? null : (
+            {projectId === "__global__" ? null : (
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
                 nativeButton={false}
-                render={<Link to="/admin/streams/$projectId" params={{ projectId: "global" }} />}
+                render={
+                  <Link to="/admin/streams/$projectId" params={{ projectId: "__global__" }} />
+                }
               >
                 <RadioTowerIcon data-icon="inline-start" aria-hidden="true" />
                 Global

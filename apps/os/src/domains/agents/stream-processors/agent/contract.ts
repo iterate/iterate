@@ -96,6 +96,21 @@ export const AgentProcessorContract = defineProcessorContract({
       ],
       payloadSchema: z.object({ systemPrompt: z.string() }),
     },
+    "events.iterate.com/agent/config-updated": {
+      description:
+        "Project-authored agent configuration. The agent processor turns this birth/config fact into concrete setup facts and runtime side effects.",
+      examples: [
+        {
+          description: "Configure a web agent's default prompt",
+          payload: {
+            systemPrompt: "You are the Iterate web agent for /agents/demo.",
+          },
+        },
+      ],
+      payloadSchema: z.object({
+        systemPrompt: z.string().optional(),
+      }),
+    },
     "events.iterate.com/agent/input-added": {
       description: "A curated model-visible row of agent context.",
       examples: [
@@ -259,12 +274,12 @@ export const AgentProcessorContract = defineProcessorContract({
   consumes: [
     "events.iterate.com/itx/capability-provided",
     "events.iterate.com/itx/script-execution-completed",
-    "events.iterate.com/stream/child-stream-created",
     "events.iterate.com/stream/subscriber-connected",
     "events.iterate.com/agents/user-message-received",
     "events.iterate.com/agents/web-message-sent",
     "events.iterate.com/agents/tui-message-sent",
     "events.iterate.com/agent/system-prompt-updated",
+    "events.iterate.com/agent/config-updated",
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/output-added",
     "events.iterate.com/agent/llm-provider-selected",
@@ -277,6 +292,7 @@ export const AgentProcessorContract = defineProcessorContract({
   ],
   emits: [
     "events.iterate.com/itx/script-execution-requested",
+    "events.iterate.com/agent/system-prompt-updated",
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/llm-request-scheduled",
     "events.iterate.com/agent/llm-request-requested",
@@ -303,11 +319,12 @@ export function reduceAgentEvent(args: { state: AgentState; event: AgentConsumed
   switch (event.type) {
     case "events.iterate.com/itx/capability-provided":
     case "events.iterate.com/itx/script-execution-completed":
-    case "events.iterate.com/stream/child-stream-created":
     case "events.iterate.com/stream/subscriber-connected":
     case "events.iterate.com/agents/user-message-received":
     case "events.iterate.com/agents/web-message-sent":
     case "events.iterate.com/agents/tui-message-sent":
+      return state;
+    case "events.iterate.com/agent/config-updated":
       return state;
     case "events.iterate.com/agent/system-prompt-updated":
       return { ...state, systemPrompt: event.payload.systemPrompt };

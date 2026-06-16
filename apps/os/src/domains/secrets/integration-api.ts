@@ -15,7 +15,6 @@ import {
   upsertProjectConnection,
   upsertProjectSecret,
 } from "~/domains/secrets/secrets-store.ts";
-import { getSlackIntegrationStub } from "~/domains/slack/durable-objects/slack-integration-durable-object.ts";
 import {
   oauthRedirectUri,
   providerSecretKey,
@@ -379,10 +378,6 @@ async function handleVerifiedSlackWebhook(input: {
     // Workers observability rather than scraping logs.
     return Response.json({ ok: true, ignored: "team-not-claimed" });
   }
-  const slackIntegration = getSlackIntegrationStub(connection.projectId) as unknown as {
-    ensureReady(): Promise<unknown>;
-  };
-
   const stream = await getInitializedStreamStub({
     durableObjectNamespace: env.STREAM as never,
     projectId: connection.projectId,
@@ -405,16 +400,6 @@ async function handleVerifiedSlackWebhook(input: {
       body: payload,
     },
   });
-  // Only the durable append gates the 200: Slack retries webhooks that take
-  // longer than ~3s, so integration processor catch-up stays in the background.
-  // `ensureReady()` appends the idempotent subscription fact and then catches up.
-  input.context.waitUntil?.(
-    (async () => {
-      await slackIntegration.ensureReady();
-    })().catch((error) => {
-      console.error("[slack-integration-webhook] background catch-up failed", error);
-    }),
-  );
 
   return Response.json({ ok: true });
 }

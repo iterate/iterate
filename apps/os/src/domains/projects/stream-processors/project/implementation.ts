@@ -43,16 +43,13 @@ import {
   getSlackAgentDurableObjectName,
   type SlackAgentDurableObject,
 } from "~/domains/slack/durable-objects/slack-agent-durable-object.ts";
+import { getSlackIntegrationDurableObjectName } from "~/domains/slack/slack-naming.ts";
 import { SlackAgentProcessorContract } from "~/domains/slack/stream-processors/slack-agent/contract.ts";
+import { SlackProcessorContract } from "~/domains/slack/stream-processors/slack/contract.ts";
 import { ensureProjectRepoInfoForProject } from "~/domains/repos/entrypoints/repo-capability.ts";
 import type { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
-import { getRepoDurableObjectName } from "~/domains/repos/repo-durable-object-name.ts";
-import { PROJECT_REPO_PATH } from "~/domains/repos/project-repo.ts";
-import {
-  ONBOARDING_AGENT_INPUT,
-  projectOnboardingBootstrapMarkdown,
-} from "~/domains/repos/project-repo-template.ts";
 import type { AppConfig } from "~/config.ts";
+import { SLACK_INTEGRATION_STREAM_PATH } from "~/domains/secrets/integration-stream-constants.ts";
 
 export { PROJECT_STREAM_PATH, projectFacts, ProjectProcessorContract } from "./contract.ts";
 export type { ProjectFacts, ProjectProcessorState } from "./contract.ts";
@@ -204,12 +201,10 @@ export class ProjectProcessor extends StreamProcessor<
       },
     });
     await this.#ensureProjectRepo({ projectId, slug });
-    await this.#seedOnboardingBootstrap({ projectId, slug });
     await this.#appendAgentStreamBirthCertificate({
       agentPath: ONBOARDING_AGENT_PATH,
       projectId,
     });
-    await this.#appendOnboardingAgentInput(projectId);
     await this.ctx.stream.append({
       event: {
         type: "events.iterate.com/project/create-completed",
@@ -260,7 +255,6 @@ export class ProjectProcessor extends StreamProcessor<
     const repo = await ensureProjectRepoInfoForProject({
       env: this.deps.env,
       projectId: input.projectId,
-      projectSlug: input.slug,
     });
     await this.ctx.stream.append({
       event: {
@@ -271,42 +265,6 @@ export class ProjectProcessor extends StreamProcessor<
           projectId: input.projectId,
           repoPath: repo.path,
         },
-      },
-    });
-  }
-
-  async #seedOnboardingBootstrap(input: { projectId: string; slug: string }) {
-    const repo = this.deps.env.REPO.getByName(
-      getRepoDurableObjectName({
-        path: PROJECT_REPO_PATH,
-        projectId: input.projectId,
-      }),
-    );
-
-    await repo.commitFiles({
-      author: { name: "Iterate", email: "support@iterate.com" },
-      changes: [
-        {
-          path: "BOOTSTRAP.md",
-          content: projectOnboardingBootstrapMarkdown(input),
-        },
-      ],
-      message: "Seed onboarding bootstrap",
-    });
-  }
-
-  async #appendOnboardingAgentInput(projectId: string) {
-    const stream = await getInitializedStreamStub({
-      durableObjectNamespace: this.deps.env.STREAM as unknown as StreamDurableObjectNamespace,
-      projectId,
-      path: ONBOARDING_AGENT_PATH,
-    });
-
-    await stream.append({
-      type: "events.iterate.com/agent/input-added",
-      idempotencyKey: `project-onboarding-agent-input:${projectId}`,
-      payload: {
-        content: ONBOARDING_AGENT_INPUT,
       },
     });
   }
@@ -329,6 +287,13 @@ export class ProjectProcessor extends StreamProcessor<
         agentPath: childPath.data,
         projectId: this.deps.projectId(),
       });
+      return;
+    }
+
+    if (childPath.data === SLACK_INTEGRATION_STREAM_PATH) {
+      await this.#appendSlackIntegrationBirthCertificate({
+        projectId: this.deps.projectId(),
+      });
     }
   }
 
@@ -341,7 +306,7 @@ export class ProjectProcessor extends StreamProcessor<
    *
    * - the main agent processor should consume this stream;
    * - Slack-routed agent streams also get the Slack-agent processor;
-   * - the project contributes the default visible system prompt.
+   * - the project contributes the default visible configuration.
    *
    * LLM provider subscriptions are deliberately absent. An agent starts doing
    * LLM work only after a domain-specific configuration fact, such as
@@ -353,8 +318,8 @@ export class ProjectProcessor extends StreamProcessor<
       streamPath: input.agentPath,
       events: [
         {
-          type: "events.iterate.com/agent/system-prompt-updated",
-          idempotencyKey: "project-agent-setup:system-prompt",
+          type: "events.iterate.com/agent/config-updated",
+          idempotencyKey: "project-agent-setup:config",
           payload: {
             systemPrompt: defaultAgentSystemPrompt(input.agentPath),
           },
@@ -368,6 +333,24 @@ export class ProjectProcessor extends StreamProcessor<
           ? [slackAgentProcessorSubscriptionConfiguredEvent(input)]
           : []),
       ],
+    });
+  }
+
+  async #appendSlackIntegrationBirthCertificate(input: { projectId: string }) {
+    await this.ctx.stream.append({
+      streamPath: SLACK_INTEGRATION_STREAM_PATH,
+      event: {
+        type: "events.iterate.com/stream/subscription-configured",
+        idempotencyKey: `slack-subscription:${input.projectId}:workers-rpc:callable`,
+        payload: {
+          subscriptionKey: `slack:${input.projectId}`,
+          subscriber: durableObjectProcessorSubscriber({
+            bindingName: "SLACK_INTEGRATION",
+            durableObjectName: getSlackIntegrationDurableObjectName(input.projectId),
+            processorName: SlackProcessorContract.slug,
+          }),
+        },
+      },
     });
   }
 }

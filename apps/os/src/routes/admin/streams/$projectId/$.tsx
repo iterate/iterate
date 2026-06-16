@@ -22,7 +22,7 @@ function AdminStreamDetailPage() {
   const { projectId, _splat: streamPath } = Route.useParams();
   const itx = useItx();
   const navigate = useNavigate();
-  const streamProjectId = projectId === "global" ? null : projectId;
+  const streamProjectId = projectId === "__global__" ? null : projectId;
   const source = useMemo(
     () => (path: StreamPathType) => itx.streams.project(streamProjectId).get(path),
     [itx, streamProjectId],
@@ -43,7 +43,7 @@ function AdminStreamDetailPage() {
       streamView={{
         emptyLabel: "No events in this stream yet.",
         projectSlug: projectId,
-        projectSlugOrId: projectId,
+        projectId: streamProjectId,
         renderStreamPathLink: ({ path, children, className }) => (
           <Link
             to="/admin/streams/$projectId/$"

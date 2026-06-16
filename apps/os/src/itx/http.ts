@@ -1,7 +1,7 @@
 // HTTP routing to capabilities: any cap whose surface includes
 // fetch(Request) is routable at its own hostname:
 //
-//     https://{cap}--{projectSlugOrId}.{projectHostnameBase}/…
+//     https://{cap}--{projectId}.{projectHostnameBase}/…
 //
 // Subdomain-per-cap, never path-under-project-origin: agent-authored HTML on
 // the project's main origin would be XSS into its cookies. Cap names are JS

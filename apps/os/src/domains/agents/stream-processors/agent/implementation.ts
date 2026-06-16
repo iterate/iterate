@@ -30,8 +30,8 @@ export { AgentProcessorContract } from "./contract.ts";
 export type AgentProcessorContract = typeof AgentProcessorContract;
 
 export type AgentProcessorDeps = {
-  ensureChildAgentRunner(childPath: string): Promise<unknown>;
   isAgentsRootStream(): boolean;
+  setupAgentRuntime(): Promise<unknown>;
   /**
    * Reads the full committed history of the agent's stream. The debounce-timer
    * handoff rebuilds agent state from durable history at the last possible
@@ -39,11 +39,6 @@ export type AgentProcessorDeps = {
    * potentially stale warm reduction (see `#requestScheduledLlmWork`).
    */
   readStreamEvents(): Promise<StreamEvent[]>;
-  /**
-   * Ensures the agent's Itx context and its own stream subscription exist
-   * before the agent enqueues script work for that context.
-   */
-  ensureItxContext(): Promise<unknown>;
 };
 
 type LlmRequestPolicy = Extract<
@@ -89,17 +84,34 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     const { event, previousState, state } = args;
     switch (event.type) {
       case "events.iterate.com/agent/system-prompt-updated":
+      case "events.iterate.com/agent/config-updated":
       case "events.iterate.com/agent/llm-provider-selected":
       case "events.iterate.com/agent/llm-request-scheduled":
       case "events.iterate.com/agent/status-updated":
       case "events.iterate.com/agent/llm-request-queued":
-        return;
-      case "events.iterate.com/stream/child-stream-created":
-        args.blockProcessorWhile(() => this.deps.ensureChildAgentRunner(event.payload.childPath));
+        if (event.type === "events.iterate.com/agent/config-updated") {
+          args.blockProcessorWhile(async () => {
+            await this.deps.setupAgentRuntime();
+            if (event.payload.systemPrompt !== undefined) {
+              await this.ctx.stream.append({
+                event: {
+                  type: "events.iterate.com/agent/system-prompt-updated",
+                  idempotencyKey: buildProcessorIdempotencyKey({
+                    processor: AgentProcessorContract,
+                    key: "apply-config/system-prompt",
+                    sourceEvent: event,
+                  }),
+                  payload: { systemPrompt: event.payload.systemPrompt },
+                },
+              });
+            }
+          });
+        }
         return;
       case "events.iterate.com/agents/user-message-received":
         if (this.deps.isAgentsRootStream()) return;
         args.blockProcessorWhile(async () => {
+          await this.deps.setupAgentRuntime();
           await this.#appendEventTypeExplanation({ eventType: event.type });
           await this.ctx.stream.append({
             event: {
@@ -354,7 +366,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     const script = extractCodemodeScript(event.payload.content);
     if (script == null) return;
 
-    await this.deps.ensureItxContext();
+    await this.deps.setupAgentRuntime();
     await this.ctx.stream.append({
       event: {
         type: ITX_EVENT_TYPES.scriptExecutionRequested,

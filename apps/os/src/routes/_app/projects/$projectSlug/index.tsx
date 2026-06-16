@@ -84,7 +84,7 @@ function ProjectHomePage() {
       <ProjectStreamView
         emptyLabel="No events in the project root stream yet."
         projectSlug={params.projectSlug}
-        projectSlugOrId={project.id}
+        projectId={project.id}
         streamPath={StreamPath.parse("/")}
       />
     </section>

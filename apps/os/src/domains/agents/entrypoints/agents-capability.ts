@@ -21,13 +21,10 @@ type AgentRpcStub = {
 /**
  * The PROJECT-scoped agents surface reachable over itx (`itx.agents.sendMessage`).
  *
- * The one method is {@link sendMessage}: it routes through the agent
- * Durable Object's own `sendMessage`, which runs `ensureStartedAndCaughtUp()`
- * — so it FORCE-WAKES a cold or never-started agent (creating the DO with
- * `allowCreate: true`) before appending the user message. A raw stream append
- * does NOT do this: it lands an event on a stream nobody is subscribed to yet,
- * because a never-started agent has no live subscriptions. Listing agents and
- * reading/writing presets go directly through `itx.streams` on the /agents tree.
+ * The one method is {@link sendMessage}: it routes through the agent Durable
+ * Object's append facade. Stream creation and setup are owned by project and
+ * agent processor facts; listing agents and reading/writing presets go
+ * directly through `itx.streams` on the /agents tree.
  *
  * This is a DIFFERENT context from the per-agent `agents` capability the agent
  * DO provides on its OWN context (agent-durable-object.ts) — that one lives on
@@ -41,10 +38,6 @@ export class AgentsCapability extends WorkerEntrypoint<AgentsCapabilityEnv, Agen
     return replayPathCall(this, input);
   }
 
-  /**
-   * Force-wake the agent (cold/legacy included) and append the user message
-   * through its DO `sendMessage` — the path that runs ensureStartedAndCaughtUp.
-   */
   async sendMessage(input: { agentPath: string; message: string; channel?: string }) {
     const agent = await this.getAgent(input.agentPath);
     return await agent.sendMessage({ channel: input.channel, message: input.message });

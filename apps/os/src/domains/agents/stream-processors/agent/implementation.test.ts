@@ -19,7 +19,8 @@ describe("AgentProcessor", () => {
 
   it("renders chat user messages into agent input", async () => {
     const { stream, appended } = memoryStream();
-    const processor = newAgentProcessor({ stream });
+    const setupAgentRuntime = vi.fn(async () => undefined);
+    const processor = newAgentProcessor({ stream, setupAgentRuntime });
 
     await processor.ingest({
       events: [
@@ -32,6 +33,7 @@ describe("AgentProcessor", () => {
       streamMaxOffset: 5,
     });
 
+    expect(setupAgentRuntime).toHaveBeenCalledOnce();
     expect(appended[0]).toMatchObject({
       type: "events.iterate.com/agent/input-added",
       idempotencyKey: "agent/event-type-explainer/events.iterate.com/agents/user-message-received",
@@ -87,29 +89,33 @@ describe("AgentProcessor", () => {
     });
   });
 
-  it("wakes child agent runners from child stream creation events", async () => {
+  it("applies agent config facts by setting up runtime and appending concrete prompt facts", async () => {
     const { stream, appended } = memoryStream();
-    const childPaths: string[] = [];
+    const setupAgentRuntime = vi.fn(async () => undefined);
     const processor = newAgentProcessor({
       stream,
-      ensureChildAgentRunner: async (childPath) => {
-        childPaths.push(childPath);
-      },
+      setupAgentRuntime,
     });
 
     await processor.ingest({
       events: [
         agentEvent({
-          type: "events.iterate.com/stream/child-stream-created",
-          payload: { childPath: "/agents/child" },
+          type: "events.iterate.com/agent/config-updated",
+          payload: { systemPrompt: "Use the project tools." },
           offset: 12,
         }),
       ],
       streamMaxOffset: 12,
     });
 
-    expect(childPaths).toEqual(["/agents/child"]);
-    expect(appended).toEqual([]);
+    expect(setupAgentRuntime).toHaveBeenCalledOnce();
+    expect(appended).toEqual([
+      expect.objectContaining({
+        type: "events.iterate.com/agent/system-prompt-updated",
+        idempotencyKey: "agent/apply-config/system-prompt@12",
+        payload: { systemPrompt: "Use the project tools." },
+      }),
+    ]);
   });
 
   it("does not render received chat messages on the agents root stream", async () => {
@@ -156,11 +162,11 @@ describe("AgentProcessor", () => {
 
   it("does not enqueue agent output scripts on the agents root stream", async () => {
     const { stream, appended } = memoryStream();
-    const ensureItxContext = vi.fn(async () => undefined);
+    const setupAgentRuntime = vi.fn(async () => undefined);
     const processor = newAgentProcessor({
       stream,
-      ensureItxContext,
       isAgentsRootStream: () => true,
+      setupAgentRuntime,
     });
 
     await processor.ingest({
@@ -180,7 +186,7 @@ describe("AgentProcessor", () => {
       streamMaxOffset: 13,
     });
 
-    expect(ensureItxContext).not.toHaveBeenCalled();
+    expect(setupAgentRuntime).not.toHaveBeenCalled();
     expect(appended).toEqual([]);
   });
 
@@ -819,19 +825,17 @@ function initialState(): AgentState {
 
 function newAgentProcessor(args: {
   stream: StreamProcessorIterateContext["stream"];
-  ensureChildAgentRunner?: (childPath: string) => Promise<unknown>;
-  ensureItxContext?: () => Promise<unknown>;
   isAgentsRootStream?: () => boolean;
   snapshot?: StreamProcessorSnapshot<AgentState>;
   readStreamEvents?: () => Promise<StreamEvent[]>;
+  setupAgentRuntime?: () => Promise<unknown>;
 }) {
   return new AgentProcessor({
     iterateContext: { stream: args.stream },
-    ensureChildAgentRunner: args.ensureChildAgentRunner ?? (async () => undefined),
-    ensureItxContext: args.ensureItxContext ?? (async () => undefined),
     isAgentsRootStream: args.isAgentsRootStream ?? (() => false),
     readState: () => args.snapshot,
     readStreamEvents: args.readStreamEvents ?? (async () => []),
+    setupAgentRuntime: args.setupAgentRuntime ?? (async () => undefined),
   });
 }
 

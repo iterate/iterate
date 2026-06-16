@@ -137,18 +137,15 @@ const PLATFORM_PROJECT_CAPABILITIES: PlatformCapability[] = [
   {
     address: { entrypoint: "ReposCapability", type: "rpc", worker: { type: "loopback" } },
     instructions:
-      "The project's git repos: itx.repos.ensureProjectRepoInfo({ projectSlug }), " +
+      "The project's git repos: itx.repos.ensureProjectRepoInfo(), " +
       "list(), create({ path }), get({ path }) — repo handles expose commitFiles/readFiles/readLog.",
     name: "repos",
   },
   {
-    // The project's agents. sendMessage FORCE-WAKES the agent Durable Object
-    // (ensureStartedAndCaughtUp) before appending, so chat works even for a
-    // cold or never-started/legacy agent — a raw stream append would not.
     address: { entrypoint: "AgentsCapability", type: "rpc", worker: { type: "loopback" } },
     instructions:
-      "The project's agents: itx.agents.sendMessage({ agentPath, message, channel? }) wakes " +
-      "the agent (cold/legacy included) and posts a user message, returning { event }. " +
+      "The project's agents: itx.agents.sendMessage({ agentPath, message, channel? }) posts " +
+      "a user message to an agent stream, returning { event }. " +
       "List agents and read/write presets directly via itx.streams on the /agents tree.",
     name: "agents",
   },

@@ -18,21 +18,6 @@ REPL, and CLI use. The oRPC product surface is gone; nothing here talks to oRPC 
   through it (`itx.streams.get(path).{append,appendBatch,read,subscribe}`,
   `itx.streams.create(...)`, `itx.agents.sendMessage(...)`).
 
-### Preserved oRPC reference (`*.orpc-legacy.ts`)
-
-Misha's original oRPC e2e coverage is kept verbatim as reference material, **not** as active tests:
-
-- `vitest/agents.orpc-legacy.ts`, `vitest/admin-project.orpc-legacy.ts`,
-  `test-support/create-test-project.orpc-legacy.ts`, `test-support/os-client.orpc-legacy.ts`.
-- These are intentionally **not** named `.test.ts`, so Vitest never collects them, and they are
-  never imported by active code. They still reference the removed oRPC stack (`@orpc/*`,
-  `@iterate-com/os-contract`, `~/orpc/...`), so each carries `// @ts-nocheck` + `/* eslint-disable */`
-  and knip is told to ignore `e2e/**/*.orpc-legacy.ts`.
-- Treat them as the porting spec for the active `*.itx.e2e.test.ts` equivalents — any oRPC or
-  WebSocket helper you see in them is legacy-only and not the active testing surface. The
-  crash-recovery case (agent host DO killed mid-turn) has no itx port yet: `itx.agents` exposes
-  only `sendMessage`, with no `kill` door.
-
 ## Lanes
 
 All Vitest lanes require a base URL plus an admin credential (one of

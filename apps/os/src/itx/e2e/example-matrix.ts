@@ -244,7 +244,7 @@ export async function pushProjectRepoFiles(input: {
     itx: Record<string, any>;
     vars: { dir: string; files: Record<string, string>; message: string; projectSlug: string };
   }) => {
-    const repo = await itx.repos.ensureProjectRepoInfo({ projectSlug: vars.projectSlug });
+    const repo = await itx.repos.ensureProjectRepoInfo();
     const url = new URL(repo.remote);
     url.username = "x";
     url.password = repo.token.split("?")[0];

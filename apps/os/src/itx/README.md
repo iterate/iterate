@@ -239,11 +239,12 @@ because only kernel code writes context refs.
 ## ⑤ The context's stream: events are the only writes (`contract.ts`, `coordinates.ts`)
 
 `Itx extends StreamProcessor` (packages/streams). **A context IS a stream
-coordinate** — `(namespace, path)`, written as the REF `<namespace>:<path>`
+coordinate** — `{ projectId, path }`, written as the REF `<projectId>:<path>`
 — and that stream is the ONLY authority:
 
 - **Identity is the coordinate.** The project context is the project's root
-  stream (`prj_x:/`); an agent's context is the agent's own stream
+  stream (`prj_x:/`); deployment-wide contexts use `__global__:/...`;
+  an agent's context is the agent's own stream
   (`prj_x:/agents/…`); an MCP session's is its session stream; anonymous
   extends default to `/itx/<generated>` — a plain convention, not a
   reserved segment (any stream path can be a context). There are NO context

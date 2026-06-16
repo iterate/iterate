@@ -32,8 +32,6 @@ import {
   type OpenAiResponsesWebSocket,
   type OpenAiResponsesWebSocketStreamMessage,
 } from "~/domains/agents/stream-processors/openai-ws/implementation.ts";
-import { JsonataReactorProcessorContract } from "~/domains/agents/stream-processors/jsonata-reactor/contract.ts";
-import { JsonataReactorProcessor } from "~/domains/agents/stream-processors/jsonata-reactor/implementation.ts";
 import {
   getInitializedStreamStub,
   getStreamDurableObjectName,
@@ -57,8 +55,6 @@ import {
   AGENTS_STREAM_PATH,
   type AgentDurableObjectName,
   agentLlmProcessorSlug,
-  agentProcessorSubscriptionConfiguredEvents,
-  getAgentDurableObjectName,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
 import { buildProjectStreamViewerUrl } from "~/lib/stream-viewer-url.ts";
 import { formatDurableObjectName, parseDurableObjectName } from "~/domains/durable-object-names.ts";
@@ -71,14 +67,13 @@ export {
 } from "~/domains/agents/agent-stream-subscriptions.ts";
 
 export type AgentDurableObjectEnv = {
-  AGENT: DurableObjectNamespace<AgentDurableObject>;
   AI: CloudflareAiBinding;
   APP_CONFIG: string;
   ITX_CONTEXT: DurableObjectNamespace<ItxDurableObject>;
   // Shared app D1 — read-only here, for the `itx.debug()` project-slug lookup.
   // The agent writes NO object-catalog projection: it is listed by walking the
   // /agents stream tree and addressed by its self-describing name.
-  DO_CATALOG: D1Database;
+  DB: D1Database;
   REPO: DurableObjectNamespace<RepoDurableObject>;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
   WORKSPACE: DurableObjectNamespace<WorkspaceDurableObject>;
@@ -124,22 +119,11 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
     (deps) =>
       new AgentProcessor({
         ...deps,
-        ensureChildAgentRunner: async (childPath) => {
-          const params = await this.ensureStarted();
-          const agentPath = StreamPath.safeParse(childPath);
-          if (!agentPath.success) return;
-          const name = getAgentDurableObjectName({
-            path: agentPath.data,
-            projectId: params.projectId,
-          });
-          await this.env.AGENT.getByName(name).ensureStreamSetup();
-        },
-        ensureItxContext: async () => {
-          const params = await this.ensureStarted();
-          return await this.ensureItxContext(params);
-        },
         isAgentsRootStream: () => this.name.path === AGENTS_STREAM_PATH,
         readStreamEvents: () => this.readSubscribedStreamEvents("agent"),
+        setupAgentRuntime: async () => {
+          await this.setupAgentRuntime(this.projectScopedName());
+        },
       }),
   );
   openAiWsProcessor = this.host.add("openai-ws", (deps) => {
@@ -169,43 +153,20 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
         readStreamEvents: () => this.readSubscribedStreamEvents("cloudflare-ai"),
       }),
   );
-  jsonataReactorProcessor = this.host.add(
-    "jsonata-reactor",
-    (deps) => new JsonataReactorProcessor(deps),
-  );
+  // eslint-disable-next-line no-unused-private-class-members -- oxlint false positive: read and assigned via ??=.
+  #runtimeSetup: Promise<void> | undefined;
 
-  #setup: Promise<AgentDurableObjectName> | undefined;
-
-  async ensureStreamSetup(): Promise<void> {
-    await this.ensureStarted();
+  private async setupAgentRuntime(params: AgentDurableObjectName): Promise<void> {
+    this.#runtimeSetup ??= this.setupAgentRuntimeOnce(params).finally(() => {
+      this.#runtimeSetup = undefined;
+    });
+    await this.#runtimeSetup;
   }
 
-  private async ensureStarted(): Promise<AgentDurableObjectName> {
-    const name = this.projectScopedName();
-    this.#setup ??= this.ensureAgentSetup(name).then(() => name);
-    return await this.#setup;
-  }
-
-  private async ensureAgentSetup(params: AgentDurableObjectName): Promise<void> {
-    if (params.path === AGENTS_STREAM_PATH) {
-      await this.ensureAgentSubscriptions(params, [
-        JsonataReactorProcessorContract.slug,
-        AgentProcessorContract.slug,
-      ]);
-      return;
-    }
-
+  private async setupAgentRuntimeOnce(params: AgentDurableObjectName): Promise<void> {
     await this.ensureAgentStreamExists(params);
-    this.ctx.waitUntil(
-      this.ensureAgentWorkspace(params).catch((error) => {
-        console.error("[agent-workspace-setup] failed", error);
-      }),
-    );
-    this.ctx.waitUntil(
-      this.ensureItxContext(params).catch((error) => {
-        console.error("[agent-itx-context-setup] failed", error);
-      }),
-    );
+    await this.ensureItxContext(params);
+    await this.ensureAgentWorkspace(params);
   }
 
   private projectScopedName(): AgentDurableObjectName {
@@ -233,38 +194,23 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
     await stream.getState();
   }
 
-  /** See the wake hook comment: the wake-time catch-up runs outside the lifecycle gate. */
-  // eslint-disable-next-line no-unused-private-class-members -- oxlint false positive: read and assigned via ??=.
-  #wakeCatchUp: Promise<void> | undefined;
-
-  private async ensureStartedAndCaughtUp(): Promise<AgentDurableObjectName> {
-    const params = await this.ensureStarted();
-    this.#wakeCatchUp ??= this.waitForAgentProcessorsCatchUp(params).catch((error: unknown) => {
-      this.#wakeCatchUp = undefined;
-      throw error;
-    });
-    await this.#wakeCatchUp;
-    return params;
-  }
-
   /**
    * Subscription callables on agent streams dial this host entry point.
-   * Initialize from the runtime name first: a cold instance can receive the
-   * handshake before anything else has touched it, and the wake hook is what
-   * seeds the agent's own subscriptions and setup events.
+   * The stream already owns setup through subscription facts; this method only
+   * validates that the DO name is a project-scoped agent coordinate.
    */
   async requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
-    await this.ensureStarted();
+    this.projectScopedName();
     return await this.host.requestStreamSubscription(args);
   }
 
   async getRuntimeState() {
-    const params = await this.ensureStartedAndCaughtUp();
+    const params = this.projectScopedName();
     return await this.getAgentRuntimeState(params);
   }
 
   async sendMessage(input: { message: string; channel?: string }) {
-    const params = await this.ensureStartedAndCaughtUp();
+    const params = this.projectScopedName();
     const origin = parseAgentMessageOrigin(input.channel);
     const event = await this.streamsEntrypoint(params.path).append({
       event: {
@@ -290,7 +236,7 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
   }
 
   async doThing(input: { label: string; value: number }) {
-    await this.ensureStartedAndCaughtUp();
+    this.projectScopedName();
     return {
       agentName: this.ctx.id.name,
       label: input.label,
@@ -305,7 +251,7 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
     path: string[];
     tool: "chat" | "debug";
   }) {
-    await this.ensureStartedAndCaughtUp();
+    this.projectScopedName();
     if (input.tool === "debug") {
       return await this.createDebugSnapshot();
     }
@@ -321,25 +267,6 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
       message,
     });
     return { event };
-  }
-
-  private async ensureAgentSubscriptions(
-    params: AgentDurableObjectName,
-    processorSlugs: readonly string[],
-  ) {
-    const stream = await getInitializedStreamStub({
-      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      projectId: params.projectId,
-      path: params.path,
-    });
-
-    await stream.appendBatch(
-      agentProcessorSubscriptionConfiguredEvents({
-        agentPath: params.path,
-        processorSlugs,
-        projectId: params.projectId,
-      }),
-    );
   }
 
   private async waitForAgentProcessorsCatchUp(params: AgentDurableObjectName) {
@@ -394,7 +321,7 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
 
   private async agentProcessorSlugs(params: AgentDurableObjectName) {
     if (params.path === AGENTS_STREAM_PATH) {
-      return [JsonataReactorProcessorContract.slug, AgentProcessorContract.slug];
+      return [AgentProcessorContract.slug];
     }
     return [
       AgentProcessorContract.slug,
@@ -408,7 +335,6 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
       agent: this.agentProcessor,
       "openai-ws": this.openAiWsProcessor,
       "cloudflare-ai": this.cloudflareAiProcessor,
-      "jsonata-reactor": this.jsonataReactorProcessor,
     };
     const processor = processors[processorSlug];
     if (processor === undefined) {
@@ -453,7 +379,7 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
    * catalog: the provide events fold into the capability table (resolution)
    * while the agent processor renders them for the LLM (visibility).
    */
-  async ensureItxContext(
+  private async ensureItxContext(
     params: AgentDurableObjectName,
   ): Promise<{ context: string; contextAddress: CapabilityAddress }> {
     this.#ensureItxContextPromise ??= this.#ensureItxContextOnce(params).finally(() => {
@@ -613,7 +539,7 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
     return await getReposCapability({
       exports: this.ctx.exports,
       props: { projectId: params.projectId },
-    }).ensureProjectRepoInfo({ projectSlug: null });
+    }).ensureProjectRepoInfo();
   }
 
   private async getAgentWorkspace(params: AgentDurableObjectName) {
@@ -648,7 +574,7 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
 
   private async readDebugProjectInfo(): Promise<DebugProjectInfo | null> {
     try {
-      const row = await this.env.DO_CATALOG.prepare(
+      const row = await this.env.DB.prepare(
         `select p.id, p.slug
          from projects p
          where p.id = ?

@@ -12,7 +12,6 @@ import {
 import {
   REPO_DEFAULT_BRANCH,
   REPO_WRITE_TOKEN_TTL_SECONDS,
-  type CloudflareArtifactRepo,
   type CloudflareArtifactsBinding,
   artifactRemoteUrl,
   createCloudflareArtifactsRestBinding,
@@ -30,7 +29,6 @@ import {
   ReadRepoLogInput,
   ReadRepoTreeInput,
   commitRepoFiles,
-  isGitAuthError,
   listRepoFiles,
   readRemoteBranchOid,
   readRepoFiles,
@@ -41,6 +39,8 @@ import {
 import {
   RepoStreamProcessor,
   RepoStreamProcessorContract,
+  type RepoCreateRequestedPayload,
+  type RepoCreatedPayload,
   repoStreamPath,
 } from "~/domains/repos/stream-processors/repo-stream-processor.ts";
 import {
@@ -67,7 +67,6 @@ export type RepoInfo = {
 };
 
 export type CreateRepoInput = {
-  projectSlug?: string;
   source?:
     | { kind: "empty" }
     | {
@@ -92,7 +91,14 @@ export class RepoDurableObject extends DurableObject<RepoEnv> {
   readonly name = parseDurableObjectName(this.ctx.id.name!);
 
   host = createStreamProcessorHost(this.ctx);
-  repo = this.host.add(RepoStreamProcessorContract.slug, (deps) => new RepoStreamProcessor(deps));
+  repo = this.host.add(
+    RepoStreamProcessorContract.slug,
+    (deps) =>
+      new RepoStreamProcessor({
+        ...deps,
+        createRepoArtifact: (input) => this.createRepoArtifact(input),
+      }),
+  );
 
   /** Subscription callables on the repo stream dial this. */
   requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
@@ -115,38 +121,11 @@ export class RepoDurableObject extends DurableObject<RepoEnv> {
 
   async createRepo(input: CreateRepoInput = {}): Promise<RepoInfo> {
     await this.ensureRepoStreamSetup();
-    await this.waitForRepoProcessorCatchUp();
-
-    if ((await this.currentRepo()) !== null) {
-      throw new Error(`Repo ${this.repoName().path} already exists.`);
-    }
-
-    const artifactName = repoArtifactName(this.repoName());
-    const artifacts = this.requireArtifacts();
-    const source = input.source ?? { kind: "empty" as const };
-    const artifact =
-      source.kind === "artifact-fork"
-        ? await this.forkArtifactRepo({
-            artifactName,
-            artifacts,
-            source,
-          })
-        : await artifacts.create(artifactName, {
-            setDefaultBranch: REPO_DEFAULT_BRANCH,
-          });
-    const remote = (await readArtifactString(artifact.remote)) ?? this.artifactRemote(artifactName);
-    const defaultBranch =
-      (await readArtifactString(artifact.defaultBranch)) ??
-      (await readArtifactString(artifact.default_branch)) ??
-      REPO_DEFAULT_BRANCH;
-
-    const event = await this.appendRepoCreatedEvent({
-      defaultBranch,
-      path: this.repoName().path,
-      remote,
-      tokenExpiresAt: null,
+    const request = await this.appendRepoCreateRequestedEvent({
+      path: String(this.repoName().path),
+      source: input.source ?? { kind: "empty" },
     });
-    await this.waitForRepoProcessorCatchUp(event.offset);
+    await this.waitForRepoCreated(request.offset);
 
     return await this.requireInfo();
   }
@@ -257,20 +236,14 @@ export class RepoDurableObject extends DurableObject<RepoEnv> {
     });
   }
 
-  /** Runs a git operation with an on-demand artifact token, retrying once on auth failure. */
+  /** Runs a git operation with a fresh, on-demand artifact token. */
   private async withRepoGitCredentials<T>(operation: (info: RepoInfo) => Promise<T>): Promise<T> {
     await this.ensureRepoStreamSetup();
     await this.waitForRepoProcessorCatchUp();
-    const info = await this.requireInfo();
-    try {
-      return await operation(info);
-    } catch (error) {
-      if (!isGitAuthError(error)) throw error;
-      return await operation(await this.requireInfo());
-    }
+    return await operation(await this.requireInfo());
   }
 
-  async getArtifact(): Promise<CloudflareArtifactRepo> {
+  async getArtifact() {
     await this.ensureRepoStreamSetup();
     await this.waitForRepoProcessorCatchUp();
 
@@ -302,6 +275,16 @@ export class RepoDurableObject extends DurableObject<RepoEnv> {
       if (state.reducedThroughOffset >= maxOffset) return;
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
+  }
+
+  private async waitForRepoCreated(requestOffset: number) {
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      await this.waitForRepoProcessorCatchUp(requestOffset);
+      if ((await this.currentRepo()) !== null) return;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new RepoNotCreatedError(`Repo ${this.repoName().path} was not created.`);
   }
 
   /**
@@ -386,6 +369,34 @@ export class RepoDurableObject extends DurableObject<RepoEnv> {
     });
   }
 
+  private async createRepoArtifact(input: RepoCreateRequestedPayload): Promise<RepoCreatedPayload> {
+    const artifactName = repoArtifactName(this.repoName());
+    const artifacts = this.requireArtifacts();
+    const source = input.source ?? { kind: "empty" as const };
+    const artifact =
+      source.kind === "artifact-fork"
+        ? await this.forkArtifactRepo({
+            artifactName,
+            artifacts,
+            source,
+          })
+        : await artifacts.create(artifactName, {
+            setDefaultBranch: REPO_DEFAULT_BRANCH,
+          });
+    const remote = (await readArtifactString(artifact.remote)) ?? this.artifactRemote(artifactName);
+    const defaultBranch =
+      (await readArtifactString(artifact.defaultBranch)) ??
+      (await readArtifactString(artifact.default_branch)) ??
+      REPO_DEFAULT_BRANCH;
+
+    return {
+      defaultBranch,
+      path: input.path,
+      remote,
+      tokenExpiresAt: null,
+    };
+  }
+
   private async forkArtifactRepo(input: {
     artifactName: string;
     artifacts: CloudflareArtifactsBinding;
@@ -405,12 +416,7 @@ export class RepoDurableObject extends DurableObject<RepoEnv> {
     });
   }
 
-  private async appendRepoCreatedEvent(input: {
-    defaultBranch: string;
-    path: string;
-    remote: string;
-    tokenExpiresAt: string | null;
-  }) {
+  private async appendRepoCreateRequestedEvent(input: RepoCreateRequestedPayload) {
     const stream = await getInitializedStreamStub({
       durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
       projectId: this.repoName().projectId,
@@ -418,8 +424,8 @@ export class RepoDurableObject extends DurableObject<RepoEnv> {
     });
 
     return await stream.append({
-      type: "events.iterate.com/repo/created",
-      idempotencyKey: `repo-created:${this.repoName().projectId}:${this.repoName().path}`,
+      type: "events.iterate.com/repo/create-requested",
+      idempotencyKey: `repo-create-requested:${this.repoName().projectId}:${this.repoName().path}`,
       payload: input,
     });
   }
@@ -489,14 +495,10 @@ function gitInfo(input: { defaultBranch: string; path: string; remote: string; t
 }
 
 async function readArtifactString(value: unknown): Promise<string | undefined> {
-  let candidate: unknown;
-  try {
-    candidate = typeof value === "function" ? (value as () => unknown | Promise<unknown>)() : value;
-    const resolved = await candidate;
-    return typeof resolved === "string" && resolved.length > 0 ? resolved : undefined;
-  } catch {
-    return undefined;
-  }
+  const candidate =
+    typeof value === "function" ? (value as () => unknown | Promise<unknown>)() : value;
+  const resolved = await candidate;
+  return typeof resolved === "string" && resolved.length > 0 ? resolved : undefined;
 }
 
 function shellQuote(value: string) {

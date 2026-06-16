@@ -5,11 +5,6 @@ import type {
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import { getRepoDurableObjectName } from "~/domains/repos/repo-durable-object-name.ts";
 import {
-  isRepoAlreadyExistsError,
-  isRepoNotCreatedError,
-  isRepoNotFoundError,
-} from "~/domains/repos/repo-errors.ts";
-import {
   ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME,
   PROJECT_REPO_PATH,
 } from "~/domains/repos/project-repo.ts";
@@ -32,7 +27,7 @@ export type ReposCapabilityProps = {
   projectId: string;
 };
 
-export type RepoCatalogRecord = {
+export type RepoRecord = {
   createdAt: string;
   lastWokenAt: string;
   name: string;
@@ -89,34 +84,19 @@ export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposC
     return replayPathCall(this, input);
   }
 
-  async create(input: { path: string; projectSlug?: string }) {
+  async create(input: { path: string }) {
     const namespace = this.requireRepoNamespace();
     const repo = namespace.getByName(this.repoName(input.path));
-
-    try {
-      await repo.getInfo();
-      throw new Error(`Repo ${input.path} already exists.`);
-    } catch (error) {
-      if (!isRepoNotCreatedError(error)) throw error;
-    }
-
-    await repo.createRepo({ projectSlug: input.projectSlug });
+    await repo.createRepo();
     return new RepoHandle(repo);
   }
 
-  async createInfo(input: { path: string; projectSlug?: string }): Promise<RepoInfo> {
+  async createInfo(input: { path: string }): Promise<RepoInfo> {
     return await (await this.create(input)).getInfo();
   }
 
   async get(input: { path: string }) {
     const repo = this.requireRepoNamespace().getByName(this.repoName(input.path));
-    try {
-      await repo.getInfo();
-    } catch (error) {
-      if (!isRepoNotCreatedError(error)) throw error;
-      throw new Error(`Repo ${input.path} not found.`);
-    }
-
     return new RepoHandle(repo);
   }
 
@@ -124,31 +104,16 @@ export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposC
     return await (await this.get(input)).getInfo();
   }
 
-  async ensureProjectRepoInfo(input: { projectSlug: string | null }): Promise<RepoInfo> {
+  async ensureProjectRepoInfo(): Promise<RepoInfo> {
     return await ensureProjectRepoInfoForProject({
       env: this.env,
       projectId: this.ctx.props.projectId,
-      projectSlug: input.projectSlug,
     });
   }
 
-  async list(): Promise<RepoCatalogRecord[]> {
+  async list(): Promise<RepoRecord[]> {
     const state = await readProjectProcessorState(this.ctx.props.projectId);
-
-    const repos = await Promise.all(
-      state.repos.map(async (child) => {
-        const repo = this.toRepoCatalogRecord(child);
-        try {
-          await this.getInfo({ path: repo.path });
-          return repo;
-        } catch (error) {
-          if (isRepoNotCreatedError(error) || isRepoNotFoundError(error)) return null;
-          throw error;
-        }
-      }),
-    );
-
-    return repos.filter((repo): repo is RepoCatalogRecord => repo !== null);
+    return state.repos.map((child) => this.toRepoRecord(child));
   }
 
   private requireRepoNamespace() {
@@ -166,7 +131,7 @@ export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposC
     });
   }
 
-  private toRepoCatalogRecord(repo: ProjectProcessorState["repos"][number]): RepoCatalogRecord {
+  private toRepoRecord(repo: ProjectProcessorState["repos"][number]): RepoRecord {
     return {
       createdAt: repo.createdAt,
       lastWokenAt: repo.createdAt,
@@ -182,27 +147,23 @@ export { ReposCapability as RepoCapability };
 export async function ensureProjectRepoInfoForProject(input: {
   env: Pick<ReposCapabilityEnv, "REPO">;
   projectId: string;
-  projectSlug: string | null;
 }): Promise<RepoInfo> {
   const key = `${input.projectId}:${PROJECT_REPO_PATH}`;
   const existingPromise = projectRepoInfoPromises.get(key);
   if (existingPromise) return await existingPromise;
 
-  const promise = createOrReadProjectRepoInfoForProject(input);
-  projectRepoInfoPromises.set(key, promise);
-  try {
-    return await promise;
-  } finally {
+  const promise = createOrReadProjectRepoInfoForProject(input).finally(() => {
     if (projectRepoInfoPromises.get(key) === promise) {
       projectRepoInfoPromises.delete(key);
     }
-  }
+  });
+  projectRepoInfoPromises.set(key, promise);
+  return await promise;
 }
 
 async function createOrReadProjectRepoInfoForProject(input: {
   env: Pick<ReposCapabilityEnv, "REPO">;
   projectId: string;
-  projectSlug: string | null;
 }): Promise<RepoInfo> {
   const namespace = requireRepoNamespace(input.env);
   const name = getRepoDurableObjectName({
@@ -211,30 +172,13 @@ async function createOrReadProjectRepoInfoForProject(input: {
   });
   const repo = namespace.getByName(name);
 
-  try {
-    return await repo.getInfo();
-  } catch (error) {
-    if (!isRepoNotCreatedError(error)) {
-      throw error;
-    }
-  }
-
-  try {
-    return await repo.createRepo({
-      projectSlug: input.projectSlug || undefined,
-      source: {
-        artifactName: ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME,
-        description: `Project repo for ${input.projectSlug || input.projectId}`,
-        kind: "artifact-fork",
-      },
-    });
-  } catch (error) {
-    if (isRepoAlreadyExistsError(error)) {
-      return await repo.getInfo();
-    }
-
-    throw error;
-  }
+  return await repo.createRepo({
+    source: {
+      artifactName: ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME,
+      description: `Project repo for ${input.projectId}`,
+      kind: "artifact-fork",
+    },
+  });
 }
 
 export function getReposCapability(input: {

@@ -109,7 +109,7 @@ export function ProjectStreamView({
   headerAccessory,
   messageComposer,
   projectSlug,
-  projectSlugOrId,
+  projectId,
   renderStreamPathLink,
   showCommandPaletteTrigger = false,
   streamSource,
@@ -121,7 +121,7 @@ export function ProjectStreamView({
   headerAccessory?: ReactNode;
   messageComposer?: ProjectStreamMessageComposer;
   projectSlug: string;
-  projectSlugOrId: string;
+  projectId: string | null;
   renderStreamPathLink?: StreamPathLinkRenderer;
   showCommandPaletteTrigger?: boolean;
   streamSource?: ItxStreamSource;
@@ -129,6 +129,7 @@ export function ProjectStreamView({
 }) {
   const itx = useItx();
   const streamPathText = streamPath.toString();
+  const streamRuntimeProjectKey = projectId ?? "__global__";
   // The agent-ui processor (presence, live state) runs on every stream; the
   // chat-shaped Agent view only makes sense for streams under /agents — those
   // default to it, everything else defaults to the plain feed.
@@ -146,7 +147,7 @@ export function ProjectStreamView({
     () =>
       acquireStreamRuntime({
         createStreamClient: streamClientFactory,
-        projectId: projectSlugOrId,
+        projectId: streamRuntimeProjectKey,
         streamPath: streamPathText,
         slug: BrowserRawEventsContract.slug,
         schemaVersion: BROWSER_RAW_EVENTS_SCHEMA_VERSION,
@@ -165,7 +166,7 @@ export function ProjectStreamView({
           });
         },
       }),
-    [projectSlugOrId, streamClientFactory, streamPathText],
+    [streamRuntimeProjectKey, streamClientFactory, streamPathText],
   );
   const snapshot = useSyncExternalStore(
     store.subscribe,
@@ -174,7 +175,7 @@ export function ProjectStreamView({
   );
   const countResult = useStreamQuery(store.streamDatabase, `SELECT COUNT(*) AS count FROM events`);
   const eventCount = Number(countResult.data[0]?.count ?? 0);
-  const reductionKey = `${projectSlugOrId}:${streamPathText}`;
+  const reductionKey = `${streamRuntimeProjectKey}:${streamPathText}`;
 
   // A second browser-hosted processor on the same stream (and same per-path
   // SQLite database): folds agent events into settled `agent_feed_items` rows
@@ -185,7 +186,7 @@ export function ProjectStreamView({
     () =>
       acquireStreamRuntime({
         createStreamClient: streamClientFactory,
-        projectId: projectSlugOrId,
+        projectId: streamRuntimeProjectKey,
         streamPath: streamPathText,
         slug: AgentUiProcessorContract.slug,
         schemaVersion: AGENT_UI_SCHEMA_VERSION,
@@ -205,7 +206,7 @@ export function ProjectStreamView({
           });
         },
       }),
-    [projectSlugOrId, streamClientFactory, streamPathText],
+    [streamRuntimeProjectKey, streamClientFactory, streamPathText],
   );
   const agentSnapshot = useSyncExternalStore(
     agentStore.subscribe,

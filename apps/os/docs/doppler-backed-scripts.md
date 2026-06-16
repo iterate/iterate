@@ -87,7 +87,7 @@ const server = http.createServer(async (_req, res) => {
   const setCookie = response.headers.get("set-cookie");
   if (setCookie) res.setHeader("set-cookie", setCookie);
   res.statusCode = response.ok ? 302 : 502;
-  res.setHeader("location", `${target}/admin/streams/global`);
+  res.setHeader("location", `${target}/admin/streams/__global__`);
   res.end(response.ok ? "admin cookie set" : "admin cookie bridge failed");
   server.close();
 });

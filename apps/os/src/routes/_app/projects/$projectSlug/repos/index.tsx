@@ -83,7 +83,7 @@ function ProjectReposIndexContent() {
   const reposList = useItxQuery({ key: reposKey, query: (itx) => itx.repos.list() });
   const createRepo = useMutation({
     mutationFn: async (input: { path: string }) => {
-      await itx.repos.create({ path: input.path, projectSlug: params.projectSlug });
+      await itx.repos.create({ path: input.path });
       return input.path;
     },
     onSuccess: async (path) => {

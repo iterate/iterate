@@ -405,7 +405,7 @@ One PR (deliberately breaking; prd gets redeployed), five moves:
 - **A context IS a stream coordinate; ItxDurableObject is the ONLY host.**
   Context ids (`itx_…`), the `itx_contexts` D1 directory, the reserved `itx`
   stream segment, and the embedded cores in the Project and Agent DOs are
-  all deleted. Identity is the REF `<namespace>:<path>` — also the node's
+  all deleted. Identity is the REF `<projectId>:<path>` — also the node's
   DO name and address. The project context lives at `prj_x:/` (its events
   interleave with the project's own on the root stream, exactly like agents
   already did on theirs); an MCP session's at its session stream; `extend`
