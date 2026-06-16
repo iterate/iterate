@@ -74,7 +74,7 @@ Meaning:
 - `workerEntrypoint.props` carries entrypoint construction parameters.
 - Dynamic worker source is represented by a normal worker entrypoint adapter,
   not by a top-level `source` target. For example, a loopback
-  `SourceWorkerCapability` entrypoint can receive `SourceWorkerProps`. Use the
+  `DynamicWorkerCapability` entrypoint can receive `SourceWorkerProps`. Use the
   existing production source shapes: inline modules or real repo source
   `{ type: "repo", repo, commit, path, bundle? }`.
   The adapter builds/loads the dynamic worker through `LOADER` and replays the
@@ -125,7 +125,7 @@ props? }` maps only if the binding is actually a worker service binding.
   maps to `durableObject`.
 - Current `{ type: "rpc", worker: { type: "source", source }, ... }` maps to a
   worker-entrypoint adapter, probably loopback first:
-  `workerEntrypoint(SourceWorkerCapability, { source, entrypoint, innerProps })`.
+  `workerEntrypoint(DynamicWorkerCapability, { source, entrypoint, innerProps })`.
   Repo-backed sources use the current production shape
   `{ type: "repo", repo, commit, path, bundle? }`.
 
