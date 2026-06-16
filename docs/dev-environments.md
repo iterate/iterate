@@ -321,14 +321,13 @@ The captun Vite plugin (`apps/os/vite.config.ts`) activates when
 `APP_CONFIG_BASE_URL` (`https://<name>.tunnels.iterate.com`) unless
 `APP_CONFIG.baseUrl` is set explicitly. The plugin forwards public HTTP and
 WebSockets to your local dev server, so HMR and itx can use the same public
-public URL.
+URL.
 
 For personal `dev_<user>` configs, startup also ensures the shared dev auth
 client accepts `https://<name>.tunnels.iterate.com/api/iterate-auth/callback`.
 Shared `dev` does not mutate auth client state; use a personal dev config when
-you need human OAuth through a public local URL. Tests open public local URLs via
-`createPublicTunnel` (`apps/os/e2e/test-support/create-test-project.ts`)
-against the same gateway.
+you need human OAuth through a public local URL. Tests that need public local
+URLs use the same gateway.
 
 Public local URLs are not scarce. The genuinely scarce thing is the webhook-source
 configuration — a Slack app points at exactly one delivery URL at a time —

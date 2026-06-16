@@ -10,7 +10,7 @@ a tiny ingress router owns all routes, the dashboard app is its own worker,
 and every Durable Object class is its own worker. Three kinds of traffic are
 dispatched on hostname and path:
 
-1. Infrastructure routes that bypass the app entirely: the captun tunnel relay
+1. Infrastructure routes that bypass the app entirely: the Captun public relay
    at `/__iterate/captun` and admin-token debug routes.
 2. Project ingress: requests to project hosts (`<slug>.iterate.app`, custom
    hostnames) route to the project's callable, never the dashboard.

@@ -73,7 +73,7 @@ describe("prepareLocalDevServer", () => {
     });
   });
 
-  it("uses a captun tunnel name for the public base URL while preserving local discovery", async () => {
+  it("uses a Captun public URL name while preserving local discovery", async () => {
     const appDir = mkdtempSync(join(tmpdir(), "iterate-local-dev-"));
     tempDirs.push(appDir);
     const env: Record<string, string | undefined> = {
