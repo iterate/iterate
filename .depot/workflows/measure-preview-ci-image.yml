@@ -1,0 +1,39 @@
+name: Measure Preview CI Image
+
+on:
+  workflow_dispatch: {}
+
+env:
+  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+
+jobs:
+  setup:
+    name: Measure preview image setup
+    runs-on:
+      size: 16x64
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    steps:
+      - name: First step timestamp
+        run: date -u +"first-step-utc=%Y-%m-%dT%H:%M:%SZ"
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Verify baked tools
+        run: |-
+          set -euo pipefail
+          node --version
+          pnpm --version
+          doppler --version
+          echo "pnpm-store=$(pnpm store path)"
+          du -sh "$(pnpm store path)" || true
+          du -sh node_modules || true
+          du -sh /home/runner/.cache/ms-playwright || true
+
+      - name: Validate dependency tree
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      - name: Verify preview browser
+        run: pnpm --dir apps/streams-example-app exec playwright install chromium
