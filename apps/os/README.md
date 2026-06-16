@@ -75,7 +75,7 @@ For Jonas:
 pnpm dev
 
 # Equivalent explicit form:
-doppler run --project os --config dev_jonas -- pnpm exec tsx ./alchemy.run.ts
+doppler run --project os --config dev_jonas -- pnpm cli dev start
 
 # Terminal 2: run real-worker e2e against the discovered local server.
 doppler run --project os --config dev_jonas -- pnpm e2e
@@ -86,6 +86,18 @@ local Doppler setup for `apps/os`; inside Doppler, `DOPPLER_CONFIG` is set to
 values such as `dev_jonas`. The dev wrapper writes output to
 `.alchemy/dev-server.log`, so a second terminal can follow it with
 `tail -f .alchemy/dev-server.log`.
+
+The same local server lifecycle is also available through the app CLI:
+
+```bash
+pnpm cli dev status
+pnpm cli dev start                     # attached, same as pnpm dev
+pnpm cli dev start --detach            # background; prints the selected URL
+pnpm cli dev attach                    # follow a pre-existing server log
+pnpm cli dev restart
+pnpm cli dev restart --detach
+pnpm cli dev kill
+```
 
 The shared `dev` config behaves the same way:
 

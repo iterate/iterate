@@ -1190,10 +1190,12 @@ origin })`, set by the first delegating hop, preserved upward; the
   `gitClone`/`gitAdd`/`gitCommit`/`gitPush`/`gitStatus` methods are the
   surface; nested RpcTargets returned from entrypoint getters do not
   survive RPC boundaries reliably, so don't ship one.
-- ~~Vite allowedHosts blocks the dev tunnel host~~ → Misdiagnosis. The
-  config is `allowedHosts: true`; the 403/502s came from a wedged vite
-  process behind the still-connected cloudflared tunnel. Restarting the
-  dev server fixes it; e2e through `os.iterate-dev-<user>.com` passes.
+- ~~Vite allowedHosts blocks the dev tunnel host~~ → Historical tunnel-era
+  misdiagnosis. The config is `allowedHosts: true`; the 403/502s came from a
+  wedged vite process behind the still-connected cloudflared tunnel.
+  Restarting the dev server fixed it. Current local dev uses
+  `localhost:<port>` plus `<slug>.localhost:<port>` project hosts; use captun
+  or preview when a public URL is required.
 - prd cleanup after tombstone soak: CodemodeSession class + stale stream
   subscriber events, then namespace deletion (mechanically proven safe).
 - Legacy `executeCodemodeFunctionCall` methods on capability entrypoints —

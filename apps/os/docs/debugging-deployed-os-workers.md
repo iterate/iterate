@@ -14,13 +14,13 @@ swapping the Doppler config. Run CLI commands from `apps/os`; plain
 ## Common CLI Targets
 
 ```bash
-# Local dev through your configured tunnel. Requires `pnpm dev` and a healthy tunnel.
+# Local dev through the discovery file. Requires `pnpm dev` or `pnpm cli dev start --detach`.
 pnpm cli itx --help
 
-# Fully-local dev server. Requires `doppler run --config dev -- pnpm dev`.
+# Fully-local dev server with an explicit config.
 doppler run --config dev -- pnpm cli itx --help
 
-# Explicit local override, if you are not using the discovery file.
+# Explicit local/captun override, if you are not using the discovery file.
 doppler run --config dev -- pnpm cli --base-url http://localhost:<port> itx --help
 
 # Production.

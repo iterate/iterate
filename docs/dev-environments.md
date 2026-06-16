@@ -60,10 +60,13 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   recorded in **`apps/os/.alchemy/dev-server.json`**
   (`{pid, port, baseUrl, logPath, stoppedAt?}`).
   Scripts and CLIs that need "the local dev server" read that file — no
-  flags, no guessing. One dev server per worktree: a second `pnpm dev` refuses
-  while the first is alive. The file appears ~10–15s before the port actually
-  accepts connections (Vite is still booting) — poll the base URL until it
-  returns a response before driving it.
+  flags, no guessing. `pnpm dev` is the attached shorthand for
+  `cd apps/os && pnpm cli dev start`. Use `pnpm cli dev start --detach`,
+  `status`, `attach`, `restart`, and `kill` from `apps/os` to manage the
+  recorded local server for this worktree. A second start attaches to the
+  existing live server; use `restart` to replace it. The file appears ~10–15s
+  before the port actually accepts connections (Vite is still booting) — poll
+  the base URL until it returns a response before driving it.
 - Dev server output is mirrored to the gitignored
   **`apps/os/.alchemy/dev-server.log`**. Tail it from another terminal with
   `tail -f apps/os/.alchemy/dev-server.log` from the repo root, or

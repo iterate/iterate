@@ -109,7 +109,8 @@ doppler run --project os --config preview_2 -- pnpm exec tsx ./alchemy.run.ts --
 
 ## Local Development
 
-Use `pnpm dev` for normal local OS development. It wraps Doppler and Alchemy.
+Use `pnpm dev` for normal local OS development. It is the attached shorthand
+for `cd apps/os && pnpm cli dev start`, which wraps Doppler and Alchemy.
 
 ```bash
 pnpm install
@@ -121,14 +122,15 @@ The default config is the shared root `dev`: a **fully-local** environment
 `http://localhost:<port>`, no tunnel, no Cloudflare resources) whose only
 external dependency is the dev-global auth at `auth.iterate-dev.com`. Any
 number of worktrees/agents run this concurrently without contention. See
-[Dev environments](dev-environments.md). Tunnel-backed per-user configs
-(`dev_<user>`) below remain for webhook/third-party-OAuth work.
+[Dev environments](dev-environments.md) for lifecycle controls such as
+`pnpm cli dev start --detach`, `attach`, `restart`, and `kill`. Use captun,
+preview, or production when a flow needs a public callback URL.
 
 For an explicit app/config:
 
 ```bash
 cd apps/os
-doppler run --project os --config dev_jonas -- pnpm exec tsx ./alchemy.run.ts
+doppler run --project os --config dev_jonas -- pnpm cli dev start
 ```
 
 OS dev configs run fully locally on `http://localhost:<port>`. Personal configs
