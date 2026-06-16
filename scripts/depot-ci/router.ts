@@ -5,6 +5,7 @@ import { runCommand } from "../../packages/shared/src/node/run-command.ts";
 const defaultDepotOrgId = "0p91s0lz49";
 const defaultRepositoryFullName = "iterate/iterate";
 const buildPreviewImageWorkflow = ".depot/workflows/build-preview-ci-image.yml";
+const measurePreviewCacheDiskWorkflow = ".depot/workflows/measure-preview-cache-disk.yml";
 const measurePreviewImageWorkflow = ".depot/workflows/measure-preview-ci-image.yml";
 const previewTrialWorkflow = "cloudflare-previews.yml";
 
@@ -192,6 +193,24 @@ export const router = os.router({
         .meta({
           description:
             "Measure checkout and dependency validation time on the uploaded preview CI image",
+        })
+        .handler(async ({ input, signal }) => {
+          return await runLocalWorkflow({
+            job: "setup",
+            orgId: input.orgId,
+            signal,
+            workflowPath: input.workflowPath,
+          });
+        }),
+      measureCacheDisk: os
+        .input(
+          CommonDepotInput.extend({
+            workflowPath: z.string().trim().min(1).default(measurePreviewCacheDiskWorkflow),
+          }),
+        )
+        .meta({
+          description:
+            "Measure dependency install time on a stock Depot runner with the durable pnpm cache disk",
         })
         .handler(async ({ input, signal }) => {
           return await runLocalWorkflow({
