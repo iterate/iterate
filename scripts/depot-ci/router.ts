@@ -8,7 +8,7 @@ const buildPreviewImageWorkflow = ".depot/workflows/build-preview-ci-image.yml";
 const measurePreviewImageWorkflow = ".depot/workflows/measure-preview-ci-image.yml";
 const previewTrialWorkflow = "cloudflare-previews.yml";
 
-const commonDepotInput = z.object({
+const CommonDepotInput = z.object({
   orgId: z
     .string()
     .trim()
@@ -148,7 +148,7 @@ async function runLocalWorkflow(input: {
 export const router = os.router({
   "depot-ci": os.router({
     doctor: os
-      .input(commonDepotInput)
+      .input(CommonDepotInput)
       .meta({ description: "Verify local Depot CI CLI access for this repository" })
       .handler(async ({ input, signal }) => {
         const [version, org, ci] = await Promise.all([
@@ -167,7 +167,7 @@ export const router = os.router({
     image: os.router({
       build: os
         .input(
-          commonDepotInput.extend({
+          CommonDepotInput.extend({
             workflowPath: z.string().trim().min(1).default(buildPreviewImageWorkflow),
           }),
         )
@@ -185,7 +185,7 @@ export const router = os.router({
         }),
       measureSetup: os
         .input(
-          commonDepotInput.extend({
+          CommonDepotInput.extend({
             workflowPath: z.string().trim().min(1).default(measurePreviewImageWorkflow),
           }),
         )
@@ -205,7 +205,7 @@ export const router = os.router({
     preview: os.router({
       dispatch: os
         .input(
-          commonDepotInput.extend({
+          CommonDepotInput.extend({
             baseSha: z.string().trim().min(1),
             headRefName: z.string().trim().min(1),
             headSha: z.string().trim().min(1),

@@ -8,6 +8,7 @@ import {
   batchPreviewAppsByDependencies,
   expandPreviewDependencies,
   mapPreviewAppsByDependencyReadiness,
+  resolvePreviewAppsWithReadyDependencies,
   resolvePreviewReadinessUrls,
   resolvePreviewCompareBaseSha,
   selectPreviewAppsNeedingRetry,
@@ -68,6 +69,35 @@ describe("preview app dependency batches", () => {
     semaphore.resolve();
     streams.resolve();
     await expect(run).resolves.toEqual(["os", "semaphore", "auth", "streams-example-app"]);
+  });
+});
+
+describe("preview deploy dependencies", () => {
+  it("does not serialize a dependent app behind an already-routed dependency", () => {
+    expect(
+      resolvePreviewAppsWithReadyDependencies([cloudflarePreviewApps.os], {
+        apps: {
+          auth: {
+            appDisplayName: "Auth",
+            appSlug: "auth",
+            headSha: "previous-head",
+            publicUrl: "https://auth.iterate-preview-1.com",
+            status: "deployed",
+            updatedAt: "2026-06-16T00:00:00.000Z",
+          },
+        },
+        environmentConfigLease: null,
+      })[0]?.previewDependencies,
+    ).toEqual([]);
+  });
+
+  it("keeps the dependency for first-time preview bootstrap", () => {
+    expect(
+      resolvePreviewAppsWithReadyDependencies([cloudflarePreviewApps.os], {
+        apps: {},
+        environmentConfigLease: null,
+      })[0]?.previewDependencies,
+    ).toEqual(["auth"]);
   });
 });
 

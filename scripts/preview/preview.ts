@@ -238,7 +238,7 @@ export async function deployCloudflarePreviewForPullRequest(
   };
 
   await mapPreviewAppsByDependencyReadiness(
-    selectedApps,
+    resolvePreviewAppsWithReadyDependencies(selectedApps, current.state),
     defaultPreviewAppConcurrency,
     async (app) => {
       const entry = await deployPreviewAppWithStatus({
@@ -845,6 +845,29 @@ export function expandPreviewDependencies(appSlugs: readonly CloudflarePreviewAp
   return Object.values(cloudflarePreviewApps)
     .map((app) => app.slug)
     .filter((appSlug) => selected.has(appSlug));
+}
+
+export function resolvePreviewAppsWithReadyDependencies(
+  apps: readonly PreviewAppRuntime[],
+  state: CloudflarePreviewState,
+) {
+  return apps.map((app) => ({
+    ...app,
+    previewDependencies: (app.previewDependencies ?? []).filter(
+      (dependency) => !previewAppHasReadyRoute(state, dependency),
+    ),
+  }));
+}
+
+function previewAppHasReadyRoute(
+  state: CloudflarePreviewState,
+  appSlug: CloudflarePreviewAppSlugType,
+) {
+  const entry = state.apps[appSlug];
+  return (
+    typeof entry?.publicUrl === "string" &&
+    ["awaiting-tests", "deployed", "tests-failed"].includes(entry.status)
+  );
 }
 
 export function batchPreviewAppsByDependencies(apps: readonly PreviewAppRuntime[]) {
