@@ -120,14 +120,14 @@ function fakeStream() {
     cursor = batch.at(-1)!.offset;
     void Promise.resolve(
       deliver({
-        namespace: "stream",
+        projectId: "stream",
         path: "/r",
         events: batch,
         streamMaxOffset: log.at(-1)?.offset ?? 0,
         // Hosts under test never read batch state; a stub keeps the fake honest
         // to the StreamEventBatch shape without dragging in the core reducer.
         state: {
-          namespace: "stream",
+          projectId: "stream",
           path: "/r",
           maxOffset: log.at(-1)?.offset ?? 0,
         } as StreamEventBatch["state"],
@@ -195,7 +195,7 @@ const subscribeArgs = (stream: ReturnType<typeof fakeStream>["stream"]) => ({
   stream: stream as never,
   subscriptionKey: "k",
   streamMaxOffset: 0,
-  streamRuntimeState: { coreProcessorState: { namespace: "stream", path: "/r" } as never },
+  streamRuntimeState: { coreProcessorState: { projectId: "stream", path: "/r" } as never },
 });
 
 describe("T0 — hosted processors run side effects during catch-up replay", () => {

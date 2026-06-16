@@ -135,7 +135,7 @@ class CoreStreamSim {
     let entry = this.streams.get(path);
     if (entry === undefined) {
       entry = {
-        coreProcessorState: initialCoreProcessorState({ namespace: "stream", path }),
+        coreProcessorState: initialCoreProcessorState({ projectId: "stream", path }),
         events: [],
       };
       this.streams.set(path, entry);
@@ -184,12 +184,12 @@ class CoreStreamSim {
 }
 
 function initialCoreProcessorState(args: {
-  namespace: string;
+  projectId: string;
   path: string;
 }): StreamCoreProcessorState {
   return CoreProcessorContract.stateSchema.parse({
     ...getInitialProcessorState(CoreProcessorContract),
-    namespace: args.namespace,
+    projectId: args.projectId,
     path: args.path,
   });
 }
@@ -199,7 +199,7 @@ describe("core stream state and subscription processors", () => {
     const sim = new CoreStreamSim();
     sim.append("/a/b/c", {
       type: "events.iterate.com/stream/created",
-      payload: { namespace: "stream", path: "/a/b/c" },
+      payload: { projectId: "stream", path: "/a/b/c" },
     });
     expect(sim.streams.get("/")?.coreProcessorState.childPaths).toEqual(["/a"]);
     expect(sim.streams.get("/a")?.coreProcessorState.childPaths).toEqual(["/a/b"]);
@@ -210,7 +210,7 @@ describe("core stream state and subscription processors", () => {
     const sim = new CoreStreamSim();
     sim.append("/cb", {
       type: "events.iterate.com/stream/created",
-      payload: { namespace: "stream", path: "/cb" },
+      payload: { projectId: "stream", path: "/cb" },
     });
     sim.append("/cb", {
       type: "events.iterate.com/stream/subscription-configured",

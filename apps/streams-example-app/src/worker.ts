@@ -5,7 +5,7 @@ import { parseStreamRpcRequest, streamDurableObjectName } from "./lib/stream-rpc
 import { PublicStreamRpcTarget } from "~/domains/streams/engine/workers/durable-objects/stream.ts";
 
 export { Stream } from "~/domains/streams/engine/workers/durable-objects/stream.ts";
-export { StreamProcessorRunner } from "~/domains/streams/engine/workers/durable-objects/stream-processor-runner.ts";
+export { StreamProcessorRunner } from "~/domains/streams/engine/workers/test-support/stream-processor-runner.ts";
 
 export default createServerEntry({
   async fetch(request) {
@@ -21,11 +21,11 @@ export default createServerEntry({
     }
 
     if (url.pathname === "/api/streams") {
-      const { namespace, path } = parseStreamRpcRequest({ url });
+      const { projectId, path } = parseStreamRpcRequest({ url });
       return newWorkersRpcResponse(
         request,
         new PublicStreamRpcTarget(
-          env.STREAM.getByName(streamDurableObjectName({ namespace, path })),
+          env.STREAM.getByName(streamDurableObjectName({ projectId, path })),
         ),
       );
     }

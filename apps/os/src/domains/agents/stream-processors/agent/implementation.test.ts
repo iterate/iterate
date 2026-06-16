@@ -20,7 +20,8 @@ describe("AgentProcessor", () => {
 
   it("renders chat user messages into agent input", async () => {
     const { stream, appended } = memoryStream();
-    const processor = newAgentProcessor({ stream });
+    const setupAgentRuntime = vi.fn(async () => undefined);
+    const processor = newAgentProcessor({ stream, setupAgentRuntime });
 
     await processor.ingest({
       events: [
@@ -33,6 +34,7 @@ describe("AgentProcessor", () => {
       streamMaxOffset: 5,
     });
 
+    expect(setupAgentRuntime).toHaveBeenCalledOnce();
     expect(appended[0]).toMatchObject({
       type: "events.iterate.com/agent/input-added",
       idempotencyKey: "agent/event-type-explainer/events.iterate.com/agents/user-message-received",
@@ -88,29 +90,33 @@ describe("AgentProcessor", () => {
     });
   });
 
-  it("wakes child agent runners from child stream creation events", async () => {
+  it("applies agent config facts by setting up runtime and appending concrete prompt facts", async () => {
     const { stream, appended } = memoryStream();
-    const childPaths: string[] = [];
+    const setupAgentRuntime = vi.fn(async () => undefined);
     const processor = newAgentProcessor({
       stream,
-      ensureChildAgentRunner: async (childPath) => {
-        childPaths.push(childPath);
-      },
+      setupAgentRuntime,
     });
 
     await processor.ingest({
       events: [
         agentEvent({
-          type: "events.iterate.com/stream/child-stream-created",
-          payload: { childPath: "/agents/child" },
+          type: "events.iterate.com/agent/config-updated",
+          payload: { systemPrompt: "Use the project tools." },
           offset: 12,
         }),
       ],
       streamMaxOffset: 12,
     });
 
-    expect(childPaths).toEqual(["/agents/child"]);
-    expect(appended).toEqual([]);
+    expect(setupAgentRuntime).toHaveBeenCalledOnce();
+    expect(appended).toEqual([
+      expect.objectContaining({
+        type: "events.iterate.com/agent/system-prompt-updated",
+        idempotencyKey: "agent/apply-config/system-prompt@12",
+        payload: { systemPrompt: "Use the project tools." },
+      }),
+    ]);
   });
 
   it("does not render received chat messages on the agents root stream", async () => {
@@ -157,11 +163,11 @@ describe("AgentProcessor", () => {
 
   it("does not enqueue agent output scripts on the agents root stream", async () => {
     const { stream, appended } = memoryStream();
-    const ensureItxContext = vi.fn(async () => undefined);
+    const setupAgentRuntime = vi.fn(async () => undefined);
     const processor = newAgentProcessor({
       stream,
-      ensureItxContext,
       isAgentsRootStream: () => true,
+      setupAgentRuntime,
     });
 
     await processor.ingest({
@@ -181,7 +187,7 @@ describe("AgentProcessor", () => {
       streamMaxOffset: 13,
     });
 
-    expect(ensureItxContext).not.toHaveBeenCalled();
+    expect(setupAgentRuntime).not.toHaveBeenCalled();
     expect(appended).toEqual([]);
   });
 
@@ -251,6 +257,7 @@ describe("AgentProcessor", () => {
 
     await processor.ingest({
       events: [
+        providerSelectedEvent({ offset: 41 }),
         agentEvent({
           type: "events.iterate.com/agent/input-added",
           payload: {
@@ -269,7 +276,7 @@ describe("AgentProcessor", () => {
         idempotencyKey: "agent/llm-request-scheduled@42",
         payload: expect.objectContaining({
           debounceMs: 1000,
-          model: "@cf/moonshotai/kimi-k2.6",
+          model: "@cf/moonshotai/kimi-k2.7-code",
         }),
       }),
     ]);
@@ -283,6 +290,7 @@ describe("AgentProcessor", () => {
         offset: 12,
         state: {
           ...initialState(),
+          llmProvider: "openai-ws",
           currentRequest: { phase: "requested", llmRequestId: 12 },
         },
       },
@@ -319,6 +327,7 @@ describe("AgentProcessor", () => {
         offset: 12,
         state: {
           ...initialState(),
+          llmProvider: "openai-ws",
           currentRequest: { phase: "requested", llmRequestId: 12 },
         },
       },
@@ -365,7 +374,7 @@ describe("AgentProcessor", () => {
           type: "events.iterate.com/agent/llm-request-requested",
           payload: {
             model: "test-model",
-            runOpts: {},
+            provider: "openai-ws",
           },
           offset: 43,
         }),
@@ -508,10 +517,12 @@ describe("AgentProcessor", () => {
         offset: 7,
         state: {
           ...initialState(),
+          llmProvider: "openai-ws",
           currentRequest: { phase: "scheduled", requestId: "req_lost", scheduledOffset: 7 },
         },
       },
       readStreamEvents: async () => [
+        providerSelectedEvent({ offset: 1 }),
         agentEvent({
           type: "events.iterate.com/agent/input-added",
           payload: { content: "hi", llmRequestPolicy: { behaviour: "after-current-request" } },
@@ -533,6 +544,7 @@ describe("AgentProcessor", () => {
         // the (dead) timer path converge on the same idempotency key — if the
         // timer somehow fired before the crash landed its append, this dedups.
         idempotencyKey: "agent/llm-request-requested@7",
+        payload: expect.objectContaining({ provider: "openai-ws" }),
       }),
     ]);
   });
@@ -546,6 +558,7 @@ describe("AgentProcessor", () => {
         state: {
           ...initialState(),
           history: [{ role: "user", content: "hi" }],
+          llmProvider: "openai-ws",
           pendingTriggerOffset: 42,
         },
       },
@@ -610,6 +623,7 @@ describe("AgentProcessor", () => {
 
     await processor.ingest({
       events: [
+        providerSelectedEvent({ offset: 41 }),
         agentEvent({
           type: "events.iterate.com/agent/input-added",
           payload: { content: "hello" },
@@ -634,10 +648,12 @@ describe("AgentProcessor", () => {
         offset: 7,
         state: {
           ...initialState(),
+          llmProvider: "openai-ws",
           currentRequest: { phase: "scheduled", requestId: "req_lost", scheduledOffset: 7 },
         },
       },
       readStreamEvents: async () => [
+        providerSelectedEvent({ offset: 1 }),
         agentEvent({
           type: "events.iterate.com/agent/llm-request-scheduled",
           payload: { requestId: "req_lost", debounceMs: 1000, model: "test-model" },
@@ -666,6 +682,7 @@ describe("AgentProcessor", () => {
       expect.objectContaining({
         type: "events.iterate.com/agent/llm-request-requested",
         idempotencyKey: "agent/llm-request-requested@7",
+        payload: expect.objectContaining({ provider: "openai-ws" }),
       }),
     ]);
   });
@@ -673,6 +690,7 @@ describe("AgentProcessor", () => {
   it("does not re-request on connect when the live instance already owns the schedule", async () => {
     vi.useFakeTimers();
     const { stream, appended } = memoryStream();
+    const selectedProvider = providerSelectedEvent({ offset: 1 });
     const triggeringInput = agentEvent({
       type: "events.iterate.com/agent/input-added",
       payload: { content: "hi", llmRequestPolicy: { behaviour: "after-current-request" } },
@@ -681,6 +699,7 @@ describe("AgentProcessor", () => {
     const processor = newAgentProcessor({
       stream,
       readStreamEvents: async () => [
+        selectedProvider,
         triggeringInput,
         ...appended
           .filter((event) => event.type === "events.iterate.com/agent/llm-request-scheduled")
@@ -694,7 +713,7 @@ describe("AgentProcessor", () => {
     // timer. A subscriber-connected fact arriving afterwards (any other
     // processor or a browser attaching) must not fire the request early or
     // double-request — the live timer owns the schedule.
-    await processor.ingest({ events: [triggeringInput], streamMaxOffset: 3 });
+    await processor.ingest({ events: [selectedProvider, triggeringInput], streamMaxOffset: 3 });
     await processor.ingest({
       events: [subscriberConnectedEvent({ offset: 5 })],
       streamMaxOffset: 5,
@@ -733,6 +752,7 @@ describe("AgentProcessor", () => {
         },
       },
       readStreamEvents: async () => [
+        providerSelectedEvent({ offset: 1 }),
         agentEvent({
           type: "events.iterate.com/agent/llm-request-scheduled",
           payload: { requestId: "req_retry", debounceMs: 1000, model: "test-model" },
@@ -757,6 +777,7 @@ describe("AgentProcessor", () => {
       expect.objectContaining({
         type: "events.iterate.com/agent/llm-request-requested",
         idempotencyKey: "agent/llm-request-requested@7",
+        payload: expect.objectContaining({ provider: "openai-ws" }),
       }),
     ]);
   });
@@ -764,6 +785,7 @@ describe("AgentProcessor", () => {
   it("hands a scheduled LLM request to providers by reference, without a body", async () => {
     vi.useFakeTimers();
     const { stream, appended } = memoryStream();
+    const selectedProvider = providerSelectedEvent({ offset: 1 });
     const triggeringInput = agentEvent({
       type: "events.iterate.com/agent/input-added",
       payload: { content: "hi", llmRequestPolicy: { behaviour: "after-current-request" } },
@@ -776,6 +798,7 @@ describe("AgentProcessor", () => {
       // processor appended (the request handoff re-verifies the schedule is
       // still current against history).
       readStreamEvents: async () => [
+        selectedProvider,
         agentEvent({
           type: "events.iterate.com/agent/input-added",
           payload: {
@@ -793,16 +816,16 @@ describe("AgentProcessor", () => {
       ],
     });
 
-    await processor.ingest({ events: [triggeringInput], streamMaxOffset: 3 });
+    await processor.ingest({ events: [selectedProvider, triggeringInput], streamMaxOffset: 3 });
     await vi.advanceTimersByTimeAsync(1000);
 
     expect(appended).toHaveLength(2);
-    // Request-by-reference: the handoff records which model to run and how,
+    // Request-by-reference: the handoff records which model to run,
     // but never embeds the conversation — providers rebuild it from history
     // up to this event's own offset (see llm-request-helpers.ts).
     expect(appended[1]).toMatchObject({
       type: "events.iterate.com/agent/llm-request-requested",
-      payload: { model: expect.any(String), runOpts: {} },
+      payload: { model: expect.any(String), provider: "openai-ws" },
     });
     expect(appended[1]!.payload).not.toHaveProperty("body");
   });
@@ -814,19 +837,17 @@ function initialState(): AgentState {
 
 function newAgentProcessor(args: {
   stream: StreamProcessorIterateContext["stream"];
-  ensureChildAgentRunner?: (childPath: string) => Promise<unknown>;
-  ensureItxContext?: () => Promise<unknown>;
   isAgentsRootStream?: () => boolean;
   snapshot?: StreamProcessorSnapshot<AgentState>;
   readStreamEvents?: () => Promise<StreamEvent[]>;
+  setupAgentRuntime?: () => Promise<unknown>;
 }) {
   return new AgentProcessor({
     iterateContext: { stream: args.stream },
-    ensureChildAgentRunner: args.ensureChildAgentRunner ?? (async () => undefined),
-    ensureItxContext: args.ensureItxContext ?? (async () => undefined),
     isAgentsRootStream: args.isAgentsRootStream ?? (() => false),
     readState: () => args.snapshot,
     readStreamEvents: args.readStreamEvents ?? (async () => []),
+    setupAgentRuntime: args.setupAgentRuntime ?? (async () => undefined),
   });
 }
 
@@ -868,6 +889,17 @@ function subscriberConnectedEvent(args: { offset: number }): StreamEvent {
     offset: args.offset,
     createdAt: "2026-01-01T00:00:00.000Z",
   };
+}
+
+function providerSelectedEvent(args: { offset: number }): StreamEvent {
+  return agentEvent({
+    type: "events.iterate.com/agent/llm-provider-selected",
+    payload: {
+      model: "@cf/moonshotai/kimi-k2.7-code",
+      provider: "openai-ws",
+    },
+    offset: args.offset,
+  });
 }
 
 function agentEvent(args: {

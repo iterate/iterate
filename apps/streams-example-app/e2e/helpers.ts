@@ -14,20 +14,20 @@ export function e2eStreamPathLabel(label: string) {
   return e2eStreamPath(`/${label}-${crypto.randomUUID()}`);
 }
 
-export function toStreamWebSocketUrl(args: { path: string; namespace?: string }) {
+export function toStreamWebSocketUrl(args: { path: string; projectId?: string }) {
   const path = e2eStreamPath(args.path);
-  const url = new URL(streamRpcPath({ path, namespace: args.namespace }), e2eWorkerUrl());
+  const url = new URL(streamRpcPath({ path, projectId: args.projectId }), e2eWorkerUrl());
   if (url.protocol === "http:") url.protocol = "ws:";
   if (url.protocol === "https:") url.protocol = "wss:";
   return url.toString();
 }
 
 export function streamProcessorRunnerName(args: {
-  namespace: string;
+  projectId: string;
   path: string;
   subscriptionKey: string;
 }) {
-  return `${args.namespace}:${e2eStreamPath(args.path)}:${args.subscriptionKey}`;
+  return `${args.projectId}:${e2eStreamPath(args.path)}:${args.subscriptionKey}`;
 }
 
 export function toStreamProcessorRunnerWebSocketUrl(
@@ -44,15 +44,15 @@ export function toStreamProcessorRunnerWebSocketUrl(
   return url.toString();
 }
 
-export function streamRoute(args: { path: string; namespace?: string; view?: string }) {
+export function streamRoute(args: { path: string; projectId?: string; view?: string }) {
   const search = streamViewSearch({
     path: e2eStreamPath(args.path),
-    namespace: args.namespace,
+    projectId: args.projectId,
     view: args.view,
   });
   const params = new URLSearchParams({
     path: search.path,
-    namespace: search.namespace,
+    projectId: search.projectId,
     view: search.view,
   });
   return `/streams?${params.toString()}`;

@@ -29,7 +29,7 @@ test("extend: child caps shadow the parent, misses delegate up the chain", async
   using child = await projectItx.extend({ name: "e2e-session" });
   const childDescription = await child.describe();
   // A context IS a stream coordinate: the anonymous extend lands under the
-  // /itx/<generated> catch-all in the project's namespace.
+  // /itx/<generated> catch-all in the project.
   expect(String(childDescription.context)).toMatch(new RegExp(`^${project.id}:/itx/itx`));
   expect(childDescription.project).toMatchObject({ id: project.id });
 
@@ -164,13 +164,13 @@ test("extend: workspaces are HOST-provided — plain extensions share the projec
   );
 
   // …while a context whose HOST provides its own `workspace` capability —
-  // the agent pattern: an explicit workspaceId bound to its own identity —
+  // the agent pattern: an explicit workspace path bound to its own identity —
   // is isolated from the shared one.
   using isolated = await projectItx.extend({ name: "e2e-ws-isolated" });
   await isolated.provideCapability({
     capability: {
       entrypoint: "WorkspaceCapability",
-      props: { workspaceId: `e2e-${marker}` },
+      props: { path: `/workspaces/e2e-${marker}` },
       type: "rpc",
       worker: { type: "loopback" },
     },

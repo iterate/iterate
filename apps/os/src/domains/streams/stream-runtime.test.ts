@@ -10,7 +10,7 @@ describe("toStreamState", () => {
     // keeps the projection and the contract from drifting again.
     const state = toStreamState({
       coreProcessorState: {
-        namespace: "prj_123",
+        projectId: "prj_123",
         path: "/",
         eventCount: 42,
         maxOffset: 42,
@@ -26,7 +26,7 @@ describe("toStreamState", () => {
     } as never);
 
     expect(state).toEqual({
-      namespace: "prj_123",
+      projectId: "prj_123",
       path: "/",
       eventCount: 42,
       childPaths: ["/agents", "/repos"],

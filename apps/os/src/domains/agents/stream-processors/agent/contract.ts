@@ -22,7 +22,8 @@ import {
 import { CoreProcessorContract } from "~/domains/streams/engine/processors/core/contract.ts";
 import { ItxContract } from "~/itx/contract.ts";
 
-export const DEFAULT_WORKERS_AI_AGENT_MODEL = "@cf/moonshotai/kimi-k2.6";
+export const DEFAULT_WORKERS_AI_AGENT_MODEL = "@cf/moonshotai/kimi-k2.7-code";
+export const DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS = 1000;
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
@@ -42,10 +43,9 @@ export const AgentProcessorContract = defineProcessorContract({
     llmConfig: z
       .object({
         model: z.string().min(1),
-        runOpts: z.json().default({}),
-        debounceMs: z.number().int().nonnegative().default(1000),
       })
-      .default({ model: DEFAULT_WORKERS_AI_AGENT_MODEL, runOpts: {}, debounceMs: 1000 }),
+      .default({ model: DEFAULT_WORKERS_AI_AGENT_MODEL }),
+    llmProvider: z.enum(["openai-ws", "cloudflare-ai"]).nullable().default(null),
     currentRequest: z
       .discriminatedUnion("phase", [
         z.object({
@@ -95,6 +95,21 @@ export const AgentProcessorContract = defineProcessorContract({
         },
       ],
       payloadSchema: z.object({ systemPrompt: z.string() }),
+    },
+    "events.iterate.com/agent/config-updated": {
+      description:
+        "Project-authored agent configuration. The agent processor turns this birth/config fact into concrete setup facts and runtime side effects.",
+      examples: [
+        {
+          description: "Configure a web agent's default prompt",
+          payload: {
+            systemPrompt: "You are the Iterate web agent for /agents/demo.",
+          },
+        },
+      ],
+      payloadSchema: z.object({
+        systemPrompt: z.string().optional(),
+      }),
     },
     "events.iterate.com/agent/input-added": {
       description: "A curated model-visible row of agent context.",
@@ -180,12 +195,12 @@ export const AgentProcessorContract = defineProcessorContract({
         llmRequestId: z.number().int().positive().optional(),
       }),
     },
-    "events.iterate.com/agent/llm-config-updated": {
-      description: "Updates model configuration for future LLM requests.",
+    "events.iterate.com/agent/llm-provider-selected": {
+      description: "Selects the LLM provider processor and model for future LLM requests.",
       payloadSchema: z.object({
+        ifUnset: z.boolean().optional(),
         model: z.string().min(1),
-        runOpts: z.json().default({}),
-        debounceMs: z.number().int().nonnegative().default(1000),
+        provider: z.enum(["openai-ws", "cloudflare-ai"]),
       }),
     },
     "events.iterate.com/agent/llm-request-scheduled": {
@@ -201,7 +216,7 @@ export const AgentProcessorContract = defineProcessorContract({
         "The agent has prepared an LLM request. A subscribed LLM request processor must execute it and respond with agent output and a terminal llm-request-completed event. The llmRequestId used by response events is this event's stream offset. REQUEST-BY-REFERENCE: the event carries no conversation body — embedding it would store a full copy of the growing history in every request (O(N²) stream growth). Providers rebuild the chat request by reducing committed history up to this event's offset (buildLlmChatRequest), which reproduces the exact model-visible context from the stream forever.",
       payloadSchema: z.strictObject({
         model: z.string().min(1),
-        runOpts: z.json().default({}),
+        provider: z.enum(["openai-ws", "cloudflare-ai"]),
       }),
     },
     "events.iterate.com/agent/llm-request-completed": {
@@ -261,15 +276,15 @@ export const AgentProcessorContract = defineProcessorContract({
   consumes: [
     "events.iterate.com/itx/capability-provided",
     "events.iterate.com/itx/script-execution-completed",
-    "events.iterate.com/stream/child-stream-created",
     "events.iterate.com/stream/subscriber-connected",
     "events.iterate.com/agents/user-message-received",
     "events.iterate.com/agents/web-message-sent",
     "events.iterate.com/agents/tui-message-sent",
     "events.iterate.com/agent/system-prompt-updated",
+    "events.iterate.com/agent/config-updated",
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/output-added",
-    "events.iterate.com/agent/llm-config-updated",
+    "events.iterate.com/agent/llm-provider-selected",
     "events.iterate.com/agent/llm-request-scheduled",
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-completed",
@@ -279,6 +294,7 @@ export const AgentProcessorContract = defineProcessorContract({
   ],
   emits: [
     "events.iterate.com/itx/script-execution-requested",
+    "events.iterate.com/agent/system-prompt-updated",
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/llm-request-scheduled",
     "events.iterate.com/agent/llm-request-requested",
@@ -305,11 +321,12 @@ export function reduceAgentEvent(args: { state: AgentState; event: AgentConsumed
   switch (event.type) {
     case "events.iterate.com/itx/capability-provided":
     case "events.iterate.com/itx/script-execution-completed":
-    case "events.iterate.com/stream/child-stream-created":
     case "events.iterate.com/stream/subscriber-connected":
     case "events.iterate.com/agents/user-message-received":
     case "events.iterate.com/agents/web-message-sent":
     case "events.iterate.com/agents/tui-message-sent":
+      return state;
+    case "events.iterate.com/agent/config-updated":
       return state;
     case "events.iterate.com/agent/system-prompt-updated":
       return { ...state, systemPrompt: event.payload.systemPrompt };
@@ -334,8 +351,13 @@ export function reduceAgentEvent(args: { state: AgentState; event: AgentConsumed
         ...state,
         history: [...state.history, { role: "assistant" as const, content: event.payload.content }],
       };
-    case "events.iterate.com/agent/llm-config-updated":
-      return { ...state, llmConfig: event.payload };
+    case "events.iterate.com/agent/llm-provider-selected":
+      if (event.payload.ifUnset === true && state.llmProvider !== null) return state;
+      return {
+        ...state,
+        llmConfig: { model: event.payload.model },
+        llmProvider: event.payload.provider,
+      };
     case "events.iterate.com/agent/llm-request-scheduled":
       return {
         ...state,

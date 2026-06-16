@@ -64,7 +64,7 @@ describe("circuit breaker processor", () => {
     const createdEvent: StreamEvent = {
       offset: 1,
       type: "events.iterate.com/stream/created",
-      payload: { namespace: "stream", path: "/cb" },
+      payload: { projectId: "stream", path: "/cb" },
       createdAt: "2026-06-01T12:00:00.000Z",
     };
     coreState = coreReduce({ state: coreState, event: createdEvent });

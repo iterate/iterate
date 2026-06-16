@@ -87,13 +87,13 @@ async function resolveRepoSource(input: {
   }
   const cache = env.ITX_BUILD_CACHE;
   const repo = env.REPO.getByName(
-    getRepoDurableObjectName({ projectId, repoSlug: source.repo }),
+    getRepoDurableObjectName({ path: source.repoPath, projectId }),
   ) as unknown as RepoDurableObject;
 
   const oid =
     source.commit === "latest"
       ? await latestOid({
-          key: `${projectId}/${source.repo}`,
+          key: `${projectId}:${source.repoPath}`,
           maxAgeMs: input.latestMaxAgeMs ?? LATEST_PROBE_WINDOW_MS,
           repo,
         })
@@ -158,7 +158,7 @@ async function buildFromTree(input: {
   const content = files[source.path];
   if (typeof content !== "string" || content.trim() === "") {
     throw new MissingProjectWorkerError(
-      `${source.repo}@${input.oid.slice(0, 8)} has no file at "${source.path}".`,
+      `${source.repoPath}@${input.oid.slice(0, 8)} has no file at "${source.path}".`,
     );
   }
 
@@ -178,7 +178,9 @@ async function buildFromTree(input: {
     minify: source.bundle.minify,
   });
   for (const warning of result.warnings ?? []) {
-    console.warn(`[itx build] ${source.repo}@${input.oid.slice(0, 8)} ${source.path}: ${warning}`);
+    console.warn(
+      `[itx build] ${source.repoPath}@${input.oid.slice(0, 8)} ${source.path}: ${warning}`,
+    );
   }
   return {
     compatibilityDate: source.compatibilityDate ?? result.wranglerConfig?.compatibilityDate,
@@ -203,7 +205,7 @@ async function latestOid(input: {
   return oid;
 }
 
-/** The cache key IS the address: hash(project, repo, sha, path, bundle,
+/** The cache key IS the address: hash(project, repoPath, sha, path, bundle,
  * compatibilityDate — it changes the stored build). Exported for tests that
  * pre-seed the memo. */
 export async function repoSourceMemoKey(input: {
@@ -217,7 +219,7 @@ export async function repoSourceMemoKey(input: {
     new TextEncoder().encode(
       JSON.stringify([
         input.projectId,
-        source.repo,
+        source.repoPath,
         input.oid,
         source.path,
         source.bundle ?? null,
@@ -231,13 +233,13 @@ export async function repoSourceMemoKey(input: {
 
 function assertJsonSafeModules(
   modules: Record<string, unknown>,
-  source: { repo: string; path: string },
+  source: { repoPath: string; path: string },
 ): Record<string, unknown> {
   for (const [path, module] of Object.entries(modules)) {
     if (typeof module === "string") continue;
     if (module && typeof module === "object" && !("data" in module)) continue;
     throw new Error(
-      `Build of ${source.repo}:${source.path} produced a binary module ("${path}") — ` +
+      `Build of ${source.repoPath}:${source.path} produced a binary module ("${path}") — ` +
         `binary assets are not supported in repo sources yet.`,
     );
   }

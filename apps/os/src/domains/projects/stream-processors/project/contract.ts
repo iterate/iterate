@@ -32,6 +32,13 @@ const ProjectFacts = z.object({
 
 export type ProjectFacts = z.infer<typeof ProjectFacts>;
 
+const ProjectChildStream = z.object({
+  createdAt: z.string().trim().min(1),
+  path: StreamPath,
+});
+
+export type ProjectChildStream = z.infer<typeof ProjectChildStream>;
+
 /** Pure: a project's hosts derive entirely from (projectId, slug, config). */
 export function projectFacts(input: {
   config: AppConfig;
@@ -56,14 +63,20 @@ export const ProjectProcessorContract = defineProcessorContract({
   description:
     "Projects the Project's lifecycle events, drives creation side effects, and forwards project-root facts to the Project worker.",
   stateSchema: z.object({
+    agents: z.array(ProjectChildStream).default([]),
     onboarding: z.enum(["in-progress", "completed"]).default("in-progress"),
     phase: z.enum(["none", "creating", "ready"]).default("none"),
     project: ProjectFacts.nullable().default(null),
+    repos: z.array(ProjectChildStream).default([]),
+    workspaces: z.array(ProjectChildStream).default([]),
   }),
   initialState: {
+    agents: [],
     onboarding: "in-progress",
     phase: "none",
     project: null,
+    repos: [],
+    workspaces: [],
   },
   processorDeps: [CoreProcessorContract],
   events: {
@@ -83,7 +96,7 @@ export const ProjectProcessorContract = defineProcessorContract({
       payloadSchema: z.object({
         defaultBranch: z.string().trim().min(1),
         projectId: z.string().trim().min(1),
-        repoSlug: z.string().trim().min(1),
+        repoPath: z.string().trim().min(1),
       }),
     },
     "events.iterate.com/project/create-completed": {

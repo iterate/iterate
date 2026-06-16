@@ -230,6 +230,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
     state: OpenAiWsState;
     runInBackground: (work: () => Promise<unknown>) => void;
   }) {
+    if (args.event.payload.provider !== OpenAiWsProcessorContract.slug) return;
     const llmRequestId = args.event.offset;
     this.#executedLlmRequestIds.add(llmRequestId);
     const execution = this.#executionChain.then(() =>

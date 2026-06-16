@@ -873,7 +873,7 @@ test("state view renders the stream runtime state over RPC @preview", async ({ p
   const streamPath = `/e2e/${crypto.randomUUID()}`;
   await page.goto(streamRoute({ path: streamPath, view: "browser-state" }));
   await expect(page.getByTestId("stream-state")).toContainText("maxOffset", { timeout: 20_000 });
-  await expect(page.getByTestId("stream-state")).toContainText("namespace");
+  await expect(page.getByTestId("stream-state")).toContainText("projectId");
 });
 
 // Regression for the root stream route: `/streams` is its own TanStack route, not the splat

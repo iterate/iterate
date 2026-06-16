@@ -35,7 +35,7 @@ export function wireIsolateEnv(input: {
   loopback: IsolateLoopback;
   /** Attribution: which capability's isolate this is. */
   capabilityPath: string;
-  /** The isolate's home context ref (`<namespace>:<path>`) — its ITERATE can
+  /** The isolate's home context ref (`<projectId>:<path>`) — its ITERATE can
    * never reach wider, and its address and owning project are projections
    * of the ref. */
   contextRef: string;

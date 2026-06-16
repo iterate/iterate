@@ -16,7 +16,7 @@ import {
   shouldSuppressUnreadBadgeDuringInitialTail,
   useInitialTailScroll,
 } from "../lib/use-initial-tail-scroll.ts";
-import { DEFAULT_STREAM_NAMESPACE } from "../lib/stream-rpc.ts";
+import { DEFAULT_STREAM_PROJECT_ID } from "../lib/stream-rpc.ts";
 import { EventFeedView } from "./-event-feed-view.tsx";
 import { StreamStateView } from "./-stream-state-view.tsx";
 import { ViewSwitcher } from "./-view-switcher.tsx";
@@ -56,7 +56,7 @@ export function StreamPage({ streamView }: { streamView: StreamViewSearch }) {
 function HydratedStreamPage({ streamView }: { streamView: StreamViewSearch }) {
   const sidebarRuntime = useRawEventsView({
     streamPath: streamView.path,
-    streamNamespace: streamView.namespace,
+    streamProjectId: streamView.projectId,
     eventTypeFilter: "",
   });
 
@@ -80,7 +80,7 @@ export function StreamCompactView({ streamPath }: { streamPath: string }) {
         <StreamHydrationFallback
           streamView={{
             path: streamPath,
-            namespace: DEFAULT_STREAM_NAMESPACE,
+            projectId: DEFAULT_STREAM_PROJECT_ID,
             view: "browser-raw-events",
           }}
         />
@@ -96,7 +96,7 @@ function RawEventsMain({ streamView }: { streamView: StreamViewSearch }) {
   const [eventTypeFilter, setEventTypeFilter] = useState("");
   const runtime = useRawEventsView({
     streamPath: streamView.path,
-    streamNamespace: streamView.namespace,
+    streamProjectId: streamView.projectId,
     eventTypeFilter,
   });
 
@@ -182,21 +182,21 @@ function HydratedStreamCompactView({ streamPath }: { streamPath: string }) {
 // — which, once it wins leadership, runs the processor over a subscription exactly like the
 // StreamProcessorRunner DO — and subscribe to its snapshot for React. Nothing view-specific.
 function useStreamProcessor(
-  args: { streamPath: string; streamNamespace?: string } & BrowserProcessorConfig,
+  args: { streamPath: string; streamProjectId?: string } & BrowserProcessorConfig,
 ) {
-  const { streamPath, streamNamespace, slug, schemaVersion, tables, createProcessor } = args;
+  const { streamPath, streamProjectId, slug, schemaVersion, tables, createProcessor } = args;
   const store = useMemo(
     () =>
       acquireStreamRuntime({
         streamPath,
-        ...(streamNamespace === undefined ? {} : { namespace: streamNamespace }),
+        ...(streamProjectId === undefined ? {} : { projectId: streamProjectId }),
         createStreamClient: createCapnwebStreamClient,
         slug,
         schemaVersion,
         tables,
         createProcessor,
       }),
-    [streamPath, streamNamespace, slug, schemaVersion, tables, createProcessor],
+    [streamPath, streamProjectId, slug, schemaVersion, tables, createProcessor],
   );
   const snapshot = useSyncExternalStore(
     store.subscribe,
@@ -229,12 +229,12 @@ const RAW_EVENTS_RUNTIME: BrowserProcessorConfig = {
 // The raw-events view's data: the thin runtime + this view's own reactive SQL queries.
 function useRawEventsView(args: {
   streamPath: string;
-  streamNamespace?: string;
+  streamProjectId?: string;
   eventTypeFilter: string;
 }) {
   const { store, snapshot, db } = useStreamProcessor({
     streamPath: args.streamPath,
-    streamNamespace: args.streamNamespace,
+    streamProjectId: args.streamProjectId,
     ...RAW_EVENTS_RUNTIME,
   });
   const totalCountResult = useStreamQuery(db, `SELECT COUNT(*) AS count FROM events`);
@@ -299,7 +299,7 @@ function StreamViewShell({
         <StreamSidebar
           className={sidebarOpen ? undefined : "hidden"}
           eventCount={sidebarRuntime.totalEventCount}
-          key={`sidebar:${streamView.path}:${streamView.namespace}`}
+          key={`sidebar:${streamView.path}:${streamView.projectId}`}
           snapshot={sidebarRuntime.snapshot}
           streamDatabase={sidebarRuntime.streamDatabase}
           streamStore={sidebarRuntime.streamStore}
@@ -412,11 +412,11 @@ function StreamTopBar({
 }) {
   const navigate = useNavigate();
   const pathInputRef = useRef<HTMLInputElement>(null);
-  const namespaceInputRef = useRef<HTMLInputElement>(null);
+  const projectIdInputRef = useRef<HTMLInputElement>(null);
   const [editingPath, setEditingPath] = useState(false);
-  const [editingNamespace, setEditingNamespace] = useState(false);
+  const [editingProjectId, setEditingProjectId] = useState(false);
   const [editedPath, setEditedPath] = useState(streamView.path);
-  const [editedNamespace, setEditedNamespace] = useState(streamView.namespace);
+  const [editedProjectId, setEditedProjectId] = useState(streamView.projectId);
   const trimmedDraftPath = editedPath.trim();
   const normalizedDraftPath =
     trimmedDraftPath === ""
@@ -425,10 +425,10 @@ function StreamTopBar({
         ? trimmedDraftPath
         : `/${trimmedDraftPath}`;
   const pathChanged = normalizedDraftPath !== streamView.path;
-  const trimmedDraftNamespace = editedNamespace.trim();
-  const normalizedDraftNamespace =
-    trimmedDraftNamespace === "" ? DEFAULT_STREAM_NAMESPACE : trimmedDraftNamespace;
-  const namespaceChanged = normalizedDraftNamespace !== streamView.namespace;
+  const trimmedDraftProjectId = editedProjectId.trim();
+  const normalizedDraftProjectId =
+    trimmedDraftProjectId === "" ? DEFAULT_STREAM_PROJECT_ID : trimmedDraftProjectId;
+  const projectIdChanged = normalizedDraftProjectId !== streamView.projectId;
 
   useLayoutEffect(() => {
     if (!editingPath) return;
@@ -437,10 +437,10 @@ function StreamTopBar({
   }, [editingPath]);
 
   useLayoutEffect(() => {
-    if (!editingNamespace) return;
-    namespaceInputRef.current?.focus();
-    namespaceInputRef.current?.select();
-  }, [editingNamespace]);
+    if (!editingProjectId) return;
+    projectIdInputRef.current?.focus();
+    projectIdInputRef.current?.select();
+  }, [editingProjectId]);
 
   function goToDraftPath() {
     if (!pathChanged) {
@@ -453,24 +453,24 @@ function StreamTopBar({
       to: "/streams",
       search: streamViewSearch({
         path: normalizedDraftPath,
-        namespace: streamView.namespace,
+        projectId: streamView.projectId,
         view: streamView.view,
       }),
     });
   }
 
-  function goToDraftNamespace() {
-    if (!namespaceChanged) {
-      setEditingNamespace(false);
-      setEditedNamespace(streamView.namespace);
+  function goToDraftProjectId() {
+    if (!projectIdChanged) {
+      setEditingProjectId(false);
+      setEditedProjectId(streamView.projectId);
       return;
     }
-    setEditingNamespace(false);
+    setEditingProjectId(false);
     void navigate({
       to: "/streams",
       search: streamViewSearch({
         path: streamView.path,
-        namespace: normalizedDraftNamespace,
+        projectId: normalizedDraftProjectId,
         view: streamView.view,
       }),
     });
@@ -481,9 +481,9 @@ function StreamTopBar({
     setEditingPath(true);
   }
 
-  function startEditingNamespace() {
-    setEditedNamespace(streamView.namespace);
-    setEditingNamespace(true);
+  function startEditingProjectId() {
+    setEditedProjectId(streamView.projectId);
+    setEditingProjectId(true);
   }
 
   function cancelEditingPath() {
@@ -491,9 +491,9 @@ function StreamTopBar({
     setEditingPath(false);
   }
 
-  function cancelEditingNamespace() {
-    setEditedNamespace(streamView.namespace);
-    setEditingNamespace(false);
+  function cancelEditingProjectId() {
+    setEditedProjectId(streamView.projectId);
+    setEditingProjectId(false);
   }
 
   return (
@@ -573,52 +573,52 @@ function StreamTopBar({
         )}
       </div>
       <div className="flex min-w-0 flex-1 items-center gap-1.5 w-full">
-        <span className="shrink-0 text-[11px] font-medium text-[#667085]">namespace</span>
+        <span className="shrink-0 text-[11px] font-medium text-[#667085]">projectId</span>
         <div className="flex min-w-0 flex-1 items-center gap-1.5">
-          {editingNamespace ? (
+          {editingProjectId ? (
             <input
-              aria-label="Stream namespace"
+              aria-label="Stream project ID"
               className="min-w-0 flex-1 rounded border border-[#bac2cf] px-1.5 py-1 font-mono text-xs leading-snug"
-              data-testid="stream-namespace-input"
-              id="stream-namespace"
-              ref={namespaceInputRef}
-              value={editedNamespace}
-              onChange={(event) => setEditedNamespace(event.currentTarget.value)}
+              data-testid="stream-projectId-input"
+              id="stream-projectId"
+              ref={projectIdInputRef}
+              value={editedProjectId}
+              onChange={(event) => setEditedProjectId(event.currentTarget.value)}
               onKeyDown={(event) => {
                 if (event.key === "Escape") {
                   event.preventDefault();
-                  cancelEditingNamespace();
+                  cancelEditingProjectId();
                   return;
                 }
                 if (event.key !== "Enter") return;
                 event.preventDefault();
-                goToDraftNamespace();
+                goToDraftProjectId();
               }}
             />
           ) : (
             <span
               className="min-w-0 truncate font-mono text-xs leading-snug text-[#16181d]"
-              data-testid="stream-namespace"
+              data-testid="stream-projectId"
             >
-              {streamView.namespace}
+              {streamView.projectId}
             </span>
           )}
         </div>
-        {editingNamespace ? (
+        {editingProjectId ? (
           <div className="flex shrink-0 items-center gap-2">
             <button
               className="cursor-pointer border-0 bg-transparent px-0 py-1 text-[11px] font-semibold text-[#667085] disabled:cursor-default disabled:opacity-40"
-              data-testid="stream-namespace-go"
-              disabled={!namespaceChanged}
+              data-testid="stream-projectId-go"
+              disabled={!projectIdChanged}
               type="button"
-              onClick={() => goToDraftNamespace()}
+              onClick={() => goToDraftProjectId()}
             >
               Go to stream
             </button>
             <button
               className="cursor-pointer border-0 bg-transparent px-0 py-1 text-[11px] text-[#98a2b3] hover:text-[#475467] hover:underline"
               type="button"
-              onClick={() => cancelEditingNamespace()}
+              onClick={() => cancelEditingProjectId()}
             >
               Cancel
             </button>
@@ -626,11 +626,11 @@ function StreamTopBar({
         ) : (
           <button
             className="shrink-0 cursor-pointer border-0 bg-transparent px-0 py-1 text-[11px] text-[#667085] hover:text-[#344054] hover:underline"
-            data-testid="stream-namespace-change"
+            data-testid="stream-projectId-change"
             type="button"
-            onClick={() => startEditingNamespace()}
+            onClick={() => startEditingProjectId()}
           >
-            Change namespace
+            Change projectId
           </button>
         )}
       </div>

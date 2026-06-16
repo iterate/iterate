@@ -215,7 +215,7 @@ return {
 // (1) Commit a capability module into the project's own repo (the shared
 // workspace speaks git; repo.token authenticates the push).
 const { project } = await itx.describe();
-const repo = await itx.repos.ensureProjectRepoInfo({ projectSlug: project.slug });
+const repo = await itx.repos.ensureProjectRepoInfo();
 const url = new URL(repo.remote);
 url.username = "x";
 url.password = repo.token.split("?")[0];
@@ -247,7 +247,7 @@ await itx.provideCapability({
       type: "source",
       source: {
         type: "repo",
-        repo: "project",
+        repoPath: "/repos/project",
         commit: "latest",
         path: "caps/greeter.js",
         entrypoint: "Greeter",

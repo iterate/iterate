@@ -17,7 +17,7 @@ import type { StreamCoreProcessorState } from "~/domains/streams/engine/types.ts
 /**
  * Where tree nodes get their state: path → stream handle. Project pages pass
  * `(path) => itx.streams.get(path)`, the admin explorer
- * `(path) => itx.streams.namespace(ns).get(path)`. Each loaded node holds one
+ * `(path) => itx.streams.project(projectId).get(path)`. Each loaded node holds one
  * live `onStateChange` subscription (DECISIONS D20: the first push carries
  * current state, later pushes follow every append), so the tree is LIVE — no
  * query cache, plain component state.

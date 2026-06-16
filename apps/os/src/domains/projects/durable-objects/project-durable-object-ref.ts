@@ -6,10 +6,11 @@
  * inside the trusted set (no-raw-durable-object-binding-access lint rule).
  */
 import { env } from "cloudflare:workers";
+import { formatDurableObjectName } from "~/domains/durable-object-names.ts";
 
-/** Project DOs are addressed by the plain project id. */
+/** Project DOs are addressed by the canonical project root Durable Object name. */
 export function getProjectDurableObjectName(projectId: string) {
-  return projectId;
+  return formatDurableObjectName({ path: "/", projectId });
 }
 
 /** Mint a Project DO stub. */

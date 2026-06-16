@@ -5,10 +5,10 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { useItxQuery } from "~/itx/itx-react.tsx";
 
-export const Route = createFileRoute("/_app/projects/$projectSlug/repos/$repoSlug")({
+export const Route = createFileRoute("/_app/projects/$projectSlug/repos/$")({
   ssr: false,
   loader: ({ context, params }) => ({
-    breadcrumb: params.repoSlug,
+    breadcrumb: repoPathFromSplat(params._splat),
     project: context.project,
   }),
   component: ProjectRepoDetailPage,
@@ -24,15 +24,16 @@ function ProjectRepoDetailPage() {
 
 function ProjectRepoDetailContent() {
   const params = Route.useParams();
+  const repoPath = repoPathFromSplat(params._splat);
   const repo = useItxQuery({
-    key: ["repo", params.repoSlug],
-    query: (itx) => itx.repos.getInfo({ slug: params.repoSlug }),
+    key: ["repo", repoPath],
+    query: (itx) => itx.repos.getInfo({ path: repoPath }),
   });
 
   return (
     <section className="w-full space-y-4 p-4">
       <div className="rounded-lg border bg-card">
-        <InfoRow label="Slug" value={repo.slug} />
+        <InfoRow label="Path" value={repo.path} />
         <InfoRow label="Remote" value={repo.remote} copyValue={repo.remote} />
         <InfoRow label="Default branch" value={repo.defaultBranch} />
         <InfoRow label="Token expires" value={repo.tokenExpiresAt ?? "No expiry returned"} />
@@ -49,6 +50,11 @@ function ProjectRepoDetailContent() {
       <CommandBlock title="Push" command={repo.git.pushCommand} />
     </section>
   );
+}
+
+function repoPathFromSplat(splat: string | undefined) {
+  const suffix = splat?.replace(/^\/+/, "") ?? "";
+  return `/repos/${suffix}`;
 }
 
 function InfoRow(input: { copyValue?: string; label: string; value: string }) {

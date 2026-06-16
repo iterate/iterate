@@ -1,5 +1,3 @@
-import { InMemoryFs } from "@cloudflare/shell";
-import { createGit } from "@cloudflare/shell/git";
 import { stripArtifactTokenQuery } from "~/domains/repos/artifact-token.ts";
 
 export { stripArtifactTokenQuery };
@@ -56,7 +54,6 @@ type CloudflareArtifactsRestBindingInput = {
 };
 
 export const REPO_DEFAULT_BRANCH = "main";
-export const REPO_README_PATH = "README.md";
 export const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 
 export function artifactRemoteUrl(input: { accountId: string; name: string; namespace: string }) {
@@ -123,50 +120,6 @@ export async function createArtifactToken(input: {
   }
 
   throw new Error("Cloudflare Artifacts repo handle did not expose token creation.");
-}
-
-export async function pushInitialReadme(input: {
-  defaultBranch: string;
-  projectId: string;
-  projectSlug?: string;
-  remote: string;
-  repoSlug: string;
-  token: string;
-}) {
-  const filesystem = new InMemoryFs({
-    [`/${REPO_README_PATH}`]: initialReadme(input),
-  });
-  const git = createGit(filesystem, "/");
-
-  await git.init({ defaultBranch: input.defaultBranch });
-  await git.add({ filepath: REPO_README_PATH });
-  await git.commit({
-    message: "Initial commit",
-    author: {
-      name: "Iterate",
-      email: "support@iterate.com",
-    },
-  });
-  await git.remote({
-    add: {
-      name: "origin",
-      url: input.remote,
-    },
-  });
-  await git.push({
-    remote: "origin",
-    ref: input.defaultBranch,
-    username: "x",
-    password: stripArtifactTokenQuery(input.token),
-  });
-}
-
-function initialReadme(input: { projectId: string; projectSlug?: string; repoSlug: string }) {
-  return `# ${input.repoSlug}
-
-Project: ${input.projectSlug ?? input.projectId}
-Project ID: ${input.projectId}
-`;
 }
 
 function normalizeTokenExpiresAt(value: string | number | Date | null): string | null {

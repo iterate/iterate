@@ -11,7 +11,7 @@ type MaybePromise<T> = T | Promise<T>;
 export type StreamCoreProcessorState = CoreProcessorState;
 
 export type StreamEventBatch = {
-  namespace: string;
+  projectId: string | null;
   path: string;
   /**
    * The delivered events in offset order. Empty in exactly two cases: the

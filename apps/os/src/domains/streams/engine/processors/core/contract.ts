@@ -122,7 +122,7 @@ export const CoreProcessorContract = defineProcessorContract({
   version: "0.1.0",
   description: "Maintains the stream's own reduced state.",
   stateSchema: z.object({
-    namespace: z.string().trim().min(1),
+    projectId: z.string().trim().min(1).nullable(),
     path: z.string().trim().min(1),
     createdAt: z.string(),
     incarnationId: z.string().trim().min(1),
@@ -163,7 +163,7 @@ export const CoreProcessorContract = defineProcessorContract({
     ),
   }),
   initialState: {
-    namespace: "uninitialized",
+    projectId: null,
     path: "uninitialized",
     createdAt: "uninitialized",
     incarnationId: "uninitialized",
@@ -184,7 +184,7 @@ export const CoreProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/created": {
       description: "Initializes the core reduced state for a stream.",
       payloadSchema: z.object({
-        namespace: z.string().trim().min(1),
+        projectId: z.string().trim().min(1).nullable(),
         path: z.string().trim().min(1),
       }),
     },

@@ -1,14 +1,15 @@
 import type { StreamEvent, StreamEventInput } from "@iterate-com/shared/streams/stream-event";
 import type { Event, EventInput, StreamCursor } from "@iterate-com/shared/streams/types";
 import { StreamPath, StreamState } from "@iterate-com/shared/streams/types";
+import { formatDurableObjectName } from "~/domains/durable-object-names.ts";
 import type { StreamRpc } from "~/domains/streams/engine/types.ts";
 import type { Stream } from "~/domains/streams/engine/workers/durable-objects/stream.ts";
 
 export type StreamDurableObject = Stream;
 export type StreamDurableObjectNamespace = DurableObjectNamespace<Stream>;
 
-export type StreamDurableObjectStructuredName = {
-  namespace: string;
+export type StreamDurableObjectName = {
+  projectId: string | null;
   path: StreamPath;
 };
 
@@ -23,18 +24,18 @@ export type InitializedStreamStub = {
   }): Promise<ReadableStream<Uint8Array>>;
 };
 
-export function getStreamDurableObjectName(input: StreamDurableObjectStructuredName) {
-  return `${input.namespace}:${input.path}`;
+export function getStreamDurableObjectName(input: StreamDurableObjectName) {
+  return formatDurableObjectName({ path: input.path, projectId: input.projectId });
 }
 
 export async function getInitializedStreamStub(input: {
   durableObjectNamespace: StreamDurableObjectNamespace;
-  namespace: string;
+  projectId: string | null;
   path: StreamPath;
 }): Promise<InitializedStreamStub> {
   const path = input.path;
   const stub = input.durableObjectNamespace.getByName(
-    getStreamDurableObjectName({ namespace: input.namespace, path }),
+    getStreamDurableObjectName({ projectId: input.projectId, path }),
   ) as unknown as StreamRpc;
 
   return {
@@ -88,7 +89,7 @@ export function coreStateToStreamState(
   core: Awaited<ReturnType<StreamRpc["runtimeState"]>>["coreProcessorState"],
 ): StreamState {
   return StreamState.parse({
-    namespace: core.namespace,
+    projectId: core.projectId,
     path: core.path,
     eventCount: core.eventCount,
     childPaths: core.childPaths,

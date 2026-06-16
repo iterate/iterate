@@ -40,8 +40,8 @@ async function open(path: string): Promise<void> {
   const module = await loadSqliteModule();
   sqlite3 = Factory(module);
   const vfs = await OPFSCoopSyncVFS.create(VFS_NAME, module);
-  // wa-sqlite's VFS base defaults to 64-byte pathnames. OS project namespaces are
-  // longer than the example app's "default" namespace, so root stream DB paths can
+  // wa-sqlite's VFS base defaults to 64-byte pathnames. OS project projectIds are
+  // longer than the example app's "default" projectId, so root stream DB paths can
   // exceed that and make sqlite3_open_v2 fail before OPFS is touched.
   vfs.mxPathname = 1024;
   // makeDefault:false — register under a name and pass it to open_v2, so we never touch

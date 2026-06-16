@@ -4,15 +4,21 @@
  * Object implementation — repo-durable-object.ts drags isomorphic-git and
  * @cloudflare/shell into any worker that value-imports it.
  */
-import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
+import { formatDurableObjectName } from "~/domains/durable-object-names.ts";
 
-export type RepoStructuredName = {
+export type RepoDurableObjectName = {
   projectId: string;
-  repoSlug: string;
+  path: StreamPathType | string;
 };
 
-export function getRepoDurableObjectName(name: RepoStructuredName) {
-  return deriveDurableObjectNameFromStructuredName({
-    structuredName: name,
+export function getRepoDurableObjectName(name: RepoDurableObjectName) {
+  return formatDurableObjectName({
+    path: repoStreamPath(name.path),
+    projectId: name.projectId,
   });
+}
+
+export function repoStreamPath(path: StreamPathType | string) {
+  return StreamPath.parse(String(path));
 }

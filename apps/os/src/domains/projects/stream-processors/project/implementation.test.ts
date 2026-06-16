@@ -4,25 +4,18 @@ import type { StreamEvent } from "@iterate-com/shared/streams/stream-event";
 vi.mock("~/domains/repos/entrypoints/repo-capability.ts", () => ({
   ensureProjectRepoInfoForProject: async () => ({
     defaultBranch: "main",
-    slug: "project",
-  }),
-}));
-
-vi.mock("~/domains/secrets/entrypoints/secrets-capability.ts", () => ({
-  getSecretsCapability: () => ({
-    getSecretSummaryByKeyOrNull: async () => null,
-    setSecret: async () => undefined,
+    path: "/repos/project",
   }),
 }));
 
 vi.mock("~/domains/slack/durable-objects/slack-agent-durable-object.ts", () => ({
-  getSlackAgentDurableObjectName: (input: { projectId: string; streamPath: string }) =>
-    `${input.projectId}:${input.streamPath}`,
+  getSlackAgentDurableObjectName: (input: { path: string; projectId: string }) =>
+    `${input.projectId}:${input.path}`,
 }));
 
 import { ProjectProcessor, defaultAgentSystemPrompt } from "./implementation.ts";
 import { SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE } from "~/domains/agents/agent-prompt-guidance.ts";
-import { projectOnboardingBootstrapMarkdown } from "~/domains/repos/project-repo-template.ts";
+import { DEFAULT_WORKERS_AI_AGENT_MODEL } from "~/domains/agents/stream-processors/agent/contract.ts";
 
 describe("project agent prompts", () => {
   it("tells web agents to await chat sends without returning side-effect results", () => {
@@ -39,17 +32,6 @@ describe("project agent prompts", () => {
     expect(prompt).toContain("await itx.slack.chat.postMessage");
     expect(prompt).toContain(SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE);
     expect(prompt).not.toContain("return await itx.slack.chat.postMessage");
-  });
-
-  it("onboarding bootstrap tells agents not to return chat-send results by default", () => {
-    const markdown = projectOnboardingBootstrapMarkdown({
-      projectId: "prj_test",
-      slug: "test-project",
-    });
-
-    expect(markdown).toContain("awaiting `itx.chat.sendMessage({ message })`");
-    expect(markdown).toContain("Do not\n  return the result");
-    expect(markdown).not.toContain("return await itx.chat.sendMessage");
   });
 });
 
@@ -95,6 +77,100 @@ describe("ProjectProcessor worker forwarding", () => {
 
     expect(forwarded).toEqual([]);
     expect(processor.checkpointOffset).toBe(4);
+  });
+
+  it("indexes child repo, agent, and workspace streams in reduced state", async () => {
+    const processor = newProcessor({ forwardToProjectWorker: async () => undefined });
+
+    await processor.ingest({
+      events: [
+        childStreamCreated({
+          childPath: "/repos/project",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          offset: 3,
+        }),
+        childStreamCreated({
+          childPath: "/agents/onboarding",
+          createdAt: "2026-01-01T00:00:01.000Z",
+          offset: 4,
+        }),
+        childStreamCreated({
+          childPath: "/workspaces/project",
+          createdAt: "2026-01-01T00:00:02.000Z",
+          offset: 5,
+        }),
+        childStreamCreated({
+          childPath: "/repos/project",
+          createdAt: "2026-01-01T00:00:03.000Z",
+          offset: 6,
+        }),
+      ],
+      streamMaxOffset: 6,
+    });
+
+    await expect(processor.snapshot()).resolves.toMatchObject({
+      state: {
+        agents: [{ createdAt: "2026-01-01T00:00:01.000Z", path: "/agents/onboarding" }],
+        repos: [{ createdAt: "2026-01-01T00:00:00.000Z", path: "/repos/project" }],
+        workspaces: [{ createdAt: "2026-01-01T00:00:02.000Z", path: "/workspaces/project" }],
+      },
+    });
+  });
+
+  it("birth-certifies project-created agent streams with agent and provider setup", async () => {
+    const appendedBatches: Array<{ events: unknown[]; streamPath?: string }> = [];
+    const processor = newProcessor({
+      forwardToProjectWorker: async () => undefined,
+      stream: {
+        append: async () => undefined,
+        appendBatch: async (batch) => {
+          appendedBatches.push(batch);
+        },
+      },
+    });
+
+    await processor.ingest({
+      events: [
+        childStreamCreated({
+          childPath: "/agents/onboarding",
+          createdAt: "2026-01-01T00:00:01.000Z",
+          offset: 4,
+        }),
+      ],
+      streamMaxOffset: 4,
+    });
+
+    expect(appendedBatches).toHaveLength(1);
+    expect(appendedBatches[0]).toMatchObject({
+      streamPath: "/agents/onboarding",
+      events: [
+        expect.objectContaining({
+          type: "events.iterate.com/agent/config-updated",
+          idempotencyKey: "project-agent-setup:config",
+        }),
+        expect.objectContaining({
+          type: "events.iterate.com/agent/llm-provider-selected",
+          idempotencyKey: "project-agent-setup:llm-provider",
+          payload: {
+            ifUnset: true,
+            model: DEFAULT_WORKERS_AI_AGENT_MODEL,
+            provider: "openai-ws",
+          },
+        }),
+        expect.objectContaining({
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: expect.objectContaining({
+            subscriptionKey: "agent:project_1:/agents/onboarding:agent",
+          }),
+        }),
+        expect.objectContaining({
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: expect.objectContaining({
+            subscriptionKey: "agent:project_1:/agents/onboarding:openai-ws",
+          }),
+        }),
+      ],
+    });
   });
 
   it("does not advance the checkpoint past a failed project worker forward", async () => {
@@ -153,23 +229,34 @@ describe("ProjectProcessor worker forwarding", () => {
   });
 });
 
-function newProcessor(deps: { forwardToProjectWorker: (event: StreamEvent) => Promise<void> }) {
+function newProcessor(deps: {
+  forwardToProjectWorker: (event: StreamEvent) => Promise<void>;
+  stream?: {
+    append: (input: never) => unknown;
+    appendBatch: (input: { events: unknown[]; streamPath?: string }) => unknown;
+  };
+}) {
   return new ProjectProcessor({
     appConfig: () => ({ projectHostnameBases: ["iterate.localhost"] }) as never,
     env: {} as never,
     exports: {},
-    iterateContext: { stream: { append: () => {}, appendBatch: () => {} } },
+    iterateContext: { stream: deps.stream ?? { append: () => {}, appendBatch: () => {} } },
     projectId: () => "project_1",
     ...deps,
   });
 }
 
-function event(args: { offset: number; payload?: unknown; type: string }): StreamEvent {
+function event(args: {
+  createdAt?: string;
+  offset: number;
+  payload?: unknown;
+  type: string;
+}): StreamEvent {
   return {
     type: args.type,
     payload: args.payload ?? {},
     offset: args.offset,
-    createdAt: "2026-01-01T00:00:00.000Z",
+    createdAt: args.createdAt ?? "2026-01-01T00:00:00.000Z",
   };
 }
 
@@ -183,5 +270,18 @@ function projectCreated(offset: number): StreamEvent {
       slug: "project",
     },
     type: "events.iterate.com/project/created",
+  });
+}
+
+function childStreamCreated(input: {
+  childPath: string;
+  createdAt: string;
+  offset: number;
+}): StreamEvent {
+  return event({
+    createdAt: input.createdAt,
+    offset: input.offset,
+    payload: { childPath: input.childPath },
+    type: "events.iterate.com/stream/child-stream-created",
   });
 }

@@ -7,5 +7,5 @@ export { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durab
 export * from "./shared/loopback-exports.ts";
 
 export default {
-  fetch: () => Response.json({ worker: "os-agent" }, { status: 404 }),
+  fetch: () => Response.json({ worker: "agent" }, { status: 404 }),
 };

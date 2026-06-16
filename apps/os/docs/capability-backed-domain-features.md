@@ -106,9 +106,9 @@ Repos follow this pattern:
 
 - `ReposCapability` is bound to one Project ID.
 - Repo dashboard routes use `itx.repos` directly through the itx React hooks.
-- `itx.repos.create({ slug })` explicitly creates a Repo.
-- `itx.repos.get({ slug })` selects an existing Repo and returns a tiny Repo
+- `itx.repos.create({ path })` explicitly creates a Repo.
+- `itx.repos.get({ path })` selects an existing Repo and returns a tiny Repo
   handle backed by the Durable Object.
-- `itx.repos.get({ slug }).getInfo()` reads Repo details, including the remote
+- `itx.repos.get({ path }).getInfo()` reads Repo details, including the remote
   Git URL backed by Cloudflare Artifacts.
 - The Repo detail UI shows clone/push commands from `getInfo()`.

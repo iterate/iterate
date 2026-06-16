@@ -4,7 +4,7 @@
 // is valid. Tests reach the DOs through `env.STREAM` from `cloudflare:test`.
 
 export { Stream } from "./durable-objects/stream.ts";
-export { StreamProcessorRunner } from "./durable-objects/stream-processor-runner.ts";
+export { StreamProcessorRunner } from "./test-support/stream-processor-runner.ts";
 
 export default {
   fetch(): Response {

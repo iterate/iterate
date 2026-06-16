@@ -31,7 +31,7 @@ import {
 } from "./stream-browser-db.ts";
 
 const LIVE_PROGRESS_NOTIFICATION_MS = 16;
-export const DEFAULT_STREAM_NAMESPACE = "default";
+export const DEFAULT_STREAM_PROJECT_ID = "default";
 export type StreamBrowserConnectionStatus = "connecting" | "connected" | "closed" | "error";
 
 /**
@@ -84,9 +84,9 @@ export type BrowserProcessorConfig = {
 };
 
 export type BrowserStreamConnectionConfig = {
-  namespace?: string;
+  projectId?: string;
   createStreamClient?: BrowserStreamClientFactory;
-  streamUrl?: string | URL | ((args: { namespace: string; streamPath: string }) => string | URL);
+  streamUrl?: string | URL | ((args: { projectId: string; streamPath: string }) => string | URL);
 };
 
 export type StreamRuntimeState = {
@@ -124,7 +124,7 @@ export type BrowserStreamClient = Disposable &
   };
 
 export type BrowserStreamClientFactory = (args: {
-  namespace: string;
+  projectId: string;
   streamPath: string;
   streamUrl?: string | URL;
   onConnectionStatusChange?: (
@@ -160,11 +160,11 @@ export type StreamBrowserStore = Disposable & {
 
 const databaseRegistry = new Map<string, { db: StreamBrowserDatabase; refs: number }>();
 
-function acquireDatabase(namespace: string, streamPath: string) {
-  const key = `${namespace}\0${streamPath}`;
+function acquireDatabase(projectId: string, streamPath: string) {
+  const key = `${projectId}\0${streamPath}`;
   let entry = databaseRegistry.get(key);
   if (entry === undefined) {
-    entry = { db: new StreamBrowserDatabase(namespace, streamPath), refs: 0 };
+    entry = { db: new StreamBrowserDatabase(projectId, streamPath), refs: 0 };
     databaseRegistry.set(key, entry);
   }
   entry.refs += 1;
@@ -196,14 +196,14 @@ const debugRegistry = new Map<string, () => Record<string, unknown>>();
 export function acquireStreamRuntime(
   args: { streamPath: string } & BrowserProcessorConfig & BrowserStreamConnectionConfig,
 ): StreamBrowserStore {
-  const namespace = args.namespace ?? DEFAULT_STREAM_NAMESPACE;
+  const projectId = args.projectId ?? DEFAULT_STREAM_PROJECT_ID;
   const slug = args.slug;
-  const key = `${namespace} ${args.streamPath} ${slug}`;
+  const key = `${projectId} ${args.streamPath} ${slug}`;
   const existing = runtimeRegistry.get(key);
   if (existing !== undefined) return existing;
   const runtime = createStreamRuntime({
     ...args,
-    namespace,
+    projectId,
     onDispose: () => runtimeRegistry.delete(key),
   });
   runtimeRegistry.set(key, runtime);
@@ -212,7 +212,7 @@ export function acquireStreamRuntime(
 
 function createStreamRuntime(
   args: {
-    namespace: string;
+    projectId: string;
     streamPath: string;
     onDispose?: () => void;
   } & BrowserProcessorConfig &
@@ -221,7 +221,7 @@ function createStreamRuntime(
   const { schemaVersion, tables } = args;
   const slug = args.slug;
   const { db: streamDatabase, release: releaseDatabase } = acquireDatabase(
-    args.namespace,
+    args.projectId,
     args.streamPath,
   );
 
@@ -325,8 +325,8 @@ function createStreamRuntime(
   const browserSubscriberId =
     localStorage.getItem(browserSubscriberStorageKey) ?? crypto.randomUUID();
   localStorage.setItem(browserSubscriberStorageKey, browserSubscriberId);
-  // One stream subscription per (browser profile, processor); namespace keeps it distinct.
-  const subscriptionKey = `${args.namespace}:${browserSubscriberId}:${slug}`;
+  // One stream subscription per (browser profile, processor); projectId keeps it distinct.
+  const subscriptionKey = `${args.projectId}:${browserSubscriberId}:${slug}`;
   let snapshot: StreamBrowserSnapshot = {
     clearVersion: 0,
     connectionStatus: "connecting",
@@ -518,7 +518,7 @@ function createStreamRuntime(
         ? undefined
         : new URL(
             resolveStreamUrl({
-              namespace: args.namespace,
+              projectId: args.projectId,
               streamPath: args.streamPath,
               streamUrl: args.streamUrl,
             }),
@@ -530,7 +530,7 @@ function createStreamRuntime(
     const epoch = connectionEpoch;
 
     void createBrowserStreamClient(args)({
-      namespace: args.namespace,
+      projectId: args.projectId,
       streamPath: args.streamPath,
       streamUrl,
       onConnectionStatusChange(connectionStatus, connectionError) {
@@ -586,7 +586,7 @@ function createStreamRuntime(
 
     writerRole = acquireWriterRole({
       lockName: streamWriterLockName({
-        namespace: args.namespace,
+        projectId: args.projectId,
         streamPath: args.streamPath,
         slug,
         schemaVersion,
@@ -915,7 +915,7 @@ function createStreamRuntime(
     args.onDispose?.();
   }
 
-  debugRegistry.set(`${args.namespace} ${args.streamPath} ${slug}`, () => ({
+  debugRegistry.set(`${args.projectId} ${args.streamPath} ${slug}`, () => ({
     connectionStatus: snapshot.connectionStatus,
     subscriptionStatus: snapshot.subscriptionStatus,
     connectionError: snapshot.connectionError,
@@ -934,7 +934,7 @@ function createStreamRuntime(
 
   function dispose() {
     listeners.clear();
-    debugRegistry.delete(`${args.namespace} ${args.streamPath} ${slug}`);
+    debugRegistry.delete(`${args.projectId} ${args.streamPath} ${slug}`);
     if (disposed) return;
     if (disposeTimer !== undefined) {
       clearTimeout(disposeTimer);
@@ -1067,12 +1067,12 @@ function announceContract(
 }
 
 function resolveStreamUrl(args: {
-  namespace: string;
+  projectId: string;
   streamPath: string;
   streamUrl: NonNullable<BrowserStreamConnectionConfig["streamUrl"]>;
 }) {
   if (typeof args.streamUrl === "function") {
-    return args.streamUrl({ namespace: args.namespace, streamPath: args.streamPath });
+    return args.streamUrl({ projectId: args.projectId, streamPath: args.streamPath });
   }
   return args.streamUrl;
 }

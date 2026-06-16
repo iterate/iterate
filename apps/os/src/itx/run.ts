@@ -55,7 +55,7 @@ export async function runItxScript(input: {
   projectId: string | null;
   /** Where the two-event record lands. Defaults to the context's own stream
    * (props.context parsed as a coordinate); global scripts have none. */
-  record?: { namespace: string; path: string };
+  record?: { projectId: string | null; path: string };
   /** Use a caller-minted id (e.g. when the requested event already exists). */
   executionId?: string;
   /** Skip the execution-requested append (the caller already recorded one). */
@@ -75,7 +75,7 @@ export async function runItxScript(input: {
   const executionId = input.executionId ?? crypto.randomUUID();
   const startedAtMs = Date.now();
   const record =
-    input.record ?? (input.projectId === null ? null : { namespace: input.projectId, path: "/" });
+    input.record ?? (input.projectId === null ? null : { projectId: input.projectId, path: "/" });
 
   if (input.recordRequested !== false)
     await recordExecutionEvent(input.env, record, {
@@ -207,14 +207,14 @@ function itxRunWorkerSource(functionSource: string) {
 
 async function recordExecutionEvent(
   env: Env,
-  record: { namespace: string; path: string } | null,
+  record: { projectId: string | null; path: string } | null,
   event: { type: string; payload: Record<string, unknown> },
 ): Promise<void> {
   if (record === null) return; // global scripts have no project stream
   try {
     const stream = await getInitializedStreamStub({
       durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: record.namespace,
+      projectId: record.projectId,
       path: StreamPath.parse(record.path),
     });
     await stream.append(event);

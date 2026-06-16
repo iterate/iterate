@@ -171,7 +171,7 @@ async function handleItxRun(input: {
 
   let props: ItxProps;
   let scriptProjectId: string | null = null;
-  let scriptRecord: { namespace: string; path: string } | null = null;
+  let scriptRecord: { projectId: string | null; path: string } | null = null;
   if (body.context && body.context !== GLOBAL_CONTEXT_ID) {
     const ref = await resolveAccessibleContextRef({
       access: input.access,
@@ -185,7 +185,7 @@ async function handleItxRun(input: {
     }
     props = { context: ref };
     const coordinate = parseContextRef(ref);
-    scriptProjectId = coordinate.namespace;
+    scriptProjectId = coordinate.projectId;
     // The record lands on the context's own stream.
     scriptRecord = coordinate;
   } else {

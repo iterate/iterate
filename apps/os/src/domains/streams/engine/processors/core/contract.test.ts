@@ -39,7 +39,7 @@ describe("core processor contract", () => {
       {
         offset: 1,
         type: "events.iterate.com/stream/created" as const,
-        payload: { namespace: "default", path: "test" },
+        payload: { projectId: "default", path: "test" },
         createdAt: "2026-06-01T12:00:00.000Z",
       },
       {
@@ -61,7 +61,7 @@ describe("core processor contract", () => {
     }
 
     expect(state).toMatchObject({
-      namespace: "default",
+      projectId: "default",
       path: "test",
       eventCount: 3,
       maxOffset: 3,
@@ -404,7 +404,7 @@ describe("core processor contract", () => {
       payload: { childPath },
     });
 
-    // The root hears every announcement in the namespace, but only keeps the
+    // The root hears every announcement in the projectId, but only keeps the
     // immediate child paths. Callers that need a tree walk each child stream.
     const rootState = reduceEvents({
       state: CoreProcessorContract.stateSchema.parse({
@@ -444,7 +444,7 @@ describe("core processor contract", () => {
         {
           offset: 1,
           type: "events.iterate.com/stream/created",
-          payload: { namespace: "default", path: "/agents" },
+          payload: { projectId: "default", path: "/agents" },
           createdAt: "2026-06-01T12:00:00.000Z",
         },
         {
@@ -464,7 +464,7 @@ describe("core processor contract", () => {
     });
 
     expect(state).toMatchObject({
-      namespace: "default",
+      projectId: "default",
       path: "/agents",
       incarnationId: "incarnation-1",
       eventCount: 3,
@@ -479,7 +479,7 @@ describe("core processor contract", () => {
         {
           offset: 1,
           type: "events.iterate.com/stream/created",
-          payload: { namespace: "default", path: "/agents" },
+          payload: { projectId: "default", path: "/agents" },
           createdAt: "2026-06-01T12:00:00.000Z",
         },
         {
@@ -497,7 +497,7 @@ describe("core processor contract", () => {
         {
           offset: 1,
           type: "events.iterate.com/stream/created",
-          payload: { namespace: "wrong", path: "/wrong" },
+          payload: { projectId: "wrong", path: "/wrong" },
           createdAt: "2026-06-01T12:00:00.000Z",
         },
         {
@@ -511,7 +511,7 @@ describe("core processor contract", () => {
     });
 
     expect(state).toMatchObject({
-      namespace: "default",
+      projectId: "default",
       path: "/agents",
       incarnationId: "incarnation-1",
       eventCount: 3,

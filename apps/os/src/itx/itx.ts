@@ -223,7 +223,7 @@ export type ItxIterateContext = {
 };
 
 export type ItxDeps = {
-  /** This context's identity — its coordinate ref (`<namespace>:<path>`),
+  /** This context's identity — its coordinate ref (`<projectId>:<path>`),
    * stamped as the owner of provides and as origin when delegating. */
   contextRef: string;
   /** This context's own address — stamped as origin when delegating. */
@@ -864,8 +864,8 @@ function assertWellFormedCapabilityAddress(name: string, address: CapabilityAddr
           );
         }
       } else if (worker.source.type === "repo") {
-        if (!worker.source.repo || !worker.source.path) {
-          throw new Error(`Capability "${name}": repo sources need a repo slug and a file path.`);
+        if (!worker.source.repoPath || !worker.source.path) {
+          throw new Error(`Capability "${name}": repo sources need a repo path and a file path.`);
         }
       } else {
         throw new Error(

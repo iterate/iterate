@@ -140,7 +140,7 @@ function AdminProjectsPage() {
                         size="sm"
                         nativeButton={false}
                         render={
-                          <Link to="/admin/streams/$namespace" params={{ namespace: project.id }} />
+                          <Link to="/admin/streams/$projectId" params={{ projectId: project.id }} />
                         }
                       >
                         <WaypointsIcon data-icon="inline-start" aria-hidden="true" />

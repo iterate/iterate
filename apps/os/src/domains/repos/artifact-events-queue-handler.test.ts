@@ -10,7 +10,6 @@ vi.mock("~/domains/streams/stream-runtime.ts", () => ({
 const mockGetInitializedStreamStub = vi.mocked(getInitializedStreamStub);
 
 const env = {
-  GLOBAL_STREAM_NAMESPACE: "os-prd-global",
   STREAM: {} as ArtifactEventsQueueEnv["STREAM"],
 };
 
@@ -44,7 +43,7 @@ describe("handleArtifactEventsBatch", () => {
 
     expect(mockGetInitializedStreamStub).toHaveBeenCalledWith({
       durableObjectNamespace: env.STREAM,
-      namespace: "os-prd-global",
+      projectId: null,
       path: "/cloudflare/events",
     });
     expect(append).toHaveBeenCalledWith({

@@ -25,7 +25,6 @@ import { prepareLocalDevServer } from "@iterate-com/shared/alchemy/local-dev-ser
 import { ensureLocalDevOAuthClient } from "./src/auth/dev-oauth-client-bootstrap.ts";
 import { AppConfig } from "./src/config.ts";
 import type { ItxDurableObject } from "./src/itx/itx-durable-object.ts";
-import type { DebugAppendChainSubscriber } from "./src/durable-objects/debug-append-chain-subscriber.ts";
 import type { ProjectDurableObject } from "./src/domains/projects/durable-objects/project-durable-object.ts";
 import type { ProjectMcpServerConnection } from "./src/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 import type { AgentDurableObject } from "./src/domains/agents/durable-objects/agent-durable-object.ts";
@@ -211,7 +210,6 @@ const slackBotToken = ctx.runtimeConfig.slackBotToken?.exposeSecret();
 const workerNames = {
   agent: `${ctx.workerName}-agent`,
   app: `${ctx.workerName}-app`,
-  debugSubscriber: `${ctx.workerName}-debug-subscriber`,
   ingress: ctx.workerName,
   itx: `${ctx.workerName}-itx`,
   mcp: `${ctx.workerName}-mcp`,
@@ -239,9 +237,6 @@ const mcpRouteHostname = routeHostnameForUrl(ctx.runtimeConfig.mcp?.baseUrl);
 const eventDocsRouteHostname = eventDocsHostnameForAppBaseUrl(ctx.runtimeConfig.baseUrl);
 const artifactsAccountId = requireEnv("CLOUDFLARE_ACCOUNT_ID");
 const artifactsNamespace = `${ctx.workerName}-repos`;
-// Stream namespace for worker-global (non-project-scoped) streams, such as the
-// raw Cloudflare event capture stream at /cloudflare/events.
-const globalStreamNamespace = `${ctx.workerName}-global`;
 
 // ---- Durable Object namespaces ---------------------------------------------
 // One declaration per class, `scriptName` = the OWNING worker. Alchemy strips
@@ -302,13 +297,6 @@ const slackAgent = DurableObjectNamespace<SlackAgentDurableObject>("slack-agent"
   scriptName: workerNames.slackAgent,
   sqlite: true,
 });
-const debugAppendChainSubscriber = ctx.app.local
-  ? DurableObjectNamespace<DebugAppendChainSubscriber>("debug-append-chain-subscriber", {
-      className: "DebugAppendChainSubscriber",
-      scriptName: workerNames.debugSubscriber,
-      sqlite: true,
-    })
-  : undefined;
 
 const artifactEventsQueue = await Queue("artifact-events", {
   name: `${ctx.workerName}-artifact-events`,
@@ -445,14 +433,13 @@ const [
   slackIntegrationWorker,
   mcpWorker,
   projectWorker,
-  debugSubscriberWorker,
   streamWorker,
 ] = await Promise.all([
   osWorker("workspace", {
     entrypoint: "./src/workers/workspace.ts",
     // @cloudflare/shell needs Node APIs.
     compatibilityFlags: ["nodejs_compat"],
-    bindings: { DO_CATALOG: db, WORKSPACE: workspace },
+    bindings: { DO_CATALOG: db, STREAM: stream, WORKSPACE: workspace },
   }),
   osWorker("slackAgent", {
     entrypoint: "./src/workers/slack-agent.ts",
@@ -479,7 +466,6 @@ const [
       ARTIFACTS_ACCOUNT_ID: artifactsAccountId,
       ARTIFACTS_NAMESPACE: artifactsNamespace,
       DO_CATALOG: db,
-      GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
       REPO: repo,
       STREAM: stream,
     },
@@ -526,15 +512,6 @@ const [
     compatibilityFlags: ["nodejs_als", "global_fetch_strictly_public"],
     bindings: loopbackUnionBindings,
   }),
-  ctx.app.local
-    ? osWorker("debugSubscriber", {
-        entrypoint: "./src/workers/debug-append-chain-subscriber.ts",
-        bindings: {
-          DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber!,
-          STREAM: stream,
-        },
-      })
-    : Promise.resolve(undefined),
   osWorker("stream", {
     entrypoint: "./src/workers/stream.ts",
     bindings: {
@@ -547,9 +524,6 @@ const [
       SLACK_AGENT: slackAgent,
       SLACK_INTEGRATION: slackIntegration,
       STREAM: stream,
-      ...(debugAppendChainSubscriber == null
-        ? {}
-        : { DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber }),
     },
   }),
 ]);
@@ -603,15 +577,11 @@ const appWorker = await IterateAppWorker(ctx, {
     ARTIFACTS: Artifacts({ namespace: artifactsNamespace }),
     ARTIFACTS_ACCOUNT_ID: artifactsAccountId,
     ARTIFACTS_NAMESPACE: artifactsNamespace,
-    GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
     MCP: mcpWorker,
     PROJECT_HOST: projectWorker,
     PROJECT_MCP_SERVER_CONNECTION: projectMcpServerConnection,
     SLACK_AGENT: slackAgent,
     SLACK_INTEGRATION: slackIntegration,
-    ...(debugAppendChainSubscriber == null
-      ? {}
-      : { DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber }),
   },
   // OAuth login/refresh/logout, and JWT verification when static JWKS is not
   // configured, can still talk to auth.iterate.com from inside the Worker.
@@ -660,7 +630,6 @@ await IterateRoutes(ctx, {
 export const workers = {
   agent: agentWorker,
   app: appWorker,
-  debugSubscriber: debugSubscriberWorker,
   ingress: ingressWorker,
   itx: itxWorker,
   mcp: mcpWorker,

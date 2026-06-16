@@ -126,7 +126,7 @@ async function runWorkspaceCodemodeProof(input: { bearerToken: string; mcpUrl: U
 
 function workspaceCodemodeScript() {
   return `async (itx) => {
-  const repo = await itx.repos.get({ slug: "project" }).getInfo();
+  const repo = await itx.repos.get({ path: "/repos/project" }).getInfo();
   const dir = \`/workspace-preview-example-\${Date.now()}\`;
   const fileName = \`workspace-preview-example-\${Date.now()}.md\`;
   const password = repo.token.includes("?expires=")

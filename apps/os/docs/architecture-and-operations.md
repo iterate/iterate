@@ -101,14 +101,13 @@ canonical MCP endpoint (below).
 
 ## Streams
 
-`StreamDurableObject` is supplied by the OS streams domain. It knows about
-`namespace` and `path`, not projects. OS uses the stable Project ID as the
-stream namespace, which means OS stream paths are project-local, such as
+`StreamDurableObject` is supplied by the OS streams domain. It is addressed by
+`{ projectId, path }`, which means OS stream paths are project-local, such as
 `/agents/default` or `/integrations/slack`.
 
 The stream explorer lives at `/projects/:projectSlug/streams`. Detail pages
 are splat routes: `/streams/foo/bar` opens stream path `/foo/bar` inside the
-project-bound namespace.
+resolved Project ID.
 
 OS deploys the stream Durable Object from the main worker script and binds
 `STREAM` to that local namespace.
@@ -128,10 +127,10 @@ Durable Object's fetch handler:
 /__durable-objects/<kind>/<name>/<path>
 ```
 
-where `<kind>` is one of the Durable Object kinds handled by
-`src/debug-routes.ts` (for example `project`, `project-mcp-server-connection`,
-and `stream`). Other debug routes there: `/__debug/append-chain`,
-`/__debug/seed-iterate-config-base`, and `/api/itx/openapi-fixture`.
+where `<kind>` is one of `project`, `project-mcp-server-connection`, `stream`
+(`src/debug-routes.ts`). Other debug routes there:
+`/__debug/seed-iterate-config-base`, and the itx egress echo at
+`/api/itx/egress-echo`.
 
 ## MCP Directionality
 

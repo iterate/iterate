@@ -35,7 +35,7 @@ export async function withStreamConnectionFromBrowser(args: {
   return streamConnectionFromWebSocket(webSocket);
 }
 
-export const DEFAULT_STREAM_NAMESPACE = "default";
+export const DEFAULT_STREAM_PROJECT_ID = "default";
 
 export function normalizeStreamPath(args: { path?: string | null }) {
   const value = args.path;
@@ -44,30 +44,30 @@ export function normalizeStreamPath(args: { path?: string | null }) {
   return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
-export function streamDurableObjectName(args: { namespace: string; path: string }) {
-  return `${args.namespace}:${args.path}`;
+export function streamDurableObjectName(args: { projectId: string; path: string }) {
+  return `${args.projectId}:${args.path}`;
 }
 
-/** Parse `/api/streams?path=...&namespace=...` into stream DO identity parts. */
+/** Parse `/api/streams?path=...&projectId=...` into stream DO identity parts. */
 export function parseStreamRpcRequest(args: { url: URL }) {
   if (args.url.pathname !== "/api/streams") {
     throw new Error(`Unexpected stream RPC path: ${args.url.pathname}`);
   }
   const path = normalizeStreamPath({ path: args.url.searchParams.get("path") });
-  const namespaceRaw = args.url.searchParams.get("namespace")?.trim();
-  const namespace =
-    namespaceRaw === undefined || namespaceRaw === "" ? DEFAULT_STREAM_NAMESPACE : namespaceRaw;
-  return { namespace, path };
+  const projectIdRaw = args.url.searchParams.get("projectId")?.trim();
+  const projectId =
+    projectIdRaw === undefined || projectIdRaw === "" ? DEFAULT_STREAM_PROJECT_ID : projectIdRaw;
+  return { projectId, path };
 }
 
 /** HTTP path + query for the browser Stream Durable Object RPC endpoint. */
-export function streamRpcPath(args: { path: string; namespace?: string }) {
+export function streamRpcPath(args: { path: string; projectId?: string }) {
   const path = normalizeStreamPath({ path: args.path });
   const url = new URL("/api/streams", "http://placeholder");
   url.searchParams.set("path", path);
-  const namespace = args.namespace?.trim();
-  if (namespace && namespace !== DEFAULT_STREAM_NAMESPACE) {
-    url.searchParams.set("namespace", namespace);
+  const projectId = args.projectId?.trim();
+  if (projectId && projectId !== DEFAULT_STREAM_PROJECT_ID) {
+    url.searchParams.set("projectId", projectId);
   }
   return `${url.pathname}${url.search}`;
 }

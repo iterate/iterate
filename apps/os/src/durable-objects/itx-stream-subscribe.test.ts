@@ -13,7 +13,7 @@ const TEST_EVENT_TYPE = "test.iterate.com/itx-subscribe/marker";
 const PROJECT_ID = "proj__test__itxsubscribe";
 
 type StreamState = {
-  namespace: string;
+  projectId: string;
   path: string;
   eventCount: number;
   childPaths: string[];
@@ -120,8 +120,8 @@ describe("itx stream subscribe against a real Stream Durable Object", () => {
       "childPaths",
       "eventCount",
       "metadata",
-      "namespace",
       "path",
+      "projectId",
     ]);
 
     await subscription.unsubscribe();
@@ -188,7 +188,7 @@ describe("itx stream subscribe against a real Stream Durable Object", () => {
 
     await vi.waitFor(() => expect(states.length).toBeGreaterThanOrEqual(1));
     const initial = states[0]!;
-    expect(initial.namespace).toBe(PROJECT_ID);
+    expect(initial.projectId).toBe(PROJECT_ID);
     expect(initial.path).toBe(path);
     const initialEventCount = initial.eventCount;
 

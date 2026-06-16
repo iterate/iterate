@@ -4,25 +4,27 @@ import { ArrowLeftIcon, RadioTowerIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { StreamExplorerTreePage } from "~/components/stream-explorer.tsx";
+import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/domains/durable-object-names.ts";
 import { useItx } from "~/itx/itx-react.tsx";
 
-export const Route = createFileRoute("/admin/streams/$namespace/")({
-  component: AdminStreamNamespacePage,
+export const Route = createFileRoute("/admin/streams/$projectId/")({
+  component: AdminStreamProjectPage,
 });
 
-function AdminStreamNamespacePage() {
-  const { namespace } = Route.useParams();
+function AdminStreamProjectPage() {
+  const { projectId } = Route.useParams();
   const itx = useItx();
   const navigate = useNavigate();
+  const streamProjectId = projectId === NULL_DURABLE_OBJECT_PROJECT_ID ? null : projectId;
   const source = useMemo(
-    () => (streamPath: StreamPathType) => itx.streams.namespace(namespace).get(streamPath),
-    [itx, namespace],
+    () => (streamPath: StreamPathType) => itx.streams.project(streamProjectId).get(streamPath),
+    [itx, streamProjectId],
   );
 
   function openStream(streamPath: StreamPathType) {
     void navigate({
-      to: "/admin/streams/$namespace/$",
-      params: { namespace, _splat: streamPath },
+      to: "/admin/streams/$projectId/$",
+      params: { projectId, _splat: streamPath },
     });
   }
 
@@ -32,7 +34,7 @@ function AdminStreamNamespacePage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
             <h1 className="truncate text-base font-semibold">Streams explorer</h1>
-            <p className="truncate font-mono text-sm text-muted-foreground">{namespace}</p>
+            <p className="truncate font-mono text-sm text-muted-foreground">{projectId}</p>
           </div>
           <div className="flex items-center gap-2">
             <Button
@@ -43,15 +45,20 @@ function AdminStreamNamespacePage() {
               render={<Link to="/admin/streams" />}
             >
               <ArrowLeftIcon data-icon="inline-start" aria-hidden="true" />
-              Namespace
+              Project
             </Button>
-            {namespace === "global" ? null : (
+            {projectId === NULL_DURABLE_OBJECT_PROJECT_ID ? null : (
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
                 nativeButton={false}
-                render={<Link to="/admin/streams/$namespace" params={{ namespace: "global" }} />}
+                render={
+                  <Link
+                    to="/admin/streams/$projectId"
+                    params={{ projectId: NULL_DURABLE_OBJECT_PROJECT_ID }}
+                  />
+                }
               >
                 <RadioTowerIcon data-icon="inline-start" aria-hidden="true" />
                 Global

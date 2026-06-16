@@ -20,7 +20,6 @@ import {
 const GLOBAL_CF_EVENTS_STREAM_PATH = StreamPath.parse("/cloudflare/events");
 
 export type ArtifactEventsQueueEnv = {
-  GLOBAL_STREAM_NAMESPACE: string;
   STREAM: StreamDurableObjectNamespace;
 };
 
@@ -30,7 +29,7 @@ export async function handleArtifactEventsBatch(
 ): Promise<void> {
   const stream = await getInitializedStreamStub({
     durableObjectNamespace: env.STREAM,
-    namespace: env.GLOBAL_STREAM_NAMESPACE,
+    projectId: null,
     path: GLOBAL_CF_EVENTS_STREAM_PATH,
   });
 

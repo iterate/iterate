@@ -2,9 +2,12 @@
 
 Agents is the core OS agent runtime: the `AgentDurableObject`, the stream
 processors it hosts, and the subscription wiring that attaches those processors
-to agent streams. For now, default agent setup lives in the platform
+to agent streams. Today, default agent setup still lives in the platform
 `ProjectProcessor`: it watches root-stream `stream/child-stream-created` facts
-and appends setup/subscription facts to matching `/agents/...` streams.
+and appends setup/subscription facts to matching `/agents/...` streams. The
+target model is narrower: the project processor subscribes the main agent
+processor, and separate agent-stream configuration facts drive downstream
+processor subscriptions.
 
 ## Files
 
@@ -17,10 +20,9 @@ and appends setup/subscription facts to matching `/agents/...` streams.
 - `stream-processors/` — the processor contracts + implementations:
   - `agent/` — the agent core: chat ingress, inputs, outputs, script
     enqueue/completion rendering, and LLM request lifecycle.
-  - `openai-ws/` / `cloudflare-ai/` — the two LLM providers; one is selected
-    per agent via `events.iterate.com/os-agent/llm-provider-selected`
-    (default `openai-ws`).
-  - `jsonata-reactor/` — rule-driven event reactions.
+  - `openai-ws/` / `cloudflare-ai/` — the two LLM providers. A separate
+    agent-stream provider-selection fact declares which provider processor
+    should be subscribed.
 - `agent-stream-subscriptions.ts` — structured DO name, default processor
   slugs per LLM provider, and the `stream/subscription-configured` events that
   attach the processors to an agent stream.

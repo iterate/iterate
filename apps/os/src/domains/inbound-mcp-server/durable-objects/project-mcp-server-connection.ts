@@ -3,7 +3,6 @@ import { McpAgent } from "agents/mcp";
 import type { Connection } from "agents";
 import { z } from "zod";
 import { StreamPath, type EventInput } from "@iterate-com/shared/streams/types";
-import { upsertD1ObjectCatalog } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import packageJson from "../../../../package.json" with { type: "json" };
 import {
   getStreamsBackend,
@@ -39,7 +38,6 @@ export { StreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts
  */
 
 interface McpServerEnv {
-  DO_CATALOG: D1Database;
   ITX_CONTEXT: DurableObjectNamespace<ItxDurableObject>;
   MOCK_PROVIDER_BASE_URL?: string;
   PROJECT_MCP_SERVER_CONNECTION: DurableObjectNamespace;
@@ -67,28 +65,6 @@ export interface ProjectMcpServerConnectionProject {
   organizationRole: string | null;
   organizationPermissions: string[];
 }
-
-export type ProjectMcpServerConnectionStructuredName = {
-  projectId: string;
-  projectSlug: string | null;
-  orgId: string;
-  orgSlug: string | null;
-  userId: string;
-  clientId: string | null;
-  clientName: string | null;
-  streamPath: StreamPath;
-};
-
-const ProjectMcpServerConnectionStructuredName = z.object({
-  projectId: z.string(),
-  projectSlug: z.string().nullable(),
-  orgId: z.string(),
-  orgSlug: z.string().nullable(),
-  userId: z.string(),
-  clientId: z.string().nullable(),
-  clientName: z.string().nullable(),
-  streamPath: StreamPath,
-});
 
 const sessionSlugStorageKey = "mcpServerSessionSlug";
 const eventTypePrefix = "events.iterate.com/mcp-server";
@@ -143,7 +119,6 @@ export class ProjectMcpServerConnection extends McpAgent<
 
   async setInitializeRequest(initializeRequest: Parameters<McpAgent["setInitializeRequest"]>[0]) {
     await super.setInitializeRequest(initializeRequest);
-    await this.initializeCatalogRecord();
     await this.emitLifecycleEvent("session-started", {
       transportType: this.getTransportType(),
       mcpSessionId: this.getSessionId(),
@@ -248,7 +223,7 @@ export class ProjectMcpServerConnection extends McpAgent<
             functionSource: code,
             projectId: auth.projectId,
             props: { context: itxContextId },
-            record: { namespace: auth.projectId, path: streamPath },
+            record: { projectId: auth.projectId, path: streamPath },
           });
 
           const parts: string[] = [];
@@ -320,7 +295,7 @@ export class ProjectMcpServerConnection extends McpAgent<
 
   async #ensureItxContextOnce(projectId: string): Promise<string> {
     const streamPath = await this.getSessionStreamPath();
-    const ref = formatContextRef({ namespace: projectId, path: streamPath });
+    const ref = formatContextRef({ projectId, path: streamPath });
     const versionKey = `itxContextCapsVersion:${projectId}`;
     const seededVersion = await this.ctx.storage.get<string>(versionKey);
     if (seededVersion === MCP_CONTEXT_CAPS_VERSION) return ref;
@@ -331,7 +306,7 @@ export class ProjectMcpServerConnection extends McpAgent<
     const created = await createContext({
       env: this.env as unknown as Env,
       name: `mcp:${await this.getSessionSlug()}`,
-      namespace: projectId,
+      projectId,
       parent: {
         address: contextAddress(projectContextRef(projectId)),
         ref: projectContextRef(projectId),
@@ -457,42 +432,6 @@ export class ProjectMcpServerConnection extends McpAgent<
     }
 
     return params.clientInfo;
-  }
-
-  private async initializeCatalogRecord() {
-    const auth = this.authForProject(
-      this.requireAuthProps(),
-      this.resolveAvailableProjects(this.requireAuthProps())[0],
-    );
-    const name = this.ctx.id.name;
-    if (!name) {
-      throw new Error("Inbound MCP server Durable Object must be addressed by name.");
-    }
-
-    const clientInfo = await this.getClientInfo();
-    const rawClientName = isRecord(clientInfo) ? clientInfo.name : undefined;
-    const structuredName = ProjectMcpServerConnectionStructuredName.parse({
-      projectId: auth.projectId,
-      projectSlug: auth.projectSlug,
-      orgId: auth.orgId,
-      orgSlug: auth.orgSlug,
-      userId: auth.userId,
-      clientId: auth.clientId,
-      clientName: typeof rawClientName === "string" ? rawClientName : null,
-      streamPath: await this.getSessionStreamPath(),
-    });
-
-    await upsertD1ObjectCatalog({
-      db: this.env.DO_CATALOG,
-      className: "ProjectMcpServerConnection",
-      id: this.ctx.id.toString(),
-      indexes: {
-        orgId: (params) => params.orgId,
-        projectId: (params) => params.projectId,
-      },
-      name,
-      structuredName,
-    });
   }
 
   private resolveAvailableProjects(
