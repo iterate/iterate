@@ -10,7 +10,7 @@ test("resolves personal dev stages from Doppler and Alchemy spellings", () => {
   expect(resolveDevAuthClientSyncTarget({ ALCHEMY_STAGE: "dev" })).toBeNull();
 });
 
-test("bootstraps tunnel redirect URIs against the shared dev auth service", () => {
+test("bootstraps Captun redirect URIs against the shared dev auth service", () => {
   expect(
     resolveLocalDevOAuthClientBootstrap({
       ALCHEMY_STAGE: "dev_misha",

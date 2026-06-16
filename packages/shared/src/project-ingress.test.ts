@@ -54,7 +54,7 @@ describe("parseProjectIngressHostname", () => {
     });
   });
 
-  it("handles dev tunnel domains", () => {
+  it("handles multi-label project ingress domains", () => {
     const result = parseProjectIngressHostname("my-proj.dev-mmkal-os.dev.iterate.app");
     expect(result).toEqual({
       ok: true,
@@ -114,7 +114,7 @@ describe("buildMachineIngressEnvVars", () => {
     });
   });
 
-  it("builds env vars for dev tunnel", () => {
+  it("builds env vars for multi-label project ingress domains", () => {
     expect(
       buildMachineIngressEnvVars({
         projectSlug: "my-proj",

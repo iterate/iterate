@@ -1,8 +1,6 @@
 # Dev environments
 
-How local development, preview environments, and identities work. The design
-rationale lives in [dev-environments-redesign-context.md](dev-environments-redesign-context.md);
-this is the operating manual.
+How local development, preview environments, and identities work.
 
 ## The core model (read this much at minimum)
 
@@ -47,8 +45,7 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   the same fully-local OS server: random localhost port, per-worktree
   `.alchemy/` state, and human sign-in through `auth.iterate-dev.com`.
   Personal `dev_<you>` configs may still carry personal integration secrets,
-  but they should not carry app/MCP/project-host URL overrides. The old
-  `os.iterate-dev-<you>.com` hostnames are no longer part of local dev.
+  but they should not carry app/MCP/project-host URL overrides.
 
   Don't (re)introduce legacy `ITERATE_OAUTH_*` / `ITERATE_AUTH_JWKS` vars in
   these configs: an explicit JWKS in Doppler overrides the deploy-time fetch
@@ -304,11 +301,11 @@ For the PR-centric flow (managed PR comment, tests, cleanup) use
 ## Tunnels and webhooks
 
 Inbound webhooks (Slack, GitHub) and third-party OAuth callbacks need a
-public HTTPS hostname — that's the only reason to reach for a tunnel from
+public HTTPS hostname — that's the only reason to add a public local URL to
 fully-local dev.
 
-The **iterate tunnel gateway** (`apps/tunnels`, deployed at
-`tunnels.iterate.com`) mints public tunnels on demand: any caller dials it
+The **iterate public local gateway** (`apps/tunnels`, deployed at
+`tunnels.iterate.com`) mints public local URLs on demand: any caller dials it
 with the shared gateway secret (`CAPTUN_TOKEN`, in Doppler `_shared/dev` and
 `_shared/preview`) and gets `<name>.tunnels.iterate.com` in ~200ms. It's a
 standalone captun worker — deliberately not embedded in OS, so it stays tiny
@@ -324,16 +321,16 @@ The captun Vite plugin (`apps/os/vite.config.ts`) activates when
 `APP_CONFIG_BASE_URL` (`https://<name>.tunnels.iterate.com`) unless
 `APP_CONFIG.baseUrl` is set explicitly. The plugin forwards public HTTP and
 WebSockets to your local dev server, so HMR and itx can use the same public
-tunnel URL.
+public URL.
 
 For personal `dev_<user>` configs, startup also ensures the shared dev auth
 client accepts `https://<name>.tunnels.iterate.com/api/iterate-auth/callback`.
 Shared `dev` does not mutate auth client state; use a personal dev config when
-you need human OAuth through a tunnel. Tests open tunnels via
+you need human OAuth through a public local URL. Tests open public local URLs via
 `createPublicTunnel` (`apps/os/e2e/test-support/create-test-project.ts`)
 against the same gateway.
 
-Tunnels are not scarce. The genuinely scarce thing is the webhook-source
+Public local URLs are not scarce. The genuinely scarce thing is the webhook-source
 configuration — a Slack app points at exactly one delivery URL at a time —
 so set a stable `CAPTUN_TUNNEL_NAME` per person (held in `dev_<user>`) to keep
 that URL working.

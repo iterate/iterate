@@ -119,7 +119,7 @@ export async function IterateApp<B extends Bindings>(ctx: IterateCtx, props: Ite
 /**
  * The app worker with Iterate conventions — TanStack Start build via Vite,
  * APP_CONFIG injection, standard observability, asset preupload + server
- * bundle pruning — but no routes, DNS, or tunnel. Apps that put a router
+ * bundle pruning — but no routes or DNS. Apps that put a router
  * worker in front (apps/os) call this directly and give the routes to the
  * router via {@link IterateRoutes}.
  */

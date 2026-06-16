@@ -50,7 +50,7 @@ Deployment Config is deployment-time config. Alchemy reads it while declaring
 Cloudflare resources, but it should not be serialized into the running app.
 
 Keep this boundary strict. A deployment script may need a privileged Cloudflare
-API token to create routes, D1 databases, R2 buckets, tunnels, or Worker
+API token to create routes, D1 databases, R2 buckets, or Worker
 bindings. The deployed Worker usually does not need that token at runtime.
 
 Examples:
@@ -122,7 +122,7 @@ pnpm dev
 
 The default config is the shared root `dev`: a **fully-local** environment
 (miniflare D1/DOs in the worktree, random free port at
-`http://localhost:<port>`, no tunnel, no Cloudflare resources) whose only
+`http://localhost:<port>`, no Cloudflare resources) whose only
 external dependency is the dev-global auth at `auth.iterate-dev.com`. Any
 number of worktrees/agents run this concurrently without contention. See
 [Dev environments](dev-environments.md) for lifecycle controls such as

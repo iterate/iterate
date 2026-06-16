@@ -174,7 +174,7 @@ const env: Record<string, string | undefined> = {
     process.env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN ?? process.env.ITERATE_AUTH_SERVICE_TOKEN,
 };
 
-// Fully-local dev: no Alchemy/cloudflared tunnel. Picks a free port and writes
+// Fully-local dev: no Cloudflare resources. Picks a free port and writes
 // .alchemy/dev-server.json so CLIs can find the running server. If Doppler
 // provides APP_CONFIG.baseUrl (for example a captun URL), runtime config keeps
 // that public URL and the discovery file remains the local target.
@@ -229,9 +229,9 @@ const db = await D1Database("os-db", {
   adopt: true,
 });
 
-// os serves project hosts at <slug>.iterate.app (prod),
-// <slug>.iterate-dev-jonas.app (dev), and <slug>.iterate-preview-N.app
-// (preview). The preview app shell deliberately lives on the sibling
+// os serves project hosts at <slug>.iterate.app (prod), <slug>.localhost:<port>
+// (local dev), and <slug>.iterate-preview-N.app (preview).
+// The preview app shell deliberately lives on the sibling
 // iterate-preview-N.com zone (`os.iterate-preview-N.com`) so project/MCP hosts
 // can own the iterate-preview-N.app zone cleanly.
 const projectHostnameBases = ctx.runtimeConfig.projectHostnameBases ?? [];

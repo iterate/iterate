@@ -10,7 +10,6 @@
 - low-level primitives live here:
   - free port
   - dev server lifecycle
-  - cloudflare tunnel lifecycle
   - temp dir
 - test-runner-specific helpers should stay near the owning test suite
 - app-specific helpers should stay near the owning app or contract

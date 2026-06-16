@@ -162,7 +162,6 @@ const config: KnipConfig = {
     // TanStack Start resolves the router factory by convention from the
     // entrypoint, so there is no direct import Knip can follow.
     "apps/semaphore/src/router.tsx": ["exports"],
-    "apps/semaphore/scripts/seed-cloudflare-tunnel-pool.ts": ["exports"],
     "packages/shared/src/callable/entry.workerd.vitest.ts": ["exports"],
     "packages/shared/src/durable-object-utils/test-harness/initialize-fronting-worker.ts": [
       "exports",

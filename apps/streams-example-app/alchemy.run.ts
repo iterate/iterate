@@ -20,7 +20,7 @@ const streamProcessorRunner = DurableObjectNamespace<StreamProcessorRunner>(
   },
 );
 
-const { worker, afterFinalize } = await IterateApp(ctx, {
+const worker = await IterateApp(ctx, {
   main: "./src/worker.ts",
   bindings: {
     STREAM: stream,
@@ -31,6 +31,5 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
 export { worker };
 
 await ctx.app.finalize();
-await afterFinalize();
 
 if (!ctx.app.local) process.exit(0);

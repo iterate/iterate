@@ -101,7 +101,7 @@ How do I…? — **[Dev environments](docs/dev-environments.md)** answers: run
 local dev (fully local, random port, `localhost` plus project
 `<slug>.localhost` hosts), be any user or an admin (minting), point a browser
 (headless golden path) at local dev or a preview, create a preview environment
-from your machine, and when you actually need a tunnel. Doppler/Cloudflare/deploy details:
+from your machine, and when you need a public callback URL. Doppler/Cloudflare/deploy details:
 `docs/devops-cloudflare-doppler-alchemy-setup.md`.
 
 ## Documentation
