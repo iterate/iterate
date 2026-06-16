@@ -157,9 +157,6 @@ function inferArtifactsNamespaceFromBaseUrl() {
   const previewMatch = /^os\.iterate-preview-(\d+)\.com$/.exec(hostname);
   if (previewMatch) return `os-preview-${previewMatch[1]}-repos`;
 
-  const devMatch = /^os\.iterate-dev-([^.]+)\.com$/.exec(hostname);
-  if (devMatch) return `os-dev-${devMatch[1]}-repos`;
-
   if (hostname === "os.iterate.com" || hostname === "os.iterate.com") {
     return "os-prd-repos";
   }

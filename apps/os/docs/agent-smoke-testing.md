@@ -1,8 +1,8 @@
 # Smoke-testing a real agent in a deployed environment
 
 Use this to verify that an agent works end-to-end in prd, a preview slot, or a
-dev tunnel. The smoke uses the current itx CLI path rather than the removed
-project oRPC procedures.
+running local dev server. The smoke uses the current itx CLI path rather than
+the removed project oRPC procedures.
 
 ## Prerequisites
 
@@ -15,7 +15,9 @@ project oRPC procedures.
 doppler run --project os --config prd -- pnpm cli itx --help
 ```
 
-Swap `prd` for `preview_N` or `dev_<you>` as needed.
+Swap `prd` for `preview_N` as needed. For local dev, start `pnpm dev` first and
+pass `--base-url http://localhost:<port>` using the port in
+`apps/os/.alchemy/dev-server.json`.
 
 ## Procedure
 

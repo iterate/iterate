@@ -12,6 +12,7 @@ declare const slackChannelName: string;
 export async function createCloudflareAppWorkflow(meta: ImportMeta, app: CloudflareApp) {
   const workflowName = meta.url.split("/").pop()?.replace(/\.ts$/, "");
   if (!workflowName) throw new Error("Unable to resolve workflow name");
+  const deployCommandArgs = app.deployCommandArgs ?? ["pnpm", "tsx", "./alchemy.run.ts"];
   const workflowDefinitionPaths = [
     `.github/ts-workflows/workflows/${workflowName}.ts`,
     `.github/workflows/${workflowName}.yml`,
@@ -99,7 +100,7 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
             env: {
               DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             },
-            run: "doppler run -- pnpm tsx ./alchemy.run.ts",
+            run: `doppler run -- ${deployCommandArgs.join(" ")}`,
           },
         ],
       },

@@ -10,10 +10,13 @@ a _deployed_ preview against _production_ auth.
 
 - **Deployed preview** (`os.iterate-preview-N.com`): uses production auth. No
   test OTP — you sign in as a real allowlisted user. Best for final proof.
-- **Local stack** (this doc): `pnpm dev` runs OS on a random localhost port
-  and Auth on `http://localhost:7101`, against a local D1 (miniflare) you can
-  read and write directly. Best for fast iteration and for bugs that need many
-  synthetic events / fresh orgs.
+- **Normal OS local dev**: `pnpm dev` or `pnpm cli dev start --detach` runs OS
+  on a random localhost port and uses shared dev auth at
+  `auth.iterate-dev.com`.
+- **Local OS + Auth stack** (this doc): `pnpm dev-all` runs Auth on
+  `http://localhost:7101` and OS on a random localhost port, against local D1
+  (miniflare) state you can read and write directly. Best for fast iteration
+  and for bugs that need many synthetic events / fresh orgs.
 
 ## Bring up the local stack
 
@@ -29,7 +32,7 @@ URL.
 Gotchas:
 
 - The Doppler scope for `apps/auth` must resolve to a config that exists. If
-  `pnpm dev` dies with `Could not find requested config 'dev_<you>'`, point it
+  `pnpm dev-all` dies with `Could not find requested config 'dev_<you>'`, point it
   at the shared dev config: `doppler configure set config dev --scope apps/auth`.
 - A loopback issuer signs tokens with the **local** auth keys, so a static
   production JWKS can't verify them. `apps/os/alchemy.run.ts` detects a loopback

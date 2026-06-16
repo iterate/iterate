@@ -318,10 +318,8 @@ been circling:
 
 - **`project.fetch` = egress.** In itx vocabulary `itx.fetch` is project
   egress (Law 5), so the DO's bare `fetch` now routes to `egressFetch` — the
-  worker's `fetch` is the project's homepage. The one exception on the DO
-  fetch path is the captun intercept tunnel's WebSocket handshake (upgrades
-  cannot cross RPC methods). Endgame, not built: egress as a stateless
-  capability with policy cached outside the DO, and the tunnel replaced by a
+  worker's `fetch` is the project's homepage. Endgame, not built: egress as a
+  stateless capability with policy cached outside the DO, and interception as a
   live egress-shadowing capability `provide`d over capnweb-with-WebSockets.
 - **Ingress never touches the DO.** `ProjectIngressEntrypoint` (stateless)
   asks the DO `getWorkerVersion()` (freshness + deduped rebuild semantics),
@@ -374,12 +372,12 @@ One PR (deliberately breaking; prd gets redeployed), five moves:
   shadows live in its registry), but secrets are D1 rows scoped by the
   dial-time projectId, so substitution + the terminal fetch run in a plain
   isolate and secret material never enters the DO.
-  The captun intercept tunnel is replaced by
+  The old intercept path is replaced by
   `itx.caps.provide({ invoke: "path-call", name: "fetch", target })` over
-  capnweb-WS — a live provider receives every egress Request with
+  capnweb-WS: a live provider receives every egress Request with
   placeholders RAW (never material; the "withheld text" substitution mode
   died), and disconnecting restores the default. The Project DO now has NO
-  fetch surface at all. captun remains only for the public `/__iterate/captun`
+  fetch surface at all. Captun remains only for the public `/__iterate/captun`
   relay.
 - **One isolate-wiring seam.** itx/isolate.ts is the single place the
   platform's trust posture (Law 4 ITERATE scoping, Law 5 egress outbound)

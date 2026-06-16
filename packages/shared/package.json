@@ -17,7 +17,6 @@
     "./alchemy/artifacts": "./src/alchemy/artifacts.ts",
     "./alchemy/iterate-app": "./src/alchemy/iterate-app.ts",
     "./alchemy/local-dev-server": "./src/alchemy/local-dev-server.ts",
-    "./alchemy/start-cloudflared": "./src/alchemy/start-cloudflared.ts",
     "./apps/cli": "./src/apps/cli.ts",
     "./apps/internal-router-contract": "./src/apps/internal-router-contract.ts",
     "./test-helpers": "./src/test-helpers/index.ts",

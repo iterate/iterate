@@ -221,7 +221,7 @@ export default {
     }
 
     if (url.pathname === "/__test/egress-with-fetch-shadow") {
-      // The same user story the deleted egress intercept tunnel served:
+      // The same user story the deleted egress intercept path served:
       // a LIVE `fetch` cap shadows the project's egress capability and sees
       // getSecret() placeholders UNSUBSTITUTED (substitution lives in the
       // default pipe). Live stubs passed over Workers RPC only survive the

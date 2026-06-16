@@ -7,7 +7,8 @@ Monorepo for Iterate's Cloudflare Workers platform. **`apps/os`** is the main ap
 - Commands run in the context of a Doppler config; that config chooses secrets,
   app config, Cloudflare account, and Alchemy stage.
 - Local dev, previews, and production use the same `alchemy.run.ts` primitive
-  with different configs: `dev_<you>`, `preview_N`, or `prd`.
+  with different configs: shared `dev`, personal `dev_<you>`, `preview_N`, or
+  `prd`.
 - Details: [DevOps: Cloudflare, Doppler, And Alchemy](docs/devops-cloudflare-doppler-alchemy-setup.md).
 
 ## Talking to OS
@@ -24,7 +25,7 @@ authenticates with the config's admin API secret and can run scripts against a
 project's itx surface:
 
 ```bash
-# your local Doppler setup, normally dev_<you>
+# your local Doppler setup, normally shared dev
 pnpm cli itx --help
 
 # production
@@ -34,23 +35,20 @@ doppler run --config prd -- pnpm cli itx --help
 doppler run --config preview_3 -- pnpm cli itx --help
 
 # local dev server (while pnpm dev is running)
-doppler run --config dev_jonas -- pnpm cli --base-url http://localhost:5173 itx --help
-
-# localhost-oriented config (while pnpm dev:localhost is running)
-doppler run --config dev_localhost -- pnpm cli itx --help
+doppler run --config dev -- pnpm cli itx --help
 ```
 
 Use `pnpm cli itx run --help` to run a script against a project.
 
 ### Claude + project MCP
 
-Open Claude Code against a deployed project's MCP server:
+Open Claude Code against the OS MCP server for a deployment:
 
 ```bash
-doppler run --config prd -- pnpm cli claude-mcp --project-slug-or-id my-project
+doppler run --config prd -- pnpm cli claude-mcp
 ```
 
-The Doppler config picks the environment (prod, preview, your dev tunnel). `APP_CONFIG_PROJECT_HOSTNAME_BASES` in the config sets the project hostname base (e.g. `iterate.app`, `iterate-preview-3.app`); override with `--base-host` if needed.
+The Doppler config picks the environment (prod, preview, or local dev). `APP_CONFIG_PROJECT_HOSTNAME_BASES` in the config sets the deployed project hostname base (e.g. `iterate.app`, `iterate-preview-3.app`); local dev project hosts use `<slug>.localhost:<port>`. Override with `--base-host` if needed.
 
 More: [apps/os README](apps/os/AGENTS.md).
 
@@ -59,12 +57,14 @@ More: [apps/os README](apps/os/AGENTS.md).
 ```bash
 pnpm install
 doppler setup --config dev --no-interactive   # once per worktree; doppler.yaml scopes every app dir
-pnpm dev                                      # fully-local OS dev server (http://os.localhost:<port>)
+pnpm dev                                      # attached local OS dev server (http://localhost:<port>)
 ```
 
-Use `--config dev_<you>` instead for your personal tunnel-backed dev (claims
-`os.iterate-dev-<you>.com` — one worktree at a time). The shared `dev` config
-is fully local and safe for any number of parallel worktrees/agents. Details:
+Use `pnpm dev <action> [flags]` for dev server lifecycle controls (`status`,
+`start --detach`, `attach`, `restart`, `kill`); it forwards to
+`pnpm cli dev <action> [flags]`. The shared `dev` config and personal
+`dev_<you>` configs are fully local and safe for parallel worktrees; use
+captun, preview, or production for public callbacks. Details:
 [Dev environments](docs/dev-environments.md).
 
 Before PRs:
@@ -77,31 +77,31 @@ pnpm install && pnpm typecheck && pnpm lint && pnpm format && pnpm test
 
 **Start here:** `apps/os/`
 
-| Path                | What                                                                                  |
-| ------------------- | ------------------------------------------------------------------------------------- |
-| `apps/os/`          | **Main app** — product dashboard (`os.iterate.com`; dev: `os.iterate-dev-<user>.com`) |
-| `packages/iterate/` | `iterate` CLI — delegates to local source when run inside this repo                   |
-| `docs/`             | Detailed documentation                                                                |
-| `tasks/`            | Work tracking (markdown + frontmatter)                                                |
-| `apps/iterate-com/` | iterate.com marketing site                                                            |
+| Path                | What                                                                               |
+| ------------------- | ---------------------------------------------------------------------------------- |
+| `apps/os/`          | **Main app** — product dashboard (`os.iterate.com`; local dev: `localhost:<port>`) |
+| `packages/iterate/` | `iterate` CLI — delegates to local source when run inside this repo                |
+| `docs/`             | Detailed documentation                                                             |
+| `tasks/`            | Work tracking (markdown + frontmatter)                                             |
+| `apps/iterate-com/` | iterate.com marketing site                                                         |
 
 Other Cloudflare apps (`semaphore`, …) are supporting services — see `docs/architecture.md`.
 
 ## Common commands
 
 ```bash
-doppler setup --config dev --no-interactive   # once per worktree (or --config dev_<you> for tunnel dev)
-pnpm dev                      # fully-local OS dev server at http://os.localhost:<port> (see docs/dev-environments.md)
+doppler setup --config dev --no-interactive   # once per worktree (or --config dev_<you> for personal secrets)
+pnpm dev                      # attached local OS dev server at http://localhost:<port> (see docs/dev-environments.md)
 pnpm auth:mint                # mint a session as any user/admin (repo root; dev/preview; wrap in doppler run)
 pnpm --dir apps/auth dev      # auth app only (when working on auth itself)
 pnpm test && pnpm typecheck && pnpm lint && pnpm format
 ```
 
 How do I…? — **[Dev environments](docs/dev-environments.md)** answers: run
-local dev (fully local, random port, `os.localhost`), be any user or an admin
-(minting), point a browser (headless golden path) at local dev or a preview,
-create a preview environment from your machine, and when you actually need a
-tunnel. Doppler/Cloudflare/deploy details:
+local dev (fully local, random port, `localhost` plus project
+`<slug>.localhost` hosts), be any user or an admin (minting), point a browser
+(headless golden path) at local dev or a preview, create a preview environment
+from your machine, and when you need a public callback URL. Doppler/Cloudflare/deploy details:
 `docs/devops-cloudflare-doppler-alchemy-setup.md`.
 
 ## Documentation

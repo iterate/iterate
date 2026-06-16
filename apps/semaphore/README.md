@@ -30,7 +30,6 @@ pnpm cli          # doppler + iterate local-router commands
 pnpm dev          # doppler + Alchemy local (Vite); optional PORT= for fixed port; Ctrl+C to stop
 pnpm build        # production client/server bundle
 pnpm deploy       # deploy prd through Doppler and alchemy.run.ts
-pnpm seed:tunnel-pool
 pnpm seed:environment-config-leases
 pnpm sqlfu:generate
 pnpm sqlfu:check

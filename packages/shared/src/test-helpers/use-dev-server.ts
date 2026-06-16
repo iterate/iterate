@@ -24,9 +24,8 @@ export interface DevServerHandle extends AsyncDisposable {
  * Start a dev server process, wait for a health check to succeed, and stop the
  * process on dispose.
  *
- * For Semaphore + `cloudflared` e2e: acquire {@link useCloudflareTunnelLease} first,
- * then pass `port: lease.localPort`
- * so the dev server listens where the tunnel forwards (e.g. `PORT` for `pnpm dev`).
+ * For public callback e2e, choose the externally-forwarded port first and
+ * pass it here so the dev server listens where the public gateway forwards.
  */
 export async function useDevServer(options: UseDevServerOptions): Promise<DevServerHandle> {
   const mergedEnv: NodeJS.ProcessEnv = {

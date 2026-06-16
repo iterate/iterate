@@ -14,7 +14,7 @@ import { z } from "zod";
 const MAX_LEASE_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_WAIT_MS = 5 * 60 * 1000;
 
-/** Resource `type` and `slug` share one format: lowercase slugs like `cloudflare-tunnel`. */
+/** Resource `type` and `slug` share one format: lowercase slugs like `preview-4`. */
 export const semaphoreKeySchema = z
   .string()
   .trim()
@@ -220,20 +220,6 @@ export const semaphoreContract = oc.router({
 
 export type SemaphoreResourceRecord = z.infer<typeof SemaphoreResourceRecord>;
 export type SemaphoreLeaseRecord = z.infer<typeof SemaphoreLeaseRecord>;
-
-export const cloudflareTunnelType = "cloudflare-tunnel";
-
-export const CloudflareTunnelData = z.object({
-  provider: z.literal(cloudflareTunnelType),
-  publicHostname: z.string().min(1),
-  tunnelId: z.string().min(1),
-  tunnelName: z.string().min(1),
-  tunnelToken: z.string().min(1),
-  service: z.string().min(1),
-  createdAt: z.string().min(1),
-});
-
-export type CloudflareTunnelData = z.infer<typeof CloudflareTunnelData>;
 
 type SemaphoreClient = ContractRouterClient<typeof semaphoreContract>;
 type SemaphoreFetch = (input: URL | string | Request, init?: RequestInit) => Promise<Response>;

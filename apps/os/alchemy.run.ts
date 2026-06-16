@@ -19,7 +19,6 @@ import { initAlchemy } from "@iterate-com/shared/alchemy/init";
 import {
   ITERATE_WORKER_OBSERVABILITY,
   IterateAppWorker,
-  IterateDevTunnel,
   IterateRoutes,
 } from "@iterate-com/shared/alchemy/iterate-app";
 import { prepareLocalDevServer } from "@iterate-com/shared/alchemy/local-dev-server";
@@ -175,10 +174,10 @@ const env: Record<string, string | undefined> = {
     process.env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN ?? process.env.ITERATE_AUTH_SERVICE_TOKEN,
 };
 
-// Fully-local dev: no tunnel, no per-user domain. Picks a free port, bakes
-// APP_CONFIG_BASE_URL=http://localhost:<port>, and writes
-// .alchemy/dev-server.json so CLIs can find the running server. No-op for
-// deploy/preview configs and explicit APP_CONFIG_BASE_URL overrides.
+// Fully-local dev: no Cloudflare resources. Picks a free port and writes
+// .alchemy/dev-server.json so CLIs can find the running server. If Doppler
+// provides APP_CONFIG.baseUrl (for example a captun URL), runtime config keeps
+// that public URL and the discovery file remains the local target.
 const localDevServer = await prepareLocalDevServer(env);
 if (localDevServer && !env.APP_CONFIG_PROJECT_HOSTNAME_BASES) {
   // Project hosts resolve as <proj-slug>.localhost:<port> in browsers. The app
@@ -230,9 +229,9 @@ const db = await D1Database("os-db", {
   adopt: true,
 });
 
-// os serves project hosts at <slug>.iterate.app (prod),
-// <slug>.iterate-dev-jonas.app (dev), and <slug>.iterate-preview-N.app
-// (preview). The preview app shell deliberately lives on the sibling
+// os serves project hosts at <slug>.iterate.app (prod), <slug>.localhost:<port>
+// (local dev), and <slug>.iterate-preview-N.app (preview).
+// The preview app shell deliberately lives on the sibling
 // iterate-preview-N.com zone (`os.iterate-preview-N.com`) so project/MCP hosts
 // can own the iterate-preview-N.app zone cleanly.
 const projectHostnameBases = ctx.runtimeConfig.projectHostnameBases ?? [];
@@ -657,18 +656,6 @@ await IterateRoutes(ctx, {
   ],
 });
 
-// Dev tunnel (tunnel-backed dev_<user> configs): real domains -> local vite.
-// The browser-facing dev entry is the app worker (it runs the same router),
-// so the tunnel points at vite, exactly as before the split.
-const { afterFinalize } = await IterateDevTunnel(ctx, {
-  extraRouteHostnames: [
-    ...(eventDocsRouteHostname ? [eventDocsRouteHostname] : []),
-    ...(mcpRouteHostname ? [mcpRouteHostname] : []),
-    ...projectHostnameBases.flatMap(projectRouteHostnamesForBase),
-  ],
-  worker: appWorker,
-});
-
 /** Per-worker Env types for src/lib/worker-env.d.ts. */
 export const workers = {
   agent: agentWorker,
@@ -687,7 +674,6 @@ export const workers = {
 
 await artifactEventsQueueConsumerReady;
 await ctx.app.finalize();
-await afterFinalize();
 
 if (!ctx.app.local) process.exit(0);
 

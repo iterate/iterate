@@ -150,7 +150,7 @@ describe("decideIngressRoute", () => {
       },
     },
     {
-      name: "dev tunnel base host routes to the OS lane",
+      name: "Captun base host routes to the OS lane",
       config: {
         ...config,
         baseUrl: "https://jonas.tunnels.iterate.com",
@@ -161,7 +161,7 @@ describe("decideIngressRoute", () => {
       expectedDecision: { lane: "os" },
     },
     {
-      name: "dev tunnel project subdomain routes to project ingress",
+      name: "Captun project subdomain routes to project ingress",
       config: {
         ...config,
         baseUrl: "https://jonas.tunnels.iterate.com",
@@ -177,7 +177,7 @@ describe("decideIngressRoute", () => {
       },
     },
     {
-      name: "dev tunnel app host routes to project ingress",
+      name: "Captun app host routes to project ingress",
       config: {
         ...config,
         baseUrl: "https://jonas.tunnels.iterate.com",
