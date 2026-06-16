@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ESNext", "ESNext.Disposable"],
+    "types": ["@cloudflare/workers-types"],
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": false
+  },
+  // Typecheck covers the WORKER implementation. client.ts + harness.ts are
+  // Node-runtime (they import `ws`, `process`, `node:assert`) and would need
+  // @types/node, whose web globals conflict with @cloudflare/workers-types in a
+  // single program — they are proven instead by `npm run e2e` against workerd.
+  "include": ["contract.ts", "itx.ts", "global-context.ts", "auth.ts", "server.ts", "env.d.ts"]
+}
