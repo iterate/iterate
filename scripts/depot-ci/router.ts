@@ -5,7 +5,10 @@ import { runCommand } from "../../packages/shared/src/node/run-command.ts";
 const defaultDepotOrgId = "0p91s0lz49";
 const defaultRepositoryFullName = "iterate/iterate";
 const buildPreviewImageWorkflow = ".depot/workflows/build-preview-ci-image.yml";
+const measureCustomRunnerColdStartWorkflow =
+  ".depot/workflows/measure-custom-runner-cold-start.yml";
 const measurePreviewImageWorkflow = ".depot/workflows/measure-preview-ci-image.yml";
+const measureStockRunnerColdStartWorkflow = ".depot/workflows/measure-stock-runner-cold-start.yml";
 const previewTrialWorkflow = "cloudflare-previews.yml";
 
 const CommonDepotInput = z.object({
@@ -196,6 +199,40 @@ export const router = os.router({
         .handler(async ({ input, signal }) => {
           return await runLocalWorkflow({
             job: "setup",
+            orgId: input.orgId,
+            signal,
+            workflowPath: input.workflowPath,
+          });
+        }),
+      measureStockColdStart: os
+        .input(
+          CommonDepotInput.extend({
+            workflowPath: z.string().trim().min(1).default(measureStockRunnerColdStartWorkflow),
+          }),
+        )
+        .meta({
+          description: "Measure time to first step on the stock Depot Ubuntu sandbox",
+        })
+        .handler(async ({ input, signal }) => {
+          return await runLocalWorkflow({
+            job: "cold-start",
+            orgId: input.orgId,
+            signal,
+            workflowPath: input.workflowPath,
+          });
+        }),
+      measureCustomColdStart: os
+        .input(
+          CommonDepotInput.extend({
+            workflowPath: z.string().trim().min(1).default(measureCustomRunnerColdStartWorkflow),
+          }),
+        )
+        .meta({
+          description: "Measure time to first step on the custom preview CI image",
+        })
+        .handler(async ({ input, signal }) => {
+          return await runLocalWorkflow({
+            job: "cold-start",
             orgId: input.orgId,
             signal,
             workflowPath: input.workflowPath,

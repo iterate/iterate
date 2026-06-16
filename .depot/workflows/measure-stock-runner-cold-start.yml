@@ -1,0 +1,12 @@
+name: Measure Stock Runner Cold Start
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  cold-start:
+    name: Stock Depot Ubuntu cold start
+    runs-on: depot-ubuntu-24.04-64
+    steps:
+      - name: First step timestamp
+        run: date -u +"first-step-utc=%Y-%m-%dT%H:%M:%SZ"

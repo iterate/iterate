@@ -1,0 +1,14 @@
+name: Measure Custom Runner Cold Start
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  cold-start:
+    name: Custom preview image cold start
+    runs-on:
+      size: 16x64
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    steps:
+      - name: First step timestamp
+        run: date -u +"first-step-utc=%Y-%m-%dT%H:%M:%SZ"
