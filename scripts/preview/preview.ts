@@ -10,6 +10,7 @@ import {
   CloudflarePreviewAppEntry,
   type EnvironmentConfigLease,
   type CloudflarePreviewState,
+  formatDurationMs,
   readCloudflarePreviewState,
   updateCloudflarePreviewState,
 } from "./state.ts";
@@ -1088,14 +1089,6 @@ function canRunPreviewTests(entry: CloudflarePreviewAppEntry | undefined) {
   return Boolean(
     entry?.publicUrl && ["awaiting-tests", "deployed", "tests-failed"].includes(entry.status),
   );
-}
-
-function formatDurationMs(durationMs: number) {
-  if (durationMs < 1_000) {
-    return `${Math.round(durationMs)}ms`;
-  }
-
-  return `${(durationMs / 1_000).toFixed(1)}s`;
 }
 
 async function runCommandWithRetries(

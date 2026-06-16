@@ -181,7 +181,7 @@ function renderPreviewDurations(entry: CloudflarePreviewAppEntry) {
   ].filter((line): line is string => line != null);
 }
 
-function formatDurationMs(durationMs: number) {
+export function formatDurationMs(durationMs: number) {
   if (durationMs < 1_000) {
     return `${Math.round(durationMs)}ms`;
   }
