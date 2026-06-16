@@ -171,10 +171,10 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
     });
 
     // That's it — no waiting. The creation steps (D1 projection, repo,
-    // example secret, agents root, created/create-completed events) run in
+    // onboarding agent setup, created/create-completed events) run in
     // ProjectProcessor and leave a trail on the root stream; callers redirect
     // to the project immediately and watch `processor.snapshot()`
-    // (phase: creating → ready) if they care about progress.
+    // (phase: creating -> ready) if they care about progress.
     return toSummary(projectFacts({ config: this.getAppConfig(), ...input }));
   }
 
@@ -238,6 +238,7 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
         streamPath: PROJECT_STREAM_PATH,
       });
     } catch (error) {
+      if (isMissingProcessEventHookError(error)) return;
       console.error("Project worker processEvent failed.", error);
     }
   }
@@ -301,4 +302,11 @@ function toSummary(facts: ProjectFacts): ProjectSummary {
     defaultHost: facts.defaultHost,
     hosts: facts.hosts,
   };
+}
+
+function isMissingProcessEventHookError(error: unknown) {
+  return (
+    error instanceof Error &&
+    error.message.includes('RPC receiver does not implement the method "processEvent"')
+  );
 }

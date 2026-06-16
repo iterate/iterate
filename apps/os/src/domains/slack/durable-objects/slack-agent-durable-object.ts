@@ -10,10 +10,8 @@ import {
   type StreamDurableObjectNamespace,
   type StreamDurableObject,
 } from "~/domains/streams/stream-runtime.ts";
-import {
-  getAgentDurableObjectName,
-  type AgentDurableObject,
-} from "~/domains/agents/durable-objects/agent-durable-object.ts";
+import type { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
+import { getAgentDurableObjectName } from "~/domains/agents/agent-stream-subscriptions.ts";
 import { formatDurableObjectName, parseDurableObjectName } from "~/domains/durable-object-names.ts";
 import { getProjectSecret } from "~/domains/secrets/secrets-store.ts";
 import { callSlackWebApi } from "~/domains/slack/entrypoints/slack-capability.ts";

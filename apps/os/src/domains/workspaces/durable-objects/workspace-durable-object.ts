@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { Workspace, WorkspaceFileSystem, createWorkspaceStateBackend } from "@cloudflare/shell";
 import { createGit, type Git } from "@cloudflare/shell/git";
-import { formatDurableObjectName, parseDurableObjectName } from "~/domains/durable-object-names.ts";
+import { parseDurableObjectName } from "~/domains/durable-object-names.ts";
 import {
   getInitializedStreamStub,
   type StreamDurableObject,
@@ -125,13 +125,6 @@ export class WorkspaceDurableObject extends DurableObject<WorkspaceEnv> {
       projectId: this.name.projectId,
     });
   }
-}
-
-export function getWorkspaceDurableObjectName(name: { path: string; projectId: string }) {
-  return formatDurableObjectName({
-    path: name.path,
-    projectId: name.projectId,
-  });
 }
 
 function createPlainMethodObject(target: object): CloudflareShellState {

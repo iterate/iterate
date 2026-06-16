@@ -120,8 +120,8 @@ describe("itx stream subscribe against a real Stream Durable Object", () => {
       "childPaths",
       "eventCount",
       "metadata",
-      "projectId",
       "path",
+      "projectId",
     ]);
 
     await subscription.unsubscribe();

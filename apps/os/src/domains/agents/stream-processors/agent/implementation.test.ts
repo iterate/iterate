@@ -269,7 +269,7 @@ describe("AgentProcessor", () => {
         idempotencyKey: "agent/llm-request-scheduled@42",
         payload: expect.objectContaining({
           debounceMs: 1000,
-          model: "@cf/moonshotai/kimi-k2.6",
+          model: "@cf/moonshotai/kimi-k2.7-code",
         }),
       }),
     ]);
@@ -879,7 +879,7 @@ function providerSelectedEvent(args: { offset: number }): StreamEvent {
   return agentEvent({
     type: "events.iterate.com/agent/llm-provider-selected",
     payload: {
-      model: "@cf/moonshotai/kimi-k2.6",
+      model: "@cf/moonshotai/kimi-k2.7-code",
       provider: "openai-ws",
     },
     offset: args.offset,

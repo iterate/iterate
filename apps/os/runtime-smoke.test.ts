@@ -4,7 +4,7 @@
  * (`RUNTIME_SMOKE_FULL=1`).
  */
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,13 @@ import { describe, expect, test } from "vitest";
 const appRoot = dirname(fileURLToPath(import.meta.url));
 const CF_DEV_PORT = 3015;
 const hasCfWranglerLocal = existsSync(join(appRoot, ".alchemy/local/wrangler.jsonc"));
+const hasCfDevScript = Boolean(
+  (
+    JSON.parse(readFileSync(join(appRoot, "package.json"), "utf8")) as {
+      scripts?: Record<string, unknown>;
+    }
+  ).scripts?.["cf:dev"],
+);
 const runFullSmoke = process.env.RUNTIME_SMOKE_FULL === "1";
 const describeRuntimeSmoke = process.env.CI ? describe.skip : describe.sequential;
 /**
@@ -26,6 +33,10 @@ const SMOKE_ADMIN_API_SECRET = "runtime-smoke-admin-api-secret";
 const smokeEnv = {
   APP_CONFIG: JSON.stringify({
     adminApiSecret: SMOKE_ADMIN_API_SECRET,
+    iterateAuth: {
+      clientId: "runtime-smoke-client-id",
+      clientSecret: "runtime-smoke-client-secret",
+    },
     openAiApiKey: "runtime-smoke-openai-key",
   }),
 };
@@ -39,36 +50,6 @@ function stripInheritedAppConfig(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     }
   }
   return next;
-}
-
-function runWithDrainedOutput(
-  command: string,
-  args: readonly string[],
-  options: { cwd: string; env: NodeJS.ProcessEnv },
-): Promise<{ code: number | null; output: string }> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    const child = spawn(command, args, {
-      cwd: options.cwd,
-      env: options.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    child.stdout?.on("data", (data: Buffer) => {
-      chunks.push(Buffer.from(data));
-      process.stdout.write(data);
-    });
-
-    child.stderr?.on("data", (data: Buffer) => {
-      chunks.push(Buffer.from(data));
-      process.stderr.write(data);
-    });
-
-    child.on("error", reject);
-    child.on("close", (code) => {
-      resolve({ code, output: Buffer.concat(chunks).toString("utf8") });
-    });
-  });
 }
 
 function parseAlchemyDeployUrl(output: string): string | undefined {
@@ -221,6 +202,77 @@ async function withServer(
   }
 }
 
+async function runCfDeploySmoke() {
+  const child = spawn("pnpm", ["run", "cf:deploy"], {
+    cwd: appRoot,
+    env: { ...stripInheritedAppConfig(process.env), ...smokeEnv },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const chunks: Buffer[] = [];
+  let closeCode: number | null | undefined;
+  const close = new Promise<number | null>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", (code) => {
+      closeCode = code;
+      resolve(code);
+    });
+  });
+  const appendOutput = (data: Buffer) => {
+    chunks.push(Buffer.from(data));
+    return Buffer.concat(chunks).toString("utf8");
+  };
+  child.stdout?.on("data", (data: Buffer) => {
+    process.stdout.write(data);
+    appendOutput(data);
+  });
+  child.stderr?.on("data", (data: Buffer) => {
+    process.stderr.write(data);
+    appendOutput(data);
+  });
+
+  try {
+    const deadline = Date.now() + 600_000;
+    while (Date.now() < deadline) {
+      const output = Buffer.concat(chunks).toString("utf8");
+      const localDevUrl = output
+        .match(/Local dev server:\s*(http:\/\/[^\s]+)/)?.[1]
+        ?.replace(/\/$/, "");
+      if (localDevUrl) {
+        await waitForReady(localDevUrl);
+        await assertFullStack(localDevUrl);
+        return;
+      }
+
+      if (closeCode !== undefined) {
+        if (closeCode !== 0) throw new Error(`cf:deploy exited with code ${closeCode}`);
+        const deployUrl = parseAlchemyDeployUrl(output);
+        if (!deployUrl) {
+          throw new Error(
+            `Could not find deployed workers.dev URL in cf:deploy output:\n${output}`,
+          );
+        }
+        await assertFullStack(deployUrl);
+        return;
+      }
+
+      await Promise.race([delay(300), close.then(() => undefined)]);
+    }
+
+    throw new Error("Timed out waiting for cf:deploy to print a local or deployed URL.");
+  } finally {
+    if (closeCode === undefined) {
+      child.kill("SIGTERM");
+      await Promise.race([
+        close.then(
+          () => undefined,
+          () => undefined,
+        ),
+        delay(3_000).then(() => child.kill("SIGKILL")),
+      ]);
+    }
+  }
+}
+
 describe("sqlfu assets", () => {
   test("generated query and migration bundles exist", () => {
     expect(existsSync(join(appRoot, "src/db/queries/.generated/index.ts"))).toBe(true);
@@ -229,7 +281,7 @@ describe("sqlfu assets", () => {
 });
 
 describeRuntimeSmoke("runtime smoke", () => {
-  test.skipIf(!runFullSmoke || !hasCfWranglerLocal)("pnpm cf:dev", async () => {
+  test.skipIf(!runFullSmoke || !hasCfWranglerLocal || !hasCfDevScript)("pnpm cf:dev", async () => {
     const base = `http://127.0.0.1:${CF_DEV_PORT}`;
     await withServer("pnpm", ["run", "cf:dev"], smokeEnv, base, () => assertFullStack(base));
   });
@@ -237,21 +289,7 @@ describeRuntimeSmoke("runtime smoke", () => {
   test.skipIf(!runFullSmoke)(
     "pnpm cf:deploy",
     async () => {
-      const { code, output } = await runWithDrainedOutput("pnpm", ["run", "cf:deploy"], {
-        cwd: appRoot,
-        env: { ...stripInheritedAppConfig(process.env), ...smokeEnv },
-      });
-
-      if (code !== 0) {
-        throw new Error(`cf:deploy exited with code ${code}`);
-      }
-
-      const deployUrl = parseAlchemyDeployUrl(output);
-      if (!deployUrl) {
-        throw new Error(`Could not find deployed workers.dev URL in cf:deploy output:\n${output}`);
-      }
-
-      await assertFullStack(deployUrl);
+      await runCfDeploySmoke();
     },
     600_000,
   );

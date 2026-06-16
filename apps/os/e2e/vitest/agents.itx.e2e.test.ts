@@ -147,6 +147,16 @@ test("a web agent holds a real conversation: user message in, visible reply out"
   const agentPath = `/agents/web-convo-${suffix}`;
   const marker = `pong-${suffix}`;
 
+  await appendAgentSetup({
+    agentPath,
+    itx,
+    model: "gpt-5.5",
+    projectId: fixture.project.id,
+    provider: "openai-ws",
+    systemPrompt:
+      "Reply to every user message by sending exactly one visible web chat message through itx.chat.sendMessage.",
+  });
+
   await itx.agents.sendMessage({
     agentPath,
     message: `Please reply in this chat with a short message that contains exactly this token: ${marker}`,
@@ -193,11 +203,21 @@ test("a web agent holds a real conversation: user message in, visible reply out"
   expect(events.filter((event) => event.type.endsWith("error-occurred"))).toEqual([]);
 }, 180_000);
 
-test("uses OpenAI for unconfigured agent chats by default", async () => {
+test("uses OpenAI for explicitly configured agent chats", async () => {
   await using fixture = await createTestProject({ slugPrefix: "agent-default-openai" });
   using itx = fixture.itx();
   const suffix = uniqueSuffix();
   const agentPath = `/agents/default-openai-${suffix}`;
+
+  await appendAgentSetup({
+    agentPath,
+    itx,
+    model: "gpt-5.5",
+    projectId: fixture.project.id,
+    provider: "openai-ws",
+    systemPrompt:
+      "Reply to every user message by sending exactly one visible web chat message through itx.chat.sendMessage.",
+  });
 
   await itx.agents.sendMessage({
     agentPath,
@@ -258,6 +278,7 @@ test("lets agent scripts send visible agent responses through itx.chat.sendMessa
   // Bootstrap the fresh agent (wires its default subscriptions) before driving
   // it with a directly-appended output event.
   await itx.streams.create({ streamPath: agentPath });
+  await waitForAgentProcessorSetup({ agentPath, itx, projectId: fixture.project.id });
 
   // append returns the bare appended Event (offset, createdAt, …); the cast
   // steps past capnweb's lossy stub-type projection of the branded Event type.
@@ -265,13 +286,13 @@ test("lets agent scripts send visible agent responses through itx.chat.sendMessa
     event: {
       type: "events.iterate.com/agent/output-added",
       payload: {
-        content: dedent`
-          \`\`\`js
-            async (itx) => {
-              await itx.chat.sendMessage({ message: ${JSON.stringify(message)} });
-            }
-            \`\`\`
-        `,
+        content: [
+          "```js",
+          "async (itx) => {",
+          `  await itx.chat.sendMessage({ message: ${JSON.stringify(message)} });`,
+          "}",
+          "```",
+        ].join("\n"),
       },
     },
   })) as unknown as Event;
@@ -325,6 +346,11 @@ test("project config worker customizes fresh agents by appending events", async 
   // streams. Deterministic: the push script is injected as agent output (no
   // LLM) and executed against the pusher agent's prepared workspace.
   await itx.streams.create({ streamPath: pusherPath });
+  await waitForAgentProcessorSetup({
+    agentPath: pusherPath,
+    itx,
+    projectId: fixture.project.id,
+  });
 
   const configWorkerSource = [
     "export default {",
@@ -357,10 +383,12 @@ test("project config worker customizes fresh agents by appending events", async 
   ].join("\n");
   const pushScript = [
     "async (itx) => {",
+    workspaceReadyFunctionSource(),
+    "  await waitForWorkspace(itx);",
     `  await itx.workspace.writeFile('/project/worker.js', ${JSON.stringify(configWorkerSource)});`,
-    "  await itx.workspace.git.add({ dir: '/project', filepath: 'worker.js' });",
-    "  await itx.workspace.git.commit({ dir: '/project', message: 'add agent context config', author: { name: 'Agent', email: 'agent@iterate.com' } });",
-    "  await itx.workspace.git.push({ dir: '/project', remote: 'origin', ref: 'main' });",
+    "  await itx.workspace.gitAdd({ dir: '/project', filepath: 'worker.js' });",
+    "  await itx.workspace.gitCommit({ dir: '/project', message: 'add agent context config', author: { name: 'Agent', email: 'agent@iterate.com' } });",
+    "  await itx.workspace.gitPush({ dir: '/project', remote: 'origin', ref: 'main' });",
     "}",
   ].join("\n");
   await itx.streams.get(pusherPath).append({
@@ -419,6 +447,32 @@ test("lets agent chat update the project repo through the prepared workspace", a
   using itx = fixture.itx();
   const suffix = uniqueSuffix();
   const agentPath = `/agents/workspace-${suffix}`;
+
+  await appendAgentSetup({
+    agentPath,
+    itx,
+    model: "gpt-5.5",
+    projectId: fixture.project.id,
+    provider: "openai-ws",
+    systemPrompt: [
+      "For every user request, reply with exactly one fenced JavaScript code block and no surrounding prose.",
+      "Use this exact code body:",
+      dedent`
+        async (itx) => {
+          ${workspaceReadyFunctionSource()}
+          await waitForWorkspace(itx);
+          await itx.workspace.writeFile("/project/folder/banana.txt", "banana");
+          await itx.workspace.gitAdd({ dir: "/project", filepath: "folder/banana.txt" });
+          await itx.workspace.gitCommit({
+            dir: "/project",
+            message: "add folder/banana.txt",
+            author: { name: "Agent", email: "agent@iterate.com" }
+          });
+          await itx.workspace.gitPush({ dir: "/project", remote: "origin", ref: "main" });
+        }
+      `,
+    ].join("\n"),
+  });
 
   await itx.agents.sendMessage({
     agentPath,
@@ -480,6 +534,7 @@ test("renders codemode completions as direct auto-triggering agent inputs", asyn
   const threwScriptExecutionId = `threw-${suffix}`;
 
   await itx.streams.create({ streamPath: agentPath });
+  await waitForAgentProcessorSetup({ agentPath, itx, projectId: fixture.project.id });
 
   await itx.streams.get(agentPath).append({
     event: {
@@ -725,15 +780,6 @@ itIfSlackBotToken(
         }),
       }),
     );
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "events.iterate.com/agent/llm-provider-selected",
-        payload: {
-          model: "gpt-5.5",
-          provider: "openai-ws",
-        },
-      }),
-    );
     expect(events.filter((event) => event.type.startsWith("events.iterate.com/agents/"))).toEqual(
       [],
     );
@@ -830,6 +876,16 @@ itIfSlackBotToken(
     const routedAgentPath = slackAgentPath({
       channel: slackChannelId,
       threadTs: rootMessage.ts,
+    });
+
+    await appendAgentSetup({
+      agentPath: routedAgentPath,
+      itx,
+      model: "gpt-5.5",
+      projectId: fixture.project.id,
+      provider: "openai-ws",
+      systemPrompt:
+        "For Slack messages, reply with exactly one visible Slack response through the available Slack capability.",
     });
 
     await itx.streams.get("/integrations/slack").append({
@@ -984,6 +1040,40 @@ async function readUntil(input: {
     .get(input.agentPath)
     .getEvents({ afterOffset })) as unknown as Event[];
   throw new Error(`Timed out waiting for agent stream event. Saw: ${JSON.stringify(events)}`);
+}
+
+async function waitForAgentProcessorSetup(input: {
+  agentPath: string;
+  itx: ProjectItx;
+  projectId: string;
+}) {
+  await readUntil({
+    agentPath: input.agentPath,
+    itx: input.itx,
+    afterOffset: "start",
+    predicate: (event) =>
+      event.type === "events.iterate.com/stream/subscriber-connected" &&
+      (event.payload as { subscriptionKey?: unknown }).subscriptionKey ===
+        `agent:${input.projectId}:${input.agentPath}:agent`,
+  });
+}
+
+function workspaceReadyFunctionSource() {
+  return [
+    "  async function waitForWorkspace(itx) {",
+    "    let lastError;",
+    "    for (let attempt = 0; attempt < 30; attempt += 1) {",
+    "      try {",
+    "        await itx.workspace.gitStatus({ dir: '/project' });",
+    "        return;",
+    "      } catch (error) {",
+    "        lastError = error;",
+    "        await new Promise((resolve) => setTimeout(resolve, 1000));",
+    "      }",
+    "    }",
+    "    throw lastError;",
+    "  }",
+  ].join("\n");
 }
 
 async function appendAgentSetup(input: {

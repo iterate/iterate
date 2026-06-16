@@ -1,13 +1,5 @@
 import { test } from "vitest";
-import { createAdminOsItx } from "../test-support/os-client.ts";
-
-function requireBaseUrl() {
-  const baseUrl = process.env.APP_CONFIG_BASE_URL?.trim();
-  if (!baseUrl) {
-    throw new Error("APP_CONFIG_BASE_URL is required for the OS preview smoke test.");
-  }
-  return new URL(baseUrl);
-}
+import { createAdminOsItx, requireBaseUrl as requireOsBaseUrl } from "../test-support/os-client.ts";
 
 function readProjectMcpUrlOverride() {
   const url = process.env.OS_PROJECT_MCP_URL?.trim();
@@ -130,6 +122,13 @@ function projectMcpUrlFor(input: { baseUrl: URL }) {
   );
 }
 
+function canDeriveProjectMcpUrl(input: { baseUrl: URL }) {
+  return (
+    /^os\.iterate-preview-(\d+)\.com$/.test(input.baseUrl.hostname) ||
+    input.baseUrl.hostname === "os.iterate.com"
+  );
+}
+
 async function seedProjectMcpUrl(input: { baseUrl: URL }) {
   // The preview smoke deliberately uses the normal `projects.create` itx
   // procedure (admin handle → synthetic operator org), keeping this path close
@@ -139,7 +138,7 @@ async function seedProjectMcpUrl(input: { baseUrl: URL }) {
 }
 
 test("OS preview smoke", async () => {
-  const baseUrl = requireBaseUrl();
+  const baseUrl = new URL(requireOsBaseUrl());
   const projectMcpUrlOverride = readProjectMcpUrlOverride();
 
   // Keep the dashboard checks unauthenticated, then use the admin preview hook to
@@ -161,7 +160,10 @@ test("OS preview smoke", async () => {
   }
 
   const projectMcpUrl =
-    projectMcpUrlOverride ?? (hasAdminApiSecret() ? await seedProjectMcpUrl({ baseUrl }) : null);
+    projectMcpUrlOverride ??
+    (hasAdminApiSecret() && canDeriveProjectMcpUrl({ baseUrl })
+      ? await seedProjectMcpUrl({ baseUrl })
+      : null);
 
   if (!projectMcpUrl) {
     console.log(`OS preview smoke passed for ${baseUrl.toString()} (MCP project seed skipped)`);

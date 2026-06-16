@@ -47,10 +47,7 @@ import {
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import { getReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-backend.ts";
-import {
-  getWorkspaceDurableObjectName,
-  type WorkspaceDurableObject,
-} from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
+import type { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 import { stripArtifactTokenQuery } from "~/domains/repos/artifact-token.ts";
 import {
   AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE,
@@ -64,7 +61,7 @@ import {
   getAgentDurableObjectName,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
 import { buildProjectStreamViewerUrl } from "~/lib/stream-viewer-url.ts";
-import { parseDurableObjectName } from "~/domains/durable-object-names.ts";
+import { formatDurableObjectName, parseDurableObjectName } from "~/domains/durable-object-names.ts";
 
 export {
   AGENTS_STREAM_PATH,
@@ -527,6 +524,10 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
       let cloneIsUsable = true;
       try {
         await git.status({ dir: AGENT_PROJECT_REPO_DIR });
+        cloneIsUsable = await this.projectRepoCloneIsOnDefaultBranch({
+          git,
+          repo,
+        });
       } catch {
         cloneIsUsable = false;
       }
@@ -562,6 +563,50 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
       branch: input.repo.defaultBranch,
       depth: 1,
     });
+    await this.ensureProjectRepoBranch({ git: input.git, repo: input.repo });
+  }
+
+  private async projectRepoCloneIsOnDefaultBranch(input: {
+    git: CloneProjectRepoInput["git"];
+    repo: RepoInfo;
+  }) {
+    const branch = await input.git.branch({ dir: AGENT_PROJECT_REPO_DIR, list: true });
+    return (
+      branch.current === input.repo.defaultBranch && (await this.projectRepoBranchHasHead(input))
+    );
+  }
+
+  private async ensureProjectRepoBranch(input: {
+    git: CloneProjectRepoInput["git"];
+    repo: RepoInfo;
+  }) {
+    const branch = await input.git.branch({ dir: AGENT_PROJECT_REPO_DIR, list: true });
+    const branchHasHead = await this.projectRepoBranchHasHead(input);
+
+    if (!branch.branches?.includes(input.repo.defaultBranch) || !branchHasHead) {
+      await input.git.branch({ dir: AGENT_PROJECT_REPO_DIR, name: input.repo.defaultBranch });
+    }
+    await input.git.checkout({
+      dir: AGENT_PROJECT_REPO_DIR,
+      force: true,
+      ref: input.repo.defaultBranch,
+    });
+  }
+
+  private async projectRepoBranchHasHead(input: {
+    git: CloneProjectRepoInput["git"];
+    repo: RepoInfo;
+  }) {
+    try {
+      const log = await input.git.log({
+        depth: 1,
+        dir: AGENT_PROJECT_REPO_DIR,
+        ref: input.repo.defaultBranch,
+      });
+      return log.length > 0;
+    } catch {
+      return false;
+    }
   }
 
   private async getOrCreateProjectRepo(params: AgentDurableObjectName): Promise<RepoInfo> {
@@ -849,7 +894,7 @@ function agentContextAddress(name: AgentDurableObjectName): CapabilityAddress {
 }
 
 function agentWorkspaceName(params: AgentDurableObjectName): string {
-  return getWorkspaceDurableObjectName({
+  return formatDurableObjectName({
     path: String(params.path),
     projectId: params.projectId,
   });

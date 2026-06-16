@@ -17,9 +17,10 @@ const projectId = "proj__test__itxsubscribe";
 /**
  * Test-only RPC surface that drives ItxStream exactly the way production
  * does: the test's callback crosses a Workers RPC boundary into this
- * entrypoint (standing in for a capnweb session / cap isolate), ItxStream
- * dup()s it and forwards it through the ctx.exports loopback into
- * StreamsBackend, whose wrapper closure is what the real Stream Durable
+ * entrypoint (standing in for a capnweb session / cap isolate). Because this
+ * harness wraps the callback before passing it on, it must retain the callback
+ * itself; ItxStream then retains that wrapper for the next ctx.exports loopback
+ * into StreamsBackend, whose wrapper closure is what the real Stream Durable
  * Object retains for live delivery.
  */
 export class ItxStreamHarness extends WorkerEntrypoint<Env> {
@@ -47,29 +48,43 @@ export class ItxStreamHarness extends WorkerEntrypoint<Env> {
       streamMaxOffset: number;
     }) => unknown,
   ) {
-    return await this.#stream(input.path).subscribe({
-      replayAfterOffset:
-        input.afterOffset === "start"
-          ? 0
-          : typeof input.afterOffset === "number"
-            ? input.afterOffset
-            : undefined,
-      events: input.events,
-      processEventBatch: (batch) =>
-        onEventBatch({
-          events: batch.events as never,
-          state: coreStateToStreamState(batch.state),
-          streamMaxOffset: batch.streamMaxOffset,
-        }),
-    });
+    const retainedOnEventBatch = retainCallback(onEventBatch);
+    try {
+      const subscription = await this.#stream(input.path).subscribe({
+        replayAfterOffset:
+          input.afterOffset === "start"
+            ? 0
+            : typeof input.afterOffset === "number"
+              ? input.afterOffset
+              : undefined,
+        events: input.events,
+        processEventBatch: (batch) =>
+          retainedOnEventBatch({
+            events: batch.events as never,
+            state: coreStateToStreamState(batch.state),
+            streamMaxOffset: batch.streamMaxOffset,
+          }),
+      });
+      return withCallbackRelease(subscription, retainedOnEventBatch);
+    } catch (error) {
+      retainedOnEventBatch[Symbol.dispose]?.();
+      throw error;
+    }
   }
 
   /** The state-only sugar, end-to-end through the same capability loopback. */
   async onStateChange(input: { path: string }, onState: (state: StreamState) => unknown) {
-    return await this.#stream(input.path).subscribe({
-      events: false,
-      processEventBatch: (batch) => onState(coreStateToStreamState(batch.state)),
-    });
+    const retainedOnState = retainCallback(onState);
+    try {
+      const subscription = await this.#stream(input.path).subscribe({
+        events: false,
+        processEventBatch: (batch) => retainedOnState(coreStateToStreamState(batch.state)),
+      });
+      return withCallbackRelease(subscription, retainedOnState);
+    } catch (error) {
+      retainedOnState[Symbol.dispose]?.();
+      throw error;
+    }
   }
 
   /**
@@ -114,3 +129,31 @@ export default {
     return new Response("itx stream subscribe test worker");
   },
 } satisfies ExportedHandler<Env>;
+
+function retainCallback<T extends (...args: never[]) => unknown>(
+  callback: T,
+): T & Partial<Disposable> {
+  return ((callback as { dup?(): T & Partial<Disposable> }).dup?.() ?? callback) as T &
+    Partial<Disposable>;
+}
+
+function withCallbackRelease(
+  subscription: { unsubscribe(): void | Promise<void> },
+  callback: Partial<Disposable>,
+): { unsubscribe(): Promise<void> } {
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    callback[Symbol.dispose]?.();
+  };
+  return {
+    async unsubscribe() {
+      try {
+        await subscription.unsubscribe();
+      } finally {
+        release();
+      }
+    },
+  };
+}

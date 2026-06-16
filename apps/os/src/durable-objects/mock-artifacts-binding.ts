@@ -3,6 +3,7 @@ import {
   AgentDurableObject,
   type CloneProjectRepoInput,
 } from "~/domains/agents/durable-objects/agent-durable-object.ts";
+import { ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME } from "~/domains/repos/project-repo.ts";
 import type { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 
 const AGENT_PROJECT_REPO_DIR = "/project";
@@ -75,7 +76,10 @@ export class MockArtifactAgentDurableObject extends AgentDurableObject {
   }
 }
 
-mockArtifactRepos.set("iterate-config-base", new MockArtifactRepo("iterate-config-base"));
+mockArtifactRepos.set(
+  ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME,
+  new MockArtifactRepo(ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME),
+);
 
 async function prepareMockProjectRepoWorkspace(input: {
   git: Pick<

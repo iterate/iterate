@@ -22,7 +22,7 @@ import {
 import { CoreProcessorContract } from "~/domains/streams/engine/processors/core/contract.ts";
 import { ItxContract } from "~/itx/contract.ts";
 
-export const DEFAULT_WORKERS_AI_AGENT_MODEL = "@cf/moonshotai/kimi-k2.6";
+export const DEFAULT_WORKERS_AI_AGENT_MODEL = "@cf/moonshotai/kimi-k2.7-code";
 export const DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS = 1000;
 
 export const AgentProcessorContract = defineProcessorContract({

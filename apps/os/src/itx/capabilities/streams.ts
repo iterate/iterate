@@ -201,8 +201,21 @@ export class ItxStream extends RpcTarget {
   }
 
   async subscribe(input: Parameters<StreamRpc["subscribe"]>[0]): Promise<ItxStreamSubscription> {
-    const handle = await this.client().subscribe(input as never);
-    return new ItxStreamSubscription(handle);
+    const processEventBatch = input.processEventBatch;
+    const retainedProcessEventBatch =
+      (processEventBatch as { dup?(): typeof processEventBatch }).dup?.() ?? processEventBatch;
+    try {
+      const handle = await this.client().subscribe({
+        ...input,
+        processEventBatch: retainedProcessEventBatch,
+      } as never);
+      return new ItxStreamSubscription(handle, () => {
+        (retainedProcessEventBatch as Partial<Disposable>)[Symbol.dispose]?.();
+      });
+    } catch (error) {
+      (retainedProcessEventBatch as Partial<Disposable>)[Symbol.dispose]?.();
+      throw error;
+    }
   }
 
   private client(): StreamsClient {
@@ -219,11 +232,18 @@ export class ItxStream extends RpcTarget {
 
 /** Disposer for ItxStream.subscribe — callable from any execution mode. */
 export class ItxStreamSubscription extends RpcTarget {
-  constructor(private readonly handle: { unsubscribe(): void }) {
+  constructor(
+    private readonly handle: { unsubscribe(): void },
+    private readonly release: () => void = () => {},
+  ) {
     super();
   }
 
-  unsubscribe() {
-    this.handle.unsubscribe();
+  async unsubscribe() {
+    try {
+      await Promise.resolve((this.handle.unsubscribe as () => unknown)());
+    } finally {
+      this.release();
+    }
   }
 }

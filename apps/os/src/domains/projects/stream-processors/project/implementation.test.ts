@@ -8,13 +8,6 @@ vi.mock("~/domains/repos/entrypoints/repo-capability.ts", () => ({
   }),
 }));
 
-vi.mock("~/domains/secrets/entrypoints/secrets-capability.ts", () => ({
-  getSecretsCapability: () => ({
-    getSecretSummaryByKeyOrNull: async () => null,
-    setSecret: async () => undefined,
-  }),
-}));
-
 vi.mock("~/domains/slack/durable-objects/slack-agent-durable-object.ts", () => ({
   getSlackAgentDurableObjectName: (input: { path: string; projectId: string }) =>
     `${input.projectId}:${input.path}`,

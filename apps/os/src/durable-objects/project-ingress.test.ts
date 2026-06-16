@@ -1,9 +1,8 @@
 import { SELF, env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import {
-  EXAMPLE_EGRESS_SECRET_KEY,
-  EXAMPLE_EGRESS_SECRET_MATERIAL,
-} from "~/domains/secrets/example-secret.ts";
+import { PROJECT_REPO_PATH } from "~/domains/repos/project-repo.ts";
+import { repoArtifactName } from "~/domains/repos/repo-artifact-name.ts";
+import { EXAMPLE_EGRESS_SECRET_KEY } from "~/domains/secrets/example-secret.ts";
 import { decideIngressRoute } from "~/workers/shared/router.ts";
 
 afterEach(() => {
@@ -481,8 +480,8 @@ describe("Project ingress routing", () => {
       .first();
     expect(evilRow).toBeNull();
 
-    // Creation side effects (the processor's create-requested steps) have
-    // completed once phase is "ready" — the example secret is one of them.
+    // Project creation no longer seeds example secrets. Secrets are domain
+    // facts that tests and callers append explicitly when they need them.
     const exampleSecret = await env.DB.prepare(
       `SELECT key, material
        FROM project_secrets
@@ -491,10 +490,7 @@ describe("Project ingress routing", () => {
     )
       .bind("proj__local__test", EXAMPLE_EGRESS_SECRET_KEY)
       .first<{ key: string; material: string }>();
-    expect(exampleSecret).toEqual({
-      key: EXAMPLE_EGRESS_SECRET_KEY,
-      material: EXAMPLE_EGRESS_SECRET_MATERIAL,
-    });
+    expect(exampleSecret).toBeNull();
 
     const repoResponse = await SELF.fetch("https://os.iterate.localhost/__test/project-repo");
     expect(repoResponse.ok).toBe(true);
@@ -505,14 +501,18 @@ describe("Project ingress routing", () => {
       };
       token: string;
     };
+    const artifactRemote = `https://artifacts.example.test/${repoArtifactName({
+      projectId: "proj__local__test",
+      path: PROJECT_REPO_PATH,
+    })}.git`;
     expect(repo).toMatchObject({
       defaultBranch: "main",
+      path: PROJECT_REPO_PATH,
       git: expect.objectContaining({
         cloneCommand: expect.stringContaining("git -c http.extraHeader="),
-        remote: "https://artifacts.example.test/proj__local__test--project.git",
+        remote: artifactRemote,
       }),
-      remote: "https://artifacts.example.test/proj__local__test--project.git",
-      slug: "project",
+      remote: artifactRemote,
       token: expect.stringContaining("mock-write-"),
     });
     expect(repo.token).toContain("?expires=");

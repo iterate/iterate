@@ -440,7 +440,7 @@ const [
     entrypoint: "./src/workers/workspace.ts",
     // @cloudflare/shell needs Node APIs.
     compatibilityFlags: ["nodejs_compat"],
-    bindings: { DO_CATALOG: db, WORKSPACE: workspace },
+    bindings: { DO_CATALOG: db, STREAM: stream, WORKSPACE: workspace },
   }),
   osWorker("slackAgent", {
     entrypoint: "./src/workers/slack-agent.ts",

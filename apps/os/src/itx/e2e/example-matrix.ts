@@ -6,8 +6,8 @@
 //   node            AsyncFunction over a Cap'n Web stub in this process
 //   cli             `iterate-app-cli itx run -e …` (a real spawned CLI)
 //   dynamic-worker  POST /api/itx/run with the body wrapped as a function
-//   config-worker   the body baked into the project's repo
-//                   worker.js, invoked via itx.worker (env.ITERATE.context)
+//   config-worker   the body baked into the project's repo worker.js, exposed
+//                   as a project source capability (env.ITERATE.context)
 
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -52,6 +52,8 @@ export async function runExampleCode(
 const LOADER_CONTENTION_MESSAGE = "Too many concurrent dynamic workers";
 const CONFIG_WORKER_RPC_DISCONNECT_MESSAGE = "Network connection lost.";
 const LOADER_CONTENTION_BACKOFF_MS = [2_000, 5_000, 10_000];
+const PROJECT_WORKER_LATEST_PROBE_WINDOW_MS = 10_000;
+const MATRIX_WORKER_CAPABILITY = "itxMatrixWorker";
 
 async function retryOnWorkerStartupContention<T>(
   runtime: MatrixRuntime,
@@ -150,17 +152,25 @@ async function runInConfigWorker(input: {
   if (!input.id) throw new Error("config-worker runs are invoked by example id.");
   using itx = connectGlobal();
   using projectItx = await itx.projects.get(input.projectId);
-  const worker = (projectItx as never as Record<string, any>).worker;
-  return await worker.runItxExample({ id: input.id, vars: input.vars });
+  const worker = (projectItx as never as Record<string, any>)[MATRIX_WORKER_CAPABILITY];
+  const result = JSON.parse(
+    (await worker.runItxExample({ id: input.id, vars: input.vars })) as string,
+  );
+  if (isConfigWorkerErrorResult(result)) {
+    throw new Error(
+      `config-worker example failed: ${result.error.name}: ${result.error.message}\n${result.error.stack}`,
+    );
+  }
+  return (result as { value: unknown }).value;
 }
 
 /**
  * The project-repo worker.js for the matrix project: every config-worker
  * example baked in as `async ({ itx, vars }) => { <body> }`, dispatched by id
- * through ONE exported method. `itx.worker.runItxExample(...)` reaches it via
- * the Project DO's path replay, and the script's handle is the config
- * worker's own env.ITERATE.context — the same project-scoped itx every other
- * runtime connects to from outside.
+ * through ONE exported method. The harness provides worker.js as an explicit
+ * source capability and calls `runItxExample(...)`; the script's handle is the
+ * config worker's own env.ITERATE.context — the same project-scoped itx every
+ * other runtime connects to from outside.
  */
 export function configWorkerRunnerSource(examples: ItxExample[]): string {
   const scripts = examples
@@ -183,11 +193,33 @@ export default class extends WorkerEntrypoint {
   async runItxExample({ id, vars }) {
     const script = scripts[id];
     if (!script) throw new Error("unknown example: " + id);
-    const itx = await this.env.ITERATE.context;
-    return await script({ itx, vars: vars ?? {} });
+    try {
+      const itx = await this.env.ITERATE.context;
+      return JSON.stringify({ value: await script({ itx, vars: vars ?? {} }) });
+    } catch (error) {
+      return JSON.stringify({
+        error: {
+          message: error instanceof Error ? error.message : String(error),
+          name: error instanceof Error ? error.name : "Error",
+          stack: error instanceof Error ? error.stack : "",
+        },
+      });
+    }
   }
 }
 `;
+}
+
+function isConfigWorkerErrorResult(
+  result: unknown,
+): result is { error: { message: string; name: string; stack: string } } {
+  return (
+    typeof result === "object" &&
+    result !== null &&
+    "error" in result &&
+    typeof (result as { error?: unknown }).error === "object" &&
+    (result as { error?: unknown }).error !== null
+  );
 }
 
 /**
@@ -201,6 +233,10 @@ export async function pushProjectRepoFiles(input: {
   projectId: string;
   projectSlug: string;
 }): Promise<void> {
+  using itx = connectGlobal();
+  using projectItx = await itx.projects.get(input.projectId);
+  await waitForProjectReady(projectItx);
+
   const pushScript = async ({
     itx,
     vars,
@@ -247,6 +283,55 @@ export async function pushProjectRepoFiles(input: {
   });
   const body = (await response.json()) as { error?: string; result?: unknown };
   if (!response.ok) throw new Error(`config worker push failed: ${body.error}`);
+  const repo = await (
+    projectItx as never as { repos: { get(input: { path: string }): unknown } }
+  ).repos.get({ path: "/repos/project" });
+  const readResult = await (
+    repo as { readFiles(input: { paths: string[] }): Promise<unknown> }
+  ).readFiles({
+    paths: Object.keys(input.files),
+  });
+  const files = (readResult as { files?: Array<{ content?: unknown; path: string }> }).files ?? [];
+  for (const path of Object.keys(input.files)) {
+    const file = (files as Array<{ content?: unknown; path: string }>).find(
+      (item) => item.path === path,
+    );
+    if (file?.content !== input.files[path]) {
+      throw new Error(`config worker push did not persist ${path}: ${JSON.stringify(files)}`);
+    }
+  }
+  await projectItx.provideCapability({
+    name: MATRIX_WORKER_CAPABILITY,
+    capability: {
+      type: "rpc",
+      worker: {
+        type: "source",
+        source: {
+          bundle: {},
+          commit: "latest",
+          path: "worker.js",
+          repoPath: "/repos/project",
+          type: "repo",
+        },
+      },
+    },
+  });
+  // Source dials intentionally use a short "latest" probe window. The matrix
+  // immediately calls the just-pushed worker, so wait once here rather than
+  // making every config-worker example race the stale key.
+  await new Promise((resolve) => setTimeout(resolve, PROJECT_WORKER_LATEST_PROBE_WINDOW_MS + 250));
+}
+
+async function waitForProjectReady(projectItx: unknown) {
+  let snapshot: unknown;
+  for (let attempt = 0; attempt < 90; attempt += 1) {
+    const project = (projectItx as { project: { processor: { snapshot(): Promise<unknown> } } })
+      .project;
+    snapshot = await project.processor.snapshot();
+    if ((snapshot as { state?: { phase?: unknown } }).state?.phase === "ready") return;
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  throw new Error(`Timed out waiting for create-completed: ${JSON.stringify(snapshot)}`);
 }
 
 function matrixAuthHeaders() {

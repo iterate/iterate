@@ -1,11 +1,11 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import {
   type CloudflareShellState,
-  getWorkspaceDurableObjectName,
   type WorkspaceDurableObject,
 } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 import { replayPathCall } from "~/itx/path-proxy.ts";
 import type { PathCall } from "~/itx/itx.ts";
+import { formatDurableObjectName } from "~/domains/durable-object-names.ts";
 
 type WorkspaceCapabilityEnv = {
   WORKSPACE?: DurableObjectNamespace<WorkspaceDurableObject>;
@@ -58,7 +58,8 @@ export class WorkspaceCapability extends WorkerEntrypoint<
     return await this.#callGit("status", input);
   }
 
-  async readFile(path: string) {
+  async readFile(input: string | { path: string }) {
+    const path = workspaceFilePath(input);
     const state = await (await this.workspace()).cloudflareShellState();
     return await callMethod({
       args: [path],
@@ -68,10 +69,11 @@ export class WorkspaceCapability extends WorkerEntrypoint<
     });
   }
 
-  async writeFile(path: string, content: string) {
+  async writeFile(pathOrInput: string | { content: string; path: string }, content?: string) {
+    const input = workspaceFileWrite(pathOrInput, content);
     const state = await (await this.workspace()).cloudflareShellState();
     return await callMethod({
-      args: [path, content],
+      args: [input.path, input.content],
       method: "writeFile",
       targetName: "itx.workspace",
       target: state as {},
@@ -80,7 +82,7 @@ export class WorkspaceCapability extends WorkerEntrypoint<
 
   private async workspace(): Promise<WorkspaceRpcStub> {
     const namespace = this.requireWorkspaceNamespace();
-    const name = getWorkspaceDurableObjectName(this.workspaceName());
+    const name = formatDurableObjectName(this.workspaceName());
     return namespace.getByName(name) as unknown as WorkspaceRpcStub;
   }
 
@@ -126,4 +128,20 @@ async function callMethod(input: {
   }
 
   return await fn(...input.args);
+}
+
+function workspaceFilePath(input: string | { path: string }) {
+  if (typeof input === "string") return input;
+  return input.path;
+}
+
+function workspaceFileWrite(
+  pathOrInput: string | { content: string; path: string },
+  content: string | undefined,
+) {
+  if (typeof pathOrInput !== "string") return pathOrInput;
+  if (content === undefined) {
+    throw new Error("itx.workspace.writeFile(path, content) requires content.");
+  }
+  return { path: pathOrInput, content };
 }
