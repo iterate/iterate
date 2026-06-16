@@ -14,7 +14,10 @@ export async function withStreamConnectionFromBrowser(args: {
     error: string | undefined,
   ) => void;
 }): Promise<StreamConnection> {
-  const browserUrl = new URL(args.url, browserLocationHref());
+  const browserUrl = new URL(
+    args.url,
+    typeof window === "undefined" ? "http://localhost/" : window.location.href,
+  );
   const webSocket = new WebSocket(toWebSocketUrl(browserUrl));
   args.onConnectionStatusChange?.("connecting", undefined);
   webSocket.addEventListener("open", () => args.onConnectionStatusChange?.("connected", undefined));
@@ -30,10 +33,6 @@ export async function withStreamConnectionFromBrowser(args: {
     args.onConnectionStatusChange?.("error", "WebSocket error"),
   );
   return streamConnectionFromWebSocket(webSocket);
-}
-
-function browserLocationHref() {
-  return typeof window === "undefined" ? "http://localhost/" : window.location.href;
 }
 
 export const DEFAULT_STREAM_NAMESPACE = "default";

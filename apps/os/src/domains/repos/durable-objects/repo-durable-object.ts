@@ -513,6 +513,7 @@ type RepoProcessorRuntimeState = {
   reducedThroughOffset: number;
 };
 
+/** Subscription coordinate used by the repo processor within a project stream. */
 function repoProcessorSubscriptionKey(input: RepoStructuredName) {
   return `repo:${input.projectId}:${input.repoSlug}`;
 }

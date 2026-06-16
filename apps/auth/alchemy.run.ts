@@ -58,8 +58,6 @@ const AlchemyEnv = z.object({
 const alchemyEnv = AlchemyEnv.parse(process.env);
 const publicUrl = alchemyEnv.VITE_PUBLIC_URL ?? alchemyEnv.VITE_AUTH_APP_ORIGIN;
 
-const stateStore = (scope: Scope) =>
-  scope.local ? new SQLiteStateStore(scope, { engine: "libsql" }) : new CloudflareStateStore(scope);
 const primaryUrl = alchemyEnv.WORKER_ROUTES[0]
   ? `https://${alchemyEnv.WORKER_ROUTES[0]}`
   : undefined;
@@ -69,7 +67,10 @@ const app = await alchemy(APP_NAME, {
   stage: alchemyEnv.ALCHEMY_STAGE,
   ...(alchemyEnv.ALCHEMY_LOCAL ? { local: true } : {}),
   adopt: true,
-  stateStore,
+  stateStore: (scope: Scope) =>
+    scope.local
+      ? new SQLiteStateStore(scope, { engine: "libsql" })
+      : new CloudflareStateStore(scope),
 });
 
 const workerName = slugify(`${APP_NAME}-${app.stage}`);

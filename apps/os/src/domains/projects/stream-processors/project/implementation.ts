@@ -145,7 +145,7 @@ export class ProjectProcessor extends StreamProcessor<
     const { event, state } = args;
     if (event.type === "events.iterate.com/stream/child-stream-created") {
       const childPath = StreamPath.safeParse(event.payload.childPath);
-      if (childPath.success && isAgentStreamPath(childPath.data)) {
+      if (childPath.success && childPath.data.startsWith("/agents/")) {
         await this.#ensureAgentStreamSetup({
           agentPath: childPath.data,
           projectId: this.deps.projectId(),
@@ -376,10 +376,6 @@ export class ProjectProcessor extends StreamProcessor<
       ],
     });
   }
-}
-
-function isAgentStreamPath(path: string) {
-  return path.startsWith("/agents/") && path !== AGENTS_STREAM_PATH;
 }
 
 function isSlackAgentPath(agentPath: string) {

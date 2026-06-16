@@ -25,6 +25,7 @@ import { spendCircuitBreakerToken } from "./processors/circuit-breaker/contract.
 
 const iso = (ms = 0) => new Date(ms).toISOString();
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+/** Minimal stream context mock; leaving it named avoids contextual typing of the no-op methods. */
 const iterateContext = () => ({ stream: { append() {}, appendBatch() {} } });
 
 // A minimal counting processor whose batch hook can be made to throw once.
@@ -179,11 +180,10 @@ function fakeStream() {
     },
   };
 
-  // External producer: append a user event to the stream (drives delivery).
-  const produce = (input: StreamEventInput) => push(input);
   return {
     stream,
-    produce,
+    // External producer: append a user event to the stream (drives delivery).
+    produce: (input: StreamEventInput) => push(input),
     hostAppends,
     failNextSubscribes: (count: number) => {
       subscribeFailures = count;

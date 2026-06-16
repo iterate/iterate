@@ -353,7 +353,9 @@ function activitySummary(activity: AgentUiActivity): string {
   );
   const interruptedWithPartialResponse = activity.steps.some(
     (step) =>
-      step.kind === "llm" && step.outcome === "cancelled" && llmStepHasPartialResponse(step),
+      step.kind === "llm" &&
+      step.outcome === "cancelled" &&
+      (step.thinkingText !== "" || step.responseText !== ""),
   );
   const parts: string[] = [];
   if (codeCount > 0) parts.push(`Ran code ${codeCount}×`);
@@ -432,10 +434,6 @@ function stepMeta(step: AgentUiStep): string {
   if (step.durationMs != null) parts.push(formatSeconds(step.durationMs));
   if (step.outcome === "failed") parts.push("failed");
   return parts.join(" · ");
-}
-
-function llmStepHasPartialResponse(step: AgentUiLlmStep): boolean {
-  return step.thinkingText !== "" || step.responseText !== "";
 }
 
 function LlmStepDetail({ step }: { step: AgentUiLlmStep }) {

@@ -344,6 +344,7 @@ function isLlmish(entry: AgentUiPresenceEntry): boolean {
   return ["agent", "openai-ws", "cloudflare-ai", "itx"].includes(slug);
 }
 
+/** Deterministic fake RTT for preview data; stable per subscription but still visibly live. */
 function fakeRtt(subscriptionKey: string, rttNow: number): number {
   return 14 + (hashString(subscriptionKey) % 38) + (rttNow % 9);
 }

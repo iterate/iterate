@@ -119,7 +119,7 @@ export function EventsStreamView({
   errorLabel?: string;
   className?: string;
 }) {
-  const feedElementTypes = getElementTypes(viewState.slots.feed);
+  const feedElementTypes = [...new Set(viewState.slots.feed.map((element) => element.type))].sort();
   const visibleFeedElements = filterElementsByElementType({
     elements: viewState.slots.feed,
     hiddenElementTypes,
@@ -570,7 +570,7 @@ function ActivityHeaderElement({ element }: { element: EventsStreamActivityEleme
 
 function RawJsonDump({ element }: { element: EventsStreamRawJsonDumpElement }) {
   const events = useMemo(
-    () => orderRawJsonDumpEventsForDisplay(element.props.events),
+    () => element.props.events.map(orderRawJsonDumpEventForDisplay),
     [element.props.events],
   );
 
@@ -604,12 +604,6 @@ const RAW_JSON_DUMP_EVENT_ORDERED_KEYS = new Set<string>([
   ...RAW_JSON_DUMP_EVENT_PREFIX_KEY_ORDER,
   ...RAW_JSON_DUMP_EVENT_SUFFIX_KEY_ORDER,
 ]);
-
-function orderRawJsonDumpEventsForDisplay(
-  events: readonly Event[],
-): Array<Record<string, unknown>> {
-  return events.map(orderRawJsonDumpEventForDisplay);
-}
 
 function orderRawJsonDumpEventForDisplay(event: Event): Record<string, unknown> {
   const eventRecord = event as Record<string, unknown>;
@@ -973,12 +967,6 @@ function getRawEventSummaries(
   return elements
     .flatMap((element) => (element.type === "grouped-raw-event" ? element.props.events : []))
     .sort((a, b) => a.offset - b.offset);
-}
-
-function getElementTypes(
-  elements: readonly EventsStreamBuiltInElement[],
-): EventsStreamElementType[] {
-  return [...new Set(elements.map((element) => element.type))].sort();
 }
 
 function filterElementsByElementType({

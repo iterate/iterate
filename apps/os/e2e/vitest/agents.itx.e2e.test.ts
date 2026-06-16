@@ -1002,7 +1002,7 @@ async function readUntil(input: {
       .get(input.agentPath)
       .getEvents({ afterOffset })) as unknown as Event[];
     if (events.some(input.predicate)) return events;
-    await delay(1_000);
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
 
   const events = (await input.itx.streams
@@ -1139,8 +1139,4 @@ function maxGapAfter(events: readonly Event[], afterOffset: number) {
 
 function uniqueSuffix() {
   return `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
-}
-
-async function delay(ms: number) {
-  await new Promise((resolve) => setTimeout(resolve, ms));
 }

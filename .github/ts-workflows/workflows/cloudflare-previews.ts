@@ -24,15 +24,16 @@ function createPreviewCommand(input: {
   includeWorkflowRunUrl?: boolean;
   prefix?: string;
 }) {
-  const argumentsWithLineContinuations = addLineContinuations(
-    createCommonPreviewArguments({
-      includePullRequestBaseSha: input.includePullRequestBaseSha ?? false,
-      includePullRequestHeadRefName: input.includePullRequestHeadRefName ?? false,
-      includePullRequestHeadSha: input.includePullRequestHeadSha ?? false,
-      includePullRequestIsFork: input.includePullRequestIsFork ?? false,
-      includeSemaphoreBaseUrl: input.includeSemaphoreBaseUrl ?? false,
-      includeWorkflowRunUrl: input.includeWorkflowRunUrl ?? false,
-    }),
+  const lines = createCommonPreviewArguments({
+    includePullRequestBaseSha: input.includePullRequestBaseSha ?? false,
+    includePullRequestHeadRefName: input.includePullRequestHeadRefName ?? false,
+    includePullRequestHeadSha: input.includePullRequestHeadSha ?? false,
+    includePullRequestIsFork: input.includePullRequestIsFork ?? false,
+    includeSemaphoreBaseUrl: input.includeSemaphoreBaseUrl ?? false,
+    includeWorkflowRunUrl: input.includeWorkflowRunUrl ?? false,
+  });
+  const argumentsWithLineContinuations = lines.map((line, index) =>
+    index === lines.length - 1 ? `  ${line}` : `  ${line} \\`,
   );
 
   return [
@@ -40,10 +41,6 @@ function createPreviewCommand(input: {
     `${input.prefix ?? ""}pnpm preview ${input.command} \\`,
     ...argumentsWithLineContinuations,
   ].join("\n");
-}
-
-function addLineContinuations(lines: string[]) {
-  return lines.map((line, index) => (index === lines.length - 1 ? `  ${line}` : `  ${line} \\`));
 }
 
 function createCommonPreviewArguments(input: {

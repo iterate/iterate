@@ -4,9 +4,5 @@ export const Route = createFileRoute("/sign-up/$")({
   beforeLoad: () => {
     throw redirect({ href: "/api/iterate-auth/login" });
   },
-  component: SignUpRoute,
+  component: () => <main className="grid min-h-svh place-items-center bg-background p-4" />,
 });
-
-function SignUpRoute() {
-  return <main className="grid min-h-svh place-items-center bg-background p-4" />;
-}

@@ -173,7 +173,9 @@ function WorkspaceInventoryPage() {
             {selectedOrganization ? (
               <OrganizationDetail
                 organization={selectedOrganization}
-                canManage={canManageOrganization(selectedOrganization)}
+                canManage={
+                  selectedOrganization.role === "owner" || selectedOrganization.role === "admin"
+                }
                 onCreateProject={() =>
                   setProjectDialog({
                     organizationSlug: selectedOrganization.slug,
@@ -572,8 +574,4 @@ function DeleteProjectDialog(props: {
       </AlertDialogContent>
     </AlertDialog>
   );
-}
-
-function canManageOrganization(organization: Organization) {
-  return organization.role === "owner" || organization.role === "admin";
 }

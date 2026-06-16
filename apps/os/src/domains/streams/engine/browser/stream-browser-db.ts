@@ -349,7 +349,7 @@ export class StreamBrowserDatabase implements Disposable {
       const data = await this.exec(entry.sql, entry.params);
       next = { data, status: "ok", error: undefined };
     } catch (error) {
-      if (isMissingTableError(error)) {
+      if (error instanceof Error && error.message.includes("no such table")) {
         // A view's table may not exist until its processor's first write creates it. Treat
         // that as an empty result (count 0 / no rows) rather than a surfaced error.
         next = { data: emptyTableRows(entry.sql), status: "ok", error: undefined };
@@ -439,10 +439,12 @@ export class StreamBrowserDatabase implements Disposable {
 // the mirror is a cache and will be replayed from the durable stream.
 const DATABASE_CACHE_VERSION = "v3";
 
+/** OPFS directory path for the cached SQLite mirror of one stream. */
 function databasePathFor(namespace: string, streamPath: string) {
   return `${encodeURIComponent(namespace)}/${DATABASE_CACHE_VERSION}/${databaseSlugForStreamPath(streamPath)}.sqlite3`;
 }
 
+/** Download filename paired with databasePathFor's namespace/version/stream identity. */
 function downloadFilenameFor(namespace: string, streamPath: string) {
   return `${encodeURIComponent(namespace)}__${DATABASE_CACHE_VERSION}-${databaseSlugForStreamPath(streamPath)}.sqlite3`;
 }
@@ -476,10 +478,6 @@ function isSqlValue(value: unknown): value is SqlValue {
     value instanceof Uint8Array ||
     (Array.isArray(value) && value.every((item) => typeof item === "number"))
   );
-}
-
-function isMissingTableError(error: unknown) {
-  return error instanceof Error && error.message.includes("no such table");
 }
 
 /**

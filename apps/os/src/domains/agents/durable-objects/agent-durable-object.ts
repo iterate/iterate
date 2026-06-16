@@ -871,6 +871,7 @@ function agentContextRef(name: AgentDurableObjectStructuredName): string {
   return formatContextRef({ namespace: name.projectId, path: String(name.agentPath) });
 }
 
+/** Address form of the same agent context coordinate used by agentContextRef. */
 function agentContextAddress(name: AgentDurableObjectStructuredName): CapabilityAddress {
   return contextAddress(agentContextRef(name));
 }

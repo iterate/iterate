@@ -684,10 +684,12 @@ type CapabilityEnv = {
   WORKSPACE: DurableObjectNamespace<WorkspaceDurableObject>;
 };
 
+/** Sketch helper: resolve a user-facing slug into the platform project id shape. */
 function resolveProjectId(projectIdOrSlug: string) {
   return projectIdOrSlug.startsWith("proj_") ? projectIdOrSlug : `proj_${projectIdOrSlug}`;
 }
 
+/** Sketch helper: stand in for the product's real id allocation. */
 function allocateProjectId() {
   return "proj_generated";
 }
@@ -697,6 +699,7 @@ function createProject(input: {
   projectId: string;
   slug: string;
 }) {
+  // Sketch only: a real implementation would persist the project record here.
   void input;
 }
 

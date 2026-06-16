@@ -205,7 +205,7 @@ function StreamTerminalApp() {
         }
       } catch (error) {
         if (abortController.signal.aborted) return;
-        if (isUnauthorizedError(error)) {
+        if (error instanceof Error && /\b(UNAUTHORIZED|401)\b/i.test(error.message)) {
           setStatus("refreshing auth");
           try {
             if (await osClient.refreshAuth()) {
@@ -1051,7 +1051,7 @@ function createOAuthAuthProvider(initialSession: OAuthRuntimeSession, cookie: st
   let lastForcedRefreshAt = 0;
 
   const refresh = async (force: boolean) => {
-    if (!canRefreshOAuthSession(session)) return false;
+    if (!(session.refreshToken && session.clientId && session.authBaseUrl)) return false;
     if (force) {
       const now = Date.now();
       if (now - lastForcedRefreshAt < OAUTH_FORCE_REFRESH_THROTTLE_MS) return false;
@@ -1087,10 +1087,6 @@ function authHeaders(input: { bearerToken: string | undefined; cookie: string | 
     ...(input.bearerToken ? { Authorization: `Bearer ${input.bearerToken}` } : {}),
     ...(input.cookie ? { Cookie: input.cookie } : {}),
   };
-}
-
-function canRefreshOAuthSession(session: OAuthRuntimeSession) {
-  return Boolean(session.refreshToken && session.clientId && session.authBaseUrl);
 }
 
 function sessionNeedsRefresh(session: OAuthRuntimeSession) {
@@ -1166,8 +1162,4 @@ function readEnv(name: string) {
   if (value == null) return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function isUnauthorizedError(error: unknown) {
-  return error instanceof Error && /\b(UNAUTHORIZED|401)\b/i.test(error.message);
 }

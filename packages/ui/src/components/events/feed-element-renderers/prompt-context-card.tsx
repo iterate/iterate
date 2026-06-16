@@ -15,7 +15,7 @@ import { cn } from "@iterate-com/ui/lib/utils";
 
 export function PromptContextCard({ element }: { element: EventsStreamPromptContextElement }) {
   const sourceLabel = element.props.source == null ? null : `from ${element.props.source}`;
-  const policyLabel = formatLlmRequestPolicy(element.props.llmRequestPolicy);
+  const policyLabel = element.props.llmRequestPolicy.behaviour;
   const policyDescription = describeLlmRequestPolicy(element.props.llmRequestPolicy);
   const canTriggerRequest = element.props.llmRequestPolicy.behaviour !== "dont-trigger-request";
 
@@ -56,12 +56,6 @@ export function PromptContextCard({ element }: { element: EventsStreamPromptCont
       </MessageContent>
     </Message>
   );
-}
-
-function formatLlmRequestPolicy(
-  policy: EventsStreamPromptContextElement["props"]["llmRequestPolicy"],
-) {
-  return policy.behaviour;
 }
 
 function describeLlmRequestPolicy(

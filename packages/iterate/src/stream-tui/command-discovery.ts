@@ -100,7 +100,7 @@ export function suggestSlashCommands<TCommand extends SlashCommandRecord>(args: 
 }
 
 export function acceptedSlashInput(command: SlashCommandRecord) {
-  return `/${command.slash.name}${commandNeedsInput(command) ? " " : ""}`;
+  return `/${command.slash.name}${command.input?.positional?.required === true ? " " : ""}`;
 }
 
 export function formatSlashCommandLabel(command: SlashCommandRecord) {
@@ -145,10 +145,6 @@ function scoreSlashCommand(args: { command: SlashCommandRecord; query: string })
   if (fuzzyMatchRanges(slash, args.query).length > 0) return 18;
   if (fuzzyMatchRanges(title, args.query).length > 0) return 10;
   return 0;
-}
-
-function commandNeedsInput(command: SlashCommandRecord) {
-  return command.input?.positional?.required === true;
 }
 
 /**

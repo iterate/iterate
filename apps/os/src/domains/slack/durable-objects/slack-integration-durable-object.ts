@@ -166,6 +166,7 @@ export class SlackIntegrationDurableObject extends SlackIntegrationLifecycleBase
   }
 }
 
+/** Subscription coordinate for the Slack processor owned by this project's integration DO. */
 function slackIntegrationProcessorSubscriptionKey(projectId: string) {
   return `slack:${projectId}`;
 }

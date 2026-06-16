@@ -32,12 +32,17 @@ async function appendEvent(
 ) {
   return await runInDurableObject(stream, (instance) => instance.append({ event }));
 }
+
+/** Read all durable stream events without exposing test assertions to runInDurableObject plumbing. */
 async function getEvents(stream: DurableObjectStub<Stream>): Promise<StreamEvent[]> {
   return await runInDurableObject(stream, (instance) => instance.getEvents({ afterOffset: 0 }));
 }
+
 async function severProducer(stream: DurableObjectStub<Stream>) {
   await runInDurableObject(stream, (instance) => instance.runIdleTeardownNow());
 }
+
+/** Force the subscriber runner idle-disconnect path from inside the Durable Object instance. */
 async function severSubscriber(runner: DurableObjectStub<StreamProcessorRunner>) {
   await runInDurableObject(runner, (instance) => instance.runIdleDisconnectNow());
 }

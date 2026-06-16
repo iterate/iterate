@@ -63,7 +63,7 @@ function ProjectIntegrationsContent() {
   });
   const slackConnection = connections.slack;
   const googleConnection = connections.google;
-  const oauthErrorLabel = search.error ? formatOAuthError(search.error) : null;
+  const oauthErrorLabel = search.error ? search.error.replaceAll("_", " ") : null;
 
   const startSlack = useMutation({
     mutationFn: async () => {
@@ -289,10 +289,6 @@ function formatTimestamp(value: string) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(timestamp));
-}
-
-function formatOAuthError(value: string) {
-  return value.replaceAll("_", " ");
 }
 
 function countScopes(scopes: string | null, separator: "," | " ") {

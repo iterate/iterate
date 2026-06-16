@@ -231,7 +231,7 @@ export default {
         async call({ args }: { path: string[]; args: unknown[] }) {
           const request = args[0] as Request;
           return Response.json({
-            headers: headersToArrays(request.headers),
+            headers: Object.fromEntries([...request.headers].map(([key, value]) => [key, [value]])),
             url: request.url,
           });
         }
@@ -432,8 +432,4 @@ async function ensureD1Schema(db: D1Database) {
     ),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_project_secrets_key ON project_secrets (key)`),
   ]);
-}
-
-function headersToArrays(headers: Headers) {
-  return Object.fromEntries([...headers].map(([key, value]) => [key, [value]]));
 }

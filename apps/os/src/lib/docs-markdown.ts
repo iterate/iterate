@@ -36,7 +36,9 @@ export function handleDocsMarkdownFetch(input: {
       "content-signal": "ai-train=yes, search=yes, ai-input=yes",
       "content-type": "text/markdown; charset=utf-8",
       vary: "accept",
-      "x-markdown-tokens": estimateTokenCount(markdown).toString(),
+      "x-markdown-tokens": Math.ceil(
+        markdown.split(/\s+/).filter(Boolean).length * 1.35,
+      ).toString(),
     },
   });
 }
@@ -52,7 +54,7 @@ function resolveDocsMarkdownRequest(input: {
   isEventDocsHost: boolean;
   pathname: string;
 }): DocsMarkdownRequest | null {
-  const path = normalizePath(input.pathname);
+  const path = decodeURIComponent(input.pathname).replace(/^\/+|\/+$/g, "");
   const markdownPath = stripMarkdownIndexSuffix(path);
   const forceMarkdown = markdownPath !== path || path.endsWith(".md") || path.endsWith("llms.txt");
 
@@ -305,10 +307,6 @@ function stripMarkdownIndexSuffix(path: string) {
   return path;
 }
 
-function normalizePath(pathname: string) {
-  return decodeURIComponent(pathname).replace(/^\/+|\/+$/g, "");
-}
-
 function prefersMarkdown(accept: string | null) {
   const parsed = parseAccept(accept);
   if (parsed.length === 0) return false;
@@ -342,8 +340,4 @@ function bestQuality(parsed: readonly { mediaType: string; q: number }[], mediaT
   const matches = parsed.filter((item) => mediaTypes.includes(item.mediaType));
   if (matches.length === 0) return null;
   return Math.max(...matches.map((item) => item.q));
-}
-
-function estimateTokenCount(markdown: string) {
-  return Math.ceil(markdown.split(/\s+/).filter(Boolean).length * 1.35);
 }
