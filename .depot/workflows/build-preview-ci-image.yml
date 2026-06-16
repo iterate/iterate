@@ -13,7 +13,7 @@ env:
 jobs:
   build-image:
     name: Build preview CI image
-    runs-on: depot-ubuntu-latest
+    runs-on: depot-ubuntu-24.04-64
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
