@@ -45,6 +45,26 @@ tests as soon as its own dependency is ready. That lost little in the measured
 case and keeps the behavior easy to reason about: OS tests only start after the
 slot's auth and OS deployments both exist.
 
+To run the same deploy-then-test lifecycle from your machine:
+
+```bash
+doppler run --project _shared --config prd -- pnpm preview:ci <pr-number>
+```
+
+That wrapper lives at `scripts/preview/run-ci-locally.sh`. It reads the PR head
+ref, head SHA, base SHA, fork flag, and URL with `gh`, then runs the same two
+preview commands as the GitHub workflow:
+
+```bash
+pnpm preview deploy ...
+pnpm preview test ...
+```
+
+Use this when you want to reproduce the preview deployment and e2e behavior
+without waiting for GitHub Actions. Use `pnpm preview sync ...` only when you
+want the older single-command deploy-and-test helper; CI uses the explicit
+deploy step followed by the explicit test step.
+
 ## Depot GitHub Actions Runners
 
 Most workflows still run on GitHub Actions. Depot is used there as a runner
