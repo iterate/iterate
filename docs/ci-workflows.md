@@ -43,8 +43,8 @@ The preview workflow is deliberately simple:
 
 The preview script does not try to prove dependency freshness or start each app's
 tests as soon as it is individually ready. That lost little in the measured case
-and keeps the behavior easy to reason about. Ordinary OS-only changes do not
-redeploy auth; they use the existing slot auth worker.
+and keeps the behavior easy to reason about. Ordinary OS-only changes probe the
+slot's existing auth worker and only redeploy auth first if that probe fails.
 
 To run the same deploy-then-test lifecycle from your machine:
 

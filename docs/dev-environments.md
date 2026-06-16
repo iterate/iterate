@@ -254,9 +254,10 @@ Cloudflare account: `os.iterate-preview-N.com`, `auth.iterate-preview-N.com`,
 and `<proj-slug>.iterate-preview-N.app`. Slots are leased via semaphore
 (`environment-config-lease`, slugs `preview-1..9`). CI acquires a lease per PR,
 deploys the apps touched by the PR, runs e2e, and destroys the PR's deployed apps
-and releases the lease on PR close. Ordinary OS-only changes use the existing slot
-auth worker; when auth and OS are both selected, auth deploys before OS because
-OS bakes auth JWKS during deployment.
+and releases the lease on PR close. Ordinary OS-only changes probe the existing
+slot auth worker and only redeploy auth first if that probe fails; when auth and
+OS are both selected, auth deploys before OS because OS bakes auth JWKS during
+deployment.
 
 The slot's OS↔auth OAuth client credentials are **constants in Doppler**
 (`auth/preview_N` carries `AUTH_SEED_OAUTH_CLIENTS`; `os/preview_N` carries

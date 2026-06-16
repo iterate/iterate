@@ -37,6 +37,7 @@ const defaultPreviewLeaseMs = 60 * 60 * 1000;
 // returning immediately once the health endpoint is reachable.
 const defaultPreviewReadyTimeoutMs = 600_000;
 const defaultPreviewReadyUrlPath = "/api/__internal/health";
+const defaultPreviewAuthProbeTimeoutMs = 5_000;
 const defaultPreviewTestMaxAttempts = 1;
 const defaultPreviewTestRetryDelayMs = 5_000;
 const defaultPreviewAppConcurrency = 5;
@@ -184,7 +185,7 @@ export async function deployCloudflarePreviewForPullRequest(
     repositoryFullName: params.repositoryFullName,
     pullRequestNumber: params.pullRequestNumber,
   });
-  const selectedApps = await selectPreviewAppsForPullRequest({
+  let selectedApps = await selectPreviewAppsForPullRequest({
     force: params.force ?? false,
     githubToken: params.githubToken,
     previousState: current.state,
@@ -212,6 +213,13 @@ export async function deployCloudflarePreviewForPullRequest(
     ),
     semaphoreBaseUrl: params.semaphoreBaseUrl ?? defaultSemaphoreBaseUrl,
     waitMs: params.waitMs,
+  });
+  selectedApps = await includeAuthPreviewIfOsNeedsIt({
+    commandEnvironment: params.commandEnvironment,
+    dopplerConfig: environmentConfigLease.dopplerConfig,
+    repositoryRoot: params.repositoryRoot,
+    selectedApps,
+    signal: params.signal,
   });
   const leaseUpdate = await updatePreviewState(params, (state) => ({
     ...state,
@@ -818,6 +826,52 @@ export function orderPreviewDeployBatches(apps: readonly PreviewAppRuntime[]) {
   }
 
   return [apps.filter((app) => app.slug !== "os"), [os]];
+}
+
+async function includeAuthPreviewIfOsNeedsIt(input: {
+  commandEnvironment: NodeJS.ProcessEnv;
+  dopplerConfig: string;
+  repositoryRoot: string;
+  selectedApps: readonly PreviewAppRuntime[];
+  signal?: AbortSignal;
+}) {
+  const selectedSlugs = new Set(input.selectedApps.map((app) => app.slug));
+  if (!selectedSlugs.has("os") || selectedSlugs.has("auth")) {
+    return [...input.selectedApps];
+  }
+
+  const auth = cloudflarePreviewApps.auth;
+  try {
+    const authConfig = await readPreviewAppConfig({
+      app: auth,
+      commandEnvironment: input.commandEnvironment,
+      dopplerConfig: input.dopplerConfig,
+      repositoryRoot: input.repositoryRoot,
+      signal: input.signal,
+    });
+    const readiness = await waitForPreviewAppReadiness({
+      publicUrl: authConfig.baseUrl,
+      readyUrlPath: auth.previewReadyUrlPath,
+      signal: input.signal,
+      timeoutMs: defaultPreviewAuthProbeTimeoutMs,
+    });
+    if (readiness.ok) {
+      console.error("[preview] existing auth preview is ready; deploying OS without auth");
+      return [...input.selectedApps];
+    }
+
+    console.error(
+      `[preview] auth preview is not ready; deploying auth before OS: ${readiness.message}`,
+    );
+  } catch (error) {
+    console.error(
+      `[preview] auth preview probe failed; deploying auth before OS: ${formatPreviewErrorMessage(error)}`,
+    );
+  }
+
+  return Object.values(cloudflarePreviewApps).filter(
+    (app) => app.slug === "auth" || selectedSlugs.has(app.slug),
+  );
 }
 
 async function mapWithConcurrency<T, Result>(
