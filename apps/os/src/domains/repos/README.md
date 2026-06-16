@@ -154,8 +154,8 @@ write token is refreshed once automatically on an auth failure.
 ## Capability
 
 `ReposCapability` (`WorkerEntrypoint`, props `{ projectId: string }`) is the
-shared surface for oRPC and codemode. It is also exported under the alias
-`RepoCapability`. Methods:
+itx surface for repos. It is also exported under the alias `RepoCapability`.
+Methods:
 
 - `create({ slug, projectSlug? })` / `get({ slug })` — return a `RepoHandle`
   RpcTarget exposing `getInfo`, `refreshWriteToken`, `commitFiles`,
@@ -166,16 +166,15 @@ shared surface for oRPC and codemode. It is also exported under the alias
   `project` Repo.
 - `list()` — reads D1 lifecycle catalog rows by the `projectId` index, then
   filters out rows whose DO exists but was never fully created.
-- `executeCodemodeFunctionCall` — codemode adapter for the above.
+- `call(input)` — itx path-call dispatch for the methods above.
 
 Selection uses `getInitializedDoStub({ allowCreate, namespace, name })`;
 `allowCreate: false` returns `null` when no initialized Repo DO exists.
 
-Codemode exposes the capability as `ctx.repos`
-(`~/domains/codemode/example-provider-registrations.ts`). The oRPC adapters
-`os.project.repos.{list,create,get}` (`src/orpc/routers/repos.ts`) run under
-project-scope middleware, call the capability, and return serializable
-`RepoInfo` (oRPC cannot return live DO stubs).
+The project itx context exposes the capability as `itx.repos`. The repo
+dashboard routes (`src/routes/_app/projects/$projectSlug/repos`) call
+`itx.repos.list()`, `itx.repos.create(...)`, and `itx.repos.getInfo(...)`
+directly through the itx React hooks.
 
 ## The project repo
 
@@ -200,7 +199,7 @@ inferred from the Doppler config.
 ## Notes
 
 - The one-year write token is a deliberate prototype trade-off so UI and
-  codemode get a complete clone/push workflow; revisit before making Repos
+  itx get a complete clone/push workflow; revisit before making Repos
   broadly available. `refreshWriteToken` exists for recovery from expiry.
 - D1 holds the queryable Repo catalog (lifecycle rows indexed by `projectId`
   and `repoSlug`); everything else durable lives in the Repo DO and its

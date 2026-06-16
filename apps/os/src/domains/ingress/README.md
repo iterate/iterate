@@ -4,6 +4,7 @@ Ingress maps public request hostnames to one of the OS lanes:
 
 - known OS host -> app worker
 - MCP host/path -> MCP worker
+- itx capability host -> project-host worker
 - project platform/custom host -> project-host worker
 - anything else -> 404
 

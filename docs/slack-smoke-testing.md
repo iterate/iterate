@@ -14,7 +14,7 @@ The smoke test covers the OS-side production path after Slack ingress:
    `/agents/slack/<channel>/ts-<thread>`.
 4. `SlackAgentDurableObject` transcribes the Slack event into agent input.
 5. `AgentDurableObject` starts the LLM request.
-6. Codemode calls `ctx.slack.chat.postMessage`.
+6. The itx script calls `itx.slack.chat.postMessage`.
 7. A real Slack reply appears in the original thread.
 
 It does not prove Slack's Events API delivery latency unless the trigger event
@@ -57,7 +57,7 @@ doppler run --project os --config prd -- sh -c 'echo "$APP_CONFIG_BASE_URL"'
 
 1. Resolve the Slack channel ID for `#slack-agent-e2e-test` with
    `conversations.list`.
-2. Create a temporary OS project through the admin-authenticated oRPC API.
+2. Create a temporary OS project through the admin-authenticated itx CLI.
 3. Post a real root message to Slack with `chat.postMessage`. This creates the
    thread the agent will reply to.
 4. Subscribe the project's `/integrations/slack` stream to the production
@@ -71,15 +71,15 @@ doppler run --project os --config prd -- sh -c 'echo "$APP_CONFIG_BASE_URL"'
    ```
 
 7. Poll the routed Slack-agent stream until
-   `events.iterate.com/codemode/function-call-completed` appears for
-   `slack.chat.postMessage`.
+   `events.iterate.com/itx/script-execution-completed` appears for the script
+   that calls `itx.slack.chat.postMessage`.
 8. Record the wall-clock duration from appending the webhook event to the
-   completed Slack function call.
+   completed itx script execution.
 9. Inspect the routed stream for these useful timestamps:
    - `events.iterate.com/slack/webhook-received`
    - `events.iterate.com/agent/input-added`
    - `events.iterate.com/openai-ws/llm-request-started`
-   - `events.iterate.com/codemode/function-call-completed`
+   - `events.iterate.com/itx/script-execution-completed`
 
 10. Remove the temporary OS project.
 

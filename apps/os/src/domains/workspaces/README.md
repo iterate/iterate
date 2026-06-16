@@ -1,10 +1,10 @@
 # Workspaces Domain
 
-Workspaces is currently a skeletal POC codemode provider. The product concept is
+Workspaces is currently a skeletal POC itx capability. The product concept is
 not settled because OS already has Projects and Organizations.
 
-Keep `ctx.workspace` unchanged for now while using this folder to make the
-domain boundary visible.
+Keep `itx.workspace` as the singular project workspace surface while using this
+folder to make the domain boundary visible.
 
 Most durable workspace state should stay in Durable Objects where practical. D1
 is for queryable projections, routing lookup, and cross-object indexes.
