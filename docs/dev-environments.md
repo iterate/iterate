@@ -252,9 +252,11 @@ auth flows specifically, always start with a fresh profile + `cookies clear`.
 Each preview slot N is a complete, isolated stack on the dev/preview
 Cloudflare account: `os.iterate-preview-N.com`, `auth.iterate-preview-N.com`,
 and `<proj-slug>.iterate-preview-N.app`. Slots are leased via semaphore
-(`environment-config-lease`, slugs `preview-1..9`); CI acquires a lease per
-PR, deploys the slot's auth first (OS bakes its JWKS from it), then OS, runs
-e2e, and destroys + releases on PR close.
+(`environment-config-lease`, slugs `preview-1..9`). CI acquires a lease per PR,
+deploys the apps touched by the PR, runs e2e, and destroys the PR's deployed apps
+and releases the lease on PR close. Ordinary OS-only changes use the existing slot
+auth worker; when auth and OS are both selected, auth deploys before OS because
+OS bakes auth JWKS during deployment.
 
 The slot's OS↔auth OAuth client credentials are **constants in Doppler**
 (`auth/preview_N` carries `AUTH_SEED_OAUTH_CLIENTS`; `os/preview_N` carries
@@ -273,7 +275,8 @@ doppler run --project _shared --config prd -- pnpm preview status              #
 doppler run --project _shared --config prd -- pnpm preview acquire --slot 9    # lease it (3h default)
 # → prints leaseId + the matching release command
 
-# 2. Deploy (same primitive as everything else; auth first — OS bakes its JWKS from it):
+# 2. Deploy (same primitive as everything else; deploy auth first when you
+#    changed auth or need to seed a fresh slot):
 cd apps/auth && doppler run --project auth --config preview_9 -- pnpm alchemy:up
 cd ../os     && doppler run --project os   --config preview_9 -- pnpm alchemy:up
 

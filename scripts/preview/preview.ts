@@ -220,7 +220,7 @@ export async function deployCloudflarePreviewForPullRequest(
 
   let ok = true;
   let latestState = leaseUpdate.state;
-  for (const batch of batchPreviewAppsByDependencies(selectedApps)) {
+  for (const batch of orderPreviewDeployBatches(selectedApps)) {
     const entries = await mapWithConcurrency(batch, defaultPreviewAppConcurrency, async (app) => {
       return await deployPreviewAppWithStatus({
         app,
@@ -388,7 +388,7 @@ export async function cleanupCloudflarePreviewForPullRequest(
   const appsToCleanUp = (Object.keys(current.state.apps) as CloudflarePreviewAppSlugType[])
     .map((appSlug) => cloudflarePreviewApps[appSlug])
     .filter((app): app is PreviewAppRuntime => app != null);
-  const cleanupBatches = [...batchPreviewAppsByDependencies(appsToCleanUp)].reverse();
+  const cleanupBatches = [...orderPreviewDeployBatches(appsToCleanUp)].reverse();
   for (const batch of cleanupBatches) {
     const entries = await mapWithConcurrency(batch, defaultPreviewAppConcurrency, async (app) => {
       const startedAt = Date.now();
@@ -795,7 +795,7 @@ async function selectPreviewAppsForPullRequest(input: {
     }
   }
 
-  return expandPreviewDependencies([...selectedSlugs]).map((slug) => cloudflarePreviewApps[slug]);
+  return Object.values(cloudflarePreviewApps).filter((app) => selectedSlugs.has(app.slug));
 }
 
 export function selectPreviewAppsNeedingRetry(params: {
@@ -807,61 +807,17 @@ export function selectPreviewAppsNeedingRetry(params: {
     .filter((entry) => ["awaiting-tests", "deploy-failed", "tests-failed"].includes(entry.status))
     .map((entry) => CloudflarePreviewAppSlug.parse(entry.appSlug));
 
-  return expandPreviewDependencies(retrySlugs).map((slug) => cloudflarePreviewApps[slug]);
+  return Object.values(cloudflarePreviewApps).filter((app) => retrySlugs.includes(app.slug));
 }
 
-export function expandPreviewDependencies(appSlugs: readonly CloudflarePreviewAppSlugType[]) {
-  const selected = new Set(appSlugs);
-  const visit = (appSlug: CloudflarePreviewAppSlugType) => {
-    const app = cloudflarePreviewApps[appSlug];
-    for (const dependency of app.previewDependencies ?? []) {
-      if (selected.has(dependency)) {
-        continue;
-      }
-
-      selected.add(dependency);
-      visit(dependency);
-    }
-  };
-
-  for (const appSlug of appSlugs) {
-    visit(appSlug);
+export function orderPreviewDeployBatches(apps: readonly PreviewAppRuntime[]) {
+  const os = apps.find((app) => app.slug === "os");
+  const auth = apps.find((app) => app.slug === "auth");
+  if (!os || !auth) {
+    return apps.length > 0 ? [[...apps]] : [];
   }
 
-  return Object.values(cloudflarePreviewApps)
-    .map((app) => app.slug)
-    .filter((appSlug) => selected.has(appSlug));
-}
-
-export function batchPreviewAppsByDependencies(apps: readonly PreviewAppRuntime[]) {
-  const appsBySlug = new Map(apps.map((app) => [app.slug, app]));
-  const remainingSlugs = new Set(appsBySlug.keys());
-  const batches: PreviewAppRuntime[][] = [];
-
-  while (remainingSlugs.size > 0) {
-    const batch = apps.filter((app) => {
-      if (!remainingSlugs.has(app.slug)) {
-        return false;
-      }
-
-      return (app.previewDependencies ?? []).every(
-        (dependency) => !appsBySlug.has(dependency) || !remainingSlugs.has(dependency),
-      );
-    });
-
-    if (batch.length === 0) {
-      throw new Error(
-        `Could not order preview apps by dependencies: ${[...remainingSlugs].join(", ")}`,
-      );
-    }
-
-    batches.push(batch);
-    for (const app of batch) {
-      remainingSlugs.delete(app.slug);
-    }
-  }
-
-  return batches;
+  return [apps.filter((app) => app.slug !== "os"), [os]];
 }
 
 async function mapWithConcurrency<T, Result>(
