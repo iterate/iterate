@@ -50,7 +50,7 @@ const EmptyInput = z.object({});
  * it and the `.alchemy/dev-server.json` / `.alchemy/dev-server.log` discovery
  * files that scripts and tests already know how to read.
  */
-const StartInput = z.object({
+const StartOptions = z.object({
   attach: z
     .boolean()
     .default(true)
@@ -71,12 +71,12 @@ export const devServerStartScript = orpc
     default: true,
     description: "Start the OS local dev server, or attach if it is already running.",
   })
-  .input(StartInput)
+  .input(StartOptions)
   .handler(async ({ input }) => startDevServer(input));
 
 export const devServerRestartScript = orpc
   .meta({ description: "Restart the OS local dev server." })
-  .input(StartInput)
+  .input(StartOptions)
   .handler(async ({ input }) => {
     await killDevServer();
     return startDevServer(input);
@@ -92,7 +92,7 @@ export const devServerAttachScript = orpc
   .input(EmptyInput)
   .handler(async () => attachToRecordedDevServer());
 
-type StartOptions = z.infer<typeof StartInput>;
+type StartOptions = z.infer<typeof StartOptions>;
 
 export async function runDevServerCommand(argv: string[]): Promise<number> {
   const parsed = parseDirectArgs(argv);
@@ -136,7 +136,9 @@ export async function runDevServerCommand(argv: string[]): Promise<number> {
   }
 
   const result = await startDevServer(parsed.start);
-  if (!shouldAttach(parsed.start)) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  if (parsed.start.detach || !parsed.start.attach) {
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  }
   return "exitCode" in result ? result.exitCode : 0;
 }
 
@@ -471,10 +473,6 @@ function exitCodeForSignal(signal: NodeJS.Signals | null) {
   if (signal === "SIGINT") return 130;
   if (signal === "SIGTERM") return 143;
   return undefined;
-}
-
-function shouldAttach(options: Pick<StartOptions, "attach" | "detach">) {
-  return options.detach ? false : options.attach;
 }
 
 type DirectAction = "attach" | "kill" | "restart" | "start" | "status";
