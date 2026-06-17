@@ -116,6 +116,7 @@ export class SlackAgentProcessor extends StreamProcessor<
         const botBotId = state.botBotId ?? botBotIdFromPayload(event.payload);
         if (isOwnBotMessage(slackEvent, botBotId)) return;
         if (isBotAction(slackEvent, state.botUserId)) return;
+        if (readStringField(slackEvent, "type") !== "message") return;
 
         const channel = target?.channel ?? state.channel ?? readStringField(slackEvent, "channel");
         const threadTs =
