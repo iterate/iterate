@@ -8,7 +8,7 @@ import {
   uiErrorReporter,
   videoMode,
 } from "middlewright";
-import { OS_APP_ROOT, REPO_ROOT, waitForLocalOsBaseUrl } from "./local-dev.ts";
+import { REPO_ROOT, waitForLocalOsBaseUrl } from "./local-dev.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -86,7 +86,7 @@ async function seedLocalAuth(input: {
   const seedArgs = [
     "exec",
     "tsx",
-    "./e2e/playwright/seed-local-auth.ts",
+    "./specs/seed-local-auth.ts",
     "--email",
     input.email,
     "--organization-name",
@@ -117,12 +117,12 @@ async function seedLocalAuth(input: {
         "--",
         "pnpm",
         "--dir",
-        "../os",
+        "../..",
         ...seedArgs,
       ];
 
   const { stdout } = await execFileAsync(command, args, {
-    cwd: direct ? OS_APP_ROOT : `${REPO_ROOT}/apps/auth`,
+    cwd: direct ? REPO_ROOT : `${REPO_ROOT}/apps/auth`,
     env,
     maxBuffer: 10 * 1024 * 1024,
   });

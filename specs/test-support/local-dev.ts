@@ -1,8 +1,8 @@
 import { fileURLToPath } from "node:url";
 import { readLocalDevServerInfo } from "@iterate-com/shared/alchemy/local-dev-server";
 
-export const OS_APP_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
-export const REPO_ROOT = fileURLToPath(new URL("../../../../..", import.meta.url));
+export const OS_APP_ROOT = fileURLToPath(new URL("../../apps/os", import.meta.url));
+export const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
 export async function waitForLocalOsBaseUrl(input: { timeoutMs?: number } = {}) {
   const deadline = Date.now() + (input.timeoutMs || 60_000);

@@ -4,7 +4,7 @@ const videoMode = process.env.VIDEO_MODE === "1";
 const readyPort = Number(process.env.OS_PLAYWRIGHT_READY_PORT || 17604);
 
 export default defineConfig({
-  testDir: "e2e/playwright",
+  testDir: "specs",
   testMatch: "**/*.spec.ts",
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
@@ -33,7 +33,7 @@ export default defineConfig({
   webServer: process.env.OS_PLAYWRIGHT_BASE_URL
     ? undefined
     : {
-        command: `pnpm exec tsx ./e2e/playwright/start-local-dev.ts --ready-port ${readyPort}`,
+        command: `pnpm exec tsx ./specs/start-local-dev.ts --ready-port ${readyPort}`,
         url: `http://127.0.0.1:${readyPort}/ready`,
         reuseExistingServer: !process.env.CI,
         timeout: 180_000,

@@ -23,10 +23,6 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       ),
       // One entry module per deployed worker (docs/worker-topology.md).
       "src/workers/*.ts!",
-      "playwright.config.ts",
-      "e2e/playwright/**/*.spec.ts",
-      "e2e/playwright/seed-local-auth.ts",
-      "e2e/playwright/start-local-dev.ts",
       "e2e/vitest.config.ts",
       "e2e/tui-test/tui-test.config.ts",
       "e2e/tui-test/run.ts",
@@ -143,6 +139,13 @@ const config: KnipConfig = {
   // Keep the config honest in CI/local runs: if Knip thinks our patterns or
   // workspace setup drifted, fail instead of silently warning.
   treatConfigHintsAsErrors: true,
+  entry: [
+    "playwright.config.ts",
+    "specs/**/*.spec.ts",
+    "specs/seed-local-auth.ts",
+    "specs/start-local-dev.ts",
+  ],
+  project: ["playwright.config.ts", "specs/**/*.ts"],
   // Keep this root command intentionally scoped. When Knip includes dependent
   // workspaces for a selected package, we still do not want it wandering into
   // unrelated apps with heavyweight config loading.
