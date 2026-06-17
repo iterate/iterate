@@ -14,7 +14,10 @@ vi.mock("~/domains/slack/durable-objects/slack-agent-durable-object.ts", () => (
 }));
 
 import { ProjectProcessor, defaultAgentSystemPrompt } from "./implementation.ts";
-import { SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE } from "~/domains/agents/agent-prompt-guidance.ts";
+import {
+  AGENT_WORKSPACE_CAPABILITY_INSTRUCTIONS,
+  SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE,
+} from "~/domains/agents/agent-prompt-guidance.ts";
 import { DEFAULT_WORKERS_AI_AGENT_MODEL } from "~/domains/agents/stream-processors/agent/contract.ts";
 
 describe("project agent prompts", () => {
@@ -23,8 +26,9 @@ describe("project agent prompts", () => {
 
     expect(prompt).toContain("await itx.chat.sendMessage({ message })");
     expect(prompt).toContain(SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE);
+    expect(prompt).toContain(AGENT_WORKSPACE_CAPABILITY_INSTRUCTIONS);
     expect(prompt).not.toContain("return await itx.chat.sendMessage");
-    expect(prompt).not.toContain("ONBOARDING.md");
+    expect(prompt).toContain("/project/ONBOARDING.md");
   });
 
   it("includes onboarding markdown instructions for the onboarding agent", () => {
@@ -40,6 +44,8 @@ describe("project agent prompts", () => {
 
     expect(prompt).toContain("await itx.slack.chat.postMessage");
     expect(prompt).toContain(SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE);
+    expect(prompt).toContain("itx.workspace.readFile");
+    expect(prompt).toContain("require('fs')");
     expect(prompt).not.toContain("return await itx.slack.chat.postMessage");
   });
 });

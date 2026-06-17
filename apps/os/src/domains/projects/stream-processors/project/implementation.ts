@@ -39,7 +39,10 @@ import {
 } from "~/domains/streams/stream-runtime.ts";
 import type { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
 import { agentProcessorSubscriptionConfiguredEvents } from "~/domains/agents/agent-stream-subscriptions.ts";
-import { SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE } from "~/domains/agents/agent-prompt-guidance.ts";
+import {
+  AGENT_WORKSPACE_CAPABILITY_INSTRUCTIONS,
+  SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE,
+} from "~/domains/agents/agent-prompt-guidance.ts";
 import { DEFAULT_WORKERS_AI_AGENT_MODEL } from "~/domains/agents/stream-processors/agent/contract.ts";
 import {
   getSlackAgentDurableObjectName,
@@ -406,6 +409,7 @@ export function defaultAgentSystemPrompt(agentPath: string) {
       : `For web chat, reply with await itx.chat.sendMessage({ message }). ${SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE}`,
     "Use itx.streams.get(path) to read and append project stream events.",
     "Use the project repo as durable memory for stable project knowledge.",
+    AGENT_WORKSPACE_CAPABILITY_INSTRUCTIONS,
   ].join("\n\n");
 }
 
