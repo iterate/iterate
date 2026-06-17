@@ -8,11 +8,7 @@ import type { ResponsesClientEvent } from "openai/resources/responses/responses"
 import { getInitialProcessorState } from "@iterate-com/shared/streams/stream-processors";
 import type { StreamEvent, StreamEventInput } from "@iterate-com/shared/streams/stream-event";
 import { OpenAiWsProcessorContract, type OpenAiWsState } from "./contract.ts";
-import {
-  OpenAiWsProcessor,
-  type OpenAiResponsesWebSocket,
-  type OpenAiResponsesWebSocketStreamMessage,
-} from "./implementation.ts";
+import { OpenAiWsProcessor, type OpenAiResponsesWebSocket } from "./implementation.ts";
 import type {
   StreamProcessorIterateContext,
   StreamProcessorSnapshot,
@@ -748,38 +744,37 @@ async function waitFor(condition: () => boolean) {
 
 class FakeOpenAiResponsesWebSocket implements OpenAiResponsesWebSocket {
   readonly url = new URL("wss://api.openai.test/v1/responses");
-  readonly socket = { readyState: 0 };
+  readyState = 1;
   readonly sent: ResponsesClientEvent[] = [];
   sendError: Error | undefined;
   closed = false;
-  #messages: OpenAiResponsesWebSocketStreamMessage[] = [{ type: "connecting" }];
-  #waiters: Array<(result: IteratorResult<OpenAiResponsesWebSocketStreamMessage>) => void> = [];
+  #messages: JsonValue[] = [];
+  #waiters: Array<(result: IteratorResult<JsonValue>) => void> = [];
 
   sendResponseCreate(event: ResponsesClientEvent): void {
     if (this.sendError != null) throw this.sendError;
     this.sent.push(event);
   }
 
-  stream(): AsyncIterableIterator<OpenAiResponsesWebSocketStreamMessage> {
+  messages(): AsyncIterableIterator<JsonValue> {
     return this;
   }
 
   close(): void {
     this.closed = true;
-    this.socket.readyState = 3;
-    this.#push({ type: "close", code: 1000, reason: "closed by test" });
+    this.readyState = 3;
+    this.#flushWaiters();
   }
 
   open(): void {
-    this.socket.readyState = 1;
-    this.#push({ type: "open" });
+    this.readyState = 1;
   }
 
   receive(message: JsonValue): void {
-    this.#push({ type: "message", message });
+    this.#push(message);
   }
 
-  async next(): Promise<IteratorResult<OpenAiResponsesWebSocketStreamMessage>> {
+  async next(): Promise<IteratorResult<JsonValue>> {
     const message = this.#messages.shift();
     if (message != null) return { value: message, done: false };
 
@@ -792,11 +787,11 @@ class FakeOpenAiResponsesWebSocket implements OpenAiResponsesWebSocket {
     return { value: undefined, done: true };
   }
 
-  [Symbol.asyncIterator](): AsyncIterableIterator<OpenAiResponsesWebSocketStreamMessage> {
+  [Symbol.asyncIterator](): AsyncIterableIterator<JsonValue> {
     return this;
   }
 
-  #push(message: OpenAiResponsesWebSocketStreamMessage) {
+  #push(message: JsonValue) {
     const waiter = this.#waiters.shift();
     if (waiter != null) {
       waiter({ value: message, done: false });
@@ -804,5 +799,11 @@ class FakeOpenAiResponsesWebSocket implements OpenAiResponsesWebSocket {
     }
 
     this.#messages.push(message);
+  }
+
+  #flushWaiters() {
+    for (let waiter = this.#waiters.shift(); waiter != null; waiter = this.#waiters.shift()) {
+      waiter({ value: undefined, done: true });
+    }
   }
 }

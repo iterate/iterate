@@ -117,7 +117,7 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
     }
     return new OpenAiWsProcessor({
       ...deps,
-      openResponsesWebSocket: async () => createOpenAiResponsesWebSocketClient(apiKey),
+      openResponsesWebSocket: () => createOpenAiResponsesWebSocketClient(apiKey),
       readStreamEvents: () => this.readSubscribedStreamEvents("openai-ws"),
     });
   });

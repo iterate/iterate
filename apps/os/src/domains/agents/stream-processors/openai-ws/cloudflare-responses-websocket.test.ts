@@ -11,11 +11,7 @@ describe("createOpenAiResponsesWebSocketClient", () => {
     const fetch = vi.fn(async () => ({ status: 101, webSocket: socket }));
     vi.stubGlobal("fetch", fetch);
 
-    const client = createOpenAiResponsesWebSocketClient("sk-test");
-    const stream = client.stream();
-
-    await expect(stream.next()).resolves.toEqual({ done: false, value: { type: "connecting" } });
-    await expect(stream.next()).resolves.toEqual({ done: false, value: { type: "open" } });
+    const client = await createOpenAiResponsesWebSocketClient("sk-test");
 
     expect(fetch).toHaveBeenCalledWith("https://api.openai.com/v1/responses", {
       headers: {
@@ -32,38 +28,46 @@ describe("createOpenAiResponsesWebSocketClient", () => {
     ]);
   });
 
-  it("streams parsed messages, raw frames, and close events", async () => {
+  it("streams parsed messages and fails the iterator when the socket closes", async () => {
     const socket = new FakeCloudflareWebSocket();
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => ({ status: 101, webSocket: socket })),
     );
 
-    const stream = createOpenAiResponsesWebSocketClient("sk-test").stream();
-    await stream.next();
-    await stream.next();
+    const stream = (await createOpenAiResponsesWebSocketClient("sk-test")).messages();
 
     socket.receive(JSON.stringify({ response: { id: "resp_1" }, type: "response.completed" }));
     await expect(stream.next()).resolves.toEqual({
       done: false,
-      value: {
-        message: { response: { id: "resp_1" }, type: "response.completed" },
-        type: "message",
-      },
-    });
-
-    socket.receive("not json");
-    await expect(stream.next()).resolves.toEqual({
-      done: false,
-      value: { data: "not json", type: "raw" },
+      value: { response: { id: "resp_1" }, type: "response.completed" },
     });
 
     socket.close(1000, "done");
-    await expect(stream.next()).resolves.toEqual({
-      done: false,
-      value: { code: 1000, reason: "done", type: "close" },
-    });
-    await expect(stream.next()).resolves.toEqual({ done: true, value: undefined });
+    await expect(stream.next()).rejects.toThrow("OpenAI WebSocket closed: 1000 done");
+  });
+
+  it("fails to connect when the upgrade returns no websocket", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ status: 426, webSocket: null })),
+    );
+
+    await expect(createOpenAiResponsesWebSocketClient("sk-test")).rejects.toThrow(
+      "OpenAI WebSocket upgrade failed with status 426.",
+    );
+  });
+
+  it("fails the iterator for non-json frames", async () => {
+    const socket = new FakeCloudflareWebSocket();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ status: 101, webSocket: socket })),
+    );
+
+    const stream = (await createOpenAiResponsesWebSocketClient("sk-test")).messages();
+    socket.receive("not json");
+    await expect(stream.next()).rejects.toThrow();
   });
 });
 

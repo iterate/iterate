@@ -81,25 +81,17 @@ export type OpenAiWsProcessorDeps = {
 
 export type OpenAiResponsesWebSocket = {
   readonly url: URL | string;
-  readonly socket: { readonly readyState: number };
+  readonly readyState: number;
   sendResponseCreate(event: ResponsesClientEvent): void;
-  stream(): AsyncIterableIterator<OpenAiResponsesWebSocketStreamMessage>;
+  messages(): AsyncIterableIterator<JsonValue>;
   close(props?: { code: number; reason: string }): void;
 };
-
-export type OpenAiResponsesWebSocketStreamMessage =
-  | { type: "connecting" | "open" | "closing" | "reconnected" }
-  | { type: "close"; code: number; reason: string }
-  | { type: "reconnecting"; reconnect: JsonValue }
-  | { type: "message"; message: JsonValue }
-  | { type: "raw"; data: unknown }
-  | { type: "error"; error: unknown };
 
 type OpenAiWsConnection = {
   id: string;
   url: string;
   client: OpenAiResponsesWebSocket;
-  iterator: AsyncIterableIterator<OpenAiResponsesWebSocketStreamMessage>;
+  iterator: AsyncIterableIterator<JsonValue>;
   receiveSequence: number;
   sendSequence: number;
 };
@@ -337,14 +329,13 @@ export class OpenAiWsProcessor extends StreamProcessor<
   }
 
   async #getConnection(sourceEvent: LlmRequestRequestedEvent): Promise<OpenAiWsConnection> {
-    if (this.#connection?.client.socket.readyState === OpenAiWebSocketReadyState.Open) {
+    if (this.#connection?.client.readyState === OpenAiWebSocketReadyState.Open) {
       return this.#connection;
     }
 
     const connectionId = `openai_ws_${sourceEvent.offset}_${crypto.randomUUID()}`;
     const client = await this.deps.openResponsesWebSocket();
-    const iterator = client.stream();
-    await waitForOpenAiResponsesSocketOpen(iterator);
+    const iterator = client.messages();
 
     const connection: OpenAiWsConnection = {
       id: connectionId,
@@ -899,70 +890,10 @@ function newInputMessagesForContinuation(
   return lastAssistantIndex === -1 ? messages : messages.slice(lastAssistantIndex + 1);
 }
 
-async function waitForOpenAiResponsesSocketOpen(
-  iterator: AsyncIterableIterator<OpenAiResponsesWebSocketStreamMessage>,
-) {
-  while (true) {
-    const result = await iterator.next();
-    if (result.done === true) throw new Error("OpenAI WebSocket stream ended before opening.");
-
-    switch (result.value.type) {
-      case "connecting":
-        continue;
-      case "open":
-        return;
-      case "close":
-        throw new Error(
-          `OpenAI WebSocket closed before opening: ${result.value.code} ${result.value.reason}`,
-        );
-      case "error":
-        throw result.value.error;
-      case "message":
-      case "raw":
-      case "closing":
-      case "reconnecting":
-      case "reconnected":
-        continue;
-      default:
-        return assertNever(result.value);
-    }
-  }
-}
-
 async function nextOpenAiResponsesMessage(connection: OpenAiWsConnection): Promise<JsonValue> {
-  while (true) {
-    const result = await connection.iterator.next();
-    if (result.done === true) throw new Error("OpenAI WebSocket stream ended.");
-
-    switch (result.value.type) {
-      case "message":
-        return toJsonValue(result.value.message);
-      case "raw":
-        return parseRawSocketMessage(result.value.data);
-      case "close":
-        throw new Error(`OpenAI WebSocket closed: ${result.value.code} ${result.value.reason}`);
-      case "error":
-        throw result.value.error;
-      case "connecting":
-      case "open":
-      case "closing":
-      case "reconnecting":
-      case "reconnected":
-        continue;
-      default:
-        return assertNever(result.value);
-    }
-  }
-}
-
-function parseRawSocketMessage(message: unknown): JsonValue {
-  const text =
-    typeof message === "string"
-      ? message
-      : message instanceof ArrayBuffer
-        ? new TextDecoder().decode(message)
-        : String(message);
-  return toJsonValue(JSON.parse(text));
+  const result = await connection.iterator.next();
+  if (result.done === true) throw new Error("OpenAI WebSocket stream ended.");
+  return result.value;
 }
 
 function toJsonValue(value: unknown): JsonValue {
