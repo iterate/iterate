@@ -1,6 +1,6 @@
 // The browser itx REPL: a Cap'n Web session straight from the browser tab to
 // /api/itx, with `itx` in scope. Because itx is symmetric, anything you can
-// do here you can do from Node, a worker cap, or the config worker — and the
+// do here you can do from Node, a worker cap, or the project worker — and the
 // browser can PROVIDE live capabilities too (see the examples).
 //
 // The REPL rides the ONE browser itx primitive — useItx (~/itx/itx-react.tsx).

@@ -150,7 +150,9 @@ async function buildFromTree(input: {
   source: WorkerSource & { type: "repo" };
 }): Promise<StoredBuild> {
   const { source } = input;
-  const files = Object.fromEntries(input.files.map((file) => [file.path, file.content]));
+  const files = withIterateWorkerPackage(
+    Object.fromEntries(input.files.map((file) => [file.path, file.content])),
+  );
 
   // Typed for BOTH branches: a missing/empty entry file is the normal
   // "no worker yet" state, never a build failure (the bundler would surface
@@ -224,6 +226,7 @@ export async function repoSourceMemoKey(input: {
         source.path,
         source.bundle ?? null,
         source.compatibilityDate ?? null,
+        ITERATE_WORKER_PACKAGE_FILES,
       ]),
     ),
   );
@@ -244,4 +247,63 @@ function assertJsonSafeModules(
     );
   }
   return modules;
+}
+
+const ITERATE_WORKER_PACKAGE_FILES: Record<string, string> = {
+  "node_modules/iterate/package.json": JSON.stringify({
+    exports: {
+      "./worker": "./worker.ts",
+    },
+    name: "iterate",
+    type: "module",
+    version: "0.0.0-iterate-platform",
+  }),
+  "node_modules/iterate/worker.ts": iterateWorkerPackageSource(),
+};
+
+function iterateWorkerPackageSource() {
+  return `import { WorkerEntrypoint } from "cloudflare:workers";
+
+export type IterateStreamAppendInput = {
+  event: unknown;
+  streamPath?: string;
+};
+
+export type IterateProjectStreams = {
+  append: (input: IterateStreamAppendInput) => Promise<unknown>;
+};
+
+export type IterateProjectEnv = {
+  ITERATE: unknown;
+  STREAMS: IterateProjectStreams;
+};
+
+export type IterateProjectEventInput = {
+  event: unknown;
+  streamPath: string;
+};
+
+export class IterateProjectEntrypoint extends WorkerEntrypoint<IterateProjectEnv> {
+  get itx(): IterateProjectEnv["ITERATE"] {
+    return this.env.ITERATE;
+  }
+
+  get streams(): IterateProjectEnv["STREAMS"] {
+    return this.env.STREAMS;
+  }
+
+  async processEvent(input: IterateProjectEventInput): Promise<void> {
+    await this.onProjectEvent(input);
+  }
+
+  protected async onProjectEvent(_input: IterateProjectEventInput): Promise<void> {}
+}
+`;
+}
+
+function withIterateWorkerPackage(files: Record<string, string>): Record<string, string> {
+  return {
+    ...ITERATE_WORKER_PACKAGE_FILES,
+    ...files,
+  };
 }

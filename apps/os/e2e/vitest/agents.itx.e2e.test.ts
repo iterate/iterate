@@ -446,6 +446,102 @@ test("project processor configures fresh agent streams from child-stream-created
   );
 }, 120_000);
 
+test("project worker customizes fresh agents by appending events", async () => {
+  await using fixture = await createTestProject({ slugPrefix: "agent-context-worker" });
+  using itx = fixture.itx();
+  const suffix = uniqueSuffix();
+  const pusherPath = `/agents/config-pusher-${suffix}`;
+  const customizedPath = `/agents/customized-${suffix}`;
+  const promptMarker = `CUSTOM CONTEXT PROMPT ${suffix}`;
+  const capabilityName = `acmeTool${suffix.replace(/-/g, "")}`;
+
+  await itx.streams.create({ streamPath: pusherPath });
+
+  const projectWorkerSource = [
+    'import { IterateProjectEntrypoint } from "iterate/worker";',
+    "",
+    "export default class ProjectWorker extends IterateProjectEntrypoint {",
+    '  async fetch() { return new Response("ok"); }',
+    "",
+    "  // The project worker is a stream processor: this receives every event on",
+    "  // the project root stream. New agent streams announce themselves as",
+    "  // child-stream-created; react by appending agent context events.",
+    "  async onProjectEvent({ event }) {",
+    '    if (event.type !== "events.iterate.com/stream/child-stream-created") return;',
+    "    const agentPath = event.payload.childPath;",
+    `    if (!agentPath.startsWith(${JSON.stringify("/agents/customized-")})) return;`,
+    "    await this.streams.append({",
+    "      streamPath: agentPath,",
+    "      event: {",
+    '        type: "events.iterate.com/agent/system-prompt-updated",',
+    `        payload: { systemPrompt: ${JSON.stringify(promptMarker)} + " for " + agentPath },`,
+    "      },",
+    "    });",
+    "    await this.streams.append({",
+    "      streamPath: agentPath,",
+    "      event: {",
+    '        type: "events.iterate.com/itx/capability-provided",',
+    `        payload: { path: [${JSON.stringify(capabilityName)}], kind: "rpc", address: { type: "rpc", worker: { type: "loopback" }, entrypoint: "WorkerCapability" }, meta: { instructions: "Use itx.worker.${capabilityName}() (custom ${suffix})." } },`,
+    "      },",
+    "    });",
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+  const pushScript = [
+    "async (itx) => {",
+    workspaceReadyFunctionSource(),
+    "  await waitForWorkspace(itx);",
+    `  await itx.workspace.writeFile('/project/worker.ts', ${JSON.stringify(projectWorkerSource)});`,
+    "  await itx.workspace.gitAdd({ dir: '/project', filepath: 'worker.ts' });",
+    "  await itx.workspace.gitCommit({ dir: '/project', message: 'add agent context config', author: { name: 'Agent', email: 'agent@iterate.com' } });",
+    "  await itx.workspace.gitPush({ dir: '/project', remote: 'origin', ref: 'main' });",
+    "}",
+  ].join("\n");
+  await itx.streams.get(pusherPath).append({
+    event: {
+      type: "events.iterate.com/agent/output-added",
+      payload: { content: ["```js", pushScript, "```"].join("\n") },
+    },
+  });
+  const pushEvents = await readUntil({
+    agentPath: pusherPath,
+    itx,
+    afterOffset: "start",
+    predicate: (event) => event.type === "events.iterate.com/itx/script-execution-completed",
+    timeoutMs: 120_000,
+  });
+  expect(
+    requiredEvent(pushEvents, "events.iterate.com/itx/script-execution-completed").payload,
+  ).toMatchObject({ ok: true });
+
+  await itx.streams.create({ streamPath: customizedPath });
+  const events = await readUntil({
+    agentPath: customizedPath,
+    itx,
+    afterOffset: "start",
+    predicate: (event) =>
+      event.type === "events.iterate.com/agent/system-prompt-updated" &&
+      typeof (event.payload as { systemPrompt?: unknown }).systemPrompt === "string" &&
+      ((event.payload as { systemPrompt?: string }).systemPrompt || "").includes(promptMarker),
+    timeoutMs: 120_000,
+  });
+
+  const lastPrompt = requiredEvent(
+    [...events].reverse(),
+    "events.iterate.com/agent/system-prompt-updated",
+  );
+  const lastPromptText = requiredStringPayload(lastPrompt, "systemPrompt");
+  expect(lastPromptText).toContain(promptMarker);
+  expect(lastPromptText).toContain(customizedPath);
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: "events.iterate.com/itx/capability-provided",
+      payload: expect.objectContaining({ path: [capabilityName] }),
+    }),
+  );
+}, 240_000);
+
 test("lets agent chat update the project repo through the prepared workspace", async () => {
   await using fixture = await createTestProject({ slugPrefix: "agent-workspace" });
   using itx = fixture.itx();

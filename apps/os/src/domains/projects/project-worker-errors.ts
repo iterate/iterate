@@ -1,5 +1,5 @@
 /**
- * "There is no worker to load" is a normal state: the repo or worker.js may not
+ * "There is no worker to load" is a normal state: the repo or worker.ts may not
  * exist yet. Other load failures should still retry through the processor
  * checkpoint.
  */
