@@ -137,6 +137,58 @@ describe("OpenAiWsProcessor", () => {
     });
   });
 
+  it("completes the request as failed when the WebSocket send fails after opening", async () => {
+    const { stream, appended } = memoryStream();
+    const sockets: FakeOpenAiResponsesWebSocket[] = [];
+    const processor = newProcessor({
+      stream,
+      appended,
+      sockets,
+      snapshot: { offset: 0, state: testState() },
+    });
+
+    await processor.ingest({
+      events: [llmRequestRequestedEvent({ offset: 11 })],
+      streamMaxOffset: 11,
+    });
+    await waitFor(() => sockets.length === 1);
+    sockets[0]!.sendError = new Error("send failed after open");
+    sockets[0]?.open();
+
+    await waitFor(() =>
+      eventTypes(appended).includes("events.iterate.com/agent/llm-request-completed"),
+    );
+
+    expect(eventTypes(appended)).not.toContain(
+      "events.iterate.com/openai-ws/websocket-message-sent",
+    );
+    expect(eventTypes(appended)).toContain("events.iterate.com/openai-ws/websocket-disconnected");
+    expect(appended).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/openai-ws/llm-request-completed",
+        payload: expect.objectContaining({
+          llmRequestId: 11,
+          result: expect.objectContaining({
+            status: "failure",
+            error: { message: "send failed after open" },
+          }),
+        }),
+      }),
+    );
+    expect(appended).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/agent/llm-request-completed",
+        payload: expect.objectContaining({
+          llmRequestId: 11,
+          result: expect.objectContaining({
+            status: "failure",
+            error: { message: "send failed after open" },
+          }),
+        }),
+      }),
+    );
+  });
+
   it("does not append agent output for a cancelled request", async () => {
     const { stream, appended } = memoryStream();
     const sockets: FakeOpenAiResponsesWebSocket[] = [];
@@ -641,11 +693,13 @@ class FakeOpenAiResponsesWebSocket implements OpenAiResponsesWebSocket {
   readonly url = new URL("wss://api.openai.test/v1/responses");
   readonly socket = { readyState: 0 };
   readonly sent: JsonValue[] = [];
+  sendError: Error | undefined;
   closed = false;
   #messages: OpenAiResponsesWebSocketStreamMessage[] = [{ type: "connecting" }];
   #waiters: Array<(result: IteratorResult<OpenAiResponsesWebSocketStreamMessage>) => void> = [];
 
   send(event: JsonValue): void {
+    if (this.sendError != null) throw this.sendError;
     this.sent.push(event);
   }
 

@@ -509,7 +509,57 @@ export class OpenAiWsProcessor extends StreamProcessor<
       ...(previousResponseId == null ? {} : { previous_response_id: previousResponseId }),
     });
     const sendSequence = connection.sendSequence++;
-    connection.client.send(requestMessage);
+    try {
+      connection.client.send(requestMessage);
+    } catch (error) {
+      this.#markConnectionClosed(connection);
+      const durationMs = Date.now() - startedAt;
+      const failure = {
+        status: "failure" as const,
+        error: { message: stringifyError(error) },
+      };
+      await this.#append({
+        type: "events.iterate.com/openai-ws/websocket-disconnected",
+        idempotencyKey: buildProcessorIdempotencyKey({
+          processor: OpenAiWsProcessorContract,
+          key: `websocket-disconnected/${connection.id}`,
+          sourceEvent: args.event,
+        }),
+        payload: {
+          connectionId: connection.id,
+        },
+      });
+      await this.#append({
+        type: "events.iterate.com/openai-ws/llm-request-completed",
+        idempotencyKey: buildProcessorIdempotencyKey({
+          processor: OpenAiWsProcessorContract,
+          key: "provider-llm-request-completed",
+          sourceEvent: args.event,
+        }),
+        payload: {
+          connectionId: connection.id,
+          llmRequestId,
+          durationMs,
+          result: failure,
+        },
+      });
+      await this.#append({
+        type: "events.iterate.com/agent/llm-request-completed",
+        idempotencyKey: buildProcessorIdempotencyKey({
+          processor: OpenAiWsProcessorContract,
+          key: "agent-llm-request-completed",
+          sourceEvent: args.event,
+        }),
+        payload: {
+          llmRequestId,
+          provider: OpenAiWsProcessorContract.slug,
+          durationMs,
+          result: failure,
+        },
+      });
+      this.#clearActiveRequest(llmRequestId);
+      return;
+    }
     await this.#append({
       type: "events.iterate.com/openai-ws/websocket-message-sent",
       idempotencyKey: buildProcessorIdempotencyKey({
