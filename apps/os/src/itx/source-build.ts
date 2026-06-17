@@ -11,7 +11,7 @@
 // esbuild-wasm): repo DO readTree → vfs → R2. No clone, no workspace, no
 // filesystem.
 
-import iterateWorkerPackageSource from "../../../../packages/iterate/src/worker.ts?raw";
+import { IterateProjectEntrypoint } from "../../../../packages/iterate/src/worker.ts";
 import type { WorkerSource } from "./itx.ts";
 import type { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import { getRepoDurableObjectName } from "~/domains/repos/repo-durable-object-name.ts";
@@ -259,8 +259,35 @@ const ITERATE_WORKER_PACKAGE_FILES: Record<string, string> = {
     type: "module",
     version: "0.0.0-iterate-platform",
   }),
-  "node_modules/iterate/worker.ts": iterateWorkerPackageSource,
+  "node_modules/iterate/worker.ts": iterateWorkerPackageSource(),
 };
+
+function iterateWorkerPackageSource() {
+  return `import { WorkerEntrypoint } from "cloudflare:workers";
+
+export type IterateStreamAppendInput = {
+  event: unknown;
+  streamPath?: string;
+};
+
+export type IterateProjectStreams = {
+  append: (input: IterateStreamAppendInput) => Promise<unknown>;
+};
+
+export type IterateProjectEnv = {
+  ITERATE: unknown;
+  STREAMS: IterateProjectStreams;
+};
+
+export type IterateProjectEventInput = {
+  event: unknown;
+  streamPath: string;
+};
+
+const IterateProjectEntrypoint = ${IterateProjectEntrypoint.toString()};
+export { IterateProjectEntrypoint };
+`;
+}
 
 function withIterateWorkerPackage(files: Record<string, string>): Record<string, string> {
   return {
