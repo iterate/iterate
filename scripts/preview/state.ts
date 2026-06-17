@@ -109,22 +109,23 @@ export function renderCloudflarePreviewPullRequestBody(
 }
 
 function renderCloudflarePreviewSection(state: CloudflarePreviewState) {
-  const rows = Object.values(state.apps)
-    .sort((left, right) => left.appDisplayName.localeCompare(right.appDisplayName))
-    .map(renderPreviewAppEntry)
-    .join("\n\n");
+  const entries = Object.values(state.apps).sort((left, right) =>
+    left.appDisplayName.localeCompare(right.appDisplayName),
+  );
+  const table = entries.length > 0 ? renderPreviewAppTable(entries) : null;
+  const failureDetails = entries.map(renderPreviewAppFailureDetails).filter(Boolean).join("\n\n");
 
   return [
     "## Environment Config Lease",
-    "",
     markdownAnnotator("", cloudflarePreviewStateLabel).update(wrapHiddenStateBlock(state)),
     state.environmentConfigLease
       ? renderEnvironmentConfigLease(state.environmentConfigLease)
       : "No active environment config lease.",
-    rows ? `\n${rows}` : "",
+    table,
+    failureDetails || null,
   ]
     .filter(Boolean)
-    .join("\n");
+    .join("\n\n");
 }
 
 function renderEnvironmentConfigLease(lease: EnvironmentConfigLease) {
@@ -136,49 +137,61 @@ function renderEnvironmentConfigLease(lease: EnvironmentConfigLease) {
   ].join("\n");
 }
 
-function renderPreviewAppEntry(entry: CloudflarePreviewAppEntry) {
+function renderPreviewAppTable(entries: CloudflarePreviewAppEntry[]) {
+  const headers = [
+    "app",
+    "status",
+    "commit",
+    "preview",
+    "deploy duration",
+    "test duration",
+    "cleanup duration",
+    "workflow run",
+    "updated",
+    "summary",
+  ];
+
+  return [
+    `| ${headers.join(" | ")} |`,
+    `| ${headers.map(() => "---").join(" | ")} |`,
+    ...entries.map(renderPreviewAppTableRow),
+  ].join("\n");
+}
+
+function renderPreviewAppTableRow(entry: CloudflarePreviewAppEntry) {
   const summary = summarizePreviewMessage(entry.message);
+  const cells = [
+    entry.appDisplayName,
+    renderStatusLabel(entry.status),
+    entry.shortSha ? `\`${entry.shortSha}\`` : "",
+    entry.publicUrl ? `[${entry.publicUrl}](${entry.publicUrl})` : "",
+    entry.deployDurationMs != null ? formatDurationMs(entry.deployDurationMs) : "",
+    entry.testDurationMs != null ? formatDurationMs(entry.testDurationMs) : "",
+    entry.cleanupDurationMs != null ? formatDurationMs(entry.cleanupDurationMs) : "",
+    entry.runUrl ? `[Workflow run](${entry.runUrl})` : "",
+    entry.updatedAt,
+    summary || "",
+  ];
+
+  return `| ${cells.map((value) => value.replaceAll("\n", "<br>").replaceAll("|", "\\|")).join(" | ")} |`;
+}
+
+function renderPreviewAppFailureDetails(entry: CloudflarePreviewAppEntry) {
   const details = readPreviewMessage(entry.message);
   const showFailureDetails = entry.status !== "deployed" && entry.status !== "released" && details;
 
-  return [
-    `### ${entry.appDisplayName}`,
-    "",
-    `Status: ${renderStatusLabel(entry.status)}`,
-    entry.shortSha ? `Commit: \`${entry.shortSha}\`` : null,
-    entry.publicUrl ? `Preview: ${entry.publicUrl}` : null,
-    ...renderPreviewDurations(entry),
-    summary ? `Summary: ${summary}` : null,
-    entry.runUrl ? `[Workflow run](${entry.runUrl})` : null,
-    `Updated: ${entry.updatedAt}`,
-    showFailureDetails
-      ? [
-          "",
-          "<details>",
-          "<summary>Failure details</summary>",
-          "",
-          `<pre>${escapeHtml(details)}</pre>`,
-          "",
-          "</details>",
-        ].join("\n")
-      : null,
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
+  if (!showFailureDetails) {
+    return null;
+  }
 
-function renderPreviewDurations(entry: CloudflarePreviewAppEntry) {
   return [
-    entry.deployDurationMs != null
-      ? `Deploy duration: ${formatDurationMs(entry.deployDurationMs)}`
-      : null,
-    entry.testDurationMs != null
-      ? `Test duration: ${formatDurationMs(entry.testDurationMs)}`
-      : null,
-    entry.cleanupDurationMs != null
-      ? `Cleanup duration: ${formatDurationMs(entry.cleanupDurationMs)}`
-      : null,
-  ].filter((line): line is string => line != null);
+    "<details>",
+    `<summary>${escapeHtml(entry.appDisplayName)} failure details</summary>`,
+    "",
+    `<pre>${escapeHtml(details)}</pre>`,
+    "",
+    "</details>",
+  ].join("\n");
 }
 
 export function formatDurationMs(durationMs: number) {

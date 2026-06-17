@@ -47,9 +47,12 @@ describe("cloudflare preview state helpers", () => {
     expect(body).toContain("<!-- CLOUDFLARE_PREVIEW_STATE -->");
     expect(body).toContain("<!--\n{");
     expect(body).toContain("\n-->\n<!-- /CLOUDFLARE_PREVIEW_STATE -->");
-    expect(body).toContain("Preview: https://os.iterate-preview-2.com");
-    expect(body).toContain("Deploy duration: 12.3s");
-    expect(body).toContain("Test duration: 678ms");
+    expect(body).toContain(
+      "| app | status | commit | preview | deploy duration | test duration | cleanup duration | workflow run | updated | summary |",
+    );
+    expect(body).toContain(
+      "| OS | deployed | `abcdef0` | [https://os.iterate-preview-2.com](https://os.iterate-preview-2.com) | 12.3s | 678ms |  | [Workflow run](https://github.com/iterate/iterate/actions/runs/123) | 2026-04-02T10:00:00.000Z |  |",
+    );
   });
 
   it("updates only the managed block and preserves surrounding PR body content", () => {
@@ -83,8 +86,11 @@ describe("cloudflare preview state helpers", () => {
     expect(body).toContain("# User content");
     expect(body).toContain("Footer");
     expect(body).toContain("No active environment config lease.");
-    expect(body).toContain("Summary: AssertionError: expected 2 to be +0");
+    expect(body).toContain(
+      "| OS | tests failed | `1234567` |  |  |  |  | [Workflow run](https://github.com/iterate/iterate/actions/runs/456) | 2026-04-02T10:00:00.000Z | AssertionError: expected 2 to be +0 |",
+    );
     expect(body).toContain("<details>");
+    expect(body).toContain("<summary>OS failure details</summary>");
   });
 
   it("returns empty state when the managed block is deleted", () => {
