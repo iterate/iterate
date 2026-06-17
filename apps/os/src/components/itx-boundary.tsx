@@ -2,7 +2,11 @@ import { Suspense, type ReactNode } from "react";
 
 /** The one muted-text placeholder both the socket-connect and first-read waits render. */
 function ItxPending({ children }: { children: ReactNode }) {
-  return <div className="p-4 text-sm text-muted-foreground">{children}</div>;
+  return (
+    <div className="p-4 text-sm text-muted-foreground" data-spinner="true">
+      {children}
+    </div>
+  );
 }
 
 /** Suspense wrapper shared by every route that reads through itx. */

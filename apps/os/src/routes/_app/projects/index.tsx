@@ -35,8 +35,17 @@ export const Route = createFileRoute("/_app/projects/")({
   loader: async () => ({
     routeConfig: await getPublicRouteConfig(),
   }),
+  pendingComponent: ProjectsIndexPending,
   component: ProjectsIndexPage,
 });
+
+function ProjectsIndexPending() {
+  return (
+    <section className="p-4 text-sm text-muted-foreground" data-spinner="true">
+      Loading projects...
+    </section>
+  );
+}
 
 function buildProjectHostname(input: {
   slug: string;
@@ -116,6 +125,7 @@ function ProjectsIndexPage() {
         <div className="flex flex-wrap items-center gap-2">
           {isAdmin ? (
             <Button
+              nativeButton={false}
               type="button"
               variant="outline"
               size="sm"
@@ -125,7 +135,12 @@ function ProjectsIndexPage() {
             </Button>
           ) : null}
           {hasProjects ? (
-            <Button type="button" size="sm" render={<Link to="/new-project" />}>
+            <Button
+              nativeButton={false}
+              type="button"
+              size="sm"
+              render={<Link to="/new-project" />}
+            >
               New project
             </Button>
           ) : null}
@@ -144,7 +159,12 @@ function ProjectsIndexPage() {
                 Create your first project to start using OS.
               </p>
             </div>
-            <Button type="button" size="sm" render={<Link to="/new-project" />}>
+            <Button
+              nativeButton={false}
+              type="button"
+              size="sm"
+              render={<Link to="/new-project" />}
+            >
               Create new project
             </Button>
           </div>
