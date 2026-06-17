@@ -355,6 +355,47 @@ describe("SlackAgentProcessor", () => {
     expect(appended).toEqual([]);
   });
 
+  it("renders human reaction events as non-triggering agent input", async () => {
+    const { appended, processor } = createProcessor();
+
+    await processor.ingest({
+      events: [
+        committedEvent({
+          offset: 50,
+          type: "events.iterate.com/slack/webhook-received",
+          payload: {
+            body: {
+              type: "event_callback",
+              event: {
+                type: "reaction_added",
+                user: "U_USER",
+                reaction: "eyes",
+                item: { type: "message", channel: "C123", ts: "1772136259.000000" },
+                item_user: "U_OTHER_USER",
+                event_ts: "1772136260.000000",
+              },
+              authorizations: [
+                { team_id: "T123", user_id: "U_BOT", is_bot: true, is_enterprise_install: false },
+              ],
+            },
+          },
+        }),
+      ],
+      streamMaxOffset: 50,
+    });
+    await flushBackgroundWork();
+
+    expect(appended).toHaveLength(1);
+    expect(appended[0]!.event).toMatchObject({
+      type: "events.iterate.com/agent/input-added",
+      idempotencyKey: "slack-agent/slack-webhook-to-agent-input@50",
+      payload: {
+        content: expect.stringContaining("type: reaction_added"),
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
+      },
+    });
+  });
+
   it("ignores messages posted by our own bot", async () => {
     const { appended, processor } = createProcessor();
 

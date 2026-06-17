@@ -83,7 +83,11 @@ export class SlackAgentProcessor extends StreamProcessor<
         // is nothing to announce here.
         return;
       case "events.iterate.com/slack/webhook-received": {
-        const appendAgentInput = async () => {
+        const appendAgentInput = async (
+          input: {
+            llmRequestPolicy?: { behaviour: "dont-trigger-request" };
+          } = {},
+        ) => {
           await this.ctx.stream.append({
             event: {
               type: "events.iterate.com/agent/input-added",
@@ -94,6 +98,9 @@ export class SlackAgentProcessor extends StreamProcessor<
               }),
               payload: {
                 content: slackWebhookAgentInput(event.payload),
+                ...(input.llmRequestPolicy == null
+                  ? {}
+                  : { llmRequestPolicy: input.llmRequestPolicy }),
               },
             },
           });
@@ -116,6 +123,15 @@ export class SlackAgentProcessor extends StreamProcessor<
         const botBotId = state.botBotId ?? botBotIdFromPayload(event.payload);
         if (isOwnBotMessage(slackEvent, botBotId)) return;
         if (isBotAction(slackEvent, state.botUserId)) return;
+        if (readStringField(slackEvent, "type") !== "message") {
+          args.blockProcessorWhile(async () => {
+            await appendAgentInput({
+              llmRequestPolicy: { behaviour: "dont-trigger-request" },
+            });
+            await this.#addEyesReactionForMessageTarget(target);
+          });
+          return;
+        }
 
         const channel = target?.channel ?? state.channel ?? readStringField(slackEvent, "channel");
         const threadTs =

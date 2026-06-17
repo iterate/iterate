@@ -445,6 +445,7 @@ const [
     entrypoint: "./src/workers/slack-agent.ts",
     bindings: {
       AGENT: agent,
+      DB: db,
       DO_CATALOG: db,
       SLACK_AGENT: slackAgent,
       STREAM: stream,
