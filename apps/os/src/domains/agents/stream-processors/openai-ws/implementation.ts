@@ -95,6 +95,19 @@ type OpenAiWsConnection = {
   receiveSequence: number;
   sendSequence: number;
 };
+type LlmFailureResult = {
+  status: "failure";
+  error: { message: string };
+  rawResponse?: JsonValue;
+};
+type AgentLlmCompletionResult =
+  | LlmFailureResult
+  | {
+      status: "success";
+      rawResponse: JsonValue | undefined;
+      usage?: JsonValue;
+      providerResponseId?: string;
+    };
 
 const OpenAiWebSocketReadyState = {
   Open: 1,
@@ -395,7 +408,10 @@ export class OpenAiWsProcessor extends StreamProcessor<
       await this.#appendProviderFailed({
         durationMs: 0,
         llmRequestId,
-        message: "LLM request was cancelled before provider execution started.",
+        result: {
+          status: "failure",
+          error: { message: "LLM request was cancelled before provider execution started." },
+        },
         sourceEvent: args.event,
       });
       this.#cancelledLlmRequestIds.delete(llmRequestId);
@@ -417,32 +433,17 @@ export class OpenAiWsProcessor extends StreamProcessor<
         status: "failure" as const,
         error: { message: stringifyError(error) },
       };
-      await this.#append({
-        type: "events.iterate.com/openai-ws/llm-request-completed",
-        idempotencyKey: buildProcessorIdempotencyKey({
-          processor: OpenAiWsProcessorContract,
-          key: "provider-llm-request-completed",
-          sourceEvent: args.event,
-        }),
-        payload: {
-          llmRequestId,
-          durationMs,
-          result: failure,
-        },
+      await this.#appendProviderFailed({
+        durationMs,
+        llmRequestId,
+        result: failure,
+        sourceEvent: args.event,
       });
-      await this.#append({
-        type: "events.iterate.com/agent/llm-request-completed",
-        idempotencyKey: buildProcessorIdempotencyKey({
-          processor: OpenAiWsProcessorContract,
-          key: "agent-llm-request-completed",
-          sourceEvent: args.event,
-        }),
-        payload: {
-          llmRequestId,
-          provider: OpenAiWsProcessorContract.slug,
-          durationMs,
-          result: failure,
-        },
+      await this.#appendAgentCompleted({
+        durationMs,
+        llmRequestId,
+        result: failure,
+        sourceEvent: args.event,
       });
       this.#clearActiveRequest(llmRequestId);
       return;
@@ -484,44 +485,22 @@ export class OpenAiWsProcessor extends StreamProcessor<
         status: "failure" as const,
         error: { message: stringifyError(error) },
       };
-      await this.#append({
-        type: "events.iterate.com/openai-ws/websocket-disconnected",
-        idempotencyKey: buildProcessorIdempotencyKey({
-          processor: OpenAiWsProcessorContract,
-          key: `websocket-disconnected/${connection.id}`,
-          sourceEvent: args.event,
-        }),
-        payload: {
-          connectionId: connection.id,
-        },
+      await this.#appendWebSocketDisconnected({
+        connectionId: connection.id,
+        sourceEvent: args.event,
       });
-      await this.#append({
-        type: "events.iterate.com/openai-ws/llm-request-completed",
-        idempotencyKey: buildProcessorIdempotencyKey({
-          processor: OpenAiWsProcessorContract,
-          key: "provider-llm-request-completed",
-          sourceEvent: args.event,
-        }),
-        payload: {
-          connectionId: connection.id,
-          llmRequestId,
-          durationMs,
-          result: failure,
-        },
+      await this.#appendProviderFailed({
+        connectionId: connection.id,
+        durationMs,
+        llmRequestId,
+        result: failure,
+        sourceEvent: args.event,
       });
-      await this.#append({
-        type: "events.iterate.com/agent/llm-request-completed",
-        idempotencyKey: buildProcessorIdempotencyKey({
-          processor: OpenAiWsProcessorContract,
-          key: "agent-llm-request-completed",
-          sourceEvent: args.event,
-        }),
-        payload: {
-          llmRequestId,
-          provider: OpenAiWsProcessorContract.slug,
-          durationMs,
-          result: failure,
-        },
+      await this.#appendAgentCompleted({
+        durationMs,
+        llmRequestId,
+        result: failure,
+        sourceEvent: args.event,
       });
       this.#clearActiveRequest(llmRequestId);
       return;
@@ -552,25 +531,21 @@ export class OpenAiWsProcessor extends StreamProcessor<
         this.#markConnectionClosed(connection);
         const durationMs = Date.now() - startedAt;
         if (this.#cancelledLlmRequestIds.has(llmRequestId)) {
-          await this.#append({
-            type: "events.iterate.com/openai-ws/websocket-disconnected",
-            idempotencyKey: buildProcessorIdempotencyKey({
-              processor: OpenAiWsProcessorContract,
-              key: `websocket-disconnected/${connection.id}`,
-              sourceEvent: args.event,
-            }),
-            payload: {
-              connectionId: connection.id,
-              code: 1000,
-              reason: "llm-request-cancelled",
-              wasClean: true,
-            },
+          await this.#appendWebSocketDisconnected({
+            code: 1000,
+            connectionId: connection.id,
+            reason: "llm-request-cancelled",
+            sourceEvent: args.event,
+            wasClean: true,
           });
           await this.#appendProviderFailed({
             connectionId: connection.id,
             durationMs,
             llmRequestId,
-            message: "LLM request was cancelled.",
+            result: {
+              status: "failure",
+              error: { message: "LLM request was cancelled." },
+            },
             sourceEvent: args.event,
           });
           this.#cancelledLlmRequestIds.delete(llmRequestId);
@@ -581,44 +556,22 @@ export class OpenAiWsProcessor extends StreamProcessor<
           status: "failure" as const,
           error: { message: stringifyError(error) },
         };
-        await this.#append({
-          type: "events.iterate.com/openai-ws/websocket-disconnected",
-          idempotencyKey: buildProcessorIdempotencyKey({
-            processor: OpenAiWsProcessorContract,
-            key: `websocket-disconnected/${connection.id}`,
-            sourceEvent: args.event,
-          }),
-          payload: {
-            connectionId: connection.id,
-          },
+        await this.#appendWebSocketDisconnected({
+          connectionId: connection.id,
+          sourceEvent: args.event,
         });
-        await this.#append({
-          type: "events.iterate.com/openai-ws/llm-request-completed",
-          idempotencyKey: buildProcessorIdempotencyKey({
-            processor: OpenAiWsProcessorContract,
-            key: "provider-llm-request-completed",
-            sourceEvent: args.event,
-          }),
-          payload: {
-            connectionId: connection.id,
-            llmRequestId,
-            durationMs,
-            result: failure,
-          },
+        await this.#appendProviderFailed({
+          connectionId: connection.id,
+          durationMs,
+          llmRequestId,
+          result: failure,
+          sourceEvent: args.event,
         });
-        await this.#append({
-          type: "events.iterate.com/agent/llm-request-completed",
-          idempotencyKey: buildProcessorIdempotencyKey({
-            processor: OpenAiWsProcessorContract,
-            key: "agent-llm-request-completed",
-            sourceEvent: args.event,
-          }),
-          payload: {
-            llmRequestId,
-            provider: OpenAiWsProcessorContract.slug,
-            durationMs,
-            result: failure,
-          },
+        await this.#appendAgentCompleted({
+          durationMs,
+          llmRequestId,
+          result: failure,
+          sourceEvent: args.event,
         });
         this.#clearActiveRequest(llmRequestId);
         return;
@@ -694,24 +647,16 @@ export class OpenAiWsProcessor extends StreamProcessor<
           },
           sourceEvent: args.event,
         });
-        await this.#append({
-          type: "events.iterate.com/agent/llm-request-completed",
-          idempotencyKey: buildProcessorIdempotencyKey({
-            processor: OpenAiWsProcessorContract,
-            key: "agent-llm-request-completed",
-            sourceEvent: args.event,
-          }),
-          payload: {
-            llmRequestId,
-            provider: OpenAiWsProcessorContract.slug,
-            durationMs,
-            result: {
-              status: "success",
-              rawResponse: finalResponse,
-              ...(usage == null ? {} : { usage }),
-              ...(responseId == null ? {} : { providerResponseId: responseId }),
-            },
+        await this.#appendAgentCompleted({
+          durationMs,
+          llmRequestId,
+          result: {
+            status: "success",
+            rawResponse: finalResponse,
+            ...(usage == null ? {} : { usage }),
+            ...(responseId == null ? {} : { providerResponseId: responseId }),
           },
+          sourceEvent: args.event,
         });
         this.#clearActiveRequest(llmRequestId);
         return;
@@ -728,33 +673,18 @@ export class OpenAiWsProcessor extends StreamProcessor<
           },
           rawResponse,
         };
-        await this.#append({
-          type: "events.iterate.com/openai-ws/llm-request-completed",
-          idempotencyKey: buildProcessorIdempotencyKey({
-            processor: OpenAiWsProcessorContract,
-            key: "provider-llm-request-completed",
-            sourceEvent: args.event,
-          }),
-          payload: {
-            connectionId: connection.id,
-            llmRequestId,
-            durationMs,
-            result: failure,
-          },
+        await this.#appendProviderFailed({
+          connectionId: connection.id,
+          durationMs,
+          llmRequestId,
+          result: failure,
+          sourceEvent: args.event,
         });
-        await this.#append({
-          type: "events.iterate.com/agent/llm-request-completed",
-          idempotencyKey: buildProcessorIdempotencyKey({
-            processor: OpenAiWsProcessorContract,
-            key: "agent-llm-request-completed",
-            sourceEvent: args.event,
-          }),
-          payload: {
-            llmRequestId,
-            provider: OpenAiWsProcessorContract.slug,
-            durationMs,
-            result: failure,
-          },
+        await this.#appendAgentCompleted({
+          durationMs,
+          llmRequestId,
+          result: failure,
+          sourceEvent: args.event,
         });
         this.#clearActiveRequest(llmRequestId);
         return;
@@ -766,7 +696,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
     connectionId?: string;
     durationMs: number;
     llmRequestId: number;
-    message: string;
+    result: LlmFailureResult;
     sourceEvent: LlmRequestRequestedEvent;
   }) {
     await this.#append({
@@ -780,10 +710,52 @@ export class OpenAiWsProcessor extends StreamProcessor<
         ...(args.connectionId == null ? {} : { connectionId: args.connectionId }),
         llmRequestId: args.llmRequestId,
         durationMs: args.durationMs,
-        result: {
-          status: "failure",
-          error: { message: args.message },
-        },
+        result: args.result,
+      },
+    });
+  }
+
+  async #appendAgentCompleted(args: {
+    durationMs: number;
+    llmRequestId: number;
+    result: AgentLlmCompletionResult;
+    sourceEvent: LlmRequestRequestedEvent;
+  }) {
+    await this.#append({
+      type: "events.iterate.com/agent/llm-request-completed",
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: OpenAiWsProcessorContract,
+        key: "agent-llm-request-completed",
+        sourceEvent: args.sourceEvent,
+      }),
+      payload: {
+        llmRequestId: args.llmRequestId,
+        provider: OpenAiWsProcessorContract.slug,
+        durationMs: args.durationMs,
+        result: args.result,
+      },
+    });
+  }
+
+  async #appendWebSocketDisconnected(args: {
+    code?: number;
+    connectionId: string;
+    reason?: string;
+    sourceEvent: LlmRequestRequestedEvent;
+    wasClean?: boolean;
+  }) {
+    await this.#append({
+      type: "events.iterate.com/openai-ws/websocket-disconnected",
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: OpenAiWsProcessorContract,
+        key: `websocket-disconnected/${args.connectionId}`,
+        sourceEvent: args.sourceEvent,
+      }),
+      payload: {
+        connectionId: args.connectionId,
+        ...(args.code == null ? {} : { code: args.code }),
+        ...(args.reason == null ? {} : { reason: args.reason }),
+        ...(args.wasClean == null ? {} : { wasClean: args.wasClean }),
       },
     });
   }
