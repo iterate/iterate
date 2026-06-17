@@ -42,8 +42,9 @@ describe("cloudflare preview state helpers", () => {
     expect(parseCloudflarePreviewState(body)).toEqual(state);
     expect(body).toContain("## Summary");
     expect(body).toContain("## Environment Config Lease");
-    expect(body).toContain("Lease: `preview-2`");
-    expect(body).toContain("Doppler config: `preview_2`");
+    expect(body).toContain(
+      "<summary>Lease: preview-2 | Doppler config: preview_2 | Type: environment-config-lease | Leased until: 2023-11-14T22:13:20.000Z</summary>\n\n| app | status | commit | preview | deploy duration | test duration | cleanup duration | workflow run | updated | summary |",
+    );
     expect(body).toContain("<!-- CLOUDFLARE_PREVIEW_STATE -->");
     expect(body).toContain("<!--\n{");
     expect(body).toContain("\n-->\n<!-- /CLOUDFLARE_PREVIEW_STATE -->");
@@ -85,7 +86,7 @@ describe("cloudflare preview state helpers", () => {
 
     expect(body).toContain("# User content");
     expect(body).toContain("Footer");
-    expect(body).toContain("No active environment config lease.");
+    expect(body).toContain("<summary>No active environment config lease.</summary>");
     expect(body).toContain(
       "| OS | tests failed | `1234567` |  |  |  |  | [Workflow run](https://github.com/iterate/iterate/actions/runs/456) | 2026-04-02T10:00:00.000Z | AssertionError: expected 2 to be +0 |",
     );

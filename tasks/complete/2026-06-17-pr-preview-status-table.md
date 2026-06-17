@@ -7,7 +7,7 @@ size: small
 
 ## Status Summary
 
-Complete in this branch. The preview PR body renderer now emits one Markdown table for app status rows, while preserving lease details, hidden state, message summaries, and failure detail blocks.
+Complete in this branch. The preview PR body renderer now emits one Markdown table for app status rows inside a lease-summary `<details>` block, while preserving hidden state, message summaries, and failure detail blocks.
 
 ## Goal
 
@@ -47,4 +47,5 @@ Change that section to a Markdown table with columns roughly:
 ## Implementation Notes
 
 - The table columns are `app`, `status`, `commit`, `preview`, `deploy duration`, `test duration`, `cleanup duration`, `workflow run`, `updated`, and `summary`.
+- The lease metadata renders as a single-line `<summary>` and the app table is the details body.
 - Failure details remain below the table in collapsible `<details>` blocks for non-deployed/non-released statuses with message details.

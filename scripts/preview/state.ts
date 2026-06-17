@@ -118,22 +118,35 @@ function renderCloudflarePreviewSection(state: CloudflarePreviewState) {
   return [
     "## Environment Config Lease",
     markdownAnnotator("", cloudflarePreviewStateLabel).update(wrapHiddenStateBlock(state)),
-    state.environmentConfigLease
-      ? renderEnvironmentConfigLease(state.environmentConfigLease)
-      : "No active environment config lease.",
-    table,
+    renderPreviewAppTableDetails({
+      summary: state.environmentConfigLease
+        ? renderEnvironmentConfigLeaseSummary(state.environmentConfigLease)
+        : "No active environment config lease.",
+      table,
+    }),
     failureDetails || null,
   ]
     .filter(Boolean)
     .join("\n\n");
 }
 
-function renderEnvironmentConfigLease(lease: EnvironmentConfigLease) {
+function renderEnvironmentConfigLeaseSummary(lease: EnvironmentConfigLease) {
   return [
-    `Lease: \`${lease.slug}\``,
-    `Doppler config: \`${lease.dopplerConfig}\``,
-    `Type: \`${lease.type}\``,
+    `Lease: ${lease.slug}`,
+    `Doppler config: ${lease.dopplerConfig}`,
+    `Type: ${lease.type}`,
     `Leased until: ${new Date(lease.leasedUntil).toISOString()}`,
+  ].join(" | ");
+}
+
+function renderPreviewAppTableDetails(input: { summary: string; table: string | null }) {
+  return [
+    "<details>",
+    `<summary>${escapeHtml(input.summary)}</summary>`,
+    "",
+    input.table || "No preview apps recorded.",
+    "",
+    "</details>",
   ].join("\n");
 }
 
