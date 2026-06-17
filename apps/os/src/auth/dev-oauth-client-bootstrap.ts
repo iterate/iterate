@@ -20,6 +20,9 @@ export function resolveDevAuthClientSyncTarget(env: Record<string, string | unde
   }
 
   const stage = env.ALCHEMY_STAGE?.trim().toLowerCase();
+  if (stage?.startsWith(DEV_TARGET_PREFIX)) {
+    return stage;
+  }
   if (stage?.startsWith(DEV_STAGE_PREFIX)) {
     const user = stage.slice(DEV_STAGE_PREFIX.length);
     if (user.length > 0) {

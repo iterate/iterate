@@ -113,6 +113,7 @@ function ProjectsIndexContent() {
         <div className="flex flex-wrap items-center gap-2">
           {isAdmin ? (
             <Button
+              nativeButton={false}
               type="button"
               variant="outline"
               size="sm"
@@ -122,7 +123,12 @@ function ProjectsIndexContent() {
             </Button>
           ) : null}
           {hasProjects ? (
-            <Button type="button" size="sm" render={<Link to="/new-project" />}>
+            <Button
+              nativeButton={false}
+              type="button"
+              size="sm"
+              render={<Link to="/new-project" />}
+            >
               New project
             </Button>
           ) : null}
@@ -141,7 +147,12 @@ function ProjectsIndexContent() {
                 Create your first project to start using OS.
               </p>
             </div>
-            <Button type="button" size="sm" render={<Link to="/new-project" />}>
+            <Button
+              nativeButton={false}
+              type="button"
+              size="sm"
+              render={<Link to="/new-project" />}
+            >
               Create new project
             </Button>
           </div>

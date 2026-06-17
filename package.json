@@ -20,6 +20,7 @@
     "lint:fix": "oxlint . --fix",
     "knip": "knip --workspace apps/os --workspace apps/semaphore --workspace apps/streams-example-app --workspace packages/shared",
     "prepare": "is-ci || husky",
+    "spec": "playwright test --config playwright.config.ts",
     "vitest": "pnpm --dir apps/os test",
     "test": "pnpm -r --parallel --filter '!iterate' test",
     "test:onboarding": "pnpm -r --parallel --filter '!iterate' test:onboarding",
@@ -34,6 +35,9 @@
     "auth:mint": "tsx scripts/auth/mint-session.ts"
   },
   "devDependencies": {
+    "@iterate-com/auth-contract": "workspace:*",
+    "@iterate-com/shared": "workspace:*",
+    "@playwright/test": "1.60.0",
     "@tanstack/eslint-plugin-router": "^1.139.0",
     "@types/node": "^24.10.1",
     "@typescript/native-preview": "^7.0.0-dev.20260203.1",
@@ -47,8 +51,10 @@
     "is-ci": "4.1.0",
     "knip": "^6.0.5",
     "lint-staged": "^16.2.7",
+    "middlewright": "^0.1.0",
     "oxfmt": "^0.35.0",
     "oxlint": "^1.50.0",
+    "playwright": "1.60.0",
     "skills": "^1.4.5",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"

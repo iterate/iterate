@@ -139,6 +139,13 @@ const config: KnipConfig = {
   // Keep the config honest in CI/local runs: if Knip thinks our patterns or
   // workspace setup drifted, fail instead of silently warning.
   treatConfigHintsAsErrors: true,
+  entry: [
+    "playwright.config.ts",
+    "specs/**/*.spec.ts",
+    "specs/seed-local-auth.ts",
+    "specs/start-local-dev.ts",
+  ],
+  project: ["playwright.config.ts", "specs/**/*.ts"],
   // Keep this root command intentionally scoped. When Knip includes dependent
   // workspaces for a selected package, we still do not want it wandering into
   // unrelated apps with heavyweight config loading.
