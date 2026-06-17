@@ -5,6 +5,7 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import { Link, createFileRoute } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
 import { FolderPlus } from "lucide-react";
 import { useAuthClient } from "@iterate-com/auth/client";
 import { Button } from "@iterate-com/ui/components/button";
@@ -14,7 +15,12 @@ import type { ReactNode } from "react";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
-import { myProjectsQueryOptions, type Project } from "~/lib/project-server-fns.ts";
+import {
+  createProjectServerFn,
+  listMyProjectsServerFn,
+  myProjectsQueryOptions,
+  type Project,
+} from "~/lib/project-server-fns.ts";
 import { reconnectItx, useItx } from "~/itx/itx-react.tsx";
 
 type OrganizationSummary = {
@@ -57,8 +63,13 @@ function ProjectsIndexContent() {
   const isAdmin = session?.authenticated ? session.user.isAdmin === true : false;
   const itx = useItx();
   const queryClient = useQueryClient();
+  const listMyProjectsFn = useServerFn(listMyProjectsServerFn);
+  const createProjectFn = useServerFn(createProjectServerFn);
   const listQueryOptions = myProjectsQueryOptions();
-  const list = useQuery(listQueryOptions);
+  const list = useQuery({
+    ...listQueryOptions,
+    queryFn: () => listMyProjectsFn({ data: { limit: 100, offset: 0 } }),
+  });
   const projects = list.data?.projects ?? [];
 
   // The scoped oRPC list intentionally merges two sources:
@@ -87,10 +98,12 @@ function ProjectsIndexContent() {
       const organizationSlug = project.organizationId
         ? organizations.find((organization) => organization.id === project.organizationId)?.slug
         : undefined;
-      return await itx.projects.create({
-        id: project.id,
-        slug: project.slug,
-        organizationSlug,
+      return await createProjectFn({
+        data: {
+          id: project.id,
+          slug: project.slug,
+          organizationSlug,
+        },
       });
     },
     onSuccess: async () => {

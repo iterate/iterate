@@ -1,5 +1,8 @@
 import { createServerFn } from "@tanstack/react-start";
 import { ProjectsCapability } from "~/domains/projects/project-directory.ts";
+import { principalIsAdmin } from "~/auth/principal.ts";
+import { countAllProjects, listAllProjects } from "~/db/queries/.generated/index.ts";
+import { authenticateCapnwebAdmin } from "~/itx/admin-auth-cookie.ts";
 import { requireRequestContext } from "~/request-context.ts";
 
 /**
@@ -44,6 +47,44 @@ export const listMyProjectsServerFn: (input: {
   .inputValidator((input: { limit?: number; offset?: number }) => input)
   .handler(async ({ data }) => {
     return await new ProjectsCapability({ context: requireRequestContext() }).list(data);
+  });
+
+/** All OS projects, guarded for the admin page. */
+export const listAdminProjectsServerFn: (input: {
+  data: { limit?: number; offset?: number };
+}) => Promise<ProjectListResult> = createServerFn({ method: "GET" })
+  .inputValidator((input: { limit?: number; offset?: number }) => input)
+  .handler(async ({ data }) => {
+    const context = requireRequestContext();
+    const adminCookiePrincipal = context.rawRequest
+      ? authenticateCapnwebAdmin({ config: context.config, request: context.rawRequest })
+      : null;
+    const isAdmin =
+      (context.principal ? principalIsAdmin(context.principal) : false) ||
+      adminCookiePrincipal !== null;
+    if (!isAdmin) {
+      throw new Error("Admin access required.");
+    }
+
+    const limit = data.limit ?? 100;
+    const offset = data.offset ?? 0;
+    const [totalRow, rows] = await Promise.all([
+      countAllProjects(context.db),
+      listAllProjects(context.db, { limit, offset }),
+    ]);
+
+    return {
+      projects: rows.map((row) => ({
+        id: row.id,
+        slug: row.slug,
+        organizationId: null,
+        customHostname: row.custom_hostname ?? null,
+        createdAt: row.created_at ?? null,
+        updatedAt: row.updated_at ?? null,
+        isOrphanedProjectFromAuthService: false,
+      })),
+      total: totalRow?.total ?? 0,
+    };
   });
 
 /**

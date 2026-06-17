@@ -1,5 +1,6 @@
 import { useMemo, useState, type ReactElement } from "react";
 import { Link, useMatches, useMatchRoute } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
 import {
   ArrowLeft,
   Bug,
@@ -69,7 +70,7 @@ import {
 } from "@iterate-com/ui/components/sidebar";
 import type { AppConfig } from "~/config.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
-import { myProjectsQueryOptions } from "~/lib/project-server-fns.ts";
+import { listMyProjectsServerFn, myProjectsQueryOptions } from "~/lib/project-server-fns.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
 
 type PublicConfig = PublicAppConfig<AppConfig>;
@@ -106,7 +107,7 @@ export function AppSidebar({ routeConfig }: AppSidebarProps) {
 function AppSidebarHeader() {
   const matches = useMatches();
   const { isMobile } = useSidebar();
-  const { data } = useQuery(myProjectsQueryOptions());
+  const { data } = useMyProjectsQuery();
   const projects =
     data?.projects.filter((project) => !project.isOrphanedProjectFromAuthService) ?? [];
   const activeProjectSlug = getActiveProjectSlug(matches);
@@ -376,7 +377,7 @@ function authWorkerOrigin(config: PublicConfig) {
 function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
   const matchRoute = useMatchRoute();
   const matches = useMatches();
-  const { data } = useQuery(myProjectsQueryOptions());
+  const { data } = useMyProjectsQuery();
   const projects =
     data?.projects.filter((project) => !project.isOrphanedProjectFromAuthService) ?? [];
   const activeProjectSlug = getActiveProjectSlug(matches);
@@ -460,6 +461,14 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
       </SidebarGroup>
     </>
   );
+}
+
+function useMyProjectsQuery() {
+  const listMyProjectsFn = useServerFn(listMyProjectsServerFn);
+  return useQuery({
+    ...myProjectsQueryOptions(),
+    queryFn: () => listMyProjectsFn({ data: { limit: 100, offset: 0 } }),
+  });
 }
 
 function getActiveProjectSlug(matches: ReturnType<typeof useMatches>) {
