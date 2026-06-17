@@ -6,7 +6,7 @@
 //
 //   /api/itx                         -> admin-only platform root
 //   /api/itx/<projectId>             -> project context
-//   project.agents.get("/agents/x")  -> agent DO public surface, including itx
+//   project.agents.get("/agents/x")  -> agent ITX surface
 //
 // There is no global/`__global__` context: a project is its own ITX root, and
 // cross-project / platform reach lives ONLY behind the admin root.
@@ -629,57 +629,6 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 }
 
-class AgentRpcTarget extends RpcTarget {
-  #agent: AgentDurableObject & ItxHostNode;
-  #project: ItxHostNode;
-
-  constructor(input: { path: string; projectId: string }) {
-    super();
-    this.#agent = (workerEnv as unknown as Env).AGENT.getByName(
-      formatDurableObjectName({ projectId: input.projectId, path: input.path }),
-    ) as unknown as AgentDurableObject & ItxHostNode;
-    this.#project = (workerEnv as unknown as Env).PROJECT.getByName(
-      formatDurableObjectName({ projectId: input.projectId, path: "/" }),
-    ) as unknown as ItxHostNode;
-  }
-
-  get itx(): ItxContext {
-    return itxHandleForNode(this.#agent);
-  }
-
-  get project(): ItxContext {
-    return itxHandleForNode(this.#project);
-  }
-
-  whoami() {
-    return this.#agent.whoami();
-  }
-
-  sendMessage(input: { message: string; channel?: string }) {
-    return this.#agent.sendMessage(input);
-  }
-
-  provideCapability(args: ProvideArgs) {
-    return this.#agent.provideCapability(args);
-  }
-
-  invokeCapability(args: { path: string[]; args?: unknown[] }) {
-    return this.#agent.invokeCapability(args);
-  }
-
-  revokeCapability(args: { path: string[] }) {
-    return this.#agent.revokeCapability(args);
-  }
-
-  describe() {
-    return this.#agent.describe();
-  }
-
-  runScript(args: { code: string }) {
-    return this.#agent.runScript(args);
-  }
-}
-
 class RepoRpcTarget extends RpcTarget {
   #path: string;
   #projectId: string;
@@ -711,14 +660,10 @@ class AgentsRpcTarget extends RpcTarget {
 
   get(agentPathInput: string) {
     const path = normalizeAgentPath(agentPathInput);
-    return new AgentRpcTarget({ projectId: this.#projectId, path });
-  }
-
-  async sendMessage(input: { agentPath: string; message: string; channel?: string }) {
-    return await this.get(input.agentPath).sendMessage({
-      message: input.message,
-      channel: input.channel,
-    });
+    const agent = (workerEnv as unknown as Env).AGENT.getByName(
+      formatDurableObjectName({ projectId: this.#projectId, path }),
+    ) as unknown as ItxHostNode;
+    return agent.itx;
   }
 }
 

@@ -129,7 +129,7 @@ export function withItx<T = any>(input: WithItxInput): T {
     input.token ? { authorization: `Bearer ${input.token}` } : undefined,
   );
   const path = input.path ?? "/";
-  const target = path === "/" ? session : session.agents.get(path).itx;
+  const target = path === "/" ? session : session.agents.get(path);
   return new Proxy(target, {
     get(target, key, receiver) {
       if (key === Symbol.dispose) return () => session[Symbol.dispose]?.();

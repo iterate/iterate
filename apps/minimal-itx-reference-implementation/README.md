@@ -66,7 +66,7 @@ get an agent's ITX through the project-local agents capability:
 ```ts
 using project = withItx({ projectId: "prj_ref", token: "alice-token" });
 const agent = project.agents.get("/agents/alice");
-await agent.itx.whoami();
+await agent.whoami();
 ```
 
 There is no global project context — a project is the root of its own ITX.

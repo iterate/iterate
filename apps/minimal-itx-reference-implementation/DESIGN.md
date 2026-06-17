@@ -129,8 +129,7 @@ change, not a log rewrite.
 
 `project.agents.get("/agents/alice")` accepts only a full project-local agent
 path. The Project ID and Durable Object namespace/name are derived by the
-project host, and the returned RPC target forwards all public methods on the
-Agent Durable Object, including `agent.itx`.
+project host, and the returned value is that agent's ITX surface.
 
 `RepoDurableObject` is deliberately fake. It only exposes `counter.js`, a
 hard-coded source file that exports both `CounterEntrypoint` and
@@ -201,7 +200,7 @@ Every target is `pathInvokerToProxy({ invokeCapability })`. `/api/itx`
 serves the admin Root ITX. `/api/itx/<projectId>` serves the project context by
 forwarding into `ProjectDurableObject.invokeCapability`. There is no public agent connect
 endpoint: a caller gets an agent through `project.agents.get("/agents/name")`
-and then uses `agent.itx`. Do not pass a raw Durable Object stub straight to
+and then calls it directly. Do not pass a raw Durable Object stub straight to
 `pathInvokerToProxy`: DO stubs make arbitrary properties look callable,
 which is precisely the ambiguity this proxy avoids.
 

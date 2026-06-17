@@ -295,7 +295,7 @@ describe("itx reference implementation", () => {
     expect(project.builtins[0].path).toEqual([]);
     expect(project.builtins[0].address).toBeNull();
     const path = agentPath("via-agents");
-    const viaProject = projectItxHandle.agents.get(path).itx;
+    const viaProject = projectItxHandle.agents.get(path);
     expect(await viaProject.whoami()).toBe(`agent prj_ref:${path}`);
     expect((d as any).parentCapabilities).toBeUndefined();
   });
