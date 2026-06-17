@@ -140,8 +140,8 @@ OS dev configs run fully locally on `http://localhost:<port>`. Personal configs
 such as `dev_jonas`, `dev_misha`, and `dev_rahul` may still carry personal
 integration secrets, but they should not carry app/MCP/project-host URL
 overrides. OS writes the selected localhost URL to
-`apps/os/.alchemy/dev-server.json`, and local MCP is path-mounted at
-`<baseUrl>/api/__mcp`; `mcp.localhost` is not portable across local resolvers.
+`apps/os/.alchemy/dev-server.json`, and local MCP is served at
+`<baseUrl>/api/mcp`; `mcp.localhost` is not portable across local resolvers.
 
 ## Environment Configs
 

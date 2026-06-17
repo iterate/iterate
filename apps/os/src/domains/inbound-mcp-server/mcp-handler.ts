@@ -4,89 +4,159 @@ import {
   listProjectScopeIds,
 } from "@iterate-com/shared/auth-claims";
 import { oauthResourceAudienceVariants } from "@iterate-com/shared/oauth-resource";
-import { McpAgent } from "agents/mcp";
-import { createD1Client } from "sqlfu";
-import type { AppConfig } from "~/config.ts";
-import { authenticateAdminBearer } from "~/auth/admin.ts";
-import { principalFromAccessToken, type Principal } from "~/auth/principal.ts";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { createMcpHandler } from "agents/mcp";
+import { z } from "zod";
+import packageJson from "../../../package.json" with { type: "json" };
+import { authenticateAdminApiSecret } from "~/auth/admin.ts";
+import { principalFromAccessToken } from "~/auth/principal.ts";
 import { listAllProjects } from "~/db/queries/.generated/index.ts";
-import { isBrowserMcpInstructionsRequest } from "~/domains/inbound-mcp-server/mcp-instructions-request.ts";
-import {
-  matchMcpRequestUrl,
-  normalizeMcpBaseUrl,
-  publicMcpRequestUrl,
-  stripTrailingSlash,
-} from "~/domains/inbound-mcp-server/mcp-url-routing.ts";
-import { resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
-import type {
-  ProjectMcpServerConnectionProject,
-  ProjectMcpServerConnectionProps,
-} from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
+import { projectContextRef } from "~/itx/coordinates.ts";
+import type { ItxRuntime } from "~/itx/handle.ts";
+import { runItxScript } from "~/itx/run.ts";
+import { MCP_START_MOUNT_PATH, resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
+import type { RequestContext } from "~/request-context.ts";
 
-type McpHandlerInput = {
-  request: Request;
-  env: Env;
-  ctx: ExecutionContext;
-  config: AppConfig;
+type ProjectGrant = {
+  id: string;
+  slug: string;
 };
 
-const internalMcpHandlerPath = "/__iterate/internal-mcp";
-const mcpHandler = McpAgent.serve(internalMcpHandlerPath, {
-  binding: "PROJECT_MCP_SERVER_CONNECTION",
+type McpAuth = {
+  authType: "admin_api_secret" | "oauth_access_token";
+  projects: ProjectGrant[];
+  scopes: string[];
+};
+
+const requiredToolScope = "profile";
+const ExecJsInput = z.object({
+  code: z
+    .string()
+    .describe(
+      "JavaScript async arrow function to execute, e.g. async (itx) => { return await itx.describe(); }",
+    ),
+  project: z.string().optional().describe("Project slug to run this code against."),
 });
 
 export const mcpCorsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
-    "Authorization, Content-Type, Mcp-Session-Id, Mcp-Protocol-Version, Last-Event-ID",
+    "Authorization, Content-Type, Mcp-Session-Id, Mcp-Protocol-Version, Last-Event-ID, Accept",
   "Access-Control-Expose-Headers": "WWW-Authenticate, Mcp-Session-Id, Mcp-Protocol-Version",
   "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
 };
 
-// Two ways to authenticate an MCP request, tried in order:
-// 1. The platform admin API secret (authenticateAdminMcpRequest): full access
-//    to every project in this deployment.
-// 2. An Iterate Auth OAuth bearer token: project access is the intersection of
-//    two independent gates — the token's `projects` claim (which projects the
-//    user belongs to / selected during the OAuth flow) and its `project:<id>`
-//    scope entries. A Better Auth admin-role token skips the scope gate but not
-//    the claim gate, so even a platform admin's token only reaches projects
-//    listed in its claims.
-export async function handleMcpFetch(input: McpHandlerInput): Promise<Response | null> {
-  const routeMatch = matchConfiguredMcpBaseUrl(input);
-  if (!routeMatch) return null;
-
+export async function handleInboundMcpRequest(input: {
+  context: RequestContext;
+  env: Env;
+  request: Request;
+}): Promise<Response> {
+  const pathname = new URL(input.request.url).pathname;
   if (input.request.method === "OPTIONS") {
     return new Response(null, { headers: mcpCorsHeaders });
   }
-
-  if (routeMatch.relativePathname === "/.well-known/oauth-protected-resource") {
-    return Response.json(buildProtectedResourceMetadata(input), { headers: mcpCorsHeaders });
+  if (pathname === `${MCP_START_MOUNT_PATH}/.well-known/oauth-protected-resource`) {
+    return Response.json(protectedResourceMetadata(input), { headers: mcpCorsHeaders });
   }
-
-  if (routeMatch.relativePathname !== "/") {
+  if (pathname !== MCP_START_MOUNT_PATH && pathname !== `${MCP_START_MOUNT_PATH}/`) {
     return new Response("Not found", { status: 404, headers: mcpCorsHeaders });
   }
 
-  if (isBrowserMcpInstructionsRequest(input.request)) {
-    return mcpInstructionsPageResponse(input);
-  }
+  const auth = await resolveMcpAuth(input);
+  if (auth instanceof Response) return auth;
 
-  const adminProps = await authenticateAdminMcpRequest(input);
-  if (adminProps instanceof Response) {
-    return adminProps;
-  }
-  if (adminProps) {
-    const ctxWithProps = input.ctx as ExecutionContext & {
-      props?: ProjectMcpServerConnectionProps;
+  const server = createServer({ ...input, auth });
+  const handler = createMcpHandler(server, {
+    enableJsonResponse: true,
+    route: MCP_START_MOUNT_PATH,
+    sessionIdGenerator: undefined,
+  });
+  return withCorsHeaders(
+    await handler(input.request, input.env, mcpExecutionContext(input.context)),
+  );
+}
+
+function createServer(input: { auth: McpAuth; context: RequestContext; env: Env }) {
+  const server = new McpServer(
+    { name: "os", version: packageJson.version },
+    {
+      instructions: [
+        "This is an Iterate OS project MCP server.",
+        "Use exec_js to run a JavaScript async arrow function against a project.",
+      ].join("\n"),
+    },
+  );
+
+  const projects = input.auth.projects;
+  const requireProjectInput = input.auth.authType === "admin_api_secret" || projects.length > 1;
+
+  server.registerTool(
+    "exec_js",
+    {
+      title: "Run code",
+      description:
+        "Execute JavaScript against an Iterate project. The code must be a single async arrow function: async (itx) => { ... }.",
+      inputSchema: ExecJsInput,
+    },
+    async (rawInput) => {
+      const parsedInput = ExecJsInput.parse(rawInput);
+      const project = resolveToolProject(projects, parsedInput.project, { requireProjectInput });
+      requireScope(input.auth, requiredToolScope);
+
+      const workerExports = input.context.workerExports;
+      if (!workerExports) throw new Error("MCP exec_js needs workerExports in request context.");
+
+      const outcome = await runItxScript({
+        env: input.env,
+        exports: workerExports as unknown as ItxRuntime["exports"],
+        functionSource: parsedInput.code,
+        projectId: project.id,
+        props: { context: projectContextRef(project.id) },
+      });
+
+      const parts: string[] = [];
+      if (outcome.logs.length > 0) parts.push(`Console:\n${outcome.logs.join("\n")}`);
+      parts.push(
+        outcome.ok
+          ? `Result: ${JSON.stringify(outcome.result, null, 2)}`
+          : `Error: ${outcome.error}`,
+      );
+
+      return {
+        content: [{ type: "text" as const, text: parts.join("\n\n") }],
+        isError: !outcome.ok,
+      };
+    },
+  );
+
+  return server;
+}
+
+async function resolveMcpAuth(input: {
+  context: RequestContext;
+  env: Env;
+  request: Request;
+}): Promise<McpAuth | Response> {
+  if (authenticateAdminApiSecret(input.context, input.request)) {
+    const projects = await listAllProjects(input.context.db, { limit: 10_000, offset: 0 });
+    if (projects.length === 0) {
+      return new Response("No projects are available to this admin MCP token.", {
+        status: 403,
+        headers: mcpCorsHeaders,
+      });
+    }
+    return {
+      authType: "admin_api_secret",
+      projects: projects.map((project) => ({
+        id: project.id,
+        slug: project.slug,
+      })),
+      scopes: [],
     };
-    ctxWithProps.props = adminProps;
-    return withCorsHeaders(
-      await mcpHandler.fetch(mcpHandlerRequest(input.request), input.env, input.ctx),
-    );
   }
 
-  const auth = createMcpIterateAuth(input);
+  const mcpAudiences = oauthResourceAudienceVariants(canonicalMcpResourceUrl(input));
+  const auth = createMcpIterateAuth(input, mcpAudiences);
   if (!auth) {
     return new Response("Iterate auth is not configured.", {
       status: 503,
@@ -95,8 +165,10 @@ export async function handleMcpFetch(input: McpHandlerInput): Promise<Response |
   }
 
   const accessToken = await auth.authenticateBearer({ headers: input.request.headers });
-  if (!accessToken) {
-    return unauthorizedMcpResponse(input, "Missing or invalid bearer token");
+  if (!accessToken) return unauthorizedMcpResponse(input, "Missing or invalid bearer token");
+  const audiences = Array.isArray(accessToken.aud) ? accessToken.aud : [accessToken.aud];
+  if (!audiences.some((audience) => mcpAudiences.includes(audience))) {
+    return unauthorizedMcpResponse(input, "Bearer token is not scoped to this MCP resource");
   }
 
   const scopes = readAccessTokenScopes(accessToken);
@@ -105,16 +177,11 @@ export async function handleMcpFetch(input: McpHandlerInput): Promise<Response |
   const projects = principal.projects.flatMap((project) => {
     if (!principal.isAdmin && !grantedProjectIds.has(project.id)) return [];
 
-    const organization = principal.organizations.find((org) => org.id === project.organizationId);
     return [
       {
         id: project.id,
         slug: project.slug,
-        organizationId: project.organizationId,
-        organizationPermissions: [],
-        organizationRole: organization?.role ?? null,
-        organizationSlug: organization?.slug ?? null,
-      } satisfies ProjectMcpServerConnectionProject,
+      } satisfies ProjectGrant,
     ];
   });
 
@@ -125,115 +192,66 @@ export async function handleMcpFetch(input: McpHandlerInput): Promise<Response |
     });
   }
 
-  const ctxWithProps = input.ctx as ExecutionContext & { props?: ProjectMcpServerConnectionProps };
-  ctxWithProps.props = propsFromPrincipal({
-    clientId: accessToken.azp ?? null,
-    principal,
+  return {
+    authType: "oauth_access_token",
     projects,
     scopes,
-  });
-
-  return withCorsHeaders(
-    await mcpHandler.fetch(mcpHandlerRequest(input.request), input.env, input.ctx),
-  );
+  };
 }
 
-async function authenticateAdminMcpRequest(input: McpHandlerInput) {
-  if (
-    !authenticateAdminBearer({
-      authorizationHeader: input.request.headers.get("authorization"),
-      config: input.config,
-    })
-  ) {
-    return null;
-  }
-
-  const db = createD1Client(input.env.DB);
-  const projects = await listAllProjects(db, { limit: 10_000, offset: 0 });
-  if (projects.length === 0) {
-    return new Response("No projects are available to this admin MCP token.", {
-      status: 403,
-      headers: mcpCorsHeaders,
-    });
-  }
-
-  return {
-    authType: "admin_api_secret",
-    clientId: "admin-api-secret",
-    orgId: "admin-api",
-    orgPermissions: ["admin:api"],
-    orgRole: "admin",
-    orgSlug: null,
-    projectId: null,
-    projectSlug: null,
-    projects: projects.map((project) => ({
-      id: project.id,
-      slug: project.slug,
-      organizationId: "admin-api",
-      organizationPermissions: ["admin:api"],
-      organizationRole: "admin",
-      organizationSlug: null,
-    })),
-    scopes: [],
-    userId: "admin-api-secret",
-  } satisfies ProjectMcpServerConnectionProps;
-}
-
-function matchConfiguredMcpBaseUrl(input: McpHandlerInput) {
-  return matchMcpRequestUrl({
-    appBaseUrl: input.config.baseUrl,
-    mcpBaseUrl: input.config.mcp?.baseUrl,
-    requestUrl: publicMcpRequestUrl(input.request),
-  });
-}
-
-function mcpHandlerRequest(request: Request) {
-  const url = new URL(request.url);
-  url.pathname = internalMcpHandlerPath;
-  return new Request(url, request);
-}
-
-function createMcpIterateAuth(input: McpHandlerInput) {
-  const config = input.config.iterateAuth;
+function createMcpIterateAuth(
+  input: { context: RequestContext; request: Request },
+  resources: readonly string[],
+) {
+  const config = input.context.config.iterateAuth;
   if (!config) return null;
 
-  const baseUrl = (input.config.baseUrl ?? new URL(input.request.url).origin).replace(/\/+$/, "");
+  const requestOrigin = new URL(input.request.url).origin;
+  const baseUrl = (input.context.config.baseUrl ?? requestOrigin).replace(/\/+$/, "");
   return createIterateAuth({
     issuer: config.issuer,
     clientId: config.clientId,
     clientSecret: config.clientSecret.exposeSecret(),
+    jwks: config.jwks,
     redirectURI: `${baseUrl}/api/iterate-auth/callback`,
-    resource: oauthResourceAudienceVariants(canonicalMcpResourceUrl(input)),
+    resource: [...resources],
   });
 }
 
-function propsFromPrincipal(input: {
-  clientId: string | null;
-  principal: Extract<Principal, { type: "user" }>;
-  projects: ProjectMcpServerConnectionProject[];
-  scopes: string[];
-}): ProjectMcpServerConnectionProps {
-  const firstProject = input.projects[0];
-  return {
-    authType: "oauth_access_token",
-    clientId: input.clientId,
-    orgId: firstProject.organizationId,
-    orgPermissions: firstProject.organizationPermissions,
-    orgRole: firstProject.organizationRole,
-    orgSlug: firstProject.organizationSlug,
-    projectId: input.projects.length === 1 ? firstProject.id : null,
-    projectSlug: input.projects.length === 1 ? firstProject.slug : null,
-    projects: input.projects,
-    scopes: input.scopes,
-    userId: input.principal.userId,
-  };
+function readAccessTokenScopes(accessToken: { scope?: string; scopes?: string[] }) {
+  if (accessToken.scopes) return accessToken.scopes;
+  return accessToken.scope?.split(" ").filter(Boolean) ?? [];
 }
 
-function buildProtectedResourceMetadata(input: McpHandlerInput) {
+function resolveToolProject(
+  projects: ProjectGrant[],
+  requestedProject: string | undefined,
+  options: { requireProjectInput: boolean },
+) {
+  if (!options.requireProjectInput && !requestedProject) return projects[0];
+
+  const normalizedRequestedProject = requestedProject?.trim();
+  if (!normalizedRequestedProject) throw new Error("Pass a project slug.");
+
+  const project = projects.find((candidate) => candidate.slug === normalizedRequestedProject);
+  if (!project) {
+    throw new Error(`MCP token does not grant access to project: ${normalizedRequestedProject}`);
+  }
+  return project;
+}
+
+function requireScope(auth: McpAuth, scope: string) {
+  if (auth.authType === "admin_api_secret") return;
+  if (!auth.scopes.includes(scope)) {
+    throw new Error(`MCP token is missing required scope: ${scope}`);
+  }
+}
+
+function protectedResourceMetadata(input: { context: RequestContext; request: Request }) {
   return {
     resource: canonicalMcpResourceUrl(input),
     authorization_servers: [
-      input.config.iterateAuth?.issuer ?? "https://auth.iterate.com/api/auth",
+      input.context.config.iterateAuth?.issuer ?? "https://auth.iterate.com/api/auth",
     ],
     scopes_supported: [
       "openid",
@@ -246,23 +264,20 @@ function buildProtectedResourceMetadata(input: McpHandlerInput) {
   };
 }
 
-function readAccessTokenScopes(accessToken: { scope?: string; scopes?: string[] }) {
-  if (accessToken.scopes) return accessToken.scopes;
-  return accessToken.scope?.split(" ").filter(Boolean) ?? [];
-}
-
-function canonicalMcpResourceUrl(input: McpHandlerInput) {
+function canonicalMcpResourceUrl(input: { context: RequestContext; request: Request }) {
   const rawUrl = resolveMcpBaseUrl({
-    appBaseUrl: input.config.baseUrl,
-    mcpBaseUrl: input.config.mcp?.baseUrl,
+    appBaseUrl: input.context.config.baseUrl,
+    mcpBaseUrl: input.context.config.mcp?.baseUrl,
     requestUrl: input.request.url,
   });
   if (!rawUrl) throw new Error("APP_CONFIG_MCP__BASE_URL is required for MCP requests.");
-  const baseUrl = normalizeMcpBaseUrl(rawUrl);
-  return stripTrailingSlash(baseUrl.toString());
+  return rawUrl;
 }
 
-function unauthorizedMcpResponse(input: McpHandlerInput, message: string) {
+function unauthorizedMcpResponse(
+  input: { context: RequestContext; request: Request },
+  message: string,
+) {
   const metadataUrl = new URL(
     ".well-known/oauth-protected-resource",
     `${canonicalMcpResourceUrl(input)}/`,
@@ -276,52 +291,13 @@ function unauthorizedMcpResponse(input: McpHandlerInput, message: string) {
   });
 }
 
-function mcpInstructionsPageResponse(input: McpHandlerInput) {
-  const mcpUrl = canonicalMcpResourceUrl(input);
-  const metadataUrl = new URL(
-    ".well-known/oauth-protected-resource",
-    `${canonicalMcpResourceUrl(input)}/`,
-  ).toString();
-  const claudeCommand = `claude mcp add --transport http iterate ${mcpUrl}`;
-
-  return new Response(
-    `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Iterate MCP</title>
-  <style>
-    body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #fafafa; color: #171717; }
-    main { max-width: 720px; padding: 32px 20px; margin: 0 auto; }
-    h1 { font-size: 22px; margin: 0 0 8px; }
-    p { color: #525252; line-height: 1.5; }
-    section { margin-top: 16px; border: 1px solid #e5e5e5; border-radius: 8px; background: white; padding: 16px; }
-    code { display: block; overflow-wrap: anywhere; white-space: pre-wrap; border-radius: 6px; background: #f5f5f5; padding: 12px; font: 13px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
-    a { color: #155dfc; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>Iterate MCP</h1>
-    <p>Connect an MCP client to Iterate OS. The auth flow lets you choose which projects this client can access.</p>
-    <section>
-      <p>Endpoint</p>
-      <code>${escapeHtml(mcpUrl)}</code>
-    </section>
-    <section>
-      <p>Protected resource metadata</p>
-      <code>${escapeHtml(metadataUrl)}</code>
-    </section>
-    <section>
-      <p>Claude Code</p>
-      <code>${escapeHtml(claudeCommand)}</code>
-    </section>
-  </main>
-</body>
-</html>`,
-    { headers: { ...mcpCorsHeaders, "Content-Type": "text/html; charset=utf-8" } },
-  );
+function mcpExecutionContext(context: RequestContext): ExecutionContext {
+  return {
+    exports: context.workerExports ?? ({} as Cloudflare.Exports),
+    passThroughOnException() {},
+    props: {},
+    waitUntil: (promise: Promise<unknown>) => context.waitUntil?.(promise),
+  } as ExecutionContext;
 }
 
 function withCorsHeaders(response: Response) {
@@ -334,8 +310,4 @@ function withCorsHeaders(response: Response) {
     statusText: response.statusText,
     headers,
   });
-}
-
-function escapeHtml(value: string) {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }

@@ -19,6 +19,7 @@ import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as PosthogProxySplatRouteImport } from './routes/posthog-proxy.$'
+import { Route as ApiMcpRouteImport } from './routes/api.mcp'
 import { Route as ApiHealthRouteImport } from './routes/api.health'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
 import { Route as AdminReplRouteImport } from './routes/admin/repl'
@@ -102,6 +103,11 @@ const SignInSplatRoute = SignInSplatRouteImport.update({
 const PosthogProxySplatRoute = PosthogProxySplatRouteImport.update({
   id: '/posthog-proxy/$',
   path: '/posthog-proxy/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiMcpRoute = ApiMcpRouteImport.update({
+  id: '/api/mcp',
+  path: '/api/mcp',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiHealthRoute = ApiHealthRouteImport.update({
@@ -319,6 +325,7 @@ export interface FileRoutesByFullPath {
   '/admin/repl': typeof AdminReplRoute
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
+  '/api/mcp': typeof ApiMcpRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -361,6 +368,7 @@ export interface FileRoutesByTo {
   '/admin/repl': typeof AdminReplRoute
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
+  '/api/mcp': typeof ApiMcpRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -405,6 +413,7 @@ export interface FileRoutesById {
   '/admin/repl': typeof AdminReplRoute
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
+  '/api/mcp': typeof ApiMcpRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -453,6 +462,7 @@ export interface FileRouteTypes {
     | '/admin/repl'
     | '/api/$'
     | '/api/health'
+    | '/api/mcp'
     | '/posthog-proxy/$'
     | '/sign-in/$'
     | '/sign-up/$'
@@ -495,6 +505,7 @@ export interface FileRouteTypes {
     | '/admin/repl'
     | '/api/$'
     | '/api/health'
+    | '/api/mcp'
     | '/posthog-proxy/$'
     | '/sign-in/$'
     | '/sign-up/$'
@@ -538,6 +549,7 @@ export interface FileRouteTypes {
     | '/admin/repl'
     | '/api/$'
     | '/api/health'
+    | '/api/mcp'
     | '/posthog-proxy/$'
     | '/sign-in/$'
     | '/sign-up/$'
@@ -579,6 +591,7 @@ export interface RootRouteChildren {
   DocsRoute: typeof DocsRouteWithChildren
   ApiSplatRoute: typeof ApiSplatRoute
   ApiHealthRoute: typeof ApiHealthRoute
+  ApiMcpRoute: typeof ApiMcpRoute
   PosthogProxySplatRoute: typeof PosthogProxySplatRoute
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
@@ -654,6 +667,13 @@ declare module '@tanstack/react-router' {
       path: '/posthog-proxy/$'
       fullPath: '/posthog-proxy/$'
       preLoaderRoute: typeof PosthogProxySplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/mcp': {
+      id: '/api/mcp'
+      path: '/api/mcp'
+      fullPath: '/api/mcp'
+      preLoaderRoute: typeof ApiMcpRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/health': {
@@ -1111,6 +1131,7 @@ const rootRouteChildren: RootRouteChildren = {
   DocsRoute: DocsRouteWithChildren,
   ApiSplatRoute: ApiSplatRoute,
   ApiHealthRoute: ApiHealthRoute,
+  ApiMcpRoute: ApiMcpRoute,
   PosthogProxySplatRoute: PosthogProxySplatRoute,
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,

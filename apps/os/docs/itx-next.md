@@ -424,13 +424,11 @@ The plan:
 - Per-function-call events (`function-call-requested/completed`) die. If we
   want call-level audit later it's one hook in `ContextRegistry.invoke` —
   the single supervisor dispatch — covering every cap uniformly.
-- `ProjectMcpServerConnection` shrinks to: authenticate → fork-or-reuse a
-  child context per MCP session → append/run/await → format (~750 lines →
-  ~150).
-- Needed along the way: per-context execution streams. Child-context audit
-  currently lands on the project's `/itx` stream (D9); execution events want
-  the session's history self-contained (e.g. `/itx/ctx_…`). Decide path
-  scheme.
+- The inbound MCP route is stateless: authenticate each request, select a
+  project, run `exec_js` against the project context, and format the result.
+- Needed along the way: explicit execution handles if MCP tools need durable
+  state beyond the project context. Do not hide application state in MCP
+  transport sessions.
 
 ### Providing capabilities via events?
 

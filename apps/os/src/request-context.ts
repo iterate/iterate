@@ -1,4 +1,3 @@
-import { getGlobalStartContext } from "@tanstack/react-start";
 import type { Client } from "sqlfu";
 import type { SharedRequestLogger } from "@iterate-com/shared/request-logging";
 import type { AuthenticatedSession } from "@iterate-com/auth/server";
@@ -36,11 +35,17 @@ export interface RequestContext {
   iterateAuthSession?: AuthenticatedSession | null;
 }
 
-// Register the request context for both packages: in the installed versions,
-// `handler.fetch` (server entry) types its `context` option from
-// @tanstack/react-router's Register, while middleware and
-// getGlobalStartContext read @tanstack/react-start's. These are distinct
-// interfaces, so both need the augmentation.
+// Register the request context for both public module surfaces used by Start:
+// - server-entry's `handler.fetch` reads `Register` from @tanstack/react-router
+// - createServerFn/createMiddleware read it through @tanstack/react-start
+//
+// TanStack's docs show the react-router augmentation for handler.fetch. In this
+// installed package set, removing the react-start augmentation makes server
+// functions and request middleware lose the base Worker context and see only
+// middleware-added fields.
+//
+// TODO: Retest this when upgrading TanStack Start; ideally the documented
+// react-router augmentation should be enough.
 declare module "@tanstack/react-start" {
   interface Register {
     server: {
@@ -55,28 +60,4 @@ declare module "@tanstack/react-router" {
       requestContext: RequestContext;
     };
   }
-}
-
-/**
- * Typed access to the request context from server code.
- *
- * `getGlobalStartContext()`'s own return type currently collapses to
- * `undefined` because of a type-level bug in start-client-core's
- * `AssignAllServerRequestContext` when the generated routeTree.gen.ts footer
- * registers `config` on the Register interface (`AssignAllMiddleware<[]>`
- * degenerates to `never`). The runtime value is exactly the context workers/app.ts
- * passes to `handler.fetch`, merged with what the auth request middleware adds
- * — both shapes are fields of RequestContext, so this cast states the truth.
- */
-export function getRequestContext(): RequestContext | undefined {
-  return getGlobalStartContext() as RequestContext | undefined;
-}
-
-/** Like getRequestContext, but for paths where workers/app.ts guarantees a context. */
-export function requireRequestContext(context?: RequestContext): RequestContext {
-  const resolved = context ?? (getGlobalStartContext() as RequestContext | undefined);
-  if (!resolved) {
-    throw new Error("Request context missing — handler.fetch was called without a context.");
-  }
-  return resolved;
 }

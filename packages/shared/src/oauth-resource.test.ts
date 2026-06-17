@@ -15,8 +15,8 @@ describe("OAuth resource helpers", () => {
   });
 
   it("does not add slash variants for resource audiences with paths", () => {
-    expect(oauthResourceAudienceVariants("http://localhost:7301/api/__mcp/")).toEqual([
-      "http://localhost:7301/api/__mcp",
+    expect(oauthResourceAudienceVariants("http://localhost:7301/api/mcp/")).toEqual([
+      "http://localhost:7301/api/mcp",
     ]);
   });
 

@@ -72,20 +72,6 @@ async function fetchWithTransientRetry(input: {
   throw new Error(`No response received from ${input.url}`);
 }
 
-async function expectOkText(input: { headers?: HeadersInit; url: URL }) {
-  const response = await fetchWithTransientRetry({
-    init: {
-      headers: input.headers,
-      redirect: "manual",
-    },
-    url: input.url,
-  });
-  if (!response.ok) {
-    throw new Error(`Expected ok response from ${input.url}; received ${response.status}.`);
-  }
-  return await response.text();
-}
-
 /**
  * Ensure one deterministic project exists, via project-scoped itx — the same
  * surface the browser/CLI use now that the oRPC REST routes are gone. The smoke
@@ -168,17 +154,6 @@ test("OS preview smoke", async () => {
   if (!projectMcpUrl) {
     console.log(`OS preview smoke passed for ${baseUrl.toString()} (MCP project seed skipped)`);
     return;
-  }
-
-  const instructionsHtml = await expectOkText({
-    headers: { accept: "text/html" },
-    url: projectMcpUrl,
-  });
-  if (
-    !instructionsHtml.includes("Connect an MCP client to Iterate OS") ||
-    !instructionsHtml.includes(projectMcpUrl.toString().replace(/\/+$/, ""))
-  ) {
-    throw new Error(`MCP instructions page did not contain setup text: ${instructionsHtml}`);
   }
 
   const projectMcpResponse = await expectStatus({

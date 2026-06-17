@@ -6,7 +6,6 @@ import {
   resolveProjectSlugFromHostname,
 } from "~/lib/project-host-routing.ts";
 import { isEventDocsHostname } from "~/lib/event-docs-host.ts";
-import { requireRequestContext } from "~/request-context.ts";
 
 export type RootAuthSnapshot = {
   authSession: PublicSessionResponse;
@@ -29,19 +28,18 @@ export type RootAuthSnapshot = {
  */
 export const fetchRootAuthSnapshot: () => Promise<RootAuthSnapshot> = createServerFn({
   method: "GET",
-}).handler(async (): Promise<RootAuthSnapshot> => {
-  const startContext = requireRequestContext();
+}).handler(async ({ context }): Promise<RootAuthSnapshot> => {
   return {
-    authSession: toPublicSession(startContext.iterateAuthSession),
-    iterateAuthIssuer: startContext.config.iterateAuth?.issuer,
+    authSession: toPublicSession(context.iterateAuthSession),
+    iterateAuthIssuer: context.config.iterateAuth?.issuer,
     currentProjectHostSlug: resolveCurrentProjectHostSlug({
-      baseUrl: startContext.config.baseUrl,
-      projectHostnameBases: startContext.config.projectHostnameBases ?? [],
-      requestUrl: startContext.rawRequest?.url,
+      baseUrl: context.config.baseUrl,
+      projectHostnameBases: context.config.projectHostnameBases ?? [],
+      requestUrl: context.rawRequest?.url,
     }),
     isEventDocsHost: isEventDocsHostname({
-      appBaseUrl: startContext.config.baseUrl,
-      requestUrl: startContext.rawRequest?.url,
+      appBaseUrl: context.config.baseUrl,
+      requestUrl: context.rawRequest?.url,
     }),
   };
 });

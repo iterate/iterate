@@ -16,11 +16,11 @@ canvas contents with sanitized HTML.
 
 This would give itx scripts and provider tools a durable visual sidecar:
 
-- multiple canvases per MCP session
+- multiple canvases per MCP client flow
 - each canvas can be updated independently
 - model-visible output stays concise
 - human-visible output can show live logs, tables, charts, artifacts, provider call graphs, approval UI, or replay state
-- the same event stream infrastructure used for MCP session telemetry can drive the UI
+- the same event stream infrastructure used for tool telemetry can drive the UI
 
 ## Findings
 
