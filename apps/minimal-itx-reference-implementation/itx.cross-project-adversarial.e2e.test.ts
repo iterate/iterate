@@ -1,7 +1,7 @@
 // Cross-project isolation, the adversarial view. Threat model: a principal that
-// legitimately holds a context in project A (here: alice in `shared`) tries to
-// reach project B (`bob`) or the admin `__null__` plane WITHOUT access. The only
-// authority decision is the connect door; everything else is confined by
+// legitimately holds a context in project A (here: alice in `prj_ref`) tries to
+// reach project B (`prj_bob`) or the admin `__null__` plane WITHOUT access. The
+// only authority decision is the connect door; everything else is confined by
 // construction. These tests assert that confinement holds.
 
 import { describe, expect, it } from "vitest";
@@ -18,7 +18,7 @@ describe("itx cross-project adversarial e2e", () => {
     await expectRejects(() =>
       itx.provideCapability({
         path: ["pwn"],
-        capability: { type: "durable-object", namespace: "itx", name: "bob:/" },
+        capability: { type: "durable-object", namespace: "itx", name: "prj_bob:/" },
       }),
     ).toThrow(/can only be host built-ins/);
 
@@ -47,7 +47,7 @@ describe("itx cross-project adversarial e2e", () => {
         capability: {
           type: "durable-object",
           namespace: "repo",
-          name: "shared:/repos/project",
+          name: "prj_ref:/repos/project",
         },
       }),
     ).toThrow(/can only be host built-ins/);
@@ -56,7 +56,7 @@ describe("itx cross-project adversarial e2e", () => {
   // Attack 2 is gone structurally: there is no global catalog to enumerate or
   // hop through, so the connect door is the whole boundary.
   it("denies connecting to a project the principal cannot access", async () => {
-    using denied = connect({ projectId: "bob", path: "/" }); // alice has no access to bob
+    using denied = connect({ projectId: "prj_bob", path: "/" });
     await expectRejects(() => denied.describe()).toThrow();
   });
 

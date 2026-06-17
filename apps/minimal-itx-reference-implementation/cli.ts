@@ -31,7 +31,7 @@ const script = new AsyncFunction("itx", "vars", arg("code"));
 using itx = withItx({
   baseUrl: arg("base-url", process.env.ITX_BASE ?? "http://127.0.0.1:8788"),
   path: arg("path", "/"),
-  projectId: arg("project-id", "shared"),
+  projectId: arg("project-id", "prj_ref"),
   token: arg("token", "alice-token"),
 });
 

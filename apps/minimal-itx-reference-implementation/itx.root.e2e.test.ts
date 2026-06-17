@@ -12,7 +12,7 @@ describe("itx admin root e2e", () => {
     using root = connectRoot();
 
     const projects = await root.projects.list();
-    expect([...projects].sort()).toEqual(["alice", "bob", "shared"]);
+    expect([...projects].sort()).toEqual(["prj_alice", "prj_bob", "prj_ref"]);
 
     // Streams are pre-scoped to __null__: the caller passes a PATH only.
     const path = `/integrations/slack/webhooks/${rid}`;

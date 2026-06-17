@@ -26,7 +26,7 @@ export const dynamicCalc = {
 /** A dynamic Durable Object facet sourced from the fake repo's counter.js. */
 export const repoCounter = {
   type: "dynamic-durable-object",
-  source: { type: "repo", repo: "shared:/repos/project", commit: "latest", path: "counter.js" },
+  source: { type: "repo", repo: "prj_ref:/repos/project", commit: "latest", path: "counter.js" },
   className: "CounterDurableObject",
 };
 

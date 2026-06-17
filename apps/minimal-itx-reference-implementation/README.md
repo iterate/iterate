@@ -38,7 +38,7 @@ Run one project with `npm test -- --project node` (or `--project browser`).
 ```ts
 import { withItx } from "./client.ts";
 
-using itx = withItx({ projectId: "shared", path: "/", token: "alice-token" });
+using itx = withItx({ projectId: "prj_ref", path: "/", token: "alice-token" });
 await itx.provideCapability({ path: ["greeter"], capability: (n) => `hi ${n}` });
 await itx.greeter("alice"); // "hi alice" — naked deep path, no client path proxy
 ```
@@ -64,7 +64,7 @@ The public connect shape is `/api/itx` for the admin platform root and
 get an agent's ITX through the project-local agents capability:
 
 ```ts
-using project = withItx({ projectId: "shared", token: "alice-token" });
+using project = withItx({ projectId: "prj_ref", token: "alice-token" });
 const agent = project.agents.get("/agents/alice");
 await agent.itx().whoami();
 ```
@@ -92,5 +92,5 @@ curl -sS \
   -H 'authorization: Bearer alice-token' \
   -H 'content-type: text/plain' \
   --data 'async () => "hello from curl"' \
-  'http://127.0.0.1:8788/api/itx/shared'
+  'http://127.0.0.1:8788/api/itx/prj_ref'
 ```

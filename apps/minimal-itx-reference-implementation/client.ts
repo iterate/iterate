@@ -92,7 +92,7 @@ export function connect<T>(url: string, headers?: Record<string, string>): T {
 export type WithItxInput = {
   /** Worker base url. Defaults to ITX_BASE or http://127.0.0.1:8788. */
   baseUrl?: string;
-  /** A project id like "shared" (required — there is no global context). */
+  /** A project id like "prj_ref" (required — there is no global context). */
   projectId?: string;
   /** Context path inside the project. "/" is the project root. */
   path?: string;

@@ -32,10 +32,10 @@ export type MatrixCoordinate = { path: string; projectId: string };
 
 /** The fresh coordinate an example runs at: agent examples get a unique agent
  *  path so durable state never bleeds between runs; project examples use the
- *  shared project root. */
+ *  prj_ref project root. */
 export function exampleCoordinate(example: ItxExample, label: string): MatrixCoordinate {
   const path = example.context === "agent" ? `/agents/matrix-${label}-${slug(example.id)}` : "/";
-  return { path, projectId: "shared" };
+  return { path, projectId: "prj_ref" };
 }
 
 export async function runExampleCode(

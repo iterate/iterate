@@ -22,18 +22,18 @@ export function baseUrl(): string {
 }
 
 /** The bearer token naming the demo principal (see auth.ts). Defaults to alice,
- *  who can reach projects ["alice", "shared"]. */
+ *  who can reach projects ["prj_alice", "prj_ref"]. */
 export function token(): string {
   return process.env.ITX_TOKEN?.trim() || "alice-token";
 }
 
 /** Connect a context handle on the running worker. Defaults to the demo
- *  principal and the shared project root; pass overrides for agent paths or
+ *  principal and the prj_ref project root; pass overrides for agent paths or
  *  other projects. */
 export function connect<T = any>(input: Partial<WithItxInput> = {}): T {
   return withItx<T>({
     baseUrl: baseUrl(),
-    projectId: "shared",
+    projectId: "prj_ref",
     path: "/",
     token: token(),
     ...input,

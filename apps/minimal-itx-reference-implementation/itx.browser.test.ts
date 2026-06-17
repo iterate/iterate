@@ -33,7 +33,7 @@ describe.skipIf(!__ITX_BROWSER_E2E__.baseUrl)("itx browser execution mode", () =
     const exampleCase = EXAMPLE_CASES[example.id]!;
     it(`runs catalogue example "${example.id}" in a browser tab`, async () => {
       const path = example.context === "agent" ? `/agents/browser-${rid}-${slug(example.id)}` : "/";
-      const runCtx = { marker: `browser-${rid}`, projectId: "shared" };
+      const runCtx = { marker: `browser-${rid}`, projectId: "prj_ref" };
 
       // Setup runs over a browser-owned connection — the SAME runtime-agnostic
       // verb calls as Node, just from a tab. Sturdy addresses are plain data,
@@ -79,7 +79,7 @@ describe.skipIf(!__ITX_BROWSER_E2E__.baseUrl)("itx browser execution mode", () =
 function connectFromBrowser(path: string): any {
   const wsBase = __ITX_BROWSER_E2E__.baseUrl.replace(/^http/, "ws");
   const params = new URLSearchParams({ token: __ITX_BROWSER_E2E__.token });
-  const session = newWebSocketRpcSession(new WebSocket(`${wsBase}/api/itx/shared?${params}`));
+  const session = newWebSocketRpcSession(new WebSocket(`${wsBase}/api/itx/prj_ref?${params}`));
   const target = path === "/" ? session : (session as any).agents.get(path).itx();
   return new Proxy(target, {
     get(target, key, receiver) {

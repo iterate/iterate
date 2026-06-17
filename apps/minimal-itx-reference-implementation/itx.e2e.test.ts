@@ -6,8 +6,8 @@
 // catalogue (examples.ts) across every server-side runtime. The browser leg of
 // the matrix is itx.browser.test.ts (vitest's browser project).
 //
-// Each capability test uses a FRESH agent coordinate (shared:/agents/<rand>)
-// so durable state never bleeds between runs. The chain test reuses shared:/
+// Each capability test uses a FRESH agent coordinate (prj_ref:/agents/<rand>)
+// so durable state never bleeds between runs. The chain test reuses prj_ref:/
 // as the parent context but only with sturdy/replace-safe provides.
 
 import { describe, expect, it } from "vitest";
@@ -37,7 +37,7 @@ const projectItx = () => connect({ path: "/" });
 const agentItx = (label: string) => connect({ path: agentPath(label) });
 
 const postProjectScript = (code: string) =>
-  fetch(itxHttpUrl({ baseUrl: baseUrl(), projectId: "shared" }), {
+  fetch(itxHttpUrl({ baseUrl: baseUrl(), projectId: "prj_ref" }), {
     body: code,
     headers: { authorization: `Bearer ${token()}`, "content-type": "text/plain" },
     method: "POST",
@@ -150,10 +150,10 @@ describe("itx reference implementation", () => {
   });
 
   it("7. auth at the connect door", async () => {
-    using bad = withItx({ baseUrl: baseUrl(), projectId: "shared", path: "/", token: "nope" });
+    using bad = withItx({ baseUrl: baseUrl(), projectId: "prj_ref", path: "/", token: "nope" });
     await expectRejects(() => bad.describe()).toThrow();
 
-    using denied = connect({ projectId: "bob", path: "/" }); // alice has no access to bob
+    using denied = connect({ projectId: "prj_bob", path: "/" });
     await expectRejects(() => denied.describe()).toThrow();
   });
 
@@ -290,7 +290,7 @@ describe("itx reference implementation", () => {
     expect(repo?.address).toBeNull();
     const path = agentPath("via-agents");
     const viaProject = projectItxHandle.agents.get(path).itx();
-    expect(await viaProject.whoami()).toBe(`agent shared:${path}`);
+    expect(await viaProject.whoami()).toBe(`agent prj_ref:${path}`);
     expect((d as any).parentCapabilities).toBeUndefined();
   });
 
@@ -308,7 +308,7 @@ describe("itx reference implementation", () => {
     expect(await project.fetch("data:text/plain,hello")).toEqual({
       body: "hello",
       status: 200,
-      viaProject: "shared",
+      viaProject: "prj_ref",
     });
   });
 
@@ -454,7 +454,7 @@ describe("catalogue matrix (server runtimes)", () => {
       const ctx = exampleCoordinate(example, rid);
       const runCtx = { marker: `node-${rid}`, projectId: ctx.projectId };
 
-      // Setup once against the shared coordinate; every runtime connects to it.
+      // Setup once against the prj_ref coordinate; every runtime connects to it.
       if (exampleCase.setup) {
         using itx = connect({ path: ctx.path });
         await exampleCase.setup(itx);

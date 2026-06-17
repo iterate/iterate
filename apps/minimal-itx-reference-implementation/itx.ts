@@ -7,7 +7,7 @@
 // is the in-memory bridge of live stubs, which is precisely the live-vs-sturdy
 // line drawn in running code.
 //
-// This file also holds the small shared vocabulary every itx implementation
+// This file also holds the small common vocabulary every itx implementation
 // uses: the capability-descriptor types, path matching, `retain`, and
 // `replayPath`. The admin Root ITX (root-itx.ts) reuses `replayPath` so the two
 // surfaces cannot drift in how they resolve a dotted path.

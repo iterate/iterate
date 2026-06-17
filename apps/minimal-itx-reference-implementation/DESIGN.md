@@ -214,7 +214,7 @@ which is precisely the ambiguity this proxy avoids.
 | File                                        | What                                                                                                                                                                   |
 | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `contract.ts`                               | the itx event log: event schemas + reduced state (`defineProcessorContract`)                                                                                           |
-| `itx.ts`                                    | `ItxProcessor extends StreamProcessor` (the fold + verbs + bridge + chain), the shared vocabulary (`replayPath`, `retain`, prefix matching), the `ItxContext` protocol |
+| `itx.ts`                                    | `ItxProcessor extends StreamProcessor` (the fold + verbs + bridge + chain), the common vocabulary (`replayPath`, `retain`, prefix matching), the `ItxContext` protocol |
 | `root-itx.ts`                               | `RootItx` — the admin-only platform root (`/api/itx`): the project catalog + `__null__` streams, pre-scoped; no provide, no dialer                                     |
 | `durable-object-names.ts`                   | the one place `{projectId}:{path}` names are formatted/parsed; `PLATFORM_PROJECT_ID` (`__null__`)                                                                      |
 | `auth.ts`                                   | the connect-door access model (`"all" \| string[]`) — the single authority decision                                                                                    |
@@ -225,7 +225,7 @@ which is precisely the ambiguity this proxy avoids.
 | `examples.ts`                               | the catalogue: pure-data script bodies (`itx` + `vars` in scope, explicit `return`) the matrix runs across every runtime                                               |
 | `example-cases.ts`                          | test-only setup + `vars` + assertions per catalogue entry (so `examples.ts` stays pure data, and examples can't silently rot)                                          |
 | `example-matrix.ts`                         | runs a catalogue body through every server-side runtime (node, cli, post-script, dynamic-worker)                                                                       |
-| `itx-scripts.ts`                            | reusable sturdy capability sources shared by the tests (dynamic workers, repo-backed DO facets, …)                                                                     |
+| `itx-scripts.ts`                            | reusable sturdy capability sources used by the tests (dynamic workers, repo-backed DO facets, …)                                                                       |
 | `itx.e2e.test.ts`                           | the node vitest project: every core concept, then the catalogue matrix across server runtimes                                                                          |
 | `itx.cross-project-adversarial.e2e.test.ts` | the cross-project isolation attacks (dial-by-name rejection, connect-door denial, `__null__` refusal)                                                                  |
 | `itx.parent-adversarial.e2e.test.ts`        | forged `worker-entrypoint` rejection + reserved `itxParent` segment guard                                                                                              |
@@ -239,5 +239,5 @@ The capability model is complete; the surface is trimmed. No incremental "steps"
 (this is the end state), no Swift/native-dialog or real-SDK demos, no
 durability/replay proofs baked into the implementation (that the table is the
 fold of the log is StreamProcessor's contract, not ours to re-prove). The
-read-your-writes wait uses the shared StreamProcessor delivered-offset await; no
+read-your-writes wait uses the StreamProcessor delivered-offset await; no
 local polling loop is needed.

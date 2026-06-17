@@ -19,7 +19,7 @@ describe("itx itxParent adversarial e2e", () => {
         capability: {
           type: "worker-entrypoint",
           entrypoint: "ItxEntrypoint",
-          props: { projectId: "bob", path: "/" },
+          props: { projectId: "prj_bob", path: "/" },
         },
         instructions: "attempt to smuggle a trusted itxParent entrypoint into another project",
       }),

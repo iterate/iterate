@@ -26,8 +26,8 @@ export type Access = "all" | string[];
 export type Principal = { name: string; access: Access };
 
 export const PRINCIPALS: Record<string, Principal> = {
-  "alice-token": { name: "alice", access: ["alice", "shared"] },
-  "bob-token": { name: "bob", access: ["bob", "shared"] },
+  "alice-token": { name: "alice", access: ["prj_alice", "prj_ref"] },
+  "bob-token": { name: "bob", access: ["prj_bob", "prj_ref"] },
   // An admin: reaches any project, and is the only principal allowed at the
   // admin-only Root ITX (`/api/itx`).
   "root-token": { name: "root", access: "all" },

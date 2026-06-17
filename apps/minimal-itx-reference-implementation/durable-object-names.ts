@@ -1,6 +1,6 @@
 // durable-object-names.ts — the ONE place a Durable Object name is formatted and
 // parsed. Every domain Durable Object name is `{projectId}:{path}`: a single,
-// shared prefixing scheme (mirrors apps/os/src/domains/durable-object-names.ts).
+// common prefixing scheme (mirrors apps/os/src/domains/durable-object-names.ts).
 // Because the projectId is always the prefix, a name alone tells you which
 // project the object belongs to — that is the whole basis of the access model.
 //

@@ -23,7 +23,7 @@ const token = process.env.ITX_TOKEN?.trim() || "alice-token";
 
 export default defineConfig({
   test: {
-    // One running worker is shared across files, so default to sequential to
+    // One running worker serves all files, so default to sequential to
     // keep a single dev server from being hammered and output readable.
     fileParallelism: process.env.ITX_E2E_FILE_PARALLELISM === "true",
     hookTimeout: 45_000,
