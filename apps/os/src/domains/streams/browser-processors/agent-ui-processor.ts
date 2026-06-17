@@ -19,7 +19,10 @@ import {
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { createSchemaEnsurer } from "~/domains/streams/engine/browser/ensure-schema-once.ts";
 import type { SqlClient, SqlValue } from "~/domains/streams/engine/browser/stream-browser-db.ts";
-import { StreamProcessor } from "~/domains/streams/engine/stream-processor.ts";
+import {
+  StreamProcessor,
+  type StreamProcessorDeps,
+} from "~/domains/streams/engine/stream-processor.ts";
 
 /** The table this processor owns. */
 export const AGENT_UI_FEED_TABLE = "agent_feed_items";
@@ -51,9 +54,12 @@ export const AgentUiProcessorContract = Object.assign(AgentUiProcessorContractBa
 
 export type AgentUiProcessorContract = typeof AgentUiProcessorContract;
 
-export type AgentUiProcessorDeps = {
-  sql: SqlClient;
-};
+export type AgentUiProcessorDeps = StreamProcessorDeps<
+  AgentUiProcessorContract,
+  {
+    sql: SqlClient;
+  }
+>;
 
 export class AgentUiProcessor extends StreamProcessor<
   AgentUiProcessorContract,

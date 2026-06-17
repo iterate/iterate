@@ -60,7 +60,7 @@ export class CircuitBreakerProcessor extends StreamProcessor<CircuitBreakerContr
     // ordinary appends are rejected, so the breaker stops being fed.
     if (!shouldTripCircuitBreaker(args.state)) return;
     args.runInBackground(async () => {
-      await this.ctx.stream.append({
+      await this.deps.stream.append({
         event: {
           type: "events.iterate.com/stream/paused",
           idempotencyKey: `stream-paused:${args.event.offset}`,

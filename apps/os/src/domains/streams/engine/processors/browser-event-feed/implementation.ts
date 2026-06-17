@@ -1,4 +1,4 @@
-import { StreamProcessor } from "../../stream-processor.ts";
+import { StreamProcessor, type StreamProcessorDeps } from "../../stream-processor.ts";
 import { createSchemaEnsurer } from "../../browser/ensure-schema-once.ts";
 import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
 import { BrowserEventFeedContract } from "./contract.ts";
@@ -14,9 +14,12 @@ export const BROWSER_EVENT_FEED_SCHEMA_VERSION = 2;
 export type BrowserEventFeedContract = typeof BrowserEventFeedContract;
 export type BrowserEventFeedState = FeedState;
 
-export type BrowserEventFeedProcessorDeps = {
-  sql: SqlClient;
-};
+export type BrowserEventFeedProcessorDeps = StreamProcessorDeps<
+  BrowserEventFeedContract,
+  {
+    sql: SqlClient;
+  }
+>;
 
 /**
  * Folds stream events into grouped `feed_items` rows for the browser feed UI.

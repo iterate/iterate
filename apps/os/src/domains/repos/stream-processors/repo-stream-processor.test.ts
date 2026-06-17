@@ -1,11 +1,12 @@
 import { describe, expect, test } from "vitest";
 import type { StreamEventInput } from "@iterate-com/shared/streams/stream-event";
 import { RepoStreamProcessor } from "./repo-stream-processor.ts";
+import type { StreamProcessorStream } from "~/domains/streams/engine/stream-processor.ts";
 
 describe("Repo stream processor", () => {
   test("derives Repo state from events.iterate.com/repo/created", async () => {
     const processor = new RepoStreamProcessor({
-      iterateContext: { stream: { append() {}, appendBatch() {} } },
+      stream: { append() {}, appendBatch() {} } as unknown as StreamProcessorStream,
       createRepoArtifact: async () => {
         throw new Error("createRepoArtifact should not be called for repo/created.");
       },
@@ -39,14 +40,12 @@ describe("Repo stream processor", () => {
   test("turns repo/create-requested into repo/created through the artifact dependency", async () => {
     const appended: StreamEventInput[] = [];
     const processor = new RepoStreamProcessor({
-      iterateContext: {
-        stream: {
-          append(args) {
-            appended.push(args.event);
-          },
-          appendBatch() {},
+      stream: {
+        append(args: { event: StreamEventInput }) {
+          appended.push((args as { event: StreamEventInput }).event);
         },
-      },
+        appendBatch() {},
+      } as unknown as StreamProcessorStream,
       createRepoArtifact: async (input) => ({
         defaultBranch: "main",
         path: input.path,

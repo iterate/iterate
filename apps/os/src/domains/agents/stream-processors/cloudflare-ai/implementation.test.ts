@@ -14,7 +14,7 @@ import type { StreamEvent, StreamEventInput } from "@iterate-com/shared/streams/
 import { CloudflareAiProcessorContract, type CloudflareAiState } from "./contract.ts";
 import { CloudflareAiProcessor } from "./implementation.ts";
 import type {
-  StreamProcessorIterateContext,
+  StreamProcessorStream,
   StreamProcessorSnapshot,
 } from "~/domains/streams/engine/stream-processor.ts";
 
@@ -268,7 +268,7 @@ function stateWithRequest(
 }
 
 function newProcessor(args: {
-  stream: StreamProcessorIterateContext["stream"];
+  stream: StreamProcessorStream;
   runs: string[];
   bodies?: unknown[];
   snapshot?: StreamProcessorSnapshot<CloudflareAiState>;
@@ -276,7 +276,7 @@ function newProcessor(args: {
   aiResult?: () => unknown;
 }) {
   return new CloudflareAiProcessor({
-    iterateContext: { stream: args.stream },
+    stream: args.stream,
     readState: () => args.snapshot,
     ai: {
       run: async (model: string, body: unknown) => {
@@ -360,8 +360,8 @@ async function waitFor(condition: () => boolean) {
 function memoryStream() {
   let nextOffset = 100;
   const appended: StreamEventInput[] = [];
-  const stream: StreamProcessorIterateContext["stream"] = {
-    append: (appendArgs) => {
+  const stream = {
+    append: (appendArgs: { event: StreamEventInput }) => {
       appended.push(appendArgs.event as StreamEventInput);
       const committed: StreamEvent = {
         ...(appendArgs.event as StreamEventInput),
@@ -370,7 +370,7 @@ function memoryStream() {
       };
       return committed;
     },
-    appendBatch: (batchArgs) =>
+    appendBatch: (batchArgs: { events: StreamEventInput[] }) =>
       (batchArgs.events as StreamEventInput[]).map((input) => {
         appended.push(input);
         const committed: StreamEvent = {
@@ -380,7 +380,7 @@ function memoryStream() {
         };
         return committed;
       }),
-  };
+  } as unknown as StreamProcessorStream;
   return { stream, appended };
 }
 

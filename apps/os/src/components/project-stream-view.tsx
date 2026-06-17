@@ -160,7 +160,7 @@ export function ProjectStreamView({
             subscriptionKey,
           });
           return new BrowserRawEventsProcessor({
-            iterateContext: { stream },
+            stream,
             sql,
             readState: storage.readState,
             writeState: storage.writeState,
@@ -200,7 +200,7 @@ export function ProjectStreamView({
             subscriptionKey,
           });
           return new AgentUiProcessor({
-            iterateContext: { stream },
+            stream,
             sql,
             readState: storage.readState,
             writeState: storage.writeState,

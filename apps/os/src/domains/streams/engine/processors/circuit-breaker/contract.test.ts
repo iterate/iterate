@@ -4,11 +4,12 @@ import { CoreProcessorContract, type CoreProcessorState } from "../core/contract
 import { CoreStreamProcessor } from "../core/implementation.ts";
 import { CircuitBreakerProcessor } from "./implementation.ts";
 import { shouldTripCircuitBreaker, spendCircuitBreakerToken } from "./contract.ts";
+import type { StreamProcessorStream } from "../../stream-processor.ts";
 
-const iterateContext = () => ({ stream: { append() {}, appendBatch() {} } });
+const stream = () => ({ append() {}, appendBatch() {} }) as unknown as StreamProcessorStream;
 
 describe("circuit breaker processor", () => {
-  const coreProcessor = new CoreStreamProcessor({ iterateContext: iterateContext() });
+  const coreProcessor = new CoreStreamProcessor({ stream: stream() });
   const coreReduce = (args: { state: CoreProcessorState; event: StreamEvent }) =>
     coreProcessor.reduceEvent(args);
 
@@ -32,7 +33,7 @@ describe("circuit breaker processor", () => {
   });
 
   it("configures burst and refill via its owned configured event", async () => {
-    const processor = new CircuitBreakerProcessor({ iterateContext: iterateContext() });
+    const processor = new CircuitBreakerProcessor({ stream: stream() });
 
     await processor.ingest({
       events: [
@@ -55,7 +56,7 @@ describe("circuit breaker processor", () => {
 
   it("trips after the burst budget and drives stream pause/resume", async () => {
     let coreState = CoreProcessorContract.stateSchema.parse(CoreProcessorContract.initialState);
-    const processor = new CircuitBreakerProcessor({ iterateContext: iterateContext() });
+    const processor = new CircuitBreakerProcessor({ stream: stream() });
 
     const ingest = async (event: StreamEvent) => {
       await processor.ingest({ events: [event], streamMaxOffset: event.offset });

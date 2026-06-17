@@ -20,6 +20,7 @@ import {
   deleteBrowserProcessorState,
 } from "./processor-state-storage.ts";
 import type { SqlClient, SqlValue } from "./stream-browser-db.ts";
+import type { StreamProcessorStream } from "../stream-processor.ts";
 
 // node:sqlite rejects the number[] member of SqlValue; these tests never use it.
 type ScalarSqlValue = Exclude<SqlValue, number[]>;
@@ -47,8 +48,8 @@ function wrap(db: DatabaseSync): SqlClient {
   };
 }
 
-/** Minimal stream context mock; leaving it named avoids contextual typing of the no-op methods. */
-const iterateContext = () => ({ stream: { append() {}, appendBatch() {} } });
+/** Minimal stream stub for tests that never call the richer stream RPC methods. */
+const stream = () => ({ append() {}, appendBatch() {} }) as unknown as StreamProcessorStream;
 
 function rawEvent(offset: number): StreamEvent {
   return { type: "test/raw", payload: { offset }, offset, createdAt: new Date(0).toISOString() };
@@ -60,7 +61,7 @@ function createRawEventsProcessor(sql: SqlClient) {
     processorSlug: BrowserRawEventsContract.slug,
   });
   return new BrowserRawEventsProcessor({
-    iterateContext: iterateContext(),
+    stream: stream(),
     sql,
     readState: storage.readState,
     writeState: storage.writeState,

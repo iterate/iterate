@@ -21,14 +21,18 @@
 // stub, reads the processor's checkpoint, and calls back `subscribeOutbound` so
 // the stream pumps batches into `processor.ingest`.
 
-import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "../stream-processor.ts";
+import type {
+  StreamProcessorRuntimeState,
+  StreamProcessorSnapshot,
+  StreamProcessorStream,
+} from "../stream-processor.ts";
 import type { ProcessorContractAnnouncement } from "../processors/core/contract.ts";
 import type { StreamEvent } from "../shared/event.ts";
 import type { StreamCoreProcessorState, StreamRpc, StreamSubscriptionHandle } from "../types.ts";
 
 /** What the Stream DO sends when dialing a subscriber's callable. */
 export type StreamSubscriptionHandshake = {
-  stream: StreamRpc;
+  stream: StreamProcessorStream;
   subscriptionKey: string;
   streamMaxOffset: number;
   streamRuntimeState: { coreProcessorState: StreamCoreProcessorState };
@@ -50,12 +54,7 @@ export type RequestStreamSubscriptionArgs = StreamSubscriptionHandshake & {
  * `new RepoProcessor({ ...deps, github })`.
  */
 export type HostedProcessorDeps = {
-  iterateContext: {
-    stream: {
-      append(args: { streamPath?: string; event: unknown }): unknown;
-      appendBatch(args: { streamPath?: string; events: unknown[] }): unknown;
-    };
-  };
+  stream: StreamProcessorStream;
   readState: () => StreamProcessorSnapshot<any> | undefined;
   writeState: (snapshot: StreamProcessorSnapshot<any>) => void;
   keepAliveWhile: (work: () => Promise<unknown>) => void;
@@ -358,12 +357,7 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
         throw new Error(`Stream processor "${name}" is already registered on this host`);
       }
       const processor = build({
-        iterateContext: {
-          stream: {
-            append: (args) => requireStream(name).append(args as never),
-            appendBatch: (args) => requireStream(name).appendBatch(args as never),
-          },
-        },
+        stream: lateBoundProcessorStream(name),
         readState: () =>
           ctx.storage.kv.get<StreamProcessorSnapshot<any>>(snapshotKey(name)) ?? undefined,
         writeState: (snapshot) => void ctx.storage.kv.put(snapshotKey(name), snapshot),
@@ -430,6 +424,28 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
     },
     runIdleDisconnectNow,
   };
+
+  function lateBoundProcessorStream(name: string): StreamProcessorStream {
+    const stream = {
+      append: (args: Parameters<StreamRpc["append"]>[0]) => requireStream(name).append(args),
+      appendBatch: (args: Parameters<StreamRpc["appendBatch"]>[0]) =>
+        requireStream(name).appendBatch(args),
+      getEvent: (args: Parameters<StreamRpc["getEvent"]>[0]) => requireStream(name).getEvent(args),
+      getEvents: (args?: Parameters<StreamRpc["getEvents"]>[0]) =>
+        requireStream(name).getEvents(args),
+      waitForEvent: (args: Parameters<StreamRpc["waitForEvent"]>[0]) =>
+        requireStream(name).waitForEvent(args),
+      subscribe: (args: Parameters<StreamRpc["subscribe"]>[0]) =>
+        requireStream(name).subscribe(args),
+      getProcessorRuntimeState: (args: Parameters<StreamRpc["getProcessorRuntimeState"]>[0]) =>
+        requireStream(name).getProcessorRuntimeState(args),
+      runtimeState: () => requireStream(name).runtimeState(),
+      kill: () => requireStream(name).kill(),
+      reset: () => requireStream(name).reset(),
+      reduce: (args: Parameters<StreamRpc["reduce"]>[0]) => requireStream(name).reduce(args),
+    } satisfies StreamRpc;
+    return stream as unknown as StreamProcessorStream;
+  }
 }
 
 function announceContract(contract: {
@@ -469,7 +485,7 @@ type RetainableStreamRpc = StreamRpc &
     dup?(): RetainedStreamRpc;
   };
 
-function retainStreamRpc(stream: StreamRpc): RetainedStreamRpc {
+function retainStreamRpc(stream: StreamProcessorStream): RetainedStreamRpc {
   const retainable = stream as RetainableStreamRpc;
   const retained = retainable.dup?.() ?? retainable;
   const dispose = retained[Symbol.dispose]?.bind(retained);

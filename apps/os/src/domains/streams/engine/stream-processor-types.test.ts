@@ -7,7 +7,7 @@ import {
   type WildcardConsumedEvent,
 } from "./shared/stream-processors.ts";
 import type { StreamEvent } from "./shared/event.ts";
-import { StreamProcessor } from "./stream-processor.ts";
+import { StreamProcessor, type StreamProcessorStream } from "./stream-processor.ts";
 
 const DependencyProcessorContract = defineProcessorContract({
   slug: "test.dependency",
@@ -56,6 +56,7 @@ class TypeInferenceProcessor extends StreamProcessor<TypeInferenceProcessorContr
     args: Parameters<StreamProcessor<TypeInferenceProcessorContract>["reduce"]>[0],
   ) {
     expectTypeOf(args.state).toEqualTypeOf<TypeInferenceProcessorState>();
+    expectTypeOf(this.deps.stream).toEqualTypeOf<StreamProcessorStream>();
 
     switch (args.event.type) {
       case "events.test/dependency/input":
@@ -110,7 +111,9 @@ class TypeInferenceProcessor extends StreamProcessor<TypeInferenceProcessorContr
 
 describe("StreamProcessor class type inference", () => {
   it("infers consumed dependency events and emitted dependency inputs", () => {
-    new TypeInferenceProcessor({ iterateContext: { stream: { append() {}, appendBatch() {} } } });
+    new TypeInferenceProcessor({
+      stream: { append() {}, appendBatch() {} } as unknown as StreamProcessorStream,
+    });
 
     expectTypeOf<TypeInferenceProcessorContract["emits"][number]>().toEqualTypeOf<
       "events.test/dependency/output" | "events.test/local/output"
@@ -203,7 +206,9 @@ describe("consumes wildcard typing", () => {
   });
 
   it("['*', ...named] is the named union plus the wildcard member", () => {
-    new MixedWildcardProcessor({ iterateContext: { stream: { append() {}, appendBatch() {} } } });
+    new MixedWildcardProcessor({
+      stream: { append() {}, appendBatch() {} } as unknown as StreamProcessorStream,
+    });
 
     type Consumed = ConsumedEvent<MixedWildcardContract>;
     expectTypeOf<
