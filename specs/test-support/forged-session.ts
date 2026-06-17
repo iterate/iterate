@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { BrowserContext } from "@playwright/test";
+import type { BrowserContext, Page } from "@playwright/test";
 import {
   ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM,
   ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM,
@@ -44,6 +44,54 @@ export type MintedIterateSession = {
 
 let configPromise: Promise<OsPlaywrightAuthConfig> | undefined;
 let signingKeyPromise: Promise<CryptoKey> | undefined;
+
+export async function createProjectFixture(
+  slugPrefix: string,
+  input: { baseURL: string | undefined; page: Page },
+) {
+  if (!input.baseURL) throw new Error("Playwright baseURL fixture is required.");
+
+  const projectSlug = uniqueFixtureSlug(slugPrefix);
+  const projectFixture = await createAdminProject({ baseUrl: input.baseURL, slug: projectSlug });
+  try {
+    const organization = {
+      id: `org_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`,
+      name: `Playwright ${projectSlug}`,
+      role: "admin" as const,
+      slug: uniqueFixtureSlug(`${slugPrefix}-org`),
+    };
+    const session = await mintIterateSession({
+      baseUrl: input.baseURL,
+      email: `forged-${projectSlug}+test@nustom.com`,
+      organizations: [organization],
+      projects: [
+        {
+          id: projectFixture.project.id,
+          organizationId: organization.id,
+          slug: projectFixture.project.slug,
+        },
+      ],
+    });
+
+    await addIterateSessionCookie({
+      baseUrl: input.baseURL,
+      context: input.page.context(),
+      session,
+    });
+
+    return {
+      organization,
+      project: projectFixture.project,
+      session,
+      async [Symbol.asyncDispose]() {
+        await projectFixture[Symbol.asyncDispose]();
+      },
+    };
+  } catch (error) {
+    await projectFixture[Symbol.asyncDispose]();
+    throw error;
+  }
+}
 
 export async function createAdminProject(input: { baseUrl: string; slug: string }) {
   const config = await resolveOsPlaywrightAuthConfig(input.baseUrl);
@@ -333,4 +381,8 @@ async function readOsAuthAuthorizeConfig(baseUrl: string) {
 function base64UrlEncode(value: string | ArrayBuffer) {
   const bytes = typeof value === "string" ? new TextEncoder().encode(value) : new Uint8Array(value);
   return Buffer.from(bytes).toString("base64url");
+}
+
+function uniqueFixtureSlug(prefix: string) {
+  return `${prefix}-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`.toLowerCase();
 }

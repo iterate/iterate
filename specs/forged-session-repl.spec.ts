@@ -1,43 +1,10 @@
-import {
-  addIterateSessionCookie,
-  createAdminProject,
-  mintIterateSession,
-} from "./test-support/forged-session.ts";
-import { test, uniqueSlug } from "./test-support/test.ts";
+import { createProjectFixture } from "./test-support/forged-session.ts";
+import { test } from "./test-support/test.ts";
 
 test("project REPL accepts a directly minted JWT session cookie", async ({ baseURL, page }) => {
-  if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
-
-  const projectSlug = uniqueSlug("forged-repl");
-  await using projectFixture = await createAdminProject({ baseUrl: baseURL, slug: projectSlug });
-  const organization = {
-    id: `org_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`,
-    name: "Forged Playwright Org",
-    role: "admin" as const,
-    slug: uniqueSlug("forged-org"),
-  };
-  const session = await mintIterateSession({
-    baseUrl: baseURL,
-    email: `forged-${projectSlug}+test@nustom.com`,
-    organizations: [organization],
-    projects: [
-      {
-        id: projectFixture.project.id,
-        organizationId: organization.id,
-        slug: projectFixture.project.slug,
-      },
-    ],
-  });
-
-  await page.context().clearCookies();
-  await addIterateSessionCookie({
-    baseUrl: baseURL,
-    context: page.context(),
-    session,
-  });
-
+  await using projectFixture = await createProjectFixture("basic-repl", { baseURL, page });
   await page.goto(`/projects/${projectFixture.project.slug}/repl`);
-  await page.getByRole("button", { name: "Run" }).click();
+  await page.getByRole("button", { name: "Run" }).click({ timeout: 5_000 });
 
   await page.getByText(`"capabilities"`).waitFor();
 });
