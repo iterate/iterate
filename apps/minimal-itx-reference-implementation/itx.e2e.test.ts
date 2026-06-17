@@ -146,15 +146,6 @@ describe("itx reference implementation", () => {
     }
   });
 
-  it("6. the __global__ root: catalog reads, provide is read-only", async () => {
-    using g = connect({ projectId: "", path: "/" });
-    const list = await g.projects.list();
-    expect([...list].sort()).toEqual(["alice", "shared"]);
-    expect(await g.projects.get("shared")).toEqual({ id: "shared", ref: "shared:/" });
-    await expectRejects(() => g.projects.get("bob")).toThrow();
-    await expectRejects(() => g.provideCapability({ path: ["x"], capability: () => 1 })).toThrow();
-  });
-
   it("7. auth at the connect door", async () => {
     using bad = withItx({ baseUrl: baseUrl(), projectId: "shared", path: "/", token: "nope" });
     await expectRejects(() => bad.describe()).toThrow();
@@ -282,14 +273,7 @@ describe("itx reference implementation", () => {
     expect(await itx.counterB.current()).toBe(1);
   });
 
-  it("16. inherited __global__ projects catalog is principal-scoped", async () => {
-    using project = projectItx();
-    expect([...(await project.projects.list())].sort()).toEqual(["alice", "shared"]);
-    expect([...(await project.itxParent.projects.list())].sort()).toEqual(["alice", "shared"]);
-    await expectRejects(() => project.projects.get("bob")).toThrow();
-  });
-
-  it("17. itxParent is a sturdy built-in entrypoint", async () => {
+  it("17. itxParent is a sturdy built-in entrypoint; the project is the top of the chain", async () => {
     using agent = agentItx("describe-chain");
     const d = await agent.describe();
     expect(d.builtins.some((c: any) => c.path.join(".") === "whoami")).toBe(true);
@@ -302,14 +286,16 @@ describe("itx reference implementation", () => {
     const whoami = d.builtins.find((c: any) => c.path.join(".") === "whoami");
     expect(whoami?.address?.name).toMatch(/^shared:\/agents\//);
 
+    // The agent's parent is its project. The project has fetch + repo and is the
+    // TOP of the chain: NO itxParent (there is no global root to climb to).
     const project = await agent.itxParent.describe();
     expect(project.builtins.some((c: any) => c.path.join(".") === "fetch")).toBe(true);
     expect(project.builtins.some((c: any) => c.path.join(".") === "repo")).toBe(true);
+    expect(project.builtins.some((c: any) => c.path.join(".") === "itxParent")).toBe(false);
     const repo = project.builtins.find((c: any) => c.path.join(".") === "repo");
     expect(repo?.address?.name).toBe("shared:/repos/project");
-    const root = await agent.itxParent.itxParent.describe();
-    expect(root.builtins.some((c: any) => c.path.join(".") === "projects")).toBe(true);
-    expect(root.builtins.some((c: any) => c.path.join(".") === "itxParent")).toBe(false);
+    // Climbing past the project throws — nothing left to inherit.
+    await expectRejects(() => agent.itxParent.itxParent.describe()).toThrow();
     expect((d as any).parentCapabilities).toBeUndefined();
   });
 

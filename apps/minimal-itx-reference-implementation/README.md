@@ -28,8 +28,9 @@ already running. `npm test` needs `npm run dev` up (or set `ITX_BASE` /
 Together they exercise, end to end: live capabilities, dynamic workers, a
 repo-backed dynamic Durable Object facet from `counter.js`, trusted Durable
 Object built-ins, deep dotted paths + longest-prefix shadowing, the itxParent
-chain via the reserved sturdy `itxParent` built-in, the stateless `__global__`
-root, auth at the connect door, and codemode.
+chain via the reserved sturdy `itxParent` built-in (an agent inherits its
+project; a project is the top of its chain), cross-project isolation, the
+admin-only platform root, auth at the connect door, and codemode.
 
 Run one project with `npm test -- --project node` (or `--project browser`).
 
@@ -60,8 +61,19 @@ await itx.slack.chat.postMessage({ channel: "C123", text: "hi" });
 ```
 
 The HTTP shape is `projectId` plus `path`: `projectId=shared&path=/` opens the
-project context, `projectId=shared&path=/agents/alice` opens an agent context,
-and empty `projectId` opens the `__global__` root.
+project context and `projectId=shared&path=/agents/alice` opens an agent context.
+There is no global context — a project is the top of its own chain. Cross-project
+listing and the platform (`__null__`) streams live behind the **admin-only**
+`/api/root` ([root-itx.ts](./root-itx.ts)):
+
+```ts
+import { withRoot } from "./client.ts";
+
+using root = withRoot({ token: "root-token" }); // an admin (access: "all")
+await root.projects.list();
+const log = root.streams.get("/integrations/slack/webhooks"); // pre-scoped to __null__
+await log.append({ type: "events.iterate.com/test/webhook", payload: { hi: 1 } });
+```
 
 ## Curl
 

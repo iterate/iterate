@@ -9,8 +9,8 @@
 //
 // This file also holds the small shared vocabulary every itx implementation
 // uses: the capability-descriptor types, path matching, `retain`, and
-// `replayPath`. `GlobalItx` (global-itx.ts) reuses them so the two
-// implementations of the protocol cannot drift in how they resolve a path.
+// `replayPath`. The admin Root ITX (root-itx.ts) reuses `replayPath` so the two
+// surfaces cannot drift in how they resolve a dotted path.
 
 import { StreamProcessor } from "@iterate-com/os/src/domains/streams/engine/stream-processor.ts";
 import {
@@ -49,9 +49,8 @@ export type DescribeResult = {
 };
 
 /**
- * The itx context protocol. A served context and a dialable parent context both answer
- * it. `ItxProcessor` and `GlobalItx` each `implements` this, so the two
- * cannot drift apart: change one method's shape and the other stops compiling.
+ * The itx context protocol. A served context and a dialable parent context both
+ * answer it. `ItxProcessor` `implements` this so every context shares one shape.
  *
  * Every verb takes a single bag-of-props argument (no positional parameters) —
  * this is the one calling convention across the wire, the bridge, the chain and
@@ -394,8 +393,16 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
   async provideCapability({ path, capability, instructions, types }: ProvideArgs) {
     this.#assertUserCapabilityPath(path);
     const address = isCapabilityAddress(capability) ? capability : null;
-    if (address?.type === "worker-entrypoint") {
-      throw new Error("trusted worker-entrypoint addresses can only be host built-ins");
+    // Addresses that reach the trusted dialer — a `durable-object` (any
+    // namespace/name) or a `worker-entrypoint` (the itxParent loopback) — can ONLY
+    // be host-created built-ins. A user provide naming them is how a project-A
+    // holder would otherwise dial project B (or the admin `__null__` plane) by
+    // NAME. Live caps and `dynamic-worker`/`dynamic-durable-object` (whose only
+    // binding is this context's own scoped env.ITX) remain providable.
+    if (address?.type === "worker-entrypoint" || address?.type === "durable-object") {
+      throw new Error(
+        `addresses that dial trusted namespaces ("${address.type}") can only be host built-ins`,
+      );
     }
     if (address === null) {
       this.#setLiveCapability(path, capability);

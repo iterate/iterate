@@ -18,8 +18,10 @@ capability table is their reduction. The log is the single source of truth; the
 table is derived and reconstructible by replay. A capability is either **live**
 (an in-memory stub that dies with its provider) or **sturdy** (a plain-data
 address that can be re-dialed into a callable). Contexts form a **chain**: on a
-miss, resolution falls through via the reserved `itxParent` built-in, bottoming
-out at the stateless **`__global__` root**.
+miss, resolution falls through via the reserved `itxParent` built-in. An **agent**
+inherits its **project**; a **project is the top of its chain** (a miss there just
+throws). There is no global context: cross-project listing and the platform
+streams live behind the separate, admin-only **Root ITX** (`root-itx.ts`).
 
 ## Capabilities: live vs sturdy
 
@@ -41,7 +43,7 @@ no dotted-string key anywhere in resolution.
 
 ## The four verbs (one calling convention)
 
-Every context — `Itx` and `GlobalItx` alike — implements `ItxContext`:
+Every context implements `ItxContext`:
 
 ```ts
 provideCapability({ path, capability, instructions?, types? }) → { path }
@@ -102,8 +104,15 @@ dispatched on `address.type`:
 - `{ type: "worker-entrypoint", entrypoint, props }` → a trusted loopback
   WorkerEntrypoint with props, used here for the reserved `itxParent` built-in
 
-Provider code cannot provide `worker-entrypoint` addresses. They are trusted
-host-created built-ins only.
+**The two trusted dialer types — `durable-object` and `worker-entrypoint` — can
+ONLY be host-created built-ins.** A user (or codemode) `provideCapability` naming
+either is rejected (`itx.ts`). This is the load-bearing cross-project guard: a
+`durable-object` address is a constructible `{projectId}:{path}` NAME, so allowing
+a user to provide one would let a project-A holder dial project B (or the admin
+`__null__` plane) by naming it. Built-ins are safe because the host always builds
+the name from the context's own coordinate. What a user CAN provide — live caps
+and `dynamic-worker`/`dynamic-durable-object` — carries no cross-project reach
+(their only binding is this context's own scoped `env.ITX`).
 
 ## The chain — inheritance by late binding
 
@@ -116,17 +125,18 @@ resolves own fold → built-ins, then on a miss retries through
 its parent by late binding (re-resolved per call), never by copy.
 
 Topology: an **agent** (`<projectId>:/agents/<name>`) gets an `itxParent` built-in
-pointing to its **project** (`<projectId>:/`); a project gets an `itxParent` built-in
-pointing to the **`__global__` root**. Parentage is derived from the context
-**coordinate** by the host, not folded from the log — nothing reads a folded
-copy, so it isn't stored.
+pointing to its **project** (`<projectId>:/`); a **project has no `itxParent`** — it
+is the top of its chain, so a miss there throws. Parentage is derived from the
+context **coordinate** by the host, not folded from the log — nothing reads a
+folded copy, so it isn't stored. Because the chain never leaves the project, a
+context can only ever reach its own project's objects.
 
 ## Built-in capabilities — the domain objects
 
 A context is born with capabilities defined by the **domain object** at its
 coordinate. `ProjectDurableObject` offers `fetch` (its egress) and `repo`;
-`AgentDurableObject` offers `whoami`. Contexts with a parent also get the
-reserved `itxParent` built-in. Built-ins are handed to the
+`AgentDurableObject` offers `whoami` plus the reserved `itxParent` built-in
+pointing at its project. Built-ins are handed to the
 `ItxProcessor` constructor as an array of the same `ProvideArgs` shape a provide
 uses, and the built-ins here are literal trusted Durable Object addresses such
 as `{ type: "durable-object", namespace: "agent", name, path: ["whoami"] }`.
@@ -138,22 +148,30 @@ hard-coded source file that exports both `CounterEntrypoint` and
 `CounterDurableObject`. This proves the repo-backed dynamic topology without
 pulling in real Artifacts or bundling machinery.
 
-## The `__global__` root — stateless, read-only
+## The admin Root ITX — the platform plane
 
-`GlobalItx` (`global-itx.ts`) is the chain's `__global__` root: every project's
-parent, itself parentless. It is the one context that is **not** a DO and **not**
-a StreamProcessor — there is nothing to persist, so it is constructed in code per
-connection and answers the same `ItxContext` protocol. The WebSocket route
-serves it through the same `pathProxyToInvokeCapability` as DO-backed contexts,
-so `projects`, `describe`, and every other terminal call use the same
-`invokeCapability({ path, args })` rule. Two structural properties:
+`RootItx` (`root-itx.ts`) is **not** a context and **not** a Durable Object: a
+tiny fixed RPC surface served at `/api/root`, constructed per connection at the
+edge and run through the same `pathProxyToInvokeCapability` rule, so
+`root.projects.list()` and `root.streams.get("/x").append(event)` collapse to one
+`invokeCapability` just like a context's dotted calls.
 
-- **read-only** — `provideCapability` / `revokeCapability` throw; there is no log
-  to append to, so "you cannot provide into the root" is structural.
-- **no parent** — a miss has nowhere to climb and throws.
+It exists because `__null__` (the platform projectId) holds streams that belong
+to no project — integration webhooks, the project catalog. Those are deliberately
+NOT a connectable context (`/api/itx?projectId=__null__` is refused and nothing
+can dial into `__null__` from a project). The only door is here, and it is safe
+with no authority logic of its own:
 
-Its capabilities are a fixed `projects` catalog (`{ list, get }`), riding the
-capability protocol so adding a sibling (`users`, `orgs`) is just another entry.
+- **admin-only** — the edge serves it only to a principal whose `access` is
+  `"all"` (`auth.ts`); a non-admin gets `403`.
+- **no provide, no dialer** — the surface is exactly `projects` and `streams`, so
+  there is nothing to inject a capability into and no caller-supplied name to dial.
+- **streams pre-scoped** — the caller passes a `path` only; the projectId is
+  hardcoded to `__null__`, so a caller cannot pivot to another project's streams
+  (names are built from the scope the root already owns).
+
+Adding a sibling surface (`users`, `orgs`) is just another branch in
+`invokeCapability`.
 
 ## Codemode — a capability that is a program
 
@@ -165,24 +183,32 @@ launched it. The run is bracketed by durable `script-execution-requested` /
 a log holds both state changes and plain audit records. `runScript` needs the
 Worker Loader and is intentionally not part of the Cap'n Web ITX model.
 
-## Auth — at the connect door
+## Auth — one decision, at the connect door
 
-itx is unauthed **within** a connection (the reference dialer is not a policy
-surface, and there is no per-capability gating).
-The trust boundary is the WebSocket handshake (`auth.ts`): a bearer token names a
-principal, the principal may reach a set of projects, and the server only
-upgrades the socket if the requested context is in reach. The `__global__` root is not
-project-scoped, so it only authenticates the principal and scopes the catalog to
-that principal's reach.
+The entire model is one line: you are either an **admin** (`access: "all"`, may
+reach anything, nobody cares) **or** you hold a **list of project ids** and may
+reach exactly those. `access` is the same `"all" | string[]` shape apps/os
+linearizes a principal to (`accessForPrincipal`). There is no per-capability
+gating anywhere downstream — once the connect door (`auth.ts`
+`authorizeProjectAccess`) lets you into a project, everything inside is confined
+BY CONSTRUCTION:
+
+- built-ins name only that project;
+- the chain tops out at that project (no global catalog to climb to);
+- user provides cannot name another project's Durable Object (the dialer-address
+  types are host-built-ins only).
+
+So authority lives at the door and nowhere else. The Root ITX (`/api/root`) uses
+the same `authenticate` and additionally requires `access === "all"`.
 
 ## The serving edge
 
 The route uses Cap'n Web's Worker helper directly:
 `newWorkersRpcResponse(request, target)`.
 
-Every WebSocket target is `pathProxyToInvokeCapability({ invokeCapability })`.
-For project and agent contexts, that object forwards into the selected
-`ItxDurableObject`; for `__global__`, it forwards into a `GlobalItx`. Do not
+Every target is `pathProxyToInvokeCapability({ invokeCapability })`. For project
+and agent contexts (`/api/itx`), that object forwards into the selected
+`ItxDurableObject`; for `/api/root`, it wraps the admin `RootItx`. Do not
 pass a raw Durable Object stub straight to `pathProxyToInvokeCapability`: DO
 stubs make arbitrary properties look callable, which is precisely the ambiguity
 this proxy avoids. The DO still exposes the itx verbs directly for Workers RPC
@@ -191,23 +217,27 @@ Workers RPC use.
 
 ## Files
 
-| File                  | What                                                                                                                                                                                          |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `contract.ts`         | the itx event log: event schemas + reduced state (`defineProcessorContract`)                                                                                                                  |
-| `itx.ts`              | `ItxProcessor extends StreamProcessor` (the fold + verbs + bridge + chain), the shared vocabulary (`replayPath`, `retain`, prefix matching), the `ItxContext` protocol                        |
-| `global-itx.ts`       | `GlobalItx` — the stateless, read-only root (`implements ItxContext`)                                                                                                                         |
-| `auth.ts`             | the connect-door access map and checks                                                                                                                                                        |
-| `server.ts`           | the Worker: `pathProxyToInvokeCapability`, `ItxDurableObject`, `ProjectDurableObject`/`AgentDurableObject`/`RepoDurableObject`, `dial`, the `/api/itx` route; re-exports the real `Stream` DO |
-| `client.ts`           | `withItx` + `connect` — socket opener, naked path calls, and provide-time normalization for raw local SDK objects                                                                             |
-| `cli.ts`              | a tiny command-line itx runner — the matrix's process-boundary runtime                                                                                                                        |
-| `e2e-env.ts`          | which running worker to talk to + which demo principal to authenticate as (the suite never starts a server; mirrors apps/os)                                                                  |
-| `examples.ts`         | the catalogue: pure-data script bodies (`itx` + `vars` in scope, explicit `return`) the matrix runs across every runtime                                                                      |
-| `example-cases.ts`    | test-only setup + `vars` + assertions per catalogue entry (so `examples.ts` stays pure data, and examples can't silently rot)                                                                 |
-| `example-matrix.ts`   | runs a catalogue body through every server-side runtime (node, cli, post-script, dynamic-worker)                                                                                              |
-| `itx-scripts.ts`      | reusable sturdy capability sources shared by the tests (dynamic workers, repo-backed DO facets, …)                                                                                            |
-| `itx.e2e.test.ts`     | the node vitest project: every core concept, then the catalogue matrix across server runtimes                                                                                                 |
-| `itx.browser.test.ts` | the browser vitest project: the catalogue in a real Chromium tab (token-in-query auth)                                                                                                        |
-| `vitest.config.ts`    | the two-project (node + browser) config                                                                                                                                                       |
+| File                                        | What                                                                                                                                                                                          |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `contract.ts`                               | the itx event log: event schemas + reduced state (`defineProcessorContract`)                                                                                                                  |
+| `itx.ts`                                    | `ItxProcessor extends StreamProcessor` (the fold + verbs + bridge + chain), the shared vocabulary (`replayPath`, `retain`, prefix matching), the `ItxContext` protocol                        |
+| `root-itx.ts`                               | `RootItx` — the admin-only platform root (`/api/root`): the project catalog + `__null__` streams, pre-scoped; no provide, no dialer                                                           |
+| `durable-object-names.ts`                   | the one place `{projectId}:{path}` names are formatted/parsed; `PLATFORM_PROJECT_ID` (`__null__`)                                                                                             |
+| `auth.ts`                                   | the connect-door access model (`"all" \| string[]`) — the single authority decision                                                                                                           |
+| `server.ts`                                 | the Worker: `pathProxyToInvokeCapability`, `ItxDurableObject`, `ProjectDurableObject`/`AgentDurableObject`/`RepoDurableObject`, `dial`, the `/api/itx` route; re-exports the real `Stream` DO |
+| `client.ts`                                 | `withItx` + `connect` — socket opener, naked path calls, and provide-time normalization for raw local SDK objects                                                                             |
+| `cli.ts`                                    | a tiny command-line itx runner — the matrix's process-boundary runtime                                                                                                                        |
+| `e2e-env.ts`                                | which running worker to talk to + which demo principal to authenticate as (the suite never starts a server; mirrors apps/os)                                                                  |
+| `examples.ts`                               | the catalogue: pure-data script bodies (`itx` + `vars` in scope, explicit `return`) the matrix runs across every runtime                                                                      |
+| `example-cases.ts`                          | test-only setup + `vars` + assertions per catalogue entry (so `examples.ts` stays pure data, and examples can't silently rot)                                                                 |
+| `example-matrix.ts`                         | runs a catalogue body through every server-side runtime (node, cli, post-script, dynamic-worker)                                                                                              |
+| `itx-scripts.ts`                            | reusable sturdy capability sources shared by the tests (dynamic workers, repo-backed DO facets, …)                                                                                            |
+| `itx.e2e.test.ts`                           | the node vitest project: every core concept, then the catalogue matrix across server runtimes                                                                                                 |
+| `itx.cross-project-adversarial.e2e.test.ts` | the cross-project isolation attacks (dial-by-name rejection, connect-door denial, `__null__` refusal)                                                                                         |
+| `itx.parent-adversarial.e2e.test.ts`        | forged `worker-entrypoint` rejection + reserved `itxParent` segment guard                                                                                                                     |
+| `itx.root.e2e.test.ts`                      | the admin Root ITX: project catalog + `__null__` stream read/write as admin; non-admin refused                                                                                                |
+| `itx.browser.test.ts`                       | the browser vitest project: the catalogue in a real Chromium tab (token-in-query auth)                                                                                                        |
+| `vitest.config.ts`                          | the two-project (node + browser) config                                                                                                                                                       |
 
 ## What this deliberately omits
 

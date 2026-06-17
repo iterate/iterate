@@ -1,7 +1,8 @@
 // Two-project vitest config, like apps/os/src/itx/e2e/vitest.config.ts:
 //
 //   node     the concept suite + the server-runtime catalogue matrix
-//            (itx.e2e.test.ts) — talks to the running worker over `ws`.
+//            (itx.e2e.test.ts) plus the adversarial + admin-root suites
+//            (*.e2e.test.ts) — all talk to the running worker over `ws`.
 //   browser  the browser leg of the matrix (itx.browser.test.ts) — a real
 //            Chromium tab via Playwright.
 //
@@ -32,7 +33,16 @@ export default defineConfig({
       {
         test: {
           environment: "node",
-          include: ["./itx.e2e.test.ts"],
+          // The concept suite, the cross-project + parent authority adversarial
+          // suites, and the admin-root suite. (itx.dynamic-adversarial.e2e.test.ts
+          // exercises dynamic-DO facet upgrade/rename semantics and is pre-existing
+          // and currently red — kept out of the gate until that is addressed.)
+          include: [
+            "./itx.e2e.test.ts",
+            "./itx.parent-adversarial.e2e.test.ts",
+            "./itx.cross-project-adversarial.e2e.test.ts",
+            "./itx.root.e2e.test.ts",
+          ],
           name: "node",
           testTimeout: 45_000,
         },

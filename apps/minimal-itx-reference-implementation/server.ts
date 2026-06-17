@@ -1,11 +1,16 @@
 // server.ts — the Cloudflare Worker that hosts itx.
 //
 // One Worker, one itx Durable Object per context coordinate, one durable event
-// log per context. The whole surface is a single connect route:
+// log per context. The surface is two connect routes:
 //
 //   /api/itx?projectId=<id>&path=/                 -> a project context
 //   /api/itx?projectId=<id>&path=/agents/<name>    -> an agent context
-//   /api/itx?projectId=&path=/                     -> the stateless platform root
+//   /api/root                                      -> the admin-only platform
+//                                                     root (project catalog +
+//                                                     `__null__` streams; root-itx.ts)
+//
+// There is no global/`__global__` context: a project is the top of its own
+// chain, and cross-project / platform reach lives ONLY behind the admin root.
 //
 // A NAKED Cap'n Web stub drives every context: `itx.provideCapability({…})` and
 // `itx.slack.chat.postMessage(msg)` are both just pipelined property paths that
@@ -23,8 +28,14 @@ import {
 import { durableObjectProcessorSubscriber } from "@iterate-com/os/src/domains/streams/engine/shared/callable-subscriber.ts";
 import { ItxContract } from "./contract.ts";
 import { ItxProcessor, replayPath, type ItxContext, type ProvideArgs } from "./itx.ts";
-import { GlobalItx } from "./global-itx.ts";
+import { RootItx } from "./root-itx.ts";
 import { authenticate, authorizeProjectAccess } from "./auth.ts";
+import {
+  formatDurableObjectName,
+  parseDurableObjectName,
+  PLATFORM_PROJECT_ID,
+  type DurableObjectNameParts,
+} from "./durable-object-names.ts";
 
 // The real durable event log from apps/os — re-exported so wrangler hosts it as
 // a Durable Object. A context's capability table is the fold of one of these.
@@ -41,11 +52,14 @@ export class ItxBindingEntrypoint extends WorkerEntrypoint<Env, { context: strin
 }
 
 export class ItxEntrypoint extends WorkerEntrypoint<Env, { projectId: string; path: string }> {
+  // The reserved `itxParent` loopback. Only ever host-propped at an agent's own
+  // project coordinate, so it forwards into a real project context (there is no
+  // `__global__` to fall through to).
   invokeCapability(args: { path: string[]; args?: unknown[] }) {
-    const context = contextFromProjectPath(this.ctx.props.projectId, this.ctx.props.path);
-    if (context === "__global__") {
-      return new GlobalItx({ access: "all" }).invokeCapability(args);
-    }
+    const context = formatDurableObjectName({
+      projectId: this.ctx.props.projectId,
+      path: this.ctx.props.path,
+    });
     return this.env.ITX.getByName(context).invokeCapability(args);
   }
 
@@ -149,44 +163,12 @@ function hashString(s: string): string {
   return (h >>> 0).toString(36);
 }
 
-const NULL_DURABLE_OBJECT_PROJECT_ID = "__null__";
 const PROJECT_REPO_PATH = "/repos/project";
 
-type DurableObjectNameParts = { projectId: string | null; path: string };
-
-function normalizeDurableObjectProjectId(projectId: string | null): string | null {
-  return projectId === NULL_DURABLE_OBJECT_PROJECT_ID ? null : projectId;
-}
-
-function normalizeDurableObjectPath(path: string): string {
-  return path === "" ? "/" : path.startsWith("/") ? path : `/${path}`;
-}
-
-// Keep the reference app's internal DO names in the same shape as apps/os:
-// object-form `{ projectId, path }` at call sites, encoded only at the Worker
-// binding edge. `__global__` is still stateless, so it never gets an ITX DO name.
-function formatDurableObjectName(input: DurableObjectNameParts): string {
-  const projectId =
-    normalizeDurableObjectProjectId(input.projectId) ?? NULL_DURABLE_OBJECT_PROJECT_ID;
-  if (projectId.includes(":")) {
-    throw new Error(`Durable Object projectId must not contain ":", got ${projectId}.`);
-  }
-  return `${projectId}:${normalizeDurableObjectPath(input.path)}`;
-}
-
-function parseDurableObjectName(name: string): DurableObjectNameParts {
-  const colon = name.indexOf(":");
-  if (colon <= 0 || name[colon + 1] !== "/") {
-    throw new Error(`Durable Object name must be "{projectId}:{path}", got ${name}.`);
-  }
-  return {
-    projectId: normalizeDurableObjectProjectId(name.slice(0, colon)),
-    path: normalizeDurableObjectPath(name.slice(colon + 1)),
-  };
-}
-
-function itxLogName(contextName: string | undefined): string {
-  if (!contextName) return formatDurableObjectName({ projectId: null, path: "/itx" });
+// A context's durable event log lives at `/itx` (project root) or `/itx/agents/…`
+// (agent) within the SAME projectId — the same `{projectId}:{path}` scheme as
+// every other Durable Object (durable-object-names.ts).
+function itxLogName(contextName: string): string {
   const context = parseDurableObjectName(contextName);
   return formatDurableObjectName({
     projectId: context.projectId,
@@ -257,6 +239,14 @@ export class ItxDurableObject extends DurableObject<Env> {
   #nameParts(): DurableObjectNameParts | null {
     const name = this.ctx.id.name;
     return name ? parseDurableObjectName(name) : null;
+  }
+
+  // An itx context Durable Object is always summoned by name (getByName), so its
+  // coordinate is always present. Fail loudly rather than invent a fallback.
+  #requireName(): string {
+    const name = this.ctx.id.name;
+    if (!name) throw new Error("itx context Durable Object must be addressed by name");
+    return name;
   }
 
   // A context is born with built-in capabilities defined by the DOMAIN object it
@@ -357,9 +347,7 @@ export class ItxDurableObject extends DurableObject<Env> {
       compatibilityFlags: ["nodejs_compat"],
       env: {
         ITX: ((this.ctx as any).exports as any).ItxBindingEntrypoint({
-          props: {
-            context: this.ctx.id.name ?? formatDurableObjectName({ projectId: null, path: "/itx" }),
-          },
+          props: { context: this.#requireName() },
         }),
       },
       mainModule: resolved.mainModule,
@@ -417,7 +405,7 @@ export class ItxDurableObject extends DurableObject<Env> {
   // context IS its stream coordinate. Re-resolve the stub per call so it stays
   // valid across the log's lifecycle.
   #coordinate(): string {
-    return itxLogName(this.ctx.id.name);
+    return itxLogName(this.#requireName());
   }
   #log() {
     // `as any` on the stream stub avoids a deep StreamProcessor-generic
@@ -436,7 +424,7 @@ export class ItxDurableObject extends DurableObject<Env> {
   #ensureSubscriptionConfigured(): void {
     if (this.#subscriptionConfigured) return;
     this.#subscriptionConfigured = true;
-    const name = this.ctx.id.name ?? formatDurableObjectName({ projectId: null, path: "/itx" });
+    const name = this.#requireName();
     const event: any = {
       type: "events.iterate.com/stream/subscription-configured",
       idempotencyKey: `itx-subscription:${name}`,
@@ -565,17 +553,10 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
   // The capabilities a context scoped to THIS project is born with — same shape
   // as a provideCapability call. A built-in is a capability pre-provided in code.
+  // A project is the TOP of its chain: no `itxParent`, so a capability miss here
+  // just throws (there is no global root to climb to).
   static builtinCapabilities(projectId: string): ProvideArgs[] {
     return [
-      {
-        path: ["itxParent"],
-        capability: {
-          type: "worker-entrypoint",
-          entrypoint: "ItxEntrypoint",
-          props: { projectId: "", path: "/" },
-        },
-        instructions: "the stateless __global__ parent context",
-      },
       {
         path: ["fetch"],
         capability: {
@@ -669,11 +650,6 @@ export class RepoDurableObject extends DurableObject<Env> {
 // The Worker entrypoint.
 // ---------------------------------------------------------------------------
 
-function contextFromProjectPath(projectId: string, path: string): string {
-  if (projectId === "") return "__global__";
-  return formatDurableObjectName({ projectId, path });
-}
-
 async function readScriptCode(request: Request): Promise<string> {
   const contentType = request.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {
@@ -695,78 +671,66 @@ function json(data: unknown, init?: ResponseInit): Response {
 export default {
   async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+
+    // The admin-only platform root. NOT a context and NOT a Durable Object: a
+    // tiny fixed RPC surface (root-itx.ts) for the project catalog and the
+    // `__null__` platform streams. Admins only; nothing is ever provided to it.
+    if (url.pathname === "/api/root") {
+      const principal = authenticate(request);
+      if (!principal) return new Response("missing or invalid token", { status: 401 });
+      if (principal.access !== "all")
+        return new Response("root ITX is admin-only", { status: 403 });
+      if (request.method !== "GET") return new Response("method not allowed", { status: 405 });
+      return newWorkersRpcResponse(request, pathProxyToInvokeCapability(new RootItx(env)));
+    }
+
     if (url.pathname !== "/api/itx") {
       return new Response(
-        "minimal-itx: connect to /api/itx?projectId=<id>&path=/ or POST code to run a script",
+        "minimal-itx: connect to /api/itx?projectId=<id>&path=/ (or /api/root for admins)",
         { status: 404 },
       );
     }
 
     const projectId = url.searchParams.get("projectId") ?? "";
     const path = url.searchParams.get("path") ?? "/";
-    const context = contextFromProjectPath(projectId, path);
 
-    // The __global__ root: not project-scoped, so authenticate the principal only
-    // and serve the STATELESS __global__ context, scoped to the projects it may reach.
-    // No DO and no stream — the context is constructed per connection.
-    if (context === "__global__") {
-      const principal = authenticate(request);
-      if (!principal) return new Response("missing or invalid token", { status: 401 });
-      if (request.method !== "GET") {
-        return json(
-          { error: "__global__ is stateless and does not support script execution" },
-          { status: 400 },
-        );
-      }
-      return newWorkersRpcResponse(
-        request,
-        pathProxyToInvokeCapability(new GlobalItx({ access: principal.projects })),
-      );
+    // `__null__` is the platform plane, not a connectable context — its streams
+    // live behind the admin root, never as a project context.
+    if (projectId === PLATFORM_PROJECT_ID) {
+      return new Response(`"${PLATFORM_PROJECT_ID}" is not a connectable context; use /api/root`, {
+        status: 404,
+      });
     }
 
-    // A project or agent context. Authorize the principal for the project, then
-    // serve the DO-backed context at that coordinate. The DO also exposes
-    // codemode (runScript) directly.
+    // THE authority decision: may this principal reach this project? Everything
+    // past this door is confined by construction — built-ins name only this
+    // project, the chain tops out at this project, and user provides cannot name
+    // another project's Durable Object. No further authority checks anywhere.
     const auth = authorizeProjectAccess(request, projectId);
     if (!auth.ok) return new Response(auth.message, { status: auth.status });
 
+    const context = formatDurableObjectName({ projectId, path });
     const node = env.ITX.getByName(context);
+
     if (request.method === "POST") {
       try {
         const code = await readScriptCode(request);
         const run = (await node.runScript({ code })) as Record<string, unknown>;
-        return json({
-          context,
-          ...run,
-          describe: await node.describe(),
-        });
+        return json({ context, ...run, describe: await node.describe() });
       } catch (error: any) {
         return json({ error: error?.message ?? String(error) }, { status: 400 });
       }
     }
     if (request.method !== "GET") return new Response("method not allowed", { status: 405 });
-    // The WebSocket surface is intentionally one operation: invokeCapability.
-    // That keeps root control-name dispatch in the context, not in the Cap'n Web
-    // proxy. The only edge policy here is principal-scoping inherited global
-    // catalog reads. `projects.*`, `itxParent.projects.*`, and
-    // `itxParent.itxParent.projects.*` are the same global catalog from an external
-    // caller's point of view, so strip leading `itxParent` segments before applying
-    // the existing catalog scope. Internal itxParent entrypoints still run wider,
-    // which is tracked as a later hardening task.
+
+    // The WebSocket surface is one operation: invokeCapability, forwarded into
+    // the selected context. No catalog scoping to do — there is no global catalog
+    // on a project's chain.
     return newWorkersRpcResponse(
       request,
       pathProxyToInvokeCapability({
-        invokeCapability: (args: { path: string[]; args?: unknown[] }) => {
-          const globalCatalogPath = args.path.slice();
-          while (globalCatalogPath[0] === "itxParent") globalCatalogPath.shift();
-          if (globalCatalogPath[0] === "projects") {
-            return new GlobalItx({ access: auth.projects }).invokeCapability({
-              ...args,
-              path: globalCatalogPath,
-            });
-          }
-          return node.invokeCapability(args);
-        },
+        invokeCapability: (args: { path: string[]; args?: unknown[] }) =>
+          node.invokeCapability(args),
       }),
     );
   },

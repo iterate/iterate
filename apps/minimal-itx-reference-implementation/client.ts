@@ -18,11 +18,17 @@
 import WebSocket from "ws";
 import { newWebSocketRpcSession } from "capnweb";
 
+// Mirrors the server's address types (itx.ts). Address-shaped values are
+// forwarded as plain data; everything else is wrapped as a live provider. The
+// trusted dialer types (`durable-object`, `worker-entrypoint`) are included so a
+// provide naming them reaches the server's guard and gets a clear rejection,
+// rather than being silently turned into a broken live cap.
 const CAPABILITY_ADDRESS_TYPES = new Set([
   "rpc",
   "dynamic-worker",
   "dynamic-durable-object",
   "durable-object",
+  "worker-entrypoint",
 ]);
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> => {
@@ -86,7 +92,7 @@ export function connect<T>(url: string, headers?: Record<string, string>): T {
 export type WithItxInput = {
   /** Worker base url. Defaults to ITX_BASE or http://127.0.0.1:8788. */
   baseUrl?: string;
-  /** Empty means `__global__`; otherwise a project id like "shared". */
+  /** A project id like "shared" (required — there is no global context). */
   projectId?: string;
   /** Context path inside the project. "/" is the project root. */
   path?: string;
@@ -136,6 +142,35 @@ export function withItx<T = any>(input: WithItxInput): T {
         });
     },
   }) as T;
+}
+
+// --- the admin-only platform root (root-itx.ts) ----------------------------
+
+export type WithRootInput = {
+  /** Worker base url. Defaults to ITX_BASE or http://127.0.0.1:8788. */
+  baseUrl?: string;
+  /** Admin bearer token (auth.ts `access: "all"`). */
+  token?: string;
+  /** Browsers cannot set the upgrade header, so send the token as `?token=…`. */
+  tokenInQuery?: boolean;
+};
+
+export function itxRootWebSocketUrl(input: WithRootInput = {}): string {
+  const base = input.baseUrl ?? process.env.ITX_BASE ?? "http://127.0.0.1:8788";
+  const wsBase = base.replace(/^http/, "ws");
+  const params = new URLSearchParams();
+  if (input.tokenInQuery && input.token) params.set("token", input.token);
+  const qs = params.toString();
+  return `${wsBase}/api/root${qs ? `?${qs}` : ""}`;
+}
+
+/** Connect to the admin Root ITX. No provide-time normalization is needed — the
+ *  root has no provide surface; it is just `projects` + `streams`. */
+export function withRoot<T = any>(input: WithRootInput = {}): T {
+  return connect<T>(
+    itxRootWebSocketUrl(input),
+    input.token ? { authorization: `Bearer ${input.token}` } : undefined,
+  );
 }
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

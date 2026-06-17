@@ -6,7 +6,7 @@
 // vitest.config.ts injects the same values there via `define`
 // (__ITX_BROWSER_E2E__) instead of importing this file.
 
-import { withItx, type WithItxInput } from "./client.ts";
+import { withItx, withRoot, type WithItxInput } from "./client.ts";
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:8788";
 
@@ -28,8 +28,8 @@ export function token(): string {
 }
 
 /** Connect a context handle on the running worker. Defaults to the demo
- *  principal and the shared project root; pass overrides for agent paths,
- *  other projects, or the stateless __global__ root (projectId: ""). */
+ *  principal and the shared project root; pass overrides for agent paths or
+ *  other projects. */
 export function connect<T = any>(input: Partial<WithItxInput> = {}): T {
   return withItx<T>({
     baseUrl: baseUrl(),
@@ -38,4 +38,14 @@ export function connect<T = any>(input: Partial<WithItxInput> = {}): T {
     token: token(),
     ...input,
   });
+}
+
+/** The admin token for the Root ITX (auth.ts `access: "all"`). */
+export function adminToken(): string {
+  return process.env.ITX_ADMIN_TOKEN?.trim() || "root-token";
+}
+
+/** Connect to the admin-only platform root (`/api/root`). */
+export function connectRoot<T = any>(): T {
+  return withRoot<T>({ baseUrl: baseUrl(), token: adminToken() });
 }
