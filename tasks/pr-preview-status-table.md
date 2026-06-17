@@ -43,4 +43,3 @@ Change that section to a Markdown table with columns roughly:
 - [ ] Update renderer output to a Markdown table.
 - [ ] Update focused tests for the new PR body format.
 - [ ] Run the relevant preview script tests.
-
