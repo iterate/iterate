@@ -300,6 +300,88 @@ describe("itx reference implementation", () => {
     expect((d as any).parentCapabilities).toBeUndefined();
   });
 
+  it("17b. project.agents.get(path) returns a full agent-scoped ITX handle", async () => {
+    using project = projectItx();
+    const path = agentPath("agent-handle-contract");
+    const agent = project.agents.get(path);
+
+    expect(await agent.whoami()).toBe(`agent prj_ref:${path}`);
+    expect(await agent.project.egress("data:text/plain,from-agent-handle")).toMatchObject({
+      body: "from-agent-handle",
+      status: 200,
+      viaProject: "prj_ref",
+    });
+
+    await agent.provideCapability({ path: ["calc"], capability: dynamicCalc });
+    expect(await agent.calc.add(19, 23)).toBe(42);
+
+    const script = (await agent.runScript({
+      code: `async (itx) => {
+        await itx.provideCapability({
+          path: ["scriptCalc"],
+          capability: ${JSON.stringify(dynamicCalc)},
+        });
+        return {
+          project: await itx.project.egress("data:text/plain,from-script"),
+          whoami: await itx.whoami(),
+        };
+      }`,
+    })) as any;
+    expect(script.result.whoami).toBe(`agent prj_ref:${path}`);
+    expect(script.result.project).toMatchObject({
+      body: "from-script",
+      status: 200,
+      viaProject: "prj_ref",
+    });
+    expect(await agent.scriptCalc.add(20, 22)).toBe(42);
+
+    await agent.provideCapability({
+      path: ["agentProbe"],
+      capability: {
+        type: "dynamic-worker",
+        source: {
+          type: "inline",
+          mainModule: "agent-probe.js",
+          modules: {
+            "agent-probe.js": `
+              import { WorkerEntrypoint } from "cloudflare:workers";
+              export class AgentProbeEntrypoint extends WorkerEntrypoint {
+                async run() {
+                  const itx = await this.env.ITX.get();
+                  await itx.provideCapability({
+                    path: ["workerCalc"],
+                    capability: ${JSON.stringify(dynamicCalc)},
+                  });
+                  const script = await itx.runScript({
+                    code: ${JSON.stringify(`async (itx) => itx.whoami()`)},
+                  });
+                  return {
+                    project: await itx.project.egress("data:text/plain,from-worker"),
+                    script: script.result,
+                    whoami: await itx.whoami(),
+                  };
+                }
+              }
+            `,
+          },
+        },
+        entrypoint: "AgentProbeEntrypoint",
+        props: {},
+      },
+    });
+    expect(await agent.agentProbe.run()).toEqual({
+      project: { body: "from-worker", status: 200, viaProject: "prj_ref" },
+      script: `agent prj_ref:${path}`,
+      whoami: `agent prj_ref:${path}`,
+    });
+    expect(await agent.workerCalc.add(21, 21)).toBe(42);
+
+    const description = await agent.describe();
+    expect(description.capabilities.some((cap: any) => cap.path.join(".") === "workerCalc")).toBe(
+      true,
+    );
+  });
+
   it("18. own capability shadows and then restores a built-in", async () => {
     using agent = agentItx("shadow-builtin");
     const original = await agent.whoami();
