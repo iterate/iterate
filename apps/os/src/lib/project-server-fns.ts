@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { ProjectsCapability } from "~/domains/projects/project-directory.ts";
-import { requireRequestContext } from "~/request-context.ts";
+import { authenticateCapnwebAdmin } from "~/itx/admin-auth-cookie.ts";
+import { requireRequestContext, type RequestContext } from "~/request-context.ts";
 
 /**
  * SSR-safe project reads as TanStack server functions. itx is client-only (it
@@ -29,43 +30,73 @@ export type ProjectWithIngressUrl = Project & { ingressUrl: string };
 
 export type ProjectListResult = { projects: Project[]; total: number };
 
-export const createProjectServerFn: (input: {
+export const myProjectsQueryKey = ["my-projects"] as const;
+export const myProjectsListInput = { limit: 100, offset: 0 } as const;
+export const myProjectsStaleTime = 30_000;
+
+export const createMyProjectServerFn: (input: {
   data: { id?: string; slug: string; organizationSlug?: string };
 }) => Promise<ProjectWithIngressUrl> = createServerFn({ method: "POST" })
-  .inputValidator((input: { id?: string; slug: string; organizationSlug?: string }) => input)
+  .validator((input: { id?: string; slug: string; organizationSlug?: string }) => input)
   .handler(async ({ data }) => {
-    return await new ProjectsCapability({ context: requireRequestContext() }).create(data);
+    return await new ProjectsCapability({ context: requireUserRequestContext() }).create(data);
+  });
+
+export const deleteProjectServerFn: (input: {
+  data: { id: string };
+}) => Promise<{ ok: true; id: string; deleted: boolean }> = createServerFn({ method: "POST" })
+  .validator((input: { id: string }) => input)
+  .handler(async ({ data }) => {
+    return await new ProjectsCapability({ context: requireRequestContext() }).remove(data);
   });
 
 /** The session principal's accessible projects (mirrors the former `projects.list`). */
 export const listMyProjectsServerFn: (input: {
   data: { limit?: number; offset?: number };
 }) => Promise<ProjectListResult> = createServerFn({ method: "GET" })
-  .inputValidator((input: { limit?: number; offset?: number }) => input)
+  .validator((input: { limit?: number; offset?: number }) => input)
   .handler(async ({ data }) => {
     return await new ProjectsCapability({ context: requireRequestContext() }).list(data);
   });
 
-/**
- * Shared query options for the session's accessible projects: the `_app`
- * loader prefetches it (SSR), the sidebar reads it via `useQuery`, both off the
- * same key so hydration matches with no flash.
- */
-export function myProjectsQueryOptions() {
-  return {
-    queryKey: ["my-projects"] as const,
-    queryFn: () => listMyProjectsServerFn({ data: { limit: 100, offset: 0 } }),
-    staleTime: 30_000,
-  };
-}
+/** All OS projects, guarded for the admin page. */
+export const listAdminProjectsServerFn: (input: {
+  data: { limit?: number; offset?: number };
+}) => Promise<ProjectListResult> = createServerFn({ method: "GET" })
+  .validator((input: { limit?: number; offset?: number }) => input)
+  .handler(async ({ data }) => {
+    return await new ProjectsCapability({ context: adminProjectContext() }).listAllForAdmin(data);
+  });
 
 /** A single project the session principal can read, by slug (mirrors `projects.findBySlug`). */
 export const getProjectBySlugServerFn: (input: {
   data: { slug: string };
 }) => Promise<ProjectWithIngressUrl> = createServerFn({ method: "GET" })
-  .inputValidator((input: { slug: string }) => input)
+  .validator((input: { slug: string }) => input)
   .handler(async ({ data }) => {
     return await new ProjectsCapability({ context: requireRequestContext() }).findBySlug({
       slug: data.slug,
     });
   });
+
+function adminProjectContext(): RequestContext {
+  const context = requireRequestContext();
+  if (context.rawRequest) {
+    const adminCookiePrincipal = authenticateCapnwebAdmin({
+      config: context.config,
+      request: context.rawRequest,
+    });
+    if (adminCookiePrincipal) {
+      return { ...context, principal: adminCookiePrincipal };
+    }
+  }
+  return context;
+}
+
+function requireUserRequestContext(): RequestContext {
+  const context = requireRequestContext();
+  if (context.principal?.type !== "user") {
+    throw new Error("Sign in to create projects.");
+  }
+  return context;
+}

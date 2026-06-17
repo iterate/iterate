@@ -11,11 +11,18 @@ import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { toast } from "@iterate-com/ui/components/sonner";
 import type { ReactNode } from "react";
-import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
-import { myProjectsQueryOptions, type Project } from "~/lib/project-server-fns.ts";
-import { reconnectItx, useItx } from "~/itx/itx-react.tsx";
+import {
+  createMyProjectServerFn,
+  deleteProjectServerFn,
+  listMyProjectsServerFn,
+  myProjectsListInput,
+  myProjectsQueryKey,
+  myProjectsStaleTime,
+  type Project,
+} from "~/lib/project-server-fns.ts";
+import { reconnectItx } from "~/itx/itx-react.tsx";
 
 type OrganizationSummary = {
   id: string;
@@ -43,22 +50,16 @@ function buildProjectHostname(input: {
 }
 
 function ProjectsIndexPage() {
-  return (
-    <ItxBoundary>
-      <ProjectsIndexContent />
-    </ItxBoundary>
-  );
-}
-
-function ProjectsIndexContent() {
   const { routeConfig } = Route.useLoaderData();
   const { session } = useAuthClient();
   const organizations = session?.authenticated ? session.session.organizations : [];
   const isAdmin = session?.authenticated ? session.user.isAdmin === true : false;
-  const itx = useItx();
   const queryClient = useQueryClient();
-  const listQueryOptions = myProjectsQueryOptions();
-  const list = useQuery(listQueryOptions);
+  const list = useQuery({
+    queryKey: myProjectsQueryKey,
+    queryFn: () => listMyProjectsServerFn({ data: myProjectsListInput }),
+    staleTime: myProjectsStaleTime,
+  });
   const projects = list.data?.projects ?? [];
 
   // The scoped oRPC list intentionally merges two sources:
@@ -74,10 +75,10 @@ function ProjectsIndexContent() {
 
   const deleteProject = useMutation({
     mutationFn: async (input: { id: string }) => {
-      return await itx.projects.remove(input);
+      return await deleteProjectServerFn({ data: input });
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: listQueryOptions.queryKey });
+      await queryClient.invalidateQueries({ queryKey: myProjectsQueryKey });
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });
@@ -87,14 +88,16 @@ function ProjectsIndexContent() {
       const organizationSlug = project.organizationId
         ? organizations.find((organization) => organization.id === project.organizationId)?.slug
         : undefined;
-      return await itx.projects.create({
-        id: project.id,
-        slug: project.slug,
-        organizationSlug,
+      return await createMyProjectServerFn({
+        data: {
+          id: project.id,
+          slug: project.slug,
+          organizationSlug,
+        },
       });
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: listQueryOptions.queryKey });
+      await queryClient.invalidateQueries({ queryKey: myProjectsQueryKey });
       reconnectItx();
       toast.success("Project recovered");
     },
