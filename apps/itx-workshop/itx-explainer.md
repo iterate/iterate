@@ -4,6 +4,11 @@ A coding-workshop derivation of **itx** — Iterate's capability layer — built
 
 > **runnable & verified** — The _complete, runnable_ implementations live in this folder: Steps 0–6 (wire-level) run against real `workerd` + Cap'n Web clients (`server.ts` + `harness.ts`, and the self-contained `min-dynamic-target.mjs`); Steps 7–10 (model-level — ref taxonomy, dial, fold, chain, processor) are checked by `validate-steps.mjs`; the Step 1 dialog Swift is type-checked with `swiftc`. The **inline snippets below are abbreviated for reading** — they lean on a few helpers defined once and reused (`findCapabilityByPath`, `invokeCapabilityAtPath`, `retain`) and on real workerd behavior, so don't expect every fragment to run verbatim if you paste it in isolation; the files above are the source of truth. One caveat that bites: if you _simulate_ the DO with a shared in-memory object (no wrangler), the RpcStub-vs-copy distinction and `ctx.waitUntil` vanish — and with them the whole point of Step 4. One thing worth flagging up front: **there is no client-side path proxy** — a naked Cap'n Web stub already pipelines a whole dotted path into one call (see Step 6).
 
+The path-proxy trick below is intentionally built on Cap'n Web's own object-capability
+semantics: stubs pipeline member reads into a call path, and the server only has to
+translate that path into itx's dynamic registry. The workshop code is our minimal
+wrapper around that behavior, not a new client-side RPC protocol.
+
 ---
 
 ## Step 0 — A method call over a socket
@@ -97,9 +102,10 @@ The laptop can only offer the _one_ object it passed into _that one call_, and o
 
 ```ts
 class Itx extends RpcTarget {
-  // The registry: capability name → its entry. A plain object keyed by name —
-  // it stays plain JSON all the way through, which is what lets it become a
-  // durable, replayable fold in Step 8.
+  // The registry: capability name → capability entry. The field is called
+  // `capabilities` in the real implementation; `#caps` here is just shorthand
+  // for a small snippet. It stays plain JSON all the way through, which is what
+  // lets it become a durable, replayable fold in Step 8.
   #caps: Record<string, { capability: any; instructions?: string }> = {};
   provide({
     name,
@@ -136,7 +142,7 @@ await itx.invoke({ name: "runSwift", args: [`print(1 + 1)`] }); // → "2\n"
 
 A `provide` can carry two pieces of metadata, **both optional**: **`instructions`** — a sentence saying what the capability is for, for an agent or a human reading the table — and **`types`**, a type surface for the cap. `instructions` is the one you'll usually set; `types` is genuinely optional and most caps omit it (it's carried for when something acts on it; nothing does yet). Whatever you pass rides the `provideCapability({ path, capability, instructions?, types? })` bag over the wire, the fold records it on the capability entry, and a context-level `describe()` reads it back — a cap **describes itself at the point it's provided**, so there's no separate per-capability describe step to maintain; `describe()` just surfaces the metadata the fold already holds (`null` for whatever you left out). (The runnable harness asserts both directions: provide `db` with `instructions` + `types` and `describe().db` returns them; provide `mailer` bare and `describe().mailer` comes back `{ instructions: null, types: null }`.)
 
-The stored `name → capability` pairing has no special label in the codebase — the act is a **provide** and what it registers is a **capability entry**. A capability is one of just two kinds: a live **stub** or, later (Step 7), a serializable **address**. (Step 6 will generalize this addressing field from a `name` to a `path`.)
+The stored `name → capability` pairing has no special label in the codebase — the act is a **provide** and what it registers is a **capability entry** in the `capabilities` registry. A capability is one of just two kinds: a live **stub** or, later (Step 7), a serializable **address**. (Step 6 will generalize this addressing field from a `name` to a `path`.)
 
 (We call the verbs `provide` / `invoke` here while deriving them; the runnable toy spells them `provideCapability` / `invokeCapability` / `revokeCapability` (+ `describe`) — flat verbs on the handle, kept consistent and matching production, _not_ namespaced under `itx.caps.*`. `invoke`/`invokeCapability` does double duty on purpose: it's the public verb _and_ the one calling convention every capability bottoms out in — `invoke({ path, args })`, the same operation one layer apart. We deliberately use `invoke` rather than `call`: `call` is a `Function.prototype` member (`fn.call(...)`), so a `call` verb/convention would collide with it — both as a reserved path segment and as a member name on the function-typed proxy. `invoke` isn't on any prototype, so it stays clean.)
 
@@ -448,7 +454,7 @@ itx.provide({
 await itx.petstore.findPetsByStatus({ status: "available" }); // → invoke({ path: ["findPetsByStatus"], args })
 ```
 
-This is modeled on what iterate ships — `apps/os/src/itx/capabilities/openapi-client.ts`, a loopback cap (the real one also fetches the spec through project egress and derives a typed surface). A loopback is one ref kind; the other big one is a **`source`** worker — code built and run at runtime (a _dynamic worker_, via the Worker Loader). That's what `dial` does, just below, and what the runnable `steps/09-dial` actually exercises.
+This is modeled on what iterate ships — `apps/os/src/itx/capabilities/openapi-client.ts`, a loopback cap (the real one also fetches the spec through project egress and derives a typed surface). A loopback is one ref kind; the other big one is a **`source`** worker — code built and run at runtime (a _dynamic worker_, via the Worker Loader). That's what `dial` does, just below, and what the runnable `steps/09-dial` actually exercises. The word **dial** is the capability-restoration seam: address data goes in, a callable target comes out. If you're reading the control flow, "dial" means "restore this address to a live invoker".
 
 A purely structural discriminator tells the two kinds apart — and `invokeCapabilityAtPath` from Step 6 just grows an **address** branch, so `invoke` itself is unchanged:
 
@@ -465,7 +471,7 @@ function invokeCapabilityAtPath({ capability, path, args }) {
 }
 ```
 
-A **`PathCallable`** is just "anything with `invoke({ path, args })`" — the one calling convention everything bottoms out in, and exactly what `dial` returns. (Production names this calling convention `call`, distinct from the `invoke` verb; we use `invoke` for both, to avoid the `Function.prototype.call` clash.)
+A **`PathCallable`** is just "anything with `invoke({ path, args })`" — the one calling convention everything bottoms out in, and exactly what `dial` returns. More concrete names for the moving parts are: **find capability by path** (longest-prefix lookup), **restore address** (dial a sturdy ref), and **invoke capability at path** (replay the remaining path and call it). Those are the terms used in the snippets so the model does not hide behind abstract words like "resolve" or "borrow". (Production names this calling convention `call`, distinct from the `invoke` verb; we use `invoke` for both, to avoid the `Function.prototype.call` clash.)
 
 So what is `dial`? It's an injected effect that turns a sturdy ref back into a `PathCallable`. For a `source` worker it **builds the project worker from the repo and runs it as a dynamic worker** (the Worker Loader), caching the isolate by content — same content, same isolate:
 
@@ -522,8 +528,8 @@ The fold is then just a `switch` returning the next **plain object**:
 reduce({ event, state }) {
   switch (event.type) {
     case "…/capability-provided": {
-      const name = event.payload.path.join(".");
-      return { ...state, capabilities: { ...state.capabilities, [name]: row(event.payload) } };
+      const key = event.payload.path.join(".");
+      return { ...state, capabilities: { ...state.capabilities, [key]: row(event.payload) } };
     }
     case "…/capability-revoked": {
       const { [event.payload.path.join(".")]: _gone, ...rest } = state.capabilities;

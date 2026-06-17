@@ -15,6 +15,11 @@ rows as projections so the hot Worker path has a simple exact-host lookup.
 The app-level `projects` table is also a projection written from Project
 Durable Object lifecycle commands.
 
+The Project Durable Object remains the authority. Global D1 should hold only
+query projections needed outside the Project Durable Object, currently project
+listing rows and exact-host ingress rows unless KV or another edge index replaces
+one of those. D1 rows must be rebuildable from Project Durable Object state.
+
 The shared durable-object-utils D1 object catalog is separate from those
 application projections. It tracks initialized Durable Objects for discovery,
 inspection, and repair workflows.

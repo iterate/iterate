@@ -35,6 +35,13 @@ provider-owned webhook routing key, store it in
 `project_connections.webhook_provider_identifier`, enforce global uniqueness for
 that provider, and route inbound webhooks by resolving that claim to a ProjectId.
 
+From the itx point of view, an integration should be exposed as project-scoped
+capabilities, not as bespoke ingress-only machinery. For example, an integration
+can provide a narrow `fetch`/egress capability, secret-management helpers, or
+provider-specific actions on the project itx. The provider claim above remains
+the webhook routing fact; the callable surface should be mounted as capabilities
+so scripts, agents, and browser clients all reach it through the same path model.
+
 Google is project-scoped for this slice:
 
 - Provider: `google`

@@ -2,9 +2,10 @@
 
 **Adds:** the second kind of capability becomes real. A **sturdy** capability is
 plain serializable data — a ref naming a worker to build and run, plus the
-`props` that specialize it. `dial` turns that ref back into something callable by
-**loading the worker** (Cloudflare's Worker Loader) and handing back its
-entrypoint. The entrypoint's methods run in the freshly-built isolate.
+`props` that specialize it. `dial` is the restoration seam: it turns that ref
+back into something callable by **loading the worker** (Cloudflare's Worker
+Loader) and handing back its entrypoint. The entrypoint's methods run in the
+freshly-built isolate.
 
 ```ts
 itx.provideCapability(["calc"], {
