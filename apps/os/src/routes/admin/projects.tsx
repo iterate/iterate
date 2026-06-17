@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useServerFn } from "@tanstack/react-start";
 import { ArrowLeftIcon, ArrowRightIcon, ExternalLinkIcon, WaypointsIcon } from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
@@ -24,12 +23,11 @@ export const Route = createFileRoute("/admin/projects")({
 });
 
 function AdminProjectsPage() {
-  const listAdminProjectsFn = useServerFn(listAdminProjectsServerFn);
   const [pageIndex, setPageIndex] = useState(0);
   const offset = pageIndex * PAGE_SIZE;
   const projectsQuery = useQuery({
     queryKey: ["admin", "projects", { limit: PAGE_SIZE, offset }],
-    queryFn: async () => await listAdminProjectsFn({ data: { limit: PAGE_SIZE, offset } }),
+    queryFn: async () => await listAdminProjectsServerFn({ data: { limit: PAGE_SIZE, offset } }),
   });
   const projects = projectsQuery.data?.projects ?? [];
   const total = projectsQuery.data?.total ?? 0;

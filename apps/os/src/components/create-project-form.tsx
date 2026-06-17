@@ -1,7 +1,6 @@
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
-import { useServerFn } from "@tanstack/react-start";
 import { useAuthClient } from "@iterate-com/auth/client";
 import { Button } from "@iterate-com/ui/components/button";
 import {
@@ -40,7 +39,6 @@ export function CreateProjectForm() {
   const queryClient = useQueryClient();
   const { refresh, session } = useAuthClient();
   const organizations = session?.authenticated ? session.session.organizations : [];
-  const createProjectFn = useServerFn(createProjectServerFn);
   const createProject = useMutation({
     mutationFn: async (input: { slug: string; organizationSlug: string }) => {
       // Product project creation must use the request/session-aware project
@@ -49,7 +47,7 @@ export function CreateProjectForm() {
       // path with no auth organization ownership. The dashboard create form is
       // different: it should create/adopt through auth for the selected org so
       // the refreshed session contains the new project and `/projects` lists it.
-      return await createProjectFn({
+      return await createProjectServerFn({
         data: {
           slug: input.slug,
           organizationSlug: input.organizationSlug || undefined,

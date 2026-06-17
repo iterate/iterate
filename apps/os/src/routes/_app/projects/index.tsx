@@ -5,7 +5,6 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import { Link, createFileRoute } from "@tanstack/react-router";
-import { useServerFn } from "@tanstack/react-start";
 import { FolderPlus } from "lucide-react";
 import { useAuthClient } from "@iterate-com/auth/client";
 import { Button } from "@iterate-com/ui/components/button";
@@ -18,7 +17,9 @@ import {
   createProjectServerFn,
   deleteProjectServerFn,
   listMyProjectsServerFn,
-  myProjectsQueryOptions,
+  myProjectsListInput,
+  myProjectsQueryKey,
+  myProjectsStaleTime,
   type Project,
 } from "~/lib/project-server-fns.ts";
 import { reconnectItx } from "~/itx/itx-react.tsx";
@@ -54,13 +55,11 @@ function ProjectsIndexPage() {
   const organizations = session?.authenticated ? session.session.organizations : [];
   const isAdmin = session?.authenticated ? session.user.isAdmin === true : false;
   const queryClient = useQueryClient();
-  const listMyProjectsFn = useServerFn(listMyProjectsServerFn);
-  const createProjectFn = useServerFn(createProjectServerFn);
-  const deleteProjectFn = useServerFn(deleteProjectServerFn);
-  const listQueryOptions = myProjectsQueryOptions(() =>
-    listMyProjectsFn({ data: { limit: 100, offset: 0 } }),
-  );
-  const list = useQuery(listQueryOptions);
+  const list = useQuery({
+    queryKey: myProjectsQueryKey,
+    queryFn: () => listMyProjectsServerFn({ data: myProjectsListInput }),
+    staleTime: myProjectsStaleTime,
+  });
   const projects = list.data?.projects ?? [];
 
   // The scoped oRPC list intentionally merges two sources:
@@ -76,10 +75,10 @@ function ProjectsIndexPage() {
 
   const deleteProject = useMutation({
     mutationFn: async (input: { id: string }) => {
-      return await deleteProjectFn({ data: input });
+      return await deleteProjectServerFn({ data: input });
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: listQueryOptions.queryKey });
+      await queryClient.invalidateQueries({ queryKey: myProjectsQueryKey });
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });
@@ -89,7 +88,7 @@ function ProjectsIndexPage() {
       const organizationSlug = project.organizationId
         ? organizations.find((organization) => organization.id === project.organizationId)?.slug
         : undefined;
-      return await createProjectFn({
+      return await createProjectServerFn({
         data: {
           id: project.id,
           slug: project.slug,
@@ -98,7 +97,7 @@ function ProjectsIndexPage() {
       });
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: listQueryOptions.queryKey });
+      await queryClient.invalidateQueries({ queryKey: myProjectsQueryKey });
       reconnectItx();
       toast.success("Project recovered");
     },

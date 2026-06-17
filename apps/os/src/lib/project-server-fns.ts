@@ -30,10 +30,14 @@ export type ProjectWithIngressUrl = Project & { ingressUrl: string };
 
 export type ProjectListResult = { projects: Project[]; total: number };
 
+export const myProjectsQueryKey = ["my-projects"] as const;
+export const myProjectsListInput = { limit: 100, offset: 0 } as const;
+export const myProjectsStaleTime = 30_000;
+
 export const createProjectServerFn: (input: {
   data: { id?: string; slug: string; organizationSlug?: string };
 }) => Promise<ProjectWithIngressUrl> = createServerFn({ method: "POST" })
-  .inputValidator((input: { id?: string; slug: string; organizationSlug?: string }) => input)
+  .validator((input: { id?: string; slug: string; organizationSlug?: string }) => input)
   .handler(async ({ data }) => {
     return await new ProjectsCapability({ context: requireRequestContext() }).create(data);
   });
@@ -41,7 +45,7 @@ export const createProjectServerFn: (input: {
 export const deleteProjectServerFn: (input: {
   data: { id: string };
 }) => Promise<{ ok: true; id: string; deleted: boolean }> = createServerFn({ method: "POST" })
-  .inputValidator((input: { id: string }) => input)
+  .validator((input: { id: string }) => input)
   .handler(async ({ data }) => {
     return await new ProjectsCapability({ context: requireRequestContext() }).remove(data);
   });
@@ -50,7 +54,7 @@ export const deleteProjectServerFn: (input: {
 export const listMyProjectsServerFn: (input: {
   data: { limit?: number; offset?: number };
 }) => Promise<ProjectListResult> = createServerFn({ method: "GET" })
-  .inputValidator((input: { limit?: number; offset?: number }) => input)
+  .validator((input: { limit?: number; offset?: number }) => input)
   .handler(async ({ data }) => {
     return await new ProjectsCapability({ context: requireRequestContext() }).list(data);
   });
@@ -59,34 +63,16 @@ export const listMyProjectsServerFn: (input: {
 export const listAdminProjectsServerFn: (input: {
   data: { limit?: number; offset?: number };
 }) => Promise<ProjectListResult> = createServerFn({ method: "GET" })
-  .inputValidator((input: { limit?: number; offset?: number }) => input)
+  .validator((input: { limit?: number; offset?: number }) => input)
   .handler(async ({ data }) => {
     return await new ProjectsCapability({ context: adminProjectContext() }).listAllForAdmin(data);
   });
-
-export const myProjectsQueryKey = ["my-projects"] as const;
-
-/**
- * Shared query options for the session's accessible projects: the `_app`
- * loader prefetches it (SSR), the sidebar reads it via `useQuery`, both off the
- * same key so hydration matches with no flash.
- */
-export function myProjectsQueryOptions(
-  queryFn: () => Promise<ProjectListResult> = () =>
-    listMyProjectsServerFn({ data: { limit: 100, offset: 0 } }),
-) {
-  return {
-    queryKey: myProjectsQueryKey,
-    queryFn,
-    staleTime: 30_000,
-  };
-}
 
 /** A single project the session principal can read, by slug (mirrors `projects.findBySlug`). */
 export const getProjectBySlugServerFn: (input: {
   data: { slug: string };
 }) => Promise<ProjectWithIngressUrl> = createServerFn({ method: "GET" })
-  .inputValidator((input: { slug: string }) => input)
+  .validator((input: { slug: string }) => input)
   .handler(async ({ data }) => {
     return await new ProjectsCapability({ context: requireRequestContext() }).findBySlug({
       slug: data.slug,

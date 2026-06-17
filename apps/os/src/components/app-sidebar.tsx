@@ -1,6 +1,5 @@
 import { useMemo, useState, type ReactElement } from "react";
 import { Link, useMatches, useMatchRoute } from "@tanstack/react-router";
-import { useServerFn } from "@tanstack/react-start";
 import {
   ArrowLeft,
   Bug,
@@ -70,7 +69,13 @@ import {
 } from "@iterate-com/ui/components/sidebar";
 import type { AppConfig } from "~/config.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
-import { listMyProjectsServerFn, myProjectsQueryOptions } from "~/lib/project-server-fns.ts";
+import {
+  listMyProjectsServerFn,
+  myProjectsListInput,
+  myProjectsQueryKey,
+  myProjectsStaleTime,
+  type Project,
+} from "~/lib/project-server-fns.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
 
 type PublicConfig = PublicAppConfig<AppConfig>;
@@ -80,6 +85,14 @@ type AppSidebarProps = {
 };
 
 export function AppSidebar({ routeConfig }: AppSidebarProps) {
+  const { data } = useQuery({
+    queryKey: myProjectsQueryKey,
+    queryFn: () => listMyProjectsServerFn({ data: myProjectsListInput }),
+    staleTime: myProjectsStaleTime,
+  });
+  const projects =
+    data?.projects.filter((project) => !project.isOrphanedProjectFromAuthService) ?? [];
+
   // Sidebar composition follows shadcn sidebar blocks 07/08:
   // https://ui.shadcn.com/blocks/sidebar
   return (
@@ -90,10 +103,10 @@ export function AppSidebar({ routeConfig }: AppSidebarProps) {
           SidebarMenuButton uses for its width/height/padding — so the padding offset
           and the button's height change move the logo together instead of drifting. */}
       <SidebarHeader className="transition-[padding] group-data-[collapsible=icon]:pt-3">
-        <AppSidebarHeader />
+        <AppSidebarHeader projects={projects} />
       </SidebarHeader>
       <SidebarContent>
-        <AppSidebarNav routeConfig={routeConfig} />
+        <AppSidebarNav routeConfig={routeConfig} projects={projects} />
       </SidebarContent>
       <SidebarFooter>
         <AppSidebarCollapseButton />
@@ -104,12 +117,9 @@ export function AppSidebar({ routeConfig }: AppSidebarProps) {
   );
 }
 
-function AppSidebarHeader() {
+function AppSidebarHeader({ projects }: { projects: Project[] }) {
   const matches = useMatches();
   const { isMobile } = useSidebar();
-  const { data } = useMyProjectsQuery();
-  const projects =
-    data?.projects.filter((project) => !project.isOrphanedProjectFromAuthService) ?? [];
   const activeProjectSlug = getActiveProjectSlug(matches);
   const headerDescription = activeProjectSlug ?? "(select project)";
 
@@ -374,12 +384,15 @@ function authWorkerOrigin(config: PublicConfig) {
   return "https://auth.iterate.com";
 }
 
-function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
+function AppSidebarNav({
+  projects,
+  routeConfig,
+}: {
+  projects: Project[];
+  routeConfig: PublicRouteConfig;
+}) {
   const matchRoute = useMatchRoute();
   const matches = useMatches();
-  const { data } = useMyProjectsQuery();
-  const projects =
-    data?.projects.filter((project) => !project.isOrphanedProjectFromAuthService) ?? [];
   const activeProjectSlug = getActiveProjectSlug(matches);
   const activeProject = projects.find((project) => project.slug === activeProjectSlug);
 
@@ -460,13 +473,6 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
         </SidebarGroupContent>
       </SidebarGroup>
     </>
-  );
-}
-
-function useMyProjectsQuery() {
-  const listMyProjectsFn = useServerFn(listMyProjectsServerFn);
-  return useQuery(
-    myProjectsQueryOptions(() => listMyProjectsFn({ data: { limit: 100, offset: 0 } })),
   );
 }
 
