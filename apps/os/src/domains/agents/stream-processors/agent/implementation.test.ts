@@ -11,7 +11,10 @@ import type {
   StreamProcessorIterateContext,
   StreamProcessorSnapshot,
 } from "~/domains/streams/engine/stream-processor.ts";
-import { AGENT_CHAT_CAPABILITY_INSTRUCTIONS } from "~/domains/agents/agent-prompt-guidance.ts";
+import {
+  AGENT_CHAT_CAPABILITY_INSTRUCTIONS,
+  AGENT_WORKSPACE_CAPABILITY_INSTRUCTIONS,
+} from "~/domains/agents/agent-prompt-guidance.ts";
 
 describe("AgentProcessor", () => {
   afterEach(() => {
@@ -534,6 +537,34 @@ describe("AgentProcessor", () => {
     expect(payload.content).toContain("itx.chat.sendMessage({ message })");
     expect(payload.content).toContain("Do not return the result");
     expect(payload.content).toContain("offset 44");
+  });
+
+  it("renders workspace capability instructions with the prepared project repo path", async () => {
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({ stream });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/itx/capability-provided",
+          payload: {
+            path: ["workspace"],
+            meta: { instructions: AGENT_WORKSPACE_CAPABILITY_INSTRUCTIONS },
+          },
+          offset: 45,
+        }),
+      ],
+      streamMaxOffset: 45,
+    });
+
+    const payload = appended[1]?.payload as { content: string };
+    expect(payload.content).toContain("itx.workspace.readFile");
+    expect(payload.content).toContain("project repo is already cloned at /project");
+    expect(payload.content).toContain("/project/ONBOARDING.md");
+    expect(payload.content).toContain("git dir /project");
+    expect(payload.content).toContain("Do not use unannounced APIs");
+    expect(payload.content).toContain("itx.repo");
+    expect(payload.content).toContain("probing missing itx capabilities can throw");
   });
 
   it("recovers a scheduled request whose debounce timer died with a previous incarnation", async () => {

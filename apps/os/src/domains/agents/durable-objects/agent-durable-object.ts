@@ -48,7 +48,10 @@ import {
   type AgentDurableObjectName,
   agentLlmProcessorSlug,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
-import { AGENT_CHAT_CAPABILITY_INSTRUCTIONS } from "~/domains/agents/agent-prompt-guidance.ts";
+import {
+  AGENT_CHAT_CAPABILITY_INSTRUCTIONS,
+  AGENT_WORKSPACE_CAPABILITY_INSTRUCTIONS,
+} from "~/domains/agents/agent-prompt-guidance.ts";
 import { buildProjectStreamViewerUrl } from "~/lib/stream-viewer-url.ts";
 import { formatDurableObjectName, parseDurableObjectName } from "~/domains/durable-object-names.ts";
 
@@ -84,7 +87,7 @@ export type CloneProjectRepoInput = {
 /** Bump when agentContextCapabilities changes — re-provides the agent's tools
  * onto its own context (each provide appends an itx/capability-provided event
  * that both folds into the capability table and renders into the LLM's view). */
-const AGENT_CONTEXT_CAPABILITIES_VERSION = "8";
+const AGENT_CONTEXT_CAPABILITIES_VERSION = "10";
 
 export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
   readonly name = parseDurableObjectName(this.ctx.id.name!);
@@ -666,9 +669,7 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
           type: "rpc",
           worker: { type: "loopback" },
         },
-        instructions:
-          "This agent's private workspace filesystem: itx.workspace.readFile/writeFile plus the " +
-          "flat git methods gitClone/gitAdd/gitCommit/gitPush/gitStatus.",
+        instructions: AGENT_WORKSPACE_CAPABILITY_INSTRUCTIONS,
         name: "workspace",
       },
     ];
