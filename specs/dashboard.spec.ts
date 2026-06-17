@@ -1,10 +1,4 @@
-import {
-  createProject,
-  expect,
-  signInWithLocalAuth,
-  test,
-  uniqueSlug,
-} from "./test-support/test.ts";
+import { createProject, signInWithLocalAuth, test, uniqueSlug } from "./test-support/test.ts";
 
 test("can enter the dashboard and create a project", async ({ page }) => {
   await signInWithLocalAuth(page);
@@ -12,9 +6,9 @@ test("can enter the dashboard and create a project", async ({ page }) => {
   const projectSlug = uniqueSlug("playwright-project");
   await createProject(page, projectSlug);
 
-  await expect(page).toHaveURL(new RegExp(`/projects/${projectSlug}/`));
-  await expect(page.getByText(projectSlug).first()).toBeVisible();
+  await page.waitForURL(new RegExp(`/projects/${projectSlug}/`));
+  await page.getByText(projectSlug).first().waitFor();
 
   await page.goto("/projects");
-  await expect(page.getByRole("link", { name: projectSlug })).toBeVisible();
+  await page.getByRole("link", { name: projectSlug }).waitFor();
 });

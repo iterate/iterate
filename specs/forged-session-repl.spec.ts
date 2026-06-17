@@ -3,7 +3,7 @@ import {
   createAdminProject,
   mintIterateSession,
 } from "./test-support/forged-session.ts";
-import { expect, test, uniqueSlug } from "./test-support/test.ts";
+import { test, uniqueSlug } from "./test-support/test.ts";
 
 test("project REPL accepts a directly minted JWT session cookie", async ({ baseURL, page }) => {
   if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
@@ -37,8 +37,7 @@ test("project REPL accepts a directly minted JWT session cookie", async ({ baseU
   });
 
   await page.goto(`/projects/${projectFixture.project.slug}/repl`);
-  await expect(page.getByRole("button", { name: "Run" })).toBeEnabled();
   await page.getByRole("button", { name: "Run" }).click();
 
-  await expect(page.getByText("Result")).toBeVisible();
+  await page.getByText(`"capabilities"`).waitFor();
 });
