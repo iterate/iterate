@@ -10,12 +10,12 @@
 // WHY IT EXISTS. `__null__` (the platform projectId) holds streams that belong
 // to no project — integration webhooks, the project catalog, and so on. Those
 // are deliberately NOT a connectable project context: you cannot dial into
-// `__null__` from a project, and `/api/itx?projectId=__null__` is refused. The
+// `__null__` from a project, and `/api/itx/__null__` is refused. The
 // ONLY door to them is here.
 //
 // WHY IT IS SAFE — with no authority logic of its own:
 //   • Admin-only. The edge (server.ts) serves this surface ONLY to a principal
-//     whose access is "all" (auth.ts). A non-admin gets 403 at `/api/root`.
+//     whose access is "all" (auth.ts). A non-admin gets 403 at `/api/itx`.
 //   • No provide, no dialer. The surface is exactly `projects` and `streams`.
 //     There is nothing to inject a capability into and no caller-supplied name
 //     to dial — so the cross-project dial holes that a context's dialer must

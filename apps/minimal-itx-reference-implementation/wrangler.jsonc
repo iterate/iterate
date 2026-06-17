@@ -6,10 +6,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "durable_objects": {
     "bindings": [
-      // The itx context host: one DO per encoded { projectId, path } coordinate
-      // ("<projectId>:/" or "<projectId>:/agents/<name>"). Hosts the Itx StreamProcessor.
-      { "name": "ITX", "class_name": "ItxDurableObject" },
-      // The domain objects a context attaches to (they define its built-in caps).
+      // The domain objects that host their own embedded itx processors.
       { "name": "PROJECT", "class_name": "ProjectDurableObject" },
       { "name": "AGENT", "class_name": "AgentDurableObject" },
       { "name": "REPO", "class_name": "RepoDurableObject" },
@@ -22,7 +19,6 @@
     {
       "tag": "v1",
       "new_sqlite_classes": [
-        "ItxDurableObject",
         "ProjectDurableObject",
         "AgentDurableObject",
         "RepoDurableObject",

@@ -29,7 +29,7 @@ export const PRINCIPALS: Record<string, Principal> = {
   "alice-token": { name: "alice", access: ["alice", "shared"] },
   "bob-token": { name: "bob", access: ["bob", "shared"] },
   // An admin: reaches any project, and is the only principal allowed at the
-  // admin-only Root ITX (`/api/root`).
+  // admin-only Root ITX (`/api/itx`).
   "root-token": { name: "root", access: "all" },
 };
 

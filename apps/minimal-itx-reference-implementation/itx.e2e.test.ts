@@ -11,7 +11,7 @@
 // as the parent context but only with sturdy/replace-safe provides.
 
 import { describe, expect, it } from "vitest";
-import { withItx } from "./client.ts";
+import { itxHttpUrl, withItx } from "./client.ts";
 import { baseUrl, connect, token } from "./e2e-env.ts";
 import { EXAMPLE_CASES, EXAMPLE_IDS_WITHOUT_CASES } from "./example-cases.ts";
 import {
@@ -36,12 +36,17 @@ const agentPath = (label: string) => `/agents/${label}-${rid}`;
 const projectItx = () => connect({ path: "/" });
 const agentItx = (label: string) => connect({ path: agentPath(label) });
 
-const postScript = (path: string, code: string) =>
-  fetch(`${baseUrl()}/api/itx?projectId=shared&path=${encodeURIComponent(path)}`, {
+const postProjectScript = (code: string) =>
+  fetch(itxHttpUrl({ baseUrl: baseUrl(), projectId: "shared" }), {
     body: code,
     headers: { authorization: `Bearer ${token()}`, "content-type": "text/plain" },
     method: "POST",
   });
+
+const runAgentScript = async (path: string, code: string) => {
+  using project = projectItx();
+  return await project.agents.get(path).runScript({ code });
+};
 
 /** Cap'n Web returns an RpcPromise (thenable, not `instanceof Promise`). Wrap a
  *  call in a real async fn so vitest's `.rejects` can await it. */
@@ -129,7 +134,6 @@ describe("itx reference implementation", () => {
     {
       using agent = agentItx("chain");
       expect(await agent.calc.add(2, 3)).toBe(5);
-      expect(await agent.itxParent.calc.add(2, 3)).toBe(5);
       expect((await agent.whoami()).startsWith("agent ")).toBe(true);
       // Shadow the inherited cap locally; the project is unaffected.
       await agent.provideCapability({
@@ -137,7 +141,6 @@ describe("itx reference implementation", () => {
         capability: { add: (a: number, b: number) => a * b },
       });
       expect(await agent.calc.add(2, 3)).toBe(6);
-      expect(await agent.itxParent.calc.add(2, 3)).toBe(5);
     }
 
     {
@@ -158,12 +161,10 @@ describe("itx reference implementation", () => {
     const path = agentPath("code");
     using itx = agentItx("code");
     await itx.provideCapability({ path: ["calc"], capability: dynamicCalc });
-    const response = await postScript(
+    const output = (await runAgentScript(
       path,
       `async (itx) => itx.invokeCapability({ path: ["calc", "add"], args: [10, 20] })`,
-    );
-    expect(response.status).toBe(200);
-    const output = (await response.json()) as any;
+    )) as any;
     expect(output.result).toBe(30);
     const d = await itx.describe();
     const execution = d.scriptExecutions.find((x: any) => x.executionId === output.executionId);
@@ -172,7 +173,7 @@ describe("itx reference implementation", () => {
   });
 
   it("9. POST /api/itx runs a script and folds requested/completed events", async () => {
-    const response = await postScript(agentPath("post"), `async () => "curlable"`);
+    const response = await postProjectScript(`async () => "curlable"`);
     expect(response.status).toBe(200);
     const body = (await response.json()) as any;
     expect(body.result).toBe("curlable");
@@ -273,29 +274,23 @@ describe("itx reference implementation", () => {
     expect(await itx.counterB.current()).toBe(1);
   });
 
-  it("17. itxParent is a sturdy built-in entrypoint; the project is the top of the chain", async () => {
+  it("17. agent ITX is reached through the project-local agents capability", async () => {
     using agent = agentItx("describe-chain");
     const d = await agent.describe();
     expect(d.builtins.some((c: any) => c.path.join(".") === "whoami")).toBe(true);
-    const itxParent = d.builtins.find((c: any) => c.path.join(".") === "itxParent");
-    expect(itxParent?.address).toMatchObject({
-      entrypoint: "ItxEntrypoint",
-      props: { path: "/", projectId: "shared" },
-      type: "worker-entrypoint",
-    });
     const whoami = d.builtins.find((c: any) => c.path.join(".") === "whoami");
-    expect(whoami?.address?.name).toMatch(/^shared:\/agents\//);
+    expect(whoami?.address).toBeNull();
 
-    // The agent's parent is its project. The project has fetch + repo and is the
-    // TOP of the chain: NO itxParent (there is no global root to climb to).
-    const project = await agent.itxParent.describe();
+    using projectItxHandle = projectItx();
+    const project = await projectItxHandle.describe();
     expect(project.builtins.some((c: any) => c.path.join(".") === "fetch")).toBe(true);
     expect(project.builtins.some((c: any) => c.path.join(".") === "repo")).toBe(true);
-    expect(project.builtins.some((c: any) => c.path.join(".") === "itxParent")).toBe(false);
+    expect(project.builtins.some((c: any) => c.path.join(".") === "agents")).toBe(true);
     const repo = project.builtins.find((c: any) => c.path.join(".") === "repo");
-    expect(repo?.address?.name).toBe("shared:/repos/project");
-    // Climbing past the project throws — nothing left to inherit.
-    await expectRejects(() => agent.itxParent.itxParent.describe()).toThrow();
+    expect(repo?.address).toBeNull();
+    const path = agentPath("via-agents");
+    const viaProject = projectItxHandle.agents.get(path).itx();
+    expect(await viaProject.whoami()).toBe(`agent shared:${path}`);
     expect((d as any).parentCapabilities).toBeUndefined();
   });
 
@@ -308,10 +303,8 @@ describe("itx reference implementation", () => {
     expect(await agent.whoami()).toBe(original);
   });
 
-  it("19. trusted durable-object built-in replays its path prefix", async () => {
+  it("19. project fetch is a host runtime built-in", async () => {
     using project = projectItx();
-    // Project `fetch` is a trusted durable-object address whose stored prefix is
-    // ["egress"]. The caller invokes `fetch(...)`; dial replays egress first.
     expect(await project.fetch("data:text/plain,hello")).toEqual({
       body: "hello",
       status: 200,
@@ -323,9 +316,7 @@ describe("itx reference implementation", () => {
     const path = agentPath("script-error");
     using itx = agentItx("script-error");
     const code = `async () => { throw new Error("boom"); }`;
-    const response = await postScript(path, code);
-    expect(response.status).toBe(400);
-    expect(await response.text()).toMatch(/boom/);
+    await expectRejects(() => runAgentScript(path, code)).toThrow(/boom/);
     const execution = (await itx.describe()).scriptExecutions.find((x: any) => x.code === code);
     expect(execution?.status).toBe("completed");
     expect(execution?.error ?? "").toMatch(/boom/);
@@ -333,7 +324,7 @@ describe("itx reference implementation", () => {
 
   it("21. codemode can durably provide a capability for later callers", async () => {
     const path = agentPath("script-provide");
-    const response = await postScript(
+    const body = (await runAgentScript(
       path,
       `async (itx) => {
           await itx.provideCapability({
@@ -342,9 +333,7 @@ describe("itx reference implementation", () => {
           });
           return "provided";
         }`,
-    );
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as any;
+    )) as any;
     expect(body.result).toBe("provided");
 
     using itx = connect({ path });

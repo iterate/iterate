@@ -1,4 +1,4 @@
-// The admin-only platform root (root-itx.ts), served at /api/root. Proves an
+// The admin-only platform root (root-itx.ts), served at /api/itx. Proves an
 // admin can list projects and read/write the `__null__` platform streams, and
 // that a non-admin is refused at the door.
 
@@ -27,14 +27,14 @@ describe("itx admin root e2e", () => {
   });
 
   it("refuses a non-admin principal at the root door", async () => {
-    const response = await fetch(`${baseUrl()}/api/root`, {
+    const response = await fetch(`${baseUrl()}/api/itx`, {
       headers: { authorization: `Bearer ${token()}` }, // alice — not an admin
     });
     expect(response.status).toBe(403);
   });
 
   it("refuses an unauthenticated request at the root door", async () => {
-    const response = await fetch(`${baseUrl()}/api/root`);
+    const response = await fetch(`${baseUrl()}/api/itx`);
     expect(response.status).toBe(401);
   });
 

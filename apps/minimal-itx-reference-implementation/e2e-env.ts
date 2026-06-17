@@ -45,7 +45,7 @@ export function adminToken(): string {
   return process.env.ITX_ADMIN_TOKEN?.trim() || "root-token";
 }
 
-/** Connect to the admin-only platform root (`/api/root`). */
+/** Connect to the admin-only platform root (`/api/itx`). */
 export function connectRoot<T = any>(): T {
   return withRoot<T>({ baseUrl: baseUrl(), token: adminToken() });
 }

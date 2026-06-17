@@ -78,12 +78,15 @@ describe.skipIf(!__ITX_BROWSER_E2E__.baseUrl)("itx browser execution mode", () =
 
 function connectFromBrowser(path: string): any {
   const wsBase = __ITX_BROWSER_E2E__.baseUrl.replace(/^http/, "ws");
-  const params = new URLSearchParams({
-    projectId: "shared",
-    path,
-    token: __ITX_BROWSER_E2E__.token,
+  const params = new URLSearchParams({ token: __ITX_BROWSER_E2E__.token });
+  const session = newWebSocketRpcSession(new WebSocket(`${wsBase}/api/itx/shared?${params}`));
+  const target = path === "/" ? session : (session as any).agents.get(path).itx();
+  return new Proxy(target, {
+    get(target, key, receiver) {
+      if (key === Symbol.dispose) return () => (session as any)[Symbol.dispose]?.();
+      return Reflect.get(target, key, receiver);
+    },
   });
-  return newWebSocketRpcSession(new WebSocket(`${wsBase}/api/itx?${params}`));
 }
 
 function slug(value: string): string {

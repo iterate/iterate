@@ -102,22 +102,18 @@ export type WithItxInput = {
 
 export function itxHttpUrl(input: WithItxInput): string {
   const base = input.baseUrl ?? process.env.ITX_BASE ?? "http://127.0.0.1:8788";
-  const params = new URLSearchParams({
-    projectId: input.projectId ?? "",
-    path: input.path ?? "/",
-  });
-  return `${base}/api/itx?${params}`;
+  const projectId = input.projectId ?? "";
+  return `${base}/api/itx/${encodeURIComponent(projectId)}`;
 }
 
 export function itxWebSocketUrl(input: WithItxInput & { tokenInQuery?: boolean }): string {
   const base = input.baseUrl ?? process.env.ITX_BASE ?? "http://127.0.0.1:8788";
   const wsBase = base.replace(/^http/, "ws");
-  const params = new URLSearchParams({
-    projectId: input.projectId ?? "",
-    path: input.path ?? "/",
-  });
+  const projectId = input.projectId ?? "";
+  const params = new URLSearchParams();
   if (input.tokenInQuery && input.token) params.set("token", input.token);
-  return `${wsBase}/api/itx?${params}`;
+  const qs = params.toString();
+  return `${wsBase}/api/itx/${encodeURIComponent(projectId)}${qs ? `?${qs}` : ""}`;
 }
 
 /** Hold an itx context from OUTSIDE the platform (a Node program, a test, your
@@ -132,8 +128,11 @@ export function withItx<T = any>(input: WithItxInput): T {
     url,
     input.token ? { authorization: `Bearer ${input.token}` } : undefined,
   );
-  return new Proxy(session, {
+  const path = input.path ?? "/";
+  const target = path === "/" ? session : session.agents.get(path).itx();
+  return new Proxy(target, {
     get(target, key, receiver) {
+      if (key === Symbol.dispose) return () => session[Symbol.dispose]?.();
       if (key !== "provideCapability") return Reflect.get(target, key, receiver);
       return (args: { capability: unknown; [key: string]: unknown }) =>
         target.provideCapability({
@@ -161,7 +160,7 @@ export function itxRootWebSocketUrl(input: WithRootInput = {}): string {
   const params = new URLSearchParams();
   if (input.tokenInQuery && input.token) params.set("token", input.token);
   const qs = params.toString();
-  return `${wsBase}/api/root${qs ? `?${qs}` : ""}`;
+  return `${wsBase}/api/itx${qs ? `?${qs}` : ""}`;
 }
 
 /** Connect to the admin Root ITX. No provide-time normalization is needed — the

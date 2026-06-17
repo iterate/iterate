@@ -1,13 +1,12 @@
 // server.ts — the Cloudflare Worker that hosts itx.
 //
-// One Worker, one itx Durable Object per context coordinate, one durable event
-// log per context. The surface is two connect routes:
+// One Worker, Project/Agent Durable Objects host their own embedded itx
+// processors, and each context still has one durable event log. The public
+// surface is:
 //
-//   /api/itx?projectId=<id>&path=/                 -> a project context
-//   /api/itx?projectId=<id>&path=/agents/<name>    -> an agent context
-//   /api/root                                      -> the admin-only platform
-//                                                     root (project catalog +
-//                                                     `__null__` streams; root-itx.ts)
+//   /api/itx                         -> admin-only platform root
+//   /api/itx/<projectId>             -> project context
+//   project.agents.get("/agents/x")  -> agent DO public surface, including itx()
 //
 // There is no global/`__global__` context: a project is the top of its own
 // chain, and cross-project / platform reach lives ONLY behind the admin root.
@@ -19,13 +18,14 @@
 // `invokeCapability({ path, args })`. The context, not the proxy, decides
 // whether that path is a reserved ITX control name or a user capability.
 
-import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
+import { DurableObject, RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import { newWorkersRpcResponse } from "capnweb";
 import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
 } from "@iterate-com/os/src/domains/streams/engine/workers/stream-processor-host.ts";
 import { durableObjectProcessorSubscriber } from "@iterate-com/os/src/domains/streams/engine/shared/callable-subscriber.ts";
+import { makeRpcTargetClass } from "@iterate-com/os/src/domains/streams/engine/shared/rpc-target.ts";
 import { ItxContract } from "./contract.ts";
 import { ItxProcessor, replayPath, type ItxContext, type ProvideArgs } from "./itx.ts";
 import { RootItx } from "./root-itx.ts";
@@ -41,30 +41,16 @@ import {
 // a Durable Object. A context's capability table is the fold of one of these.
 export { Stream } from "@iterate-com/os/src/domains/streams/engine/workers/durable-objects/stream.ts";
 
-export class ItxBindingEntrypoint extends WorkerEntrypoint<Env, { context: string }> {
+export class ItxBindingEntrypoint extends WorkerEntrypoint<
+  Env,
+  { projectId: string; path: string }
+> {
   async get(): Promise<ItxContext> {
-    const node = this.env.ITX.getByName(this.ctx.props.context);
+    const node = contextNode(this.env, this.ctx.props);
     return pathProxyToInvokeCapability({
       invokeCapability: (args: { path: string[]; args?: unknown[] }) =>
-        (node as any).invokeCapability(args),
+        (node as any).itx().invokeCapability(args),
     }) as ItxContext;
-  }
-}
-
-export class ItxEntrypoint extends WorkerEntrypoint<Env, { projectId: string; path: string }> {
-  // The reserved `itxParent` loopback. Only ever host-propped at an agent's own
-  // project coordinate, so it forwards into a real project context (there is no
-  // `__global__` to fall through to).
-  invokeCapability(args: { path: string[]; args?: unknown[] }) {
-    const context = formatDurableObjectName({
-      projectId: this.ctx.props.projectId,
-      path: this.ctx.props.path,
-    });
-    return this.env.ITX.getByName(context).invokeCapability(args);
-  }
-
-  describe() {
-    return this.invokeCapability({ path: ["describe"], args: [] });
   }
 }
 
@@ -132,7 +118,6 @@ function pathProxyToInvokeCapability(
 }
 
 interface Env {
-  ITX: DurableObjectNamespace<ItxDurableObject>;
   PROJECT: DurableObjectNamespace<ProjectDurableObject>;
   AGENT: DurableObjectNamespace<AgentDurableObject>;
   REPO: DurableObjectNamespace<RepoDurableObject>;
@@ -154,6 +139,23 @@ interface Env {
       getDurableObjectClass?(name?: string): any;
     };
   };
+}
+
+type ItxHostNode = {
+  itx(): ItxContext;
+  runScript(args: { code: string }): Promise<unknown>;
+};
+
+function contextNode(env: Env, parts: { projectId: string; path: string }): ItxHostNode {
+  if (parts.path === "/") {
+    return env.PROJECT.getByName(formatDurableObjectName(parts)) as unknown as ItxHostNode;
+  }
+  if (parts.path.startsWith("/agents/")) {
+    return env.AGENT.getByName(formatDurableObjectName(parts)) as unknown as ItxHostNode;
+  }
+  throw new Error(
+    `no ITX host for path "${parts.path}" (only "/" and "/agents/..." are host-owned contexts)`,
+  );
 }
 
 // Content-addressed cache key for a loaded isolate: same source → same isolate.
@@ -218,11 +220,10 @@ function localPathProxy(target: unknown | Promise<unknown>, path: string[] = [])
 // in-memory field inside the processor; the log itself is the real `Stream`
 // Durable Object, dialed by coordinate.
 // ---------------------------------------------------------------------------
-export class ItxDurableObject extends DurableObject<Env> {
-  // The processor is HOSTED (not just newed) so the stream can deliver batches to
-  // it: createStreamProcessorHost wires checkpoint storage + keep-alive, and on
-  // subscription handshake pumps every appended batch into the processor's ingest.
+abstract class ItxHostDurableObject extends DurableObject<Env> {
   host = createStreamProcessorHost(this.ctx);
+  #subscriptionConfigured = false;
+  #dynamicDurableObjectVersions = new Map<string, string>();
   #itx = this.host.add(
     ItxContract.slug,
     (deps) =>
@@ -230,13 +231,17 @@ export class ItxDurableObject extends DurableObject<Env> {
         ...deps,
         iterateContext: { stream: this.#log() },
         dial: (address) => this.#dial(address),
-        builtinCapabilities: this.#contextBuiltinCapabilities(), // from the domain object
+        builtinCapabilities: this.contextBuiltinCapabilities(),
+        parentContext: () => this.parentContext(),
       }),
   );
-  #subscriptionConfigured = false;
-  #dynamicDurableObjectVersions = new Map<string, string>();
 
-  #nameParts(): DurableObjectNameParts | null {
+  protected abstract contextBuiltinCapabilities(): ProvideArgs[];
+  protected parentContext(): ItxContext | null {
+    return null;
+  }
+
+  protected nameParts(): DurableObjectNameParts | null {
     const name = this.ctx.id.name;
     return name ? parseDurableObjectName(name) : null;
   }
@@ -249,43 +254,18 @@ export class ItxDurableObject extends DurableObject<Env> {
     return name;
   }
 
-  // A context is born with built-in capabilities defined by the DOMAIN object it
-  // is scoped to. The project context gets `itxParent` + Project DO built-ins; an
-  // agent context gets `itxParent` + Agent DO built-ins. The host decides WHICH
-  // coordinate maps to WHICH domain object; the domain object defines WHAT it
-  // offers.
-  #contextBuiltinCapabilities(): ProvideArgs[] {
-    const parts = this.#nameParts();
-    const projectId = parts?.projectId;
-    if (!parts || !projectId) return [];
-    if (parts.path === "/") {
-      return ProjectDurableObject.builtinCapabilities(projectId);
-    }
-    if (parts.path.startsWith("/agents/")) {
-      return AgentDurableObject.builtinCapabilities({ projectId, path: parts.path });
-    }
-    return [];
+  #requireNameParts(): DurableObjectNameParts {
+    return parseDurableObjectName(this.#requireName());
+  }
+
+  protected requireProjectId(): string {
+    const projectId = this.nameParts()?.projectId;
+    if (!projectId) throw new Error("ITX host Durable Object must be project-scoped");
+    return projectId;
   }
 
   // Capability address → callable stub.
   #dial(address: any): any {
-    if (address?.type === "worker-entrypoint") {
-      const entrypoint = ((this.ctx as any).exports as any)[address.entrypoint]({
-        props: address.props ?? {},
-      });
-      // `ItxEntrypoint` is a path-call surface: it exposes
-      // invokeCapability({ path, args }), not a literal method for every
-      // inherited capability. Wrap that shape with the same server-side proxy the
-      // WebSocket edge uses, so a sturdy itxParent address can answer
-      // `itx.itxParent.fetch(...)` and implicit miss fallback identically.
-      if (typeof entrypoint.invokeCapability === "function") {
-        return pathProxyToInvokeCapability({
-          invokeCapability: (args: { path: string[]; args?: unknown[] }) =>
-            entrypoint.invokeCapability(args),
-        });
-      }
-      return localPathProxy(entrypoint);
-    }
     if (address?.type === "dynamic-worker") {
       const loaded = this.#loadDynamicWorker(address.source);
       const entrypoint = loaded.then((worker) =>
@@ -303,23 +283,7 @@ export class ItxDurableObject extends DurableObject<Env> {
       )}`;
       return localPathProxy(this.#dynamicDurableObjectFacet(facetName, address));
     }
-    if (address?.type === "durable-object") {
-      const namespace = this.#durableObjectNamespace(address.namespace);
-      return localPathProxy(namespace.getByName(address.name), address.path ?? []);
-    }
     throw new Error(`address is not dialable: ${JSON.stringify(address)}`);
-  }
-
-  #durableObjectNamespace(namespace: string): { getByName(name: string): unknown } {
-    const namespaces: Record<string, { getByName(name: string): unknown }> = {
-      agent: this.env.AGENT,
-      itx: this.env.ITX,
-      project: this.env.PROJECT,
-      repo: this.env.REPO,
-    };
-    const binding = namespaces[namespace];
-    if (!binding) throw new Error(`unknown trusted Durable Object namespace "${namespace}"`);
-    return binding;
   }
 
   async #resolveWorkerSource(source: DynamicWorkerSource): Promise<ResolvedWorkerSource> {
@@ -331,7 +295,12 @@ export class ItxDurableObject extends DurableObject<Env> {
         modules: source.modules,
       };
     }
-    const repo = this.env.REPO.getByName(source.repo);
+    const repo = this.env.REPO.getByName(
+      formatDurableObjectName({
+        projectId: this.requireProjectId(),
+        path: PROJECT_REPO_PATH,
+      }),
+    );
     const resolved = await repo.getWorkerSource({ path: source.path });
     return {
       cacheKey: hashString(JSON.stringify({ source, resolved })),
@@ -347,7 +316,7 @@ export class ItxDurableObject extends DurableObject<Env> {
       compatibilityFlags: ["nodejs_compat"],
       env: {
         ITX: ((this.ctx as any).exports as any).ItxBindingEntrypoint({
-          props: { context: this.#requireName() },
+          props: this.#requireNameParts(),
         }),
       },
       mainModule: resolved.mainModule,
@@ -382,8 +351,8 @@ export class ItxDurableObject extends DurableObject<Env> {
     }
     this.#dynamicDurableObjectVersions.set(facetName, version);
     // This marker is supervisor metadata, not user data. We need it durably so a
-    // freshly-started ItxDurableObject can tell whether an already-running facet
-    // is on the source/class version it is about to serve. But once the in-memory
+    // freshly-started host DO can tell whether an already-running facet is on
+    // the source/class version it is about to serve. But once the in-memory
     // map has seen the current version, writing the same marker on every method
     // call is pure hot-path storage churn. Persist only the first observation for
     // this isolate or an actual version change.
@@ -425,13 +394,14 @@ export class ItxDurableObject extends DurableObject<Env> {
     if (this.#subscriptionConfigured) return;
     this.#subscriptionConfigured = true;
     const name = this.#requireName();
+    const bindingName = this.#requireNameParts().path === "/" ? "PROJECT" : "AGENT";
     const event: any = {
       type: "events.iterate.com/stream/subscription-configured",
-      idempotencyKey: `itx-subscription:${name}`,
+      idempotencyKey: `itx-host-subscription:${bindingName}:${name}`,
       payload: {
         subscriptionKey: `itx:${name}`,
         subscriber: durableObjectProcessorSubscriber({
-          bindingName: "ITX",
+          bindingName,
           durableObjectName: name,
           processorName: ItxContract.slug,
         }),
@@ -441,25 +411,29 @@ export class ItxDurableObject extends DurableObject<Env> {
   }
 
   // The hosted processor. Lazily wires the subscription on first reach.
-  get itx(): ItxProcessor {
+  itx(): ItxContext {
     this.#ensureSubscriptionConfigured();
-    return this.#itx;
+    return pathProxyToInvokeCapability(this.#itx) as ItxContext;
   }
 
   provideCapability(args: ProvideArgs) {
-    return this.itx.provideCapability(args);
+    this.#ensureSubscriptionConfigured();
+    return this.#itx.provideCapability(args);
   }
 
   invokeCapability(args: { path: string[]; args?: unknown[] }) {
-    return this.itx.invokeCapability(args);
+    this.#ensureSubscriptionConfigured();
+    return this.#itx.invokeCapability(args);
   }
 
   revokeCapability(args: { path: string[] }) {
-    return this.itx.revokeCapability(args);
+    this.#ensureSubscriptionConfigured();
+    return this.#itx.revokeCapability(args);
   }
 
   describe() {
-    return this.itx.describe();
+    this.#ensureSubscriptionConfigured();
+    return this.#itx.describe();
   }
 
   // The Stream DO dials this to start delivering batches to the host's processor.
@@ -533,10 +507,54 @@ export class ItxDurableObject extends DurableObject<Env> {
 // attaches to them by coordinate, and parentage is a reserved built-in).
 // ---------------------------------------------------------------------------
 
+type RpcTargetClass<TSource extends object> = new (source: TSource) => RpcTarget;
+
+function makeInheritedRpcTargetClass<TSource extends object>(
+  sourceClass: { prototype: TSource },
+  options: { exclude?: readonly PropertyKey[] } = {},
+): RpcTargetClass<TSource> {
+  const exclude = new Set<PropertyKey>([
+    "constructor",
+    "contextBuiltinCapabilities",
+    "parentContext",
+    "requestStreamSubscription",
+    ...(options.exclude ?? []),
+  ]);
+
+  class GeneratedRpcTarget extends RpcTarget {
+    constructor(readonly source: TSource) {
+      super();
+    }
+  }
+
+  for (
+    let proto: object | null = sourceClass.prototype;
+    proto && proto !== DurableObject.prototype && proto !== Object.prototype;
+    proto = Object.getPrototypeOf(proto)
+  ) {
+    for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(proto))) {
+      if (exclude.has(key) || key in GeneratedRpcTarget.prototype) continue;
+      if (typeof descriptor.value === "function") {
+        Object.defineProperty(GeneratedRpcTarget.prototype, key, {
+          value(this: GeneratedRpcTarget, ...args: unknown[]) {
+            const member = Reflect.get(this.source, key);
+            if (typeof member !== "function") {
+              throw new TypeError(`${key} is not callable on the wrapped RPC source.`);
+            }
+            return Reflect.apply(member, this.source, args);
+          },
+        });
+      }
+    }
+  }
+
+  return GeneratedRpcTarget as RpcTargetClass<TSource>;
+}
+
 // The Project DO. Owns the project's egress AND defines a project context's
 // built-ins. `egress` does the outbound fetch (named `egress`, not `fetch`,
 // because a DO's `fetch` is its HTTP entrypoint).
-export class ProjectDurableObject extends DurableObject<Env> {
+export class ProjectDurableObject extends ItxHostDurableObject {
   async egress(
     url: string,
     init?: RequestInit,
@@ -551,64 +569,62 @@ export class ProjectDurableObject extends DurableObject<Env> {
     };
   }
 
-  // The capabilities a context scoped to THIS project is born with — same shape
-  // as a provideCapability call. A built-in is a capability pre-provided in code.
-  // A project is the TOP of its chain: no `itxParent`, so a capability miss here
-  // just throws (there is no global root to climb to).
-  static builtinCapabilities(projectId: string): ProvideArgs[] {
+  protected contextBuiltinCapabilities(): ProvideArgs[] {
+    const projectId = this.requireProjectId();
+    const repo = this.env.REPO.getByName(
+      formatDurableObjectName({ projectId, path: PROJECT_REPO_PATH }),
+    );
     return [
       {
         path: ["fetch"],
-        capability: {
-          type: "durable-object",
-          namespace: "project",
-          name: formatDurableObjectName({ projectId, path: "/" }),
-          path: ["egress"],
-        },
+        capability: (url: string, init?: RequestInit) => this.egress(url, init),
         instructions: "the project's HTTP egress",
       },
       {
         path: ["repo"],
-        capability: {
-          type: "durable-object",
-          namespace: "repo",
-          name: formatDurableObjectName({ projectId, path: PROJECT_REPO_PATH }),
-        },
+        capability: new RepoRpcTarget(repo as unknown as RepoDurableObject),
         instructions: "the project's fake repo: getWorkerSource({ path: 'counter.js' })",
+      },
+      {
+        path: ["agents"],
+        capability: new AgentsRpcTarget({ agents: this.env.AGENT, projectId }),
+        instructions:
+          "project-local agents: agents.get('/agents/name') returns that Agent Durable Object's public RPC surface",
       },
     ];
   }
 }
 
 // The Agent DO. Lives UNDER a project (coordinate "<id>/agents/<name>"). Owns its
-// identity and defines its own built-ins (whoami). An agent context is born with
-// these AND a reserved `itxParent` built-in pointing at its project, so an agent can
-// call its own `whoami` AND the project's inherited `fetch`.
-export class AgentDurableObject extends DurableObject<Env> {
+// identity, defines its own built-ins (whoami), and injects the project context
+// as its parent.
+export class AgentDurableObject extends ItxHostDurableObject {
   whoami(): string {
-    const parts = this.ctx.id.name ? parseDurableObjectName(this.ctx.id.name) : null;
+    const parts = this.nameParts();
     return parts ? `agent ${parts.projectId}:${parts.path}` : "agent ?";
   }
 
-  static builtinCapabilities(parts: { projectId: string; path: string }): ProvideArgs[] {
+  sendMessage(input: { message: string; channel?: string }) {
+    return { agent: this.whoami(), ...input };
+  }
+
+  protected parentContext(): ItxContext {
+    const project = this.env.PROJECT.getByName(
+      formatDurableObjectName({ projectId: this.requireProjectId(), path: "/" }),
+    ) as unknown as ItxHostNode;
+    return {
+      provideCapability: (args) => project.itx().provideCapability(args),
+      invokeCapability: (args) => project.itx().invokeCapability(args),
+      revokeCapability: (args) => project.itx().revokeCapability(args),
+      describe: () => project.itx().describe(),
+    };
+  }
+
+  protected contextBuiltinCapabilities(): ProvideArgs[] {
     return [
       {
-        path: ["itxParent"],
-        capability: {
-          type: "worker-entrypoint",
-          entrypoint: "ItxEntrypoint",
-          props: { projectId: parts.projectId, path: "/" },
-        },
-        instructions: "the parent project context",
-      },
-      {
         path: ["whoami"],
-        capability: {
-          type: "durable-object",
-          namespace: "agent",
-          name: formatDurableObjectName(parts),
-          path: ["whoami"],
-        },
+        capability: () => this.whoami(),
         instructions: "the agent's own identity",
       },
     ];
@@ -646,6 +662,42 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 }
 
+const RepoRpcTarget = makeRpcTargetClass(RepoDurableObject);
+const AgentRpcTarget = makeInheritedRpcTargetClass(AgentDurableObject);
+
+class AgentsRpcTarget extends RpcTarget {
+  #agents: DurableObjectNamespace<AgentDurableObject>;
+  #projectId: string;
+
+  constructor(input: { agents: DurableObjectNamespace<AgentDurableObject>; projectId: string }) {
+    super();
+    this.#agents = input.agents;
+    this.#projectId = input.projectId;
+  }
+
+  get(agentPathInput: string) {
+    const path = normalizeAgentPath(agentPathInput);
+    const agent = this.#agents.getByName(
+      formatDurableObjectName({ projectId: this.#projectId, path }),
+    );
+    return new AgentRpcTarget(agent as unknown as AgentDurableObject);
+  }
+
+  async sendMessage(input: { agentPath: string; message: string; channel?: string }) {
+    return await (this.get(input.agentPath) as unknown as AgentDurableObject).sendMessage({
+      message: input.message,
+      channel: input.channel,
+    });
+  }
+}
+
+function normalizeAgentPath(path: string): string {
+  if (!path.startsWith("/agents/")) {
+    throw new Error(`agent path must start with "/agents/", got "${path}"`);
+  }
+  return path;
+}
+
 // ---------------------------------------------------------------------------
 // The Worker entrypoint.
 // ---------------------------------------------------------------------------
@@ -672,32 +724,32 @@ export default {
   async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
-    // The admin-only platform root. NOT a context and NOT a Durable Object: a
-    // tiny fixed RPC surface (root-itx.ts) for the project catalog and the
-    // `__null__` platform streams. Admins only; nothing is ever provided to it.
-    if (url.pathname === "/api/root") {
+    const pathProjectMatch = url.pathname.match(/^\/api\/itx\/([^/]+)$/);
+    const projectId = decodeURIComponent(pathProjectMatch?.[1] ?? "");
+
+    if (!projectId && url.pathname === "/api/itx") {
       const principal = authenticate(request);
       if (!principal) return new Response("missing or invalid token", { status: 401 });
       if (principal.access !== "all")
-        return new Response("root ITX is admin-only", { status: 403 });
+        return new Response("root ITX is admin-only in the reference implementation", {
+          status: 403,
+        });
       if (request.method !== "GET") return new Response("method not allowed", { status: 405 });
       return newWorkersRpcResponse(request, pathProxyToInvokeCapability(new RootItx(env)));
     }
 
-    if (url.pathname !== "/api/itx") {
-      return new Response(
-        "minimal-itx: connect to /api/itx?projectId=<id>&path=/ (or /api/root for admins)",
-        { status: 404 },
-      );
+    if (!projectId) {
+      return new Response("minimal-itx: connect to /api/itx/<projectId> or /api/itx for admins", {
+        status: 404,
+      });
     }
 
-    const projectId = url.searchParams.get("projectId") ?? "";
-    const path = url.searchParams.get("path") ?? "/";
+    const path = "/";
 
     // `__null__` is the platform plane, not a connectable context — its streams
     // live behind the admin root, never as a project context.
     if (projectId === PLATFORM_PROJECT_ID) {
-      return new Response(`"${PLATFORM_PROJECT_ID}" is not a connectable context; use /api/root`, {
+      return new Response(`"${PLATFORM_PROJECT_ID}" is not a connectable context; use /api/itx`, {
         status: 404,
       });
     }
@@ -709,14 +761,17 @@ export default {
     const auth = authorizeProjectAccess(request, projectId);
     if (!auth.ok) return new Response(auth.message, { status: auth.status });
 
-    const context = formatDurableObjectName({ projectId, path });
-    const node = env.ITX.getByName(context);
+    const node = contextNode(env, { projectId, path });
 
     if (request.method === "POST") {
       try {
         const code = await readScriptCode(request);
         const run = (await node.runScript({ code })) as Record<string, unknown>;
-        return json({ context, ...run, describe: await node.describe() });
+        return json({
+          context: formatDurableObjectName({ projectId, path }),
+          ...run,
+          describe: await node.itx().describe(),
+        });
       } catch (error: any) {
         return json({ error: error?.message ?? String(error) }, { status: 400 });
       }
@@ -730,7 +785,7 @@ export default {
       request,
       pathProxyToInvokeCapability({
         invokeCapability: (args: { path: string[]; args?: unknown[] }) =>
-          node.invokeCapability(args),
+          node.itx().invokeCapability(args),
       }),
     );
   },

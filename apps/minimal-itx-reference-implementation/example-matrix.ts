@@ -93,17 +93,24 @@ async function runInCli(input: RunInput): Promise<unknown> {
 }
 
 async function runByPostScript(input: RunInput): Promise<unknown> {
-  const response = await fetch(
-    itxHttpUrl({ baseUrl: baseUrl(), path: input.ctx.path, projectId: input.ctx.projectId }),
-    {
-      // The server runs `program(itx)`, so vars are baked into the body as a
-      // local — the body still authors against `itx` + `vars` in scope, the
-      // same contract every other runtime gives it.
-      body: `async (itx) => { const vars = ${JSON.stringify(input.vars)};\n${input.code}\n}`,
-      headers: { authorization: `Bearer ${token()}`, "content-type": "text/plain" },
-      method: "POST",
-    },
-  );
+  const agentScriptCode = `async (itx) => { const vars = ${JSON.stringify(input.vars)};\n${input.code}\n}`;
+  const projectScript =
+    input.ctx.path === "/"
+      ? agentScriptCode
+      : `async (itx) => {
+          const run = await itx.agents.get(${JSON.stringify(input.ctx.path)}).runScript({
+            code: ${JSON.stringify(agentScriptCode)},
+          });
+          return run.result;
+        }`;
+  const response = await fetch(itxHttpUrl({ baseUrl: baseUrl(), projectId: input.ctx.projectId }), {
+    // The server runs `program(itx)`, so vars are baked into the body as a
+    // local — the body still authors against `itx` + `vars` in scope, the
+    // same contract every other runtime gives it.
+    body: projectScript,
+    headers: { authorization: `Bearer ${token()}`, "content-type": "text/plain" },
+    method: "POST",
+  });
   const body = (await response.json()) as { error?: string; result?: unknown };
   if (!response.ok) throw new Error(`POST /api/itx failed: ${body.error ?? JSON.stringify(body)}`);
   return body.result;

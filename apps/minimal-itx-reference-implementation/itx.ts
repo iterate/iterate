@@ -40,8 +40,7 @@ export type ProvideArgs = {
 };
 
 /** What `describe()` returns: this context's folded capability table and its
- *  host-created built-ins. Parent traversal is visible as the reserved built-in
- *  path `itxParent`, not as a separate nested field. */
+ *  host-created built-ins. Parent traversal is host topology, not folded state. */
 export type DescribeResult = {
   capabilities: CapabilityRecord[];
   builtins: CapabilityRecord[];
@@ -268,6 +267,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
   // durable fold stores only `address: null`; this map holds the actual callable
   // and whether the provider is member-replayed or path-called.
   #liveCapabilities = new Map<string, LiveInvoker>();
+  #builtinLiveCapabilities = new Map<string, LiveInvoker>();
 
   // Injected dialer: sturdy capability address → callable stub.
   #dial: (address: any) => any;
@@ -282,11 +282,13 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
   // built-in at the same path (own list is searched first). Changing built-ins is
   // a code change, not a log rewrite.
   #builtins: CapabilityRecord[];
+  #parentContext: () => ItxContext | null;
 
   constructor(
     args: ConstructorParameters<typeof StreamProcessor<typeof ItxContract>>[0] & {
       dial?: (address: any) => any;
       builtinCapabilities?: ProvideArgs[];
+      parentContext?: () => ItxContext | null;
     },
   ) {
     super(args);
@@ -295,12 +297,13 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
       (() => {
         throw new Error("this context has no dial configured for sturdy addresses");
       });
+    this.#parentContext = args.parentContext ?? (() => null);
     // Normalize each built-in into a CapabilityRecord, stashing any live one's
     // stub in the bridge — exactly what provideCapability does for a live provide.
     this.#builtins = (args.builtinCapabilities ?? []).map((b) => {
       const address = isCapabilityAddress(b.capability) ? b.capability : null;
       if (address === null) {
-        this.#setLiveCapability(b.path, b.capability);
+        this.#setLiveCapability(this.#builtinLiveCapabilities, b.path, b.capability);
       }
       return {
         path: b.path,
@@ -393,21 +396,19 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
   async provideCapability({ path, capability, instructions, types }: ProvideArgs) {
     this.#assertUserCapabilityPath(path);
     const address = isCapabilityAddress(capability) ? capability : null;
-    // Addresses that reach the trusted dialer — a `durable-object` (any
-    // namespace/name) or a `worker-entrypoint` (the itxParent loopback) — can ONLY
-    // be host-created built-ins. A user provide naming them is how a project-A
-    // holder would otherwise dial project B (or the admin `__null__` plane) by
-    // NAME. Live caps and `dynamic-worker`/`dynamic-durable-object` (whose only
-    // binding is this context's own scoped env.ITX) remain providable.
+    // Trusted topology is not a public capability-address vocabulary. A user
+    // provide naming a Durable Object or loopback entrypoint would otherwise let
+    // caller data choose platform reach by name. Host built-ins are live runtime
+    // targets instead; live caps and dynamic workers remain providable.
     if (address?.type === "worker-entrypoint" || address?.type === "durable-object") {
       throw new Error(
         `addresses that dial trusted namespaces ("${address.type}") can only be host built-ins`,
       );
     }
     if (address === null) {
-      this.#setLiveCapability(path, capability);
+      this.#setLiveCapability(this.#liveCapabilities, path, capability);
     } else {
-      this.#deleteLiveCapability(path);
+      this.#deleteLiveCapability(this.#liveCapabilities, path);
     }
     const committed = await this.ctx.stream.append({
       event: {
@@ -421,7 +422,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
 
   async revokeCapability({ path }: { path: string[] }) {
     this.#assertUserCapabilityPath(path);
-    this.#deleteLiveCapability(path);
+    this.#deleteLiveCapability(this.#liveCapabilities, path);
     const committed = await this.ctx.stream.append({
       event: { type: "events.iterate.com/itx/capability-revoked", payload: { path } },
     });
@@ -467,27 +468,28 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
     }
 
     const local =
-      this.#resolveLocal(this.state.capabilities, path) ?? this.#resolveLocal(this.#builtins, path);
+      this.#resolveLocal(this.state.capabilities, path, this.#liveCapabilities) ??
+      this.#resolveLocal(this.#builtins, path, this.#builtinLiveCapabilities);
     if (local) return await local(args);
 
-    // Parentage is now expressed as an ordinary host-created built-in at
-    // ["itxParent"], usually a sturdy worker-entrypoint address. A miss is just a
-    // retry through that built-in with the original path appended, so implicit
-    // inheritance and explicit `itx.itxParent.foo()` use the same dial/replay path.
-    const itxParent = this.#resolveLocal(this.#builtins, [ITX_PARENT_PATH_SEGMENT, ...path]);
-    if (itxParent) return await itxParent(args);
+    const parent = this.#parentContext();
+    if (parent) return await parent.invokeCapability({ path, args });
 
     throw new Error(`no capability "${path.join(".")}"`);
   }
 
   // Resolve one capability list — folded rows or built-ins. Sturdy rows are
   // dialed and property-replayed; live rows use their retained invoker.
-  #resolveLocal(caps: CapabilityRecord[], path: string[]): ((args: unknown[]) => unknown) | null {
+  #resolveLocal(
+    caps: CapabilityRecord[],
+    path: string[],
+    liveCapabilities: Map<string, LiveInvoker>,
+  ): ((args: unknown[]) => unknown) | null {
     const hit = resolveLongestPrefix(caps, path);
     if (!hit) return null;
     const { record, rest } = hit;
-    // `itxParent` is topology syntax. Only the host-created `["itxParent"]`
-    // built-in may consume it; user providers never see it in replay suffixes.
+    // `itxParent` stays reserved so old topology syntax cannot be smuggled
+    // through a user-provided nested capability.
     if (record.path[0] !== ITX_PARENT_PATH_SEGMENT && rest.includes(ITX_PARENT_PATH_SEGMENT)) {
       throw new Error(
         `reserved ITX path segment "${ITX_PARENT_PATH_SEGMENT}" cannot be provided by a capability`,
@@ -506,7 +508,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
       const target = this.#dial(address);
       return (args) => replayPath(target, rest, args);
     }
-    const target = this.#liveCapabilities.get(bridgeKey(record.path));
+    const target = liveCapabilities.get(bridgeKey(record.path));
     if (!target) {
       throw new Error(
         `capability "${record.path.join(".")}" is offline (live provider disconnected)`,
@@ -524,15 +526,19 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
     }
   }
 
-  #setLiveCapability(path: string[], capability: unknown) {
+  #setLiveCapability(
+    liveCapabilities: Map<string, LiveInvoker>,
+    path: string[],
+    capability: unknown,
+  ) {
     const key = bridgeKey(path);
-    this.#liveCapabilities.get(key)?.[Symbol.dispose]?.();
-    this.#liveCapabilities.set(key, liveInvoker(capability));
+    liveCapabilities.get(key)?.[Symbol.dispose]?.();
+    liveCapabilities.set(key, liveInvoker(capability));
   }
 
-  #deleteLiveCapability(path: string[]) {
+  #deleteLiveCapability(liveCapabilities: Map<string, LiveInvoker>, path: string[]) {
     const key = bridgeKey(path);
-    this.#liveCapabilities.get(key)?.[Symbol.dispose]?.();
-    this.#liveCapabilities.delete(key);
+    liveCapabilities.get(key)?.[Symbol.dispose]?.();
+    liveCapabilities.delete(key);
   }
 }

@@ -26,11 +26,10 @@ already running. `npm test` needs `npm run dev` up (or set `ITX_BASE` /
   a real Chromium tab via Playwright.
 
 Together they exercise, end to end: live capabilities, dynamic workers, a
-repo-backed dynamic Durable Object facet from `counter.js`, trusted Durable
-Object built-ins, deep dotted paths + longest-prefix shadowing, the itxParent
-chain via the reserved sturdy `itxParent` built-in (an agent inherits its
-project; a project is the top of its chain), cross-project isolation, the
-admin-only platform root, auth at the connect door, and codemode.
+repo-backed dynamic Durable Object facet from `counter.js`, host runtime
+built-ins, deep dotted paths + longest-prefix shadowing, agent inheritance from
+its project, cross-project isolation, the admin-only platform root, auth at the
+connect door, and codemode.
 
 Run one project with `npm test -- --project node` (or `--project browser`).
 
@@ -45,9 +44,9 @@ await itx.greeter("alice"); // "hi alice" — naked deep path, no client path pr
 ```
 
 The root ITX control names (`provideCapability`, `invokeCapability`,
-`revokeCapability`, `describe`) and the reserved `itxParent` built-in root cannot
-be mounted as user capabilities. Script execution is intentionally HTTP-only:
-use `POST /api/itx` rather than `itx.runScript()` over the WebSocket model.
+`revokeCapability`, `describe`) cannot be mounted as user capabilities. Script
+execution is intentionally HTTP-only: use `POST /api/itx/<projectId>` rather
+than `itx.runScript()` over the WebSocket model.
 
 `withItx` also normalizes raw local SDK objects at provide time. Bare Cap'n Web
 cannot serialize arbitrary class instances such as `new Slack.WebClient()` by
@@ -60,11 +59,19 @@ await itx.provideCapability({ path: ["slack"], capability: slack });
 await itx.slack.chat.postMessage({ channel: "C123", text: "hi" });
 ```
 
-The HTTP shape is `projectId` plus `path`: `projectId=shared&path=/` opens the
-project context and `projectId=shared&path=/agents/alice` opens an agent context.
-There is no global context — a project is the top of its own chain. Cross-project
-listing and the platform (`__null__`) streams live behind the **admin-only**
-`/api/root` ([root-itx.ts](./root-itx.ts)):
+The public connect shape is `/api/itx` for the admin platform root and
+`/api/itx/<projectId>` for a project. There is no public agent connect endpoint:
+get an agent's ITX through the project-local agents capability:
+
+```ts
+using project = withItx({ projectId: "shared", token: "alice-token" });
+const agent = project.agents.get("/agents/alice");
+await agent.itx().whoami();
+```
+
+There is no global project context — a project is the top of its own chain.
+Cross-project listing and the platform (`__null__`) streams live behind the
+**admin-only** root ([root-itx.ts](./root-itx.ts)):
 
 ```ts
 import { withRoot } from "./client.ts";
@@ -85,5 +92,5 @@ curl -sS \
   -H 'authorization: Bearer alice-token' \
   -H 'content-type: text/plain' \
   --data 'async () => "hello from curl"' \
-  'http://127.0.0.1:8788/api/itx?projectId=shared&path=/'
+  'http://127.0.0.1:8788/api/itx/shared'
 ```
