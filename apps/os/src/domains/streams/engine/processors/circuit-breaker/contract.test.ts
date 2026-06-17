@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { StreamEvent } from "../../shared/event.ts";
 import { CoreProcessorContract, type CoreProcessorState } from "../core/contract.ts";
 import { CoreStreamProcessor } from "../core/implementation.ts";
+import type { StreamProcessorStream } from "../../stream-processor.ts";
 import { CircuitBreakerProcessor } from "./implementation.ts";
 import { shouldTripCircuitBreaker, spendCircuitBreakerToken } from "./contract.ts";
-import type { StreamProcessorStream } from "../../stream-processor.ts";
 
 const stream = () => ({ append() {}, appendBatch() {} }) as unknown as StreamProcessorStream;
 

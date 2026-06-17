@@ -15,12 +15,12 @@ import {
   ensureBrowserRawEventsSchema,
   type BrowserRawEventsState,
 } from "../processors/browser-raw-events/implementation.ts";
+import type { StreamProcessorStream } from "../stream-processor.ts";
 import {
   browserProcessorStateStorage,
   deleteBrowserProcessorState,
 } from "./processor-state-storage.ts";
 import type { SqlClient, SqlValue } from "./stream-browser-db.ts";
-import type { StreamProcessorStream } from "../stream-processor.ts";
 
 // node:sqlite rejects the number[] member of SqlValue; these tests never use it.
 type ScalarSqlValue = Exclude<SqlValue, number[]>;
