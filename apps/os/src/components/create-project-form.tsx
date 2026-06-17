@@ -20,7 +20,7 @@ import {
 } from "@iterate-com/ui/components/select";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { z } from "zod";
-import { createProjectServerFn, myProjectsQueryKey } from "~/lib/project-server-fns.ts";
+import { createMyProjectServerFn, myProjectsQueryKey } from "~/lib/project-server-fns.ts";
 import { reconnectItx } from "~/itx/itx-react.tsx";
 
 const PROJECT_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -41,13 +41,7 @@ export function CreateProjectForm() {
   const organizations = session?.authenticated ? session.session.organizations : [];
   const createProject = useMutation({
     mutationFn: async (input: { slug: string; organizationSlug: string }) => {
-      // Product project creation must use the request/session-aware project
-      // directory, not the global itx handle. Admin users hold an "all" itx
-      // handle, and itx.projects.create intentionally uses that as an operator
-      // path with no auth organization ownership. The dashboard create form is
-      // different: it should create/adopt through auth for the selected org so
-      // the refreshed session contains the new project and `/projects` lists it.
-      return await createProjectServerFn({
+      return await createMyProjectServerFn({
         data: {
           slug: input.slug,
           organizationSlug: input.organizationSlug || undefined,

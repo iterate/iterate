@@ -14,7 +14,7 @@ import type { ReactNode } from "react";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import {
-  createProjectServerFn,
+  createMyProjectServerFn,
   deleteProjectServerFn,
   listMyProjectsServerFn,
   myProjectsListInput,
@@ -88,7 +88,7 @@ function ProjectsIndexPage() {
       const organizationSlug = project.organizationId
         ? organizations.find((organization) => organization.id === project.organizationId)?.slug
         : undefined;
-      return await createProjectServerFn({
+      return await createMyProjectServerFn({
         data: {
           id: project.id,
           slug: project.slug,

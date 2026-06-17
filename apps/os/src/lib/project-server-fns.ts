@@ -34,12 +34,12 @@ export const myProjectsQueryKey = ["my-projects"] as const;
 export const myProjectsListInput = { limit: 100, offset: 0 } as const;
 export const myProjectsStaleTime = 30_000;
 
-export const createProjectServerFn: (input: {
+export const createMyProjectServerFn: (input: {
   data: { id?: string; slug: string; organizationSlug?: string };
 }) => Promise<ProjectWithIngressUrl> = createServerFn({ method: "POST" })
   .validator((input: { id?: string; slug: string; organizationSlug?: string }) => input)
   .handler(async ({ data }) => {
-    return await new ProjectsCapability({ context: requireRequestContext() }).create(data);
+    return await new ProjectsCapability({ context: requireUserRequestContext() }).create(data);
   });
 
 export const deleteProjectServerFn: (input: {
@@ -89,6 +89,14 @@ function adminProjectContext(): RequestContext {
     if (adminCookiePrincipal) {
       return { ...context, principal: adminCookiePrincipal };
     }
+  }
+  return context;
+}
+
+function requireUserRequestContext(): RequestContext {
+  const context = requireRequestContext();
+  if (context.principal?.type !== "user") {
+    throw new Error("Sign in to create projects.");
   }
   return context;
 }
