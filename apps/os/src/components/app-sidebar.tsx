@@ -465,10 +465,9 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
 
 function useMyProjectsQuery() {
   const listMyProjectsFn = useServerFn(listMyProjectsServerFn);
-  return useQuery({
-    ...myProjectsQueryOptions(),
-    queryFn: () => listMyProjectsFn({ data: { limit: 100, offset: 0 } }),
-  });
+  return useQuery(
+    myProjectsQueryOptions(() => listMyProjectsFn({ data: { limit: 100, offset: 0 } })),
+  );
 }
 
 function getActiveProjectSlug(matches: ReturnType<typeof useMatches>) {

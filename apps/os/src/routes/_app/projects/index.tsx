@@ -12,16 +12,16 @@ import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { toast } from "@iterate-com/ui/components/sonner";
 import type { ReactNode } from "react";
-import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import {
   createProjectServerFn,
+  deleteProjectServerFn,
   listMyProjectsServerFn,
   myProjectsQueryOptions,
   type Project,
 } from "~/lib/project-server-fns.ts";
-import { reconnectItx, useItx } from "~/itx/itx-react.tsx";
+import { reconnectItx } from "~/itx/itx-react.tsx";
 
 type OrganizationSummary = {
   id: string;
@@ -49,27 +49,18 @@ function buildProjectHostname(input: {
 }
 
 function ProjectsIndexPage() {
-  return (
-    <ItxBoundary>
-      <ProjectsIndexContent />
-    </ItxBoundary>
-  );
-}
-
-function ProjectsIndexContent() {
   const { routeConfig } = Route.useLoaderData();
   const { session } = useAuthClient();
   const organizations = session?.authenticated ? session.session.organizations : [];
   const isAdmin = session?.authenticated ? session.user.isAdmin === true : false;
-  const itx = useItx();
   const queryClient = useQueryClient();
   const listMyProjectsFn = useServerFn(listMyProjectsServerFn);
   const createProjectFn = useServerFn(createProjectServerFn);
-  const listQueryOptions = myProjectsQueryOptions();
-  const list = useQuery({
-    ...listQueryOptions,
-    queryFn: () => listMyProjectsFn({ data: { limit: 100, offset: 0 } }),
-  });
+  const deleteProjectFn = useServerFn(deleteProjectServerFn);
+  const listQueryOptions = myProjectsQueryOptions(() =>
+    listMyProjectsFn({ data: { limit: 100, offset: 0 } }),
+  );
+  const list = useQuery(listQueryOptions);
   const projects = list.data?.projects ?? [];
 
   // The scoped oRPC list intentionally merges two sources:
@@ -85,7 +76,7 @@ function ProjectsIndexContent() {
 
   const deleteProject = useMutation({
     mutationFn: async (input: { id: string }) => {
-      return await itx.projects.remove(input);
+      return await deleteProjectFn({ data: input });
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: listQueryOptions.queryKey });

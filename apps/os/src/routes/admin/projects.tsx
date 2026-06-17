@@ -23,14 +23,6 @@ export const Route = createFileRoute("/admin/projects")({
   component: AdminProjectsPage,
 });
 
-type AdminProject = {
-  id: string;
-  slug: string;
-  customHostname: string | null;
-  createdAt: string | null;
-  updatedAt: string | null;
-};
-
 function AdminProjectsPage() {
   const listAdminProjectsFn = useServerFn(listAdminProjectsServerFn);
   const [pageIndex, setPageIndex] = useState(0);
@@ -39,7 +31,7 @@ function AdminProjectsPage() {
     queryKey: ["admin", "projects", { limit: PAGE_SIZE, offset }],
     queryFn: async () => await listAdminProjectsFn({ data: { limit: PAGE_SIZE, offset } }),
   });
-  const projects = (projectsQuery.data?.projects ?? []) as AdminProject[];
+  const projects = projectsQuery.data?.projects ?? [];
   const total = projectsQuery.data?.total ?? 0;
   const hasPrevious = pageIndex > 0;
   const hasNext = offset + projects.length < total;

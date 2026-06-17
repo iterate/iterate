@@ -21,7 +21,7 @@ import {
 } from "@iterate-com/ui/components/select";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { z } from "zod";
-import { createProjectServerFn, myProjectsQueryOptions } from "~/lib/project-server-fns.ts";
+import { createProjectServerFn, myProjectsQueryKey } from "~/lib/project-server-fns.ts";
 import { reconnectItx } from "~/itx/itx-react.tsx";
 
 const PROJECT_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -61,7 +61,7 @@ export function CreateProjectForm() {
       // claim BEFORE navigating to the project-scoped route (#1516); without
       // this the project route loads before the session knows the project.
       await refresh({ force: true });
-      await queryClient.invalidateQueries({ queryKey: myProjectsQueryOptions().queryKey });
+      await queryClient.invalidateQueries({ queryKey: myProjectsQueryKey });
       // Drop the global itx socket so it re-dials with the refreshed claims —
       // otherwise itx.projects.list (connect-time principal) omits this project.
       reconnectItx();
