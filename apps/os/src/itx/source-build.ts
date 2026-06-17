@@ -11,6 +11,7 @@
 // esbuild-wasm): repo DO readTree → vfs → R2. No clone, no workspace, no
 // filesystem.
 
+import iterateWorkerPackageSource from "../../../../packages/iterate/src/worker.ts?raw";
 import type { WorkerSource } from "./itx.ts";
 import type { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import { getRepoDurableObjectName } from "~/domains/repos/repo-durable-object-name.ts";
@@ -226,6 +227,7 @@ export async function repoSourceMemoKey(input: {
         source.path,
         source.bundle ?? null,
         source.compatibilityDate ?? null,
+        ITERATE_WORKER_PACKAGE_FILES,
       ]),
     ),
   );
@@ -257,24 +259,7 @@ const ITERATE_WORKER_PACKAGE_FILES: Record<string, string> = {
     type: "module",
     version: "0.0.0-iterate-platform",
   }),
-  "node_modules/iterate/worker.ts": `import { WorkerEntrypoint } from "cloudflare:workers";
-
-export class IterateProjectEntrypoint extends WorkerEntrypoint {
-  get itx() {
-    return this.env.ITERATE;
-  }
-
-  get streams() {
-    return this.env.STREAMS;
-  }
-
-  async processEvent(input) {
-    await this.onProjectEvent(input);
-  }
-
-  async onProjectEvent(_input) {}
-}
-`,
+  "node_modules/iterate/worker.ts": iterateWorkerPackageSource,
 };
 
 function withIterateWorkerPackage(files: Record<string, string>): Record<string, string> {
