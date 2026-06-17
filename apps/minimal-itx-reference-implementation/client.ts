@@ -20,7 +20,7 @@ import { newWebSocketRpcSession } from "capnweb";
 
 // Mirrors the server's address types (itx.ts). Address-shaped values are
 // forwarded as plain data; everything else is wrapped as a live provider. The
-// trusted dialer types (`durable-object`, `worker-entrypoint`) are included so a
+// trusted resolver types (`durable-object`, `worker-entrypoint`) are included so a
 // provide naming them reaches the server's guard and gets a clear rejection,
 // rather than being silently turned into a broken live cap.
 const CAPABILITY_ADDRESS_TYPES = new Set([
@@ -129,7 +129,7 @@ export function withItx<T = any>(input: WithItxInput): T {
     input.token ? { authorization: `Bearer ${input.token}` } : undefined,
   );
   const path = input.path ?? "/";
-  const target = path === "/" ? session : session.agents.get(path).itx();
+  const target = path === "/" ? session : session.agents.get(path).itx;
   return new Proxy(target, {
     get(target, key, receiver) {
       if (key === Symbol.dispose) return () => session[Symbol.dispose]?.();

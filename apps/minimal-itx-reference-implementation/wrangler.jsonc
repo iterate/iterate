@@ -26,7 +26,7 @@
       ],
     },
   ],
-  // dial + codemode build and run workers from a sturdy address at runtime.
+  // Dynamic capabilities and codemode build and run workers from addresses at runtime.
   "worker_loaders": [{ "binding": "LOADER" }],
   "dev": {
     "port": 8788,

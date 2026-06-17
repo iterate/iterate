@@ -7,8 +7,8 @@
 // the matrix is itx.browser.test.ts (vitest's browser project).
 //
 // Each capability test uses a FRESH agent coordinate (prj_ref:/agents/<rand>)
-// so durable state never bleeds between runs. The chain test reuses prj_ref:/
-// as the parent context but only with sturdy/replace-safe provides.
+// so durable state never bleeds between runs. Project-scoped assertions use
+// sturdy/replace-safe provides on prj_ref:/.
 
 import { describe, expect, it } from "vitest";
 import { itxHttpUrl, withItx } from "./client.ts";
@@ -102,7 +102,7 @@ describe("itx reference implementation", () => {
     expect(await itx.api.echo("pong")).toBe("pong");
   });
 
-  it("3. dynamic-worker: dialed + run via the Worker Loader", async () => {
+  it("3. dynamic-worker: resolved + run via the Worker Loader", async () => {
     using itx = agentItx("sturdy");
     await itx.provideCapability({ path: ["calc"], capability: dynamicCalc });
     expect(await itx.calc.add(40, 2)).toBe(42);
@@ -115,7 +115,7 @@ describe("itx reference implementation", () => {
 
   it("4. dynamic-durable-object: repo counter.js runs as a facet", async () => {
     using itx = agentItx("facet");
-    const source = await itx.repo.getWorkerSource({ path: "counter.js" });
+    const source = await itx.project.repo.getWorkerSource({ path: "counter.js" });
     expect(source.mainModule).toBe("counter.js");
 
     await itx.provideCapability({ path: ["counter"], capability: repoCounter });
@@ -124,7 +124,7 @@ describe("itx reference implementation", () => {
     expect(await itx.counter.current()).toBe(2);
   });
 
-  it("5. the chain: agent inherits the project's caps and can shadow", async () => {
+  it("5. an agent reaches project capabilities through its explicit project handle", async () => {
     // The project provides a sturdy cap (durable, replace-safe across runs).
     {
       using proj = projectItx();
@@ -132,10 +132,13 @@ describe("itx reference implementation", () => {
     }
 
     {
-      using agent = agentItx("chain");
-      expect(await agent.calc.add(2, 3)).toBe(5);
+      using agent = agentItx("explicit-project");
+      expect(await agent.project.calc.add(2, 3)).toBe(5);
       expect((await agent.whoami()).startsWith("agent ")).toBe(true);
-      // Shadow the inherited cap locally; the project is unaffected.
+      await expectRejects(() => agent.calc.add(2, 3)).toThrow(
+        /capability path "calc\.add" hit undefined/,
+      );
+      // A local cap can use the same name without changing the project.
       await agent.provideCapability({
         path: ["calc"],
         capability: { add: (a: number, b: number) => a * b },
@@ -233,7 +236,7 @@ describe("itx reference implementation", () => {
     using itx = agentItx("addressed-slack");
     // Same caller shape as the live SDK test, different lifetime: plain address
     // data, so provideCapability writes the address to the log and stores no
-    // in-memory stub. Later calls dial the worker and replay chat.postMessage.
+    // in-memory stub. Later calls resolve the worker and replay chat.postMessage.
     await itx.provideCapability({ path: ["slack"], capability: addressedSlackWorker });
     expect(await itx.slack.chat.postMessage({ text: "hi from address" })).toEqual({
       args: [{ text: "hi from address" }],
@@ -275,21 +278,24 @@ describe("itx reference implementation", () => {
   });
 
   it("17. agent ITX is reached through the project-local agents capability", async () => {
-    using agent = agentItx("describe-chain");
+    using agent = agentItx("describe-agent");
     const d = await agent.describe();
-    expect(d.builtins.some((c: any) => c.path.join(".") === "whoami")).toBe(true);
-    const whoami = d.builtins.find((c: any) => c.path.join(".") === "whoami");
-    expect(whoami?.address).toBeNull();
+    expect(d.builtins).toHaveLength(1);
+    expect(d.builtins[0].path).toEqual([]);
+    expect(d.builtins[0].address).toBeNull();
+    expect(await agent.project.egress("data:text/plain,hello")).toMatchObject({
+      body: "hello",
+      status: 200,
+      viaProject: "prj_ref",
+    });
 
     using projectItxHandle = projectItx();
     const project = await projectItxHandle.describe();
-    expect(project.builtins.some((c: any) => c.path.join(".") === "fetch")).toBe(true);
-    expect(project.builtins.some((c: any) => c.path.join(".") === "repo")).toBe(true);
-    expect(project.builtins.some((c: any) => c.path.join(".") === "agents")).toBe(true);
-    const repo = project.builtins.find((c: any) => c.path.join(".") === "repo");
-    expect(repo?.address).toBeNull();
+    expect(project.builtins).toHaveLength(1);
+    expect(project.builtins[0].path).toEqual([]);
+    expect(project.builtins[0].address).toBeNull();
     const path = agentPath("via-agents");
-    const viaProject = projectItxHandle.agents.get(path).itx();
+    const viaProject = projectItxHandle.agents.get(path).itx;
     expect(await viaProject.whoami()).toBe(`agent prj_ref:${path}`);
     expect((d as any).parentCapabilities).toBeUndefined();
   });
@@ -303,9 +309,9 @@ describe("itx reference implementation", () => {
     expect(await agent.whoami()).toBe(original);
   });
 
-  it("19. project fetch is a host runtime built-in", async () => {
+  it("19. project egress is a host runtime built-in", async () => {
     using project = projectItx();
-    expect(await project.fetch("data:text/plain,hello")).toEqual({
+    expect(await project.egress("data:text/plain,hello")).toEqual({
       body: "hello",
       status: 200,
       viaProject: "prj_ref",
@@ -347,30 +353,9 @@ describe("itx reference implementation", () => {
     await expectRejects(() =>
       itx.provideCapability({ path: ["describe"], capability: () => "shadow" }),
     ).toThrow(/reserved ITX control root/);
-    await expectRejects(() =>
-      itx.provideCapability({ path: ["itxParent"], capability: () => "shadow" }),
-    ).toThrow(/reserved ITX path segment/);
-    await expectRejects(() =>
-      itx.provideCapability({ path: ["itxParent", "fetch"], capability: () => "shadow" }),
-    ).toThrow(/reserved ITX path segment/);
-    await expectRejects(() =>
-      itx.provideCapability({ path: ["toolbox", "itxParent"], capability: () => "shadow" }),
-    ).toThrow(/reserved ITX path segment/);
-    await itx.provideCapability({
-      path: ["pathCallToolbox"],
-      capability: {
-        invokeCapability: () => "forged",
-      },
-    });
-    await expectRejects(() => itx.pathCallToolbox.itxParent.projects.list()).toThrow(
-      /reserved ITX path segment "itxParent"/,
-    );
     const description = await itx.describe();
     expect(typeof description).toBe("object");
     expect(description.capabilities.some((cap: any) => cap.path.join(".") === "describe")).toBe(
-      false,
-    );
-    expect(description.capabilities.some((cap: any) => cap.path.join(".") === "itxParent")).toBe(
       false,
     );
   });
@@ -414,7 +399,9 @@ describe("itx reference implementation", () => {
     expect(calls).toEqual(["old", "new"]);
 
     await itx.revokeCapability({ path: ["switchable"] });
-    await expectRejects(() => itx.switchable()).toThrow(/no capability "switchable"/);
+    await expectRejects(() => itx.switchable()).toThrow(
+      /capability path "switchable" did not resolve to a function/,
+    );
     expect(calls).toEqual(["old", "new"]);
   });
 

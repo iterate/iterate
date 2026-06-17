@@ -12,7 +12,7 @@ const agentItx = (label: string) => connect({ path: `/agents/cross-project-${lab
 const expectRejects = (fn: () => unknown) => expect((async () => await fn())()).rejects;
 
 describe("itx cross-project adversarial e2e", () => {
-  // Attack 1: dial project B's context by NAMING its Durable Object.
+  // Attack 1: resolve project B's context by NAMING its Durable Object.
   it("rejects a user-provided durable-object address naming another project", async () => {
     using itx = agentItx("name-other-project");
     await expectRejects(() =>
@@ -37,7 +37,7 @@ describe("itx cross-project adversarial e2e", () => {
     ).toThrow(/can only be host built-ins/);
   });
 
-  // Even reaching a sibling DO in the SAME project family is just data the dialer
+  // Even reaching a sibling DO in the SAME project family is just data the resolver
   // refuses — there is no user-providable durable-object address at all.
   it("rejects a user-provided durable-object address naming the project's own DOs", async () => {
     using itx = agentItx("name-own");

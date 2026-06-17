@@ -14,7 +14,7 @@
 //                        and the actual stub lives in an in-memory bridge beside
 //                        the fold (see itx.ts).
 //   • a STURDY address — plain serializable data describing how to re-make the
-//                        capability (`dial` turns it back into a callable). This
+//                        capability (the host resolves it back into a callable). This
 //                        IS durable, so the fold stores the address itself.
 //
 // `address === null` ⟺ live; `address !== null` ⟺ sturdy. One field, one
@@ -23,14 +23,14 @@
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
 
-/** A sturdy capability address — plain data; `dial` (server.ts) turns it back
- *  into a callable. `type` selects the dialer; the rest is dialer-specific. */
+/** A sturdy capability address — plain data; the host turns it back into a
+ *  callable. `type` selects the resolver; the rest is resolver-specific. */
 export const CapabilityAddress = z.looseObject({ type: z.string() });
 export type CapabilityAddress = z.infer<typeof CapabilityAddress>;
 
 /** One row of the capability table: the path it is mounted at, its address
  *  (null ⟺ live), and the metadata it was provided with. This same shape
- *  describes a folded provide, a built-in, and a parent-path capability — there is
+ *  describes a folded provide and a built-in — there is
  *  one capability-descriptor type, everywhere. */
 export const CapabilityRecord = z.object({
   path: z.array(z.string()),
@@ -61,8 +61,8 @@ export const ItxContract = defineProcessorContract({
   // a provide at a path already present REPLACES that entry. The table is
   // derived from the log, never the source of truth.
   //
-  // There is no `context`/parentage field here: parentage is host topology, not
-  // folded state. Nothing reads a folded parentage copy, so it does not exist.
+  // There is no `context` field here: host topology is not folded
+  // state. Nothing reads a folded topology copy, so it does not exist.
   stateSchema: z.object({
     capabilities: z.array(CapabilityRecord).default([]),
     scriptExecutions: z.array(ScriptExecutionRecord).default([]),

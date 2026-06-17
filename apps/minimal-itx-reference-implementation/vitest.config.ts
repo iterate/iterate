@@ -33,13 +33,12 @@ export default defineConfig({
       {
         test: {
           environment: "node",
-          // The concept suite, the cross-project + parent authority adversarial
-          // suites, and the admin-root suite. (itx.dynamic-adversarial.e2e.test.ts
+          // The concept suite, the cross-project authority adversarial suite,
+          // and the admin-root suite. (itx.dynamic-adversarial.e2e.test.ts
           // exercises dynamic-DO facet upgrade/rename semantics and is pre-existing
           // and currently red — kept out of the gate until that is addressed.)
           include: [
             "./itx.e2e.test.ts",
-            "./itx.parent-adversarial.e2e.test.ts",
             "./itx.cross-project-adversarial.e2e.test.ts",
             "./itx.root.e2e.test.ts",
           ],

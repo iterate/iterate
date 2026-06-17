@@ -6,7 +6,7 @@
 //
 // `__null__` is the platform projectId: streams that belong to no project
 // (integration webhooks, the project catalog, …). It is NOT a connectable
-// context — `/api/itx/__null__` is refused and nothing can dial into
+// context — `/api/itx/__null__` is refused and nothing can connect into
 // it from a project. The only door to `__null__` objects is the admin-only Root
 // ITX (root-itx.ts). Everywhere else it is an ordinary projectId string.
 

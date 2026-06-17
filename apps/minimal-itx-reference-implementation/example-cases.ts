@@ -34,7 +34,7 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       expect(result as string).toMatch(/^agent prj_ref:\/agents\//);
     },
   },
-  "project-builtin-inherited": {
+  "project-builtin-explicit": {
     assert: (result) => {
       expect(result).toEqual({ mainModule: "counter.js", hasCounter: true });
     },

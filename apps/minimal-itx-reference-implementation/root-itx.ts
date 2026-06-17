@@ -2,23 +2,23 @@
 //
 // This is NOT a context and NOT a Durable Object. It is a tiny, fixed RPC
 // surface — "dumb-ass RPC targets" — constructed per connection at the serving
-// edge and served through the SAME `pathProxyToInvokeCapability` rule as every
+// edge and served through the SAME `pathInvokerToProxy` rule as every
 // other itx surface, so `root.projects.list()` and
 // `root.streams.get("/x").append(event)` collapse into one `invokeCapability`
 // exactly the way a context's dotted calls do.
 //
 // WHY IT EXISTS. `__null__` (the platform projectId) holds streams that belong
 // to no project — integration webhooks, the project catalog, and so on. Those
-// are deliberately NOT a connectable project context: you cannot dial into
+// are deliberately NOT a connectable project context: you cannot connect into
 // `__null__` from a project, and `/api/itx/__null__` is refused. The
 // ONLY door to them is here.
 //
 // WHY IT IS SAFE — with no authority logic of its own:
 //   • Admin-only. The edge (server.ts) serves this surface ONLY to a principal
 //     whose access is "all" (auth.ts). A non-admin gets 403 at `/api/itx`.
-//   • No provide, no dialer. The surface is exactly `projects` and `streams`.
+//   • No provide, no address resolver. The surface is exactly `projects` and `streams`.
 //     There is nothing to inject a capability into and no caller-supplied name
-//     to dial — so the cross-project dial holes that a context's dialer must
+//     to resolve — so the cross-project address holes that a context's resolver must
 //     guard against simply cannot be expressed here.
 //   • Streams are PRE-SCOPED. The caller supplies a PATH only; the projectId is
 //     hardcoded to `__null__`, so a caller cannot pivot to another project's

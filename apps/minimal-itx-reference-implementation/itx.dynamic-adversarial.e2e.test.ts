@@ -112,7 +112,7 @@ describe("itx dynamic durable object adversarial lifecycle", () => {
       await itx.provideCapability({ path: ["safe"], capability: missingClassBox() });
       await itx.safe.version();
     } catch {
-      // The invalid upgrade may be rejected at provide time or when first dialed.
+      // The invalid upgrade may be rejected at provide time or when first resolved.
     }
 
     expect(await itx.safe.version()).toBe("v1");

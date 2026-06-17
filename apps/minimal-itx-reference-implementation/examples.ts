@@ -27,8 +27,8 @@ export type ItxExampleRuntime = (typeof ITX_EXAMPLE_RUNTIMES)[number];
 export type ItxExample = {
   /** Script body: `itx` and `vars` in scope, explicit `return`. */
   code: string;
-  /** The coordinate the snippet expects: an agent context (which inherits the
-   *  project's built-ins) or the project root itself. */
+  /** The coordinate the snippet expects: an agent context or the project root
+   *  itself. Agents reach their project explicitly through `itx.project`. */
   context: "agent" | "project";
   description: string;
   id: string;
@@ -50,14 +50,14 @@ export const ITX_EXAMPLES: ItxExample[] = [
     code: `return await itx.whoami();`,
   },
   {
-    id: "project-builtin-inherited",
-    title: "Reach a project built-in inherited by an agent",
+    id: "project-builtin-explicit",
+    title: "Reach the project surface from an agent",
     description:
-      "An agent context has a host-injected parent link to its project context, so the project's `repo` built-in resolves through the chain without the agent providing anything.",
+      "An agent context exposes its containing project as `itx.project`, so project-level capabilities are explicit.",
     context: "agent",
     runtimes: ALL_RUNTIMES,
     code: `
-      const source = await itx.repo.getWorkerSource({ path: "counter.js" });
+      const source = await itx.project.repo.getWorkerSource({ path: "counter.js" });
       return {
         mainModule: source.mainModule,
         hasCounter: source.modules["counter.js"].includes("CounterDurableObject"),
@@ -68,7 +68,7 @@ export const ITX_EXAMPLES: ItxExample[] = [
     id: "dynamic-worker-capability",
     title: "Call a provided dynamic-worker capability",
     description:
-      "A sturdy capability (an address, not a live stub) is dialed from the event log on demand: the Worker Loader runs the isolate and its method answers. `vars` parameterizes the call.",
+      "A sturdy capability (an address, not a live stub) is resolved from the event log on demand: the Worker Loader runs the isolate and its method answers. `vars` parameterizes the call.",
     context: "agent",
     runtimes: ALL_RUNTIMES,
     code: `return await itx.calc.add(vars.a, vars.b);`,

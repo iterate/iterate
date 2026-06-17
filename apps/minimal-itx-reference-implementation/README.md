@@ -66,10 +66,10 @@ get an agent's ITX through the project-local agents capability:
 ```ts
 using project = withItx({ projectId: "prj_ref", token: "alice-token" });
 const agent = project.agents.get("/agents/alice");
-await agent.itx().whoami();
+await agent.itx.whoami();
 ```
 
-There is no global project context — a project is the top of its own chain.
+There is no global project context — a project is the root of its own ITX.
 Cross-project listing and the platform (`__null__`) streams live behind the
 **admin-only** root ([root-itx.ts](./root-itx.ts)):
 

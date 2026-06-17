@@ -4,10 +4,10 @@
 // reach anything, nobody cares) OR you hold a list of project ids and may reach
 // exactly those. There is no per-capability gating anywhere downstream — once
 // the connect door lets you into a project context, everything inside it is
-// confined BY CONSTRUCTION: built-ins name only that project, the chain tops out
-// at that project (there is no global catalog to climb to), and user-provided
+// confined BY CONSTRUCTION: built-ins name only that project, agents reach their
+// project through an explicit host-owned member, and user-provided
 // capabilities cannot name another project's Durable Object (server/itx reject
-// the dialer address types). So authority lives here, at the door, and nowhere
+// trusted address types). So authority lives here, at the door, and nowhere
 // else.
 //
 // `access` is intentionally the SAME shape apps/os linearizes a principal to

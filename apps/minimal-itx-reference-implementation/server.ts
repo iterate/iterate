@@ -6,26 +6,25 @@
 //
 //   /api/itx                         -> admin-only platform root
 //   /api/itx/<projectId>             -> project context
-//   project.agents.get("/agents/x")  -> agent DO public surface, including itx()
+//   project.agents.get("/agents/x")  -> agent DO public surface, including itx
 //
-// There is no global/`__global__` context: a project is the top of its own
-// chain, and cross-project / platform reach lives ONLY behind the admin root.
+// There is no global/`__global__` context: a project is its own ITX root, and
+// cross-project / platform reach lives ONLY behind the admin root.
 //
 // A NAKED Cap'n Web stub drives every context: `itx.provideCapability({…})` and
 // `itx.slack.chat.postMessage(msg)` are both just pipelined property paths that
-// end in a call. The trick is entirely server-side:
-// `pathProxyToInvokeCapability` (below) collapses every terminal call into one
-// `invokeCapability({ path, args })`. The context, not the proxy, decides
+// end in a call. The trick is entirely server-side: `pathInvokerToProxy`
+// (below) collapses every terminal call into one `invokeCapability({ path, args })`.
+// The context, not the proxy, decides
 // whether that path is a reserved ITX control name or a user capability.
 
-import { DurableObject, RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+import { DurableObject, env as workerEnv, RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import { newWorkersRpcResponse } from "capnweb";
 import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
 } from "@iterate-com/os/src/domains/streams/engine/workers/stream-processor-host.ts";
 import { durableObjectProcessorSubscriber } from "@iterate-com/os/src/domains/streams/engine/shared/callable-subscriber.ts";
-import { makeRpcTargetClass } from "@iterate-com/os/src/domains/streams/engine/shared/rpc-target.ts";
 import { ItxContract } from "./contract.ts";
 import { ItxProcessor, replayPath, type ItxContext, type ProvideArgs } from "./itx.ts";
 import { RootItx } from "./root-itx.ts";
@@ -47,10 +46,7 @@ export class ItxBindingEntrypoint extends WorkerEntrypoint<
 > {
   async get(): Promise<ItxContext> {
     const node = contextNode(this.env, this.ctx.props);
-    return pathProxyToInvokeCapability({
-      invokeCapability: (args: { path: string[]; args?: unknown[] }) =>
-        (node as any).itx().invokeCapability(args),
-    }) as ItxContext;
+    return itxHandleForNode(node);
   }
 }
 
@@ -72,9 +68,13 @@ export class ItxBindingEntrypoint extends WorkerEntrypoint<
 //      traversed via Object.hasOwn, where fabricated own properties are allowed.
 //   2. `getOwnPropertyDescriptor` is load-bearing, not just `get`. Server-side
 //      Cap'n Web does Object.hasOwn(value, segment) BEFORE reading value[segment];
-//      without the descriptor trap every segment reads as absent and the chain
+//      without the descriptor trap every segment reads as absent and the path
 //      dies at ".chat of undefined".
 //   3. `has` must answer for non-reserved names too.
+//
+// The inverse adapter is `PathInvoker`: it takes a normal object and exposes the
+// one path invocation method by replaying `{ path, args }` onto that object.
+// The host DOs use `new PathInvoker(this)` as their base built-in at `path: []`.
 
 // Names Cap'n Web (or the JS runtime) probes that must never be treated as path
 // segments or verbs — they would derail the proxy or trigger thenable detection.
@@ -90,11 +90,38 @@ const RESERVED = new Set([
   "onRpcBroken",
 ]);
 
-function pathProxyToInvokeCapability(
-  target: { invokeCapability(args: { path: string[]; args?: unknown[] }): unknown },
-  path: string[] = [],
-): any {
-  const valueFor = (key: string) => pathProxyToInvokeCapability(target, [...path, key]);
+type PathInvocation = { path: string[]; args?: unknown[] };
+type PathInvokable = { invokeCapability(args: PathInvocation): unknown };
+
+const ITX_HOST_INTERNAL_PATHS = new Set([
+  "describe",
+  "itx",
+  "invokeCapability",
+  "provideCapability",
+  "requestStreamSubscription",
+  "revokeCapability",
+  "runScript",
+]);
+
+class PathInvoker implements PathInvokable {
+  #target: unknown;
+  #exclude: ReadonlySet<string>;
+
+  constructor(target: unknown, options: { exclude?: ReadonlySet<string> } = {}) {
+    this.#target = target;
+    this.#exclude = options.exclude ?? new Set();
+  }
+
+  invokeCapability({ path, args = [] }: PathInvocation) {
+    if (path[0] && this.#exclude.has(path[0])) {
+      throw new Error(`path "${path[0]}" is not part of this public capability surface`);
+    }
+    return replayPath(this.#target, path, args);
+  }
+}
+
+function pathInvokerToProxy(target: PathInvokable, path: string[] = []): any {
+  const valueFor = (key: string) => pathInvokerToProxy(target, [...path, key]);
   return new Proxy(function () {}, {
     get(t, key) {
       if (typeof key === "symbol") return Reflect.get(t, key);
@@ -122,8 +149,8 @@ interface Env {
   AGENT: DurableObjectNamespace<AgentDurableObject>;
   REPO: DurableObjectNamespace<RepoDurableObject>;
   STREAM: DurableObjectNamespace<any>;
-  // Worker Loader: build + run a worker from a sturdy address (dial) or a script
-  // (codemode) at runtime.
+  // Worker Loader: build + run dynamic workers/facets and codemode scripts at
+  // runtime.
   LOADER: {
     get(
       id: string,
@@ -142,9 +169,25 @@ interface Env {
 }
 
 type ItxHostNode = {
-  itx(): ItxContext;
+  describe(): Promise<unknown>;
+  invokeCapability(args: { path: string[]; args?: unknown[] }): Promise<unknown>;
+  provideCapability(args: ProvideArgs): Promise<unknown>;
+  readonly itx: ItxContext;
+  revokeCapability(args: { path: string[] }): Promise<unknown>;
   runScript(args: { code: string }): Promise<unknown>;
 };
+
+function itxHandleForNode(node: ItxHostNode): ItxContext {
+  return pathInvokerToProxy({
+    invokeCapability: ({ path, args = [] }: { path: string[]; args?: unknown[] }) => {
+      if (path[0] === "runScript") {
+        if (path.length !== 1) throw new Error('reserved ITX control path "runScript"');
+        return node.runScript(args[0] as { code: string });
+      }
+      return node.invokeCapability({ path, args });
+    },
+  }) as ItxContext;
+}
 
 function contextNode(env: Env, parts: { projectId: string; path: string }): ItxHostNode {
   if (parts.path === "/") {
@@ -218,7 +261,7 @@ function localPathProxy(target: unknown | Promise<unknown>, path: string[] = [])
 // event, the fold projects it, replaying the log rebuilds it. The processor's
 // checkpoint is a disposable cache in this DO's storage; the live stubs are an
 // in-memory field inside the processor; the log itself is the real `Stream`
-// Durable Object, dialed by coordinate.
+// Durable Object, resolved by coordinate.
 // ---------------------------------------------------------------------------
 abstract class ItxHostDurableObject extends DurableObject<Env> {
   host = createStreamProcessorHost(this.ctx);
@@ -230,16 +273,16 @@ abstract class ItxHostDurableObject extends DurableObject<Env> {
       new ItxProcessor({
         ...deps,
         iterateContext: { stream: this.#log() },
-        dial: (address) => this.#dial(address),
-        builtinCapabilities: this.contextBuiltinCapabilities(),
-        parentContext: () => this.parentContext(),
+        resolveAddress: (address) => this.#resolveAddress(address),
+        builtinCapabilities: [
+          {
+            path: [],
+            capability: new PathInvoker(this, { exclude: ITX_HOST_INTERNAL_PATHS }),
+            instructions: "the host Durable Object's public capability surface",
+          },
+        ],
       }),
   );
-
-  protected abstract contextBuiltinCapabilities(): ProvideArgs[];
-  protected parentContext(): ItxContext | null {
-    return null;
-  }
 
   protected nameParts(): DurableObjectNameParts | null {
     const name = this.ctx.id.name;
@@ -265,7 +308,7 @@ abstract class ItxHostDurableObject extends DurableObject<Env> {
   }
 
   // Capability address → callable stub.
-  #dial(address: any): any {
+  #resolveAddress(address: any): any {
     if (address?.type === "dynamic-worker") {
       const loaded = this.#loadDynamicWorker(address.source);
       const entrypoint = loaded.then((worker) =>
@@ -283,7 +326,7 @@ abstract class ItxHostDurableObject extends DurableObject<Env> {
       )}`;
       return localPathProxy(this.#dynamicDurableObjectFacet(facetName, address));
     }
-    throw new Error(`address is not dialable: ${JSON.stringify(address)}`);
+    throw new Error(`address is not resolvable: ${JSON.stringify(address)}`);
   }
 
   async #resolveWorkerSource(source: DynamicWorkerSource): Promise<ResolvedWorkerSource> {
@@ -387,7 +430,7 @@ abstract class ItxHostDurableObject extends DurableObject<Env> {
   }
 
   // Configure the stream → processor subscription ONCE (idempotent): point the
-  // stream at THIS DO's requestStreamSubscription. The Stream DO then dials us and
+  // stream at THIS DO's requestStreamSubscription. The Stream DO then calls us and
   // pumps every appended batch into the processor — automatic delivery, including
   // events written by anyone else, not just this context's own provides.
   #ensureSubscriptionConfigured(): void {
@@ -411,9 +454,9 @@ abstract class ItxHostDurableObject extends DurableObject<Env> {
   }
 
   // The hosted processor. Lazily wires the subscription on first reach.
-  itx(): ItxContext {
+  get itx(): ItxContext {
     this.#ensureSubscriptionConfigured();
-    return pathProxyToInvokeCapability(this.#itx) as ItxContext;
+    return itxHandleForNode(this);
   }
 
   provideCapability(args: ProvideArgs) {
@@ -436,15 +479,15 @@ abstract class ItxHostDurableObject extends DurableObject<Env> {
     return this.#itx.describe();
   }
 
-  // The Stream DO dials this to start delivering batches to the host's processor.
+  // The Stream DO calls this to start delivering batches to the host's processor.
   requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
     this.#ensureSubscriptionConfigured();
     return this.host.requestStreamSubscription(args);
   }
 
   // Codemode: a capability can be a whole PROGRAM. The code is an
-  // `async (itx) => …` function; we LOAD it as a worker (the Worker Loader, like
-  // dial), hand it an itx handle so it can invoke/provide against THIS context,
+  // `async (itx) => …` function; we LOAD it as a worker through the Worker
+  // Loader, hand it an itx handle so it can invoke/provide against THIS context,
   // and bracket the run with durable request/completed records. Everything the
   // script does between them is invisible to the log; the two events are the
   // audit record that a run happened.
@@ -486,7 +529,7 @@ abstract class ItxHostDurableObject extends DurableObject<Env> {
     // were a plain `{ invokeCapability }` object, `itx.whoami()` would work in
     // Node and browser but fail in codemode, which is exactly the runtime drift
     // ITX is meant to avoid.
-    const itxHandle = pathProxyToInvokeCapability(this.#itx);
+    const itxHandle = itxHandleForNode(this);
     try {
       const result = await loaded.getEntrypoint("ScriptEntrypoint").run(itxHandle);
       await appendCompleted({ result });
@@ -502,64 +545,18 @@ abstract class ItxHostDurableObject extends DurableObject<Env> {
 // The domain objects. A context's identity is a project id + a path, and at each
 // coordinate sits a real domain Durable Object: the project root is a `Project`,
 // an agent under it is an `Agent`. Each owns its resources AND defines the
-// built-in capabilities a context scoped to it is born with — the production
-// shape in miniature (apps/os has Project and Agent DOs; the itx context
-// attaches to them by coordinate, and parentage is a reserved built-in).
+// public capability surface a context scoped to it is born with. The ITX host
+// mounts each DO itself as the base built-in at `path: []`, so adding a built-in
+// is just adding a public method/getter here.
 // ---------------------------------------------------------------------------
 
-type RpcTargetClass<TSource extends object> = new (source: TSource) => RpcTarget;
-
-function makeInheritedRpcTargetClass<TSource extends object>(
-  sourceClass: { prototype: TSource },
-  options: { exclude?: readonly PropertyKey[] } = {},
-): RpcTargetClass<TSource> {
-  const exclude = new Set<PropertyKey>([
-    "constructor",
-    "contextBuiltinCapabilities",
-    "parentContext",
-    "requestStreamSubscription",
-    ...(options.exclude ?? []),
-  ]);
-
-  class GeneratedRpcTarget extends RpcTarget {
-    constructor(readonly source: TSource) {
-      super();
-    }
-  }
-
-  for (
-    let proto: object | null = sourceClass.prototype;
-    proto && proto !== DurableObject.prototype && proto !== Object.prototype;
-    proto = Object.getPrototypeOf(proto)
-  ) {
-    for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(proto))) {
-      if (exclude.has(key) || key in GeneratedRpcTarget.prototype) continue;
-      if (typeof descriptor.value === "function") {
-        Object.defineProperty(GeneratedRpcTarget.prototype, key, {
-          value(this: GeneratedRpcTarget, ...args: unknown[]) {
-            const member = Reflect.get(this.source, key);
-            if (typeof member !== "function") {
-              throw new TypeError(`${key} is not callable on the wrapped RPC source.`);
-            }
-            return Reflect.apply(member, this.source, args);
-          },
-        });
-      }
-    }
-  }
-
-  return GeneratedRpcTarget as RpcTargetClass<TSource>;
-}
-
-// The Project DO. Owns the project's egress AND defines a project context's
-// built-ins. `egress` does the outbound fetch (named `egress`, not `fetch`,
-// because a DO's `fetch` is its HTTP entrypoint).
+// The Project DO. Owns the project's capability surface.
 export class ProjectDurableObject extends ItxHostDurableObject {
   async egress(
     url: string,
     init?: RequestInit,
   ): Promise<{ status: number; body: string; viaProject: string }> {
-    const response = await fetch(url, init);
+    const response = await globalThis.fetch(url, init);
     return {
       status: response.status,
       body: await response.text(),
@@ -569,36 +566,28 @@ export class ProjectDurableObject extends ItxHostDurableObject {
     };
   }
 
-  protected contextBuiltinCapabilities(): ProvideArgs[] {
-    const projectId = this.requireProjectId();
-    const repo = this.env.REPO.getByName(
-      formatDurableObjectName({ projectId, path: PROJECT_REPO_PATH }),
-    );
-    return [
-      {
-        path: ["fetch"],
-        capability: (url: string, init?: RequestInit) => this.egress(url, init),
-        instructions: "the project's HTTP egress",
-      },
-      {
-        path: ["repo"],
-        capability: new RepoRpcTarget(repo as unknown as RepoDurableObject),
-        instructions: "the project's fake repo: getWorkerSource({ path: 'counter.js' })",
-      },
-      {
-        path: ["agents"],
-        capability: new AgentsRpcTarget({ agents: this.env.AGENT, projectId }),
-        instructions:
-          "project-local agents: agents.get('/agents/name') returns that Agent Durable Object's public RPC surface",
-      },
-    ];
+  get repo() {
+    return new RepoRpcTarget({
+      path: PROJECT_REPO_PATH,
+      projectId: this.requireProjectId(),
+    });
+  }
+
+  get agents() {
+    return new AgentsRpcTarget({ projectId: this.requireProjectId() });
   }
 }
 
 // The Agent DO. Lives UNDER a project (coordinate "<id>/agents/<name>"). Owns its
-// identity, defines its own built-ins (whoami), and injects the project context
-// as its parent.
+// identity and exposes explicit project reach through its public surface.
 export class AgentDurableObject extends ItxHostDurableObject {
+  get project() {
+    const project = this.env.PROJECT.getByName(
+      formatDurableObjectName({ projectId: this.requireProjectId(), path: "/" }),
+    ) as unknown as ItxHostNode;
+    return itxHandleForNode(project);
+  }
+
   whoami(): string {
     const parts = this.nameParts();
     return parts ? `agent ${parts.projectId}:${parts.path}` : "agent ?";
@@ -606,28 +595,6 @@ export class AgentDurableObject extends ItxHostDurableObject {
 
   sendMessage(input: { message: string; channel?: string }) {
     return { agent: this.whoami(), ...input };
-  }
-
-  protected parentContext(): ItxContext {
-    const project = this.env.PROJECT.getByName(
-      formatDurableObjectName({ projectId: this.requireProjectId(), path: "/" }),
-    ) as unknown as ItxHostNode;
-    return {
-      provideCapability: (args) => project.itx().provideCapability(args),
-      invokeCapability: (args) => project.itx().invokeCapability(args),
-      revokeCapability: (args) => project.itx().revokeCapability(args),
-      describe: () => project.itx().describe(),
-    };
-  }
-
-  protected contextBuiltinCapabilities(): ProvideArgs[] {
-    return [
-      {
-        path: ["whoami"],
-        capability: () => this.whoami(),
-        instructions: "the agent's own identity",
-      },
-    ];
   }
 }
 
@@ -662,29 +629,93 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 }
 
-const RepoRpcTarget = makeRpcTargetClass(RepoDurableObject);
-const AgentRpcTarget = makeInheritedRpcTargetClass(AgentDurableObject);
+class AgentRpcTarget extends RpcTarget {
+  #agent: AgentDurableObject & ItxHostNode;
+  #project: ItxHostNode;
 
-class AgentsRpcTarget extends RpcTarget {
-  #agents: DurableObjectNamespace<AgentDurableObject>;
+  constructor(input: { path: string; projectId: string }) {
+    super();
+    this.#agent = (workerEnv as unknown as Env).AGENT.getByName(
+      formatDurableObjectName({ projectId: input.projectId, path: input.path }),
+    ) as unknown as AgentDurableObject & ItxHostNode;
+    this.#project = (workerEnv as unknown as Env).PROJECT.getByName(
+      formatDurableObjectName({ projectId: input.projectId, path: "/" }),
+    ) as unknown as ItxHostNode;
+  }
+
+  get itx(): ItxContext {
+    return itxHandleForNode(this.#agent);
+  }
+
+  get project(): ItxContext {
+    return itxHandleForNode(this.#project);
+  }
+
+  whoami() {
+    return this.#agent.whoami();
+  }
+
+  sendMessage(input: { message: string; channel?: string }) {
+    return this.#agent.sendMessage(input);
+  }
+
+  provideCapability(args: ProvideArgs) {
+    return this.#agent.provideCapability(args);
+  }
+
+  invokeCapability(args: { path: string[]; args?: unknown[] }) {
+    return this.#agent.invokeCapability(args);
+  }
+
+  revokeCapability(args: { path: string[] }) {
+    return this.#agent.revokeCapability(args);
+  }
+
+  describe() {
+    return this.#agent.describe();
+  }
+
+  runScript(args: { code: string }) {
+    return this.#agent.runScript(args);
+  }
+}
+
+class RepoRpcTarget extends RpcTarget {
+  #path: string;
   #projectId: string;
 
-  constructor(input: { agents: DurableObjectNamespace<AgentDurableObject>; projectId: string }) {
+  constructor(input: { path: string; projectId: string }) {
     super();
-    this.#agents = input.agents;
+    this.#path = input.path;
+    this.#projectId = input.projectId;
+  }
+
+  #repo() {
+    return (workerEnv as unknown as Env).REPO.getByName(
+      formatDurableObjectName({ projectId: this.#projectId, path: this.#path }),
+    );
+  }
+
+  getWorkerSource(args: { path: string }) {
+    return this.#repo().getWorkerSource(args);
+  }
+}
+
+class AgentsRpcTarget extends RpcTarget {
+  #projectId: string;
+
+  constructor(input: { projectId: string }) {
+    super();
     this.#projectId = input.projectId;
   }
 
   get(agentPathInput: string) {
     const path = normalizeAgentPath(agentPathInput);
-    const agent = this.#agents.getByName(
-      formatDurableObjectName({ projectId: this.#projectId, path }),
-    );
-    return new AgentRpcTarget(agent as unknown as AgentDurableObject);
+    return new AgentRpcTarget({ projectId: this.#projectId, path });
   }
 
   async sendMessage(input: { agentPath: string; message: string; channel?: string }) {
-    return await (this.get(input.agentPath) as unknown as AgentDurableObject).sendMessage({
+    return await this.get(input.agentPath).sendMessage({
       message: input.message,
       channel: input.channel,
     });
@@ -735,7 +766,7 @@ export default {
           status: 403,
         });
       if (request.method !== "GET") return new Response("method not allowed", { status: 405 });
-      return newWorkersRpcResponse(request, pathProxyToInvokeCapability(new RootItx(env)));
+      return newWorkersRpcResponse(request, pathInvokerToProxy(new RootItx(env)));
     }
 
     if (!projectId) {
@@ -755,9 +786,10 @@ export default {
     }
 
     // THE authority decision: may this principal reach this project? Everything
-    // past this door is confined by construction — built-ins name only this
-    // project, the chain tops out at this project, and user provides cannot name
-    // another project's Durable Object. No further authority checks anywhere.
+    // past this door is confined by construction — host surfaces name only this
+    // project, agents reach their project through an explicit host-owned member,
+    // and user provides cannot name another project's Durable Object. No further
+    // authority checks anywhere.
     const auth = authorizeProjectAccess(request, projectId);
     if (!auth.ok) return new Response(auth.message, { status: auth.status });
 
@@ -770,7 +802,7 @@ export default {
         return json({
           context: formatDurableObjectName({ projectId, path }),
           ...run,
-          describe: await node.itx().describe(),
+          describe: await node.describe(),
         });
       } catch (error: any) {
         return json({ error: error?.message ?? String(error) }, { status: 400 });
@@ -780,13 +812,7 @@ export default {
 
     // The WebSocket surface is one operation: invokeCapability, forwarded into
     // the selected context. No catalog scoping to do — there is no global catalog
-    // on a project's chain.
-    return newWorkersRpcResponse(
-      request,
-      pathProxyToInvokeCapability({
-        invokeCapability: (args: { path: string[]; args?: unknown[] }) =>
-          node.itx().invokeCapability(args),
-      }),
-    );
+    // on a project's ITX surface.
+    return newWorkersRpcResponse(request, itxHandleForNode(node));
   },
 };
