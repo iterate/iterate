@@ -273,8 +273,12 @@ export type IterateProjectStreams = {
   append: (input: IterateStreamAppendInput) => Promise<unknown>;
 };
 
-export type IterateProjectEnv = {
-  ITERATE: unknown;
+export type IterateProjectItx<Context = unknown> = {
+  context: Promise<Context>;
+};
+
+export type IterateProjectEnv<Context = unknown> = {
+  ITERATE: IterateProjectItx<Context>;
   STREAMS: IterateProjectStreams;
 };
 
@@ -283,8 +287,10 @@ export type IterateProjectEventInput = {
   streamPath: string;
 };
 
-export class IterateProjectEntrypoint extends WorkerEntrypoint<IterateProjectEnv> {
-  get itx(): IterateProjectEnv["ITERATE"] {
+export class IterateProjectEntrypoint<Context = unknown> extends WorkerEntrypoint<
+  IterateProjectEnv<Context>
+> {
+  get itx(): IterateProjectItx<Context> {
     return this.env.ITERATE;
   }
 

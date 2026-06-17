@@ -24,7 +24,7 @@ const ITERATE_CONFIG_PACKAGE_JSON = `{
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260426.1",
-    "iterate": "^0.2.5",
+    "iterate": "^0.2.6",
     "typescript": "^5.9.3"
   }
 }
