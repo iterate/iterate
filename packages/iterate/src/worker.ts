@@ -1,36 +1,13 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { defineIterateProjectEntrypoint } from "./worker-shared.ts";
 
-export type IterateStreamAppendInput = {
-  event: unknown;
-  streamPath?: string;
-};
+export type {
+  IterateProjectEnv,
+  IterateProjectEventInput,
+  IterateProjectStreams,
+  IterateStreamAppendInput,
+} from "./worker-shared.ts";
 
-export type IterateProjectStreams = {
-  append: (input: IterateStreamAppendInput) => Promise<unknown>;
-};
+const IterateProjectEntrypointBase = defineIterateProjectEntrypoint(WorkerEntrypoint);
 
-export type IterateProjectEnv = {
-  ITERATE: unknown;
-  STREAMS: IterateProjectStreams;
-};
-
-export type IterateProjectEventInput = {
-  event: unknown;
-  streamPath: string;
-};
-
-export class IterateProjectEntrypoint extends WorkerEntrypoint<IterateProjectEnv> {
-  get itx(): IterateProjectEnv["ITERATE"] {
-    return this.env.ITERATE;
-  }
-
-  get streams(): IterateProjectEnv["STREAMS"] {
-    return this.env.STREAMS;
-  }
-
-  async processEvent(input: IterateProjectEventInput): Promise<void> {
-    await this.onProjectEvent(input);
-  }
-
-  protected async onProjectEvent(_input: IterateProjectEventInput): Promise<void> {}
-}
+export class IterateProjectEntrypoint extends IterateProjectEntrypointBase {}

@@ -11,7 +11,7 @@
 // esbuild-wasm): repo DO readTree → vfs → R2. No clone, no workspace, no
 // filesystem.
 
-import { IterateProjectEntrypoint } from "../../../../packages/iterate/src/worker.ts";
+import { defineIterateProjectEntrypoint } from "../../../../packages/iterate/src/worker-shared.ts";
 import type { WorkerSource } from "./itx.ts";
 import type { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import { getRepoDurableObjectName } from "~/domains/repos/repo-durable-object-name.ts";
@@ -284,8 +284,10 @@ export type IterateProjectEventInput = {
   streamPath: string;
 };
 
-const IterateProjectEntrypoint = ${IterateProjectEntrypoint.toString()};
-export { IterateProjectEntrypoint };
+const defineIterateProjectEntrypoint = ${defineIterateProjectEntrypoint.toString()};
+const IterateProjectEntrypointBase = defineIterateProjectEntrypoint(WorkerEntrypoint);
+
+export class IterateProjectEntrypoint extends IterateProjectEntrypointBase {}
 `;
 }
 
