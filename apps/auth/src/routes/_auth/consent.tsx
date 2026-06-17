@@ -41,7 +41,6 @@ function RouteComponent() {
         throw new Error("Could not continue the OAuth redirect");
       }
 
-      window.location.href = result.url;
       return result;
     },
   });
