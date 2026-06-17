@@ -12,49 +12,25 @@ const agentItx = (label: string) => connect({ path: `/agents/cross-project-${lab
 const expectRejects = (fn: () => unknown) => expect((async () => await fn())()).rejects;
 
 describe("itx cross-project adversarial e2e", () => {
-  // Attack 1: resolve project B's context by NAMING its Durable Object.
-  it("rejects a user-provided durable-object address naming another project", async () => {
-    using itx = agentItx("name-other-project");
-    await expectRejects(() =>
-      itx.provideCapability({
-        path: ["pwn"],
-        capability: { type: "durable-object", namespace: "itx", name: "prj_bob:/" },
-      }),
-    ).toThrow(/can only be host built-ins/);
+  it("rejects non-dynamic address types as user-provided capabilities", async () => {
+    using itx = agentItx("unsupported-address-types");
+    for (const capability of [
+      { type: "durable-object", namespace: "itx", name: "prj_bob:/" },
+      { type: "worker-entrypoint", binding: "PROJECT", name: "prj_ref:/" },
+      { type: "rpc", worker: { type: "loopback" } },
+    ]) {
+      await expectRejects(() =>
+        itx.provideCapability({
+          path: ["unsupported"],
+          capability,
+        }),
+      ).toThrow(/unsupported capability address type/);
+    }
 
     const d = await itx.describe();
-    expect(d.capabilities.some((c: any) => c.path.join(".") === "pwn")).toBe(false);
+    expect(d.capabilities.some((c: any) => c.path.join(".") === "unsupported")).toBe(false);
   });
 
-  // Attack 3: the same trick aimed at the admin-only `__null__` platform plane.
-  it("rejects a user-provided durable-object address naming the __null__ plane", async () => {
-    using itx = agentItx("name-null");
-    await expectRejects(() =>
-      itx.provideCapability({
-        path: ["platform"],
-        capability: { type: "durable-object", namespace: "itx", name: "__null__:/integrations" },
-      }),
-    ).toThrow(/can only be host built-ins/);
-  });
-
-  // Even reaching a sibling DO in the SAME project family is just data the resolver
-  // refuses — there is no user-providable durable-object address at all.
-  it("rejects a user-provided durable-object address naming the project's own DOs", async () => {
-    using itx = agentItx("name-own");
-    await expectRejects(() =>
-      itx.provideCapability({
-        path: ["repoPeek"],
-        capability: {
-          type: "durable-object",
-          namespace: "repo",
-          name: "prj_ref:/repos/project",
-        },
-      }),
-    ).toThrow(/can only be host built-ins/);
-  });
-
-  // Attack 2 is gone structurally: there is no global catalog to enumerate or
-  // hop through, so the connect door is the whole boundary.
   it("denies connecting to a project the principal cannot access", async () => {
     using denied = connect({ projectId: "prj_bob", path: "/" });
     await expectRejects(() => denied.describe()).toThrow();

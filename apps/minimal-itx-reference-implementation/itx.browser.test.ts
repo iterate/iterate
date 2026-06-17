@@ -36,7 +36,7 @@ describe.skipIf(!__ITX_BROWSER_E2E__.baseUrl)("itx browser execution mode", () =
       const runCtx = { marker: `browser-${rid}`, projectId: "prj_ref" };
 
       // Setup runs over a browser-owned connection — the SAME runtime-agnostic
-      // verb calls as Node, just from a tab. Sturdy addresses are plain data,
+      // verb calls as Node, just from a tab. Dynamic addresses are plain data,
       // so the naked stub can provide them with no normalization.
       if (exampleCase.setup) {
         using setupItx = connectFromBrowser(path);

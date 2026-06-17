@@ -27,8 +27,8 @@ already running. `npm test` needs `npm run dev` up (or set `ITX_BASE` /
 
 Together they exercise, end to end: live capabilities, dynamic workers, a
 repo-backed dynamic Durable Object facet from `counter.js`, host runtime
-built-ins, deep dotted paths + longest-prefix shadowing, agent inheritance from
-its project, cross-project isolation, the admin-only platform root, auth at the
+built-ins, deep dotted paths + longest-prefix shadowing, explicit agent project
+reach, cross-project isolation, the admin-only platform root, auth at the
 connect door, and codemode.
 
 Run one project with `npm test -- --project node` (or `--project browser`).
@@ -44,9 +44,9 @@ await itx.greeter("alice"); // "hi alice" — naked deep path, no client path pr
 ```
 
 The root ITX control names (`provideCapability`, `invokeCapability`,
-`revokeCapability`, `describe`) cannot be mounted as user capabilities. Script
-execution is intentionally HTTP-only: use `POST /api/itx/<projectId>` rather
-than `itx.runScript()` over the WebSocket model.
+`revokeCapability`, `describe`, `runScript`) cannot be mounted as user
+capabilities. `runScript` is the codemode control; `POST /api/itx/<projectId>`
+is the HTTP form of the same operation.
 
 `withItx` also normalizes raw local SDK objects at provide time. Bare Cap'n Web
 cannot serialize arbitrary class instances such as `new Slack.WebClient()` by

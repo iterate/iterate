@@ -1,9 +1,9 @@
 // root-itx.ts — the admin-only platform root.
 //
 // This is NOT a context and NOT a Durable Object. It is a tiny, fixed RPC
-// surface — "dumb-ass RPC targets" — constructed per connection at the serving
-// edge and served through the SAME `pathInvokerToProxy` rule as every
-// other itx surface, so `root.projects.list()` and
+// surface constructed per connection at the serving edge and served through the
+// SAME `pathInvokerToProxy` rule as every other itx surface, so
+// `root.projects.list()` and
 // `root.streams.get("/x").append(event)` collapse into one `invokeCapability`
 // exactly the way a context's dotted calls do.
 //

@@ -11,7 +11,7 @@
 // There is no global/`__global__` context: a project is its own ITX root, and
 // cross-project / platform reach lives ONLY behind the admin root.
 //
-// A NAKED Cap'n Web stub drives every context: `itx.provideCapability({…})` and
+// A bare Cap'n Web stub drives every context: `itx.provideCapability({…})` and
 // `itx.slack.chat.postMessage(msg)` are both just pipelined property paths that
 // end in a call. The trick is entirely server-side: `pathInvokerToProxy`
 // (below) collapses every terminal call into one `invokeCapability({ path, args })`.
@@ -26,7 +26,7 @@ import {
 } from "@iterate-com/os/src/domains/streams/engine/workers/stream-processor-host.ts";
 import { durableObjectProcessorSubscriber } from "@iterate-com/os/src/domains/streams/engine/shared/callable-subscriber.ts";
 import { ItxContract } from "./contract.ts";
-import { ItxProcessor, replayPath, type ItxContext, type ProvideArgs } from "./itx.ts";
+import { ItxProcessor, replayPath, type ItxContext } from "./itx.ts";
 import { RootItx } from "./root-itx.ts";
 import { authenticate, authorizeProjectAccess } from "./auth.ts";
 import {
@@ -35,6 +35,7 @@ import {
   PLATFORM_PROJECT_ID,
   type DurableObjectNameParts,
 } from "./durable-object-names.ts";
+import type { CapabilityAddress, DynamicWorkerSource } from "./contract.ts";
 
 // The real durable event log from apps/os — re-exported so wrangler hosts it as
 // a Durable Object. A context's capability table is the fold of one of these.
@@ -46,7 +47,7 @@ export class ItxBindingEntrypoint extends WorkerEntrypoint<
 > {
   async get(): Promise<ItxContext> {
     const node = contextNode(this.env, this.ctx.props);
-    return itxHandleForNode(node);
+    return contextHandleForHost(node);
   }
 }
 
@@ -72,9 +73,9 @@ export class ItxBindingEntrypoint extends WorkerEntrypoint<
 //      dies at ".chat of undefined".
 //   3. `has` must answer for non-reserved names too.
 //
-// The inverse adapter is `PathInvoker`: it takes a normal object and exposes the
-// one path invocation method by replaying `{ path, args }` onto that object.
-// The host DOs use `new PathInvoker(this)` as their base built-in at `path: []`.
+// The inverse adapter is `objectToPathInvoker`: it takes a normal object and
+// exposes the one path invocation method by replaying `{ path, args }` onto that
+// object. Host DOs mount their concrete public members this way at `path: []`.
 
 // Names Cap'n Web (or the JS runtime) probes that must never be treated as path
 // segments or verbs — they would derail the proxy or trigger thenable detection.
@@ -91,36 +92,47 @@ const RESERVED = new Set([
 ]);
 
 type PathInvocation = { path: string[]; args?: unknown[] };
-type PathInvokable = { invokeCapability(args: PathInvocation): unknown };
 
-const ITX_HOST_INTERNAL_PATHS = new Set([
-  "describe",
-  "itx",
-  "invokeCapability",
-  "provideCapability",
-  "requestStreamSubscription",
-  "revokeCapability",
-  "runScript",
-]);
-
-class PathInvoker implements PathInvokable {
-  #target: unknown;
-  #exclude: ReadonlySet<string>;
-
-  constructor(target: unknown, options: { exclude?: ReadonlySet<string> } = {}) {
-    this.#target = target;
-    this.#exclude = options.exclude ?? new Set();
+function findSubclassDescriptor(
+  target: object,
+  key: string,
+  stopAt: object,
+): PropertyDescriptor | undefined {
+  for (
+    let proto = Object.getPrototypeOf(target);
+    proto && proto !== stopAt;
+    proto = Object.getPrototypeOf(proto)
+  ) {
+    const descriptor = Object.getOwnPropertyDescriptor(proto, key);
+    if (descriptor) return descriptor;
   }
-
-  invokeCapability({ path, args = [] }: PathInvocation) {
-    if (path[0] && this.#exclude.has(path[0])) {
-      throw new Error(`path "${path[0]}" is not part of this public capability surface`);
-    }
-    return replayPath(this.#target, path, args);
-  }
+  return undefined;
 }
 
-function pathInvokerToProxy(target: PathInvokable, path: string[] = []): any {
+async function replayHostPath(target: object, path: string[], args: unknown[], stopAt: object) {
+  const [head, ...rest] = path;
+  if (!head) return target;
+  const descriptor = findSubclassDescriptor(target, head, stopAt);
+  if (!descriptor) throw new Error(`no host capability "${head}"`);
+
+  const value = "value" in descriptor ? descriptor.value : await descriptor.get?.call(target);
+
+  if (rest.length > 0) return await replayPath(value, rest, args);
+  if (typeof value === "function") return await value.apply(target, args);
+  return value;
+}
+
+function objectToPathInvoker(target: object, stopAt: object) {
+  return {
+    invokeCapability: ({ path, args = [] }: PathInvocation) =>
+      replayHostPath(target, path, args, stopAt),
+  };
+}
+
+function pathInvokerToProxy(
+  target: { invokeCapability(args: PathInvocation): unknown },
+  path: string[] = [],
+): any {
   const valueFor = (key: string) => pathInvokerToProxy(target, [...path, key]);
   return new Proxy(function () {}, {
     get(t, key) {
@@ -168,33 +180,23 @@ interface Env {
   };
 }
 
-type ItxHostNode = {
-  describe(): Promise<unknown>;
-  invokeCapability(args: { path: string[]; args?: unknown[] }): Promise<unknown>;
-  provideCapability(args: ProvideArgs): Promise<unknown>;
-  readonly itx: ItxContext;
-  revokeCapability(args: { path: string[] }): Promise<unknown>;
-  runScript(args: { code: string }): Promise<unknown>;
+type ItxContextHost = {
+  invokeCapability(args: PathInvocation): unknown;
 };
 
-function itxHandleForNode(node: ItxHostNode): ItxContext {
+function contextHandleForHost(host: ItxContextHost): ItxContext {
   return pathInvokerToProxy({
-    invokeCapability: ({ path, args = [] }: { path: string[]; args?: unknown[] }) => {
-      if (path[0] === "runScript") {
-        if (path.length !== 1) throw new Error('reserved ITX control path "runScript"');
-        return node.runScript(args[0] as { code: string });
-      }
-      return node.invokeCapability({ path, args });
-    },
+    invokeCapability: ({ path, args = [] }: { path: string[]; args?: unknown[] }) =>
+      host.invokeCapability({ path, args }),
   }) as ItxContext;
 }
 
-function contextNode(env: Env, parts: { projectId: string; path: string }): ItxHostNode {
+function contextNode(env: Env, parts: { projectId: string; path: string }): ItxContextHost {
   if (parts.path === "/") {
-    return env.PROJECT.getByName(formatDurableObjectName(parts)) as unknown as ItxHostNode;
+    return env.PROJECT.getByName(formatDurableObjectName(parts)) as unknown as ItxContextHost;
   }
   if (parts.path.startsWith("/agents/")) {
-    return env.AGENT.getByName(formatDurableObjectName(parts)) as unknown as ItxHostNode;
+    return env.AGENT.getByName(formatDurableObjectName(parts)) as unknown as ItxContextHost;
   }
   throw new Error(
     `no ITX host for path "${parts.path}" (only "/" and "/agents/..." are host-owned contexts)`,
@@ -220,21 +222,6 @@ function itxLogName(contextName: string): string {
     path: context.path === "/" ? "/itx" : `/itx${context.path}`,
   });
 }
-
-type DynamicWorkerSource =
-  | {
-      type: "inline";
-      mainModule: string;
-      modules: Record<string, string>;
-      compatibilityDate?: string;
-    }
-  | {
-      type: "repo";
-      repo: string;
-      commit: string | "latest";
-      path: string;
-      compatibilityDate?: string;
-    };
 
 type ResolvedWorkerSource = {
   cacheKey: string;
@@ -267,17 +254,18 @@ abstract class ItxHostDurableObject extends DurableObject<Env> {
   host = createStreamProcessorHost(this.ctx);
   #subscriptionConfigured = false;
   #dynamicDurableObjectVersions = new Map<string, string>();
-  #itx = this.host.add(
+  #itxProcessor = this.host.add(
     ItxContract.slug,
     (deps) =>
       new ItxProcessor({
         ...deps,
         iterateContext: { stream: this.#log() },
-        resolveAddress: (address) => this.#resolveAddress(address),
+        resolveDynamicCapability: (address) => this.#resolveDynamicCapability(address),
+        runScript: (args) => this.#runScript(args),
         builtinCapabilities: [
           {
             path: [],
-            capability: new PathInvoker(this, { exclude: ITX_HOST_INTERNAL_PATHS }),
+            capability: objectToPathInvoker(this, ItxHostDurableObject.prototype),
             instructions: "the host Durable Object's public capability surface",
           },
         ],
@@ -307,9 +295,9 @@ abstract class ItxHostDurableObject extends DurableObject<Env> {
     return projectId;
   }
 
-  // Capability address → callable stub.
-  #resolveAddress(address: any): any {
-    if (address?.type === "dynamic-worker") {
+  // Dynamic capability address → callable stub.
+  #resolveDynamicCapability(address: CapabilityAddress): any {
+    if (address.type === "dynamic-worker") {
       const loaded = this.#loadDynamicWorker(address.source);
       const entrypoint = loaded.then((worker) =>
         worker.getEntrypoint(address.entrypoint, { props: address.props ?? {} }),
@@ -317,11 +305,11 @@ abstract class ItxHostDurableObject extends DurableObject<Env> {
       entrypoint.catch(() => {});
       return localPathProxy(entrypoint);
     }
-    if (address?.type === "dynamic-durable-object") {
+    if (address.type === "dynamic-durable-object") {
       const facetName = `dynamic-durable-object:${hashString(
         JSON.stringify({
           className: address.className,
-          mountPath: address.mountPath,
+          mountPath: (address as { mountPath?: string[] }).mountPath,
         }),
       )}`;
       return localPathProxy(this.#dynamicDurableObjectFacet(facetName, address));
@@ -354,17 +342,20 @@ abstract class ItxHostDurableObject extends DurableObject<Env> {
   }
 
   #loadResolvedDynamicWorker(resolved: ResolvedWorkerSource) {
-    return this.env.LOADER.get(`dynamic-worker:${resolved.cacheKey}`, () => ({
-      compatibilityDate: resolved.compatibilityDate ?? "2026-05-01",
-      compatibilityFlags: ["nodejs_compat"],
-      env: {
-        ITX: ((this.ctx as any).exports as any).ItxBindingEntrypoint({
-          props: this.#requireNameParts(),
-        }),
-      },
-      mainModule: resolved.mainModule,
-      modules: resolved.modules,
-    }));
+    return this.env.LOADER.get(
+      `dynamic-worker:${this.#requireName()}:${resolved.cacheKey}`,
+      () => ({
+        compatibilityDate: resolved.compatibilityDate ?? "2026-05-01",
+        compatibilityFlags: ["nodejs_compat"],
+        env: {
+          ITX: ((this.ctx as any).exports as any).ItxBindingEntrypoint({
+            props: this.#requireNameParts(),
+          }),
+        },
+        mainModule: resolved.mainModule,
+        modules: resolved.modules,
+      }),
+    );
   }
 
   async #loadDynamicWorker(source: DynamicWorkerSource) {
@@ -372,7 +363,10 @@ abstract class ItxHostDurableObject extends DurableObject<Env> {
     return this.#loadResolvedDynamicWorker(resolved);
   }
 
-  async #dynamicDurableObjectFacet(facetName: string, address: any) {
+  async #dynamicDurableObjectFacet(
+    facetName: string,
+    address: Extract<CapabilityAddress, { type: "dynamic-durable-object" }>,
+  ) {
     const resolved = await this.#resolveWorkerSource(address.source);
     const version = JSON.stringify({ cacheKey: resolved.cacheKey, className: address.className });
     const versionKey = `itx:dynamic-do-facet-version:${facetName}`;
@@ -453,30 +447,9 @@ abstract class ItxHostDurableObject extends DurableObject<Env> {
     this.ctx.waitUntil(this.#log().append({ event }));
   }
 
-  // The hosted processor. Lazily wires the subscription on first reach.
-  get itx(): ItxContext {
-    this.#ensureSubscriptionConfigured();
-    return itxHandleForNode(this);
-  }
-
-  provideCapability(args: ProvideArgs) {
-    this.#ensureSubscriptionConfigured();
-    return this.#itx.provideCapability(args);
-  }
-
   invokeCapability(args: { path: string[]; args?: unknown[] }) {
     this.#ensureSubscriptionConfigured();
-    return this.#itx.invokeCapability(args);
-  }
-
-  revokeCapability(args: { path: string[] }) {
-    this.#ensureSubscriptionConfigured();
-    return this.#itx.revokeCapability(args);
-  }
-
-  describe() {
-    this.#ensureSubscriptionConfigured();
-    return this.#itx.describe();
+    return this.#itxProcessor.invokeCapability(args);
   }
 
   // The Stream DO calls this to start delivering batches to the host's processor.
@@ -491,7 +464,7 @@ abstract class ItxHostDurableObject extends DurableObject<Env> {
   // and bracket the run with durable request/completed records. Everything the
   // script does between them is invisible to the log; the two events are the
   // audit record that a run happened.
-  async runScript({ code }: { code: string }): Promise<unknown> {
+  async #runScript({ code }: { code: string }): Promise<unknown> {
     this.#ensureSubscriptionConfigured();
     const executionId = crypto.randomUUID();
     const log = this.#log();
@@ -502,7 +475,7 @@ abstract class ItxHostDurableObject extends DurableObject<Env> {
           payload: { executionId, ...payload },
         },
       } as any);
-      await this.#itx.waitUntilEvent({ offset: (completed as any).offset });
+      await this.#itxProcessor.waitUntilEvent({ offset: (completed as any).offset });
     };
     const requested = await log.append({
       event: {
@@ -510,7 +483,7 @@ abstract class ItxHostDurableObject extends DurableObject<Env> {
         payload: { executionId, code },
       },
     } as any);
-    await this.#itx.waitUntilEvent({ offset: (requested as any).offset });
+    await this.#itxProcessor.waitUntilEvent({ offset: (requested as any).offset });
     const source = `
       import { WorkerEntrypoint } from "cloudflare:workers";
       const program = ${code};
@@ -529,7 +502,7 @@ abstract class ItxHostDurableObject extends DurableObject<Env> {
     // were a plain `{ invokeCapability }` object, `itx.whoami()` would work in
     // Node and browser but fail in codemode, which is exactly the runtime drift
     // ITX is meant to avoid.
-    const itxHandle = itxHandleForNode(this);
+    const itxHandle = contextHandleForHost(this);
     try {
       const result = await loaded.getEntrypoint("ScriptEntrypoint").run(itxHandle);
       await appendCompleted({ result });
@@ -584,8 +557,8 @@ export class AgentDurableObject extends ItxHostDurableObject {
   get project() {
     const project = this.env.PROJECT.getByName(
       formatDurableObjectName({ projectId: this.requireProjectId(), path: "/" }),
-    ) as unknown as ItxHostNode;
-    return itxHandleForNode(project);
+    ) as unknown as ItxContextHost;
+    return contextHandleForHost(project);
   }
 
   whoami(): string {
@@ -662,8 +635,8 @@ class AgentsRpcTarget extends RpcTarget {
     const path = normalizeAgentPath(agentPathInput);
     const agent = (workerEnv as unknown as Env).AGENT.getByName(
       formatDurableObjectName({ projectId: this.#projectId, path }),
-    ) as unknown as ItxHostNode;
-    return agent.itx;
+    ) as unknown as ItxContextHost;
+    return contextHandleForHost(agent);
   }
 }
 
@@ -743,11 +716,12 @@ export default {
     if (request.method === "POST") {
       try {
         const code = await readScriptCode(request);
-        const run = (await node.runScript({ code })) as Record<string, unknown>;
+        const itx = contextHandleForHost(node);
+        const run = (await itx.runScript({ code })) as Record<string, unknown>;
         return json({
           context: formatDurableObjectName({ projectId, path }),
           ...run,
-          describe: await node.describe(),
+          describe: await itx.describe(),
         });
       } catch (error: any) {
         return json({ error: error?.message ?? String(error) }, { status: 400 });
@@ -758,6 +732,6 @@ export default {
     // The WebSocket surface is one operation: invokeCapability, forwarded into
     // the selected context. No catalog scoping to do — there is no global catalog
     // on a project's ITX surface.
-    return newWorkersRpcResponse(request, itxHandleForNode(node));
+    return newWorkersRpcResponse(request, contextHandleForHost(node));
   },
 };

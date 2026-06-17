@@ -1,16 +1,15 @@
-// itx.ts — the itx core. `ItxProcessor` IS a real StreamProcessor.
+// itx.ts — the durable ITX context core.
 //
-// `ItxProcessor extends StreamProcessor<ItxContract>` from the platform streams engine
-// (apps/os/src/domains/streams/engine). We override exactly one pure method —
-// `reduce` (the fold) — and add the verbs. Everything DURABLE (what names exist,
-// each one's address) is the fold of the event log; the only non-durable state
-// is the in-memory bridge of live stubs, which is precisely the live-vs-sturdy
-// line drawn in running code.
+// An ITX context is the object-capability RPC surface of a hosting Durable
+// Object. The host supplies its public surface by reference; user-provided
+// capabilities are stored as a durable event-log fold. `ItxProcessor` is the
+// small StreamProcessor that owns that fold plus the in-memory bridge for live
+// stubs.
 //
 // This file also holds the small common vocabulary every itx implementation
-// uses: the capability-descriptor types, path matching, `retain`, and
-// `replayPath`. The admin Root ITX (root-itx.ts) reuses `replayPath` so the two
-// surfaces cannot drift in how they resolve a dotted path.
+// uses: capability-descriptor types, path matching, `retain`, and `replayPath`.
+// The admin Root ITX (root-itx.ts) reuses `replayPath` so the two surfaces cannot
+// drift in how they resolve a dotted path.
 
 import { StreamProcessor } from "@iterate-com/os/src/domains/streams/engine/stream-processor.ts";
 import {
@@ -30,7 +29,7 @@ import {
  * in code (handed to the constructor) instead of via an appended event.
  *
  * `capability` is either a live value (a function / nested object — held in the
- * bridge) or a sturdy `CapabilityAddress` (plain data — stored and resolved).
+ * bridge) or a dynamic `CapabilityAddress` (plain data — stored and resolved).
  */
 export type ProvideArgs = {
   path: string[];
@@ -59,6 +58,7 @@ export interface ItxContext {
   provideCapability(args: ProvideArgs): Promise<{ path: string[] }>;
   invokeCapability(args: { path: string[]; args?: unknown[] }): Promise<unknown>;
   revokeCapability(args: { path: string[] }): Promise<void>;
+  runScript(args: { code: string }): Promise<unknown>;
   describe(): Promise<DescribeResult>;
 }
 
@@ -66,14 +66,13 @@ export interface ItxContext {
 // Shared vocabulary.
 // ---------------------------------------------------------------------------
 
-export const ITX_CONTROL_NAMES = new Set([
+const ITX_CONTROL_NAMES = new Set([
   "provideCapability",
   "invokeCapability",
   "revokeCapability",
   "describe",
   "runScript",
 ]);
-const RESERVED_CONTROL_ROOTS = ITX_CONTROL_NAMES;
 
 // Capability paths are also JavaScript property paths on the Cap'n Web surface:
 // `itx.slack.chat.postMessage()` becomes
@@ -108,21 +107,18 @@ export function assertCapabilityPath(path: string[]) {
   }
 }
 
-const CAPABILITY_ADDRESS_TYPES = new Set([
-  "rpc",
-  "dynamic-worker",
-  "dynamic-durable-object",
-  "durable-object",
-  "worker-entrypoint",
-]);
+const CAPABILITY_ADDRESS_TYPES = new Set(["dynamic-worker", "dynamic-durable-object"]);
 
-/** Structural live-vs-sturdy test: a sturdy provided capability is plain
- *  address data; anything else (a function, a nested object) is a live stub. */
+const capabilityAddressType = (c: unknown): string | undefined => {
+  if (!c || typeof c !== "object") return undefined;
+  const type = (c as Record<string, unknown>).type;
+  return typeof type === "string" ? type : undefined;
+};
+
+/** Structural live-vs-durable test: a dynamic address is durable provider data;
+ *  anything else (a function, a nested object) is a live stub. */
 export const isCapabilityAddress = (c: unknown): c is CapabilityAddress =>
-  !!c &&
-  typeof c === "object" &&
-  typeof (c as { type?: unknown }).type === "string" &&
-  CAPABILITY_ADDRESS_TYPES.has((c as { type: string }).type);
+  CAPABILITY_ADDRESS_TYPES.has(capabilityAddressType(c) ?? "");
 
 // A live capability can be provided in two shapes:
 //
@@ -136,7 +132,7 @@ export const isCapabilityAddress = (c: unknown): c is CapabilityAddress =>
 //    `invokeCapability`, so `["slack", "chat", "postMessage"]` becomes
 //    `slack.invokeCapability({ path: ["chat", "postMessage"], args })`.
 //
-// This is intentionally detected only for live capabilities. Sturdy/durable
+// This is intentionally detected only for live capabilities. Dynamic
 // capabilities already have an address and are resolved by the host.
 const isPathCallProvider = (
   capability: unknown,
@@ -242,19 +238,20 @@ export async function replayPath(target: any, rest: string[], args: unknown[]) {
   return await receiver[method](...args);
 }
 
-type LiveInvoker = ((rest: string[], args: unknown[]) => unknown) & {
-  [Symbol.dispose]?: () => void;
+type LiveCapability = {
+  dispose(): void;
+  invoke(rest: string[], args: unknown[]): unknown;
 };
 
-const liveInvoker = (capability: unknown): LiveInvoker => {
+const liveCapability = (capability: unknown): LiveCapability => {
   const retained = retain(capability);
-  const invoke = (
-    isPathCallProvider(capability)
-      ? (rest: string[], args: unknown[]) => retained.invokeCapability({ path: rest, args })
-      : (rest: string[], args: unknown[]) => replayPath(retained, rest, args)
-  ) as LiveInvoker;
-  invoke[Symbol.dispose] = () => disposeLiveValue(retained);
-  return invoke;
+  const invoke = isPathCallProvider(capability)
+    ? (rest: string[], args: unknown[]) => retained.invokeCapability({ path: rest, args })
+    : (rest: string[], args: unknown[]) => replayPath(retained, rest, args);
+  return {
+    dispose: () => disposeLiveValue(retained),
+    invoke,
+  };
 };
 
 // ---------------------------------------------------------------------------
@@ -267,11 +264,12 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
   // Live capabilities are in-memory retained invokers keyed by mount path. The
   // durable fold stores only `address: null`; this map holds the actual callable
   // and whether the provider is member-replayed or path-called.
-  #liveCapabilities = new Map<string, LiveInvoker>();
-  #builtinLiveCapabilities = new Map<string, LiveInvoker>();
+  #liveCapabilities = new Map<string, LiveCapability>();
+  #builtinLiveCapabilities = new Map<string, LiveCapability>();
 
-  // Injected resolver: sturdy capability address → callable stub.
-  #resolveAddress: (address: any) => any;
+  // Injected resolver: dynamic capability address → callable stub.
+  #resolveDynamicCapability: (address: CapabilityAddress) => any;
+  #runScript: (args: { code: string }) => Promise<unknown>;
 
   // Built-in capabilities, handed to the constructor instead of appended to the
   // log (e.g. a project context's `egress`, backed by its Project DO). They arrive
@@ -285,15 +283,21 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
   #builtins: CapabilityRecord[];
   constructor(
     args: ConstructorParameters<typeof StreamProcessor<typeof ItxContract>>[0] & {
-      resolveAddress?: (address: any) => any;
+      resolveDynamicCapability?: (address: CapabilityAddress) => any;
+      runScript?: (args: { code: string }) => Promise<unknown>;
       builtinCapabilities?: ProvideArgs[];
     },
   ) {
     super(args);
-    this.#resolveAddress =
-      args.resolveAddress ??
+    this.#resolveDynamicCapability =
+      args.resolveDynamicCapability ??
       (() => {
-        throw new Error("this context has no resolver configured for sturdy addresses");
+        throw new Error("this context has no resolver configured for dynamic addresses");
+      });
+    this.#runScript =
+      args.runScript ??
+      (() => {
+        throw new Error("this context has no script runner configured");
       });
     // Normalize each built-in into a CapabilityRecord, stashing any live one's
     // stub in the bridge — exactly what provideCapability does for a live provide.
@@ -314,8 +318,10 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
   // The fold: one pure projection of an event into the next capability table.
   // Returning the same state for events we do not consume is the identity case
   // (the codemode bracket events fall through here — they are records, not state).
-  protected override reduce(args: Parameters<StreamProcessor<typeof ItxContract>["reduce"]>[0]) {
-    const { event, state } = args as { event: any; state: any };
+  protected override reduce({
+    event,
+    state,
+  }: Parameters<StreamProcessor<typeof ItxContract>["reduce"]>[0]) {
     switch (event.type) {
       case "events.iterate.com/itx/capability-provided": {
         const { path, address, instructions, types } = event.payload;
@@ -375,7 +381,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
                   ...execution,
                   error: typeof error === "string" ? error : null,
                   result,
-                  status: "completed",
+                  status: "completed" as const,
                 }
               : execution,
           ),
@@ -392,16 +398,13 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
   // so the write is immediately readable (read-your-writes).
   async provideCapability({ path, capability, instructions, types }: ProvideArgs) {
     this.#assertUserCapabilityPath(path);
-    const address = isCapabilityAddress(capability) ? capability : null;
-    // Trusted topology is not a public capability-address vocabulary. A user
-    // provide naming a Durable Object or loopback entrypoint would otherwise let
-    // caller data choose platform reach by name. Host built-ins are live runtime
-    // targets instead; live caps and dynamic workers remain providable.
-    if (address?.type === "worker-entrypoint" || address?.type === "durable-object") {
+    const providedAddressType = capabilityAddressType(capability);
+    if (providedAddressType && !CAPABILITY_ADDRESS_TYPES.has(providedAddressType)) {
       throw new Error(
-        `addresses that resolve trusted namespaces ("${address.type}") can only be host built-ins`,
+        `unsupported capability address type "${providedAddressType}" (public durable capabilities are dynamic-worker or dynamic-durable-object)`,
       );
     }
+    const address = isCapabilityAddress(capability) ? capability : null;
     if (address === null) {
       this.#setLiveCapability(this.#liveCapabilities, path, capability);
     } else {
@@ -437,6 +440,10 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
     };
   }
 
+  async runScript(args: { code: string }): Promise<unknown> {
+    return await this.#runScript(args);
+  }
+
   // Every dotted Cap'n Web call arrives as invokeCapability({ path, args }).
   // Single-segment root paths that name the ITX control surface are handled here
   // first, so pathInvokerToProxy does not need to know those names. They are reserved:
@@ -462,7 +469,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
         case "describe":
           return await this.describe();
         case "runScript":
-          throw new Error('"runScript" is a host-owned ITX control');
+          return await this.runScript(args[0] as { code: string });
       }
     }
 
@@ -474,12 +481,12 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
     throw new Error(`no capability "${path.join(".")}"`);
   }
 
-  // Resolve one capability list — folded rows or built-ins. Sturdy rows are
+  // Resolve one capability list — folded rows or built-ins. Dynamic rows are
   // resolved and property-replayed; live rows use their retained invoker.
   #resolveLocal(
     caps: CapabilityRecord[],
     path: string[],
-    liveCapabilities: Map<string, LiveInvoker>,
+    liveCapabilities: Map<string, LiveCapability>,
   ): ((args: unknown[]) => unknown) | null {
     const hit = resolveLongestPrefix(caps, path);
     if (!hit) return null;
@@ -494,7 +501,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
         record.address.type === "dynamic-durable-object"
           ? { ...record.address, mountPath: record.path }
           : record.address;
-      const target = this.#resolveAddress(address);
+      const target = this.#resolveDynamicCapability(address);
       return (args) => replayPath(target, rest, args);
     }
     const target = liveCapabilities.get(bridgeKey(record.path));
@@ -503,30 +510,30 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
         `capability "${record.path.join(".")}" is offline (live provider disconnected)`,
       );
     }
-    return (args) => target(rest, args);
+    return (args) => target.invoke(rest, args);
   }
 
   #assertUserCapabilityPath(path: string[]) {
     assertCapabilityPath(path);
     const control = path[0];
-    if (control && RESERVED_CONTROL_ROOTS.has(control)) {
+    if (control && ITX_CONTROL_NAMES.has(control)) {
       throw new Error(`reserved ITX control root "${control}" cannot be provided as a capability`);
     }
   }
 
   #setLiveCapability(
-    liveCapabilities: Map<string, LiveInvoker>,
+    liveCapabilities: Map<string, LiveCapability>,
     path: string[],
     capability: unknown,
   ) {
     const key = bridgeKey(path);
-    liveCapabilities.get(key)?.[Symbol.dispose]?.();
-    liveCapabilities.set(key, liveInvoker(capability));
+    liveCapabilities.get(key)?.dispose();
+    liveCapabilities.set(key, liveCapability(capability));
   }
 
-  #deleteLiveCapability(liveCapabilities: Map<string, LiveInvoker>, path: string[]) {
+  #deleteLiveCapability(liveCapabilities: Map<string, LiveCapability>, path: string[]) {
     const key = bridgeKey(path);
-    liveCapabilities.get(key)?.[Symbol.dispose]?.();
+    liveCapabilities.get(key)?.dispose();
     liveCapabilities.delete(key);
   }
 }

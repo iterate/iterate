@@ -18,18 +18,10 @@
 import WebSocket from "ws";
 import { newWebSocketRpcSession } from "capnweb";
 
-// Mirrors the server's address types (itx.ts). Address-shaped values are
-// forwarded as plain data; everything else is wrapped as a live provider. The
-// trusted resolver types (`durable-object`, `worker-entrypoint`) are included so a
-// provide naming them reaches the server's guard and gets a clear rejection,
-// rather than being silently turned into a broken live cap.
-const CAPABILITY_ADDRESS_TYPES = new Set([
-  "rpc",
-  "dynamic-worker",
-  "dynamic-durable-object",
-  "durable-object",
-  "worker-entrypoint",
-]);
+// Mirrors the public durable address types in itx.ts. Address-shaped values are
+// forwarded as plain data; everything else is wrapped as a live provider. Host
+// topology is deliberately not a client-providable address vocabulary.
+const CAPABILITY_ADDRESS_TYPES = new Set(["dynamic-worker", "dynamic-durable-object"]);
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> => {
   if (!value || typeof value !== "object") return false;

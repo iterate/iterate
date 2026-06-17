@@ -1,14 +1,13 @@
 // auth.ts — the access boundary, and the ONLY authority decision in the system.
 //
 // The whole model is one line: you are either an admin (`access: "all"`, may
-// reach anything, nobody cares) OR you hold a list of project ids and may reach
-// exactly those. There is no per-capability gating anywhere downstream — once
-// the connect door lets you into a project context, everything inside it is
-// confined BY CONSTRUCTION: built-ins name only that project, agents reach their
-// project through an explicit host-owned member, and user-provided
-// capabilities cannot name another project's Durable Object (server/itx reject
-// trusted address types). So authority lives here, at the door, and nowhere
-// else.
+// reach any project) OR you hold a list of project ids and may reach exactly
+// those. There is no per-capability gating anywhere downstream — once the
+// connect door lets you into a project context, everything inside it is confined
+// BY CONSTRUCTION: host capabilities name only that project, agents reach their
+// project through an explicit host-owned member, and public durable addresses
+// are only dynamic worker/facet descriptions. So authority lives here, at the
+// door, and nowhere else.
 //
 // `access` is intentionally the SAME shape apps/os linearizes a principal to
 // (`ProjectAccess = "all" | string[]`, see apps/os/src/itx/access.ts) — this is a

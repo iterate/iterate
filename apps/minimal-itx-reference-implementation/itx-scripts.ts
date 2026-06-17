@@ -1,10 +1,10 @@
-// Reusable capability sources for the e2e suites — the sturdy (plain-data)
+// Reusable capability sources for the e2e suites — the plain-data dynamic
 // capability addresses the concept tests and the catalogue examples provide.
 // Mirrors apps/os/src/itx/e2e/itx-scripts.ts: these are serializable address
 // values, so a Node test, the CLI, a worker, OR a browser tab can all
 // provideCapability them over the same naked Cap'n Web stub.
 
-/** A dynamic worker: one method, `add(a, b)`. The smallest sturdy capability. */
+/** A dynamic worker: one method, `add(a, b)`. The smallest durable capability. */
 export const dynamicCalc = {
   type: "dynamic-worker",
   source: {
@@ -26,7 +26,7 @@ export const dynamicCalc = {
 /** A dynamic Durable Object facet sourced from the fake repo's counter.js. */
 export const repoCounter = {
   type: "dynamic-durable-object",
-  source: { type: "repo", repo: "prj_ref:/repos/project", commit: "latest", path: "counter.js" },
+  source: { type: "repo", path: "counter.js" },
   className: "CounterDurableObject",
 };
 

@@ -1,14 +1,14 @@
 // The Node-side e2e suite. Run a worker first (`npm run dev`, or point ITX_BASE
 // / APP_CONFIG_BASE_URL at a deployed one), then `npm test`.
 //
-// Drives every core itx concept through a NAKED Cap'n Web stub over a real
+// Drives every core itx concept through a bare Cap'n Web stub over a real
 // WebSocket to real workerd + a real Stream Durable Object, then runs the
 // catalogue (examples.ts) across every server-side runtime. The browser leg of
 // the matrix is itx.browser.test.ts (vitest's browser project).
 //
 // Each capability test uses a FRESH agent coordinate (prj_ref:/agents/<rand>)
 // so durable state never bleeds between runs. Project-scoped assertions use
-// sturdy/replace-safe provides on prj_ref:/.
+// durable/replace-safe provides on prj_ref:/.
 
 import { describe, expect, it } from "vitest";
 import { itxHttpUrl, withItx } from "./client.ts";
@@ -103,7 +103,7 @@ describe("itx reference implementation", () => {
   });
 
   it("3. dynamic-worker: resolved + run via the Worker Loader", async () => {
-    using itx = agentItx("sturdy");
+    using itx = agentItx("dynamic");
     await itx.provideCapability({ path: ["calc"], capability: dynamicCalc });
     expect(await itx.calc.add(40, 2)).toBe(42);
 
@@ -125,7 +125,7 @@ describe("itx reference implementation", () => {
   });
 
   it("5. an agent reaches project capabilities through its explicit project handle", async () => {
-    // The project provides a sturdy cap (durable, replace-safe across runs).
+    // The project provides a durable dynamic cap (replace-safe across runs).
     {
       using proj = projectItx();
       await proj.provideCapability({ path: ["calc"], capability: dynamicCalc });
@@ -135,9 +135,7 @@ describe("itx reference implementation", () => {
       using agent = agentItx("explicit-project");
       expect(await agent.project.calc.add(2, 3)).toBe(5);
       expect((await agent.whoami()).startsWith("agent ")).toBe(true);
-      await expectRejects(() => agent.calc.add(2, 3)).toThrow(
-        /capability path "calc\.add" hit undefined/,
-      );
+      await expectRejects(() => agent.calc.add(2, 3)).toThrow(/no host capability "calc"/);
       // A local cap can use the same name without changing the project.
       await agent.provideCapability({
         path: ["calc"],
@@ -481,9 +479,7 @@ describe("itx reference implementation", () => {
     expect(calls).toEqual(["old", "new"]);
 
     await itx.revokeCapability({ path: ["switchable"] });
-    await expectRejects(() => itx.switchable()).toThrow(
-      /capability path "switchable" did not resolve to a function/,
-    );
+    await expectRejects(() => itx.switchable()).toThrow(/no host capability "switchable"/);
     expect(calls).toEqual(["old", "new"]);
   });
 

@@ -13,19 +13,50 @@
 //                        NOT durable, so the fold records it with `address: null`
 //                        and the actual stub lives in an in-memory bridge beside
 //                        the fold (see itx.ts).
-//   • a STURDY address — plain serializable data describing how to re-make the
-//                        capability (the host resolves it back into a callable). This
-//                        IS durable, so the fold stores the address itself.
+//   • a durable dynamic address
+//                      — plain serializable data describing dynamic code the host
+//                        can run as a worker or Durable Object facet. This IS
+//                        durable, so the fold stores the address itself.
 //
-// `address === null` ⟺ live; `address !== null` ⟺ sturdy. One field, one
-// discriminator — there is no separate `kind` column to keep in sync.
+// `address === null` means live; `address !== null` means a durable dynamic
+// address. One field, one discriminator — there is no separate `kind` column to
+// keep in sync.
 
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
 
-/** A sturdy capability address — plain data; the host turns it back into a
- *  callable. `type` selects the resolver; the rest is resolver-specific. */
-export const CapabilityAddress = z.looseObject({ type: z.string() });
+const DynamicWorkerSource = z.discriminatedUnion("type", [
+  z.looseObject({
+    compatibilityDate: z.string().optional(),
+    mainModule: z.string(),
+    modules: z.record(z.string(), z.string()),
+    type: z.literal("inline"),
+  }),
+  z.looseObject({
+    compatibilityDate: z.string().optional(),
+    path: z.string(),
+    type: z.literal("repo"),
+  }),
+]);
+export type DynamicWorkerSource = z.infer<typeof DynamicWorkerSource>;
+
+/** A public durable capability address — plain data for dynamic code the host
+ *  can run inside the current Project/Agent host. Host topology is not an
+ *  address vocabulary: there is no user-providable Durable Object or loopback
+ *  ref here. */
+export const CapabilityAddress = z.discriminatedUnion("type", [
+  z.looseObject({
+    entrypoint: z.string(),
+    props: z.record(z.string(), z.unknown()).optional(),
+    source: DynamicWorkerSource,
+    type: z.literal("dynamic-worker"),
+  }),
+  z.looseObject({
+    className: z.string(),
+    source: DynamicWorkerSource,
+    type: z.literal("dynamic-durable-object"),
+  }),
+]);
 export type CapabilityAddress = z.infer<typeof CapabilityAddress>;
 
 /** One row of the capability table: the path it is mounted at, its address
@@ -34,7 +65,7 @@ export type CapabilityAddress = z.infer<typeof CapabilityAddress>;
  *  one capability-descriptor type, everywhere. */
 export const CapabilityRecord = z.object({
   path: z.array(z.string()),
-  // null ⟺ a live stub (in the in-memory bridge); non-null ⟺ a sturdy address.
+  // null = a live stub (in the in-memory bridge); non-null = a dynamic address.
   address: CapabilityAddress.nullable().default(null),
   // What the capability is for — for an agent or a human reading the table.
   instructions: z.string().nullable().default(null),
@@ -71,7 +102,7 @@ export const ItxContract = defineProcessorContract({
   events: {
     "events.iterate.com/itx/capability-provided": {
       description:
-        "A capability was provided at a path. THE write: the fold projects it into the table. A live provide records `address: null` (its stub stays an in-memory bridge entry); a sturdy provide records the address.",
+        "A capability was provided at a path. THE write: the fold projects it into the table. A live provide records `address: null` (its stub stays an in-memory bridge entry); a dynamic provide records the address.",
       payloadSchema: z.looseObject({
         path: z.array(z.string()),
         address: CapabilityAddress.nullable().optional(),
