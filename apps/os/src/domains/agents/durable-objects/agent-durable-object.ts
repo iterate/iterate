@@ -1,4 +1,3 @@
-import OpenAI from "openai";
 import { DurableObject } from "cloudflare:workers";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import type { StreamEvent } from "@iterate-com/shared/streams/stream-event";
@@ -118,8 +117,7 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
     }
     return new OpenAiWsProcessor({
       ...deps,
-      openResponsesWebSocket: async () =>
-        createOpenAiResponsesWebSocketClient(new OpenAI({ apiKey })),
+      openResponsesWebSocket: async () => createOpenAiResponsesWebSocketClient(apiKey),
       readStreamEvents: () => this.readSubscribedStreamEvents("openai-ws"),
     });
   });

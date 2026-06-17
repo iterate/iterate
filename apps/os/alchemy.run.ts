@@ -479,7 +479,7 @@ const [
   }),
   osWorker("agent", {
     entrypoint: "./src/workers/agent.ts",
-    // openai needs Node APIs.
+    // Agent hosts share the generic loopback export surface.
     compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"],
     bindings: loopbackUnionBindings,
   }),
