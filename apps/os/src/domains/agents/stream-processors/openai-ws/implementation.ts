@@ -23,6 +23,7 @@
 // `#reconcileDanglingStartedRequests`.
 
 import { z } from "zod";
+import type { ResponseInput, ResponsesClientEvent } from "openai/resources/responses/responses";
 import {
   assertNever,
   buildProcessorIdempotencyKey,
@@ -81,7 +82,7 @@ export type OpenAiWsProcessorDeps = {
 export type OpenAiResponsesWebSocket = {
   readonly url: URL | string;
   readonly socket: { readonly readyState: number };
-  send(event: JsonValue): void;
+  sendResponseCreate(event: ResponsesClientEvent): void;
   stream(): AsyncIterableIterator<OpenAiResponsesWebSocketStreamMessage>;
   close(props?: { code: number; reason: string }): void;
 };
@@ -476,41 +477,15 @@ export class OpenAiWsProcessor extends StreamProcessor<
       events: await this.deps.readStreamEvents(),
       llmRequestId,
     });
-    const systemMessages = body.messages.filter((message) => message.role === "system");
-    const inputMessages = body.messages.filter((message) => message.role !== "system");
     const previousResponseId = this.#previousResponseId;
-    /**
-     * `store: false` keeps this out of OpenAI's stored response retention, but
-     * WebSocket mode can still chain the immediate conversation by carrying
-     * `previous_response_id` from the prior completed response. The rebuilt
-     * chat request remains the source of truth for what we explicitly send.
-     */
-    const requestMessage = toJsonValue({
-      type: "response.create",
+    const requestMessage = buildResponsesClientEvent({
+      messages: body.messages,
       model: args.state.model,
-      instructions:
-        systemMessages.map((message) => message.content).join("\n\n") ||
-        "You are a helpful assistant.",
-      input: inputMessages.map((message) => ({
-        type: "message",
-        role: message.role,
-        content: [
-          {
-            type: message.role === "assistant" ? "output_text" : "input_text",
-            text: message.content,
-          },
-        ],
-      })),
-      store: false,
-      // Reasoning models stream `response.reasoning_summary_text.delta`
-      // frames when summaries are requested; those land on the stream like
-      // every other frame so the UI can show thinking as it happens.
-      ...(supportsReasoningSummaries(args.state.model) ? { reasoning: { summary: "auto" } } : {}),
-      ...(previousResponseId == null ? {} : { previous_response_id: previousResponseId }),
+      previousResponseId,
     });
     const sendSequence = connection.sendSequence++;
     try {
-      connection.client.send(requestMessage);
+      connection.client.sendResponseCreate(requestMessage);
     } catch (error) {
       this.#markConnectionClosed(connection);
       const durationMs = Date.now() - startedAt;
@@ -571,7 +546,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
         connectionId: connection.id,
         llmRequestId,
         sequence: sendSequence,
-        message: requestMessage,
+        message: toJsonValue(requestMessage),
       },
     });
 
@@ -752,6 +727,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
       }
 
       if (parsed.data.type === "response.failed" || parsed.data.type === "error") {
+        this.#previousResponseId = null;
         const rawResponse = toJsonValue(message);
         const durationMs = Date.now() - startedAt;
         const failure = {
@@ -868,6 +844,59 @@ export class OpenAiWsProcessor extends StreamProcessor<
  */
 function supportsReasoningSummaries(model: string) {
   return /^(gpt-5|o[1-9]|codex)/.test(model);
+}
+
+function buildResponsesClientEvent(args: {
+  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+  model: string;
+  previousResponseId: string | null;
+}): ResponsesClientEvent {
+  const systemMessages = args.messages.filter((message) => message.role === "system");
+  const inputMessages = args.messages.filter(isResponsesInputMessage);
+  const input =
+    args.previousResponseId == null
+      ? toResponsesInput(inputMessages)
+      : toResponsesInput(newInputMessagesForContinuation(inputMessages));
+
+  return {
+    type: "response.create",
+    model: args.model as ResponsesClientEvent["model"],
+    instructions:
+      systemMessages.map((message) => message.content).join("\n\n") ||
+      "You are a helpful assistant.",
+    input,
+    store: false,
+    // Reasoning models stream `response.reasoning_summary_text.delta`
+    // frames when summaries are requested; those land on the stream like
+    // every other frame so the UI can show thinking as it happens.
+    ...(supportsReasoningSummaries(args.model) ? { reasoning: { summary: "auto" } } : {}),
+    ...(args.previousResponseId == null ? {} : { previous_response_id: args.previousResponseId }),
+  };
+}
+
+function toResponsesInput(messages: Array<{ role: "user" | "assistant"; content: string }>) {
+  return messages.map((message) => ({
+    type: "message" as const,
+    role: message.role,
+    content: message.content,
+  })) satisfies ResponseInput;
+}
+
+function isResponsesInputMessage(message: {
+  role: "system" | "user" | "assistant";
+  content: string;
+}): message is {
+  role: "user" | "assistant";
+  content: string;
+} {
+  return message.role !== "system";
+}
+
+function newInputMessagesForContinuation(
+  messages: Array<{ role: "user" | "assistant"; content: string }>,
+) {
+  const lastAssistantIndex = messages.findLastIndex((message) => message.role === "assistant");
+  return lastAssistantIndex === -1 ? messages : messages.slice(lastAssistantIndex + 1);
 }
 
 async function waitForOpenAiResponsesSocketOpen(

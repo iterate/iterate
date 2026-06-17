@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import type { ResponsesClientEvent } from "openai/resources/responses/responses";
 import { getInitialProcessorState } from "@iterate-com/shared/streams/stream-processors";
 import type { StreamEvent, StreamEventInput } from "@iterate-com/shared/streams/stream-event";
 import { OpenAiWsProcessorContract, type OpenAiWsState } from "./contract.ts";
@@ -69,6 +70,7 @@ describe("OpenAiWsProcessor", () => {
     ).toHaveLength(2);
     expect(sockets[0]?.sent[1]).toMatchObject({
       previous_response_id: "resp_first",
+      input: [],
     });
     expect(eventTypes(appended)).toContain("events.iterate.com/agent/output-added");
     expect(eventTypes(appended)).toContain("events.iterate.com/agent/llm-request-completed");
@@ -131,9 +133,50 @@ describe("OpenAiWsProcessor", () => {
         {
           type: "message",
           role: "user",
-          content: [{ type: "input_text", text: "hello" }],
+          content: "hello",
         },
       ],
+    });
+  });
+
+  it("continues a warm WebSocket with only new input after the previous assistant output", async () => {
+    const { stream, appended } = memoryStream();
+    const sockets: FakeOpenAiResponsesWebSocket[] = [];
+    const processor = newProcessor({
+      stream,
+      appended,
+      sockets,
+      snapshot: { offset: 0, state: testState() },
+      readStreamEvents: async () => [
+        inputAddedEvent({ offset: 2, content: "first user turn" }),
+        llmRequestRequestedEvent({ offset: 11 }),
+        outputAddedEvent({ offset: 12, content: "first assistant turn", llmRequestId: 11 }),
+        inputAddedEvent({ offset: 21, content: "second user turn" }),
+        llmRequestRequestedEvent({ offset: 22 }),
+      ],
+    });
+
+    const firstRequest = processor.ingest({
+      events: [llmRequestRequestedEvent({ offset: 11 })],
+      streamMaxOffset: 11,
+    });
+    await waitFor(() => sockets.length === 1);
+    sockets[0]?.open();
+    await waitFor(() => sockets[0]?.sent.length === 1);
+    completeResponse(sockets[0], { delta: "first assistant turn", responseId: "resp_first" });
+    await firstRequest;
+
+    const secondRequest = processor.ingest({
+      events: [llmRequestRequestedEvent({ offset: 22 })],
+      streamMaxOffset: 22,
+    });
+    await waitFor(() => sockets[0]?.sent.length === 2);
+    completeResponse(sockets[0], { delta: "second assistant turn", responseId: "resp_second" });
+    await secondRequest;
+
+    expect(sockets[0]?.sent[1]).toMatchObject({
+      previous_response_id: "resp_first",
+      input: [{ type: "message", role: "user", content: "second user turn" }],
     });
   });
 
@@ -248,6 +291,7 @@ describe("OpenAiWsProcessor", () => {
     await waitFor(() => sockets[0]?.sent.length === 2);
     expect(sockets[0]?.sent[1]).toMatchObject({
       previous_response_id: "resp_previous",
+      input: [],
     });
 
     await processor.ingest({
@@ -606,6 +650,19 @@ function inputAddedEvent(args: { offset: number; content: string }): StreamEvent
   };
 }
 
+function outputAddedEvent(args: {
+  offset: number;
+  content: string;
+  llmRequestId: number;
+}): StreamEvent {
+  return {
+    type: "events.iterate.com/agent/output-added",
+    payload: { content: args.content, llmRequestId: args.llmRequestId },
+    offset: args.offset,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+}
+
 function configUpdatedEvent(args: { offset: number; model: string }): StreamEvent {
   return {
     type: "events.iterate.com/openai-ws/config-updated",
@@ -692,13 +749,13 @@ async function waitFor(condition: () => boolean) {
 class FakeOpenAiResponsesWebSocket implements OpenAiResponsesWebSocket {
   readonly url = new URL("wss://api.openai.test/v1/responses");
   readonly socket = { readyState: 0 };
-  readonly sent: JsonValue[] = [];
+  readonly sent: ResponsesClientEvent[] = [];
   sendError: Error | undefined;
   closed = false;
   #messages: OpenAiResponsesWebSocketStreamMessage[] = [{ type: "connecting" }];
   #waiters: Array<(result: IteratorResult<OpenAiResponsesWebSocketStreamMessage>) => void> = [];
 
-  send(event: JsonValue): void {
+  sendResponseCreate(event: ResponsesClientEvent): void {
     if (this.sendError != null) throw this.sendError;
     this.sent.push(event);
   }

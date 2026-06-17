@@ -5,8 +5,6 @@ import type {
   OpenAiResponsesWebSocketStreamMessage,
 } from "./implementation.ts";
 
-type JsonValue = z.infer<ReturnType<typeof z.json>>;
-
 const OpenAiResponsesWebSocketUrl = "wss://api.openai.com/v1/responses";
 
 export function createOpenAiResponsesWebSocketClient(apiKey: string): OpenAiResponsesWebSocket {
@@ -29,10 +27,9 @@ class CloudflareResponsesWebSocket implements OpenAiResponsesWebSocket {
     return { readyState: this.#socket?.readyState ?? this.#readyState };
   }
 
-  send(event: JsonValue): void {
+  sendResponseCreate(event: ResponsesClientEvent): void {
     if (this.#socket == null) throw new Error("OpenAI WebSocket is not open.");
-    const clientEvent = event as unknown as ResponsesClientEvent;
-    this.#socket.send(JSON.stringify(clientEvent));
+    this.#socket.send(JSON.stringify(event));
   }
 
   stream(): AsyncIterableIterator<OpenAiResponsesWebSocketStreamMessage> {

@@ -25,9 +25,11 @@ describe("createOpenAiResponsesWebSocketClient", () => {
       },
     });
 
-    client.send({ type: "response.create", model: "gpt-test" });
+    client.sendResponseCreate({ type: "response.create", model: "gpt-5.5" });
 
-    expect(socket.sent).toEqual([JSON.stringify({ type: "response.create", model: "gpt-test" })]);
+    expect(socket.sent.map((frame) => JSON.parse(frame))).toEqual([
+      { type: "response.create", model: "gpt-5.5" },
+    ]);
   });
 
   it("streams parsed messages, raw frames, and close events", async () => {
