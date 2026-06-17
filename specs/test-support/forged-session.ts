@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { BrowserContext, Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import {
   ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM,
   ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM,
@@ -73,11 +73,24 @@ export async function createProjectFixture(
       ],
     });
 
-    await addIterateSessionCookie({
-      baseUrl: input.baseURL,
-      context: input.page.context(),
-      session,
-    });
+    await input.page.context().addCookies([
+      {
+        expires: Math.floor(session.expiresAtMs / 1000),
+        httpOnly: true,
+        name: "iterate_session",
+        sameSite: "Lax",
+        secure: new URL(input.baseURL).protocol === "https:",
+        url: input.baseURL,
+        value: encodeURIComponent(
+          JSON.stringify({
+            accessToken: session.accessToken,
+            accessTokenExpiresAt: session.expiresAtMs,
+            idToken: session.idToken,
+            tokenType: "bearer",
+          }),
+        ),
+      },
+    ]);
 
     return {
       organization,
@@ -165,31 +178,6 @@ export async function mintIterateSession(input: {
     expiresAtMs: expiresAtSeconds * 1000,
     idToken,
   };
-}
-
-export async function addIterateSessionCookie(input: {
-  baseUrl: string;
-  context: BrowserContext;
-  session: MintedIterateSession;
-}) {
-  await input.context.addCookies([
-    {
-      expires: Math.floor(input.session.expiresAtMs / 1000),
-      httpOnly: true,
-      name: "iterate_session",
-      sameSite: "Lax",
-      secure: new URL(input.baseUrl).protocol === "https:",
-      url: input.baseUrl,
-      value: encodeURIComponent(
-        JSON.stringify({
-          accessToken: input.session.accessToken,
-          accessTokenExpiresAt: input.session.expiresAtMs,
-          idToken: input.session.idToken,
-          tokenType: "bearer",
-        }),
-      ),
-    },
-  ]);
 }
 
 async function resolveOsPlaywrightAuthConfig(baseUrl: string): Promise<OsPlaywrightAuthConfig> {

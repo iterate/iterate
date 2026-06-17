@@ -71,6 +71,7 @@ export function ItxRepl({
     code,
     path: REPL_SOURCE_PATH,
   });
+  const runButtonLabel = typeScriptExtensions.loading ? "Loading..." : "Run";
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -141,16 +142,21 @@ export function ItxRepl({
               </div>
             ))}
             <div className="flex flex-col gap-2 border-l-2 border-primary/50 py-2 pr-3 pl-3">
-              <ReplPromptRow status={status}>
-                <Button disabled={!canRun} onClick={onRun} size="sm">
+              <ReplPromptRow status={typeScriptExtensions.loading ? null : status}>
+                <Button
+                  data-spinner={typeScriptExtensions.loading ? "true" : undefined}
+                  disabled={typeScriptExtensions.loading || !canRun}
+                  onClick={onRun}
+                  size="sm"
+                >
                   <Play data-icon="inline-start" />
-                  Run
+                  {runButtonLabel}
                 </Button>
               </ReplPromptRow>
               <SourceCodeBlock
                 code={code}
                 className={`${replCodeBlockClassName} min-h-24`}
-                codeMirrorExtensions={typeScriptExtensions}
+                codeMirrorExtensions={typeScriptExtensions.extensions}
                 editable
                 language="typescript"
                 onChange={onChangeCode}
@@ -223,6 +229,7 @@ function useReplTypeScriptExtensions(input: { code: string; path: string }) {
   const codeRef = useRef(input.code);
   codeRef.current = input.code;
   const [extensions, setExtensions] = useState<readonly SourceCodeBlockExtension[]>([]);
+  const [loading, setLoading] = useState(Boolean(loadTypeScriptExtensionModules));
 
   useEffect(() => {
     let innerWorker: Worker | null = null;
@@ -230,7 +237,10 @@ function useReplTypeScriptExtensions(input: { code: string; path: string }) {
     let disposed = false;
 
     async function initializeTypeScriptExtensions() {
-      if (!loadTypeScriptExtensionModules) return;
+      if (!loadTypeScriptExtensionModules) {
+        setLoading(false);
+        return;
+      }
       const [autocompleteModule, comlinkModule, typeScriptExtensionsModule] =
         await loadTypeScriptExtensionModules();
 
@@ -268,11 +278,13 @@ function useReplTypeScriptExtensions(input: { code: string; path: string }) {
         }),
         tsHoverWorker(),
       ]);
+      setLoading(false);
     }
 
     void initializeTypeScriptExtensions().catch((error: unknown) => {
       if (disposed) return;
       console.error("[itx-repl] Failed to initialize TypeScript worker", error);
+      setLoading(false);
     });
 
     return () => {
@@ -282,7 +294,7 @@ function useReplTypeScriptExtensions(input: { code: string; path: string }) {
     };
   }, [input.path]);
 
-  return useMemo(() => extensions, [extensions]);
+  return useMemo(() => ({ extensions, loading }), [extensions, loading]);
 }
 
 function ReplPromptRow(input: { children?: ReactNode; status: string | null }) {

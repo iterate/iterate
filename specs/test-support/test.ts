@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { expect, test as base, type Page } from "@playwright/test";
+import { test as base, type Page } from "@playwright/test";
 import {
   addPlugins,
   hydrationWaiter,
@@ -11,8 +11,6 @@ import {
 import { REPO_ROOT, waitForLocalOsBaseUrl } from "./local-dev.ts";
 
 const execFileAsync = promisify(execFile);
-
-export { expect };
 
 export const test = base.extend({
   baseURL: async ({ browserName: _browserName }, use) => {
@@ -51,15 +49,14 @@ export async function signInWithLocalAuth(page: Page) {
 
   await page.context().clearCookies();
   await page.goto("/api/iterate-auth/login?return_to=/projects");
-  await expect(page.getByRole("button", { name: "Continue with email" })).toBeEnabled();
   await page.getByRole("button", { name: "Continue with email" }).click();
   await page.getByTestId("email-input").fill(email);
   await page.getByTestId("email-submit-button").click();
   await page.getByTestId("email-otp-input").fill("424242");
   await page.getByTestId("email-verify-button").click();
   await continueOAuthProjectAccess(page);
-  await expect(page.getByRole("heading", { exact: true, name: "Projects" })).toBeVisible();
-  await expect(page.getByText(email)).toBeVisible();
+  await page.getByRole("heading", { exact: true, name: "Projects" }).waitFor();
+  await page.getByText(email).waitFor();
 
   return seed;
 }
@@ -143,12 +140,9 @@ async function seedLocalAuth(input: {
 
 async function continueOAuthProjectAccess(page: Page) {
   const projectAccessContinue = page.getByRole("button", { exact: true, name: "Continue" });
-  if (await projectAccessContinue.isVisible({ timeout: 5_000 }).catch(() => false)) {
-    await expect(projectAccessContinue).toBeEnabled();
+  if (await projectAccessContinue.isVisible().catch(() => false)) {
     await projectAccessContinue.click();
   }
 
-  const allowAccess = page.getByRole("button", { name: "Allow access" });
-  await expect(allowAccess).toBeEnabled();
-  await allowAccess.click();
+  await page.getByRole("button", { name: "Allow access" }).click();
 }
