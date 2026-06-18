@@ -22,7 +22,6 @@ import {
   type CloudflareAiBinding,
 } from "~/domains/agents/stream-processors/cloudflare-ai/implementation.ts";
 import { OpenAiWsProcessor } from "~/domains/agents/stream-processors/openai-ws/implementation.ts";
-import { createOpenAiResponsesWebSocketClient } from "~/domains/agents/stream-processors/openai-ws/cloudflare-responses-websocket.ts";
 import {
   getInitializedStreamStub,
   getStreamDurableObjectName,
@@ -117,7 +116,7 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
     }
     return new OpenAiWsProcessor({
       ...deps,
-      openResponsesWebSocket: () => createOpenAiResponsesWebSocketClient(apiKey),
+      apiKey,
       readStreamEvents: () => this.readSubscribedStreamEvents("openai-ws"),
     });
   });

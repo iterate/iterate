@@ -36,6 +36,7 @@ import {
   isAgentLlmRequestStillCurrent,
   parseLlmRequestRequestedEventAt,
 } from "../llm-request-helpers.ts";
+import { createOpenAiResponsesWebSocketClient } from "./cloudflare-responses-websocket.ts";
 import { OpenAiWsProcessorContract, type OpenAiWsState } from "./contract.ts";
 import {
   StreamProcessor,
@@ -76,7 +77,8 @@ const OpenAiResponsesStreamMessage = z.looseObject({
 export type OpenAiWsProcessorDeps = StreamProcessorDeps<
   OpenAiWsProcessorContract,
   {
-    openResponsesWebSocket(): Promise<OpenAiResponsesWebSocket>;
+    apiKey: string;
+    createResponsesWebSocketClient?: (apiKey: string) => Promise<OpenAiResponsesWebSocket>;
     /**
      * Reads the full committed history of the agent's stream so the processor
      * can confirm the request is still current before appending agent output.
@@ -353,7 +355,9 @@ export class OpenAiWsProcessor extends StreamProcessor<
     }
 
     const connectionId = `openai_ws_${sourceEvent.offset}_${crypto.randomUUID()}`;
-    const client = await this.deps.openResponsesWebSocket();
+    const client = await (
+      this.deps.createResponsesWebSocketClient ?? createOpenAiResponsesWebSocketClient
+    )(this.deps.apiKey);
     const iterator = client.messages();
 
     const connection: OpenAiWsConnection = {

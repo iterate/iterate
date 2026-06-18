@@ -611,7 +611,8 @@ function newProcessor(args: {
   return new OpenAiWsProcessor({
     stream: args.stream,
     readState: () => args.snapshot,
-    openResponsesWebSocket: async () => {
+    apiKey: "sk-test",
+    createResponsesWebSocketClient: async () => {
       const socket = new FakeOpenAiResponsesWebSocket();
       args.sockets.push(socket);
       return socket;
