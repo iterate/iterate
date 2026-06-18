@@ -2,7 +2,7 @@
 state: planned
 priority: medium
 size: large
-dependsOn: ["rpc.md"]
+dependsOn: []
 ---
 
 # Tool providers
