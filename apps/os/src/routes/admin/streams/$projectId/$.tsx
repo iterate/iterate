@@ -4,6 +4,7 @@ import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/t
 import { StreamExplorerDetail } from "~/components/stream-explorer.tsx";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/domains/durable-object-names.ts";
 import { useItx } from "~/itx/itx-react.tsx";
+import type { ItxStreamForBrowserRuntime } from "~/lib/itx-stream-browser-client.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 
 export const Route = createFileRoute("/admin/streams/$projectId/$")({
@@ -54,7 +55,8 @@ function AdminStreamDetailPage() {
             {children}
           </Link>
         ),
-        streamSource: (path) => itx.streams.project(streamProjectId).get(path),
+        streamSource: (path) =>
+          itx.streams.project(streamProjectId).get(path) as unknown as ItxStreamForBrowserRuntime,
       }}
     />
   );

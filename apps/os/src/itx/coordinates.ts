@@ -24,7 +24,7 @@ import { StreamPath } from "@iterate-com/shared/streams/types";
 import { typeid } from "@iterate-com/shared/typeid";
 import { ItxContract, ITX_EVENT_TYPES, type CapabilityAddress } from "./itx.ts";
 import { durableObjectProcessorSubscriber } from "~/domains/streams/engine/shared/callable-subscriber.ts";
-import type { StreamProcessorStream } from "~/domains/streams/engine/stream-processor.ts";
+import type { StreamRpc } from "~/domains/streams/engine/types.ts";
 import {
   getInitializedStreamStub,
   getStreamDurableObjectName,
@@ -159,11 +159,11 @@ export function dialCodeContext(input: {
 // ---- the context's stream --------------------------------------------------------
 
 /** The context's stream as the core consumes it. */
-export function contextStream(env: Env, coordinate: ItxCoordinate): StreamProcessorStream {
+export function contextStream(env: Env, coordinate: ItxCoordinate): StreamRpc {
   const path = StreamPath.parse(coordinate.path);
   return (env.STREAM as unknown as StreamDurableObjectNamespace).getByName(
     getStreamDurableObjectName({ projectId: coordinate.projectId, path }),
-  ) as unknown as StreamProcessorStream;
+  ) as unknown as StreamRpc;
 }
 
 // ---- creation -------------------------------------------------------------------

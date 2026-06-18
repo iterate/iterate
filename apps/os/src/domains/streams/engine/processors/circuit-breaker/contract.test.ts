@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { StreamEvent } from "../../shared/event.ts";
 import { CoreProcessorContract, type CoreProcessorState } from "../core/contract.ts";
 import { CoreStreamProcessor } from "../core/implementation.ts";
-import type { StreamProcessorStream } from "../../stream-processor.ts";
+import type { StreamRpc } from "../../types.ts";
 import { CircuitBreakerProcessor } from "./implementation.ts";
 import { shouldTripCircuitBreaker, spendCircuitBreakerToken } from "./contract.ts";
 
-const stream = () => ({ append() {}, appendBatch() {} }) as unknown as StreamProcessorStream;
+const stream = () => ({ append() {}, appendBatch() {} }) as unknown as StreamRpc;
 
 describe("circuit breaker processor", () => {
   const coreProcessor = new CoreStreamProcessor({ stream: stream() });

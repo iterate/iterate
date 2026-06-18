@@ -56,12 +56,6 @@ export type LiveStreamSubscriberDescriptor = Omit<StreamSubscriberDescriptor, "p
   };
 };
 
-/** The minimal append surface a processor's iterate context exposes. */
-export type ProcessorStream = {
-  append(args: { streamPath?: string; event: StreamEventInput }): unknown;
-  appendBatch(args: { streamPath?: string; events: StreamEventInput[] }): unknown;
-};
-
 export type StreamRpc = {
   append(args: { streamPath?: string; event: StreamEventInput }): MaybePromise<StreamEvent>;
   appendBatch(args: {

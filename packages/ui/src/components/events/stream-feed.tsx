@@ -58,6 +58,7 @@ import type {
   EventsStreamMetadataUpdatedElement,
   EventsStreamRawEventSummary,
   EventsStreamRawJsonDumpElement,
+  EventsStreamSourceEvent,
   EventsStreamViewState,
 } from "@iterate-com/ui/components/events/feed-items";
 import {
@@ -105,7 +106,7 @@ export function EventsStreamView({
   className,
 }: {
   viewState: EventsStreamViewState;
-  events?: readonly Event[];
+  events?: readonly EventsStreamSourceEvent[];
   openEventOffset?: number;
   onOpenEventOffsetChange?: (offset?: number) => void;
   getEventTypeHref?: (eventType: string) => string | undefined;
@@ -605,7 +606,7 @@ const RAW_JSON_DUMP_EVENT_ORDERED_KEYS = new Set<string>([
   ...RAW_JSON_DUMP_EVENT_SUFFIX_KEY_ORDER,
 ]);
 
-function orderRawJsonDumpEventForDisplay(event: Event): Record<string, unknown> {
+function orderRawJsonDumpEventForDisplay(event: EventsStreamSourceEvent): Record<string, unknown> {
   const eventRecord = event as Record<string, unknown>;
   const orderedEvent: Record<string, unknown> = {};
 
@@ -924,8 +925,10 @@ function getRelativeStreamPath({
   return targetPath;
 }
 
-function collectRawEventsFromElements(elements: readonly EventsStreamBuiltInElement[]): Event[] {
-  const rawEvents = new Map<number, Event>();
+function collectRawEventsFromElements(
+  elements: readonly EventsStreamBuiltInElement[],
+): EventsStreamSourceEvent[] {
+  const rawEvents = new Map<number, EventsStreamSourceEvent>();
 
   for (const element of elements) {
     if (element.type === "grouped-raw-event") {

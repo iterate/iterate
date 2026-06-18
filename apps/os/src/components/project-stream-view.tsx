@@ -136,7 +136,8 @@ export function ProjectStreamView({
   // default to it, everything else defaults to the plain feed.
   const isAgentStream = streamPathText.startsWith("/agents/");
   const resolvedStreamSource = useMemo<ItxStreamSource>(
-    () => streamSource ?? ((path) => itx.streams.get(path)),
+    () =>
+      streamSource ?? ((path) => itx.streams.get(path) as unknown as ItxStreamForBrowserRuntime),
     [itx, streamSource],
   );
   const streamClientFactory = useMemo(

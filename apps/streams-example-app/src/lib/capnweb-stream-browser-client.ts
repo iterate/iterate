@@ -24,10 +24,14 @@ export const createCapnwebStreamClient: BrowserStreamClientFactory = async (
   return {
     append: (appendArgs) => connection.stream.append(appendArgs),
     appendBatch: (appendArgs) => connection.stream.appendBatch(appendArgs),
+    getEvent: (getEventArgs) => connection.stream.getEvent(getEventArgs),
+    getEvents: (getEventsArgs) => connection.stream.getEvents(getEventsArgs),
+    waitForEvent: (waitForEventArgs) => connection.stream.waitForEvent(waitForEventArgs),
     runtimeState: () => connection.stream.runtimeState(),
     getProcessorRuntimeState: (runtimeStateArgs) =>
       connection.stream.getProcessorRuntimeState(runtimeStateArgs),
     subscribe: (subscribeArgs) => connection.stream.subscribe(subscribeArgs),
+    reduce: (reduceArgs) => connection.stream.reduce(reduceArgs),
     kill: () => connection.stream.kill(),
     reset: () => connection.stream.reset(),
     [Symbol.dispose]() {

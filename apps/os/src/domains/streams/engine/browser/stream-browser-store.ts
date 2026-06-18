@@ -17,15 +17,11 @@ import type { StreamEvent, StreamEventInput } from "../shared/event.ts";
 import type {
   LiveStreamSubscriberDescriptor,
   ProcessorRuntimeState,
-  ProcessorStream,
   StreamCoreProcessorState,
+  StreamRpc,
   SubscriptionKey,
 } from "../types.ts";
-import type {
-  StreamProcessorRuntimeState,
-  StreamProcessorSnapshot,
-  StreamProcessorStream,
-} from "../stream-processor.ts";
+import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "../stream-processor.ts";
 import { deleteBrowserProcessorState } from "./processor-state-storage.ts";
 import { acquireWriterRole, streamWriterLockName, type WriterRole } from "./stream-leader.ts";
 import {
@@ -81,7 +77,7 @@ export type BrowserProcessorConfig = {
   tables: string[];
   /** Create the concrete processor once the browser runtime has a stream connection. */
   createProcessor(args: {
-    stream: StreamProcessorStream;
+    stream: StreamRpc;
     sql: SqlClient;
     subscriptionKey: string;
   }): BrowserHostedProcessor;
@@ -108,24 +104,7 @@ export type StreamRuntimeState = {
  */
 export type StreamRpcResult<T> = Promise<T> & Disposable;
 
-export type BrowserStreamClient = Disposable &
-  ProcessorStream & {
-    runtimeState(): Promise<StreamRuntimeState>;
-    getProcessorRuntimeState(args: {
-      subscriptionKey: SubscriptionKey;
-    }): Promise<ProcessorRuntimeState | null>;
-    subscribe(args: {
-      subscriptionKey?: string;
-      processEventBatch: (batch: {
-        events: readonly StreamEvent[];
-        streamMaxOffset: number;
-      }) => unknown;
-      replayAfterOffset?: number;
-      subscriber?: LiveStreamSubscriberDescriptor;
-    }): Promise<{ unsubscribe(): void }>;
-    kill(): Promise<void> | void;
-    reset(): Promise<void>;
-  };
+export type BrowserStreamClient = Disposable & StreamRpc;
 
 export type BrowserStreamClientFactory = (args: {
   projectId: string;
@@ -457,7 +436,7 @@ function createStreamRuntime(
     // Deliberately a throwaway instance: processors memoize their checkpoint on
     // first read, so the real instance must be created after any discard below.
     const processor = args.createProcessor({
-      stream: rpc as unknown as StreamProcessorStream,
+      stream: rpc,
       sql,
       subscriptionKey,
     });
@@ -627,7 +606,7 @@ function createStreamRuntime(
         // lastDeliveredOffset over the current election's values.
         if (!ownsRuntime()) return undefined;
         const processor = args.createProcessor({
-          stream: election.connection as unknown as StreamProcessorStream,
+          stream: election.connection,
           sql,
           subscriptionKey,
         });

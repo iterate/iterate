@@ -11,13 +11,13 @@ import {
   StreamProcessor,
   type StreamProcessorDeps,
   type StreamProcessorSnapshot,
-  type StreamProcessorStream,
 } from "./stream-processor.ts";
+import type { StreamRpc } from "./types.ts";
 
 const iso = new Date(0).toISOString();
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-const stream = () => ({ append() {}, appendBatch() {} }) as unknown as StreamProcessorStream;
+const stream = () => ({ append() {}, appendBatch() {} }) as unknown as StreamRpc;
 
 // ---------------------------------------------------------------------------
 // counter — a named-only contract with spy hooks injected through deps

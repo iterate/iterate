@@ -19,8 +19,8 @@ import {
   StreamProcessor,
   type StreamProcessorDeps,
   type StreamProcessorSnapshot,
-  type StreamProcessorStream,
 } from "./stream-processor.ts";
+import type { StreamRpc } from "./types.ts";
 import { createStreamProcessorHost } from "./workers/stream-processor-host.ts";
 import {
   CircuitBreakerProcessor,
@@ -31,7 +31,7 @@ import { spendCircuitBreakerToken } from "./processors/circuit-breaker/contract.
 const iso = (ms = 0) => new Date(ms).toISOString();
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 /** Minimal stream stub for tests that never call the richer stream RPC methods. */
-const stream = () => ({ append() {}, appendBatch() {} }) as unknown as StreamProcessorStream;
+const stream = () => ({ append() {}, appendBatch() {} }) as unknown as StreamRpc;
 
 // A minimal counting processor whose batch hook can be made to throw once.
 const CounterContract = defineProcessorContract({
@@ -407,7 +407,7 @@ describe("T6 — circuit-breaker pauses once the bucket is in deficit (M4)", () 
           return e;
         },
         appendBatch: () => [],
-      } as unknown as StreamProcessorStream,
+      } as unknown as StreamRpc,
     });
 
     await processor.ingest({

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { StreamEvent, StreamEventInput } from "@iterate-com/shared/streams/stream-event";
 import { SlackAgentProcessor, eyesReactionTargetFromWebhookPayload } from "./implementation.ts";
-import type { StreamProcessorStream } from "~/domains/streams/engine/stream-processor.ts";
+import type { StreamRpc } from "~/domains/streams/engine/types.ts";
 
 describe("eyesReactionTargetFromWebhookPayload", () => {
   const humanMessagePayload = (event: Record<string, unknown> = {}) => ({
@@ -504,7 +504,7 @@ function createProcessor(
           return committedEvent({ ...event, offset: appended.length });
         });
       },
-    } as unknown as StreamProcessorStream,
+    } as unknown as StreamRpc,
     ...processorDeps,
   });
   return { appended, processor };

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { StreamEvent, StreamEventInput } from "@iterate-com/shared/streams/stream-event";
 import { SlackProcessor } from "./implementation.ts";
-import type { StreamProcessorStream } from "~/domains/streams/engine/stream-processor.ts";
+import type { StreamRpc } from "~/domains/streams/engine/types.ts";
 
 describe("SlackProcessor", () => {
   it("reduces Slack connection state", async () => {
@@ -146,7 +146,7 @@ describe("SlackProcessor", () => {
             appended.push({ event, streamPath });
             return committedEvent({ ...event, offset: appended.length });
           }),
-      } as unknown as StreamProcessorStream,
+      } as unknown as StreamRpc,
     });
 
     // First delivery: the append throws. ingest MUST reject and the checkpoint
@@ -311,7 +311,7 @@ function createProcessor(
           return committedEvent({ ...event, offset: appended.length });
         });
       },
-    } as unknown as StreamProcessorStream,
+    } as unknown as StreamRpc,
     ...deps,
   });
   return { appended, processor };

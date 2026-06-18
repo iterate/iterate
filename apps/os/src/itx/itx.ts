@@ -16,8 +16,8 @@
 // something speaking `call({ path, args })` (dial.ts builds it; the core
 // never touches env or a project id), `parentItx` is a stub of the parent
 // context's core (chain delegation — the defaults are simply the chain's
-// code-rooted final link, platform-context.ts), and the stream's
-// append/read pair rides in as the processor's iterate context.
+// code-rooted final link, platform-context.ts), and `stream` is the raw stream
+// RPC used to append and replay the context event log.
 //
 // ONE host: ItxDurableObject (the generic context host) exposes the core via
 // an `itx()` method — a method, not a property, because workerd does not
@@ -576,16 +576,16 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps> {
     const release = this.#liveStubReleases.get(name);
     this.#liveStubReleases.delete(name);
     if (opts.record) {
-      void this.deps.stream
-        .append({
+      void Promise.resolve(
+        this.deps.stream.append({
           event: {
             payload: { path: name.split(".") },
             type: ITX_EVENT_TYPES.capabilityDisconnected,
           },
-        })
-        .catch((error) => {
-          console.error(`[itx] capability-disconnected append failed for "${name}":`, error);
-        });
+        }),
+      ).catch((error: unknown) => {
+        console.error(`[itx] capability-disconnected append failed for "${name}":`, error);
+      });
     }
     release?.();
   }

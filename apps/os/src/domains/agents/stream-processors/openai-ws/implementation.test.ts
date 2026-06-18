@@ -12,10 +12,8 @@ import {
   type OpenAiResponsesWebSocket,
   type OpenAiResponsesWebSocketStreamMessage,
 } from "./implementation.ts";
-import type {
-  StreamProcessorStream,
-  StreamProcessorSnapshot,
-} from "~/domains/streams/engine/stream-processor.ts";
+import type { StreamProcessorSnapshot } from "~/domains/streams/engine/stream-processor.ts";
+import type { StreamRpc } from "~/domains/streams/engine/types.ts";
 
 type JsonValue = z.infer<ReturnType<typeof z.json>>;
 
@@ -492,7 +490,7 @@ function testState(): OpenAiWsState {
 }
 
 function newProcessor(args: {
-  stream: StreamProcessorStream;
+  stream: StreamRpc;
   appended: StreamEventInput[];
   sockets: FakeOpenAiResponsesWebSocket[];
   snapshot?: StreamProcessorSnapshot<OpenAiWsState>;
@@ -599,7 +597,7 @@ function memoryStream() {
         };
         return committed;
       }),
-  } as unknown as StreamProcessorStream;
+  } as unknown as StreamRpc;
   return { stream, appended };
 }
 

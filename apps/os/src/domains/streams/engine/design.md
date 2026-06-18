@@ -2,7 +2,7 @@
 
 > **Status: historical design notes, partially superseded.** This captures the
 > original thinking; several decisions below never shipped under the names used
-> here (e.g. `implementProcessor`/`afterAppend`, `connectStream`). The
+> here (e.g. split implementation builders and `connectStream`). The
 > design-of-record is the code plus `README.md`, `CONTEXT.md`, and the ADRs in
 > `docs/adr/`. Where this document and the code disagree, the code wins. Factual
 > claims that are known-wrong against the current code are corrected inline; the
@@ -214,16 +214,14 @@ need.
 - Need to separate out reducer and schemas / metadata from implementation
 - `consumes` can include `"*"` for processors that need to reduce every event in a stream. The core
   stream processor uses this to maintain event count, max offset, and subscription configuration.
-- Implementation consists of single `afterAppend` function
-  - `afterAppend` should be synchronous to force processor author to think about what they want to do
-  - `afterAppend` should be a pure function of its arguments. It needs to be passed
-    - the new event
-    - previous state
-    - new state (because reducer is run for us)
-    - the exact stream RPC append API as `stream`
-    - a `blockProcessorUntil` function that tells the processor runer to not process any more events until the promise returned from the callback completes
-    - a `keepAlive` function to track detached work without blocking the processor checkpoint
-    -
+- Implementation is a class-based `StreamProcessor` with hooks:
+  - `reduce` for pure state projection
+  - `processEvent` for per-event side effects
+  - `processEventBatch` for batch side effects and transactional writes
+- Runtime capabilities are ordinary constructor deps. The stream capability is `deps.stream`;
+  processor-specific services belong in the same deps object, not in a parallel processor context.
+- Side-effect helpers are hook args: `blockProcessorWhile` for work that must complete before
+  checkpointing, and `runInBackground` for detached work.
 
 ## Instrumentation
 
@@ -415,129 +413,24 @@ Not a big deal, though, as this is an almost complete implementation of capnweb.
 
 # Stream processor
 
-> **Superseded.** The shipped model is a single `StreamProcessor` abstract class
-> (`src/stream-processor.ts`) extended by subclasses with a `defineProcessorContract`
-> contract; hooks are `reduce` / `processEvent` / `processEventBatch`, side-effect
-> helpers are `blockProcessorWhile` / `runInBackground`, and catch-up replay runs
-> idempotent side effects for delivered events past the checkpoint. The
-> `implementProcessor(contract, implementation)` /
-> `build(deps) -> { afterAppend }` split described below, and the claim that a base
-> class can't get contextual param typing, never shipped. See README.md §"Stream
-> Processor Abstraction" for the current model. The text below is retained as history.
+The shipped model is a single `StreamProcessor` abstract class
+(`src/stream-processor.ts`) extended by subclasses with a `defineProcessorContract`
+contract.
 
-A stream processor is **two objects**, never fused:
-
-1. **Contract** — pure and serializable, safe to import anywhere (browser, frontend
-   projection, reducer). Declares: the event catalog it owns, `consumes`, `emits`,
-   `processorDeps`, `stateSchema`, and the pure `reduce`. This is `defineProcessorContract`.
-2. **Implementation** — backend-only side effects (`onStart`, `afterAppend`). Bound to a
-   contract via `implementProcessor(contract, implementation)`.
-
-A browser or frontend projection imports only the contract and runs `reduce`; it never
-pulls in side-effect code. This is the unifying replacement for both the legacy
-`SimpleStreamProcessor` (which fused reducer + side effects) and the previous rich
-implementation. We are NOT preserving backwards compatibility with either.
-
-## Resolved decisions (all 2026-06-02)
-
-Working reference implementation: `src/stream-processor.ts (+ stream-processor.test.ts)` (compiles).
-
-- **Processor = contract + implementation**, two separate objects.
-- **Implementation = `build(deps) -> { afterAppend }`.** `build` is the only place
-  runtime clients are constructed; it closes over them. Runtime state is
-  caches/connections _derived from deps_ — NEVER business state. Business state lives in
-  the reduced `state` (the snapshot). This split is what makes both unit-testable.
-- **No `onStart`.** Setup is done in `build`, lazily on first use, or via a
-  `processorStarted` _event_ the processor consumes.
-- **`afterAppend` is per-event and synchronous** (a switch statement, returns void).
-  NOT batch-shaped. It receives `event`, `previousState`, `state`, `streamMaxOffset`,
-  the exact `stream` append API, `blockProcessorUntil(() => work)`, and
-  `keepAlive(promise)` for detached lifetime tracking.
-- **Two usage patterns, and "when do we persist the processed offset?" is the axis:**
-  - _Default (high-volume / fire-and-forget):_ effects fire in the background; the runner
-    advances and persists the offset **optimistically, coalesced once per delivered
-    batch**. A lost effect is fixed by reconcile-forward (the processor notices on a later
-    `afterAppend` by comparing `state`/reality). Side-effect ordering is best-effort;
-    processors must be written reconcile-tolerant.
-  - _Durable job queue (low-volume), opt-in via `blockProcessorUntil`:_ its true meaning
-    is "this work is part of what 'processed' means — **do not checkpoint past this event
-    until it completes**." The runner awaits the blocker, persists `{state, offset}`, then
-    continues. Crash before completion => the event is re-delivered and re-processed
-    (at-least-once). Rare, so the serial cost is acceptable.
-- **Bulk-write batching lives in the db layer, not the hook.** Because `afterAppend` no
-  longer blocks by default, the runner rips through a delivered batch synchronously, so a
-  fire-and-forget `db.write(event)` that debounces/coalesces internally yields one batched
-  SQLite transaction per delivered batch — preserving the batch/row write-mode
-  optimization without a batch-shaped hook. (Blocking was what defeated debounce earlier.)
-- **Type narrowing of `afterAppend` args is free** because the implementation is an
-  object literal passed through a generic function (`implementProcessor`). Proven that
-  class inheritance (method override OR field arrow, generic or concrete base) does NOT
-  get contextual param typing — so the contract+implementation split is functional, not
-  a base class.
-- **Exactly one runner and one delivery path.** Processors consume events through
-  `processEventBatch({ events, streamMaxOffset })`. Browser/node clients call `subscribe()`; built-in
-  outbound runners call `subscribeOutbound()` after the stream wakes them over Workers RPC.
-- **The runner consumes a subscription.** No `catchUp()` / `readHistory` / catch-up-vs-live split:
-  the stream replays history through the _same_ `processEventBatch` channel, so the
-  runner processes one event at a time through `processorRunner.run({ subscription })`.
-  Runner responsibilities: dedup by `event.offset <= snapshot.offset`, serialize events,
-  persist the `{ state, offset }` snapshot via a storage port, and append side effects
-  through the exact stream API.
-- **Runtimes differ only in connection setup and storage.** Browser and Node call
-  `stream.subscribe({ processEventBatch: subscription.processEventBatch, replayAfterOffset })`; the
-  outbound StreamProcessorRunner DO calls `stream.subscribeOutbound(...)`. After that, all three
-  process the same event batches.
-- **The browser SQLite projector** is `consumes: ["*"]`, no `reduce`, and an `afterAppend`
-  that does a fire-and-forget `db.write(event)` (the db coalesces into batched
-  transactions). Its resume cursor is the side-effect target itself —
-  `replayAfterOffset = SELECT MAX(offset) FROM events` — so no separate snapshot is needed and a
-  lost write is just re-delivered and re-written via `INSERT OR IGNORE`. Proven through
-  the same `createProcessorRunner` + `processorRunner.run({ subscription })` as node/DO.
-- **Builtin (inline) processors have a `beforeAppend` gate; subscription processors do
-  not.** Three hook tiers:
-  - Contract (pure, portable): `reduce` only.
-  - Subscription implementation (runner, post-commit): `{ afterAppend }`. Cannot gate —
-    only sees committed events.
-  - Builtin implementation (inline in `Stream`, pre-commit, before offset allocation):
-    `{ beforeAppend?, afterAppend? }`. `beforeAppend` rejects by throwing.
-    This is required for the circuit breaker / future authorization: the canonical
-    rate-limiter needs `reduce` to _succeed_ on the event that trips the breaker (token
-    accounting goes negative), `afterAppend` to emit `stream/paused`, and `beforeAppend`
-    to reject the _next_ event once `state.paused`. "Reduce throws" cannot express this and
-    would smear admission logic into the pure reducer that ships to browser projections.
-    Reference: the legacy shared stream circuit breaker. `beforeAppend` is sync
-    today (matches os); async is a future extension if authorization needs I/O.
-- **The Stream DO runs only the core processor inline.**
-  The `core` processor owns stream bookkeeping, child-stream topology, and the
-  paused/resumed door (`beforeAppend`). The `circuit-breaker` processor is an outbound
-  subscription processor; it owns token-bucket metering and the
-  `events.iterate.com/circuit-breaker/configured` event. When it trips, it appends
-  `events.iterate.com/stream/paused`, and the `core` processor shuts the door.
-  More complex circuit breakers can sit elsewhere in the network and use the same
-  paused/resumed contract.
-
-- **Contract announcements ride the connect handshake.** The processor host passes
-  each processor's contract in its subscribe call and the stream records it on the
-  `events.iterate.com/stream/subscriber-connected` presence fact (the standalone
-  `processor-registered` event is gone). Keep owned event type strings inline
-  in the processor contract, consumes/emits arrays, and reducer; repeating one durable
-  event string inside a processor definition is clearer than hiding it behind aliases.
-
-- **`afterAppend` gets `streamMaxOffset`, a raw fact with no derived fields.** The stream
-  piggybacks it on each delivery via `processEventBatch({ events, streamMaxOffset })`
-  (no extra round-trip; the core already tracks `maxOffset`). The processor deduces
-  offset lag as `streamMaxOffset - event.offset`.
-
-- **Append→delivery round-trip latency is measured on the RECEIVE side, never by
-  awaiting `append()`.** When instrumented, the runner stamps a wall-clock send time into
-  a reserved metadata key (`events.iterate.com/instrument/appended-at-ms`) on each append;
-  when that event is delivered back in `processEventBatch`, latency = `Date.now() -
-appendedAtMs`. No correlation map, no await — `append` stays fire-and-forget. Exact for
-  the self-loop (same isolate appends and receives); cross-isolate is subject to clock
-  skew. Stamping is opt-in (only when an `onAppendRoundTrip` callback is provided) so normal
-  events stay clean. CF note: `Date.now()` is frozen within a turn and advances on IO, so
-  the append-turn vs deliver-turn correctly capture elapsed wall-clock across the network.
-  Demonstrated + executed in the trial via `exampleAppendRoundTrip` (loopback stream).
+- **Contract**: event catalog, `consumes`, `emits`, `processorDeps`, `stateSchema`,
+  optional `initialState`, and optional pure `reduce`.
+- **Implementation**: subclass hooks `prepare`, `reduce`, `processEvent`, and
+  `processEventBatch`.
+- **Dependencies**: one constructor deps object. The host injects `deps.stream`,
+  checkpoint storage, and keep-alive support; processor-specific dependencies are
+  additional fields in that same object.
+- **Delivery path**: the stream delivers `processEventBatch({ events, streamMaxOffset })`;
+  the base class filters already-checkpointed events, narrows consumed events through
+  the contract, reduces state, runs hooks, waits for `blockProcessorWhile` work, and
+  persists `{ state, offset }`.
+- **Detached work**: hooks receive `runInBackground` for non-checkpoint-blocking work.
+- **Contract announcements**: the processor host passes each processor's contract in
+  the subscribe call; the stream records it on `subscriber-connected` presence.
 
 ## Open questions
 
@@ -719,8 +612,8 @@ the subscription / processor-runner layer, where raw stream events are consumed.
 This matches the current OS stream processor model:
 
 - `ConsumedEvent<Contract>` is inferred from `contract.consumes`
-- `EmittedInput<Contract>` is inferred from `contract.emits`
-- `ProcessorStreamApi<Contract>.subscribe()` still transports raw `StreamEvent`s
+- processor dependencies expose the full raw `StreamRpc`
+- stream subscriptions and appends still transport raw `StreamEvent`s / `StreamEventInput`s
 - runners narrow each raw event at consumption time by resolving the event definition from the
   contract and its processor dependencies, then parsing with the matching payload schema
 
@@ -755,10 +648,10 @@ await using runner = await processorRunner.run({ subscription })({
 });
 ```
 
-Append typing is useful, but it is a separate concern from subscription narrowing. Processor-facing
-stream APIs and e2e helpers can expose `append({ event: EmittedInput<Contract> })` when they are
-already bound to a processor contract. The low-level `connection.stream.append()` should keep accepting
-raw `StreamEventInput`.
+Append typing is deliberately not part of the processor stream dependency. Processor deps should stay
+easy to reason about: `this.deps.stream` is the stream RPC, not a parallel contract-bound stream API.
+Tests or helpers that want stricter event factories can build them separately without changing the
+runtime dependency shape.
 
 ### Level 3: inbound stream processor runner
 
@@ -770,13 +663,13 @@ What the caller has:
 - a stream connection
 - a processor contract and implementation
 - optional initial processor state / stored snapshot
-- optional deps for `afterAppend`
+- processor-specific constructor deps
 
 What the caller wants:
 
 - catch up from `replayAfterOffset`
 - reduce matching events into state
-- run `afterAppend` for live/relevant events
+- run processor hooks for delivered events
 - inspect the current processor runtime state, including its snapshot
 - stop the runner with async disposal
 
