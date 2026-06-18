@@ -226,7 +226,7 @@ async function loadOsPlaywrightAuthEnv(): Promise<OsPlaywrightAuthEnv> {
 
   const dopplerEnv = await loadOsDopplerSecrets();
   if (dopplerEnv.ok) {
-    const parsed = OsPlaywrightAuthEnv.safeParse(dopplerEnv.secrets);
+    const parsed = OsPlaywrightAuthEnv.safeParse({ ...dopplerEnv.secrets, ...process.env });
     if (parsed.success) return parsed.data;
 
     throw new Error(

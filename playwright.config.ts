@@ -40,7 +40,12 @@ export default defineConfig({
         env: process.env as Record<string, string>,
         url: `${localOsTarget.baseUrl}/api/health`,
         reuseExistingServer: !process.env.CI,
-        timeout: 180_000,
+        timeout: Math.max(
+          10_000,
+          new Date(localOsDevServer.readLive()?.startedAt || Date.now()).getTime() +
+            180_000 -
+            Date.now(),
+        ),
         stdout: "pipe",
         stderr: "pipe",
       }
