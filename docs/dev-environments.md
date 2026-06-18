@@ -61,10 +61,10 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   captun URL, runtime config keeps the public URL and the discovery file remains
   the local target.
   Scripts and CLIs that need "the local dev server" read that file — no
-  flags, no guessing. `pnpm dev` is the attached shorthand for
-  `cd apps/os && pnpm cli dev start`; extra args forward, so
-  `pnpm dev status`, `pnpm dev attach`, and `pnpm dev restart --detach` are the
-  short forms for `pnpm cli dev ...`. A second start attaches to the existing
+  flags, no guessing. `pnpm dev` runs `apps/os/scripts/dev.ts`; extra args
+  forward, so `pnpm dev status`, `pnpm dev attach`, and
+  `pnpm dev restart --detach` use the same local lifecycle module. A second
+  start attaches to the existing
   live server; use `restart` to replace it. The file appears ~10–15s before
   the port actually accepts connections (Vite is still booting) — poll the
   base URL until it returns a response before driving it.
@@ -191,6 +191,44 @@ creating an org + project on first sign-in (test emails `+...test@` with OTP
 The `browserSignInUrl` embeds the (short-lived) tokens as query params — treat
 it as a secret: it can appear in browser history and edge request logs, so
 don't paste it into shared channels.
+
+### Playwright specs against local dev or previews
+
+Root Playwright specs use the same forge key and admin API secret, but mint the
+session cookie directly instead of going through the browser sign-in URL. If
+`apps/os` has a Doppler config selected, `pnpm spec` can read the needed secrets
+directly; wrap the command in `doppler run` when you want to force a particular
+config:
+
+```bash
+# local dev: starts or reuses the local OS dev server when APP_CONFIG_BASE_URL is unset
+pnpm spec
+
+# same thing, forcing a specific Doppler config
+doppler run --project os --config dev -- pnpm spec
+
+# deployed preview: the Doppler config supplies APP_CONFIG_BASE_URL for the OS worker
+doppler run --project os --config preview_3 -- pnpm spec
+
+# arbitrary deployed OS worker: preserve an explicit APP_CONFIG_BASE_URL override
+APP_CONFIG_BASE_URL=https://os-preview-3.iterate.com \
+  doppler run --project os --config preview_3 --preserve-env=APP_CONFIG_BASE_URL -- pnpm spec
+```
+
+Forged-session specs validate one env contract: `APP_CONFIG_ADMIN_API_SECRET`
+for project fixture setup, plus `APP_CONFIG_ITERATE_AUTH__CLIENT_ID`,
+`APP_CONFIG_ITERATE_AUTH__ISSUER`, and `AUTH_FORGE_PRIVATE_JWK` for JWT
+minting. Those values are expected to come from the same `os` Doppler config as
+the worker under test. The access-token resource is derived from the target OS
+base URL (`http://localhost` for loopback local dev, otherwise the normalized
+base URL). The helper validates `process.env` first, then falls back to
+`doppler secrets download --no-file --format json` from `apps/os` when those
+values are missing; it never infers auth values from redirects.
+`APP_CONFIG_BASE_URL` is the only target override; when it is unset, Playwright
+runs the OS dev script through Node with `start`, `--detach`, `--keep-alive`,
+and `--port <port>`, so it reuses the same per-worktree dev server recorded in
+`apps/os/.alchemy/dev-server.json`, then waits directly on that server's
+`/api/health`.
 
 ### Minting in production
 

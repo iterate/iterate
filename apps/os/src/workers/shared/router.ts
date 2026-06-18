@@ -109,7 +109,11 @@ export async function decideIngressRoute(input: {
   );
   const appHostname = normalizeIngressHost(new URL(input.config.baseUrl ?? input.url).hostname);
   const eventDocsHostname = eventDocsHostnameForAppBaseUrl(input.config.baseUrl);
-  if (requestHost === appHostname || requestHost === eventDocsHostname) {
+  if (
+    requestHost === appHostname ||
+    requestHost === eventDocsHostname ||
+    isLoopbackAppHostAlias(requestHost, input.config.projectHostnameBases ?? [])
+  ) {
     return { lane: "os" } as const;
   }
 
@@ -167,6 +171,13 @@ export async function decideIngressRoute(input: {
   }
 
   return { lane: "notFound" } as const;
+}
+
+function isLoopbackAppHostAlias(requestHost: string, projectHostnameBases: readonly string[]) {
+  return projectHostnameBases.some((rawBase) => {
+    const base = normalizeIngressHost(normalizeProjectHostnameBase(rawBase));
+    return requestHost === base && (base === "localhost" || base.endsWith(".localhost"));
+  });
 }
 
 /** Parse the resolved-rule header set by {@link routeOsRequest}; null when

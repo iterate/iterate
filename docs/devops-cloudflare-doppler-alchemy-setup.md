@@ -111,8 +111,8 @@ doppler run --project os --config preview_2 -- pnpm run destroy
 ## Local Development
 
 Use `pnpm dev` for normal local OS development. It is the attached shorthand
-for `cd apps/os && pnpm cli dev start`, which wraps Doppler and Alchemy.
-Additional args forward to the CLI dev group, so `pnpm dev status`,
+for the `apps/os/scripts/dev.ts` local lifecycle module, which wraps Doppler
+and Alchemy. Additional args forward to that module, so `pnpm dev status`,
 `pnpm dev attach`, and `pnpm dev restart --detach` are supported.
 
 ```bash
@@ -133,7 +133,7 @@ For an explicit app/config:
 
 ```bash
 cd apps/os
-doppler run --project os --config dev -- pnpm cli dev start
+doppler run --project os --config dev -- pnpm dev start
 ```
 
 OS dev configs run fully locally on `http://localhost:<port>`. Personal configs

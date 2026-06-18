@@ -15,7 +15,7 @@ Use `preview_N` or `prd` configs for deployed workers. For local dev, use
 ## Common CLI Targets
 
 ```bash
-# Local dev through the discovery file. Requires `pnpm dev` or `pnpm cli dev start --detach`.
+# Local dev through the discovery file. Requires `pnpm dev` or `pnpm dev start --detach`.
 pnpm cli itx --help
 
 # Fully-local dev server with an explicit config.
