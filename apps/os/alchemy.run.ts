@@ -473,8 +473,8 @@ const [
   }),
   osWorker("agent", {
     entrypoint: "./src/workers/agent.ts",
-    // openai needs Node APIs.
-    compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"],
+    // Own-zone fetches must route through Worker routes, same as app/project/itx hosts.
+    compatibilityFlags: ["global_fetch_strictly_public"],
     bindings: loopbackUnionBindings,
   }),
   osWorker("slackIntegration", {

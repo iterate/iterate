@@ -573,9 +573,6 @@ importers:
       lucide-react:
         specifier: ^0.553.0
         version: 0.553.0(react@19.2.4)
-      openai:
-        specifier: ^6.36.0
-        version: 6.36.0(ws@8.19.0)(zod@4.3.6)
       react:
         specifier: ^19.2.0
         version: 19.2.4
@@ -652,6 +649,9 @@ importers:
       miniflare:
         specifier: catalog:cloudflare
         version: 4.20260424.0
+      openai:
+        specifier: ^6.36.0
+        version: 6.36.0(ws@8.19.0)(zod@4.3.6)
       tinyexec:
         specifier: ^1.0.2
         version: 1.1.1
