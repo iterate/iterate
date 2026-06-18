@@ -22,7 +22,7 @@ export class EchoExampleProcessor extends StreamProcessor<EchoExampleContract> {
     if (args.event.type !== "events.iterate.com/echo-example/input-received") return;
     const seen = args.state.seen;
     args.runInBackground(async () => {
-      await this.ctx.stream.append({
+      await this.deps.stream.append({
         event: {
           type: "events.iterate.com/echo-example/output-echoed",
           // Replays are deduped by the input's offset, not wall-clock time.

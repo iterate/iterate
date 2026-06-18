@@ -16,7 +16,6 @@ import { parseConfig, type AppConfig } from "~/config.ts";
 
 export { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
-export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";
 export { ItxCapabilityIngress } from "~/itx/http.ts";
 export * from "./shared/loopback-exports.ts";
 

@@ -2,7 +2,7 @@
 
 Owner doctrine, recorded 2026-06-11 during the itx address-unification
 review. This is the way to design ANY durable domain object on this
-platform — agents, contexts, MCP sessions, whatever comes next.
+platform — agents, contexts, app canvases, whatever comes next.
 
 ## Creation is an event. The journal begins with its own birth certificate.
 

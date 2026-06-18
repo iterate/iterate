@@ -26,8 +26,8 @@ Object.
 
 - Define how a Project Route Destination declares auth requirements.
 - Define the principal shape passed to authorization checks.
-- Decide how protocol entrypoints, such as `ProjectMcpServerEntrypoint`, pass
-  verified identity into the generic authorization model.
+- Decide how protocol handlers, such as the app-worker MCP route, pass verified
+  identity into the generic authorization model.
 - Decide where route-specific scopes live and how they relate to Clerk OAuth
   scopes.
 - Add a generic Project Durable Object method for evaluating access to a Project
@@ -36,12 +36,11 @@ Object.
 
 ## V1 Compromise
 
-For the first Project MCP Server Entry Point implementation, keep the boundary
-simple:
+For the first Project MCP route implementation, keep the boundary simple:
 
-- `ProjectMcpServerEntrypoint` owns Clerk OAuth protocol verification.
+- The app-worker MCP route owns OAuth protocol verification.
 - It calls a generic Project Durable Object Project Access Check after verifying
-  the Clerk principal.
+  the OAuth principal.
 - The Project Access Check may use the app-level D1 `projects` projection for a
   simple Project/Clerk Organization access check.
 - Do not add MCP-specific authorization methods to the Project Durable Object.

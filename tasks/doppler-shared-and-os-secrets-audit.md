@@ -99,7 +99,7 @@ doppler secrets --project os --config prd --only-names > /tmp/product.txt
 ### Product `os` (was `os`)
 
 - [ ] Each `preview_N`: `APP_CONFIG_BASE_URL` uses `https://os.iterate-preview-N.com` (not `os.`).
-- [ ] `dev` / `dev_*`: fully local by default (`APP_CONFIG_BASE_URL=http://localhost:<port>`, project hosts under `localhost`, local MCP at `<baseUrl>/api/__mcp`).
+- [ ] `dev` / `dev_*`: fully local by default (`APP_CONFIG_BASE_URL=http://localhost:<port>`, project hosts under `localhost`, local MCP at `<baseUrl>/api/mcp`).
 - [ ] `prd`: `https://os.iterate.com` + `["iterate.app"]`.
 - [ ] No keys from legacy `os` bucket (run diff above after rename).
 - [ ] Drop deprecated Clerk OAuth static keys if unset (`oauthClientId` / `oauthClientSecret` in schema).

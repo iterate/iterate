@@ -2,9 +2,9 @@
 //
 // Every context is `{ projectId, path }` — an ordinary event stream. The
 // project context lives at `(projectId, "/")`, an agent's at
-// `(projectId, agentPath)`, an MCP session's at its session stream path, and
-// anonymous extensions default to `/itx/<generated>` (a plain convention,
-// not a reserved segment — any stream path can be a context). There are no
+// `(projectId, agentPath)`, and anonymous extensions default to
+// `/itx/<generated>` (a plain convention, not a reserved segment — any stream
+// path can be a context). There are no
 // context ids: the REF string `<projectId>:<path>` is the identity, and it
 // is also the ItxDurableObject's name, so identity, stream, and address are
 // the same fact spelled three ways.
@@ -22,10 +22,12 @@
 
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import { typeid } from "@iterate-com/shared/typeid";
-import { ItxContract, ITX_EVENT_TYPES, type CapabilityAddress, type ContextStream } from "./itx.ts";
+import { ItxContract, ITX_EVENT_TYPES, type CapabilityAddress } from "./itx.ts";
 import { durableObjectProcessorSubscriber } from "~/domains/streams/engine/shared/callable-subscriber.ts";
+import type { StreamProcessorStream } from "~/domains/streams/engine/stream-processor.ts";
 import {
   getInitializedStreamStub,
+  getStreamDurableObjectName,
   type StreamDurableObjectNamespace,
 } from "~/domains/streams/stream-runtime.ts";
 import { formatDurableObjectName, parseDurableObjectName } from "~/domains/durable-object-names.ts";
@@ -156,24 +158,12 @@ export function dialCodeContext(input: {
 
 // ---- the context's stream --------------------------------------------------------
 
-/** The context's stream as the core consumes it: append + getEvents. */
-export function contextStream(env: Env, coordinate: ItxCoordinate): ContextStream {
-  const stub = () =>
-    getInitializedStreamStub({
-      durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
-      projectId: coordinate.projectId,
-      path: StreamPath.parse(coordinate.path),
-    });
-  return {
-    async append(args) {
-      return await (await stub()).append(args.event);
-    },
-    async getEvents(input) {
-      return await (
-        await stub()
-      ).history({ after: input.afterOffset === 0 ? "start" : input.afterOffset });
-    },
-  };
+/** The context's stream as the core consumes it. */
+export function contextStream(env: Env, coordinate: ItxCoordinate): StreamProcessorStream {
+  const path = StreamPath.parse(coordinate.path);
+  return (env.STREAM as unknown as StreamDurableObjectNamespace).getByName(
+    getStreamDurableObjectName({ projectId: coordinate.projectId, path }),
+  ) as unknown as StreamProcessorStream;
 }
 
 // ---- creation -------------------------------------------------------------------

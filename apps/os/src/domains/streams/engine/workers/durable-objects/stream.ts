@@ -9,6 +9,7 @@ import {
 import type { StreamSubscriptionHandshake } from "../stream-processor-host.ts";
 import { getInitialProcessorState } from "../../shared/stream-processors.ts";
 import type { ProcessEventBatch, StreamCoreProcessorState } from "../../types.ts";
+import type { StreamProcessorStream } from "../../stream-processor.ts";
 import { CoreStreamProcessor } from "../../processors/core/implementation.ts";
 import { CoreProcessorContract, type CoreProcessorState } from "../../processors/core/contract.ts";
 import type { LiveStreamSubscriberDescriptor, StreamRpc } from "../../types.ts";
@@ -69,13 +70,8 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
   // The core processor owns the live delivery connections and reconciles them
   // against reduced state; this DO supplies the storage and RPC mechanics it
   // needs (committed-event reads, the live state, Callable dispatch).
-  coreProcessor = new CoreStreamProcessor({
-    iterateContext: {
-      stream: {
-        append: (args) => this.append(args),
-        appendBatch: (args) => this.appendBatch(args),
-      },
-    },
+  coreProcessor: CoreStreamProcessor = new CoreStreamProcessor({
+    stream: new StreamRpcTarget(this) as unknown as StreamProcessorStream,
     keepAliveWhile: (work) => void this.ctx.waitUntil(work()),
     getEvents: (args) => this.getEvents(args),
     currentState: () => this.#coreProcessorState,
@@ -356,7 +352,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
         path: resolvedPath,
         projectId: this.name.projectId,
       }),
-    );
+    ) as unknown as Pick<StreamRpc, "append" | "appendBatch">;
   }
 
   /**
@@ -685,11 +681,13 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     return this.coreProcessor.openConnection({ ...args, direction: "outbound" });
   }
 
-  getProcessorRuntimeState(args: { subscriptionKey: string }) {
+  getProcessorRuntimeState(args: {
+    subscriptionKey: string;
+  }): ReturnType<StreamRpc["getProcessorRuntimeState"]> {
     return this.coreProcessor.getProcessorRuntimeState(args);
   }
 
-  runtimeState() {
+  runtimeState(): Awaited<ReturnType<StreamRpc["runtimeState"]>> {
     return {
       coreProcessorState: this.#coreProcessorState,
       runtime: {
@@ -764,7 +762,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
         exports: (this.ctx as { exports?: Record<string, unknown> }).exports,
       },
       payload: {
-        stream: new StreamRpcTarget(this) as unknown as StreamRpc,
+        stream: new StreamRpcTarget(this) as unknown as StreamProcessorStream,
         subscriptionKey: args.subscriptionKey,
         streamMaxOffset: this.#coreProcessorState.maxOffset,
         streamRuntimeState: { coreProcessorState: this.#coreProcessorState },

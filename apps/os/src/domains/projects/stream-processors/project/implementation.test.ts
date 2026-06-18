@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import type { StreamEvent } from "@iterate-com/shared/streams/stream-event";
+import type { StreamEvent, StreamEventInput } from "@iterate-com/shared/streams/stream-event";
+import { ProjectProcessor, defaultAgentSystemPrompt } from "./implementation.ts";
+import type { StreamProcessorStream } from "~/domains/streams/engine/stream-processor.ts";
 
 vi.mock("~/domains/repos/entrypoints/repo-capability.ts", () => ({
   ensureProjectRepoInfoForProject: async () => ({
@@ -13,7 +15,6 @@ vi.mock("~/domains/slack/durable-objects/slack-agent-durable-object.ts", () => (
     `${input.projectId}:${input.path}`,
 }));
 
-import { ProjectProcessor, defaultAgentSystemPrompt } from "./implementation.ts";
 import {
   AGENT_WORKSPACE_CAPABILITY_INSTRUCTIONS,
   SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE,
@@ -136,12 +137,7 @@ describe("ProjectProcessor worker forwarding", () => {
     const appendedBatches: Array<{ events: unknown[]; streamPath?: string }> = [];
     const processor = newProcessor({
       forwardToProjectWorker: async () => undefined,
-      stream: {
-        append: async () => undefined,
-        appendBatch: async (batch) => {
-          appendedBatches.push(batch);
-        },
-      },
+      stream: recordingStream(appendedBatches),
     });
 
     await processor.ingest({
@@ -199,12 +195,7 @@ describe("ProjectProcessor worker forwarding", () => {
     const appendedBatches: Array<{ events: unknown[]; streamPath?: string }> = [];
     const processor = newProcessor({
       forwardToProjectWorker: async () => undefined,
-      stream: {
-        append: async () => undefined,
-        appendBatch: async (batch) => {
-          appendedBatches.push(batch);
-        },
-      },
+      stream: recordingStream(appendedBatches),
     });
 
     await processor.ingest({
@@ -285,19 +276,29 @@ describe("ProjectProcessor worker forwarding", () => {
 
 function newProcessor(deps: {
   forwardToProjectWorker: (event: StreamEvent) => Promise<void>;
-  stream?: {
-    append: (input: never) => unknown;
-    appendBatch: (input: { events: unknown[]; streamPath?: string }) => unknown;
-  };
+  stream?: StreamProcessorStream;
 }) {
+  const { forwardToProjectWorker, stream } = deps;
   return new ProjectProcessor({
     appConfig: () => ({ projectHostnameBases: ["iterate.localhost"] }) as never,
     env: {} as never,
     exports: {},
-    iterateContext: { stream: deps.stream ?? { append: () => {}, appendBatch: () => {} } },
+    forwardToProjectWorker,
+    stream:
+      stream ?? ({ append: () => {}, appendBatch: () => {} } as unknown as StreamProcessorStream),
     projectId: () => "project_1",
-    ...deps,
   });
+}
+
+function recordingStream(appendedBatches: Array<{ events: unknown[]; streamPath?: string }>) {
+  let offset = 0;
+  return {
+    append: async (args: { event: StreamEventInput }) => event({ ...args.event, offset: ++offset }),
+    appendBatch: async (batch: { events: StreamEventInput[]; streamPath?: string }) => {
+      appendedBatches.push(batch);
+      return batch.events.map((input) => event({ ...input, offset: ++offset }));
+    },
+  } as unknown as StreamProcessorStream;
 }
 
 function event(args: {

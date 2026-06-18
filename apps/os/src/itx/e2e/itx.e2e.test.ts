@@ -449,7 +449,7 @@ test("the defaults arrive from the code-rooted chain end, and own rows shadow th
     kind: "rpc",
   });
   // The whole migrated kernel arrives the same way (§8: cap #0 disappears).
-  for (const name of ["repos", "streams", "workspace", "worker"]) {
+  for (const name of ["gmail", "repos", "streams", "workspace", "worker"]) {
     expect(before.capabilities.find((entry) => entry.name === name)).toMatchObject({
       from: "defaults",
     });

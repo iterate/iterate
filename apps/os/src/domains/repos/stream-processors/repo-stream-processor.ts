@@ -9,7 +9,10 @@ import {
   defineProcessorContract,
 } from "@iterate-com/shared/streams/stream-processors";
 import { StreamPath } from "@iterate-com/shared/streams/types";
-import { StreamProcessor } from "~/domains/streams/engine/stream-processor.ts";
+import {
+  StreamProcessor,
+  type StreamProcessorDeps,
+} from "~/domains/streams/engine/stream-processor.ts";
 
 export function repoStreamPath(path: string) {
   return StreamPath.parse(path);
@@ -75,9 +78,12 @@ export type RepoCreatedPayload = z.infer<
   (typeof RepoStreamProcessorContract.events)["events.iterate.com/repo/created"]["payloadSchema"]
 >;
 
-export type RepoStreamProcessorDeps = {
-  createRepoArtifact(input: RepoCreateRequestedPayload): Promise<RepoCreatedPayload>;
-};
+export type RepoStreamProcessorDeps = StreamProcessorDeps<
+  RepoStreamProcessorContract,
+  {
+    createRepoArtifact(input: RepoCreateRequestedPayload): Promise<RepoCreatedPayload>;
+  }
+>;
 
 export class RepoStreamProcessor extends StreamProcessor<
   RepoStreamProcessorContract,
@@ -111,7 +117,7 @@ export class RepoStreamProcessor extends StreamProcessor<
 
     args.blockProcessorWhile(async () => {
       const created = await this.deps.createRepoArtifact(event.payload);
-      await this.ctx.stream.append({
+      await this.deps.stream.append({
         event: {
           type: "events.iterate.com/repo/created",
           idempotencyKey: buildProcessorIdempotencyKey({
