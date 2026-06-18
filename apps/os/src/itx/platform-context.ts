@@ -135,6 +135,13 @@ const PLATFORM_PROJECT_CAPABILITIES: PlatformCapability[] = [
     name: "integrations",
   },
   {
+    address: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },
+    instructions:
+      "Gmail for this project's connected Google account: " +
+      "itx.gmail.request({ path, method?, query?, body? }) proxies a Gmail REST API call.",
+    name: "gmail",
+  },
+  {
     address: { entrypoint: "ReposCapability", type: "rpc", worker: { type: "loopback" } },
     instructions:
       "The project's git repos: itx.repos.ensureProjectRepoInfo(), " +

@@ -2,7 +2,9 @@ import { defineConfig, devices } from "@playwright/test";
 import { localOsDevServer } from "./apps/os/scripts/dev.ts";
 
 const videoMode = process.env.VIDEO_MODE === "1";
-const configuredOsBaseUrl = process.env.OS_BASE_URL?.replace(/\/+$/, "");
+
+/** Note: we use APP_CONFIG_BASE_URL as the *os* base url, even though that same variable name is used for other services too */
+const configuredOsBaseUrl = process.env.APP_CONFIG_BASE_URL?.replace(/\/+$/, "");
 const localOsTarget = configuredOsBaseUrl ? null : await localOsDevServer.resolveTarget();
 const osBaseUrl = configuredOsBaseUrl || localOsTarget?.baseUrl;
 

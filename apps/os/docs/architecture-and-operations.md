@@ -7,21 +7,19 @@ short README.
 
 OS deploys as many small Workers (see [worker-topology.md](./worker-topology.md)):
 a tiny ingress router owns all routes, the dashboard app is its own worker,
-and every Durable Object class is its own worker. Three kinds of traffic are
+and every Durable Object class is its own worker. Two kinds of traffic are
 dispatched on hostname and path:
 
-1. Infrastructure routes that bypass the app entirely: the Captun public relay
-   at `/__iterate/captun` and admin-token debug routes.
-2. Project ingress: requests to project hosts (`<slug>.iterate.app`, custom
+1. Project ingress: requests to project hosts (`<slug>.iterate.app`, custom
    hostnames) route to the project's callable, never the dashboard.
-3. The OS dashboard: a TanStack Start app, itx endpoint, integration
-   callbacks, and debug routes.
+2. The OS dashboard: a TanStack Start app, itx endpoint, integration
+   callbacks, debug routes, and inbound MCP.
 
-The ingress worker (`src/workers/ingress.ts`) forwards the MCP hostname to
-the MCP worker and ingress-rule matches to the project worker; everything
-else lands on the app worker (`src/workers/app.ts`), whose evlog-wrapped
-pipeline tries handlers in order before falling through to TanStack Start:
-docs markdown, `/api/itx`, and the `/__durable-objects` debug proxy. Runtime
+The ingress worker (`src/workers/ingress.ts`) rewrites the MCP hostname to the
+app worker's `/api/mcp` route and forwards ingress-rule matches to the
+project worker; everything else lands on the app worker (`src/workers/app.ts`),
+whose evlog-wrapped pipeline tries handlers in order before falling through to
+TanStack Start: docs markdown, `/api/itx`, and the `/__durable-objects` debug proxy. Runtime
 config is parsed from `env` per request (never at module scope — isolates can
 outlive binding-only deploys).
 
@@ -95,10 +93,6 @@ records desired state locally and writes global D1 projection rows for the hot
 Worker path. Durable Object SQLite and D1 are not one atomic transaction, so
 repair/reconciliation is explicit follow-up work.
 
-`ProjectMcpServerEntrypoint` still exists as a named export but is a
-tombstone: it returns `410 Gone` because project MCP hostnames moved to the
-canonical MCP endpoint (below).
-
 ## Streams
 
 `StreamDurableObject` is supplied by the OS streams domain. It is addressed by
@@ -109,8 +103,8 @@ The stream explorer lives at `/projects/:projectSlug/streams`. Detail pages
 are splat routes: `/streams/foo/bar` opens stream path `/foo/bar` inside the
 resolved Project ID.
 
-OS deploys the stream Durable Object from the main worker script and binds
-`STREAM` to that local namespace.
+OS deploys the stream Durable Object from the stream worker script and binds
+`STREAM` cross-script where callers need stream access.
 
 ## Durable Object Utilities
 
@@ -127,21 +121,21 @@ Durable Object's fetch handler:
 /__durable-objects/<kind>/<name>/<path>
 ```
 
-where `<kind>` is one of `project`, `project-mcp-server-connection`, `stream`
-(`src/debug-routes.ts`). Other debug routes there:
-`/__debug/seed-iterate-config-base`, and the itx egress echo at
-`/api/itx/egress-echo`.
+where `<kind>` is one of the Durable Object kinds handled by
+`src/debug-routes.ts` (for example `project` and `stream`). Other debug routes
+there: `/__debug/append-chain`,
+`/__debug/seed-iterate-config-base`, and `/api/itx/openapi-fixture`.
 
 ## MCP Directionality
 
 OS has two MCP flows:
 
-- Inbound MCP: external MCP clients connect to the canonical MCP endpoint.
-  `handleMcpFetch` (`src/domains/inbound-mcp-server/mcp-handler.ts`) matches
-  the URL from `APP_CONFIG_MCP__BASE_URL` (for example
-  `https://mcp.iterate.com`; fully-local dev defaults to
-  `<baseUrl>/api/__mcp`) and delegates session state to the
-  `ProjectMcpServerConnection` Durable Object via `McpAgent.serve`.
+- Inbound MCP: the app worker's TanStack Start route at `/api/mcp` is the MCP
+  server. `APP_CONFIG_MCP__BASE_URL` is the canonical OAuth resource URL and
+  can point at a dedicated MCP hostname (for example `https://mcp.iterate.com`),
+  which ingress rewrites to the same Start route. The OS app-host `/api/mcp`
+  route is also valid. The handler authenticates each request, creates a fresh
+  in-memory MCP server, and exposes `exec_js`.
 - Outbound MCP: an itx capability can connect to an external MCP server and
   expose that remote server's tools through the same path-call surface.
 

@@ -263,8 +263,6 @@ function readDebugDurableObjectNamespace(
   switch (objectKind) {
     case "project":
       return env.PROJECT as unknown as DebugDurableObjectNamespace;
-    case "project-mcp-server-connection":
-      return env.PROJECT_MCP_SERVER_CONNECTION as unknown as DebugDurableObjectNamespace;
     case "stream":
       return env.STREAM as unknown as DebugDurableObjectNamespace;
     default:

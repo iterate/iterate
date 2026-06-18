@@ -65,7 +65,7 @@ export class ItxDurableObject extends DurableObject<Env> {
       // The core appends/reads its OWN stream directly (dialed by name) —
       // never through the host's subscription-retained stub, which only
       // exists after the stream has dialed us.
-      iterateContext: { stream: contextStream(this.env, coordinate) },
+      stream: contextStream(this.env, coordinate),
       parentItx: () => {
         const parent = this.#itx.state.context?.parent;
         if (!parent) return null;

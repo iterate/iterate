@@ -5,7 +5,10 @@
 import { describe, expect, it } from "vitest";
 import { e2eStreamPathLabel, toStreamWebSocketUrl } from "../helpers.ts";
 import { withStreamConnectionFromNode } from "../../src/lib/node-stream-connection.ts";
-import type { StreamProcessorSnapshot } from "~/domains/streams/engine/stream-processor.ts";
+import type {
+  StreamProcessorSnapshot,
+  StreamProcessorStream,
+} from "~/domains/streams/engine/stream-processor.ts";
 // The SAME processor the staging host DO runs.
 import { EchoExampleProcessor } from "~/domains/streams/engine/processors/examples/echo/implementation.ts";
 import type { EchoExampleState } from "~/domains/streams/engine/processors/examples/echo/contract.ts";
@@ -24,12 +27,7 @@ async function hostEcho(args: {
   };
 }) {
   const processor = new EchoExampleProcessor({
-    iterateContext: {
-      stream: {
-        append: (appendArgs) => args.stream.append(appendArgs as never),
-        appendBatch: (batchArgs) => args.stream.appendBatch(batchArgs as never),
-      },
-    },
+    stream: args.stream as unknown as StreamProcessorStream,
     readState: args.storage.load,
     writeState: args.storage.save,
   });

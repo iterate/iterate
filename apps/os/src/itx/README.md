@@ -244,10 +244,9 @@ coordinate** — `{ projectId, path }`, written as the REF `<projectId>:<path>`
 
 - **Identity is the coordinate.** The project context is the project's root
   stream (`prj_x:/`); deployment-wide contexts use `__null__:/...`;
-  an agent's context is the agent's own stream
-  (`prj_x:/agents/…`); an MCP session's is its session stream; anonymous
-  extends default to `/itx/<generated>` — a plain convention, not a
-  reserved segment (any stream path can be a context). There are NO context
+  an agent's context is the agent's own stream (`prj_x:/agents/…`);
+  anonymous extends default to `/itx/<generated>` — a plain convention, not
+  a reserved segment (any stream path can be a context). There are NO context
   ids and no directory: ref, stream, and node address are one string.
 - **Creation is two idempotent appends by the CREATOR**
   (`createContext`, `coordinates.ts`): a `subscription-configured` event
@@ -284,7 +283,7 @@ coordinate** — `{ projectId, path }`, written as the REF `<projectId>:<path>`
 ## ⑥ The host: ItxDurableObject, and nothing else
 
 **One host.** `ItxDurableObject` (`itx-durable-object.ts`) hosts EVERY
-context — project, agent, MCP session, extension. It holds NO configuration:
+context — project, agent, extension. It holds NO configuration:
 its DO **name IS the ref**, so identity, stream, and self-address are
 projections of the name; parentage folds from the birth certificate;
 `descriptor()` derives from state. It registers its `Itx` as the `itx`
@@ -295,10 +294,10 @@ property accesses, so `node.itx().invoke(…)` stays one round trip).
 
 Creators: `projects.create` appends the project context's creation events
 onto the root stream (parent: the platform defaults); the agent DO appends
-its own onto the agent stream (parent: the project context); the MCP
-connection onto its session stream; `extend()` onto the chosen path. The
-Project and Agent DOs keep their DOMAIN work — processors, creation
-orchestration, tool provides — but host no capability core.
+its own onto the agent stream (parent: the project context); `extend()`
+appends onto the chosen child path. The Project and Agent DOs keep their
+DOMAIN work — processors, creation orchestration, tool provides — but host
+no capability core.
 
 Workspaces are deliberately NOT the kernel's concern: `WorkspaceCapability`
 takes an explicit provider-chosen `workspaceId`. The defaults provide the

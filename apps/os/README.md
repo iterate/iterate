@@ -11,8 +11,8 @@ It combines:
 - Iterate Auth Worker for first-party sessions, organizations, project claims,
   and MCP OAuth.
 - sqlfu and Cloudflare D1 for app projections.
-- Durable Objects for project lifecycle, ingress, MCP sessions, agents, repos,
-  workspaces, itx contexts, and shared streams.
+- Durable Objects for project lifecycle, ingress, agents, repos, workspaces,
+  itx contexts, and shared streams.
 
 ## How To Use It
 
@@ -133,16 +133,16 @@ doppler run --config prd -- pnpm cli claude-mcp
 ```
 
 The canonical MCP endpoint comes from `APP_CONFIG_MCP__BASE_URL`, for example
-`https://mcp.iterate.com` in production. Local dev deliberately keeps MCP
-path-mounted on the curlable app origin: `<APP_CONFIG_BASE_URL>/api/__mcp`, for
-example `http://localhost:5176/api/__mcp`.
+`https://mcp.iterate.com` in production. Local dev serves MCP on the normal app
+route: `<APP_CONFIG_BASE_URL>/api/mcp`, for example
+`http://localhost:5176/api/mcp`.
 
 Smoke local MCP with the Inspector:
 
 ```bash
 doppler run --project os --config dev -- sh -lc '
   BASE=$(node -p "require(\"./.alchemy/dev-server.json\").baseUrl")
-  npx -y @modelcontextprotocol/inspector --cli "$BASE/api/__mcp" \
+  npx -y @modelcontextprotocol/inspector --cli "$BASE/api/mcp" \
     --transport http \
     --method tools/list \
     --header "Authorization: Bearer $APP_CONFIG_ADMIN_API_SECRET"
@@ -154,7 +154,7 @@ Then call `exec_js` with a real project slug:
 ```bash
 doppler run --project os --config dev -- sh -lc '
   BASE=$(node -p "require(\"./.alchemy/dev-server.json\").baseUrl")
-  npx -y @modelcontextprotocol/inspector --cli "$BASE/api/__mcp" \
+  npx -y @modelcontextprotocol/inspector --cli "$BASE/api/mcp" \
     --transport http \
     --method tools/call \
     --tool-name exec_js \

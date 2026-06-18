@@ -5,7 +5,7 @@ import { os } from "@orpc/server";
 import { z } from "zod";
 
 const DEFAULT_MCP_BASE_URL = "https://mcp.iterate.com";
-const LOCAL_DEVELOPMENT_MCP_PATH = "/api/__mcp";
+const LOCAL_DEVELOPMENT_MCP_PATH = "/api/mcp";
 const SERVER_NAME = "iterate";
 const DEFAULT_INITIAL_PROMPT = "describe the MCP tools you have available";
 
@@ -16,7 +16,7 @@ const ClaudeMcpInput = z.object({
     .min(1)
     .regex(/^[a-zA-Z0-9_-]+$/, "Project slug or ID must be hostname-safe")
     .optional()
-    .describe("Deprecated; admin-token MCP sessions now expose all projects."),
+    .describe("Deprecated; admin-token MCP access now exposes all projects."),
   baseHost: z
     .string()
     .trim()
@@ -61,7 +61,7 @@ export const claudeMcpScript = os
     );
   });
 
-function defaultMcpUrlFromEnv() {
+export function defaultMcpUrlFromEnv() {
   const resolvedMcpBaseUrl = resolveMcpBaseUrl({
     appBaseUrl: process.env.APP_CONFIG_BASE_URL,
     mcpBaseUrl: process.env.APP_CONFIG_MCP__BASE_URL,
@@ -144,7 +144,7 @@ export async function assertMcpAdminBearerAccepted(input: { mcpUrl: string; toke
     throw new Error(
       [
         "MCP bearer token was rejected (401).",
-        "APP_CONFIG_ADMIN_API_SECRET must match the deployed OS worker for this MCP hostname.",
+        "APP_CONFIG_ADMIN_API_SECRET must match the OS deployment serving this MCP URL.",
         dopplerConfig
           ? `Current Doppler config: ${dopplerConfig}`
           : "No DOPPLER_CONFIG in env — `pnpm cli` defaults to os/prd; override with e.g. `doppler run --project os --config preview_2 -- pnpm cli …`.",

@@ -59,7 +59,7 @@ OS no longer imports anything from `@iterate-com/shared/apps/*`:
 - **`AppContext` → `RequestContext`** (`src/request-context.ts`), which _is_
   the TanStack Start request context (the `Register` augmentation lives next
   to the type). It now carries request-scoped state only: config, db, log,
-  auth principal/session, waitUntil, `ctx.exports`, project scope.
+  auth principal/session, waitUntil, and `ctx.exports`.
 - **Worker bindings are read from `import { env } from "cloudflare:workers"`**
   at the point of use instead of being threaded through context as optional
   fields. This deleted a dozen `if (!context.X) throw "binding not available"`
@@ -108,18 +108,14 @@ structural changes, all verified by bisection:
      explicit type annotations.
 - The request context is registered on **both** `@tanstack/react-start` and
   `@tanstack/react-router`: in the installed versions `handler.fetch` types its
-  context from react-router's Register while middleware/getGlobalStartContext
+  context from react-router's Register while middleware and server functions
   read react-start's. These are distinct interfaces.
 - `iterateAuthMiddleware` is now `createMiddleware({ type: "request" })` — it
   is registered as requestMiddleware and returns raw Responses, which is the
   request-middleware contract.
-- Upstream type bug worked around: once the footer registers `config`,
-  `getGlobalStartContext()`'s return type collapses to `undefined`
-  (`AssignAllMiddleware<[]>` degenerates to `never` inside
-  `AssignAllServerRequestContext`). `getRequestContext()` /
-  `requireRequestContext()` in `src/request-context.ts` are the typed accessors
-  that state the runtime truth; nothing else should call
-  `getGlobalStartContext` directly.
+- Server routes and server functions use TanStack's native handler `context`
+  argument directly; `src/request-context.ts` only defines the OS request
+  context shape and Register augmentation.
 
 ### 6. Security: closed an unauthenticated secret leak in `__internal/debug` (2026-06-10)
 

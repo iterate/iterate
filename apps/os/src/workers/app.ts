@@ -16,7 +16,7 @@
 import handler from "@tanstack/react-start/server-entry";
 import { withEvlog } from "@iterate-com/shared/evlog";
 import { createD1Client } from "sqlfu";
-import { ROUTED_LANE_HEADER, routeOsRequest } from "./shared/router.ts";
+import { routeOsRequest } from "./shared/router.ts";
 import { AppConfig, parseConfig } from "~/config.ts";
 import type { RequestContext } from "~/request-context.ts";
 import { handleDebugRoutes, handleDurableObjectDebugFetch } from "~/debug-routes.ts";
@@ -40,19 +40,17 @@ export default {
     return withEvlog(
       { request, app: { name: "@iterate-com/os", slug: "os" }, config, executionCtx: ctx },
       async ({ log }) => {
-        // Deployed, the ingress worker has already classified the request
-        // (ROUTED_LANE_HEADER) — this re-route only runs when the browser
-        // talks to this worker directly (local dev, workers.dev previews),
-        // forwarding project-host/MCP traffic exactly like ingress would.
-        if (!request.headers.get(ROUTED_LANE_HEADER)) {
-          const routed = await routeOsRequest({
-            config,
-            db: env.DB,
-            request,
-            targets: { MCP: env.MCP, PROJECT_HOST: env.PROJECT_HOST },
-          });
-          if (routed) return routed;
-        }
+        // In local dev and workers.dev previews the browser can talk to this
+        // worker directly, so it runs the shared router to forward project-host
+        // traffic over the same service binding ingress uses in production. MCP
+        // stays in this app worker and falls through to the Start route.
+        const routed = await routeOsRequest({
+          config,
+          db: env.DB,
+          request,
+          targets: { PROJECT_HOST: env.PROJECT_HOST },
+        });
+        if (routed) return routed;
 
         // When baseUrl is not configured (for example workers.dev previews),
         // the request origin is the app's own URL. After this, baseUrl is always set.

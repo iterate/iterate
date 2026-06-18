@@ -76,15 +76,15 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   Browser project ingress uses `*.localhost`; curl/Node on macOS usually do
   not resolve those names, so non-browser clients should use
   `localhost:<port>` with a Host header.
-- Local MCP is deliberately path-mounted on the curlable app origin:
-  `http://localhost:<port>/api/__mcp`. Do not use `mcp.localhost` for local
+- Local MCP is the normal OS app route:
+  `http://localhost:<port>/api/mcp`. Do not use `mcp.localhost` for local
   scripts unless you have configured local wildcard DNS yourself.
   Smoke it with the MCP Inspector from `apps/os`:
 
   ```bash
   doppler run --project os --config dev -- sh -lc '
     BASE=$(node -p "require(\"./.alchemy/dev-server.json\").baseUrl")
-    npx -y @modelcontextprotocol/inspector --cli "$BASE/api/__mcp" \
+    npx -y @modelcontextprotocol/inspector --cli "$BASE/api/mcp" \
       --transport http \
       --method tools/list \
       --header "Authorization: Bearer $APP_CONFIG_ADMIN_API_SECRET"
@@ -96,7 +96,7 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   ```bash
   doppler run --project os --config dev -- sh -lc '
     BASE=$(node -p "require(\"./.alchemy/dev-server.json\").baseUrl")
-    npx -y @modelcontextprotocol/inspector --cli "$BASE/api/__mcp" \
+    npx -y @modelcontextprotocol/inspector --cli "$BASE/api/mcp" \
       --transport http \
       --method tools/call \
       --tool-name exec_js \

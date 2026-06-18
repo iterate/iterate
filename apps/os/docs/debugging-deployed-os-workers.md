@@ -61,11 +61,13 @@ doppler run --config prd -- pnpm cli itx run \
 
 ### Project MCP
 
-The OS MCP transport is served at the configured MCP base URL. Production is
-`https://mcp.iterate.com`; fully-local dev defaults to `<baseUrl>/api/__mcp`.
-`/projects/:slug/mcp` is the dashboard UI, not the transport URL. Admin-token
-sessions expose all projects and the `exec_js` tool requires a project slug when
-it runs.
+The OS MCP transport is the app worker's `/api/mcp` Start route. Production
+advertises `https://mcp.iterate.com` as the canonical OAuth resource URL, and
+ingress rewrites that hostname to the same route. The app-host
+`https://os.iterate.com/api/mcp` route is also valid. Fully-local dev defaults
+to `<baseUrl>/api/mcp`. `/projects/:slug/mcp` is the dashboard UI, not the
+transport URL. Admin-token sessions expose all projects and the `exec_js` tool
+requires a project slug when it runs.
 
 ```text
 https://mcp.iterate.com

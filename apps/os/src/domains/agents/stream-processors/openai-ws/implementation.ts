@@ -36,7 +36,10 @@ import {
   parseLlmRequestRequestedEventAt,
 } from "../llm-request-helpers.ts";
 import { OpenAiWsProcessorContract, type OpenAiWsState } from "./contract.ts";
-import { StreamProcessor } from "~/domains/streams/engine/stream-processor.ts";
+import {
+  StreamProcessor,
+  type StreamProcessorDeps,
+} from "~/domains/streams/engine/stream-processor.ts";
 
 export { OpenAiWsProcessorContract } from "./contract.ts";
 
@@ -69,14 +72,17 @@ const OpenAiResponsesStreamMessage = z.looseObject({
   error: z.object({ message: z.string().optional() }).passthrough().optional(),
 });
 
-export type OpenAiWsProcessorDeps = {
-  openResponsesWebSocket(): Promise<OpenAiResponsesWebSocket>;
-  /**
-   * Reads the full committed history of the agent's stream so the processor
-   * can confirm the request is still current before appending agent output.
-   */
-  readStreamEvents(): Promise<StreamEvent[]>;
-};
+export type OpenAiWsProcessorDeps = StreamProcessorDeps<
+  OpenAiWsProcessorContract,
+  {
+    openResponsesWebSocket(): Promise<OpenAiResponsesWebSocket>;
+    /**
+     * Reads the full committed history of the agent's stream so the processor
+     * can confirm the request is still current before appending agent output.
+     */
+    readStreamEvents(): Promise<StreamEvent[]>;
+  }
+>;
 
 export type OpenAiResponsesWebSocket = {
   readonly url: URL | string;
@@ -808,7 +814,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
   }
 
   async #append(event: { type: string; idempotencyKey: string; payload: unknown }) {
-    await this.ctx.stream.append({ event });
+    await this.deps.stream.append({ event });
   }
 }
 

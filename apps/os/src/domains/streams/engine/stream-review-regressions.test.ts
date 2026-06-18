@@ -15,7 +15,12 @@ import { z } from "zod";
 import { defineProcessorContract } from "./shared/stream-processors.ts";
 import type { StreamEvent, StreamEventInput } from "./shared/event.ts";
 import type { StreamEventBatch } from "./types.ts";
-import { StreamProcessor, type StreamProcessorSnapshot } from "./stream-processor.ts";
+import {
+  StreamProcessor,
+  type StreamProcessorDeps,
+  type StreamProcessorSnapshot,
+  type StreamProcessorStream,
+} from "./stream-processor.ts";
 import { createStreamProcessorHost } from "./workers/stream-processor-host.ts";
 import {
   CircuitBreakerProcessor,
@@ -25,8 +30,8 @@ import { spendCircuitBreakerToken } from "./processors/circuit-breaker/contract.
 
 const iso = (ms = 0) => new Date(ms).toISOString();
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
-/** Minimal stream context mock; leaving it named avoids contextual typing of the no-op methods. */
-const iterateContext = () => ({ stream: { append() {}, appendBatch() {} } });
+/** Minimal stream stub for tests that never call the richer stream RPC methods. */
+const stream = () => ({ append() {}, appendBatch() {} }) as unknown as StreamProcessorStream;
 
 // A minimal counting processor whose batch hook can be made to throw once.
 const CounterContract = defineProcessorContract({
@@ -40,10 +45,13 @@ const CounterContract = defineProcessorContract({
   emits: [],
 });
 type CounterContract = typeof CounterContract;
-type CounterDeps = {
-  onBatch?: (args: { events: readonly StreamEvent[] }) => void;
-  onEvent?: (amount: number) => void;
-};
+type CounterDeps = StreamProcessorDeps<
+  CounterContract,
+  {
+    onBatch?: (args: { events: readonly StreamEvent[] }) => void;
+    onEvent?: (amount: number) => void;
+  }
+>;
 
 class CounterProcessor extends StreamProcessor<CounterContract, CounterDeps> {
   readonly contract = CounterContract;
@@ -347,7 +355,7 @@ describe("T2 — writeState failure advances the in-memory checkpoint (C2)", () 
     const writes: StreamProcessorSnapshot<{ total: number }>[] = [];
     let failNextWrite = true;
     const processor = new CounterProcessor({
-      iterateContext: iterateContext(),
+      stream: stream(),
       writeState: (snapshot) => {
         if (failNextWrite) {
           failNextWrite = false;
@@ -392,16 +400,14 @@ describe("T6 — circuit-breaker pauses once the bucket is in deficit (M4)", () 
   it("pauses during catch-up once the bucket is in deficit", async () => {
     const committed: StreamEvent[] = [];
     const processor = new CircuitBreakerProcessor({
-      iterateContext: {
-        stream: {
-          append: (args) => {
-            const e = { ...args.event, offset: 100, createdAt: iso(1) } as StreamEvent;
-            committed.push(e);
-            return e;
-          },
-          appendBatch: () => [],
+      stream: {
+        append: (args: { event: StreamEventInput }) => {
+          const e = { ...args.event, offset: 100, createdAt: iso(1) } as StreamEvent;
+          committed.push(e);
+          return e;
         },
-      },
+        appendBatch: () => [],
+      } as unknown as StreamProcessorStream,
     });
 
     await processor.ingest({

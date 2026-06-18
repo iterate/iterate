@@ -1,4 +1,4 @@
-const localDevelopmentMcpPath = "/api/__mcp";
+export const MCP_START_MOUNT_PATH = "/api/mcp";
 
 export function resolveMcpBaseUrl(input: {
   appBaseUrl?: string;
@@ -14,9 +14,7 @@ export function resolveMcpBaseUrl(input: {
   const parsed = new URL(localBaseUrl);
   if (!isLocalhostHostname(parsed.hostname)) return null;
 
-  return normalizeUrlWithoutSearchOrHash(
-    new URL(localDevelopmentMcpPath, parsed.origin).toString(),
-  );
+  return normalizeUrlWithoutSearchOrHash(new URL(MCP_START_MOUNT_PATH, parsed.origin).toString());
 }
 
 export function normalizeUrlWithoutSearchOrHash(value: string) {
@@ -27,7 +25,7 @@ export function normalizeUrlWithoutSearchOrHash(value: string) {
   return url.toString().replace(/\/$/, "");
 }
 
-function isLocalhostHostname(hostname: string) {
+export function isLocalhostHostname(hostname: string) {
   return (
     hostname === "localhost" ||
     hostname === "127.0.0.1" ||

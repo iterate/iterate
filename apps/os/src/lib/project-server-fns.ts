@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { ProjectsCapability } from "~/domains/projects/project-directory.ts";
 import { authenticateCapnwebAdmin } from "~/itx/admin-auth-cookie.ts";
-import { requireRequestContext, type RequestContext } from "~/request-context.ts";
+import type { RequestContext } from "~/request-context.ts";
 
 /**
  * SSR-safe project reads as TanStack server functions. itx is client-only (it
@@ -38,16 +38,18 @@ export const createMyProjectServerFn: (input: {
   data: { id?: string; slug: string; organizationSlug?: string };
 }) => Promise<ProjectWithIngressUrl> = createServerFn({ method: "POST" })
   .validator((input: { id?: string; slug: string; organizationSlug?: string }) => input)
-  .handler(async ({ data }) => {
-    return await new ProjectsCapability({ context: requireUserRequestContext() }).create(data);
+  .handler(async ({ context, data }) => {
+    return await new ProjectsCapability({ context: requireUserRequestContext(context) }).create(
+      data,
+    );
   });
 
 export const deleteProjectServerFn: (input: {
   data: { id: string };
 }) => Promise<{ ok: true; id: string; deleted: boolean }> = createServerFn({ method: "POST" })
   .validator((input: { id: string }) => input)
-  .handler(async ({ data }) => {
-    return await new ProjectsCapability({ context: requireRequestContext() }).remove(data);
+  .handler(async ({ context, data }) => {
+    return await new ProjectsCapability({ context }).remove(data);
   });
 
 /** The session principal's accessible projects (mirrors the former `projects.list`). */
@@ -55,8 +57,8 @@ export const listMyProjectsServerFn: (input: {
   data: { limit?: number; offset?: number };
 }) => Promise<ProjectListResult> = createServerFn({ method: "GET" })
   .validator((input: { limit?: number; offset?: number }) => input)
-  .handler(async ({ data }) => {
-    return await new ProjectsCapability({ context: requireRequestContext() }).list(data);
+  .handler(async ({ context, data }) => {
+    return await new ProjectsCapability({ context }).list(data);
   });
 
 /** All OS projects, guarded for the admin page. */
@@ -64,8 +66,10 @@ export const listAdminProjectsServerFn: (input: {
   data: { limit?: number; offset?: number };
 }) => Promise<ProjectListResult> = createServerFn({ method: "GET" })
   .validator((input: { limit?: number; offset?: number }) => input)
-  .handler(async ({ data }) => {
-    return await new ProjectsCapability({ context: adminProjectContext() }).listAllForAdmin(data);
+  .handler(async ({ context, data }) => {
+    return await new ProjectsCapability({ context: adminProjectContext(context) }).listAllForAdmin(
+      data,
+    );
   });
 
 /** A single project the session principal can read, by slug (mirrors `projects.findBySlug`). */
@@ -73,14 +77,13 @@ export const getProjectBySlugServerFn: (input: {
   data: { slug: string };
 }) => Promise<ProjectWithIngressUrl> = createServerFn({ method: "GET" })
   .validator((input: { slug: string }) => input)
-  .handler(async ({ data }) => {
-    return await new ProjectsCapability({ context: requireRequestContext() }).findBySlug({
+  .handler(async ({ context, data }) => {
+    return await new ProjectsCapability({ context }).findBySlug({
       slug: data.slug,
     });
   });
 
-function adminProjectContext(): RequestContext {
-  const context = requireRequestContext();
+function adminProjectContext(context: RequestContext): RequestContext {
   if (context.rawRequest) {
     const adminCookiePrincipal = authenticateCapnwebAdmin({
       config: context.config,
@@ -93,8 +96,7 @@ function adminProjectContext(): RequestContext {
   return context;
 }
 
-function requireUserRequestContext(): RequestContext {
-  const context = requireRequestContext();
+function requireUserRequestContext(context: RequestContext): RequestContext {
   if (context.principal?.type !== "user") {
     throw new Error("Sign in to create projects.");
   }
