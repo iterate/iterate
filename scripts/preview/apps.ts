@@ -16,6 +16,7 @@ export type CloudflarePreviewApp = {
   /** Readiness probe path on the app's public URL (default /api/__internal/health). */
   previewReadyUrlPath?: string;
   previewTestBaseUrlEnvVar: string;
+  previewTestArtifacts?: readonly [string, ...string[]];
   previewTestCommandArgs: readonly [string, ...string[]];
 };
 
@@ -63,6 +64,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // OS bakes auth JWKS during deployment, so the slot's auth deployment must
     // finish before OS deploy starts.
     previewDependencies: ["auth"],
+    previewTestArtifacts: ["test-results"],
     previewTestBaseUrlEnvVar: "OS_BASE_URL",
     // The itx e2e (node project only — the browser project needs a Playwright
     // chromium install the preview e2e job doesn't have) reads
