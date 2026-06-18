@@ -201,6 +201,7 @@ describe("OpenAiWsProcessor", () => {
     expect(eventTypes(appended)).not.toContain(
       "events.iterate.com/openai-ws/websocket-message-sent",
     );
+    expect(sockets[0]?.closed).toBe(true);
     expect(eventTypes(appended)).toContain("events.iterate.com/openai-ws/websocket-disconnected");
     expect(appended).toContainEqual(
       expect.objectContaining({

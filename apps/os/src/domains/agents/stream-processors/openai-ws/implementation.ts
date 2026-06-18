@@ -479,6 +479,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
     try {
       connection.client.sendResponseCreate(requestMessage);
     } catch (error) {
+      connection.client.close({ code: 1011, reason: "send-failed" });
       this.#markConnectionClosed(connection);
       const durationMs = Date.now() - startedAt;
       const failure = {
