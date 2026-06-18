@@ -34,3 +34,4 @@ Done in draft PR #1564. The OS preview test lane now runs root Playwright specs 
 - The first focused Vitest attempt from the repo root failed because `vitest` is not installed at root. The working command uses the OS workspace binary with `--root ../..`.
 - Full PR check rollup passed after the final push: Preview deploy/e2e, lint-typecheck, test, Generate Workflows, and autofix.
 - Follow-up after run 27773132640: the OS itx matrix failed before root Playwright ran, and the artifact upload step found no `test-results` directory. OS preview artifacts now include the Vitest `/tmp/os-e2e-*` and `/tmp/os-itx-e2e-*` run roots as well as Playwright result directories.
+- Follow-up after run 27775715377: artifacts uploaded correctly, but OS e2e still failed under concurrent smoke/broad-itx/matrix load. The OS preview command now runs those phases sequentially before root Playwright to reduce preview-slot pressure.

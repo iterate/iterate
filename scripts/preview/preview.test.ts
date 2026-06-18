@@ -71,17 +71,21 @@ describe("preview test commands", () => {
   it("runs root Playwright specs after OS preview Vitest lanes", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs[2];
     const playwrightInstall = "pnpm --dir ../.. exec playwright install chromium";
+    const smoke = 'pnpm e2e -t "OS preview smoke"';
+    const broadItx =
+      "OS_ITX_E2E_FILE_PARALLELISM=true OS_ITX_E2E_EGRESS_CONCURRENT=true OS_ITX_E2E_LIVE_CONCURRENT=true OS_ITX_E2E_SKIP_MATRIX=true pnpm e2e:itx --project node";
+    const matrix = "pnpm e2e:itx --project node src/itx/e2e/itx.e2e.test.ts -t 'catalogue example'";
     const playwrightSpec = "pnpm --dir ../.. spec";
-    const vitestStatusGate =
-      'if [ "$smoke_status" -ne 0 ] || [ "$itx_status" -ne 0 ] || [ "$matrix_status" -ne 0 ]; then exit 1; fi';
 
     expect(script).toContain(playwrightInstall);
+    expect(script).toContain(smoke);
+    expect(script).toContain(broadItx);
+    expect(script).toContain(matrix);
     expect(script).toContain(playwrightSpec);
-    expect(script).toContain(vitestStatusGate);
-    expect(script.indexOf(playwrightInstall)).toBeLessThan(
-      script.indexOf('pnpm e2e -t "OS preview smoke" & smoke_pid=$!'),
-    );
-    expect(script.indexOf(playwrightSpec)).toBeGreaterThan(script.indexOf(vitestStatusGate));
+    expect(script.indexOf(playwrightInstall)).toBeLessThan(script.indexOf(smoke));
+    expect(script.indexOf(smoke)).toBeLessThan(script.indexOf(broadItx));
+    expect(script.indexOf(broadItx)).toBeLessThan(script.indexOf(matrix));
+    expect(script.indexOf(matrix)).toBeLessThan(script.indexOf(playwrightSpec));
   });
 });
 

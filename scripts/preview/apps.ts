@@ -82,20 +82,9 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       [
         "set -euo pipefail",
         "pnpm --dir ../.. exec playwright install chromium",
-        'pnpm e2e -t "OS preview smoke" & smoke_pid=$!',
-        // Keep the catalogue matrix out of the broad file-parallel run: mixing
-        // both forms of parallelism in one Vitest process overloaded preview
-        // workers in probes. Start it after a short delay so its setup overlaps
-        // the broad phase's tail without hitting the initial worker burst.
-        "OS_ITX_E2E_FILE_PARALLELISM=true OS_ITX_E2E_EGRESS_CONCURRENT=true OS_ITX_E2E_LIVE_CONCURRENT=true OS_ITX_E2E_SKIP_MATRIX=true pnpm e2e:itx --project node & itx_pid=$!",
-        "(sleep ${OS_ITX_E2E_MATRIX_DELAY_SECONDS:-20}; pnpm e2e:itx --project node src/itx/e2e/itx.e2e.test.ts -t 'catalogue example') & matrix_pid=$!",
-        "smoke_status=0",
-        "itx_status=0",
-        "matrix_status=0",
-        'wait "$smoke_pid" || smoke_status=$?',
-        'wait "$itx_pid" || itx_status=$?',
-        'wait "$matrix_pid" || matrix_status=$?',
-        'if [ "$smoke_status" -ne 0 ] || [ "$itx_status" -ne 0 ] || [ "$matrix_status" -ne 0 ]; then exit 1; fi',
+        'pnpm e2e -t "OS preview smoke"',
+        "OS_ITX_E2E_FILE_PARALLELISM=true OS_ITX_E2E_EGRESS_CONCURRENT=true OS_ITX_E2E_LIVE_CONCURRENT=true OS_ITX_E2E_SKIP_MATRIX=true pnpm e2e:itx --project node",
+        "pnpm e2e:itx --project node src/itx/e2e/itx.e2e.test.ts -t 'catalogue example'",
         "pnpm --dir ../.. spec",
       ].join("; "),
     ],
