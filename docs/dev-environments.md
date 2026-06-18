@@ -195,11 +195,16 @@ don't paste it into shared channels.
 ### Playwright specs against local dev or previews
 
 Root Playwright specs use the same forge key and admin API secret, but mint the
-session cookie directly instead of going through the browser sign-in URL. Run
-them inside the `os` Doppler config for the target environment:
+session cookie directly instead of going through the browser sign-in URL. If
+`apps/os` has a Doppler config selected, `pnpm spec` can read the needed secrets
+directly; wrap the command in `doppler run` when you want to force a particular
+config:
 
 ```bash
 # local dev: starts or reuses the local OS dev server when OS_BASE_URL is unset
+pnpm spec
+
+# same thing, forcing a specific Doppler config
 doppler run --project os --config dev -- pnpm spec
 
 # deployed preview: point the specs at the deployed OS worker

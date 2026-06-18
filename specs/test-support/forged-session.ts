@@ -1,3 +1,6 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import type { Page } from "@playwright/test";
 import { z } from "zod/v4";
 import {
@@ -21,6 +24,11 @@ type OsPlaywrightAuthConfig = {
   forgePrivateJwk: ForgePrivateJwk;
   issuer: string;
 };
+
+type OsPlaywrightAuthEnv = z.infer<typeof Env>;
+
+const execFileAsync = promisify(execFile);
+const OS_APP_DIR = fileURLToPath(new URL("../../apps/os", import.meta.url));
 
 const ForgePrivateJwkSchema = z
   .looseObject({
@@ -202,23 +210,64 @@ async function resolveOsPlaywrightAuthConfig(): Promise<OsPlaywrightAuthConfig> 
 }
 
 async function loadOsPlaywrightAuthConfig(): Promise<OsPlaywrightAuthConfig> {
+  const env = await loadOsPlaywrightAuthEnv();
+
+  return {
+    adminApiSecret: env.APP_CONFIG_ADMIN_API_SECRET,
+    clientId: env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID,
+    forgePrivateJwk: env.AUTH_FORGE_PRIVATE_JWK,
+    issuer: env.APP_CONFIG_ITERATE_AUTH__ISSUER,
+  };
+}
+
+async function loadOsPlaywrightAuthEnv(): Promise<OsPlaywrightAuthEnv> {
   const env = Env.safeParse(process.env);
-  if (!env.success) {
+  if (env.success) return env.data;
+
+  const dopplerEnv = await loadOsDopplerSecrets();
+  if (dopplerEnv.ok) {
+    const parsed = Env.safeParse(dopplerEnv.secrets);
+    if (parsed.success) return parsed.data;
+
     throw new Error(
       [
         "Playwright forged-session specs require OS auth/admin env from Doppler.",
-        "Run with `doppler run --project os --config <dev|preview_N> -- pnpm spec`.",
+        "process.env was missing required values, and `doppler secrets download --no-file --format json` from apps/os did not contain valid replacements.",
+        "process.env validation:",
         z.prettifyError(env.error),
+        "apps/os Doppler validation:",
+        z.prettifyError(parsed.error),
       ].join("\n\n"),
     );
   }
 
-  return {
-    adminApiSecret: env.data.APP_CONFIG_ADMIN_API_SECRET,
-    clientId: env.data.APP_CONFIG_ITERATE_AUTH__CLIENT_ID,
-    forgePrivateJwk: env.data.AUTH_FORGE_PRIVATE_JWK,
-    issuer: env.data.APP_CONFIG_ITERATE_AUTH__ISSUER,
-  };
+  throw new Error(
+    [
+      "Playwright forged-session specs require OS auth/admin env from Doppler.",
+      "Run with `doppler run --project os --config <dev|preview_N> -- pnpm spec`, or configure Doppler for apps/os so `pnpm spec` can read secrets directly.",
+      "process.env validation:",
+      z.prettifyError(env.error),
+      "apps/os Doppler lookup:",
+      dopplerEnv.error,
+    ].join("\n\n"),
+  );
+}
+
+async function loadOsDopplerSecrets() {
+  try {
+    const { stdout } = await execFileAsync(
+      "doppler",
+      ["secrets", "download", "--no-file", "--format", "json"],
+      {
+        cwd: OS_APP_DIR,
+        env: process.env,
+        maxBuffer: 10 * 1024 * 1024,
+      },
+    );
+    return { ok: true as const, secrets: JSON.parse(stdout) as Record<string, string> };
+  } catch (error) {
+    return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 async function signJwt(input: {
