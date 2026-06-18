@@ -406,8 +406,8 @@ One PR (deliberately breaking; prd gets redeployed), five moves:
   all deleted. Identity is the REF `<projectId>:<path>` — also the node's
   DO name and address. The project context lives at `prj_x:/` (its events
   interleave with the project's own on the root stream, exactly like agents
-  already did on theirs); an MCP session's at its session stream; `extend`
-  takes a `path` or generates `/itx/<id>`.
+  already did on theirs); child contexts live at the `extend` path or the
+  generated `/itx/<id>` path.
 - **The generic host derives nothing; creation is an event by the CREATOR.**
   `createContext` appends `subscription-configured` (pointing the stream at
   the node's `itx` processor) + `context-created { name, parent }` — both

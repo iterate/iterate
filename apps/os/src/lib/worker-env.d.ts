@@ -15,7 +15,6 @@ type AppWorkerEnv = W["app"]["Env"];
 type AgentWorkerEnv = W["agent"]["Env"];
 type IngressWorkerEnv = W["ingress"]["Env"];
 type ItxWorkerEnv = W["itx"]["Env"];
-type McpWorkerEnv = W["mcp"]["Env"];
 type ProjectWorkerEnv = W["project"]["Env"];
 type RepoWorkerEnv = W["repo"]["Env"];
 type SlackAgentWorkerEnv = W["slackAgent"]["Env"];
@@ -34,7 +33,6 @@ export interface CloudflareEnv
     AgentWorkerEnv,
     IngressWorkerEnv,
     ItxWorkerEnv,
-    McpWorkerEnv,
     ProjectWorkerEnv,
     RepoWorkerEnv,
     SlackAgentWorkerEnv,
@@ -51,7 +49,6 @@ export interface CloudflareEnv
 type WorkerMainModule = typeof import("../workers/shared/loopback-exports.ts") & {
   ItxCapabilityIngress: (typeof import("../itx/http.ts"))["ItxCapabilityIngress"];
   ProjectIngressEntrypoint: (typeof import("../domains/projects/entrypoints/project-ingress-entrypoint.ts"))["ProjectIngressEntrypoint"];
-  ProjectMcpServerEntrypoint: (typeof import("../domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts"))["ProjectMcpServerEntrypoint"];
 };
 
 declare global {

@@ -2,9 +2,9 @@
 //
 // Every context is `{ projectId, path }` — an ordinary event stream. The
 // project context lives at `(projectId, "/")`, an agent's at
-// `(projectId, agentPath)`, an MCP session's at its session stream path, and
-// anonymous extensions default to `/itx/<generated>` (a plain convention,
-// not a reserved segment — any stream path can be a context). There are no
+// `(projectId, agentPath)`, and anonymous extensions default to
+// `/itx/<generated>` (a plain convention, not a reserved segment — any stream
+// path can be a context). There are no
 // context ids: the REF string `<projectId>:<path>` is the identity, and it
 // is also the ItxDurableObject's name, so identity, stream, and address are
 // the same fact spelled three ways.

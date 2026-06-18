@@ -342,9 +342,9 @@ export class ItxHandle extends RpcTarget {
    * (Law 4). Child caps shadow this context's; misses delegate up the chain.
    *
    * The child IS a stream coordinate: pass `path` to put it somewhere
-   * meaningful (an MCP session's stream, a run's stream), or take the
-   * generated `/itx/<id>` catch-all. Extending an existing path is
-   * get-or-create — the first creation event wins.
+   * meaningful (an agent stream, a run stream), or take the generated
+   * `/itx/<id>` catch-all. Extending an existing path is get-or-create —
+   * the first creation event wins.
    */
   async extend(opts: { name?: string; path?: string } = {}): Promise<ItxHandle> {
     const projectId = this.#requireProjectId();

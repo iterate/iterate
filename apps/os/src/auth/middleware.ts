@@ -3,11 +3,9 @@ import {
   isAuthHandlerRequest,
   type AuthenticatedSession,
 } from "@iterate-com/auth/server";
-import { oauthResourceAudienceVariants } from "@iterate-com/shared/oauth-resource";
 import { createMiddleware } from "@tanstack/react-start";
 import type { RequestContext } from "~/request-context.ts";
 import { authenticateAdminApiSecret } from "~/auth/admin.ts";
-import { resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
 import {
   principalFromAccessToken,
   principalFromSession,
@@ -24,11 +22,6 @@ const authClients = new Map<string, OsIterateAuth>();
 // https://tanstack.com/start/latest/docs/framework/react/guide/middleware
 export const iterateAuthMiddleware = createMiddleware({ type: "request" }).server(
   async ({ request, context, next }) => {
-    // Start types the request context as possibly undefined, but workers/app.ts
-    // always passes one to handler.fetch — treat its absence as a wiring bug.
-    if (!context) {
-      throw new Error("Request context missing — handler.fetch was called without a context.");
-    }
     const auth = createOsIterateAuth(context, request);
     const authHandlerResponse = auth?.handleRequest(request) ?? null;
     if (authHandlerResponse) {
@@ -137,22 +130,13 @@ export function createOsIterateAuth(context: RequestContext, request: Request) {
 
   const requestOrigin = new URL(request.url).origin;
   const resource = (config.resource ?? context.config.baseUrl ?? requestOrigin).replace(/\/+$/, "");
-  const mcpResource = resolveMcpBaseUrl({
-    appBaseUrl: context.config.baseUrl,
-    mcpBaseUrl: context.config.mcp?.baseUrl,
-    requestUrl: request.url,
-  });
-  const resources = mcpResource
-    ? [resource, ...oauthResourceAudienceVariants(mcpResource)]
-    : [resource];
-
   const authConfig = {
     issuer: config.issuer,
     clientId: config.clientId,
     clientSecret: config.clientSecret.exposeSecret(),
     jwks: config.jwks,
     redirectURI: `${(context.config.baseUrl ?? requestOrigin).replace(/\/+$/, "")}/api/iterate-auth/callback`,
-    resource: resources,
+    resource: [resource],
     logoutReturnToOrigins: context.config.baseUrl ? [context.config.baseUrl] : undefined,
   };
   const cacheKey = JSON.stringify(authConfig);
