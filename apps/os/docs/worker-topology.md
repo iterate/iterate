@@ -14,19 +14,19 @@ Everything is declared in one place: [`apps/os/alchemy.run.ts`](../alchemy.run.t
 
 `<n>` is the stage worker name (`os-prd`, `os-preview-N`, `os-dev-<user>`).
 
-| Worker                  | Entry (`src/workers/`) | Owns                                                                                                                                                                                                  | Notable bindings (beyond `APP_CONFIG`)                                                                 | Compat flags                                                              |
-| ----------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- |
-| `<n>` (ingress)         | `ingress.ts`           | **All routes.** Hostname-level routing only                                                                                                                                                           | `APP`, `PROJECT_HOST`, `MCP` services; `DB`                                                            | none                                                                      |
-| `<n>-app`               | `app.ts`               | Dashboard: TanStack SSR + assets, oRPC `/api`, debug routes, stream RPC, app-host itx                                                                                                                 | every DO namespace (cross-script), `LOADER`, `AI`, `DB`, artifacts trio, `MCP`/`PROJECT_HOST` services | `nodejs_compat`, `global_fetch_strictly_public`                           |
-| `<n>-stream`            | `stream.ts`            | `StreamDurableObject` (journals, event streams)                                                                                                                                                       | subscriber namespaces: `AGENT`, `PROJECT`, `REPO`, `SLACK_AGENT`, `SLACK_INTEGRATION`                  | none                                                                      |
-| `<n>-project`           | `project.ts`           | `ProjectDurableObject` + the **project-host lane** (stateless fetch: project-host itx + ingress-callable dispatch) + `ProjectIngressEntrypoint`, `ItxCapabilityIngress`, `ProjectMcpServerEntrypoint` | loopback union (below)                                                                                 | `nodejs_als`, `global_fetch_strictly_public`                              |
-| `<n>-agent`             | `agent.ts`             | `AgentDurableObject` (agent + LLM processors)                                                                                                                                                         | loopback union                                                                                         | `global_fetch_strictly_public`                                            |
-| `<n>-itx`               | `itx.ts`               | `ItxDurableObject` (generic extended-context hosts)                                                                                                                                                   | loopback union                                                                                         | `global_fetch_strictly_public`                                            |
-| `<n>-mcp`               | `mcp.ts`               | `ProjectMcpServerConnection` + the MCP endpoint (`handleMcpFetch` as default fetch)                                                                                                                   | loopback union + own namespace                                                                         | `nodejs_compat` (agents pkg, better-auth), `global_fetch_strictly_public` |
-| `<n>-repo`              | `repo.ts`              | `RepoDurableObject` + the artifact-events **queue consumer**                                                                                                                                          | own ns, `STREAM`, `ARTIFACTS` (+account/namespace), `GLOBAL_STREAM_NAMESPACE`                          | `nodejs_compat` (isomorphic-git, shell)                                   |
-| `<n>-workspace`         | `workspace.ts`         | `WorkspaceDurableObject`                                                                                                                                                                              | own ns                                                                                                 | `nodejs_compat` (@cloudflare/shell)                                       |
-| `<n>-slack-integration` | `slack-integration.ts` | `SlackIntegrationDurableObject`                                                                                                                                                                       | own ns, `SLACK_AGENT`, `AGENT`, `STREAM`, `DB`, slack token                                            | none                                                                      |
-| `<n>-slack-agent`       | `slack-agent.ts`       | `SlackAgentDurableObject`                                                                                                                                                                             | own ns, `STREAM`, `DB`, slack token                                                                    | none                                                                      |
+| Worker                            | Entry (`src/workers/`)             | Owns                                                                                                                                                                    | Notable bindings (beyond `APP_CONFIG`)                                                          | Compat flags                                    |
+| --------------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| `<n>` (ingress)                   | `ingress.ts`                       | **All routes.** Hostname-level routing only                                                                                                                             | `APP`, `PROJECT_HOST` services; `DB`                                                            | none                                            |
+| `<n>-app`                         | `app.ts`                           | Dashboard: TanStack SSR + assets, oRPC `/api`, debug routes, stream RPC, app-host itx, inbound MCP `/api/mcp`                                                           | every DO namespace (cross-script), `LOADER`, `AI`, `DB`, artifacts trio, `PROJECT_HOST` service | `nodejs_compat`, `global_fetch_strictly_public` |
+| `<n>-stream`                      | `stream.ts`                        | `StreamDurableObject` (journals, event streams)                                                                                                                         | subscriber namespaces: `AGENT`, `PROJECT`, `REPO`, `SLACK_AGENT`, `SLACK_INTEGRATION`           | none                                            |
+| `<n>-project`                     | `project.ts`                       | `ProjectDurableObject` + the **project-host lane** (stateless fetch: project-host itx + ingress-callable dispatch) + `ProjectIngressEntrypoint`, `ItxCapabilityIngress` | loopback union (below)                                                                          | `nodejs_als`, `global_fetch_strictly_public`    |
+| `<n>-agent`                       | `agent.ts`                         | `AgentDurableObject` (agent + LLM processors)                                                                                                                           | loopback union                                                                                  | `global_fetch_strictly_public`                  |
+| `<n>-itx`                         | `itx.ts`                           | `ItxDurableObject` (generic extended-context hosts)                                                                                                                     | loopback union                                                                                  | `global_fetch_strictly_public`                  |
+| `<n>-repo`                        | `repo.ts`                          | `RepoDurableObject` + the artifact-events **queue consumer**                                                                                                            | own ns, `STREAM`, `DO_CATALOG`, `ARTIFACTS` (+account/namespace), `GLOBAL_STREAM_NAMESPACE`     | `nodejs_compat` (isomorphic-git, shell)         |
+| `<n>-workspace`                   | `workspace.ts`                     | `WorkspaceDurableObject`                                                                                                                                                | own ns, `DO_CATALOG`                                                                            | `nodejs_compat` (@cloudflare/shell)             |
+| `<n>-slack-integration`           | `slack-integration.ts`             | `SlackIntegrationDurableObject`                                                                                                                                         | own ns, `SLACK_AGENT`, `AGENT`, `STREAM`, `DB`/`DO_CATALOG`, slack token                        | none                                            |
+| `<n>-slack-agent`                 | `slack-agent.ts`                   | `SlackAgentDurableObject`                                                                                                                                               | own ns, `STREAM`, `DO_CATALOG`, slack token                                                     | none                                            |
+| `<n>-debug-subscriber` (dev only) | `debug-append-chain-subscriber.ts` | `DebugAppendChainSubscriber`                                                                                                                                            | `STREAM`                                                                                        | none                                            |
 
 Every non-app worker has a tiny default fetch returning
 `{"worker": "os-<id>"}` with a 404 — useful as a cold-start probe and a
@@ -60,7 +60,7 @@ bindings as long as both scripts exist.
 
 itx resolves loopback capabilities through `ctx.exports`, which only sees
 classes exported from the _same_ script. Every itx-hosting worker (project,
-agent, itx, mcp, app) therefore re-exports
+agent, itx, app) therefore re-exports
 [`src/workers/shared/loopback-exports.ts`](../src/workers/shared/loopback-exports.ts)
 — one module, identical `ctx.exports` everywhere — and carries the
 `loopbackUnionBindings` those classes need (see `alchemy.run.ts`).
@@ -90,7 +90,7 @@ lookup, one service-binding forward
 ([`src/workers/shared/router.ts`](../src/workers/shared/router.ts)):
 
 ```
-                    ┌────────────► <n>-mcp     (MCP hostname)
+                    ┌────────────► <n>-app     (MCP hostname → /api/mcp)
 browser ──► <n> ────┼────────────► <n>-project (ingress-rule match: project
  (routes)  ingress  │               hosts, custom hostnames, cap hosts —
                     │               resolved rule rides an internal header)
@@ -100,7 +100,7 @@ browser ──► <n> ────┼────────────► <n>
 - The matched rule is forwarded on `x-iterate-resolved-ingress` so the
   project worker doesn't repeat the D1 lookup. The internal headers are
   trustworthy because (a) the ingress worker strips them from inbound
-  requests — it is the trust boundary — and (b) the app/project/mcp workers
+  requests — it is the trust boundary — and (b) the app/project workers
   have **no routes and no workers.dev URL**: they are only reachable via
   service bindings from workers that just resolved the rule. This matches
   Cloudflare's own framing of bindings as capability grants ("a named
@@ -113,11 +113,8 @@ browser ──► <n> ────┼────────────► <n>
   interface, and alchemy 0.83's local dev drops `__entrypoint__` on
   named-entrypoint service bindings (see `Worker.experimentalEntrypoint`).
   Revisit if that lands upstream.
-- App-lane requests get `x-iterate-routed-lane: app`, so the app worker
-  skips re-routing.
-- The **app worker runs the same router first** when a request reaches it
-  without that header (local dev, workers.dev). One routing code path — no
-  dev/prod fork.
+- The **app worker runs the same router first** for local dev and workers.dev
+  requests. One routing code path — no dev/prod fork.
 - Project-host itx (`/__itx`) terminates in the project worker's stateless
   fetch (itx Law 7: Cap'n Web never terminates in a DO).
 - **Admin debug routes are app-host-only** (deliberate change from the
@@ -127,7 +124,7 @@ browser ──► <n> ────┼────────────► <n>
   customer-facing project/custom hostnames. Operator tooling and the itx e2e
   fixtures already target the app base URL.
 
-## Local dev: one workerd, twelve workers
+## Local dev: one workerd, eleven workers
 
 `pnpm dev` runs **all** workers inside vite's single workerd via
 `@cloudflare/vite-plugin`'s `auxiliaryWorkers`:
@@ -196,16 +193,16 @@ slack-integration → stream → agent) pay per hop.
 
 **Script sizes** (what every cold isolate of that worker loads):
 
-| Worker                      | Uploaded size | vs monolith (28.3MB)                                                                       |
-| --------------------------- | ------------- | ------------------------------------------------------------------------------------------ |
-| ingress                     | 1.3MB         | 22× smaller                                                                                |
-| stream                      | 2.3MB         | 12×                                                                                        |
-| slack-agent                 | 2.1MB         | 14×                                                                                        |
-| slack-integration           | 2.5MB         | 11×                                                                                        |
-| workspace                   | 3.3MB         | 9×                                                                                         |
-| repo                        | 3.8MB         | 7×                                                                                         |
-| itx / project / mcp / agent | 19.6–23.5MB   | ~14MB of each is `esbuild.wasm` (precompiled; see tasks/os-source-build-builder-worker.md) |
-| app                         | 27.3MB        | the TanStack SSR bundle — but no Durable Object ever loads it anymore                      |
+| Worker                | Uploaded size | vs monolith (28.3MB)                                                                       |
+| --------------------- | ------------- | ------------------------------------------------------------------------------------------ |
+| ingress               | 1.3MB         | 22× smaller                                                                                |
+| stream                | 2.3MB         | 12×                                                                                        |
+| slack-agent           | 2.1MB         | 14×                                                                                        |
+| slack-integration     | 2.5MB         | 11×                                                                                        |
+| workspace             | 3.3MB         | 9×                                                                                         |
+| repo                  | 3.8MB         | 7×                                                                                         |
+| itx / project / agent | 19.6–23.5MB   | ~14MB of each is `esbuild.wasm` (precompiled; see tasks/os-source-build-builder-worker.md) |
+| app                   | 27.3MB        | the TanStack SSR bundle — but no Durable Object ever loads it anymore                      |
 
 **Fresh Stream DO instantiation** (TTFB, post-deploy, same colo):
 

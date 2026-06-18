@@ -85,11 +85,11 @@ describe("project host routing", () => {
   it("preserves path-mounted MCP base URLs", () => {
     expect(
       buildProjectMcpUrl({
-        mcpBaseUrl: "http://localhost:5176/api/__mcp/",
+        mcpBaseUrl: "http://localhost:5176/api/mcp/",
         projectSlug: "demo",
         projectHostnameBases: ["iterate.localhost"],
       }),
-    ).toBe("http://localhost:5176/api/__mcp");
+    ).toBe("http://localhost:5176/api/mcp");
   });
 
   it("defaults localhost deployments to the local MCP path", () => {
@@ -99,7 +99,7 @@ describe("project host routing", () => {
         projectSlug: "demo",
         projectHostnameBases: ["iterate.localhost"],
       }),
-    ).toBe("http://localhost:5176/api/__mcp");
+    ).toBe("http://localhost:5176/api/mcp");
   });
 
   it("does not invent MCP URLs without an MCP base URL", () => {

@@ -19,7 +19,7 @@ import type {
   ProcessEventBatch,
   ProcessorRuntimeState,
 } from "../../types.ts";
-import { StreamProcessor } from "../../stream-processor.ts";
+import { StreamProcessor, type StreamProcessorDeps } from "../../stream-processor.ts";
 import {
   disposeIgnoredRpcResult,
   retainGetProcessorRuntimeState,
@@ -45,17 +45,20 @@ export type CoreProcessorContract = typeof CoreProcessorContract;
  * Optional so reduce-only usage (tests, state rebuilds) can construct the
  * processor without a live stream behind it; connection methods assert.
  */
-export type CoreProcessorDeps = {
-  /** Read committed events for the delivery pump. */
-  getEvents?: (args: { afterOffset: number; limit: number }) => StreamEvent[];
-  /** The live reduced core state (owned by the Stream DO between appends). */
-  currentState?: () => CoreProcessorState;
-  /** Dispatch one configured outbound subscriber's Callable with the handshake. */
-  dial?: (args: {
-    configured: CoreProcessorState["subscriptionsByKey"][string];
-    subscriptionKey: string;
-  }) => Promise<void>;
-};
+export type CoreProcessorDeps = StreamProcessorDeps<
+  CoreProcessorContract,
+  {
+    /** Read committed events for the delivery pump. */
+    getEvents?: (args: { afterOffset: number; limit: number }) => StreamEvent[];
+    /** The live reduced core state (owned by the Stream DO between appends). */
+    currentState?: () => CoreProcessorState;
+    /** Dispatch one configured outbound subscriber's Callable with the handshake. */
+    dial?: (args: {
+      configured: CoreProcessorState["subscriptionsByKey"][string];
+      subscriptionKey: string;
+    }) => Promise<void>;
+  }
+>;
 
 export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, CoreProcessorDeps> {
   readonly contract = CoreProcessorContract;
@@ -354,7 +357,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
     args.runInBackground(async () => {
       await Promise.all(
         ancestorPaths.map((ancestorPath) =>
-          this.ctx.stream.append({
+          this.deps.stream.append({
             streamPath: ancestorPath,
             event: {
               type: "events.iterate.com/stream/child-stream-created",
@@ -735,11 +738,11 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
    * that must never mask the close itself, so failures are logged, not thrown.
    */
   #appendPresenceFact(event: StreamEventInput): void {
-    try {
-      void this.ctx.stream.append({ event });
-    } catch (error) {
+    void (async () => {
+      await this.deps.stream.append({ event });
+    })().catch((error: unknown) => {
       console.error("stream presence fact append failed", { type: event.type, error });
-    }
+    });
   }
 
   #currentState(): CoreProcessorState {

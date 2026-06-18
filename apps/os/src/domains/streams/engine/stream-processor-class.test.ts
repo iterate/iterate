@@ -7,12 +7,17 @@ import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { defineProcessorContract } from "./shared/stream-processors.ts";
 import type { StreamEvent } from "./shared/event.ts";
-import { StreamProcessor, type StreamProcessorSnapshot } from "./stream-processor.ts";
+import {
+  StreamProcessor,
+  type StreamProcessorDeps,
+  type StreamProcessorSnapshot,
+  type StreamProcessorStream,
+} from "./stream-processor.ts";
 
 const iso = new Date(0).toISOString();
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-const iterateContext = () => ({ stream: { append() {}, appendBatch() {} } });
+const stream = () => ({ append() {}, appendBatch() {} }) as unknown as StreamProcessorStream;
 
 // ---------------------------------------------------------------------------
 // counter — a named-only contract with spy hooks injected through deps
@@ -40,31 +45,34 @@ type SideEffectHelpers = {
   runInBackground: (work: () => Promise<unknown>) => void;
 };
 
-type CounterDeps = {
-  onProcessEvent?: (
-    args: {
-      event: StreamEvent;
-      previousState: CounterState;
-      state: CounterState;
-      checkpointOffset: number;
-      streamMaxOffset: number;
-    } & SideEffectHelpers,
-  ) => void;
-  onProcessEventBatch?: (
-    args: {
-      events: readonly StreamEvent[];
-      reducedEvents: readonly {
+type CounterDeps = StreamProcessorDeps<
+  CounterContract,
+  {
+    onProcessEvent?: (
+      args: {
         event: StreamEvent;
         previousState: CounterState;
         state: CounterState;
-      }[];
-      previousState: CounterState;
-      state: CounterState;
-      streamMaxOffset: number;
-      checkpointOffset: number;
-    } & SideEffectHelpers,
-  ) => void | Promise<void>;
-};
+        checkpointOffset: number;
+        streamMaxOffset: number;
+      } & SideEffectHelpers,
+    ) => void;
+    onProcessEventBatch?: (
+      args: {
+        events: readonly StreamEvent[];
+        reducedEvents: readonly {
+          event: StreamEvent;
+          previousState: CounterState;
+          state: CounterState;
+        }[];
+        previousState: CounterState;
+        state: CounterState;
+        streamMaxOffset: number;
+        checkpointOffset: number;
+      } & SideEffectHelpers,
+    ) => void | Promise<void>;
+  }
+>;
 
 class CounterProcessor extends StreamProcessor<CounterContract, CounterDeps> {
   readonly contract = CounterContract;
@@ -122,7 +130,7 @@ describe("reduce and checkpoint", () => {
   it("reduces consumed events into state and checkpoints once per batch", async () => {
     const writes: CounterSnapshot[] = [];
     const processor = new CounterProcessor({
-      iterateContext: iterateContext(),
+      stream: stream(),
       writeState: (snapshot) => void writes.push(snapshot),
     });
 
@@ -135,7 +143,7 @@ describe("reduce and checkpoint", () => {
 
   it("resumes from readState, parsing the stored state through the schema", async () => {
     const processor = new CounterProcessor({
-      iterateContext: iterateContext(),
+      stream: stream(),
       // `total` is omitted: the schema default must fill it in on load.
       readState: () => ({ offset: 5, state: {} as CounterState }),
     });
@@ -151,7 +159,7 @@ describe("reduce and checkpoint", () => {
     const writes: CounterSnapshot[] = [];
     const hooks = vi.fn();
     const processor = new CounterProcessor({
-      iterateContext: iterateContext(),
+      stream: stream(),
       writeState: (snapshot) => void writes.push(snapshot),
       onProcessEvent: hooks,
       onProcessEventBatch: hooks,
@@ -171,7 +179,7 @@ describe("reduce and checkpoint", () => {
     const writes: CounterSnapshot[] = [];
     const onProcessEvent = vi.fn();
     const processor = new CounterProcessor({
-      iterateContext: iterateContext(),
+      stream: stream(),
       writeState: (snapshot) => void writes.push(snapshot),
       onProcessEvent,
     });
@@ -188,7 +196,7 @@ describe("reduce and checkpoint", () => {
 describe("state change subscriptions", () => {
   it("pushes the loaded current state immediately", async () => {
     const processor = new CounterProcessor({
-      iterateContext: iterateContext(),
+      stream: stream(),
       readState: () => ({ offset: 5, state: { total: 9 } }),
     });
     const states: CounterState[] = [];
@@ -200,7 +208,7 @@ describe("state change subscriptions", () => {
   });
 
   it("notifies after ingest only when the reduced state reference changes", async () => {
-    const processor = new CounterProcessor({ iterateContext: iterateContext() });
+    const processor = new CounterProcessor({ stream: stream() });
     const states: CounterState[] = [];
     const unsubscribe = await processor.onStateChange((state) => states.push(state));
 
@@ -213,7 +221,7 @@ describe("state change subscriptions", () => {
   });
 
   it("does not notify when a reducer returns the same state object", async () => {
-    const processor = new SameStateProcessor({ iterateContext: iterateContext() });
+    const processor = new SameStateProcessor({ stream: stream() });
     const states: SameState[] = [];
     const unsubscribe = await processor.onStateChange((state) => states.push(state));
 
@@ -233,7 +241,7 @@ describe("state change subscriptions", () => {
       [Symbol.dispose]: disposeOriginal,
       dup: () => Object.assign(vi.fn(), { [Symbol.dispose]: disposeRetained }),
     });
-    const processor = new CounterProcessor({ iterateContext: iterateContext() });
+    const processor = new CounterProcessor({ stream: stream() });
 
     const unsubscribe = await processor.onStateChange(original);
     await processor.ingest({ events: [add(1, 1)], streamMaxOffset: 1 });
@@ -251,7 +259,7 @@ describe("hook wiring", () => {
     const calls: { offset: number; previousTotal: number; total: number; checkpoint: number }[] =
       [];
     const processor = new CounterProcessor({
-      iterateContext: iterateContext(),
+      stream: stream(),
       onProcessEvent: (args) => {
         calls.push({
           offset: args.event.offset,
@@ -273,7 +281,7 @@ describe("hook wiring", () => {
   it("processEventBatch sees deduped events plus batch-entry and batch-exit state", async () => {
     const batches: { offsets: number[]; previousTotal: number; total: number }[] = [];
     const processor = new CounterProcessor({
-      iterateContext: iterateContext(),
+      stream: stream(),
       readState: () => ({ offset: 1, state: { total: 1 } }),
       onProcessEventBatch: (args) => {
         batches.push({
@@ -297,7 +305,7 @@ describe("batch serialization", () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
     const processor = new CounterProcessor({
-      iterateContext: iterateContext(),
+      stream: stream(),
       onProcessEventBatch: async (args) => {
         const firstOffset = args.events[0]!.offset;
         order.push(`start:${firstOffset}`);
@@ -320,7 +328,7 @@ describe("batch serialization", () => {
     const writes: CounterSnapshot[] = [];
     let failNext = true;
     const processor = new CounterProcessor({
-      iterateContext: iterateContext(),
+      stream: stream(),
       writeState: (snapshot) => void writes.push(snapshot),
       onProcessEventBatch: () => {
         if (failNext) {
@@ -349,7 +357,7 @@ describe("blocking and background side effects", () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
     const processor = new CounterProcessor({
-      iterateContext: iterateContext(),
+      stream: stream(),
       writeState: (snapshot) => void writes.push(snapshot),
       onProcessEvent: ({ blockProcessorWhile }) => blockProcessorWhile(() => gate),
     });
@@ -367,7 +375,7 @@ describe("blocking and background side effects", () => {
     const writes: CounterSnapshot[] = [];
     let failNext = true;
     const processor = new CounterProcessor({
-      iterateContext: iterateContext(),
+      stream: stream(),
       writeState: (snapshot) => void writes.push(snapshot),
       onProcessEvent: ({ blockProcessorWhile }) => {
         blockProcessorWhile(async () => {
@@ -393,7 +401,7 @@ describe("blocking and background side effects", () => {
     const gate = new Promise<void>((resolve) => (release = resolve));
     let blockingWorkFinished = false;
     const processor = new CounterProcessor({
-      iterateContext: iterateContext(),
+      stream: stream(),
       onProcessEvent: ({ event, blockProcessorWhile }) => {
         if (event.offset === 1) {
           blockProcessorWhile(() =>
@@ -424,7 +432,7 @@ describe("blocking and background side effects", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const writes: CounterSnapshot[] = [];
     const processor = new CounterProcessor({
-      iterateContext: iterateContext(),
+      stream: stream(),
       writeState: (snapshot) => void writes.push(snapshot),
       onProcessEvent: ({ runInBackground }) => {
         runInBackground(async () => {
@@ -447,7 +455,7 @@ describe("blocking and background side effects", () => {
   it("routes async work through the host's keepAliveWhile", async () => {
     const keepAliveWhile = vi.fn((work: () => Promise<unknown>) => void work());
     const processor = new CounterProcessor({
-      iterateContext: iterateContext(),
+      stream: stream(),
       keepAliveWhile,
       onProcessEvent: ({ blockProcessorWhile, runInBackground }) => {
         blockProcessorWhile(async () => {});
@@ -464,7 +472,7 @@ describe("state storage", () => {
   it("retries a failed readState on the next batch instead of caching the rejection", async () => {
     let attempts = 0;
     const processor = new CounterProcessor({
-      iterateContext: iterateContext(),
+      stream: stream(),
       readState: () => {
         attempts += 1;
         if (attempts === 1) throw new Error("storage offline");
@@ -483,7 +491,7 @@ describe("state storage", () => {
   });
 
   it("falls back to in-memory snapshots when no storage is provided", async () => {
-    const processor = new CounterProcessor({ iterateContext: iterateContext() });
+    const processor = new CounterProcessor({ stream: stream() });
 
     await processor.ingest({ events: [add(1, 5)], streamMaxOffset: 1 });
 
@@ -527,7 +535,7 @@ class WildcardProcessor extends StreamProcessor<WildcardContract> {
 
 describe("wildcard consumption", () => {
   it("validates named event payloads and passes unnamed events through", async () => {
-    const processor = new WildcardProcessor({ iterateContext: iterateContext() });
+    const processor = new WildcardProcessor({ stream: stream() });
 
     await processor.ingest({
       events: [
@@ -542,7 +550,7 @@ describe("wildcard consumption", () => {
   });
 
   it("rejects the batch when a named event payload fails its schema", async () => {
-    const processor = new WildcardProcessor({ iterateContext: iterateContext() });
+    const processor = new WildcardProcessor({ stream: stream() });
 
     await expect(
       processor.ingest({

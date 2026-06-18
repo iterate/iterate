@@ -102,10 +102,12 @@ The small OS module that converts between object-form `{ projectId, path }` name
 _Avoid_: domain-specific name helper, structured JSON name, namespace parser
 
 **Project MCP Route**:
-The OS `/mcp` resource for project-scoped MCP sessions. OAuth access tokens
-expose projects granted by token claims and scopes; admin-token sessions expose
-all projects. Project-scoped tools such as `exec_js` select the Project per
-invocation.
+The OS app's normal TanStack Start MCP route at `/api/mcp`. The canonical OAuth
+resource URL comes from `APP_CONFIG_MCP__BASE_URL` and may route through a
+dedicated MCP hostname, but the app-host `/api/mcp` route is also valid. OAuth
+access tokens expose projects granted by token claims and scopes; admin-token
+sessions expose all projects. Project-scoped tools such as `exec_js` select the
+Project per invocation.
 _Avoid_: Project MCP hostname, ingress MCP alias
 
 **Ingress Hostname**:
@@ -219,9 +221,9 @@ The project-local arbitrary Key used by Secret References to resolve one Project
 _Avoid_: Secret ID, Secret Slug, hostname-safe name
 
 **OS MCP Handler**:
-The OS Worker `/mcp` handler that exposes the inbound MCP server, verifies OAuth
-or admin credentials, selects the Project, and attaches a
-**Project MCP Server Connection**.
+The app worker's stateless `/api/mcp` handler that exposes the inbound MCP
+server, verifies OAuth or admin credentials, selects the Project, and runs
+tools against the Project-scoped itx context.
 _Avoid_: Project MCP hostname, ingress MCP entrypoint, Tool Provider, Capability wrapper
 
 **Loopback Fetch Callable**:
@@ -466,7 +468,7 @@ _Avoid_: Organization, Project, workspace alias
 A Durable Object-backed itx capability that connects from OS to one external
 MCP server using our MCP client connection and exposes that remote server as
 itx capability paths.
-_Avoid_: Project MCP Server Connection, inbound MCP server, MCP metadata provider, describe callable, MCP registry
+_Avoid_: inbound MCP server, MCP metadata provider, describe callable, MCP registry
 
 **OpenAPI Client Capability**:
 A capability that exposes one OpenAPI specification as itx capability paths.
@@ -485,13 +487,9 @@ An adapter that exposes an external system, such as OpenAPI or MCP, as an itx
 Capability.
 _Avoid_: tool provider descriptor, session capability
 
-**Project MCP Server Connection**:
-A Durable Object-backed connection from an external MCP client into OS's project-scoped MCP server, implemented by the `ProjectMcpServerConnection` Durable Object.
-_Avoid_: Iterate MCP server, MCP client provider, outbound MCP connection
-
 **Outbound MCP From Our Client Tool Provider**:
 A Tool Provider registration whose RPC Callable targets an **Outbound MCP From Our Client Capability**.
-_Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
+_Avoid_: Project MCP route, inbound MCP
 
 ## Relationships
 
@@ -547,12 +545,14 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - The **Stable Project Ingress Host** remains routable even when the slug-derived host changes.
 - Custom hostname, default-host, dashboard-host, and stream-host lifecycle are future ingress work, not current routing behavior.
 - A **Project MCP Route** may expose one or more authorized **Projects**.
-- A **Project MCP Route** is served through OS `/mcp`, using auth-worker project
-  claims and scopes or an admin token that exposes all projects.
+- A **Project MCP Route** is the app worker's `/api/mcp` Start route. The
+  canonical MCP resource URL from `APP_CONFIG_MCP__BASE_URL` can point at a
+  dedicated MCP hostname, and the OS app-host `/api/mcp` route reaches the same
+  handler.
 - Project-scoped MCP tools select one **Project** per invocation before touching
   project-local capabilities.
-- OS exposes one global MCP resource at `/mcp`; it does not expose per-project
-  MCP hostnames.
+- OS exposes one global MCP resource; it does not expose per-project MCP
+  hostnames.
 - The OS Worker classifies every request by **Ingress Hostname** before invoking the **OS App**.
 - The OS Worker uses a global **Ingress Route Table** to decide whether a request becomes **Project Ingress** or continues to the **OS App**.
 - Requests that do not match the global **Ingress Route Table** are handled by the **OS App**.
@@ -587,13 +587,12 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - **Secret Keys** are arbitrary strings and are not required to be URL-safe.
 - Upserting a **Project Secret** by **Secret Key** preserves the existing **Secret ID** when that key already exists in the Project.
 - **Secret References** resolve by **Secret Key**, such as `getSecret({ key: "openai-api-key" })`.
-- The legacy `ProjectMcpServerEntrypoint` Worker export now returns a tombstone response.
-- The OS Worker owns MCP protocol paths, OAuth protected-resource metadata paths, browser instructions, and 404s for unsupported paths on `/mcp`.
-- A browser request to a **Project MCP Route** that is not an MCP client connection may return a static HTML instructions page.
-- The **Project MCP Server Connection** Durable Object class/catalog name is `ProjectMcpServerConnection`.
+- The app worker's **OS MCP Handler** owns MCP protocol paths, OAuth
+  protected-resource metadata paths, and 404s for unsupported paths below
+  `/api/mcp`.
 - The **Outbound MCP From Our Client Capability** Durable Object class name is `OutboundMcpFromOurClientCapability`.
 - The **Outbound MCP From Our Client Capability** uses the `OUTBOUND_MCP_FROM_OUR_CLIENT_CAPABILITY` namespace binding.
-- The OS Worker `/mcp` handler owns MCP OAuth protocol verification in v1.
+- The app worker's **OS MCP Handler** owns MCP OAuth protocol verification in v1.
 - The **Project Durable Object** must not grow MCP-specific authorization methods such as `authorizeMcpServerConnection`.
 - The **Project Durable Object** may expose a generic **Project Access Check** in v1 for entrypoints that have already verified a principal.
 - The v1 **Project Access Check** first trusts auth-worker project claims and may use the app-level **Project Listing Projection** in D1 as a legacy fallback.
@@ -608,7 +607,9 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - TanStack project routes and itx entrypoints should thinly proxy project
   lifecycle commands to the **Project Control Surface** instead of
   reimplementing project lifecycle logic in the app worker.
-- The **Project Durable Object** owns project ingress routing. MCP auth lives in the OS `/mcp` handler, which calls generic project access logic after token verification.
+- The **Project Durable Object** owns project ingress routing. MCP auth lives in
+  the app worker's **OS MCP Handler**, which uses verified token claims and
+  scopes after token verification.
 - The **Project Durable Object** is the authority for desired project-owned ingress state.
 - Global **Ingress Routing Rules** for project-owned hostnames are **Project Projections** written for fast indexed lookup by the OS Worker.
 - V1 may synchronously write **Project Projections** from **Project Control Surface** commands even though Durable Object SQLite and D1 are not one atomic transaction.
@@ -618,7 +619,8 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - A **Fetch Destination** may be backed by OS-packaged source code, runtime-loaded code, or another project-owned capability.
 - Global and project-local ingress use the same **Ingress Route Table** concept even though their first concrete destinations differ.
 - Projects are born with **Slug Project Ingress Host** and **Stable Project Ingress Host** routes.
-- Projects are not born with MCP hostname aliases; MCP access is centralized at OS `/mcp`.
+- Projects are not born with MCP hostname aliases; MCP access is centralized at
+  the canonical OS MCP endpoint.
 - Slug changes should update slug-derived ingress routes at the same time; alias lifecycle is future work.
 - Project MCP server `exec_js` starts a **Script Execution** and therefore requires a **Script**.
 - Browser REPL execution and Project MCP server `exec_js` share the same itx
@@ -739,13 +741,10 @@ context while the provider remains connected.
 > **Domain expert:** "Use one async arrow function: `async (itx) => { ... }`. The `/api/itx/run` endpoint accepts `{ itx, vars }` at its API boundary and wraps it into that runner shape."
 
 > **Dev:** "Is an outbound MCP capability the same thing as OS's MCP server connection?"
-> **Domain expert:** "No. **Outbound MCP From Our Client Capability** is OS as an MCP client. **Project MCP Server Connection** is an external client connected to OS's project-scoped MCP server."
+> **Domain expert:** "No. **Outbound MCP From Our Client Capability** is OS as an MCP client. Inbound MCP is an external client connected to OS's project-scoped MCP server."
 
 > **Dev:** "What are the two MCP directions in OS?"
-> **Domain expert:** "Inbound MCP is OS acting as the MCP server via the fetch-based **OS MCP Handler** and `ProjectMcpServerConnection`. Outbound MCP is OS acting as an MCP client via `OutboundMcpFromOurClientCapability`, which can be exposed as an itx capability."
-
-> **Dev:** "Should the Durable Object behind OS's project-scoped MCP server be called `IterateMcpServer`?"
-> **Domain expert:** "No. Use `ProjectMcpServerConnection`: it describes one external MCP client connection and avoids confusing OS-as-server with OS-as-client."
+> **Domain expert:** "Inbound MCP is OS acting as the MCP server via the stateless fetch-based **OS MCP Handler**. Outbound MCP is OS acting as an MCP client via `OutboundMcpFromOurClientCapability`, which can be exposed as an itx capability."
 
 > **Dev:** "Can someone open an OS project page without signing in?"
 > **Domain expert:** "No. The **OS App** is authenticated, and every **Project** is managed through the user's active **Organization**."
@@ -784,15 +783,15 @@ context while the provider remains connected.
 > **Domain expert:** "Not yet. Keep it exported from the main OS Worker while Project ingress depends on **Loopback Fetch Callables** with dynamic props."
 
 > **Dev:** "Does `/mcp` on a Project-owned hostname route to the Project MCP server?"
-> **Domain expert:** "No. MCP is served by the OS app at `/mcp`; OAuth sessions expose token-granted projects, admin-token sessions expose all projects, and project-scoped tools select one project per invocation."
+> **Domain expert:** "No. MCP is served by the OS app's `/api/mcp` route; the canonical MCP resource URL is the OAuth identity, not a per-project hostname. OAuth sessions expose token-granted projects, admin-token sessions expose all projects, and project-scoped tools select one project per invocation."
 
 > **Dev:** "Does the Project Durable Object need to understand MCP protocol paths?"
-> **Domain expert:** "No. The OS `/mcp` handler owns protocol paths, OAuth metadata, browser setup instructions, and unsupported-path responses."
+> **Domain expert:** "No. The **OS MCP Handler** owns protocol paths, OAuth metadata, and unsupported-path responses."
 
 > **Dev:** "Should Project Durable Object expose `authorizeMcpServerConnection(...)`?"
 > **Domain expert:** "No. MCP is one Project Route Destination among many. Future authorization should be generic **Project Route Authorization**, not a method per destination type."
 
-> **Dev:** "How should `/mcp` check access in v1 after verifying auth-worker OAuth?"
+> **Dev:** "How should MCP check access in v1 after verifying auth-worker OAuth?"
 > **Domain expert:** "Use the verified **Principal**. Auth-worker project claims authorize directly; the legacy D1 Project projection remains a fallback for organization-owned projects."
 
 > **Dev:** "What should a global ingress rule point at for project traffic?"
@@ -852,10 +851,9 @@ context while the provider remains connected.
 - "MCP JWT" is too narrow for auth-worker OAuth. Resolved: use **OAuth Access Token** for OAuth MCP bearer tokens and **Principal** for OS's request-local authenticated actor.
 - "project URL" was ambiguous between stable IDs and slugs. Resolved: use **Project Route** for the user-facing `/projects/:projectSlug` URL.
 - "MCP" can mean OS as an MCP server or OS as a client of another MCP server.
-  Resolved: use **OS MCP Handler** plus **Project MCP Server Connection** for
-  external clients connected to OS, and **Outbound MCP From Our Client
-  Capability** for OS connecting to external MCP servers as itx capabilities.
-- "`IterateMcpServer`" names the product, not the domain concept. Resolved: use `ProjectMcpServerConnection` for the Durable Object class/catalog name.
+  Resolved: use **OS MCP Handler** for external clients connected to OS, and
+  **Outbound MCP From Our Client Capability** for OS connecting to external MCP
+  servers as itx capabilities.
 - "Project Run Code Session" added an unnecessary layer. Resolved: run scripts
   against a **Project-Scoped itx Handle**.
 - "route" can mean a TanStack route, a Worker hostname match, or a Project-local destination. Resolved: use **Ingress Hostname** for the Worker-level host classifier, **Project Route** for the authenticated OS dashboard URL, and **Project Route Destination** for a Project Durable Object target.

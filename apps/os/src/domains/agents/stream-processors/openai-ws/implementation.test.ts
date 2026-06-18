@@ -10,7 +10,7 @@ import type { StreamEvent, StreamEventInput } from "@iterate-com/shared/streams/
 import { OpenAiWsProcessorContract, type OpenAiWsState } from "./contract.ts";
 import { OpenAiWsProcessor, type OpenAiResponsesWebSocket } from "./implementation.ts";
 import type {
-  StreamProcessorIterateContext,
+  StreamProcessorStream,
   StreamProcessorSnapshot,
 } from "~/domains/streams/engine/stream-processor.ts";
 
@@ -585,14 +585,14 @@ function testState(): OpenAiWsState {
 }
 
 function newProcessor(args: {
-  stream: StreamProcessorIterateContext["stream"];
+  stream: StreamProcessorStream;
   appended: StreamEventInput[];
   sockets: FakeOpenAiResponsesWebSocket[];
   snapshot?: StreamProcessorSnapshot<OpenAiWsState>;
   readStreamEvents?: () => Promise<StreamEvent[]>;
 }) {
   return new OpenAiWsProcessor({
-    iterateContext: { stream: args.stream },
+    stream: args.stream,
     readState: () => args.snapshot,
     openResponsesWebSocket: async () => {
       const socket = new FakeOpenAiResponsesWebSocket();
@@ -685,8 +685,8 @@ function subscriberConnectedEvent(args: { offset: number }): StreamEvent {
 function memoryStream() {
   let nextOffset = 100;
   const appended: StreamEventInput[] = [];
-  const stream: StreamProcessorIterateContext["stream"] = {
-    append: (args) => {
+  const stream = {
+    append: (args: { event: StreamEventInput }) => {
       appended.push(args.event);
       const committed: StreamEvent = {
         ...args.event,
@@ -695,7 +695,7 @@ function memoryStream() {
       };
       return committed;
     },
-    appendBatch: (args) =>
+    appendBatch: (args: { events: StreamEventInput[] }) =>
       args.events.map((input) => {
         appended.push(input);
         const committed: StreamEvent = {
@@ -705,7 +705,7 @@ function memoryStream() {
         };
         return committed;
       }),
-  };
+  } as unknown as StreamProcessorStream;
   return { stream, appended };
 }
 

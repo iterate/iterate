@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { StreamEvent, StreamEventInput } from "@iterate-com/shared/streams/stream-event";
-import {
-  SlackAgentProcessor,
-  eyesReactionTargetFromWebhookPayload,
-  type SlackAgentProcessorDeps,
-} from "./implementation.ts";
+import { SlackAgentProcessor, eyesReactionTargetFromWebhookPayload } from "./implementation.ts";
+import type { StreamProcessorStream } from "~/domains/streams/engine/stream-processor.ts";
 
 describe("eyesReactionTargetFromWebhookPayload", () => {
   const humanMessagePayload = (event: Record<string, unknown> = {}) => ({
@@ -484,29 +481,30 @@ describe("SlackAgentProcessor", () => {
 });
 
 function createProcessor(
-  deps: Partial<SlackAgentProcessorDeps> & {
+  deps: {
+    callSlackApi?: (method: string, body: Record<string, unknown>) => Promise<void>;
     onAppend?: (event: StreamEventInput) => void;
   } = {},
 ) {
   const { onAppend, ...processorDeps } = deps;
   const appended: Array<{ streamPath?: string; event: StreamEventInput }> = [];
   const processor = new SlackAgentProcessor({
-    iterateContext: {
-      stream: {
-        append: async ({ event, streamPath }) => {
+    stream: {
+      append: async (args: { event: StreamEventInput; streamPath?: string }) => {
+        const { event, streamPath } = args;
+        onAppend?.(event);
+        appended.push({ event, streamPath });
+        return committedEvent({ ...event, offset: appended.length });
+      },
+      appendBatch: async (args: { events: StreamEventInput[]; streamPath?: string }) => {
+        return args.events.map((event) => {
+          const streamPath = args.streamPath;
           onAppend?.(event);
           appended.push({ event, streamPath });
           return committedEvent({ ...event, offset: appended.length });
-        },
-        appendBatch: async ({ events, streamPath }) => {
-          return events.map((event) => {
-            onAppend?.(event);
-            appended.push({ event, streamPath });
-            return committedEvent({ ...event, offset: appended.length });
-          });
-        },
+        });
       },
-    },
+    } as unknown as StreamProcessorStream,
     ...processorDeps,
   });
   return { appended, processor };

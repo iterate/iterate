@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { assertMcpAdminBearerAccepted, buildClaudeShellCommand } from "./claude-mcp.ts";
+import {
+  assertMcpAdminBearerAccepted,
+  buildClaudeShellCommand,
+  defaultMcpUrlFromEnv,
+} from "./claude-mcp.ts";
 
 describe("buildClaudeShellCommand", () => {
   it("quotes JSON mcp config for shell copy-paste", () => {
@@ -14,6 +18,28 @@ describe("buildClaudeShellCommand", () => {
     expect(command).toBe(
       'claude --mcp-config \'{"mcpServers":{"iterate":{"type":"http"}}}\' --strict-mcp-config \'hello world\'',
     );
+  });
+});
+
+describe("defaultMcpUrlFromEnv", () => {
+  const originalEnv = { ...process.env };
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  it("uses the normal local Start route when only the app base URL is configured", () => {
+    delete process.env.APP_CONFIG_MCP__BASE_URL;
+    process.env.APP_CONFIG_BASE_URL = "http://localhost:5176";
+
+    expect(defaultMcpUrlFromEnv()).toBe("http://localhost:5176/api/mcp");
+  });
+
+  it("prefers the configured canonical MCP URL", () => {
+    process.env.APP_CONFIG_BASE_URL = "http://localhost:5176";
+    process.env.APP_CONFIG_MCP__BASE_URL = "https://mcp.iterate-preview-5.com";
+
+    expect(defaultMcpUrlFromEnv()).toBe("https://mcp.iterate-preview-5.com");
   });
 });
 
