@@ -6,6 +6,7 @@ import {
 import { durableObjectProcessorSubscriber } from "~/domains/streams/engine/shared/callable-subscriber.ts";
 import {
   getInitializedStreamStub,
+  getStreamRpcStub,
   type StreamDurableObjectNamespace,
   type StreamDurableObject,
 } from "~/domains/streams/stream-runtime.ts";
@@ -96,6 +97,11 @@ export class RepoDurableObject extends DurableObject<RepoEnv> {
     (deps) =>
       new RepoStreamProcessor({
         ...deps,
+        stream: getStreamRpcStub({
+          durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+          projectId: this.repoName().projectId,
+          path: repoStreamPath(this.repoName().path),
+        }),
         createRepoArtifact: (input) => this.createRepoArtifact(input),
       }),
   );

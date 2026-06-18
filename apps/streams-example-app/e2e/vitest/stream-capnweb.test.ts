@@ -1,7 +1,15 @@
 import { RpcTarget } from "capnweb";
 import { describe, expect, it } from "vitest";
-import { e2eStreamPath, e2eStreamPathLabel, toStreamWebSocketUrl } from "../helpers.ts";
-import { withStreamConnectionFromBrowser } from "../../src/lib/stream-rpc.ts";
+import {
+  e2eStreamPath,
+  e2eStreamPathLabel,
+  streamProcessorRunnerName,
+  toStreamWebSocketUrl,
+} from "../helpers.ts";
+import {
+  DEFAULT_STREAM_PROJECT_ID,
+  withStreamConnectionFromBrowser,
+} from "../../src/lib/stream-rpc.ts";
 import { withStreamConnectionFromNode } from "../../src/lib/node-stream-connection.ts";
 import type { WebSocketFrame } from "../../src/lib/stream-connection.ts";
 import type { StreamEvent, StreamEventInput } from "~/domains/streams/engine/shared/event.ts";
@@ -496,7 +504,11 @@ describe("stream capnweb protocol", () => {
           subscriptionKey,
           subscriber: durableObjectProcessorSubscriber({
             bindingName: "STREAM_PROCESSOR_RUNNER",
-            durableObjectName: `${path}:${subscriptionKey}`,
+            durableObjectName: streamProcessorRunnerName({
+              projectId: DEFAULT_STREAM_PROJECT_ID,
+              path,
+              subscriptionKey,
+            }),
             processorName: "echo-example",
           }),
         },
@@ -529,7 +541,11 @@ describe("stream capnweb protocol", () => {
           subscriptionKey,
           subscriber: durableObjectProcessorSubscriber({
             bindingName: "STREAM_PROCESSOR_RUNNER",
-            durableObjectName: `${path}:${subscriptionKey}`,
+            durableObjectName: streamProcessorRunnerName({
+              projectId: DEFAULT_STREAM_PROJECT_ID,
+              path,
+              subscriptionKey,
+            }),
             processorName: "circuit-breaker",
           }),
         },

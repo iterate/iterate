@@ -1,7 +1,7 @@
 import type { StreamEvent, StreamEventInput } from "@iterate-com/shared/streams/stream-event";
 import type { Event, EventInput, StreamCursor } from "@iterate-com/shared/streams/types";
 import { StreamPath, StreamState } from "@iterate-com/shared/streams/types";
-import { formatDurableObjectName } from "~/domains/durable-object-names.ts";
+import { formatDurableObjectName } from "../durable-object-names.ts";
 import type { StreamRpc } from "~/domains/streams/engine/types.ts";
 import type { Stream } from "~/domains/streams/engine/workers/durable-objects/stream.ts";
 
@@ -28,15 +28,23 @@ export function getStreamDurableObjectName(input: StreamDurableObjectName) {
   return formatDurableObjectName({ path: input.path, projectId: input.projectId });
 }
 
+export function getStreamRpcStub(input: {
+  durableObjectNamespace: StreamDurableObjectNamespace;
+  projectId: string | null;
+  path: StreamPath;
+}): StreamRpc {
+  return input.durableObjectNamespace.getByName(
+    getStreamDurableObjectName({ projectId: input.projectId, path: input.path }),
+  ) as unknown as StreamRpc;
+}
+
 export async function getInitializedStreamStub(input: {
   durableObjectNamespace: StreamDurableObjectNamespace;
   projectId: string | null;
   path: StreamPath;
 }): Promise<InitializedStreamStub> {
   const path = input.path;
-  const stub = input.durableObjectNamespace.getByName(
-    getStreamDurableObjectName({ projectId: input.projectId, path }),
-  ) as unknown as StreamRpc;
+  const stub = getStreamRpcStub(input);
 
   return {
     async append(event) {

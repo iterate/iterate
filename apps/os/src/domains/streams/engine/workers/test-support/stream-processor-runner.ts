@@ -8,16 +8,29 @@ import { DurableObject } from "cloudflare:workers";
 import { makeRpcTargetClass } from "../../shared/rpc-target.ts";
 import { EchoExampleProcessor } from "../../processors/examples/echo/implementation.ts";
 import { CircuitBreakerProcessor } from "../../processors/circuit-breaker/implementation.ts";
+import type { Stream } from "../durable-objects/stream.ts";
+import { getStreamRpcStub } from "../../../stream-runtime.ts";
+import { parseDurableObjectName } from "../../../../durable-object-names.ts";
 import {
   createStreamProcessorHost,
   type HostedProcessorRuntimeState,
   type RequestStreamSubscriptionArgs,
 } from "../stream-processor-host.ts";
 
-export class StreamProcessorRunner extends DurableObject {
+type StreamProcessorRunnerEnv = {
+  STREAM: DurableObjectNamespace<Stream>;
+};
+
+export class StreamProcessorRunner extends DurableObject<StreamProcessorRunnerEnv> {
   host = createStreamProcessorHost(this.ctx);
-  echo = this.host.add("echo-example", (deps) => new EchoExampleProcessor(deps));
-  circuitBreaker = this.host.add("circuit-breaker", (deps) => new CircuitBreakerProcessor(deps));
+  echo = this.host.add(
+    "echo-example",
+    (deps) => new EchoExampleProcessor({ ...deps, stream: this.streamRpc() }),
+  );
+  circuitBreaker = this.host.add(
+    "circuit-breaker",
+    (deps) => new CircuitBreakerProcessor({ ...deps, stream: this.streamRpc() }),
+  );
 
   // Legacy/external Cap'n Web entrypoint. Same-account Stream Durable Objects
   // dispatch the subscription callable straight at requestStreamSubscription.
@@ -41,6 +54,26 @@ export class StreamProcessorRunner extends DurableObject {
    */
   runIdleDisconnectNow(): void {
     this.host.runIdleDisconnectNow();
+  }
+
+  private streamRpc() {
+    const name = this.ctx.id.name;
+    if (!name) {
+      throw new Error("StreamProcessorRunner must be addressed by name.");
+    }
+    const separator = name.lastIndexOf(":");
+    if (separator <= 0) {
+      throw new Error(
+        `StreamProcessorRunner name must be "{streamDurableObjectName}:{subscriptionKey}", got ${JSON.stringify(name)}.`,
+      );
+    }
+    const streamName = name.slice(0, separator);
+    const coordinate = parseDurableObjectName(streamName);
+    return getStreamRpcStub({
+      durableObjectNamespace: this.env.STREAM,
+      projectId: coordinate.projectId,
+      path: coordinate.path,
+    });
   }
 }
 

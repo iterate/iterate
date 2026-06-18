@@ -218,7 +218,12 @@ describe("T0 — hosted processors run side effects during catch-up replay", () 
 
     host.add(
       "counter",
-      (deps) => new CounterProcessor({ ...deps, onEvent: (amount) => sideEffects.push(amount) }),
+      (deps) =>
+        new CounterProcessor({
+          ...deps,
+          stream: stream as unknown as StreamRpc,
+          onEvent: (amount) => sideEffects.push(amount),
+        }),
     );
 
     await host.requestStreamSubscription({
@@ -247,6 +252,7 @@ describe("T1 — a failed batch must not drop events under continued delivery (C
       (deps) =>
         new CounterProcessor({
           ...deps,
+          stream: stream as unknown as StreamRpc,
           onBatch: ({ events }) => {
             // Fail the first delivery that carries a user add, once.
             if (failOnAdd && events.some((event) => event.type === "test/add")) {
@@ -282,6 +288,7 @@ describe("T1b — a poison batch records an error and disconnects (C1 poison pol
       (deps) =>
         new CounterProcessor({
           ...deps,
+          stream: stream as unknown as StreamRpc,
           onBatch: ({ events }) => {
             if (events.some((event) => event.type === "test/add")) {
               throw new Error("poison batch");
@@ -322,6 +329,7 @@ describe("T1c — a failed recovery must not permanently wedge the ingest chain 
       (deps) =>
         new CounterProcessor({
           ...deps,
+          stream: fake.stream as unknown as StreamRpc,
           onBatch: ({ events }) => {
             if (failOnAdd && events.some((event) => event.type === "test/add")) {
               failOnAdd = false;

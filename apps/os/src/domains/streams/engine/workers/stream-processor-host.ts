@@ -5,7 +5,7 @@
 // ```ts
 // export class AgentDurableObject extends DurableObject<Env> {
 //   host = createStreamProcessorHost(this.ctx);
-//   agent = this.host.add("agent", (deps) => new AgentProcessor({ ...deps, openai }));
+//   agent = this.host.add("agent", (deps) => new AgentProcessor({ ...deps, stream, openai }));
 //   search = this.host.add("search", (deps) => new SearchProcessor(deps));
 //
 //   requestStreamSubscription(args: RequestStreamSubscriptionArgs) {
@@ -47,10 +47,9 @@ export type RequestStreamSubscriptionArgs = StreamSubscriptionHandshake & {
 /**
  * Base deps the host provides to each processor it owns. Spread them into the
  * processor constructor along with processor-specific deps:
- * `new RepoProcessor({ ...deps, github })`.
+ * `new RepoProcessor({ ...deps, stream, github })`.
  */
 export type HostedProcessorDeps = {
-  stream: StreamRpc;
   readState: () => StreamProcessorSnapshot<any> | undefined;
   writeState: (snapshot: StreamProcessorSnapshot<any>) => void;
   keepAliveWhile: (work: () => Promise<unknown>) => void;
@@ -122,8 +121,9 @@ const HOST_IDLE_TEARDOWN_MS = 5 * 60_000;
 export type StreamProcessorHost = {
   /**
    * Register a named processor. The builder receives the host-provided base
-   * deps (checkpoint storage in DO KV keyed by `name` and the late-bound stream
-   * capability) and must construct the processor with them. Call during DO field
+   * deps (checkpoint storage in DO KV keyed by `name`) and must construct the
+   * processor with them. Processors that append should receive their stream as a
+   * normal processor-specific dep at the callsite. Call during DO field
    * initialization.
    */
   add<P extends AnyHostedProcessor>(name: string, build: (deps: HostedProcessorDeps) => P): P;
@@ -163,16 +163,6 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
       );
     }
     return entry;
-  }
-
-  function requireStream(name: string): StreamRpc {
-    const entry = requireEntry(name);
-    if (entry.stream === undefined) {
-      throw new Error(
-        `Stream processor "${name}" has no stream subscription yet; appends are only possible after the stream has dialed this host`,
-      );
-    }
-    return entry.stream;
   }
 
   function resolveProcessorName(processorName: string | undefined): string {
@@ -357,7 +347,6 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
         throw new Error(`Stream processor "${name}" is already registered on this host`);
       }
       const processor = build({
-        stream: lateBoundStreamRpc(name),
         readState: () =>
           ctx.storage.kv.get<StreamProcessorSnapshot<any>>(snapshotKey(name)) ?? undefined,
         writeState: (snapshot) => void ctx.storage.kv.put(snapshotKey(name), snapshot),
@@ -424,23 +413,6 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
     },
     runIdleDisconnectNow,
   };
-
-  function lateBoundStreamRpc(name: string): StreamRpc {
-    return new Proxy(Object.create(null), {
-      get(_target, property) {
-        if (property === "then") return undefined;
-        return (...args: unknown[]) => {
-          const stream = requireStream(name) as unknown as Record<PropertyKey, unknown>;
-          const value = stream[property];
-          if (typeof value !== "function") {
-            if (args.length === 0) return value;
-            throw new TypeError(`Stream RPC property "${String(property)}" is not callable`);
-          }
-          return (stream[property] as (...methodArgs: unknown[]) => unknown)(...args);
-        };
-      },
-    }) as StreamRpc;
-  }
 }
 
 function announceContract(contract: {

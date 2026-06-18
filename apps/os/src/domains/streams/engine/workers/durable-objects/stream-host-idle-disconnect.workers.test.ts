@@ -28,7 +28,8 @@ const OUTPUT_TYPE = "events.iterate.com/echo-example/output-echoed";
 let counter = 0;
 function freshNames() {
   counter += 1;
-  return { streamName: `hostidle:/hostidle/t${counter}`, runnerName: `hostidle-runner-${counter}` };
+  const streamName = `hostidle:/hostidle/t${counter}`;
+  return { streamName, runnerName: `${streamName}:runner-${counter}` };
 }
 
 async function appendEvent(
