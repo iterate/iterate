@@ -1,0 +1,32 @@
+{
+  "name": "minimal-itx-v2",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A smaller ITX reference: stateless Cap'n Web capability tree plus a tiny stream-backed dynamic capability processor.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "repl": "tsx scripts/repl.ts",
+    "test": "pnpm typecheck",
+    "e2e": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
+    "verify:deployed": "tsx scripts/verify-deployed.ts",
+    "verify:miniflare": "tsx scripts/verify-miniflare.ts",
+    "types:wrangler": "wrangler types worker-configuration.d.ts",
+    "types:wrangler:check": "wrangler types worker-configuration.d.ts --check"
+  },
+  "dependencies": {
+    "@iterate-com/os": "workspace:*",
+    "@iterate-com/shared": "workspace:*",
+    "capnweb": "^0.8.0",
+    "ws": "^8.18.0",
+    "zod": "~4.3.6"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.20.3",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.7",
+    "wrangler": "4.101.0"
+  }
+}

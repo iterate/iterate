@@ -18,7 +18,7 @@ export class EchoExampleProcessor extends StreamProcessor<EchoExampleContract> {
 
   protected override processEvent(
     args: Parameters<StreamProcessor<EchoExampleContract>["processEvent"]>[0],
-  ): void {
+  ): undefined {
     if (args.event.type !== "events.iterate.com/echo-example/input-received") return;
     const seen = args.state.seen;
     args.runInBackground(async () => {

@@ -50,7 +50,7 @@ export class CircuitBreakerProcessor extends StreamProcessor<CircuitBreakerContr
 
   protected override processEvent(
     args: Parameters<StreamProcessor<CircuitBreakerContract>["processEvent"]>[0],
-  ): void {
+  ): undefined {
     // Level-triggered, not edge-triggered: fire whenever the bucket is in deficit
     // on a live event. An edge guard (`!tripped(previousState)`) would miss the
     // common case where the not-tripped->tripped transition happened at or below

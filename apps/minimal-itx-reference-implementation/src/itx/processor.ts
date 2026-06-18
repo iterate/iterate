@@ -413,7 +413,7 @@ export class ItxProcessor
     event,
     state,
     runInBackground,
-  }: Parameters<StreamProcessor<typeof ItxContract>["processEvent"]>[0]): void {
+  }: Parameters<StreamProcessor<typeof ItxContract>["processEvent"]>[0]): undefined {
     if (event.type !== "events.iterate.com/itx/script-execution-requested") return;
     if (state.pendingScriptExecutions[event.payload.executionId] !== true) return;
     runInBackground(() =>

@@ -59,11 +59,9 @@ onlyBuiltDependencies:
   - workerd
 
 overrides:
-  # Our capnweb fork, which adds WebSocket-over-RPC support (iterate/capnweb#1, not yet
-  # upstreamed). Installed as a prebuilt tarball from the fork's GitHub release, so installs
-  # don't depend on building from source. To update: build + `npm pack` in the fork, upload to
-  # a new release, and point this URL at it.
-  "capnweb": "https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz"
+  # Our capnweb fork, with WebSocket-over-RPC support plus fallbackCall
+  # (iterate/capnweb#1 and iterate/capnweb#2, not yet upstreamed).
+  "capnweb": "github:iterate/capnweb#0bd5640399434ed5daefdd690f3f7a7d29862d15"
   # x402,viem are optional peer dependencies of agents sdk, which is source of lot of unnecessary/deprecated packages, removing them is fine
   "axios": "1.13.6"
   "agents>x402": "-"

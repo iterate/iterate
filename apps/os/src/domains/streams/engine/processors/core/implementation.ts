@@ -324,7 +324,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
    */
   protected override processEvent(
     args: Parameters<StreamProcessor<CoreProcessorContract>["processEvent"]>[0],
-  ): void {
+  ): undefined {
     switch (args.event.type) {
       case "events.iterate.com/stream/woken":
       case "events.iterate.com/stream/subscription-configured":

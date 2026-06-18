@@ -365,7 +365,7 @@ export abstract class StreamProcessor<
   }
 
   /** Synchronous per-event side-effect hook, called by the default `processEventBatch`. */
-  protected processEvent(_args: ProcessEventArgs<Contract>): void {}
+  protected processEvent(_args: ProcessEventArgs<Contract>): undefined {}
 
   /**
    * Batch-level side-effect hook. Runs inside the serialized section, after the

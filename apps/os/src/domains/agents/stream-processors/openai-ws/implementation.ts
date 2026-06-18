@@ -179,7 +179,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
 
   protected override processEvent(
     args: Parameters<StreamProcessor<OpenAiWsProcessorContract>["processEvent"]>[0],
-  ): void {
+  ): undefined {
     const { event, state } = args;
     switch (event.type) {
       case "events.iterate.com/openai-ws/config-updated":

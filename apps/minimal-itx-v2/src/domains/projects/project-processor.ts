@@ -103,7 +103,6 @@ export class ProjectProcessor extends StreamProcessor<
             ).append({
               event: {
                 type: "events.iterate.com/stream/subscription-configured",
-                idempotencyKey: `repo-subscription:${this.deps.projectId}:${path}`,
                 payload: {
                   subscriptionKey: `repo:${this.deps.projectId}:${path}`,
                   subscriber: durableObjectProcessorSubscriber({
@@ -131,7 +130,6 @@ export class ProjectProcessor extends StreamProcessor<
               events: [
                 {
                   type: "events.iterate.com/stream/subscription-configured",
-                  idempotencyKey: `agent-subscription:${this.deps.projectId}:${path}`,
                   payload: {
                     subscriptionKey: `agent:${this.deps.projectId}:${path}`,
                     subscriber: durableObjectProcessorSubscriber({
@@ -143,7 +141,6 @@ export class ProjectProcessor extends StreamProcessor<
                 },
                 {
                   type: "events.iterate.com/stream/subscription-configured",
-                  idempotencyKey: `agent-itx-subscription:${this.deps.projectId}:${path}`,
                   payload: {
                     subscriptionKey: `itx:${this.deps.projectId}:${path}`,
                     subscriber: durableObjectProcessorSubscriber({

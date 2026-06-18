@@ -1,0 +1,34 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "minimal-itx-v2",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-05-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      // The domain objects that host their own embedded itx processors.
+      { "name": "PROJECT", "class_name": "ProjectDurableObject" },
+      { "name": "AGENT", "class_name": "AgentDurableObject" },
+      { "name": "REPO", "class_name": "RepoDurableObject" },
+      // The real durable event log from apps/os — a context's capability table
+      // is the fold of one of these streams.
+      { "name": "STREAM", "class_name": "StreamDurableObject" },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "ProjectDurableObject",
+        "AgentDurableObject",
+        "RepoDurableObject",
+        "StreamDurableObject",
+      ],
+    },
+  ],
+  // Dynamic capabilities and codemode build and run workers from addresses at runtime.
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "dev": {
+    "port": 8789,
+  },
+}
