@@ -78,7 +78,7 @@ config only when you need personal integration secrets.
 pnpm dev
 
 # Equivalent explicit form:
-doppler run --project os --config dev -- pnpm cli dev start
+doppler run --project os --config dev -- pnpm dev start
 
 # Terminal 2: run real-worker e2e against the discovered local server.
 doppler run --project os --config dev -- pnpm e2e
@@ -90,7 +90,7 @@ values such as `dev` or `dev_<user>`. The dev wrapper writes output to
 `.alchemy/dev-server.log`, so a second terminal can follow it with
 `tail -f .alchemy/dev-server.log`.
 
-The same local server lifecycle is also available through the app CLI:
+The same local server lifecycle is available through the dev module:
 
 ```bash
 pnpm dev status
@@ -102,8 +102,8 @@ pnpm dev restart --detach
 pnpm dev kill
 ```
 
-`pnpm dev <action> [flags]` forwards to `pnpm cli dev <action> [flags]`; use
-the longer form only when you are already working in the app CLI.
+`pnpm dev <action> [flags]` runs `scripts/dev.ts` directly; use
+`pnpm cli dev <action>` only when you are already working in the app CLI.
 
 The shared `dev` config behaves the same way:
 

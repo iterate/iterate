@@ -1,7 +1,10 @@
 import { defineConfig, devices } from "@playwright/test";
+import { localOsDevServer } from "./apps/os/scripts/dev.ts";
 
 const videoMode = process.env.VIDEO_MODE === "1";
-const readyPort = Number(process.env.OS_PLAYWRIGHT_READY_PORT || 17604);
+const configuredOsBaseUrl = process.env.OS_BASE_URL?.replace(/\/+$/, "");
+const localOsTarget = configuredOsBaseUrl ? null : await localOsDevServer.resolveTarget();
+const osBaseUrl = configuredOsBaseUrl || localOsTarget?.baseUrl;
 
 export default defineConfig({
   testDir: "specs",
@@ -20,6 +23,7 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   use: {
     actionTimeout: videoMode ? 10_000 : 750,
+    baseURL: osBaseUrl,
     screenshot: "only-on-failure",
     trace: process.env.CI ? "on-first-retry" : "retain-on-failure",
     video: videoMode ? "on" : "retain-on-failure",
@@ -30,14 +34,15 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } },
     },
   ],
-  webServer: process.env.OS_PLAYWRIGHT_BASE_URL
-    ? undefined
-    : {
-        command: `pnpm exec tsx ./specs/start-local-dev.ts --ready-port ${readyPort}`,
-        url: `http://127.0.0.1:${readyPort}/ready`,
+  webServer: localOsTarget
+    ? {
+        command: `node ./apps/os/scripts/dev.ts start --detach --keep-alive --port ${localOsTarget.port}`,
+        env: process.env as Record<string, string>,
+        url: `${localOsTarget.baseUrl}/api/health`,
         reuseExistingServer: !process.env.CI,
         timeout: 180_000,
         stdout: "pipe",
         stderr: "pipe",
-      },
+      }
+    : undefined,
 });

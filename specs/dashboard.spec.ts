@@ -1,14 +1,12 @@
-import { createProject, signInWithLocalAuth, test, uniqueSlug } from "./test-support/test.ts";
+import { createProjectFixture } from "./test-support/forged-session.ts";
+import { test } from "./test-support/test.ts";
 
-test("can enter the dashboard and create a project", async ({ page }) => {
-  await signInWithLocalAuth(page);
-
-  const projectSlug = uniqueSlug("playwright-project");
-  await createProject(page, projectSlug);
-
-  await page.waitForURL(new RegExp(`/projects/${projectSlug}/`));
-  await page.getByText(projectSlug).first().waitFor();
+test("can enter the dashboard with a directly minted JWT session cookie", async ({
+  baseURL,
+  page,
+}) => {
+  await using projectFixture = await createProjectFixture("dashboard", { baseURL, page });
 
   await page.goto("/projects");
-  await page.getByRole("link", { name: projectSlug }).waitFor();
+  await page.getByRole("link", { name: projectFixture.project.slug }).waitFor();
 });

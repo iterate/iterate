@@ -1,6 +1,5 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import type { Page } from "@playwright/test";
+import { z } from "zod/v4";
 import {
   ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM,
   ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM,
@@ -10,18 +9,6 @@ import {
   type IterateAuthProjectClaim,
 } from "@iterate-com/shared/auth-claims";
 import { withItx } from "../../apps/os/src/itx/client.ts";
-
-const execFileAsync = promisify(execFile);
-
-type DopplerAuthEnv = {
-  APP_CONFIG_ADMIN_API_SECRET?: string;
-  APP_CONFIG_ITERATE_AUTH__CLIENT_ID?: string;
-  APP_CONFIG_ITERATE_AUTH__ISSUER?: string;
-  APP_CONFIG_ITERATE_AUTH__RESOURCE?: string;
-  AUTH_FORGE_PRIVATE_JWK?: string;
-  ITERATE_OAUTH_CLIENT_ID?: string;
-  ITERATE_OAUTH_ISSUER?: string;
-};
 
 type ForgePrivateJwk = JsonWebKey & {
   alg?: string;
@@ -33,8 +20,37 @@ type OsPlaywrightAuthConfig = {
   clientId: string;
   forgePrivateJwk: ForgePrivateJwk;
   issuer: string;
-  resource: string;
 };
+
+const ForgePrivateJwkSchema = z
+  .looseObject({
+    crv: z.literal("Ed25519"),
+    kid: z.string().min(1),
+    kty: z.literal("OKP"),
+  })
+  .transform((value) => value as ForgePrivateJwk);
+
+const Env = z.object({
+  /** OS admin handle used to create and clean up fixture projects through /api/itx. */
+  APP_CONFIG_ADMIN_API_SECRET: z.string().min(1),
+  /** OAuth client id used as the id-token audience. */
+  APP_CONFIG_ITERATE_AUTH__CLIENT_ID: z.string().min(1),
+  /** Auth issuer used for both forged access and id tokens. */
+  APP_CONFIG_ITERATE_AUTH__ISSUER: z.url(),
+  /** Private half of the forge key baked into dev/preview OS JWKS. */
+  AUTH_FORGE_PRIVATE_JWK: z
+    .string()
+    .min(1)
+    .transform((value, context) => {
+      try {
+        return JSON.parse(value);
+      } catch (error) {
+        context.addIssue({ code: "custom", message: `Invalid JSON ${value}: ${error}` });
+        return z.NEVER;
+      }
+    })
+    .pipe(ForgePrivateJwkSchema),
+});
 
 export type MintedIterateSession = {
   accessToken: string;
@@ -107,7 +123,7 @@ export async function createProjectFixture(
 }
 
 export async function createAdminProject(input: { baseUrl: string; slug: string }) {
-  const config = await resolveOsPlaywrightAuthConfig(input.baseUrl);
+  const config = await resolveOsPlaywrightAuthConfig();
   using itx = withItx({ baseUrl: input.baseUrl, token: config.adminApiSecret });
   const project = (await itx.projects.create({ slug: input.slug })) as {
     id: string;
@@ -132,7 +148,7 @@ export async function mintIterateSession(input: {
   organizations: IterateAuthAccessTokenOrganizationClaim[];
   projects: IterateAuthProjectClaim[];
 }) {
-  const config = await resolveOsPlaywrightAuthConfig(input.baseUrl);
+  const config = await resolveOsPlaywrightAuthConfig();
   const subject = `usr_forged_${input.email.replace(/[^a-z0-9]+/gi, "_").toLowerCase()}`;
   const now = Math.floor(Date.now() / 1000);
   const ttlSeconds = 60 * 60;
@@ -140,7 +156,7 @@ export async function mintIterateSession(input: {
   const sessionId = `ses_forged_${crypto.randomUUID().slice(0, 8)}`;
 
   const accessToken = await signJwt({
-    audience: config.resource,
+    audience: authResourceForBaseUrl(input.baseUrl),
     issuer: config.issuer,
     payload: {
       email: input.email,
@@ -180,109 +196,29 @@ export async function mintIterateSession(input: {
   };
 }
 
-async function resolveOsPlaywrightAuthConfig(baseUrl: string): Promise<OsPlaywrightAuthConfig> {
-  configPromise = configPromise || loadOsPlaywrightAuthConfig(baseUrl);
+async function resolveOsPlaywrightAuthConfig(): Promise<OsPlaywrightAuthConfig> {
+  configPromise = configPromise || loadOsPlaywrightAuthConfig();
   return await configPromise;
 }
 
-async function loadOsPlaywrightAuthConfig(baseUrl: string): Promise<OsPlaywrightAuthConfig> {
-  const dopplerEnv = await readDopplerAuthEnv();
-  const authorizeConfig = await readOsAuthAuthorizeConfig(baseUrl);
-  const issuer =
-    process.env.OS_PLAYWRIGHT_AUTH_ISSUER ||
-    authorizeConfig.issuer ||
-    process.env.APP_CONFIG_ITERATE_AUTH__ISSUER ||
-    process.env.ITERATE_OAUTH_ISSUER ||
-    dopplerEnv.APP_CONFIG_ITERATE_AUTH__ISSUER ||
-    dopplerEnv.ITERATE_OAUTH_ISSUER ||
-    "";
-  const clientId =
-    authorizeConfig.clientId ||
-    process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID ||
-    process.env.ITERATE_OAUTH_CLIENT_ID ||
-    dopplerEnv.APP_CONFIG_ITERATE_AUTH__CLIENT_ID ||
-    dopplerEnv.ITERATE_OAUTH_CLIENT_ID ||
-    "";
-  const resource =
-    process.env.OS_PLAYWRIGHT_AUTH_RESOURCE ||
-    authorizeConfig.resource ||
-    process.env.APP_CONFIG_ITERATE_AUTH__RESOURCE ||
-    dopplerEnv.APP_CONFIG_ITERATE_AUTH__RESOURCE ||
-    defaultAuthResource(baseUrl);
-  const adminApiSecret =
-    process.env.OS_E2E_ADMIN_API_SECRET ||
-    process.env.OS_ADMIN_API_SECRET ||
-    process.env.APP_CONFIG_ADMIN_API_SECRET ||
-    dopplerEnv.APP_CONFIG_ADMIN_API_SECRET ||
-    "";
-  const forgePrivateJwkJson =
-    process.env.AUTH_FORGE_PRIVATE_JWK || dopplerEnv.AUTH_FORGE_PRIVATE_JWK || "";
-
-  if (!issuer) throw new Error("Missing Iterate auth issuer for Playwright forged session.");
-  if (!clientId) throw new Error("Missing Iterate auth client id for Playwright forged session.");
-  if (!resource) throw new Error("Missing Iterate auth resource for Playwright forged session.");
-  if (!adminApiSecret) {
-    throw new Error("Missing OS admin API secret for Playwright admin project setup.");
-  }
-  if (!forgePrivateJwkJson) {
-    throw new Error("Missing AUTH_FORGE_PRIVATE_JWK for Playwright forged session.");
-  }
-
-  const forgePrivateJwk = JSON.parse(forgePrivateJwkJson) as ForgePrivateJwk;
-  if (forgePrivateJwk.kty !== "OKP" || forgePrivateJwk.crv !== "Ed25519") {
-    throw new Error("Playwright forged sessions currently require an Ed25519 forge JWK.");
-  }
-  if (!forgePrivateJwk.kid) {
-    throw new Error("AUTH_FORGE_PRIVATE_JWK must include a kid.");
+async function loadOsPlaywrightAuthConfig(): Promise<OsPlaywrightAuthConfig> {
+  const env = Env.safeParse(process.env);
+  if (!env.success) {
+    throw new Error(
+      [
+        "Playwright forged-session specs require OS auth/admin env from Doppler.",
+        "Run with `doppler run --project os --config <dev|preview_N> -- pnpm spec`.",
+        z.prettifyError(env.error),
+      ].join("\n\n"),
+    );
   }
 
   return {
-    adminApiSecret,
-    clientId,
-    forgePrivateJwk,
-    issuer,
-    resource,
+    adminApiSecret: env.data.APP_CONFIG_ADMIN_API_SECRET,
+    clientId: env.data.APP_CONFIG_ITERATE_AUTH__CLIENT_ID,
+    forgePrivateJwk: env.data.AUTH_FORGE_PRIVATE_JWK,
+    issuer: env.data.APP_CONFIG_ITERATE_AUTH__ISSUER,
   };
-}
-
-async function readDopplerAuthEnv(): Promise<DopplerAuthEnv> {
-  const direct: DopplerAuthEnv = {
-    APP_CONFIG_ADMIN_API_SECRET: process.env.APP_CONFIG_ADMIN_API_SECRET,
-    APP_CONFIG_ITERATE_AUTH__CLIENT_ID: process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID,
-    APP_CONFIG_ITERATE_AUTH__ISSUER: process.env.APP_CONFIG_ITERATE_AUTH__ISSUER,
-    APP_CONFIG_ITERATE_AUTH__RESOURCE: process.env.APP_CONFIG_ITERATE_AUTH__RESOURCE,
-    AUTH_FORGE_PRIVATE_JWK: process.env.AUTH_FORGE_PRIVATE_JWK,
-    ITERATE_OAUTH_CLIENT_ID: process.env.ITERATE_OAUTH_CLIENT_ID,
-    ITERATE_OAUTH_ISSUER: process.env.ITERATE_OAUTH_ISSUER,
-  };
-  if (
-    direct.APP_CONFIG_ADMIN_API_SECRET &&
-    direct.AUTH_FORGE_PRIVATE_JWK &&
-    (direct.APP_CONFIG_ITERATE_AUTH__CLIENT_ID || direct.ITERATE_OAUTH_CLIENT_ID)
-  ) {
-    return direct;
-  }
-
-  const config = process.env.OS_PLAYWRIGHT_DOPPLER_CONFIG || process.env.DOPPLER_CONFIG || "dev";
-  const script = `
-const keys = [
-  "APP_CONFIG_ADMIN_API_SECRET",
-  "APP_CONFIG_ITERATE_AUTH__CLIENT_ID",
-  "APP_CONFIG_ITERATE_AUTH__ISSUER",
-  "APP_CONFIG_ITERATE_AUTH__RESOURCE",
-  "AUTH_FORGE_PRIVATE_JWK",
-  "ITERATE_OAUTH_CLIENT_ID",
-  "ITERATE_OAUTH_ISSUER"
-];
-process.stdout.write(JSON.stringify(Object.fromEntries(keys.map((key) => [key, process.env[key] || ""]))));
-`;
-
-  const { stdout } = await execFileAsync(
-    "doppler",
-    ["run", "--project", "os", "--config", config, "--", "node", "-e", script],
-    { maxBuffer: 1024 * 1024 },
-  );
-  return JSON.parse(stdout) as DopplerAuthEnv;
 }
 
 async function signJwt(input: {
@@ -327,43 +263,17 @@ async function signingKey(privateJwk: ForgePrivateJwk) {
   return await signingKeyPromise;
 }
 
-function defaultAuthResource(baseUrl: string) {
+function authResourceForBaseUrl(baseUrl: string) {
   const url = new URL(baseUrl);
-  const loopback =
+  if (
     url.hostname === "localhost" ||
     url.hostname === "127.0.0.1" ||
     url.hostname === "::1" ||
-    url.hostname.endsWith(".localhost");
-  return loopback ? `http://${url.hostname}` : baseUrl.replace(/\/+$/, "");
-}
-
-async function readOsAuthAuthorizeConfig(baseUrl: string) {
-  let url = new URL("/api/iterate-auth/login?return_to=/", baseUrl);
-
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const response = await fetch(url, { redirect: "manual" });
-    const location = response.headers.get("location");
-    if (!location) break;
-
-    const nextUrl = new URL(location, url);
-    if (nextUrl.origin === new URL(baseUrl).origin && nextUrl.pathname === url.pathname) {
-      url = nextUrl;
-      continue;
-    }
-
-    const issuerPath = nextUrl.pathname.replace(/\/oauth2\/authorize$/u, "");
-    return {
-      clientId: nextUrl.searchParams.get("client_id") || "",
-      issuer: `${nextUrl.origin}${issuerPath}`,
-      resource: nextUrl.searchParams.get("resource") || "",
-    };
+    url.hostname.endsWith(".localhost")
+  ) {
+    return `http://${url.hostname}`;
   }
-
-  return {
-    clientId: "",
-    issuer: "",
-    resource: "",
-  };
+  return baseUrl.replace(/\/+$/, "");
 }
 
 function base64UrlEncode(value: string | ArrayBuffer) {

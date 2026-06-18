@@ -28,7 +28,7 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "e2e/tui-test/run.ts",
       // Mounted into the CLI by packages/iterate/src/os/router.ts, which knip
       // doesn't traverse (the iterate package isn't a knip workspace).
-      "scripts/dev-server.ts",
+      "scripts/dev.ts",
       "scripts/itx-agent-smoke.ts",
       "scripts/itx-run.ts",
       "scripts/seed-iterate-config-base-repo.ts",
@@ -140,12 +140,7 @@ const config: KnipConfig = {
   // Keep the config honest in CI/local runs: if Knip thinks our patterns or
   // workspace setup drifted, fail instead of silently warning.
   treatConfigHintsAsErrors: true,
-  entry: [
-    "playwright.config.ts",
-    "specs/**/*.spec.ts",
-    "specs/seed-local-auth.ts",
-    "specs/start-local-dev.ts",
-  ],
+  entry: ["playwright.config.ts", "specs/**/*.spec.ts"],
   project: ["playwright.config.ts", "specs/**/*.ts"],
   // Keep this root command intentionally scoped. When Knip includes dependent
   // workspaces for a selected package, we still do not want it wandering into

@@ -8,7 +8,7 @@
   },
   "scripts": {
     "cli": "tsx ./scripts/cli.ts",
-    "dev": "pnpm cli dev",
+    "dev": "tsx ./scripts/dev.ts",
     "dev:local": "tsx ./scripts/dev.ts --no-doppler",
     "build": "doppler run -- pnpm exec vite build",
     "rpc": "pnpm cli rpc",
@@ -105,6 +105,7 @@
     "jsdom": "27.4.0",
     "miniflare": "catalog:cloudflare",
     "tinyexec": "^1.0.2",
+    "trpc-cli": "https://pkg.pr.new/mmkal/trpc-cli@210",
     "tsx": "^4.20.3",
     "typescript": "^5.9.3",
     "vite": "^8.0.0",

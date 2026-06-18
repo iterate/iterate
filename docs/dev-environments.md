@@ -61,10 +61,10 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   captun URL, runtime config keeps the public URL and the discovery file remains
   the local target.
   Scripts and CLIs that need "the local dev server" read that file — no
-  flags, no guessing. `pnpm dev` is the attached shorthand for
-  `cd apps/os && pnpm cli dev start`; extra args forward, so
-  `pnpm dev status`, `pnpm dev attach`, and `pnpm dev restart --detach` are the
-  short forms for `pnpm cli dev ...`. A second start attaches to the existing
+  flags, no guessing. `pnpm dev` runs `apps/os/scripts/dev.ts`; extra args
+  forward, so `pnpm dev status`, `pnpm dev attach`, and
+  `pnpm dev restart --detach` use the same local lifecycle module. A second
+  start attaches to the existing
   live server; use `restart` to replace it. The file appears ~10–15s before
   the port actually accepts connections (Vite is still booting) — poll the
   base URL until it returns a response before driving it.
@@ -191,6 +191,34 @@ creating an org + project on first sign-in (test emails `+...test@` with OTP
 The `browserSignInUrl` embeds the (short-lived) tokens as query params — treat
 it as a secret: it can appear in browser history and edge request logs, so
 don't paste it into shared channels.
+
+### Playwright specs against local dev or previews
+
+Root Playwright specs use the same forge key and admin API secret, but mint the
+session cookie directly instead of going through the browser sign-in URL. Run
+them inside the `os` Doppler config for the target environment:
+
+```bash
+# local dev: starts or reuses the local OS dev server when OS_BASE_URL is unset
+doppler run --project os --config dev -- pnpm spec
+
+# deployed preview: point the specs at the deployed OS worker
+OS_BASE_URL=https://os-preview-3.iterate.com \
+  doppler run --project os --config preview_3 -- pnpm spec
+```
+
+Forged-session specs validate one env contract: `APP_CONFIG_ADMIN_API_SECRET`
+for project fixture setup, plus `APP_CONFIG_ITERATE_AUTH__CLIENT_ID`,
+`APP_CONFIG_ITERATE_AUTH__ISSUER`, and `AUTH_FORGE_PRIVATE_JWK` for JWT
+minting. Those values are expected to come from the same `os` Doppler config as
+the worker under test. The access-token resource is derived from the target OS
+base URL (`http://localhost` for loopback local dev, otherwise the normalized
+base URL). The helper does not shell out to Doppler or infer auth values from
+redirects. `OS_BASE_URL` is the only target override; when it is unset,
+Playwright runs the OS dev script through Node with `start`, `--detach`,
+`--keep-alive`, and `--port <port>`, so it reuses the same per-worktree dev
+server recorded in `apps/os/.alchemy/dev-server.json`, then waits directly on
+that server's `/api/health`.
 
 ### Minting in production
 

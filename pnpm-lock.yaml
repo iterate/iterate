@@ -655,6 +655,9 @@ importers:
       tinyexec:
         specifier: ^1.0.2
         version: 1.1.1
+      trpc-cli:
+        specifier: https://pkg.pr.new/mmkal/trpc-cli@210
+        version: https://pkg.pr.new/mmkal/trpc-cli@210(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
       tsx:
         specifier: ^4.20.3
         version: 4.21.0
@@ -12644,6 +12647,32 @@ packages:
 
   trpc-cli@0.14.0:
     resolution: {integrity: sha512-Ibin1oLB6gGWfx/YfzbS+GYy3t2RbMUm+qUal8VYtGMt5kpwL6FteMNz1Mk9x7w0jB72xGxQm4B5VWtnO/Nihw==}
+    engines: {node: '>=18'}
+    hasBin: true
+    peerDependencies:
+      '@orpc/server': 1.13.14
+      '@trpc/server': ^10.45.2 || ^11.0.1
+      '@valibot/to-json-schema': ^1.1.0
+      effect: ^3.14.2 || ^4.0.0
+      valibot: ^1.1.0
+      zod: ^3.24.0 || ^4.0.0
+    peerDependenciesMeta:
+      '@orpc/server':
+        optional: true
+      '@trpc/server':
+        optional: true
+      '@valibot/to-json-schema':
+        optional: true
+      effect:
+        optional: true
+      valibot:
+        optional: true
+      zod:
+        optional: true
+
+  trpc-cli@https://pkg.pr.new/mmkal/trpc-cli@210:
+    resolution: {tarball: https://pkg.pr.new/mmkal/trpc-cli@210}
+    version: 0.0.0-dev-20260617164939
     engines: {node: '>=18'}
     hasBin: true
     peerDependencies:
@@ -27701,6 +27730,16 @@ snapshots:
       '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@5.9.3))
       valibot: 1.2.0(typescript@5.9.3)
       zod: 4.4.3
+
+  trpc-cli@https://pkg.pr.new/mmkal/trpc-cli@210(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6):
+    dependencies:
+      commander: 14.0.3
+    optionalDependencies:
+      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+      '@trpc/server': 11.12.0(typescript@5.9.3)
+      '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@5.9.3))
+      valibot: 1.2.0(typescript@5.9.3)
+      zod: 4.3.6
 
   ts-api-utils@2.4.0(typescript@5.9.3):
     dependencies:
