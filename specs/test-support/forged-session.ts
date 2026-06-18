@@ -153,17 +153,47 @@ export async function createAdminProject(input: { baseUrl: string; slug: string 
 }
 
 async function waitForProjectReady(projectItx: unknown, project: { id: string; slug: string }) {
-  let snapshot: any;
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    snapshot = await (
-      projectItx as { project: { processor: { snapshot(): Promise<any> } } }
-    ).project.processor.snapshot();
-    if (snapshot.state?.phase === "ready") return;
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  const processor = (
+    projectItx as {
+      project: {
+        processor: {
+          onStateChange(callback: (state: any) => unknown): Promise<(() => void) & Disposable>;
+        };
+      };
+    }
+  ).project.processor;
+
+  let lastState: any;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    let resolveReady: () => void;
+    let rejectReady: (error: unknown) => void;
+    const ready = new Promise<void>((resolve, reject) => {
+      resolveReady = resolve;
+      rejectReady = reject;
+    });
+
+    timeout = setTimeout(() => {
+      rejectReady(
+        new Error(
+          `Timed out waiting for project ${project.id} (${project.slug}) to become ready: ${JSON.stringify(lastState)}`,
+        ),
+      );
+    }, 60_000);
+
+    const unsubscribe = await processor.onStateChange((state) => {
+      lastState = state;
+      if (state?.phase === "ready") resolveReady();
+    });
+    try {
+      await ready;
+    } finally {
+      unsubscribe();
+    }
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
-  throw new Error(
-    `Timed out waiting for project ${project.id} (${project.slug}) to become ready: ${JSON.stringify(snapshot)}`,
-  );
 }
 
 export async function mintIterateSession(input: {
