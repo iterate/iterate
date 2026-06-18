@@ -26,7 +26,7 @@ accept `OS_E2E_BEARER_TOKEN` or `OS_E2E_COOKIE`). The usual invocation is
 `doppler run --config <config> -- pnpm e2e [-t <filter>]` from `apps/os`. Deployed configs supply
 the base URL: `prd` → `os.iterate.com`, `preview_N` → `os.iterate-preview-N.com`. Local configs
 (`dev` and `dev_<you>`) read `.alchemy/dev-server.json` from the running CLI-managed dev server
-(`pnpm dev` or `pnpm cli dev start --detach`).
+(`pnpm dev` or `pnpm dev start --detach`).
 
 If you need to target captun or another custom target, override explicitly:
 `OS_ITX_E2E_BASE_URL=http://localhost:<port> doppler run --config dev -- pnpm e2e`.

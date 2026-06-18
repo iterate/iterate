@@ -232,7 +232,7 @@ describeRuntimeSmoke("runtime smoke", () => {
     const base = `http://127.0.0.1:${CF_DEV_PORT}`;
     await withServer(
       "pnpm",
-      ["exec", "tsx", "./scripts/dev.ts", "--no-doppler"],
+      ["exec", "tsx", "./scripts/dev.ts", "--skip-doppler"],
       {
         ...smokeEnv,
         ALCHEMY_LOCAL: "true",

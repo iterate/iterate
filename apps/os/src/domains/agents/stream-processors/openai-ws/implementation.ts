@@ -23,6 +23,7 @@
 // `#reconcileDanglingStartedRequests`.
 
 import { z } from "zod";
+import type { ResponseInput, ResponsesClientEvent } from "openai/resources/responses/responses";
 import {
   assertNever,
   buildProcessorIdempotencyKey,
@@ -35,6 +36,7 @@ import {
   isAgentLlmRequestStillCurrent,
   parseLlmRequestRequestedEventAt,
 } from "../llm-request-helpers.ts";
+import { createOpenAiResponsesWebSocketClient } from "./cloudflare-responses-websocket.ts";
 import { OpenAiWsProcessorContract, type OpenAiWsState } from "./contract.ts";
 import {
   StreamProcessor,
@@ -54,7 +56,7 @@ type LlmRequestCancelledEvent = Extract<
   OpenAiWsConsumedEvent,
   { type: "events.iterate.com/agent/llm-request-cancelled" }
 >;
-type JsonValue = z.infer<ReturnType<typeof z.json>>;
+export type JsonValue = z.infer<ReturnType<typeof z.json>>;
 
 const OpenAiResponsesStreamMessage = z.looseObject({
   type: z.string(),
@@ -75,7 +77,8 @@ const OpenAiResponsesStreamMessage = z.looseObject({
 export type OpenAiWsProcessorDeps = StreamProcessorDeps<
   OpenAiWsProcessorContract,
   {
-    openResponsesWebSocket(): Promise<OpenAiResponsesWebSocket>;
+    apiKey: string;
+    createResponsesWebSocketClient?: (apiKey: string) => Promise<OpenAiResponsesWebSocket>;
     /**
      * Reads the full committed history of the agent's stream so the processor
      * can confirm the request is still current before appending agent output.
@@ -86,28 +89,33 @@ export type OpenAiWsProcessorDeps = StreamProcessorDeps<
 
 export type OpenAiResponsesWebSocket = {
   readonly url: URL | string;
-  readonly socket: { readonly readyState: number };
-  send(event: JsonValue): void;
-  stream(): AsyncIterableIterator<OpenAiResponsesWebSocketStreamMessage>;
+  readonly readyState: number;
+  sendResponseCreate(event: ResponsesClientEvent): void;
+  messages(): AsyncIterableIterator<JsonValue>;
   close(props?: { code: number; reason: string }): void;
 };
-
-export type OpenAiResponsesWebSocketStreamMessage =
-  | { type: "connecting" | "open" | "closing" | "reconnected" }
-  | { type: "close"; code: number; reason: string }
-  | { type: "reconnecting"; reconnect: JsonValue }
-  | { type: "message"; message: JsonValue }
-  | { type: "raw"; data: unknown }
-  | { type: "error"; error: unknown };
 
 type OpenAiWsConnection = {
   id: string;
   url: string;
   client: OpenAiResponsesWebSocket;
-  iterator: AsyncIterableIterator<OpenAiResponsesWebSocketStreamMessage>;
+  iterator: AsyncIterableIterator<JsonValue>;
   receiveSequence: number;
   sendSequence: number;
 };
+type LlmFailureResult = {
+  status: "failure";
+  error: { message: string };
+  rawResponse?: JsonValue;
+};
+type AgentLlmCompletionResult =
+  | LlmFailureResult
+  | {
+      status: "success";
+      rawResponse: JsonValue | undefined;
+      usage?: JsonValue;
+      providerResponseId?: string;
+    };
 
 const OpenAiWebSocketReadyState = {
   Open: 1,
@@ -342,14 +350,15 @@ export class OpenAiWsProcessor extends StreamProcessor<
   }
 
   async #getConnection(sourceEvent: LlmRequestRequestedEvent): Promise<OpenAiWsConnection> {
-    if (this.#connection?.client.socket.readyState === OpenAiWebSocketReadyState.Open) {
+    if (this.#connection?.client.readyState === OpenAiWebSocketReadyState.Open) {
       return this.#connection;
     }
 
     const connectionId = `openai_ws_${sourceEvent.offset}_${crypto.randomUUID()}`;
-    const client = await this.deps.openResponsesWebSocket();
-    const iterator = client.stream();
-    await waitForOpenAiResponsesSocketOpen(iterator);
+    const client = await (
+      this.deps.createResponsesWebSocketClient ?? createOpenAiResponsesWebSocketClient
+    )(this.deps.apiKey);
+    const iterator = client.messages();
 
     const connection: OpenAiWsConnection = {
       id: connectionId,
@@ -409,7 +418,10 @@ export class OpenAiWsProcessor extends StreamProcessor<
       await this.#appendProviderFailed({
         durationMs: 0,
         llmRequestId,
-        message: "LLM request was cancelled before provider execution started.",
+        result: {
+          status: "failure",
+          error: { message: "LLM request was cancelled before provider execution started." },
+        },
         sourceEvent: args.event,
       });
       this.#cancelledLlmRequestIds.delete(llmRequestId);
@@ -431,32 +443,17 @@ export class OpenAiWsProcessor extends StreamProcessor<
         status: "failure" as const,
         error: { message: stringifyError(error) },
       };
-      await this.#append({
-        type: "events.iterate.com/openai-ws/llm-request-completed",
-        idempotencyKey: buildProcessorIdempotencyKey({
-          processor: OpenAiWsProcessorContract,
-          key: "provider-llm-request-completed",
-          sourceEvent: args.event,
-        }),
-        payload: {
-          llmRequestId,
-          durationMs,
-          result: failure,
-        },
+      await this.#appendProviderFailed({
+        durationMs,
+        llmRequestId,
+        result: failure,
+        sourceEvent: args.event,
       });
-      await this.#append({
-        type: "events.iterate.com/agent/llm-request-completed",
-        idempotencyKey: buildProcessorIdempotencyKey({
-          processor: OpenAiWsProcessorContract,
-          key: "agent-llm-request-completed",
-          sourceEvent: args.event,
-        }),
-        payload: {
-          llmRequestId,
-          provider: OpenAiWsProcessorContract.slug,
-          durationMs,
-          result: failure,
-        },
+      await this.#appendAgentCompleted({
+        durationMs,
+        llmRequestId,
+        result: failure,
+        sourceEvent: args.event,
       });
       this.#clearActiveRequest(llmRequestId);
       return;
@@ -482,40 +479,43 @@ export class OpenAiWsProcessor extends StreamProcessor<
       events: await this.deps.readStreamEvents(),
       llmRequestId,
     });
-    const systemMessages = body.messages.filter((message) => message.role === "system");
-    const inputMessages = body.messages.filter((message) => message.role !== "system");
     const previousResponseId = this.#previousResponseId;
-    /**
-     * `store: false` keeps this out of OpenAI's stored response retention, but
-     * WebSocket mode can still chain the immediate conversation by carrying
-     * `previous_response_id` from the prior completed response. The rebuilt
-     * chat request remains the source of truth for what we explicitly send.
-     */
-    const requestMessage = toJsonValue({
-      type: "response.create",
+    const requestMessage = buildResponsesClientEvent({
+      messages: body.messages,
       model: args.state.model,
-      instructions:
-        systemMessages.map((message) => message.content).join("\n\n") ||
-        "You are a helpful assistant.",
-      input: inputMessages.map((message) => ({
-        type: "message",
-        role: message.role,
-        content: [
-          {
-            type: message.role === "assistant" ? "output_text" : "input_text",
-            text: message.content,
-          },
-        ],
-      })),
-      store: false,
-      // Reasoning models stream `response.reasoning_summary_text.delta`
-      // frames when summaries are requested; those land on the stream like
-      // every other frame so the UI can show thinking as it happens.
-      ...(supportsReasoningSummaries(args.state.model) ? { reasoning: { summary: "auto" } } : {}),
-      ...(previousResponseId == null ? {} : { previous_response_id: previousResponseId }),
+      previousResponseId,
     });
     const sendSequence = connection.sendSequence++;
-    connection.client.send(requestMessage);
+    try {
+      connection.client.sendResponseCreate(requestMessage);
+    } catch (error) {
+      connection.client.close({ code: 1011, reason: "send-failed" });
+      this.#markConnectionClosed(connection);
+      const durationMs = Date.now() - startedAt;
+      const failure = {
+        status: "failure" as const,
+        error: { message: stringifyError(error) },
+      };
+      await this.#appendWebSocketDisconnected({
+        connectionId: connection.id,
+        sourceEvent: args.event,
+      });
+      await this.#appendProviderFailed({
+        connectionId: connection.id,
+        durationMs,
+        llmRequestId,
+        result: failure,
+        sourceEvent: args.event,
+      });
+      await this.#appendAgentCompleted({
+        durationMs,
+        llmRequestId,
+        result: failure,
+        sourceEvent: args.event,
+      });
+      this.#clearActiveRequest(llmRequestId);
+      return;
+    }
     await this.#append({
       type: "events.iterate.com/openai-ws/websocket-message-sent",
       idempotencyKey: buildProcessorIdempotencyKey({
@@ -527,7 +527,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
         connectionId: connection.id,
         llmRequestId,
         sequence: sendSequence,
-        message: requestMessage,
+        message: toJsonValue(requestMessage),
       },
     });
 
@@ -542,25 +542,21 @@ export class OpenAiWsProcessor extends StreamProcessor<
         this.#markConnectionClosed(connection);
         const durationMs = Date.now() - startedAt;
         if (this.#cancelledLlmRequestIds.has(llmRequestId)) {
-          await this.#append({
-            type: "events.iterate.com/openai-ws/websocket-disconnected",
-            idempotencyKey: buildProcessorIdempotencyKey({
-              processor: OpenAiWsProcessorContract,
-              key: `websocket-disconnected/${connection.id}`,
-              sourceEvent: args.event,
-            }),
-            payload: {
-              connectionId: connection.id,
-              code: 1000,
-              reason: "llm-request-cancelled",
-              wasClean: true,
-            },
+          await this.#appendWebSocketDisconnected({
+            code: 1000,
+            connectionId: connection.id,
+            reason: "llm-request-cancelled",
+            sourceEvent: args.event,
+            wasClean: true,
           });
           await this.#appendProviderFailed({
             connectionId: connection.id,
             durationMs,
             llmRequestId,
-            message: "LLM request was cancelled.",
+            result: {
+              status: "failure",
+              error: { message: "LLM request was cancelled." },
+            },
             sourceEvent: args.event,
           });
           this.#cancelledLlmRequestIds.delete(llmRequestId);
@@ -571,44 +567,22 @@ export class OpenAiWsProcessor extends StreamProcessor<
           status: "failure" as const,
           error: { message: stringifyError(error) },
         };
-        await this.#append({
-          type: "events.iterate.com/openai-ws/websocket-disconnected",
-          idempotencyKey: buildProcessorIdempotencyKey({
-            processor: OpenAiWsProcessorContract,
-            key: `websocket-disconnected/${connection.id}`,
-            sourceEvent: args.event,
-          }),
-          payload: {
-            connectionId: connection.id,
-          },
+        await this.#appendWebSocketDisconnected({
+          connectionId: connection.id,
+          sourceEvent: args.event,
         });
-        await this.#append({
-          type: "events.iterate.com/openai-ws/llm-request-completed",
-          idempotencyKey: buildProcessorIdempotencyKey({
-            processor: OpenAiWsProcessorContract,
-            key: "provider-llm-request-completed",
-            sourceEvent: args.event,
-          }),
-          payload: {
-            connectionId: connection.id,
-            llmRequestId,
-            durationMs,
-            result: failure,
-          },
+        await this.#appendProviderFailed({
+          connectionId: connection.id,
+          durationMs,
+          llmRequestId,
+          result: failure,
+          sourceEvent: args.event,
         });
-        await this.#append({
-          type: "events.iterate.com/agent/llm-request-completed",
-          idempotencyKey: buildProcessorIdempotencyKey({
-            processor: OpenAiWsProcessorContract,
-            key: "agent-llm-request-completed",
-            sourceEvent: args.event,
-          }),
-          payload: {
-            llmRequestId,
-            provider: OpenAiWsProcessorContract.slug,
-            durationMs,
-            result: failure,
-          },
+        await this.#appendAgentCompleted({
+          durationMs,
+          llmRequestId,
+          result: failure,
+          sourceEvent: args.event,
         });
         this.#clearActiveRequest(llmRequestId);
         return;
@@ -644,7 +618,6 @@ export class OpenAiWsProcessor extends StreamProcessor<
       if (parsed.data.type === "response.completed") {
         finalResponse = toJsonValue(parsed.data.response ?? message);
         const responseId = parsed.data.response?.id;
-        if (responseId != null) this.#previousResponseId = responseId;
         const durationMs = Date.now() - startedAt;
         const usage = parsed.data.response?.usage;
         if (!(await this.#isAgentLlmRequestStillCurrent({ llmRequestId }))) {
@@ -672,6 +645,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
           }),
           payload: { content: outputText, llmRequestId },
         });
+        if (responseId != null) this.#previousResponseId = responseId;
         await this.#appendProviderCompleted({
           connectionId: connection.id,
           durationMs,
@@ -684,30 +658,23 @@ export class OpenAiWsProcessor extends StreamProcessor<
           },
           sourceEvent: args.event,
         });
-        await this.#append({
-          type: "events.iterate.com/agent/llm-request-completed",
-          idempotencyKey: buildProcessorIdempotencyKey({
-            processor: OpenAiWsProcessorContract,
-            key: "agent-llm-request-completed",
-            sourceEvent: args.event,
-          }),
-          payload: {
-            llmRequestId,
-            provider: OpenAiWsProcessorContract.slug,
-            durationMs,
-            result: {
-              status: "success",
-              rawResponse: finalResponse,
-              ...(usage == null ? {} : { usage }),
-              ...(responseId == null ? {} : { providerResponseId: responseId }),
-            },
+        await this.#appendAgentCompleted({
+          durationMs,
+          llmRequestId,
+          result: {
+            status: "success",
+            rawResponse: finalResponse,
+            ...(usage == null ? {} : { usage }),
+            ...(responseId == null ? {} : { providerResponseId: responseId }),
           },
+          sourceEvent: args.event,
         });
         this.#clearActiveRequest(llmRequestId);
         return;
       }
 
       if (parsed.data.type === "response.failed" || parsed.data.type === "error") {
+        this.#previousResponseId = null;
         const rawResponse = toJsonValue(message);
         const durationMs = Date.now() - startedAt;
         const failure = {
@@ -717,33 +684,18 @@ export class OpenAiWsProcessor extends StreamProcessor<
           },
           rawResponse,
         };
-        await this.#append({
-          type: "events.iterate.com/openai-ws/llm-request-completed",
-          idempotencyKey: buildProcessorIdempotencyKey({
-            processor: OpenAiWsProcessorContract,
-            key: "provider-llm-request-completed",
-            sourceEvent: args.event,
-          }),
-          payload: {
-            connectionId: connection.id,
-            llmRequestId,
-            durationMs,
-            result: failure,
-          },
+        await this.#appendProviderFailed({
+          connectionId: connection.id,
+          durationMs,
+          llmRequestId,
+          result: failure,
+          sourceEvent: args.event,
         });
-        await this.#append({
-          type: "events.iterate.com/agent/llm-request-completed",
-          idempotencyKey: buildProcessorIdempotencyKey({
-            processor: OpenAiWsProcessorContract,
-            key: "agent-llm-request-completed",
-            sourceEvent: args.event,
-          }),
-          payload: {
-            llmRequestId,
-            provider: OpenAiWsProcessorContract.slug,
-            durationMs,
-            result: failure,
-          },
+        await this.#appendAgentCompleted({
+          durationMs,
+          llmRequestId,
+          result: failure,
+          sourceEvent: args.event,
         });
         this.#clearActiveRequest(llmRequestId);
         return;
@@ -755,7 +707,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
     connectionId?: string;
     durationMs: number;
     llmRequestId: number;
-    message: string;
+    result: LlmFailureResult;
     sourceEvent: LlmRequestRequestedEvent;
   }) {
     await this.#append({
@@ -769,10 +721,52 @@ export class OpenAiWsProcessor extends StreamProcessor<
         ...(args.connectionId == null ? {} : { connectionId: args.connectionId }),
         llmRequestId: args.llmRequestId,
         durationMs: args.durationMs,
-        result: {
-          status: "failure",
-          error: { message: args.message },
-        },
+        result: args.result,
+      },
+    });
+  }
+
+  async #appendAgentCompleted(args: {
+    durationMs: number;
+    llmRequestId: number;
+    result: AgentLlmCompletionResult;
+    sourceEvent: LlmRequestRequestedEvent;
+  }) {
+    await this.#append({
+      type: "events.iterate.com/agent/llm-request-completed",
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: OpenAiWsProcessorContract,
+        key: "agent-llm-request-completed",
+        sourceEvent: args.sourceEvent,
+      }),
+      payload: {
+        llmRequestId: args.llmRequestId,
+        provider: OpenAiWsProcessorContract.slug,
+        durationMs: args.durationMs,
+        result: args.result,
+      },
+    });
+  }
+
+  async #appendWebSocketDisconnected(args: {
+    code?: number;
+    connectionId: string;
+    reason?: string;
+    sourceEvent: LlmRequestRequestedEvent;
+    wasClean?: boolean;
+  }) {
+    await this.#append({
+      type: "events.iterate.com/openai-ws/websocket-disconnected",
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: OpenAiWsProcessorContract,
+        key: `websocket-disconnected/${args.connectionId}`,
+        sourceEvent: args.sourceEvent,
+      }),
+      payload: {
+        connectionId: args.connectionId,
+        ...(args.code == null ? {} : { code: args.code }),
+        ...(args.reason == null ? {} : { reason: args.reason }),
+        ...(args.wasClean == null ? {} : { wasClean: args.wasClean }),
       },
     });
   }
@@ -826,70 +820,63 @@ function supportsReasoningSummaries(model: string) {
   return /^(gpt-5|o[1-9]|codex)/.test(model);
 }
 
-async function waitForOpenAiResponsesSocketOpen(
-  iterator: AsyncIterableIterator<OpenAiResponsesWebSocketStreamMessage>,
-) {
-  while (true) {
-    const result = await iterator.next();
-    if (result.done === true) throw new Error("OpenAI WebSocket stream ended before opening.");
+function buildResponsesClientEvent(args: {
+  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+  model: string;
+  previousResponseId: string | null;
+}): ResponsesClientEvent {
+  const systemMessages = args.messages.filter((message) => message.role === "system");
+  const inputMessages = args.messages.filter(isResponsesInputMessage);
+  const input =
+    args.previousResponseId == null
+      ? toResponsesInput(inputMessages)
+      : toResponsesInput(newInputMessagesForContinuation(inputMessages));
 
-    switch (result.value.type) {
-      case "connecting":
-        continue;
-      case "open":
-        return;
-      case "close":
-        throw new Error(
-          `OpenAI WebSocket closed before opening: ${result.value.code} ${result.value.reason}`,
-        );
-      case "error":
-        throw result.value.error;
-      case "message":
-      case "raw":
-      case "closing":
-      case "reconnecting":
-      case "reconnected":
-        continue;
-      default:
-        return assertNever(result.value);
-    }
-  }
+  return {
+    type: "response.create",
+    model: args.model as ResponsesClientEvent["model"],
+    instructions:
+      systemMessages.map((message) => message.content).join("\n\n") ||
+      "You are a helpful assistant.",
+    input,
+    store: false,
+    // Reasoning models stream `response.reasoning_summary_text.delta`
+    // frames when summaries are requested; those land on the stream like
+    // every other frame so the UI can show thinking as it happens.
+    ...(supportsReasoningSummaries(args.model) ? { reasoning: { summary: "auto" } } : {}),
+    ...(args.previousResponseId == null ? {} : { previous_response_id: args.previousResponseId }),
+  };
+}
+
+function toResponsesInput(messages: Array<{ role: "user" | "assistant"; content: string }>) {
+  return messages.map((message) => ({
+    type: "message" as const,
+    role: message.role,
+    content: message.content,
+  })) satisfies ResponseInput;
+}
+
+function isResponsesInputMessage(message: {
+  role: "system" | "user" | "assistant";
+  content: string;
+}): message is {
+  role: "user" | "assistant";
+  content: string;
+} {
+  return message.role !== "system";
+}
+
+function newInputMessagesForContinuation(
+  messages: Array<{ role: "user" | "assistant"; content: string }>,
+) {
+  const lastAssistantIndex = messages.findLastIndex((message) => message.role === "assistant");
+  return lastAssistantIndex === -1 ? messages : messages.slice(lastAssistantIndex + 1);
 }
 
 async function nextOpenAiResponsesMessage(connection: OpenAiWsConnection): Promise<JsonValue> {
-  while (true) {
-    const result = await connection.iterator.next();
-    if (result.done === true) throw new Error("OpenAI WebSocket stream ended.");
-
-    switch (result.value.type) {
-      case "message":
-        return toJsonValue(result.value.message);
-      case "raw":
-        return parseRawSocketMessage(result.value.data);
-      case "close":
-        throw new Error(`OpenAI WebSocket closed: ${result.value.code} ${result.value.reason}`);
-      case "error":
-        throw result.value.error;
-      case "connecting":
-      case "open":
-      case "closing":
-      case "reconnecting":
-      case "reconnected":
-        continue;
-      default:
-        return assertNever(result.value);
-    }
-  }
-}
-
-function parseRawSocketMessage(message: unknown): JsonValue {
-  const text =
-    typeof message === "string"
-      ? message
-      : message instanceof ArrayBuffer
-        ? new TextDecoder().decode(message)
-        : String(message);
-  return toJsonValue(JSON.parse(text));
+  const result = await connection.iterator.next();
+  if (result.done === true) throw new Error("OpenAI WebSocket stream ended.");
+  return result.value;
 }
 
 function toJsonValue(value: unknown): JsonValue {

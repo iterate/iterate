@@ -74,7 +74,7 @@ function RootDocument({ children }: { children: ReactNode }) {
       <head>
         <HeadContent />
       </head>
-      <body data-hydrated={isHydrated}>
+      <body className="min-h-screen bg-background font-sans antialiased" data-hydrated={isHydrated}>
         {children}
         <Scripts />
       </body>

@@ -61,10 +61,9 @@ pnpm dev                                      # attached local OS dev server (ht
 ```
 
 Use `pnpm dev <action> [flags]` for dev server lifecycle controls (`status`,
-`start --detach`, `attach`, `restart`, `kill`); it forwards to
-`pnpm cli dev <action> [flags]`. The shared `dev` config and personal
-`dev_<you>` configs are fully local and safe for parallel worktrees; use
-captun, preview, or production for public callbacks. Details:
+`start --detach`, `attach`, `restart`, `kill`). The shared `dev` config and
+personal `dev_<you>` configs are fully local and safe for parallel worktrees;
+use captun, preview, or production for public callbacks. Details:
 [Dev environments](docs/dev-environments.md).
 
 Before PRs:
