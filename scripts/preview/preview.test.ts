@@ -4,13 +4,15 @@ import {
   cloudflarePreviewAdditionalTriggerPaths,
   cloudflarePreviewSharedPaths,
 } from "./apps.ts";
-import {
+import { previewInternals } from "./preview.ts";
+
+const {
   expandPreviewDependencies,
   orderPreviewDeployBatches,
   resolvePreviewReadinessUrls,
   resolvePreviewCompareBaseSha,
   selectPreviewAppsNeedingRetry,
-} from "./preview.ts";
+} = previewInternals;
 
 describe("preview app dependency expansion", () => {
   it("expands os to include its auth dependency", () => {

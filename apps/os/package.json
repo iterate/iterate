@@ -105,7 +105,7 @@
     "miniflare": "catalog:cloudflare",
     "openai": "^6.36.0",
     "tinyexec": "^1.0.2",
-    "trpc-cli": "0.14.0",
+    "trpc-cli": "0.15.0",
     "tsx": "^4.20.3",
     "typescript": "^5.9.3",
     "vite": "^8.0.0",

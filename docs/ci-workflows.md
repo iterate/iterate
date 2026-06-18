@@ -38,7 +38,7 @@ The preview workflow is deliberately simple:
 - select the apps affected by the PR diff;
 - include declared preview dependencies, currently OS -> auth;
 - deploy the selected apps in dependency batches;
-- after deployment has finished, run tests for every deployed app concurrently.
+- after deployment has finished, run tests for deployed apps one at a time.
 
 The preview script does not try to prove dependency freshness or start each app's
 tests as soon as it is individually ready. That lost little in the measured case
@@ -51,9 +51,9 @@ To run the same deploy-then-test lifecycle from your machine:
 doppler run --project _shared --config prd -- pnpm preview:ci <pr-number>
 ```
 
-That wrapper lives at `scripts/preview/run-ci-locally.sh`. It reads the PR head
-ref, head SHA, base SHA, fork flag, and URL with `gh`, then runs the same two
-preview commands as the GitHub workflow:
+That wrapper lives at `scripts/preview/run-ci-locally.sh`. It uses
+`GITHUB_TOKEN` or `gh auth token`, sets the workflow URL to the PR URL for local
+runs, then runs the same two preview commands as the GitHub workflow:
 
 ```bash
 pnpm preview deploy ...
@@ -61,9 +61,9 @@ pnpm preview test ...
 ```
 
 Use this when you want to reproduce the preview deployment and e2e behavior
-without waiting for GitHub Actions. Use `pnpm preview sync ...` only when you
-want the older single-command deploy-and-test helper; CI uses the explicit
-deploy step followed by the explicit test step.
+without waiting for GitHub Actions. Use `pnpm preview sync --pull-request-number
+<n>` when you want one command to deploy and test; CI uses the explicit deploy
+step followed by the explicit test step.
 
 ## Depot GitHub Actions Runners
 

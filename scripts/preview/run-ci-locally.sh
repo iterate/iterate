@@ -10,8 +10,7 @@ Runs the same preview lifecycle shape as CI for a pull request:
   1. pnpm preview deploy
   2. pnpm preview test
 
-The script reads PR head/base metadata through gh and uses gh auth token when
-GITHUB_TOKEN is not already set.
+The script uses gh auth token when GITHUB_TOKEN is not already set.
 USAGE
 }
 
@@ -42,37 +41,22 @@ if [[ -z "${GITHUB_TOKEN:-}" ]]; then
   GITHUB_TOKEN="$(gh auth token)"
 fi
 
-repository_full_name="${GITHUB_REPOSITORY:-iterate/iterate}"
+if [[ -z "${WORKFLOW_RUN_URL:-}" ]]; then
+  export WORKFLOW_RUN_URL
+  WORKFLOW_RUN_URL="$(
+    gh pr view "$pr_number" \
+      --repo "${GITHUB_REPOSITORY:-iterate/iterate}" \
+      --json url \
+      --jq .url
+  )"
+fi
 
-eval "$(
-  gh pr view "$pr_number" \
-    --repo "$repository_full_name" \
-    --json headRefName,headRefOid,baseRefOid,isCrossRepository,url \
-    --jq '"PR_HEAD_REF_NAME=\(.headRefName|@sh)
-PR_HEAD_SHA=\(.headRefOid|@sh)
-PR_BASE_SHA=\(.baseRefOid|@sh)
-PR_IS_FORK=\(.isCrossRepository)
-PR_URL=\(.url|@sh)"'
-)"
-
-workflow_run_url="${WORKFLOW_RUN_URL:-$PR_URL}"
-
-common_args=(
-  --github-token "$GITHUB_TOKEN"
-  --pull-request-number "$pr_number"
-  --repository-full-name "$repository_full_name"
-  --workflow-run-url "$workflow_run_url"
-)
-
-echo "[preview:ci] deploy PR #$pr_number ($PR_HEAD_SHA)"
+echo "[preview:ci] deploy PR #$pr_number"
 pnpm preview deploy \
-  "${common_args[@]}" \
-  --pull-request-head-ref-name "$PR_HEAD_REF_NAME" \
-  --pull-request-head-sha "$PR_HEAD_SHA" \
-  --pull-request-base-sha "$PR_BASE_SHA" \
-  --is-fork "$PR_IS_FORK"
+  --github-token "$GITHUB_TOKEN" \
+  --pull-request-number "$pr_number"
 
-echo "[preview:ci] test PR #$pr_number ($PR_HEAD_SHA)"
+echo "[preview:ci] test PR #$pr_number"
 pnpm preview test \
-  "${common_args[@]}" \
-  --pull-request-head-sha "$PR_HEAD_SHA"
+  --github-token "$GITHUB_TOKEN" \
+  --pull-request-number "$pr_number"

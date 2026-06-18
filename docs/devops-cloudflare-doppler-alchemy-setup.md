@@ -198,6 +198,9 @@ GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --pre
 GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview cleanup --pull-request-number 1234
 ```
 
+For PR commands, the CLI only needs a GitHub token and pull request number; it
+derives the repository, head SHA, and base SHA through GitHub.
+
 Direct app deploys to `preview_N` are useful for debugging the primitive, but
 they bypass Semaphore and can collide with a PR that owns the same lease.
 
@@ -210,15 +213,15 @@ and prevents two PRs from deploying to the same slot simultaneously.
 
 #### How leases work
 
-| Concept   | Meaning                                                            |
-| --------- | ------------------------------------------------------------------ |
-| Resource  | A preview slot (type `environment-config-lease`, slug `preview-N`) |
-| Lease     | Time-bound claim; identified by a `leaseId` UUID                   |
-| `leaseMs` | How long the lease is held (milliseconds; max 30 days)             |
-| `waitMs`  | How long to wait if no slot is available (max 5 minutes)           |
-| Acquire   | Claim any available slot of a given type                           |
-| Release   | Return a slot early (requires the matching `leaseId`)              |
-| Renew     | Extend the expiry on an active lease                               |
+| Concept   | Meaning                                                                |
+| --------- | ---------------------------------------------------------------------- |
+| Resource  | A preview slot (type `environment-config-lease`, slug `preview-N`)     |
+| Lease     | Time-bound claim; identified by a `leaseId` UUID                       |
+| `leaseMs` | API field for how long the lease is held (milliseconds; max 30 days)   |
+| `waitMs`  | API field for how long to wait if no slot is available (max 5 minutes) |
+| Acquire   | Claim any available slot of a given type                               |
+| Release   | Return a slot early (requires the matching `leaseId`)                  |
+| Renew     | Extend the expiry on an active lease                                   |
 
 Each resource type gets its own Durable Object that serializes lease
 operations, manages a waiter queue, and reaps expired leases via alarms. D1

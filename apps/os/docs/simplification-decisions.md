@@ -155,9 +155,9 @@ Two findings worth keeping:
   server-side, debug the itx WebSocket path and stream subscription state.
 
 - **`Preview / deploy` red was `apps/semaphore`, not `apps/os` — a dropped
-  `baseUrl` in the migrated config.** On PR #1411 the deploy job failed at
-  `scripts/preview/router.ts:113` after a ~9-minute silent gap (the readiness
-  poll's 10-min budget, `preview.ts:43`). The misleading part: `os`'s readiness
+  `baseUrl` in the migrated config.** On PR #1411 the deploy job failed in the
+  preview deploy step after a ~9-minute silent gap (the readiness poll's 10-min
+  budget, `preview.ts:43`). The misleading part: `os`'s readiness
   passed (`status: awaiting-tests`); the recorded state showed **semaphore**
   `deploy-failed` with `Readiness check returned 522 for
 https://semaphore.iterate-preview-2.com/api/__internal/health`. The semaphore
