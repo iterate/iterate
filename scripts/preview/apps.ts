@@ -64,7 +64,12 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // OS bakes auth JWKS during deployment, so the slot's auth deployment must
     // finish before OS deploy starts.
     previewDependencies: ["auth"],
-    previewTestArtifacts: ["test-results"],
+    previewTestArtifacts: [
+      "test-results",
+      "apps/os/test-results",
+      "/tmp/os-e2e-*",
+      "/tmp/os-itx-e2e-*",
+    ],
     previewTestBaseUrlEnvVar: "OS_BASE_URL",
     // The itx e2e (node project only — the browser project needs a Playwright
     // chromium install the preview e2e job doesn't have) reads

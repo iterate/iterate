@@ -57,6 +57,17 @@ describe("preview workflow scope", () => {
 });
 
 describe("preview test commands", () => {
+  it("uploads both Playwright and Vitest artifacts for OS preview failures", () => {
+    expect(cloudflarePreviewApps.os).toMatchObject({
+      previewTestArtifacts: [
+        "test-results",
+        "apps/os/test-results",
+        "/tmp/os-e2e-*",
+        "/tmp/os-itx-e2e-*",
+      ],
+    });
+  });
+
   it("runs root Playwright specs after OS preview Vitest lanes", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs[2];
     const playwrightInstall = "pnpm --dir ../.. exec playwright install chromium";
