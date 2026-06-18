@@ -72,7 +72,7 @@ function createCommonPreviewArguments(input: {
   ];
 }
 
-function createDopplerStep(input: { command: string; name: string }): Step {
+function createDopplerPreviewStep(input: { name: string; run: string }): Step {
   return {
     if: "github.event.pull_request.head.repo.fork != true",
     name: input.name,
@@ -82,33 +82,14 @@ function createDopplerStep(input: { command: string; name: string }): Step {
       WORKFLOW_RUN_URL:
         "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
     },
-    run: createPreviewCommand({
-      command: input.command,
-      includePullRequestBaseSha: input.command === "deploy",
-      includePullRequestHeadRefName: input.command === "deploy",
-      includePullRequestHeadSha: input.command !== "cleanup",
-      includePullRequestIsFork: input.command === "deploy",
-      includeWorkflowRunUrl: input.command !== "cleanup",
-      prefix: "doppler run --project _shared --config prd -- ",
-    }),
+    run: input.run,
   };
 }
 
-function createPreviewLifecycleJob(input: {
-  command: string;
-  /** Step name for the main command; defaults to the job name. */
-  commandStepName?: string;
-  /** Doppler-only commands run in the same job after the main command, sharing its runner and setup. */
-  dopplerFollowUps?: Array<{ command: string; name: string }>;
-  if: string;
-  name: string;
-  runsOnDoppler?: boolean;
-  runsOnForks?: boolean;
-}) {
-  const commandStepName = input.commandStepName ?? input.name;
-  const forkStep: Step = {
+function createForkPreviewDeployStep(): Step {
+  return {
     if: "github.event.pull_request.head.repo.fork == true",
-    name: `${commandStepName} for forks`,
+    name: "Preview / deploy for forks",
     env: {
       GITHUB_TOKEN: "${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}",
       SEMAPHORE_BASE_URL: "https://semaphore.iterate.com",
@@ -116,16 +97,55 @@ function createPreviewLifecycleJob(input: {
         "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
     },
     run: createPreviewCommand({
-      command: input.command,
-      includePullRequestBaseSha: input.command === "deploy",
-      includePullRequestHeadRefName: input.command === "deploy",
-      includePullRequestHeadSha: input.command !== "cleanup",
-      includePullRequestIsFork: input.command === "deploy",
+      command: "deploy",
+      includePullRequestBaseSha: true,
+      includePullRequestHeadRefName: true,
+      includePullRequestHeadSha: true,
+      includePullRequestIsFork: true,
       includeSemaphoreBaseUrl: true,
       includeWorkflowRunUrl: true,
     }),
   };
+}
 
+function createDopplerPreviewDeployStep(): Step {
+  return createDopplerPreviewStep({
+    name: "Preview / deploy",
+    run: createPreviewCommand({
+      command: "deploy",
+      includePullRequestBaseSha: true,
+      includePullRequestHeadRefName: true,
+      includePullRequestHeadSha: true,
+      includePullRequestIsFork: true,
+      includeWorkflowRunUrl: true,
+      prefix: "doppler run --project _shared --config prd -- ",
+    }),
+  });
+}
+
+function createDopplerPreviewTestStep(): Step {
+  return createDopplerPreviewStep({
+    name: "Preview / e2e",
+    run: createPreviewCommand({
+      command: "test",
+      includePullRequestHeadSha: true,
+      includeWorkflowRunUrl: true,
+      prefix: "doppler run --project _shared --config prd -- ",
+    }),
+  });
+}
+
+function createDopplerPreviewCleanupStep(): Step {
+  return createDopplerPreviewStep({
+    name: "Preview / cleanup",
+    run: createPreviewCommand({
+      command: "cleanup",
+      prefix: "doppler run --project _shared --config prd -- ",
+    }),
+  });
+}
+
+function createPreviewLifecycleJob(input: { if: string; name: string; steps: Step[] }) {
   return {
     if: input.if,
     name: input.name,
@@ -142,16 +162,30 @@ function createPreviewLifecycleJob(input: {
         ...utils.installDopplerCli,
         if: "github.event.pull_request.head.repo.fork != true",
       },
-      ...(input.runsOnForks ? [forkStep] : []),
-      ...(input.runsOnDoppler
-        ? [createDopplerStep({ command: input.command, name: commandStepName })]
-        : []),
-      ...(input.dopplerFollowUps ?? []).map((followUp) => createDopplerStep(followUp)),
-      // TODO: Split deploy/test and cleanup lifecycle helpers so test-only
-      // behavior does not need to branch on the lifecycle command.
-      ...(input.command === "deploy" ? createPreviewTestArtifactSteps() : []),
+      ...input.steps,
     ],
   } satisfies Workflow["jobs"][string];
+}
+
+function createPreviewDeployAndTestJob() {
+  return createPreviewLifecycleJob({
+    if: "github.event.action != 'closed'",
+    name: "Preview / deploy + e2e",
+    steps: [
+      createForkPreviewDeployStep(),
+      createDopplerPreviewDeployStep(),
+      createDopplerPreviewTestStep(),
+      ...createPreviewTestArtifactSteps(),
+    ],
+  });
+}
+
+function createPreviewCleanupJob() {
+  return createPreviewLifecycleJob({
+    if: "github.event.action == 'closed' && github.event.pull_request.head.repo.fork != true",
+    name: "Preview / cleanup",
+    steps: [createDopplerPreviewCleanupStep()],
+  });
 }
 
 function createPreviewTestArtifactSteps(): Step[] {
@@ -190,20 +224,7 @@ export default {
     // Deploy and e2e share one job: a separate e2e job paid ~80s of runner
     // pickup plus checkout/install before running a single test. The e2e step
     // is doppler-only, so forks still deploy and simply skip it.
-    preview: createPreviewLifecycleJob({
-      command: "deploy",
-      commandStepName: "Preview / deploy",
-      dopplerFollowUps: [{ command: "test", name: "Preview / e2e" }],
-      if: "github.event.action != 'closed'",
-      name: "Preview / deploy + e2e",
-      runsOnDoppler: true,
-      runsOnForks: true,
-    }),
-    cleanup: createPreviewLifecycleJob({
-      command: "cleanup",
-      if: "github.event.action == 'closed' && github.event.pull_request.head.repo.fork != true",
-      name: "Preview / cleanup",
-      runsOnDoppler: true,
-    }),
+    preview: createPreviewDeployAndTestJob(),
+    cleanup: createPreviewCleanupJob(),
   },
 } satisfies Workflow;
