@@ -137,6 +137,8 @@ export async function createAdminProject(input: { baseUrl: string; slug: string 
     id: string;
     slug: string;
   };
+  using projectItx = await itx.projects.get(project.id);
+  await waitForProjectReady(projectItx, project);
   let disposed = false;
 
   return {
@@ -148,6 +150,20 @@ export async function createAdminProject(input: { baseUrl: string; slug: string 
       await cleanupItx.projects.remove({ id: project.id }).catch(() => undefined);
     },
   };
+}
+
+async function waitForProjectReady(projectItx: unknown, project: { id: string; slug: string }) {
+  let snapshot: any;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    snapshot = await (
+      projectItx as { project: { processor: { snapshot(): Promise<any> } } }
+    ).project.processor.snapshot();
+    if (snapshot.state?.phase === "ready") return;
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  throw new Error(
+    `Timed out waiting for project ${project.id} (${project.slug}) to become ready: ${JSON.stringify(snapshot)}`,
+  );
 }
 
 export async function mintIterateSession(input: {

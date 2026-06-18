@@ -40,7 +40,7 @@ const defaultPreviewReadyTimeoutMs = 600_000;
 const defaultPreviewReadyUrlPath = "/api/__internal/health";
 const defaultPreviewTestMaxAttempts = 1;
 const defaultPreviewTestRetryDelayMs = 5_000;
-const defaultPreviewAppConcurrency = 5;
+const defaultPreviewDeployConcurrency = 5;
 export type PreviewSemaphoreResourceClient = {
   acquire: (input: { leaseMs: number; type: string; waitMs?: number }) => Promise<{
     data: Record<string, unknown>;
@@ -222,17 +222,21 @@ export async function deployCloudflarePreviewForPullRequest(
   let ok = true;
   let latestState = leaseUpdate.state;
   for (const batch of orderPreviewDeployBatches(selectedApps)) {
-    const entries = await mapWithConcurrency(batch, defaultPreviewAppConcurrency, async (app) => {
-      return await deployPreviewAppWithStatus({
-        app,
-        commandEnvironment: params.commandEnvironment,
-        dopplerConfig: environmentConfigLease.dopplerConfig,
-        pullRequestHeadSha: pullRequest.pullRequestHeadSha,
-        repositoryRoot: params.repositoryRoot,
-        runUrl: params.workflowRunUrl ?? null,
-        signal: params.signal,
-      });
-    });
+    const entries = await mapWithConcurrency(
+      batch,
+      defaultPreviewDeployConcurrency,
+      async (app) => {
+        return await deployPreviewAppWithStatus({
+          app,
+          commandEnvironment: params.commandEnvironment,
+          dopplerConfig: environmentConfigLease.dopplerConfig,
+          pullRequestHeadSha: pullRequest.pullRequestHeadSha,
+          repositoryRoot: params.repositoryRoot,
+          runUrl: params.workflowRunUrl ?? null,
+          signal: params.signal,
+        });
+      },
+    );
     if (entries.some((entry) => entry.status === "deploy-failed")) {
       ok = false;
     }
@@ -289,40 +293,43 @@ export async function testCloudflarePreviewForPullRequest(
     };
   }
 
-  const entries = (
-    await mapWithConcurrency(testableApps, defaultPreviewAppConcurrency, async (app) => {
-      const existingEntry = current.state.apps[app.slug];
-      if (!existingEntry?.publicUrl) {
-        return null;
-      }
+  const entries: z.infer<typeof CloudflarePreviewAppEntry>[] = [];
+  // Preview e2e commands are full app-level suites. Run them one at a time so
+  // unrelated app checks do not multiply load against the same preview slot.
+  for (const app of testableApps) {
+    const existingEntry = current.state.apps[app.slug];
+    if (!existingEntry?.publicUrl) {
+      continue;
+    }
 
-      const startedAt = Date.now();
-      console.error(`[preview] test start: ${app.slug}`);
-      const testResult = await runCommandWithRetries({
-        args: [
-          "run",
-          "--project",
-          app.dopplerProject,
-          "--config",
-          environmentConfigLease.dopplerConfig,
-          "--",
-          "env",
-          `${app.previewTestBaseUrlEnvVar}=${existingEntry.publicUrl}`,
-          ...app.previewTestCommandArgs,
-        ],
-        command: "doppler",
-        environment: params.commandEnvironment,
-        maxAttempts: defaultPreviewTestMaxAttempts,
-        retryDelayMs: defaultPreviewTestRetryDelayMs,
-        signal: params.signal,
-        workingDirectory: resolve(params.repositoryRoot, app.appPath),
-      });
-      const testDurationMs = Date.now() - startedAt;
-      console.error(
-        `[preview] test ${testResult.exitCode === 0 ? "passed" : "failed"}: ${app.slug} (${formatDurationMs(testDurationMs)})`,
-      );
+    const startedAt = Date.now();
+    console.error(`[preview] test start: ${app.slug}`);
+    const testResult = await runCommandWithRetries({
+      args: [
+        "run",
+        "--project",
+        app.dopplerProject,
+        "--config",
+        environmentConfigLease.dopplerConfig,
+        "--",
+        "env",
+        `${app.previewTestBaseUrlEnvVar}=${existingEntry.publicUrl}`,
+        ...app.previewTestCommandArgs,
+      ],
+      command: "doppler",
+      environment: params.commandEnvironment,
+      maxAttempts: defaultPreviewTestMaxAttempts,
+      retryDelayMs: defaultPreviewTestRetryDelayMs,
+      signal: params.signal,
+      workingDirectory: resolve(params.repositoryRoot, app.appPath),
+    });
+    const testDurationMs = Date.now() - startedAt;
+    console.error(
+      `[preview] test ${testResult.exitCode === 0 ? "passed" : "failed"}: ${app.slug} (${formatDurationMs(testDurationMs)})`,
+    );
 
-      return CloudflarePreviewAppEntry.parse({
+    entries.push(
+      CloudflarePreviewAppEntry.parse({
         ...existingEntry,
         appDisplayName: app.displayName,
         appSlug: app.slug,
@@ -334,9 +341,9 @@ export async function testCloudflarePreviewForPullRequest(
         status: testResult.exitCode === 0 ? "deployed" : "tests-failed",
         testDurationMs,
         updatedAt: new Date().toISOString(),
-      });
-    })
-  ).filter((entry): entry is NonNullable<typeof entry> => entry != null);
+      }),
+    );
+  }
 
   const ok = !entries.some((entry) => entry.status === "tests-failed");
   if (entries.length > 0) {
@@ -391,35 +398,39 @@ export async function cleanupCloudflarePreviewForPullRequest(
     .filter((app): app is PreviewAppRuntime => app != null);
   const cleanupBatches = [...orderPreviewDeployBatches(appsToCleanUp)].reverse();
   for (const batch of cleanupBatches) {
-    const entries = await mapWithConcurrency(batch, defaultPreviewAppConcurrency, async (app) => {
-      const startedAt = Date.now();
-      console.error(`[preview] cleanup start: ${app.slug}`);
-      const destroyResult = await runPreviewAlchemyCommand({
-        app,
-        commandEnvironment: params.commandEnvironment,
-        dopplerConfig: environmentConfigLease.dopplerConfig,
-        operation: "down",
-        repositoryRoot: params.repositoryRoot,
-        signal: params.signal,
-      });
-      const cleanupDurationMs = Date.now() - startedAt;
-      console.error(
-        `[preview] cleanup ${destroyResult.exitCode === 0 ? "passed" : "failed"}: ${app.slug} (${formatDurationMs(cleanupDurationMs)})`,
-      );
-      const existingEntry = latestState.apps[app.slug];
-      return CloudflarePreviewAppEntry.parse({
-        ...existingEntry,
-        appDisplayName: app.displayName,
-        appSlug: app.slug,
-        message:
-          destroyResult.exitCode === 0
-            ? "Preview app released."
-            : commandFailureMessage(destroyResult, "Preview teardown failed."),
-        cleanupDurationMs,
-        status: destroyResult.exitCode === 0 ? "released" : "cleanup-failed",
-        updatedAt: new Date().toISOString(),
-      });
-    });
+    const entries = await mapWithConcurrency(
+      batch,
+      defaultPreviewDeployConcurrency,
+      async (app) => {
+        const startedAt = Date.now();
+        console.error(`[preview] cleanup start: ${app.slug}`);
+        const destroyResult = await runPreviewAlchemyCommand({
+          app,
+          commandEnvironment: params.commandEnvironment,
+          dopplerConfig: environmentConfigLease.dopplerConfig,
+          operation: "down",
+          repositoryRoot: params.repositoryRoot,
+          signal: params.signal,
+        });
+        const cleanupDurationMs = Date.now() - startedAt;
+        console.error(
+          `[preview] cleanup ${destroyResult.exitCode === 0 ? "passed" : "failed"}: ${app.slug} (${formatDurationMs(cleanupDurationMs)})`,
+        );
+        const existingEntry = latestState.apps[app.slug];
+        return CloudflarePreviewAppEntry.parse({
+          ...existingEntry,
+          appDisplayName: app.displayName,
+          appSlug: app.slug,
+          message:
+            destroyResult.exitCode === 0
+              ? "Preview app released."
+              : commandFailureMessage(destroyResult, "Preview teardown failed."),
+          cleanupDurationMs,
+          status: destroyResult.exitCode === 0 ? "released" : "cleanup-failed",
+          updatedAt: new Date().toISOString(),
+        });
+      },
+    );
     if (entries.some((entry) => entry.status === "cleanup-failed")) {
       ok = false;
     }
