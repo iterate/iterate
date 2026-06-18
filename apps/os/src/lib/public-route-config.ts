@@ -1,7 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getPublicConfig } from "@iterate-com/shared/config";
 import { AppConfig } from "~/config.ts";
-import { requireRequestContext } from "~/request-context.ts";
 
 /**
  * The browser bootstrap config (redacted fields stripped). Replaces the oRPC
@@ -22,7 +21,7 @@ export const getPublicConfigServerFn = createServerFn({ method: "GET" }).handler
   // rejects. Returning a JSON string keeps the wire type honest (a plain
   // string); `__root.tsx` JSON.parses then re-validates through the public
   // config schema.
-  (): string => JSON.stringify(getPublicConfig(requireRequestContext().config, AppConfig)),
+  ({ context }): string => JSON.stringify(getPublicConfig(context.config, AppConfig)),
 );
 
 export type PublicRouteConfig = {
@@ -32,8 +31,8 @@ export type PublicRouteConfig = {
 };
 
 export const getPublicRouteConfig = createServerFn({ method: "GET" }).handler(
-  (): PublicRouteConfig => {
-    const config = requireRequestContext().config;
+  ({ context }): PublicRouteConfig => {
+    const config = context.config;
 
     return {
       baseUrl: config.baseUrl,

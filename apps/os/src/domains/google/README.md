@@ -11,8 +11,9 @@ accounts.
   Gmail REST API call (`https://gmail.googleapis.com/gmail/v1` + path) using a
   fresh access token from `getFreshGoogleAccessToken` in
   `~/domains/secrets/oauth.ts`.
-- `GmailCapability` is provided as `itx.gmail` by `AgentDurableObject` and the
-  inbound MCP server connection.
+- `GmailCapability` is provided as the project default `itx.gmail`, so
+  project-scoped handles, agents, and inbound MCP execution all use the same
+  capability chain.
 
 The Google OAuth connection itself (tokens, connect/disconnect, the
 `/integrations/google` stream) lives in the secrets domain — see

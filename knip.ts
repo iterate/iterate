@@ -36,8 +36,6 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "sqlfu.config.ts",
       "src/durable-objects/codemode-session.vitest.config.ts",
       "src/durable-objects/codemode-session-test-entry.ts",
-      "src/durable-objects/iterate-mcp-server.vitest.config.ts",
-      "src/durable-objects/iterate-mcp-server-test-entry.ts",
       "src/durable-objects/project-ingress.vitest.config.ts",
       "src/durable-objects/project-ingress-test-entry.ts",
       "src/durable-objects/itx-stream-subscribe.vitest.config.ts",
