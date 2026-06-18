@@ -12,7 +12,7 @@ import {
   SheetTitle,
 } from "@iterate-com/ui/components/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
-import type { EventsStreamSourceEvent } from "./feed-items";
+import type { EventsStreamSourceEvent } from "./feed-items.ts";
 
 /**
  * Raw event detail drawer shared by stream renderers.
