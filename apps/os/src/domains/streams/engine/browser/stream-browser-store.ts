@@ -115,6 +115,17 @@ export type BrowserStreamClientFactory = (args: {
   ) => void;
 }) => Promise<BrowserStreamClient>;
 
+export function asBrowserStreamClient(stream: StreamRpc, dispose: () => void): BrowserStreamClient {
+  return new Proxy(stream, {
+    get(target, property, receiver) {
+      if (property === Symbol.dispose) return dispose;
+      const value = Reflect.get(target, property, receiver);
+      if (typeof value !== "function") return value;
+      return (...args: unknown[]) => Reflect.apply(value, target, args);
+    },
+  }) as BrowserStreamClient;
+}
+
 export type StreamBrowserStore = Disposable & {
   readonly streamDatabase: StreamBrowserDatabase;
   appendBatch(args: { events: StreamEventInput[] }): StreamRpcResult<StreamEvent[]>;
@@ -200,6 +211,10 @@ function createStreamRuntime(
   } & BrowserProcessorConfig &
     BrowserStreamConnectionConfig,
 ): StreamBrowserStore {
+  if (args.createStreamClient === undefined) {
+    throw new Error("acquireStreamRuntime requires createStreamClient.");
+  }
+  const createStreamClient = args.createStreamClient;
   const { schemaVersion, tables } = args;
   const slug = args.slug;
   const { db: streamDatabase, release: releaseDatabase } = acquireDatabase(
@@ -515,7 +530,7 @@ function createStreamRuntime(
     connectionEpoch += 1;
     const epoch = connectionEpoch;
 
-    void createBrowserStreamClient(args)({
+    void createStreamClient({
       projectId: args.projectId,
       streamPath: args.streamPath,
       streamUrl,
@@ -1005,16 +1020,6 @@ function createStreamRuntime(
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
-}
-
-function createBrowserStreamClient(args: {
-  createStreamClient?: BrowserStreamClientFactory;
-  streamUrl?: BrowserStreamConnectionConfig["streamUrl"];
-}): BrowserStreamClientFactory {
-  if (args.createStreamClient === undefined) {
-    throw new Error("acquireStreamRuntime requires createStreamClient.");
-  }
-  return args.createStreamClient;
 }
 
 /**

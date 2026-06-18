@@ -58,6 +58,7 @@ import type {
 } from "~/domains/streams/engine/browser/stream-browser-db.ts";
 import {
   acquireStreamRuntime,
+  asBrowserStreamClient,
   type StreamBrowserStore,
   type StreamRuntimeState,
 } from "~/domains/streams/engine/browser/stream-browser-store.ts";
@@ -67,6 +68,7 @@ import {
   BrowserRawEventsProcessor,
   type BrowserRawEventsState,
 } from "~/domains/streams/engine/processors/browser-raw-events/implementation.ts";
+import type { StreamRpc } from "~/domains/streams/engine/types.ts";
 import { AgentFeedView } from "~/components/agent-feed.tsx";
 import { AgentPillComposer, type AgentComposerMode } from "~/components/agent-pill-composer.tsx";
 import { ExampleEventsPanel } from "~/components/example-events-panel.tsx";
@@ -74,10 +76,6 @@ import { openGlobalCommandPalette } from "~/components/global-command-palette-ev
 import { PresenceAvatar, StreamProcessorsPanel } from "~/components/stream-processors-panel.tsx";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/domains/durable-object-names.ts";
 import { useItx } from "~/itx/itx-react.tsx";
-import {
-  itxStreamBrowserClient,
-  type ItxStreamForBrowserRuntime,
-} from "~/lib/itx-stream-browser-client.ts";
 import { presenceLabel, sparklinePoints, useSimulatedRttMetrics } from "~/lib/stream-presence.ts";
 import { useStreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useVirtualizedTailScroll } from "~/lib/use-virtualized-tail-scroll.ts";
@@ -94,9 +92,7 @@ type StreamPathLinkRenderer = (input: {
   className?: string;
   path: StreamPath;
 }) => ReactNode;
-type ItxStreamSource = (
-  streamPath: StreamPath,
-) => ItxStreamForBrowserRuntime | Promise<ItxStreamForBrowserRuntime>;
+type ItxStreamSource = (streamPath: StreamPath) => StreamRpc | Promise<StreamRpc>;
 
 const DEFAULT_RAW_EVENT_YAML =
   "type: events.iterate.com/os/manual-event\npayload:\n  message: Hello from OS\n";
@@ -136,13 +132,15 @@ export function ProjectStreamView({
   // default to it, everything else defaults to the plain feed.
   const isAgentStream = streamPathText.startsWith("/agents/");
   const resolvedStreamSource = useMemo<ItxStreamSource>(
-    () =>
-      streamSource ?? ((path) => itx.streams.get(path) as unknown as ItxStreamForBrowserRuntime),
+    () => streamSource ?? ((path) => itx.streams.get(path)),
     [itx, streamSource],
   );
   const streamClientFactory = useMemo(
     () => async (input: { streamPath: string }) =>
-      itxStreamBrowserClient(await resolvedStreamSource(StreamPath.parse(input.streamPath))),
+      asBrowserStreamClient(
+        await resolvedStreamSource(StreamPath.parse(input.streamPath)),
+        () => {},
+      ),
     [resolvedStreamSource],
   );
   const store = useMemo(

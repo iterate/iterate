@@ -638,7 +638,11 @@ export type ProcessorRuntimeState = {
   };
   runtime?: Record<string, unknown>;
 };
-export type StreamSubscriptionHandle = { unsubscribe(): void };
+export type StreamSubscriptionHandle = {
+  subscriptionKey: string;
+  streamMaxOffset: number;
+  unsubscribe(): void;
+};
 export type StreamSubscriberDescriptor = { description?: string; [key: string]: unknown };
 export type StreamSubscriptionBatch = {
   events: StreamEvent[];

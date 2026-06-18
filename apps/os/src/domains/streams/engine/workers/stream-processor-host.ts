@@ -426,25 +426,20 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
   };
 
   function lateBoundStreamRpc(name: string): StreamRpc {
-    const stream = {
-      append: (args: Parameters<StreamRpc["append"]>[0]) => requireStream(name).append(args),
-      appendBatch: (args: Parameters<StreamRpc["appendBatch"]>[0]) =>
-        requireStream(name).appendBatch(args),
-      getEvent: (args: Parameters<StreamRpc["getEvent"]>[0]) => requireStream(name).getEvent(args),
-      getEvents: (args?: Parameters<StreamRpc["getEvents"]>[0]) =>
-        requireStream(name).getEvents(args),
-      waitForEvent: (args: Parameters<StreamRpc["waitForEvent"]>[0]) =>
-        requireStream(name).waitForEvent(args),
-      subscribe: (args: Parameters<StreamRpc["subscribe"]>[0]) =>
-        requireStream(name).subscribe(args),
-      getProcessorRuntimeState: (args: Parameters<StreamRpc["getProcessorRuntimeState"]>[0]) =>
-        requireStream(name).getProcessorRuntimeState(args),
-      runtimeState: () => requireStream(name).runtimeState(),
-      kill: () => requireStream(name).kill(),
-      reset: () => requireStream(name).reset(),
-      reduce: (args: Parameters<StreamRpc["reduce"]>[0]) => requireStream(name).reduce(args),
-    } satisfies StreamRpc;
-    return stream;
+    return new Proxy(Object.create(null), {
+      get(_target, property) {
+        if (property === "then") return undefined;
+        return (...args: unknown[]) => {
+          const stream = requireStream(name) as unknown as Record<PropertyKey, unknown>;
+          const value = stream[property];
+          if (typeof value !== "function") {
+            if (args.length === 0) return value;
+            throw new TypeError(`Stream RPC property "${String(property)}" is not callable`);
+          }
+          return (stream[property] as (...methodArgs: unknown[]) => unknown)(...args);
+        };
+      },
+    }) as StreamRpc;
   }
 }
 
