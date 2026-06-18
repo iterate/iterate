@@ -138,18 +138,16 @@ describe("OpenAiWsProcessor", () => {
   it("continues a warm WebSocket with only new input after the previous assistant output", async () => {
     const { stream, appended } = memoryStream();
     const sockets: FakeOpenAiResponsesWebSocket[] = [];
+    let streamEvents = [
+      inputAddedEvent({ offset: 2, content: "first user turn" }),
+      llmRequestRequestedEvent({ offset: 11 }),
+    ];
     const processor = newProcessor({
       stream,
       appended,
       sockets,
       snapshot: { offset: 0, state: testState() },
-      readStreamEvents: async () => [
-        inputAddedEvent({ offset: 2, content: "first user turn" }),
-        llmRequestRequestedEvent({ offset: 11 }),
-        outputAddedEvent({ offset: 12, content: "first assistant turn", llmRequestId: 11 }),
-        inputAddedEvent({ offset: 21, content: "second user turn" }),
-        llmRequestRequestedEvent({ offset: 22 }),
-      ],
+      readStreamEvents: async () => streamEvents,
     });
 
     const firstRequest = processor.ingest({
@@ -161,6 +159,18 @@ describe("OpenAiWsProcessor", () => {
     await waitFor(() => sockets[0]?.sent.length === 1);
     completeResponse(sockets[0], { delta: "first assistant turn", responseId: "resp_first" });
     await firstRequest;
+    await waitFor(
+      () =>
+        appended.filter((event) => event.type === "events.iterate.com/agent/llm-request-completed")
+          .length === 1,
+    );
+
+    streamEvents = [
+      ...streamEvents,
+      outputAddedEvent({ offset: 12, content: "first assistant turn", llmRequestId: 11 }),
+      inputAddedEvent({ offset: 21, content: "second user turn" }),
+      llmRequestRequestedEvent({ offset: 22 }),
+    ];
 
     const secondRequest = processor.ingest({
       events: [llmRequestRequestedEvent({ offset: 22 })],
@@ -259,6 +269,13 @@ describe("OpenAiWsProcessor", () => {
     );
     expect(eventTypes(appended)).not.toContain("events.iterate.com/agent/output-added");
     expect(eventTypes(appended)).not.toContain("events.iterate.com/agent/llm-request-completed");
+
+    await processor.ingest({
+      events: [llmRequestRequestedEvent({ offset: 30 })],
+      streamMaxOffset: 30,
+    });
+    await waitFor(() => sockets[0]?.sent.length === 2);
+    expect(sockets[0]?.sent[1]).not.toHaveProperty("previous_response_id");
   });
 
   it("closes a cancelled in-flight request so the next request can start", async () => {

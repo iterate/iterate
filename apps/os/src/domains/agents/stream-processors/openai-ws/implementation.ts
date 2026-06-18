@@ -614,7 +614,6 @@ export class OpenAiWsProcessor extends StreamProcessor<
       if (parsed.data.type === "response.completed") {
         finalResponse = toJsonValue(parsed.data.response ?? message);
         const responseId = parsed.data.response?.id;
-        if (responseId != null) this.#previousResponseId = responseId;
         const durationMs = Date.now() - startedAt;
         const usage = parsed.data.response?.usage;
         if (!(await this.#isAgentLlmRequestStillCurrent({ llmRequestId }))) {
@@ -642,6 +641,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
           }),
           payload: { content: outputText, llmRequestId },
         });
+        if (responseId != null) this.#previousResponseId = responseId;
         await this.#appendProviderCompleted({
           connectionId: connection.id,
           durationMs,
