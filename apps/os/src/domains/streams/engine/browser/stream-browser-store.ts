@@ -21,7 +21,11 @@ import type {
   StreamCoreProcessorState,
   SubscriptionKey,
 } from "../types.ts";
-import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "../stream-processor.ts";
+import type {
+  StreamProcessorRuntimeState,
+  StreamProcessorSnapshot,
+  StreamProcessorStream,
+} from "../stream-processor.ts";
 import { deleteBrowserProcessorState } from "./processor-state-storage.ts";
 import { acquireWriterRole, streamWriterLockName, type WriterRole } from "./stream-leader.ts";
 import {
@@ -77,7 +81,7 @@ export type BrowserProcessorConfig = {
   tables: string[];
   /** Create the concrete processor once the browser runtime has a stream connection. */
   createProcessor(args: {
-    stream: ProcessorStream;
+    stream: StreamProcessorStream;
     sql: SqlClient;
     subscriptionKey: string;
   }): BrowserHostedProcessor;
@@ -452,7 +456,11 @@ function createStreamRuntime(
   async function reconcileLocalMirrorWithServer(rpc: BrowserStreamClient) {
     // Deliberately a throwaway instance: processors memoize their checkpoint on
     // first read, so the real instance must be created after any discard below.
-    const processor = args.createProcessor({ stream: rpc, sql, subscriptionKey });
+    const processor = args.createProcessor({
+      stream: rpc as unknown as StreamProcessorStream,
+      sql,
+      subscriptionKey,
+    });
     const checkpoint = await processor.snapshot();
     const localMaxOffset = checkpoint.offset;
     const { coreProcessorState } = await rpc.runtimeState();
@@ -619,7 +627,7 @@ function createStreamRuntime(
         // lastDeliveredOffset over the current election's values.
         if (!ownsRuntime()) return undefined;
         const processor = args.createProcessor({
-          stream: election.connection,
+          stream: election.connection as unknown as StreamProcessorStream,
           sql,
           subscriptionKey,
         });

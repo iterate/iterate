@@ -22,10 +22,12 @@
 
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import { typeid } from "@iterate-com/shared/typeid";
-import { ItxContract, ITX_EVENT_TYPES, type CapabilityAddress, type ContextStream } from "./itx.ts";
+import { ItxContract, ITX_EVENT_TYPES, type CapabilityAddress } from "./itx.ts";
 import { durableObjectProcessorSubscriber } from "~/domains/streams/engine/shared/callable-subscriber.ts";
+import type { StreamProcessorStream } from "~/domains/streams/engine/stream-processor.ts";
 import {
   getInitializedStreamStub,
+  getStreamDurableObjectName,
   type StreamDurableObjectNamespace,
 } from "~/domains/streams/stream-runtime.ts";
 import { formatDurableObjectName, parseDurableObjectName } from "~/domains/durable-object-names.ts";
@@ -156,24 +158,12 @@ export function dialCodeContext(input: {
 
 // ---- the context's stream --------------------------------------------------------
 
-/** The context's stream as the core consumes it: append + getEvents. */
-export function contextStream(env: Env, coordinate: ItxCoordinate): ContextStream {
-  const stub = () =>
-    getInitializedStreamStub({
-      durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
-      projectId: coordinate.projectId,
-      path: StreamPath.parse(coordinate.path),
-    });
-  return {
-    async append(args) {
-      return await (await stub()).append(args.event);
-    },
-    async getEvents(input) {
-      return await (
-        await stub()
-      ).history({ after: input.afterOffset === 0 ? "start" : input.afterOffset });
-    },
-  };
+/** The context's stream as the core consumes it. */
+export function contextStream(env: Env, coordinate: ItxCoordinate): StreamProcessorStream {
+  const path = StreamPath.parse(coordinate.path);
+  return (env.STREAM as unknown as StreamDurableObjectNamespace).getByName(
+    getStreamDurableObjectName({ projectId: coordinate.projectId, path }),
+  ) as unknown as StreamProcessorStream;
 }
 
 // ---- creation -------------------------------------------------------------------

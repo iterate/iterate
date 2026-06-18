@@ -1,4 +1,4 @@
-import { StreamProcessor } from "../../stream-processor.ts";
+import { StreamProcessor, type StreamProcessorDeps } from "../../stream-processor.ts";
 import { createSchemaEnsurer } from "../../browser/ensure-schema-once.ts";
 import { deleteBrowserProcessorState } from "../../browser/processor-state-storage.ts";
 import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
@@ -10,9 +10,12 @@ export const BROWSER_RAW_EVENTS_SCHEMA_VERSION = 4;
 export type BrowserRawEventsContract = typeof BrowserRawEventsContract;
 export type BrowserRawEventsState = Record<string, never>;
 
-export type BrowserRawEventsProcessorDeps = {
-  sql: SqlClient;
-};
+export type BrowserRawEventsProcessorDeps = StreamProcessorDeps<
+  BrowserRawEventsContract,
+  {
+    sql: SqlClient;
+  }
+>;
 
 /**
  * Mirrors raw stream events into the browser's `events` SQLite table, one
