@@ -105,6 +105,17 @@ jobs:
             --pull-request-number "${{ github.event.pull_request.number }}" \
             --repository-full-name "${{ github.repository }}" \
             --workflow-run-url "$WORKFLOW_RUN_URL"
+      - name: Upload OS preview test artifacts
+        if: always() && github.event.pull_request.head.repo.fork != true
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-os-test-artifacts
+          path: |-
+            test-results
+            apps/os/test-results
+            /tmp/os-e2e-*
+            /tmp/os-itx-e2e-*
+          if-no-files-found: ignore
   cleanup:
     if: github.event.action == 'closed' && github.event.pull_request.head.repo.fork != true
     name: Preview / cleanup

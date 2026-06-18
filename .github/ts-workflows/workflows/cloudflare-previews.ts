@@ -1,4 +1,4 @@
-import type { Step, Workflow } from "@jlarky/gha-ts/workflow-types";
+import { uses, type Step, type Workflow } from "@jlarky/gha-ts/workflow-types";
 import {
   cloudflarePreviewApps,
   cloudflarePreviewAdditionalTriggerPaths,
@@ -147,8 +147,27 @@ function createPreviewLifecycleJob(input: {
         ? [createDopplerStep({ command: input.command, name: commandStepName })]
         : []),
       ...(input.dopplerFollowUps ?? []).map((followUp) => createDopplerStep(followUp)),
+      // TODO: Split deploy/test and cleanup lifecycle helpers so test-only
+      // behavior does not need to branch on the lifecycle command.
+      ...(input.command === "deploy" ? createPreviewTestArtifactSteps() : []),
     ],
   } satisfies Workflow["jobs"][string];
+}
+
+function createPreviewTestArtifactSteps(): Step[] {
+  return Object.values(cloudflarePreviewApps).flatMap((app) => {
+    if (!app.previewTestArtifacts) return [];
+
+    return {
+      name: `Upload ${app.displayName} preview test artifacts`,
+      if: "always() && github.event.pull_request.head.repo.fork != true",
+      ...uses("actions/upload-artifact@v4", {
+        name: `preview-${app.slug}-test-artifacts`,
+        path: app.previewTestArtifacts.join("\n"),
+        "if-no-files-found": "ignore",
+      }),
+    };
+  });
 }
 
 export default {
