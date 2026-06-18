@@ -147,6 +147,8 @@ function createPreviewLifecycleJob(input: {
         ? [createDopplerStep({ command: input.command, name: commandStepName })]
         : []),
       ...(input.dopplerFollowUps ?? []).map((followUp) => createDopplerStep(followUp)),
+      // TODO: Split deploy/test and cleanup lifecycle helpers so test-only
+      // behavior does not need to branch on the lifecycle command.
       ...(input.command === "deploy" ? createPreviewTestArtifactSteps() : []),
     ],
   } satisfies Workflow["jobs"][string];
