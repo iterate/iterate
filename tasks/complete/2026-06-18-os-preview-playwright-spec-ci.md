@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: small
 ---
 
@@ -7,7 +7,7 @@ size: small
 
 ## Status Summary
 
-Implementation is complete and pushed to draft PR #1564. The OS preview test lane now runs root Playwright specs after the existing Vitest preview checks, workflow generation is clean, and focused validation passes; the remaining proof is the PR's actual preview CI run.
+Done in draft PR #1564. The OS preview test lane now runs root Playwright specs after the existing Vitest preview checks, workflow generation is clean, focused validation passes, and the PR's Cloudflare Previews check passed.
 
 ## Assumptions
 
@@ -24,6 +24,7 @@ Implementation is complete and pushed to draft PR #1564. The OS preview test lan
 - [x] Regenerate generated GitHub workflow YAML. _`pnpm workflows` completed; no generated YAML changed because the existing preview workflow already executes the preview runner._
 - [x] Run targeted validation for workflow generation and affected preview tests. _Passed `pnpm --dir .github/ts-workflows build`, `pnpm workflows`, formatter check, and `pnpm --dir apps/os exec vitest run --root ../.. scripts/preview/preview.test.ts`._
 - [x] Push branch and keep the draft PR updated. _Draft PR #1564 is open with the implementation commit pushed and the body updated with the CI shape plus local validation._
+- [x] Confirm preview CI. _Cloudflare Previews run 27769347493 passed; the OS preview test log showed the Playwright `Running 2 tests using 1 worker` / `2 passed` block before `[preview] test passed: os`._
 
 ## Implementation Notes
 
@@ -31,3 +32,4 @@ Implementation is complete and pushed to draft PR #1564. The OS preview test lan
 - Current `.github/workflows/cloudflare-previews.yml` is generated from `.github/ts-workflows/workflows/cloudflare-previews.ts`.
 - Preview configs use underscores (`preview_N`), not hyphenated names.
 - The first focused Vitest attempt from the repo root failed because `vitest` is not installed at root. The working command uses the OS workspace binary with `--root ../..`.
+- Full PR check rollup passed after the final push: Preview deploy/e2e, lint-typecheck, test, Generate Workflows, and autofix.
