@@ -1,9 +1,13 @@
-import { describe, expect, it } from "vitest";
-import { connect } from "./e2e-env.ts";
+import { beforeAll, describe, expect, it } from "vitest";
+import { connect, ensureProject } from "./e2e-env.ts";
 
 const rid = Math.random().toString(36).slice(2, 8);
 const agentItx = (label: string) =>
   connect({ path: `/agents/dynamic-adversarial-${label}-${rid}` });
+
+beforeAll(async () => {
+  await ensureProject("prj_ref");
+});
 
 const storageBox = ({
   className,
@@ -14,7 +18,7 @@ const storageBox = ({
   moduleName: string;
   version: string;
 }) => ({
-  type: "dynamic-durable-object",
+  type: "durable-object",
   source: {
     type: "inline",
     mainModule: moduleName,
@@ -46,7 +50,7 @@ const storageBox = ({
 });
 
 const missingClassBox = () => ({
-  type: "dynamic-durable-object",
+  type: "durable-object",
   source: {
     type: "inline",
     mainModule: "missing-class-box.js",

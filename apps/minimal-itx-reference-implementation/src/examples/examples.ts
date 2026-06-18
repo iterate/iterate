@@ -65,8 +65,8 @@ export const ITX_EXAMPLES: ItxExample[] = [
     `,
   },
   {
-    id: "dynamic-worker-capability",
-    title: "Call a provided dynamic-worker capability",
+    id: "worker-entrypoint-capability",
+    title: "Call a provided worker-entrypoint capability",
     description:
       "A durable dynamic capability (an address, not a live stub) is resolved from the event log on demand: the Worker Loader runs the isolate and its method answers. `vars` parameterizes the call.",
     context: "agent",
@@ -74,7 +74,7 @@ export const ITX_EXAMPLES: ItxExample[] = [
     code: `return await itx.calc.add(vars.a, vars.b);`,
   },
   {
-    id: "dynamic-durable-object-facet",
+    id: "durable-object-facet",
     title: "Increment a dynamic Durable Object facet",
     description:
       "A repo-sourced Durable Object mounted as a capability keeps private SQLite storage keyed by its mount path, so increments persist across calls within a context.",

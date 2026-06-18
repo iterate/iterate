@@ -4,7 +4,7 @@
 // code body can run from a process boundary, using the same naked Cap'n Web stub
 // as any script an agent would launch from a terminal.
 
-import { withItx } from "./client.ts";
+import { withItx } from "./src/client.ts";
 
 const AsyncFunction = async function () {}.constructor as new (
   ...args: string[]

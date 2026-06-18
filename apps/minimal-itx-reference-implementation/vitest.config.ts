@@ -20,6 +20,7 @@ const baseUrl = (
   "http://127.0.0.1:8788"
 ).replace(/\/+$/, "");
 const token = process.env.ITX_TOKEN?.trim() || "alice-token";
+const adminToken = process.env.ITX_ADMIN_TOKEN?.trim() || "root-token";
 
 export default defineConfig({
   test: {
@@ -38,6 +39,7 @@ export default defineConfig({
           // exercises dynamic-DO facet upgrade/rename semantics and is pre-existing
           // and currently red — kept out of the gate until that is addressed.)
           include: [
+            "./src/**/*.test.ts",
             "./itx.e2e.test.ts",
             "./itx.cross-project-adversarial.e2e.test.ts",
             "./itx.root.e2e.test.ts",
@@ -48,7 +50,7 @@ export default defineConfig({
       },
       {
         define: {
-          __ITX_BROWSER_E2E__: JSON.stringify({ baseUrl, token }),
+          __ITX_BROWSER_E2E__: JSON.stringify({ adminToken, baseUrl, token }),
         },
         test: {
           browser: {

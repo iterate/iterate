@@ -11,12 +11,12 @@
 // worker too. baseUrl + token are injected by vitest.config.ts via `define`
 // because the browser cannot read process.env.
 
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { newWebSocketRpcSession } from "capnweb";
-import { EXAMPLE_CASES } from "./example-cases.ts";
-import { ITX_EXAMPLES } from "./examples.ts";
+import { EXAMPLE_CASES } from "./src/examples/example-cases.ts";
+import { ITX_EXAMPLES } from "./src/examples/examples.ts";
 
-declare const __ITX_BROWSER_E2E__: { baseUrl: string; token: string };
+declare const __ITX_BROWSER_E2E__: { adminToken: string; baseUrl: string; token: string };
 
 const AsyncFunction = async function () {}.constructor as new (
   ...args: string[]
@@ -29,6 +29,11 @@ const BROWSER_EXAMPLES = ITX_EXAMPLES.filter(
 const rid = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 describe.skipIf(!__ITX_BROWSER_E2E__.baseUrl)("itx browser execution mode", () => {
+  beforeAll(async () => {
+    using root = connectRootFromBrowser();
+    await root.projects.create("prj_ref");
+  });
+
   for (const example of BROWSER_EXAMPLES) {
     const exampleCase = EXAMPLE_CASES[example.id]!;
     it(`runs catalogue example "${example.id}" in a browser tab`, async () => {
@@ -83,10 +88,20 @@ function connectFromBrowser(path: string): any {
   const target = path === "/" ? session : (session as any).agents.get(path);
   return new Proxy(target, {
     get(target, key, receiver) {
-      if (key === Symbol.dispose) return () => (session as any)[Symbol.dispose]?.();
+      if (key === Symbol.dispose)
+        return () => {
+          (target as any)[Symbol.dispose]?.();
+          (session as any)[Symbol.dispose]?.();
+        };
       return Reflect.get(target, key, receiver);
     },
   });
+}
+
+function connectRootFromBrowser(): any {
+  const wsBase = __ITX_BROWSER_E2E__.baseUrl.replace(/^http/, "ws");
+  const params = new URLSearchParams({ token: __ITX_BROWSER_E2E__.adminToken });
+  return newWebSocketRpcSession(new WebSocket(`${wsBase}/api/itx?${params}`));
 }
 
 function slug(value: string): string {

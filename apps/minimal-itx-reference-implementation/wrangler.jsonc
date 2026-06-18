@@ -1,8 +1,8 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "minimal-itx-reference-implementation",
-  "main": "server.ts",
-  "compatibility_date": "2026-05-01",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-06-18",
   "compatibility_flags": ["nodejs_compat"],
   "durable_objects": {
     "bindings": [
@@ -12,7 +12,7 @@
       { "name": "REPO", "class_name": "RepoDurableObject" },
       // The real durable event log from apps/os — a context's capability table
       // is the fold of one of these streams.
-      { "name": "STREAM", "class_name": "Stream" },
+      { "name": "STREAM", "class_name": "StreamDurableObject" },
     ],
   },
   "migrations": [
@@ -22,7 +22,7 @@
         "ProjectDurableObject",
         "AgentDurableObject",
         "RepoDurableObject",
-        "Stream",
+        "StreamDurableObject",
       ],
     },
   ],

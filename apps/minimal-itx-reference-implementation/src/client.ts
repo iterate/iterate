@@ -3,8 +3,8 @@
 // There is deliberately NO path proxy for reads/calls: a naked Cap'n Web stub
 // already turns `stub.slack.chat.postMessage(args)` into one pipelined message
 // (the stub accumulates the property path locally, zero round trips, and sends it
-// on the terminal call). The server-side dynamic proxy (server.ts) collapses that
-// path into one invokeCapability.
+// on the terminal call). The server-side dynamic proxy
+// (`src/itx/path-invoker.ts`) collapses that path into one invokeCapability.
 //
 // The only client-side convenience is on provideCapability: raw local SDK
 // instances such as `new Slack.WebClient()` are not serializable Cap'n Web
@@ -18,10 +18,11 @@
 import WebSocket from "ws";
 import { newWebSocketRpcSession } from "capnweb";
 
-// Mirrors the public durable address types in itx.ts. Address-shaped values are
+// Mirrors the public durable address types in `src/itx/processor-contract.ts`.
+// Address-shaped values are
 // forwarded as plain data; everything else is wrapped as a live provider. Host
 // topology is deliberately not a client-providable address vocabulary.
-const CAPABILITY_ADDRESS_TYPES = new Set(["dynamic-worker", "dynamic-durable-object"]);
+const CAPABILITY_ADDRESS_TYPES = new Set(["worker-entrypoint", "durable-object"]);
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> => {
   if (!value || typeof value !== "object") return false;
@@ -34,11 +35,27 @@ const isCapabilityAddress = (value: unknown) =>
   typeof value.type === "string" &&
   CAPABILITY_ADDRESS_TYPES.has(value.type);
 
-const replayLocalPath = (target: any, path: string[], args: unknown[] = []) => {
-  if (path.length === 0) return typeof target === "function" ? target(...args) : target;
+const replayLocalPath = (target: unknown, path: string[], args: unknown[] = []): unknown => {
+  if (path.length === 0) {
+    return typeof target === "function"
+      ? (target as (...args: unknown[]) => unknown)(...args)
+      : target;
+  }
   let receiver = target;
-  for (let i = 0; i < path.length - 1; i++) receiver = receiver[path[i]];
-  return receiver[path.at(-1)!](...args);
+  for (let i = 0; i < path.length - 1; i++) {
+    if (receiver === null || (typeof receiver !== "object" && typeof receiver !== "function")) {
+      throw new Error(`local capability path "${path.join(".")}" hit ${String(receiver)}`);
+    }
+    receiver = (receiver as Record<string, unknown>)[path[i]];
+  }
+  if (receiver === null || (typeof receiver !== "object" && typeof receiver !== "function")) {
+    throw new Error(`local capability path "${path.join(".")}" hit ${String(receiver)}`);
+  }
+  const leaf = (receiver as Record<string, unknown>)[path.at(-1)!];
+  if (typeof leaf !== "function") {
+    throw new Error(`local capability path "${path.join(".")}" did not resolve to a function`);
+  }
+  return leaf(...args);
 };
 
 /**
@@ -53,13 +70,17 @@ const replayLocalPath = (target: any, path: string[], args: unknown[] = []) => {
  * the function stub dies and the capability becomes offline, which is the live
  * capability lifetime we want.
  */
-export const normalizeProvidedCapability = (capability: any): any => {
+export const normalizeProvidedCapability = (capability: unknown): unknown => {
   if (isCapabilityAddress(capability)) return capability;
 
   if (capability && typeof capability === "object" && !isPlainObject(capability)) {
+    const candidate = capability as { invokeCapability?: unknown };
     const invoke =
-      typeof capability.invokeCapability === "function"
-        ? (input: { path: string[]; args?: unknown[] }) => capability.invokeCapability(input)
+      typeof candidate.invokeCapability === "function"
+        ? (input: { path: string[]; args?: unknown[] }) =>
+            (
+              candidate.invokeCapability as (input: { path: string[]; args?: unknown[] }) => unknown
+            )(input)
         : (input: { path: string[]; args?: unknown[] }) =>
             replayLocalPath(capability, input.path, input.args ?? []);
     return {
@@ -114,9 +135,16 @@ export function itxWebSocketUrl(input: WithItxInput & { tokenInQuery?: boolean }
  *  cross RPC. Deep reads/calls still use the naked Cap'n Web path pipeline.
  *  `using itx = withItx(...)` closes the socket at scope end — and any live
  *  capability this connection provided is gone when it drops. */
-export function withItx<T = any>(input: WithItxInput): T {
+type DisposableRpc = { [Symbol.dispose]?: () => void };
+type ProvidedCapabilityArgs = { capability: unknown; [key: string]: unknown };
+type ItxSession = DisposableRpc & {
+  agents: { get(path: string): ItxSession };
+  provideCapability(args: ProvidedCapabilityArgs): unknown;
+};
+
+export function withItx<T = unknown>(input: WithItxInput): T {
   const url = itxWebSocketUrl(input);
-  const session = connect<any>(
+  const session = connect<ItxSession>(
     url,
     input.token ? { authorization: `Bearer ${input.token}` } : undefined,
   );
@@ -124,9 +152,13 @@ export function withItx<T = any>(input: WithItxInput): T {
   const target = path === "/" ? session : session.agents.get(path);
   return new Proxy(target, {
     get(target, key, receiver) {
-      if (key === Symbol.dispose) return () => session[Symbol.dispose]?.();
+      if (key === Symbol.dispose)
+        return () => {
+          target[Symbol.dispose]?.();
+          session[Symbol.dispose]?.();
+        };
       if (key !== "provideCapability") return Reflect.get(target, key, receiver);
-      return (args: { capability: unknown; [key: string]: unknown }) =>
+      return (args: ProvidedCapabilityArgs) =>
         target.provideCapability({
           ...args,
           capability: normalizeProvidedCapability(args.capability),
@@ -135,7 +167,7 @@ export function withItx<T = any>(input: WithItxInput): T {
   }) as T;
 }
 
-// --- the admin-only platform root (root-itx.ts) ----------------------------
+// --- the admin-only platform root (src/itx/root.ts) ------------------------
 
 export type WithRootInput = {
   /** Worker base url. Defaults to ITX_BASE or http://127.0.0.1:8788. */
@@ -157,7 +189,7 @@ export function itxRootWebSocketUrl(input: WithRootInput = {}): string {
 
 /** Connect to the admin Root ITX. No provide-time normalization is needed — the
  *  root has no provide surface; it is just `projects` + `streams`. */
-export function withRoot<T = any>(input: WithRootInput = {}): T {
+export function withRoot<T = unknown>(input: WithRootInput = {}): T {
   return connect<T>(
     itxRootWebSocketUrl(input),
     input.token ? { authorization: `Bearer ${input.token}` } : undefined,

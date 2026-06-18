@@ -1,10 +1,10 @@
-// root-itx.ts — the admin-only platform root.
+// root.ts — the admin-only platform root.
 //
 // This is NOT a context and NOT a Durable Object. It is a tiny, fixed RPC
 // surface constructed per connection at the serving edge and served through the
 // SAME `pathInvokerToProxy` rule as every other itx surface, so
 // `root.projects.list()` and
-// `root.streams.get("/x").append(event)` collapse into one `invokeCapability`
+// `root.streams.get("/x").append({ event })` collapse into one `invokeCapability`
 // exactly the way a context's dotted calls do.
 //
 // WHY IT EXISTS. `__null__` (the platform projectId) holds streams that belong
@@ -14,7 +14,7 @@
 // ONLY door to them is here.
 //
 // WHY IT IS SAFE — with no authority logic of its own:
-//   • Admin-only. The edge (server.ts) serves this surface ONLY to a principal
+//   • Admin-only. The edge (worker.ts) serves this surface ONLY to a principal
 //     whose access is "all" (auth.ts). A non-admin gets 403 at `/api/itx`.
 //   • No provide, no address resolver. The surface is exactly `projects` and `streams`.
 //     There is nothing to inject a capability into and no caller-supplied name
@@ -25,15 +25,14 @@
 //     streams through it (and the Stream DO validates the path itself). Names are
 //     built from the scope this object already owns, never supplied by the caller.
 
-import { KNOWN_PROJECTS } from "./auth.ts";
-import { formatDurableObjectName, PLATFORM_PROJECT_ID } from "./durable-object-names.ts";
-import { replayPath } from "./itx.ts";
+import { KNOWN_PROJECTS } from "../auth.ts";
+import { formatDurableObjectName, PLATFORM_PROJECT_ID } from "../domains/durable-object-names.ts";
+import { StreamRpcTarget } from "../domains/streams/streams-rpc-target.ts";
+import type { Env } from "../env.ts";
+import { pathInvokerToProxy } from "./path-invoker.ts";
+import { replayPath } from "./processor.ts";
 
-/** Just the bindings the root needs — kept local so this file never imports the
- *  Worker's full `Env` (and never the other way around). */
-type RootEnv = {
-  STREAM: { getByName(name: string): any };
-};
+type RootEnv = Pick<Env, "PROJECT" | "STREAM">;
 
 export class RootItx {
   #env: RootEnv;
@@ -54,41 +53,40 @@ export class RootItx {
     args?: unknown[];
   }): Promise<unknown> {
     if (path[0] === "projects") {
-      return await replayPath(
-        {
+      return await replayPath({
+        target: {
           list: () => KNOWN_PROJECTS,
-          // A real platform would mint a `prj_…` id and seed the project's first
-          // events here; the reference impl just echoes the requested id.
-          create: (id: string) => ({ id }),
+          // The admin root is the external bootstrap door. Project creation is
+          // not magic inside a processor: this calls the Project Durable Object,
+          // which subscribes its project + ITX processors to the root stream and
+          // appends the first project/created fact.
+          create: async (id: string) =>
+            await this.#env.PROJECT.getByName(
+              formatDurableObjectName({ projectId: id, path: "/" }),
+            ).createProject({ projectId: id }),
         },
-        path.slice(1),
+        path: path.slice(1),
         args,
-      );
+      });
     }
     if (path[0] === "streams") {
-      return await replayPath(
-        {
-          // PATH only — the projectId is fixed to the platform plane. Returns a
-          // small live handle over the real Stream Durable Object so the caller
-          // chains `.append(event)` / `.getEvents()` straight onto it.
+      return await replayPath({
+        target: {
+          // PATH only — the projectId is fixed to the platform plane. Return a
+          // Stream RPC target over the real Stream Durable Object stub, not a
+          // copied subset of methods. This keeps callback-heavy subscribe()
+          // lifecycle handling identical to apps/os while root stays out of the
+          // business of mirroring Stream APIs.
           get: (streamPath: string) => {
             const stream = this.#env.STREAM.getByName(
               formatDurableObjectName({ projectId: PLATFORM_PROJECT_ID, path: streamPath }),
             );
-            return {
-              append: (event: unknown) => stream.append({ event }),
-              appendBatch: (events: unknown[]) => stream.appendBatch({ events }),
-              getEvents: (range?: {
-                afterOffset?: number;
-                beforeOffset?: number;
-                limit?: number;
-              }) => stream.getEvents(range ?? {}),
-            };
+            return pathInvokerToProxy(new StreamRpcTarget(stream));
           },
         },
-        path.slice(1),
+        path: path.slice(1),
         args,
-      );
+      });
     }
     throw new Error(
       `no root capability "${path.join(".")}" (the platform root has projects + streams)`,

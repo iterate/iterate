@@ -10,6 +10,7 @@
 // example will execute in Node, the CLI, a worker, or a browser tab.
 
 import { expect } from "vitest";
+import type { Itx } from "../itx/processor.ts";
 import { dynamicCalc, repoCounter } from "./itx-scripts.ts";
 
 export type ExampleRunContext = {
@@ -19,7 +20,7 @@ export type ExampleRunContext = {
 };
 
 export type ExampleCase = {
-  setup?: (itx: any) => Promise<void>;
+  setup?: (itx: Itx) => Promise<void>;
   vars?: (ctx: ExampleRunContext) => Record<string, unknown>;
   assert: (result: unknown, ctx: ExampleRunContext) => void;
 };
@@ -39,7 +40,7 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       expect(result).toEqual({ mainModule: "counter.js", hasCounter: true });
     },
   },
-  "dynamic-worker-capability": {
+  "worker-entrypoint-capability": {
     setup: async (itx) => {
       await itx.provideCapability({ path: ["calc"], capability: dynamicCalc });
     },
@@ -48,7 +49,7 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       expect(result).toBe(42);
     },
   },
-  "dynamic-durable-object-facet": {
+  "durable-object-facet": {
     setup: async (itx) => {
       await itx.provideCapability({ path: ["counter"], capability: repoCounter });
     },

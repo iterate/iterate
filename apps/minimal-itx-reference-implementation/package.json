@@ -8,21 +8,22 @@
     "dev": "wrangler dev",
     "test": "pnpm typecheck",
     "e2e": "vitest run",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "types:wrangler": "wrangler types worker-configuration.d.ts",
+    "types:wrangler:check": "wrangler types worker-configuration.d.ts --check"
   },
   "dependencies": {
+    "@iterate-com/os": "workspace:*",
+    "@iterate-com/shared": "workspace:*",
     "capnweb": "^0.8.0",
     "ws": "^8.18.0",
-    "zod": "~4.3.6",
-    "@iterate-com/os": "workspace:*",
-    "@iterate-com/shared": "workspace:*"
+    "zod": "~4.3.6"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250101.0",
     "@vitest/browser-playwright": "^4.1.7",
     "playwright": "1.57.0",
+    "typescript": "^5.6.0",
     "vitest": "^4.1.7",
-    "wrangler": "^4.85.0",
-    "typescript": "^5.6.0"
+    "wrangler": "4.101.0"
   }
 }

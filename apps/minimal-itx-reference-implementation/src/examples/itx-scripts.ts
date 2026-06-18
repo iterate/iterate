@@ -6,7 +6,7 @@
 
 /** A dynamic worker: one method, `add(a, b)`. The smallest durable capability. */
 export const dynamicCalc = {
-  type: "dynamic-worker",
+  type: "worker-entrypoint",
   source: {
     type: "inline",
     mainModule: "calc.js",
@@ -25,15 +25,15 @@ export const dynamicCalc = {
 
 /** A dynamic Durable Object facet sourced from the fake repo's counter.js. */
 export const repoCounter = {
-  type: "dynamic-durable-object",
-  source: { type: "repo", path: "counter.js" },
+  type: "durable-object",
+  source: { type: "from-repo", repoPath: "/repos/project", sourcePath: "counter.js" },
   className: "CounterDurableObject",
 };
 
 /** A dynamic worker that returns a NESTED RpcTarget (`math`), so callers reach
  *  `kit.math.add(...)` through one naked dotted path. */
 export const nestedKitWorker = {
-  type: "dynamic-worker",
+  type: "worker-entrypoint",
   source: {
     type: "inline",
     mainModule: "kit.js",
@@ -57,7 +57,7 @@ export const nestedKitWorker = {
 /** A Slack-shaped dynamic worker: the SAME caller surface as a live SDK
  *  (`slack.chat.postMessage`) but stored as an address, not an in-memory stub. */
 export const addressedSlackWorker = {
-  type: "dynamic-worker",
+  type: "worker-entrypoint",
   source: {
     type: "inline",
     mainModule: "slack.js",
@@ -85,7 +85,7 @@ export const addressedSlackWorker = {
 
 /** A dynamic worker exposing a count + a nested SKU price lookup. */
 export const inventoryWorker = {
-  type: "dynamic-worker",
+  type: "worker-entrypoint",
   source: {
     type: "inline",
     mainModule: "inventory.js",
@@ -109,7 +109,7 @@ export const inventoryWorker = {
 /** A dynamic worker that discovers `inventory` through its OWN scoped
  *  env.ITX.get() — worker-to-worker composition without a direct binding. */
 export const reportWorker = {
-  type: "dynamic-worker",
+  type: "worker-entrypoint",
   source: {
     type: "inline",
     mainModule: "report.js",
@@ -134,7 +134,7 @@ export const reportWorker = {
 /** A dynamic Durable Object whose source can advance v1 → v2 while the mounted
  *  storage survives — the durable identity is the mount path, not the hash. */
 export const upgradeCounter = (version: "v1" | "v2") => ({
-  type: "dynamic-durable-object",
+  type: "durable-object",
   source: {
     type: "inline",
     mainModule: "upgrade-counter.js",

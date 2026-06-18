@@ -4,19 +4,24 @@
 // only authority decision is the connect door; everything else is confined by
 // construction. These tests assert that confinement holds.
 
-import { describe, expect, it } from "vitest";
-import { connect } from "./e2e-env.ts";
+import { beforeAll, describe, expect, it } from "vitest";
+import { connect, ensureProject } from "./e2e-env.ts";
 
 const rid = Math.random().toString(36).slice(2, 8);
 const agentItx = (label: string) => connect({ path: `/agents/cross-project-${label}-${rid}` });
 const expectRejects = (fn: () => unknown) => expect((async () => await fn())()).rejects;
 
+beforeAll(async () => {
+  await ensureProject("prj_ref");
+  await ensureProject("prj_bob");
+});
+
 describe("itx cross-project adversarial e2e", () => {
   it("rejects non-dynamic address types as user-provided capabilities", async () => {
     using itx = agentItx("unsupported-address-types");
     for (const capability of [
-      { type: "durable-object", namespace: "itx", name: "prj_bob:/" },
-      { type: "worker-entrypoint", binding: "PROJECT", name: "prj_ref:/" },
+      { type: "durable-object-namespace", namespace: "itx", name: "prj_bob:/" },
+      { type: "worker-binding", binding: "PROJECT", name: "prj_ref:/" },
       { type: "rpc", worker: { type: "loopback" } },
     ]) {
       await expectRejects(() =>

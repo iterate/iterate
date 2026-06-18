@@ -1,4 +1,4 @@
-// contract.ts — an itx context, defined as a durable event log.
+// processor-contract.ts — an itx context, defined as a durable event log.
 //
 // The central idea: an itx context is NOT a registry you mutate. It is a STREAM
 // of events you fold. So this file does not define a `Map`; it defines the event
@@ -12,7 +12,7 @@
 //   • a LIVE stub      — a callable held in memory, dies with its provider.
 //                        NOT durable, so the fold records it with `address: null`
 //                        and the actual stub lives in an in-memory bridge beside
-//                        the fold (see itx.ts).
+//                        the fold (see processor.ts).
 //   • a durable dynamic address
 //                      — plain serializable data describing dynamic code the host
 //                        can run as a worker or Durable Object facet. This IS
@@ -24,39 +24,17 @@
 
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
-
-const DynamicWorkerSource = z.discriminatedUnion("type", [
-  z.looseObject({
-    compatibilityDate: z.string().optional(),
-    mainModule: z.string(),
-    modules: z.record(z.string(), z.string()),
-    type: z.literal("inline"),
-  }),
-  z.looseObject({
-    compatibilityDate: z.string().optional(),
-    path: z.string(),
-    type: z.literal("repo"),
-  }),
-]);
-export type DynamicWorkerSource = z.infer<typeof DynamicWorkerSource>;
+import { DynamicWorkerRef } from "../domains/dynamic-workers/dynamic-worker-ref.ts";
+export type {
+  DynamicWorkerRef,
+  DynamicWorkerSourceRef,
+} from "../domains/dynamic-workers/dynamic-worker-ref.ts";
 
 /** A public durable capability address — plain data for dynamic code the host
  *  can run inside the current Project/Agent host. Host topology is not an
  *  address vocabulary: there is no user-providable Durable Object or loopback
  *  ref here. */
-export const CapabilityAddress = z.discriminatedUnion("type", [
-  z.looseObject({
-    entrypoint: z.string(),
-    props: z.record(z.string(), z.unknown()).optional(),
-    source: DynamicWorkerSource,
-    type: z.literal("dynamic-worker"),
-  }),
-  z.looseObject({
-    className: z.string(),
-    source: DynamicWorkerSource,
-    type: z.literal("dynamic-durable-object"),
-  }),
-]);
+export const CapabilityAddress = DynamicWorkerRef;
 export type CapabilityAddress = z.infer<typeof CapabilityAddress>;
 
 /** One row of the capability table: the path it is mounted at, its address
@@ -74,17 +52,8 @@ export const CapabilityRecord = z.object({
 });
 export type CapabilityRecord = z.infer<typeof CapabilityRecord>;
 
-const ScriptExecutionRecord = z.object({
-  executionId: z.string(),
-  code: z.string().nullable().default(null),
-  status: z.enum(["requested", "completed"]).default("requested"),
-  result: z.unknown().optional(),
-  error: z.string().nullable().default(null),
-});
-export type ScriptExecutionRecord = z.infer<typeof ScriptExecutionRecord>;
-
 export const ItxContract = defineProcessorContract({
-  slug: "itx",
+  slug: "itx-v2",
   version: "0.1.0",
   description: "A context: its capability table, folded from its own durable event log.",
   // State is a PLAIN OBJECT (the StreamProcessor checkpoints + validates it; a
@@ -96,9 +65,9 @@ export const ItxContract = defineProcessorContract({
   // state. Nothing reads a folded topology copy, so it does not exist.
   stateSchema: z.object({
     capabilities: z.array(CapabilityRecord).default([]),
-    scriptExecutions: z.array(ScriptExecutionRecord).default([]),
+    pendingScriptExecutions: z.record(z.string(), z.boolean()).default({}),
   }),
-  initialState: { capabilities: [], scriptExecutions: [] },
+  initialState: { capabilities: [], pendingScriptExecutions: {} },
   events: {
     "events.iterate.com/itx/capability-provided": {
       description:
@@ -115,13 +84,11 @@ export const ItxContract = defineProcessorContract({
         "A capability entry was removed (exact path match, never prefix). Also how a live cap goes away — there is no separate 'disconnected' event; you revoke it.",
       payloadSchema: z.looseObject({ path: z.array(z.string()) }),
     },
-    // Codemode. These are durable RECORDS, not state changes — the fold does not
-    // consume them; together they bracket a script run. Declared here so they are
-    // known events on the contract-validated stream, not strays. They demonstrate
-    // that a log holds both state-changing events AND plain audit records.
+    // Codemode. These are known stream events, but they are not reduced state:
+    // processor.ts observes them in processEvent as runtime/audit side effects.
     "events.iterate.com/itx/script-execution-requested": {
       description: "A codemode run was requested: `code` is the `async (itx) => …` program.",
-      payloadSchema: z.looseObject({ executionId: z.string(), code: z.string().optional() }),
+      payloadSchema: z.looseObject({ executionId: z.string(), code: z.string() }),
     },
     "events.iterate.com/itx/script-execution-completed": {
       description: "A codemode run settled. With the requested event, this is the durable record.",

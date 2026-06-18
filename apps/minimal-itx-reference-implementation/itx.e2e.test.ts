@@ -10,17 +10,23 @@
 // so durable state never bleeds between runs. Project-scoped assertions use
 // durable/replace-safe provides on prj_ref:/.
 
-import { describe, expect, it } from "vitest";
-import { itxHttpUrl, withItx } from "./client.ts";
-import { baseUrl, connect, token } from "./e2e-env.ts";
-import { EXAMPLE_CASES, EXAMPLE_IDS_WITHOUT_CASES } from "./example-cases.ts";
+import { beforeAll, describe, expect, it } from "vitest";
+import { z } from "zod";
+import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
+import {
+  StreamProcessor,
+  type StreamProcessorSnapshot,
+} from "@iterate-com/os/src/domains/streams/engine/stream-processor.ts";
+import { itxHttpUrl, withItx } from "./src/client.ts";
+import { baseUrl, connect, ensureProject, token } from "./e2e-env.ts";
+import { EXAMPLE_CASES, EXAMPLE_IDS_WITHOUT_CASES } from "./src/examples/example-cases.ts";
 import {
   exampleCoordinate,
   MATRIX_RUNTIMES,
   runExampleCode,
   type MatrixRuntime,
-} from "./example-matrix.ts";
-import { ITX_EXAMPLES } from "./examples.ts";
+} from "./src/examples/example-matrix.ts";
+import { ITX_EXAMPLES } from "./src/examples/examples.ts";
 import {
   addressedSlackWorker,
   dynamicCalc,
@@ -29,12 +35,52 @@ import {
   repoCounter,
   reportWorker,
   upgradeCounter,
-} from "./itx-scripts.ts";
+} from "./src/examples/itx-scripts.ts";
 
 const rid = Math.random().toString(36).slice(2, 8);
 const agentPath = (label: string) => `/agents/${label}-${rid}`;
 const projectItx = () => connect({ path: "/" });
 const agentItx = (label: string) => connect({ path: agentPath(label) });
+
+const SubscribeCounterContract = defineProcessorContract({
+  slug: "itx.reference.subscribe-counter",
+  version: "0.1.0",
+  description: "Counts project stream events delivered through an itx stream subscription.",
+  stateSchema: z.object({
+    markers: z.array(z.string()).default([]),
+    total: z.number().default(0),
+  }),
+  initialState: {},
+  events: {
+    "events.iterate.com/test/project-stream-subscribe": {
+      payloadSchema: z.object({
+        amount: z.number().default(1),
+        marker: z.string(),
+      }),
+    },
+  },
+  consumes: ["events.iterate.com/test/project-stream-subscribe"],
+  emits: [],
+});
+type SubscribeCounterContract = typeof SubscribeCounterContract;
+type SubscribeCounterState = { markers: string[]; total: number };
+
+class SubscribeCounterProcessor extends StreamProcessor<SubscribeCounterContract> {
+  readonly contract = SubscribeCounterContract;
+
+  protected override reduce(
+    args: Parameters<StreamProcessor<SubscribeCounterContract>["reduce"]>[0],
+  ) {
+    return {
+      markers: [...args.state.markers, args.event.payload.marker],
+      total: args.state.total + args.event.payload.amount,
+    };
+  }
+}
+
+beforeAll(async () => {
+  await ensureProject("prj_ref");
+});
 
 const postProjectScript = (code: string) =>
   fetch(itxHttpUrl({ baseUrl: baseUrl(), projectId: "prj_ref" }), {
@@ -51,6 +97,20 @@ const runAgentScript = async (path: string, code: string) => {
 /** Cap'n Web returns an RpcPromise (thenable, not `instanceof Promise`). Wrap a
  *  call in a real async fn so vitest's `.rejects` can await it. */
 const expectRejects = (fn: () => unknown) => expect((async () => await fn())()).rejects;
+
+function announceContract(contract: SubscribeCounterContract) {
+  return {
+    slug: contract.slug,
+    version: contract.version ?? "0",
+    description: contract.description ?? "",
+    consumes: [...contract.consumes],
+    emits: [...(contract.emits ?? [])],
+    ownedEvents: Object.entries(contract.events).map(([type, definition]) => ({
+      type,
+      ...(definition.description === undefined ? {} : { description: definition.description }),
+    })),
+  };
+}
 
 describe("itx reference implementation", () => {
   it("1. live capability: provide → invoke → describe → revoke", async () => {
@@ -102,7 +162,7 @@ describe("itx reference implementation", () => {
     expect(await itx.api.echo("pong")).toBe("pong");
   });
 
-  it("3. dynamic-worker: resolved + run via the Worker Loader", async () => {
+  it("3. worker-entrypoint: resolved + run via the Worker Loader", async () => {
     using itx = agentItx("dynamic");
     await itx.provideCapability({ path: ["calc"], capability: dynamicCalc });
     expect(await itx.calc.add(40, 2)).toBe(42);
@@ -110,13 +170,14 @@ describe("itx reference implementation", () => {
     const d = await itx.describe();
     const row = d.capabilities.find((c: any) => c.path.join(".") === "calc");
     expect(row?.address).toBeTruthy();
-    expect(row.address.type).toBe("dynamic-worker");
+    expect(row.address.type).toBe("worker-entrypoint");
   });
 
-  it("4. dynamic-durable-object: repo counter.js runs as a facet", async () => {
+  it("4. durable-object: repo counter.js runs as a facet", async () => {
     using itx = agentItx("facet");
     const source = await itx.project.repo.getWorkerSource({ path: "counter.js" });
     expect(source.mainModule).toBe("counter.js");
+    expect(await itx.project.repo.whoami()).toBe("repo prj_ref:/repos/project");
 
     await itx.provideCapability({ path: ["counter"], capability: repoCounter });
     expect(await itx.counter.increment()).toBe(1);
@@ -167,22 +228,21 @@ describe("itx reference implementation", () => {
       `async (itx) => itx.invokeCapability({ path: ["calc", "add"], args: [10, 20] })`,
     )) as any;
     expect(output.result).toBe(30);
-    const d = await itx.describe();
-    const execution = d.scriptExecutions.find((x: any) => x.executionId === output.executionId);
-    expect(execution?.status).toBe("completed");
-    expect(execution?.result).toBe(30);
+    expect(output.completedEvent.payload).toMatchObject({
+      executionId: output.executionId,
+      result: 30,
+    });
   });
 
-  it("9. POST /api/itx runs a script and folds requested/completed events", async () => {
+  it("9. POST /api/itx runs a script and returns the completed event", async () => {
     const response = await postProjectScript(`async () => "curlable"`);
     expect(response.status).toBe(200);
     const body = (await response.json()) as any;
     expect(body.result).toBe("curlable");
-    const execution = body.describe.scriptExecutions.find(
-      (x: any) => x.executionId === body.executionId,
-    );
-    expect(execution?.status).toBe("completed");
-    expect(execution?.result).toBe("curlable");
+    expect(body.completedEvent.payload).toMatchObject({
+      executionId: body.executionId,
+      result: "curlable",
+    });
   });
 
   it("11. raw SDK-shaped live provider is client-normalized and goes offline", async () => {
@@ -230,7 +290,7 @@ describe("itx reference implementation", () => {
     }
   });
 
-  it("12. Slack-shaped non-live provider is a stored dynamic-worker address", async () => {
+  it("12. Slack-shaped non-live provider is a stored worker-entrypoint address", async () => {
     using itx = agentItx("addressed-slack");
     // Same caller shape as the live SDK test, different lifetime: plain address
     // data, so provideCapability writes the address to the log and stores no
@@ -243,7 +303,7 @@ describe("itx reference implementation", () => {
     });
 
     const row = (await itx.describe()).capabilities.find((c: any) => c.path.join(".") === "slack");
-    expect(row?.address?.type).toBe("dynamic-worker");
+    expect(row?.address?.type).toBe("worker-entrypoint");
     expect(row?.address?.entrypoint).toBe("SlackEntrypoint");
   });
 
@@ -278,9 +338,11 @@ describe("itx reference implementation", () => {
   it("17. agent ITX is reached through the project-local agents capability", async () => {
     using agent = agentItx("describe-agent");
     const d = await agent.describe();
-    expect(d.builtins).toHaveLength(1);
-    expect(d.builtins[0].path).toEqual([]);
-    expect(d.builtins[0].address).toBeNull();
+    expect(d.builtinCapabilities).toHaveLength(2);
+    expect(d.builtinCapabilities[0].path).toEqual([]);
+    expect(d.builtinCapabilities[0].address).toBeNull();
+    expect(d.builtinCapabilities[1].path).toEqual(["workers"]);
+    expect(d.builtinCapabilities[1].address).toBeNull();
     expect(await agent.project.egress("data:text/plain,hello")).toMatchObject({
       body: "hello",
       status: 200,
@@ -289,19 +351,120 @@ describe("itx reference implementation", () => {
 
     using projectItxHandle = projectItx();
     const project = await projectItxHandle.describe();
-    expect(project.builtins).toHaveLength(1);
-    expect(project.builtins[0].path).toEqual([]);
-    expect(project.builtins[0].address).toBeNull();
+    expect(project.builtinCapabilities).toHaveLength(2);
+    expect(project.builtinCapabilities[0].path).toEqual([]);
+    expect(project.builtinCapabilities[0].address).toBeNull();
+    expect(project.builtinCapabilities[1].path).toEqual(["workers"]);
+    expect(project.builtinCapabilities[1].address).toBeNull();
     const path = agentPath("via-agents");
-    const viaProject = projectItxHandle.agents.get(path);
+    using viaProject = projectItxHandle.agents.get(path);
     expect(await viaProject.whoami()).toBe(`agent prj_ref:${path}`);
     expect((d as any).parentCapabilities).toBeUndefined();
   });
 
-  it("17b. project.agents.get(path) returns a full agent-scoped ITX handle", async () => {
+  it("17b. project.streams.get(path) returns a project-scoped stream handle", async () => {
+    using project = projectItx();
+    const path = `/scratch/streams-${rid}`;
+    const stream = project.streams.get(path);
+
+    const appended = await stream.append({
+      event: {
+        type: "events.iterate.com/test/project-stream",
+        payload: { marker: rid },
+      },
+    });
+    expect(typeof appended.offset).toBe("number");
+
+    const events = await stream.getEvents();
+    expect(events.at(-1)?.payload).toMatchObject({ marker: rid });
+  });
+
+  it("17b2. project stream handles can subscribe a local StreamProcessor through itx", async () => {
+    using project = projectItx();
+    const path = `/scratch/subscribe-${rid}`;
+    const stream = project.streams.get(path);
+    const eventType = "events.iterate.com/test/project-stream-subscribe";
+
+    let storedSnapshot: StreamProcessorSnapshot<SubscribeCounterState> | undefined;
+    const processor = new SubscribeCounterProcessor({
+      iterateContext: {
+        stream: {
+          append: (args: unknown) => stream.append(args),
+          appendBatch: (args: unknown) => stream.appendBatch(args),
+        },
+      },
+      readState: () => storedSnapshot,
+      writeState: (snapshot) => {
+        storedSnapshot = snapshot;
+      },
+    });
+
+    const before = `before-${rid}`;
+    const replayed = await stream.append({
+      event: {
+        type: eventType,
+        payload: { amount: 2, marker: before },
+      },
+    });
+
+    const initial = await processor.snapshot();
+    const subscription = await stream.subscribe({
+      replayAfterOffset: initial.offset,
+      eventTypes: [eventType],
+      subscriber: {
+        description: "minimal-itx-reference e2e local processor",
+        processor: {
+          announcement: announceContract(processor.contract),
+          getRuntimeState: () => processor.getRuntimeState(),
+        },
+      },
+      processEventBatch: (batch: {
+        events: Parameters<typeof processor.ingest>[0]["events"];
+        streamMaxOffset: number;
+      }) => processor.ingest(batch),
+    });
+
+    await processor.waitUntilEvent({ offset: replayed.offset, timeoutMs: 8_000 });
+    expect(processor.state).toEqual({ markers: [before], total: 2 });
+
+    const during = `during-${rid}`;
+    const appended = await stream.append({
+      event: {
+        type: eventType,
+        payload: { amount: 3, marker: during },
+      },
+    });
+
+    await processor.waitUntilEvent({ offset: appended.offset, timeoutMs: 8_000 });
+    expect(processor.state).toEqual({ markers: [before, during], total: 5 });
+    expect(storedSnapshot).toEqual({
+      offset: appended.offset,
+      state: { markers: [before, during], total: 5 },
+    });
+
+    const runtimeState = await stream.getProcessorRuntimeState({
+      subscriptionKey: subscription.subscriptionKey,
+    });
+    expect(runtimeState?.snapshot).toMatchObject({
+      offset: appended.offset,
+      state: { markers: [before, during], total: 5 },
+    });
+
+    await subscription.unsubscribe();
+    await stream.append({
+      event: {
+        type: eventType,
+        payload: { amount: 99, marker: `after-${rid}` },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    expect(processor.state).toEqual({ markers: [before, during], total: 5 });
+  });
+
+  it("17c. project.agents.get(path) returns a full agent-scoped ITX handle", async () => {
     using project = projectItx();
     const path = agentPath("agent-handle-contract");
-    const agent = project.agents.get(path);
+    using agent = project.agents.get(path);
 
     expect(await agent.whoami()).toBe(`agent prj_ref:${path}`);
     expect(await agent.project.egress("data:text/plain,from-agent-handle")).toMatchObject({
@@ -336,7 +499,7 @@ describe("itx reference implementation", () => {
     await agent.provideCapability({
       path: ["agentProbe"],
       capability: {
-        type: "dynamic-worker",
+        type: "worker-entrypoint",
         source: {
           type: "inline",
           mainModule: "agent-probe.js",
@@ -398,14 +561,10 @@ describe("itx reference implementation", () => {
     });
   });
 
-  it("20. failed scripts still fold a completed error record", async () => {
+  it("20. failed scripts throw the script error", async () => {
     const path = agentPath("script-error");
-    using itx = agentItx("script-error");
     const code = `async () => { throw new Error("boom"); }`;
     await expectRejects(() => runAgentScript(path, code)).toThrow(/boom/);
-    const execution = (await itx.describe()).scriptExecutions.find((x: any) => x.code === code);
-    expect(execution?.status).toBe("completed");
-    expect(execution?.error ?? "").toMatch(/boom/);
   });
 
   it("21. codemode can durably provide a capability for later callers", async () => {
@@ -425,7 +584,7 @@ describe("itx reference implementation", () => {
     using itx = connect({ path });
     expect(await itx.calc2.add(20, 22)).toBe(42);
     const row = (await itx.describe()).capabilities.find((c: any) => c.path.join(".") === "calc2");
-    expect(row?.address?.type).toBe("dynamic-worker");
+    expect(row?.address?.type).toBe("worker-entrypoint");
   });
 
   it("22. root ITX control names are reserved and cannot be shadowed", async () => {

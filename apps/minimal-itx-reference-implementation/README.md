@@ -36,7 +36,7 @@ Run one project with `npm test -- --project node` (or `--project browser`).
 ## Connect
 
 ```ts
-import { withItx } from "./client.ts";
+import { withItx } from "./src/client.ts";
 
 using itx = withItx({ projectId: "prj_ref", path: "/", token: "alice-token" });
 await itx.provideCapability({ path: ["greeter"], capability: (n) => `hi ${n}` });
@@ -71,15 +71,17 @@ await agent.whoami();
 
 There is no global project context — a project is the root of its own ITX.
 Cross-project listing and the platform (`__null__`) streams live behind the
-**admin-only** root ([root-itx.ts](./root-itx.ts)):
+**admin-only** root ([root.ts](./src/itx/root.ts)):
 
 ```ts
-import { withRoot } from "./client.ts";
+import { withRoot } from "./src/client.ts";
 
 using root = withRoot({ token: "root-token" }); // an admin (access: "all")
 await root.projects.list();
 const log = root.streams.get("/integrations/slack/webhooks"); // pre-scoped to __null__
-await log.append({ type: "events.iterate.com/test/webhook", payload: { hi: 1 } });
+await log.append({
+  event: { type: "events.iterate.com/test/webhook", payload: { hi: 1 } },
+});
 ```
 
 ## Curl

@@ -15,12 +15,12 @@
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { itxHttpUrl, withItx } from "./client.ts";
-import { baseUrl, token } from "./e2e-env.ts";
+import { itxHttpUrl, withItx } from "../client.ts";
+import { baseUrl, token } from "../../e2e-env.ts";
 import type { ItxExample } from "./examples.ts";
 
 const execFileAsync = promisify(execFile);
-const APP_ROOT = fileURLToPath(new URL(".", import.meta.url));
+const APP_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const AsyncFunction = async function () {}.constructor as new (
   ...args: string[]
 ) => (itx: unknown, vars: Record<string, unknown>) => Promise<unknown>;
@@ -119,7 +119,7 @@ async function runByPostScript(input: RunInput): Promise<unknown> {
 async function runInDynamicWorker(input: RunInput): Promise<unknown> {
   const runnerName = `runner_${crypto.randomUUID().replace(/-/g, "_")}`;
   const runner = {
-    type: "dynamic-worker",
+    type: "worker-entrypoint",
     source: {
       type: "inline",
       mainModule: "runner.js",

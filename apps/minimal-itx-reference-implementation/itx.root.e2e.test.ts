@@ -1,4 +1,4 @@
-// The admin-only platform root (root-itx.ts), served at /api/itx. Proves an
+// The admin-only platform root (src/itx/root.ts), served at /api/itx. Proves an
 // admin can list projects and read/write the `__null__` platform streams, and
 // that a non-admin is refused at the door.
 
@@ -16,13 +16,16 @@ describe("itx admin root e2e", () => {
 
     // Streams are pre-scoped to __null__: the caller passes a PATH only.
     const path = `/integrations/slack/webhooks/${rid}`;
-    const appended = await root.streams.get(path).append({
-      type: "events.iterate.com/test/webhook",
-      payload: { hello: "world", rid },
+    using log = await root.streams.get(path);
+    const appended = await log.append({
+      event: {
+        type: "events.iterate.com/test/webhook",
+        payload: { hello: "world", rid },
+      },
     });
     expect(typeof appended.offset).toBe("number");
 
-    const events = await root.streams.get(path).getEvents();
+    const events = await log.getEvents();
     expect(events.at(-1)?.payload).toMatchObject({ hello: "world", rid });
   });
 

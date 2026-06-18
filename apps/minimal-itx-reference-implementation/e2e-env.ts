@@ -6,7 +6,7 @@
 // vitest.config.ts injects the same values there via `define`
 // (__ITX_BROWSER_E2E__) instead of importing this file.
 
-import { withItx, withRoot, type WithItxInput } from "./client.ts";
+import { withItx, withRoot, type WithItxInput } from "./src/client.ts";
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:8788";
 
@@ -30,7 +30,7 @@ export function token(): string {
 /** Connect a context handle on the running worker. Defaults to the demo
  *  principal and the prj_ref project root; pass overrides for agent paths or
  *  other projects. */
-export function connect<T = any>(input: Partial<WithItxInput> = {}): T {
+export function connect<T = unknown>(input: Partial<WithItxInput> = {}): T {
   return withItx<T>({
     baseUrl: baseUrl(),
     projectId: "prj_ref",
@@ -46,6 +46,11 @@ export function adminToken(): string {
 }
 
 /** Connect to the admin-only platform root (`/api/itx`). */
-export function connectRoot<T = any>(): T {
+export function connectRoot<T = unknown>(): T {
   return withRoot<T>({ baseUrl: baseUrl(), token: adminToken() });
+}
+
+export async function ensureProject(projectId = "prj_ref"): Promise<void> {
+  using root = connectRoot();
+  await root.projects.create(projectId);
 }

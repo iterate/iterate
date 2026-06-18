@@ -18,34 +18,71 @@ you append events (`capability-provided`, `capability-revoked`) and the
 capability table is their reduction. The log is the single source of truth; the
 table is derived and reconstructible by replay. A capability is either **live**
 (an in-memory stub that dies with its provider) or **durable dynamic** (a
-plain-data dynamic-worker/facet address that can be resolved into a callable).
-Project and Agent Durable
+plain-data `DynamicWorkerRef` that can be resolved into a callable worker
+entrypoint or Durable Object facet). Project and Agent Durable
 Objects host their own embedded itx processor. Each host is mounted as the
 context's base built-in at `path: []`, so public methods/getters on the host DO
 are the default capability surface. There is no global context and no implicit
 parent traversal: an agent reaches its project explicitly through `itx.project`.
 Cross-project listing and the platform streams live behind the separate,
-admin-only **Root ITX** (`root-itx.ts`).
+admin-only **Root ITX** (`src/itx/root.ts`).
 
 ## Capabilities: live vs durable dynamic
 
 One field discriminates, and it is not a `kind` enum — it is the `address`:
 
-|                     | `address`                                                                  | where the callable lives             | durable?                            |
-| ------------------- | -------------------------------------------------------------------------- | ------------------------------------ | ----------------------------------- |
-| **live**            | `null`                                                                     | the in-memory bridge beside the fold | no — dies with its provider/session |
-| **durable dynamic** | `{ type: "dynamic-worker", … }` or `{ type: "dynamic-durable-object", … }` | rebuilt on demand by the host        | yes — the address is in the log     |
+|                     | `address`                                                             | where the callable lives             | durable?                            |
+| ------------------- | --------------------------------------------------------------------- | ------------------------------------ | ----------------------------------- |
+| **live**            | `null`                                                                | the in-memory bridge beside the fold | no — dies with its provider/session |
+| **durable dynamic** | `{ type: "worker-entrypoint", … }` or `{ type: "durable-object", … }` | rebuilt on demand by the host        | yes — the address is in the log     |
 
-`CapabilityRecord` (`contract.ts`) is `{ path, address, instructions, types }`.
+`CapabilityRecord` (`src/itx/processor-contract.ts`) is `{ path, address, instructions, types }`.
 A live provide records `address: null` and stashes the real stub in the bridge;
 a durable dynamic provide records the address and stashes nothing.
-`address === null` is the entire test (`itx.ts`'s `isCapabilityAddress`).
+`address === null` is the live/durable line; `durableCapabilityAddress(...)`
+recognizes the public `DynamicWorkerRef` shapes.
+
+The durable dynamic address shape is the same data structure consumed by
+`itx.workers.get(ref)`:
+
+```ts
+type DynamicWorkerRef = (
+  | {
+      type: "worker-entrypoint";
+      source: DynamicWorkerSourceRef;
+      entrypoint?: string; // defaults to the Worker's default entrypoint
+      props?: Record<string, unknown>;
+    }
+  | {
+      type: "durable-object";
+      source: DynamicWorkerSourceRef;
+      className: string;
+    }
+) & {
+  cacheKey?: string;
+};
+
+type DynamicWorkerSourceRef =
+  | {
+      type: "inline";
+      mainModule: string;
+      modules: Record<string, string>;
+    }
+  | {
+      type: "from-repo";
+      repoPath: string;
+      sourcePath: string;
+    };
+```
+
+`from-repo` is project-scoped by construction: callers name a repo path inside
+the current project, never a project id or global repository binding.
 
 Paths are **arrays of segments** (`["slack", "chat", "postMessage"]`), matched
 by **longest registered prefix** so a deep shadow beats a broad mount. There is
 no dotted-string key anywhere in resolution.
 
-## The four verbs (one calling convention)
+## Control verbs (one calling convention)
 
 Every context implements `ItxContext`:
 
@@ -54,17 +91,18 @@ provideCapability({ path, capability, instructions?, types? }) → { path }
 invokeCapability({ path, args? })                              → unknown
 revokeCapability({ path })                                     → void
 describe()                                                     → DescribeResult
+runScript({ code })                                            → RunScriptResult
 ```
 
-Every verb takes a **single bag-of-props** argument. On the Cap'n Web dotted
+Every control verb takes a **single bag-of-props** argument. On the Cap'n Web dotted
 surface, even these verbs arrive as `invokeCapability({ path, args })`:
 `itx.describe()` is path `["describe"]`, and
 `itx.provideCapability(args)` is path `["provideCapability"]`. The context owns
 those reserved root names and dispatches them before ordinary capability
 resolution. User capabilities cannot be mounted under those names, so the
 control surface cannot be shadowed. `describe()` is the only read verb (there is
-no `list`); it returns the raw folded `capabilities` and the host-injected
-`builtins`.
+no `list`); it returns the raw folded `capabilities` and host-injected
+`builtinCapabilities`.
 
 ## The client — naked path calls, normalized live provides
 
@@ -83,7 +121,7 @@ stub dies and the folded live row becomes offline.
 
 For DO-backed itx contexts, the load-bearing piece is **server-side**:
 capabilities are registered at runtime, so the served main object can't be a
-fixed method-only class. `pathInvokerToProxy` (`server.ts`) is a `Proxy` over a
+fixed method-only class. `pathInvokerToProxy` (`src/itx/path-invoker.ts`) is a `Proxy` over a
 **function**. It answers any non-reserved name and, on the terminal call,
 collapses the accumulated path into one `invokeCapability({ path, args })`.
 Its inverse is `objectToPathInvoker`: a tiny adapter that takes a host object and
@@ -99,31 +137,69 @@ round) are encoded there: the target must be function-typed,
 reading), and `has` must answer for non-reserved names. A `RESERVED` set blocks
 names that would derail it (`then`, `__proto__`, ...).
 
-## Dynamic address resolution — address → stub
+## Dynamic workers — ref → proxied capability
 
-The host Durable Object turns a durable dynamic capability address back into a
-callable, dispatched on `address.type`:
+Dynamic worker/facet resolution is a capability object, not duplicated host
+logic. Project and Agent hosts each construct one `DynamicWorkersRpcTarget` and
+use that same instance in two places:
 
-- `{ type: "dynamic-worker", source, entrypoint, props }` → build + run a
-  WorkerEntrypoint via the **Worker Loader**, cached by content hash, with
-  `env.ITX` scoped back to the same host context
-- `{ type: "dynamic-durable-object", source, className }` → load a Durable
-  Object class and run it as a facet of the current Project/Agent Durable Object
+- pass it to `ItxProcessor` so mounted durable dynamic addresses and scripts can
+  run;
+- mount it as the ordinary, shadowable `workers` built-in, so callers can use
+  `itx.workers.get(ref).someMethod(...)`.
+
+`DynamicWorkersRpcTarget` has one public method:
+
+```ts
+get(ref: DynamicWorkerRef): unknown
+```
+
+It returns a proxied callable surface, not a raw Worker Loader stub. That keeps
+entrypoint methods, Durable Object facet methods, and nested `RpcTarget` returns
+usable through the same dotted path style as every other capability.
+
+Internally, `get(ref)` resolves `ref.source`, loads the dynamic Worker with
+Cloudflare's Worker Loader, and then resolves either:
+
+- `{ type: "worker-entrypoint", source, entrypoint?, props? }` to a
+  WorkerEntrypoint, where `entrypoint` may be omitted for the default entrypoint;
+- `{ type: "durable-object", source, className }` to a Durable Object facet of
+  the current Project/Agent host.
+
+Facet storage stays with the current host DO. That matches the authority model:
+a dynamic Durable Object capability belongs to the Project or Agent context that
+mounted it, and its facet identity can include the capability mount path.
+
+The target is constructed with concrete project-scoped authority: `projectId`,
+the Worker Loader binding, the current host's facets API, and the worker env
+bindings to inject into dynamic code. `projectId` is not caller-controlled; it is
+used both as the first cache-key prefix and to resolve `from-repo` sources only
+inside the current project.
+
+Worker Loader cache identity ladders from broad to specific:
+
+1. `DynamicWorkersRpcTarget` prefixes with `projectId`.
+2. `ItxProcessor` adds the mounted capability path when it invokes a durable
+   dynamic capability.
+3. `DynamicWorkerRef.cacheKey` adds caller/source semantic identity when useful.
+4. Source resolution appends a content/build hash so changed code gets a new
+   Worker Loader id.
 
 Host topology is not a public address vocabulary. A user (or codemode) can
-provide live caps, `dynamic-worker`, and `dynamic-durable-object`; any other
-`type`-tagged address is rejected before it enters the log. Host surfaces such as
-`egress`, `repo`, `agents`, `whoami`, and `project` are live runtime targets
-constructed by the host Durable Object from its own Project ID. Dynamic code
-receives only this context's scoped `env.ITX`, and repo-backed sources are
-resolved through the host project's repo.
+provide live caps or `DynamicWorkerRef` addresses; any other `type`-tagged
+address is rejected before it enters the log. Host surfaces such as `egress`,
+`repo`, `agents`, `workers`, `whoami`, and `project` are live runtime targets
+constructed by the host Durable Object from its own project scope. Dynamic code
+receives only the bindings the host injects, including this context's scoped
+`env.ITX`.
 
 ## Host-root capabilities — the domain objects
 
 A context is born with one base capability defined by the host **domain object**:
 `{ path: [], capability: objectToPathInvoker(this, ItxHostDurableObject.prototype) }`.
-`ProjectDurableObject` offers public members such as `egress`, `repo`, and
-`agents`; `AgentDurableObject` offers `whoami`, `sendMessage`, and `project`.
+`ProjectDurableObject` offers public members such as `egress`, `repo`, `agents`,
+and `workers`; `AgentDurableObject` offers `whoami`, `sendMessage`, `project`,
+and `workers`.
 The empty path is host-owned; user provides must name at least one path segment.
 Host-root capabilities are handed to the `ItxProcessor` constructor as the same
 `ProvideArgs` shape a provide uses, but they are live host-owned targets, not
@@ -141,10 +217,10 @@ pulling in real Artifacts or bundling machinery.
 
 ## The admin Root ITX — the platform plane
 
-`RootItx` (`root-itx.ts`) is **not** a context and **not** a Durable Object: a
+`RootItx` (`src/itx/root.ts`) is **not** a context and **not** a Durable Object: a
 tiny fixed RPC surface served at `/api/itx`, constructed per connection at the
 edge and run through the same `pathInvokerToProxy` rule, so
-`root.projects.list()` and `root.streams.get("/x").append(event)` collapse to one
+`root.projects.list()` and `root.streams.get("/x").append({ event })` collapse to one
 `invokeCapability` just like a context's dotted calls.
 
 It exists because `__null__` (the platform projectId) holds streams that belong
@@ -167,14 +243,35 @@ Adding a sibling surface (`users`, `orgs`) is just another branch in
 
 ## Codemode — a capability that is a program
 
-`runScript({ code })` loads an `async (itx) => ...` program as a worker and hands
-it an **itx handle** so it can invoke and provide against the very context that
-launched it. `POST /api/itx/<projectId>` is the HTTP form of that same control.
-The run is bracketed by durable
-`script-execution-requested` /
-`-completed` records — events the fold does **not** consume, demonstrating that
-a log holds both state changes and plain audit records. `runScript` needs the
-Worker Loader, so the host injects the runner into the processor.
+`runScript({ code })` is a command submission API. It appends
+`script-execution-requested`, waits for the matching
+`script-execution-completed`, and then either returns the result plus the
+completed event or throws using the completed event's error. `POST
+/api/itx/<projectId>` is the HTTP form of that same control.
+
+The execution side effect lives in `ItxProcessor.processEvent`, not in the host
+Durable Object. When the processor observes `script-execution-requested`, it
+constructs the exact wrapper source, turns it into an inline
+`DynamicWorkerRef`, and runs it through the same `DynamicWorkersRpcTarget.get`
+path as every other dynamic worker:
+
+```ts
+import { WorkerEntrypoint } from "cloudflare:workers";
+
+const fn = /* inserted script */;
+
+export class ScriptEntrypoint extends WorkerEntrypoint {
+  async run() {
+    return await fn(await this.env.ITX.get());
+  }
+}
+```
+
+The script discovers the current context through `env.ITX.get()`, exactly like
+repo-backed dynamic workers do. The processor records pending script executions
+as reduced state if it needs an idempotence marker, and removes that pending
+entry when `script-execution-completed` is reduced. There is no separate
+in-memory script history; the stream events are the durable record.
 
 ## Auth — one decision, at the connect door
 
@@ -209,26 +306,28 @@ which is precisely the ambiguity this proxy avoids.
 
 ## Files
 
-| File                                        | What                                                                                                                                                                          |
-| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `contract.ts`                               | the itx event log: event schemas + reduced state (`defineProcessorContract`)                                                                                                  |
-| `itx.ts`                                    | `ItxProcessor extends StreamProcessor` (the fold + verbs + bridge), the common vocabulary (`replayPath`, `retain`, prefix matching), the `ItxContext` protocol                |
-| `root-itx.ts`                               | `RootItx` — the admin-only platform root (`/api/itx`): the project catalog + `__null__` streams, pre-scoped; no provide, no address resolver                                  |
-| `durable-object-names.ts`                   | the one place `{projectId}:{path}` names are formatted/parsed; `PLATFORM_PROJECT_ID` (`__null__`)                                                                             |
-| `auth.ts`                                   | the connect-door access model (`"all" \| string[]`) — the single authority decision                                                                                           |
-| `server.ts`                                 | the Worker: `objectToPathInvoker`/`pathInvokerToProxy`, embedded Project/Agent itx hosts, dynamic worker/facet loading, the `/api/itx` route; re-exports the real `Stream` DO |
-| `client.ts`                                 | `withItx` + `connect` — socket opener, naked path calls, and provide-time normalization for raw local SDK objects                                                             |
-| `cli.ts`                                    | a tiny command-line itx runner — the matrix's process-boundary runtime                                                                                                        |
-| `e2e-env.ts`                                | which running worker to talk to + which demo principal to authenticate as (the suite never starts a server; mirrors apps/os)                                                  |
-| `examples.ts`                               | the catalogue: pure-data script bodies (`itx` + `vars` in scope, explicit `return`) the matrix runs across every runtime                                                      |
-| `example-cases.ts`                          | test-only setup + `vars` + assertions per catalogue entry (so `examples.ts` stays pure data, and examples can't silently rot)                                                 |
-| `example-matrix.ts`                         | runs a catalogue body through every server-side runtime (node, cli, post-script, dynamic-worker)                                                                              |
-| `itx-scripts.ts`                            | reusable dynamic capability sources used by the tests (dynamic workers, repo-backed DO facets, …)                                                                             |
-| `itx.e2e.test.ts`                           | the node vitest project: every core concept, then the catalogue matrix across server runtimes                                                                                 |
-| `itx.cross-project-adversarial.e2e.test.ts` | the cross-project isolation attacks (host-topology address rejection, connect-door denial, `__null__` refusal)                                                                |
-| `itx.root.e2e.test.ts`                      | the admin Root ITX: project catalog + `__null__` stream read/write as admin; non-admin refused                                                                                |
-| `itx.browser.test.ts`                       | the browser vitest project: the catalogue in a real Chromium tab (token-in-query auth)                                                                                        |
-| `vitest.config.ts`                          | the two-project (node + browser) config                                                                                                                                       |
+| File                                        | What                                                                                                                                                           |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/itx/processor-contract.ts`             | the itx event log: event schemas + reduced state (`defineProcessorContract`)                                                                                   |
+| `src/itx/processor.ts`                      | `ItxProcessor extends StreamProcessor` (the fold + verbs + bridge), the common vocabulary (`replayPath`, `retain`, prefix matching), the `ItxContext` protocol |
+| `src/itx/root.ts`                           | `RootItx` — the admin-only platform root (`/api/itx`): the project catalog + `__null__` streams, pre-scoped; no provide, no address resolver                   |
+| `src/itx/path-invoker.ts`                   | `objectToPathInvoker` and `pathInvokerToProxy`, the inverse adapters between explicit object surfaces and path invocation                                      |
+| `src/domains/dynamic-workers/`              | `DynamicWorkersRpcTarget`, `DynamicWorkerRef` source resolution, Worker Loader calls, and Durable Object facet resolution                                      |
+| `src/domains/durable-object-names.ts`       | the one place `{projectId}:{path}` names are formatted/parsed; `PLATFORM_PROJECT_ID` (`__null__`)                                                              |
+| `src/auth.ts`                               | the connect-door access model (`"all" \| string[]`) — the single authority decision                                                                            |
+| `src/worker.ts`                             | the Worker route and exports for Project/Agent/Repo DOs, `ItxEntrypoint`, and the real `Stream` DO                                                             |
+| `src/client.ts`                             | `withItx` + `connect` — socket opener, naked path calls, and provide-time normalization for raw local SDK objects                                              |
+| `cli.ts`                                    | a tiny command-line itx runner — the matrix's process-boundary runtime                                                                                         |
+| `e2e-env.ts`                                | which running worker to talk to + which demo principal to authenticate as (the suite never starts a server; mirrors apps/os)                                   |
+| `src/examples/examples.ts`                  | the catalogue: pure-data script bodies (`itx` + `vars` in scope, explicit `return`) the matrix runs across every runtime                                       |
+| `src/examples/example-cases.ts`             | test-only setup + `vars` + assertions per catalogue entry (so `examples.ts` stays pure data, and examples can't silently rot)                                  |
+| `example-matrix.ts`                         | runs a catalogue body through every server-side runtime (node, cli, post-script, dynamic-worker)                                                               |
+| `itx-scripts.ts`                            | reusable dynamic capability sources used by the tests (dynamic workers, repo-backed DO facets, …)                                                              |
+| `itx.e2e.test.ts`                           | the node vitest project: every core concept, then the catalogue matrix across server runtimes                                                                  |
+| `itx.cross-project-adversarial.e2e.test.ts` | the cross-project isolation attacks (host-topology address rejection, connect-door denial, `__null__` refusal)                                                 |
+| `itx.root.e2e.test.ts`                      | the admin Root ITX: project catalog + `__null__` stream read/write as admin; non-admin refused                                                                 |
+| `itx.browser.test.ts`                       | the browser vitest project: the catalogue in a real Chromium tab (token-in-query auth)                                                                         |
+| `vitest.config.ts`                          | the two-project (node + browser) config                                                                                                                        |
 
 ## What this deliberately omits
 

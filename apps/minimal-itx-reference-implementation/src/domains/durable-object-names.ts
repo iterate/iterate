@@ -8,7 +8,7 @@
 // (integration webhooks, the project catalog, …). It is NOT a connectable
 // context — `/api/itx/__null__` is refused and nothing can connect into
 // it from a project. The only door to `__null__` objects is the admin-only Root
-// ITX (root-itx.ts). Everywhere else it is an ordinary projectId string.
+// ITX (src/itx/root.ts). Everywhere else it is an ordinary projectId string.
 
 export const PLATFORM_PROJECT_ID = "__null__";
 
