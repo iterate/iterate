@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from "react";
-import { type Event, type StreamPath } from "@iterate-com/shared/streams/types";
+import { type StreamPath } from "@iterate-com/shared/streams/types";
 import {
   AlertTriangleIcon,
   BotIcon,

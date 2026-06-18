@@ -15,7 +15,6 @@
 import type { ProcessorContractAnnouncement } from "../processors/core/contract.ts";
 import type { StreamEvent, StreamEventInput } from "../shared/event.ts";
 import type {
-  LiveStreamSubscriberDescriptor,
   ProcessorRuntimeState,
   StreamCoreProcessorState,
   StreamRpc,

@@ -257,7 +257,10 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
       replayAfterOffset: snapshot.offset,
       // The contract is the filter: the stream only delivers event types the
       // processor consumes. A `"*"` in consumes means unfiltered delivery.
-      eventTypes: processorEventTypes(entry.processor.contract),
+      eventTypes:
+        entry.processor.contract.consumesAllEvents === true
+          ? ["*"]
+          : entry.processor.contract.consumes,
       // The stream appends this identity as a subscriber-connected presence
       // fact; the contract announcement feeds its processorsBySlug registry.
       // Recovery re-subscriptions pass the same incarnationId — each (re)open
@@ -464,10 +467,6 @@ function announceContract(contract: {
       ...(definition.description === undefined ? {} : { description: definition.description }),
     })),
   };
-}
-
-function processorEventTypes(contract: { consumes: readonly string[]; consumesAllEvents?: true }) {
-  return contract.consumesAllEvents === true ? ["*"] : contract.consumes;
 }
 
 type RetainedStreamRpc = StreamRpc &
