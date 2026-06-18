@@ -533,6 +533,7 @@ export function ProjectStreamView({
               ))
             }
             reductionKey={reductionKey}
+            streamPath={streamPath}
           />
         ) : activeTab === "raw" ? (
           <ProjectStreamRawView
@@ -633,6 +634,7 @@ function useReducedStreamState<TState>(args: {
   /** Distinguishes caches when several reductions share one reductionKey. */
   cacheScope: string;
   initialState: () => TState;
+  normalizeEvent?: (event: Event) => Event;
   reduceEvent: (state: TState, event: Event) => TState;
 }): ReducedStreamState<TState> {
   const rowsResult = useStreamQuery(
@@ -641,7 +643,7 @@ function useReducedStreamState<TState>(args: {
   );
   const cacheRef = useRef<ReductionCache<TState> | null>(null);
   const cacheKey = `${args.cacheScope}:${args.reductionKey}`;
-  const { initialState, reduceEvent } = args;
+  const { initialState, normalizeEvent, reduceEvent } = args;
 
   return useMemo(() => {
     const cached = cacheRef.current?.key === cacheKey ? cacheRef.current : null;
@@ -674,6 +676,7 @@ function useReducedStreamState<TState>(args: {
       } catch {
         continue;
       }
+      event = normalizeEvent?.(event) ?? event;
       events.push(event);
       state = reduceEvent(state, event);
     }
@@ -687,7 +690,7 @@ function useReducedStreamState<TState>(args: {
     };
 
     return { status: "ok" as const, state, events };
-  }, [rowsResult, cacheKey, initialState, reduceEvent]);
+  }, [rowsResult, cacheKey, initialState, normalizeEvent, reduceEvent]);
 }
 
 /**
@@ -734,17 +737,25 @@ function ProjectStreamFeedView({
   emptyLabel,
   renderStreamPathLink,
   reductionKey,
+  streamPath,
 }: {
   database: StreamBrowserDatabase;
   emptyLabel: string;
   renderStreamPathLink: StreamPathLinkRenderer;
   reductionKey: string;
+  streamPath: StreamPath;
 }) {
+  const normalizeEvent = useCallback(
+    (event: Event): Event =>
+      event.streamPath == null ? ({ ...event, streamPath: streamPath.toString() } as Event) : event,
+    [streamPath],
+  );
   const feed = useReducedStreamState<EventsStreamViewState>({
     database,
     reductionKey,
     cacheScope: StreamViewProcessorContract.slug,
     initialState: () => getInitialProcessorState(StreamViewProcessorContract),
+    normalizeEvent,
     reduceEvent: reduceStreamViewEvent,
   });
   const [rendererMode, setRendererMode] = useState<EventsStreamRendererMode>("raw-pretty");

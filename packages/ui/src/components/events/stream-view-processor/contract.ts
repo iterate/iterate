@@ -671,7 +671,10 @@ function stringifyCodemodeError(error: unknown) {
 }
 
 function streamPathFromEvent(event: StreamViewEvent): StreamPath {
-  return (event.streamPath ?? "/") as StreamPath;
+  if (event.streamPath == null) {
+    throw new Error("Stream view events must include streamPath");
+  }
+  return event.streamPath as StreamPath;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
