@@ -25,7 +25,7 @@ type OsPlaywrightAuthConfig = {
   issuer: string;
 };
 
-type OsPlaywrightAuthEnv = z.infer<typeof Env>;
+type OsPlaywrightAuthEnv = z.infer<typeof OsPlaywrightAuthEnv>;
 
 const execFileAsync = promisify(execFile);
 const OS_APP_DIR = fileURLToPath(new URL("../../apps/os", import.meta.url));
@@ -38,7 +38,7 @@ const ForgePrivateJwkSchema = z
   })
   .transform((value) => value as ForgePrivateJwk);
 
-const Env = z.object({
+const OsPlaywrightAuthEnv = z.object({
   /** OS admin handle used to create and clean up fixture projects through /api/itx. */
   APP_CONFIG_ADMIN_API_SECRET: z.string().min(1),
   /** OAuth client id used as the id-token audience. */
@@ -221,12 +221,12 @@ async function loadOsPlaywrightAuthConfig(): Promise<OsPlaywrightAuthConfig> {
 }
 
 async function loadOsPlaywrightAuthEnv(): Promise<OsPlaywrightAuthEnv> {
-  const env = Env.safeParse(process.env);
+  const env = OsPlaywrightAuthEnv.safeParse(process.env);
   if (env.success) return env.data;
 
   const dopplerEnv = await loadOsDopplerSecrets();
   if (dopplerEnv.ok) {
-    const parsed = Env.safeParse(dopplerEnv.secrets);
+    const parsed = OsPlaywrightAuthEnv.safeParse(dopplerEnv.secrets);
     if (parsed.success) return parsed.data;
 
     throw new Error(
