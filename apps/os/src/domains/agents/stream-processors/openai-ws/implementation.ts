@@ -52,7 +52,7 @@ type LlmRequestCancelledEvent = Extract<
   OpenAiWsConsumedEvent,
   { type: "events.iterate.com/agent/llm-request-cancelled" }
 >;
-type JsonValue = z.infer<ReturnType<typeof z.json>>;
+export type JsonValue = z.infer<ReturnType<typeof z.json>>;
 
 const OpenAiResponsesStreamMessage = z.looseObject({
   type: z.string(),

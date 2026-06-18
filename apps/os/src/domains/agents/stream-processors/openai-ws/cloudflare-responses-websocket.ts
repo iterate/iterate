@@ -1,10 +1,8 @@
-import { z } from "zod";
 import type { ResponsesClientEvent } from "openai/resources/responses/responses";
-import type { OpenAiResponsesWebSocket } from "./implementation.ts";
+import type { JsonValue, OpenAiResponsesWebSocket } from "./implementation.ts";
 
 const OpenAiResponsesWebSocketUrl = "wss://api.openai.com/v1/responses";
 const WebSocketOpenReadyState = 1;
-type JsonValue = z.infer<ReturnType<typeof z.json>>;
 
 export async function createOpenAiResponsesWebSocketClient(
   apiKey: string,
@@ -78,7 +76,7 @@ class CloudflareResponsesWebSocket implements OpenAiResponsesWebSocket {
     }
 
     try {
-      this.#push(z.json().parse(JSON.parse(data)));
+      this.#push(JSON.parse(data) as JsonValue);
     } catch (error) {
       this.#fail(error);
       this.close({ code: 1002, reason: "invalid-json-frame" });

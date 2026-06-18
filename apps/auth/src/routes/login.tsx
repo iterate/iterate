@@ -163,7 +163,7 @@ function LoginActions({
   }, []);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" data-hydrated={isHydrated}>
       {emailOtpEnabled ? (
         <EmailOtpSignIn
           redirectTo={redirectTo}
@@ -255,14 +255,22 @@ function EmailOtpSignIn({
 
   return (
     <div className="space-y-3">
-      {!showExpandedForm ? (
+      {!showExpandedForm && !isHydrated ? (
+        <Button
+          className="w-full border-border bg-background text-foreground shadow-sm transition-colors"
+          variant="outline"
+          size="lg"
+          data-spinner="true"
+          disabled
+        >
+          Loading...
+        </Button>
+      ) : !showExpandedForm ? (
         <Button
           className="w-full border-border bg-background text-foreground shadow-sm transition-colors hover:bg-muted"
           variant="outline"
           size="lg"
           data-testid="email-login-button"
-          aria-disabled={!isHydrated}
-          disabled={!isHydrated}
           onClick={() => onExpandedChange(true)}
         >
           Continue with email

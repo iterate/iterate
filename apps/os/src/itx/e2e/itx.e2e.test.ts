@@ -19,8 +19,8 @@ import {
 } from "./e2e-env.ts";
 import { EXAMPLE_CASES, EXAMPLE_IDS_WITHOUT_CASES } from "./example-cases.ts";
 import {
-  configWorkerRunnerSource,
   MATRIX_RUNTIMES,
+  projectWorkerRunnerSource,
   pushProjectRepoFiles,
   runExampleCode,
 } from "./example-matrix.ts";
@@ -34,8 +34,8 @@ const createdProjectIds = registerCreatedProjectCleanup();
 // ---- the catalogue matrix ---------------------------------------------------
 // One project, created here (the harness's job); every example then connects
 // INTO it and gets straight to work — itx.streams.get("/repl/demo"), no
-// narrowing boilerplate. The config-worker runtime needs the catalogue baked
-// into the project's worker.js, so the lazy setup pushes that once.
+// narrowing boilerplate. The project-worker runtime needs the catalogue baked
+// into the project's worker.ts, so the lazy setup pushes that once.
 
 const MATRIX_EXAMPLES = ITX_EXAMPLES.filter(
   (example) =>
@@ -80,11 +80,11 @@ function ensureMatrixProject(
       };
       createdProjectIds.push(project.id);
       await pushProjectRepoFiles({
-        commitMessage: "bake catalogue examples into the config worker",
+        commitMessage: "bake catalogue examples into the project worker",
         files: {
-          "worker.js": configWorkerRunnerSource(
+          "worker.ts": projectWorkerRunnerSource(
             matrixExamples.filter((matrixExample) =>
-              matrixExample.runtimes.includes("config-worker"),
+              matrixExample.runtimes.includes("project-worker"),
             ),
           ),
         },
@@ -100,7 +100,7 @@ function ensureMatrixProject(
 
 for (const example of MATRIX_EXAMPLES) {
   const exampleCase = EXAMPLE_CASES[example.id]!;
-  // Cold isolates, a config-worker rebuild per call, and a spawned CLI per
+  // Cold isolates, a project-worker rebuild per call, and a spawned CLI per
   // cli-tagged example make these the slowest tests in the suite.
   matrixTest(
     `catalogue example "${example.id}" runs identically across runtimes`,

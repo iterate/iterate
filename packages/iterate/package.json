@@ -1,6 +1,6 @@
 {
   "name": "iterate",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "CLI for iterate",
   "license": "Apache-2.0",
   "type": "module",
@@ -25,7 +25,8 @@
     "iterate": "./bin/iterate.js"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./worker": "./src/worker.ts"
   },
   "publishConfig": {
     "access": "public",
@@ -33,6 +34,10 @@
       ".": {
         "import": "./dist/index.mjs",
         "types": "./dist/index.d.mts"
+      },
+      "./worker": {
+        "import": "./dist/worker.mjs",
+        "types": "./dist/worker.d.mts"
       }
     }
   },

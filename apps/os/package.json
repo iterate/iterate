@@ -53,6 +53,7 @@
     "@iterate-com/auth-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
+    "@journeyapps/wa-sqlite": "^1.7.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@opentui/core": "0.1.102",
     "@opentui/react": "0.1.102",
@@ -80,8 +81,7 @@
     "sqlfu": "0.0.3-14",
     "tailwindcss": "^4.1.18",
     "yaml": "^2.8.3",
-    "zod": "^4.3.6",
-    "@journeyapps/wa-sqlite": "^1.7.0"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "catalog:cloudflare",
@@ -104,7 +104,6 @@
     "jsdom": "27.4.0",
     "miniflare": "catalog:cloudflare",
     "openai": "^6.36.0",
-    "playwright": "1.57.0",
     "tinyexec": "^1.0.2",
     "tsx": "^4.20.3",
     "typescript": "^5.9.3",
