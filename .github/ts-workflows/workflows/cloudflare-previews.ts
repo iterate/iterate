@@ -3,7 +3,7 @@ import {
   cloudflarePreviewApps,
   cloudflarePreviewAdditionalTriggerPaths,
   cloudflarePreviewSharedPaths,
-} from "../../../scripts/preview/apps.ts";
+} from "../../../scripts/preview/preview.ts";
 import * as utils from "../utils/index.ts";
 
 const previewPaths = [

@@ -305,7 +305,7 @@ The slot's OS↔auth OAuth client credentials are **constants in Doppler**
 the matching `APP_CONFIG_ITERATE_AUTH__*`). Every auth deploy reseeds them
 into its database, so the DB can never drift from Doppler and the two apps
 need no deploy-time coordination. Provisioning/rotation:
-`pnpm tsx scripts/preview/provision-auth-preview-configs.ts [--rotate]`.
+`doppler run --project _shared --config prd -- pnpm preview provision-auth-preview-configs --rotate`.
 
 ### Creating a preview environment from your machine
 

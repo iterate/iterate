@@ -1,5 +1,5 @@
 import { workflow } from "@jlarky/gha-ts/workflow-types";
-import { cloudflareAppSharedPaths } from "../../../scripts/preview/apps.ts";
+import { cloudflareAppSharedPaths } from "../../../scripts/preview/preview.ts";
 import * as utils from "../utils/index.ts";
 
 // The tunnel gateway (tunnels.iterate.com) is a single prd worker, not a

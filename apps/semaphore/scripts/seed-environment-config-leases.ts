@@ -1,8 +1,9 @@
 import { z } from "zod";
-import { syncPreviewInventory } from "../../../scripts/preview/preview-inventory.ts";
+import { previewInternals } from "../../../scripts/preview/preview.ts";
 import { createSemaphoreClient } from "../src/contract.ts";
 
 const DEFAULT_SEMAPHORE_BASE_URL = "https://semaphore.iterate.com";
+const { syncPreviewInventory } = previewInternals;
 
 export const SeedEnvironmentConfigLeasesInput = z
   .object({

@@ -20,7 +20,7 @@ Done in draft PR #1564. The OS preview test lane now runs root Playwright specs 
 ## Checklist
 
 - [x] Inspect existing preview deployment/test workflow and command generation. _The preview CLI stores the leased `preview_N` config in PR state and runs app tests under `doppler run --project <app> --config preview_N`._
-- [x] Add Playwright specs to the OS preview test lane after preview deployment. _`scripts/preview/apps.ts` now installs Chromium and runs root `pnpm spec` after the existing OS Vitest preview lanes._
+- [x] Add Playwright specs to the OS preview test lane after preview deployment. _`scripts/preview/preview.ts` now installs Chromium and runs root `pnpm spec` after the existing OS Vitest preview lanes._
 - [x] Regenerate generated GitHub workflow YAML. _`pnpm workflows` completed; no generated YAML changed because the existing preview workflow already executes the preview runner._
 - [x] Run targeted validation for workflow generation and affected preview tests. _Passed `pnpm --dir .github/ts-workflows build`, `pnpm workflows`, formatter check, and `pnpm --dir apps/os exec vitest run --root ../.. scripts/preview/preview.test.ts`._
 - [x] Push branch and keep the draft PR updated. _Draft PR #1564 is open with the implementation commit pushed and the body updated with the CI shape plus local validation._

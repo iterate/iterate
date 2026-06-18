@@ -43,7 +43,7 @@ export default defineConfig({
   test: {
     // Every test creates its own uniquely-suffixed project, so files only
     // share the deployed worker and can run in parallel. Preview CI opts in
-    // (see scripts/preview/apps.ts); local runs default to sequential so a
+    // (see scripts/preview/preview.ts); local runs default to sequential so a
     // single dev server isn't hammered and output stays readable.
     fileParallelism: process.env.OS_ITX_E2E_FILE_PARALLELISM === "true",
     hookTimeout: 45_000,
