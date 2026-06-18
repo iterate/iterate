@@ -11,11 +11,15 @@ import { createProjectFixture as createForgedProjectFixture } from "./forged-ses
 type ForgedProjectFixture = Awaited<ReturnType<typeof createForgedProjectFixture>>;
 
 export const test = base.extend<{
-  createProjectFixture: (slugPrefix: string) => Promise<ForgedProjectFixture>;
+  helpers: {
+    createFixture: (slugPrefix: string) => Promise<ForgedProjectFixture>;
+  };
 }>({
-  createProjectFixture: async ({ baseURL, page }, use) => {
+  helpers: async ({ baseURL, page }, use) => {
     if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
-    await use((slugPrefix) => createForgedProjectFixture(slugPrefix, { baseURL, page }));
+    await use({
+      createFixture: (slugPrefix) => createForgedProjectFixture(slugPrefix, { baseURL, page }),
+    });
   },
   page: async ({ page: basePage }, use, testInfo) => {
     await using page = await addPlugins({
