@@ -201,15 +201,18 @@ directly; wrap the command in `doppler run` when you want to force a particular
 config:
 
 ```bash
-# local dev: starts or reuses the local OS dev server when OS_BASE_URL is unset
+# local dev: starts or reuses the local OS dev server when APP_CONFIG_BASE_URL is unset
 pnpm spec
 
 # same thing, forcing a specific Doppler config
 doppler run --project os --config dev -- pnpm spec
 
-# deployed preview: point the specs at the deployed OS worker
-OS_BASE_URL=https://os-preview-3.iterate.com \
-  doppler run --project os --config preview_3 -- pnpm spec
+# deployed preview: the Doppler config supplies APP_CONFIG_BASE_URL for the OS worker
+doppler run --project os --config preview_3 -- pnpm spec
+
+# arbitrary deployed OS worker: preserve an explicit APP_CONFIG_BASE_URL override
+APP_CONFIG_BASE_URL=https://os-preview-3.iterate.com \
+  doppler run --project os --config preview_3 --preserve-env=APP_CONFIG_BASE_URL -- pnpm spec
 ```
 
 Forged-session specs validate one env contract: `APP_CONFIG_ADMIN_API_SECRET`
@@ -218,12 +221,14 @@ for project fixture setup, plus `APP_CONFIG_ITERATE_AUTH__CLIENT_ID`,
 minting. Those values are expected to come from the same `os` Doppler config as
 the worker under test. The access-token resource is derived from the target OS
 base URL (`http://localhost` for loopback local dev, otherwise the normalized
-base URL). The helper does not shell out to Doppler or infer auth values from
-redirects. `OS_BASE_URL` is the only target override; when it is unset,
-Playwright runs the OS dev script through Node with `start`, `--detach`,
-`--keep-alive`, and `--port <port>`, so it reuses the same per-worktree dev
-server recorded in `apps/os/.alchemy/dev-server.json`, then waits directly on
-that server's `/api/health`.
+base URL). The helper validates `process.env` first, then falls back to
+`doppler secrets download --no-file --format json` from `apps/os` when those
+values are missing; it never infers auth values from redirects.
+`APP_CONFIG_BASE_URL` is the only target override; when it is unset, Playwright
+runs the OS dev script through Node with `start`, `--detach`, `--keep-alive`,
+and `--port <port>`, so it reuses the same per-worktree dev server recorded in
+`apps/os/.alchemy/dev-server.json`, then waits directly on that server's
+`/api/health`.
 
 ### Minting in production
 
