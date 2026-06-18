@@ -285,20 +285,32 @@ function newProcessor(deps: {
     exports: {},
     forwardToProjectWorker,
     stream:
-      stream ?? ({ append: () => {}, appendBatch: () => {} } as unknown as StreamProcessorStream),
+      stream ??
+      (() => {
+        const noop = {
+          append: () => {},
+          appendBatch: () => {},
+          at: () => noop,
+        } as unknown as StreamProcessorStream;
+        return noop;
+      })(),
     projectId: () => "project_1",
   });
 }
 
 function recordingStream(appendedBatches: Array<{ events: unknown[]; streamPath?: string }>) {
   let offset = 0;
-  return {
-    append: async (args: { event: StreamEventInput }) => event({ ...args.event, offset: ++offset }),
-    appendBatch: async (batch: { events: StreamEventInput[]; streamPath?: string }) => {
-      appendedBatches.push(batch);
-      return batch.events.map((input) => event({ ...input, offset: ++offset }));
-    },
-  } as unknown as StreamProcessorStream;
+  const streamFor = (streamPath: string | undefined): StreamProcessorStream =>
+    ({
+      append: async (args: { event: StreamEventInput }) =>
+        event({ ...args.event, offset: ++offset }),
+      appendBatch: async (batch: { events: StreamEventInput[] }) => {
+        appendedBatches.push({ ...batch, streamPath });
+        return batch.events.map((input) => event({ ...input, offset: ++offset }));
+      },
+      at: (nextPath: string) => streamFor(nextPath),
+    }) as unknown as StreamProcessorStream;
+  return streamFor(undefined);
 }
 
 function event(args: {

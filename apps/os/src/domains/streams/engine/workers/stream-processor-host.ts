@@ -430,6 +430,7 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
       append: (args: Parameters<StreamRpc["append"]>[0]) => requireStream(name).append(args),
       appendBatch: (args: Parameters<StreamRpc["appendBatch"]>[0]) =>
         requireStream(name).appendBatch(args),
+      at: (streamPath: string) => requireStream(name).at(streamPath),
       getEvent: (args: Parameters<StreamRpc["getEvent"]>[0]) => requireStream(name).getEvent(args),
       getEvents: (args?: Parameters<StreamRpc["getEvents"]>[0]) =>
         requireStream(name).getEvents(args),

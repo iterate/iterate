@@ -357,8 +357,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
     args.runInBackground(async () => {
       await Promise.all(
         ancestorPaths.map((ancestorPath) =>
-          this.deps.stream.append({
-            streamPath: ancestorPath,
+          this.deps.stream.at(ancestorPath).append({
             event: {
               type: "events.iterate.com/stream/child-stream-created",
               idempotencyKey: `child-stream-created:${ancestorPath}:${path}`,

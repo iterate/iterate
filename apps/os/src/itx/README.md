@@ -131,8 +131,8 @@ stub controls like `dup`/`then`/`constructor`).
 Note for the curious: there are TWO composing pipelining systems in play.
 This one flattens dotted NAMES into data before anything touches the network;
 the RPC transports (capnweb, Workers RPC) separately pipeline CALLS onto
-returned stubs. They compose — `itx.streams.get("/x").append(e)` is one
-PathCall producing a stub the transport then pipelines `append` onto.
+returned stubs. They compose — `itx.streams.get("/x").append({ event })` is
+one PathCall producing a stub the transport then pipelines `append` onto.
 
 ## ② Data becomes dots again: `replayPathCall`
 

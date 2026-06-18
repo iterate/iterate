@@ -46,8 +46,14 @@ export function makeRpcTargetClass<TSource extends object>(
   const include = options.include === undefined ? undefined : new Set<PropertyKey>(options.include);
 
   class GeneratedRpcTarget extends RpcTarget {
-    constructor(readonly source: TSource) {
+    declare readonly source: TSource;
+
+    constructor(source: TSource) {
       super();
+      // RpcTarget instances can cross Workers RPC boundaries. Keep the local
+      // source reference off the structured-clone surface; only methods below
+      // should be exposed remotely.
+      Object.defineProperty(this, "source", { value: source, enumerable: false });
     }
   }
 

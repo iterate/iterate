@@ -156,6 +156,25 @@ function parseStreamRef(ref: string | { projectId: string | null; path: string }
   });
 }
 
+function resolveRelativeStreamPath(basePath: string, streamPath: string): string {
+  const segments = streamPath.startsWith("/") ? [] : basePath.split("/").filter(Boolean);
+  for (const segment of streamPath.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") {
+      if (segments.length === 0) {
+        throw new ItxError({
+          code: "BAD_REQUEST",
+          message: `Stream path ${JSON.stringify(streamPath)} escapes the stream root.`,
+        });
+      }
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+  return `/${segments.join("/")}`;
+}
+
 export class ItxStream extends RpcTarget {
   constructor(
     private readonly scope: StreamsScope,
@@ -171,6 +190,14 @@ export class ItxStream extends RpcTarget {
 
   async appendBatch(input: Parameters<StreamRpc["appendBatch"]>[0]) {
     return await this.client().appendBatch(input as never);
+  }
+
+  at(streamPath: string): ItxStream {
+    return new ItxStream(
+      this.scope,
+      this.projectId,
+      resolveRelativeStreamPath(this.path, streamPath),
+    );
   }
 
   async getEvent(input: Parameters<StreamRpc["getEvent"]>[0]) {

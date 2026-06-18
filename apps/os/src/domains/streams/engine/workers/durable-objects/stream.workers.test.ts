@@ -18,7 +18,7 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import type { StreamEvent } from "../../shared/event.ts";
-import type { StreamEventBatch } from "../../types.ts";
+import type { StreamEventBatch, StreamRpc } from "../../types.ts";
 import { PublicStreamRpcTarget, type Stream } from "./stream.ts";
 
 const STREAM = (env as unknown as { STREAM: DurableObjectNamespace<Stream> }).STREAM;
@@ -112,6 +112,23 @@ describe("T8 — Stream DO smoke (coverage)", () => {
     expect(second.offset).toBe(first.offset + 1);
     const read = (await stream.getEvent({ offset: second.offset })) as StreamEvent | undefined;
     expect(read?.payload).toEqual({ i: 2 });
+  });
+
+  it("at returns a stream target resolved relative to the current stream", async () => {
+    const child = (await freshStream().at("child")) as StreamRpc;
+    const committed = (await child.append({
+      event: { type: "test.cd", payload: { target: "child" } },
+    })) as StreamEvent;
+
+    const state = (await child.runtimeState()) as Awaited<ReturnType<StreamRpc["runtimeState"]>>;
+    expect(committed.offset).toBe(3);
+    expect(state.coreProcessorState.path).toMatch(/^\/review\/t\d+\/child$/);
+
+    const sibling = (await child.at("../sibling")) as StreamRpc;
+    const siblingState = (await sibling.runtimeState()) as Awaited<
+      ReturnType<StreamRpc["runtimeState"]>
+    >;
+    expect(siblingState.coreProcessorState.path).toMatch(/^\/review\/t\d+\/sibling$/);
   });
 
   it("honors getEvents afterOffset + limit", async () => {

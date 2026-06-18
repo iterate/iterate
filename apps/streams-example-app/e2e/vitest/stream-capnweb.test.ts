@@ -128,20 +128,18 @@ describe("stream capnweb protocol", () => {
     },
   );
 
-  // Cross-stream append must land on the same leading-slash DO name the rest of the
-  // system uses. The regressed `#resolveStream` stripped the leading slash, so an event
-  // appended via `streamPath` went to `default:e2e/.../child` while a reader connects to
-  // `default:/e2e/.../child` — a different, empty stream. These prove path resolution.
-  e2eIt('append resolves relative child paths ("child" and "./child")', async () => {
+  // Cross-stream navigation must land on the same leading-slash DO name the rest of the
+  // system uses. The regressed resolver stripped the leading slash, so an event
+  // appended via a relative path went to `default:e2e/.../child` while a reader connects
+  // to `default:/e2e/.../child` — a different, empty stream. These prove path resolution.
+  e2eIt('at resolves relative child paths ("child" and "./child")', async () => {
     const base = e2eStreamPathLabel("e2e/resolve-child");
     using parent = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path: base }) });
 
-    const viaBare = await parent.stream.append({
-      streamPath: "child",
+    const viaBare = await parent.stream.at("child").append({
       event: { type: "test.stream.resolve", payload: { kind: "bare" } },
     });
-    const viaDot = await parent.stream.append({
-      streamPath: "./child",
+    const viaDot = await parent.stream.at("./child").append({
       event: { type: "test.stream.resolve", payload: { kind: "dot" } },
     });
 
@@ -159,14 +157,13 @@ describe("stream capnweb protocol", () => {
     expect(parentEvents.some((event) => event.type === "test.stream.resolve")).toBe(false);
   });
 
-  e2eIt("append resolves an absolute /root/path", async () => {
+  e2eIt("at resolves an absolute /root/path", async () => {
     const unique = crypto.randomUUID();
     const base = e2eStreamPath(`/e2e/resolve-abs-${unique}`);
     const target = e2eStreamPath(`/e2e/resolve-abs-target-${unique}`);
     using parent = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path: base }) });
 
-    const appended = await parent.stream.append({
-      streamPath: target,
+    const appended = await parent.stream.at(target).append({
       event: { type: "test.stream.resolve", payload: { kind: "absolute" } },
     });
 
@@ -180,15 +177,14 @@ describe("stream capnweb protocol", () => {
     expect(parentEvents.some((event) => event.type === "test.stream.resolve")).toBe(false);
   });
 
-  e2eIt("append resolves ..-relative parent, grandparent and mixed paths", async () => {
+  e2eIt("at resolves ..-relative parent, grandparent and mixed paths", async () => {
     const root = e2eStreamPathLabel("e2e/resolve-up");
     using current = withStreamConnectionFromNode({
       url: toStreamWebSocketUrl({ path: `${root}/a/b/c` }),
     });
 
     // ../parent -> {root}/a/b/parent
-    const toParent = await current.stream.append({
-      streamPath: "../parent",
+    const toParent = await current.stream.at("../parent").append({
       event: { type: "test.stream.resolve", payload: { kind: "parent" } },
     });
     using parentStream = withStreamConnectionFromNode({
@@ -199,8 +195,7 @@ describe("stream capnweb protocol", () => {
     );
 
     // ../../grandparent -> {root}/a/grandparent
-    const toGrand = await current.stream.append({
-      streamPath: "../../grandparent",
+    const toGrand = await current.stream.at("../../grandparent").append({
       event: { type: "test.stream.resolve", payload: { kind: "grandparent" } },
     });
     using grandStream = withStreamConnectionFromNode({
@@ -209,8 +204,7 @@ describe("stream capnweb protocol", () => {
     await expect(grandStream.stream.getEvents({ afterOffset: 0 })).resolves.toContainEqual(toGrand);
 
     // ../../grandparent/.././bla normalizes to {root}/a/bla
-    const toMixed = await current.stream.append({
-      streamPath: "../../grandparent/.././bla",
+    const toMixed = await current.stream.at("../../grandparent/.././bla").append({
       event: { type: "test.stream.resolve", payload: { kind: "mixed" } },
     });
     using blaStream = withStreamConnectionFromNode({
@@ -219,14 +213,13 @@ describe("stream capnweb protocol", () => {
     await expect(blaStream.stream.getEvents({ afterOffset: 0 })).resolves.toContainEqual(toMixed);
   });
 
-  e2eIt("append rejects a streamPath that escapes the stream root", async () => {
+  e2eIt("at rejects a streamPath that escapes the stream root", async () => {
     // base has depth 2 ([e2e, resolve-escape-...]); three `..` pops past the root.
     const base = e2eStreamPathLabel("e2e/resolve-escape");
     using parent = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path: base }) });
 
     await expect(
-      parent.stream.append({
-        streamPath: "../../../too-far",
+      parent.stream.at("../../../too-far").append({
         event: { type: "test.stream.resolve", payload: { kind: "escape" } },
       }),
     ).rejects.toThrow();

@@ -129,10 +129,10 @@ describe("SlackProcessor", () => {
     // lost) and passes under `blockProcessorWhile`.
     const appended: Array<{ streamPath?: string; event: StreamEventInput }> = [];
     let failNextAppend = true;
-    const processor = new SlackProcessor({
-      stream: {
-        append: async (args: { event: StreamEventInput; streamPath?: string }) => {
-          const { event, streamPath } = args;
+    const streamFor = (streamPath: string | undefined): StreamProcessorStream =>
+      ({
+        append: async (args: { event: StreamEventInput }) => {
+          const { event } = args;
           if (failNextAppend) {
             failNextAppend = false;
             throw new Error("cold StreamsCapability RPC failed");
@@ -140,13 +140,15 @@ describe("SlackProcessor", () => {
           appended.push({ event, streamPath });
           return committedEvent({ ...event, offset: appended.length });
         },
-        appendBatch: async (args: { events: StreamEventInput[]; streamPath?: string }) =>
+        appendBatch: async (args: { events: StreamEventInput[] }) =>
           args.events.map((event) => {
-            const streamPath = args.streamPath;
             appended.push({ event, streamPath });
             return committedEvent({ ...event, offset: appended.length });
           }),
-      } as unknown as StreamProcessorStream,
+        at: (nextPath: string) => streamFor(nextPath),
+      }) as unknown as StreamProcessorStream;
+    const processor = new SlackProcessor({
+      stream: streamFor(undefined),
     });
 
     // First delivery: the append throws. ingest MUST reject and the checkpoint
@@ -297,21 +299,23 @@ function createProcessor(
   } = {},
 ) {
   const appended: Array<{ streamPath?: string; event: StreamEventInput }> = [];
-  const processor = new SlackProcessor({
-    stream: {
-      append: async (args: { event: StreamEventInput; streamPath?: string }) => {
-        const { event, streamPath } = args;
+  const streamFor = (streamPath: string | undefined): StreamProcessorStream =>
+    ({
+      append: async (args: { event: StreamEventInput }) => {
+        const { event } = args;
         appended.push({ event, streamPath });
         return committedEvent({ ...event, offset: appended.length });
       },
-      appendBatch: async (args: { events: StreamEventInput[]; streamPath?: string }) => {
+      appendBatch: async (args: { events: StreamEventInput[] }) => {
         return args.events.map((event) => {
-          const streamPath = args.streamPath;
           appended.push({ event, streamPath });
           return committedEvent({ ...event, offset: appended.length });
         });
       },
-    } as unknown as StreamProcessorStream,
+      at: (nextPath: string) => streamFor(nextPath),
+    }) as unknown as StreamProcessorStream;
+  const processor = new SlackProcessor({
+    stream: streamFor(undefined),
     ...deps,
   });
   return { appended, processor };

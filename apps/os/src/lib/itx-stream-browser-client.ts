@@ -8,8 +8,9 @@ import type {
 type StreamSubscribeInput = Parameters<StreamRpc["subscribe"]>[0];
 
 export type ItxStreamForBrowserRuntime = {
-  append(args: { streamPath?: string; event: StreamEventInput }): Promise<StreamEvent>;
-  appendBatch(args: { streamPath?: string; events: StreamEventInput[] }): Promise<StreamEvent[]>;
+  append(args: { event: StreamEventInput }): Promise<StreamEvent>;
+  appendBatch(args: { events: StreamEventInput[] }): Promise<StreamEvent[]>;
+  at(streamPath: string): ItxStreamForBrowserRuntime;
   runtimeState(): Promise<StreamRuntimeState>;
   getProcessorRuntimeState(
     args: Parameters<StreamRpc["getProcessorRuntimeState"]>[0],
@@ -29,6 +30,7 @@ export function itxStreamBrowserClient(stream: ItxStreamForBrowserRuntime): Brow
   return {
     append: (args) => stream.append(args),
     appendBatch: (args) => stream.appendBatch(args),
+    at: (streamPath) => itxStreamBrowserClient(stream.at(streamPath)),
     runtimeState: () => stream.runtimeState(),
     getProcessorRuntimeState: (args) =>
       stream.getProcessorRuntimeState(args) as Promise<
