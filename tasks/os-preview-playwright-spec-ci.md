@@ -7,7 +7,7 @@ size: small
 
 ## Status Summary
 
-Early task definition is complete. Implementation still needs to wire root Playwright specs into the OS preview test lane, regenerate the workflow, and verify the generated YAML/checks.
+Implementation is mostly complete. The OS preview test lane now runs root Playwright specs after the existing Vitest preview checks, workflow generation is clean, and focused validation passes; the branch still needs its implementation commit pushed.
 
 ## Assumptions
 
@@ -19,13 +19,15 @@ Early task definition is complete. Implementation still needs to wire root Playw
 
 ## Checklist
 
-- [ ] Inspect existing preview deployment/test workflow and command generation.
-- [ ] Add Playwright specs to the OS preview test lane after preview deployment.
-- [ ] Regenerate generated GitHub workflow YAML.
-- [ ] Run targeted validation for workflow generation and affected preview tests.
+- [x] Inspect existing preview deployment/test workflow and command generation. _The preview CLI stores the leased `preview_N` config in PR state and runs app tests under `doppler run --project <app> --config preview_N`._
+- [x] Add Playwright specs to the OS preview test lane after preview deployment. _`scripts/preview/apps.ts` now installs Chromium and runs root `pnpm spec` after the existing OS Vitest preview lanes._
+- [x] Regenerate generated GitHub workflow YAML. _`pnpm workflows` completed; no generated YAML changed because the existing preview workflow already executes the preview runner._
+- [x] Run targeted validation for workflow generation and affected preview tests. _Passed `pnpm --dir .github/ts-workflows build`, `pnpm workflows`, formatter check, and `pnpm --dir apps/os exec vitest run --root ../.. scripts/preview/preview.test.ts`._
 - [ ] Push branch and keep the draft PR updated.
 
 ## Implementation Notes
 
 - Root `playwright.config.ts` uses `APP_CONFIG_BASE_URL` when present, otherwise it tries to start local OS dev. Running under `doppler run --project os --config preview_N` should therefore target the deployed preview rather than local dev.
 - Current `.github/workflows/cloudflare-previews.yml` is generated from `.github/ts-workflows/workflows/cloudflare-previews.ts`.
+- Preview configs use underscores (`preview_N`), not hyphenated names.
+- The first focused Vitest attempt from the repo root failed because `vitest` is not installed at root. The working command uses the OS workspace binary with `--root ../..`.

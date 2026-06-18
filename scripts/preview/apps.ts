@@ -67,11 +67,14 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // The itx e2e (node project only — the browser project needs a Playwright
     // chromium install the preview e2e job doesn't have) reads
     // APP_CONFIG_BASE_URL + APP_CONFIG_ADMIN_API_SECRET from the leased
-    // preview Doppler config, same as the preview smoke.
+    // preview Doppler config, same as the preview smoke. Root Playwright specs
+    // run after those Vitest lanes, using the same preview Doppler config.
     previewTestCommandArgs: [
       "bash",
       "-c",
       [
+        "set -euo pipefail",
+        "pnpm --dir ../.. exec playwright install chromium",
         'pnpm e2e -t "OS preview smoke" & smoke_pid=$!',
         // Keep the catalogue matrix out of the broad file-parallel run: mixing
         // both forms of parallelism in one Vitest process overloaded preview
@@ -86,6 +89,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         'wait "$itx_pid" || itx_status=$?',
         'wait "$matrix_pid" || matrix_status=$?',
         'if [ "$smoke_status" -ne 0 ] || [ "$itx_status" -ne 0 ] || [ "$matrix_status" -ne 0 ]; then exit 1; fi',
+        "pnpm --dir ../.. spec",
       ].join("; "),
     ],
   },

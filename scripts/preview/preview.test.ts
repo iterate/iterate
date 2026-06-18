@@ -56,6 +56,24 @@ describe("preview workflow scope", () => {
   });
 });
 
+describe("preview test commands", () => {
+  it("runs root Playwright specs after OS preview Vitest lanes", () => {
+    const script = cloudflarePreviewApps.os.previewTestCommandArgs[2];
+    const playwrightInstall = "pnpm --dir ../.. exec playwright install chromium";
+    const playwrightSpec = "pnpm --dir ../.. spec";
+    const vitestStatusGate =
+      'if [ "$smoke_status" -ne 0 ] || [ "$itx_status" -ne 0 ] || [ "$matrix_status" -ne 0 ]; then exit 1; fi';
+
+    expect(script).toContain(playwrightInstall);
+    expect(script).toContain(playwrightSpec);
+    expect(script).toContain(vitestStatusGate);
+    expect(script.indexOf(playwrightInstall)).toBeLessThan(
+      script.indexOf('pnpm e2e -t "OS preview smoke" & smoke_pid=$!'),
+    );
+    expect(script.indexOf(playwrightSpec)).toBeGreaterThan(script.indexOf(vitestStatusGate));
+  });
+});
+
 describe("preview readiness URLs", () => {
   it("checks the deployed app URL without probing synthetic project hostnames", () => {
     expect(
