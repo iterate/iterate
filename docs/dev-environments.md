@@ -37,8 +37,8 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
 ```
 
 - **Config selection**: `pnpm dev` preserves an existing `doppler run`
-  environment; otherwise it enters Doppler using the `apps/os` local setup. For
-  a one-off config, use
+  environment; otherwise it loads Doppler secrets from the `apps/os` local setup
+  into the spawned dev server. For a one-off config, use
   `doppler run --project os --config dev_<you> -- pnpm dev`; do not set
   `DOPPLER_CONFIG` by hand.
 - **Which config?** `dev`, `dev_jonas`, `dev_misha`, and `dev_rahul` all run
