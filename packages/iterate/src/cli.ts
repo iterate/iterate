@@ -2,9 +2,8 @@ import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
 
 import * as prompts from "@clack/prompts";
 import { createORPCClient } from "@orpc/client";
@@ -43,9 +42,7 @@ let configFlagOverride: string | undefined;
  * That keeps router-local help/validation focused on the mounted
  * procedures instead of teaching every command about iterate-specific flags.
  *
- * Usage examples:
- * - `iterate --local-router ./scripts/preview/router.ts local-router preview sync`
- * - `iterate --config dev doctor`
+ * Example: `iterate --config dev doctor`
  */
 const consumeCliStringFlag = (flagName: string): string | undefined => {
   const args = process.argv.slice(2);
@@ -65,30 +62,6 @@ const firstNonFlagArgument = (args: string[]): string | undefined => {
     if (!arg.startsWith("-")) return arg;
   }
   return undefined;
-};
-
-/**
- * Temporary compatibility for root-owned preview commands.
- * App CLIs should use packages/shared/src/apps/cli.ts instead of iterate --local-router,
- * but preview still depends on this mounted-router flow for now.
- */
-const loadLocalRouter = async (routerPath: string) => {
-  const fullPath = resolve(process.cwd(), routerPath);
-  const importedModule = (await import(pathToFileURL(fullPath).href)) as {
-    router?: import("@orpc/server").Router<any, any>;
-  };
-  const router = importedModule.router;
-  if (router == null) {
-    throw new Error(
-      `Local router module ${JSON.stringify(routerPath)} must export a named "router" value.`,
-    );
-  }
-  if (typeof router !== "object") {
-    throw new Error(
-      `Local router module ${JSON.stringify(routerPath)} exported a router mount, but it is not an object.`,
-    );
-  }
-  return router;
 };
 
 const resolveStreamTuiEntrypointPath = () => {
@@ -918,7 +891,6 @@ const launcherProcedures = {
 export const getCli = async () => {
   // Parse custom top-level flags early, before trpc-cli sees the args.
   configFlagOverride = consumeCliStringFlag("--config");
-  const localRouterPath = consumeCliStringFlag("--local-router");
   const requestedRootCommand = firstNonFlagArgument(process.argv.slice(2));
   const shouldLoadRemoteRouters =
     !requestedRootCommand ||
@@ -932,11 +904,6 @@ export const getCli = async () => {
   };
 
   const routers: Record<string, import("@orpc/server").Router<any, any>>[] = [launcherProcedures];
-
-  if (localRouterPath) {
-    const localRouter = await loadLocalRouter(localRouterPath);
-    routers.push({ "local-router": localRouter });
-  }
 
   // Launcher commands are fully local and should not wait on remote discovery before
   // they can run or print command-specific help.

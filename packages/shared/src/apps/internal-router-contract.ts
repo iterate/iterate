@@ -23,18 +23,6 @@ export const internalContract = oc.router({
     .route({ method: "GET", path: "/__internal/debug", tags: [INTERNAL_OPENAPI_TAG] })
     .input(EmptyInput)
     .output(z.record(z.string(), z.unknown())),
-  trpcCliProcedures: oc
-    .route({
-      method: "GET",
-      path: "/__internal/trpc-cli-procedures",
-      tags: [INTERNAL_OPENAPI_TAG],
-    })
-    .input(EmptyInput)
-    .output(
-      z.object({
-        procedures: z.array(z.unknown()),
-      }),
-    ),
   refreshRegistry: oc
     .route({ method: "POST", path: "/__internal/refresh-registry", tags: [INTERNAL_OPENAPI_TAG] })
     .input(

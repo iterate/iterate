@@ -13,7 +13,7 @@
     "skills:sync": "npx skills add . --skill '*' -a claude-code -a opencode -g -y",
     "skills:list": "npx skills list -g -a claude-code -a opencode",
     "iterate": "node ./packages/iterate/bin/iterate.js",
-    "preview": "node ./packages/iterate/bin/iterate.js --local-router ./scripts/preview/router.ts local-router preview",
+    "preview": "trpc-cli scripts/preview/preview.ts",
     "preview:ci": "./scripts/preview/run-ci-locally.sh",
     "lint": "oxlint . --threads 1 --deny-warnings",
     "lint:check": "pnpm lint",
@@ -55,6 +55,7 @@
     "oxlint": "^1.50.0",
     "playwright": "1.60.0",
     "skills": "^1.4.5",
+    "trpc-cli": "0.15.0",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   },

@@ -121,7 +121,7 @@ production when a flow needs a public callback URL.
 
 `pnpm cli` uses `scripts/cli.ts`: if already inside `doppler run`, it preserves
 that config; otherwise it enters Doppler using the local `apps/os` setup. Local
-CLI commands are loaded from `packages/iterate/src/os/router.ts`. Use
+CLI commands are plain TypeScript modules under `apps/os/scripts`. Use
 `doppler run --config <config> -- <command>` when you want preview/prd app
 config explicitly.
 

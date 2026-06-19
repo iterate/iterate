@@ -37,7 +37,7 @@ For agent streams, use the project-scoped agents capability:
 ```bash
 doppler run --project os --config preview_2 -- pnpm --dir apps/os cli itx run \
   --context <project-slug-or-id> \
-  -e 'return await itx.agents.create().getRuntimeState({ agentPath: "/agents/local-debug" })'
+  --eval 'return await itx.agents.create().getRuntimeState({ agentPath: "/agents/local-debug" })'
 ```
 
 This is useful for confirming whether a failure is in stream append ordering,

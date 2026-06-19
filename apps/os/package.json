@@ -11,7 +11,6 @@
     "dev": "tsx ./scripts/dev.ts",
     "dev:local": "tsx ./scripts/dev.ts --skip-doppler",
     "build": "doppler run -- pnpm exec vite build",
-    "rpc": "pnpm cli rpc",
     "probe:do-duration": "tsx ./scripts/do-duration-probe.ts",
     "deploy": "doppler run -- tsx ./alchemy.run.ts",
     "destroy": "doppler run -- tsx ./alchemy.run.ts --destroy",
@@ -32,15 +31,6 @@
     "auth:sync-clients": "tsx ./scripts/sync-auth-clients.ts",
     "test:smoke": "RUNTIME_SMOKE_FULL=1 vitest run --exclude 'src/durable-objects/*.test.ts' --exclude 'src/itx/e2e/**' --exclude '**/*.workers.test.ts'",
     "test:watch": "vitest --exclude 'src/durable-objects/*.test.ts' --exclude 'src/itx/e2e/**' --exclude '**/*.workers.test.ts'"
-  },
-  "iterateAppCli": {
-    "localRouterPaths": [
-      "../../packages/iterate/src/os/router.ts"
-    ],
-    "remote": {
-      "auth": "shared-api-secret-bearer",
-      "defaultBaseUrl": "https://os.iterate.com"
-    }
   },
   "dependencies": {
     "@cloudflare/shell": "^0.3.4",
@@ -105,7 +95,7 @@
     "miniflare": "catalog:cloudflare",
     "openai": "^6.36.0",
     "tinyexec": "^1.0.2",
-    "trpc-cli": "0.14.0",
+    "trpc-cli": "0.15.0",
     "tsx": "^4.20.3",
     "typescript": "^5.9.3",
     "vite": "^8.0.0",

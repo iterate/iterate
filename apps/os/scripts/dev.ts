@@ -15,9 +15,7 @@ import {
 import { resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { os } from "@orpc/server";
-import { createCli } from "trpc-cli";
-import { z } from "zod/v4";
+import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 
 import {
   localDevServerLogPath,
@@ -31,49 +29,21 @@ export type LocalOsDevServerTarget =
   | { baseUrl: string; kind: "start"; port: number };
 
 export type StartOptions = {
+  /** Keep this process attached to the dev server output. */
   attach?: boolean;
+  /** Doppler config to use when entering Doppler. */
   config?: string;
+  /** Start in the background and return once the discovery file is published. */
   detach?: boolean;
+  /** Keep this wrapper command alive after detached startup. Intended for Playwright webServer. */
   keepAlive?: boolean;
-  noDoppler?: boolean;
+  /** Port the local OS server must use. */
   port?: number;
+  /** Do not enter Doppler before starting. Intended for already-prepared local envs. */
+  skipDoppler?: boolean;
+  /** Maximum time to wait for detached startup. */
   timeoutMs?: number;
 };
-
-type CliStartOptions = z.input<typeof CliStartOptions>;
-
-const EmptyInput = z.object({});
-const CliStartOptions = z.object({
-  attach: z.boolean().optional().describe("Keep this process attached to the dev server output."),
-  config: z.string().optional().describe("Doppler config to use when entering Doppler."),
-  detach: z
-    .boolean()
-    .optional()
-    .describe("Start in the background and return once the discovery file is published."),
-  keepAlive: z
-    .boolean()
-    .optional()
-    .describe(
-      "Keep this wrapper command alive after detached startup. Intended for Playwright webServer.",
-    ),
-  skipDoppler: z
-    .boolean()
-    .optional()
-    .describe("Do not enter Doppler before starting. Intended for already-prepared local envs."),
-  port: z
-    .number()
-    .int()
-    .min(1)
-    .max(65_535)
-    .optional()
-    .describe("Port the local OS server must use."),
-  timeoutMs: z
-    .number()
-    .int()
-    .positive()
-    .optional()
-    .describe("Maximum time to wait for detached startup."),
-});
 
 const APP_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const ALCHEMY_DIR = resolve(APP_ROOT, ".alchemy");
@@ -94,7 +64,7 @@ export default async function start(options: StartOptions = {}) {
     throw new Error("keepAlive requires detach.");
   }
 
-  if (!options.noDoppler && !process.env.DOPPLER_CONFIG) {
+  if (!options.skipDoppler && !process.env.DOPPLER_CONFIG) {
     return runInDoppler("start", { ...options, attach, detach, keepAlive, port, timeoutMs });
   }
 
@@ -114,7 +84,7 @@ export async function restart(options: StartOptions = {}) {
     throw new Error("keepAlive requires detach.");
   }
 
-  if (!options.noDoppler && !process.env.DOPPLER_CONFIG) {
+  if (!options.skipDoppler && !process.env.DOPPLER_CONFIG) {
     return runInDoppler("restart", { ...options, attach, detach, keepAlive, port, timeoutMs });
   }
 
@@ -579,11 +549,6 @@ function normalizeBaseUrl(baseUrl: string) {
   return baseUrl.replace(/\/+$/, "");
 }
 
-function cliStartOptions(input: CliStartOptions): StartOptions {
-  const { skipDoppler, ...options } = input;
-  return { ...options, noDoppler: skipDoppler };
-}
-
 function isMainModule() {
   const entry = process.argv[1];
   if (!entry) return false;
@@ -592,31 +557,11 @@ function isMainModule() {
 
 if (isMainModule()) {
   void createCli({
+    ...import.meta,
     name: "dev",
-    router: {
-      attach: os
-        .meta({ description: "Attach to the recorded OS local dev server log." })
-        .input(EmptyInput)
-        .handler(async () => attach()),
-      kill: os
-        .meta({ description: "Stop the recorded OS local dev server." })
-        .input(EmptyInput)
-        .handler(async () => kill()),
-      restart: os
-        .meta({ description: "Restart the OS local dev server." })
-        .input(CliStartOptions)
-        .handler(async ({ input }) => restart(cliStartOptions(input))),
-      start: os
-        .meta({
-          default: true,
-          description: "Start the OS local dev server, or attach if it is already running.",
-        })
-        .input(CliStartOptions)
-        .handler(async ({ input }) => start(cliStartOptions(input))),
-      status: os
-        .meta({ description: "Show the recorded OS local dev server status." })
-        .input(EmptyInput)
-        .handler(async () => status()),
-    },
-  }).run();
+    jsonInput: "auto",
+  }).run({
+    logger: yamlTableConsoleLogger,
+    prompts: isAgent() ? undefined : createBuiltInPrompts(),
+  });
 }

@@ -21,9 +21,6 @@ pnpm cli itx --help
 # Fully-local dev server with an explicit config.
 doppler run --config dev -- pnpm cli itx --help
 
-# Explicit local/captun override, if you are not using the discovery file.
-doppler run --config dev -- pnpm cli --base-url http://localhost:<port> itx --help
-
 # Production.
 doppler run --config prd -- pnpm cli itx --help
 
@@ -56,7 +53,7 @@ List projects from the global admin handle:
 
 ```bash
 doppler run --config prd -- pnpm cli itx run \
-  -e 'return await itx.projects.list({ limit: 20 })'
+  --eval 'return await itx.projects.list({ limit: 20 })'
 ```
 
 ### Project MCP
@@ -83,7 +80,7 @@ doppler run --config prd -- pnpm cli claude-mcp
 For previews, run under the preview Doppler config:
 
 ```bash
-doppler run --config preview_3 -- pnpm cli itx run -e 'return await itx.projects.list({ limit: 20 })'
+doppler run --config preview_3 -- pnpm cli itx run --eval 'return await itx.projects.list({ limit: 20 })'
 doppler run --config preview_3 -- pnpm cli claude-mcp
 ```
 
@@ -106,7 +103,7 @@ hard-coding disposable preview projects.
 
 ```bash
 doppler run --config preview_3 -- pnpm cli itx run \
-  -e 'return await itx.projects.list({ limit: 20 })'
+  --eval 'return await itx.projects.list({ limit: 20 })'
 ```
 
 ## Useful itx Snippets
@@ -114,22 +111,22 @@ doppler run --config preview_3 -- pnpm cli itx run \
 ```bash
 # Confirm the project resolves.
 doppler run --config prd -- pnpm cli itx run \
-  -e 'return await itx.projects.get("iterate")'
+  --eval 'return await itx.projects.get("iterate")'
 
 # List initialized child streams under root.
 doppler run --config prd -- pnpm cli itx run \
   --context iterate \
-  -e 'return await itx.streams.get("/").runtimeState()'
+  --eval 'return await itx.streams.get("/").runtimeState()'
 
 # Read a stream.
 doppler run --config prd -- pnpm cli itx run \
   --context iterate \
-  -e 'return await itx.streams.get("/debugging-docs/example").getEvents({ beforeOffset: "end", limit: 100 })'
+  --eval 'return await itx.streams.get("/debugging-docs/example").getEvents({ beforeOffset: "end", limit: 100 })'
 
 # Inspect an agent runtime state.
 doppler run --config prd -- pnpm cli itx run \
   --context iterate \
-  -e 'return await itx.agents.create().getRuntimeState({ agentPath: "/agents/default" })'
+  --eval 'return await itx.agents.create().getRuntimeState({ agentPath: "/agents/default" })'
 ```
 
 ## Cloudflare Debugging
