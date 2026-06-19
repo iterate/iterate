@@ -27,6 +27,7 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "e2e/tui-test/tui-test.config.ts",
       "e2e/tui-test/run.ts",
       // Local operational commands mounted by scripts/cli.ts.
+      "scripts/artifacts.ts",
       "scripts/cli.ts",
       "scripts/dev.ts",
       "sqlfu.config.ts",

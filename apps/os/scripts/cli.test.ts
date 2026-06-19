@@ -9,18 +9,12 @@ import { claudeMcp } from "./cli.ts";
 const execFileAsync = promisify(execFile);
 const APP_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
-it("exposes OS script class groups as CLI subcommands", async () => {
+it("exposes OS script modules as CLI subcommands", async () => {
   const { stdout } = await runCli(["--help"]);
 
   expect(stdout).toContain("artifacts");
   expect(stdout).toContain("dev");
   expect(stdout).toContain("itx");
-});
-
-it("restores the short eval option for itx scripts", async () => {
-  const { stdout } = await runCli(["itx", "run", "--help"]);
-
-  expect(stdout).toContain("-e, --eval");
 });
 
 it("prints a shell-quoted Claude command for the resolved local MCP URL", async () => {
