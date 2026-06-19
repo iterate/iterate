@@ -61,9 +61,8 @@ pnpm preview test ...
 ```
 
 Use this when you want to reproduce the preview deployment and e2e behavior
-without waiting for GitHub Actions. Use `pnpm preview sync --pull-request-number
-<n>` when you want one command to deploy and test; CI uses the explicit deploy
-step followed by the explicit test step.
+without waiting for GitHub Actions. The preview CLI intentionally keeps deploy
+and test as separate commands so the CI shape and local reproduction path match.
 
 ## Depot GitHub Actions Runners
 

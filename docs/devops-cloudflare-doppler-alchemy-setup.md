@@ -194,7 +194,8 @@ Use the repo preview CLI for PRs so Semaphore owns the lease:
 ```bash
 doppler run --project _shared --config prd -- pnpm preview status
 doppler run --project _shared --config prd -- pnpm preview reconcile
-GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview sync --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview deploy --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview test --pull-request-number 1234
 GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview cleanup --pull-request-number 1234
 ```
 
@@ -239,10 +240,14 @@ doppler run --project _shared --config prd -- pnpm preview status
 # Reconcile inventory: check Doppler configs and Cloudflare zones exist
 doppler run --project _shared --config prd -- pnpm preview reconcile
 
-# Acquire a preview slot for a PR (used by CI)
+# Deploy and test a PR preview (used by CI)
 GITHUB_TOKEN="$(gh auth token)" \
   doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- \
-  pnpm preview sync --pull-request-number 1234
+  pnpm preview deploy --pull-request-number 1234
+
+GITHUB_TOKEN="$(gh auth token)" \
+  doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- \
+  pnpm preview test --pull-request-number 1234
 
 # Release a preview slot after PR cleanup
 GITHUB_TOKEN="$(gh auth token)" \

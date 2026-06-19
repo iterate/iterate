@@ -332,7 +332,7 @@ doppler run --project _shared --config prd -- pnpm preview release --slot 9 --le
 ```
 
 For the PR-centric flow (managed PR comment, tests, cleanup) use
-`pnpm preview sync|deploy|test|cleanup --pull-request-number N` under
+`pnpm preview deploy|test|cleanup --pull-request-number N` under
 `doppler run --project _shared --config prd` — see
 [devops-cloudflare-doppler-alchemy-setup.md](devops-cloudflare-doppler-alchemy-setup.md).
 

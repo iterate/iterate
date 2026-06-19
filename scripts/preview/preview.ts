@@ -19,39 +19,77 @@ type PullRequestCommandOptions = {
 };
 
 /**
- * Deploy affected preview apps for a pull request, run preview tests, and update the managed PR preview section.
- */
-export default async function sync(options: PullRequestCommandOptions = {}) {
-  const runtime = createPreviewRuntime();
-  const result = await syncPreviewForPullRequest({
-    ...runtime,
-    context: await resolvePullRequestPreviewContext({
-      commandEnvironment: runtime.commandEnvironment,
-      githubToken: resolveGithubToken(options, runtime.commandEnvironment),
-      pullRequestNumber: resolvePullRequestNumber(options, runtime.commandEnvironment),
-    }),
-  });
-
-  if (!result.ok) {
-    throw new Error("Failed to sync Cloudflare preview apps.");
-  }
-
-  return result;
-}
-
-/**
  * Deploy affected preview apps for a pull request without running preview e2e.
  */
 export async function deploy(options: PullRequestCommandOptions = {}) {
   const runtime = createPreviewRuntime();
-  const result = await deployPreviewForPullRequest({
-    ...runtime,
-    context: await resolvePullRequestPreviewContext({
-      commandEnvironment: runtime.commandEnvironment,
-      githubToken: resolveGithubToken(options, runtime.commandEnvironment),
-      pullRequestNumber: resolvePullRequestNumber(options, runtime.commandEnvironment),
-    }),
+  const context = await resolvePullRequestPreviewContext({
+    commandEnvironment: runtime.commandEnvironment,
+    githubToken: resolveGithubToken(options, runtime.commandEnvironment),
+    pullRequestNumber: resolvePullRequestNumber(options, runtime.commandEnvironment),
   });
+
+  const current = await readCloudflarePreviewState(context);
+  const selectedApps = await selectPreviewAppsForPullRequest({
+    ...context,
+    previousState: current.state,
+  });
+
+  if (selectedApps.length === 0) {
+    return {
+      ok: true,
+      skipped: true,
+      state: current.state,
+    };
+  }
+
+  const environmentConfigLease = await claimEnvironmentConfigLease({
+    createPreviewSemaphoreResourceClient: runtime.createPreviewSemaphoreResourceClient,
+    leaseMs: defaultPreviewLeaseMs,
+    previousEnvironmentConfigLease: current.state.environmentConfigLease,
+  });
+  const leaseUpdate = await updatePreviewState(context, (state) => ({
+    ...state,
+    environmentConfigLease,
+  }));
+
+  let ok = true;
+  let latestState = leaseUpdate.state;
+  for (const batch of orderPreviewDeployBatches(selectedApps)) {
+    const entries = await mapWithConcurrency(
+      batch,
+      defaultPreviewDeployConcurrency,
+      async (app) => {
+        return await deployPreviewAppWithStatus({
+          app,
+          commandEnvironment: runtime.commandEnvironment,
+          dopplerConfig: environmentConfigLease.dopplerConfig,
+          pullRequestHeadSha: context.pullRequestHeadSha,
+          repositoryRoot: runtime.repositoryRoot,
+          runUrl: context.workflowRunUrl,
+          signal: runtime.signal,
+        });
+      },
+    );
+    if (entries.some((entry) => entry.status === "deploy-failed")) {
+      ok = false;
+    }
+
+    const update = await updatePreviewState(context, (state) => ({
+      ...state,
+      environmentConfigLease,
+      apps: {
+        ...state.apps,
+        ...Object.fromEntries(entries.map((entry) => [entry.appSlug, entry])),
+      },
+    }));
+    latestState = update.state;
+  }
+
+  const result = {
+    ok,
+    state: latestState,
+  };
 
   if (!result.ok) {
     throw new Error("Failed to deploy Cloudflare preview apps.");
@@ -65,14 +103,113 @@ export async function deploy(options: PullRequestCommandOptions = {}) {
  */
 export async function test(options: PullRequestCommandOptions = {}) {
   const runtime = createPreviewRuntime();
-  const result = await testPreviewForPullRequest({
-    ...runtime,
-    context: await resolvePullRequestPreviewContext({
-      commandEnvironment: runtime.commandEnvironment,
-      githubToken: resolveGithubToken(options, runtime.commandEnvironment),
-      pullRequestNumber: resolvePullRequestNumber(options, runtime.commandEnvironment),
-    }),
+  const context = await resolvePullRequestPreviewContext({
+    commandEnvironment: runtime.commandEnvironment,
+    githubToken: resolveGithubToken(options, runtime.commandEnvironment),
+    pullRequestNumber: resolvePullRequestNumber(options, runtime.commandEnvironment),
   });
+
+  const current = await readCloudflarePreviewState(context);
+  const environmentConfigLease = current.state.environmentConfigLease;
+  if (environmentConfigLease == null) {
+    return {
+      ok: true,
+      skipped: true,
+      state: current.state,
+    };
+  }
+
+  const testableApps = Object.values(current.state.apps)
+    .filter((entry) => canRunPreviewTests(entry))
+    .filter((entry) => entry.headSha === context.pullRequestHeadSha)
+    .map((entry) => cloudflarePreviewApps[entry.appSlug as CloudflarePreviewAppSlugType])
+    .filter((app): app is PreviewAppRuntime => app != null);
+
+  if (testableApps.length === 0) {
+    return {
+      ok: true,
+      skipped: true,
+      state: current.state,
+    };
+  }
+
+  const entries: CloudflarePreviewAppEntry[] = [];
+  // Preview e2e commands are full app-level suites. Run them one at a time so
+  // unrelated app checks do not multiply load against the same preview slot.
+  for (const app of testableApps) {
+    const existingEntry = current.state.apps[app.slug];
+    if (!existingEntry?.publicUrl) {
+      continue;
+    }
+
+    const startedAt = Date.now();
+    console.error(`[preview] test start: ${app.slug}`);
+    const testResult = await runCommandWithRetries({
+      args: [
+        "run",
+        "--project",
+        app.dopplerProject,
+        "--config",
+        environmentConfigLease.dopplerConfig,
+        "--",
+        "env",
+        `${app.previewTestBaseUrlEnvVar}=${existingEntry.publicUrl}`,
+        ...app.previewTestCommandArgs,
+      ],
+      command: "doppler",
+      environment: runtime.commandEnvironment,
+      maxAttempts: defaultPreviewTestMaxAttempts,
+      retryDelayMs: defaultPreviewTestRetryDelayMs,
+      signal: runtime.signal,
+      workingDirectory: resolve(runtime.repositoryRoot, app.appPath),
+    });
+    const testDurationMs = Date.now() - startedAt;
+    console.error(
+      `[preview] test ${testResult.exitCode === 0 ? "passed" : "failed"}: ${app.slug} (${formatDurationMs(testDurationMs)})`,
+    );
+
+    entries.push(
+      CloudflarePreviewAppEntry.parse({
+        ...existingEntry,
+        appDisplayName: app.displayName,
+        appSlug: app.slug,
+        message:
+          testResult.exitCode === 0
+            ? null
+            : commandFailureMessage(testResult, "Preview tests failed after deploy."),
+        runUrl: context.workflowRunUrl ?? existingEntry.runUrl ?? null,
+        status: testResult.exitCode === 0 ? "deployed" : "tests-failed",
+        testDurationMs,
+        updatedAt: new Date().toISOString(),
+      } satisfies CloudflarePreviewAppEntry),
+    );
+  }
+
+  const ok = !entries.some((entry) => entry.status === "tests-failed");
+  if (entries.length > 0) {
+    const update = await updatePreviewState(context, (state) => ({
+      ...state,
+      apps: {
+        ...state.apps,
+        ...Object.fromEntries(entries.map((entry) => [entry.appSlug, entry])),
+      },
+    }));
+    const result = {
+      ok,
+      state: update.state,
+    };
+
+    if (!result.ok) {
+      throw new Error("Failed to run Cloudflare preview tests.");
+    }
+
+    return result;
+  }
+
+  const result = {
+    ok,
+    state: current.state,
+  };
 
   if (!result.ok) {
     throw new Error("Failed to run Cloudflare preview tests.");
@@ -425,6 +562,7 @@ export const CloudflarePreviewAppEntry = z.object({
   deployDurationMs: z.number().nonnegative().finite().nullable().optional(),
   testDurationMs: z.number().nonnegative().finite().nullable().optional(),
 });
+export type CloudflarePreviewAppEntry = z.infer<typeof CloudflarePreviewAppEntry>;
 
 const CloudflarePreviewState = z.object({
   apps: z.record(z.string().trim().min(1), CloudflarePreviewAppEntry).default({}),
@@ -528,12 +666,6 @@ export type PreviewSemaphoreResourceClient = {
       slug: string;
     }>
   >;
-};
-
-type PreviewLifecycleResult = {
-  ok: boolean;
-  skipped?: boolean;
-  state: CloudflarePreviewState;
 };
 
 export type PreviewAppRuntime = (typeof cloudflarePreviewApps)[CloudflarePreviewAppSlugType];
@@ -759,9 +891,7 @@ async function updateCloudflarePreviewState(params: {
     body: renderCloudflarePreviewPullRequestBody(current.body, nextState),
   });
 
-  return {
-    state: nextState,
-  };
+  return { state: nextState };
 }
 
 function parseCloudflarePreviewState(body: string): CloudflarePreviewState {
@@ -1516,195 +1646,6 @@ function splitRepositoryFullName(repositoryFullName: string) {
   return parts as [string, string];
 }
 
-async function syncPreviewForPullRequest(
-  params: PreviewRuntime & { context: PullRequestPreviewContext },
-): Promise<PreviewLifecycleResult> {
-  const deployResult = await deployPreviewForPullRequest(params);
-  if (!deployResult.ok || deployResult.skipped) {
-    return deployResult;
-  }
-
-  return await testPreviewForPullRequest(params);
-}
-
-async function deployPreviewForPullRequest(
-  params: PreviewRuntime & { context: PullRequestPreviewContext },
-): Promise<PreviewLifecycleResult> {
-  const current = await readCloudflarePreviewState({
-    githubToken: params.context.githubToken,
-    repositoryFullName: params.context.repositoryFullName,
-    pullRequestNumber: params.context.pullRequestNumber,
-  });
-  const selectedApps = await selectPreviewAppsForPullRequest({
-    githubToken: params.context.githubToken,
-    previousState: current.state,
-    pullRequestBaseSha: params.context.pullRequestBaseSha,
-    pullRequestHeadSha: params.context.pullRequestHeadSha,
-    pullRequestNumber: params.context.pullRequestNumber,
-    repositoryFullName: params.context.repositoryFullName,
-  });
-
-  if (selectedApps.length === 0) {
-    return {
-      ok: true,
-      skipped: true,
-      state: current.state,
-    };
-  }
-
-  const environmentConfigLease = await claimEnvironmentConfigLease({
-    createPreviewSemaphoreResourceClient: params.createPreviewSemaphoreResourceClient,
-    leaseMs: defaultPreviewLeaseMs,
-    previousEnvironmentConfigLease: current.state.environmentConfigLease,
-  });
-  const leaseUpdate = await updatePreviewState(params, (state) => ({
-    ...state,
-    environmentConfigLease,
-  }));
-
-  let ok = true;
-  let latestState = leaseUpdate.state;
-  for (const batch of orderPreviewDeployBatches(selectedApps)) {
-    const entries = await mapWithConcurrency(
-      batch,
-      defaultPreviewDeployConcurrency,
-      async (app) => {
-        return await deployPreviewAppWithStatus({
-          app,
-          commandEnvironment: params.commandEnvironment,
-          dopplerConfig: environmentConfigLease.dopplerConfig,
-          pullRequestHeadSha: params.context.pullRequestHeadSha,
-          repositoryRoot: params.repositoryRoot,
-          runUrl: params.context.workflowRunUrl,
-          signal: params.signal,
-        });
-      },
-    );
-    if (entries.some((entry) => entry.status === "deploy-failed")) {
-      ok = false;
-    }
-
-    const update = await updatePreviewState(params, (state) => ({
-      ...state,
-      environmentConfigLease,
-      apps: {
-        ...state.apps,
-        ...Object.fromEntries(entries.map((entry) => [entry.appSlug, entry])),
-      },
-    }));
-    latestState = update.state;
-  }
-
-  return {
-    ok,
-    state: latestState,
-  };
-}
-
-async function testPreviewForPullRequest(
-  params: PreviewRuntime & { context: PullRequestPreviewContext },
-): Promise<PreviewLifecycleResult> {
-  const current = await readCloudflarePreviewState({
-    githubToken: params.context.githubToken,
-    repositoryFullName: params.context.repositoryFullName,
-    pullRequestNumber: params.context.pullRequestNumber,
-  });
-  const environmentConfigLease = current.state.environmentConfigLease;
-  if (environmentConfigLease == null) {
-    return {
-      ok: true,
-      skipped: true,
-      state: current.state,
-    };
-  }
-
-  const testableApps = Object.values(current.state.apps)
-    .filter((entry) => canRunPreviewTests(entry))
-    .filter((entry) => entry.headSha === params.context.pullRequestHeadSha)
-    .map((entry) => cloudflarePreviewApps[entry.appSlug as CloudflarePreviewAppSlugType])
-    .filter((app): app is PreviewAppRuntime => app != null);
-
-  if (testableApps.length === 0) {
-    return {
-      ok: true,
-      skipped: true,
-      state: current.state,
-    };
-  }
-
-  const entries: z.infer<typeof CloudflarePreviewAppEntry>[] = [];
-  // Preview e2e commands are full app-level suites. Run them one at a time so
-  // unrelated app checks do not multiply load against the same preview slot.
-  for (const app of testableApps) {
-    const existingEntry = current.state.apps[app.slug];
-    if (!existingEntry?.publicUrl) {
-      continue;
-    }
-
-    const startedAt = Date.now();
-    console.error(`[preview] test start: ${app.slug}`);
-    const testResult = await runCommandWithRetries({
-      args: [
-        "run",
-        "--project",
-        app.dopplerProject,
-        "--config",
-        environmentConfigLease.dopplerConfig,
-        "--",
-        "env",
-        `${app.previewTestBaseUrlEnvVar}=${existingEntry.publicUrl}`,
-        ...app.previewTestCommandArgs,
-      ],
-      command: "doppler",
-      environment: params.commandEnvironment,
-      maxAttempts: defaultPreviewTestMaxAttempts,
-      retryDelayMs: defaultPreviewTestRetryDelayMs,
-      signal: params.signal,
-      workingDirectory: resolve(params.repositoryRoot, app.appPath),
-    });
-    const testDurationMs = Date.now() - startedAt;
-    console.error(
-      `[preview] test ${testResult.exitCode === 0 ? "passed" : "failed"}: ${app.slug} (${formatDurationMs(testDurationMs)})`,
-    );
-
-    entries.push(
-      CloudflarePreviewAppEntry.parse({
-        ...existingEntry,
-        appDisplayName: app.displayName,
-        appSlug: app.slug,
-        message:
-          testResult.exitCode === 0
-            ? null
-            : commandFailureMessage(testResult, "Preview tests failed after deploy."),
-        runUrl: params.context.workflowRunUrl ?? existingEntry.runUrl ?? null,
-        status: testResult.exitCode === 0 ? "deployed" : "tests-failed",
-        testDurationMs,
-        updatedAt: new Date().toISOString(),
-      }),
-    );
-  }
-
-  const ok = !entries.some((entry) => entry.status === "tests-failed");
-  if (entries.length > 0) {
-    const update = await updatePreviewState(params, (state) => ({
-      ...state,
-      apps: {
-        ...state.apps,
-        ...Object.fromEntries(entries.map((entry) => [entry.appSlug, entry])),
-      },
-    }));
-    return {
-      ok,
-      state: update.state,
-    };
-  }
-
-  return {
-    ok,
-    state: current.state,
-  };
-}
-
 async function cleanupPreviewForPullRequest(
   params: PreviewRuntime & { context: PullRequestPreviewContext },
 ) {
@@ -1766,7 +1707,7 @@ async function cleanupPreviewForPullRequest(
       ok = false;
     }
 
-    const update = await updatePreviewState(params, (state) => ({
+    const update = await updatePreviewState(params.context, (state) => ({
       ...state,
       apps: {
         ...state.apps,
@@ -1790,7 +1731,7 @@ async function cleanupPreviewForPullRequest(
     slug: environmentConfigLease.slug,
     leaseId: environmentConfigLease.leaseId,
   });
-  const update = await updatePreviewState(params, (state) => ({
+  const update = await updatePreviewState(params.context, (state) => ({
     ...state,
     environmentConfigLease: null,
   }));
@@ -2335,13 +2276,11 @@ function matchesPreviewPath(filename: string, patterns: readonly string[]) {
 }
 
 async function updatePreviewState(
-  params: { context: PullRequestPreviewContext },
+  context: PullRequestPreviewContext,
   update: (state: CloudflarePreviewState) => CloudflarePreviewState,
 ) {
   return await updateCloudflarePreviewState({
-    githubToken: params.context.githubToken,
-    pullRequestNumber: params.context.pullRequestNumber,
-    repositoryFullName: params.context.repositoryFullName,
+    ...context,
     update,
   });
 }
