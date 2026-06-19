@@ -8,7 +8,6 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
-  realpathSync,
   statSync,
   writeSync,
 } from "node:fs";
@@ -24,14 +23,10 @@ import {
   type DevServerInfo,
 } from "@iterate-com/shared/alchemy/local-dev-server";
 
-export type LocalOsDevServerTarget =
-  | { baseUrl: string; kind: "live"; port: number; info: DevServerInfo }
-  | { baseUrl: string; kind: "start"; port: number };
-
 export type StartOptions = {
   /** Keep this process attached to the dev server output. */
   attach?: boolean;
-  /** Doppler config to use when entering Doppler. */
+  /** Doppler config to load before starting the dev server. */
   config?: string;
   /** Start in the background and return once the discovery file is published. */
   detach?: boolean;
@@ -39,10 +34,17 @@ export type StartOptions = {
   keepAlive?: boolean;
   /** Port the local OS server must use. */
   port?: number;
-  /** Do not enter Doppler before starting. Intended for already-prepared local envs. */
+  /** Do not load Doppler secrets before starting. Intended for already-prepared local envs. */
   skipDoppler?: boolean;
   /** Maximum time to wait for detached startup. */
   timeoutMs?: number;
+};
+
+type LoadOsDopplerSecretsOptions = {
+  /** Doppler config to load. Defaults to the local apps/os Doppler setup. */
+  config?: string;
+  /** Environment used for the Doppler CLI process. Defaults to process.env. */
+  env?: NodeJS.ProcessEnv;
 };
 
 const APP_ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -64,11 +66,8 @@ export default async function start(options: StartOptions = {}) {
     throw new Error("keepAlive requires detach.");
   }
 
-  if (!options.skipDoppler && !process.env.DOPPLER_CONFIG) {
-    return runInDoppler("start", { ...options, attach, detach, keepAlive, port, timeoutMs });
-  }
-
-  const result = await startDevServer({ attach, detach, port, timeoutMs });
+  const env = loadDevServerEnv(options);
+  const result = await startDevServer({ attach, detach, env, port, timeoutMs });
   if (keepAlive) await keepProcessAlive();
   return result;
 }
@@ -84,13 +83,10 @@ export async function restart(options: StartOptions = {}) {
     throw new Error("keepAlive requires detach.");
   }
 
-  if (!options.skipDoppler && !process.env.DOPPLER_CONFIG) {
-    return runInDoppler("restart", { ...options, attach, detach, keepAlive, port, timeoutMs });
-  }
-
-  assertLocalAlchemyDev();
+  const env = loadDevServerEnv(options);
+  assertLocalAlchemyDev(env);
   await kill();
-  const result = await startDevServer({ attach, detach, port, timeoutMs });
+  const result = await startDevServer({ attach, detach, env, port, timeoutMs });
   if (keepAlive) await keepProcessAlive();
   return result;
 }
@@ -145,10 +141,17 @@ export const localOsDevServer = {
   resolveTarget: resolveLocalOsDevServerTarget,
 };
 
+export const doppler = {
+  loadOsSecrets,
+};
+
 /** Resolve the OS local dev server target that a caller should use. */
 async function resolveLocalOsDevServerTarget(
   env: NodeJS.ProcessEnv = process.env,
-): Promise<LocalOsDevServerTarget> {
+): Promise<
+  | { baseUrl: string; kind: "live"; port: number; info: DevServerInfo }
+  | { baseUrl: string; kind: "start"; port: number }
+> {
   const live = readLiveLocalOsDevServer();
   if (live) {
     return {
@@ -178,10 +181,11 @@ function readLiveLocalOsDevServer() {
 async function startDevServer(input: {
   attach: boolean;
   detach: boolean;
+  env: NodeJS.ProcessEnv;
   port: number | undefined;
   timeoutMs: number;
 }) {
-  assertLocalAlchemyDev();
+  assertLocalAlchemyDev(input.env);
   const shouldStream = !input.detach && input.attach;
   const existing = readLocalDevServerInfo(APP_ROOT, { requireLive: true });
   if (existing) {
@@ -192,13 +196,13 @@ async function startDevServer(input: {
   }
 
   if (shouldStream) {
-    return startAttachedDevServer(input.port);
+    return startAttachedDevServer(input.env, input.port);
   }
 
-  return startDetachedDevServer(input.timeoutMs, input.port);
+  return startDetachedDevServer(input.env, input.timeoutMs, input.port);
 }
 
-async function startAttachedDevServer(port: number | undefined) {
+async function startAttachedDevServer(env: NodeJS.ProcessEnv, port: number | undefined) {
   mkdirSync(ALCHEMY_DIR, { recursive: true });
   const command = "tsx";
   const commandArgs = ["./alchemy.run.ts"];
@@ -209,7 +213,7 @@ async function startAttachedDevServer(port: number | undefined) {
   const child = spawn(command, commandArgs, {
     cwd: APP_ROOT,
     env: {
-      ...process.env,
+      ...env,
       DEV_SERVER_LOG_PATH: LOG_PATH,
       ...(port ? { PORT: String(port) } : {}),
     },
@@ -240,7 +244,11 @@ async function startAttachedDevServer(port: number | undefined) {
   });
 }
 
-async function startDetachedDevServer(timeoutMs: number, port: number | undefined) {
+async function startDetachedDevServer(
+  env: NodeJS.ProcessEnv,
+  timeoutMs: number,
+  port: number | undefined,
+) {
   mkdirSync(ALCHEMY_DIR, { recursive: true });
   const command = "tsx";
   const commandArgs = ["./alchemy.run.ts"];
@@ -251,7 +259,7 @@ async function startDetachedDevServer(timeoutMs: number, port: number | undefine
     cwd: APP_ROOT,
     detached: true,
     env: {
-      ...process.env,
+      ...env,
       DEV_SERVER_LOG_PATH: LOG_PATH,
       ...(port ? { PORT: String(port) } : {}),
     },
@@ -350,23 +358,6 @@ function portFromTemporaryServer(port: number) {
   });
 }
 
-function runInDoppler(action: "restart" | "start", options: StartOptions) {
-  const dopplerArgs = [
-    "run",
-    ...(options.config ? ["--config", options.config] : []),
-    "--",
-    "tsx",
-    "./scripts/dev.ts",
-    action,
-    "--skip-doppler",
-    ...(options.detach ? ["--detach"] : []),
-    ...(options.keepAlive ? ["--keep-alive"] : []),
-    ...(options.port ? ["--port", String(options.port)] : []),
-    ...(options.timeoutMs ? ["--timeout-ms", String(options.timeoutMs)] : []),
-  ];
-  return spawnSyncExitCode("doppler", dopplerArgs);
-}
-
 async function keepProcessAlive() {
   const live = readLiveLocalOsDevServer();
   if (!live) {
@@ -449,13 +440,59 @@ function isPidAlive(pid: number) {
   }
 }
 
-function assertLocalAlchemyDev() {
-  const isLocal = /^(1|true|yes)$/i.test(process.env.ALCHEMY_LOCAL?.trim() || "");
+function loadDevServerEnv(options: Pick<StartOptions, "config" | "skipDoppler">) {
+  if (options.skipDoppler || process.env.DOPPLER_CONFIG) return process.env;
+
+  const dopplerEnv = doppler.loadOsSecrets({ config: options.config });
+  if (!dopplerEnv.ok) {
+    throw new Error(["Could not load OS dev secrets from Doppler.", dopplerEnv.error].join("\n"));
+  }
+
+  return { ...process.env, ...dopplerEnv.secrets };
+}
+
+function loadOsSecrets(options: LoadOsDopplerSecretsOptions = {}) {
+  try {
+    const result = spawnSync(
+      "doppler",
+      [
+        "secrets",
+        "download",
+        "--no-file",
+        "--format",
+        "json",
+        ...(options.config ? ["--config", options.config] : []),
+      ],
+      {
+        cwd: APP_ROOT,
+        encoding: "utf8",
+        env: options.env || process.env,
+        maxBuffer: 10 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+
+    if (result.error) throw result.error;
+    if (result.status !== 0) {
+      return {
+        ok: false as const,
+        error: result.stderr.trim() || `doppler exited with status ${result.status}`,
+      };
+    }
+
+    return { ok: true as const, secrets: JSON.parse(result.stdout) as Record<string, string> };
+  } catch (error) {
+    return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function assertLocalAlchemyDev(env: NodeJS.ProcessEnv) {
+  const isLocal = /^(1|true|yes)$/i.test(env.ALCHEMY_LOCAL?.trim() || "");
   if (!isLocal) {
     throw new Error(
       "Refusing to run the OS dev server because ALCHEMY_LOCAL is not true. " +
-        `Doppler config ${process.env.DOPPLER_CONFIG || "(unset)"} would run ` +
-        `stage ${process.env.ALCHEMY_STAGE || "(unset)"} as a deploy. ` +
+        `Doppler config ${env.DOPPLER_CONFIG || "(unset)"} would run ` +
+        `stage ${env.ALCHEMY_STAGE || "(unset)"} as a deploy. ` +
         "Use doppler run --project os --config <config> -- pnpm deploy for intentional deployments.",
     );
   }
@@ -518,26 +555,6 @@ function logHeader(command: string, commandArgs: string[]) {
   ].join("\n");
 }
 
-function spawnSyncExitCode(command: string, args: string[]) {
-  const result = spawnSync(command, args, {
-    cwd: APP_ROOT,
-    env: process.env,
-    stdio: "inherit",
-  });
-
-  if (result.error) {
-    console.error(result.error);
-    process.exitCode = 1;
-    return { exitCode: 1 };
-  }
-  if (result.signal) {
-    process.kill(process.pid, result.signal);
-  }
-  const exitCode = result.status === null ? 1 : result.status;
-  process.exitCode = exitCode;
-  return { exitCode };
-}
-
 function exitCodeForSignal(signal: NodeJS.Signals | null) {
   if (signal === "SIGINT") return 130;
   if (signal === "SIGTERM") return 143;
@@ -549,19 +566,11 @@ function normalizeBaseUrl(baseUrl: string) {
   return baseUrl.replace(/\/+$/, "");
 }
 
-function isMainModule() {
-  const entry = process.argv[1];
-  if (!entry) return false;
-  return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
-}
-
-if (isMainModule()) {
-  void createCli({
-    ...import.meta,
-    name: "dev",
-    jsonInput: "auto",
-  }).run({
-    logger: yamlTableConsoleLogger,
-    prompts: isAgent() ? undefined : createBuiltInPrompts(),
-  });
-}
+void createCli({
+  ...import.meta,
+  name: "dev",
+  jsonInput: "auto",
+}).run({
+  logger: yamlTableConsoleLogger,
+  prompts: isAgent() ? undefined : createBuiltInPrompts(),
+});

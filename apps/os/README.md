@@ -44,7 +44,7 @@ project-local, such as `/agents/default` or `/integrations/slack`.
 Run from `apps/os`.
 
 ```bash
-pnpm dev                 # local OS/TanStack dev through Doppler
+pnpm dev                 # local OS/TanStack dev with Doppler-backed env
 pnpm typecheck           # TypeScript
 pnpm test                # unit tests
 pnpm e2e -t "OS preview smoke"
@@ -85,10 +85,10 @@ doppler run --project os --config dev -- pnpm e2e
 ```
 
 `pnpm dev` is the shorthand for the local Doppler/Alchemy dev flow. It uses the
-local Doppler setup for `apps/os`; inside Doppler, `DOPPLER_CONFIG` is set to
-values such as `dev` or `dev_<user>`. The dev wrapper writes output to
-`.alchemy/dev-server.log`, so a second terminal can follow it with
-`tail -f .alchemy/dev-server.log`.
+local Doppler setup for `apps/os` and starts Alchemy with that env. The spawned
+dev server gets `DOPPLER_CONFIG` values such as `dev` or `dev_<user>`. The dev
+wrapper writes output to `.alchemy/dev-server.log`, so a second terminal can
+follow it with `tail -f .alchemy/dev-server.log`.
 
 The same local server lifecycle is available through the dev module:
 

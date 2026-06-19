@@ -23,7 +23,10 @@ const AsyncFunction = async function () {}.constructor as new (
 ) => (itx: unknown, vars: Record<string, unknown>, rpcTarget: unknown) => Promise<unknown>;
 
 type RunOptions = {
-  /** Inline script body. Runs with `itx` and `vars` in scope; end with `return ...`. */
+  /**
+   * Inline script body. Runs with `itx` and `vars` in scope; end with `return ...`.
+   * @alias e
+   */
   eval?: string;
   /** Path to a script file with the same body shape as `eval`. */
   file?: string;

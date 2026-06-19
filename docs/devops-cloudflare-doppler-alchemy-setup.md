@@ -111,9 +111,10 @@ doppler run --project os --config preview_2 -- pnpm run destroy
 ## Local Development
 
 Use `pnpm dev` for normal local OS development. It is the attached shorthand
-for the `apps/os/scripts/dev.ts` local lifecycle module, which wraps Doppler
-and Alchemy. Additional args forward to that module, so `pnpm dev status`,
-`pnpm dev attach`, and `pnpm dev restart --detach` are supported.
+for the `apps/os/scripts/dev.ts` local lifecycle module, which loads Doppler
+secrets into the local Alchemy dev server env. Additional args forward to that
+module, so `pnpm dev status`, `pnpm dev attach`, and
+`pnpm dev restart --detach` are supported.
 
 ```bash
 pnpm install

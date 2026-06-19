@@ -1,6 +1,21 @@
+import { execFile } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+
 import { expect, it, vi } from "vitest";
 
 import { claudeMcp } from "./cli.ts";
+
+const execFileAsync = promisify(execFile);
+const APP_ROOT = fileURLToPath(new URL("..", import.meta.url));
+
+it("exposes OS script modules as CLI subcommands", async () => {
+  const { stdout } = await runCli(["--help"]);
+
+  expect(stdout).toContain("artifacts");
+  expect(stdout).toContain("dev");
+  expect(stdout).toContain("itx");
+});
 
 it("prints a shell-quoted Claude command for the resolved local MCP URL", async () => {
   using env = temporaryEnv({
@@ -73,6 +88,17 @@ it("rejects 401 with an admin token hint", async () => {
   void env;
   void fetch;
 });
+
+async function runCli(args: string[]) {
+  return await execFileAsync("pnpm", ["exec", "tsx", "./scripts/cli.ts", ...args], {
+    cwd: APP_ROOT,
+    env: {
+      ...process.env,
+      DOPPLER_CONFIG: process.env.DOPPLER_CONFIG || "dev",
+    },
+    maxBuffer: 1024 * 1024,
+  });
+}
 
 function temporaryEnv(values: Record<string, string | undefined>) {
   const previousValues = new Map<string, string | undefined>();

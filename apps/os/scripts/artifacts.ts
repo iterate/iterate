@@ -79,7 +79,7 @@ export async function seedConfigBase(options: SeedConfigBaseOptions = {}) {
 
   console.info(`Using Cloudflare Artifacts namespace ${resolvedOptions.namespace}`);
   const artifact = await getOrCreateArtifactRepo(resolvedOptions);
-  const token = artifact.token ?? (await createArtifactToken(resolvedOptions));
+  const token = artifact.token || (await createArtifactToken(resolvedOptions));
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "iterate-config-base-"));
   try {
     copyDirSync(holderDir, tmpDir);
@@ -249,7 +249,7 @@ async function getOrCreateArtifactRepo(options: SeedResolvedOptions): Promise<Ar
     name: options.repoName,
   });
   if (created.success) {
-    return readArtifactRepoAccess(created.result ?? created);
+    return readArtifactRepoAccess(created.result || created);
   }
 
   const existing = await artifactsApi(
@@ -261,7 +261,7 @@ async function getOrCreateArtifactRepo(options: SeedResolvedOptions): Promise<Ar
     throw new Error(`Failed to get or create Artifact repo: ${JSON.stringify(existing)}`);
   }
 
-  return readArtifactRepoAccess(existing.result ?? existing);
+  return readArtifactRepoAccess(existing.result || existing);
 }
 
 async function createArtifactToken(options: SeedResolvedOptions): Promise<string> {
@@ -274,7 +274,7 @@ async function createArtifactToken(options: SeedResolvedOptions): Promise<string
     throw new Error(`Failed to create Artifact token: ${JSON.stringify(token)}`);
   }
 
-  return readToken(token.result ?? token);
+  return readToken(token.result || token);
 }
 
 async function verifyArtifactFork(options: SeedResolvedOptions) {
@@ -316,7 +316,7 @@ async function forkArtifactRepo(
     throw new Error(`Failed to fork Artifact repo: ${JSON.stringify(forked)}`);
   }
 
-  return readArtifactRepoAccess(forked.result ?? forked);
+  return readArtifactRepoAccess(forked.result || forked);
 }
 
 async function deleteArtifactRepo(options: SeedResolvedOptions, repoName: string) {
@@ -379,12 +379,12 @@ function readArtifactRepoAccess(value: unknown): ArtifactRepoAccess {
 
   return {
     remote,
-    token: readString(repo, "token") ?? readString(repo, "plaintext"),
+    token: readString(repo, "token") || readString(repo, "plaintext"),
   };
 }
 
 function readToken(value: unknown): string {
-  const token = readString(asRecord(value), "plaintext") ?? readString(asRecord(value), "token");
+  const token = readString(asRecord(value), "plaintext") || readString(asRecord(value), "token");
   if (!token) {
     throw new Error(
       `Cloudflare Artifacts token response did not include plaintext: ${JSON.stringify(value)}`,
@@ -463,7 +463,7 @@ function subscriptionMatches(
 ) {
   if (current.enabled !== true) return false;
   if (current.destination?.queue_id !== queueId) return false;
-  if ([...(current.events ?? [])].sort().join(",") !== [...desired.events].sort().join(",")) {
+  if ([...(current.events || [])].sort().join(",") !== [...desired.events].sort().join(",")) {
     return false;
   }
   return Object.entries(desired.source).every(
@@ -478,7 +478,7 @@ async function findQueueId(options: SetupResolvedOptions, queueName: string) {
       "GET",
       `/queues?page=${page}&per_page=100`,
     );
-    const queues = response.result ?? [];
+    const queues = response.result || [];
     const match = queues.find((queue) => queue.queue_name === queueName);
     if (match) return match.queue_id;
     if (queues.length < 100) return null;
@@ -494,7 +494,7 @@ async function listSubscriptions(options: SetupResolvedOptions) {
       "GET",
       `?page=${page}&per_page=100`,
     );
-    const batch = response.result ?? [];
+    const batch = response.result || [];
     subscriptions.push(...batch);
     if (batch.length < 100) break;
   }
@@ -533,7 +533,7 @@ async function cloudflareApi<T = unknown>(
   };
   if (!response.ok || parsed.success === false) {
     throw new Error(
-      `${method} ${apiPath} failed (${response.status}): ${JSON.stringify(parsed.errors ?? parsed)}`,
+      `${method} ${apiPath} failed (${response.status}): ${JSON.stringify(parsed.errors || parsed)}`,
     );
   }
   return parsed;
