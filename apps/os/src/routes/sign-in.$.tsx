@@ -28,7 +28,7 @@ function SignInRoute() {
 
   function startEmailSignIn() {
     setRedirectingTo("email");
-    signIn({ returnTo });
+    signIn({ returnTo, loginHint: "email" });
   }
 
   function startGoogleSignIn() {
