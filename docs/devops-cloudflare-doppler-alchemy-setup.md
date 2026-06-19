@@ -59,7 +59,7 @@ Examples:
 - `APP_CONFIG_PROJECT_HOSTNAME_BASES` is App Config.
 - `CLOUDFLARE_ACCOUNT_ID` is Deployment Config.
 - `CLOUDFLARE_API_TOKEN` is Deployment Config.
-- `OS_ARTIFACTS_NAMESPACE` (read by `apps/os/scripts/artifacts.ts`)
+- `OS_ARTIFACTS_NAMESPACE` (read by `apps/os/scripts/cli.ts`)
   is Deployment Config.
 
 ## Cloudflare Accounts

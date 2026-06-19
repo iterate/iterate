@@ -55,7 +55,7 @@
     "oxlint": "^1.50.0",
     "playwright": "1.60.0",
     "skills": "^1.4.5",
-    "trpc-cli": "0.15.0",
+    "trpc-cli": "https://pkg.pr.new/mmkal/trpc-cli@211",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   },
