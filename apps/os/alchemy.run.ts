@@ -167,6 +167,10 @@ const env: Record<string, string | undefined> = {
     process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID ?? process.env.ITERATE_OAUTH_CLIENT_ID,
   APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET:
     process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET ?? process.env.ITERATE_OAUTH_CLIENT_SECRET,
+  APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED:
+    process.env.APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED ??
+    process.env.VITE_ENABLE_EMAIL_OTP_SIGNIN ??
+    (process.env.ALCHEMY_STAGE?.startsWith("dev") ? "true" : undefined),
   APP_CONFIG_ITERATE_AUTH__JWKS: await resolveStaticAuthJwks(resolvedAuthIssuer),
   APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN:
     process.env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN ?? process.env.ITERATE_AUTH_SERVICE_TOKEN,

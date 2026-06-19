@@ -123,7 +123,13 @@ app.all("*", (c) =>
 );
 
 export function preserveOAuthResourceRedirect(request: Request, response: Response) {
-  return preserveRedirectSearchParams(request, response, [OAUTH_RESOURCE_PARAMETER]);
+  const requestUrl = new URL(request.url);
+  const paramNames = [OAUTH_RESOURCE_PARAMETER];
+  const loginHint = requestUrl.searchParams.get("login_hint");
+  if (loginHint === "email" || loginHint === "google") {
+    paramNames.push("login_hint");
+  }
+  return preserveRedirectSearchParams(request, response, paramNames);
 }
 
 function preserveRedirectSearchParams(
