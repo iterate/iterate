@@ -1,6 +1,3 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { fileURLToPath } from "node:url";
 import type { Page } from "@playwright/test";
 import { z } from "zod/v4";
 import {
@@ -11,6 +8,7 @@ import {
   type IterateAuthAccessTokenOrganizationClaim,
   type IterateAuthProjectClaim,
 } from "@iterate-com/shared/auth-claims";
+import { loadOsDopplerSecrets } from "../../apps/os/scripts/doppler.ts";
 import { withItx } from "../../apps/os/src/itx/client.ts";
 
 type ForgePrivateJwk = JsonWebKey & {
@@ -26,9 +24,6 @@ type OsPlaywrightAuthConfig = {
 };
 
 type OsPlaywrightAuthEnv = z.infer<typeof OsPlaywrightAuthEnv>;
-
-const execFileAsync = promisify(execFile);
-const OS_APP_DIR = fileURLToPath(new URL("../../apps/os", import.meta.url));
 
 const ForgePrivateJwkSchema = z
   .looseObject({
@@ -297,23 +292,6 @@ async function loadOsPlaywrightAuthEnv(): Promise<OsPlaywrightAuthEnv> {
       dopplerEnv.error,
     ].join("\n\n"),
   );
-}
-
-async function loadOsDopplerSecrets() {
-  try {
-    const { stdout } = await execFileAsync(
-      "doppler",
-      ["secrets", "download", "--no-file", "--format", "json"],
-      {
-        cwd: OS_APP_DIR,
-        env: process.env,
-        maxBuffer: 10 * 1024 * 1024,
-      },
-    );
-    return { ok: true as const, secrets: JSON.parse(stdout) as Record<string, string> };
-  } catch (error) {
-    return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
-  }
 }
 
 async function signJwt(input: {

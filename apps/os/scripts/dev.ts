@@ -23,6 +23,7 @@ import {
   releaseLocalDevServerInfo,
   type DevServerInfo,
 } from "@iterate-com/shared/alchemy/local-dev-server";
+import { loadOsDopplerSecrets } from "./doppler.ts";
 
 export type LocalOsDevServerTarget =
   | { baseUrl: string; kind: "live"; port: number; info: DevServerInfo }
@@ -434,36 +435,12 @@ function isPidAlive(pid: number) {
 function loadDevServerEnv(options: Pick<StartOptions, "config" | "skipDoppler">) {
   if (options.skipDoppler || process.env.DOPPLER_CONFIG) return process.env;
 
-  const result = spawnSync(
-    "doppler",
-    [
-      "secrets",
-      "download",
-      "--no-file",
-      "--format",
-      "json",
-      ...(options.config ? ["--config", options.config] : []),
-    ],
-    {
-      cwd: APP_ROOT,
-      encoding: "utf8",
-      env: process.env,
-      maxBuffer: 10 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-
-  if (result.error) throw result.error;
-  if (result.status !== 0) {
-    throw new Error(
-      [
-        "Could not load OS dev secrets from Doppler.",
-        result.stderr.trim() || `doppler exited with status ${result.status}`,
-      ].join("\n"),
-    );
+  const dopplerEnv = loadOsDopplerSecrets({ config: options.config });
+  if (!dopplerEnv.ok) {
+    throw new Error(["Could not load OS dev secrets from Doppler.", dopplerEnv.error].join("\n"));
   }
 
-  return { ...process.env, ...(JSON.parse(result.stdout) as Record<string, string>) };
+  return { ...process.env, ...dopplerEnv.secrets };
 }
 
 function assertLocalAlchemyDev(env: NodeJS.ProcessEnv) {
