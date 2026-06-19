@@ -30,6 +30,7 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "scripts/artifacts.ts",
       "scripts/cli.ts",
       "scripts/dev.ts",
+      "scripts/itx.ts",
       "sqlfu.config.ts",
       "src/durable-objects/codemode-session.vitest.config.ts",
       "src/durable-objects/codemode-session-test-entry.ts",
