@@ -114,6 +114,8 @@ export function ItxRepl({
             {entries.map((entry, index) => (
               <div
                 key={index}
+                data-testid="itx-repl-entry"
+                data-status={entry.status}
                 className={
                   entry.status === "error"
                     ? "flex flex-col gap-2 border-l-2 border-destructive/50 bg-destructive/5 py-2 pr-3 pl-3"
@@ -130,14 +132,24 @@ export function ItxRepl({
                   />
                 ) : null}
                 {entry.status === "success" ? (
-                  <ReplCollapsibleSerializedBlock data={entry.result} title="Result" />
+                  <>
+                    <ReplCollapsibleSerializedBlock data={entry.result} title="Result" />
+                    <pre className="sr-only" data-testid="itx-repl-result-json">
+                      {entry.output}
+                    </pre>
+                  </>
                 ) : (
-                  <ReplCollapsibleCodeBlock
-                    code={entry.output}
-                    language={entry.outputLanguage}
-                    title="Error"
-                    variant="error"
-                  />
+                  <>
+                    <ReplCollapsibleCodeBlock
+                      code={entry.output}
+                      language={entry.outputLanguage}
+                      title="Error"
+                      variant="error"
+                    />
+                    <pre className="sr-only" data-testid="itx-repl-error">
+                      {entry.output}
+                    </pre>
+                  </>
                 )}
               </div>
             ))}
@@ -153,18 +165,20 @@ export function ItxRepl({
                   {runButtonLabel}
                 </Button>
               </ReplPromptRow>
-              <SourceCodeBlock
-                code={code}
-                className={`${replCodeBlockClassName} min-h-24`}
-                codeMirrorExtensions={typeScriptExtensions.extensions}
-                editable
-                language="typescript"
-                onChange={onChangeCode}
-                onModEnter={onRun}
-                plainChrome
-                showCopyButton={false}
-                showLineNumbers={false}
-              />
+              <div data-testid="itx-repl-editor">
+                <SourceCodeBlock
+                  code={code}
+                  className={`${replCodeBlockClassName} min-h-24`}
+                  codeMirrorExtensions={typeScriptExtensions.extensions}
+                  editable
+                  language="typescript"
+                  onChange={onChangeCode}
+                  onModEnter={onRun}
+                  plainChrome
+                  showCopyButton={false}
+                  showLineNumbers={false}
+                />
+              </div>
               <div ref={bottomRef} />
             </div>
           </div>
