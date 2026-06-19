@@ -3,9 +3,6 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "bin": {
-    "iterate-app-cli": "./bin/iterate-app-cli.js"
-  },
   "exports": {
     "./config": "./src/config.ts",
     "./evlog": "./src/evlog/with-evlog.ts",
@@ -17,7 +14,6 @@
     "./alchemy/artifacts": "./src/alchemy/artifacts.ts",
     "./alchemy/iterate-app": "./src/alchemy/iterate-app.ts",
     "./alchemy/local-dev-server": "./src/alchemy/local-dev-server.ts",
-    "./apps/cli": "./src/apps/cli.ts",
     "./apps/internal-router-contract": "./src/apps/internal-router-contract.ts",
     "./test-helpers": "./src/test-helpers/index.ts",
     "./test-support/vitest-e2e": "./src/test-support/vitest-e2e/index.ts",
@@ -75,7 +71,6 @@
     "deploy:durable-object-utils:e2e": "sh -c 'stage=\"${ALCHEMY_STAGE:-do-utils-e2e}\"; ALCHEMY_STAGE=\"$stage\" pnpm exec alchemy deploy ./src/durable-object-utils/e2e/alchemy.run.ts --stage \"$stage\"'"
   },
   "dependencies": {
-    "@clack/prompts": "^1.2.0",
     "@orpc/client": "1.13.14",
     "@orpc/contract": "1.13.14",
     "@orpc/server": "1.13.14",
@@ -88,12 +83,10 @@
     "minimatch": "^10.1.1",
     "nitro": "3.0.260311-beta",
     "react": "^19.2.4",
-    "trpc-cli": "0.15.0",
     "tsx": "^4.21.0",
     "type-fest": "^5.5.0",
     "typeid-js": "^1.2.0",
     "vite": "7.3.1",
-    "yaml": "^2.8.2",
     "zod": "^4.1.11"
   },
   "devDependencies": {

@@ -49,7 +49,7 @@ array).
 - Ingress / routing: `project-host-routing.ts`, worker entrypoints,
   `project-platform-host-routing.ts`, `project-durable-object.ts`
 - oRPC context, `auth.ts`, UI (`settings`, `app-sidebar`, project list)
-- `packages/iterate/src/os/claude-mcp.ts`, `apps/os/scripts/sync-auth-clients.ts`
+- `apps/os/scripts/cli.ts` (`claude-mcp`), `apps/os/scripts/sync-auth-clients.ts`
 - `scripts/preview/preview.ts` parse helpers
 - Tests: replace array fixtures with a single string
 - Doppler: migrate all `os` configs from JSON array to string (prd, preview*N,

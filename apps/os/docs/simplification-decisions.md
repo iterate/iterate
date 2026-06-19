@@ -77,9 +77,6 @@ OS no longer imports anything from `@iterate-com/shared/apps/*`:
   namespace for CLI discovery and browser public-config bootstrap. That surface
   has since been removed from OS; current operator work uses `pnpm cli itx ...`
   and `/api/itx`.
-- **Deliberate exception:** `scripts/cli.ts` keeps using the shared CLI
-  harness (`@iterate-com/shared/apps/cli`) — it is cross-app tooling, not
-  runtime code, and inlining it would be bloat, not simplification.
 - Dropped `externalEgressProxy` from the config schema: nothing in OS consumed
   it and no Doppler config sets it (checked prd).
 
@@ -128,7 +125,7 @@ before this PR. Rotate those secrets.
 
 The leak was in the old shared app internal router helper. OS's inline
 `__internal` router already returns a static `{ runtime: "workerd" }`, and
-semaphore now implements the same static debug response in its local router.
+semaphore now implements the same static debug response in the app worker.
 
 ### 7. Preview smoke test: real agent conversation end to end (2026-06-10)
 

@@ -171,8 +171,9 @@ The working recipe to browse OS as a minted identity:
 
 ```bash
 # 1. create a project via the operator path (admin API secret)
-(cd apps/os && doppler run --project os --config dev -- pnpm cli --base-url http://localhost:<port> \
-  rpc projects create --slug my-proj      # → note the returned "id"
+(cd apps/os && doppler run --project os --config dev -- pnpm cli itx run \
+  --base-url http://localhost:<port> \
+  --eval 'return await itx.projects.create({ slug: "my-proj" })' # note the returned "id"
 )
 
 # 2. mint with BOTH org and project claims (the org can be any made-up id —

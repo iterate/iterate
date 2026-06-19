@@ -1,7 +1,6 @@
 import { ORPCError } from "@orpc/server";
 import { env } from "cloudflare:workers";
 import { getPublicConfig } from "@iterate-com/shared/config";
-import { parseRouter, type AnyRouter } from "trpc-cli";
 import { z } from "zod";
 import packageJson from "../../package.json" with { type: "json" };
 import { AppConfig } from "~/config.ts";
@@ -200,8 +199,7 @@ const releaseResourceProcedure = semaphore.resources.release
 
 /**
  * The `__internal.*` subtree (served at `/api/__internal/*`) is the operator
- * namespace the `iterate` CLI relies on: `pnpm cli rpc` discovers procedures
- * through `trpcCliProcedures`, and deploy tooling probes `health`.
+ * namespace for deployment probes and browser public-config bootstrap.
  */
 const internalRouter = semaphore.__internal.router({
   health: semaphore.__internal.health.handler(() => ({
@@ -216,9 +214,6 @@ const internalRouter = semaphore.__internal.router({
   ),
   // UNAUTHENTICATED route — never return secrets here (see the os incident).
   debug: semaphore.__internal.debug.handler(() => ({ runtime: "workerd" })),
-  trpcCliProcedures: semaphore.__internal.trpcCliProcedures.handler(() => ({
-    procedures: listCliProcedures(),
-  })),
   refreshRegistry: semaphore.__internal.refreshRegistry.handler(() => {
     throw new ORPCError("NOT_IMPLEMENTED", {
       message: "__internal.refreshRegistry is not implemented for semaphore",
@@ -239,11 +234,3 @@ export const appRouter = semaphore.router({
     release: releaseResourceProcedure,
   }),
 });
-
-// Hoisted + cast so the handler above can list the finished router without a
-// circular type inference on `appRouter`.
-function listCliProcedures(): unknown[] {
-  return parseRouter({ router: appRouter as AnyRouter }).filter(
-    (entry) => entry[0] !== "__internal.trpcCliProcedures",
-  );
-}

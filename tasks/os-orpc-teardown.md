@@ -72,10 +72,9 @@ rollback plan.
 - [ ] e2e `test-support/os-client.ts` helpers (`createProject`,
       `readProjectStreamUntil`, `streamProjectEventsUntil`) onto `connectItx`
       / `ItxStream.subscribe`; migrate the e2e files
-- [ ] CLI: `pnpm cli itx run <file|-e>` wrapping `POST /api/itx/run`
+- [ ] CLI: `pnpm cli itx run <file|--eval>` wrapping `POST /api/itx/run`
       (identical from curl), `pnpm cli itx call <path...>` sugar; discovery =
-      `itx.describe()`; `packages/shared/src/apps/cli.ts` untouched
-      (auth/semaphore still use it)
+      `itx.describe()`
 - [ ] MCP: `run_itx_code` tool on the project MCP server (depends on the itx
       processor task)
 

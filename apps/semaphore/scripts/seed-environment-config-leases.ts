@@ -1,21 +1,19 @@
-import { z } from "zod";
 import { previewInternals } from "../../../scripts/preview/preview.ts";
 import { createSemaphoreClient } from "../src/contract.ts";
 
 const DEFAULT_SEMAPHORE_BASE_URL = "https://semaphore.iterate.com";
 const { syncPreviewInventory } = previewInternals;
 
-export const SeedEnvironmentConfigLeasesInput = z
-  .object({
-    semaphoreBaseUrl: z.string().trim().url().optional(),
-  })
-  .default({});
-
-export type SeedEnvironmentConfigLeasesInput = z.infer<typeof SeedEnvironmentConfigLeasesInput>;
+export type SeedEnvironmentConfigLeasesInput = {
+  semaphoreBaseUrl?: string;
+};
 
 export async function seedEnvironmentConfigLeases(input: SeedEnvironmentConfigLeasesInput) {
   const semaphoreBaseUrl =
-    input.semaphoreBaseUrl ?? process.env.SEMAPHORE_BASE_URL?.trim() ?? DEFAULT_SEMAPHORE_BASE_URL;
+    input.semaphoreBaseUrl?.trim() ||
+    process.env.SEMAPHORE_BASE_URL?.trim() ||
+    DEFAULT_SEMAPHORE_BASE_URL;
+  new URL(semaphoreBaseUrl);
   const semaphoreApiToken =
     process.env.SEMAPHORE_API_TOKEN?.trim() ?? process.env.APP_CONFIG_SHARED_API_SECRET?.trim();
   if (!semaphoreApiToken) {

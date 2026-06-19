@@ -25,7 +25,7 @@ pass `--base-url http://localhost:<port>` using the port in
 
 ```bash
 doppler run --project os --config prd -- pnpm cli itx run \
-  -e 'return await itx.projects.create({ slug: `agent-smoke-${Date.now()}` })'
+  --eval 'return await itx.projects.create({ slug: `agent-smoke-${Date.now()}` })'
 ```
 
 Note the returned `id` and `slug`.
@@ -77,7 +77,7 @@ await itx.chat.sendMessage({ message: "PONG" });
 
 ```bash
 doppler run --project os --config prd -- pnpm cli itx run \
-  -e 'return await itx.projects.remove({ id: "<prj_id>" })'
+  --eval 'return await itx.projects.remove({ id: "<prj_id>" })'
 ```
 
 ## Gotchas

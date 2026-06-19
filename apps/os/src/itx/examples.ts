@@ -6,7 +6,7 @@
 //
 //   browser         the REPL (compileBrowserReplFunction wraps the body)
 //   node            AsyncFunction("itx", "vars", code) on a Cap'n Web stub
-//   cli             `pnpm cli itx run -e <code>` (same Node eval, spawned)
+//   cli             `pnpm cli itx run --eval <code>` (same Node eval, spawned)
 //   dynamic-worker  POST /api/itx/run with `async ({ itx, vars }) => { code }`
 //   project-worker  the body baked into the project repo's worker.ts,
 //                   executed against this.itx.context
