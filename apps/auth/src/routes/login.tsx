@@ -47,9 +47,11 @@ function RouteComponent() {
   const { emailOtpEnabled, session } = Route.useLoaderData();
   const signedInSession = session && isOAuthProviderFlowSearch(search) ? session : null;
   const loginHint =
-    !signedInSession && (search.login_hint === "email" || search.login_hint === "google")
+    !signedInSession && search.login_hint === "email" && emailOtpEnabled
       ? search.login_hint
-      : undefined;
+      : !signedInSession && search.login_hint === "google"
+        ? search.login_hint
+        : undefined;
 
   return (
     <div className="flex min-h-screen items-center justify-center p-4">
@@ -163,10 +165,10 @@ function LoginActions({
   const [isHydrated, setIsHydrated] = useState(false);
   const consumedGoogleHint = useRef(false);
   const { isPending: googleSignInPending, mutate: signInWithGoogle } = useMutation({
-    mutationFn: () =>
+    mutationFn: async () =>
       authClient.signIn.social({
         provider: "google",
-        callbackURL: redirectTo,
+        callbackURL: await getPostLoginRedirectUrl(redirectTo),
       }),
   });
 

@@ -527,8 +527,8 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
     url.searchParams.set("nonce", nonce);
     url.searchParams.set("code_challenge", challenge);
     url.searchParams.set("code_challenge_method", "S256");
-    const loginHint = normalizeLoginHint(requestURL.searchParams.get("login_hint"));
-    if (loginHint) {
+    const loginHint = requestURL.searchParams.get("login_hint");
+    if (loginHint === "email" || loginHint === "google") {
       url.searchParams.set("login_hint", loginHint);
     }
 
@@ -813,10 +813,6 @@ function localLoopbackCanonicalLoginURL(requestURL: URL, redirectURI: string) {
   if (!isLocalLoopbackHostname(redirectURL.hostname)) return null;
 
   return new URL(`${requestURL.pathname}${requestURL.search}`, redirectURL.origin);
-}
-
-function normalizeLoginHint(value: string | null) {
-  return value === "email" || value === "google" ? value : null;
 }
 
 function isLocalLoopbackHostname(hostname: string) {

@@ -26,9 +26,14 @@ function SignInRoute() {
   const returnTo = safeRedirectPath(redirectUrl);
   const [redirectingTo, setRedirectingTo] = useState<"email" | "google" | null>(null);
 
-  function startSignIn(loginHint: "email" | "google") {
-    setRedirectingTo(loginHint);
-    signIn({ returnTo, loginHint });
+  function startEmailSignIn() {
+    setRedirectingTo("email");
+    signIn({ returnTo });
+  }
+
+  function startGoogleSignIn() {
+    setRedirectingTo("google");
+    signIn({ returnTo, loginHint: "google" });
   }
 
   return (
@@ -45,7 +50,7 @@ function SignInRoute() {
             variant="outline"
             size="lg"
             disabled={redirectingTo !== null}
-            onClick={() => startSignIn("email")}
+            onClick={startEmailSignIn}
           >
             <MailIcon className="size-4" />
             {redirectingTo === "email" ? "Redirecting..." : "Sign in with email"}
@@ -55,7 +60,7 @@ function SignInRoute() {
             variant="outline"
             size="lg"
             disabled={redirectingTo !== null}
-            onClick={() => startSignIn("google")}
+            onClick={startGoogleSignIn}
           >
             <GoogleIcon />
             {redirectingTo === "google" ? "Redirecting..." : "Sign in with Google"}
