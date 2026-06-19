@@ -177,13 +177,27 @@ function LoginActions({
   }, []);
 
   useEffect(() => {
+    let googleHintAlreadyConsumed = false;
+    try {
+      googleHintAlreadyConsumed =
+        sessionStorage.getItem("iterate-auth-google-login-hint") === window.location.href;
+    } catch {
+      googleHintAlreadyConsumed = false;
+    }
+
     if (
       isHydrated &&
       loginHint === "google" &&
       !consumedGoogleHint.current &&
+      !googleHintAlreadyConsumed &&
       !googleSignInPending
     ) {
       consumedGoogleHint.current = true;
+      try {
+        sessionStorage.setItem("iterate-auth-google-login-hint", window.location.href);
+      } catch {
+        // Ignore storage failures; the in-memory ref still prevents same-mount retries.
+      }
       signInWithGoogle();
     }
   }, [googleSignInPending, isHydrated, loginHint, signInWithGoogle]);

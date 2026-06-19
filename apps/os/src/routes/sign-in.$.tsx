@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
+import { extractPublicConfigSchema } from "@iterate-com/shared/config";
 import { z } from "zod";
 import { MailIcon } from "lucide-react";
 import { useAuthClient } from "@iterate-com/auth/client";
@@ -12,18 +13,27 @@ import {
   CardTitle,
 } from "@iterate-com/ui/components/card";
 import { Separator } from "@iterate-com/ui/components/separator";
+import { AppConfig } from "../config.ts";
+import { getPublicConfigServerFn } from "~/lib/public-route-config.ts";
+
+const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
 
 export const Route = createFileRoute("/sign-in/$")({
   validateSearch: z.looseObject({
     redirect_url: z.string().optional(),
+  }),
+  loader: async () => ({
+    config: PublicConfigSchema.parse(JSON.parse(await getPublicConfigServerFn())),
   }),
   component: SignInRoute,
 });
 
 function SignInRoute() {
   const { signIn } = useAuthClient();
+  const { config } = Route.useLoaderData();
   const { redirect_url: redirectUrl } = Route.useSearch();
   const returnTo = safeRedirectPath(redirectUrl);
+  const emailOtpEnabled = config.iterateAuth?.emailOtpEnabled ?? false;
   const [redirectingTo, setRedirectingTo] = useState<"email" | "google" | null>(null);
 
   function startEmailSignIn() {
@@ -45,16 +55,18 @@ function SignInRoute() {
         </CardHeader>
         <Separator />
         <CardContent className="space-y-3 pt-6">
-          <Button
-            className="w-full border-border bg-background text-foreground shadow-sm transition-colors hover:bg-muted"
-            variant="outline"
-            size="lg"
-            disabled={redirectingTo !== null}
-            onClick={startEmailSignIn}
-          >
-            <MailIcon className="size-4" />
-            {redirectingTo === "email" ? "Redirecting..." : "Sign in with email"}
-          </Button>
+          {emailOtpEnabled ? (
+            <Button
+              className="w-full border-border bg-background text-foreground shadow-sm transition-colors hover:bg-muted"
+              variant="outline"
+              size="lg"
+              disabled={redirectingTo !== null}
+              onClick={startEmailSignIn}
+            >
+              <MailIcon className="size-4" />
+              {redirectingTo === "email" ? "Redirecting..." : "Sign in with email"}
+            </Button>
+          ) : null}
           <Button
             className="w-full"
             variant="outline"
