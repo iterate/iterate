@@ -4,7 +4,7 @@
 // itx.browser.test.ts (vitest's browser project); everything else is here.
 //
 //   node            AsyncFunction over a Cap'n Web stub in this process
-//   cli             `pnpm cli itx run --eval …` (a real spawned CLI)
+//   cli             `tsx ./scripts/cli.ts itx run --eval …` (a real spawned CLI)
 //   dynamic-worker  POST /api/itx/run with the body wrapped as a function
 //   project-worker  the body baked into the project's repo
 //                   worker.ts, invoked via itx.worker (this.itx.context)
@@ -97,7 +97,9 @@ async function runInCli(input: {
   const { stdout } = await execFileAsync(
     "pnpm",
     [
-      "cli",
+      "exec",
+      "tsx",
+      "./scripts/cli.ts",
       "itx",
       "run",
       "--eval",
