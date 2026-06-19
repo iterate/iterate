@@ -41,6 +41,30 @@ describe("iterate auth login", () => {
     expect(location.searchParams.get("state")).toBeTruthy();
   });
 
+  it("forwards valid login hints to the auth worker authorization request", async () => {
+    const handler = testAuthHandler(config);
+
+    const response = await handler(
+      new Request("http://localhost:65455/api/iterate-auth/login?login_hint=google"),
+    );
+
+    expect(response.status).toBe(302);
+    const location = new URL(response.headers.get("location") ?? "");
+    expect(location.searchParams.get("login_hint")).toBe("google");
+  });
+
+  it("drops unknown login hints from the auth worker authorization request", async () => {
+    const handler = testAuthHandler(config);
+
+    const response = await handler(
+      new Request("http://localhost:65455/api/iterate-auth/login?login_hint=github"),
+    );
+
+    expect(response.status).toBe(302);
+    const location = new URL(response.headers.get("location") ?? "");
+    expect(location.searchParams.get("login_hint")).toBeNull();
+  });
+
   it("resolves relative return paths against the configured public return origin", async () => {
     const handler = testAuthHandler({
       ...config,

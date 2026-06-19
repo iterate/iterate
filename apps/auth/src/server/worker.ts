@@ -123,7 +123,12 @@ app.all("*", (c) =>
 );
 
 export function preserveOAuthResourceRedirect(request: Request, response: Response) {
-  return preserveRedirectSearchParams(request, response, [OAUTH_RESOURCE_PARAMETER]);
+  const requestUrl = new URL(request.url);
+  const paramNames = [OAUTH_RESOURCE_PARAMETER];
+  if (isLoginHint(requestUrl.searchParams.get("login_hint"))) {
+    paramNames.push("login_hint");
+  }
+  return preserveRedirectSearchParams(request, response, paramNames);
 }
 
 function preserveRedirectSearchParams(
@@ -157,6 +162,10 @@ function preserveRedirectSearchParams(
     statusText: response.statusText,
     headers,
   });
+}
+
+function isLoginHint(value: string | null) {
+  return value === "email" || value === "google";
 }
 
 export default app;

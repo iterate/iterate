@@ -38,6 +38,8 @@ type LogoutOptions = {
 type LoginOptions = {
   /** Destination after OAuth callback. Defaults to the current origin. */
   returnTo?: string;
+  /** Preferred sign-in method for the auth server login page. */
+  loginHint?: "email" | "google";
 };
 
 type RefreshOptions = {
@@ -86,6 +88,9 @@ export function createIterateAuthClient(config: IterateAuthClientConfig = {}) {
       const url = new URL(`${base}/login`, window.location.origin);
       if (options.returnTo) {
         url.searchParams.set("return_to", options.returnTo);
+      }
+      if (options.loginHint) {
+        url.searchParams.set("login_hint", options.loginHint);
       }
       window.location.href = url.toString();
     },
