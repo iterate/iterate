@@ -1,5 +1,56 @@
 # Minimal ITX v2
 
+The public Cap'n Web endpoint exports one unauthenticated target:
+
+```ts
+using unauthenticatedItx = connectItx({ baseUrl });
+using itx = unauthenticatedItx.authenticate({
+  auth: { type: "token", token },
+  projectId: "prj_ref",
+});
+```
+
+`authenticate()` is the only way to get the real ITX capability. Its input is
+also the shape used by platform-provided dynamic worker bindings:
+
+```ts
+type ItxConnectInput = {
+  auth:
+    | { type: "token"; token: string }
+    | { type: "from-server-cookie" }
+    | { type: "trusted-internal"; token: string };
+  projectId?: string;
+  path?: string;
+};
+```
+
+Omitting `projectId` returns the authenticated global ITX. Passing `projectId`
+with no `path` returns the project root ITX. Passing a path such as
+`/agents/ada` returns that context's ITX.
+
+Browser-style auth can be simulated with a fake login endpoint:
+
+```bash
+curl -i -X POST http://127.0.0.1:8789/api/login --data alice-token
+```
+
+That writes an HttpOnly cookie. Browser callers then connect to `/api/itx` and
+authenticate with:
+
+```ts
+using itx = unauthenticatedItx.authenticate({
+  auth: { type: "from-server-cookie" },
+  projectId: "prj_ref",
+});
+```
+
+Dynamic workers receive an `env.ITX` binding whose props include a trusted
+internal auth credential. Inside loaded code:
+
+```ts
+const itx = await env.ITX.authenticate();
+```
+
 Run the local Miniflare-backed worker and test it:
 
 ```bash

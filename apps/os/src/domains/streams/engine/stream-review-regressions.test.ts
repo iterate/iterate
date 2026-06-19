@@ -52,7 +52,7 @@ class CounterProcessor extends StreamProcessor<CounterContract, CounterDeps> {
   }
   protected override processEvent(
     args: Parameters<StreamProcessor<CounterContract>["processEvent"]>[0],
-  ): void {
+  ): undefined {
     this.deps.onEvent?.(args.event.payload.amount);
   }
   protected override async processEventBatch(

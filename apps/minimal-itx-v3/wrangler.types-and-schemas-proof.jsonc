@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "minimal-itx-v3-types-and-schemas-proof",
+  "main": "types-and-schemas.wrangler-proof.worker.ts",
+  "compatibility_date": "2026-05-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [{ "name": "PROOF_STREAM", "class_name": "ProofStreamDurableObject" }],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ProofStreamDurableObject"],
+    },
+  ],
+}

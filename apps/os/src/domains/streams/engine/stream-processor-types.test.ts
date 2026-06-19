@@ -78,7 +78,7 @@ class TypeInferenceProcessor extends StreamProcessor<TypeInferenceProcessorContr
 
   protected override processEvent(
     args: Parameters<StreamProcessor<TypeInferenceProcessorContract>["processEvent"]>[0],
-  ): void {
+  ): undefined {
     expectTypeOf(args.previousState).toEqualTypeOf<TypeInferenceProcessorState>();
     expectTypeOf(args.state).toEqualTypeOf<TypeInferenceProcessorState>();
 

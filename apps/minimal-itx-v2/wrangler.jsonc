@@ -1,6 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "minimal-itx-v2",
+  "account_id": "376ef7ed81b0573f93524de763666c15",
   "main": "src/worker.ts",
   "compatibility_date": "2026-05-01",
   "compatibility_flags": ["nodejs_compat"],
@@ -26,6 +27,17 @@
       ],
     },
   ],
+  "artifacts": [
+    {
+      "binding": "ARTIFACTS",
+      "namespace": "minimal-itx-v2-repos",
+      "remote": true,
+    },
+  ],
+  "vars": {
+    "ARTIFACTS_ACCOUNT_ID": "376ef7ed81b0573f93524de763666c15",
+    "ARTIFACTS_NAMESPACE": "minimal-itx-v2-repos",
+  },
   // Dynamic capabilities and codemode build and run workers from addresses at runtime.
   "worker_loaders": [{ "binding": "LOADER" }],
   "dev": {

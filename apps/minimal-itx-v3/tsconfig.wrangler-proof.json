@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ESNext", "ESNext.Disposable", "DOM"],
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": false,
+    "types": ["node", "@cloudflare/workers-types"]
+  },
+  "files": [
+    "types-and-schemas.ts",
+    "types-and-schemas.wrangler-proof.d.ts",
+    "types-and-schemas.wrangler-proof.type.test.ts",
+    "types-and-schemas.wrangler-proof.worker.ts"
+  ]
+}
