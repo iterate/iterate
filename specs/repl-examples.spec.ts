@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import { EXAMPLE_CASES } from "../apps/os/src/itx/e2e/example-cases.ts";
 import { ITX_EXAMPLES } from "../apps/os/src/itx/examples.ts";
 import { test } from "./test-support/test.ts";
@@ -13,38 +13,34 @@ const REPL_EXAMPLES = Object.entries(EXAMPLE_CASES).map(([id, exampleCase]) => {
 });
 
 test.describe("itx REPL catalogue examples", () => {
-  test.setTimeout(300_000);
+  for (const { example, exampleCase } of REPL_EXAMPLES) {
+    test(`runs "${example.id}" through the project REPL`, async ({ helpers, page }) => {
+      await using fixture = await helpers.createFixture(`repl-${example.id}`);
+      await page.goto(`/projects/${fixture.project.slug}/repl`);
+      await page.getByRole("button", { name: "Run" }).waitFor();
+      await page.getByTestId("itx-repl-editor").locator(".cm-content").waitFor();
 
-  test("runs every example-cases snippet through the project REPL", async ({ helpers, page }) => {
-    await using fixture = await helpers.createFixture("repl-examples");
-    await page.goto(`/projects/${fixture.project.slug}/repl`);
-    await page.getByRole("button", { name: "Run" }).waitFor();
-    await page.getByTestId("itx-repl-editor").locator(".cm-content").waitFor();
+      const ctx = {
+        marker: `playwright-${example.id}-${crypto.randomUUID().slice(0, 8)}`,
+        projectId: fixture.project.id,
+      };
+      const vars = exampleCase.vars ? exampleCase.vars(ctx) : {};
 
-    for (const { example, exampleCase } of REPL_EXAMPLES) {
-      await test.step(example.id, async () => {
-        const ctx = {
-          marker: `playwright-${example.id}-${crypto.randomUUID().slice(0, 8)}`,
-          projectId: fixture.project.id,
-        };
-        const vars = exampleCase.vars ? exampleCase.vars(ctx) : {};
+      await runReplSnippet(page, `vars = ${JSON.stringify(vars, null, 2)};`);
+      const result = await runReplSnippet(page, example.code);
 
-        await runReplSnippet(page, `vars = ${JSON.stringify(vars, null, 2)};`);
-        const result = await runReplSnippet(page, example.code);
-
-        try {
-          exampleCase.assert(result, ctx);
-        } catch (error) {
-          throw new Error(
-            `REPL example ${example.id} returned an unexpected result: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-            { cause: error },
-          );
-        }
-      });
-    }
-  });
+      try {
+        exampleCase.assert(result, ctx, expect);
+      } catch (error) {
+        throw new Error(
+          `REPL example ${example.id} returned an unexpected result: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          { cause: error },
+        );
+      }
+    });
+  }
 });
 
 async function runReplSnippet(page: Page, code: string) {

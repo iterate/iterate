@@ -122,7 +122,7 @@ for (const example of MATRIX_EXAMPLES) {
             projectId,
             vars,
           });
-          exampleCase.assert(result, ctx);
+          exampleCase.assert(result, ctx, expect);
         } catch (error) {
           throw new Error(
             `example "${example.id}" failed in the ${runtime} runtime: ${

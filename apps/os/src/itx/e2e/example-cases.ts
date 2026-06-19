@@ -42,8 +42,10 @@ export type ExampleRunContext = {
 
 export type ExampleCase = {
   vars?: (ctx: ExampleRunContext) => Record<string, unknown>;
-  assert: (result: unknown, ctx: ExampleRunContext) => void;
+  assert: (result: unknown, ctx: ExampleRunContext, expect: ExampleExpect) => void;
 };
+
+export type ExampleExpect = (actual: any, message?: string) => any;
 
 /** Example ids that intentionally have no matrix case (see header). */
 export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
@@ -59,189 +61,92 @@ export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
 export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   "list-and-describe-project": {
     vars: ({ projectId }) => ({ projectId }),
-    assert: (result, { projectId }) => {
-      assertMatchesObject(result, { context: `${projectId}:/`, project: { id: projectId } });
+    assert: (result, { projectId }, expect) => {
+      expect(result).toMatchObject({ context: `${projectId}:/`, project: { id: projectId } });
     },
   },
   "append-and-read-stream": {
     vars: ({ marker }) => ({ note: marker }),
-    assert: (result, { marker }) => {
-      assertMatchesObject(result, { appended: { payload: { note: marker } } });
-      assertGreaterThan((result as { count: number }).count, 0, "result.count");
+    assert: (result, { marker }, expect) => {
+      expect(result).toMatchObject({ appended: { payload: { note: marker } } });
+      expect((result as { count: number }).count).toBeGreaterThan(0);
     },
   },
   "provide-plain-object": {
-    assert: (result) => {
-      assertDeepEqual(result, {
+    assert: (result, _ctx, expect) => {
+      expect(result).toEqual({
         deep: { answer: 42, question: "life, the universe, everything" },
         ultimate: 42,
       });
     },
   },
   "provide-path-call-sdk": {
-    assert: (result) => {
-      assertMatchesObject(result, { method: "chat.postMessage", provider: "live-session" });
+    assert: (result, _ctx, expect) => {
+      expect(result).toMatchObject({ method: "chat.postMessage", provider: "live-session" });
     },
   },
   "provide-durable-worker-cap": {
-    assert: (result) => {
-      assertDeepEqual(result, { greeting: "hello, world", sum: 5 });
+    assert: (result, _ctx, expect) => {
+      expect(result).toEqual({ greeting: "hello, world", sum: 5 });
     },
   },
   "worker-cap-uses-its-own-itx": {
     // The todo stream accumulates across runtimes (same project, same path) —
     // containment, not equality.
-    assert: (result) => {
-      assertContains(result, "ship the capability layer", "result");
-      assertContains(result, "delete the mounts", "result");
+    assert: (result, _ctx, expect) => {
+      expect(result).toContain("ship the capability layer");
+      expect(result).toContain("delete the mounts");
     },
   },
   "deep-auto-proxy": {
-    assert: (result) => {
-      assertDeepEqual(result, { echo: { echoed: { hi: 1 } }, sum: 5 });
+    assert: (result, _ctx, expect) => {
+      expect(result).toEqual({ echo: { echoed: { hi: 1 } }, sum: 5 });
     },
   },
   "worker-to-worker": {
-    assert: (result) => {
-      assertDeepEqual(result, { count: 7, price: 42, total: 294 });
+    assert: (result, _ctx, expect) => {
+      expect(result).toEqual({ count: 7, price: 42, total: 294 });
     },
   },
   "stateful-facet-cap": {
     // The counter facet persists across runtimes — strictly positive and even
     // (each run increments twice), not exactly 2.
-    assert: (result) => {
+    assert: (result, _ctx, expect) => {
       const current = (result as { current: number }).current;
-      assert(typeof current === "number", `Expected result.current to be a number, got ${current}`);
-      assertGreaterThanOrEqual(current, 2, "result.current");
+      expect(typeof current).toBe("number");
+      expect(current).toBeGreaterThanOrEqual(2);
     },
   },
   "extend-child-context": {
-    assert: (result) => {
-      assertMatchesObject(result, { fromChild: "child" });
+    assert: (result, _ctx, expect) => {
+      expect(result).toMatchObject({ fromChild: "child" });
       const capabilities = (result as { capabilities: Array<{ from?: string; name: string }> })
         .capabilities;
       // The shadow is the child's OWN entry (no provenance field); the
       // defaults arrive through the chain labeled from: "defaults".
       const shared = capabilities.filter((entry) => entry.name === "shared");
-      assertLength(shared, 1, "shared capabilities");
-      assert(
-        shared[0]!.from === undefined,
-        `Expected child shared capability to have no provenance, got ${shared[0]!.from}`,
-      );
-      const fetchCapability = capabilities.find((entry) => entry.name === "fetch");
-      assertDeepEqual(fetchCapability?.from, "defaults", "fetch capability provenance");
+      expect(shared).toHaveLength(1);
+      expect(shared[0]!.from).toBeUndefined();
+      expect(capabilities.find((entry) => entry.name === "fetch")?.from).toBe("defaults");
     },
   },
   "journal-is-the-record": {
     vars: ({ marker }) => ({ capName: `journal_${marker.replace(/-/g, "_")}` }),
-    assert: (result) => {
-      assertDeepEqual(result, { record: ["capability-provided", "capability-revoked"] });
+    assert: (result, _ctx, expect) => {
+      expect(result).toEqual({ record: ["capability-provided", "capability-revoked"] });
     },
   },
   "http-cap": {
-    assert: (result) => {
+    assert: (result, _ctx, expect) => {
       const url = (result as { url: string }).url;
-      assert(typeof url === "string", `Expected result.url to be a string, got ${url}`);
-      assertContains(url, "hello--", "result.url");
-      assertValidUrl(url, "result.url");
+      expect(typeof url).toBe("string");
+      expect(url).toContain("hello--");
+      expect(() => new URL(url)).not.toThrow();
     },
   },
   "import-npm-via-esm-sh": {
-    assert: (result, { projectId }) => {
-      assertMatchesObject(result, { context: `${projectId}:/`, project: { id: projectId } });
+    assert: (result, { projectId }, expect) => {
+      expect(result).toMatchObject({ context: `${projectId}:/`, project: { id: projectId } });
     },
   },
 };
-
-function assert(condition: boolean, message: string): asserts condition {
-  if (!condition) throw new Error(message);
-}
-
-function assertGreaterThan(actual: unknown, expected: number, label: string) {
-  assert(
-    typeof actual === "number" && actual > expected,
-    `Expected ${label} to be greater than ${expected}, got ${formatValue(actual)}`,
-  );
-}
-
-function assertGreaterThanOrEqual(actual: unknown, expected: number, label: string) {
-  assert(
-    typeof actual === "number" && actual >= expected,
-    `Expected ${label} to be at least ${expected}, got ${formatValue(actual)}`,
-  );
-}
-
-function assertLength(actual: unknown[], expected: number, label: string) {
-  assert(
-    actual.length === expected,
-    `Expected ${label} to have length ${expected}, got ${actual.length}: ${formatValue(actual)}`,
-  );
-}
-
-function assertContains(container: unknown, item: unknown, label: string) {
-  assert(
-    (typeof container === "string" && typeof item === "string" && container.includes(item)) ||
-      (Array.isArray(container) && container.includes(item)),
-    `Expected ${label} to contain ${formatValue(item)}, got ${formatValue(container)}`,
-  );
-}
-
-function assertMatchesObject(actual: unknown, expected: unknown, label = "result") {
-  if (isPlainObject(expected)) {
-    assert(isPlainObject(actual), `Expected ${label} to be an object, got ${formatValue(actual)}`);
-    for (const [key, value] of Object.entries(expected)) {
-      assertMatchesObject((actual as Record<string, unknown>)[key], value, `${label}.${key}`);
-    }
-    return;
-  }
-
-  assertDeepEqual(actual, expected, label);
-}
-
-function assertDeepEqual(actual: unknown, expected: unknown, label = "result") {
-  assert(
-    deepEqual(actual, expected),
-    `Expected ${label} to equal ${formatValue(expected)}, got ${formatValue(actual)}`,
-  );
-}
-
-function assertValidUrl(value: string, label: string) {
-  try {
-    new URL(value);
-  } catch (error) {
-    throw new Error(
-      `Expected ${label} to be a valid URL, got ${formatValue(value)}: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-  }
-}
-
-function deepEqual(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) return true;
-  if (Array.isArray(left) || Array.isArray(right)) {
-    if (!Array.isArray(left) || !Array.isArray(right)) return false;
-    if (left.length !== right.length) return false;
-    return left.every((value, index) => deepEqual(value, right[index]));
-  }
-  if (isPlainObject(left) || isPlainObject(right)) {
-    if (!isPlainObject(left) || !isPlainObject(right)) return false;
-    const leftEntries = Object.entries(left);
-    const rightEntries = Object.entries(right);
-    if (leftEntries.length !== rightEntries.length) return false;
-    return leftEntries.every(([key, value]) => deepEqual(value, right[key]));
-  }
-  return false;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function formatValue(value: unknown) {
-  try {
-    return JSON.stringify(value) || String(value);
-  } catch {
-    return String(value);
-  }
-}
