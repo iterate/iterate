@@ -8,7 +8,6 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
-  realpathSync,
   statSync,
   writeSync,
 } from "node:fs";
@@ -23,11 +22,6 @@ import {
   releaseLocalDevServerInfo,
   type DevServerInfo,
 } from "@iterate-com/shared/alchemy/local-dev-server";
-import { loadOsDopplerSecrets } from "./doppler.ts";
-
-export type LocalOsDevServerTarget =
-  | { baseUrl: string; kind: "live"; port: number; info: DevServerInfo }
-  | { baseUrl: string; kind: "start"; port: number };
 
 export type StartOptions = {
   /** Keep this process attached to the dev server output. */
@@ -44,6 +38,13 @@ export type StartOptions = {
   skipDoppler?: boolean;
   /** Maximum time to wait for detached startup. */
   timeoutMs?: number;
+};
+
+type LoadOsDopplerSecretsOptions = {
+  /** Doppler config to load. Defaults to the local apps/os Doppler setup. */
+  config?: string;
+  /** Environment used for the Doppler CLI process. Defaults to process.env. */
+  env?: NodeJS.ProcessEnv;
 };
 
 const APP_ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -140,10 +141,17 @@ export const localOsDevServer = {
   resolveTarget: resolveLocalOsDevServerTarget,
 };
 
+export const doppler = {
+  loadOsSecrets,
+};
+
 /** Resolve the OS local dev server target that a caller should use. */
 async function resolveLocalOsDevServerTarget(
   env: NodeJS.ProcessEnv = process.env,
-): Promise<LocalOsDevServerTarget> {
+): Promise<
+  | { baseUrl: string; kind: "live"; port: number; info: DevServerInfo }
+  | { baseUrl: string; kind: "start"; port: number }
+> {
   const live = readLiveLocalOsDevServer();
   if (live) {
     return {
@@ -435,12 +443,47 @@ function isPidAlive(pid: number) {
 function loadDevServerEnv(options: Pick<StartOptions, "config" | "skipDoppler">) {
   if (options.skipDoppler || process.env.DOPPLER_CONFIG) return process.env;
 
-  const dopplerEnv = loadOsDopplerSecrets({ config: options.config });
+  const dopplerEnv = doppler.loadOsSecrets({ config: options.config });
   if (!dopplerEnv.ok) {
     throw new Error(["Could not load OS dev secrets from Doppler.", dopplerEnv.error].join("\n"));
   }
 
   return { ...process.env, ...dopplerEnv.secrets };
+}
+
+function loadOsSecrets(options: LoadOsDopplerSecretsOptions = {}) {
+  try {
+    const result = spawnSync(
+      "doppler",
+      [
+        "secrets",
+        "download",
+        "--no-file",
+        "--format",
+        "json",
+        ...(options.config ? ["--config", options.config] : []),
+      ],
+      {
+        cwd: APP_ROOT,
+        encoding: "utf8",
+        env: options.env || process.env,
+        maxBuffer: 10 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+
+    if (result.error) throw result.error;
+    if (result.status !== 0) {
+      return {
+        ok: false as const,
+        error: result.stderr.trim() || `doppler exited with status ${result.status}`,
+      };
+    }
+
+    return { ok: true as const, secrets: JSON.parse(result.stdout) as Record<string, string> };
+  } catch (error) {
+    return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 function assertLocalAlchemyDev(env: NodeJS.ProcessEnv) {
@@ -523,19 +566,11 @@ function normalizeBaseUrl(baseUrl: string) {
   return baseUrl.replace(/\/+$/, "");
 }
 
-function isMainModule() {
-  const entry = process.argv[1];
-  if (!entry) return false;
-  return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
-}
-
-if (isMainModule()) {
-  void createCli({
-    ...import.meta,
-    name: "dev",
-    jsonInput: "auto",
-  }).run({
-    logger: yamlTableConsoleLogger,
-    prompts: isAgent() ? undefined : createBuiltInPrompts(),
-  });
-}
+void createCli({
+  ...import.meta,
+  name: "dev",
+  jsonInput: "auto",
+}).run({
+  logger: yamlTableConsoleLogger,
+  prompts: isAgent() ? undefined : createBuiltInPrompts(),
+});

@@ -8,7 +8,7 @@ import {
   type IterateAuthAccessTokenOrganizationClaim,
   type IterateAuthProjectClaim,
 } from "@iterate-com/shared/auth-claims";
-import { loadOsDopplerSecrets } from "../../apps/os/scripts/doppler.ts";
+import { doppler } from "../../apps/os/scripts/dev.ts";
 import { withItx } from "../../apps/os/src/itx/client.ts";
 
 type ForgePrivateJwk = JsonWebKey & {
@@ -265,7 +265,7 @@ async function loadOsPlaywrightAuthEnv(): Promise<OsPlaywrightAuthEnv> {
   const env = OsPlaywrightAuthEnv.safeParse(process.env);
   if (env.success) return env.data;
 
-  const dopplerEnv = await loadOsDopplerSecrets();
+  const dopplerEnv = doppler.loadOsSecrets();
   if (dopplerEnv.ok) {
     const parsed = OsPlaywrightAuthEnv.safeParse({ ...dopplerEnv.secrets, ...process.env });
     if (parsed.success) return parsed.data;
