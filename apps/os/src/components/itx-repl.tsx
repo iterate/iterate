@@ -134,20 +134,24 @@ export function ItxRepl({
                 ) : null}
                 {entry.status === "success" ? (
                   <>
-                    <ReplCollapsibleSerializedBlock data={entry.result} title="Result" />
-                    <pre className="sr-only" data-testid="itx-repl-result-json">
+                    <div data-testid="itx-repl-visible-result">
+                      <ReplCollapsibleSerializedBlock data={entry.result} title="Result" />
+                    </div>
+                    <pre data-testid="itx-repl-result-json" hidden>
                       {entry.output}
                     </pre>
                   </>
                 ) : (
                   <>
-                    <ReplCollapsibleCodeBlock
-                      code={entry.output}
-                      language={entry.outputLanguage}
-                      title="Error"
-                      variant="error"
-                    />
-                    <pre className="sr-only" data-testid="itx-repl-error" data-type="error">
+                    <div data-testid="itx-repl-visible-error">
+                      <ReplCollapsibleCodeBlock
+                        code={entry.output}
+                        language={entry.outputLanguage}
+                        title="Error"
+                        variant="error"
+                      />
+                    </div>
+                    <pre data-testid="itx-repl-error" data-type="error" hidden>
                       {entry.output}
                     </pre>
                   </>
@@ -371,18 +375,19 @@ function ReplCollapsibleCodeBlock(input: {
 }
 
 function ReplCollapsibleSerializedBlock(input: { data: unknown; title: string }) {
+  const { data, title } = input;
   return (
     <Collapsible defaultOpen>
       <div className="flex items-center justify-between gap-2">
         <CollapsibleTrigger className="group flex items-center gap-1 text-xs font-medium text-muted-foreground">
           <ChevronDown className="size-3 -rotate-90 transition-transform [[data-panel-open]_&]:rotate-0" />
-          {input.title}
+          {title}
         </CollapsibleTrigger>
       </div>
       <CollapsibleContent>
         <SerializedObjectCodeBlock
           className="max-h-96"
-          data={input.data}
+          data={data}
           initialFormat="json"
           showCopyButton
           showLineNumbers

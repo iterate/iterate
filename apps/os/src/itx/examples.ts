@@ -730,7 +730,7 @@ const Description = z.object({
   project: z.object({ id: z.string(), slug: z.string() }).nullable(),
 });
 
-return Description.parse(await itx.describe());
+return {...Description.parse(await itx.describe()), greeting: "hello" + "there"};
 `.trim(),
   },
 ];

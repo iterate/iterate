@@ -37,6 +37,7 @@ export async function runBrowserReplEntry(input: {
   itx: unknown;
   scope: Record<string, unknown>;
 }): Promise<BrowserReplEntry> {
+  const id = crypto.randomUUID();
   const trimmedCode = input.code.trim();
   const consoleLogs: BrowserReplConsoleLog[] = [];
   const previousConsole = input.scope.console;
@@ -53,6 +54,7 @@ export async function runBrowserReplEntry(input: {
     return {
       code: trimmedCode,
       consoleOutput: formatBrowserReplConsoleOutput(consoleLogs),
+      id,
       output: formattedResult.text,
       outputLanguage: formattedResult.language,
       result,
@@ -62,6 +64,7 @@ export async function runBrowserReplEntry(input: {
     return {
       code: trimmedCode,
       consoleOutput: formatBrowserReplConsoleOutput(consoleLogs),
+      id,
       output: error instanceof Error ? (error.stack ?? error.message) : String(error),
       outputLanguage: "text",
       status: "error",

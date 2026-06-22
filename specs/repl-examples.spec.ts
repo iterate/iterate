@@ -43,10 +43,16 @@ test.describe("itx REPL catalogue examples", () => {
       const entry = page.locator(`[data-entry-index="${entryIndex}"][data-status="success"]`);
       await entry.waitFor();
 
+      await entry.getByTestId("itx-repl-result-json").waitFor({ state: "attached" });
       const resultJson = await entry.getByTestId("itx-repl-result-json").textContent();
       const result = JSON.parse(resultJson!);
 
       exampleCase.assert(result, ctx, expect as never);
+      const visibleResult = entry.getByTestId("itx-repl-visible-result");
+      await visibleResult.locator(".cm-SerializedObjectCodeBlock .cm-content").waitFor();
+      if (example.id === "import-npm-via-esm-sh") {
+        await visibleResult.getByText("hellothere").waitFor();
+      }
 
       // if (example.id.includes("esm-sh")) {
       // await entry.getByTestId("itx-repl-result-json").getByText(fixture.project.id).waitFor();
@@ -58,7 +64,7 @@ test.describe("itx REPL catalogue examples", () => {
 
       // await page.locator(".sdofijsdoifjdf").waitFor();
 
-      // await new Promise((resolve) => setTimeout(resolve, 100));
+      // await new Promise((resolve) => setTimeout(resolve, 1000));
     });
   }
 });

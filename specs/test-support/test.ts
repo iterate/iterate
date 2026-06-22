@@ -18,8 +18,8 @@ const addPagePlugins = (page: Page, testInfo: TestInfo) =>
       hydrationWaiter({ timeout: 30_000 }),
       uiErrorReporter(),
       spinnerWaiter({ spinnerTimeout: 30_000 }),
-      videoMode({ skipStackFrames: ["test-support/test.ts"], deadAirThreshold: 300 }),
-      process.env.VIDEO_MODE === "1" && videoMode({ skipStackFrames: ["test-support/test.ts"] }),
+      process.env.VIDEO_MODE === "1" &&
+        videoMode({ skipStackFrames: ["test-support/test.ts"], deadAirThreshold: 300 }),
     ],
     boxedStackPrefixes: (defaults) => [...defaults, import.meta.dirname],
   });
