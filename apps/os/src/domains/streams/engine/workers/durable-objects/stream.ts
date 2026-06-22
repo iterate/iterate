@@ -344,15 +344,19 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     return state;
   }
 
-  #resolveStream(streamPath: string): Pick<StreamRpc, "append" | "appendBatch"> {
+  at(streamPath: string): StreamRpc {
     const resolvedPath = resolveStreamPath(this.#coreProcessorState.path, streamPath);
-    if (resolvedPath === resolveStreamPath(this.#coreProcessorState.path, ".")) return this;
-    return this.env.STREAM.getByName(
-      formatDurableObjectName({
-        path: resolvedPath,
-        projectId: this.name.projectId,
-      }),
-    ) as unknown as Pick<StreamRpc, "append" | "appendBatch">;
+    if (resolvedPath === resolveStreamPath(this.#coreProcessorState.path, ".")) {
+      return new StreamRpcTarget(this) as unknown as StreamRpc;
+    }
+    return new StreamRpcTarget(
+      this.env.STREAM.getByName(
+        formatDurableObjectName({
+          path: resolvedPath,
+          projectId: this.name.projectId,
+        }),
+      ) as unknown as StreamRpc,
+    ) as unknown as StreamRpc;
   }
 
   /**
@@ -360,13 +364,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
    *
    * Uses `appendBatch()`, so all append ordering and persistence stays in one place.
    */
-  append(args: {
-    streamPath?: string;
-    event: StreamEventInput;
-  }): StreamEvent | Promise<StreamEvent> {
-    if (args.streamPath !== undefined) {
-      return this.#resolveStream(args.streamPath).append({ event: args.event });
-    }
+  append(args: { event: StreamEventInput }): StreamEvent | Promise<StreamEvent> {
     return this.#appendBatchHere({ events: [args.event] })[0]!;
   }
 
@@ -387,14 +385,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
    *
    * Returns the persisted events (including offsets + `createdAt`) in input order.
    */
-  appendBatch(args: {
-    streamPath?: string;
-    events: StreamEventInput[];
-  }): StreamEvent[] | Promise<StreamEvent[]> {
-    if (args.streamPath !== undefined) {
-      return this.#resolveStream(args.streamPath).appendBatch({ events: args.events });
-    }
-
+  appendBatch(args: { events: StreamEventInput[] }): StreamEvent[] | Promise<StreamEvent[]> {
     return this.#appendBatchHere({ events: args.events });
   }
 
@@ -780,6 +771,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 const STREAM_RPC_METHODS = [
   "append",
   "appendBatch",
+  "at",
   "getEvent",
   "getEvents",
   "waitForEvent",

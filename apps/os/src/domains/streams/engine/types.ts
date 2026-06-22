@@ -58,16 +58,20 @@ export type LiveStreamSubscriberDescriptor = Omit<StreamSubscriberDescriptor, "p
 
 /** The minimal append surface a processor's iterate context exposes. */
 export type ProcessorStream = {
-  append(args: { streamPath?: string; event: StreamEventInput }): unknown;
-  appendBatch(args: { streamPath?: string; events: StreamEventInput[] }): unknown;
+  append(args: { event: StreamEventInput }): unknown;
+  appendBatch(args: { events: StreamEventInput[] }): unknown;
+  at(streamPath: string): ProcessorStream;
 };
 
 export type StreamRpc = {
-  append(args: { streamPath?: string; event: StreamEventInput }): MaybePromise<StreamEvent>;
-  appendBatch(args: {
-    streamPath?: string;
-    events: StreamEventInput[];
-  }): MaybePromise<StreamEvent[]>;
+  append(args: { event: StreamEventInput }): MaybePromise<StreamEvent>;
+  appendBatch(args: { events: StreamEventInput[] }): MaybePromise<StreamEvent[]>;
+  /**
+   * Returns a stream target resolved from this stream's path. Absolute paths
+   * start at the project root; relative paths (`child`, `./child`, `../peer`)
+   * resolve from the current stream.
+   */
+  at(streamPath: string): StreamRpc;
   getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): MaybePromise<StreamEvent | undefined>;

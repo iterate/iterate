@@ -133,8 +133,9 @@ Non-obvious behaviors worth knowing:
   to replay from the first event. Delivery starts at `replayAfterOffset + 1`.
 - **512KB event chunking.** Each event's JSON is split into 512KB rows in `event_chunks`, so a
   single event can exceed the Durable Object per-row size limit.
-- **Relative `streamPath`.** `append`/`appendBatch` accept a `streamPath` resolved relative to the
-  current stream's path; appends to another stream are dispatched to that Durable Object.
+- **Relative stream navigation.** `at(streamPath)` returns the stream RPC target resolved relative
+  to the current stream's path (`child`, `./child`, `../sibling`) or from the root for absolute
+  paths. Appends stay pinned to their target: use `stream.at("../sibling").append({ event })`.
 - **`reset()` vs `kill()`.** `reset()` clears all durable storage for the stream then aborts the
   current incarnation; `kill()` only aborts the incarnation.
 

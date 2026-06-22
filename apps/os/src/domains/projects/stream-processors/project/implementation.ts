@@ -331,8 +331,7 @@ export class ProjectProcessor extends StreamProcessor<
    * processors can safely ignore requests addressed to another provider.
    */
   async #appendAgentStreamBirthCertificate(input: { agentPath: StreamPath; projectId: string }) {
-    await this.deps.stream.appendBatch({
-      streamPath: input.agentPath,
+    await this.deps.stream.at(input.agentPath).appendBatch({
       events: [
         {
           type: "events.iterate.com/agent/config-updated",
@@ -376,8 +375,7 @@ export class ProjectProcessor extends StreamProcessor<
   }
 
   async #appendSlackIntegrationBirthCertificate(input: { projectId: string }) {
-    await this.deps.stream.append({
-      streamPath: SLACK_INTEGRATION_STREAM_PATH,
+    await this.deps.stream.at(SLACK_INTEGRATION_STREAM_PATH).append({
       event: {
         type: "events.iterate.com/stream/subscription-configured",
         idempotencyKey: `slack-subscription:${input.projectId}:workers-rpc:callable`,

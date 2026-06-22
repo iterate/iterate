@@ -648,8 +648,13 @@ export type StreamSubscriptionBatch = {
 
 /** A handle pinned to one stream. */
 export interface ItxStream {
-  append(args: { streamPath?: string; event: StreamEventInput }): Promise<StreamEvent>;
-  appendBatch(args: { streamPath?: string; events: StreamEventInput[] }): Promise<StreamEvent[]>;
+  append(args: { event: StreamEventInput }): Promise<StreamEvent>;
+  appendBatch(args: { events: StreamEventInput[] }): Promise<StreamEvent[]>;
+  /**
+   * Navigate from this stream to another stream in the same project. Absolute
+   * paths start at `/`; relative paths resolve from this stream.
+   */
+  at(streamPath: string): ItxStream;
   getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined>;

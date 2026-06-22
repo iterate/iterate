@@ -145,8 +145,7 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
       // so the replay dedupes instead of double-forwarding.
       args.blockProcessorWhile(async () => {
         await this.deps.stream.append({ event: routeEvent });
-        await this.deps.stream.appendBatch({
-          streamPath,
+        await this.deps.stream.at(streamPath).appendBatch({
           events: [routeEvent, forwardedWebhookEvent],
         });
       });
@@ -164,7 +163,7 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
     // Block the checkpoint so a failed append replays the webhook instead of
     // dropping it; the idempotency key makes the replay a no-op if it landed.
     args.blockProcessorWhile(async () => {
-      await this.deps.stream.append({ streamPath, event: forwardedWebhookEvent });
+      await this.deps.stream.at(streamPath).append({ event: forwardedWebhookEvent });
     });
   }
 }

@@ -37,6 +37,20 @@ function event(args: {
   };
 }
 
+function resolveTestStreamPath(basePath: string, streamPath: string): string {
+  const segments = streamPath.startsWith("/") ? [] : basePath.split("/").filter(Boolean);
+  for (const segment of streamPath.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") {
+      if (segments.length === 0) throw new Error(`stream path escapes root: ${streamPath}`);
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+  return `/${segments.join("/")}`;
+}
+
 // A stream stub that records appends in memory. These tests only exercise the
 // append surface, so the fake is cast to the full RPC stub type.
 function memoryStream(options: { startOffset?: number } = {}) {
@@ -54,6 +68,7 @@ function memoryStream(options: { startOffset?: number } = {}) {
         committed.push(e);
         return e;
       }),
+    at: () => stream,
   } as unknown as StreamProcessorStream;
   return { stream, committed };
 }
@@ -145,13 +160,16 @@ class CoreStreamSim {
 
   append(path: string, input: StreamEventInput, createdAtMs = 0): StreamEvent {
     const entry = this.#entry(path);
+    const streamFor = (streamPath: string): StreamProcessorStream =>
+      ({
+        append: (args: { event: StreamEventInput }) =>
+          this.append(streamPath, args.event, createdAtMs),
+        appendBatch: (args: { events: StreamEventInput[] }) =>
+          args.events.map((event) => this.append(streamPath, event, createdAtMs)),
+        at: (nextPath: string) => streamFor(resolveTestStreamPath(streamPath, nextPath)),
+      }) as unknown as StreamProcessorStream;
     const coreInline = new CoreStreamProcessor({
-      stream: {
-        append: (args: { streamPath?: string; event: StreamEventInput }) =>
-          this.append(args.streamPath ?? path, args.event, createdAtMs),
-        appendBatch: (args: { streamPath?: string; events: StreamEventInput[] }) =>
-          args.events.map((event) => this.append(args.streamPath ?? path, event, createdAtMs)),
-      } as unknown as StreamProcessorStream,
+      stream: streamFor(path),
     });
 
     coreInline.validateAppend({
@@ -237,13 +255,15 @@ describe("core stream state and subscription processors", () => {
     const batch = [...entry.events];
 
     const writes: StreamProcessorSnapshot<unknown>[] = [];
+    const streamFor = (streamPath: string): StreamProcessorStream =>
+      ({
+        append: (args: { event: StreamEventInput }) => sim.append(streamPath, args.event),
+        appendBatch: (args: { events: StreamEventInput[] }) =>
+          args.events.map((event) => sim.append(streamPath, event)),
+        at: (nextPath: string) => streamFor(resolveTestStreamPath(streamPath, nextPath)),
+      }) as unknown as StreamProcessorStream;
     const processor = new CircuitBreakerProcessor({
-      stream: {
-        append: (args: { streamPath?: string; event: StreamEventInput }) =>
-          sim.append(args.streamPath ?? "/cb", args.event),
-        appendBatch: (args: { streamPath?: string; events: StreamEventInput[] }) =>
-          args.events.map((event) => sim.append(args.streamPath ?? "/cb", event)),
-      } as unknown as StreamProcessorStream,
+      stream: streamFor("/cb"),
       writeState: (snapshot) => void writes.push(snapshot),
     });
 
