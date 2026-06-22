@@ -4,6 +4,7 @@ export const DEFAULT_BROWSER_REPL_CODE = "await itx.projects.list({ limit: 5 })"
 
 export type BrowserReplEntry = {
   code: string;
+  id: string;
   consoleOutput: string;
   output: string;
   outputLanguage: "json" | "text";

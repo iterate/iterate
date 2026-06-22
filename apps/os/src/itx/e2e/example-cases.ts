@@ -42,10 +42,8 @@ export type ExampleRunContext = {
 
 export type ExampleCase = {
   vars?: (ctx: ExampleRunContext) => Record<string, unknown>;
-  assert: (result: unknown, ctx: ExampleRunContext, expect: ExampleExpect) => void;
+  assert: (result: unknown, ctx: ExampleRunContext, expect: typeof import("vitest").expect) => void;
 };
-
-export type ExampleExpect = (actual: any, message?: string) => any;
 
 /** Example ids that intentionally have no matrix case (see header). */
 export const EXAMPLE_IDS_WITHOUT_CASES = new Set([

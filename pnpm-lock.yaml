@@ -120,8 +120,8 @@ importers:
         specifier: ^16.2.7
         version: 16.3.2
       middlewright:
-        specifier: ^0.1.0
-        version: 0.1.0(@playwright/test@1.60.0)
+        specifier: file:../middlewright
+        version: file:../middlewright(@playwright/test@1.60.0)
       oxfmt:
         specifier: ^0.35.0
         version: 0.35.0
@@ -10941,8 +10941,8 @@ packages:
     resolution: {integrity: sha512-PXwfBhYu0hBCPw8Dn0E+WDYb7af3dSLVWKi3HGv84IdF4TyFoC0ysxFd0Goxw7nSv4T/PzEJQxsYsEiFCKo2BA==}
     engines: {node: '>=8.6'}
 
-  middlewright@0.1.0:
-    resolution: {integrity: sha512-1xWxyVV/w+5Rvo/yjM8ukzdwmPwOTCi4Dr5x8xEHIuiGuP1LW/KcuTVgxRA0KIpTdl1QO63J+Y26+zyI2iEiDg==}
+  middlewright@file:../middlewright:
+    resolution: {directory: ../middlewright, type: directory}
     engines: {node: '>=20'}
     peerDependencies:
       '@playwright/test': '>=1.49.0'
@@ -25855,7 +25855,7 @@ snapshots:
       braces: 3.0.3
       picomatch: 2.3.1
 
-  middlewright@0.1.0(@playwright/test@1.60.0):
+  middlewright@file:../middlewright(@playwright/test@1.60.0):
     dependencies:
       '@playwright/test': 1.60.0
       dedent: 1.7.2

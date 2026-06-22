@@ -18,65 +18,47 @@ test.describe("itx REPL catalogue examples", () => {
       await using fixture = await helpers.createFixture(`repl-${example.id}`);
       await page.goto(`/projects/${fixture.project.slug}/repl`);
       await page.getByRole("button", { name: "Run" }).waitFor();
+      page.videoMode.setStartTime(); // start video from now
       await page.getByTestId("itx-repl-editor").locator(".cm-content").waitFor();
 
       const ctx = {
         marker: `playwright-${example.id}-${crypto.randomUUID().slice(0, 8)}`,
         projectId: fixture.project.id,
       };
-      const vars = exampleCase.vars ? exampleCase.vars(ctx) : {};
+      // const vars = exampleCase.vars ? exampleCase.vars(ctx) : {};
 
-      await runReplSnippet(page, `vars = ${JSON.stringify(vars, null, 2)};`);
-      const result = await runReplSnippet(page, example.code);
+      const entries = page.getByTestId("itx-repl-entry");
+      const entryIndex = await entries.count();
 
-      try {
-        exampleCase.assert(result, ctx, expect);
-      } catch (error) {
-        throw new Error(
-          `REPL example ${example.id} returned an unexpected result: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-          { cause: error },
-        );
-      }
+      let code = `const vars = ${JSON.stringify(exampleCase.vars?.(ctx), null, 2)};`;
+      code += `\n\n${example.code}`;
+
+      const editor = page.getByTestId("itx-repl-editor").locator(".cm-content");
+      await editor.click();
+      await page.keyboard.press("ControlOrMeta+A");
+      await page.keyboard.insertText(code);
+
+      await page.getByRole("button", { name: "Run" }).click();
+
+      const entry = page.locator(`[data-entry-index="${entryIndex}"][data-status="success"]`);
+      await entry.waitFor();
+
+      const resultJson = await entry.getByTestId("itx-repl-result-json").textContent();
+      const result = JSON.parse(resultJson!);
+
+      exampleCase.assert(result, ctx, expect as never);
+
+      // if (example.id.includes("esm-sh")) {
+      // await entry.getByTestId("itx-repl-result-json").getByText(fixture.project.id).waitFor();
+      // await entry
+      //   .getByTestId("itx-repl-result-json")
+      //   .getByText(fixture.project.id, { exact: true })
+      //   .click();
+      // // }
+
+      // await page.locator(".sdofijsdoifjdf").waitFor();
+
+      // await new Promise((resolve) => setTimeout(resolve, 100));
     });
   }
 });
-
-async function runReplSnippet(page: Page, code: string) {
-  const entries = page.getByTestId("itx-repl-entry");
-  const entryIndex = await entries.count();
-
-  await replaceReplCode(page, code);
-  await page.getByRole("button", { name: "Run" }).click();
-
-  const entry = entries.nth(entryIndex);
-  await entry.waitFor();
-
-  const status = await entry.getAttribute("data-status");
-  if (status !== "success") {
-    const errorText = await entry.getByTestId("itx-repl-error").textContent();
-    throw new Error(`REPL snippet failed:\n${errorText || (await entry.textContent())}`);
-  }
-
-  const resultJson = await entry.getByTestId("itx-repl-result-json").textContent();
-  if (!resultJson) throw new Error("REPL snippet succeeded without a serialized result.");
-
-  try {
-    return JSON.parse(resultJson);
-  } catch (error) {
-    throw new Error(
-      `REPL snippet returned non-JSON output:\n${resultJson}\n${
-        error instanceof Error ? error.message : String(error)
-      }`,
-      { cause: error },
-    );
-  }
-}
-
-async function replaceReplCode(page: Page, code: string) {
-  const editor = page.getByTestId("itx-repl-editor").locator(".cm-content");
-  await editor.click();
-  await page.keyboard.press("ControlOrMeta+A");
-  await page.keyboard.insertText(code);
-}

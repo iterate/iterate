@@ -116,6 +116,7 @@ export function ItxRepl({
                 key={index}
                 data-testid="itx-repl-entry"
                 data-status={entry.status}
+                data-entry-index={index}
                 className={
                   entry.status === "error"
                     ? "flex flex-col gap-2 border-l-2 border-destructive/50 bg-destructive/5 py-2 pr-3 pl-3"
@@ -146,7 +147,7 @@ export function ItxRepl({
                       title="Error"
                       variant="error"
                     />
-                    <pre className="sr-only" data-testid="itx-repl-error">
+                    <pre className="sr-only" data-testid="itx-repl-error" data-type="error">
                       {entry.output}
                     </pre>
                   </>
