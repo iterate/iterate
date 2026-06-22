@@ -140,8 +140,34 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           });
         });
         return;
+      case "events.iterate.com/agents/agent-message-received":
+        if (this.deps.isAgentsRootStream()) return;
+        args.blockProcessorWhile(async () => {
+          await this.deps.setupAgentRuntime();
+          await this.#appendEventTypeExplanation({ eventType: event.type });
+          await this.deps.stream.append({
+            event: {
+              type: "events.iterate.com/agent/input-added",
+              idempotencyKey: buildProcessorIdempotencyKey({
+                processor: AgentProcessorContract,
+                key: "render-agent-message",
+                sourceEvent: event,
+              }),
+              payload: {
+                content: chatEventBlock({
+                  offset: event.offset,
+                  type: event.type,
+                  bodyTag: "message",
+                  body: event.payload.message,
+                }),
+              },
+            },
+          });
+        });
+        return;
       case "events.iterate.com/agents/web-message-sent":
       case "events.iterate.com/agents/tui-message-sent":
+      case "events.iterate.com/agents/agent-message-sent":
         if (this.deps.isAgentsRootStream()) return;
         args.blockProcessorWhile(async () => {
           await this.#appendEventTypeExplanation({ eventType: event.type });
@@ -716,11 +742,17 @@ function eventTypeExplanation(eventType: string): string | null {
   if (eventType === "events.iterate.com/agents/user-message-received") {
     return "First `events.iterate.com/agents/user-message-received` event. This represents a message received from a user; the payload origin says whether it came from web or TUI.";
   }
+  if (eventType === "events.iterate.com/agents/agent-message-received") {
+    return "First `events.iterate.com/agents/agent-message-received` event. This represents a message from an AI agent that is speaking to the project owner and asking this Iterate agent to do work on their behalf.";
+  }
   if (eventType === "events.iterate.com/agents/web-message-sent") {
     return "First `events.iterate.com/agents/web-message-sent` event. This represents a message sent through the web chat response tool.";
   }
   if (eventType === "events.iterate.com/agents/tui-message-sent") {
     return "First `events.iterate.com/agents/tui-message-sent` event. This represents a message sent through the TUI chat response tool.";
+  }
+  if (eventType === "events.iterate.com/agents/agent-message-sent") {
+    return "First `events.iterate.com/agents/agent-message-sent` event. This represents a response sent to the AI agent that asked this Iterate agent for help.";
   }
   if (eventType === "events.iterate.com/agent/llm-request-cancelled") {
     return eventTypeExplanationBlock({
@@ -732,7 +764,7 @@ function eventTypeExplanation(eventType: string): string | null {
     return eventTypeExplanationBlock({
       type: eventType,
       meaning:
-        "A capability is now available to your scripts. Call it as `itx.<name>.<method>(args)` in a code block. Return a value only when you need to inspect it on your next turn. For side-effect-only calls such as `itx.chat.sendMessage(...)`, await the call but do not return it. The event below shows the capability's name and usage instructions.",
+        "A capability is now available to your scripts. Call it using the exact shape in its usage instructions, such as `itx.<name>(args)` or `itx.<name>.<method>(args)`. Return a value only when you need to inspect it on your next turn. For side-effect-only calls, await the call but do not return it. The event below shows the capability's name and usage instructions.",
     });
   }
   return null;

@@ -8,6 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpHandler } from "agents/mcp";
 import { z } from "zod";
 import packageJson from "../../../package.json" with { type: "json" };
+import { resolveAskAssistantAgentPath } from "./ask-assistant-agent-path.ts";
 import { authenticateAdminApiSecret } from "~/auth/admin.ts";
 import { principalFromAccessToken } from "~/auth/principal.ts";
 import { listAllProjects } from "~/db/queries/.generated/index.ts";
@@ -16,6 +17,8 @@ import type { ItxRuntime } from "~/itx/handle.ts";
 import { runItxScript } from "~/itx/run.ts";
 import { MCP_START_MOUNT_PATH, resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
 import type { RequestContext } from "~/request-context.ts";
+import { getStreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
+import type { StreamEvent } from "~/domains/streams/engine/shared/event.ts";
 
 type ProjectGrant = {
   id: string;
@@ -24,11 +27,13 @@ type ProjectGrant = {
 
 type McpAuth = {
   authType: "admin_api_secret" | "oauth_access_token";
+  askAssistantSessionKey?: string;
   projects: ProjectGrant[];
   scopes: string[];
 };
 
 const requiredToolScope = "profile";
+const AGENT_MESSAGE_SENT_EVENT_TYPE = "events.iterate.com/agents/agent-message-sent";
 const ExecJsInput = z.object({
   code: z
     .string()
@@ -36,6 +41,13 @@ const ExecJsInput = z.object({
       "JavaScript async arrow function to execute, e.g. async (itx) => { return await itx.describe(); }",
     ),
   project: z.string().optional().describe("Project slug to run this code against."),
+});
+const AskAssistantInput = z.object({
+  message: z
+    .string()
+    .trim()
+    .min(1)
+    .describe("Human-language request to ask the project assistant."),
 });
 
 export const mcpCorsHeaders = {
@@ -76,13 +88,19 @@ export async function handleInboundMcpRequest(input: {
   );
 }
 
-function createServer(input: { auth: McpAuth; context: RequestContext; env: Env }) {
+function createServer(input: {
+  auth: McpAuth;
+  context: RequestContext;
+  env: Env;
+  request: Request;
+}) {
   const server = new McpServer(
     { name: "os", version: packageJson.version },
     {
       instructions: [
         "This is an Iterate OS project MCP server.",
         "Use exec_js to run a JavaScript async arrow function against a project.",
+        "Use ask_assistant to ask the project assistant a plain-language question.",
       ].join("\n"),
     },
   );
@@ -129,7 +147,96 @@ function createServer(input: { auth: McpAuth; context: RequestContext; env: Env 
     },
   );
 
+  server.registerTool(
+    "ask_assistant",
+    {
+      title: "Ask assistant",
+      description:
+        "Ask a project assistant in human language. The MCP call blocks until the assistant calls itx.respondToAgent({ message }). Requires the token to grant exactly one project.",
+      inputSchema: AskAssistantInput,
+    },
+    async (rawInput) => {
+      const message = parseAskAssistantMessage(rawInput);
+      const project = resolveAskAssistantProject(projects);
+      requireScope(input.auth, requiredToolScope);
+
+      const workerExports = input.context.workerExports;
+      if (!workerExports) {
+        throw new Error("MCP ask_assistant needs workerExports in request context.");
+      }
+
+      const agentPath = await resolveAskAssistantAgentPath({
+        auth: input.auth,
+        request: input.request,
+      });
+      const streams = getStreamsBackend({
+        exports: workerExports as Pick<Cloudflare.Exports, "StreamsBackend">,
+        props: {
+          appendMetadata: {
+            source: { tool: "ask_assistant" },
+          },
+          appendPolicy: { mode: "stream" },
+          projectId: project.id,
+          streamPath: agentPath,
+        },
+      });
+
+      const requestEvent = await streams.append({
+        event: {
+          type: "events.iterate.com/agents/agent-message-received",
+          payload: {
+            message,
+          },
+        },
+      });
+
+      try {
+        const responseEvent = await streams.waitForEvent({
+          afterOffset: requestEvent.offset,
+          eventTypes: [AGENT_MESSAGE_SENT_EVENT_TYPE],
+          timeoutMs: 120_000,
+          predicate: (event) => event.type === AGENT_MESSAGE_SENT_EVENT_TYPE,
+        });
+        return {
+          content: [{ type: "text" as const, text: readMcpResponseMessage(responseEvent) }],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `The assistant did not send an MCP response in time: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
   return server;
+}
+
+function parseAskAssistantMessage(rawInput: unknown) {
+  if (typeof rawInput === "string") return AskAssistantInput.shape.message.parse(rawInput);
+  return AskAssistantInput.parse(rawInput).message;
+}
+
+function resolveAskAssistantProject(projects: ProjectGrant[]) {
+  if (projects.length === 1) return projects[0]!;
+  throw new Error(
+    "ask_assistant requires an MCP token that grants exactly one project. Reconnect MCP from a project-scoped OAuth selection.",
+  );
+}
+
+function readMcpResponseMessage(event: StreamEvent) {
+  const message = (event.payload as { message?: unknown } | undefined)?.message;
+  if (typeof message !== "string" || message.trim() === "") {
+    throw new Error(`Agent response event ${event.offset} did not include a message.`);
+  }
+  return message;
 }
 
 async function resolveMcpAuth(input: {
@@ -194,6 +301,9 @@ async function resolveMcpAuth(input: {
 
   return {
     authType: "oauth_access_token",
+    askAssistantSessionKey: principal.sessionId
+      ? `oauth-session:${principal.sessionId}`
+      : `oauth-user:${principal.userId}`,
     projects,
     scopes,
   };

@@ -60,6 +60,44 @@ describe("AgentProcessor", () => {
     });
   });
 
+  it("renders agent-to-agent messages into agent input", async () => {
+    const { stream, appended } = memoryStream();
+    const setupAgentRuntime = vi.fn(async () => undefined);
+    const processor = newAgentProcessor({ stream, setupAgentRuntime });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/agents/agent-message-received",
+          payload: { message: "check project status" },
+          offset: 6,
+        }),
+      ],
+      streamMaxOffset: 6,
+    });
+
+    expect(setupAgentRuntime).toHaveBeenCalledOnce();
+    expect(appended[0]).toMatchObject({
+      type: "events.iterate.com/agent/input-added",
+      idempotencyKey: "agent/event-type-explainer/events.iterate.com/agents/agent-message-received",
+    });
+    expect(appended[1]).toMatchObject({
+      type: "events.iterate.com/agent/input-added",
+      idempotencyKey: "agent/render-agent-message@6",
+      payload: {
+        content: [
+          "```yaml",
+          "event:",
+          "  offset: 6",
+          "  type: events.iterate.com/agents/agent-message-received",
+          "  message: |-",
+          "    check project status",
+          "```",
+        ].join("\n"),
+      },
+    });
+  });
+
   it("renders chat tool responses without triggering a request", async () => {
     const { stream, appended } = memoryStream();
     const processor = newAgentProcessor({ stream });

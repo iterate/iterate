@@ -1,5 +1,5 @@
-// AgentToolsCapability: the agent's own tools (chat.sendMessage, debug) as a
-// dialable itx loopback (DIALABLE_LOOPBACKS).
+// AgentToolsCapability: the agent's own tools (chat.sendMessage,
+// respondToAgent, debug) as a dialable itx loopback (DIALABLE_LOOPBACKS).
 //
 // Why a forwarder instead of a durable-object ref: DO names are
 // definer-controlled, so a raw ref could address another project's agent.
@@ -18,8 +18,8 @@ export type AgentToolsCapabilityProps = {
   projectId?: string;
   /** Which agent stream this tool cap is bound to. Definer-supplied. */
   agentPath: string;
-  /** The tool namespace on the agent DO: "chat" or "debug". */
-  tool: "chat" | "debug";
+  /** The tool namespace on the agent DO. */
+  tool: "chat" | "debug" | "respondToAgent";
   capabilityPath?: string;
   context?: string;
 };

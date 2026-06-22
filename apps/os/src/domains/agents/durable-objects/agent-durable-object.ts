@@ -48,6 +48,7 @@ import {
 } from "~/domains/agents/agent-stream-subscriptions.ts";
 import {
   AGENT_CHAT_CAPABILITY_INSTRUCTIONS,
+  AGENT_TO_AGENT_RESPONSE_CAPABILITY_INSTRUCTIONS,
   AGENT_WORKSPACE_CAPABILITY_INSTRUCTIONS,
 } from "~/domains/agents/agent-prompt-guidance.ts";
 import { buildProjectStreamViewerUrl } from "~/lib/stream-viewer-url.ts";
@@ -85,7 +86,7 @@ export type CloneProjectRepoInput = {
 /** Bump when agentContextCapabilities changes — re-provides the agent's tools
  * onto its own context (each provide appends an itx/capability-provided event
  * that both folds into the capability table and renders into the LLM's view). */
-const AGENT_CONTEXT_CAPABILITIES_VERSION = "10";
+const AGENT_CONTEXT_CAPABILITIES_VERSION = "11";
 
 export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
   readonly name = parseDurableObjectName(this.ctx.id.name!);
@@ -225,7 +226,7 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
     args: unknown[];
     callId: string;
     path: string[];
-    tool: "chat" | "debug";
+    tool: "chat" | "debug" | "respondToAgent";
   }) {
     this.projectScopedName();
     if (input.tool === "debug") {
@@ -233,11 +234,24 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
     }
 
     const functionName = input.path.join(".");
+    if (input.tool === "respondToAgent") {
+      if (input.path.length !== 0) {
+        throw new Error(`Unknown respondToAgent path ${functionName}`);
+      }
+
+      const message = parseMessageToolInput(input.args[0], "itx.respondToAgent");
+      const event = await this.appendAgentMessage({
+        idempotencyKey: `agents-respond-to-agent:${input.callId}`,
+        message,
+      });
+      return { event };
+    }
+
     if (functionName !== "sendMessage") {
       throw new Error(`Unknown agent chat tool function chat.${functionName}`);
     }
 
-    const message = parseChatToolMessage(input.args[0]);
+    const message = parseMessageToolInput(input.args[0], "itx.chat.sendMessage");
     const event = await this.appendAssistantResponse({
       idempotencyKey: `agents-chat-tool:send-message:${input.callId}`,
       message,
@@ -596,6 +610,18 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
     });
   }
 
+  private async appendAgentMessage(input: { idempotencyKey: string; message: string }) {
+    return await this.streamsEntrypoint(this.name.path).append({
+      event: {
+        type: "events.iterate.com/agents/agent-message-sent",
+        idempotencyKey: input.idempotencyKey,
+        payload: {
+          message: input.message,
+        },
+      },
+    });
+  }
+
   private agentContextCapabilities(params: AgentDurableObjectName): Array<{
     name: string;
     instructions: string;
@@ -618,16 +644,27 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
             "calls for it.",
           name: "slack",
         }
-      : {
-          capability: {
-            entrypoint: "AgentToolsCapability",
-            props: { agentPath: params.path, tool: "chat" },
-            type: "rpc",
-            worker: { type: "loopback" },
-          } satisfies CapabilityAddress,
-          instructions: AGENT_CHAT_CAPABILITY_INSTRUCTIONS,
-          name: "chat",
-        };
+      : isMcpAgentPath(params.path)
+        ? {
+            capability: {
+              entrypoint: "AgentToolsCapability",
+              props: { agentPath: params.path, tool: "respondToAgent" },
+              type: "rpc",
+              worker: { type: "loopback" },
+            } satisfies CapabilityAddress,
+            instructions: AGENT_TO_AGENT_RESPONSE_CAPABILITY_INSTRUCTIONS,
+            name: "respondToAgent",
+          }
+        : {
+            capability: {
+              entrypoint: "AgentToolsCapability",
+              props: { agentPath: params.path, tool: "chat" },
+              type: "rpc",
+              worker: { type: "loopback" },
+            } satisfies CapabilityAddress,
+            instructions: AGENT_CHAT_CAPABILITY_INSTRUCTIONS,
+            name: "chat",
+          };
 
     return [
       channel,
@@ -769,13 +806,13 @@ function formatDebugMessage(snapshot: DebugSnapshot) {
     .join("\n");
 }
 
-function parseChatToolMessage(value: unknown) {
+function parseMessageToolInput(value: unknown, toolName: string) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("itx.chat.sendMessage requires an object argument.");
+    throw new Error(`${toolName} requires an object argument.`);
   }
   const message = (value as { message?: unknown }).message;
   if (typeof message !== "string" || message.trim() === "") {
-    throw new Error("itx.chat.sendMessage requires a non-empty message string.");
+    throw new Error(`${toolName} requires a non-empty message string.`);
   }
   return message;
 }
@@ -783,4 +820,9 @@ function parseChatToolMessage(value: unknown) {
 function isSlackAgentPath(agentPath: string) {
   const normalized = agentPath.toLowerCase();
   return normalized === "/agents/slack" || normalized.startsWith("/agents/slack/");
+}
+
+function isMcpAgentPath(agentPath: string) {
+  const normalized = agentPath.toLowerCase();
+  return normalized === "/agents/mcp" || normalized.startsWith("/agents/mcp/");
 }

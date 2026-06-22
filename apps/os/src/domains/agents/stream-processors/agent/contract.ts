@@ -160,6 +160,19 @@ export const AgentProcessorContract = defineProcessorContract({
         content: z.string(),
       }),
     },
+    "events.iterate.com/agents/agent-message-received": {
+      description:
+        "Inbound message from an AI agent acting on behalf of the project owner before it is rendered into model context.",
+      examples: [
+        {
+          description: "Agent-to-agent request",
+          payload: { message: "Check whether the project has any failing deployment checks." },
+        },
+      ],
+      payloadSchema: z.object({
+        message: z.string(),
+      }),
+    },
     "events.iterate.com/agents/web-message-sent": {
       description: "User-visible web chat response emitted by a tool call.",
       examples: [
@@ -181,6 +194,20 @@ export const AgentProcessorContract = defineProcessorContract({
           description: "Assistant reply via TUI",
           payload: {
             message: "I can help you manage your project, run code, and more.",
+          },
+        },
+      ],
+      payloadSchema: z.object({
+        message: z.string(),
+      }),
+    },
+    "events.iterate.com/agents/agent-message-sent": {
+      description: "Response emitted to an AI agent that asked this agent for help.",
+      examples: [
+        {
+          description: "Assistant reply to another agent",
+          payload: {
+            message: "The project has two active agents and no failing checks.",
           },
         },
       ],
@@ -278,8 +305,10 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/itx/script-execution-completed",
     "events.iterate.com/stream/subscriber-connected",
     "events.iterate.com/agents/user-message-received",
+    "events.iterate.com/agents/agent-message-received",
     "events.iterate.com/agents/web-message-sent",
     "events.iterate.com/agents/tui-message-sent",
+    "events.iterate.com/agents/agent-message-sent",
     "events.iterate.com/agent/system-prompt-updated",
     "events.iterate.com/agent/config-updated",
     "events.iterate.com/agent/input-added",
@@ -323,8 +352,10 @@ export function reduceAgentEvent(args: { state: AgentState; event: AgentConsumed
     case "events.iterate.com/itx/script-execution-completed":
     case "events.iterate.com/stream/subscriber-connected":
     case "events.iterate.com/agents/user-message-received":
+    case "events.iterate.com/agents/agent-message-received":
     case "events.iterate.com/agents/web-message-sent":
     case "events.iterate.com/agents/tui-message-sent":
+    case "events.iterate.com/agents/agent-message-sent":
       return state;
     case "events.iterate.com/agent/config-updated":
       return event.payload.systemPrompt === undefined

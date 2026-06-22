@@ -43,6 +43,7 @@ import {
 import type { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
 import { agentProcessorSubscriptionConfiguredEvents } from "~/domains/agents/agent-stream-subscriptions.ts";
 import {
+  AGENT_TO_AGENT_RESPONSE_CAPABILITY_INSTRUCTIONS,
   AGENT_WORKSPACE_CAPABILITY_INSTRUCTIONS,
   SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE,
 } from "~/domains/agents/agent-prompt-guidance.ts";
@@ -399,8 +400,14 @@ function isSlackAgentPath(agentPath: string) {
   return normalized === "/agents/slack" || normalized.startsWith("/agents/slack/");
 }
 
+function isMcpAgentPath(agentPath: string) {
+  const normalized = agentPath.toLowerCase();
+  return normalized === "/agents/mcp" || normalized.startsWith("/agents/mcp/");
+}
+
 export function defaultAgentSystemPrompt(agentPath: string) {
   const isSlack = isSlackAgentPath(agentPath);
+  const isMcp = isMcpAgentPath(agentPath);
   const isOnboarding = agentPath === ONBOARDING_AGENT_PATH;
   return [
     `You are the iterate AI agent running on stream ${agentPath}.`,
@@ -415,7 +422,12 @@ export function defaultAgentSystemPrompt(agentPath: string) {
     "Use capabilities announced as itx/capability-provided events.",
     isSlack
       ? `For Slack, reply only when mentioned, directly asked, or clearly needed. Use await itx.slack.chat.postMessage({ channel, thread_ts, text }) on the same thread. ${SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE}`
-      : `For web chat, reply with await itx.chat.sendMessage({ message }). ${SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE}`,
+      : isMcp
+        ? [
+            "An AI agent is currently speaking to the owner of this Iterate project. That agent is asking you to do work on the owner's behalf.",
+            AGENT_TO_AGENT_RESPONSE_CAPABILITY_INSTRUCTIONS,
+          ].join(" ")
+        : `For web chat, reply with await itx.chat.sendMessage({ message }). ${SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE}`,
     "Use itx.streams.get(path) to read and append project stream events.",
     "Use the project repo as durable memory for stable project knowledge.",
     AGENT_WORKSPACE_CAPABILITY_INSTRUCTIONS,

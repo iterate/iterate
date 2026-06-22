@@ -16,6 +16,7 @@ vi.mock("~/domains/slack/durable-objects/slack-agent-durable-object.ts", () => (
 }));
 
 import {
+  AGENT_TO_AGENT_RESPONSE_CAPABILITY_INSTRUCTIONS,
   AGENT_WORKSPACE_CAPABILITY_INSTRUCTIONS,
   SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE,
 } from "~/domains/agents/agent-prompt-guidance.ts";
@@ -48,6 +49,17 @@ describe("project agent prompts", () => {
     expect(prompt).toContain("itx.workspace.readFile");
     expect(prompt).toContain("require('fs')");
     expect(prompt).not.toContain("return await itx.slack.chat.postMessage");
+  });
+
+  it("tells MCP inbound agents to answer the owner-facing agent without web or Slack chat", () => {
+    const prompt = defaultAgentSystemPrompt("/agents/mcp/inbound/session-test");
+
+    expect(prompt).toContain("AI agent is currently speaking to the owner");
+    expect(prompt).toContain(AGENT_TO_AGENT_RESPONSE_CAPABILITY_INSTRUCTIONS);
+    expect(prompt).toContain("await itx.respondToAgent({ message })");
+    expect(prompt).not.toContain("itx.chat.sendMessage");
+    expect(prompt).not.toContain("itx.slack.chat.postMessage");
+    expect(prompt).not.toContain("itx.mcp.respond");
   });
 });
 
