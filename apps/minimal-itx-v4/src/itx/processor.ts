@@ -10,7 +10,7 @@ import type {
   ItxCapabilityHost,
   JsonSerializableTrustMeBro,
   StreamEvent,
-} from "../../types-and-schemas.ts";
+} from "../../types.ts";
 import { ItxContract, type CapabilityRecord } from "./processor-contract.ts";
 
 export type ProvideCapabilityInput = Parameters<ItxCapabilityHost["provideCapability"]>[0];

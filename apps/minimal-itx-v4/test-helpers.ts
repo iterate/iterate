@@ -1,4 +1,4 @@
-import { newWebSocketRpcSession } from "capnweb";
+import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import WebSocket from "ws";
 import type { UnauthenticatedItx } from "./types.ts";
 
@@ -9,10 +9,6 @@ export type ItxWebSocketMessage = {
   data: unknown;
   direction: "in" | "out";
   timestamp: number;
-};
-
-type ItxSessionInput = {
-  onWebSocketMessage?: (message: ItxWebSocketMessage) => void;
 };
 
 export function buildUrl({
@@ -37,7 +33,15 @@ function byteLength(data: unknown): number {
   return 0;
 }
 
-export function withItxSession(input: ItxSessionInput = {}) {
+/**
+ * Returns a bog standard capnweb websocket RpcStub using newWebSocketRpcSession but allows
+ * the caller to pass in a function to record the websocket messages.
+ */
+export function withItxSession(
+  input: {
+    onWebSocketMessage?: (message: ItxWebSocketMessage) => void;
+  } = {},
+): RpcStub<UnauthenticatedItx> {
   const socket = new WebSocket(buildUrl({ path: "/api/itx", protocol: "ws" }), {
     handshakeTimeout: 10_000,
   });

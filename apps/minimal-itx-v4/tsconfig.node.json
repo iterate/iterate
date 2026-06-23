@@ -6,12 +6,10 @@
   },
   "include": [
     "src/client.ts",
-    "e2e-env.ts",
     "itx.e2e.test.ts",
+    "test-helpers.ts",
     "scripts/*.ts",
-    "types-and-schemas.stream-proof.ts",
-    "types-and-schemas.type.test.ts",
     "vitest.config.ts",
-    "types-and-schemas.ts"
+    "types.ts"
   ]
 }

@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { env } from "cloudflare:workers";
 import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
@@ -9,13 +10,13 @@ import type { ItxProcessorRpc } from "../../itx/processor.ts";
 import { ItxContract } from "../../itx/processor-contract.ts";
 import { ItxProcessor } from "../../itx/processor.ts";
 import { DynamicWorkersRpcTarget } from "../dynamic-workers/dynamic-workers-rpc-target.ts";
-import { parseDurableObjectName } from "../durable-object-names.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { Project, RpcTargetImplementation, StreamEvent } from "../../../types.ts";
 import { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { ProjectProcessor, ProjectProcessorContract } from "./project-processor.ts";
 
 export class ProjectDurableObject extends DurableObject<Env> {
-  readonly #name = parseDurableObjectName(this.ctx.id.name!);
+  readonly #name = DurableObjectNameCodec.parseProjectScoped(this.ctx.id.name!);
   readonly #processorHost = createStreamProcessorHost(this.ctx);
   readonly #projectProcessor = this.#processorHost.add(
     ProjectProcessorContract.slug,
@@ -75,6 +76,24 @@ export class ProjectDurableObject extends DurableObject<Env> {
     });
   }
 
+  // get rpcTarget() {
+  //   return new ProjectRpcTarget({
+  //     auth: trustedInternalAuthContext(),
+  //     projectId: this.#name.projectId,
+  //   });
+  // }
+
+  // updateProjectRepo() {
+  //   return this.rpcTarget.streams.get("/").append({
+  //     event: {
+  //       type: "events.iterate.com/stream/subscription-configured",
+  //       payload: {
+  //         subscriptionKey: `repo:${this.#name.projectId}:${PROJECT_REPO_PATH}:${crypto.randomUUID()}`,
+  //       },
+  //     },
+  //   });
+  // }
+
   // get worker(): ProjectWorker {
   //   return new ProjectWorkerTarget({
   //     auth: trustedInternalAuthContext(),
@@ -110,7 +129,10 @@ export class ProjectDurableObject extends DurableObject<Env> {
     return this.getCapability();
   }
 
-  async create(args: { projectId: string; slug: string }): Promise<StreamEvent> {
+  async create(args: Parameters<Project["create"]>[0]) {
+    if (args.projectId === undefined) {
+      args.projectId = "prj_" + crypto.randomUUID();
+    }
     if (args.projectId !== this.#name.projectId) {
       throw new Error(
         `create(${args.projectId}) must run on "${this.#name.projectId}", got ${args.projectId}`,

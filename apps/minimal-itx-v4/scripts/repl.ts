@@ -26,14 +26,16 @@ const adminToken = parseTokenEnv("ITX_ADMIN_TOKEN", { principal: "root", type: "
 
 const unauthenticated = connectItx({ baseUrl });
 const root = unauthenticated.authenticate({
-  auth: { type: "token", token: adminToken },
+  type: "token",
+  token: adminToken,
 }) as unknown as RpcStub<RootRpc>;
-await root.projects.create(projectId);
+await root.projects.create({ projectId, slug: projectId });
 
-const itx = unauthenticated.authenticate({
-  auth: { type: "token", token },
-  projectId,
-}) as unknown as RpcStub<ProjectItxRpc>;
+const userRoot = unauthenticated.authenticate({
+  type: "token",
+  token,
+}) as unknown as RpcStub<RootRpc>;
+const itx = userRoot.projects.get(projectId) as unknown as RpcStub<ProjectItxRpc>;
 
 const server = repl.start({
   ignoreUndefined: true,
@@ -49,11 +51,13 @@ Object.assign(server.context, {
   root,
   token,
   unauthenticated,
+  userRoot,
 });
 
 server.on("exit", () => {
   itx[Symbol.dispose]?.();
   root[Symbol.dispose]?.();
+  userRoot[Symbol.dispose]?.();
   unauthenticated[Symbol.dispose]?.();
 });
 

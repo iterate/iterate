@@ -7,11 +7,7 @@ import type {
   StreamEvent as PublicStreamEvent,
   StreamEventInput as PublicStreamEventInput,
 } from "../../../types.ts";
-import {
-  formatDurableObjectName,
-  PLATFORM_PROJECT_ID,
-  parseDurableObjectName,
-} from "../durable-object-names.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import {
   StreamEvent as StreamEventSchema,
@@ -383,7 +379,7 @@ export class StreamDurableObject extends DurableObject<Env> implements Stream {
     const resolvedPath = resolveStreamPath(this.#coreProcessorState.path, streamPath);
     if (resolvedPath === resolveStreamPath(this.#coreProcessorState.path, ".")) return this;
     return this.env.STREAM.getByName(
-      formatDurableObjectName({
+      DurableObjectNameCodec.stringify({
         path: resolvedPath,
         projectId: this.name.projectId,
       }),
@@ -613,12 +609,7 @@ export class StreamDurableObject extends DurableObject<Env> implements Stream {
    * incarnation dies, the wait dies too; callers that need retry semantics
    * should call again with the same `afterOffset`.
    */
-  async waitForEvent(args: {
-    afterOffset?: number;
-    eventTypes?: readonly string[];
-    predicate?: (event: StreamEvent) => boolean | Promise<boolean>;
-    timeoutMs: number;
-  }): Promise<StreamEvent> {
+  async waitForEvent(args: Parameters<Stream["waitForEvent"]>[0]) {
     if (args.eventTypes === undefined && args.predicate === undefined) {
       throw new Error("waitForEvent requires eventTypes or predicate.");
     }
@@ -817,7 +808,7 @@ export class StreamDurableObject extends DurableObject<Env> implements Stream {
         stream: new StreamRpcTarget({
           auth: trustedInternalAuthContext(),
           path: this.name.path,
-          projectId: this.name.projectId === PLATFORM_PROJECT_ID ? null : this.name.projectId,
+          projectId: this.name.projectId,
         }) as unknown as StreamRpc,
         subscriptionKey: args.subscriptionKey,
         streamMaxOffset: this.#coreProcessorState.maxOffset,
@@ -860,7 +851,7 @@ function parseStreamDurableObjectName(name: string | undefined) {
   if (!name) {
     throw new Error("Stream Durable Object must be addressed by name.");
   }
-  return parseDurableObjectName(name);
+  return DurableObjectNameCodec.parse(name);
 }
 
 function* chunkBytes(value: Uint8Array, chunkSize: number): Generator<[number, ArrayBuffer]> {

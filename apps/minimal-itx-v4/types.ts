@@ -57,7 +57,6 @@ export interface UnauthenticatedItx {
    * carries trusted connection props.
    */
   authenticate(input: ItxAuthCredentials): ItxRoot;
-  whoami(): string;
 }
 
 export interface ItxRoot {
@@ -66,9 +65,9 @@ export interface ItxRoot {
 }
 
 export interface Projects {
-  get(projectId: string): Project;
+  get(projectId: string): Promise<Project>;
   create(args: { projectId: string; slug: string }): Promise<Project>;
-  list(): string[];
+  list(): Promise<string[]>;
 }
 
 /**
@@ -84,7 +83,7 @@ export interface Project extends ItxCapabilityHost {
   // repos: Repos;
   // repo: Repo;
   // worker: ProjectWorker;
-  create(): Promise<StreamEvent>;
+  create(args: { projectId?: string; slug: string }): Promise<StreamEvent>;
 }
 
 /**
@@ -152,7 +151,7 @@ export interface Stream {
     /** Optional event-type prefilter. Omit, or include `"*"`, for all events. */
     eventTypes?: readonly string[];
     /** Called for candidate events until it returns true. */
-    predicate: (event: StreamEvent) => boolean | Promise<boolean>;
+    predicate?: (event: StreamEvent) => boolean | Promise<boolean>;
     /** Maximum time to wait before rejecting. */
     timeoutMs: number;
   }): Promise<StreamEvent>;
@@ -421,6 +420,13 @@ export type RpcTargetImplementation<T> = {
     : RpcTargetResult<T[K]>;
 };
 
+/**
+ * Credentials passed by a capnweb client to the stateless worker in worker.ts to authenticate.
+ *
+ * - `from-server-cookie` tells worker.ts "take the cookie from the http request and use it"
+ * - `token` lets you pass in an auth token directly
+ * - `trusted-internal` is used for internal callers (e.g. a dynamic worker)
+ */
 export type ItxAuthCredentials =
   | { type: "from-server-cookie" }
   | { type: "token"; token: ItxAuthToken }

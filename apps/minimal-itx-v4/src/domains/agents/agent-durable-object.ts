@@ -5,13 +5,13 @@ import {
 } from "../streams/engine/workers/stream-processor-host.ts";
 import type { Env } from "../../env.ts";
 import { TRUSTED_INTERNAL_ITX_TOKEN, trustedInternalAuthContext } from "../../auth.ts";
-import type { Agent, AgentItx, StreamEvent } from "../../../types-and-schemas.ts";
+import type { Agent, AgentItx, StreamEvent } from "../../../types.ts";
 import type { ItxProcessorRpc } from "../../itx/processor.ts";
 import { ItxContract } from "../../itx/processor-contract.ts";
 import { ItxProcessor } from "../../itx/processor.ts";
 import { AgentItx as AgentItxTarget, ProjectItx, StreamTarget } from "../../rpc_targets.ts";
 import { DynamicWorkersRpcTarget } from "../dynamic-workers/dynamic-workers-rpc-target.ts";
-import { parseDurableObjectName } from "../durable-object-names.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { AgentProcessor, AgentProcessorContract } from "./agent-processor.ts";
 
 type InternalStreamWriter = {
@@ -19,7 +19,7 @@ type InternalStreamWriter = {
 };
 
 export class AgentDurableObject extends DurableObject<Env> implements Agent {
-  readonly #name = parseDurableObjectName(this.ctx.id.name!);
+  readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   readonly #host = createStreamProcessorHost(this.ctx);
   readonly #stream = this.ctx.exports.StreamDurableObject.getByName(this.ctx.id.name!);
 

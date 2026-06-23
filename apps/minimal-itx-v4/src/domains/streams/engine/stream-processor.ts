@@ -1,6 +1,6 @@
 import { RpcTarget } from "capnweb";
 import type { z } from "zod";
-import type { Stream } from "../../../../types.ts";
+import type { RpcTargetImplementation, Stream } from "../../../../types.ts";
 import type { StreamEvent } from "./shared/event.ts";
 import {
   assertObjectProcessorState,
@@ -19,7 +19,7 @@ import {
 } from "./shared/stream-processors.ts";
 
 /** Stream capability the host hands every processor as `this.stream`. */
-export type StreamProcessorStream = Stream;
+export type StreamProcessorStream = RpcTargetImplementation<Stream>;
 
 /**
  * The structural slice of a processor contract that the class needs. Contracts
@@ -425,7 +425,10 @@ export abstract class StreamProcessor<
    * Pure projection of one consumed event into the next state. Defaults to
    * identity; returning `null`/`undefined` also keeps the current state.
    */
-  protected reduce(args: ReduceArgs<Contract>): ProcessorState<Contract> | null | undefined {
+  protected reduce(
+    this: never,
+    args: ReduceArgs<Contract>,
+  ): ProcessorState<Contract> | null | undefined {
     return args.state;
   }
 

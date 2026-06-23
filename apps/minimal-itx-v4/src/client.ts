@@ -4,7 +4,7 @@ import {
   type RpcCompatible as CapnRpcCompatible,
   type RpcStub as CapnRpcStub,
 } from "capnweb";
-import type { UnauthenticatedItx } from "../types-and-schemas.ts";
+import type { UnauthenticatedItx } from "../types.ts";
 
 export type {
   Agent,
@@ -16,7 +16,6 @@ export type {
   ItxAuth,
   ItxAuthToken,
   ItxCapabilityHost,
-  ItxConnectInput,
   JsonSerializableTrustMeBro,
   Project,
   Project as ProjectItxClient,
@@ -27,9 +26,10 @@ export type {
   Repo as RepoRpc,
   Repos,
   Repos as ReposRpc,
-  RootItx,
-  RootItx as RootItxClient,
-  RootItx as RootRpc,
+  ItxRoot,
+  ItxRoot as RootItx,
+  ItxRoot as RootItxClient,
+  ItxRoot as RootRpc,
   Stream,
   Stream as StreamRpc,
   StreamEvent,
@@ -39,7 +39,7 @@ export type {
   UnauthenticatedItx,
   UnauthenticatedItx as UnauthenticatedItxClient,
   UnauthenticatedItx as UnauthenticatedItxRpc,
-} from "../types-and-schemas.ts";
+} from "../types.ts";
 export type { RpcCompatible, RpcStub } from "capnweb";
 export type { ItxAuthContext } from "./auth.ts";
 

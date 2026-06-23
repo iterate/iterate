@@ -13,7 +13,7 @@ import type {
   Stream,
 } from "../types.ts";
 import type { ProcessEventBatch } from "./domains/streams/engine/types.ts";
-import { formatDurableObjectName, PLATFORM_PROJECT_ID } from "./domains/durable-object-names.ts";
+import { DurableObjectNameCodec } from "./domains/durable-object-names.ts";
 import {
   disposeIgnoredRpcResult,
   retainProcessEventBatch,
@@ -38,8 +38,8 @@ export class StreamRpcTarget extends RpcTarget implements RpcTargetImplementatio
 
   get durableObjectStub() {
     return env.STREAM.getByName(
-      formatDurableObjectName({
-        projectId: this.props.projectId ?? PLATFORM_PROJECT_ID,
+      DurableObjectNameCodec.stringify({
+        projectId: this.props.projectId,
         path: this.props.path,
       }),
     );
@@ -147,21 +147,28 @@ export class ItxRootRpcTarget extends RpcTarget implements RpcTargetImplementati
     super();
   }
 
-  get projects(): RpcTargetImplementation<Projects> {
+  get projects() {
     return new ProjectsRpcTarget({ auth: this.props.auth });
   }
 
-  whoami(): string {
+  get streams() {
+    return new StreamsRpcTarget({ auth: this.props.auth, projectId: null });
+  }
+
+  // get repos() {
+  //   return new ReposRpcTarget({ auth: this.props.auth, projectId: null });
+  // }
+
+  whoami() {
     return this.props.auth.principal;
   }
 }
-
 class ProjectsRpcTarget extends RpcTarget implements RpcTargetImplementation<Projects> {
   constructor(readonly props: { auth: ItxAuth }) {
     super();
   }
 
-  get(projectId: string): RpcTargetImplementation<Project> {
+  async get(projectId: string) {
     return new ProjectRpcTarget({
       auth: this.props.auth,
       projectId: projectId,
@@ -175,8 +182,16 @@ class ProjectsRpcTarget extends RpcTarget implements RpcTargetImplementation<Pro
     if (!this.props.auth.isAdmin()) {
       throw new Error(`principal "${this.props.auth.principal}" cannot create projects`);
     }
+
+    if (args.projectId === undefined) {
+      // In actual apps/os we'd
+      // 1) check auth JWT for matching project id and
+      // 2) if not found, go to auth.iterate.com to create new project
+      args.projectId = "prj_" + crypto.randomUUID();
+    }
+
     const _event = await env.PROJECT.getByName(
-      formatDurableObjectName({ path: "/", projectId: args.projectId }),
+      DurableObjectNameCodec.stringify({ path: "/", projectId: args.projectId }),
     ).create(args);
     return this.get(args.projectId);
   }
@@ -232,7 +247,7 @@ export class UnauthenticatedItxRpcTarget
     super();
   }
 
-  authenticate(input: ItxAuthCredentials): ItxRootRpcTarget {
+  authenticate(input: ItxAuthCredentials) {
     let auth: ItxAuth | null = null;
 
     if (input.type === "token") {
@@ -251,21 +266,13 @@ export class UnauthenticatedItxRpcTarget
 
     return new ItxRootRpcTarget({ auth });
   }
-
-  whoami(): string {
-    return "Unauthenticated";
-  }
 }
 
 export class ItxEntrypoint
   extends WorkerEntrypoint<Env, ItxAuthCredentials>
-  implements RpcTargetImplementation<UnauthenticatedItx>
+  implements Pick<RpcTargetImplementation<UnauthenticatedItx>, "authenticate">
 {
   authenticate(input: ItxAuthCredentials = this.ctx.props) {
     return new UnauthenticatedItxRpcTarget().authenticate(input);
-  }
-
-  whoami(): string {
-    return new UnauthenticatedItxRpcTarget().whoami();
   }
 }

@@ -2,7 +2,7 @@ import { z } from "zod";
 import type {
   DynamicWorkerRef as DynamicWorkerRefType,
   DynamicWorkerSource as DynamicWorkerSourceType,
-} from "../../../types-and-schemas.ts";
+} from "../../../types.ts";
 
 export const DynamicWorkerSource = z.discriminatedUnion("type", [
   z.strictObject({

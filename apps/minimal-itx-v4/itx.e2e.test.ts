@@ -2,25 +2,26 @@ import { describe, expect, test } from "vitest";
 // oxlint-disable-next-line iterate/no-capnweb-http-batch -- this regression test intentionally proves the one-shot HTTP batch shape.
 import { newHttpBatchRpcSession } from "capnweb";
 import { buildUrl, withItxSession } from "./test-helpers.ts";
+import type { ItxWebSocketMessage } from "./test-helpers.ts";
 import type { ItxAuthToken, UnauthenticatedItx } from "./types.ts";
-
-const aliceToken: ItxAuthToken = {
-  principal: "alice",
-  projectScopes: ["prj_alice", "prj_ref"],
-  type: "user",
-};
 
 // These are hand written tests - they MUST pass
 describe("minimal itx v4", () => {
   test("Unauthenticated itx can't do anything", async () => {
     using session = withItxSession();
-    expect(await session.whoami()).toBe("Unauthenticated");
     await expect((<any>session).projects).rejects.toThrow();
   });
 
   test("Authenticated itx whoami returns principal", async () => {
     using session = withItxSession();
-    using itx = session.authenticate({ type: "token", token: aliceToken });
+    using itx = session.authenticate({
+      type: "token",
+      token: {
+        principal: "alice",
+        projectScopes: ["prj_alice", "prj_ref"],
+        type: "user",
+      },
+    });
 
     const projects = itx.projects;
 
@@ -30,7 +31,14 @@ describe("minimal itx v4", () => {
 
   test("Authenticated itx whoami can create project", async () => {
     using session = withItxSession();
-    using itx = session.authenticate({ type: "token", token: aliceToken });
+    using itx = session.authenticate({
+      type: "token",
+      token: {
+        principal: "alice",
+        projectScopes: ["prj_alice", "prj_ref"],
+        type: "user",
+      },
+    });
 
     const projects = itx.projects;
 
@@ -49,7 +57,62 @@ describe("minimal itx v4", () => {
     expect(principal).toBe("alice");
     expect(projects).toEqual(["prj_alice", "prj_ref"]);
     // session is now finished - cannot be used again in batch http mode
-    await expect(session.whoami()).rejects.toThrow();
+    await expect(session.authenticate).rejects.toThrow();
+  });
+
+  test("websocket transport pipelines a batch into a single round trip", async () => {
+    // Pipelining proof for the *websocket* transport. The HTTP batch test above
+    // proves it for one-shot batches; this one proves the live socket coalesces a
+    // pipelined script into a single network round trip too.
+    //
+    // We measure round trips straight off the wire. test-helpers' onWebSocketMessage
+    // hook records every frame with its direction, and capnweb sends each RPC call
+    // as its own frame (a "push", plus a "pull" when the result is awaited). The
+    // give-away of a round trip is therefore NOT the frame count but the
+    // interleaving: a pipelined batch fires all of its outbound frames back to back
+    // (one contiguous burst) before blocking on any reply, whereas awaiting between
+    // calls forces a reply (an inbound frame) to land mid-stream and splits the
+    // outbound frames into separate bursts. So: round trips === number of
+    // contiguous outbound bursts.
+    const countRoundTrips = (messages: readonly ItxWebSocketMessage[]): number => {
+      let roundTrips = 0;
+      let previousDirection: ItxWebSocketMessage["direction"] | undefined;
+      for (const { direction } of messages) {
+        if (direction === "out" && previousDirection !== "out") roundTrips += 1;
+        previousDirection = direction;
+      }
+      return roundTrips;
+    };
+
+    // Pipelined: authenticate + both reads are issued in the same tick, so every
+    // outbound frame leaves before any reply is awaited -> one burst.
+    const pipelined: ItxWebSocketMessage[] = [];
+    {
+      using session = withItxSession({ onWebSocketMessage: (m) => pipelined.push(m) });
+      using itx = session.authenticate({ type: "token", token: aliceToken });
+      const [principal, projects] = await Promise.all([itx.whoami(), itx.projects.list()]);
+      expect(principal).toBe("alice");
+      expect(projects).toEqual(["prj_alice", "prj_ref"]);
+    }
+
+    // Sequential: the same logical work, but each await blocks on a reply before
+    // the next call goes out, so the inbound frame splits the outbound frames
+    // into separate bursts -> more round trips.
+    const sequential: ItxWebSocketMessage[] = [];
+    {
+      using session = withItxSession({ onWebSocketMessage: (m) => sequential.push(m) });
+      using itx = session.authenticate({ type: "token", token: aliceToken });
+      expect(await itx.whoami()).toBe("alice");
+      expect(await itx.projects.list()).toEqual(["prj_alice", "prj_ref"]);
+    }
+
+    const pipelinedRoundTrips = countRoundTrips(pipelined);
+    const sequentialRoundTrips = countRoundTrips(sequential);
+
+    // The whole point: pipelining collapses the script to a single round trip.
+    expect(pipelinedRoundTrips).toBe(1);
+    // And it really is a saving over doing the same work one await at a time.
+    expect(pipelinedRoundTrips).toBeLessThan(sequentialRoundTrips);
   });
 });
 

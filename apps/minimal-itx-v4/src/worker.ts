@@ -10,6 +10,9 @@ import { ItxEntrypoint, UnauthenticatedItxRpcTarget } from "./rpc-targets.ts";
 export default {
   async fetch(request: Request, _env: Env) {
     const url = new URL(request.url);
+
+    // To test cookie auth, callers can post the JWT they'd like to have written as a cookie to /api/login
+    // In this demo implementation of itx, we just trust the caller to pick their own jwt.
     if (url.pathname === "/api/login") {
       if (request.method !== "POST")
         return Response.json({ error: "method not allowed" }, { status: 405 });

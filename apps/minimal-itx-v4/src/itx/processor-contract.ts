@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
 import { DynamicWorkerRef } from "../domains/dynamic-workers/dynamic-worker-ref.ts";
-import type { CapabilityRecord as CapabilityRecordType } from "../../types-and-schemas.ts";
+import type { CapabilityRecord as CapabilityRecordType } from "../../types.ts";
 
 export const CapabilityRecord = z.discriminatedUnion("type", [
   z.strictObject({

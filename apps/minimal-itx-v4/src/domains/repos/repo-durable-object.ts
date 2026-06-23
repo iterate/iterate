@@ -6,9 +6,9 @@ import {
   type RequestStreamSubscriptionArgs,
 } from "../streams/engine/workers/stream-processor-host.ts";
 import type { Env } from "../../env.ts";
-import type { Repo, StreamEvent } from "../../../types-and-schemas.ts";
+import type { Repo, StreamEvent } from "../../../types.ts";
 import { hashString, type ResolvedWorkerSource } from "../dynamic-workers/dynamic-worker-loader.ts";
-import { parseDurableObjectName } from "../durable-object-names.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.ts";
 import { RepoProcessor, RepoProcessorContract } from "./repo-processor.ts";
 
@@ -22,7 +22,7 @@ type InternalStreamWriter = {
 };
 
 export class RepoDurableObject extends DurableObject<Env> implements Repo {
-  readonly #name = parseDurableObjectName(this.ctx.id.name!);
+  readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   readonly #host = createStreamProcessorHost(this.ctx);
   readonly #stream = this.ctx.exports.StreamDurableObject.getByName(this.ctx.id.name!);
 

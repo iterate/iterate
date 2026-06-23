@@ -4,7 +4,7 @@ import { StreamProcessor } from "../streams/engine/stream-processor.ts";
 import { durableObjectProcessorSubscriber } from "../streams/engine/shared/callable-subscriber.ts";
 import type { Env } from "../../env.ts";
 import type { StreamEvent } from "../../../types.ts";
-import { formatDurableObjectName } from "../durable-object-names.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { AgentProcessorContract } from "../agents/agent-processor.ts";
 import { RepoProcessorContract } from "../repos/repo-processor.ts";
 import { CoreProcessorContract } from "../streams/engine/processors/core/contract.ts";
@@ -84,6 +84,7 @@ export class ProjectProcessor extends StreamProcessor<
 
   protected override processEvent({
     blockProcessorWhile,
+    runInBackground,
     event,
     append,
   }: Parameters<StreamProcessor<typeof ProjectProcessorContract>["processEvent"]>[0]): undefined {
@@ -94,7 +95,7 @@ export class ProjectProcessor extends StreamProcessor<
             `create-requested for "${event.payload.projectId}" on project "${this.deps.projectId}"`,
           );
         }
-        blockProcessorWhile(async () => {
+        runInBackground(async () => {
           setTimeout(async () => {
             await append({
               type: "events.iterate.com/project/created",
@@ -111,7 +112,10 @@ export class ProjectProcessor extends StreamProcessor<
         // below and wires the repo processor to the child stream.
         blockProcessorWhile(async () => {
           await this.deps.env.STREAM.getByName(
-            formatDurableObjectName({ projectId: this.deps.projectId, path: "/repos/project" }),
+            DurableObjectNameCodec.stringify({
+              projectId: this.deps.projectId,
+              path: "/repos/project",
+            }),
           ).runtimeState();
         });
         return;
@@ -127,7 +131,7 @@ export class ProjectProcessor extends StreamProcessor<
                 subscriptionKey: RepoProcessorContract.slug,
                 subscriber: durableObjectProcessorSubscriber({
                   bindingName: "REPO",
-                  durableObjectName: formatDurableObjectName({
+                  durableObjectName: DurableObjectNameCodec.stringify({
                     projectId: this.deps.projectId,
                     path,
                   }),
@@ -147,7 +151,7 @@ export class ProjectProcessor extends StreamProcessor<
                 subscriptionKey: AgentProcessorContract.slug,
                 subscriber: durableObjectProcessorSubscriber({
                   bindingName: "AGENT",
-                  durableObjectName: formatDurableObjectName({
+                  durableObjectName: DurableObjectNameCodec.stringify({
                     projectId: this.deps.projectId,
                     path,
                   }),
@@ -175,10 +179,7 @@ export class ProjectProcessor extends StreamProcessor<
     return await this.stream.waitForEvent({
       afterOffset: requested.offset,
       eventTypes: ["events.iterate.com/project/created"],
-      predicate: (event) =>
-        event.type === "events.iterate.com/project/created" &&
-        event.payload?.projectId === args.projectId,
-      timeoutMs: 10000,
+      timeoutMs: 5000,
     });
   }
 }
