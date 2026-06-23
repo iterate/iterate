@@ -445,7 +445,13 @@ export class ProjectWorkerRpcTarget
         sourcePath: PROJECT_WORKER_SOURCE_PATH,
         type: "repo",
       },
-      target: { type: "worker-entrypoint" },
+      target: {
+        props: {
+          auth: TRUSTED_INTERNAL_ITX_PROPS,
+          projectId: this.props.projectId,
+        },
+        type: "worker-entrypoint",
+      },
     });
   }
 }

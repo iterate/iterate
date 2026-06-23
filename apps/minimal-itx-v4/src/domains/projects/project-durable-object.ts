@@ -96,7 +96,16 @@ export class ProjectDurableObject extends DurableObject<Env> {
         sourcePath: PROJECT_WORKER_SOURCE_PATH,
         type: "repo",
       },
-      target: { type: "worker-entrypoint" },
+      target: {
+        props: {
+          auth: {
+            type: "trusted-internal",
+            token: TRUSTED_INTERNAL_ITX_TOKEN,
+          },
+          projectId: this.#name.projectId,
+        },
+        type: "worker-entrypoint",
+      },
     });
   }
 

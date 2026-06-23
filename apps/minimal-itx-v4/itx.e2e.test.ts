@@ -3,11 +3,17 @@ import { describe, expect, test } from "vitest";
 // oxlint-disable-next-line iterate/no-capnweb-http-batch -- this regression test intentionally proves the one-shot HTTP batch shape.
 import { newHttpBatchRpcSession } from "capnweb";
 import { WebClient } from "@slack/web-api";
+import { z } from "zod";
+import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
 import { buildUrl, withItxSession } from "./test-helpers.ts";
 import type { ItxWebSocketMessage } from "./test-helpers.ts";
 import type { UnauthenticatedItx } from "./types.ts";
 import { TRUSTED_INTERNAL_ITX_TOKEN } from "./src/auth.ts";
 import { RepoArtifactNameCodec } from "./src/domains/repos/repo-artifact-name.ts";
+import {
+  StreamProcessor,
+  type StreamProcessorSnapshot,
+} from "./src/domains/streams/engine/stream-processor.ts";
 
 type MockSlack = {
   calls: string[];
@@ -18,6 +24,49 @@ type MockSlack = {
 type PathCallable = {
   invokeCapability(input: { args?: unknown[]; path: string[] }): unknown;
 };
+
+const PROJECT_WORKER_FORWARDED_EVENT_TYPE = "events.iterate.test/project-worker-forwarded";
+
+const ProjectWorkerForwardingProbeContract = defineProcessorContract({
+  slug: "minimal-itx-v4.project-worker-forwarding-probe",
+  version: "0.1.0",
+  description: "Records project worker processEvent deliveries observed through an ITX stream.",
+  stateSchema: z.object({
+    childPaths: z.array(z.string()).default([]),
+    markers: z.array(z.string()).default([]),
+  }),
+  initialState: { childPaths: [], markers: [] },
+  events: {
+    [PROJECT_WORKER_FORWARDED_EVENT_TYPE]: {
+      payloadSchema: z.object({
+        childPath: z.string(),
+        marker: z.string(),
+        originalType: z.string(),
+      }),
+    },
+  },
+  consumes: [PROJECT_WORKER_FORWARDED_EVENT_TYPE],
+  emits: [],
+});
+type ProjectWorkerForwardingProbeContract = typeof ProjectWorkerForwardingProbeContract;
+type ProjectWorkerForwardingProbeState = {
+  childPaths: string[];
+  markers: string[];
+};
+
+class ProjectWorkerForwardingProbeProcessor extends StreamProcessor<ProjectWorkerForwardingProbeContract> {
+  readonly contract = ProjectWorkerForwardingProbeContract;
+
+  protected override reduce({
+    event,
+    state,
+  }: Parameters<StreamProcessor<ProjectWorkerForwardingProbeContract>["reduce"]>[0]) {
+    return {
+      childPaths: [...state.childPaths, event.payload.childPath],
+      markers: [...state.markers, event.payload.marker],
+    };
+  }
+}
 
 function parseBody(body: string, contentType: string | string[] | undefined): Record<string, any> {
   if (typeof contentType === "string" && contentType.includes("application/json")) {
@@ -442,8 +491,16 @@ describe("minimal itx v4", () => {
               async processEvent({ event }) {
                 if (event.metadata?.crossPostMarker !== ${JSON.stringify(marker)}) return;
 
-                const root = await this.env.ITX.authenticate();
-                const project = await root.projects.get(${JSON.stringify(description.projectId)});
+                const root = await this.env.ITX.authenticate(this.ctx.props.auth);
+                // TODO(workers-rpc-pipelining): This should eventually collapse to
+                // root.projects.get(this.ctx.props.projectId).streams.get(...).
+                // Workers RPC exposes prototype getters, but workerd does not reliably
+                // promise-pipeline through getter/property hops on an unresolved RPC
+                // result. That is why apps/os uses method-shaped boundaries like
+                // node.itx().invoke(...) and PathProxy/replayPathCall for deep dotted
+                // traversal. Keep this explicit await until v4 has the same kind of
+                // method-shaped or path-proxy bridge for project-scoped ITX handles.
+                const project = await root.projects.get(this.ctx.props.projectId);
                 await project.streams.get("/cross-posted").append({
                   type: "events.iterate.com/test/cross-posted",
                   idempotencyKey: \`project-worker-cross-post:\${event.offset}\`,
@@ -487,6 +544,124 @@ describe("minimal itx v4", () => {
       originalPayload: { text: "hello from root" },
       originalType: "events.iterate.com/test/source",
     });
+  });
+
+  test("Project stream subscribe can observe project worker processEvent forwarding", async () => {
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+
+    const marker = crypto.randomUUID();
+    const outputPath = `/worker-forwarding-output-${marker}`;
+    const triggerPath = `/worker-forwarding-trigger-${marker}`;
+
+    using project = itx.projects.create({ slug: `worker-forwarding-${marker}` });
+    const description = await project.describe();
+
+    await project.repo.commitFiles({
+      changes: [
+        {
+          path: "worker.js",
+          content: `
+            import { WorkerEntrypoint } from "cloudflare:workers";
+
+            const OUTPUT_PATH = ${JSON.stringify(outputPath)};
+            const TRIGGER_PATH = ${JSON.stringify(triggerPath)};
+            const MARKER = ${JSON.stringify(marker)};
+            const FORWARDED_EVENT_TYPE = ${JSON.stringify(PROJECT_WORKER_FORWARDED_EVENT_TYPE)};
+
+            export default class ProjectWorker extends WorkerEntrypoint {
+              fetch(req) {
+                return new Response(\`forwarding test worker fetched \${new URL(req.url).pathname}\`);
+              }
+
+              async processEvent(input) {
+                const event = input.event;
+                if (event.type !== "events.iterate.com/stream/child-stream-created") return;
+                if (event.payload.childPath !== TRIGGER_PATH) return;
+
+                const root = await this.env.ITX.authenticate(this.ctx.props.auth);
+                // TODO(workers-rpc-pipelining): This should eventually collapse to
+                // root.projects.get(this.ctx.props.projectId).streams.get(...).
+                // Workers RPC exposes prototype getters, but workerd does not reliably
+                // promise-pipeline through getter/property hops on an unresolved RPC
+                // result. That is why apps/os uses method-shaped boundaries like
+                // node.itx().invoke(...) and PathProxy/replayPathCall for deep dotted
+                // traversal. Keep this explicit await until v4 has the same kind of
+                // method-shaped or path-proxy bridge for project-scoped ITX handles.
+                const project = await root.projects.get(this.ctx.props.projectId);
+                await project.streams.get(OUTPUT_PATH).append({
+                  type: FORWARDED_EVENT_TYPE,
+                  payload: {
+                    childPath: event.payload.childPath,
+                    marker: MARKER,
+                    originalType: event.type,
+                  },
+                });
+              }
+            }
+          `,
+        },
+      ],
+      message: "Add forwarding test worker",
+    });
+
+    const outputStream = project.streams.get(outputPath);
+    let storedSnapshot: StreamProcessorSnapshot<ProjectWorkerForwardingProbeState> | undefined;
+    const processor = new ProjectWorkerForwardingProbeProcessor({
+      readState: () => storedSnapshot,
+      stream: outputStream as never,
+      writeState: (snapshot) => {
+        storedSnapshot = snapshot;
+      },
+    });
+
+    const initial = await processor.snapshot();
+    const subscription = await outputStream.subscribe({
+      eventTypes: [PROJECT_WORKER_FORWARDED_EVENT_TYPE],
+      processEventBatch: (batch) => processor.ingest(batch),
+      replayAfterOffset: initial.offset,
+      subscriber: {
+        description: "minimal-itx-v4 e2e local project worker forwarding probe",
+      },
+    });
+
+    await project.streams.get(triggerPath).append({
+      type: "events.iterate.test/project-worker-forwarding-trigger",
+      payload: { marker },
+    });
+
+    await processor.waitUntilEvent({
+      predicate: (event) =>
+        event.type === PROJECT_WORKER_FORWARDED_EVENT_TYPE && event.payload?.marker === marker,
+      timeoutMs: 8_000,
+    });
+    expect(processor.state).toEqual({
+      childPaths: [triggerPath],
+      markers: [marker],
+    });
+    expect(storedSnapshot).toEqual({
+      offset: expect.any(Number),
+      state: {
+        childPaths: [triggerPath],
+        markers: [marker],
+      },
+    });
+
+    await subscription.unsubscribe();
+    const stateAtUnsubscribe = processor.state;
+    await outputStream.append({
+      type: PROJECT_WORKER_FORWARDED_EVENT_TYPE,
+      payload: {
+        childPath: outputPath,
+        marker: `after-${marker}`,
+        originalType: "manual",
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    expect(processor.state).toEqual(stateAtUnsubscribe);
   });
 
   test("Authenticated project can provide the Slack SDK as nested dotted callables", async () => {
