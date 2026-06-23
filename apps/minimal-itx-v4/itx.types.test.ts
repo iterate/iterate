@@ -5,7 +5,10 @@ import { describe, expectTypeOf, it } from "vitest";
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
 import type { StreamEvent } from "./types.ts";
-import { StreamProcessor } from "./src/domains/streams/engine/stream-processor.ts";
+import {
+  StreamProcessor,
+  type StreamProcessorStream,
+} from "./src/domains/streams/engine/stream-processor.ts";
 
 type IsNever<Value> = [Value] extends [never] ? true : false;
 
@@ -17,7 +20,8 @@ type HelloWorldEvent = {
 declare class ProofStreamDurableObject implements Rpc.DurableObjectBranded {
   [Rpc.__DURABLE_OBJECT_BRAND]: never;
 
-  append(event: { type: "hello-world" }): HelloWorldEvent;
+  append(event: { type: "hello-world" }): HelloWorldEvent[];
+  at(path: string): ProofStreamDurableObject;
 }
 
 interface ProofEnv {
@@ -34,10 +38,10 @@ describe("Cloudflare Durable Object RPC types", () => {
     // DurableObjectNamespace<ProofStreamDurableObject> turns append() into
     // `never`; with the patch it remains the RPC promise shape we can await.
     function assertGeneratedWorkerEnvStreamAppend(env: ProofEnv) {
-      const event = env.STREAM.getByName("bla").append({ type: "hello-world" });
+      const events = env.STREAM.getByName("bla").append({ type: "hello-world" });
 
-      expectTypeOf<IsNever<typeof event>>().toEqualTypeOf<false>();
-      expectTypeOf(event).toExtend<Promise<HelloWorldEvent & Disposable>>();
+      expectTypeOf<IsNever<typeof events>>().toEqualTypeOf<false>();
+      expectTypeOf(events).toExtend<Promise<HelloWorldEvent[] & Disposable>>();
     }
 
     void assertGeneratedWorkerEnvStreamAppend;
@@ -54,10 +58,8 @@ describe("Cloudflare Durable Object RPC types", () => {
     function assertGeneratedExportsStreamAppend(ctx: DurableObjectState) {
       const stream = ctx.exports.StreamDurableObject.getByName("bla");
       const appended = stream.append({
-        event: {
-          type: "events.iterate.com/project/created",
-          payload: { projectId: "prj_ref" },
-        },
+        type: "events.iterate.com/project/created",
+        payload: { projectId: "prj_ref" },
       });
       const waited = stream.waitForEvent({
         eventTypes: ["events.iterate.com/project/created"],
@@ -68,7 +70,7 @@ describe("Cloudflare Durable Object RPC types", () => {
       expectTypeOf<IsNever<typeof waited>>().toEqualTypeOf<false>();
       // Loopback DO calls are still RPC calls. The important guarantee is that
       // they are awaitable stream events, not synchronous events and not `never`.
-      expectTypeOf(appended).toExtend<Promise<StreamEvent & Disposable>>();
+      expectTypeOf(appended).toExtend<Promise<StreamEvent[] & Disposable>>();
       expectTypeOf(waited).toExtend<Promise<StreamEvent & Disposable>>();
     }
 
@@ -103,31 +105,30 @@ describe("stream processor type helpers", () => {
 
       protected override processEvent({
         append,
-        appendBatch,
       }: Parameters<StreamProcessor<typeof ToyProcessorContract>["processEvent"]>[0]): undefined {
         const appended = append({
           type: "events.iterate.com/toy/emitted",
           payload: { output: "ok" },
         });
-        expectTypeOf(appended).toExtend<StreamEvent>();
+        expectTypeOf(appended).toExtend<StreamEvent[]>();
 
-        appendBatch([
+        append(
           {
             type: "events.iterate.com/toy/emitted",
-            payload: { output: "batch" },
+            payload: { output: "batch-a" },
           },
-        ]);
-
-        append({
-          streamPath: "../sibling",
-          event: {
+          {
             type: "events.iterate.com/toy/emitted",
-            payload: { output: "cross-stream" },
+            payload: { output: "batch-b" },
           },
+        );
+
+        (this.stream.at("../sibling") as StreamProcessorStream).append({
+          type: "events.iterate.com/toy/emitted",
+          payload: { output: "cross-stream" },
         });
 
         type AppendInput = Parameters<typeof append>[0];
-        type AppendBatchInput = Parameters<typeof appendBatch>[0];
 
         expectTypeOf<{
           type: "events.iterate.com/toy/consumed";
@@ -143,15 +144,6 @@ describe("stream processor type helpers", () => {
           type: "events.iterate.com/toy/emitted";
           payload: { input: string };
         }>().not.toExtend<AppendInput>();
-
-        expectTypeOf<
-          [
-            {
-              type: "events.iterate.com/toy/emitted";
-              payload: { nope: boolean };
-            },
-          ]
-        >().not.toExtend<AppendBatchInput>();
       }
     }
 

@@ -1,7 +1,7 @@
 import { RpcTarget } from "capnweb";
 import type { z } from "zod";
 import type { RpcTargetImplementation, Stream } from "../../../../types.ts";
-import type { StreamEvent } from "./shared/event.ts";
+import type { StreamEvent, StreamEventInput } from "./shared/event.ts";
 import {
   assertObjectProcessorState,
   getConsumedEventDefinition,
@@ -73,29 +73,9 @@ type SideEffectHelpers = {
   runInBackground: (work: () => Promise<unknown>) => void;
 };
 
-type EmittedAppendEnvelope<Contract> = {
-  streamPath?: string;
-  event: EmittedInput<Contract>;
-};
-
-type EmittedAppendInput<Contract> = EmittedInput<Contract> | EmittedAppendEnvelope<Contract>;
-
-type EmittedAppendBatchEnvelope<Contract> = {
-  streamPath?: string;
-  events: readonly EmittedInput<Contract>[];
-};
-
-type EmittedAppendBatchInput<Contract> =
-  | readonly EmittedInput<Contract>[]
-  | EmittedAppendBatchEnvelope<Contract>;
-
 type EmitHelpers<Contract> = {
-  /** Append an event listed in `contract.emits`. */
-  append: (input: EmittedAppendInput<Contract>) => ReturnType<StreamProcessorStream["append"]>;
-  /** Append multiple events listed in `contract.emits`. */
-  appendBatch: (
-    input: EmittedAppendBatchInput<Contract>,
-  ) => ReturnType<StreamProcessorStream["appendBatch"]>;
+  /** Append one or more events listed in `contract.emits`. */
+  append: (...input: EmittedInput<Contract>[]) => StreamEvent[];
 };
 
 type ProcessEventArgs<Contract> = ReducedEvent<Contract> &
@@ -110,10 +90,8 @@ type ProcessEventArgs<Contract> = ReducedEvent<Contract> &
   };
 
 type ProcessEventBatchArgs<Contract> = SideEffectHelpers & {
-  /** Append an event listed in `contract.emits`. */
+  /** Append one or more events listed in `contract.emits`. */
   append: EmitHelpers<Contract>["append"];
-  /** Append multiple events listed in `contract.emits`. */
-  appendBatch: EmitHelpers<Contract>["appendBatch"];
   /** New events past the checkpoint, in stream order, consumed or not. */
   events: readonly StreamEvent[];
   /** The consumed subset of `events`, each with its reduction result. */
@@ -425,10 +403,7 @@ export abstract class StreamProcessor<
    * Pure projection of one consumed event into the next state. Defaults to
    * identity; returning `null`/`undefined` also keeps the current state.
    */
-  protected reduce(
-    this: never,
-    args: ReduceArgs<Contract>,
-  ): ProcessorState<Contract> | null | undefined {
+  protected reduce(args: ReduceArgs<Contract>): ProcessorState<Contract> | null | undefined {
     return args.state;
   }
 
@@ -450,7 +425,6 @@ export abstract class StreamProcessor<
         blockProcessorWhile: args.blockProcessorWhile,
         runInBackground: args.runInBackground,
         append: args.append,
-        appendBatch: args.appendBatch,
       });
     }
   }
@@ -522,8 +496,7 @@ export abstract class StreamProcessor<
         state,
         streamMaxOffset: args.streamMaxOffset,
         checkpointOffset,
-        append: (input) => this.#appendEmitted(input),
-        appendBatch: (input) => this.#appendEmittedBatch(input),
+        append: (...input) => this.#appendEmitted(...input),
         blockProcessorWhile: (work) => {
           blockingWork.push(this.#runKeepAliveBackedWork(work));
         },
@@ -551,28 +524,9 @@ export abstract class StreamProcessor<
     this.#resolveEventWaiters(events);
   }
 
-  #appendEmitted(input: EmittedAppendInput<Contract>): ReturnType<StreamProcessorStream["append"]> {
-    if (isEmittedAppendEnvelope(input)) {
-      return this.stream.append({
-        streamPath: input.streamPath,
-        event: this.buildEmittedEvent(input.event),
-      } as never);
-    }
-    return this.stream.append({ event: this.buildEmittedEvent(input) } as never);
-  }
-
-  #appendEmittedBatch(
-    input: EmittedAppendBatchInput<Contract>,
-  ): ReturnType<StreamProcessorStream["appendBatch"]> {
-    if (isEmittedAppendBatchEnvelope(input)) {
-      return this.stream.appendBatch({
-        streamPath: input.streamPath,
-        events: input.events.map((event) => this.buildEmittedEvent(event)),
-      } as never);
-    }
-    return this.stream.appendBatch({
-      events: input.map((event) => this.buildEmittedEvent(event)),
-    } as never);
+  #appendEmitted(...input: EmittedInput<Contract>[]): StreamEvent[] {
+    const events = input.map((event) => this.buildEmittedEvent(event) as StreamEventInput);
+    return (this.stream.append as (...events: StreamEventInput[]) => StreamEvent[])(...events);
   }
 
   #parseEventInput(args: {
@@ -689,18 +643,6 @@ function retainStateChangeCallback<State>(
       dispose?.();
     },
   });
-}
-
-function isEmittedAppendEnvelope<Contract>(
-  input: EmittedAppendInput<Contract>,
-): input is EmittedAppendEnvelope<Contract> {
-  return typeof input === "object" && input !== null && "event" in input;
-}
-
-function isEmittedAppendBatchEnvelope<Contract>(
-  input: EmittedAppendBatchInput<Contract>,
-): input is EmittedAppendBatchEnvelope<Contract> {
-  return !Array.isArray(input);
 }
 
 function disposeIgnoredRpcResult(result: unknown): void {

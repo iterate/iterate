@@ -15,7 +15,7 @@ import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { AgentProcessor, AgentProcessorContract } from "./agent-processor.ts";
 
 type InternalStreamWriter = {
-  append(input: unknown): Promise<unknown>;
+  append(...input: unknown[]): Promise<unknown[]>;
 };
 
 export class AgentDurableObject extends DurableObject<Env> implements Agent {
@@ -96,28 +96,23 @@ export class AgentDurableObject extends DurableObject<Env> implements Agent {
 
   async create(): Promise<StreamEvent> {
     await this.#streamWriter().append({
-      event: {
-        type: "events.iterate.com/agent/create-requested",
-        payload: {},
-      },
+      type: "events.iterate.com/agent/create-requested",
+      payload: {},
     });
-    const event = await this.#streamWriter().append({
-      event: {
-        type: "events.iterate.com/agent/created",
-        idempotencyKey: `agent-created:${this.#name.projectId}:${this.#name.path}`,
-        payload: {},
-      },
+    const [event] = await this.#streamWriter().append({
+      type: "events.iterate.com/agent/created",
+      idempotencyKey: `agent-created:${this.#name.projectId}:${this.#name.path}`,
+      payload: {},
     });
     return event as StreamEvent;
   }
 
   async sendMessage(message: string): Promise<StreamEvent> {
-    return (await this.#streamWriter().append({
-      event: {
-        type: "events.iterate.com/agent/message-sent",
-        payload: { message },
-      },
-    })) as StreamEvent;
+    const [event] = await this.#streamWriter().append({
+      type: "events.iterate.com/agent/message-sent",
+      payload: { message },
+    });
+    return event as StreamEvent;
   }
 
   async runScript(code: string) {

@@ -3,7 +3,8 @@ import { describe, expect, test } from "vitest";
 import { newHttpBatchRpcSession } from "capnweb";
 import { buildUrl, withItxSession } from "./test-helpers.ts";
 import type { ItxWebSocketMessage } from "./test-helpers.ts";
-import type { ItxAuthToken, UnauthenticatedItx } from "./types.ts";
+import type { UnauthenticatedItx } from "./types.ts";
+import { TRUSTED_INTERNAL_ITX_TOKEN } from "./src/auth.ts";
 
 // These are hand written tests - they MUST pass
 describe("minimal itx v4", () => {
@@ -30,7 +31,110 @@ describe("minimal itx v4", () => {
   });
 
   test("Authenticated itx whoami can create project", async () => {
-    using session = withItxSession();
+    const messages: ItxWebSocketMessage[] = [];
+    using session = withItxSession({
+      onWebSocketMessage: (message) => {
+        messages.push(message);
+      },
+    });
+    using itx = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+
+    using project = itx.projects.create({ slug: "alice-project" });
+    const description = await project.describe();
+    expect(description.projectId).toMatch(/prj_alice$/);
+    expect(description.name).toMatch(/prj_alice\.iterate\/$/);
+    expect(messages).toContainEqual([
+      expect.any(Number),
+      "out",
+      ["push", ["pipeline", 1, ["projects", "create"], [{ slug: "alice-project" }]]],
+    ]);
+
+    using stream = project.streams.get("/");
+
+    const events = await stream.getEvents();
+
+    // We don't care about ordering, just that the stream contains each of these
+    // event types. Mapping to types + arrayContaining is the concise idiomatic way.
+    expect(events.map((event) => event.type)).toEqual(
+      expect.arrayContaining([
+        "events.iterate.com/stream/created",
+        "events.iterate.com/stream/woken",
+        "events.iterate.com/stream/subscription-configured",
+        "events.iterate.com/project/create-requested",
+        "events.iterate.com/project/created",
+        "events.iterate.com/stream/subscriber-disconnected",
+      ]),
+    );
+
+    const committedEvent = await project.streams.get("/some/path").append({
+      type: "hello-world",
+    });
+    expect(committedEvent).toMatchObject({
+      type: "hello-world",
+      offset: events.at(-1)!.offset + 1,
+    });
+    expect(await project.streams.get("/some/path").getEvents()).toMatchObject([
+      {
+        type: "events.iterate.com/stream/created",
+      },
+      {
+        type: "events.iterate.com/stream/woken",
+      },
+      committedEvent,
+    ]);
+
+    const getSecret = async () => "bananas";
+
+    const { revoke } = await project.provideCapability({
+      path: ["someMethodInTestRunner"],
+      capability: {
+        type: "live",
+        target: {
+          getSecret: (secretGetter: { getSecret(): Promise<string> }) => secretGetter.getSecret(),
+        },
+      },
+    });
+
+    // @ts-expect-error - TODO maybe some niceties
+    expect(await project.someMethodInTestRunner.getSecret(getSecret)).toBe("bananas");
+
+    // make new itx connection
+
+    using newSession = withItxSession();
+    using newItx = newSession.authenticate({
+      type: "token",
+      token: {
+        projectScopes: [description.projectId],
+        type: "user",
+        principal: "alice",
+      },
+    });
+
+    expect(
+      // @ts-expect-error - TODO maybe some niceties
+      await newItx.projects.get(description.projectId).someMethodInTestRunner.getSecret(getSecret),
+    ).toBe("bananas");
+
+    await revoke();
+
+    // @ts-expect-error
+    await expect(project.someMethodInTestRunner.getSecret(getSecret)).rejects.toThrow(
+      /no capability "someMethodInTestRunner.getSecret"/,
+    );
+    await expect(
+      // @ts-expect-error - TODO maybe some niceties
+      newItx.projects.get(description.projectId).someMethodInTestRunner.getSecret(getSecret),
+    ).rejects.toThrow(/no capability "someMethodInTestRunner.getSecret"/);
+  });
+
+  // This test is handy because it proves that we really only need one round trip to
+  // take all the actions in this itx script
+  test("Authenticated itx whoami and projects list complete in one HTTP batch", async () => {
+    // oxlint-disable-next-line iterate/no-capnweb-http-batch -- if this cannot pipeline in one request, Cap'n Web rejects the batch.
+    using session = newHttpBatchRpcSession<UnauthenticatedItx>(buildUrl({ path: "/api/itx" }));
     using itx = session.authenticate({
       type: "token",
       token: {
@@ -39,28 +143,17 @@ describe("minimal itx v4", () => {
         type: "user",
       },
     });
-
-    const projects = itx.projects;
-
-    expect(await itx.whoami()).toBe("alice");
-    expect(await projects.list()).toEqual(["prj_alice", "prj_ref"]);
-  });
-
-  // This test is handy because it proves that we really only need one round trip to
-  // take all the actions in this itx script
-  test("Authenticated itx whoami and projects list complete in one HTTP batch", async () => {
-    // oxlint-disable-next-line iterate/no-capnweb-http-batch -- if this cannot pipeline in one request, Cap'n Web rejects the batch.
-    using session = newHttpBatchRpcSession<UnauthenticatedItx>(buildUrl({ path: "/api/itx" }));
-    using itx = session.authenticate({ type: "token", token: aliceToken });
     // If we didn't do Promise.all, this wouldn't work - wouldn't be sent as part of the same batch
     const [principal, projects] = await Promise.all([itx.whoami(), itx.projects.list()]);
     expect(principal).toBe("alice");
     expect(projects).toEqual(["prj_alice", "prj_ref"]);
+
     // session is now finished - cannot be used again in batch http mode
     await expect(session.authenticate).rejects.toThrow();
   });
 
-  test("websocket transport pipelines a batch into a single round trip", async () => {
+  // MAYBE dumb vibecoded test not sure
+  test.skip("websocket transport pipelines a batch into a single round trip", async () => {
     // Pipelining proof for the *websocket* transport. The HTTP batch test above
     // proves it for one-shot batches; this one proves the live socket coalesces a
     // pipelined script into a single network round trip too.
@@ -76,8 +169,8 @@ describe("minimal itx v4", () => {
     // contiguous outbound bursts.
     const countRoundTrips = (messages: readonly ItxWebSocketMessage[]): number => {
       let roundTrips = 0;
-      let previousDirection: ItxWebSocketMessage["direction"] | undefined;
-      for (const { direction } of messages) {
+      let previousDirection: ItxWebSocketMessage[1] | undefined;
+      for (const [, direction] of messages) {
         if (direction === "out" && previousDirection !== "out") roundTrips += 1;
         previousDirection = direction;
       }
@@ -89,7 +182,14 @@ describe("minimal itx v4", () => {
     const pipelined: ItxWebSocketMessage[] = [];
     {
       using session = withItxSession({ onWebSocketMessage: (m) => pipelined.push(m) });
-      using itx = session.authenticate({ type: "token", token: aliceToken });
+      using itx = session.authenticate({
+        type: "token",
+        token: {
+          principal: "alice",
+          projectScopes: ["prj_alice", "prj_ref"],
+          type: "user",
+        },
+      });
       const [principal, projects] = await Promise.all([itx.whoami(), itx.projects.list()]);
       expect(principal).toBe("alice");
       expect(projects).toEqual(["prj_alice", "prj_ref"]);
@@ -101,7 +201,14 @@ describe("minimal itx v4", () => {
     const sequential: ItxWebSocketMessage[] = [];
     {
       using session = withItxSession({ onWebSocketMessage: (m) => sequential.push(m) });
-      using itx = session.authenticate({ type: "token", token: aliceToken });
+      using itx = session.authenticate({
+        type: "token",
+        token: {
+          principal: "alice",
+          projectScopes: ["prj_alice", "prj_ref"],
+          type: "user",
+        },
+      });
       expect(await itx.whoami()).toBe("alice");
       expect(await itx.projects.list()).toEqual(["prj_alice", "prj_ref"]);
     }

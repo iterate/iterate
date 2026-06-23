@@ -11,6 +11,7 @@
 
 import { z } from "zod";
 import { Callable } from "@iterate-com/shared/callable/types.ts";
+import type { GetProcessorRuntimeState } from "../../../../../../types.ts";
 import { defineProcessorContract } from "../../shared/stream-processors.ts";
 
 /**
@@ -91,6 +92,20 @@ export const StreamSubscriberDescriptor = z.object({
 });
 
 export type StreamSubscriberDescriptor = z.infer<typeof StreamSubscriberDescriptor>;
+
+/**
+ * The runtime (non-serializable) view of a subscriber descriptor. Same shape as
+ * the persisted `StreamSubscriberDescriptor`, but the processor entry may carry
+ * a live `getRuntimeState` capability retained for the subscription lifetime. It
+ * is not persisted into presence facts; the stream calls it on demand from
+ * `getProcessorRuntimeState({ subscriptionKey })`.
+ */
+export type LiveStreamSubscriberDescriptor = Omit<StreamSubscriberDescriptor, "processor"> & {
+  processor?: {
+    announcement: ProcessorContractAnnouncement;
+    getRuntimeState?: GetProcessorRuntimeState;
+  };
+};
 
 export const StreamSubscriberDisconnectReason = z.enum([
   /** A new connection for the same subscriptionKey replaced this one. */

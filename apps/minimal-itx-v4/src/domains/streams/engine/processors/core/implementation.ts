@@ -14,11 +14,8 @@
 
 import type { StreamEvent, StreamEventInput } from "../../shared/event.ts";
 import type { ConsumedEvent } from "../../shared/stream-processors.ts";
-import type {
-  LiveStreamSubscriberDescriptor,
-  ProcessEventBatch,
-  ProcessorRuntimeState,
-} from "../../types.ts";
+import type { ProcessEventBatch, ProcessorRuntimeState } from "../../../../../../types.ts";
+import type { StreamProcessorStream } from "../../stream-processor.ts";
 import { StreamProcessor } from "../../stream-processor.ts";
 import {
   disposeIgnoredRpcResult,
@@ -29,6 +26,7 @@ import {
   CoreProcessorContract,
   ProcessorContractAnnouncement as ProcessorContractAnnouncementSchema,
   type CoreProcessorState,
+  type LiveStreamSubscriberDescriptor,
   type ProcessorContractAnnouncement,
   type StreamSubscriberDescriptor,
   type StreamSubscriberDisconnectReason,
@@ -135,25 +133,9 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
         );
       },
       runInBackground: (work) => this.runInBackground(work),
-      append: (input) => {
-        if (typeof input === "object" && input !== null && "event" in input) {
-          return this.stream.append({
-            streamPath: input.streamPath,
-            event: this.buildEmittedEvent(input.event),
-          } as never);
-        }
-        return this.stream.append({ event: this.buildEmittedEvent(input) } as never);
-      },
-      appendBatch: (input) => {
-        if (typeof input === "object" && input !== null && "events" in input) {
-          return this.stream.appendBatch({
-            streamPath: input.streamPath,
-            events: input.events.map((event) => this.buildEmittedEvent(event)),
-          } as never);
-        }
-        return this.stream.appendBatch({
-          events: input.map((event) => this.buildEmittedEvent(event)),
-        } as never);
+      append: (...input) => {
+        const events = input.map((event) => this.buildEmittedEvent(event) as StreamEventInput);
+        return (this.stream.append as (...events: StreamEventInput[]) => StreamEvent[])(...events);
       },
     });
   }
@@ -373,16 +355,14 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
     const path = args.state.path;
     args.runInBackground(async () => {
       await Promise.all(
-        ancestorPaths.map((ancestorPath) =>
-          this.stream.append({
-            streamPath: ancestorPath,
-            event: {
-              type: "events.iterate.com/stream/child-stream-created",
-              idempotencyKey: `child-stream-created:${ancestorPath}:${path}`,
-              payload: { childPath: path },
-            },
-          }),
-        ),
+        ancestorPaths.map(async (ancestorPath) => {
+          const stream = this.stream.at(ancestorPath) as StreamProcessorStream;
+          await stream.append({
+            type: "events.iterate.com/stream/child-stream-created",
+            idempotencyKey: `child-stream-created:${ancestorPath}:${path}`,
+            payload: { childPath: path },
+          });
+        }),
       );
     });
   }
@@ -756,7 +736,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
    */
   #appendPresenceFact(event: StreamEventInput): void {
     try {
-      void this.stream.append({ event });
+      void this.stream.append(event);
     } catch (error) {
       console.error("stream presence fact append failed", { type: event.type, error });
     }

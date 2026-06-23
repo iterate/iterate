@@ -4,7 +4,7 @@ import process from "node:process";
 const baseUrl = (process.env.ITX_BASE || process.env.APP_CONFIG_BASE_URL || "").trim();
 
 if (!baseUrl) {
-  console.error("Set ITX_BASE or APP_CONFIG_BASE_URL to the deployed minimal-itx-v3 worker URL.");
+  console.error("Set ITX_BASE or APP_CONFIG_BASE_URL to the deployed minimal-itx-v4 worker URL.");
   process.exit(1);
 }
 
@@ -14,7 +14,7 @@ if (/^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(baseUrl)) {
 }
 
 const child = spawn("pnpm", ["e2e"], {
-  env: { ...process.env, ITX_BASE: baseUrl.replace(/\/+$/, "") },
+  env: { ...process.env, ITX_BASE_URL: baseUrl.replace(/\/+$/, "") },
   stdio: "inherit",
 });
 

@@ -129,16 +129,11 @@ export class ProjectDurableObject extends DurableObject<Env> {
     return this.getCapability();
   }
 
-  async create(args: Parameters<Project["create"]>[0]) {
-    if (args.projectId === undefined) {
-      args.projectId = "prj_" + crypto.randomUUID();
-    }
-    if (args.projectId !== this.#name.projectId) {
-      throw new Error(
-        `create(${args.projectId}) must run on "${this.#name.projectId}", got ${args.projectId}`,
-      );
-    }
-    return this.#projectProcessor.createProject(args);
+  describe() {
+    return {
+      projectId: this.#name.projectId,
+      name: this.ctx.id.name!,
+    };
   }
 
   // async runScript(code: string) {

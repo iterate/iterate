@@ -4,12 +4,7 @@ import type { UnauthenticatedItx } from "./types.ts";
 
 const DEFAULT_BASE_URL = "http://localhost:8791";
 
-export type ItxWebSocketMessage = {
-  byteLength: number;
-  data: unknown;
-  direction: "in" | "out";
-  timestamp: number;
-};
+export type ItxWebSocketMessage = [timestamp: number, direction: "in" | "out", data: unknown];
 
 export function buildUrl({
   path,
@@ -25,12 +20,19 @@ export function buildUrl({
   return url.toString();
 }
 
-function byteLength(data: unknown): number {
-  if (typeof data === "string") return Buffer.byteLength(data);
-  if (data instanceof ArrayBuffer) return data.byteLength;
-  if (ArrayBuffer.isView(data)) return data.byteLength;
-  if (Array.isArray(data)) return data.reduce((sum, chunk) => sum + byteLength(chunk), 0);
-  return 0;
+/** Decode a raw ws frame (outbound string, inbound Buffer/ArrayBuffer) into its parsed JSON value. */
+function parseFrame(data: unknown): unknown {
+  const text =
+    typeof data === "string"
+      ? data
+      : Buffer.isBuffer(data)
+        ? data.toString("utf8")
+        : ArrayBuffer.isView(data)
+          ? Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("utf8")
+          : data instanceof ArrayBuffer
+            ? Buffer.from(data).toString("utf8")
+            : undefined;
+  return text === undefined ? data : JSON.parse(text);
 }
 
 /**
@@ -46,21 +48,18 @@ export function withItxSession(
     handshakeTimeout: 10_000,
   });
 
-  const record = (message: Omit<ItxWebSocketMessage, "byteLength" | "timestamp">) => {
-    input.onWebSocketMessage?.({
-      ...message,
-      byteLength: byteLength(message.data),
-      timestamp: Date.now(),
-    });
+  const start = Date.now();
+  const record = (direction: "in" | "out", data: unknown) => {
+    input.onWebSocketMessage?.([Date.now() - start, direction, parseFrame(data)]);
   };
 
   const send = socket.send.bind(socket);
   socket.send = ((data: Parameters<WebSocket["send"]>[0], ...args: unknown[]) => {
-    record({ data, direction: "out" });
+    record("out", data);
     return send(data, ...(args as []));
   }) as WebSocket["send"];
 
-  socket.on("message", (data) => record({ data, direction: "in" }));
+  socket.on("message", (data) => record("in", data));
 
   return newWebSocketRpcSession<UnauthenticatedItx>(
     socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],

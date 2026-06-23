@@ -36,11 +36,9 @@
  *   projectId: "prj_ref",
  * });
  *
- * const event = await itx.streams.get("/notes").append({
- *   event: {
- *     type: "events.iterate.com/demo/note-written",
- *     payload: { text: "hello" },
- *   },
+ * const [event] = await itx.streams.get("/notes").append({
+ *   type: "events.iterate.com/demo/note-written",
+ *   payload: { text: "hello" },
  * });
  * ```
  */
@@ -65,9 +63,9 @@ export interface ItxRoot {
 }
 
 export interface Projects {
-  get(projectId: string): Promise<Project>;
-  create(args: { projectId: string; slug: string }): Promise<Project>;
-  list(): Promise<string[]>;
+  get(projectId: string): Project;
+  create(args: { projectId?: string; slug: string }): Promise<Project>;
+  list(): string[];
 }
 
 /**
@@ -79,11 +77,11 @@ export interface Projects {
  */
 export interface Project extends ItxCapabilityHost {
   streams: Streams;
+  describe(): { projectId: string; name: string };
   // agents: Agents;
   // repos: Repos;
   // repo: Repo;
   // worker: ProjectWorker;
-  create(args: { projectId?: string; slug: string }): Promise<StreamEvent>;
 }
 
 /**
@@ -108,8 +106,8 @@ export interface AgentItx extends Project {
  * https://developers.cloudflare.com/workers/runtime-apis/rpc/#promise-pipelining
  *
  * The synchronous append/read signatures are intentional. `StreamDurableObject`
- * implements this whole interface, so changing `append`, `appendBatch`,
- * `getEvent`, or `getEvents` to return a Promise fails at the class declaration.
+ * implements this whole interface, so changing `append`, `getEvent`, or
+ * `getEvents` to return a Promise fails at the class declaration.
  * SQLite-backed Durable Objects provide synchronous SQL and synchronous KV
  * APIs, and Cloudflare documents that SQL cursors should be consumed before the
  * next `await`:
@@ -117,11 +115,17 @@ export interface AgentItx extends Project {
  * https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/#synchronous-kv-api
  */
 export interface Stream {
-  /** Append one event to this stream, or to a child/relative stream path. */
-  append(input: { streamPath?: string; event: StreamEventInput }): StreamEvent;
+  /** Append one or more events atomically, preserving input order. */
+  append(...events: StreamEventInput[]): StreamEvent[];
 
-  /** Append several events atomically, preserving input order. */
-  appendBatch(input: { streamPath?: string; events: StreamEventInput[] }): StreamEvent[];
+  /**
+   * Resolve another stream by absolute or relative path and return its stub.
+   *
+   * Absolute paths (`/`, `/repos/project`) resolve from the project root.
+   * Relative paths (`child`, `./child`, `../sibling`) resolve against this
+   * stream's path. `.` resolves to this stream.
+   */
+  at(path: string): Stream;
 
   /**
    * Read one committed event by offset or idempotency key.
@@ -259,12 +263,22 @@ export interface ProjectWorker {
 }
 
 export interface ItxCapabilityHost {
+  /**
+   * Let's you run a script from a string of javascript (soon typescript!) like this:
+   *
+   * async (itx) => {
+   *   return await itx.whoami();
+   * }
+   */
   runScript(code: string): Promise<{
     completedEvent: StreamEvent;
     executionId: string;
-    result: JsonSerializableTrustMeBro;
+    // TODO could become a actual "trust me serializable" type so we get rid of the
+    // wrangler types patch and it's actually safer / truer
+    result: unknown;
   }>;
 
+  // TODO make interface nicer / maybe overload
   provideCapability(input: { path: string[]; capability: ProvidedCapability }): Promise<{
     revoke(): void | Promise<void>;
   }>;
@@ -400,7 +414,7 @@ type RpcTargetResult<T> =
  *
  * ```ts
  * const stream = itx.projects.get("prj").streams.get("/notes");
- * const event = await stream.append({ event: { type: "note" } });
+ * const [event] = await stream.append({ type: "note" });
  * ```
  *
  * Therefore this helper permits two adapter-only freedoms:
@@ -443,6 +457,110 @@ export interface ItxAuth {
   assertCanAccessProject(projectId: string | null): void;
   listAccessibleProjects(): string[];
 }
+
+/**
+ * Stream engine internal types.
+ *
+ * These are not part of the public ITX capability tree — they describe the
+ * stream runtime's subscription/delivery plumbing. They live here so the app
+ * keeps a single shared, import-free types module. Where a precise shape would
+ * require importing an internal module (the core processor's reduced state, a
+ * subscriber descriptor), they use `unknown`, mirroring the placeholders on the
+ * public `Stream` interface above; the precise versions live next to their
+ * owners (`processors/core/contract.ts`).
+ */
+
+type MaybePromise<T> = T | Promise<T>;
+
+export type SubscriptionKey = string;
+
+/** Serializable debug view of a live delivery connection, returned by `runtimeState()`. */
+export type ConnectionInfo = {
+  direction: "inbound" | "outbound";
+  startedAt: string;
+  cursor: number;
+  batchesSent: number;
+  eventsSent: number;
+  lastDeliveredAt?: string;
+};
+
+export type StreamEventBatch = {
+  projectId: string | null;
+  path: string;
+  /**
+   * Delivered events in offset order. Empty in exactly two cases: the initial
+   * push every subscription receives on open and every batch of an
+   * `events: false` (state-only) subscription.
+   */
+  events: StreamEvent[];
+  /** Highest committed offset known when the batch was delivered. */
+  streamMaxOffset: number;
+  /** Core reduced state as of `streamMaxOffset`. Precise type: `CoreProcessorState`. */
+  state: unknown;
+};
+
+export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
+
+/** A processor's inspectable live state: durable checkpoint plus optional runtime detail. */
+export type ProcessorRuntimeState = {
+  snapshot: { offset: number; state: unknown };
+  runtime?: Record<string, unknown>;
+};
+
+export type GetProcessorRuntimeState = () => MaybePromise<ProcessorRuntimeState>;
+
+export type StreamSubscriptionHandle = {
+  subscriptionKey: SubscriptionKey;
+  streamMaxOffset: number;
+  unsubscribe(): void;
+};
+
+/**
+ * The stream surface as seen across an RPC boundary (a retained subscriber stub
+ * or the dial handshake). Mirrors `Stream`, but every call may resolve
+ * asynchronously and there are two internal-only verbs (`reset`, `reduce`).
+ * `subscriber` and the core `coreProcessorState` stay `unknown` here for the
+ * same reason they are `unknown` on `Stream`.
+ */
+export type StreamRpc = {
+  append(...events: StreamEventInput[]): MaybePromise<StreamEvent[]>;
+  at(path: string): MaybePromise<StreamRpc>;
+  getEvent(
+    args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
+  ): MaybePromise<StreamEvent | undefined>;
+  getEvents(args?: {
+    afterOffset?: number;
+    beforeOffset?: number | null;
+    limit?: number;
+  }): MaybePromise<StreamEvent[]>;
+  waitForEvent(args: {
+    afterOffset?: number;
+    eventTypes?: readonly string[];
+    predicate: (event: StreamEvent) => MaybePromise<boolean>;
+    timeoutMs: number;
+  }): MaybePromise<StreamEvent>;
+  subscribe(args: {
+    subscriptionKey?: SubscriptionKey;
+    processEventBatch: ProcessEventBatch;
+    replayAfterOffset?: number;
+    eventTypes?: readonly string[];
+    events?: boolean;
+    subscriber?: unknown;
+  }): MaybePromise<StreamSubscriptionHandle>;
+  getProcessorRuntimeState(args: {
+    subscriptionKey: SubscriptionKey;
+  }): MaybePromise<ProcessorRuntimeState | null>;
+  runtimeState(): MaybePromise<{
+    coreProcessorState: unknown;
+    runtime: {
+      connections: Record<SubscriptionKey, ConnectionInfo>;
+    };
+  }>;
+  kill(): MaybePromise<void>;
+  /** Clears all durable storage for this stream, then aborts the current incarnation. */
+  reset(): Promise<void>;
+  reduce(args: { event: StreamEvent; coreProcessorState?: unknown }): MaybePromise<unknown>;
+};
 
 // Copyright (c) 2025 Cloudflare, Inc.
 // Licensed under the MIT license found in the LICENSE.txt file or at:

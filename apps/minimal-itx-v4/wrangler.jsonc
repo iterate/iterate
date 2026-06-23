@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "minimal-itx-v3",
+  "name": "minimal-itx-v4",
   "account_id": "376ef7ed81b0573f93524de763666c15",
   "main": "src/worker.ts",
   "compatibility_date": "2026-05-01",

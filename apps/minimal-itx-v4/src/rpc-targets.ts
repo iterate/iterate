@@ -11,8 +11,8 @@ import type {
   Agents,
   Repos,
   Stream,
+  ProcessEventBatch,
 } from "../types.ts";
-import type { ProcessEventBatch } from "./domains/streams/engine/types.ts";
 import { DurableObjectNameCodec } from "./domains/durable-object-names.ts";
 import {
   disposeIgnoredRpcResult,
@@ -26,6 +26,8 @@ import {
   ITX_AUTH_COOKIE,
   TRUSTED_INTERNAL_ITX_TOKEN,
 } from "./auth.ts";
+import { ProjectProcessorContract } from "./domains/projects/project-processor.ts";
+import { durableObjectProcessorSubscriber } from "./domains/streams/engine/shared/callable-subscriber.ts";
 
 type StreamProcessEventBatch = Parameters<Stream["subscribe"]>[0]["processEventBatch"];
 type StreamProcessEventBatchInput = Parameters<StreamProcessEventBatch>[0];
@@ -45,12 +47,12 @@ export class StreamRpcTarget extends RpcTarget implements RpcTargetImplementatio
     );
   }
 
-  append(args: Parameters<Stream["append"]>[0]) {
-    return this.durableObjectStub.append(args);
+  append(...events: Parameters<Stream["append"]>) {
+    return this.durableObjectStub.append(...events);
   }
 
-  appendBatch(args: Parameters<Stream["appendBatch"]>[0]) {
-    return this.durableObjectStub.appendBatch(args);
+  at(path: Parameters<Stream["at"]>[0]) {
+    return this.durableObjectStub.at(path) as unknown as Stream;
   }
 
   getEvent(args: Parameters<Stream["getEvent"]>[0]) {
@@ -168,17 +170,13 @@ class ProjectsRpcTarget extends RpcTarget implements RpcTargetImplementation<Pro
     super();
   }
 
-  async get(projectId: string) {
+  get(projectId: string) {
     return new ProjectRpcTarget({
       auth: this.props.auth,
       projectId: projectId,
     });
   }
-
-  async create(args: {
-    projectId: string;
-    slug: string;
-  }): Promise<RpcTargetImplementation<Project>> {
+  async create(args: Parameters<Projects["create"]>[0]) {
     if (!this.props.auth.isAdmin()) {
       throw new Error(`principal "${this.props.auth.principal}" cannot create projects`);
     }
@@ -190,10 +188,40 @@ class ProjectsRpcTarget extends RpcTarget implements RpcTargetImplementation<Pro
       args.projectId = "prj_" + crypto.randomUUID();
     }
 
-    const _event = await env.PROJECT.getByName(
-      DurableObjectNameCodec.stringify({ path: "/", projectId: args.projectId }),
-    ).create(args);
-    return this.get(args.projectId);
+    const stream = new StreamRpcTarget({
+      auth: this.props.auth,
+      projectId: args.projectId,
+      path: "/",
+    });
+
+    await stream.append(
+      // TODO move towards ProjectProcessorContract.buildEvent() helper or similar
+      {
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: {
+          subscriptionKey: ProjectProcessorContract.slug,
+          subscriber: durableObjectProcessorSubscriber({
+            bindingName: "PROJECT",
+            durableObjectName: DurableObjectNameCodec.stringify({
+              projectId: args.projectId,
+              path: "/",
+            }),
+            processorName: ProjectProcessorContract.slug,
+          }),
+        },
+      },
+      // Kick off the "create project sequence"
+      {
+        type: "events.iterate.com/project/create-requested",
+        payload: { projectId: args.projectId, slug: args.slug },
+      },
+    );
+    await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/project/created"],
+      timeoutMs: 5000,
+    });
+
+    return new ProjectRpcTarget({ auth: this.props.auth, projectId: args.projectId });
   }
 
   list(): string[] {
@@ -207,8 +235,14 @@ export class ProjectRpcTarget extends RpcTarget implements RpcTargetImplementati
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  create(): Promise<never> {
-    throw new Error("project.create is not implemented in minimal-itx-v4");
+  get durableObjectStub() {
+    return env.PROJECT.getByName(
+      DurableObjectNameCodec.stringify({ path: "/", projectId: this.props.projectId }),
+    );
+  }
+
+  describe() {
+    return this.durableObjectStub.describe();
   }
 
   runScript(): Promise<never> {

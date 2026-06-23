@@ -3,9 +3,11 @@ import { z } from "zod";
 import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import type {
+  ProcessEventBatch,
   Stream,
   StreamEvent as PublicStreamEvent,
   StreamEventInput as PublicStreamEventInput,
+  StreamRpc,
 } from "../../../types.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
@@ -18,16 +20,11 @@ import {
 import type { StreamSubscriptionHandshake } from "./engine/workers/stream-processor-host.ts";
 import type { StreamProcessorStream } from "./engine/stream-processor.ts";
 import { getInitialProcessorState } from "./engine/shared/stream-processors.ts";
-import type {
-  LiveStreamSubscriberDescriptor,
-  ProcessEventBatch,
-  StreamCoreProcessorState,
-  StreamRpc,
-} from "./engine/types.ts";
 import { CoreStreamProcessor } from "./engine/processors/core/implementation.ts";
 import {
   CoreProcessorContract,
   type CoreProcessorState,
+  type LiveStreamSubscriberDescriptor,
 } from "./engine/processors/core/contract.ts";
 import { createStreamSubscription } from "./engine/subscription.ts";
 
@@ -79,7 +76,7 @@ const DEFAULT_STREAM_IDLE_TEARDOWN_MS = 5 * 60_000;
 export class StreamDurableObject extends DurableObject<Env> implements Stream {
   readonly name = parseStreamDurableObjectName(this.ctx.id.name);
 
-  #coreProcessorState: StreamCoreProcessorState;
+  #coreProcessorState: CoreProcessorState;
   /** In-memory idle teardown timer; armed only while outbound connections exist. */
   #idleTimer: ReturnType<typeof setTimeout> | undefined;
   // The core processor owns the live delivery connections and reconciles them
@@ -87,10 +84,8 @@ export class StreamDurableObject extends DurableObject<Env> implements Stream {
   // needs (committed-event reads, the live state, Callable dispatch).
   coreProcessor = new CoreStreamProcessor({
     stream: {
-      append: (args: { streamPath?: string; event: StreamEventInput }) =>
-        this.#appendFromProcessor(args),
-      appendBatch: (args: { streamPath?: string; events: StreamEventInput[] }) =>
-        this.#appendBatchFromProcessor(args),
+      append: (...events: PublicStreamEventInput[]) => this.append(...events),
+      at: (path: string) => this.at(path),
       getEvent: (args: Parameters<StreamProcessorStream["getEvent"]>[0]) => this.getEvent(args),
       getEvents: (args?: Parameters<StreamProcessorStream["getEvents"]>[0]) => this.getEvents(args),
       waitForEvent: (args: Parameters<StreamProcessorStream["waitForEvent"]>[0]) =>
@@ -125,18 +120,14 @@ export class StreamDurableObject extends DurableObject<Env> implements Stream {
     // subscriptions but no new appends still reconnects.
     if (this.#coreProcessorState.eventCount === 0) {
       this.append({
-        event: {
-          type: "events.iterate.com/stream/created",
-          payload: { projectId: this.name.projectId, path: this.name.path },
-        },
+        type: "events.iterate.com/stream/created",
+        payload: { projectId: this.name.projectId, path: this.name.path },
       });
     }
     // each time the durable object wakes up, we append this event
     this.append({
-      event: {
-        type: "events.iterate.com/stream/woken",
-        payload: { incarnationId: crypto.randomUUID() },
-      },
+      type: "events.iterate.com/stream/woken",
+      payload: { incarnationId: crypto.randomUUID() },
     });
   }
 
@@ -175,7 +166,7 @@ export class StreamDurableObject extends DurableObject<Env> implements Stream {
     `);
   }
 
-  protected readCoreProcessorState(): StreamCoreProcessorState {
+  protected readCoreProcessorState(): CoreProcessorState {
     const stored = this.ctx.storage.kv.get<unknown>("state");
     const storedVersion = this.ctx.storage.kv.get<unknown>("stateVersion") ?? 1;
     // State persisted by a reducer of a different version is incomplete (it
@@ -195,12 +186,12 @@ export class StreamDurableObject extends DurableObject<Env> implements Stream {
     return state;
   }
 
-  protected writeCoreProcessorState(state: StreamCoreProcessorState): void {
+  protected writeCoreProcessorState(state: CoreProcessorState): void {
     this.ctx.storage.kv.put("state", state);
     this.ctx.storage.kv.put("stateVersion", CORE_STATE_VERSION);
   }
 
-  #catchUpCoreProcessorState(state: StreamCoreProcessorState): StreamCoreProcessorState {
+  #catchUpCoreProcessorState(state: CoreProcessorState): CoreProcessorState {
     const highestOffset = this.#readHighestEventOffset();
     if (highestOffset <= state.maxOffset) return state;
 
@@ -346,7 +337,7 @@ export class StreamDurableObject extends DurableObject<Env> implements Stream {
     );
   }
 
-  #recoverCoreProcessorStateFromEventLog(): StreamCoreProcessorState | undefined {
+  #recoverCoreProcessorStateFromEventLog(): CoreProcessorState | undefined {
     const events = this.#readEventsInRange({
       afterOffset: 0,
       beforeOffset: Number.MAX_SAFE_INTEGER,
@@ -364,9 +355,9 @@ export class StreamDurableObject extends DurableObject<Env> implements Stream {
   }
 
   #reduceCoreProcessorState(args: {
-    state: StreamCoreProcessorState;
+    state: CoreProcessorState;
     events: readonly StreamEvent[];
-  }): StreamCoreProcessorState {
+  }): CoreProcessorState {
     let state = args.state;
     for (const event of args.events) {
       if (event.offset <= state.maxOffset) continue;
@@ -375,33 +366,10 @@ export class StreamDurableObject extends DurableObject<Env> implements Stream {
     return state;
   }
 
-  #resolveStream(streamPath: string): Pick<Stream, "append" | "appendBatch"> {
-    const resolvedPath = resolveStreamPath(this.#coreProcessorState.path, streamPath);
-    if (resolvedPath === resolveStreamPath(this.#coreProcessorState.path, ".")) return this;
-    return this.env.STREAM.getByName(
-      DurableObjectNameCodec.stringify({
-        path: resolvedPath,
-        projectId: this.name.projectId,
-      }),
-    ) as unknown as Pick<Stream, "append" | "appendBatch">;
-  }
-
-  /**
-   * Convenience RPC for appending one event.
-   *
-   * Uses `appendBatch()`, so all append ordering and persistence stays in one place.
-   */
-  append(args: { event: PublicStreamEventInput }): PublicStreamEvent {
-    return this.#appendBatchHere({
-      events: [args.event as StreamAppendInput],
-    })[0]! as PublicStreamEvent;
-  }
-
   /**
    * Synchronously assigns offsets, reduces, persists, then wakes delivery.
    *
-   * What actually happens for `appendBatch({ events: [a, b] })` on a stream at
-   * `maxOffset: 4`:
+   * What actually happens for `append(a, b)` on a stream at `maxOffset: 4`:
    * 1. `a` becomes offset 5, `b` becomes offset 6; each is folded into reduced state.
    *    An event whose `idempotencyKey` already exists is skipped and the existing
    *    event is returned in its place (so the returned array stays input-aligned).
@@ -414,32 +382,25 @@ export class StreamDurableObject extends DurableObject<Env> implements Stream {
    *
    * Returns the persisted events (including offsets + `createdAt`) in input order.
    */
-  appendBatch(args: { events: PublicStreamEventInput[] }): PublicStreamEvent[] {
+  append(...events: PublicStreamEventInput[]): PublicStreamEvent[] {
     return this.#appendBatchHere({
-      events: args.events as StreamAppendInput[],
+      events: events as StreamAppendInput[],
     }) as PublicStreamEvent[];
+  }
+
+  at(streamPath: string): Stream {
+    const resolvedPath = resolveStreamPath(this.#coreProcessorState.path, streamPath);
+    if (resolvedPath === this.#coreProcessorState.path) return this;
+    return this.env.STREAM.getByName(
+      DurableObjectNameCodec.stringify({
+        path: resolvedPath,
+        projectId: this.name.projectId,
+      }),
+    ) as unknown as Stream;
   }
 
   appendInternal(args: { events: StreamAppendInput[] }): void {
     this.#appendBatchHere({ events: args.events });
-  }
-
-  #appendFromProcessor(args: { streamPath?: string; event: StreamEventInput }) {
-    if (args.streamPath !== undefined) {
-      return this.#resolveStream(args.streamPath).append({
-        event: args.event as PublicStreamEventInput,
-      });
-    }
-    return this.append({ event: args.event as PublicStreamEventInput });
-  }
-
-  #appendBatchFromProcessor(args: { streamPath?: string; events: StreamEventInput[] }) {
-    if (args.streamPath !== undefined) {
-      return this.#resolveStream(args.streamPath).appendBatch({
-        events: args.events as PublicStreamEventInput[],
-      });
-    }
-    return this.appendBatch({ events: args.events as PublicStreamEventInput[] });
   }
 
   #appendBatchHere(args: { events: StreamAppendInput[] }): StreamEvent[] {
@@ -448,8 +409,8 @@ export class StreamDurableObject extends DurableObject<Env> implements Stream {
     const newEvents: StreamEvent[] = [];
     const reducedSideEffects: Array<{
       event: StreamEvent;
-      previousState: StreamCoreProcessorState;
-      state: StreamCoreProcessorState;
+      previousState: CoreProcessorState;
+      state: CoreProcessorState;
     }> = [];
     const idempotencyHitsInBatch = new Map<string, StreamEvent>();
     // 1. Prepare events and reduced state.
@@ -492,7 +453,7 @@ export class StreamDurableObject extends DurableObject<Env> implements Stream {
 
       // Core side effects are deferred until after the commit below:
       // `processReducedEvent` side effects (e.g. announcing this stream to its
-      // ancestors) call back into `append`/`#resolveStream`, which read
+      // ancestors via `stream.at(...)`) call back into `append`/`at`, which read
       // `this.#coreProcessorState` — running them mid-batch would observe the
       // stale pre-append state (on a brand-new stream that still has the
       // placeholder project/path).
@@ -668,8 +629,8 @@ export class StreamDurableObject extends DurableObject<Env> implements Stream {
 
   reduce(args: {
     event: StreamEvent;
-    coreProcessorState?: StreamCoreProcessorState;
-  }): StreamCoreProcessorState {
+    coreProcessorState?: CoreProcessorState;
+  }): CoreProcessorState {
     const base = args.coreProcessorState ?? this.#coreProcessorState;
 
     return this.coreProcessor.reduceEvent({
@@ -818,25 +779,14 @@ export class StreamDurableObject extends DurableObject<Env> implements Stream {
   }
 }
 
-/**
- * Resolves `streamPath` against the current stream's path into a canonical
- * leading-slash path used for the target Durable Object name.
- *
- * Stream identity uses leading-slash paths everywhere — DO names, ancestor paths
- * and runner names all keep it — so resolution preserves
- * the leading slash rather than stripping it. Relative paths (`child`, `./child`,
- * `../sibling`) resolve against `basePath`; absolute paths (`/root/x`) resolve from
- * the root. `.` and empty segments are ignored, `..` pops a segment, and a `..` that
- * would pop past the root throws rather than silently clamping at `/`.
- */
-export function resolveStreamPath(basePath: string, streamPath: string): string {
+function resolveStreamPath(basePath: string, streamPath: string): string {
   const segments = streamPath.startsWith("/") ? [] : basePath.split("/").filter(Boolean);
   for (const segment of streamPath.split("/")) {
     if (segment === "" || segment === ".") continue;
     if (segment === "..") {
       if (segments.length === 0) {
         throw new Error(
-          `streamPath "${streamPath}" escapes the stream root (resolved from "${basePath}")`,
+          `stream path "${streamPath}" escapes the stream root (resolved from "${basePath}")`,
         );
       }
       segments.pop();

@@ -3,7 +3,7 @@ import { defineProcessorContract } from "@iterate-com/shared/streams/stream-proc
 import { StreamProcessor } from "../streams/engine/stream-processor.ts";
 import { durableObjectProcessorSubscriber } from "../streams/engine/shared/callable-subscriber.ts";
 import type { Env } from "../../env.ts";
-import type { StreamEvent } from "../../../types.ts";
+import type { Project, StreamEvent } from "../../../types.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { AgentProcessorContract } from "../agents/agent-processor.ts";
 import { RepoProcessorContract } from "../repos/repo-processor.ts";
@@ -47,7 +47,6 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/subscription-configured",
   ],
 });
-
 type ProjectProcessorDeps = {
   env: Env;
   projectId: string;
@@ -97,11 +96,12 @@ export class ProjectProcessor extends StreamProcessor<
         }
         runInBackground(async () => {
           setTimeout(async () => {
+            // TODO type is wrong! should be async for sure
             await append({
               type: "events.iterate.com/project/created",
               payload: event.payload,
             });
-          }, 1000);
+          }, 100);
         });
         break;
       }
@@ -167,19 +167,5 @@ export class ProjectProcessor extends StreamProcessor<
       default:
         return;
     }
-  }
-
-  async createProject(args: { projectId: string; slug: string }): Promise<StreamEvent> {
-    const requested = await this.stream.append({
-      event: this.buildEvent({
-        type: "events.iterate.com/project/create-requested",
-        payload: args,
-      }),
-    });
-    return await this.stream.waitForEvent({
-      afterOffset: requested.offset,
-      eventTypes: ["events.iterate.com/project/created"],
-      timeoutMs: 5000,
-    });
   }
 }

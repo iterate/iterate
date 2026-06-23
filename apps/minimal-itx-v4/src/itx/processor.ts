@@ -244,8 +244,9 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
     } else {
       this.#liveCapabilities.set(key, retainLiveCapability(capability.target));
     }
-    const committed = await this.stream.append({
-      event: { type: "events.iterate.com/itx/capability-provided", payload: record },
+    const [committed] = await this.stream.append({
+      type: "events.iterate.com/itx/capability-provided",
+      payload: record,
     });
     await this.waitUntilEvent({ offset: committed.offset });
     return { path };
@@ -256,8 +257,9 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
     const key = liveKey(path);
     this.#liveCapabilities.get(key)?.dispose();
     this.#liveCapabilities.delete(key);
-    const committed = await this.stream.append({
-      event: { type: "events.iterate.com/itx/capability-revoked", payload: { path } },
+    const [committed] = await this.stream.append({
+      type: "events.iterate.com/itx/capability-revoked",
+      payload: { path },
     });
     await this.waitUntilEvent({ offset: committed.offset });
   }
@@ -283,10 +285,8 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
     const executionId = crypto.randomUUID();
     const completed = this.#waitForScriptCompletion(executionId);
     await this.stream.append({
-      event: {
-        type: "events.iterate.com/itx/script-execution-requested",
-        payload: { code, executionId },
-      },
+      type: "events.iterate.com/itx/script-execution-requested",
+      payload: { code, executionId },
     });
     const event = await completed;
     const payload = event.payload as CompletedPayload;
@@ -319,10 +319,8 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
               result: "result" in payload ? json(payload.result) : null,
             };
       return this.stream.append({
-        event: {
-          type: "events.iterate.com/itx/script-execution-completed",
-          payload: completionPayload,
-        },
+        type: "events.iterate.com/itx/script-execution-completed",
+        payload: completionPayload,
       });
     };
 

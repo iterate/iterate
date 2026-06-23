@@ -70,11 +70,9 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
     if (event.type !== "events.iterate.com/agent/create-requested") return;
     blockProcessorWhile(async () => {
       await this.stream.append({
-        event: {
-          type: "events.iterate.com/agent/created",
-          idempotencyKey: `agent-created:${event.offset}`,
-          payload: event.payload,
-        },
+        type: "events.iterate.com/agent/created",
+        idempotencyKey: `agent-created:${event.offset}`,
+        payload: event.payload,
       });
     });
   }

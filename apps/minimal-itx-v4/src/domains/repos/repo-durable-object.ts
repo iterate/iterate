@@ -17,7 +17,7 @@ const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 const REPO_DIR = "/repo";
 
 type InternalStreamWriter = {
-  append(input: unknown): Promise<unknown>;
+  append(...input: unknown[]): Promise<unknown[]>;
   getEvents(input?: unknown): Promise<unknown>;
 };
 
@@ -63,10 +63,8 @@ export class RepoDurableObject extends DurableObject<Env> implements Repo {
     if (existing) return existing;
 
     await this.#streamWriter().append({
-      event: {
-        type: "events.iterate.com/repo/create-requested",
-        payload: {},
-      },
+      type: "events.iterate.com/repo/create-requested",
+      payload: {},
     });
 
     const artifactName = this.artifactName();
@@ -77,12 +75,10 @@ export class RepoDurableObject extends DurableObject<Env> implements Repo {
           remote: this.artifactRemote(artifactName),
         }
       : await this.createArtifactRepo({});
-    const event = await this.#streamWriter().append({
-      event: {
-        type: "events.iterate.com/repo/created",
-        idempotencyKey: `repo-created:${this.#name.projectId}:${this.#name.path}`,
-        payload,
-      },
+    const [event] = await this.#streamWriter().append({
+      type: "events.iterate.com/repo/created",
+      idempotencyKey: `repo-created:${this.#name.projectId}:${this.#name.path}`,
+      payload,
     });
     return event as StreamEvent;
   }

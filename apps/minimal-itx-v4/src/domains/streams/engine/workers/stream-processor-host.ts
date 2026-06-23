@@ -26,16 +26,19 @@ import type {
   StreamProcessorSnapshot,
   StreamProcessorStream,
 } from "../stream-processor.ts";
-import type { ProcessorContractAnnouncement } from "../processors/core/contract.ts";
-import type { StreamEvent } from "../shared/event.ts";
-import type { StreamCoreProcessorState, StreamRpc, StreamSubscriptionHandle } from "../types.ts";
+import type {
+  CoreProcessorState,
+  ProcessorContractAnnouncement,
+} from "../processors/core/contract.ts";
+import type { StreamEvent, StreamEventInput } from "../shared/event.ts";
+import type { StreamRpc, StreamSubscriptionHandle } from "../../../../../types.ts";
 
 /** What the Stream DO sends when dialing a subscriber's callable. */
 export type StreamSubscriptionHandshake = {
   stream: StreamRpc;
   subscriptionKey: string;
   streamMaxOffset: number;
-  streamRuntimeState: { coreProcessorState: StreamCoreProcessorState };
+  streamRuntimeState: { coreProcessorState: CoreProcessorState };
 };
 
 /**
@@ -336,16 +339,14 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
     const offset = (await entry.processor.snapshot()).offset;
     const message = (error instanceof Error ? error.message : String(error)) || "unknown error";
     await entry.stream?.append({
-      event: {
-        type: "events.iterate.com/stream/error-occurred",
-        idempotencyKey: `processor-ingest-failed:${name}:${offset}`,
-        payload: {
-          message: `stream processor "${name}" gave up after ${entry.consecutiveIngestFailures} failed ingest attempts at offset ${offset}`,
-          error: {
-            message,
-            ...(error instanceof Error && error.name ? { name: error.name } : {}),
-            ...(error instanceof Error && error.stack ? { stack: error.stack } : {}),
-          },
+      type: "events.iterate.com/stream/error-occurred",
+      idempotencyKey: `processor-ingest-failed:${name}:${offset}`,
+      payload: {
+        message: `stream processor "${name}" gave up after ${entry.consecutiveIngestFailures} failed ingest attempts at offset ${offset}`,
+        error: {
+          message,
+          ...(error instanceof Error && error.name ? { name: error.name } : {}),
+          ...(error instanceof Error && error.stack ? { stack: error.stack } : {}),
         },
       },
     });
@@ -358,8 +359,8 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
       }
       const processor = build({
         stream: {
-          append: (args) => requireStream(name).append(args as never),
-          appendBatch: (args) => requireStream(name).appendBatch(args as never),
+          append: (...events: StreamEventInput[]) => requireStream(name).append(...events),
+          at: (path: string) => requireStream(name).at(path),
           getEvent: (args) => requireStream(name).getEvent(args as never),
           getEvents: (args) => requireStream(name).getEvents(args),
           waitForEvent: (args) => requireStream(name).waitForEvent(args as never),

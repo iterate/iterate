@@ -1,4 +1,4 @@
-import type { GetProcessorRuntimeState, ProcessEventBatch } from "../types.ts";
+import type { GetProcessorRuntimeState, ProcessEventBatch } from "../../../../../types.ts";
 
 type RetainedProcessEventBatch = ProcessEventBatch &
   Disposable & {
