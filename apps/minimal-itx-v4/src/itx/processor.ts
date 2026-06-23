@@ -14,7 +14,7 @@ import type {
 import { ItxContract, type CapabilityRecord } from "./processor-contract.ts";
 
 export type ProvideCapabilityInput = Parameters<ItxCapabilityHost["provideCapability"]>[0];
-export type RunScriptResult = ReturnType<ItxCapabilityHost["runScript"]>;
+export type RunScriptResult = Awaited<ReturnType<ItxCapabilityHost["runScript"]>>;
 
 export type ItxProcessorRpc = {
   invokeCapability(input: { args?: unknown[]; path: string[] }): unknown;

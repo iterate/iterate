@@ -1,6 +1,8 @@
 import { env, RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+import { fallbackCall } from "capnweb";
 import type {
   RpcTargetImplementation,
+  ItxCapabilityHost,
   ItxRoot,
   Projects,
   ItxAuthCredentials,
@@ -28,6 +30,7 @@ import {
 } from "./auth.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor.ts";
 import { durableObjectProcessorSubscriber } from "./domains/streams/engine/shared/callable-subscriber.ts";
+import type { ItxProcessorRpc, ProvideCapabilityInput } from "./itx/processor.ts";
 
 type StreamProcessEventBatch = Parameters<Stream["subscribe"]>[0]["processEventBatch"];
 type StreamProcessEventBatchInput = Parameters<StreamProcessEventBatch>[0];
@@ -229,7 +232,46 @@ class ProjectsRpcTarget extends RpcTarget implements RpcTargetImplementation<Pro
   }
 }
 
-export class ProjectRpcTarget extends RpcTarget implements RpcTargetImplementation<Project> {
+abstract class ItxCapabilityHostRpcTarget
+  extends RpcTarget
+  implements RpcTargetImplementation<ItxCapabilityHost>
+{
+  protected abstract itxProcessor(): ItxProcessorRpc;
+
+  async provideCapability(input: ProvideCapabilityInput) {
+    this.#rejectBuiltinCollision(input.path);
+    await this.itxProcessor().provideCapability(input);
+    return {
+      revoke: () => {
+        void this.revokeCapability({ path: input.path });
+      },
+    };
+  }
+
+  revokeCapability(input: { path: string[] }) {
+    return this.itxProcessor().revokeCapability(input);
+  }
+
+  runScript(code: string) {
+    return this.itxProcessor().runScript(code);
+  }
+
+  [fallbackCall](path: (string | number)[], args: unknown[]) {
+    return this.itxProcessor().invokeCapability({ args, path: path.map(String) });
+  }
+
+  #rejectBuiltinCollision(path: string[]) {
+    const root = path[0];
+    if (root && root in this) {
+      throw new Error(`cannot provide capability "${root}": it is already on this ITX target`);
+    }
+  }
+}
+
+export class ProjectRpcTarget
+  extends ItxCapabilityHostRpcTarget
+  implements RpcTargetImplementation<Project>
+{
   constructor(readonly props: { auth: ItxAuth; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -245,16 +287,8 @@ export class ProjectRpcTarget extends RpcTarget implements RpcTargetImplementati
     return this.durableObjectStub.describe();
   }
 
-  runScript(): Promise<never> {
-    throw new Error("project.runScript is not implemented in minimal-itx-v4");
-  }
-
-  provideCapability(): Promise<never> {
-    throw new Error("project.provideCapability is not implemented in minimal-itx-v4");
-  }
-
-  revokeCapability(): Promise<never> {
-    throw new Error("project.revokeCapability is not implemented in minimal-itx-v4");
+  protected itxProcessor(): ItxProcessorRpc {
+    return this.durableObjectStub.itxProcessor as unknown as ItxProcessorRpc;
   }
 
   get streams(): RpcTargetImplementation<Streams> {

@@ -1,5 +1,4 @@
 import { DurableObject } from "cloudflare:workers";
-import { env } from "cloudflare:workers";
 import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
@@ -11,7 +10,7 @@ import { ItxContract } from "../../itx/processor-contract.ts";
 import { ItxProcessor } from "../../itx/processor.ts";
 import { DynamicWorkersRpcTarget } from "../dynamic-workers/dynamic-workers-rpc-target.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import type { Project, RpcTargetImplementation, StreamEvent } from "../../../types.ts";
+import type { Project, RpcTargetImplementation } from "../../../types.ts";
 import { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { ProjectProcessor, ProjectProcessorContract } from "./project-processor.ts";
 
@@ -28,42 +27,42 @@ export class ProjectDurableObject extends DurableObject<Env> {
       }),
   );
 
-  // readonly #stream = this.ctx.exports.StreamDurableObject.getByName(this.ctx.id.name!);
+  readonly #stream = this.ctx.exports.StreamDurableObject.getByName(this.ctx.id.name!);
 
-  // readonly #dynamicWorkers = new DynamicWorkersRpcTarget({
-  //   bindings: {
-  //     ITX: this.ctx.exports.ItxEntrypoint({
-  //       props: {
-  //         ...this.#name,
-  //         auth: { type: "trusted-internal", token: TRUSTED_INTERNAL_ITX_TOKEN },
-  //       },
-  //     }),
-  //   },
-  //   facets: this.ctx.facets,
-  //   loader: this.env.LOADER,
-  //   projectId: this.#name.projectId,
-  //   storage: this.ctx.storage,
-  // });
+  readonly #dynamicWorkers = new DynamicWorkersRpcTarget({
+    bindings: {
+      ITX: this.ctx.exports.ItxEntrypoint({
+        props: {
+          type: "trusted-internal",
+          token: TRUSTED_INTERNAL_ITX_TOKEN,
+        },
+      }),
+    },
+    facets: this.ctx.facets,
+    loader: this.env.LOADER,
+    projectId: this.#name.projectId,
+    storage: this.ctx.storage,
+  });
 
-  // readonly #itxProcessor: ItxProcessorRpc;
+  readonly #itxProcessor: ItxProcessorRpc;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
 
-    // this.#itxProcessor = this.#processorHost.add(
-    //   ItxContract.slug,
-    //   (deps) =>
-    //     new ItxProcessor({
-    //       ...deps,
-    //       dynamicWorkers: this.#dynamicWorkers,
-    //       stream: this.#stream as never,
-    //     }),
-    // );
+    this.#itxProcessor = this.#processorHost.add(
+      ItxContract.slug,
+      (deps) =>
+        new ItxProcessor({
+          ...deps,
+          dynamicWorkers: this.#dynamicWorkers,
+          stream: this.#stream as never,
+        }),
+    );
   }
 
-  // get itxProcessor(): ItxProcessorRpc {
-  //   return this.#itxProcessor;
-  // }
+  get itxProcessor(): ItxProcessorRpc {
+    return this.#itxProcessor;
+  }
 
   requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
     return this.#processorHost.requestStreamSubscription(args);
@@ -136,20 +135,20 @@ export class ProjectDurableObject extends DurableObject<Env> {
     };
   }
 
-  // async runScript(code: string) {
-  //   return await this.#projectProcessor.runScript(code);
-  // }
+  async runScript(code: string) {
+    return await this.#itxProcessor.runScript(code);
+  }
 
-  // async provideCapability(input: Parameters<Project["provideCapability"]>[0]) {
-  //   await this.#itxProcessor.provideCapability(input);
-  //   return {
-  //     revoke: () => {
-  //       void this.revokeCapability({ path: input.path });
-  //     },
-  //   };
-  // }
+  async provideCapability(input: Parameters<Project["provideCapability"]>[0]) {
+    await this.#itxProcessor.provideCapability(input);
+    return {
+      revoke: () => {
+        void this.revokeCapability({ path: input.path });
+      },
+    };
+  }
 
-  // revokeCapability(input: Parameters<Project["revokeCapability"]>[0]) {
-  //   return this.#itxProcessor.revokeCapability(input);
-  // }
+  revokeCapability(input: Parameters<Project["revokeCapability"]>[0]) {
+    return this.#itxProcessor.revokeCapability(input);
+  }
 }

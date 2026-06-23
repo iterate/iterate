@@ -8,6 +8,7 @@ import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { AgentProcessorContract } from "../agents/agent-processor.ts";
 import { RepoProcessorContract } from "../repos/repo-processor.ts";
 import { CoreProcessorContract } from "../streams/engine/processors/core/contract.ts";
+import { ItxContract } from "../../itx/processor-contract.ts";
 
 export const ProjectProcessorContract = defineProcessorContract({
   slug: "project",
@@ -94,6 +95,22 @@ export class ProjectProcessor extends StreamProcessor<
             `create-requested for "${event.payload.projectId}" on project "${this.deps.projectId}"`,
           );
         }
+        blockProcessorWhile(async () => {
+          await append({
+            type: "events.iterate.com/stream/subscription-configured",
+            payload: {
+              subscriptionKey: ItxContract.slug,
+              subscriber: durableObjectProcessorSubscriber({
+                bindingName: "PROJECT",
+                durableObjectName: DurableObjectNameCodec.stringify({
+                  projectId: this.deps.projectId,
+                  path: "/",
+                }),
+                processorName: ItxContract.slug,
+              }),
+            },
+          });
+        });
         runInBackground(async () => {
           setTimeout(async () => {
             // TODO type is wrong! should be async for sure
