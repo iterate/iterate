@@ -89,7 +89,7 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
         itx,
         scope: createBrowserReplScope({ projectId, vars }),
       });
-      exampleCase.assert(result, ctx);
+      exampleCase.assert(result, ctx, expect);
     }, 120_000);
   }
 

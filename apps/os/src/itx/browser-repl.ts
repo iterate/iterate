@@ -4,6 +4,7 @@ export const DEFAULT_BROWSER_REPL_CODE = "await itx.projects.list({ limit: 5 })"
 
 export type BrowserReplEntry = {
   code: string;
+  id: string;
   consoleOutput: string;
   output: string;
   outputLanguage: "json" | "text";
@@ -36,6 +37,7 @@ export async function runBrowserReplEntry(input: {
   itx: unknown;
   scope: Record<string, unknown>;
 }): Promise<BrowserReplEntry> {
+  const id = crypto.randomUUID();
   const trimmedCode = input.code.trim();
   const consoleLogs: BrowserReplConsoleLog[] = [];
   const previousConsole = input.scope.console;
@@ -52,6 +54,7 @@ export async function runBrowserReplEntry(input: {
     return {
       code: trimmedCode,
       consoleOutput: formatBrowserReplConsoleOutput(consoleLogs),
+      id,
       output: formattedResult.text,
       outputLanguage: formattedResult.language,
       result,
@@ -61,6 +64,7 @@ export async function runBrowserReplEntry(input: {
     return {
       code: trimmedCode,
       consoleOutput: formatBrowserReplConsoleOutput(consoleLogs),
+      id,
       output: error instanceof Error ? (error.stack ?? error.message) : String(error),
       outputLanguage: "text",
       status: "error",

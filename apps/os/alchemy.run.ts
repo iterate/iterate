@@ -639,7 +639,9 @@ if (!ctx.app.local) process.exit(0);
  * project bases are normal bases too: `<slug>.iterate-preview-N.app`.
  */
 function projectRouteHostnamesForBase(base: string) {
-  return [base, `*.${base}`];
+  // Cloudflare accepts `*.base`, but the live preview zone only invoked the
+  // worker for project hosts after the broader catch-all `*base` route existed.
+  return [base, `*.${base}`, `*${base}`];
 }
 
 function routeHostnameForUrl(url: string | undefined) {
