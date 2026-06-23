@@ -7,6 +7,10 @@ import { replayPathCall } from "~/itx/path-proxy.ts";
 import type { PathCall } from "~/itx/itx.ts";
 import { formatDurableObjectName } from "~/domains/durable-object-names.ts";
 
+type WorkspaceCapabilityEnv = {
+  WORKSPACE?: DurableObjectNamespace<WorkspaceDurableObject>;
+};
+
 export type WorkspaceCapabilityProps = {
   projectId: string;
   /**
@@ -26,7 +30,7 @@ type WorkspaceRpcStub = {
 };
 
 export class WorkspaceCapability extends WorkerEntrypoint<
-  { WORKSPACE?: DurableObjectNamespace<WorkspaceDurableObject> },
+  WorkspaceCapabilityEnv,
   WorkspaceCapabilityProps
 > {
   /** The itx kernel's one calling convention; replay walks this entrypoint's own members. */

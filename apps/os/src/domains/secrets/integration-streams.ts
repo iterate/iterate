@@ -10,13 +10,15 @@ export * from "~/domains/secrets/integration-stream-constants.ts";
 
 type IntegrationProvider = "google" | "slack";
 
+type AppendIntegrationEventInput = {
+  event: EventInput;
+  projectId: string;
+  provider: IntegrationProvider;
+};
+
 export async function appendIntegrationEvent(
   context: RequestContext,
-  input: {
-    event: EventInput;
-    projectId: string;
-    provider: IntegrationProvider;
-  },
+  input: AppendIntegrationEventInput,
 ) {
   if (!context.workerExports) {
     throw new ORPCError("INTERNAL_SERVER_ERROR", {

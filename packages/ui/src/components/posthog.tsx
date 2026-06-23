@@ -45,6 +45,8 @@ function getBootstrapConfig() {
   };
 }
 
+type PostHogInterface = import("posthog-js").PostHogInterface;
+
 function buildPosthogInitOptions(options: SetupPosthogOptions) {
   return {
     api_host: resolveBrowserUrl(options.proxyUrl ?? "/api/integrations/posthog/proxy"),
@@ -62,7 +64,7 @@ function buildPosthogInitOptions(options: SetupPosthogOptions) {
           },
         }),
     loaded: options.appStage
-      ? (client: import("posthog-js").PostHogInterface) => {
+      ? (client: PostHogInterface) => {
           client.register({
             $environment: options.appStage,
           });
@@ -71,7 +73,9 @@ function buildPosthogInitOptions(options: SetupPosthogOptions) {
   };
 }
 
-function setupPosthog(client: import("posthog-js").PostHog, options: SetupPosthogOptions) {
+type PostHog = import("posthog-js").PostHog;
+
+function setupPosthog(client: PostHog, options: SetupPosthogOptions) {
   if (!shouldEnablePosthog(options.apiKey) || typeof window === "undefined") return;
 
   if (window.__iteratePosthogInitialized && window.__iteratePosthogApiKey === options.apiKey) {

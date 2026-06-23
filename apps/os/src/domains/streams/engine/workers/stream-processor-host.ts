@@ -447,11 +447,13 @@ type RetainedStreamRpc = StreamRpc &
     onRpcBroken?(callback: (error: unknown) => void): void;
   };
 
+type RetainableStreamRpc = StreamRpc &
+  Partial<Disposable> & {
+    dup?(): RetainedStreamRpc;
+  };
+
 function retainStreamRpc(stream: StreamRpc): RetainedStreamRpc {
-  const retainable = stream as StreamRpc &
-    Partial<Disposable> & {
-      dup?(): RetainedStreamRpc;
-    };
+  const retainable = stream as RetainableStreamRpc;
   const retained = retainable.dup?.() ?? retainable;
   const dispose = retained[Symbol.dispose]?.bind(retained);
   return Object.assign(retained, {

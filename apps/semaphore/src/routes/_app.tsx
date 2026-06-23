@@ -47,11 +47,19 @@ function NavLink(props: { to: "/resources/"; children: string }) {
   );
 }
 
+type BreadcrumbStaticData = {
+  breadcrumb?: string;
+};
+
+type BreadcrumbLoaderData = {
+  breadcrumb?: string;
+};
+
 function Breadcrumbs() {
   const matches = useMatches();
   const crumbs = matches.flatMap((match) => {
-    const staticBreadcrumb = (match.staticData as { breadcrumb?: string } | undefined)?.breadcrumb;
-    const dynamicBreadcrumb = (match.loaderData as { breadcrumb?: string } | undefined)?.breadcrumb;
+    const staticBreadcrumb = (match.staticData as BreadcrumbStaticData | undefined)?.breadcrumb;
+    const dynamicBreadcrumb = (match.loaderData as BreadcrumbLoaderData | undefined)?.breadcrumb;
     const label = dynamicBreadcrumb ?? staticBreadcrumb;
 
     if (!label) {

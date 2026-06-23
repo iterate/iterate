@@ -17,6 +17,15 @@ import {
   SLACK_DISCONNECTED_EVENT_TYPE,
 } from "~/domains/secrets/integration-streams.ts";
 
+type IntegrationsCapabilityEnv = {
+  APP_CONFIG?: string;
+  DB?: D1Database;
+};
+
+type IntegrationsCapabilityProps = {
+  projectId?: string;
+};
+
 type IntegrationProvider = "google" | "slack";
 
 /**
@@ -46,8 +55,8 @@ type IntegrationProvider = "google" | "slack";
  *     userId useless.
  */
 export class IntegrationsCapability extends WorkerEntrypoint<
-  { APP_CONFIG?: string; DB?: D1Database },
-  { projectId?: string }
+  IntegrationsCapabilityEnv,
+  IntegrationsCapabilityProps
 > {
   /** The itx kernel's one calling convention; replay walks this entrypoint's own members. */
   call(input: PathCall): Promise<unknown> {

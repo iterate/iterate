@@ -5,6 +5,10 @@ import { getFreshGoogleAccessToken } from "~/domains/secrets/oauth.ts";
 import { replayPathCall } from "~/itx/path-proxy.ts";
 import type { PathCall } from "~/itx/itx.ts";
 
+type GmailCapabilityEnv = {
+  DB?: D1Database;
+};
+
 type GmailCapabilityProps = {
   projectId?: string;
 };
@@ -17,7 +21,7 @@ type GmailRequestInput = {
   query?: Record<string, boolean | number | string | null | undefined>;
 };
 
-export class GmailCapability extends WorkerEntrypoint<{ DB?: D1Database }, GmailCapabilityProps> {
+export class GmailCapability extends WorkerEntrypoint<GmailCapabilityEnv, GmailCapabilityProps> {
   /** The itx kernel's one calling convention; replay walks this entrypoint's own members. */
   call(input: PathCall): Promise<unknown> {
     return replayPathCall(this, input);

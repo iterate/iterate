@@ -66,8 +66,9 @@ const STREAM_POLL_INTERVAL_MS = 1_000;
 const OAUTH_REFRESH_SKEW_MS = 60 * 1000;
 const OAUTH_FORCE_REFRESH_THROTTLE_MS = 10 * 1000;
 
+type AuthHeaders = Record<string, string>;
 type AuthProvider = {
-  getHeaders: () => Promise<Record<string, string>>;
+  getHeaders: () => Promise<AuthHeaders>;
   refresh: () => Promise<boolean>;
 };
 type OAuthRuntimeSession = {

@@ -38,8 +38,9 @@ export { CloudflareAiProcessorContract } from "./contract.ts";
 
 export type CloudflareAiProcessorContract = typeof CloudflareAiProcessorContract;
 
+type CloudflareAiConsumedEvent = ConsumedEvent<CloudflareAiProcessorContract>;
 type LlmRequestRequestedEvent = Extract<
-  ConsumedEvent<CloudflareAiProcessorContract>,
+  CloudflareAiConsumedEvent,
   { type: "events.iterate.com/agent/llm-request-requested" }
 >;
 type JsonValue = z.infer<ReturnType<typeof z.json>>;
