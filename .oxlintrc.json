@@ -121,6 +121,7 @@
     "iterate/no-implied-eval": "error",
     "iterate/stream-processor-override-args": "error",
     "iterate/no-single-use-helpers": "error",
+    "iterate/no-single-use-types": "error",
     "prefer-const": "off",
     "iterate/prefer-const": "error",
     "iterate/isolated-codemode": [
