@@ -22,9 +22,12 @@
       "new_sqlite_classes": [
         "ProjectDurableObject",
         // "AgentDurableObject",
-        "RepoDurableObject",
         "StreamDurableObject",
       ],
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["RepoDurableObject"],
     },
   ],
   "artifacts": [
