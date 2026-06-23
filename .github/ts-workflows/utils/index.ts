@@ -47,6 +47,14 @@ export const getSetupRepo = ({ ref }: { ref?: string } = {}) =>
 /** checkout, setup pnpm, setup node, install dependencies */
 export const setupRepo = getSetupRepo();
 
+export const installDopplerCli = {
+  name: "Install Doppler CLI",
+  run: [
+    'for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done',
+    "doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }",
+  ].join("\n"),
+} as const satisfies Step;
+
 type DopplerConfigName =
   | `dev_${string}`
   | `preview_${string}`
@@ -55,14 +63,6 @@ type DopplerConfigName =
   | "prd"
   | `\${{ ${string} }}`;
 type DopplerProjectName = string;
-
-export const installDopplerCli = {
-  name: "Install Doppler CLI",
-  run: [
-    'for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done',
-    "doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }",
-  ].join("\n"),
-} as const satisfies Step;
 
 export const setupDoppler = ({
   config,

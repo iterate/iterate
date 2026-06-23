@@ -17,10 +17,6 @@ export type FetchBase = {
   fetch(request: Request): Response | Promise<Response>;
 };
 
-type OptionalFetchBase = {
-  fetch?(request: Request): Response | Promise<Response>;
-};
-
 /**
  * Public result type for mixins that add or wrap fetch().
  *
@@ -44,6 +40,10 @@ export type WithFetchMixinResult<TBase extends DurableObjectClass> = DurableObje
  * base class. If no lower layer handles fetch(), return a plain 404. This keeps
  * each inspector focused on its own route instead of duplicating fallback logic.
  */
+type OptionalFetchBase = {
+  fetch?(request: Request): Response | Promise<Response>;
+};
+
 export async function delegateToBaseFetch(
   Base: DurableObjectClass,
   instance: object,

@@ -3,8 +3,6 @@ import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/t
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { StreamTreeBrowser, type StreamTreeSource } from "~/components/stream-tree-browser.tsx";
 
-type ProjectStreamViewProps = ComponentProps<typeof ProjectStreamView>;
-
 export function StreamExplorerTreePage({
   currentPath,
   header,
@@ -36,6 +34,8 @@ export function StreamExplorerTreePage({
  * header's path pill, not a tree sidebar — the source feeds the switcher's
  * lazy child loading.
  */
+type ProjectStreamViewProps = ComponentProps<typeof ProjectStreamView>;
+
 export function StreamExplorerDetail({
   currentPath,
   showCommandPaletteTrigger = false,

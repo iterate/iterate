@@ -145,6 +145,91 @@ function isFunctionLikeDeclaration(node) {
   });
 }
 
+/** @param {import("estree").Node} node */
+function isFunctionExpressionNode(node) {
+  return node.type === "FunctionExpression" || node.type === "ArrowFunctionExpression";
+}
+
+/**
+ * @param {import("estree").Node | undefined} node
+ * @returns {import("estree").Node | undefined}
+ */
+function getExportWrapper(node) {
+  if (
+    node?.type === "ExportNamedDeclaration" ||
+    node?.type === "ExportDefaultDeclaration" ||
+    node?.type === "ExportAllDeclaration"
+  ) {
+    return node;
+  }
+  return undefined;
+}
+
+/**
+ * @param {import("estree").Node} node
+ * @returns {import("estree").Node | undefined}
+ */
+function getFunctionColocationStatement(node) {
+  if (node.type === "FunctionDeclaration") {
+    return getExportWrapper(node.parent) || node;
+  }
+
+  if (!isFunctionExpressionNode(node)) return undefined;
+
+  const declarator = node.parent;
+  if (declarator?.type !== "VariableDeclarator" || declarator.init !== node) return undefined;
+  const declaration = declarator.parent;
+  if (declaration?.type !== "VariableDeclaration") return undefined;
+  return getExportWrapper(declaration.parent) || declaration;
+}
+
+/**
+ * @param {import("estree").Node} node
+ * @returns {import("estree").Node | undefined}
+ */
+function getTypeReferenceFunctionStatement(node) {
+  for (let current = node.parent; current; current = current.parent) {
+    if (current.type === "FunctionDeclaration") {
+      return getFunctionColocationStatement(current);
+    }
+    if (isFunctionExpressionNode(current)) {
+      const statement = getFunctionColocationStatement(current);
+      if (statement) return statement;
+    }
+    if (
+      current.type === "VariableDeclarator" &&
+      current.init &&
+      isFunctionExpressionNode(current.init)
+    ) {
+      return getFunctionColocationStatement(current.init);
+    }
+  }
+  return undefined;
+}
+
+/**
+ * @param {import("estree").Node} typeDeclaration
+ * @param {import("estree").Node} functionStatement
+ */
+function isImmediatelyBeside(typeDeclaration, functionStatement) {
+  const body = typeDeclaration.parent?.body;
+  if (!Array.isArray(body) || body !== functionStatement.parent?.body) return false;
+
+  const typeIndex = body.indexOf(typeDeclaration);
+  const functionIndex = body.indexOf(functionStatement);
+  if (typeIndex === -1 || functionIndex === -1) return false;
+
+  const start = Math.min(typeIndex, functionIndex) + 1;
+  const end = Math.max(typeIndex, functionIndex);
+  const between = body.slice(start, end);
+  return between.every((statement) => isTypeDeclarationStatement(statement));
+}
+
+/** @param {import("estree").Node} statement */
+function isTypeDeclarationStatement(statement) {
+  return statement.type === "TSTypeAliasDeclaration" || statement.type === "TSInterfaceDeclaration";
+}
+
 /**
  * Counts the source lines spanned by a function's body content: the statements between the
  * braces, or the expression of a concise arrow. Brace-only lines don't count, so
@@ -750,6 +835,53 @@ const plugin = {
             }
             checkHelper(node.id, node.init, node.parent);
           },
+        };
+      },
+    },
+    "colocate-single-use-types": {
+      meta: {
+        type: "suggestion",
+        docs: {
+          description:
+            "Require non-exported single-use type aliases and interfaces to sit immediately beside the function they serve.",
+        },
+      },
+      create(context) {
+        /**
+         * @param {import("estree").Node} node
+         */
+        function checkTypeDeclaration(node) {
+          const typeName = node.id?.name;
+          if (!typeName) return;
+          if (node.declare) return;
+          if (getExportWrapper(node.parent)) return;
+
+          const scope = context.sourceCode.getScope(node);
+          const variable = findVariableInScopeChain(scope, typeName);
+          if (!variable) return;
+
+          const reads = variable.references.filter((ref) => ref.isRead());
+          const isExportedReference = reads.some((ref) => {
+            const parentType = ref.identifier.parent?.type;
+            return parentType === "ExportSpecifier" || parentType === "ExportDefaultDeclaration";
+          });
+          if (isExportedReference) return;
+          if (reads.length !== 1) return;
+
+          const functionStatement = getTypeReferenceFunctionStatement(reads[0].identifier);
+          if (!functionStatement) return;
+          if (isImmediatelyBeside(node, functionStatement)) return;
+
+          context.report({
+            node: node.id,
+            message:
+              `${typeName} is a non-exported type used by one function. ` +
+              `Move it immediately before or immediately after that function.`,
+          });
+        }
+
+        return {
+          "TSTypeAliasDeclaration, TSInterfaceDeclaration": checkTypeDeclaration,
         };
       },
     },

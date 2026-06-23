@@ -80,6 +80,11 @@ import { presenceLabel, sparklinePoints, useSimulatedRttMetrics } from "~/lib/st
 import { useStreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useVirtualizedTailScroll } from "~/lib/use-virtualized-tail-scroll.ts";
 
+const DEFAULT_RAW_EVENT_YAML =
+  "type: events.iterate.com/os/manual-event\npayload:\n  message: Hello from OS\n";
+
+const MAX_PRESENCE_AVATARS = 4;
+
 type ProjectStreamMessageComposer = {
   placeholder?: string;
   onInterrupt?: (llmRequestId: number) => Promise<void>;
@@ -93,11 +98,6 @@ type StreamPathLinkRenderer = (input: {
   path: StreamPath;
 }) => ReactNode;
 type ItxStreamSource = (streamPath: StreamPath) => StreamRpc | Promise<StreamRpc>;
-
-const DEFAULT_RAW_EVENT_YAML =
-  "type: events.iterate.com/os/manual-event\npayload:\n  message: Hello from OS\n";
-
-const MAX_PRESENCE_AVATARS = 4;
 
 export function ProjectStreamView({
   autoFocusMessageComposer = false,

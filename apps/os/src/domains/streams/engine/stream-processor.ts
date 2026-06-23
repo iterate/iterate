@@ -109,10 +109,6 @@ export type StreamProcessorRuntimeState<State> = {
 type MaybePromise<T> = T | Promise<T>;
 type StateChangeCallback<State> = (state: State) => unknown;
 type RetainedStateChangeCallback<State> = StateChangeCallback<State> & Disposable;
-type RetainableStateChangeCallback<State> = StateChangeCallback<State> &
-  Partial<Disposable> & {
-    dup?(): RetainedStateChangeCallback<State>;
-  };
 export type StreamProcessorStateUnsubscribe = (() => void) & Disposable;
 
 /**
@@ -457,6 +453,11 @@ export abstract class StreamProcessor<
     return this.#state;
   }
 }
+
+type RetainableStateChangeCallback<State> = StateChangeCallback<State> &
+  Partial<Disposable> & {
+    dup?(): RetainedStateChangeCallback<State>;
+  };
 
 function retainStateChangeCallback<State>(
   cb: StateChangeCallback<State>,

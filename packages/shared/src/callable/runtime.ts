@@ -15,25 +15,6 @@ type DynamicWorkerVia = Extract<
   FetchCallable["via"],
   { type: "env-binding"; bindingType: "dynamic-worker" }
 >;
-type EnvDurableObjectVia = Extract<
-  FetchCallable["via"],
-  { type: "env-binding"; bindingType: "durable-object-namespace" }
->;
-type LoopbackDurableObjectVia = Extract<
-  FetchCallable["via"],
-  { type: "loopback-binding"; bindingType: "durable-object-namespace" }
->;
-type DynamicWorkerCode = DynamicWorkerVia["workerCode"];
-type DynamicWorkerStub = {
-  getEntrypoint: (name?: string, options?: { props?: unknown }) => unknown;
-};
-type DynamicWorkerLoader = {
-  load: (code: DynamicWorkerCode) => DynamicWorkerStub;
-  get: (
-    id: string,
-    getCode: () => DynamicWorkerCode | Promise<DynamicWorkerCode>,
-  ) => DynamicWorkerStub;
-};
 
 /**
  * Parses untrusted JSON into the v1 Callable shape.
@@ -934,6 +915,15 @@ function resolveLoopbackServiceBinding(options: {
   return binding({ props: options.via.props });
 }
 
+type EnvDurableObjectVia = Extract<
+  FetchCallable["via"],
+  { type: "env-binding"; bindingType: "durable-object-namespace" }
+>;
+type LoopbackDurableObjectVia = Extract<
+  FetchCallable["via"],
+  { type: "loopback-binding"; bindingType: "durable-object-namespace" }
+>;
+
 function resolveDurableObjectFetchStub(
   options:
     | {
@@ -1116,6 +1106,18 @@ function isFetchableBinding(
     typeof value.fetch === "function"
   );
 }
+
+type DynamicWorkerCode = DynamicWorkerVia["workerCode"];
+type DynamicWorkerStub = {
+  getEntrypoint: (name?: string, options?: { props?: unknown }) => unknown;
+};
+type DynamicWorkerLoader = {
+  load: (code: DynamicWorkerCode) => DynamicWorkerStub;
+  get: (
+    id: string,
+    getCode: () => DynamicWorkerCode | Promise<DynamicWorkerCode>,
+  ) => DynamicWorkerStub;
+};
 
 function isDynamicWorkerLoader(value: unknown): value is DynamicWorkerLoader {
   return (

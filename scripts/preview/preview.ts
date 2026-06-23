@@ -290,6 +290,13 @@ export async function status() {
 /**
  * Lease a specific preview slot for manual deploys so PR cleanup cannot destroy it.
  */
+type AcquireOptions = {
+  /** Preview slot: a number (9) or slug (preview-9 / preview_9). */
+  slot: string;
+  /** Manual lease length in hours. */
+  hours?: number;
+};
+
 export async function acquire(options: AcquireOptions) {
   const runtime = createPreviewRuntime();
   const semaphore = runtime.createPreviewSemaphoreResourceClient();
@@ -313,6 +320,13 @@ export async function acquire(options: AcquireOptions) {
 /**
  * Release a preview slot lease acquired with `preview acquire`.
  */
+type ReleaseOptions = {
+  /** Preview slot: a number (9) or slug (preview-9 / preview_9). */
+  slot: string;
+  /** Lease id returned by `pnpm preview acquire`. */
+  leaseId: string;
+};
+
 export async function release(options: ReleaseOptions) {
   const runtime = createPreviewRuntime();
   const semaphore = runtime.createPreviewSemaphoreResourceClient();
@@ -345,6 +359,11 @@ export async function reconcile() {
 /**
  * Ensure preview auth, OS, and streams-example Doppler configs contain per-slot constants.
  */
+type ProvisionAuthPreviewConfigsOptions = {
+  /** Regenerate OAuth client secrets and app auth tokens instead of keeping existing values. */
+  rotate?: boolean;
+};
+
 export async function provisionAuthPreviewConfigs(
   options: ProvisionAuthPreviewConfigsOptions = {},
 ) {
@@ -623,14 +642,6 @@ export const environmentConfigLeaseInventory = previewEnvironmentSlotNumbers.map
   };
 }) satisfies EnvironmentConfigLeaseInventoryItem[];
 
-type PreviewInventoryClient = {
-  add: (input: EnvironmentConfigLeaseInventoryItem) => Promise<unknown>;
-  delete: (input: { slug: string; type: string }) => Promise<unknown>;
-  list: (input: {
-    type: string;
-  }) => Promise<Array<{ slug: string; data: Record<string, unknown> }>>;
-};
-
 export type PreviewSemaphoreResourceClient = {
   acquire: (input: { leaseMs: number; type: string; waitMs?: number }) => Promise<{
     data: Record<string, unknown>;
@@ -670,25 +681,6 @@ export type PreviewSemaphoreResourceClient = {
 
 export type PreviewAppRuntime = (typeof cloudflarePreviewApps)[CloudflarePreviewAppSlugType];
 
-type AcquireOptions = {
-  /** Preview slot: a number (9) or slug (preview-9 / preview_9). */
-  slot: string;
-  /** Manual lease length in hours. */
-  hours?: number;
-};
-
-type ReleaseOptions = {
-  /** Preview slot: a number (9) or slug (preview-9 / preview_9). */
-  slot: string;
-  /** Lease id returned by `pnpm preview acquire`. */
-  leaseId: string;
-};
-
-type ProvisionAuthPreviewConfigsOptions = {
-  /** Regenerate OAuth client secrets and app auth tokens instead of keeping existing values. */
-  rotate?: boolean;
-};
-
 type PreviewRuntime = {
   commandEnvironment: NodeJS.ProcessEnv;
   createPreviewSemaphoreResourceClient: () => PreviewSemaphoreResourceClient;
@@ -710,10 +702,6 @@ type EnvironmentConfigLeaseResourceRecord = {
   data: Record<string, unknown>;
   leaseState: "available" | "leased";
   leasedUntil: number | null;
-};
-
-type PreviewReconcileClient = {
-  list: (input: { type: string }) => Promise<EnvironmentConfigLeaseResourceRecord[]>;
 };
 
 type CheckResult = {
@@ -738,25 +726,6 @@ type EnvironmentConfigLeaseReconcileIssue = {
   check: "resource-data" | "doppler-config" | "cloudflare-credentials" | "cloudflare-zone";
   message: string;
   resourceSlug: string;
-};
-
-type EnvironmentConfigLeaseReconcileResult = {
-  checkedAt: string;
-  ok: boolean;
-  semaphoreBaseUrl: string;
-  type: typeof ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE;
-  resources: Array<{
-    dopplerConfig: string | null;
-    domains: string[];
-    issues: EnvironmentConfigLeaseReconcileIssue[];
-    leaseState: "available" | "leased";
-    leasedUntil: string | null;
-    slug: string;
-  }>;
-  summary: {
-    resourceCount: number;
-    issueCount: number;
-  };
 };
 
 const previewManagedDopplerProjects = [
@@ -798,6 +767,14 @@ function createPreviewSemaphoreResourceClient(
     list: ({ type }) => semaphore.resources.list({ type }),
   };
 }
+
+type PreviewInventoryClient = {
+  add: (input: EnvironmentConfigLeaseInventoryItem) => Promise<unknown>;
+  delete: (input: { slug: string; type: string }) => Promise<unknown>;
+  list: (input: {
+    type: string;
+  }) => Promise<Array<{ slug: string; data: Record<string, unknown> }>>;
+};
 
 async function syncPreviewInventory(input: {
   client: PreviewInventoryClient;
@@ -1128,6 +1105,29 @@ async function writePullRequestBody(params: {
     pull_number: params.pullRequestNumber,
   });
 }
+
+type PreviewReconcileClient = {
+  list: (input: { type: string }) => Promise<EnvironmentConfigLeaseResourceRecord[]>;
+};
+
+type EnvironmentConfigLeaseReconcileResult = {
+  checkedAt: string;
+  ok: boolean;
+  semaphoreBaseUrl: string;
+  type: typeof ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE;
+  resources: Array<{
+    dopplerConfig: string | null;
+    domains: string[];
+    issues: EnvironmentConfigLeaseReconcileIssue[];
+    leaseState: "available" | "leased";
+    leasedUntil: string | null;
+    slug: string;
+  }>;
+  summary: {
+    resourceCount: number;
+    issueCount: number;
+  };
+};
 
 async function reconcileEnvironmentConfigLeaseResources(input: {
   checkCloudflareZone?: (input: {
