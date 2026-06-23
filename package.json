@@ -6,7 +6,7 @@
     "dev-all": "sh -c 'export VITE_AUTH_APP_ORIGIN=http://localhost:7101; export VITE_PUBLIC_URL=http://localhost:7101; export ITERATE_OAUTH_ISSUER=http://localhost:7101/api/auth; (cd apps/auth && doppler run --preserve-env=VITE_AUTH_APP_ORIGIN,VITE_PUBLIC_URL -- pnpm dev:local) & (cd apps/os && doppler run --preserve-env=ITERATE_OAUTH_ISSUER -- pnpm dev); wait'",
     "dev": "pnpm os dev",
     "build": "pnpm -r --parallel --filter '!iterate' build",
-    "typecheck": "pnpm -r --parallel --filter '!iterate' --filter '!minimal-itx-v2' --filter '!minimal-itx-v3' --filter '!minimal-itx-reference-implementation' typecheck",
+    "typecheck": "pnpm -r --parallel --filter '!iterate' --filter '!minimal-itx-v3' --filter '!minimal-itx-reference-implementation' typecheck",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "os": "cd apps/os && pnpm",
