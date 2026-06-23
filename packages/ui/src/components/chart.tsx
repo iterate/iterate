@@ -10,7 +10,6 @@ import { cn } from "@iterate-com/ui/lib/utils";
 const THEMES = { light: "", dark: ".dark" } as const;
 
 const INITIAL_DIMENSION = { width: 320, height: 200 } as const;
-type TooltipNameType = number | string;
 
 export type ChartConfig = Record<
   string,
@@ -107,6 +106,8 @@ ${colorConfig
 };
 
 const ChartTooltip = RechartsPrimitive.Tooltip;
+
+type TooltipNameType = number | string;
 
 function ChartTooltipContent({
   active,

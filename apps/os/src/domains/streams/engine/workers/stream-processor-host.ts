@@ -224,6 +224,12 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
   // (Re)opens the outbound subscription from the processor's durable checkpoint.
   // Called for the initial handshake and again by `recoverFromIngestFailure`, so
   // a failed batch replays from the last good offset instead of being skipped.
+  type OutboundStreamRpc = RetainedStreamRpc & {
+    subscribeOutbound(
+      args: Parameters<StreamRpc["subscribe"]>[0],
+    ): ReturnType<StreamRpc["subscribe"]>;
+  };
+
   async function openSubscription(name: string): Promise<void> {
     const entry = requireEntry(name);
     const stream = entry.stream;
@@ -440,12 +446,6 @@ type RetainedStreamRpc = StreamRpc &
   Disposable & {
     onRpcBroken?(callback: (error: unknown) => void): void;
   };
-
-type OutboundStreamRpc = RetainedStreamRpc & {
-  subscribeOutbound(
-    args: Parameters<StreamRpc["subscribe"]>[0],
-  ): ReturnType<StreamRpc["subscribe"]>;
-};
 
 type RetainableStreamRpc = StreamRpc &
   Partial<Disposable> & {

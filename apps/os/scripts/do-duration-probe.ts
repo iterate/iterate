@@ -16,11 +16,6 @@
 //   --threshold-hours N   wallTimeP99 ceiling per invocation, in hours (default 1)
 //   --prefix STR          only scripts whose name starts with STR (default "os-")
 
-interface CfGraphqlResponse<T> {
-  data?: T;
-  errors?: Array<{ message: string }>;
-}
-
 function requireEnv(name: string): string {
   const value = process.env[name];
   if (value === undefined || value === "") throw new Error(`Missing required env var ${name}`);
@@ -38,6 +33,11 @@ function flagStr(name: string, fallback: string): string {
   const fromCli = process.argv.indexOf(`--${name}`);
   if (fromCli !== -1 && process.argv[fromCli + 1] !== undefined) return process.argv[fromCli + 1]!;
   return fallback;
+}
+
+interface CfGraphqlResponse<T> {
+  data?: T;
+  errors?: Array<{ message: string }>;
 }
 
 async function main(): Promise<void> {

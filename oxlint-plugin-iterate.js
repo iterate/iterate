@@ -217,7 +217,17 @@ function isImmediatelyBeside(typeDeclaration, functionStatement) {
 
   const typeIndex = body.indexOf(typeDeclaration);
   const functionIndex = body.indexOf(functionStatement);
-  return typeIndex !== -1 && functionIndex !== -1 && Math.abs(typeIndex - functionIndex) === 1;
+  if (typeIndex === -1 || functionIndex === -1) return false;
+
+  const start = Math.min(typeIndex, functionIndex) + 1;
+  const end = Math.max(typeIndex, functionIndex);
+  const between = body.slice(start, end);
+  return between.every((statement) => isTypeDeclarationStatement(statement));
+}
+
+/** @param {import("estree").Node} statement */
+function isTypeDeclarationStatement(statement) {
+  return statement.type === "TSTypeAliasDeclaration" || statement.type === "TSInterfaceDeclaration";
 }
 
 /**

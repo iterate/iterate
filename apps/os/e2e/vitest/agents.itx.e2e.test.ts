@@ -33,17 +33,6 @@ type SlackChannel = {
   name: string;
 };
 
-type SlackConversationsListResponse =
-  | {
-      channels: SlackChannel[];
-      ok: true;
-      response_metadata?: { next_cursor?: string };
-    }
-  | {
-      error?: string;
-      ok: false;
-    };
-
 const itIfSlackBotToken = process.env.APP_CONFIG_SLACK_BOT_TOKEN?.trim() ? test : test.skip;
 
 test("can configure Cloudflare AI Gateway as the provider for an agent stream", async () => {
@@ -1083,6 +1072,17 @@ async function postSlackMessage(input: { channel: string; text: string; token: s
   }
   return result;
 }
+
+type SlackConversationsListResponse =
+  | {
+      channels: SlackChannel[];
+      ok: true;
+      response_metadata?: { next_cursor?: string };
+    }
+  | {
+      error?: string;
+      ok: false;
+    };
 
 async function listSlackChannels(token: string) {
   const channels: SlackChannel[] = [];
