@@ -30,7 +30,7 @@ describe("minimal itx v4", () => {
     expect(await projects.list()).toEqual(["prj_alice", "prj_ref"]);
   });
 
-  test("Authenticated itx whoami can create project", async () => {
+  test("Authenticated internal auth itx can create project and append to stream", async () => {
     const messages: ItxWebSocketMessage[] = [];
     using session = withItxSession({
       onWebSocketMessage: (message) => {
@@ -42,10 +42,11 @@ describe("minimal itx v4", () => {
       token: TRUSTED_INTERNAL_ITX_TOKEN,
     });
 
+    // TODO project slug should be derived from tests etc as in apps/os
     using project = itx.projects.create({ slug: "alice-project" });
     const description = await project.describe();
-    expect(description.projectId).toMatch(/prj_alice$/);
-    expect(description.name).toMatch(/prj_alice\.iterate\/$/);
+    expect(description.projectId).toMatch(/prj_[0-9a-f-]+$/);
+    expect(description.name).toMatch(/prj_[0-9a-f-]+\.iterate\/$/);
     expect(messages).toContainEqual([
       expect.any(Number),
       "out",
@@ -69,12 +70,12 @@ describe("minimal itx v4", () => {
       ]),
     );
 
-    const committedEvent = await project.streams.get("/some/path").append({
+    const [committedEvent] = await project.streams.get("/some/path").append({
       type: "hello-world",
     });
     expect(committedEvent).toMatchObject({
       type: "hello-world",
-      offset: events.at(-1)!.offset + 1,
+      offset: 3, // first two events are created and woken
     });
     expect(await project.streams.get("/some/path").getEvents()).toMatchObject([
       {
