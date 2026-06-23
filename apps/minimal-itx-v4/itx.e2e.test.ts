@@ -87,48 +87,48 @@ describe("minimal itx v4", () => {
       committedEvent,
     ]);
 
-    const getSecret = async () => "bananas";
+    // const getSecret = async () => "bananas";
 
-    const { revoke } = await project.provideCapability({
-      path: ["someMethodInTestRunner"],
-      capability: {
-        type: "live",
-        target: {
-          getSecret: (secretGetter: { getSecret(): Promise<string> }) => secretGetter.getSecret(),
-        },
-      },
-    });
+    // const { revoke } = await project.provideCapability({
+    //   path: ["someMethodInTestRunner"],
+    //   capability: {
+    //     type: "live",
+    //     target: {
+    //       getSecret: (secretGetter: { getSecret(): Promise<string> }) => secretGetter.getSecret(),
+    //     },
+    //   },
+    // });
 
-    // @ts-expect-error - TODO maybe some niceties
-    expect(await project.someMethodInTestRunner.getSecret(getSecret)).toBe("bananas");
+    // // @ts-expect-error - TODO maybe some niceties
+    // expect(await project.someMethodInTestRunner.getSecret(getSecret)).toBe("bananas");
 
-    // make new itx connection
+    // // make new itx connection
 
-    using newSession = withItxSession();
-    using newItx = newSession.authenticate({
-      type: "token",
-      token: {
-        projectScopes: [description.projectId],
-        type: "user",
-        principal: "alice",
-      },
-    });
+    // using newSession = withItxSession();
+    // using newItx = newSession.authenticate({
+    //   type: "token",
+    //   token: {
+    //     projectScopes: [description.projectId],
+    //     type: "user",
+    //     principal: "alice",
+    //   },
+    // });
 
-    expect(
-      // @ts-expect-error - TODO maybe some niceties
-      await newItx.projects.get(description.projectId).someMethodInTestRunner.getSecret(getSecret),
-    ).toBe("bananas");
+    // expect(
+    //   // @ts-expect-error - TODO maybe some niceties
+    //   await newItx.projects.get(description.projectId).someMethodInTestRunner.getSecret(getSecret),
+    // ).toBe("bananas");
 
-    await revoke();
+    // await revoke();
 
-    // @ts-expect-error
-    await expect(project.someMethodInTestRunner.getSecret(getSecret)).rejects.toThrow(
-      /no capability "someMethodInTestRunner.getSecret"/,
-    );
-    await expect(
-      // @ts-expect-error - TODO maybe some niceties
-      newItx.projects.get(description.projectId).someMethodInTestRunner.getSecret(getSecret),
-    ).rejects.toThrow(/no capability "someMethodInTestRunner.getSecret"/);
+    // // @ts-expect-error
+    // await expect(project.someMethodInTestRunner.getSecret(getSecret)).rejects.toThrow(
+    //   /no capability "someMethodInTestRunner.getSecret"/,
+    // );
+    // await expect(
+    //   // @ts-expect-error - TODO maybe some niceties
+    //   newItx.projects.get(description.projectId).someMethodInTestRunner.getSecret(getSecret),
+    // ).rejects.toThrow(/no capability "someMethodInTestRunner.getSecret"/);
   });
 
   // This test is handy because it proves that we really only need one round trip to

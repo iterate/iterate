@@ -8,7 +8,7 @@
     "dev": "wrangler dev",
     "test": "pnpm typecheck",
     "e2e": "vitest run",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "pnpm types:wrangler && tsc --noEmit -p tsconfig.json",
     "types:wrangler": "wrangler types worker-configuration.d.ts",
     "types:wrangler:check": "wrangler types worker-configuration.d.ts --check"
   },

@@ -9,7 +9,7 @@
     "repl": "tsx scripts/repl.ts",
     "test": "pnpm typecheck",
     "e2e": "vitest run",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.wrangler-proof.json",
+    "typecheck": "pnpm types:wrangler && tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.wrangler-proof.json",
     "verify:deployed": "tsx scripts/verify-deployed.ts",
     "verify:miniflare": "tsx scripts/verify-miniflare.ts",
     "types:wrangler": "wrangler types worker-configuration.d.ts",
