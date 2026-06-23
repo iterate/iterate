@@ -60,12 +60,12 @@ subscriptionKey: ItxContract.slug;
 
 In `src/rpc-targets.ts`, add a small base class similar to v3:
 
-- imports `fallbackCall` from `capnweb`;
+- imports `withInvokeCapabilityFallback` from the local `src/itx/path-proxy.ts` helper;
 - has an abstract `itxProcessor(): ItxProcessorRpc`;
 - implements `runScript`;
 - implements `provideCapability`;
 - implements `revokeCapability`;
-- implements `[fallbackCall](path, args)` by calling `invokeCapability`.
+- implements `invokeCapability({ path, args })` by delegating to the hosted processor.
 
 `ProjectRpcTarget` should extend that base and resolve its processor with:
 
@@ -88,7 +88,7 @@ Do not change `types.ts` to enumerate arbitrary provided capabilities. The test 
 project.someMethodInTestRunner.getSecret(...)
 ```
 
-At runtime, Cap'n Web's fallback call should route unknown dotted paths to `ItxProcessor.invokeCapability`.
+At runtime, the local path proxy should route unknown dotted paths to `ItxProcessor.invokeCapability`.
 
 ### 5. Re-Enable The E2E Block
 
@@ -112,4 +112,4 @@ This keeps the v4 boundary intact:
 - project creation remains event-driven through `project/create-requested`;
 - no generic context host is introduced yet.
 
-It borrows only the minimal v3 mechanism needed for the test: domain DO hosts the ITX processor, and RPC fallback turns dotted calls into `invokeCapability`.
+It borrows only the minimal v3 mechanism needed for the test: domain DO hosts the ITX processor, and the local path proxy turns dotted calls into `invokeCapability`.

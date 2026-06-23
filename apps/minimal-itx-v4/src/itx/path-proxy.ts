@@ -52,6 +52,18 @@ export function createInvokeCapabilityPathProxy(
     return undefined;
   }
 
+  // Cap'n Web and Workers RPC can transport functions as callable capabilities.
+  // Dynamic dotted fallback therefore uses a function-backed proxy instead of a
+  // RpcTarget instance: each missing property extends the path, and applying the
+  // function performs one explicit invokeCapability({ path, args }) call.
+  //
+  // The getOwnPropertyDescriptor trap is deliberately load-bearing. Cap'n Web's
+  // server-side path traversal probes own descriptors before reading a segment;
+  // if a dynamic function does not describe the next segment as an own property,
+  // calls like project.slack.chat.postMessage(...) stop before reaching apply.
+  // See:
+  // https://github.com/cloudflare/capnweb#cloudflare-workers-rpc-interoperability
+  // https://developers.cloudflare.com/workers/runtime-apis/rpc/
   return new Proxy(pathTarget, {
     apply(_target, _thisArg, args) {
       return target.invokeCapability({ args: [...args], path });
@@ -85,6 +97,10 @@ export function withInvokeCapabilityFallback<T extends object & InvokeCapability
 ): T {
   const isReserved = options.isReserved ?? isReservedDynamicPathSegment;
 
+  // Wrap the real RpcTarget rather than encoding built-ins through
+  // invokeCapability. Normal property lookup still wins for describe, streams,
+  // runScript, provideCapability, revokeCapability, and invokeCapability itself.
+  // Only missing roots become dynamic capability paths.
   return new Proxy(target, {
     get(target, key) {
       if (key === "then") return undefined;
@@ -100,6 +116,9 @@ export function withInvokeCapabilityFallback<T extends object & InvokeCapability
     },
     getOwnPropertyDescriptor(target, key) {
       // Unknown dynamic roots must not look like instance fields to Cap'n Web.
+      // That keeps Workers RPC's RpcTarget instance-property protection intact:
+      // actual instance fields are still rejected by the transport, while
+      // missing roots are discovered later as callable path proxies.
       return Reflect.getOwnPropertyDescriptor(target, key);
     },
   });

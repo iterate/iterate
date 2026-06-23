@@ -1,5 +1,4 @@
 import { env, RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
-import { fallbackCall } from "capnweb";
 import type {
   RpcTargetImplementation,
   ItxCapabilityHost,
@@ -31,6 +30,7 @@ import {
 import { ProjectProcessorContract } from "./domains/projects/project-processor.ts";
 import { durableObjectProcessorSubscriber } from "./domains/streams/engine/shared/callable-subscriber.ts";
 import type { ItxProcessorRpc, ProvideCapabilityInput } from "./itx/processor.ts";
+import { isReservedDynamicPathSegment, withInvokeCapabilityFallback } from "./itx/path-proxy.ts";
 
 type StreamProcessEventBatch = Parameters<Stream["subscribe"]>[0]["processEventBatch"];
 type StreamProcessEventBatchInput = Parameters<StreamProcessEventBatch>[0];
@@ -243,7 +243,7 @@ abstract class ItxCapabilityHostRpcTarget
     await this.itxProcessor().provideCapability(input);
     return {
       revoke: () => {
-        void this.revokeCapability({ path: input.path });
+        return this.revokeCapability({ path: input.path });
       },
     };
   }
@@ -256,13 +256,17 @@ abstract class ItxCapabilityHostRpcTarget
     return this.itxProcessor().runScript(code);
   }
 
-  [fallbackCall](path: (string | number)[], args: unknown[]) {
-    return this.itxProcessor().invokeCapability({ args, path: path.map(String) });
+  invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
+    return this.itxProcessor().invokeCapability({ args, path });
   }
 
   #rejectBuiltinCollision(path: string[]) {
     const root = path[0];
-    if (root && root in this) {
+    if (!root) return;
+    if (isReservedDynamicPathSegment(root)) {
+      throw new Error(`cannot provide capability "${root}": it is a reserved ITX path segment`);
+    }
+    if (root in this) {
       throw new Error(`cannot provide capability "${root}": it is already on this ITX target`);
     }
   }
@@ -275,6 +279,7 @@ export class ProjectRpcTarget
   constructor(readonly props: { auth: ItxAuth; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
+    return withInvokeCapabilityFallback(this);
   }
 
   get durableObjectStub() {

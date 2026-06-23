@@ -20,7 +20,6 @@ catalogs:
       version: 4.20260424.0
 
 overrides:
-  capnweb: github:iterate/capnweb#0bd5640399434ed5daefdd690f3f7a7d29862d15
   axios: 1.13.6
   agents>x402: '-'
   agents>viem: '-'
@@ -472,8 +471,8 @@ importers:
         specifier: ^7.0.0
         version: 7.14.1
       capnweb:
-        specifier: github:iterate/capnweb#0bd5640399434ed5daefdd690f3f7a7d29862d15
-        version: https://codeload.github.com/iterate/capnweb/tar.gz/0bd5640399434ed5daefdd690f3f7a7d29862d15
+        specifier: ^0.8.0
+        version: 0.8.0
       ws:
         specifier: 8.19.0
         version: 8.19.0
@@ -500,8 +499,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/shared
       capnweb:
-        specifier: github:iterate/capnweb#0bd5640399434ed5daefdd690f3f7a7d29862d15
-        version: https://codeload.github.com/iterate/capnweb/tar.gz/0bd5640399434ed5daefdd690f3f7a7d29862d15
+        specifier: ^0.8.0
+        version: 0.8.0
       ws:
         specifier: 8.19.0
         version: 8.19.0
@@ -534,8 +533,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/shared
       capnweb:
-        specifier: github:iterate/capnweb#0bd5640399434ed5daefdd690f3f7a7d29862d15
-        version: https://codeload.github.com/iterate/capnweb/tar.gz/0bd5640399434ed5daefdd690f3f7a7d29862d15
+        specifier: ^0.8.0
+        version: 0.8.0
       ws:
         specifier: 8.19.0
         version: 8.19.0
@@ -571,8 +570,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/shared
       capnweb:
-        specifier: github:iterate/capnweb#0bd5640399434ed5daefdd690f3f7a7d29862d15
-        version: https://codeload.github.com/iterate/capnweb/tar.gz/0bd5640399434ed5daefdd690f3f7a7d29862d15
+        specifier: ^0.8.0
+        version: 0.8.0
       ws:
         specifier: 8.19.0
         version: 8.19.0
@@ -689,8 +688,8 @@ importers:
         specifier: ^0.11.0
         version: 0.11.0(@babel/core@7.29.0)(@babel/runtime@7.28.6)(@cloudflare/codemode@0.3.4(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@tanstack/ai@0.10.2)(ai@6.0.159(zod@4.3.6))(zod@4.3.6))(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))(@tanstack/ai@0.10.2)(ai@6.0.159(zod@4.3.6))(react@19.2.4)(rolldown@1.1.0)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(zod@4.3.6)
       capnweb:
-        specifier: github:iterate/capnweb#0bd5640399434ed5daefdd690f3f7a7d29862d15
-        version: https://codeload.github.com/iterate/capnweb/tar.gz/0bd5640399434ed5daefdd690f3f7a7d29862d15
+        specifier: ^0.8.0
+        version: 0.8.0
       captun:
         specifier: https://pkg.pr.new/captun@6aa1207
         version: https://pkg.pr.new/captun@6aa1207(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(valibot@1.2.0(typescript@5.9.3))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(ws@8.19.0)
@@ -940,8 +939,8 @@ importers:
         specifier: ^3.14.2
         version: 3.14.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       capnweb:
-        specifier: github:iterate/capnweb#0bd5640399434ed5daefdd690f3f7a7d29862d15
-        version: https://codeload.github.com/iterate/capnweb/tar.gz/0bd5640399434ed5daefdd690f3f7a7d29862d15
+        specifier: ^0.8.0
+        version: 0.8.0
       react:
         specifier: ^19.2.0
         version: 19.2.4
@@ -8210,9 +8209,8 @@ packages:
   caniuse-lite@1.0.30001793:
     resolution: {integrity: sha512-iwSsYWaCOoh26cV8NwNRViHlrfUvYsHDfRVcbtmw0Kg6PJIZZXwMkj1442FYLBGkeUf1juAsU3DTfxW579mrPA==}
 
-  capnweb@https://codeload.github.com/iterate/capnweb/tar.gz/0bd5640399434ed5daefdd690f3f7a7d29862d15:
-    resolution: {tarball: https://codeload.github.com/iterate/capnweb/tar.gz/0bd5640399434ed5daefdd690f3f7a7d29862d15}
-    version: 0.8.0
+  capnweb@0.8.0:
+    resolution: {integrity: sha512-BK/TuXUiyfLSKsmjojn70yN7oYG/JJzoURZ3tckjg5Zj2KcygPm0A5jyOlswK7SYB4f0Gh9tt+RZ132b80iLfA==}
 
   captun@https://pkg.pr.new/captun@6aa1207:
     resolution: {tarball: https://pkg.pr.new/captun@6aa1207}
@@ -20975,20 +20973,6 @@ snapshots:
       - utf-8-validate
       - vite
 
-  '@vitest/browser-playwright@4.1.8(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(playwright@1.60.0)(vite@8.0.16(@types/node@25.6.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.8)':
-    dependencies:
-      '@vitest/browser': 4.1.8(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(vite@8.0.16(@types/node@25.6.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.8)
-      '@vitest/mocker': 4.1.8(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(vite@8.0.16(@types/node@25.6.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
-      playwright: 1.60.0
-      tinyrainbow: 3.1.0
-      vitest: 4.1.8(@opentelemetry/api@1.9.0)(@types/node@25.6.0)(@vitest/browser-playwright@4.1.8)(jsdom@27.4.0(@noble/hashes@2.0.1))(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(vite@8.0.16(@types/node@25.6.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
-    transitivePeerDependencies:
-      - bufferutil
-      - msw
-      - utf-8-validate
-      - vite
-    optional: true
-
   '@vitest/browser-playwright@4.1.8(msw@2.13.3(@types/node@25.6.0)(typescript@6.0.3))(playwright@1.60.0)(vite@8.0.16(@types/node@25.6.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.8)':
     dependencies:
       '@vitest/browser': 4.1.8(msw@2.13.3(@types/node@25.6.0)(typescript@6.0.3))(vite@8.0.16(@types/node@25.6.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.8)
@@ -22552,13 +22536,13 @@ snapshots:
 
   caniuse-lite@1.0.30001793: {}
 
-  capnweb@https://codeload.github.com/iterate/capnweb/tar.gz/0bd5640399434ed5daefdd690f3f7a7d29862d15: {}
+  capnweb@0.8.0: {}
 
   captun@https://pkg.pr.new/captun@6aa1207(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(vite@8.0.16(@types/node@25.6.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(ws@8.19.0):
     dependencies:
       '@inquirer/prompts': 8.4.3(@types/node@25.6.0)
       '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      capnweb: https://codeload.github.com/iterate/capnweb/tar.gz/0bd5640399434ed5daefdd690f3f7a7d29862d15
+      capnweb: 0.8.0
       trpc-cli: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.4.3)
       zod: 4.4.3
     optionalDependencies:
@@ -22578,7 +22562,7 @@ snapshots:
     dependencies:
       '@inquirer/prompts': 8.4.3(@types/node@25.6.0)
       '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      capnweb: https://codeload.github.com/iterate/capnweb/tar.gz/0bd5640399434ed5daefdd690f3f7a7d29862d15
+      capnweb: 0.8.0
       trpc-cli: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(valibot@1.2.0(typescript@5.9.3))(zod@4.4.3)
       zod: 4.4.3
     optionalDependencies:
@@ -29245,7 +29229,7 @@ snapshots:
     optionalDependencies:
       '@opentelemetry/api': 1.9.0
       '@types/node': 25.6.0
-      '@vitest/browser-playwright': 4.1.8(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(playwright@1.60.0)(vite@8.0.16(@types/node@25.6.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.8)
+      '@vitest/browser-playwright': 4.1.8(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(playwright@1.57.0)(vite@8.0.16(@types/node@25.6.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.8)
       jsdom: 27.4.0(@noble/hashes@2.0.1)
     transitivePeerDependencies:
       - msw

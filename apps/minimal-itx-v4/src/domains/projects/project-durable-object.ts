@@ -143,7 +143,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     await this.#itxProcessor.provideCapability(input);
     return {
       revoke: () => {
-        void this.revokeCapability({ path: input.path });
+        return this.revokeCapability({ path: input.path });
       },
     };
   }
