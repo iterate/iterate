@@ -1,11 +1,11 @@
 ---
-status: in-progress
+status: waiting-on-decision
 size: small
 ---
 
 # Colocate Single-Use Types Lint Rule
 
-Status summary: Rule implementation is done and intentionally leaves 49 current lint violations unfixed. Remaining work is to push the branch and open the draft PR for CI/review.
+Status summary: Draft PR is open with the rule only and intentionally leaves 49 current lint violations unfixed. Waiting for the keep-and-fix-vs-scrap decision after CI/review.
 
 ## Goal
 
@@ -26,10 +26,11 @@ Add an internal lint rule that requires non-exported TypeScript types used in se
 - [x] Add an internal lint rule for single-use type colocation. _Implemented as `iterate/colocate-single-use-types` in `oxlint-plugin-iterate.js`._
 - [x] Enable the rule in `.oxlintrc.json`. _Registered globally as an error so CI shows existing violations._
 - [x] Run a focused lint command to confirm the rule reports existing violations. _`pnpm lint` reports 49 errors from the new rule and exits 1._
-- [ ] Push the worktree branch and open a draft PR.
+- [x] Push the worktree branch and open a draft PR. _Opened draft PR #1572 against `main`: https://github.com/iterate/iterate/pull/1572._
 
 ## Implementation Log
 
 - Created worktree `/Users/mmkal/src/worktrees/iterate/colocate-single-use-types` on branch `lint/colocate-single-use-types` from `origin/main`.
 - Added `iterate/colocate-single-use-types`, targeting non-exported `type` aliases and `interface` declarations with exactly one read reference.
 - Confirmed the first lint run fails with existing colocation violations and no plugin crash.
+- Opened draft PR #1572 so CI can show the full current violation set before cleanup work.
