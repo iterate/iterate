@@ -201,18 +201,6 @@ function hasLeadingJsDocComment(sourceCode, node) {
 
 /**
  * @param {import("eslint").SourceCode} sourceCode
- * @param {readonly [number, number] | undefined} range
- */
-function hasCommentInRange(sourceCode, range) {
-  if (!range) return false;
-  return sourceCode.getAllComments().some((comment) => {
-    if (!comment.range) return false;
-    return comment.range[0] >= range[0] && comment.range[1] <= range[1];
-  });
-}
-
-/**
- * @param {import("eslint").SourceCode} sourceCode
  * @param {import("estree").Function} fn
  */
 function hasTypePredicateReturnType(sourceCode, fn) {
@@ -408,30 +396,6 @@ function getRelativeTsImportWithExtension(source, filename) {
 }
 
 /**
- * @param {string} text
- */
-function oneLineText(text) {
-  return text.replaceAll(/\s+/g, " ").trim();
-}
-
-/**
- * @param {import("eslint").SourceCode} sourceCode
- * @param {import("estree").Identifier} identifier
- * @param {string} inlineTypeText
- */
-function inlinedTypeUseLineLength(sourceCode, identifier, inlineTypeText) {
-  const line = identifier.loc?.start.line;
-  if (!line) return Infinity;
-  const sourceLine = sourceCode.lines[line - 1];
-  if (!sourceLine) return Infinity;
-
-  const startColumn = identifier.loc.start.column;
-  const endColumn = identifier.loc.end.column;
-  const nextLine = `${sourceLine.slice(0, startColumn)}${inlineTypeText}${sourceLine.slice(endColumn)}`;
-  return oneLineText(nextLine).length;
-}
-
-/**
  * @param {import("eslint").Rule.RuleContext} context
  * @param {import("estree").Literal} sourceNode
  */
@@ -536,78 +500,6 @@ const plugin = {
                   `Use a visible wrapper for UI locators, or hidden/script JSON for machine-readable test data.`,
               });
             }
-          },
-        };
-      },
-    },
-    "no-single-use-types": {
-      meta: {
-        type: "suggestion",
-        docs: {
-          description:
-            "Flag non-exported single-use type aliases that can be inlined without making the use line exceed 100 characters.",
-        },
-      },
-      create(context) {
-        const MAX_INLINED_LINE_LENGTH = 99;
-
-        return {
-          TSTypeAliasDeclaration(node) {
-            const parentType = node.parent?.type;
-            if (
-              parentType === "ExportNamedDeclaration" ||
-              parentType === "ExportDefaultDeclaration"
-            ) {
-              return;
-            }
-            if (node.typeParameters) return;
-            if (hasLeadingJsDocComment(context.sourceCode, node)) return;
-            if (hasCommentInRange(context.sourceCode, node.typeAnnotation?.range)) return;
-
-            const variable = findVariableInScopeChain(
-              context.sourceCode.getScope(node),
-              node.id.name,
-            );
-            if (!variable) return;
-
-            const reads = variable.references.filter((ref) => ref.isRead());
-            const readsInsideAlias = reads.some((ref) => {
-              const referenceStart = ref.identifier.range?.[0];
-              if (referenceStart === undefined || !node.range) return false;
-              return referenceStart >= node.range[0] && referenceStart < node.range[1];
-            });
-            if (readsInsideAlias) return;
-
-            const outsideAliasReads = reads.filter((ref) => {
-              const referenceStart = ref.identifier.range?.[0];
-              if (referenceStart === undefined || !node.range) return true;
-              return referenceStart < node.range[0] || referenceStart >= node.range[1];
-            });
-            if (outsideAliasReads.length !== 1) return;
-
-            const reference = outsideAliasReads[0];
-            const referenceParentType = reference.identifier.parent?.type;
-            if (
-              referenceParentType === "ExportSpecifier" ||
-              referenceParentType === "ExportDefaultDeclaration"
-            ) {
-              return;
-            }
-
-            const inlineTypeText = oneLineText(context.sourceCode.getText(node.typeAnnotation));
-            if (
-              inlinedTypeUseLineLength(context.sourceCode, reference.identifier, inlineTypeText) >
-              MAX_INLINED_LINE_LENGTH
-            ) {
-              return;
-            }
-
-            context.report({
-              node: node.id,
-              message:
-                `${node.id.name} is a non-exported single-use type alias that fits inline. ` +
-                `Inline \`${inlineTypeText}\` at its only use instead of keeping a separate type.`,
-            });
           },
         };
       },
