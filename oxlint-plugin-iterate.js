@@ -495,7 +495,7 @@ function getRelativeTsImportWithExtension(source, filename) {
 /**
  * @param {string} text
  */
-function oneLineText(text) {
+function inlineTypeText(text) {
   return text.replaceAll(/\s+/g, " ").trim();
 }
 
@@ -512,8 +512,8 @@ function inlinedTypeUseLineLength(sourceCode, identifier, inlineTypeText) {
 
   const startColumn = identifier.loc.start.column;
   const endColumn = identifier.loc.end.column;
-  const nextLine = `${sourceLine.slice(0, startColumn)}${inlineTypeText}${sourceLine.slice(endColumn)}`;
-  return oneLineText(nextLine).length;
+  return `${sourceLine.slice(0, startColumn)}${inlineTypeText}${sourceLine.slice(endColumn)}`
+    .length;
 }
 
 /**
@@ -630,7 +630,7 @@ const plugin = {
         type: "suggestion",
         docs: {
           description:
-            "Flag non-exported single-use type aliases that can be inlined without making the use line exceed 100 characters.",
+            "Flag non-exported single-use type aliases that can be inlined while keeping the use line under 100 columns.",
         },
       },
       create(context) {
@@ -679,9 +679,9 @@ const plugin = {
               return;
             }
 
-            const inlineTypeText = oneLineText(context.sourceCode.getText(node.typeAnnotation));
+            const inlineText = inlineTypeText(context.sourceCode.getText(node.typeAnnotation));
             if (
-              inlinedTypeUseLineLength(context.sourceCode, reference.identifier, inlineTypeText) >
+              inlinedTypeUseLineLength(context.sourceCode, reference.identifier, inlineText) >
               MAX_INLINED_LINE_LENGTH
             ) {
               return;
@@ -691,7 +691,7 @@ const plugin = {
               node: node.id,
               message:
                 `${node.id.name} is a non-exported single-use type alias that fits inline. ` +
-                `Inline \`${inlineTypeText}\` at its only use instead of keeping a separate type.`,
+                `Inline \`${inlineText}\` at its only use instead of keeping a separate type.`,
             });
           },
         };
