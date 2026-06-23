@@ -122,6 +122,7 @@
     "iterate/stream-processor-override-args": "error",
     "iterate/no-single-use-helpers": "error",
     "iterate/colocate-single-use-types": "error",
+    "iterate/no-single-use-types": "error",
     "prefer-const": "off",
     "iterate/prefer-const": "error",
     "iterate/isolated-codemode": [
