@@ -1,11 +1,5 @@
 import { z } from "zod";
-import {
-  StreamEvent as StreamEventSchema,
-  type Json,
-  type Stream,
-  type StreamEvent,
-  type StreamEventInput,
-} from "./types-and-schemas.ts";
+import type { Json, Stream, StreamEvent, StreamEventInput } from "./types-and-schemas.ts";
 
 type EventDefinition = {
   payloadSchema: z.ZodType;
@@ -105,8 +99,8 @@ export class ProofStreamDurableObject implements Stream {
   }
 
   appendBatch(args: { events: StreamEventInput[] }): StreamEvent[] {
-    const committed = args.events.map((event, index) =>
-      StreamEventSchema.parse({
+    const committed = args.events.map(
+      (event, index): StreamEvent => ({
         ...event,
         createdAt: new Date().toISOString(),
         offset: this.#events.length + index + 1,

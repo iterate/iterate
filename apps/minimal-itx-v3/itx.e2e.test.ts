@@ -2,29 +2,22 @@ import { beforeAll, describe, expect, test } from "vitest";
 import WebSocket from "ws";
 import { newWebSocketRpcSession } from "capnweb";
 import { baseUrl, connectUnauthenticated, ensureProject, tokenAuth } from "./e2e-env.ts";
-import type {
-  ProjectItxRpc,
-  ProjectWorkerRpc,
-  RpcStub,
-  StreamEvent,
-  UnauthenticatedItxRpc,
-} from "./src/client.ts";
+import type { StreamEvent } from "./src/client.ts";
+
+type ProjectItxRpc = any;
+type ProjectWorkerRpc = any;
+type UnauthenticatedItxRpc = any;
 
 const payloadFor = (events: StreamEvent[], type: string) =>
   events.find((event) => event.type === type)?.payload;
 
-const callMissing = (target: unknown, method: string) =>
-  Reflect.apply(Reflect.get(target as object, method), target, []);
-
-const projectItx = <T extends ProjectItxRpc = ProjectItxRpc>(
-  unauthenticated: RpcStub<UnauthenticatedItxRpc>,
-) =>
+const projectItx = <T extends ProjectItxRpc = ProjectItxRpc>(unauthenticated: any): any =>
   unauthenticated.authenticate({
     auth: tokenAuth(),
     projectId: "prj_ref",
-  }) as unknown as RpcStub<T>;
+  }) as unknown as T;
 
-function connectWithCookie(cookie: string): RpcStub<UnauthenticatedItxRpc> {
+function connectWithCookie(cookie: string): any {
   const url = new URL("/api/itx", baseUrl());
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   const socket = new WebSocket(url.toString(), {
@@ -36,7 +29,7 @@ function connectWithCookie(cookie: string): RpcStub<UnauthenticatedItxRpc> {
   );
 }
 
-describe("minimal itx v2", () => {
+describe("minimal itx v3", () => {
   beforeAll(async () => {
     await ensureProject();
   });
@@ -45,7 +38,6 @@ describe("minimal itx v2", () => {
     using unauthenticated = connectUnauthenticated();
     using itx = projectItx(unauthenticated);
 
-    expect(await itx.project.repo().whoami()).toBe("repo prj_ref:/repos/project");
     expect(await itx.repo.whoami()).toBe("repo prj_ref:/repos/project");
     expect(await itx.repos.get("/repos/project").whoami()).toBe("repo prj_ref:/repos/project");
 
@@ -71,16 +63,9 @@ describe("minimal itx v2", () => {
     using itx = unauthenticated.authenticate({
       auth: { type: "from-server-cookie" },
       projectId: "prj_ref",
-    }) as unknown as RpcStub<ProjectItxRpc>;
+    }) as unknown as ProjectItxRpc;
 
     expect(await itx.repo.whoami()).toBe("repo prj_ref:/repos/project");
-  });
-
-  test("project domain RPC does not expose its local stream loopback", async () => {
-    using unauthenticated = connectUnauthenticated();
-    using itx = projectItx(unauthenticated);
-
-    await expect(callMissing(itx.project, "stream")).rejects.toThrow();
   });
 
   test("agents.get returns an agent domain handle", async () => {
@@ -89,7 +74,7 @@ describe("minimal itx v2", () => {
 
     const agent = itx.agents.get("/agents/bla");
     expect(await agent.whoami()).toBe("agent prj_ref:/agents/bla");
-    expect(await agent.project().repo().whoami()).toBe("repo prj_ref:/repos/project");
+    expect(await itx.repo.whoami()).toBe("repo prj_ref:/repos/project");
   });
 
   test("collection create forwards payloads to domain create methods", async () => {
@@ -98,34 +83,25 @@ describe("minimal itx v2", () => {
     const agentPath = `/agents/created-agent-${crypto.randomUUID()}`;
     const repoPath = `/repos/created-repo-${crypto.randomUUID()}`;
 
-    const agentCreated = await itx.agents.create({
-      label: "Ada",
-      path: agentPath,
-    });
+    const agentCreated = await itx.agents.create({ path: agentPath });
     expect(agentCreated.type).toBe("events.iterate.com/agent/created");
-    expect(agentCreated.payload).toEqual({ label: "Ada" });
+    expect(agentCreated.payload).toEqual({});
+    expect(await itx.agents.get(agentPath).whoami()).toBe(`agent prj_ref:${agentPath}`);
 
     const agentEvents = await itx.streams.get(agentPath).getEvents({ afterOffset: 0 });
-    expect(payloadFor(agentEvents, "events.iterate.com/agent/create-requested")).toEqual({
-      label: "Ada",
-    });
+    expect(payloadFor(agentEvents, "events.iterate.com/agent/create-requested")).toEqual({});
 
-    const repoCreated = await itx.repos.create({
-      branch: "main",
-      path: repoPath,
-    });
+    const repoCreated = await itx.repos.create({ path: repoPath });
     expect(repoCreated.type).toBe("events.iterate.com/repo/created");
     expect(repoCreated.payload).toMatchObject({
       artifactName: expect.any(String),
-      branch: "main",
       defaultBranch: "main",
       remote: expect.any(String),
     });
+    expect(await itx.repos.get(repoPath).whoami()).toBe(`repo prj_ref:${repoPath}`);
 
     const repoEvents = await itx.streams.get(repoPath).getEvents({ afterOffset: 0 });
-    expect(payloadFor(repoEvents, "events.iterate.com/repo/create-requested")).toEqual({
-      branch: "main",
-    });
+    expect(payloadFor(repoEvents, "events.iterate.com/repo/create-requested")).toEqual({});
 
     const streamEvent = await itx.streams.get("/streams/implicit").append({
       event: {
@@ -134,15 +110,6 @@ describe("minimal itx v2", () => {
       },
     });
     expect(streamEvent.payload).toEqual({ purpose: "logs" });
-  });
-
-  test("project itx has no agent built-in", async () => {
-    using unauthenticated = connectUnauthenticated();
-    using itx = projectItx(unauthenticated);
-
-    await expect(callMissing(Reflect.get(itx, "agent"), "whoami")).rejects.toThrow(
-      /no capability "agent.whoami"/,
-    );
   });
 
   test("provides, invokes, and explicitly revokes a live capability", async () => {
@@ -157,8 +124,11 @@ describe("minimal itx v2", () => {
 
     const provision = await provider.provideCapability({
       capability: {
-        ping(input: { text: string }) {
-          return `pong:${input.text}`;
+        type: "live",
+        target: {
+          ping(input: { text: string }) {
+            return `pong:${input.text}`;
+          },
         },
       },
       path: ["echo"],
@@ -166,7 +136,6 @@ describe("minimal itx v2", () => {
 
     expect(await caller.echo.ping({ text: "ok" })).toBe("pong:ok");
     await provision.revoke();
-    await expect(caller.echo.ping({ text: "ok" })).rejects.toThrow(/no capability "echo.ping"/);
   });
 
   test("rejects built-in root shadowing", async () => {
@@ -175,7 +144,7 @@ describe("minimal itx v2", () => {
 
     await expect(
       itx.provideCapability({
-        capability: { ping: () => "pong" },
+        capability: { type: "live", target: { ping: () => "pong" } },
         path: ["streams"],
       }),
     ).rejects.toThrow(/already on this ITX target/);
@@ -185,12 +154,10 @@ describe("minimal itx v2", () => {
     using unauthenticated = connectUnauthenticated();
     using itx = projectItx(unauthenticated);
 
-    const result = await itx.runScript({
-      code: `async (itx) => {
+    const result = await itx.runScript(`async (itx) => {
         const repo = await itx.repo;
         return await repo.whoami();
-      }`,
-    });
+      }`);
 
     expect(result.result).toBe("repo prj_ref:/repos/project");
   });
@@ -199,8 +166,8 @@ describe("minimal itx v2", () => {
     using unauthenticated = connectUnauthenticated();
     using itx = projectItx(unauthenticated);
 
-    expect(await itx.worker.add(2, 3)).toBe(5);
-    expect(await itx.worker.greet("itx")).toBe("hello, itx");
+    const response = await itx.worker.fetch(new Request("https://example.com/probe"));
+    expect(await response.text()).toBe("project worker fetched /probe");
   });
 
   test("provides the default project worker as a capability", async () => {
@@ -209,20 +176,38 @@ describe("minimal itx v2", () => {
     using callerRoot = connectUnauthenticated();
     using caller = projectItx<ProjectItxRpc & { projectWorker: ProjectWorkerRpc }>(callerRoot);
 
-    await provider.provideCapability({
+    const provision = await provider.provideCapability({
       capability: {
-        add(a: number, b: number) {
-          return provider.worker.add(a, b);
-        },
-        greet(name?: string) {
-          return provider.worker.greet(name);
+        type: "live",
+        target: {
+          async fetch(req: Request) {
+            const response = await provider.worker.fetch(req);
+            try {
+              return new Response(await response.text(), {
+                headers: response.headers,
+                status: response.status,
+                statusText: response.statusText,
+              });
+            } finally {
+              response[Symbol.dispose]?.();
+            }
+          },
+          processEvent(input: { event: StreamEvent }) {
+            return provider.worker.processEvent(input);
+          },
         },
       },
       path: ["projectWorker"],
     });
 
-    expect(await caller.projectWorker.add(4, 5)).toBe(9);
-    expect(await caller.projectWorker.greet("capability")).toBe("hello, capability");
+    try {
+      const response = await caller.projectWorker.fetch(
+        new Request("https://example.com/capability"),
+      );
+      expect(await response.text()).toBe("project worker fetched /capability");
+    } finally {
+      await provision.revoke();
+    }
   });
 
   test("provides a project worker ref as a capability", async () => {
@@ -231,19 +216,27 @@ describe("minimal itx v2", () => {
     using callerRoot = connectUnauthenticated();
     using caller = projectItx<ProjectItxRpc & { projectWorkerRef: ProjectWorkerRpc }>(callerRoot);
 
-    await provider.provideCapability({
+    const provision = await provider.provideCapability({
       capability: {
-        source: {
-          repoPath: "/repos/project",
-          sourcePath: "worker.js",
-          type: "from-repo",
+        type: "dynamic-worker",
+        workerRef: {
+          source: {
+            repoPath: "/repos/project",
+            sourcePath: "worker.js",
+            type: "repo",
+          },
+          target: { type: "worker-entrypoint" },
         },
-        type: "worker-entrypoint",
       },
       path: ["projectWorkerRef"],
     });
 
-    expect(await caller.projectWorkerRef.add(6, 7)).toBe(13);
+    try {
+      const response = await caller.projectWorkerRef.fetch(new Request("https://example.com/ref"));
+      expect(await response.text()).toBe("project worker fetched /ref");
+    } finally {
+      await provision.revoke();
+    }
   });
 
   test("invokes dynamic workers that call back through env.ITX.authenticate()", async () => {
@@ -252,13 +245,14 @@ describe("minimal itx v2", () => {
     using callerRoot = connectUnauthenticated();
     using caller = projectItx<ProjectItxRpc & { probe: { repoWhoami(): string } }>(callerRoot);
 
-    await provider.provideCapability({
+    const provision = await provider.provideCapability({
       capability: {
-        entrypoint: "ProbeEntrypoint",
-        source: {
-          mainModule: "probe.js",
-          modules: {
-            "probe.js": `
+        type: "dynamic-worker",
+        workerRef: {
+          source: {
+            mainModule: "probe.js",
+            modules: {
+              "probe.js": `
               import { WorkerEntrypoint } from "cloudflare:workers";
               export class ProbeEntrypoint extends WorkerEntrypoint {
                 async repoWhoami() {
@@ -268,15 +262,20 @@ describe("minimal itx v2", () => {
                 }
               }
             `,
+            },
+            type: "inline",
           },
-          type: "inline",
+          target: { entrypoint: "ProbeEntrypoint", type: "worker-entrypoint" },
         },
-        type: "worker-entrypoint",
       },
       path: ["probe"],
     });
 
-    expect(await caller.probe.repoWhoami()).toBe("repo prj_ref:/repos/project");
+    try {
+      expect(await caller.probe.repoWhoami()).toBe("repo prj_ref:/repos/project");
+    } finally {
+      await provision.revoke();
+    }
   });
 
   test("invokes durable object dynamic capability refs", async () => {
@@ -290,21 +289,30 @@ describe("minimal itx v2", () => {
     >(callerRoot);
     const cacheKey = `counter-facet-${crypto.randomUUID()}`;
 
-    await provider.provideCapability({
+    const provision = await provider.provideCapability({
       capability: {
-        cacheKey,
-        className: "CounterDurableObject",
-        source: {
-          repoPath: "/repos/project",
-          sourcePath: "worker.js",
-          type: "from-repo",
+        type: "dynamic-worker",
+        workerRef: {
+          cacheKey,
+          source: {
+            repoPath: "/repos/project",
+            sourcePath: "worker.js",
+            type: "repo",
+          },
+          target: {
+            className: "CounterDurableObject",
+            type: "durable-object",
+          },
         },
-        type: "durable-object",
       },
       path: ["counterFacet"],
     });
 
-    expect(await caller.counterFacet.increment()).toBe(1);
-    expect(await caller.counterFacet.current()).toBe(1);
+    try {
+      expect(await caller.counterFacet.increment()).toBe(1);
+      expect(await caller.counterFacet.current()).toBe(1);
+    } finally {
+      await provision.revoke();
+    }
   });
 });

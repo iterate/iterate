@@ -71,7 +71,7 @@ export class RepoDurableObject extends DurableObject<Env> implements RepoRpc {
   }
 
   private async createArtifactRepo(input: Record<string, unknown>) {
-    const artifactName = this.artifactName();
+    const artifactName = await this.artifactName();
     await this.getOrCreateArtifact(artifactName);
     const defaultBranch = REPO_DEFAULT_BRANCH;
     const remote = this.artifactRemote(artifactName);
@@ -93,7 +93,7 @@ export class RepoDurableObject extends DurableObject<Env> implements RepoRpc {
   }
 
   private async repoGitAccess() {
-    const artifactName = this.artifactName();
+    const artifactName = await this.artifactName();
     const artifacts = this.requireArtifacts();
     return {
       defaultBranch: REPO_DEFAULT_BRANCH,
@@ -116,8 +116,8 @@ export class RepoDurableObject extends DurableObject<Env> implements RepoRpc {
     return this.env.ARTIFACTS;
   }
 
-  private artifactName() {
-    return `repo-${hexEncode(`${this.#name.projectId}:${this.#name.path}`)}`;
+  private async artifactName() {
+    return `repo-${(await sha256Hex(`${this.#name.projectId}:${this.#name.path}`)).slice(0, 32)}`;
   }
 
   private artifactRemote(artifactName: string) {
@@ -230,8 +230,7 @@ async function ensureBranchRef(input: { branch: string; git: ReturnType<typeof c
   }
 }
 
-function hexEncode(value: string) {
-  return Array.from(new TextEncoder().encode(value), (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  ).join("");
+async function sha256Hex(value: string) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }

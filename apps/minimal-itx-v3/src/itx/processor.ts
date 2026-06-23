@@ -2,11 +2,30 @@ import {
   StreamProcessor,
   type StreamProcessorConstructorArgs,
 } from "../domains/streams/engine/stream-processor.ts";
-import type { StreamEvent, StreamEventInput } from "../domains/streams/engine/shared/event.ts";
-import type { ItxProcessorRpc, ProvideCapabilityInput, RunScriptResult } from "../itx-types.ts";
 import type { DynamicWorkersRpcTarget } from "../domains/dynamic-workers/dynamic-workers-rpc-target.ts";
 import { hashString } from "../domains/dynamic-workers/dynamic-worker-loader.ts";
-import { CapabilityAddress, ItxContract, type CapabilityRecord } from "./processor-contract.ts";
+import { DynamicWorkerRef as DynamicWorkerRefSchema } from "../domains/dynamic-workers/dynamic-worker-ref.ts";
+import type {
+  DynamicWorkerRef,
+  ItxCapabilityHost,
+  Json,
+  ProvidedCapability,
+  StreamEvent,
+  StreamEventInput,
+} from "../../types-and-schemas.ts";
+import { ItxContract, type CapabilityRecord } from "./processor-contract.ts";
+
+export type ProvideCapabilityInput = Parameters<ItxCapabilityHost["provideCapability"]>[0];
+export type RunScriptResult = ReturnType<ItxCapabilityHost["runScript"]>;
+
+export type ItxProcessorRpc = {
+  invokeCapability(input: { args?: unknown[]; path: string[] }): unknown;
+  provideCapability(
+    input: ProvideCapabilityInput,
+  ): { path: string[] } | Promise<{ path: string[] }>;
+  revokeCapability(input: { path: string[] }): void | Promise<void>;
+  runScript(code: string): RunScriptResult | Promise<RunScriptResult>;
+};
 
 type HostStream = {
   append(args: {
@@ -21,7 +40,7 @@ type HostStream = {
 
 type ItxProcessorContext = { stream: HostStream };
 
-type CompletedPayload = { error?: unknown; executionId: string; result?: unknown };
+type CompletedPayload = { error?: string; executionId: string; result?: Json };
 type ScriptRunner = { run(): Promise<unknown> };
 const INVALID_PATH_SEGMENTS = new Set([
   "__proto__",
@@ -55,13 +74,9 @@ export function assertCapabilityPath(path: string[]) {
   }
 }
 
-function capabilityAddress(capability: unknown): CapabilityAddress | null {
-  const parsed = CapabilityAddress.safeParse(capability);
-  if (parsed.success) return parsed.data;
-  if (capability && typeof capability === "object" && "type" in capability) {
-    throw new Error(`unsupported capability address type "${String(capability.type)}"`);
-  }
-  return null;
+function json(value: unknown): Json {
+  if (value === undefined) return null;
+  return JSON.parse(JSON.stringify(value)) as Json;
 }
 
 function retain(target: unknown): unknown {
@@ -177,10 +192,7 @@ export class ItxProcessor
   }: Parameters<StreamProcessor<typeof ItxContract>["reduce"]>[0]) {
     switch (event.type) {
       case "events.iterate.com/itx/capability-provided": {
-        const row = {
-          address: event.payload.address ?? null,
-          path: event.payload.path,
-        };
+        const row = event.payload;
         const exists = state.capabilities.some((capability) => samePath(capability.path, row.path));
         return {
           ...state,
@@ -230,16 +242,24 @@ export class ItxProcessor
 
   async provideCapability({ capability, path }: ProvideCapabilityInput) {
     assertCapabilityPath(path);
-    const address = capabilityAddress(capability);
     const key = liveKey(path);
     this.#liveCapabilities.get(key)?.dispose();
-    if (address) {
+    const record: CapabilityRecord =
+      capability.type === "dynamic-worker"
+        ? {
+            path,
+            type: "dynamic-worker",
+            workerRef: DynamicWorkerRefSchema.parse(capability.workerRef),
+          }
+        : { path, type: "live" };
+
+    if (capability.type === "dynamic-worker") {
       this.#liveCapabilities.delete(key);
     } else {
-      this.#liveCapabilities.set(key, retainLiveCapability(capability));
+      this.#liveCapabilities.set(key, retainLiveCapability(capability.target));
     }
     const committed = await this.ctx.stream.append({
-      event: { type: "events.iterate.com/itx/capability-provided", payload: { address, path } },
+      event: { type: "events.iterate.com/itx/capability-provided", payload: record },
     });
     await this.waitUntilEvent({ offset: committed.offset });
     return { path };
@@ -260,9 +280,9 @@ export class ItxProcessor
     assertCapabilityPath(path);
     const hit = resolveLongestPrefix(this.state.capabilities, path);
     if (!hit) throw new Error(`no capability "${path.join(".")}"`);
-    if (hit.record.address) {
+    if (hit.record.type === "dynamic-worker") {
       const target = this.#dynamicWorkers.get(
-        withCacheKey(hit.record.address, `capability:${hit.record.path.join(".")}`),
+        withCacheKey(hit.record.workerRef, `capability:${hit.record.path.join(".")}`),
       );
       return await replayPath({ args, path: hit.rest, target });
     }
@@ -273,7 +293,7 @@ export class ItxProcessor
     return await live.invoke(hit.rest, args);
   }
 
-  async runScript({ code }: { code: string }): Promise<RunScriptResult> {
+  async runScript(code: string): Promise<RunScriptResult> {
     const executionId = crypto.randomUUID();
     const completed = this.#waitForScriptCompletion(executionId);
     await this.ctx.stream.append({
@@ -285,7 +305,7 @@ export class ItxProcessor
     const event = await completed;
     const payload = event.payload as CompletedPayload;
     if (payload.error !== undefined) throw new Error(String(payload.error));
-    return { completedEvent: event, executionId, result: payload.result };
+    return { completedEvent: event, executionId, result: payload.result ?? null };
   }
 
   async #waitForScriptCompletion(executionId: string) {
@@ -295,7 +315,7 @@ export class ItxProcessor
         if (event.type !== "events.iterate.com/itx/script-execution-completed") return false;
         const payload = event.payload as CompletedPayload;
         if (payload.executionId !== executionId) return false;
-        completed = event;
+        completed = event as StreamEvent;
         return true;
       },
     });
@@ -304,13 +324,21 @@ export class ItxProcessor
   }
 
   async #executeScript(input: { code: string; executionId: string }) {
-    const complete = (payload: Record<string, unknown>) =>
-      this.ctx.stream.append({
+    const complete = (payload: { error?: string; result?: unknown }) => {
+      const completionPayload: Json =
+        payload.error !== undefined
+          ? { error: payload.error, executionId: input.executionId }
+          : {
+              executionId: input.executionId,
+              result: "result" in payload ? json(payload.result) : null,
+            };
+      return this.ctx.stream.append({
         event: {
           type: "events.iterate.com/itx/script-execution-completed",
-          payload: { executionId: input.executionId, ...payload },
+          payload: completionPayload,
         },
       });
+    };
 
     try {
       const worker = await this.#dynamicWorkers.get<ScriptRunner>(
@@ -323,7 +351,7 @@ export class ItxProcessor
     }
   }
 
-  #scriptWorkerRef(code: string): CapabilityAddress {
+  #scriptWorkerRef(code: string): DynamicWorkerRef {
     const source = `
       import { WorkerEntrypoint } from "cloudflare:workers";
       const fn = ${code};
@@ -333,17 +361,19 @@ export class ItxProcessor
     `;
     return {
       cacheKey: `script:${hashString(code)}`,
-      entrypoint: "ScriptEntrypoint",
       source: {
         mainModule: "main.js",
         modules: { "main.js": source },
         type: "inline",
       },
-      type: "worker-entrypoint",
+      target: {
+        entrypoint: "ScriptEntrypoint",
+        type: "worker-entrypoint",
+      },
     };
   }
 }
 
-function withCacheKey(address: CapabilityAddress, prefix: string): CapabilityAddress {
+function withCacheKey(address: DynamicWorkerRef, prefix: string): DynamicWorkerRef {
   return { ...address, cacheKey: address.cacheKey ? `${prefix}:${address.cacheKey}` : prefix };
 }

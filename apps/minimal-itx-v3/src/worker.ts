@@ -5,7 +5,7 @@ import { AgentDurableObject } from "./domains/agents/agent-durable-object.ts";
 import { ProjectDurableObject } from "./domains/projects/project-durable-object.ts";
 import { RepoDurableObject } from "./domains/repos/repo-durable-object.ts";
 import { StreamDurableObject } from "./domains/streams/stream-durable-object.ts";
-import { ItxEntrypoint, UnauthenticatedItx } from "./itx/rpc-targets.ts";
+import { ItxEntrypoint, UnauthenticatedItx } from "./rpc_targets.ts";
 
 function json(status: number, body: unknown) {
   return Response.json(body, { status });

@@ -7,6 +7,7 @@ import {
   DEFAULT_ITX_BASE_URL,
   type ConnectItxInput,
   type ItxAuth,
+  type Project,
   type RootRpc,
   type RpcStub,
   type UnauthenticatedItxRpc,
@@ -40,6 +41,18 @@ export function connectUnauthenticated(
     baseUrl: baseUrl(),
     ...input,
   });
+}
+
+export function connect<T extends Project = Project>(input: {
+  path?: string;
+  projectId: string;
+}): RpcStub<T> {
+  const unauthenticated = connectUnauthenticated();
+  return unauthenticated.authenticate({
+    auth: tokenAuth(),
+    path: input.path,
+    projectId: input.projectId,
+  }) as unknown as RpcStub<T>;
 }
 
 /** The admin token for the authenticated global ITX (auth.ts `access: "all"`). */

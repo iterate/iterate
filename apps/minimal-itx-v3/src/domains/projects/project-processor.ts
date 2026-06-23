@@ -8,6 +8,20 @@ import { formatDurableObjectName } from "../durable-object-names.ts";
 import { AgentProcessorContract } from "../agents/agent-processor.ts";
 import { RepoProcessorContract } from "../repos/repo-processor.ts";
 
+type InternalStreamWriter = {
+  append(input: unknown): Promise<unknown>;
+  appendBatch(input: unknown): Promise<unknown>;
+  appendInternal(input: unknown): Promise<void>;
+};
+
+type InternalStreamBinding = {
+  getByName(name: string): InternalStreamWriter;
+};
+
+function internalStreams(env: Env): InternalStreamBinding {
+  return (env as unknown as { STREAM: InternalStreamBinding }).STREAM;
+}
+
 export const ProjectProcessorContract = defineProcessorContract({
   slug: "project",
   version: "0.1.0",
@@ -98,25 +112,28 @@ export class ProjectProcessor extends StreamProcessor<
         const path = event.payload.childPath;
         if (path.startsWith("/repos/")) {
           blockProcessorWhile(async () => {
-            await this.deps.env.STREAM.getByName(
+            const stream = internalStreams(this.deps.env).getByName(
               formatDurableObjectName({ projectId: this.deps.projectId, path }),
-            ).append({
-              event: {
-                type: "events.iterate.com/stream/subscription-configured",
-                idempotencyKey: `repo-subscription:${this.deps.projectId}:${path}`,
-                payload: {
-                  subscriptionKey: `repo:${this.deps.projectId}:${path}`,
-                  subscriber: durableObjectProcessorSubscriber({
-                    bindingName: "REPO",
-                    durableObjectName: formatDurableObjectName({
-                      projectId: this.deps.projectId,
-                      path,
+            );
+            await stream.appendInternal({
+              events: [
+                {
+                  type: "events.iterate.com/stream/subscription-configured",
+                  idempotencyKey: `repo-subscription:${this.deps.projectId}:${path}`,
+                  payload: {
+                    subscriptionKey: `repo:${this.deps.projectId}:${path}`,
+                    subscriber: durableObjectProcessorSubscriber({
+                      bindingName: "REPO",
+                      durableObjectName: formatDurableObjectName({
+                        projectId: this.deps.projectId,
+                        path,
+                      }),
+                      processorName: RepoProcessorContract.slug,
                     }),
-                    processorName: RepoProcessorContract.slug,
-                  }),
+                  },
                 },
-              },
-            });
+              ],
+            } as never);
           });
           return;
         }
@@ -127,7 +144,8 @@ export class ProjectProcessor extends StreamProcessor<
             path,
           });
           blockProcessorWhile(async () => {
-            await this.deps.env.STREAM.getByName(durableObjectName).appendBatch({
+            const stream = internalStreams(this.deps.env).getByName(durableObjectName);
+            await stream.appendInternal({
               events: [
                 {
                   type: "events.iterate.com/stream/subscription-configured",
@@ -154,7 +172,7 @@ export class ProjectProcessor extends StreamProcessor<
                   },
                 },
               ],
-            });
+            } as never);
           });
           return;
         }

@@ -13,7 +13,7 @@ catalogs:
     "@cloudflare/vite-plugin": 1.33.2
     "@cloudflare/vitest-pool-workers": ^0.14.9
     "@cloudflare/worker-bundler": ^0.1.2
-    "@cloudflare/workers-types": ^4.20260426.1
+    "@cloudflare/workers-types": ^4.20260621.1
     miniflare: 4.20260424.0
     workerd: 1.20260426.1
     wrangler: 4.102.0
@@ -89,5 +89,6 @@ overrides:
   "wrangler": "4.102.0"
 
 patchedDependencies:
+  "@cloudflare/workers-types@4.20260621.1": "@cloudflare__workers-types.patch"
   "alchemy@0.83.3": "patches/alchemy@0.83.3.patch"
   "@better-auth/oauth-provider@1.6.9": "patches/@better-auth__oauth-provider@1.6.9.patch"

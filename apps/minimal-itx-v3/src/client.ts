@@ -1,36 +1,48 @@
 import WebSocket from "ws";
-import { newWebSocketRpcSession, type RpcCompatible, type RpcStub } from "capnweb";
-import type { UnauthenticatedItxRpc } from "./itx-types.ts";
+import {
+  newWebSocketRpcSession,
+  type RpcCompatible as CapnRpcCompatible,
+  type RpcStub as CapnRpcStub,
+} from "capnweb";
+import type { UnauthenticatedItx } from "../types-and-schemas.ts";
 
 export type {
-  AgentRpc,
-  AgentsRpc,
-  AgentItxRpc,
+  Agent,
+  Agent as AgentRpc,
+  AgentItx,
+  AgentItx as AgentItxRpc,
+  Agents,
+  Agents as AgentsRpc,
+  ItxAuth,
+  ItxCapabilityHost,
   ItxConnectInput,
-  ItxProcessorRpc,
-  ItxVerbsRpc,
-  ProjectItxClient,
-  ProjectItxRpc,
-  ProjectRpc,
-  ProjectWorkerRpc,
-  ProvideCapabilityInput,
-  RepoRpc,
-  ReposRpc,
-  RootItxClient,
-  RootProjectsRpc,
-  RootRpc,
-  RunScriptResult,
+  Json,
+  Project,
+  Project as ProjectItxClient,
+  Project as ProjectItxRpc,
+  ProjectWorker,
+  ProjectWorker as ProjectWorkerRpc,
+  Repo,
+  Repo as RepoRpc,
+  Repos,
+  Repos as ReposRpc,
+  RootItx,
+  RootItx as RootItxClient,
+  RootItx as RootRpc,
+  Stream,
+  Stream as StreamRpc,
   StreamEvent,
   StreamEventInput,
-  StreamRpc,
-  StreamsRpc,
-  UnauthenticatedItxClient,
-  UnauthenticatedItxRpc,
-} from "./itx-types.ts";
-export type { ItxAuth, ItxAuthContext } from "./auth.ts";
+  Streams,
+  Streams as StreamsRpc,
+  UnauthenticatedItx,
+  UnauthenticatedItx as UnauthenticatedItxClient,
+  UnauthenticatedItx as UnauthenticatedItxRpc,
+} from "../types-and-schemas.ts";
 export type { RpcCompatible, RpcStub } from "capnweb";
+export type { ItxAuthContext } from "./auth.ts";
 
-export const DEFAULT_ITX_BASE_URL = "http://127.0.0.1:8789";
+export const DEFAULT_ITX_BASE_URL = "http://127.0.0.1:8790";
 
 export type ConnectItxInput = {
   baseUrl?: string;
@@ -50,15 +62,15 @@ export function itxWebSocketUrl(input: ConnectItxInput = {}): string {
   return websocketUrl("/api/itx", input);
 }
 
-export function connect<T extends RpcCompatible<T>>(url: string): RpcStub<T> {
+export function connect<T extends CapnRpcCompatible<T>>(url: string): CapnRpcStub<T> {
   const socket = new WebSocket(url, { handshakeTimeout: 10_000 });
   return newWebSocketRpcSession<T>(
     socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
   );
 }
 
-export function connectItx(input: ConnectItxInput = {}): RpcStub<UnauthenticatedItxRpc> {
-  return connect<UnauthenticatedItxRpc>(itxWebSocketUrl(input));
+export function connectItx(input: ConnectItxInput = {}): CapnRpcStub<UnauthenticatedItx> {
+  return connect<UnauthenticatedItx>(itxWebSocketUrl(input));
 }
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

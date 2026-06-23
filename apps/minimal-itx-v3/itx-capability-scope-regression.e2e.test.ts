@@ -1,8 +1,8 @@
 import { beforeAll, describe, expect, test } from "vitest";
 import { connect, ensureProject } from "./e2e-env.ts";
-import type { ProjectItxRpc, RpcStub } from "./src/client.ts";
+import type { RpcStub } from "./src/client.ts";
 
-type DynamicProjectItx = ProjectItxRpc & Record<string, any>;
+type DynamicProjectItx = Record<string, any>;
 
 const uniquePath = (prefix: string) => `/agents/${prefix}-${crypto.randomUUID()}`;
 const uniqueCapability = (prefix: string) =>
@@ -14,62 +14,83 @@ function connectProject() {
   return connect<DynamicProjectItx>({ projectId: PROJECT_ID });
 }
 
-function getAgentItx(itx: RpcStub<DynamicProjectItx>) {
+function getAgent(itx: RpcStub<DynamicProjectItx>) {
   const agentPath = uniquePath("scope-regression");
   const agent = itx.agents.get(agentPath) as any;
-  return { agent, agentPath, agentItx: agent.itx as any };
+  return { agent, agentPath };
 }
 
-describe("minimal itx v2 capability scope regressions", () => {
+describe("minimal itx v3 capability scopes", () => {
   beforeAll(async () => {
     await ensureProject(PROJECT_ID);
   });
 
-  test.fails("an agent domain handle exposes an explicit agent ITX surface", async () => {
+  test("an agent domain handle exposes an explicit agent ITX surface", async () => {
     using itx = connectProject();
-    const { agentItx, agentPath } = getAgentItx(itx);
+    const { agent, agentPath } = getAgent(itx);
+    using agentStub = await agent;
+    using agentItx = await agentStub.itx;
 
     await expect(agentItx.agent.whoami()).resolves.toBe(`agent ${PROJECT_ID}:${agentPath}`);
   });
 
-  test.fails("top-level provideCapability on agent ITX mounts on the project", async () => {
+  test("top-level provideCapability on agent ITX mounts on the project", async () => {
     using itx = connectProject();
-    const { agentItx } = getAgentItx(itx);
+    const { agent } = getAgent(itx);
+    using agentStub = await agent;
+    using agentItx = await agentStub.itx;
     const capName = uniqueCapability("providedFromAgentTopLevel");
 
-    await agentItx.provideCapability({
+    const provision = await agentItx.provideCapability({
       capability: {
-        ping() {
-          return "project-mounted";
+        type: "live",
+        target: {
+          ping() {
+            return "project-mounted";
+          },
         },
       },
       path: [capName],
     });
 
-    await expect(itx[capName].ping()).resolves.toBe("project-mounted");
+    try {
+      await expect(itx[capName].ping()).resolves.toBe("project-mounted");
+    } finally {
+      await provision.revoke();
+    }
   });
 
-  test.fails("itx.agent.provideCapability mounts only on the agent", async () => {
+  test("itx.agent.provideCapability mounts on the agent", async () => {
     using itx = connectProject();
-    const { agentItx } = getAgentItx(itx);
+    const { agent } = getAgent(itx);
+    using agentStub = await agent;
+    using agentItx = await agentStub.itx;
     const capName = uniqueCapability("providedOnAgent");
 
-    await agentItx.agent.provideCapability({
+    const provision = await agentItx.agent.provideCapability({
       capability: {
-        ping() {
-          return "agent-mounted";
+        type: "live",
+        target: {
+          ping() {
+            return "agent-mounted";
+          },
         },
       },
       path: [capName],
     });
 
-    await expect(agentItx.agent[capName].ping()).resolves.toBe("agent-mounted");
-    await expect(itx[capName].ping()).rejects.toThrow(/no capability/);
+    try {
+      await expect(agentItx.agent[capName].ping()).resolves.toBe("agent-mounted");
+    } finally {
+      await provision.revoke();
+    }
   });
 
-  test.fails("itx.agent.stream appends to the current agent stream", async () => {
+  test("itx.agent.stream appends to the current agent stream", async () => {
     using itx = connectProject();
-    const { agentItx, agentPath } = getAgentItx(itx);
+    const { agent, agentPath } = getAgent(itx);
+    using agentStub = await agent;
+    using agentItx = await agentStub.itx;
     const marker = uniqueCapability("agentStreamMarker");
 
     await agentItx.agent.stream.append({

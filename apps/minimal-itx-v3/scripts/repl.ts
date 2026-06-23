@@ -22,13 +22,13 @@ const adminToken = process.env.ITX_ADMIN_TOKEN || "root-token";
 const unauthenticated = connectItx({ baseUrl });
 const root = unauthenticated.authenticate({
   auth: { type: "token", token: adminToken },
-}) as RpcStub<RootRpc>;
+}) as unknown as RpcStub<RootRpc>;
 await root.projects.create(projectId);
 
 const itx = unauthenticated.authenticate({
   auth: { type: "token", token },
   projectId,
-}) as RpcStub<ProjectItxRpc>;
+}) as unknown as RpcStub<ProjectItxRpc>;
 
 const server = repl.start({
   ignoreUndefined: true,

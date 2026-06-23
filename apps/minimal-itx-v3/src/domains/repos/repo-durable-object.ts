@@ -6,7 +6,7 @@ import {
   type RequestStreamSubscriptionArgs,
 } from "../streams/engine/workers/stream-processor-host.ts";
 import type { Env } from "../../env.ts";
-import type { RepoRpc } from "../../itx-types.ts";
+import type { Repo, StreamEvent } from "../../../types-and-schemas.ts";
 import { hashString, type ResolvedWorkerSource } from "../dynamic-workers/dynamic-worker-loader.ts";
 import { parseDurableObjectName } from "../durable-object-names.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.ts";
@@ -16,10 +16,19 @@ const REPO_DEFAULT_BRANCH = "main";
 const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 const REPO_DIR = "/repo";
 
-export class RepoDurableObject extends DurableObject<Env> implements RepoRpc {
+type InternalStreamWriter = {
+  append(input: unknown): Promise<unknown>;
+  findEventSummary(input: unknown): Promise<Pick<StreamEvent, "createdAt" | "offset"> | undefined>;
+};
+
+export class RepoDurableObject extends DurableObject<Env> implements Repo {
   readonly #name = parseDurableObjectName(this.ctx.id.name!);
   readonly #host = createStreamProcessorHost(this.ctx);
   readonly #stream = this.ctx.exports.StreamDurableObject.getByName(this.ctx.id.name!);
+
+  #streamWriter(): InternalStreamWriter {
+    return this.#stream as unknown as InternalStreamWriter;
+  }
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -49,21 +58,37 @@ export class RepoDurableObject extends DurableObject<Env> implements RepoRpc {
     };
   }
 
-  async create(input: Record<string, unknown> = {}) {
-    await this.#stream.append({
+  async create(): Promise<StreamEvent> {
+    const existing = await this.createdEvent();
+    if (existing) return existing;
+
+    await this.#streamWriter().append({
       event: {
         type: "events.iterate.com/repo/create-requested",
-        payload: input,
+        payload: {},
       },
     });
 
-    return await this.#stream.append({
+    const artifactName = this.artifactName();
+    const payload = (await this.artifactExists(artifactName))
+      ? {
+          artifactName,
+          defaultBranch: REPO_DEFAULT_BRANCH,
+          remote: this.artifactRemote(artifactName),
+        }
+      : await this.createArtifactRepo({});
+    const event = await this.#streamWriter().append({
       event: {
         type: "events.iterate.com/repo/created",
-        idempotencyKey: `repo-created:${crypto.randomUUID()}`,
-        payload: await this.createArtifactRepo(input),
+        idempotencyKey: `repo-created:${this.#name.projectId}:${this.#name.path}`,
+        payload,
       },
     });
+    return event as StreamEvent;
+  }
+
+  async ensureCreated(): Promise<void> {
+    await this.create();
   }
 
   whoami(): string {
@@ -110,6 +135,32 @@ export class RepoDurableObject extends DurableObject<Env> implements RepoRpc {
     } catch {
       return await this.requireArtifacts().get(name);
     }
+  }
+
+  private async artifactExists(name: string): Promise<boolean> {
+    try {
+      await this.requireArtifacts().get(name);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async createdEvent(): Promise<StreamEvent | undefined> {
+    const summary = await this.#streamWriter().findEventSummary({
+      type: "events.iterate.com/repo/created",
+    });
+    if (!summary) return undefined;
+    const artifactName = this.artifactName();
+    return {
+      ...summary,
+      payload: {
+        artifactName,
+        defaultBranch: REPO_DEFAULT_BRANCH,
+        remote: this.artifactRemote(artifactName),
+      },
+      type: "events.iterate.com/repo/created",
+    };
   }
 
   private requireArtifacts(): Artifacts {

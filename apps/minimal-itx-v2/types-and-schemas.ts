@@ -404,6 +404,17 @@ export const SerializableObjectTrustMeBro = z
   .transform((value) => value as {});
 export type SerializableObjectTrustMeBro = z.infer<typeof SerializableObjectTrustMeBro>;
 
+export const JsonSchema: z.ZodType<Json> = z.lazy(() =>
+  z.union([
+    z.null(),
+    z.boolean(),
+    z.number(),
+    z.string(),
+    z.array(JsonSchema),
+    z.record(z.string(), JsonSchema),
+  ]),
+);
+
 /**
  * A generic stream event before it has been committed.
  *
@@ -429,8 +440,8 @@ export type SerializableObjectTrustMeBro = z.infer<typeof SerializableObjectTrus
  */
 export const StreamEventInput = z.strictObject({
   type: z.string().trim().min(1),
-  payload: SerializableObjectTrustMeBro,
-  metadata: SerializableObjectTrustMeBro.optional(),
+  payload: JsonSchema.optional(),
+  metadata: z.record(z.string(), JsonSchema).optional(),
   source: z
     .strictObject({
       processor: z

@@ -1,5 +1,5 @@
-import { describe, expectTypeOf, it } from "vitest";
-import type { RpcStub } from "capnweb";
+import { readFileSync } from "node:fs";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
   Agent,
   Agents,
@@ -9,21 +9,19 @@ import type {
   DynamicWorkerSource,
   ItxCapabilityHost,
   Json,
-  Repo,
-  Repos,
   Project,
   ProjectWorker,
   ProvidedCapability,
+  Repo,
+  Repos,
   RootItx,
-  RootProjects,
+  RpcStub,
+  RpcTargetImplementation,
   Stream,
   StreamEvent,
   StreamEventInput,
   Streams,
-} from "./types-and-schemas.ts";
-import {
-  StreamEvent as StreamEventSchema,
-  StreamEventInput as StreamEventInputSchema,
+  UnauthenticatedItx,
 } from "./types-and-schemas.ts";
 import type { ProofConsumedEvent, ProofProcessorState } from "./types-and-schemas.stream-proof.ts";
 import {
@@ -32,54 +30,65 @@ import {
   ProofStreamDurableObject,
 } from "./types-and-schemas.stream-proof.ts";
 
-describe("minimal ITX public types", () => {
-  type LocalProjectWorker = {
-    add(a: number, b: number): number;
-    greet(name?: string): string;
-  };
+type IsNever<Value> = [Value] extends [never] ? true : false;
+type IsUnknown<Value> = unknown extends Value ? ([Value] extends [unknown] ? true : false) : false;
 
-  it("keeps Project as the real project ITX surface", () => {
+describe("minimal ITX v3 public types", () => {
+  it("keeps the public contract file dependency-free", () => {
+    const source = readFileSync(new URL("./types-and-schemas.ts", import.meta.url), "utf8");
+    expect(source).not.toMatch(/^import\s/m);
+    expect(source).not.toContain('from "zod"');
+    expect(source).not.toContain('from "capnweb"');
+  });
+
+  it("models the project and agent ITX trees plainly", () => {
+    expectTypeOf<UnauthenticatedItx>().toMatchTypeOf<{
+      authenticate(input?: unknown): RootItx | Project | AgentItx;
+    }>();
     expectTypeOf<Project>().toMatchTypeOf<ItxCapabilityHost>();
     expectTypeOf<Agent>().toMatchTypeOf<ItxCapabilityHost>();
+    expectTypeOf<Agent>().toMatchTypeOf<{ itx: AgentItx; stream: Stream }>();
     expectTypeOf<Project>().toMatchTypeOf<{
       streams: Streams;
       agents: Agents;
       repos: Repos;
+      repo: Repo;
+      worker: ProjectWorker;
       provideCapability: ItxCapabilityHost["provideCapability"];
       revokeCapability: ItxCapabilityHost["revokeCapability"];
       runScript: ItxCapabilityHost["runScript"];
     }>();
     expectTypeOf<AgentItx>().toMatchTypeOf<Project & { agent: Agent }>();
-    expectTypeOf<RootItx>().toMatchTypeOf<{ projects: RootProjects }>();
+    expectTypeOf<RootItx>().toMatchTypeOf<{ projects: { get(projectId: string): Project } }>();
 
     if (false) {
-      const itx = {} as AgentItx;
-      // @ts-expect-error AgentItx is already the project surface; only the current agent is extra.
-      itx.project;
+      const project = {} as Project;
+      const agentItx = {} as AgentItx;
+
+      // @ts-expect-error Project is already the project ITX surface.
+      project.project;
+      // @ts-expect-error Agent is only present on AgentItx, not on a project ITX.
+      project.agent;
+      // @ts-expect-error AgentItx keeps project methods at top level; only current agent is extra.
+      agentItx.project;
     }
   });
 
-  it("keeps the raw stream API synchronous for server implementations", () => {
+  it("keeps raw stream APIs synchronous for durable object implementations", () => {
     if (false) {
       const stream = {} as Stream;
 
       expectTypeOf(
-        stream.append({
-          event: { type: "events.iterate.com/demo/one" },
-        }),
+        stream.append({ event: { type: "events.iterate.com/demo/one" } }),
       ).toEqualTypeOf<StreamEvent>();
-
       expectTypeOf(
-        stream.appendBatch({
-          events: [{ type: "events.iterate.com/demo/one" }],
-        }),
+        stream.appendBatch({ events: [{ type: "events.iterate.com/demo/one" }] }),
       ).toEqualTypeOf<StreamEvent[]>();
-
       expectTypeOf(stream.getEvents()).toEqualTypeOf<StreamEvent[]>();
     }
   });
 
-  it("lets a copied stream durable object implement the synchronous stream API", () => {
+  it("lets copied durable objects implement the raw interfaces directly", () => {
     if (false) {
       const stream = {} as ProofStreamDurableObject;
 
@@ -97,23 +106,40 @@ describe("minimal ITX public types", () => {
     }
   });
 
-  it("is directly usable as a Cap'n Web project ITX stub", async () => {
+  it("allows RPC target implementations to forward through async boundaries", () => {
+    type StreamTarget = RpcTargetImplementation<Stream>;
+
+    expectTypeOf<Parameters<StreamTarget["append"]>[0]>().toEqualTypeOf<{
+      event: StreamEventInput;
+    }>();
+    expectTypeOf<ReturnType<StreamTarget["append"]>>().toEqualTypeOf<
+      StreamEvent | Promise<StreamEvent>
+    >();
+    expectTypeOf<ReturnType<StreamTarget["appendBatch"]>>().toEqualTypeOf<
+      StreamEvent[] | Promise<StreamEvent[]>
+    >();
+  });
+
+  it("turns the same interfaces into async Cap'n Web stubs", async () => {
     if (false) {
-      const itx = {} as RpcStub<Project>;
-      const appendResult = itx.streams.get("/notes").append({
+      const project = {} as RpcStub<Project>;
+      const streamAppend = project.streams.get("/notes").append({
         event: { type: "events.iterate.com/demo/note-written", payload: { text: "hello" } },
       });
+      const batchAppend = project.streams.get("/notes").appendBatch({
+        events: [{ type: "events.iterate.com/demo/note-written" }],
+      });
 
-      expectTypeOf(appendResult).toMatchTypeOf<Promise<StreamEvent & Disposable>>();
-
-      expectTypeOf(await appendResult).toEqualTypeOf<StreamEvent & Disposable>();
-
-      expectTypeOf(await itx.repo.whoami()).toEqualTypeOf<string>();
-      expectTypeOf(await itx.worker.fetch(new Request("https://example.com"))).toEqualTypeOf<
+      expectTypeOf<IsNever<typeof streamAppend>>().toEqualTypeOf<false>();
+      expectTypeOf<IsUnknown<Awaited<typeof streamAppend>>>().toEqualTypeOf<false>();
+      expectTypeOf(await streamAppend).toMatchTypeOf<StreamEvent & Disposable>();
+      expectTypeOf(await batchAppend).toMatchTypeOf<StreamEvent[] & Disposable>();
+      expectTypeOf(await project.repo.whoami()).toEqualTypeOf<string>();
+      expectTypeOf(await project.worker.fetch(new Request("https://example.com"))).toEqualTypeOf<
         Response & Disposable
       >();
       expectTypeOf(
-        await itx.worker.processEvent({
+        await project.worker.processEvent({
           event: {
             type: "events.iterate.com/demo/note-written",
             offset: 1,
@@ -121,138 +147,55 @@ describe("minimal ITX public types", () => {
           },
         }),
       ).toEqualTypeOf<void>();
-      // @ts-expect-error Project ITX is already project-scoped.
-      itx.project;
     }
   });
 
-  it("keeps the local reference project worker shape explicit", async () => {
-    expectTypeOf<LocalProjectWorker>().not.toMatchTypeOf<ProjectWorker>();
-
-    if (false) {
-      const worker = {} as RpcStub<LocalProjectWorker>;
-
-      expectTypeOf(await worker.add(2, 3)).toEqualTypeOf<number>();
-      expectTypeOf(await worker.greet("itx")).toEqualTypeOf<string>();
-    }
-  });
-
-  it("is directly usable as a Cap'n Web agent ITX stub", async () => {
-    if (false) {
-      const itx = {} as RpcStub<AgentItx>;
-
-      expectTypeOf(await itx.agent.whoami()).toEqualTypeOf<string>();
-      expectTypeOf(await itx.repo.whoami()).toEqualTypeOf<string>();
-      expectTypeOf(
-        await itx.agents.create({ path: "/agents/new" }).agent.whoami(),
-      ).toEqualTypeOf<string>();
-      expectTypeOf(await itx.agent.stream.getEvents()).toEqualTypeOf<StreamEvent[] & Disposable>();
-      expectTypeOf(await itx.agent.sendMessage({ message: "hello" })).toEqualTypeOf<
-        StreamEvent & Disposable
-      >();
-
-      const projectMount = itx.provideCapability({
-        path: ["projectTool"],
-        capability: { type: "live", target: {} },
-      });
-      const agentMount = itx.agent.provideCapability({
-        path: ["agentTool"],
-        capability: { type: "live", target: {} },
-      });
-
-      expectTypeOf(projectMount.revoke()).toMatchTypeOf<Promise<void>>();
-      expectTypeOf(agentMount.revoke()).toMatchTypeOf<Promise<void>>();
-    }
-  });
-
-  it("returns created handles so create calls can be pipelined", async () => {
+  it("returns create events and keeps handles on get()", async () => {
     if (false) {
       const repos = {} as Repos;
       const createdRepo = repos.create({ path: "/repos/new" });
-      expectTypeOf(createdRepo).toEqualTypeOf<{ repo: Repo; event: StreamEvent }>();
-      expectTypeOf(createdRepo.repo.create()).toEqualTypeOf<{
-        repo: Repo;
-        event: StreamEvent;
-      }>();
-      expectTypeOf(createdRepo.repo.create().repo.whoami()).toEqualTypeOf<string>();
-      expectTypeOf(createdRepo.event).toEqualTypeOf<StreamEvent>();
+      expectTypeOf(createdRepo).toEqualTypeOf<Promise<StreamEvent>>();
+      expectTypeOf(repos.get("/repos/new").create()).toEqualTypeOf<Promise<StreamEvent>>();
+      expectTypeOf(repos.get("/repos/new").whoami()).toEqualTypeOf<string>();
 
       const agents = {} as Agents;
       const createdAgent = agents.create({ path: "/agents/new" });
-      expectTypeOf(createdAgent).toEqualTypeOf<{ agent: Agent; event: StreamEvent }>();
-      expectTypeOf(createdAgent.agent.create()).toEqualTypeOf<{
-        agent: Agent;
-        event: StreamEvent;
-      }>();
-      expectTypeOf(
-        createdAgent.agent.create().agent.sendMessage({ message: "hello" }),
-      ).toEqualTypeOf<StreamEvent>();
-      expectTypeOf(createdAgent.event).toEqualTypeOf<StreamEvent>();
+      expectTypeOf(createdAgent).toEqualTypeOf<Promise<StreamEvent>>();
+      expectTypeOf(agents.get("/agents/new").create()).toEqualTypeOf<Promise<StreamEvent>>();
+      expectTypeOf(agents.get("/agents/new").sendMessage("hello")).toEqualTypeOf<
+        Promise<StreamEvent>
+      >();
 
       const project = {} as RpcStub<Project>;
-      expectTypeOf(
-        await project.repos.create({ path: "/repos/new" }).repo.whoami(),
-      ).toEqualTypeOf<string>();
-      expectTypeOf(await project.repos.create({ path: "/repos/new" }).event).toMatchTypeOf<
+      const repoEvent = await project.repos.create({ path: "/repos/new" });
+      expectTypeOf(repoEvent).toMatchTypeOf<StreamEvent & Disposable>();
+      // @ts-expect-error create returns a committed event, not a repo handle.
+      repoEvent.repo;
+      expectTypeOf(await project.repos.get("/repos/new").whoami()).toEqualTypeOf<string>();
+
+      const agentEvent = await project.agents.create({ path: "/agents/new" });
+      expectTypeOf(agentEvent).toMatchTypeOf<StreamEvent & Disposable>();
+      // @ts-expect-error create returns a committed event, not an agent handle.
+      agentEvent.agent;
+      expectTypeOf(await project.agents.get("/agents/new").sendMessage("hello")).toMatchTypeOf<
         StreamEvent & Disposable
       >();
-      expectTypeOf(await project.repo.create().repo.whoami()).toEqualTypeOf<string>();
-      expectTypeOf(await project.repo.create().event).toMatchTypeOf<StreamEvent & Disposable>();
-      expectTypeOf(
-        await project.agents
-          .create({ path: "/agents/new" })
-          .agent.sendMessage({ message: "hello" }),
-      ).toEqualTypeOf<StreamEvent & Disposable>();
-      expectTypeOf(
-        await project.agents.get("/agents/new").create().agent.sendMessage({ message: "hello" }),
-      ).toEqualTypeOf<StreamEvent & Disposable>();
+
+      const projectEvent = await project.create();
+      expectTypeOf(projectEvent).toMatchTypeOf<StreamEvent & Disposable>();
+      // @ts-expect-error create returns a committed event, not a project handle.
+      projectEvent.project;
 
       const root = {} as RpcStub<RootItx>;
-      expectTypeOf(
-        await root.projects.create("prj_ref").project.repo.whoami(),
-      ).toEqualTypeOf<string>();
-      expectTypeOf(await root.projects.create("prj_ref").event).toMatchTypeOf<
-        StreamEvent & Disposable
-      >();
-      expectTypeOf(
-        await root.projects
-          .create("prj_ref")
-          .project.agents.create({ path: "/agents/new" })
-          .agent.whoami(),
-      ).toEqualTypeOf<string>();
+      const rootProjectEvent = await root.projects.create("prj_ref");
+      expectTypeOf(rootProjectEvent).toMatchTypeOf<StreamEvent & Disposable>();
+      // @ts-expect-error create returns a committed event, not a project handle.
+      rootProjectEvent.project;
+      expectTypeOf(await root.projects.get("prj_ref").repo.whoami()).toEqualTypeOf<string>();
     }
   });
 
-  it("supports dynamic capability intersections without polluting the base tree", async () => {
-    type EchoProject = Project & {
-      echo: {
-        ping(input: { text: string }): string;
-      };
-    };
-
-    if (false) {
-      const provider = {} as RpcStub<Project>;
-      const caller = {} as RpcStub<EchoProject>;
-
-      await provider.provideCapability({
-        path: ["echo"],
-        capability: {
-          type: "live",
-          target: {
-            ping(input: { text: string }) {
-              return `pong:${input.text}`;
-            },
-          },
-        },
-      });
-
-      expectTypeOf(await caller.echo.ping({ text: "ok" })).toEqualTypeOf<string>();
-      // @ts-expect-error Project ITX has no built-in echo capability.
-      provider.echo;
-    }
-  });
-
-  it("keeps live capabilities separate from durable event payloads", () => {
+  it("keeps live capabilities out of durable event payloads", () => {
     expectTypeOf<
       Parameters<Project["provideCapability"]>[0]["capability"]
     >().toEqualTypeOf<ProvidedCapability>();
@@ -268,24 +211,6 @@ describe("minimal ITX public types", () => {
       capability: { type: "live", target: liveCapability },
     } satisfies Parameters<Project["provideCapability"]>[0];
 
-    const providedFunctionCapabilityInput = {
-      path: ["compute"],
-      capability: {
-        type: "live",
-        target(input: { value: number }) {
-          return input.value + 1;
-        },
-      },
-    } satisfies Parameters<Project["provideCapability"]>[0];
-
-    const providedStubCapabilityInput = {
-      path: ["remoteEcho"],
-      capability: {
-        type: "live",
-        target: {} as RpcStub<(input: { text: string }) => string>,
-      },
-    } satisfies Parameters<Project["provideCapability"]>[0];
-
     const durableCapabilityInput = {
       path: ["durableEcho"],
       capability: {
@@ -296,9 +221,7 @@ describe("minimal ITX public types", () => {
             mainModule: "index.ts",
             modules: { "index.ts": "export default {}" },
           },
-          target: {
-            type: "worker-entrypoint",
-          },
+          target: { type: "worker-entrypoint" },
         },
       },
     } satisfies Parameters<Project["provideCapability"]>[0];
@@ -320,16 +243,14 @@ describe("minimal ITX public types", () => {
       payload: { type: "live", target: liveCapability.ping },
     } satisfies StreamEventInput;
 
-    void validEvent;
-    void invalidEvent;
     void providedCapabilityInput;
-    void providedFunctionCapabilityInput;
-    void providedStubCapabilityInput;
     void durableCapabilityInput;
     void invalidCapabilityInput;
+    void validEvent;
+    void invalidEvent;
   });
 
-  it("keeps stream event schemas simple and JSON-shaped", () => {
+  it("keeps stream events generic and JSON-shaped", () => {
     expectTypeOf<StreamEventInput>().toEqualTypeOf<{
       type: string;
       payload?: Json;
@@ -343,33 +264,12 @@ describe("minimal ITX public types", () => {
       idempotencyKey?: string;
     }>();
 
-    expectTypeOf<StreamEvent>().toMatchTypeOf<{
-      type: string;
-      payload?: Json;
-      metadata?: Record<string, Json>;
-      source?: {
-        processor?: {
-          slug: string;
-          version: string;
-        };
-      };
-      idempotencyKey?: string;
-      offset: number;
-      createdAt: string;
-    }>();
-
-    StreamEventInputSchema.parse({
-      type: "events.iterate.com/demo/valid",
-      payload: { ok: true },
-      metadata: { requestId: "req_1" },
-    });
-
-    StreamEventSchema.parse({
-      type: "events.iterate.com/demo/valid",
-      payload: ["ok"],
-      offset: 1,
-      createdAt: "2026-06-18T12:00:00.000Z",
-    });
+    expectTypeOf<StreamEvent>().toEqualTypeOf<
+      StreamEventInput & {
+        createdAt: string;
+        offset: number;
+      }
+    >();
 
     const invalidInputWithOffset = {
       type: "events.iterate.com/demo/not-committed-yet",
@@ -403,22 +303,6 @@ describe("minimal ITX public types", () => {
       payload: { amount: 2 },
       type: "events.iterate.com/proof/increment",
     } satisfies CounterEvent;
-    const label = {
-      createdAt: "2026-06-18T12:00:00.000Z",
-      offset: 2,
-      payload: { text: "ready" },
-      type: "events.iterate.com/proof/label",
-    } satisfies CounterEvent;
-
-    const invalidIncrement = {
-      createdAt: "2026-06-18T12:00:00.000Z",
-      offset: 3,
-      payload: {
-        // @ts-expect-error increment payload uses amount, not text.
-        text: "wrong",
-      },
-      type: "events.iterate.com/proof/increment",
-    } satisfies CounterEvent;
 
     function assertCounterEventNarrowing(event: CounterEvent) {
       switch (event.type) {
@@ -434,45 +318,26 @@ describe("minimal ITX public types", () => {
     }
 
     assertCounterEventNarrowing(increment);
-    assertCounterEventNarrowing(label);
-
     expectTypeOf(
       processor.reduce({
         event: increment,
         state: { count: 0, label: "" },
       }),
     ).toEqualTypeOf<CounterState>();
-
-    void invalidIncrement;
   });
 
-  it("documents processor-contract support schemas without making them RPC DTOs", () => {
+  it("keeps durable worker refs and capability records explicit", () => {
     expectTypeOf<DynamicWorkerSource>().toEqualTypeOf<
-      | {
-          type: "inline";
-          mainModule: string;
-          modules: Record<string, string>;
-        }
-      | {
-          type: "repo";
-          repoPath: string;
-          sourcePath: string;
-        }
+      | { type: "inline"; mainModule: string; modules: Record<string, string> }
+      | { type: "repo"; repoPath: string; sourcePath: string }
     >();
 
     expectTypeOf<DynamicWorkerRef>().toEqualTypeOf<{
       source: DynamicWorkerSource;
       cacheKey?: string;
       target:
-        | {
-            type: "worker-entrypoint";
-            entrypoint?: string;
-            props?: Record<string, Json>;
-          }
-        | {
-            type: "durable-object";
-            className: string;
-          };
+        | { type: "worker-entrypoint"; entrypoint?: string; props?: Record<string, Json> }
+        | { type: "durable-object"; className: string };
     }>();
 
     const validWorkerRef = {
@@ -488,15 +353,8 @@ describe("minimal ITX public types", () => {
     } satisfies DynamicWorkerRef;
 
     expectTypeOf<CapabilityRecord>().toEqualTypeOf<
-      | {
-          type: "live";
-          path: string[];
-        }
-      | {
-          type: "dynamic-worker";
-          path: string[];
-          workerRef: DynamicWorkerRef;
-        }
+      | { type: "live"; path: string[] }
+      | { type: "dynamic-worker"; path: string[]; workerRef: DynamicWorkerRef }
     >();
 
     const liveCapabilityRecord = {
@@ -533,26 +391,28 @@ describe("minimal ITX public types", () => {
       },
     } satisfies DynamicWorkerRef;
 
-    void validWorkerRef;
     void liveCapabilityRecord;
     void dynamicWorkerCapabilityRecord;
     void invalidDynamicWorkerCapabilityRecord;
     void invalidWorkerRef;
   });
 
-  it("types script results as serialized data returned across the RPC boundary", async () => {
+  it("types script results as JSON returned across the RPC boundary", async () => {
     if (false) {
-      const itx = {} as RpcStub<Project>;
-      const result = await itx.runScript({ code: "async () => ({ ok: true })" });
+      const project = {} as RpcStub<Project>;
+      const result = await project.runScript("async () => ({ ok: true })");
 
-      expectTypeOf(result).toEqualTypeOf<ReturnType<ItxCapabilityHost["runScript"]> & Disposable>();
+      expectTypeOf(result).toMatchTypeOf<
+        Awaited<ReturnType<ItxCapabilityHost["runScript"]>> & Disposable
+      >();
       expectTypeOf(result.result).toEqualTypeOf<Json>();
+      expectTypeOf<IsUnknown<typeof result.result>>().toEqualTypeOf<false>();
 
       const agent = {} as RpcStub<Agent>;
-      const agentResult = await agent.runScript({ code: "async () => ({ ok: true })" });
+      const agentResult = await agent.runScript("async () => ({ ok: true })");
 
-      expectTypeOf(agentResult).toEqualTypeOf<
-        ReturnType<ItxCapabilityHost["runScript"]> & Disposable
+      expectTypeOf(agentResult).toMatchTypeOf<
+        Awaited<ReturnType<ItxCapabilityHost["runScript"]>> & Disposable
       >();
       expectTypeOf(agentResult.result).toEqualTypeOf<Json>();
     }

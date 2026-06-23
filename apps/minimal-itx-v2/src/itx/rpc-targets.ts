@@ -380,4 +380,8 @@ export class ItxEntrypoint
   authenticate(input: ItxConnectInput = this.ctx.props) {
     return new UnauthenticatedItx(this.env).authenticate(input);
   }
+
+  get() {
+    return this.authenticate(this.ctx.props);
+  }
 }

@@ -5,15 +5,20 @@ import {
 } from "../streams/engine/workers/stream-processor-host.ts";
 import type { Env } from "../../env.ts";
 import { TRUSTED_INTERNAL_ITX_TOKEN, trustedInternalAuthContext } from "../../auth.ts";
-import type { AgentRpc, ItxProcessorRpc } from "../../itx-types.ts";
+import type { Agent, AgentItx, StreamEvent } from "../../../types-and-schemas.ts";
+import type { ItxProcessorRpc } from "../../itx/processor.ts";
 import { ItxContract } from "../../itx/processor-contract.ts";
 import { ItxProcessor } from "../../itx/processor.ts";
-import { ProjectRpcTarget } from "../../itx/rpc-targets.ts";
+import { AgentItx as AgentItxTarget, ProjectItx, StreamTarget } from "../../rpc_targets.ts";
 import { DynamicWorkersRpcTarget } from "../dynamic-workers/dynamic-workers-rpc-target.ts";
 import { parseDurableObjectName } from "../durable-object-names.ts";
 import { AgentProcessor, AgentProcessorContract } from "./agent-processor.ts";
 
-export class AgentDurableObject extends DurableObject<Env> implements AgentRpc {
+type InternalStreamWriter = {
+  append(input: unknown): Promise<unknown>;
+};
+
+export class AgentDurableObject extends DurableObject<Env> implements Agent {
   readonly #name = parseDurableObjectName(this.ctx.id.name!);
   readonly #host = createStreamProcessorHost(this.ctx);
   readonly #stream = this.ctx.exports.StreamDurableObject.getByName(this.ctx.id.name!);
@@ -35,6 +40,10 @@ export class AgentDurableObject extends DurableObject<Env> implements AgentRpc {
 
   readonly #itxProcessor: ItxProcessorRpc;
 
+  #streamWriter(): InternalStreamWriter {
+    return this.#stream as unknown as InternalStreamWriter;
+  }
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.#host.add(AgentProcessorContract.slug, (deps) => new AgentProcessor(deps));
@@ -44,7 +53,7 @@ export class AgentDurableObject extends DurableObject<Env> implements AgentRpc {
         new ItxProcessor({
           ...deps,
           dynamicWorkers: this.#dynamicWorkers,
-          iterateContext: { stream: this.#stream },
+          iterateContext: { stream: this.#stream as never },
         }),
     );
   }
@@ -58,38 +67,73 @@ export class AgentDurableObject extends DurableObject<Env> implements AgentRpc {
   }
 
   project() {
-    return new ProjectRpcTarget({
+    return new ProjectItx({
       auth: trustedInternalAuthContext(),
       path: "/",
       projectId: this.#name.projectId,
     });
   }
 
+  get itx(): AgentItx {
+    return new AgentItxTarget({
+      auth: trustedInternalAuthContext(),
+      path: this.#name.path,
+      projectId: this.#name.projectId,
+    }) as unknown as AgentItx;
+  }
+
+  get stream(): Agent["stream"] {
+    return new StreamTarget({
+      auth: trustedInternalAuthContext(),
+      path: this.#name.path,
+      projectId: this.#name.projectId,
+    }) as unknown as Agent["stream"];
+  }
+
   whoami() {
     return `agent ${this.#name.projectId}:${this.#name.path}`;
   }
 
-  async create(input: Record<string, unknown> = {}) {
-    await this.#stream.append({
+  async create(): Promise<StreamEvent> {
+    await this.#streamWriter().append({
       event: {
         type: "events.iterate.com/agent/create-requested",
-        payload: input,
+        payload: {},
       },
     });
-    return await this.#stream.waitForEvent({
-      eventTypes: ["events.iterate.com/agent/created"],
-      predicate: () => true,
-      timeoutMs: 5_000,
+    const event = await this.#streamWriter().append({
+      event: {
+        type: "events.iterate.com/agent/created",
+        idempotencyKey: `agent-created:${this.#name.projectId}:${this.#name.path}`,
+        payload: {},
+      },
     });
+    return event as StreamEvent;
   }
 
-  async sendMessage(input: { channel?: string; message: string }) {
-    const event = await this.#stream.append({
+  async sendMessage(message: string): Promise<StreamEvent> {
+    return (await this.#streamWriter().append({
       event: {
         type: "events.iterate.com/agent/message-sent",
-        payload: input,
+        payload: { message },
       },
-    });
-    return { agent: this.whoami(), event, ...input };
+    })) as StreamEvent;
+  }
+
+  async runScript(code: string) {
+    return await this.#itxProcessor.runScript(code);
+  }
+
+  async provideCapability(input: Parameters<Agent["provideCapability"]>[0]) {
+    await this.#itxProcessor.provideCapability(input);
+    return {
+      revoke: () => {
+        void this.revokeCapability({ path: input.path });
+      },
+    };
+  }
+
+  revokeCapability(input: Parameters<Agent["revokeCapability"]>[0]) {
+    return this.#itxProcessor.revokeCapability(input);
   }
 }

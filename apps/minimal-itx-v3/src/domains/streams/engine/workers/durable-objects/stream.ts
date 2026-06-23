@@ -19,6 +19,11 @@ import {
   formatDurableObjectName,
   parseDurableObjectName,
 } from "../../../../durable-object-names.ts";
+import type {
+  Stream as PublicStream,
+  StreamEvent as PublicStreamEvent,
+  StreamEventInput as PublicStreamEventInput,
+} from "../../../../../../types-and-schemas.ts";
 
 /**
  * Durable stream storage and Workers RPC surface.
@@ -60,7 +65,7 @@ const CORE_STATE_VERSION = 5;
 // Overridable via the STREAM_IDLE_TEARDOWN_MS env var (used by tests).
 const DEFAULT_STREAM_IDLE_TEARDOWN_MS = 5 * 60_000;
 
-export class Stream extends DurableObject<Env> implements StreamRpc {
+export class Stream extends DurableObject<Env> implements PublicStream {
   readonly name = parseStreamDurableObjectName(this.ctx.id.name);
 
   #coreProcessorState: StreamCoreProcessorState;
@@ -72,8 +77,8 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
   coreProcessor = new CoreStreamProcessor({
     iterateContext: {
       stream: {
-        append: (args) => this.append(args),
-        appendBatch: (args) => this.appendBatch(args),
+        append: (args) => this.#appendFromProcessor(args),
+        appendBatch: (args) => this.#appendBatchFromProcessor(args),
       },
     },
     keepAliveWhile: (work) => void this.ctx.waitUntil(work()),
@@ -348,7 +353,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     return state;
   }
 
-  #resolveStream(streamPath: string): Pick<StreamRpc, "append" | "appendBatch"> {
+  #resolveStream(streamPath: string): Pick<PublicStream, "append" | "appendBatch"> {
     const resolvedPath = resolveStreamPath(this.#coreProcessorState.path, streamPath);
     if (resolvedPath === resolveStreamPath(this.#coreProcessorState.path, ".")) return this;
     return this.env.STREAM.getByName(
@@ -356,7 +361,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
         path: resolvedPath,
         projectId: this.name.projectId,
       }),
-    );
+    ) as unknown as Pick<PublicStream, "append" | "appendBatch">;
   }
 
   /**
@@ -364,14 +369,10 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
    *
    * Uses `appendBatch()`, so all append ordering and persistence stays in one place.
    */
-  append(args: {
-    streamPath?: string;
-    event: StreamEventInput;
-  }): StreamEvent | Promise<StreamEvent> {
-    if (args.streamPath !== undefined) {
-      return this.#resolveStream(args.streamPath).append({ event: args.event });
-    }
-    return this.#appendBatchHere({ events: [args.event] })[0]!;
+  append(args: { event: PublicStreamEventInput }): PublicStreamEvent {
+    return this.#appendBatchHere({
+      events: [args.event as StreamEventInput],
+    })[0]! as PublicStreamEvent;
   }
 
   /**
@@ -391,15 +392,44 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
    *
    * Returns the persisted events (including offsets + `createdAt`) in input order.
    */
-  appendBatch(args: {
-    streamPath?: string;
-    events: StreamEventInput[];
-  }): StreamEvent[] | Promise<StreamEvent[]> {
-    if (args.streamPath !== undefined) {
-      return this.#resolveStream(args.streamPath).appendBatch({ events: args.events });
-    }
+  appendBatch(args: { events: PublicStreamEventInput[] }): PublicStreamEvent[] {
+    return this.#appendBatchHere({
+      events: args.events as StreamEventInput[],
+    }) as PublicStreamEvent[];
+  }
 
-    return this.#appendBatchHere({ events: args.events });
+  appendInternal(args: { events: StreamEventInput[] }): void {
+    this.#appendBatchHere({ events: args.events });
+  }
+
+  appendEventSummary(args: { event: StreamEventInput }): Pick<StreamEvent, "createdAt" | "offset"> {
+    const event = this.#appendBatchHere({ events: [args.event] })[0]!;
+    return { createdAt: event.createdAt, offset: event.offset };
+  }
+
+  findEventSummary(args: { type: string }): Pick<StreamEvent, "createdAt" | "offset"> | undefined {
+    const event = this.getEvents({ afterOffset: 0 }).find(
+      (candidate) => candidate.type === args.type,
+    );
+    return event ? { createdAt: event.createdAt, offset: event.offset } : undefined;
+  }
+
+  #appendFromProcessor(args: { streamPath?: string; event: StreamEventInput }) {
+    if (args.streamPath !== undefined) {
+      return this.#resolveStream(args.streamPath).append({
+        event: args.event as PublicStreamEventInput,
+      });
+    }
+    return this.append({ event: args.event as PublicStreamEventInput });
+  }
+
+  #appendBatchFromProcessor(args: { streamPath?: string; events: StreamEventInput[] }) {
+    if (args.streamPath !== undefined) {
+      return this.#resolveStream(args.streamPath).appendBatch({
+        events: args.events as PublicStreamEventInput[],
+      });
+    }
+    return this.appendBatch({ events: args.events as PublicStreamEventInput[] });
   }
 
   #appendBatchHere(args: { events: StreamEventInput[] }): StreamEvent[] {
@@ -546,7 +576,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
       beforeOffset?: number | null;
       limit?: number;
     } = {},
-  ): StreamEvent[] {
+  ): PublicStreamEvent[] {
     const limit = args.limit;
     if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
       throw new Error("getEvents limit must be a positive integer.");
@@ -558,7 +588,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
       afterOffset: args.afterOffset ?? 0,
       beforeOffset: args.beforeOffset ?? Number.MAX_SAFE_INTEGER,
       limit: limit ?? Number.MAX_SAFE_INTEGER,
-    });
+    }) as PublicStreamEvent[];
   }
 
   /**
