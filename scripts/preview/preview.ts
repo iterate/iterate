@@ -697,13 +697,6 @@ type PullRequestPreviewContext = {
   workflowRunUrl: string | null;
 };
 
-type EnvironmentConfigLeaseResourceRecord = {
-  slug: string;
-  data: Record<string, unknown>;
-  leaseState: "available" | "leased";
-  leasedUntil: number | null;
-};
-
 type CheckResult = {
   ok: boolean;
   message?: string;
@@ -1106,10 +1099,6 @@ async function writePullRequestBody(params: {
   });
 }
 
-type PreviewReconcileClient = {
-  list: (input: { type: string }) => Promise<EnvironmentConfigLeaseResourceRecord[]>;
-};
-
 type EnvironmentConfigLeaseReconcileResult = {
   checkedAt: string;
   ok: boolean;
@@ -1129,6 +1118,13 @@ type EnvironmentConfigLeaseReconcileResult = {
   };
 };
 
+type EnvironmentConfigLeaseResourceRecord = {
+  slug: string;
+  data: Record<string, unknown>;
+  leaseState: "available" | "leased";
+  leasedUntil: number | null;
+};
+
 async function reconcileEnvironmentConfigLeaseResources(input: {
   checkCloudflareZone?: (input: {
     accountId: string;
@@ -1143,7 +1139,9 @@ async function reconcileEnvironmentConfigLeaseResources(input: {
     repositoryRoot: string;
     signal?: AbortSignal;
   }) => Promise<CheckResult>;
-  client: PreviewReconcileClient;
+  client: {
+    list: (input: { type: string }) => Promise<EnvironmentConfigLeaseResourceRecord[]>;
+  };
   commandEnvironment: NodeJS.ProcessEnv;
   readCloudflareCredentials?: (input: {
     commandEnvironment: NodeJS.ProcessEnv;

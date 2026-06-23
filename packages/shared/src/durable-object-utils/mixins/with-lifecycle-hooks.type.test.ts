@@ -17,8 +17,6 @@ type ListingEnv = {
   DO_CATALOG: D1Database;
 };
 
-type EnvWithListings = Env & ListingEnv;
-
 type RoomInit = {
   ownerUserId: string;
 };
@@ -308,7 +306,7 @@ describe("withLifecycleHooks D1 object catalog types", () => {
       nameSchema: RoomInit,
     })(DurableObjectCore);
 
-    class ListedRoom extends ListedRoomBase<EnvWithListings> {
+    class ListedRoom extends ListedRoomBase<Env & ListingEnv> {
       getOwnerUserId() {
         // D1 cataloging must not erase withLifecycleHooks' protected subclass
         // surface.

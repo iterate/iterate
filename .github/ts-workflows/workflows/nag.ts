@@ -101,9 +101,12 @@ export default {
 
               const nodeIds = comments.map((c) => c.node_id).filter(Boolean);
 
-              type Node = { id?: string; isMinimized?: boolean; minimizedReason?: string | null };
               const res = await github.graphql<{
-                nodes: Array<Node | null>;
+                nodes: Array<{
+                  id?: string;
+                  isMinimized?: boolean;
+                  minimizedReason?: string | null;
+                } | null>;
               }>(
                 `
                   query($ids: [ID!]!) {

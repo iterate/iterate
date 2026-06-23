@@ -55,21 +55,12 @@ export const installDopplerCli = {
   ].join("\n"),
 } as const satisfies Step;
 
-type DopplerConfigName =
-  | `dev_${string}`
-  | `preview_${string}`
-  | "dev"
-  | "preview"
-  | "prd"
-  | `\${{ ${string} }}`;
-type DopplerProjectName = string;
-
 export const setupDoppler = ({
   config,
   project,
 }: {
-  config: DopplerConfigName;
-  project: DopplerProjectName;
+  config: `dev_${string}` | `preview_${string}` | "dev" | "preview" | "prd" | `\${{ ${string} }}`;
+  project: string;
 }) =>
   [
     installDopplerCli,

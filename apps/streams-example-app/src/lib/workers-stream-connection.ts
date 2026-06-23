@@ -4,12 +4,10 @@ import {
   type StreamConnection,
 } from "./stream-connection.ts";
 
-type FetchEndpoint = (request: Request) => Promise<Response>;
-
 /** Connects from a Worker or Durable Object using fetch plus a WebSocket upgrade. */
 export async function withStreamConnectionFromWorkers(args: {
   url: string | URL;
-  fetch: FetchEndpoint;
+  fetch: (request: Request) => Promise<Response>;
   headers?: HeadersInit;
 }): Promise<StreamConnection> {
   const requestHeaders = new Headers(args.headers);

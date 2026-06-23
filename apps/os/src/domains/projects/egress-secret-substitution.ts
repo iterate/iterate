@@ -45,12 +45,10 @@ export async function substituteProjectEgressSecretHeaders(input: {
   return [null, substitutedHeaders];
 }
 
-type SecretReferenceParseResult = [errorResponse: Response | null, references: SecretReference[]];
-
 export function parseSecretReferences(input: {
   header: string;
   value: string;
-}): SecretReferenceParseResult {
+}): [errorResponse: Response | null, references: SecretReference[]] {
   const references: SecretReference[] = [];
   let searchStart = 0;
 

@@ -20,7 +20,6 @@ import {
 } from "@journeyapps/wa-sqlite/src/sqlite-constants.js";
 import { OPFSCoopSyncVFS } from "@journeyapps/wa-sqlite/src/examples/OPFSCoopSyncVFS.js";
 
-type Sqlite3 = ReturnType<typeof Factory>;
 // Matches wa-sqlite's SQLiteCompatibleType (blobs surface as Uint8Array or number[]).
 type SqlValue = string | number | bigint | Uint8Array | number[] | null;
 type Statement = { sql: string; params?: SqlValue[] };
@@ -31,7 +30,7 @@ type Request =
   | { id: number; op: "export" }
   | { id: number; op: "close" };
 
-let sqlite3: Sqlite3 | undefined;
+let sqlite3: ReturnType<typeof Factory> | undefined;
 let db: number | undefined;
 let databasePath = "";
 const VFS_NAME = "stream-opfs-coop";
