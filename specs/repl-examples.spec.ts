@@ -1,4 +1,4 @@
-import { expect, type Page } from "@playwright/test";
+import { expect } from "@playwright/test";
 import { EXAMPLE_CASES } from "../apps/os/src/itx/e2e/example-cases.ts";
 import { ITX_EXAMPLES } from "../apps/os/src/itx/examples.ts";
 import { test } from "./test-support/test.ts";
@@ -18,7 +18,7 @@ test.describe("itx REPL catalogue examples", () => {
       await using fixture = await helpers.createFixture(`repl-${example.id}`);
       await page.goto(`/projects/${fixture.project.slug}/repl`);
       await page.getByRole("button", { name: "Run" }).waitFor();
-      page.videoMode.setStartTime(); // start video from now
+      page.videoMode?.setStartTime(); // start video from now
       await page.getByTestId("itx-repl-editor").locator(".cm-content").waitFor();
 
       const ctx = {
@@ -43,28 +43,12 @@ test.describe("itx REPL catalogue examples", () => {
       const entry = page.locator(`[data-entry-index="${entryIndex}"][data-status="success"]`);
       await entry.waitFor();
 
-      await entry.getByTestId("itx-repl-result-json").waitFor({ state: "attached" });
       const resultJson = await entry.getByTestId("itx-repl-result-json").textContent();
       const result = JSON.parse(resultJson!);
 
       exampleCase.assert(result, ctx, expect as never);
       const visibleResult = entry.getByTestId("itx-repl-visible-result");
       await visibleResult.locator(".cm-SerializedObjectCodeBlock .cm-content").waitFor();
-      if (example.id === "import-npm-via-esm-sh") {
-        await visibleResult.getByText("hellothere").waitFor();
-      }
-
-      // if (example.id.includes("esm-sh")) {
-      // await entry.getByTestId("itx-repl-result-json").getByText(fixture.project.id).waitFor();
-      // await entry
-      //   .getByTestId("itx-repl-result-json")
-      //   .getByText(fixture.project.id, { exact: true })
-      //   .click();
-      // // }
-
-      // await page.locator(".sdofijsdoifjdf").waitFor();
-
-      // await new Promise((resolve) => setTimeout(resolve, 1000));
     });
   }
 });

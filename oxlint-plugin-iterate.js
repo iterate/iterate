@@ -233,6 +233,66 @@ function compactTypeText(text) {
   return text.replace(/\s+/g, "");
 }
 
+/** @param {import("estree").Node | undefined} node */
+function stringLiteralValue(node) {
+  if (!node) return undefined;
+  if (node.type === "Literal" && typeof node.value === "string") return node.value;
+  return undefined;
+}
+
+/** @param {unknown} attributeName */
+function getJSXAttributeName(attributeName) {
+  if (!attributeName || typeof attributeName !== "object") return undefined;
+  if (attributeName.type === "JSXIdentifier") return attributeName.name;
+  if (attributeName.type === "JSXNamespacedName") {
+    return `${attributeName.namespace.name}:${attributeName.name.name}`;
+  }
+  return undefined;
+}
+
+/** @param {string} classText */
+function hasSrOnlyClassToken(classText) {
+  return classText.split(/\s+/).includes("sr-only");
+}
+
+/** @param {import("estree").Node | undefined} node */
+function hasSrOnlyClassExpression(node) {
+  const literal = stringLiteralValue(node);
+  if (literal !== undefined) return hasSrOnlyClassToken(literal);
+
+  if (!node) return false;
+
+  if (node.type === "TemplateLiteral") {
+    return node.quasis.some((quasi) => hasSrOnlyClassToken(quasi.value.cooked || ""));
+  }
+
+  if (node.type === "ArrayExpression") {
+    return node.elements.some((element) => hasSrOnlyClassExpression(element));
+  }
+
+  if (node.type === "ConditionalExpression") {
+    return hasSrOnlyClassExpression(node.consequent) || hasSrOnlyClassExpression(node.alternate);
+  }
+
+  if (node.type === "LogicalExpression") {
+    return hasSrOnlyClassExpression(node.left) || hasSrOnlyClassExpression(node.right);
+  }
+
+  if (node.type === "CallExpression") {
+    return node.arguments.some((argument) => hasSrOnlyClassExpression(argument));
+  }
+
+  return false;
+}
+
+/** @param {import("estree").Node | undefined} attributeValue */
+function jsxAttributeHasSrOnlyClass(attributeValue) {
+  const literal = stringLiteralValue(attributeValue);
+  if (literal !== undefined) return hasSrOnlyClassToken(literal);
+  if (attributeValue?.type !== "JSXExpressionContainer") return false;
+  return hasSrOnlyClassExpression(attributeValue.expression);
+}
+
 /**
  * Extracts the contract type argument from `class X extends StreamProcessor<Contract, ...>`.
  * Text-based on purpose (no type checker in lint): it reads the first type argument up to a
@@ -405,6 +465,39 @@ const plugin = {
                 node,
                 message:
                   "Avoid using publicProcedure unless the procedure truly must be publicly accessible - prefer one of the authenticated procedures instead",
+              });
+            }
+          },
+        };
+      },
+    },
+    "no-sr-only-data-attributes": {
+      meta: {
+        docs: {
+          description:
+            "Forbid data-* attributes on sr-only elements; hidden test/data hooks should not masquerade as visible UI.",
+        },
+        type: "problem",
+      },
+      create: (context) => {
+        return {
+          JSXOpeningElement: (node) => {
+            const attributes = node.attributes.filter(
+              (attribute) => attribute.type === "JSXAttribute",
+            );
+            const classNameAttribute = attributes.find(
+              (attribute) => getJSXAttributeName(attribute.name) === "className",
+            );
+            if (!jsxAttributeHasSrOnlyClass(classNameAttribute?.value)) return;
+
+            for (const attribute of attributes) {
+              const attributeName = getJSXAttributeName(attribute.name);
+              if (!attributeName?.startsWith("data-")) continue;
+              context.report({
+                node: attribute,
+                message:
+                  `Do not put ${attributeName} on an sr-only element. ` +
+                  `Use a visible wrapper for UI locators, or hidden/script JSON for machine-readable test data.`,
               });
             }
           },

@@ -19,7 +19,11 @@ const addPagePlugins = (page: Page, testInfo: TestInfo) =>
       uiErrorReporter(),
       spinnerWaiter({ spinnerTimeout: 30_000 }),
       process.env.VIDEO_MODE === "1" &&
-        videoMode({ skipStackFrames: ["test-support/test.ts"], deadAirThreshold: 300 }),
+        videoMode({
+          skipStackFrames: ["test-support/test.ts"],
+          deadAirThreshold: 300,
+          finalHold: 1,
+        }),
     ],
     boxedStackPrefixes: (defaults) => [...defaults, import.meta.dirname],
   });
