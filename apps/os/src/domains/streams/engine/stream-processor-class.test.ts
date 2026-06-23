@@ -116,7 +116,6 @@ const SameStateContract = defineProcessorContract({
   emits: [],
 });
 type SameStateContract = typeof SameStateContract;
-type SameState = { seen: number };
 
 class SameStateProcessor extends StreamProcessor<SameStateContract> {
   readonly contract = SameStateContract;
@@ -222,7 +221,7 @@ describe("state change subscriptions", () => {
 
   it("does not notify when a reducer returns the same state object", async () => {
     const processor = new SameStateProcessor({ stream: stream() });
-    const states: SameState[] = [];
+    const states: Array<{ seen: number }> = [];
     const unsubscribe = await processor.onStateChange((state) => states.push(state));
 
     await processor.ingest({

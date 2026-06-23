@@ -40,11 +40,9 @@ type LiveProjectProcessorState = {
 const REACTIVITY_TEST_STREAM_PATH = "/reactivity-test";
 const REACTIVITY_TEST_EVENT_TYPE = "events.iterate.com/reactivity-test/appended";
 
-type ReactivityActionKind = "batch" | "single";
-
 type ReactivityActionState = {
   error?: string;
-  kind?: ReactivityActionKind;
+  kind?: "batch" | "single";
   marker?: string;
   status: "idle" | "running" | "done" | "error";
 };
