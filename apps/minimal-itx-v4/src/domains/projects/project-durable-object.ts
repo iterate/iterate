@@ -17,17 +17,6 @@ import { ProjectProcessor, ProjectProcessorContract } from "./project-processor.
 export class ProjectDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parseProjectScoped(this.ctx.id.name!);
   readonly #processorHost = createStreamProcessorHost(this.ctx);
-  readonly #projectProcessor = this.#processorHost.add(
-    ProjectProcessorContract.slug,
-    (deps) =>
-      new ProjectProcessor({
-        ...deps,
-        ensureDefaultWorkerLoaded: () => this.ensureDefaultWorkerLoaded(),
-        forwardEventToProjectWorker: (event) => this.forwardEventToProjectWorker(event),
-        projectId: this.#name.projectId,
-      }),
-  );
-
   readonly #stream = this.ctx.exports.StreamDurableObject.getByName(this.ctx.id.name!);
 
   readonly #dynamicWorkers = new DynamicWorkersRpcTarget({
@@ -50,13 +39,24 @@ export class ProjectDurableObject extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
 
+    this.#processorHost.add(
+      ProjectProcessorContract.slug,
+      (deps) =>
+        new ProjectProcessor({
+          ...deps,
+          ensureDefaultWorkerLoaded: () => this.ensureDefaultWorkerLoaded(),
+          forwardEventToProjectWorker: (event) => this.forwardEventToProjectWorker(event),
+          projectId: this.#name.projectId,
+        }),
+    );
+
     this.#itxProcessor = this.#processorHost.add(
       ItxContract.slug,
       (deps) =>
         new ItxProcessor({
           ...deps,
           dynamicWorkers: this.#dynamicWorkers,
-          projectId: this.#name.projectId,
+          host: { projectId: this.#name.projectId },
           stream: this.#stream as never,
         }),
     );

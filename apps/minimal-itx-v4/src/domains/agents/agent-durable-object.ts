@@ -1,34 +1,32 @@
 import { DurableObject } from "cloudflare:workers";
+import type { Agent, RpcTargetImplementation } from "../../../types.ts";
+import { TRUSTED_INTERNAL_ITX_TOKEN, trustedInternalAuthContext } from "../../auth.ts";
+import type { Env } from "../../env.ts";
+import { ItxProcessor, type ItxProcessorRpc } from "../../itx/processor.ts";
+import { ItxContract } from "../../itx/processor-contract.ts";
+import { AgentRpcTarget } from "../../rpc-targets.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { DynamicWorkersRpcTarget } from "../dynamic-workers/dynamic-workers-rpc-target.ts";
 import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
 } from "../streams/engine/workers/stream-processor-host.ts";
-import type { Env } from "../../env.ts";
-import { TRUSTED_INTERNAL_ITX_TOKEN, trustedInternalAuthContext } from "../../auth.ts";
-import type { Agent, AgentItx, StreamEvent } from "../../../types.ts";
-import type { ItxProcessorRpc } from "../../itx/processor.ts";
-import { ItxContract } from "../../itx/processor-contract.ts";
-import { ItxProcessor } from "../../itx/processor.ts";
-import { AgentItx as AgentItxTarget, ProjectItx, StreamTarget } from "../../rpc_targets.ts";
-import { DynamicWorkersRpcTarget } from "../dynamic-workers/dynamic-workers-rpc-target.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { AgentProcessor, AgentProcessorContract } from "./agent-processor.ts";
 
-type InternalStreamWriter = {
-  append(...input: unknown[]): Promise<unknown[]>;
-};
-
-export class AgentDurableObject extends DurableObject<Env> implements Agent {
-  readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
-  readonly #host = createStreamProcessorHost(this.ctx);
+export class AgentDurableObject extends DurableObject<Env> {
+  readonly #name = DurableObjectNameCodec.parseProjectScoped(this.ctx.id.name!);
+  readonly #processorHost = createStreamProcessorHost(this.ctx);
   readonly #stream = this.ctx.exports.StreamDurableObject.getByName(this.ctx.id.name!);
 
   readonly #dynamicWorkers = new DynamicWorkersRpcTarget({
     bindings: {
+      // The binding is intentionally the boring unauthenticated root. Script
+      // workers authenticate and then walk to project/agent from their own
+      // entrypoint props; the ITX binding itself never bakes in a context.
       ITX: this.ctx.exports.ItxEntrypoint({
         props: {
-          ...this.#name,
-          auth: { type: "trusted-internal", token: TRUSTED_INTERNAL_ITX_TOKEN },
+          type: "trusted-internal",
+          token: TRUSTED_INTERNAL_ITX_TOKEN,
         },
       }),
     },
@@ -40,19 +38,24 @@ export class AgentDurableObject extends DurableObject<Env> implements Agent {
 
   readonly #itxProcessor: ItxProcessorRpc;
 
-  #streamWriter(): InternalStreamWriter {
-    return this.#stream as unknown as InternalStreamWriter;
-  }
-
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.#host.add(AgentProcessorContract.slug, (deps) => new AgentProcessor(deps));
-    this.#itxProcessor = this.#host.add(
+
+    if (!this.#name.path.startsWith("/agents/")) {
+      throw new Error(
+        `Agent Durable Object path must start with "/agents/", got "${this.#name.path}"`,
+      );
+    }
+
+    this.#processorHost.add(AgentProcessorContract.slug, (deps) => new AgentProcessor(deps));
+
+    this.#itxProcessor = this.#processorHost.add(
       ItxContract.slug,
       (deps) =>
         new ItxProcessor({
           ...deps,
           dynamicWorkers: this.#dynamicWorkers,
+          host: { agentPath: this.#name.path, projectId: this.#name.projectId },
           stream: this.#stream as never,
         }),
     );
@@ -63,68 +66,50 @@ export class AgentDurableObject extends DurableObject<Env> implements Agent {
   }
 
   requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
-    return this.#host.requestStreamSubscription(args);
+    return this.#processorHost.requestStreamSubscription(args);
   }
 
-  project() {
-    return new ProjectItx({
+  getCapability(): RpcTargetImplementation<Agent> {
+    return new AgentRpcTarget({
       auth: trustedInternalAuthContext(),
-      path: "/",
+      ctx: this.ctx,
+      path: this.#name.path,
       projectId: this.#name.projectId,
     });
   }
 
-  get itx(): AgentItx {
-    return new AgentItxTarget({
-      auth: trustedInternalAuthContext(),
-      path: this.#name.path,
-      projectId: this.#name.projectId,
-    }) as unknown as AgentItx;
+  get rpcTarget(): RpcTargetImplementation<Agent> {
+    return this.getCapability();
   }
 
-  get stream(): Agent["stream"] {
-    return new StreamTarget({
-      auth: trustedInternalAuthContext(),
-      path: this.#name.path,
-      projectId: this.#name.projectId,
-    }) as unknown as Agent["stream"];
+  get stream(): RpcTargetImplementation<Agent>["stream"] {
+    return this.getCapability().stream;
   }
 
   whoami() {
-    return `agent ${this.#name.projectId}:${this.#name.path}`;
+    return this.getCapability().whoami();
   }
 
-  async create(): Promise<StreamEvent> {
-    await this.#streamWriter().append({
-      type: "events.iterate.com/agent/create-requested",
-      payload: {},
-    });
-    const [event] = await this.#streamWriter().append({
-      type: "events.iterate.com/agent/created",
-      idempotencyKey: `agent-created:${this.#name.projectId}:${this.#name.path}`,
-      payload: {},
-    });
-    return event as StreamEvent;
+  create() {
+    return this.getCapability().create();
   }
 
-  async sendMessage(message: string): Promise<StreamEvent> {
-    const [event] = await this.#streamWriter().append({
-      type: "events.iterate.com/agent/message-sent",
-      payload: { message },
-    });
-    return event as StreamEvent;
+  sendMessage(message: string) {
+    return this.getCapability().sendMessage(message);
   }
 
-  async runScript(code: string) {
-    return await this.#itxProcessor.runScript(code);
+  ask(input: Parameters<Agent["ask"]>[0]) {
+    return this.getCapability().ask(input);
+  }
+
+  runScript(code: string) {
+    return this.#itxProcessor.runScript(code);
   }
 
   async provideCapability(input: Parameters<Agent["provideCapability"]>[0]) {
     await this.#itxProcessor.provideCapability(input);
     return {
-      revoke: () => {
-        void this.revokeCapability({ path: input.path });
-      },
+      revoke: () => this.revokeCapability({ path: input.path }),
     };
   }
 

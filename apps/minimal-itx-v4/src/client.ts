@@ -9,8 +9,6 @@ import type { UnauthenticatedItx } from "../types.ts";
 export type {
   Agent,
   Agent as AgentRpc,
-  AgentItx,
-  AgentItx as AgentItxRpc,
   Agents,
   Agents as AgentsRpc,
   ItxAuth,
@@ -49,12 +47,11 @@ export type ConnectItxInput = {
   baseUrl?: string;
 };
 
-function baseUrl(input?: { baseUrl?: string }) {
-  return (input?.baseUrl ?? process.env.ITX_BASE ?? DEFAULT_ITX_BASE_URL).replace(/\/+$/, "");
-}
-
 function websocketUrl(pathname: string, input: { baseUrl?: string }) {
-  const url = new URL(pathname, baseUrl(input));
+  const url = new URL(
+    pathname,
+    (input.baseUrl ?? process.env.ITX_BASE ?? DEFAULT_ITX_BASE_URL).replace(/\/+$/, ""),
+  );
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   return url.toString();
 }

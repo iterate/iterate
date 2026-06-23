@@ -11,6 +11,7 @@ import type {
   JsonSerializableTrustMeBro,
   StreamEvent,
 } from "../../types.ts";
+import { TRUSTED_INTERNAL_ITX_TOKEN } from "../auth.ts";
 import { ItxContract, type CapabilityRecord } from "./processor-contract.ts";
 
 export type ProvideCapabilityInput = Parameters<ItxCapabilityHost["provideCapability"]>[0];
@@ -23,6 +24,11 @@ export type ItxProcessorRpc = {
   ): { path: string[] } | Promise<{ path: string[] }>;
   revokeCapability(input: { path: string[] }): void | Promise<void>;
   runScript(code: string): RunScriptResult | Promise<RunScriptResult>;
+};
+
+export type ItxHostContext = {
+  agentPath?: string;
+  projectId: string;
 };
 
 type CompletedPayload = {
@@ -161,18 +167,18 @@ function retainLiveCapability(capability: unknown): LiveCapability {
 export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements ItxProcessorRpc {
   readonly contract = ItxContract;
   #dynamicWorkers: DynamicWorkersRpcTarget;
+  #host: ItxHostContext;
   #liveCapabilities = new Map<string, LiveCapability>();
-  #projectId: string;
 
   constructor(
     args: StreamProcessorConstructorArgs<typeof ItxContract, object> & {
       dynamicWorkers: DynamicWorkersRpcTarget;
-      projectId: string;
+      host: ItxHostContext;
     },
   ) {
     super(args);
     this.#dynamicWorkers = args.dynamicWorkers;
-    this.#projectId = args.projectId;
+    this.#host = args.host;
   }
 
   protected override reduce({
@@ -272,9 +278,13 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
     const hit = resolveLongestPrefix(this.state.capabilities, path);
     if (!hit) throw new Error(`no capability "${path.join(".")}"`);
     if (hit.record.type === "dynamic-worker") {
-      const target = this.#dynamicWorkers.get(
-        withCacheKey(hit.record.workerRef, `capability:${hit.record.path.join(".")}`),
-      );
+      const prefix = `capability:${hit.record.path.join(".")}`;
+      const target = this.#dynamicWorkers.get({
+        ...hit.record.workerRef,
+        cacheKey: hit.record.workerRef.cacheKey
+          ? `${prefix}:${hit.record.workerRef.cacheKey}`
+          : prefix,
+      });
       return await replayPath({ args, path: hit.rest, target });
     }
     const live = this.#liveCapabilities.get(liveKey(hit.record.path));
@@ -339,17 +349,18 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
   }
 
   #scriptWorkerRef(code: string): DynamicWorkerRef {
-    const projectId = JSON.stringify(this.#projectId);
     const source = `
       import { WorkerEntrypoint } from "cloudflare:workers";
       const fn = ${code};
       export class ScriptEntrypoint extends WorkerEntrypoint {
         async run() {
-          const project = {
-            repo: await this.env.ITX.projectRepo(${projectId}),
-            worker: await this.env.ITX.projectWorker(${projectId}),
-          };
-          return await fn(project);
+          const root = await this.env.ITX.authenticate(this.ctx.props.auth);
+          const project = await root.projects.get(this.ctx.props.projectId);
+          const itx =
+            this.ctx.props.agentPath === undefined
+              ? project
+              : await project.agents.get(this.ctx.props.agentPath);
+          return await fn(await itx);
         }
       }
     `;
@@ -362,12 +373,16 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
       },
       target: {
         entrypoint: "ScriptEntrypoint",
+        props: {
+          auth: {
+            type: "trusted-internal",
+            token: TRUSTED_INTERNAL_ITX_TOKEN,
+          },
+          projectId: this.#host.projectId,
+          ...(this.#host.agentPath === undefined ? {} : { agentPath: this.#host.agentPath }),
+        },
         type: "worker-entrypoint",
       },
     };
   }
-}
-
-function withCacheKey(address: DynamicWorkerRef, prefix: string): DynamicWorkerRef {
-  return { ...address, cacheKey: address.cacheKey ? `${prefix}:${address.cacheKey}` : prefix };
 }

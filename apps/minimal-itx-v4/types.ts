@@ -49,14 +49,17 @@ export type CfExecutionContext = {
 
 export interface UnauthenticatedItx {
   /**
-   * Authenticates into the requested ITX host.
-   *
-   * - omit `projectId` to get the root ITX catalog;
-   * - pass `projectId` to get that project;
-   * - pass an agent path such as `/agents/ada` to get an `AgentItx`.
+   * Authenticates into the root ITX catalog.
    *
    * Dynamic workers can omit `input` when the platform-provided binding already
-   * carries trusted connection props.
+   * carries trusted connection props. Context-specific work still starts from
+   * this root and walks to an ordinary object:
+   *
+   * ```ts
+   * const root = await env.ITX.authenticate(auth);
+   * const project = await root.projects.get(projectId);
+   * const agent = await project.agents.get("/agents/ada");
+   * ```
    */
   authenticate(input: ItxAuthCredentials): ItxRoot;
 }
@@ -82,21 +85,26 @@ export interface Projects {
 export interface Project extends ItxCapabilityHost {
   streams: Streams;
   describe(): { projectId: string; name: string };
-  // agents: Agents;
+  agents: Agents;
   repos: Repos;
   repo: Repo;
   worker: ProjectWorker;
 }
 
 /**
- * Agent-scoped scripts still see the project surface at top level.
+ * Agent-scoped scripts receive this same handle.
  *
- * `itx.provideCapability(...)` mounts on the project. `itx.agent` is the
- * explicit handle for the current agent, so `itx.agent.provideCapability(...)`
- * mounts on that agent instead.
+ * `provideCapability(...)` mounts on the agent. Dynamic lookup checks the
+ * agent first, then falls back to the owning project, so project-provided tools
+ * are visible to the agent while agent-only tools stay off the project.
  */
-export interface AgentItx extends Project {
-  agent: Agent;
+export interface Agent extends ItxCapabilityHost {
+  stream: Stream;
+
+  create(): Promise<StreamEvent>;
+  sendMessage(message: string): Promise<StreamEvent>;
+  ask(input: { message: string }): Promise<StreamEvent>;
+  whoami(): string;
 }
 
 /**
@@ -272,15 +280,6 @@ export interface Repos {
   get(path: string): Repo;
 }
 
-export interface Agent extends ItxCapabilityHost {
-  itx: AgentItx;
-  stream: Stream;
-
-  create(): Promise<StreamEvent>;
-  sendMessage(message: string): Promise<StreamEvent>;
-  whoami(): string;
-}
-
 export interface Agents {
   create(input: { path: string }): Promise<StreamEvent>;
   get(path: string): Agent;
@@ -414,7 +413,6 @@ type RpcTargetCapability =
   | ItxRoot
   | Projects
   | Project
-  | AgentItx
   | Stream
   | Streams
   | Repo
@@ -590,6 +588,8 @@ export type StreamRpc = {
   reset(): Promise<void>;
   reduce(args: { event: StreamEvent; coreProcessorState?: unknown }): MaybePromise<unknown>;
 };
+
+// TODO here starts the copied capnweb cruft that hopefully we just wouldn't need at all
 
 // Copyright (c) 2025 Cloudflare, Inc.
 // Licensed under the MIT license found in the LICENSE.txt file or at:

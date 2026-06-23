@@ -26,6 +26,8 @@ type PathCallable = {
 };
 
 const PROJECT_WORKER_FORWARDED_EVENT_TYPE = "events.iterate.test/project-worker-forwarded";
+const AGENT_WEB_MESSAGE_SENT_TYPE = "events.iterate.com/agents/web-message-sent";
+const AGENT_OUTPUT_ADDED_TYPE = "events.iterate.com/agent/output-added";
 
 const ProjectWorkerForwardingProbeContract = defineProcessorContract({
   slug: "minimal-itx-v4.project-worker-forwarding-probe",
@@ -160,6 +162,10 @@ function pathCallable(target: unknown): PathCallable {
       return Reflect.apply(callable, receiver, args);
     },
   };
+}
+
+function fencedAgentScript(code: string): string {
+  return ["The faux LLM produced this codemode block.", "```js", code.trim(), "```"].join("\n");
 }
 
 // These are hand written tests - they MUST pass
@@ -400,7 +406,8 @@ describe("minimal itx v4", () => {
                 export class ProbeEntrypoint extends WorkerEntrypoint {
                   async inspect() {
                     const root = await this.env.ITX.authenticate();
-                    const repo = await this.env.ITX.projectRepo(${JSON.stringify(description.projectId)});
+                    const project = await root.projects.get(${JSON.stringify(description.projectId)});
+                    const repo = await project.repo;
                     return {
                       principal: await root.whoami(),
                       repo: await repo.whoami(),
@@ -465,6 +472,204 @@ describe("minimal itx v4", () => {
     expect(await project.counterFacet.current()).toBe(1);
   });
 
+  test("Agent ask runs the faux web-chat loop and agent scripts can call project tools", async () => {
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+
+    using project = itx.projects.create({ slug: "agent-project-tool" });
+    const agentPath = `/agents/project-tool-${crypto.randomUUID()}`;
+    using agent = project.agents.get(agentPath);
+
+    await project.provideCapability({
+      path: ["projectTool"],
+      capability: {
+        type: "live",
+        target: {
+          format(input: { text: string }) {
+            return `project tool saw ${input.text}`;
+          },
+        },
+      },
+    });
+
+    const reply = await agent.ask({ message: "hello agent" });
+    expect(reply).toMatchObject({
+      type: AGENT_WEB_MESSAGE_SENT_TYPE,
+      payload: { message: "This is the response to 'hello agent'" },
+    });
+
+    const askEvents = await agent.stream.getEvents();
+    expect(askEvents.map((event) => event.type)).toEqual(
+      expect.arrayContaining([
+        "events.iterate.com/agents/user-message-received",
+        "events.iterate.com/agent/input-added",
+        "events.iterate.com/agent/llm-request-scheduled",
+        "events.iterate.com/agent/llm-request-requested",
+        AGENT_OUTPUT_ADDED_TYPE,
+        "events.iterate.com/itx/script-execution-requested",
+        "events.iterate.com/itx/script-execution-completed",
+        AGENT_WEB_MESSAGE_SENT_TYPE,
+      ]),
+    );
+
+    const projectToolReply = agent.stream.waitForEvent({
+      afterOffset: reply.offset,
+      eventTypes: [AGENT_WEB_MESSAGE_SENT_TYPE],
+      predicate: (event) => event.payload?.message === "project tool saw project-capability",
+      timeoutMs: 30_000,
+    });
+
+    await agent.stream.append({
+      type: AGENT_OUTPUT_ADDED_TYPE,
+      payload: {
+        content: fencedAgentScript(`
+          async (itx) => {
+            const message = await itx.projectTool.format({ text: "project-capability" });
+            await itx.stream.append({
+              type: ${JSON.stringify(AGENT_WEB_MESSAGE_SENT_TYPE)},
+              payload: { message },
+            });
+          }
+        `),
+      },
+    });
+
+    expect(await projectToolReply).toMatchObject({
+      type: AGENT_WEB_MESSAGE_SENT_TYPE,
+      payload: { message: "project tool saw project-capability" },
+    });
+  });
+
+  test("Agent-only dynamic worker and durable object capabilities run from LLM scripts", async () => {
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+
+    using project = itx.projects.create({ slug: "agent-only-tools" });
+    const { projectId } = await project.describe();
+    const agentPath = `/agents/agent-only-${crypto.randomUUID()}`;
+    using agent = project.agents.get(agentPath);
+    const counterCacheKey = `agent-counter-${crypto.randomUUID()}`;
+
+    await agent.provideCapability({
+      path: ["agentProbe"],
+      capability: {
+        type: "dynamic-worker",
+        workerRef: {
+          source: {
+            mainModule: "agent-probe.js",
+            modules: {
+              "agent-probe.js": `
+                import { WorkerEntrypoint } from "cloudflare:workers";
+
+                export class AgentProbeEntrypoint extends WorkerEntrypoint {
+                  async inspect(input) {
+                    const root = await this.env.ITX.authenticate(this.ctx.props.auth);
+                    const project = await root.projects.get(this.ctx.props.projectId);
+                    const agent = await project.agents.get(this.ctx.props.agentPath);
+                    return {
+                      input,
+                      projectId: (await project.describe()).projectId,
+                      whoami: await agent.whoami(),
+                    };
+                  }
+                }
+              `,
+            },
+            type: "inline",
+          },
+          target: {
+            entrypoint: "AgentProbeEntrypoint",
+            props: {
+              agentPath,
+              auth: { type: "trusted-internal", token: TRUSTED_INTERNAL_ITX_TOKEN },
+              projectId,
+            },
+            type: "worker-entrypoint",
+          },
+        },
+      },
+    });
+    await agent.provideCapability({
+      path: ["agentCounter"],
+      capability: {
+        type: "dynamic-worker",
+        workerRef: {
+          cacheKey: counterCacheKey,
+          source: {
+            repoPath: "/",
+            sourcePath: "worker.js",
+            type: "repo",
+          },
+          target: {
+            className: "CounterDurableObject",
+            type: "durable-object",
+          },
+        },
+      },
+    });
+
+    await expect(
+      // @ts-expect-error - proves agent-provided capabilities are not mounted on the project.
+      project.agentProbe.inspect("project should not see this"),
+    ).rejects.toThrow(/no capability "agentProbe.inspect"/);
+
+    const scriptReply = agent.stream.waitForEvent({
+      eventTypes: [AGENT_WEB_MESSAGE_SENT_TYPE],
+      predicate: (event) =>
+        typeof event.payload?.message === "string" &&
+        event.payload.message.includes(counterCacheKey),
+      timeoutMs: 30_000,
+    });
+
+    await agent.stream.append({
+      type: AGENT_OUTPUT_ADDED_TYPE,
+      payload: {
+        content: fencedAgentScript(`
+          async (itx) => {
+            const probe = await itx.agentProbe.inspect("agent-only");
+            const first = await itx.agentCounter.increment();
+            const current = await itx.agentCounter.current();
+            await itx.stream.append({
+              type: ${JSON.stringify(AGENT_WEB_MESSAGE_SENT_TYPE)},
+              payload: {
+                message: JSON.stringify({
+                  counterCacheKey: ${JSON.stringify(counterCacheKey)},
+                  current,
+                  first,
+                  probe,
+                }),
+              },
+            });
+          }
+        `),
+      },
+    });
+
+    const event = await scriptReply;
+    const message = JSON.parse(String(event.payload?.message)) as {
+      counterCacheKey: string;
+      current: number;
+      first: number;
+      probe: { input: string; projectId: string; whoami: string };
+    };
+    expect(message).toEqual({
+      counterCacheKey,
+      current: 1,
+      first: 1,
+      probe: {
+        input: "agent-only",
+        projectId,
+        whoami: `agent ${projectId}:${agentPath}`,
+      },
+    });
+  });
+
   test("Dynamic project worker processEvent can cross-post project events", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
@@ -473,7 +678,6 @@ describe("minimal itx v4", () => {
     });
 
     using project = itx.projects.create({ slug: "project-worker-process-event" });
-    const description = await project.describe();
     const marker = `cross-post-${crypto.randomUUID()}`;
 
     await project.repo.commitFiles({
@@ -558,7 +762,6 @@ describe("minimal itx v4", () => {
     const triggerPath = `/worker-forwarding-trigger-${marker}`;
 
     using project = itx.projects.create({ slug: `worker-forwarding-${marker}` });
-    const description = await project.describe();
 
     await project.repo.commitFiles({
       changes: [

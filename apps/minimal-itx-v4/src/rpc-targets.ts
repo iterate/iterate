@@ -8,6 +8,7 @@ import type {
   ItxAuthCredentials,
   ItxAuth,
   UnauthenticatedItx,
+  Agent,
   Project,
   ProjectWorker,
   Repo,
@@ -31,10 +32,12 @@ import {
   TRUSTED_INTERNAL_ITX_TOKEN,
 } from "./auth.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor.ts";
+import { AgentProcessorContract } from "./domains/agents/agent-processor.ts";
 import { DynamicWorkersRpcTarget } from "./domains/dynamic-workers/dynamic-workers-rpc-target.ts";
 import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "./domains/repos/project-repo.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor.ts";
 import { durableObjectProcessorSubscriber } from "./domains/streams/engine/shared/callable-subscriber.ts";
+import { ItxContract } from "./itx/processor-contract.ts";
 import { replayPath, type ItxProcessorRpc, type ProvideCapabilityInput } from "./itx/processor.ts";
 import { isReservedDynamicPathSegment, withInvokeCapabilityFallback } from "./itx/path-proxy.ts";
 
@@ -147,6 +150,14 @@ function normalizeRepoPath(path: string): string {
   return path === "" ? "/" : path.startsWith("/") ? path : `/${path}`;
 }
 
+function normalizeAgentPath(path: string): string {
+  const normalized = path === "" ? "/" : path.startsWith("/") ? path : `/${path}`;
+  if (!normalized.startsWith("/agents/")) {
+    throw new Error(`agent path must start with "/agents/", got "${normalized}"`);
+  }
+  return normalized;
+}
+
 function projectRootStream(props: { auth: ItxAuth; projectId: string }) {
   return new StreamRpcTarget({
     auth: props.auth,
@@ -187,6 +198,44 @@ function repoProcessorSubscriptionEvent(input: { path: string; projectId: string
           path,
         }),
         processorName: RepoProcessorContract.slug,
+      }),
+    },
+  } satisfies Parameters<Stream["append"]>[0];
+}
+
+function agentProcessorSubscriptionEvent(input: { path: string; projectId: string }) {
+  const path = normalizeAgentPath(input.path);
+  return {
+    type: "events.iterate.com/stream/subscription-configured",
+    idempotencyKey: `stream-subscription:${input.projectId}:${path}:${AgentProcessorContract.slug}`,
+    payload: {
+      subscriptionKey: AgentProcessorContract.slug,
+      subscriber: durableObjectProcessorSubscriber({
+        bindingName: "AGENT",
+        durableObjectName: DurableObjectNameCodec.stringify({
+          projectId: input.projectId,
+          path,
+        }),
+        processorName: AgentProcessorContract.slug,
+      }),
+    },
+  } satisfies Parameters<Stream["append"]>[0];
+}
+
+function agentItxProcessorSubscriptionEvent(input: { path: string; projectId: string }) {
+  const path = normalizeAgentPath(input.path);
+  return {
+    type: "events.iterate.com/stream/subscription-configured",
+    idempotencyKey: `stream-subscription:${input.projectId}:${path}:${ItxContract.slug}`,
+    payload: {
+      subscriptionKey: ItxContract.slug,
+      subscriber: durableObjectProcessorSubscriber({
+        bindingName: "AGENT",
+        durableObjectName: DurableObjectNameCodec.stringify({
+          projectId: input.projectId,
+          path,
+        }),
+        processorName: ItxContract.slug,
       }),
     },
   } satisfies Parameters<Stream["append"]>[0];
@@ -406,6 +455,159 @@ class ReposRpcTarget extends RpcTarget implements RpcTargetImplementation<Repos>
   }
 }
 
+class AgentsRpcTarget extends RpcTarget implements RpcTargetImplementation<Agents> {
+  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  async create(input: Parameters<Agents["create"]>[0]) {
+    return await this.get(input.path).create();
+  }
+
+  get(path: string): RpcTargetImplementation<Agent> {
+    return new AgentRpcTarget({
+      auth: this.props.auth,
+      ctx: this.props.ctx,
+      path: normalizeAgentPath(path),
+      projectId: this.props.projectId,
+    });
+  }
+}
+
+export class AgentRpcTarget
+  extends ItxCapabilityHostRpcTarget
+  implements RpcTargetImplementation<Agent>
+{
+  constructor(
+    readonly props: { auth: ItxAuth; ctx: CfExecutionContext; path: string; projectId: string },
+  ) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+    props.path = normalizeAgentPath(props.path);
+    return withInvokeCapabilityFallback(this);
+  }
+
+  get durableObjectStub() {
+    return env.AGENT.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: this.props.projectId,
+        path: this.props.path,
+      }),
+    );
+  }
+
+  protected itxProcessor(): ItxProcessorRpc {
+    return this.durableObjectStub.itxProcessor as unknown as ItxProcessorRpc;
+  }
+
+  #projectItxProcessor(): ItxProcessorRpc {
+    return env.PROJECT.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: this.props.projectId,
+        path: "/",
+      }),
+    ).itxProcessor as unknown as ItxProcessorRpc;
+  }
+
+  get stream(): RpcTargetImplementation<Stream> {
+    return new StreamRpcTarget({
+      auth: this.props.auth,
+      projectId: this.props.projectId,
+      path: this.props.path,
+    });
+  }
+
+  async create() {
+    await this.#ensureProcessorsConfigured();
+    const [requested] = await this.stream.append({
+      type: "events.iterate.com/agent/create-requested",
+      idempotencyKey: `agent-create-requested:${this.props.projectId}:${this.props.path}`,
+      payload: {},
+    });
+    return await this.stream.waitForEvent({
+      afterOffset: requested.offset - 1,
+      eventTypes: ["events.iterate.com/agent/created"],
+      timeoutMs: 30_000,
+    });
+  }
+
+  async sendMessage(message: string) {
+    await this.#ensureProcessorsConfigured();
+    const [event] = await this.stream.append({
+      type: "events.iterate.com/agents/user-message-received",
+      payload: { content: message, origin: "web" },
+    });
+    return event;
+  }
+
+  async ask(input: Parameters<Agent["ask"]>[0]) {
+    const sent = await this.sendMessage(input.message);
+    return await this.stream.waitForEvent({
+      afterOffset: sent.offset,
+      eventTypes: ["events.iterate.com/agents/web-message-sent"],
+      timeoutMs: 45_000,
+    });
+  }
+
+  whoami() {
+    return `agent ${this.props.projectId}:${this.props.path}`;
+  }
+
+  override async provideCapability(input: ProvideCapabilityInput) {
+    await this.#ensureProcessorsConfigured();
+    return await super.provideCapability(input);
+  }
+
+  override async revokeCapability(input: { path: string[] }) {
+    await this.#ensureProcessorsConfigured();
+    return await super.revokeCapability(input);
+  }
+
+  override async runScript(code: string) {
+    await this.#ensureProcessorsConfigured();
+    return await super.runScript(code);
+  }
+
+  override async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
+    await this.#ensureProcessorsConfigured();
+    try {
+      return await this.itxProcessor().invokeCapability({ args, path });
+    } catch (error) {
+      if (!isMissingCapabilityError(error, path)) throw error;
+      return await this.#projectItxProcessor().invokeCapability({ args, path });
+    }
+  }
+
+  async #ensureProcessorsConfigured() {
+    // Agent streams can be addressed before the project stream has observed the
+    // child-stream-created fact. Land the two processor subscriptions directly
+    // so first-use operations like agent.provideCapability() have a live fold to
+    // wait on without asking ProjectProcessor to append across stream Durable
+    // Object boundaries.
+    await this.stream.append(
+      agentProcessorSubscriptionEvent({
+        path: this.props.path,
+        projectId: this.props.projectId,
+      }),
+      agentItxProcessorSubscriptionEvent({
+        path: this.props.path,
+        projectId: this.props.projectId,
+      }),
+    );
+  }
+}
+
+function isMissingCapabilityError(error: unknown, path: string[]): boolean {
+  const message =
+    error instanceof Error
+      ? error.message
+      : error && typeof error === "object" && "message" in error
+        ? String((error as { message: unknown }).message)
+        : String(error);
+  return message.includes(`no capability "${path.join(".")}"`);
+}
+
 export class ProjectWorkerRpcTarget
   extends RpcTarget
   implements RpcTargetImplementation<ProjectWorker>
@@ -487,8 +689,12 @@ export class ProjectRpcTarget
     });
   }
 
-  get agents(): Agents {
-    throw new Error("project.agents is not implemented in minimal-itx-v4");
+  get agents(): RpcTargetImplementation<Agents> {
+    return new AgentsRpcTarget({
+      auth: this.props.auth,
+      ctx: this.props.ctx,
+      projectId: this.props.projectId,
+    });
   }
 
   get repos(): RpcTargetImplementation<Repos> {
@@ -524,7 +730,7 @@ export class UnauthenticatedItxRpcTarget
   // the default project worker is loaded directly with Worker Loader, yet must
   // always receive an env.ITX binding created from ctx.exports.
   constructor(
-    readonly requestHeaders: Headers = new Headers(),
+    readonly requestHeaders: Headers,
     readonly ctx: CfExecutionContext,
   ) {
     super();
@@ -557,13 +763,5 @@ export class ItxEntrypoint
 {
   authenticate(input: ItxAuthCredentials = this.ctx.props) {
     return new UnauthenticatedItxRpcTarget(new Headers(), this.ctx).authenticate(input);
-  }
-
-  projectRepo(projectId: string) {
-    return this.authenticate().projects.get(projectId).repo;
-  }
-
-  projectWorker(projectId: string) {
-    return this.authenticate().projects.get(projectId).worker;
   }
 }

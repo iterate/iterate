@@ -2,18 +2,40 @@ import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
 import { StreamProcessor } from "../streams/engine/stream-processor.ts";
 
+const FAUX_LLM_DEBOUNCE_MS = 1_000;
+
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
   version: "0.1.0",
-  description: "Tiny agent projection for the ITX reference implementation.",
+  description: "Tiny faux-agent loop for minimal ITX v4.",
   stateSchema: z.object({
     created: z.boolean().default(false),
-    initialized: z.boolean().default(false),
-    messages: z
-      .array(z.looseObject({ message: z.string(), channel: z.string().optional() }))
+    inputs: z
+      .array(
+        z.object({
+          content: z.string(),
+          offset: z.number(),
+        }),
+      )
       .default([]),
+    outputs: z
+      .array(
+        z.object({
+          content: z.string(),
+          offset: z.number(),
+        }),
+      )
+      .default([]),
+    scheduledRequests: z.record(z.string(), z.number()).default({}),
+    scriptExecutionsCompleted: z.array(z.string()).default([]),
   }),
-  initialState: { created: false, initialized: false, messages: [] },
+  initialState: {
+    created: false,
+    inputs: [],
+    outputs: [],
+    scheduledRequests: {},
+    scriptExecutionsCompleted: [],
+  },
   events: {
     "events.iterate.com/agent/create-requested": {
       description: "An agent creation was requested.",
@@ -23,25 +45,86 @@ export const AgentProcessorContract = defineProcessorContract({
       description: "The agent was created.",
       payloadSchema: z.looseObject({}),
     },
-    "events.iterate.com/stream/created": {
-      description: "The agent stream exists.",
-      payloadSchema: z.looseObject({}),
-    },
-    "events.iterate.com/agent/message-sent": {
-      description: "A message was sent through the agent.",
+    "events.iterate.com/agents/user-message-received": {
+      description: "The web UI sent a user message to the agent.",
       payloadSchema: z.looseObject({
-        channel: z.string().optional(),
+        content: z.string(),
+        origin: z.string(),
+      }),
+    },
+    "events.iterate.com/agent/input-added": {
+      description: "A normalized model-visible input was added.",
+      payloadSchema: z.looseObject({
+        content: z.string(),
+        origin: z.string().optional(),
+        sourceOffset: z.number().optional(),
+      }),
+    },
+    "events.iterate.com/agent/llm-request-scheduled": {
+      description: "A faux LLM request should be requested after a short debounce.",
+      payloadSchema: z.looseObject({
+        debounceMs: z.number(),
+        inputOffset: z.number(),
+        requestId: z.string(),
+      }),
+    },
+    "events.iterate.com/agent/llm-request-requested": {
+      description: "The faux LLM request is ready to run.",
+      payloadSchema: z.looseObject({
+        inputOffset: z.number(),
+        requestId: z.string(),
+      }),
+    },
+    "events.iterate.com/agent/output-added": {
+      description: "The faux LLM produced assistant output, usually codemode.",
+      payloadSchema: z.looseObject({
+        content: z.string(),
+        inputOffset: z.number().optional(),
+        requestId: z.string().optional(),
+      }),
+    },
+    "events.iterate.com/agents/web-message-sent": {
+      description: "A visible agent message was sent to the web UI.",
+      payloadSchema: z.looseObject({
         message: z.string(),
+      }),
+    },
+    "events.iterate.com/itx/script-execution-requested": {
+      description: "A codemode block should run in this agent ITX context.",
+      payloadSchema: z.looseObject({
+        code: z.string(),
+        executionId: z.string(),
+      }),
+    },
+    "events.iterate.com/itx/script-execution-completed": {
+      description: "A codemode block finished in this agent ITX context.",
+      payloadSchema: z.looseObject({
+        error: z.string().optional(),
+        executionId: z.string(),
+        result: z.unknown().optional(),
       }),
     },
   },
   consumes: [
     "events.iterate.com/agent/create-requested",
     "events.iterate.com/agent/created",
-    "events.iterate.com/stream/created",
-    "events.iterate.com/agent/message-sent",
+    "events.iterate.com/agents/user-message-received",
+    "events.iterate.com/agent/input-added",
+    "events.iterate.com/agent/llm-request-scheduled",
+    "events.iterate.com/agent/llm-request-requested",
+    "events.iterate.com/agent/output-added",
+    "events.iterate.com/agents/web-message-sent",
+    "events.iterate.com/itx/script-execution-requested",
+    "events.iterate.com/itx/script-execution-completed",
   ],
-  emits: ["events.iterate.com/agent/created", "events.iterate.com/agent/message-sent"],
+  emits: [
+    "events.iterate.com/agent/created",
+    "events.iterate.com/agent/input-added",
+    "events.iterate.com/agent/llm-request-scheduled",
+    "events.iterate.com/agent/llm-request-requested",
+    "events.iterate.com/agent/output-added",
+    "events.iterate.com/itx/script-execution-requested",
+  ],
 });
 
 export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContract> {
@@ -54,10 +137,43 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
     switch (event.type) {
       case "events.iterate.com/agent/created":
         return { ...state, created: true };
-      case "events.iterate.com/stream/created":
-        return { ...state, initialized: true };
-      case "events.iterate.com/agent/message-sent":
-        return { ...state, messages: [...state.messages, event.payload] };
+      case "events.iterate.com/agent/input-added":
+        return {
+          ...state,
+          inputs: [
+            ...state.inputs,
+            {
+              content: event.payload.content,
+              offset: event.offset,
+            },
+          ],
+        };
+      case "events.iterate.com/agent/llm-request-scheduled":
+        return {
+          ...state,
+          scheduledRequests: {
+            ...state.scheduledRequests,
+            [event.payload.requestId]: event.payload.inputOffset,
+          },
+        };
+      case "events.iterate.com/agent/llm-request-requested": {
+        const scheduledRequests = { ...state.scheduledRequests };
+        delete scheduledRequests[event.payload.requestId];
+        return { ...state, scheduledRequests };
+      }
+      case "events.iterate.com/agent/output-added":
+        return {
+          ...state,
+          outputs: [...state.outputs, { content: event.payload.content, offset: event.offset }],
+        };
+      case "events.iterate.com/itx/script-execution-completed":
+        return {
+          ...state,
+          scriptExecutionsCompleted: [
+            ...state.scriptExecutionsCompleted,
+            event.payload.executionId,
+          ],
+        };
       default:
         return state;
     }
@@ -66,14 +182,113 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
   protected override processEvent({
     blockProcessorWhile,
     event,
+    runInBackground,
   }: Parameters<StreamProcessor<typeof AgentProcessorContract>["processEvent"]>[0]): undefined {
-    if (event.type !== "events.iterate.com/agent/create-requested") return;
-    blockProcessorWhile(async () => {
-      await this.stream.append({
-        type: "events.iterate.com/agent/created",
-        idempotencyKey: `agent-created:${event.offset}`,
-        payload: event.payload,
-      });
-    });
+    switch (event.type) {
+      case "events.iterate.com/agent/create-requested":
+        blockProcessorWhile(async () => {
+          await this.stream.append({
+            type: "events.iterate.com/agent/created",
+            idempotencyKey: `agent-created:${event.offset}`,
+            payload: {},
+          });
+        });
+        return;
+      case "events.iterate.com/agents/user-message-received":
+        blockProcessorWhile(async () => {
+          await this.stream.append({
+            type: "events.iterate.com/agent/input-added",
+            idempotencyKey: `agent/input-added@${event.offset}`,
+            payload: {
+              content: event.payload.content,
+              origin: event.payload.origin,
+              sourceOffset: event.offset,
+            },
+          });
+        });
+        return;
+      case "events.iterate.com/agent/input-added":
+        blockProcessorWhile(async () => {
+          await this.stream.append({
+            type: "events.iterate.com/agent/llm-request-scheduled",
+            idempotencyKey: `agent/llm-request-scheduled@${event.offset}`,
+            payload: {
+              debounceMs: FAUX_LLM_DEBOUNCE_MS,
+              inputOffset: event.offset,
+              requestId: `faux-llm-request:${event.offset}`,
+            },
+          });
+        });
+        return;
+      case "events.iterate.com/agent/llm-request-scheduled":
+        runInBackground(async () => {
+          await new Promise<void>((resolve) => setTimeout(resolve, event.payload.debounceMs));
+          await this.#appendFauxLlmOutput({
+            inputOffset: event.payload.inputOffset,
+            requestId: event.payload.requestId,
+          });
+        });
+        return;
+      case "events.iterate.com/agent/output-added":
+        blockProcessorWhile(async () => {
+          const code = extractAsyncJsSnippet(event.payload.content);
+          if (code === null) return;
+          await this.stream.append({
+            type: "events.iterate.com/itx/script-execution-requested",
+            idempotencyKey: `itx/script-execution-requested@${event.offset}`,
+            payload: {
+              code,
+              executionId: `agent-output:${event.offset}`,
+            },
+          });
+        });
+        return;
+      default:
+        return;
+    }
   }
+
+  async #appendFauxLlmOutput(input: { inputOffset: number; requestId: string }) {
+    const inputEvent = await this.stream.getEvent({ offset: input.inputOffset });
+    const userInput =
+      inputEvent?.type === "events.iterate.com/agent/input-added" &&
+      typeof inputEvent.payload?.content === "string"
+        ? inputEvent.payload.content
+        : "";
+    const code = fauxResponseScript(userInput);
+    await this.stream.append(
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        idempotencyKey: `agent/llm-request-requested@${input.inputOffset}`,
+        payload: input,
+      },
+      {
+        type: "events.iterate.com/agent/output-added",
+        idempotencyKey: `agent/output-added@${input.inputOffset}`,
+        payload: {
+          content: ["```js", code, "```"].join("\n"),
+          inputOffset: input.inputOffset,
+          requestId: input.requestId,
+        },
+      },
+    );
+  }
+}
+
+function fauxResponseScript(input: string): string {
+  const response = `This is the response to '${input}'`;
+  return `
+    async (itx) => {
+      await itx.stream.append({
+        type: "events.iterate.com/agents/web-message-sent",
+        payload: { message: ${JSON.stringify(response)} },
+      });
+    }
+  `.trim();
+}
+
+function extractAsyncJsSnippet(content: string): string | null {
+  const fenced = content.match(/```(?:js|javascript|ts|typescript)?\s*([\s\S]*?)```/i);
+  const code = (fenced?.[1] ?? content).trim();
+  return /^async\s*(?:function|\()/.test(code) || /^\(?async\s*\(/.test(code) ? code : null;
 }

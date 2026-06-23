@@ -3,7 +3,6 @@ import { defineProcessorContract } from "@iterate-com/shared/streams/stream-proc
 import { StreamProcessor } from "../streams/engine/stream-processor.ts";
 import { durableObjectProcessorSubscriber } from "../streams/engine/shared/callable-subscriber.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { AgentProcessorContract } from "../agents/agent-processor.ts";
 import { PROJECT_REPO_PATH } from "../repos/project-repo.ts";
 import { CoreProcessorContract } from "../streams/engine/processors/core/contract.ts";
 import type { StreamEvent } from "../streams/engine/shared/event.ts";
@@ -187,22 +186,10 @@ export class ProjectProcessor extends StreamProcessor<
       case "events.iterate.com/stream/child-stream-created": {
         const path = event.payload.childPath;
         if (path.startsWith("/agents/")) {
-          blockProcessorWhile(async () => {
-            await append({
-              type: "events.iterate.com/stream/subscription-configured",
-              payload: {
-                subscriptionKey: AgentProcessorContract.slug,
-                subscriber: durableObjectProcessorSubscriber({
-                  bindingName: "AGENT",
-                  durableObjectName: DurableObjectNameCodec.stringify({
-                    projectId: this.deps.projectId,
-                    path,
-                  }),
-                  processorName: AgentProcessorContract.slug,
-                }),
-              },
-            });
-          });
+          // AgentRpcTarget configures the agent stream processors on first use.
+          // The project fold only records that the child exists; cross-stream
+          // appends from here would have to pass a Stream Durable Object stub
+          // through Workers RPC, which workerd cannot serialize in this path.
           return;
         }
         return;
