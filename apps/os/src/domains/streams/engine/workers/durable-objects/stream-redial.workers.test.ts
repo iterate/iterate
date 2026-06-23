@@ -31,9 +31,10 @@ const OUTPUT_TYPE = "events.iterate.com/echo-example/output-echoed";
 let counter = 0;
 function freshNames() {
   counter += 1;
+  const streamName = `redial:/redial/t${counter}`;
   return {
-    streamName: `redial:/redial/t${counter}`,
-    runnerName: `redial-runner-${counter}`,
+    streamName,
+    runnerName: `${streamName}:runner-${counter}`,
   };
 }
 

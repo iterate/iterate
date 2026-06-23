@@ -15,17 +15,12 @@
 import type { ProcessorContractAnnouncement } from "../processors/core/contract.ts";
 import type { StreamEvent, StreamEventInput } from "../shared/event.ts";
 import type {
-  LiveStreamSubscriberDescriptor,
   ProcessorRuntimeState,
-  ProcessorStream,
   StreamCoreProcessorState,
+  StreamRpc,
   SubscriptionKey,
 } from "../types.ts";
-import type {
-  StreamProcessorRuntimeState,
-  StreamProcessorSnapshot,
-  StreamProcessorStream,
-} from "../stream-processor.ts";
+import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "../stream-processor.ts";
 import { deleteBrowserProcessorState } from "./processor-state-storage.ts";
 import { acquireWriterRole, streamWriterLockName, type WriterRole } from "./stream-leader.ts";
 import {
@@ -81,7 +76,7 @@ export type BrowserProcessorConfig = {
   tables: string[];
   /** Create the concrete processor once the browser runtime has a stream connection. */
   createProcessor(args: {
-    stream: StreamProcessorStream;
+    stream: StreamRpc;
     sql: SqlClient;
     subscriptionKey: string;
   }): BrowserHostedProcessor;
@@ -108,24 +103,7 @@ export type StreamRuntimeState = {
  */
 export type StreamRpcResult<T> = Promise<T> & Disposable;
 
-export type BrowserStreamClient = Disposable &
-  ProcessorStream & {
-    runtimeState(): Promise<StreamRuntimeState>;
-    getProcessorRuntimeState(args: {
-      subscriptionKey: SubscriptionKey;
-    }): Promise<ProcessorRuntimeState | null>;
-    subscribe(args: {
-      subscriptionKey?: string;
-      processEventBatch: (batch: {
-        events: readonly StreamEvent[];
-        streamMaxOffset: number;
-      }) => unknown;
-      replayAfterOffset?: number;
-      subscriber?: LiveStreamSubscriberDescriptor;
-    }): Promise<{ unsubscribe(): void }>;
-    kill(): Promise<void> | void;
-    reset(): Promise<void>;
-  };
+export type BrowserStreamClient = Disposable & StreamRpc;
 
 export type BrowserStreamClientFactory = (args: {
   projectId: string;
@@ -136,6 +114,17 @@ export type BrowserStreamClientFactory = (args: {
     error: string | undefined,
   ) => void;
 }) => Promise<BrowserStreamClient>;
+
+export function asBrowserStreamClient(stream: StreamRpc, dispose: () => void): BrowserStreamClient {
+  return new Proxy(stream, {
+    get(target, property, receiver) {
+      if (property === Symbol.dispose) return dispose;
+      const value = Reflect.get(target, property, receiver);
+      if (typeof value !== "function") return value;
+      return (...args: unknown[]) => Reflect.apply(value, target, args);
+    },
+  }) as BrowserStreamClient;
+}
 
 export type StreamBrowserStore = Disposable & {
   readonly streamDatabase: StreamBrowserDatabase;
@@ -222,6 +211,10 @@ function createStreamRuntime(
   } & BrowserProcessorConfig &
     BrowserStreamConnectionConfig,
 ): StreamBrowserStore {
+  if (args.createStreamClient === undefined) {
+    throw new Error("acquireStreamRuntime requires createStreamClient.");
+  }
+  const createStreamClient = args.createStreamClient;
   const { schemaVersion, tables } = args;
   const slug = args.slug;
   const { db: streamDatabase, release: releaseDatabase } = acquireDatabase(
@@ -457,7 +450,7 @@ function createStreamRuntime(
     // Deliberately a throwaway instance: processors memoize their checkpoint on
     // first read, so the real instance must be created after any discard below.
     const processor = args.createProcessor({
-      stream: rpc as unknown as StreamProcessorStream,
+      stream: rpc,
       sql,
       subscriptionKey,
     });
@@ -537,7 +530,7 @@ function createStreamRuntime(
     connectionEpoch += 1;
     const epoch = connectionEpoch;
 
-    void createBrowserStreamClient(args)({
+    void createStreamClient({
       projectId: args.projectId,
       streamPath: args.streamPath,
       streamUrl,
@@ -627,7 +620,7 @@ function createStreamRuntime(
         // lastDeliveredOffset over the current election's values.
         if (!ownsRuntime()) return undefined;
         const processor = args.createProcessor({
-          stream: election.connection as unknown as StreamProcessorStream,
+          stream: election.connection,
           sql,
           subscriptionKey,
         });
@@ -1027,16 +1020,6 @@ function createStreamRuntime(
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
-}
-
-function createBrowserStreamClient(args: {
-  createStreamClient?: BrowserStreamClientFactory;
-  streamUrl?: BrowserStreamConnectionConfig["streamUrl"];
-}): BrowserStreamClientFactory {
-  if (args.createStreamClient === undefined) {
-    throw new Error("acquireStreamRuntime requires createStreamClient.");
-  }
-  return args.createStreamClient;
 }
 
 /**

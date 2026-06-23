@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { StreamEvent, StreamEventInput } from "@iterate-com/shared/streams/stream-event";
 import { ProjectProcessor, defaultAgentSystemPrompt } from "./implementation.ts";
-import type { StreamProcessorStream } from "~/domains/streams/engine/stream-processor.ts";
+import type { StreamRpc } from "~/domains/streams/engine/types.ts";
 
 vi.mock("~/domains/repos/entrypoints/repo-capability.ts", () => ({
   ensureProjectRepoInfoForProject: async () => ({
@@ -276,7 +276,7 @@ describe("ProjectProcessor worker forwarding", () => {
 
 function newProcessor(deps: {
   forwardToProjectWorker: (event: StreamEvent) => Promise<void>;
-  stream?: StreamProcessorStream;
+  stream?: StreamRpc;
 }) {
   const { forwardToProjectWorker, stream } = deps;
   return new ProjectProcessor({
@@ -284,8 +284,7 @@ function newProcessor(deps: {
     env: {} as never,
     exports: {},
     forwardToProjectWorker,
-    stream:
-      stream ?? ({ append: () => {}, appendBatch: () => {} } as unknown as StreamProcessorStream),
+    stream: stream ?? ({ append: () => {}, appendBatch: () => {} } as unknown as StreamRpc),
     projectId: () => "project_1",
   });
 }
@@ -298,7 +297,7 @@ function recordingStream(appendedBatches: Array<{ events: unknown[]; streamPath?
       appendedBatches.push(batch);
       return batch.events.map((input) => event({ ...input, offset: ++offset }));
     },
-  } as unknown as StreamProcessorStream;
+  } as unknown as StreamRpc;
 }
 
 function event(args: {

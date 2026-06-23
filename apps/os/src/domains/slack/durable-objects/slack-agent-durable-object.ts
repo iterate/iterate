@@ -5,6 +5,11 @@ import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
 } from "~/domains/streams/engine/workers/stream-processor-host.ts";
+import {
+  getStreamRpcStub,
+  type StreamDurableObject,
+  type StreamDurableObjectNamespace,
+} from "~/domains/streams/stream-runtime.ts";
 import { formatDurableObjectName, parseDurableObjectName } from "~/domains/durable-object-names.ts";
 import { getProjectSecret } from "~/domains/secrets/secrets-store.ts";
 import { callSlackWebApi } from "~/domains/slack/entrypoints/slack-capability.ts";
@@ -26,6 +31,7 @@ type SlackAgentEnv = {
   APP_CONFIG_SLACK_BOT_TOKEN?: string;
   DB: D1Database;
   SLACK_BOT_TOKEN?: string;
+  STREAM: DurableObjectNamespace<StreamDurableObject>;
 };
 
 export class SlackAgentDurableObject extends DurableObject<SlackAgentEnv> {
@@ -35,6 +41,11 @@ export class SlackAgentDurableObject extends DurableObject<SlackAgentEnv> {
   slackAgent = this.host.add(SlackAgentProcessorContract.slug, (deps) => {
     return new SlackAgentProcessor({
       ...deps,
+      stream: getStreamRpcStub({
+        durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+        projectId: this.slackAgentName().projectId,
+        path: StreamPath.parse(this.slackAgentName().path),
+      }),
       callSlackApi: async (method, body) => {
         const { projectId, path } = this.slackAgentName();
         const token = await readSlackToken({

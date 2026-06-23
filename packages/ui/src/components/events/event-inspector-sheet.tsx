@@ -1,5 +1,4 @@
 import { useEffect, useMemo } from "react";
-import type { Event } from "@iterate-com/shared/streams/types";
 import { BookOpenIcon, ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 
 import { Button } from "@iterate-com/ui/components/button";
@@ -13,6 +12,7 @@ import {
   SheetTitle,
 } from "@iterate-com/ui/components/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
+import type { EventsStreamSourceEvent } from "./feed-items.ts";
 
 /**
  * Raw event detail drawer shared by stream renderers.
@@ -27,7 +27,7 @@ export function EventsStreamEventInspectorSheet({
   onOpenEventOffsetChange,
   getEventTypeHref,
 }: {
-  events: readonly Event[];
+  events: readonly EventsStreamSourceEvent[];
   openEventOffset?: number;
   onOpenEventOffsetChange?: (offset?: number) => void;
   getEventTypeHref?: (eventType: string) => string | undefined;
@@ -205,7 +205,7 @@ export function EventsStreamEventInspectorSheet({
  * Finds the adjacent event offset in the raw wire log.
  */
 export function getAdjacentEventOffset(
-  events: readonly Event[],
+  events: readonly EventsStreamSourceEvent[],
   currentOffset: number | undefined,
   direction: "previous" | "next",
 ) {
@@ -223,7 +223,7 @@ export function getAdjacentEventOffset(
   return events[adjacentIndex]?.offset;
 }
 
-function getTimestamp(event: Event) {
+function getTimestamp(event: EventsStreamSourceEvent) {
   return Number.isNaN(Date.parse(event.createdAt)) ? Date.now() : Date.parse(event.createdAt);
 }
 
@@ -257,7 +257,7 @@ const EVENT_YAML_DISPLAY_KEY_ORDER = [
 
 const EVENT_YAML_DISPLAY_KEY_SET = new Set<string>(EVENT_YAML_DISPLAY_KEY_ORDER);
 
-function orderEventKeysForYamlDisplay(event: Event): Record<string, unknown> {
+function orderEventKeysForYamlDisplay(event: EventsStreamSourceEvent): Record<string, unknown> {
   const eventRecord = event as Record<string, unknown>;
   const orderedEvent: Record<string, unknown> = {};
 

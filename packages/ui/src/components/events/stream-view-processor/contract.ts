@@ -17,6 +17,8 @@ import type {
 
 const MAX_SAME_TYPE_RAW_GROUP = 50_000;
 
+type StreamViewEvent = StreamEvent & Partial<Pick<Event, "streamPath">>;
+
 const STREAM_PROCESSOR_REGISTERED_TYPE = "events.iterate.com/core/stream-processor-registered";
 const AGENT_SYSTEM_PROMPT_UPDATED_TYPE = "events.iterate.com/agent/system-prompt-updated";
 const AGENT_INPUT_ADDED_TYPE = "events.iterate.com/agent/input-added";
@@ -62,44 +64,6 @@ const StreamViewStateSchema = z
   .custom<EventsStreamViewState>((val) => val != null && typeof val === "object")
   .default(createInitialStreamViewState);
 
-const StreamViewProcessorContractBase = defineProcessorContract({
-  slug: "stream-view",
-  version: "0.1.0",
-  description:
-    "Browser-side processor that projects raw stream events into a mode-agnostic renderable view state with feed elements, activity indicators, and slot derivation.",
-  stateSchema: StreamViewStateSchema,
-  events: {
-    "events.iterate.com/stream-view/any-event": {
-      description: "Synthetic catch-all to satisfy the consumes type constraint.",
-      payloadSchema: z.unknown(),
-    },
-  },
-  consumes: ["events.iterate.com/stream-view/any-event"],
-  emits: [],
-  reduce({ state, event: consumedEvent }) {
-    // consumesAllEvents delivers every stream event here regardless of type.
-    // The consumed event type is narrowed to the synthetic "any-event" literal,
-    // so we cast to the base Event shape for runtime property access.
-    const event = consumedEvent as unknown as Event;
-
-    const activity = reduceActivityState({ event, state });
-
-    if (HIDDEN_FEED_EVENT_TYPES.has(event.type)) {
-      return deriveSlots({ feed: state.slots.feed, activity });
-    }
-
-    const feedItems = appendFeedItems({
-      feedItems: state.slots.feed,
-      nextItems: [
-        createRawEventGroup([toRawEventSummary(event)]),
-        ...reduceEventToSemanticFeedItems(event),
-      ],
-    });
-
-    return deriveSlots({ feed: feedItems, activity });
-  },
-});
-
 /**
  * Stream view processor contract.
  *
@@ -107,12 +71,35 @@ const StreamViewProcessorContractBase = defineProcessorContract({
  * and accumulates a mode-agnostic view state. It always produces both raw
  * summary elements and semantic elements for every event, so renderer modes
  * (raw-pretty, pretty, raw-single-json) become pure view-time filters.
- *
- * Define with `defineProcessorContract` + `consumesAllEvents` following the
- * same pattern as `JsonataReactorProcessorContract`.
  */
-export const StreamViewProcessorContract = Object.assign(StreamViewProcessorContractBase, {
-  consumesAllEvents: true as const,
+export const StreamViewProcessorContract = defineProcessorContract({
+  slug: "stream-view",
+  version: "0.1.0",
+  description:
+    "Browser-side processor that projects raw stream events into a mode-agnostic renderable view state with feed elements, activity indicators, and slot derivation.",
+  stateSchema: StreamViewStateSchema,
+  events: {},
+  consumes: [],
+  consumesAllEvents: true,
+  emits: [],
+  reduce({ state, event }: { state: EventsStreamViewState; event: StreamEvent }) {
+    const viewEvent = event as StreamViewEvent;
+    const activity = reduceActivityState({ event: viewEvent, state });
+
+    if (HIDDEN_FEED_EVENT_TYPES.has(viewEvent.type)) {
+      return deriveSlots({ feed: state.slots.feed, activity });
+    }
+
+    const feedItems = appendFeedItems({
+      feedItems: state.slots.feed,
+      nextItems: [
+        createRawEventGroup([toRawEventSummary(viewEvent)]),
+        ...reduceEventToSemanticFeedItems(viewEvent),
+      ],
+    });
+
+    return deriveSlots({ feed: feedItems, activity });
+  },
 });
 
 export type StreamViewState = EventsStreamViewState;
@@ -209,7 +196,7 @@ function createInputSlotElements(
 // ---------------------------------------------------------------------------
 
 function reduceActivityState(args: {
-  event: Event;
+  event: StreamViewEvent;
   state: EventsStreamViewState;
 }): EventsStreamActivityState {
   const activity: EventsStreamActivityState = {
@@ -300,7 +287,7 @@ function appendFeedItems(args: {
   return feedItems;
 }
 
-function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElement[] {
+function reduceEventToSemanticFeedItems(event: StreamViewEvent): EventsStreamBuiltInElement[] {
   const timestamp = getTimestamp(event.createdAt);
 
   if (event.type === AGENT_INPUT_ADDED_TYPE) {
@@ -425,7 +412,7 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
         type: "child-stream-created",
         id: `child-stream-created-${event.offset}`,
         props: {
-          parentPath: event.streamPath as StreamPath,
+          parentPath: streamPathFromEvent(event),
           childPath: parsedChildPath.data as StreamPath,
           timestamp,
           raw: event,
@@ -441,7 +428,7 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
       {
         type: "metadata-updated",
         id: `metadata-updated-${event.offset}`,
-        props: { path: event.streamPath as StreamPath, metadata, timestamp, raw: event },
+        props: { path: streamPathFromEvent(event), metadata, timestamp, raw: event },
       },
     ];
   }
@@ -536,9 +523,9 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
 // Raw event helpers
 // ---------------------------------------------------------------------------
 
-function toRawEventSummary(event: Event): EventsStreamRawEventSummary {
+function toRawEventSummary(event: StreamViewEvent): EventsStreamRawEventSummary {
   return {
-    streamPath: event.streamPath as StreamPath,
+    streamPath: streamPathFromEvent(event),
     offset: event.offset,
     createdAt: event.createdAt,
     eventType: event.type,
@@ -588,33 +575,36 @@ function createRawEventGroup(
 // Payload readers
 // ---------------------------------------------------------------------------
 
-function readStringPayloadField(event: Event, key: string) {
+function readStringPayloadField(event: StreamViewEvent, key: string) {
   const value = readPayloadRecord(event)?.[key];
   return typeof value === "string" ? value : null;
 }
 
-function readNumberPayloadField(event: Event, key: string) {
+function readNumberPayloadField(event: StreamViewEvent, key: string) {
   const value = readPayloadRecord(event)?.[key];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function readRecordPayloadField(event: Event, key: string): Record<string, unknown> | null {
+function readRecordPayloadField(
+  event: StreamViewEvent,
+  key: string,
+): Record<string, unknown> | null {
   const value = readPayloadRecord(event)?.[key];
   return isRecord(value) ? value : null;
 }
 
-function readStringArrayPayloadField(event: Event, key: string) {
+function readStringArrayPayloadField(event: StreamViewEvent, key: string) {
   const value = readPayloadRecord(event)?.[key];
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
 }
 
-function readPayloadRecord(event: Event) {
+function readPayloadRecord(event: StreamViewEvent) {
   return isRecord(event.payload) ? event.payload : null;
 }
 
-function readLlmRequestPolicy(event: Event) {
+function readLlmRequestPolicy(event: StreamViewEvent) {
   const policy = readRecordPayloadField(event, "llmRequestPolicy");
   if (policy == null) return { behaviour: "after-current-request" as const };
 
@@ -678,6 +668,13 @@ function stringifyCodemodeError(error: unknown) {
   } catch {
     return String(error);
   }
+}
+
+function streamPathFromEvent(event: StreamViewEvent): StreamPath {
+  if (event.streamPath == null) {
+    throw new Error("Stream view events must include streamPath");
+  }
+  return event.streamPath as StreamPath;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

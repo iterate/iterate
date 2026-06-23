@@ -5,7 +5,7 @@
 // ```ts
 // export class AgentDurableObject extends DurableObject<Env> {
 //   host = createStreamProcessorHost(this.ctx);
-//   agent = this.host.add("agent", (deps) => new AgentProcessor({ ...deps, openai }));
+//   agent = this.host.add("agent", (deps) => new AgentProcessor({ ...deps, stream, openai }));
 //   search = this.host.add("search", (deps) => new SearchProcessor(deps));
 //
 //   requestStreamSubscription(args: RequestStreamSubscriptionArgs) {
@@ -21,18 +21,14 @@
 // stub, reads the processor's checkpoint, and calls back `subscribeOutbound` so
 // the stream pumps batches into `processor.ingest`.
 
-import type {
-  StreamProcessorRuntimeState,
-  StreamProcessorSnapshot,
-  StreamProcessorStream,
-} from "../stream-processor.ts";
+import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "../stream-processor.ts";
 import type { ProcessorContractAnnouncement } from "../processors/core/contract.ts";
 import type { StreamEvent } from "../shared/event.ts";
 import type { StreamCoreProcessorState, StreamRpc, StreamSubscriptionHandle } from "../types.ts";
 
 /** What the Stream DO sends when dialing a subscriber's callable. */
 export type StreamSubscriptionHandshake = {
-  stream: StreamProcessorStream;
+  stream: StreamRpc;
   subscriptionKey: string;
   streamMaxOffset: number;
   streamRuntimeState: { coreProcessorState: StreamCoreProcessorState };
@@ -51,10 +47,9 @@ export type RequestStreamSubscriptionArgs = StreamSubscriptionHandshake & {
 /**
  * Base deps the host provides to each processor it owns. Spread them into the
  * processor constructor along with processor-specific deps:
- * `new RepoProcessor({ ...deps, github })`.
+ * `new RepoProcessor({ ...deps, stream, github })`.
  */
 export type HostedProcessorDeps = {
-  stream: StreamProcessorStream;
   readState: () => StreamProcessorSnapshot<any> | undefined;
   writeState: (snapshot: StreamProcessorSnapshot<any>) => void;
   keepAliveWhile: (work: () => Promise<unknown>) => void;
@@ -77,6 +72,7 @@ type AnyHostedProcessor = {
     version?: string;
     description?: string;
     consumes: readonly string[];
+    consumesAllEvents?: true;
     emits?: readonly string[];
     events: Record<string, { description?: string; payloadSchema?: unknown }>;
   };
@@ -125,8 +121,9 @@ const HOST_IDLE_TEARDOWN_MS = 5 * 60_000;
 export type StreamProcessorHost = {
   /**
    * Register a named processor. The builder receives the host-provided base
-   * deps (checkpoint storage in DO KV keyed by `name` and late-bound stream
-   * context) and must construct the processor with them. Call during DO field
+   * deps (checkpoint storage in DO KV keyed by `name`) and must construct the
+   * processor with them. Processors that append should receive their stream as a
+   * normal processor-specific dep at the callsite. Call during DO field
    * initialization.
    */
   add<P extends AnyHostedProcessor>(name: string, build: (deps: HostedProcessorDeps) => P): P;
@@ -166,16 +163,6 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
       );
     }
     return entry;
-  }
-
-  function requireStream(name: string): StreamRpc {
-    const entry = requireEntry(name);
-    if (entry.stream === undefined) {
-      throw new Error(
-        `Stream processor "${name}" has no stream subscription yet; appends are only possible after the stream has dialed this host`,
-      );
-    }
-    return entry.stream;
   }
 
   function resolveProcessorName(processorName: string | undefined): string {
@@ -260,7 +247,10 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
       replayAfterOffset: snapshot.offset,
       // The contract is the filter: the stream only delivers event types the
       // processor consumes. A `"*"` in consumes means unfiltered delivery.
-      eventTypes: entry.processor.contract.consumes,
+      eventTypes:
+        entry.processor.contract.consumesAllEvents === true
+          ? ["*"]
+          : entry.processor.contract.consumes,
       // The stream appends this identity as a subscriber-connected presence
       // fact; the contract announcement feeds its processorsBySlug registry.
       // Recovery re-subscriptions pass the same incarnationId — each (re)open
@@ -357,7 +347,6 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
         throw new Error(`Stream processor "${name}" is already registered on this host`);
       }
       const processor = build({
-        stream: lateBoundProcessorStream(name),
         readState: () =>
           ctx.storage.kv.get<StreamProcessorSnapshot<any>>(snapshotKey(name)) ?? undefined,
         writeState: (snapshot) => void ctx.storage.kv.put(snapshotKey(name), snapshot),
@@ -424,28 +413,6 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
     },
     runIdleDisconnectNow,
   };
-
-  function lateBoundProcessorStream(name: string): StreamProcessorStream {
-    const stream = {
-      append: (args: Parameters<StreamRpc["append"]>[0]) => requireStream(name).append(args),
-      appendBatch: (args: Parameters<StreamRpc["appendBatch"]>[0]) =>
-        requireStream(name).appendBatch(args),
-      getEvent: (args: Parameters<StreamRpc["getEvent"]>[0]) => requireStream(name).getEvent(args),
-      getEvents: (args?: Parameters<StreamRpc["getEvents"]>[0]) =>
-        requireStream(name).getEvents(args),
-      waitForEvent: (args: Parameters<StreamRpc["waitForEvent"]>[0]) =>
-        requireStream(name).waitForEvent(args),
-      subscribe: (args: Parameters<StreamRpc["subscribe"]>[0]) =>
-        requireStream(name).subscribe(args),
-      getProcessorRuntimeState: (args: Parameters<StreamRpc["getProcessorRuntimeState"]>[0]) =>
-        requireStream(name).getProcessorRuntimeState(args),
-      runtimeState: () => requireStream(name).runtimeState(),
-      kill: () => requireStream(name).kill(),
-      reset: () => requireStream(name).reset(),
-      reduce: (args: Parameters<StreamRpc["reduce"]>[0]) => requireStream(name).reduce(args),
-    } satisfies StreamRpc;
-    return stream as unknown as StreamProcessorStream;
-  }
 }
 
 function announceContract(contract: {
@@ -485,7 +452,7 @@ type RetainableStreamRpc = StreamRpc &
     dup?(): RetainedStreamRpc;
   };
 
-function retainStreamRpc(stream: StreamProcessorStream): RetainedStreamRpc {
+function retainStreamRpc(stream: StreamRpc): RetainedStreamRpc {
   const retainable = stream as RetainableStreamRpc;
   const retained = retainable.dup?.() ?? retainable;
   const dispose = retained[Symbol.dispose]?.bind(retained);

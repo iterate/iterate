@@ -6,7 +6,11 @@ import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
 } from "~/domains/streams/engine/workers/stream-processor-host.ts";
-import type { StreamDurableObject } from "~/domains/streams/stream-runtime.ts";
+import {
+  getStreamRpcStub,
+  type StreamDurableObject,
+  type StreamDurableObjectNamespace,
+} from "~/domains/streams/stream-runtime.ts";
 import { SLACK_INTEGRATION_STREAM_PATH } from "~/domains/secrets/integration-streams.ts";
 import { readSlackToken } from "~/domains/slack/durable-objects/slack-agent-durable-object.ts";
 import {
@@ -37,6 +41,11 @@ export class SlackIntegrationDurableObject extends DurableObject<SlackIntegratio
   slack = this.host.add(SlackProcessorContract.slug, (deps) => {
     return new SlackProcessor({
       ...deps,
+      stream: getStreamRpcStub({
+        durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+        projectId: this.projectId(),
+        path: SLACK_INTEGRATION_STREAM_PATH,
+      }),
       acknowledgeRoutedWebhook: async ({ payload }) => {
         const ack = eyesReactionTargetFromWebhookPayload(payload);
         if (ack == null) return;

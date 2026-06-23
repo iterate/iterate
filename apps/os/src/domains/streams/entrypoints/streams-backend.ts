@@ -208,7 +208,7 @@ export class StreamsBackend extends WorkerEntrypoint<StreamsBackendEnv, StreamsB
    * Exact public Stream DO RPC subscribe shape, with this backend only
    * resolving project/path and retaining the callback across the boundary.
    */
-  async subscribe(input: StreamSubscribeInput): Promise<{ unsubscribe(): void }> {
+  async subscribe(input: StreamSubscribeInput): Promise<StreamSubscriptionHandle> {
     const path = this.resolveProjectPath(input);
     const streamStub = (this.env.STREAM as unknown as StreamDurableObjectNamespace).getByName(
       getStreamDurableObjectName({ projectId: this.ctx.props.projectId, path }),
@@ -250,6 +250,8 @@ export class StreamsBackend extends WorkerEntrypoint<StreamsBackendEnv, StreamsB
     if (callbackBroken) handle.unsubscribe();
     const settled = handle;
     return {
+      subscriptionKey: settled.subscriptionKey,
+      streamMaxOffset: settled.streamMaxOffset,
       unsubscribe: () => {
         settled.unsubscribe();
         releaseCallback();

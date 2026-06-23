@@ -15,7 +15,7 @@ import {
   ensureBrowserRawEventsSchema,
   type BrowserRawEventsState,
 } from "../processors/browser-raw-events/implementation.ts";
-import type { StreamProcessorStream } from "../stream-processor.ts";
+import type { StreamRpc } from "../types.ts";
 import {
   browserProcessorStateStorage,
   deleteBrowserProcessorState,
@@ -49,7 +49,7 @@ function wrap(db: DatabaseSync): SqlClient {
 }
 
 /** Minimal stream stub for tests that never call the richer stream RPC methods. */
-const stream = () => ({ append() {}, appendBatch() {} }) as unknown as StreamProcessorStream;
+const stream = () => ({ append() {}, appendBatch() {} }) as unknown as StreamRpc;
 
 function rawEvent(offset: number): StreamEvent {
   return { type: "test/raw", payload: { offset }, offset, createdAt: new Date(0).toISOString() };

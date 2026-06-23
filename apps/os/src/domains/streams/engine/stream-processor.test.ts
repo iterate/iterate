@@ -14,7 +14,8 @@ import { CircuitBreakerProcessor } from "./processors/circuit-breaker/implementa
 import { CoreStreamProcessor } from "./processors/core/implementation.ts";
 import { CoreProcessorContract } from "./processors/core/contract.ts";
 import type { StreamCoreProcessorState } from "./types.ts";
-import type { StreamProcessorStream, StreamProcessorSnapshot } from "./stream-processor.ts";
+import type { StreamProcessorSnapshot } from "./stream-processor.ts";
+import type { StreamRpc } from "./types.ts";
 
 const iso = (ms = 0) => new Date(ms).toISOString();
 // Both example processors append via runInBackground, so tests tick the
@@ -54,7 +55,7 @@ function memoryStream(options: { startOffset?: number } = {}) {
         committed.push(e);
         return e;
       }),
-  } as unknown as StreamProcessorStream;
+  } as unknown as StreamRpc;
   return { stream, committed };
 }
 
@@ -151,7 +152,7 @@ class CoreStreamSim {
           this.append(args.streamPath ?? path, args.event, createdAtMs),
         appendBatch: (args: { streamPath?: string; events: StreamEventInput[] }) =>
           args.events.map((event) => this.append(args.streamPath ?? path, event, createdAtMs)),
-      } as unknown as StreamProcessorStream,
+      } as unknown as StreamRpc,
     });
 
     coreInline.validateAppend({
@@ -243,7 +244,7 @@ describe("core stream state and subscription processors", () => {
           sim.append(args.streamPath ?? "/cb", args.event),
         appendBatch: (args: { streamPath?: string; events: StreamEventInput[] }) =>
           args.events.map((event) => sim.append(args.streamPath ?? "/cb", event)),
-      } as unknown as StreamProcessorStream,
+      } as unknown as StreamRpc,
       writeState: (snapshot) => void writes.push(snapshot),
     });
 

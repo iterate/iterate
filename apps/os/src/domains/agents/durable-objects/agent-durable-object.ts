@@ -24,6 +24,7 @@ import {
 import { OpenAiWsProcessor } from "~/domains/agents/stream-processors/openai-ws/implementation.ts";
 import {
   getInitializedStreamStub,
+  getStreamRpcStub,
   getStreamDurableObjectName,
   type StreamDurableObjectNamespace,
   type StreamDurableObject,
@@ -96,6 +97,7 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
     (deps) =>
       new AgentProcessor({
         ...deps,
+        stream: this.agentStreamRpc(),
         isAgentsRootStream: () => this.name.path === AGENTS_STREAM_PATH,
         readStreamEvents: () => this.readSubscribedStreamEvents("agent"),
         setupAgentRuntime: async () => {
@@ -110,12 +112,14 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
       // the Cloudflare AI processor.
       return new CloudflareAiProcessor({
         ...deps,
+        stream: this.agentStreamRpc(),
         ai: this.env.AI,
         readStreamEvents: () => this.readSubscribedStreamEvents("openai-ws"),
       });
     }
     return new OpenAiWsProcessor({
       ...deps,
+      stream: this.agentStreamRpc(),
       apiKey,
       readStreamEvents: () => this.readSubscribedStreamEvents("openai-ws"),
     });
@@ -125,6 +129,7 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
     (deps) =>
       new CloudflareAiProcessor({
         ...deps,
+        stream: this.agentStreamRpc(),
         ai: this.env.AI,
         readStreamEvents: () => this.readSubscribedStreamEvents("cloudflare-ai"),
       }),
@@ -155,6 +160,15 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
       );
     }
     return { path: this.name.path, projectId: this.name.projectId };
+  }
+
+  private agentStreamRpc(): StreamRpc {
+    const params = this.projectScopedName();
+    return getStreamRpcStub({
+      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+      projectId: params.projectId,
+      path: StreamPath.parse(params.path),
+    });
   }
 
   private projectId(): string {

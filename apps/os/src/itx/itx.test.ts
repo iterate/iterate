@@ -18,7 +18,7 @@ import {
   type ItxStub,
   type ProvideCapabilityInput,
 } from "./itx.ts";
-import type { StreamProcessorStream } from "~/domains/streams/engine/stream-processor.ts";
+import type { StreamRpc } from "~/domains/streams/engine/types.ts";
 
 const AI_ADDRESS: CapabilityAddress = {
   type: "rpc",
@@ -61,7 +61,7 @@ function fakeStream(seed: Array<{ type: string; payload: Record<string, unknown>
       }) => args.events.map((event) => push(event)),
       getEvents: async (input: { afterOffset: number }) =>
         events.filter((event) => event.offset > input.afterOffset),
-    } as unknown as StreamProcessorStream,
+    } as unknown as StreamRpc,
   };
 }
 
