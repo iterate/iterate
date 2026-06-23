@@ -12,17 +12,17 @@ type WorkerBindings = Record<string, unknown>;
 
 export class DynamicWorkersRpcTarget extends RpcTarget {
   #bindings: WorkerBindings;
-  #facets: DurableObjectState["facets"];
+  #facets?: DurableObjectState["facets"];
   #loader: Env["LOADER"];
   #projectId: string;
-  #storage: DurableObjectStorage;
+  #storage?: DurableObjectStorage;
 
   constructor(props: {
     bindings: WorkerBindings;
-    facets: DurableObjectState["facets"];
+    facets?: DurableObjectState["facets"];
     loader: Env["LOADER"];
     projectId: string;
-    storage: DurableObjectStorage;
+    storage?: DurableObjectStorage;
   }) {
     super();
     this.#bindings = props.bindings;
@@ -48,6 +48,12 @@ export class DynamicWorkersRpcTarget extends RpcTarget {
     if (ref.target.type !== "durable-object") {
       throw new Error(`Dynamic worker target "${ref.target.type}" is not a Durable Object.`);
     }
+    const facets = this.#facets;
+    const storage = this.#storage;
+    if (!facets || !storage) {
+      throw new Error("Dynamic Durable Object targets require facets and storage.");
+    }
+
     const resolved = await this.#resolveSource(ref.source);
     const worker = this.#loadResolvedWorker({ ref, resolved });
     const klass = worker.getDurableObjectClass?.(ref.target.className);
@@ -65,14 +71,14 @@ export class DynamicWorkersRpcTarget extends RpcTarget {
       sourceCacheKey: resolved.cacheKey,
     });
     const versionKey = `itx:dynamic-do-facet-version:${facetName}`;
-    const previous = await this.#storage.get<string>(versionKey);
+    const previous = await storage.get<string>(versionKey);
 
     if (previous && previous !== version) {
-      this.#facets.abort(facetName, `dynamic Durable Object source changed for ${facetName}`);
+      facets.abort(facetName, `dynamic Durable Object source changed for ${facetName}`);
     }
-    if (previous !== version) await this.#storage.put(versionKey, version);
+    if (previous !== version) await storage.put(versionKey, version);
 
-    return this.#facets.get(facetName, () => ({ class: klass }));
+    return facets.get(facetName, () => ({ class: klass }));
   }
 
   async #loadWorker(ref: DynamicWorkerRef): Promise<WorkerStub> {

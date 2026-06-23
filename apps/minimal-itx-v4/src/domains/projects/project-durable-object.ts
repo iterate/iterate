@@ -5,7 +5,7 @@ import {
 } from "../streams/engine/workers/stream-processor-host.ts";
 import type { Env } from "../../env.ts";
 import { TRUSTED_INTERNAL_ITX_TOKEN, trustedInternalAuthContext } from "../../auth.ts";
-import { ItxProcessor, replayPath, type ItxProcessorRpc } from "../../itx/processor.ts";
+import { ItxProcessor, type ItxProcessorRpc } from "../../itx/processor.ts";
 import { ItxContract } from "../../itx/processor-contract.ts";
 import { DynamicWorkersRpcTarget } from "../dynamic-workers/dynamic-workers-rpc-target.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
@@ -73,6 +73,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
   getCapability(): RpcTargetImplementation<Project> {
     return new ProjectRpcTarget({
       auth: trustedInternalAuthContext(),
+      ctx: this.ctx,
       projectId: this.#name.projectId,
     });
   }
@@ -84,24 +85,8 @@ export class ProjectDurableObject extends DurableObject<Env> {
     }
   }
 
-  async workerFetch(req: Request) {
-    return await (await this.defaultProjectWorker()).fetch(req);
-  }
-
-  async workerProcessEvent(input: Parameters<ProjectWorker["processEvent"]>[0]) {
-    return await (await this.defaultProjectWorker()).processEvent(input);
-  }
-
   async forwardEventToProjectWorker(event: Parameters<ProjectWorker["processEvent"]>[0]["event"]) {
-    await this.workerProcessEvent({ event });
-  }
-
-  async workerInvokeCapability(input: { args?: unknown[]; path: string[] }) {
-    return await replayPath({
-      args: input.args ?? [],
-      path: input.path,
-      target: await this.defaultProjectWorker(),
-    });
+    await (await this.defaultProjectWorker()).processEvent({ event });
   }
 
   private defaultProjectWorker() {

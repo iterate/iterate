@@ -1,5 +1,6 @@
 import { env, RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import type {
+  CfExecutionContext,
   RpcTargetImplementation,
   ItxCapabilityHost,
   ItxRoot,
@@ -30,14 +31,20 @@ import {
   TRUSTED_INTERNAL_ITX_TOKEN,
 } from "./auth.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor.ts";
-import { PROJECT_REPO_PATH } from "./domains/repos/project-repo.ts";
+import { DynamicWorkersRpcTarget } from "./domains/dynamic-workers/dynamic-workers-rpc-target.ts";
+import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "./domains/repos/project-repo.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor.ts";
 import { durableObjectProcessorSubscriber } from "./domains/streams/engine/shared/callable-subscriber.ts";
-import type { ItxProcessorRpc, ProvideCapabilityInput } from "./itx/processor.ts";
+import { replayPath, type ItxProcessorRpc, type ProvideCapabilityInput } from "./itx/processor.ts";
 import { isReservedDynamicPathSegment, withInvokeCapabilityFallback } from "./itx/path-proxy.ts";
 
 type StreamProcessEventBatch = Parameters<Stream["subscribe"]>[0]["processEventBatch"];
 type StreamProcessEventBatchInput = Parameters<StreamProcessEventBatch>[0];
+
+const TRUSTED_INTERNAL_ITX_PROPS = {
+  token: TRUSTED_INTERNAL_ITX_TOKEN,
+  type: "trusted-internal",
+} satisfies ItxAuthCredentials;
 
 export class StreamRpcTarget extends RpcTarget implements RpcTargetImplementation<Stream> {
   constructor(readonly props: { auth: ItxAuth; projectId: string | null; path: string }) {
@@ -225,12 +232,12 @@ class StreamsRpcTarget extends RpcTarget implements RpcTargetImplementation<Stre
 }
 
 export class ItxRootRpcTarget extends RpcTarget implements RpcTargetImplementation<ItxRoot> {
-  constructor(readonly props: { auth: ItxAuth }) {
+  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext }) {
     super();
   }
 
   get projects() {
-    return new ProjectsRpcTarget({ auth: this.props.auth });
+    return new ProjectsRpcTarget({ auth: this.props.auth, ctx: this.props.ctx });
   }
 
   get streams() {
@@ -246,13 +253,14 @@ export class ItxRootRpcTarget extends RpcTarget implements RpcTargetImplementati
   }
 }
 class ProjectsRpcTarget extends RpcTarget implements RpcTargetImplementation<Projects> {
-  constructor(readonly props: { auth: ItxAuth }) {
+  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext }) {
     super();
   }
 
   get(projectId: string) {
     return new ProjectRpcTarget({
       auth: this.props.auth,
+      ctx: this.props.ctx,
       projectId: projectId,
     });
   }
@@ -291,7 +299,11 @@ class ProjectsRpcTarget extends RpcTarget implements RpcTargetImplementation<Pro
       timeoutMs: 60_000,
     });
 
-    return new ProjectRpcTarget({ auth: this.props.auth, projectId: args.projectId });
+    return new ProjectRpcTarget({
+      auth: this.props.auth,
+      ctx: this.props.ctx,
+      projectId: args.projectId,
+    });
   }
 
   list(): string[] {
@@ -398,32 +410,43 @@ export class ProjectWorkerRpcTarget
   extends RpcTarget
   implements RpcTargetImplementation<ProjectWorker>
 {
-  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
     return withInvokeCapabilityFallback(this);
   }
 
-  get durableObjectStub() {
-    return env.PROJECT.getByName(
-      DurableObjectNameCodec.stringify({ path: "/", projectId: this.props.projectId }),
-    );
+  async fetch(req: Request) {
+    return await (await this.defaultProjectWorker()).fetch(req);
   }
 
-  fetch(req: Request) {
-    return this.durableObjectStub.workerFetch(req);
+  async processEvent(input: Parameters<ProjectWorker["processEvent"]>[0]) {
+    return await (await this.defaultProjectWorker()).processEvent(input);
   }
 
-  processEvent(input: Parameters<ProjectWorker["processEvent"]>[0]) {
-    return this.durableObjectStub.workerProcessEvent(input);
+  async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
+    return await replayPath({
+      args,
+      path,
+      target: await this.defaultProjectWorker(),
+    });
   }
 
-  invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
-    return (
-      this.durableObjectStub as unknown as {
-        workerInvokeCapability(input: { args: unknown[]; path: string[] }): unknown;
-      }
-    ).workerInvokeCapability({ args, path });
+  private defaultProjectWorker() {
+    return new DynamicWorkersRpcTarget({
+      bindings: {
+        ITX: this.props.ctx.exports.ItxEntrypoint({ props: TRUSTED_INTERNAL_ITX_PROPS }),
+      },
+      loader: env.LOADER,
+      projectId: this.props.projectId,
+    }).get<ProjectWorker>({
+      source: {
+        repoPath: PROJECT_REPO_PATH,
+        sourcePath: PROJECT_WORKER_SOURCE_PATH,
+        type: "repo",
+      },
+      target: { type: "worker-entrypoint" },
+    });
   }
 }
 
@@ -431,7 +454,7 @@ export class ProjectRpcTarget
   extends ItxCapabilityHostRpcTarget
   implements RpcTargetImplementation<Project>
 {
-  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
     return withInvokeCapabilityFallback(this);
@@ -480,6 +503,7 @@ export class ProjectRpcTarget
   get worker(): RpcTargetImplementation<ProjectWorker> {
     return new ProjectWorkerRpcTarget({
       auth: this.props.auth,
+      ctx: this.props.ctx,
       projectId: this.props.projectId,
     });
   }
@@ -489,7 +513,14 @@ export class UnauthenticatedItxRpcTarget
   extends RpcTarget
   implements RpcTargetImplementation<UnauthenticatedItx>
 {
-  constructor(readonly requestHeaders: Headers = new Headers()) {
+  // This is the root of the capability tree, so it also owns the current
+  // Cloudflare execution context. We thread ctx through child targets because
+  // the default project worker is loaded directly with Worker Loader, yet must
+  // always receive an env.ITX binding created from ctx.exports.
+  constructor(
+    readonly requestHeaders: Headers = new Headers(),
+    readonly ctx: CfExecutionContext,
+  ) {
     super();
   }
 
@@ -510,7 +541,7 @@ export class UnauthenticatedItxRpcTarget
 
     if (!auth) throw new Error("missing or invalid auth");
 
-    return new ItxRootRpcTarget({ auth });
+    return new ItxRootRpcTarget({ auth, ctx: this.ctx });
   }
 }
 
@@ -519,7 +550,7 @@ export class ItxEntrypoint
   implements Pick<RpcTargetImplementation<UnauthenticatedItx>, "authenticate">
 {
   authenticate(input: ItxAuthCredentials = this.ctx.props) {
-    return new UnauthenticatedItxRpcTarget().authenticate(input);
+    return new UnauthenticatedItxRpcTarget(new Headers(), this.ctx).authenticate(input);
   }
 
   projectRepo(projectId: string) {

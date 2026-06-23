@@ -61,6 +61,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     },
   },
   consumes: [
+    "*",
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-requested",
     "events.iterate.com/repo/created",

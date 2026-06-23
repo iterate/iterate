@@ -8,7 +8,7 @@ import { StreamDurableObject } from "./domains/streams/stream-durable-object.ts"
 import { ItxEntrypoint, UnauthenticatedItxRpcTarget } from "./rpc-targets.ts";
 
 export default {
-  async fetch(request: Request, _env: Env) {
+  async fetch(request: Request, _env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
 
     // To test cookie auth, callers can post the JWT they'd like to have written as a cookie to /api/login
@@ -29,11 +29,14 @@ export default {
 
     if (url.pathname !== "/api/itx") return Response.json({ error: "not found" }, { status: 404 });
     if (request.method === "POST") {
-      return newHttpBatchRpcResponse(request, new UnauthenticatedItxRpcTarget(request.headers));
+      return newHttpBatchRpcResponse(
+        request,
+        new UnauthenticatedItxRpcTarget(request.headers, ctx),
+      );
     }
     return newWorkersWebSocketRpcResponse(
       request,
-      new UnauthenticatedItxRpcTarget(request.headers),
+      new UnauthenticatedItxRpcTarget(request.headers, ctx),
     );
   },
 } satisfies ExportedHandler<Env>;

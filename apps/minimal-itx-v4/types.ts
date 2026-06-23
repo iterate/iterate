@@ -43,6 +43,10 @@
  * ```
  */
 
+export type CfExecutionContext = {
+  exports: ExecutionContext["exports"];
+};
+
 export interface UnauthenticatedItx {
   /**
    * Authenticates into the requested ITX host.

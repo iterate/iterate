@@ -416,6 +416,79 @@ describe("minimal itx v4", () => {
     expect(await project.counterFacet.current()).toBe(1);
   });
 
+  test("Dynamic project worker processEvent can cross-post project events", async () => {
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+
+    using project = itx.projects.create({ slug: "project-worker-process-event" });
+    const description = await project.describe();
+    const marker = `cross-post-${crypto.randomUUID()}`;
+
+    await project.repo.commitFiles({
+      changes: [
+        {
+          path: "worker.js",
+          content: `
+            import { WorkerEntrypoint } from "cloudflare:workers";
+
+            export default class ProjectWorker extends WorkerEntrypoint {
+              fetch() {
+                return new Response("ok");
+              }
+
+              async processEvent({ event }) {
+                if (event.metadata?.crossPostMarker !== ${JSON.stringify(marker)}) return;
+
+                const root = await this.env.ITX.authenticate();
+                const project = await root.projects.get(${JSON.stringify(description.projectId)});
+                await project.streams.get("/cross-posted").append({
+                  type: "events.iterate.com/test/cross-posted",
+                  idempotencyKey: \`project-worker-cross-post:\${event.offset}\`,
+                  metadata: {
+                    crossPostedBy: "project-worker",
+                    marker: event.metadata.crossPostMarker,
+                    sourceOffset: event.offset,
+                  },
+                  payload: {
+                    originalPayload: event.payload ?? null,
+                    originalType: event.type,
+                  },
+                });
+              }
+            }
+          `,
+        },
+      ],
+      message: "Cross-post selected project events from processEvent",
+    });
+
+    const crossPosted = project.streams.get("/cross-posted");
+    const copied = crossPosted.waitForEvent({
+      eventTypes: ["events.iterate.com/test/cross-posted"],
+      timeoutMs: 30_000,
+    });
+
+    const [sourceEvent] = await project.streams.get("/").append({
+      type: "events.iterate.com/test/source",
+      metadata: { crossPostMarker: marker },
+      payload: { text: "hello from root" },
+    });
+
+    const copiedEvent = await copied;
+    expect(copiedEvent.metadata).toMatchObject({
+      crossPostedBy: "project-worker",
+      marker,
+      sourceOffset: sourceEvent.offset,
+    });
+    expect(copiedEvent.payload).toEqual({
+      originalPayload: { text: "hello from root" },
+      originalType: "events.iterate.com/test/source",
+    });
+  });
+
   test("Authenticated project can provide the Slack SDK as nested dotted callables", async () => {
     const mock = await startMockSlack();
     try {
