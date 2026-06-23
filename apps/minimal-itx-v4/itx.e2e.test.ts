@@ -1,10 +1,116 @@
+import http from "node:http";
 import { describe, expect, test } from "vitest";
 // oxlint-disable-next-line iterate/no-capnweb-http-batch -- this regression test intentionally proves the one-shot HTTP batch shape.
 import { newHttpBatchRpcSession } from "capnweb";
+import { WebClient } from "@slack/web-api";
 import { buildUrl, withItxSession } from "./test-helpers.ts";
 import type { ItxWebSocketMessage } from "./test-helpers.ts";
 import type { UnauthenticatedItx } from "./types.ts";
 import { TRUSTED_INTERNAL_ITX_TOKEN } from "./src/auth.ts";
+
+type MockSlack = {
+  calls: string[];
+  close(): Promise<void>;
+  url: string;
+};
+
+type PathCallable = {
+  invokeCapability(input: { args?: unknown[]; path: string[] }): unknown;
+};
+
+function parseBody(body: string, contentType: string | string[] | undefined): Record<string, any> {
+  if (typeof contentType === "string" && contentType.includes("application/json")) {
+    try {
+      return JSON.parse(body) as Record<string, any>;
+    } catch {
+      return {};
+    }
+  }
+  return Object.fromEntries(new URLSearchParams(body));
+}
+
+function startMockSlack(): Promise<MockSlack> {
+  const calls: string[] = [];
+  const server = http.createServer((req, res) => {
+    const method = (req.url ?? "").replace(/^\//, "").split("?")[0] ?? "";
+    calls.push(method);
+
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk;
+    });
+    req.on("end", () => {
+      const payload = parseBody(body, req.headers["content-type"]);
+      res.setHeader("content-type", "application/json");
+      if (method === "chat.postMessage") {
+        res.end(
+          JSON.stringify({
+            ok: true,
+            channel: payload.channel,
+            ts: "1718000000.000100",
+            message: { text: payload.text, type: "message" },
+            via: "mock-slack-api",
+          }),
+        );
+        return;
+      }
+      if (method === "users.list") {
+        res.end(
+          JSON.stringify({
+            ok: true,
+            members: [
+              { id: "U1", name: "ada" },
+              { id: "U2", name: "grace" },
+            ],
+            via: "mock-slack-api",
+          }),
+        );
+        return;
+      }
+      res.end(JSON.stringify({ ok: true, via: "mock-slack-api" }));
+    });
+  });
+
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      const port = (server.address() as { port: number }).port;
+      resolve({
+        calls,
+        close: () =>
+          new Promise((closeResolve, closeReject) => {
+            server.close((error) => (error ? closeReject(error) : closeResolve()));
+          }),
+        url: `http://127.0.0.1:${port}/`,
+      });
+    });
+  });
+}
+
+function pathCallable(target: unknown): PathCallable {
+  return {
+    invokeCapability({ args = [], path }) {
+      if (path.length === 0) return target;
+
+      let receiver = target;
+      for (const segment of path.slice(0, -1)) {
+        if (receiver === null || (typeof receiver !== "object" && typeof receiver !== "function")) {
+          throw new Error(`path "${path.join(".")}" hit ${String(receiver)}`);
+        }
+        receiver = Reflect.get(receiver, segment);
+      }
+
+      const method = path.at(-1)!;
+      if (receiver === null || (typeof receiver !== "object" && typeof receiver !== "function")) {
+        throw new Error(`path "${path.join(".")}" hit ${String(receiver)}`);
+      }
+      const callable = Reflect.get(receiver, method);
+      if (typeof callable !== "function") {
+        throw new Error(`path "${path.join(".")}" did not resolve to a function`);
+      }
+      return Reflect.apply(callable, receiver, args);
+    },
+  };
+}
 
 // These are hand written tests - they MUST pass
 describe("minimal itx v4", () => {
@@ -129,6 +235,76 @@ describe("minimal itx v4", () => {
       // @ts-expect-error - TODO maybe some niceties
       newItx.projects.get(description.projectId).someMethodInTestRunner.getSecret(getSecret),
     ).rejects.toThrow(/no capability "someMethodInTestRunner.getSecret"/);
+  });
+
+  test("Authenticated project can provide the Slack SDK as nested dotted callables", async () => {
+    const mock = await startMockSlack();
+    try {
+      using session = withItxSession();
+      using itx = session.authenticate({
+        type: "trusted-internal",
+        token: TRUSTED_INTERNAL_ITX_TOKEN,
+      });
+
+      using project = itx.projects.create({ slug: "slack-project" });
+      const description = await project.describe();
+
+      const slack = new WebClient("xoxb-not-a-real-token", {
+        retryConfig: { retries: 0 },
+        slackApiUrl: mock.url,
+      });
+
+      const { revoke } = await project.provideCapability({
+        path: ["slack"],
+        capability: {
+          type: "live",
+          target: pathCallable(slack),
+        },
+      });
+
+      using callerSession = withItxSession();
+      using callerItx = callerSession.authenticate({
+        type: "token",
+        token: {
+          projectScopes: [description.projectId],
+          type: "user",
+          principal: "alice",
+        },
+      });
+      const callerProject = callerItx.projects.get(description.projectId);
+
+      // @ts-expect-error - dynamic capability root
+      const posted = await callerProject.slack.chat.postMessage({
+        channel: "C123",
+        text: "hi from itx",
+      });
+      expect(posted).toMatchObject({
+        channel: "C123",
+        message: { text: "hi from itx" },
+        ok: true,
+        via: "mock-slack-api",
+      });
+
+      // @ts-expect-error - dynamic capability root
+      const users = await callerProject.slack.users.list();
+      expect(users).toMatchObject({
+        members: [
+          { id: "U1", name: "ada" },
+          { id: "U2", name: "grace" },
+        ],
+        ok: true,
+        via: "mock-slack-api",
+      });
+      expect(mock.calls).toEqual(expect.arrayContaining(["chat.postMessage", "users.list"]));
+
+      await revoke();
+      await expect(
+        // @ts-expect-error - dynamic capability root
+        callerProject.slack.chat.postMessage({ channel: "C123", text: "after revoke" }),
+      ).rejects.toThrow(/no capability "slack.chat.postMessage"/);
+    } finally {
+      await mock.close();
+    }
   });
 
   // This test is handy because it proves that we really only need one round trip to

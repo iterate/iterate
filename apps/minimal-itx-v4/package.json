@@ -26,6 +26,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "4.20260621.1",
+    "@slack/web-api": "^7.14.1",
     "@types/ws": "^8.18.1",
     "tsx": "^4.20.3",
     "typescript": "^5.6.0",

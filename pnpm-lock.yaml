@@ -583,6 +583,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: 4.20260621.1
         version: 4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039)
+      '@slack/web-api':
+        specifier: ^7.14.1
+        version: 7.14.1
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
