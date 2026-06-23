@@ -34,9 +34,7 @@ test.describe("itx REPL catalogue examples", () => {
       code += `\n\n${example.code}`;
 
       const editor = page.getByTestId("itx-repl-editor").locator(".cm-content");
-      await editor.click();
-      await page.keyboard.press("ControlOrMeta+A");
-      await page.keyboard.insertText(code);
+      await editor.fill(code);
 
       await page.getByRole("button", { name: "Run" }).click();
 
