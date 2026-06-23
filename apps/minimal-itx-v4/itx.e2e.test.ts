@@ -7,6 +7,7 @@ import { buildUrl, withItxSession } from "./test-helpers.ts";
 import type { ItxWebSocketMessage } from "./test-helpers.ts";
 import type { UnauthenticatedItx } from "./types.ts";
 import { TRUSTED_INTERNAL_ITX_TOKEN } from "./src/auth.ts";
+import { RepoArtifactNameCodec } from "./src/domains/repos/repo-artifact-name.ts";
 
 type MockSlack = {
   calls: string[];
@@ -171,10 +172,35 @@ describe("minimal itx v4", () => {
         "events.iterate.com/stream/woken",
         "events.iterate.com/stream/subscription-configured",
         "events.iterate.com/project/create-requested",
+        "events.iterate.com/repo/create-requested",
+        "events.iterate.com/repo/created",
         "events.iterate.com/project/created",
         "events.iterate.com/stream/subscriber-disconnected",
       ]),
     );
+
+    const repoCreated = events.find((event) => event.type === "events.iterate.com/repo/created");
+    const projectCreated = events.find(
+      (event) => event.type === "events.iterate.com/project/created",
+    );
+    expect(repoCreated).toMatchObject({
+      payload: {
+        artifactName: RepoArtifactNameCodec.stringify({
+          path: "/",
+          projectId: description.projectId,
+        }),
+        path: "/",
+        projectId: description.projectId,
+      },
+    });
+    expect(projectCreated).toBeTruthy();
+    expect(repoCreated!.offset).toBeLessThan(projectCreated!.offset);
+
+    expect(await project.repo.whoami()).toBe(`repo ${description.projectId}:/`);
+    expect(await project.repos.get("/").whoami()).toBe(`repo ${description.projectId}:/`);
+
+    const workerResponse = await project.worker.fetch(new Request("https://example.com/probe"));
+    expect(await workerResponse.text()).toBe("project worker fetched /probe");
 
     const [committedEvent] = await project.streams.get("/some/path").append({
       type: "hello-world",
@@ -235,6 +261,159 @@ describe("minimal itx v4", () => {
       // @ts-expect-error - TODO maybe some niceties
       newItx.projects.get(description.projectId).someMethodInTestRunner.getSecret(getSecret),
     ).rejects.toThrow(/no capability "someMethodInTestRunner.getSecret"/);
+  });
+
+  test("Project repos, workers, runScript, and dynamic worker refs compose", async () => {
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+
+    using project = itx.projects.create({ slug: "dynamic-worker-project" });
+    const description = await project.describe();
+
+    const scriptResult = await project.runScript(`async (itx) => {
+      const response = await itx.worker.fetch(new Request("https://example.com/script"));
+      return {
+        repo: await itx.repo.whoami(),
+        worker: await response.text(),
+      };
+    }`);
+    expect(scriptResult.result).toEqual({
+      repo: `repo ${description.projectId}:/`,
+      worker: "project worker fetched /script",
+    });
+
+    const commit = await project.repo.commitFiles({
+      changes: [
+        {
+          path: "worker.js",
+          content: `
+            import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
+
+            export default class ProjectWorker extends WorkerEntrypoint {
+              fetch(req) {
+                return new Response(\`updated project worker fetched \${new URL(req.url).pathname}\`);
+              }
+
+              someMethod() {
+                return {
+                  projectId: ${JSON.stringify(description.projectId)},
+                  source: "committed-worker",
+                };
+              }
+
+              processEvent(input) {
+                console.log("updated project worker processed", input.event.type);
+              }
+            }
+
+            export class CounterDurableObject extends DurableObject {
+              async increment() {
+                const n = ((await this.ctx.storage.get("n")) ?? 0) + 1;
+                await this.ctx.storage.put("n", n);
+                return n;
+              }
+
+              async current() {
+                return (await this.ctx.storage.get("n")) ?? 0;
+              }
+            }
+          `,
+        },
+      ],
+      message: "Add someMethod to project worker",
+    });
+    expect(commit).toMatchObject({
+      branch: "main",
+      changedPaths: ["worker.js"],
+      noChanges: false,
+    });
+    expect(commit.commitOid).toMatch(/^[0-9a-f]{40}$/);
+    // @ts-expect-error - dynamic project worker method from committed source
+    expect(await project.worker.someMethod()).toEqual({
+      projectId: description.projectId,
+      source: "committed-worker",
+    });
+
+    await project.provideCapability({
+      path: ["probe"],
+      capability: {
+        type: "dynamic-worker",
+        workerRef: {
+          source: {
+            mainModule: "probe.js",
+            modules: {
+              "probe.js": `
+                import { WorkerEntrypoint } from "cloudflare:workers";
+
+                export class ProbeEntrypoint extends WorkerEntrypoint {
+                  async inspect() {
+                    const root = await this.env.ITX.authenticate();
+                    const repo = await this.env.ITX.projectRepo(${JSON.stringify(description.projectId)});
+                    return {
+                      principal: await root.whoami(),
+                      repo: await repo.whoami(),
+                    };
+                  }
+                }
+              `,
+            },
+            type: "inline",
+          },
+          target: { entrypoint: "ProbeEntrypoint", type: "worker-entrypoint" },
+        },
+      },
+    });
+    // @ts-expect-error - dynamic capability root
+    expect(await project.probe.inspect()).toEqual({
+      principal: "trusted-internal",
+      repo: `repo ${description.projectId}:/`,
+    });
+
+    await project.provideCapability({
+      path: ["projectWorkerRef"],
+      capability: {
+        type: "dynamic-worker",
+        workerRef: {
+          source: {
+            repoPath: "/",
+            sourcePath: "worker.js",
+            type: "repo",
+          },
+          target: { type: "worker-entrypoint" },
+        },
+      },
+    });
+    // @ts-expect-error - dynamic capability root
+    const workerRefResponse = await project.projectWorkerRef.fetch(
+      new Request("https://example.com/ref"),
+    );
+    expect(await workerRefResponse.text()).toBe("updated project worker fetched /ref");
+
+    await project.provideCapability({
+      path: ["counterFacet"],
+      capability: {
+        type: "dynamic-worker",
+        workerRef: {
+          cacheKey: `counter-facet-${crypto.randomUUID()}`,
+          source: {
+            repoPath: "/",
+            sourcePath: "worker.js",
+            type: "repo",
+          },
+          target: {
+            className: "CounterDurableObject",
+            type: "durable-object",
+          },
+        },
+      },
+    });
+    // @ts-expect-error - dynamic capability root
+    expect(await project.counterFacet.increment()).toBe(1);
+    // @ts-expect-error - dynamic capability root
+    expect(await project.counterFacet.current()).toBe(1);
   });
 
   test("Authenticated project can provide the Slack SDK as nested dotted callables", async () => {

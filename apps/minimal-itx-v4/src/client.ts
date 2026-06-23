@@ -43,7 +43,7 @@ export type {
 export type { RpcCompatible, RpcStub } from "capnweb";
 export type { ItxAuthContext } from "./auth.ts";
 
-export const DEFAULT_ITX_BASE_URL = "http://127.0.0.1:8790";
+export const DEFAULT_ITX_BASE_URL = "http://127.0.0.1:8791";
 
 export type ConnectItxInput = {
   baseUrl?: string;

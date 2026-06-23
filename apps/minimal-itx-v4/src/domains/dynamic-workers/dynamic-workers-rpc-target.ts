@@ -1,5 +1,6 @@
-import { RpcTarget } from "cloudflare:workers";
+import { env, RpcTarget } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { DynamicWorkerRef, DynamicWorkerSource } from "./dynamic-worker-ref.ts";
 import {
   hashString,
@@ -110,11 +111,22 @@ export class DynamicWorkersRpcTarget extends RpcTarget {
       };
     }
 
-    // The repo domain is not wired up in minimal-itx-v4 yet (no REPO binding /
-    // RepoDurableObject in wrangler.jsonc), so repo-sourced dynamic workers
-    // cannot be resolved.
-    throw new Error(
-      `repo-sourced dynamic workers are not implemented in minimal-itx-v4 (source "${source.repoPath}")`,
-    );
+    const resolved = await env.REPO.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: this.#projectId,
+        path: source.repoPath,
+      }),
+    ).getWorkerSource({ path: source.sourcePath });
+
+    return {
+      ...resolved,
+      cacheKey: hashString(
+        JSON.stringify({
+          repoPath: source.repoPath,
+          repoSourceCacheKey: resolved.cacheKey,
+          sourcePath: source.sourcePath,
+        }),
+      ),
+    };
   }
 }

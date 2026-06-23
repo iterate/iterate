@@ -34,7 +34,7 @@ const ready = new Promise<void>((resolve, reject) => {
 try {
   await ready;
   const e2e = spawn("pnpm", ["e2e"], {
-    env: { ...process.env, ITX_BASE: baseUrl },
+    env: { ...process.env, ITX_BASE: baseUrl, ITX_BASE_URL: baseUrl },
     stdio: "inherit",
   });
   const code = await new Promise<number | null>((resolve) => e2e.on("exit", resolve));

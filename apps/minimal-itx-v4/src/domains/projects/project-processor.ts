@@ -2,12 +2,11 @@ import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
 import { StreamProcessor } from "../streams/engine/stream-processor.ts";
 import { durableObjectProcessorSubscriber } from "../streams/engine/shared/callable-subscriber.ts";
-import type { Env } from "../../env.ts";
-import type { Project, StreamEvent } from "../../../types.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { AgentProcessorContract } from "../agents/agent-processor.ts";
-import { RepoProcessorContract } from "../repos/repo-processor.ts";
+import { PROJECT_REPO_PATH } from "../repos/project-repo.ts";
 import { CoreProcessorContract } from "../streams/engine/processors/core/contract.ts";
+import type { StreamEvent } from "../streams/engine/shared/event.ts";
 import { ItxContract } from "../../itx/processor-contract.ts";
 
 export const ProjectProcessorContract = defineProcessorContract({
@@ -17,10 +16,17 @@ export const ProjectProcessorContract = defineProcessorContract({
     "Tiny project projection: bootstrap the fake repo and subscribe child domain processors.",
   stateSchema: z.object({
     agents: z.array(z.string()).default([]),
+    createRequest: z
+      .object({
+        projectId: z.string(),
+        slug: z.string(),
+      })
+      .nullable()
+      .default(null),
     created: z.boolean().default(false),
     repos: z.array(z.string()).default([]),
   }),
-  initialState: { agents: [], created: false, repos: [] },
+  initialState: { agents: [], createRequest: null, created: false, repos: [] },
   events: {
     "events.iterate.com/project/create-requested": {
       description: "A project creation was requested.",
@@ -36,20 +42,40 @@ export const ProjectProcessorContract = defineProcessorContract({
         slug: z.string(),
       }),
     },
+    "events.iterate.com/repo/create-requested": {
+      description: "The project root repo should be created.",
+      payloadSchema: z.object({
+        projectId: z.string(),
+        path: z.string(),
+      }),
+    },
+    "events.iterate.com/repo/created": {
+      description: "A project repo was created.",
+      payloadSchema: z.object({
+        artifactName: z.string(),
+        defaultBranch: z.string(),
+        path: z.string(),
+        projectId: z.string(),
+        remote: z.string(),
+      }),
+    },
   },
   consumes: [
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-requested",
+    "events.iterate.com/repo/created",
     "events.iterate.com/stream/child-stream-created",
   ],
   processorDeps: [CoreProcessorContract],
   emits: [
     "events.iterate.com/project/created",
+    "events.iterate.com/repo/create-requested",
     "events.iterate.com/stream/subscription-configured",
   ],
 });
 type ProjectProcessorDeps = {
-  env: Env;
+  ensureDefaultWorkerLoaded(): Promise<void>;
+  forwardEventToProjectWorker(event: StreamEvent): Promise<void>;
   projectId: string;
 };
 
@@ -64,6 +90,9 @@ export class ProjectProcessor extends StreamProcessor<
     state,
   }: Parameters<StreamProcessor<typeof ProjectProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
+      case "events.iterate.com/project/create-requested":
+        if (event.payload.projectId !== this.deps.projectId) return state;
+        return { ...state, createRequest: event.payload };
       case "events.iterate.com/project/created":
         if (event.payload.projectId !== this.deps.projectId) return state;
         return { ...state, created: true };
@@ -84,10 +113,22 @@ export class ProjectProcessor extends StreamProcessor<
 
   protected override processEvent({
     blockProcessorWhile,
-    runInBackground,
     event,
+    previousState,
+    runInBackground,
+    state,
     append,
   }: Parameters<StreamProcessor<typeof ProjectProcessorContract>["processEvent"]>[0]): undefined {
+    if (previousState.created) {
+      runInBackground(async () => {
+        try {
+          await this.deps.forwardEventToProjectWorker(event as StreamEvent);
+        } catch (error) {
+          console.log("project worker processEvent failed", error);
+        }
+      });
+    }
+
     switch (event.type) {
       case "events.iterate.com/project/create-requested": {
         if (event.payload.projectId !== this.deps.projectId) {
@@ -96,8 +137,9 @@ export class ProjectProcessor extends StreamProcessor<
           );
         }
         blockProcessorWhile(async () => {
-          await append({
+          append({
             type: "events.iterate.com/stream/subscription-configured",
+            idempotencyKey: `stream-subscription:${this.deps.projectId}:${ItxContract.slug}`,
             payload: {
               subscriptionKey: ItxContract.slug,
               subscriber: durableObjectProcessorSubscriber({
@@ -110,56 +152,39 @@ export class ProjectProcessor extends StreamProcessor<
               }),
             },
           });
-        });
-        runInBackground(async () => {
-          setTimeout(async () => {
-            // TODO type is wrong! should be async for sure
-            await append({
-              type: "events.iterate.com/project/created",
-              payload: event.payload,
-            });
-          }, 100);
+          append({
+            type: "events.iterate.com/repo/create-requested",
+            idempotencyKey: `repo-create-requested:${this.deps.projectId}:${PROJECT_REPO_PATH}`,
+            payload: {
+              path: PROJECT_REPO_PATH,
+              projectId: this.deps.projectId,
+            },
+          });
         });
         break;
       }
-      case "events.iterate.com/project/created": {
-        // Touching the child stream wakes the real Stream Durable Object. Its
-        // core processor emits events.iterate.com/stream/child-stream-created
-        // back onto this root stream; this processor reacts to that announcement
-        // below and wires the repo processor to the child stream.
+      case "events.iterate.com/repo/created": {
+        if (
+          event.payload.projectId !== this.deps.projectId ||
+          event.payload.path !== PROJECT_REPO_PATH ||
+          state.created ||
+          state.createRequest === null
+        ) {
+          return;
+        }
         blockProcessorWhile(async () => {
-          await this.deps.env.STREAM.getByName(
-            DurableObjectNameCodec.stringify({
-              projectId: this.deps.projectId,
-              path: "/repos/project",
-            }),
-          ).runtimeState();
+          await this.deps.ensureDefaultWorkerLoaded();
+          append({
+            type: "events.iterate.com/project/created",
+            idempotencyKey: `project-created:${this.deps.projectId}`,
+            payload: state.createRequest!,
+          });
         });
         return;
       }
 
       case "events.iterate.com/stream/child-stream-created": {
         const path = event.payload.childPath;
-        if (path.startsWith("/repos/")) {
-          blockProcessorWhile(async () => {
-            await append({
-              type: "events.iterate.com/stream/subscription-configured",
-              payload: {
-                subscriptionKey: RepoProcessorContract.slug,
-                subscriber: durableObjectProcessorSubscriber({
-                  bindingName: "REPO",
-                  durableObjectName: DurableObjectNameCodec.stringify({
-                    projectId: this.deps.projectId,
-                    path,
-                  }),
-                  processorName: RepoProcessorContract.slug,
-                }),
-              },
-            });
-          });
-          return;
-        }
-
         if (path.startsWith("/agents/")) {
           blockProcessorWhile(async () => {
             await append({

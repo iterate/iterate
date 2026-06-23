@@ -162,14 +162,17 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
   readonly contract = ItxContract;
   #dynamicWorkers: DynamicWorkersRpcTarget;
   #liveCapabilities = new Map<string, LiveCapability>();
+  #projectId: string;
 
   constructor(
     args: StreamProcessorConstructorArgs<typeof ItxContract, object> & {
       dynamicWorkers: DynamicWorkersRpcTarget;
+      projectId: string;
     },
   ) {
     super(args);
     this.#dynamicWorkers = args.dynamicWorkers;
+    this.#projectId = args.projectId;
   }
 
   protected override reduce({
@@ -336,11 +339,18 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
   }
 
   #scriptWorkerRef(code: string): DynamicWorkerRef {
+    const projectId = JSON.stringify(this.#projectId);
     const source = `
       import { WorkerEntrypoint } from "cloudflare:workers";
       const fn = ${code};
       export class ScriptEntrypoint extends WorkerEntrypoint {
-        async run() { return await fn(await this.env.ITX.authenticate()); }
+        async run() {
+          const project = {
+            repo: await this.env.ITX.projectRepo(${projectId}),
+            worker: await this.env.ITX.projectWorker(${projectId}),
+          };
+          return await fn(project);
+        }
       }
     `;
     return {

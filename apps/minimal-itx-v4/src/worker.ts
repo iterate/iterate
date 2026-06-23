@@ -3,7 +3,7 @@ import type { Env } from "./env.ts";
 import { ITX_AUTH_COOKIE } from "./auth.ts";
 // import { AgentDurableObject } from "./domains/agents/agent-durable-object.ts";
 import { ProjectDurableObject } from "./domains/projects/project-durable-object.ts";
-// import { RepoDurableObject } from "./domains/repos/repo-durable-object.ts";
+import { RepoDurableObject } from "./domains/repos/repo-durable-object.ts";
 import { StreamDurableObject } from "./domains/streams/stream-durable-object.ts";
 import { ItxEntrypoint, UnauthenticatedItxRpcTarget } from "./rpc-targets.ts";
 
@@ -42,6 +42,6 @@ export {
   ItxEntrypoint,
   // AgentDurableObject,
   ProjectDurableObject,
-  // RepoDurableObject,
+  RepoDurableObject,
   StreamDurableObject,
 };

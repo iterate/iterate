@@ -4,34 +4,40 @@ The public Cap'n Web endpoint exports one unauthenticated target:
 
 ```ts
 using unauthenticatedItx = connectItx({ baseUrl });
-using itx = unauthenticatedItx.authenticate({
-  auth: { type: "token", token },
-  projectId: "prj_ref",
+using root = unauthenticatedItx.authenticate({
+  type: "token",
+  token: { type: "user", principal: "alice", projectScopes: ["prj_ref"] },
 });
+using project = root.projects.get("prj_ref");
 ```
 
 `authenticate()` is the only way to get the real ITX capability. Its input is
 also the shape used by platform-provided dynamic worker bindings:
 
 ```ts
-type ItxConnectInput = {
-  auth:
-    | { type: "token"; token: string }
-    | { type: "from-server-cookie" }
-    | { type: "trusted-internal"; token: string };
-  projectId?: string;
-  path?: string;
-};
+type ItxAuthCredentials =
+  | { type: "token"; token: ItxAuthToken }
+  | { type: "from-server-cookie" }
+  | { type: "trusted-internal"; token: string };
 ```
 
-Omitting `projectId` returns the authenticated global ITX. Passing `projectId`
-with no `path` returns the project root ITX. Passing a path such as
-`/agents/ada` returns that context's ITX.
+Authentication returns the root ITX catalog. From there, `root.projects.get(id)`
+returns a project capability and `root.projects.create({ slug })` creates a
+project. Project creation also creates and seeds the default repo at path `/`,
+loads the seeded project worker from `worker.js`, and only then emits
+`events.iterate.com/project/created`.
+
+```ts
+using project = root.projects.create({ slug: "demo" });
+
+await project.repo.whoami(); // same repo as project.repos.get("/")
+const response = await project.worker.fetch(new Request("https://example.com/probe"));
+```
 
 Browser-style auth can be simulated with a fake login endpoint:
 
 ```bash
-curl -i -X POST http://127.0.0.1:8789/api/login --data alice-token
+curl -i -X POST http://127.0.0.1:8791/api/login --data alice-token
 ```
 
 That writes an HttpOnly cookie. Browser callers then connect to `/api/itx` and
@@ -39,8 +45,7 @@ authenticate with:
 
 ```ts
 using itx = unauthenticatedItx.authenticate({
-  auth: { type: "from-server-cookie" },
-  projectId: "prj_ref",
+  type: "from-server-cookie",
 });
 ```
 
@@ -71,7 +76,7 @@ ITX_BASE=https://your-worker.workers.dev pnpm repl
 ```
 
 The REPL exposes `itx`, `root`, `RpcTarget`, `baseUrl`, `projectId`, and `token`.
-Defaults are `http://127.0.0.1:8789`, project `prj_ref`, and the demo tokens
+Defaults are `http://127.0.0.1:8791`, project `prj_ref`, and the demo tokens
 from `src/auth.ts`.
 
 ## Cloudflare Workers RPC Types

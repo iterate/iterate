@@ -8,6 +8,8 @@ import type {
   ItxAuth,
   UnauthenticatedItx,
   Project,
+  ProjectWorker,
+  Repo,
   Streams,
   Agents,
   Repos,
@@ -28,6 +30,8 @@ import {
   TRUSTED_INTERNAL_ITX_TOKEN,
 } from "./auth.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor.ts";
+import { PROJECT_REPO_PATH } from "./domains/repos/project-repo.ts";
+import { RepoProcessorContract } from "./domains/repos/repo-processor.ts";
 import { durableObjectProcessorSubscriber } from "./domains/streams/engine/shared/callable-subscriber.ts";
 import type { ItxProcessorRpc, ProvideCapabilityInput } from "./itx/processor.ts";
 import { isReservedDynamicPathSegment, withInvokeCapabilityFallback } from "./itx/path-proxy.ts";
@@ -132,6 +136,79 @@ export class StreamRpcTarget extends RpcTarget implements RpcTargetImplementatio
   }
 }
 
+function normalizeRepoPath(path: string): string {
+  return path === "" ? "/" : path.startsWith("/") ? path : `/${path}`;
+}
+
+function projectRootStream(props: { auth: ItxAuth; projectId: string }) {
+  return new StreamRpcTarget({
+    auth: props.auth,
+    projectId: props.projectId,
+    path: "/",
+  });
+}
+
+function projectProcessorSubscriptionEvent(projectId: string) {
+  return {
+    type: "events.iterate.com/stream/subscription-configured",
+    idempotencyKey: `stream-subscription:${projectId}:${ProjectProcessorContract.slug}`,
+    payload: {
+      subscriptionKey: ProjectProcessorContract.slug,
+      subscriber: durableObjectProcessorSubscriber({
+        bindingName: "PROJECT",
+        durableObjectName: DurableObjectNameCodec.stringify({
+          projectId,
+          path: "/",
+        }),
+        processorName: ProjectProcessorContract.slug,
+      }),
+    },
+  } satisfies Parameters<Stream["append"]>[0];
+}
+
+function repoProcessorSubscriptionEvent(input: { path: string; projectId: string }) {
+  const path = normalizeRepoPath(input.path);
+  return {
+    type: "events.iterate.com/stream/subscription-configured",
+    idempotencyKey: `stream-subscription:${input.projectId}:${RepoProcessorContract.slug}:${path}`,
+    payload: {
+      subscriptionKey: `${RepoProcessorContract.slug}:${path}`,
+      subscriber: durableObjectProcessorSubscriber({
+        bindingName: "REPO",
+        durableObjectName: DurableObjectNameCodec.stringify({
+          projectId: input.projectId,
+          path,
+        }),
+        processorName: RepoProcessorContract.slug,
+      }),
+    },
+  } satisfies Parameters<Stream["append"]>[0];
+}
+
+async function requestRepoCreate(input: {
+  auth: ItxAuth;
+  path: string;
+  projectId: string;
+}): Promise<RepoRpcTarget> {
+  const path = normalizeRepoPath(input.path);
+  const stream = projectRootStream({ auth: input.auth, projectId: input.projectId });
+  const [, createRequested] = await stream.append(repoProcessorSubscriptionEvent(input), {
+    type: "events.iterate.com/repo/create-requested",
+    idempotencyKey: `repo-create-requested:${input.projectId}:${path}`,
+    payload: { projectId: input.projectId, path },
+  });
+
+  await stream.waitForEvent({
+    afterOffset: createRequested.offset - 1,
+    eventTypes: ["events.iterate.com/repo/created"],
+    predicate: (event) =>
+      event.payload?.projectId === input.projectId && event.payload?.path === path,
+    timeoutMs: 60_000,
+  });
+
+  return new RepoRpcTarget({ auth: input.auth, path, projectId: input.projectId });
+}
+
 class StreamsRpcTarget extends RpcTarget implements RpcTargetImplementation<Streams> {
   constructor(readonly props: { auth: ItxAuth; projectId: string | null }) {
     super();
@@ -191,37 +268,27 @@ class ProjectsRpcTarget extends RpcTarget implements RpcTargetImplementation<Pro
       args.projectId = "prj_" + crypto.randomUUID();
     }
 
-    const stream = new StreamRpcTarget({
+    const stream = projectRootStream({
       auth: this.props.auth,
       projectId: args.projectId,
-      path: "/",
     });
 
-    await stream.append(
+    const [, , createRequested] = await stream.append(
       // TODO move towards ProjectProcessorContract.buildEvent() helper or similar
-      {
-        type: "events.iterate.com/stream/subscription-configured",
-        payload: {
-          subscriptionKey: ProjectProcessorContract.slug,
-          subscriber: durableObjectProcessorSubscriber({
-            bindingName: "PROJECT",
-            durableObjectName: DurableObjectNameCodec.stringify({
-              projectId: args.projectId,
-              path: "/",
-            }),
-            processorName: ProjectProcessorContract.slug,
-          }),
-        },
-      },
+      projectProcessorSubscriptionEvent(args.projectId),
+      repoProcessorSubscriptionEvent({ projectId: args.projectId, path: PROJECT_REPO_PATH }),
       // Kick off the "create project sequence"
       {
         type: "events.iterate.com/project/create-requested",
+        idempotencyKey: `project-create-requested:${args.projectId}`,
         payload: { projectId: args.projectId, slug: args.slug },
       },
     );
     await stream.waitForEvent({
+      afterOffset: createRequested.offset - 1,
       eventTypes: ["events.iterate.com/project/created"],
-      timeoutMs: 5000,
+      predicate: (event) => event.payload?.projectId === args.projectId,
+      timeoutMs: 60_000,
     });
 
     return new ProjectRpcTarget({ auth: this.props.auth, projectId: args.projectId });
@@ -272,6 +339,94 @@ abstract class ItxCapabilityHostRpcTarget
   }
 }
 
+export class RepoRpcTarget extends RpcTarget implements RpcTargetImplementation<Repo> {
+  constructor(readonly props: { auth: ItxAuth; path: string; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  get durableObjectStub() {
+    return env.REPO.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: this.props.projectId,
+        path: normalizeRepoPath(this.props.path),
+      }),
+    );
+  }
+
+  create() {
+    return requestRepoCreate({
+      auth: this.props.auth,
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
+  }
+
+  whoami() {
+    return this.durableObjectStub.whoami();
+  }
+
+  commitFiles(input: Parameters<Repo["commitFiles"]>[0]) {
+    return this.durableObjectStub.commitFiles(input);
+  }
+}
+
+class ReposRpcTarget extends RpcTarget implements RpcTargetImplementation<Repos> {
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  create(input: Parameters<Repos["create"]>[0]) {
+    return requestRepoCreate({
+      auth: this.props.auth,
+      path: input.path,
+      projectId: this.props.projectId,
+    });
+  }
+
+  get(path: string) {
+    return new RepoRpcTarget({
+      auth: this.props.auth,
+      path: normalizeRepoPath(path),
+      projectId: this.props.projectId,
+    });
+  }
+}
+
+export class ProjectWorkerRpcTarget
+  extends RpcTarget
+  implements RpcTargetImplementation<ProjectWorker>
+{
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+    return withInvokeCapabilityFallback(this);
+  }
+
+  get durableObjectStub() {
+    return env.PROJECT.getByName(
+      DurableObjectNameCodec.stringify({ path: "/", projectId: this.props.projectId }),
+    );
+  }
+
+  fetch(req: Request) {
+    return this.durableObjectStub.workerFetch(req);
+  }
+
+  processEvent(input: Parameters<ProjectWorker["processEvent"]>[0]) {
+    return this.durableObjectStub.workerProcessEvent(input);
+  }
+
+  invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
+    return (
+      this.durableObjectStub as unknown as {
+        workerInvokeCapability(input: { args: unknown[]; path: string[] }): unknown;
+      }
+    ).workerInvokeCapability({ args, path });
+  }
+}
+
 export class ProjectRpcTarget
   extends ItxCapabilityHostRpcTarget
   implements RpcTargetImplementation<Project>
@@ -307,8 +462,26 @@ export class ProjectRpcTarget
     throw new Error("project.agents is not implemented in minimal-itx-v4");
   }
 
-  get repos(): Repos {
-    throw new Error("project.repos is not implemented in minimal-itx-v4");
+  get repos(): RpcTargetImplementation<Repos> {
+    return new ReposRpcTarget({
+      auth: this.props.auth,
+      projectId: this.props.projectId,
+    });
+  }
+
+  get repo(): RpcTargetImplementation<Repo> {
+    return new RepoRpcTarget({
+      auth: this.props.auth,
+      path: PROJECT_REPO_PATH,
+      projectId: this.props.projectId,
+    });
+  }
+
+  get worker(): RpcTargetImplementation<ProjectWorker> {
+    return new ProjectWorkerRpcTarget({
+      auth: this.props.auth,
+      projectId: this.props.projectId,
+    });
   }
 }
 
@@ -347,5 +520,13 @@ export class ItxEntrypoint
 {
   authenticate(input: ItxAuthCredentials = this.ctx.props) {
     return new UnauthenticatedItxRpcTarget().authenticate(input);
+  }
+
+  projectRepo(projectId: string) {
+    return this.authenticate().projects.get(projectId).repo;
+  }
+
+  projectWorker(projectId: string) {
+    return this.authenticate().projects.get(projectId).worker;
   }
 }

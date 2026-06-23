@@ -6,9 +6,14 @@ import {
   type RequestStreamSubscriptionArgs,
 } from "../streams/engine/workers/stream-processor-host.ts";
 import type { Env } from "../../env.ts";
-import type { Repo, StreamEvent } from "../../../types.ts";
 import { hashString, type ResolvedWorkerSource } from "../dynamic-workers/dynamic-worker-loader.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import type {
+  CommitRepoFilesInput,
+  CommitRepoFilesResult,
+  RepoFileChange,
+} from "../../../types.ts";
+import { RepoArtifactNameCodec } from "./repo-artifact-name.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.ts";
 import { RepoProcessor, RepoProcessorContract } from "./repo-processor.ts";
 
@@ -16,23 +21,22 @@ const REPO_DEFAULT_BRANCH = "main";
 const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 const REPO_DIR = "/repo";
 
-type InternalStreamWriter = {
-  append(...input: unknown[]): Promise<unknown[]>;
-  getEvents(input?: unknown): Promise<unknown>;
-};
-
-export class RepoDurableObject extends DurableObject<Env> implements Repo {
-  readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
+export class RepoDurableObject extends DurableObject<Env> {
+  readonly #name = DurableObjectNameCodec.parseProjectScoped(this.ctx.id.name!);
   readonly #host = createStreamProcessorHost(this.ctx);
-  readonly #stream = this.ctx.exports.StreamDurableObject.getByName(this.ctx.id.name!);
-
-  #streamWriter(): InternalStreamWriter {
-    return this.#stream as unknown as InternalStreamWriter;
-  }
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.#host.add(RepoProcessorContract.slug, (deps) => new RepoProcessor(deps));
+    this.#host.add(
+      RepoProcessorContract.slug,
+      (deps) =>
+        new RepoProcessor({
+          ...deps,
+          createRepoArtifact: (input) => this.createArtifactRepo(input),
+          path: this.#name.path,
+          projectId: this.#name.projectId,
+        }),
+    );
   }
 
   requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
@@ -58,36 +62,24 @@ export class RepoDurableObject extends DurableObject<Env> implements Repo {
     };
   }
 
-  async create(): Promise<StreamEvent> {
-    const existing = await this.createdEvent();
-    if (existing) return existing;
-
-    await this.#streamWriter().append({
-      type: "events.iterate.com/repo/create-requested",
-      payload: {},
-    });
-
-    const artifactName = this.artifactName();
-    const payload = (await this.artifactExists(artifactName))
-      ? {
-          artifactName,
-          defaultBranch: REPO_DEFAULT_BRANCH,
-          remote: this.artifactRemote(artifactName),
-        }
-      : await this.createArtifactRepo({});
-    const [event] = await this.#streamWriter().append({
-      type: "events.iterate.com/repo/created",
-      idempotencyKey: `repo-created:${this.#name.projectId}:${this.#name.path}`,
-      payload,
-    });
-    return event as StreamEvent;
-  }
-
   whoami(): string {
     return `repo ${this.#name.projectId}:${this.#name.path}`;
   }
 
-  private async createArtifactRepo(input: Record<string, unknown>) {
+  async commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult> {
+    const parsed = parseCommitFilesInput(input);
+    const repo = await this.repoGitAccess();
+    return await commitFilesToArtifactRepo({
+      author: parsed.author,
+      branch: parsed.branch ?? repo.defaultBranch,
+      changes: parsed.changes,
+      message: parsed.message,
+      remote: repo.remote,
+      token: repo.token,
+    });
+  }
+
+  private async createArtifactRepo(_input: { path: string; projectId: string }) {
     const artifactName = this.artifactName();
     await this.getOrCreateArtifact(artifactName);
     const defaultBranch = REPO_DEFAULT_BRANCH;
@@ -105,7 +97,6 @@ export class RepoDurableObject extends DurableObject<Env> implements Repo {
       artifactName,
       defaultBranch,
       remote,
-      ...input,
     };
   }
 
@@ -129,26 +120,15 @@ export class RepoDurableObject extends DurableObject<Env> implements Repo {
     }
   }
 
-  private async artifactExists(name: string): Promise<boolean> {
-    try {
-      await this.requireArtifacts().get(name);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  private async createdEvent(): Promise<StreamEvent | undefined> {
-    const events = (await this.#streamWriter().getEvents({ afterOffset: 0 })) as StreamEvent[];
-    return events.find((event) => event.type === "events.iterate.com/repo/created");
-  }
-
   private requireArtifacts(): Artifacts {
     return this.env.ARTIFACTS;
   }
 
   private artifactName() {
-    return `repo-${hexEncode(`${this.#name.projectId}:${this.#name.path}`)}`;
+    return RepoArtifactNameCodec.stringify({
+      path: this.#name.path,
+      projectId: this.#name.projectId,
+    });
   }
 
   private artifactRemote(artifactName: string) {
@@ -217,6 +197,78 @@ async function seedArtifactRepo(input: {
   }
 }
 
+async function commitFilesToArtifactRepo(input: {
+  author?: { email: string; name: string };
+  branch: string;
+  changes: RepoFileChange[];
+  message: string;
+  remote: string;
+  token: string;
+}): Promise<CommitRepoFilesResult> {
+  const filesystem = new InMemoryFs();
+  const git = createGit(filesystem, REPO_DIR);
+  const credentials = { password: input.token, username: "x" };
+
+  await git.clone({
+    branch: input.branch,
+    singleBranch: true,
+    url: input.remote,
+    ...credentials,
+  });
+
+  for (const change of input.changes) {
+    const path = normalizeRepoFilePath(change.path);
+    const absolutePath = `${REPO_DIR}/${path}`;
+
+    if ("delete" in change) {
+      if (await filesystem.exists(absolutePath)) await filesystem.rm(absolutePath);
+      await git.rm({ filepath: path });
+      continue;
+    }
+
+    const dir = absolutePath.replace(/\/[^/]+$/, "");
+    if (dir !== REPO_DIR && !(await filesystem.exists(dir))) {
+      await filesystem.mkdir(dir, { recursive: true });
+    }
+    await filesystem.writeFile(absolutePath, change.content);
+    await git.add({ filepath: path });
+  }
+
+  const changedPaths = (await git.status()).map((entry) => entry.filepath).sort();
+  if (changedPaths.length === 0) {
+    const [head] = await git.log({ depth: 1 });
+    if (!head) throw new Error("Repo has no commits.");
+    return {
+      branch: input.branch,
+      changedPaths,
+      commitOid: head.oid,
+      noChanges: true,
+    };
+  }
+
+  const commit = await git.commit({
+    author: input.author ?? { email: "support@iterate.com", name: "Iterate" },
+    message: input.message,
+  });
+
+  const pushed = await git.push({
+    force: true,
+    ref: input.branch,
+    remote: "origin",
+    ...credentials,
+  });
+  if (!pushed.ok) {
+    throw new Error(`Failed to push ${input.branch}: ${JSON.stringify(pushed.refs)}`);
+  }
+
+  return {
+    branch: input.branch,
+    changedPaths,
+    commitOid: commit.oid,
+    noChanges: false,
+  };
+}
+
 async function readRepoModules(input: { branch: string; remote: string; token: string }) {
   const filesystem = new InMemoryFs();
   const git = createGit(filesystem, REPO_DIR);
@@ -249,6 +301,62 @@ async function readRepoModules(input: { branch: string; remote: string; token: s
   return { commitOid: head.oid, modules };
 }
 
+function parseCommitFilesInput(input: CommitRepoFilesInput): CommitRepoFilesInput {
+  if (!input || typeof input !== "object") throw new Error("commitFiles input is required.");
+  if (typeof input.message !== "string" || input.message.trim() === "") {
+    throw new Error("commitFiles message must be a non-empty string.");
+  }
+  if (!Array.isArray(input.changes) || input.changes.length === 0) {
+    throw new Error("commitFiles changes must be a non-empty array.");
+  }
+  if (
+    input.branch !== undefined &&
+    (typeof input.branch !== "string" || input.branch.trim() === "")
+  ) {
+    throw new Error("commitFiles branch must be a non-empty string.");
+  }
+  if (input.author !== undefined) {
+    if (
+      typeof input.author.name !== "string" ||
+      input.author.name.trim() === "" ||
+      typeof input.author.email !== "string" ||
+      input.author.email.trim() === ""
+    ) {
+      throw new Error("commitFiles author must include non-empty name and email.");
+    }
+  }
+
+  return {
+    ...input,
+    branch: input.branch?.trim(),
+    changes: input.changes.map((change) => {
+      const path = normalizeRepoFilePath(change.path);
+      if ("delete" in change) return { delete: true, path };
+      if (typeof change.content !== "string") {
+        throw new Error(`commitFiles change "${path}" content must be a string.`);
+      }
+      return { content: change.content, path };
+    }),
+    message: input.message.trim(),
+  };
+}
+
+function normalizeRepoFilePath(path: string): string {
+  if (typeof path !== "string") throw new Error("Repo file path must be a string.");
+  const normalized = path.trim().replace(/^\/+/, "");
+  if (
+    normalized === "" ||
+    normalized === "." ||
+    normalized.startsWith("../") ||
+    normalized.includes("/../") ||
+    normalized.includes("/./") ||
+    normalized.startsWith(".git/")
+  ) {
+    throw new Error(`Invalid repo file path: "${path}".`);
+  }
+  return normalized;
+}
+
 function stripArtifactTokenQuery(token: string) {
   return token.split("?expires=")[0] ?? token;
 }
@@ -259,10 +367,4 @@ async function ensureBranchRef(input: { branch: string; git: ReturnType<typeof c
   } catch (error) {
     if (!String(error).match(/already exists/i)) throw error;
   }
-}
-
-function hexEncode(value: string) {
-  return Array.from(new TextEncoder().encode(value), (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  ).join("");
 }

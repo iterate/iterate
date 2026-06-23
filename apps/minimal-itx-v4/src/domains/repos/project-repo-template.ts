@@ -30,8 +30,7 @@ export const PROJECT_REPO_INITIAL_FILES = [
     path: "worker.js",
   },
   {
-    content:
-      "# Minimal ITX v3 project repo\n\nThis repo is seeded by RepoDurableObject.create().\n",
+    content: "# Minimal ITX v4 project repo\n\nThis repo is seeded by the repo stream processor.\n",
     path: "README.md",
   },
 ];

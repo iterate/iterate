@@ -23,13 +23,18 @@ export const RepoProcessorContract = defineProcessorContract({
   events: {
     "events.iterate.com/repo/create-requested": {
       description: "A repo creation was requested.",
-      payloadSchema: z.looseObject({}),
+      payloadSchema: z.object({
+        projectId: z.string(),
+        path: z.string(),
+      }),
     },
     "events.iterate.com/repo/created": {
       description: "The repo was created.",
-      payloadSchema: z.looseObject({
+      payloadSchema: z.object({
         artifactName: z.string(),
         defaultBranch: z.string(),
+        path: z.string(),
+        projectId: z.string(),
         remote: z.string(),
       }),
     },
@@ -43,10 +48,23 @@ export const RepoProcessorContract = defineProcessorContract({
     "events.iterate.com/repo/created",
     "events.iterate.com/stream/created",
   ],
-  emits: [],
+  emits: ["events.iterate.com/repo/created"],
 });
 
-export class RepoProcessor extends StreamProcessor<typeof RepoProcessorContract> {
+type RepoProcessorDeps = {
+  createRepoArtifact(input: { path: string; projectId: string }): Promise<{
+    artifactName: string;
+    defaultBranch: string;
+    remote: string;
+  }>;
+  path: string;
+  projectId: string;
+};
+
+export class RepoProcessor extends StreamProcessor<
+  typeof RepoProcessorContract,
+  RepoProcessorDeps
+> {
   readonly contract = RepoProcessorContract;
 
   protected override reduce({
@@ -69,5 +87,31 @@ export class RepoProcessor extends StreamProcessor<typeof RepoProcessorContract>
     }
   }
 
-  protected override processEvent(): undefined {}
+  protected override processEvent({
+    blockProcessorWhile,
+    event,
+    state,
+    append,
+  }: Parameters<StreamProcessor<typeof RepoProcessorContract>["processEvent"]>[0]): undefined {
+    if (event.type !== "events.iterate.com/repo/create-requested") return;
+    if (event.payload.projectId !== this.deps.projectId || event.payload.path !== this.deps.path) {
+      throw new Error(
+        `repo/create-requested for "${event.payload.projectId}:${event.payload.path}" on repo "${this.deps.projectId}:${this.deps.path}"`,
+      );
+    }
+    if (state.created) return;
+
+    blockProcessorWhile(async () => {
+      const payload = await this.deps.createRepoArtifact(event.payload);
+      append({
+        type: "events.iterate.com/repo/created",
+        idempotencyKey: `repo-created:${this.deps.projectId}:${this.deps.path}`,
+        payload: {
+          ...payload,
+          path: this.deps.path,
+          projectId: this.deps.projectId,
+        },
+      });
+    });
+  }
 }

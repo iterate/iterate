@@ -5,12 +5,12 @@ import {
 } from "../streams/engine/workers/stream-processor-host.ts";
 import type { Env } from "../../env.ts";
 import { TRUSTED_INTERNAL_ITX_TOKEN, trustedInternalAuthContext } from "../../auth.ts";
-import type { ItxProcessorRpc } from "../../itx/processor.ts";
+import { ItxProcessor, replayPath, type ItxProcessorRpc } from "../../itx/processor.ts";
 import { ItxContract } from "../../itx/processor-contract.ts";
-import { ItxProcessor } from "../../itx/processor.ts";
 import { DynamicWorkersRpcTarget } from "../dynamic-workers/dynamic-workers-rpc-target.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import type { Project, RpcTargetImplementation } from "../../../types.ts";
+import type { Project, ProjectWorker, RpcTargetImplementation } from "../../../types.ts";
+import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "../repos/project-repo.ts";
 import { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { ProjectProcessor, ProjectProcessorContract } from "./project-processor.ts";
 
@@ -22,7 +22,8 @@ export class ProjectDurableObject extends DurableObject<Env> {
     (deps) =>
       new ProjectProcessor({
         ...deps,
-        env: this.env,
+        ensureDefaultWorkerLoaded: () => this.ensureDefaultWorkerLoaded(),
+        forwardEventToProjectWorker: (event) => this.forwardEventToProjectWorker(event),
         projectId: this.#name.projectId,
       }),
   );
@@ -55,6 +56,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
         new ItxProcessor({
           ...deps,
           dynamicWorkers: this.#dynamicWorkers,
+          projectId: this.#name.projectId,
           stream: this.#stream as never,
         }),
     );
@@ -75,54 +77,43 @@ export class ProjectDurableObject extends DurableObject<Env> {
     });
   }
 
-  // get rpcTarget() {
-  //   return new ProjectRpcTarget({
-  //     auth: trustedInternalAuthContext(),
-  //     projectId: this.#name.projectId,
-  //   });
-  // }
+  async ensureDefaultWorkerLoaded(): Promise<void> {
+    const worker = await this.defaultProjectWorker();
+    if (typeof worker.fetch !== "function") {
+      throw new Error("Default project worker does not expose fetch().");
+    }
+  }
 
-  // updateProjectRepo() {
-  //   return this.rpcTarget.streams.get("/").append({
-  //     event: {
-  //       type: "events.iterate.com/stream/subscription-configured",
-  //       payload: {
-  //         subscriptionKey: `repo:${this.#name.projectId}:${PROJECT_REPO_PATH}:${crypto.randomUUID()}`,
-  //       },
-  //     },
-  //   });
-  // }
+  async workerFetch(req: Request) {
+    return await (await this.defaultProjectWorker()).fetch(req);
+  }
 
-  // get worker(): ProjectWorker {
-  //   return new ProjectWorkerTarget({
-  //     auth: trustedInternalAuthContext(),
-  //     projectId: this.#name.projectId,
-  //   }) as unknown as ProjectWorker;
-  // }
+  async workerProcessEvent(input: Parameters<ProjectWorker["processEvent"]>[0]) {
+    return await (await this.defaultProjectWorker()).processEvent(input);
+  }
 
-  // async workerFetch(req: Request) {
-  //   const worker = await this.#dynamicWorkers.get<ProjectWorker>({
-  //     source: {
-  //       repoPath: PROJECT_REPO_PATH,
-  //       sourcePath: "worker.js",
-  //       type: "repo",
-  //     },
-  //     target: { type: "worker-entrypoint" },
-  //   });
-  //   return await worker.fetch(req);
-  // }
+  async forwardEventToProjectWorker(event: Parameters<ProjectWorker["processEvent"]>[0]["event"]) {
+    await this.workerProcessEvent({ event });
+  }
 
-  // async workerProcessEvent(input: Parameters<ProjectWorker["processEvent"]>[0]) {
-  //   const worker = await this.#dynamicWorkers.get<ProjectWorker>({
-  //     source: {
-  //       repoPath: PROJECT_REPO_PATH,
-  //       sourcePath: "worker.js",
-  //       type: "repo",
-  //     },
-  //     target: { type: "worker-entrypoint" },
-  //   });
-  //   return await worker.processEvent(input);
-  // }
+  async workerInvokeCapability(input: { args?: unknown[]; path: string[] }) {
+    return await replayPath({
+      args: input.args ?? [],
+      path: input.path,
+      target: await this.defaultProjectWorker(),
+    });
+  }
+
+  private defaultProjectWorker() {
+    return this.#dynamicWorkers.get<ProjectWorker>({
+      source: {
+        repoPath: PROJECT_REPO_PATH,
+        sourcePath: PROJECT_WORKER_SOURCE_PATH,
+        type: "repo",
+      },
+      target: { type: "worker-entrypoint" },
+    });
+  }
 
   get rpcTarget(): RpcTargetImplementation<Project> {
     return this.getCapability();

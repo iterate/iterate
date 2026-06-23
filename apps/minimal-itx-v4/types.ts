@@ -79,9 +79,9 @@ export interface Project extends ItxCapabilityHost {
   streams: Streams;
   describe(): { projectId: string; name: string };
   // agents: Agents;
-  // repos: Repos;
-  // repo: Repo;
-  // worker: ProjectWorker;
+  repos: Repos;
+  repo: Repo;
+  worker: ProjectWorker;
 }
 
 /**
@@ -233,13 +233,38 @@ export interface Streams {
   get(path: string): Stream;
 }
 
+export type RepoFileChange =
+  | {
+      path: string;
+      content: string;
+    }
+  | {
+      path: string;
+      delete: true;
+    };
+
+export type CommitRepoFilesInput = {
+  author?: { email: string; name: string };
+  branch?: string;
+  changes: RepoFileChange[];
+  message: string;
+};
+
+export type CommitRepoFilesResult = {
+  branch: string;
+  changedPaths: string[];
+  commitOid: string;
+  noChanges: boolean;
+};
+
 export interface Repo {
-  create(): Promise<StreamEvent>;
+  commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult>;
+  create(): Promise<Repo>;
   whoami(): string;
 }
 
 export interface Repos {
-  create(input: { path: string }): Promise<StreamEvent>;
+  create(input: { path: string }): Promise<Repo>;
   get(path: string): Repo;
 }
 
