@@ -62,15 +62,7 @@ type DopplerConfigName =
   | "preview"
   | "prd"
   | `\${{ ${string} }}`;
-type DopplerProjectName = string;
-
-export const setupDoppler = ({
-  config,
-  project,
-}: {
-  config: DopplerConfigName;
-  project: DopplerProjectName;
-}) =>
+export const setupDoppler = ({ config, project }: { config: DopplerConfigName; project: string }) =>
   [
     installDopplerCli,
     {

@@ -22,11 +22,7 @@ export type ChartConfig = Record<
   )
 >;
 
-type ChartContextProps = {
-  config: ChartConfig;
-};
-
-const ChartContext = React.createContext<ChartContextProps | null>(null);
+const ChartContext = React.createContext<{ config: ChartConfig } | null>(null);
 
 function useChart() {
   const context = React.useContext(ChartContext);
@@ -107,8 +103,6 @@ ${colorConfig
 
 const ChartTooltip = RechartsPrimitive.Tooltip;
 
-type TooltipNameType = number | string;
-
 function ChartTooltipContent({
   active,
   payload,
@@ -131,7 +125,7 @@ function ChartTooltipContent({
     nameKey?: string;
     labelKey?: string;
   } & Omit<
-    RechartsPrimitive.DefaultTooltipContentProps<TooltipValueType, TooltipNameType>,
+    RechartsPrimitive.DefaultTooltipContentProps<TooltipValueType, number | string>,
     "accessibilityLayer"
   >) {
   const { config } = useChart();

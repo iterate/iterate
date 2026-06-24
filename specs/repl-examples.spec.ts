@@ -1,4 +1,5 @@
 import { expect } from "@playwright/test";
+import JSON5 from "json5";
 import { EXAMPLE_CASES } from "../apps/os/src/itx/e2e/example-cases.ts";
 import { ITX_EXAMPLES } from "../apps/os/src/itx/examples.ts";
 import { test } from "./test-support/test.ts";
@@ -25,18 +26,18 @@ test.describe("itx REPL catalogue examples", () => {
         marker: `playwright-${example.id}-${crypto.randomUUID().slice(0, 8)}`,
         projectId: fixture.project.id,
       };
-      // const vars = exampleCase.vars ? exampleCase.vars(ctx) : {};
 
       const entries = page.getByTestId("itx-repl-entry");
       const entryIndex = await entries.count();
 
-      let code = `const vars = ${JSON.stringify(exampleCase.vars?.(ctx), null, 2)};`;
-      code += `\n\n${example.code}`;
+      let code = example.code;
+      if (exampleCase.vars) {
+        const json = JSON5.stringify(exampleCase.vars(ctx), null, 2);
+        code = `const vars = ${json};\n\n${example.code}`;
+      }
 
       const editor = page.getByTestId("itx-repl-editor").locator(".cm-content");
-      await editor.click();
-      await page.keyboard.press("ControlOrMeta+A");
-      await page.keyboard.insertText(code);
+      await editor.fill(code);
 
       await page.getByRole("button", { name: "Run" }).click();
 

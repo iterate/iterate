@@ -216,14 +216,12 @@ function CustomHostnameDnsInstructions({
   );
 }
 
-type CustomHostnameStatus = Awaited<ReturnType<ItxProjects["customHostnameStatus"]>>;
-
 function CustomHostnameCloudflareStatus({
   isPending,
   status,
 }: {
   isPending: boolean;
-  status: CustomHostnameStatus | undefined;
+  status: Awaited<ReturnType<ItxProjects["customHostnameStatus"]>> | undefined;
 }) {
   if (isPending) {
     return <p className="text-xs text-muted-foreground">Checking Cloudflare hostname status...</p>;

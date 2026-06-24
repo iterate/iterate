@@ -11,17 +11,9 @@ import {
 } from "~/domains/projects/project-worker-runtime.ts";
 import type { SourceBuildEnv } from "~/itx/source-build.ts";
 
-type ProjectIngressEntrypointEnv = SourceBuildEnv & {
-  LOADER: WorkerLoaderBinding;
-};
-
-type ProjectIngressEntrypointProps = {
-  projectId: string;
-};
-
 export class ProjectIngressEntrypoint extends WorkerEntrypoint<
-  ProjectIngressEntrypointEnv,
-  ProjectIngressEntrypointProps
+  SourceBuildEnv & { LOADER: WorkerLoaderBinding },
+  { projectId: string }
 > {
   async fetch(request: Request) {
     try {

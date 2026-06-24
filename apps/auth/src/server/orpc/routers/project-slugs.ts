@@ -3,8 +3,6 @@ import { slugify } from "@iterate-com/shared/slug";
 import type { Client } from "sqlfu";
 import { getProjectById, getProjectBySlug } from "../../db/queries/index.ts";
 
-type ExistingProject = getProjectBySlug.Result;
-
 // Auth is the durable source for user-owned projects, while OS keeps its own
 // per-environment project row. In preview/dev we often delete the OS worker's
 // D1 database without deleting auth's database. OS then reads the auth session,
@@ -18,7 +16,7 @@ type ExistingProject = getProjectBySlug.Result;
 // - we never append random suffixes, because OS must recreate the exact auth
 //   project slug so routes and project hostnames stay stable across DB resets.
 export type ProjectCreateTarget =
-  | { kind: "existing"; project: ExistingProject }
+  | { kind: "existing"; project: getProjectBySlug.Result }
   | { kind: "new"; slug: string };
 
 export async function resolveProjectCreateTarget(input: {
