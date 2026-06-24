@@ -23,6 +23,7 @@ const addPagePlugins = (page: Page, testInfo: TestInfo) =>
           skipStackFrames: ["test-support/test.ts"],
           deadAirThreshold: 300,
           finalHold: 1,
+          highlight: { mode: "pointer", duration: 1000 },
         }),
     ],
     boxedStackPrefixes: (defaults) => [...defaults, import.meta.dirname],
