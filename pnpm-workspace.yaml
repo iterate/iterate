@@ -41,6 +41,7 @@ minimumReleaseAgeExclude:
   - "@mariozechner/pi-coding-agent"
   - "@mariozechner/pi-agent-core"
   - "@mariozechner/pi-tui"
+  - middlewright
   - schematch
   - sqlfu
   - trpc-cli
