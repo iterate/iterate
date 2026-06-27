@@ -4,6 +4,8 @@ import { dirname, resolve } from "node:path";
 import esquery from "esquery";
 import unicorn from "eslint-plugin-unicorn";
 
+import { getTypeAwareLintService } from "./oxlint-type-aware.js";
+
 const LIFECYCLE_HOOKS = new Set(["beforeAll", "beforeEach", "afterAll", "afterEach"]);
 const VI_MOCK_CALLS = new Set(["vi.mock", "vi.doMock"]);
 const PROPERTY_MATCHERS = new Set(["toBe", "toEqual", "toStrictEqual"]);
@@ -259,6 +261,31 @@ function getClassElementName(node) {
 function getParameterTypeAnnotation(parameter) {
   if (!("typeAnnotation" in parameter)) return undefined;
   return parameter.typeAnnotation?.typeAnnotation;
+}
+
+/** @param {string} filename */
+function isTypeScriptSourceFile(filename) {
+  return filename.endsWith(".ts") || filename.endsWith(".tsx");
+}
+
+/** @param {import("estree").Expression} expression */
+function isExplicitlyHandledPromiseExpression(expression) {
+  if (expression.type === "AwaitExpression") return true;
+  return expression.type === "UnaryExpression" && expression.operator === "void";
+}
+
+/** @param {import("estree").CallExpression} node */
+function isPromiseHandlingCallExpression(node) {
+  if (node.callee.type !== "MemberExpression") return false;
+  const propertyName = getPropertyName(node.callee.property);
+  return propertyName === "catch" || propertyName === "then" || propertyName === "finally";
+}
+
+/** @param {string} text */
+function truncateTypeText(text) {
+  const maxLength = 180;
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength)}...`;
 }
 
 const isolatedCodemodeRule = {
@@ -567,6 +594,40 @@ const plugin = {
                 message: `Annotate ${methodName}'s args as \`Parameters<StreamProcessor<${contractType}>["${methodName}"]>[0]\`.`,
               });
             }
+          },
+        };
+      },
+    },
+    "typed-no-floating-promises": {
+      meta: {
+        type: "problem",
+        docs: {
+          description:
+            "Require promise-returning expression statements to be awaited, returned, or explicitly voided.",
+        },
+      },
+      create(context) {
+        if (!isTypeScriptSourceFile(context.filename || "")) return {};
+
+        /** @type {import("./oxlint-type-aware.js").TypeAwareLintService | undefined} */
+        let service;
+
+        return {
+          CallExpression(node) {
+            if (node.parent?.type !== "ExpressionStatement") return;
+            if (isExplicitlyHandledPromiseExpression(node.parent.expression)) return;
+            if (isPromiseHandlingCallExpression(node)) return;
+
+            service ??= getTypeAwareLintService();
+            const thenable = service.getThenableInfo(context.filename, node);
+            if (!thenable) return;
+
+            context.report({
+              node,
+              message:
+                `Promise-like expression of type \`${truncateTypeText(thenable.text)}\` is not handled. ` +
+                "Await it, return it, or explicitly mark it with `void`.",
+            });
           },
         };
       },
