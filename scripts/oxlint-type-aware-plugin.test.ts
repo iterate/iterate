@@ -64,6 +64,56 @@ test("rpc-target-implementation-signatures fixes implementation signatures from 
   );
 });
 
+test("rpc-target-implementation-signatures reads methods from mapped helper implementations", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/rpc-target-implementation-signatures": "error",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
+
+  fixture.write(
+    "types.ts",
+    [
+      "export type NiceRpcTarget<T> = {",
+      "  [K in keyof T]: T[K] extends (...args: infer A) => infer R ? (...args: A) => R : T[K];",
+      "};",
+      "export interface Greeter {",
+      "  getGreeting(params: { enthusiasm: number }): string;",
+      "}",
+    ].join("\n"),
+  );
+  fixture.write(
+    "implementation.ts",
+    [
+      'import type { Greeter, NiceRpcTarget } from "./types.ts";',
+      "",
+      "class MyGreeter implements NiceRpcTarget<Greeter> {",
+      "  getGreeting(input: { enthusiasm: number }): string {",
+      '    return "hello";',
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  fixture.runOxlint(["implementation.ts", "--fix"]);
+
+  assert.equal(
+    fixture.read("implementation.ts"),
+    [
+      'import type { Greeter, NiceRpcTarget } from "./types.ts";',
+      "",
+      "class MyGreeter implements NiceRpcTarget<Greeter> {",
+      '  getGreeting(input: Parameters<Greeter["getGreeting"]>[0]) {',
+      '    return "hello";',
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+});
+
 test("typed-no-floating-promises reports only unhandled promise-like expression statements", () => {
   using fixture = createOxlintFixture({
     rules: {

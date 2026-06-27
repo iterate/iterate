@@ -185,22 +185,7 @@ export class TypeAwareLintService {
     const typed = this.resolveTypeByName(fileName, name, position);
     if (!typed) return undefined;
 
-    return typed.project.checker
-      .getPropertiesOfType(typed.type)
-      .map((property) => {
-        const propertyType = typed.project.checker.getTypeOfSymbol(property);
-        const signature = typed.project.checker.getSignaturesOfType(
-          propertyType,
-          SignatureKind.Call,
-        )[0];
-        if (!signature) return undefined;
-        return {
-          name: property.name,
-          parameters: signature.getParameters().map((parameter) => parameter.name),
-          hasRestParameter: signature.hasRestParameter,
-        };
-      })
-      .filter(Boolean);
+    return getCallablePropertiesOfType(typed.project, typed.type);
   }
 
   /**
@@ -245,6 +230,26 @@ export class TypeAwareLintService {
     }
     return this.tsconfigFiles;
   }
+}
+
+/**
+ * @param {import("@typescript/native-preview/unstable/sync").Project} project
+ * @param {import("@typescript/native-preview/unstable/sync").Type} type
+ */
+function getCallablePropertiesOfType(project, type) {
+  return project.checker
+    .getPropertiesOfType(type)
+    .map((property) => {
+      const propertyType = project.checker.getTypeOfSymbol(property);
+      const signature = project.checker.getSignaturesOfType(propertyType, SignatureKind.Call)[0];
+      if (!signature) return undefined;
+      return {
+        name: property.name,
+        parameters: signature.getParameters().map((parameter) => parameter.name),
+        hasRestParameter: signature.hasRestParameter,
+      };
+    })
+    .filter(Boolean);
 }
 
 /**

@@ -260,14 +260,96 @@ function getRpcTargetContract(context, node) {
   const classText = context.sourceCode.getText(node);
   const headerLength = node.body.range[0] - (node.range?.[0] || 0);
   const classHeader = classText.slice(0, headerLength);
-  const match = classHeader.match(
-    /\bimplements\s+RpcTargetImplementation\s*<\s*([A-Za-z_$][\w$]*)\b/,
-  );
-  if (!match?.[1]) return undefined;
-  const contractName = match[1];
-  const contractOffsetInHeader = match.index + match[0].lastIndexOf(contractName);
+  const implementedType = getFirstImplementedGenericType(classHeader);
+  if (!implementedType) return undefined;
   const classStart = node.range?.[0] || 0;
-  return { name: contractName, position: classStart + contractOffsetInHeader };
+  return {
+    name: implementedType.contractText,
+    position: classStart + implementedType.contractStart,
+  };
+}
+
+/** @param {string} classHeader */
+function getFirstImplementedGenericType(classHeader) {
+  const implementsMatch = classHeader.match(/\bimplements\b/);
+  if (!implementsMatch) return undefined;
+
+  const implementsStart = implementsMatch.index + implementsMatch[0].length;
+  const implementsText = classHeader.slice(implementsStart);
+  for (const candidate of splitTopLevelTypes(implementsText)) {
+    const generic = getGenericTypeInfo(candidate.text);
+    if (!generic) continue;
+    return {
+      contractText: generic.firstTypeArgument,
+      contractStart: implementsStart + candidate.start + generic.firstTypeArgumentStart,
+    };
+  }
+  return undefined;
+}
+
+/** @param {string} text */
+function splitTopLevelTypes(text) {
+  /** @type {{ text: string; start: number }[]} */
+  const types = [];
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < text.length; index++) {
+    const character = text[index];
+    if (character === "<") depth++;
+    if (character === ">") depth--;
+    if (character !== "," || depth !== 0) continue;
+    appendTopLevelType(types, text, start, index);
+    start = index + 1;
+  }
+  appendTopLevelType(types, text, start, text.length);
+  return types;
+}
+
+/**
+ * @param {{ text: string; start: number }[]} types
+ * @param {string} source
+ * @param {number} start
+ * @param {number} end
+ */
+function appendTopLevelType(types, source, start, end) {
+  const raw = source.slice(start, end);
+  const trimmed = raw.trim();
+  if (!trimmed) return;
+  types.push({
+    text: trimmed,
+    start: start + raw.indexOf(trimmed),
+  });
+}
+
+/** @param {string} text */
+function getGenericTypeInfo(text) {
+  const openBracket = text.indexOf("<");
+  if (openBracket === -1) return undefined;
+  const closeBracket = findMatchingGenericClose(text, openBracket);
+  if (closeBracket === undefined) return undefined;
+  const firstArgument = splitTopLevelTypes(text.slice(openBracket + 1, closeBracket))[0];
+  const firstTypeArgument = firstArgument?.text;
+  if (!firstTypeArgument) return undefined;
+  return {
+    firstTypeArgument,
+    firstTypeArgumentStart: openBracket + 1 + firstArgument.start,
+  };
+}
+
+/**
+ * @param {string} text
+ * @param {number} openBracket
+ */
+function findMatchingGenericClose(text, openBracket) {
+  let depth = 0;
+  for (let index = openBracket; index < text.length; index++) {
+    const character = text[index];
+    if (character === "<") depth++;
+    if (character !== ">") continue;
+    depth--;
+    if (depth === 0) return index;
+  }
+  return undefined;
 }
 
 /** @param {import("estree").Node} node */
