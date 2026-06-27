@@ -251,6 +251,25 @@ function getStreamProcessorContractType(context, node) {
   return match?.[1]?.trim();
 }
 
+/**
+ * @param {import("eslint").Rule.RuleContext} context
+ * @param {import("estree").ClassDeclaration | import("estree").ClassExpression} node
+ */
+function getRpcTargetContract(context, node) {
+  if (!node.body.range) return undefined;
+  const classText = context.sourceCode.getText(node);
+  const headerLength = node.body.range[0] - (node.range?.[0] || 0);
+  const classHeader = classText.slice(0, headerLength);
+  const match = classHeader.match(
+    /\bimplements\s+RpcTargetImplementation\s*<\s*([A-Za-z_$][\w$]*)\b/,
+  );
+  if (!match?.[1]) return undefined;
+  const contractName = match[1];
+  const contractOffsetInHeader = match.index + match[0].lastIndexOf(contractName);
+  const classStart = node.range?.[0] || 0;
+  return { name: contractName, position: classStart + contractOffsetInHeader };
+}
+
 /** @param {import("estree").Node} node */
 function getClassElementName(node) {
   if (!("key" in node)) return undefined;
@@ -261,6 +280,118 @@ function getClassElementName(node) {
 function getParameterTypeAnnotation(parameter) {
   if (!("typeAnnotation" in parameter)) return undefined;
   return parameter.typeAnnotation?.typeAnnotation;
+}
+
+/**
+ * @param {{ parameters: string[]; hasRestParameter: boolean }} contractMethod
+ * @param {string} contractName
+ * @param {string} methodName
+ * @param {{ name: string; optional: boolean }[]} implementationParameters
+ */
+function expectedRpcTargetParameterText(
+  contractMethod,
+  contractName,
+  methodName,
+  implementationParameters,
+) {
+  const quotedMethod = JSON.stringify(methodName);
+  const parametersType = `Parameters<${contractName}[${quotedMethod}]>`;
+  if (contractMethod.parameters.length === 0) return "";
+  if (contractMethod.hasRestParameter) {
+    const name = implementationParameters[0]?.name || contractMethod.parameters[0] || "args";
+    return `...${name}: ${parametersType}`;
+  }
+  if (contractMethod.parameters.length === 1) {
+    const implementationParameter = implementationParameters[0];
+    const name = implementationParameter?.name || contractMethod.parameters[0] || "args";
+    const optional = implementationParameter?.optional ? "?" : "";
+    return `${name}${optional}: ${parametersType}[0]`;
+  }
+  const names =
+    implementationParameters.length === contractMethod.parameters.length
+      ? implementationParameters.map((parameter) => parameter.name)
+      : contractMethod.parameters;
+  return `...[${names.join(", ")}]: ${parametersType}`;
+}
+
+/**
+ * @param {import("eslint").Rule.RuleContext} context
+ * @param {import("estree").MethodDefinition} element
+ */
+function getMethodParameterText(context, element) {
+  return element.value.params.map((parameter) => context.sourceCode.getText(parameter)).join(", ");
+}
+
+/**
+ * @param {import("estree").MethodDefinition} element
+ */
+function getMethodParameterInfo(element) {
+  return element.value.params.map((parameter) => {
+    if (parameter.type === "RestElement") {
+      return {
+        name: getPropertyName(parameter.argument) || "args",
+        optional: false,
+      };
+    }
+    return {
+      name: getPropertyName(parameter) || "args",
+      optional: Boolean(parameter.optional),
+    };
+  });
+}
+
+/**
+ * @param {import("eslint").Rule.RuleContext} context
+ * @param {import("estree").MethodDefinition} element
+ */
+function getMethodParameterRange(context, element) {
+  const keyEnd = element.key?.range?.[1];
+  const bodyStart = element.value.body?.range?.[0];
+  if (keyEnd === undefined || bodyStart === undefined) {
+    return undefined;
+  }
+
+  const source = context.sourceCode.getText();
+  const openParen = source.indexOf("(", keyEnd);
+  if (openParen === -1 || openParen > bodyStart) return undefined;
+
+  let depth = 0;
+  for (let index = openParen; index < bodyStart; index++) {
+    const character = source[index];
+    if (character === "(") depth++;
+    if (character !== ")") continue;
+    depth--;
+    if (depth === 0) return [openParen + 1, index];
+  }
+
+  return undefined;
+}
+
+/**
+ * @param {import("eslint").Rule.RuleContext} context
+ * @param {import("estree").MethodDefinition} element
+ * @param {string} expectedParameters
+ * @param {import("eslint").Rule.RuleFixer} fixer
+ */
+function fixMethodParameters(context, element, expectedParameters, fixer) {
+  const range = getMethodParameterRange(context, element);
+  if (!range) return null;
+  return fixer.replaceTextRange(range, expectedParameters);
+}
+
+/** @param {import("estree").MethodDefinition} element */
+function hasMethodReturnType(element) {
+  return Boolean(element.value.returnType || element.value.typeAnnotation);
+}
+
+/**
+ * @param {import("estree").MethodDefinition} element
+ * @param {import("eslint").Rule.RuleFixer} fixer
+ */
+function fixMethodReturnType(element, fixer) {
+  const returnType = element.value.returnType || element.value.typeAnnotation;
+  if (!returnType?.range) return null;
+  return fixer.removeRange(returnType.range);
 }
 
 /** @param {string} filename */
@@ -628,6 +759,75 @@ const plugin = {
                 `Promise-like expression of type \`${truncateTypeText(thenable.text)}\` is not handled. ` +
                 "Await it, return it, or explicitly mark it with `void`.",
             });
+          },
+        };
+      },
+    },
+    "rpc-target-implementation-signatures": {
+      meta: {
+        type: "problem",
+        fixable: "code",
+        docs: {
+          description:
+            "Require RpcTarget implementation method params to reference the implemented contract via Parameters<Contract[method]>.",
+        },
+      },
+      create(context) {
+        if (!isTypeScriptSourceFile(context.filename || "")) return {};
+
+        /** @type {import("./oxlint-type-aware.js").TypeAwareLintService | undefined} */
+        let service;
+
+        return {
+          "ClassDeclaration, ClassExpression": (node) => {
+            const contract = getRpcTargetContract(context, node);
+            if (!contract) return;
+
+            service ??= getTypeAwareLintService();
+            const properties = service.getCallablePropertiesOfNamedType(
+              context.filename,
+              contract.name,
+              contract.position,
+            );
+            if (!properties) return;
+
+            const methods = new Map(properties.map((property) => [property.name, property]));
+            for (const element of node.body.body) {
+              if (element.type !== "MethodDefinition") continue;
+              if (element.kind === "constructor") continue;
+              const methodName = getClassElementName(element);
+              if (!methodName) continue;
+
+              const method = methods.get(methodName);
+              if (!method) continue;
+
+              const implementationParameters = getMethodParameterInfo(element);
+              const expectedParameterText = expectedRpcTargetParameterText(
+                method,
+                contract.name,
+                methodName,
+                implementationParameters,
+              );
+              const actualParameters = compactTypeText(getMethodParameterText(context, element));
+              const expectedParameters = compactTypeText(expectedParameterText);
+              if (actualParameters !== expectedParameters) {
+                context.report({
+                  node: element,
+                  message: `Format ${contract.name}.${methodName} params as \`${expectedParameterText}\`.`,
+                  fix: (fixer) =>
+                    fixMethodParameters(context, element, expectedParameterText, fixer),
+                });
+                continue;
+              }
+
+              if (hasMethodReturnType(element)) {
+                context.report({
+                  node: element,
+                  message: `Do not annotate a return type on ${contract.name}.${methodName}; let the contract drive it.`,
+                  fix: (fixer) => fixMethodReturnType(element, fixer),
+                });
+              }
+            }
           },
         };
       },

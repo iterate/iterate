@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { API, SignatureKind } from "@typescript/native-preview/unstable/sync";
+import { API, SignatureKind, SymbolFlags } from "@typescript/native-preview/unstable/sync";
 
 const IGNORED_DIRS = new Set([
   ".alchemy",
@@ -154,6 +154,53 @@ export class TypeAwareLintService {
     const type = calleeType.project.checker.getReturnTypeOfSignature(signature);
     if (!type) return undefined;
     return { project: calleeType.project, type };
+  }
+
+  /**
+   * @param {string} fileName
+   * @param {string} name
+   * @param {number} position
+   */
+  resolveTypeByName(fileName, name, position) {
+    const project = this.getProjectForFile(fileName);
+    if (!project) return undefined;
+    const symbol = project.checker.resolveName(
+      name,
+      SymbolFlags.Type,
+      { document: resolve(fileName), position },
+      true,
+    );
+    if (!symbol) return undefined;
+    const type = project.checker.getDeclaredTypeOfSymbol(symbol);
+    if (!type) return undefined;
+    return { project, symbol, type };
+  }
+
+  /**
+   * @param {string} fileName
+   * @param {string} name
+   * @param {number} position
+   */
+  getCallablePropertiesOfNamedType(fileName, name, position) {
+    const typed = this.resolveTypeByName(fileName, name, position);
+    if (!typed) return undefined;
+
+    return typed.project.checker
+      .getPropertiesOfType(typed.type)
+      .map((property) => {
+        const propertyType = typed.project.checker.getTypeOfSymbol(property);
+        const signature = typed.project.checker.getSignaturesOfType(
+          propertyType,
+          SignatureKind.Call,
+        )[0];
+        if (!signature) return undefined;
+        return {
+          name: property.name,
+          parameters: signature.getParameters().map((parameter) => parameter.name),
+          hasRestParameter: signature.hasRestParameter,
+        };
+      })
+      .filter(Boolean);
   }
 
   /**

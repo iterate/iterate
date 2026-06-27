@@ -38,7 +38,7 @@ import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "./domains/repos/p
 import { RepoProcessorContract } from "./domains/repos/repo-processor.ts";
 import { durableObjectProcessorSubscriber } from "./domains/streams/engine/shared/callable-subscriber.ts";
 import { ItxContract } from "./itx/processor-contract.ts";
-import { replayPath, type ItxProcessorRpc, type ProvideCapabilityInput } from "./itx/processor.ts";
+import { replayPath, type ItxProcessorRpc } from "./itx/processor.ts";
 import { isReservedDynamicPathSegment, withInvokeCapabilityFallback } from "./itx/path-proxy.ts";
 
 type StreamProcessEventBatch = Parameters<Stream["subscribe"]>[0]["processEventBatch"];
@@ -271,7 +271,7 @@ class StreamsRpcTarget extends RpcTarget implements RpcTargetImplementation<Stre
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  get(path: string) {
+  get(path: Parameters<Streams["get"]>[0]) {
     return new StreamRpcTarget({
       auth: this.props.auth,
       projectId: this.props.projectId,
@@ -306,7 +306,7 @@ class ProjectsRpcTarget extends RpcTarget implements RpcTargetImplementation<Pro
     super();
   }
 
-  get(projectId: string) {
+  get(projectId: Parameters<Projects["get"]>[0]) {
     return new ProjectRpcTarget({
       auth: this.props.auth,
       ctx: this.props.ctx,
@@ -355,7 +355,7 @@ class ProjectsRpcTarget extends RpcTarget implements RpcTargetImplementation<Pro
     });
   }
 
-  list(): string[] {
+  list() {
     return this.props.auth.listAccessibleProjects();
   }
 }
@@ -366,7 +366,7 @@ abstract class ItxCapabilityHostRpcTarget
 {
   protected abstract itxProcessor(): ItxProcessorRpc;
 
-  async provideCapability(input: ProvideCapabilityInput) {
+  async provideCapability(input: Parameters<ItxCapabilityHost["provideCapability"]>[0]) {
     this.#rejectBuiltinCollision(input.path);
     await this.itxProcessor().provideCapability(input);
     return {
@@ -376,11 +376,11 @@ abstract class ItxCapabilityHostRpcTarget
     };
   }
 
-  revokeCapability(input: { path: string[] }) {
+  revokeCapability(input: Parameters<ItxCapabilityHost["revokeCapability"]>[0]) {
     return this.itxProcessor().revokeCapability(input);
   }
 
-  runScript(code: string) {
+  runScript(code: Parameters<ItxCapabilityHost["runScript"]>[0]) {
     return this.itxProcessor().runScript(code);
   }
 
@@ -446,7 +446,7 @@ class ReposRpcTarget extends RpcTarget implements RpcTargetImplementation<Repos>
     });
   }
 
-  get(path: string) {
+  get(path: Parameters<Repos["get"]>[0]) {
     return new RepoRpcTarget({
       auth: this.props.auth,
       path: normalizeRepoPath(path),
@@ -465,7 +465,7 @@ class AgentsRpcTarget extends RpcTarget implements RpcTargetImplementation<Agent
     return await this.get(input.path).create();
   }
 
-  get(path: string): RpcTargetImplementation<Agent> {
+  get(path: Parameters<Agents["get"]>[0]) {
     return new AgentRpcTarget({
       auth: this.props.auth,
       ctx: this.props.ctx,
@@ -532,7 +532,7 @@ export class AgentRpcTarget
     });
   }
 
-  async sendMessage(message: string) {
+  async sendMessage(message: Parameters<Agent["sendMessage"]>[0]) {
     await this.#ensureProcessorsConfigured();
     const [event] = await this.stream.append({
       type: "events.iterate.com/agents/user-message-received",
@@ -554,17 +554,17 @@ export class AgentRpcTarget
     return `agent ${this.props.projectId}:${this.props.path}`;
   }
 
-  override async provideCapability(input: ProvideCapabilityInput) {
+  override async provideCapability(input: Parameters<Agent["provideCapability"]>[0]) {
     await this.#ensureProcessorsConfigured();
     return await super.provideCapability(input);
   }
 
-  override async revokeCapability(input: { path: string[] }) {
+  override async revokeCapability(input: Parameters<Agent["revokeCapability"]>[0]) {
     await this.#ensureProcessorsConfigured();
     return await super.revokeCapability(input);
   }
 
-  override async runScript(code: string) {
+  override async runScript(code: Parameters<Agent["runScript"]>[0]) {
     await this.#ensureProcessorsConfigured();
     return await super.runScript(code);
   }
@@ -618,7 +618,7 @@ export class ProjectWorkerRpcTarget
     return withInvokeCapabilityFallback(this);
   }
 
-  async fetch(req: Request) {
+  async fetch(req: Parameters<ProjectWorker["fetch"]>[0]) {
     return await (await this.defaultProjectWorker()).fetch(req);
   }
 
@@ -736,7 +736,7 @@ export class UnauthenticatedItxRpcTarget
     super();
   }
 
-  authenticate(input: ItxAuthCredentials) {
+  authenticate(input: Parameters<UnauthenticatedItx["authenticate"]>[0]) {
     let auth: ItxAuth | null = null;
 
     if (input.type === "token") {
