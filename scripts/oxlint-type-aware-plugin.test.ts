@@ -67,7 +67,10 @@ test("rpc-target-implementation-signatures fixes implementation signatures from 
 test("rpc-target-implementation-signatures reads methods from mapped helper implementations", () => {
   using fixture = createOxlintFixture({
     rules: {
-      "iterate/rpc-target-implementation-signatures": "error",
+      "iterate/rpc-target-implementation-signatures": [
+        "error",
+        { helperTypeNames: ["RpcTargetImplementation", "NiceRpcTarget"] },
+      ],
       "iterate/typed-no-floating-promises": "off",
     },
   });
@@ -117,7 +120,10 @@ test("rpc-target-implementation-signatures reads methods from mapped helper impl
 test("rpc-target-implementation-signatures supports direct interface implementations", () => {
   using fixture = createOxlintFixture({
     rules: {
-      "iterate/rpc-target-implementation-signatures": "error",
+      "iterate/rpc-target-implementation-signatures": [
+        "error",
+        { allowDirectImplementations: true },
+      ],
       "iterate/typed-no-floating-promises": "off",
     },
   });
@@ -158,6 +164,47 @@ test("rpc-target-implementation-signatures supports direct interface implementat
       "}",
       "",
     ].join("\n"),
+  );
+});
+
+test("rpc-target-implementation-signatures ignores unknown helper wrappers by default", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/rpc-target-implementation-signatures": "error",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
+
+  fixture.write(
+    "types.ts",
+    [
+      "export type NiceRpcTarget<T> = {",
+      "  [K in keyof T]: T[K] extends (...args: infer A) => infer R ? (...args: A) => R : T[K];",
+      "};",
+      "export interface Greeter {",
+      "  getGreeting(params: { enthusiasm: number }): string;",
+      "}",
+    ].join("\n"),
+  );
+  fixture.write(
+    "implementation.ts",
+    [
+      'import type { Greeter, NiceRpcTarget } from "./types.ts";',
+      "",
+      "class MyGreeter implements NiceRpcTarget<Greeter> {",
+      "  getGreeting(input: { enthusiasm: number }): string {",
+      '    return "hello";',
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  fixture.runOxlint(["implementation.ts"]);
+
+  assert.match(
+    fixture.read("implementation.ts"),
+    /getGreeting\(input: \{ enthusiasm: number \}\): string/,
   );
 });
 
@@ -245,7 +292,7 @@ test("typed-no-floating-promises reports only unhandled promise-like expression 
   assert.doesNotMatch(output, /6:1/);
 });
 
-function createOxlintFixture(input: { rules: Record<string, string> }) {
+function createOxlintFixture(input: { rules: Record<string, unknown> }) {
   const root = mkdtempSync(join(tmpdir(), "iterate-oxlint-type-aware-"));
   const configPath = join(root, ".oxlintrc.json");
 

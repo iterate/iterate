@@ -10,6 +10,11 @@ const LIFECYCLE_HOOKS = new Set(["beforeAll", "beforeEach", "afterAll", "afterEa
 const VI_MOCK_CALLS = new Set(["vi.mock", "vi.doMock"]);
 const PROPERTY_MATCHERS = new Set(["toBe", "toEqual", "toStrictEqual"]);
 const STREAM_PROCESSOR_OVERRIDE_METHODS = new Set(["reduce", "processEvent", "processEventBatch"]);
+const DEFAULT_RPC_TARGET_SIGNATURE_OPTIONS = {
+  allowDirectImplementations: false,
+  helperTypeNames: ["RpcTargetImplementation"],
+  utilityTypeNames: ["Pick"],
+};
 
 /** @param {string} name */
 const getExpectedName = (name) => {
@@ -254,13 +259,14 @@ function getStreamProcessorContractType(context, node) {
 /**
  * @param {import("eslint").Rule.RuleContext} context
  * @param {import("estree").ClassDeclaration | import("estree").ClassExpression} node
+ * @param {ReturnType<typeof getRpcTargetSignatureRuleOptions>} options
  */
-function getRpcTargetContracts(context, node) {
+function getRpcTargetContracts(context, node, options) {
   if (!node.body.range) return undefined;
   const classText = context.sourceCode.getText(node);
   const headerLength = node.body.range[0] - (node.range?.[0] || 0);
   const classHeader = classText.slice(0, headerLength);
-  const implementedTypes = getImplementedContractTypes(classHeader);
+  const implementedTypes = getImplementedContractTypes(classHeader, options);
   const classStart = node.range?.[0] || 0;
   return implementedTypes.map((implementedType) => ({
     name: implementedType.contractText,
@@ -268,31 +274,46 @@ function getRpcTargetContracts(context, node) {
   }));
 }
 
-/** @param {string} classHeader */
-function getImplementedContractTypes(classHeader) {
+/**
+ * @param {string} classHeader
+ * @param {ReturnType<typeof getRpcTargetSignatureRuleOptions>} options
+ */
+function getImplementedContractTypes(classHeader, options) {
   const implementsMatch = classHeader.match(/\bimplements\b/);
   if (!implementsMatch) return [];
 
   const implementsStart = implementsMatch.index + implementsMatch[0].length;
   const implementsText = classHeader.slice(implementsStart);
   return splitTopLevelTypes(implementsText)
-    .map((candidate) => getReadableContractType(candidate.text, implementsStart + candidate.start))
+    .flatMap((candidate) =>
+      getReadableContractTypes(candidate.text, implementsStart + candidate.start, options),
+    )
     .filter(Boolean);
 }
 
 /**
  * @param {string} text
  * @param {number} start
+ * @param {ReturnType<typeof getRpcTargetSignatureRuleOptions>} options
  */
-function getReadableContractType(text, start) {
+function getReadableContractTypes(text, start, options) {
   const generic = getGenericTypeInfo(text);
   if (!generic) {
-    return {
-      contractText: text,
-      contractStart: start,
-    };
+    if (!options.allowDirectImplementations) return [];
+    return [{ contractText: text, contractStart: start }];
   }
-  return getReadableContractType(generic.firstTypeArgument, start + generic.firstTypeArgumentStart);
+  if (options.helperTypeNames.has(generic.typeName)) {
+    return [
+      {
+        contractText: generic.firstTypeArgument,
+        contractStart: start + generic.firstTypeArgumentStart,
+      },
+    ];
+  }
+  if (!options.utilityTypeNames.has(generic.typeName)) return [];
+  return generic.typeArguments.flatMap((argument) =>
+    getReadableContractTypes(argument.text, start + argument.start, options),
+  );
 }
 
 /** @param {string} text */
@@ -335,12 +356,20 @@ function getGenericTypeInfo(text) {
   if (openBracket === -1) return undefined;
   const closeBracket = findMatchingGenericClose(text, openBracket);
   if (closeBracket === undefined) return undefined;
-  const firstArgument = splitTopLevelTypes(text.slice(openBracket + 1, closeBracket))[0];
+  const typeName = text.slice(0, openBracket).trim().split(".").at(-1);
+  if (!typeName) return undefined;
+  const typeArguments = splitTopLevelTypes(text.slice(openBracket + 1, closeBracket));
+  const firstArgument = typeArguments[0];
   const firstTypeArgument = firstArgument?.text;
   if (!firstTypeArgument) return undefined;
   return {
     firstTypeArgument,
     firstTypeArgumentStart: openBracket + 1 + firstArgument.start,
+    typeArguments: typeArguments.map((argument) => ({
+      text: argument.text,
+      start: openBracket + 1 + argument.start,
+    })),
+    typeName,
   };
 }
 
@@ -525,6 +554,25 @@ function truncateTypeText(text) {
   const maxLength = 180;
   if (text.length <= maxLength) return text;
   return `${text.slice(0, maxLength)}...`;
+}
+
+/** @param {import("eslint").Rule.RuleContext} context */
+function getRpcTargetSignatureRuleOptions(context) {
+  const input = context.options?.[0] || {};
+  const helperTypeNames = Array.isArray(input.helperTypeNames)
+    ? input.helperTypeNames
+    : DEFAULT_RPC_TARGET_SIGNATURE_OPTIONS.helperTypeNames;
+  const utilityTypeNames = Array.isArray(input.utilityTypeNames)
+    ? input.utilityTypeNames
+    : DEFAULT_RPC_TARGET_SIGNATURE_OPTIONS.utilityTypeNames;
+  return {
+    allowDirectImplementations: Boolean(
+      input.allowDirectImplementations ??
+      DEFAULT_RPC_TARGET_SIGNATURE_OPTIONS.allowDirectImplementations,
+    ),
+    helperTypeNames: new Set(helperTypeNames),
+    utilityTypeNames: new Set(utilityTypeNames),
+  };
 }
 
 const isolatedCodemodeRule = {
@@ -875,6 +923,17 @@ const plugin = {
       meta: {
         type: "problem",
         fixable: "code",
+        schema: [
+          {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              allowDirectImplementations: { type: "boolean" },
+              helperTypeNames: { type: "array", items: { type: "string" } },
+              utilityTypeNames: { type: "array", items: { type: "string" } },
+            },
+          },
+        ],
         docs: {
           description:
             "Require RpcTarget implementation method params to reference the implemented contract via Parameters<Contract[method]>.",
@@ -885,10 +944,11 @@ const plugin = {
 
         /** @type {import("./oxlint-type-aware.js").TypeAwareLintService | undefined} */
         let service;
+        const options = getRpcTargetSignatureRuleOptions(context);
 
         return {
           "ClassDeclaration, ClassExpression": (node) => {
-            const contracts = getRpcTargetContracts(context, node);
+            const contracts = getRpcTargetContracts(context, node, options);
             if (!contracts?.length) return;
 
             service ??= getTypeAwareLintService();
