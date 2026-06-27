@@ -18,6 +18,7 @@
     "lint": "oxlint . --threads 1 --deny-warnings",
     "lint:check": "pnpm lint",
     "lint:fix": "oxlint . --fix",
+    "test:oxlint-plugin": "node --import tsx --test scripts/oxlint-type-aware-plugin.test.ts",
     "knip": "knip --workspace apps/os --workspace apps/semaphore --workspace apps/streams-example-app --workspace packages/shared",
     "prepare": "is-ci || husky",
     "vitest": "pnpm --dir apps/os test",

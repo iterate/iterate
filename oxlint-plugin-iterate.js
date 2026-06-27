@@ -379,6 +379,13 @@ function fixMethodParameters(context, element, expectedParameters, fixer) {
   return fixer.replaceTextRange(range, expectedParameters);
 }
 
+/**
+ * @param {Array<import("eslint").Rule.Fix | null>} fixes
+ */
+function compactFixes(fixes) {
+  return fixes.filter(Boolean);
+}
+
 /** @param {import("estree").MethodDefinition} element */
 function hasMethodReturnType(element) {
   return Boolean(element.value.returnType || element.value.typeAnnotation);
@@ -815,7 +822,10 @@ const plugin = {
                   node: element,
                   message: `Format ${contract.name}.${methodName} params as \`${expectedParameterText}\`.`,
                   fix: (fixer) =>
-                    fixMethodParameters(context, element, expectedParameterText, fixer),
+                    compactFixes([
+                      fixMethodParameters(context, element, expectedParameterText, fixer),
+                      fixMethodReturnType(element, fixer),
+                    ]),
                 });
                 continue;
               }
