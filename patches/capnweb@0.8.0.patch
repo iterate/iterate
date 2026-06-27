@@ -1,0 +1,46 @@
+diff --git a/dist/index-workers-CiDKhXAE.d.cts b/dist/index-workers-CiDKhXAE.d.cts
+index a6709e7517a38437e941398560ceab6a968b226c..972a5b3581d34fc5dbba123ea14d85e5072e7e24 100644
+--- a/dist/index-workers-CiDKhXAE.d.cts
++++ b/dist/index-workers-CiDKhXAE.d.cts
+@@ -241,12 +241,12 @@ type TupleProvider<T extends ReadonlyArray<unknown>> = {
+ type Provider<T> = MaybeCallableProvider<T> &
+   (T extends ReadonlyArray<unknown>
+     ? number extends T["length"] ? ArrayProvider<T[number]> : TupleProvider<T>
+-    : {
+-        [K in Exclude<
+-          keyof T,
+-          symbol | keyof StubBase<never>
+-        >]: MethodOrProperty<T[K]>;
+-      } & {
++    : Pick<
++        {
++          [K in keyof T]: MethodOrProperty<T[K]>;
++        },
++        Exclude<keyof T, symbol | keyof StubBase<never>>
++      > & {
+         map<V>(
+           callback: (value: MapCallbackValue<NonNullable<T>>) => MapCallbackReturn<V>
+         ): Result<Array<V>>;
+diff --git a/dist/index-workers-CiDKhXAE.d.ts b/dist/index-workers-CiDKhXAE.d.ts
+index a6709e7517a38437e941398560ceab6a968b226c..972a5b3581d34fc5dbba123ea14d85e5072e7e24 100644
+--- a/dist/index-workers-CiDKhXAE.d.ts
++++ b/dist/index-workers-CiDKhXAE.d.ts
+@@ -241,12 +241,12 @@ type TupleProvider<T extends ReadonlyArray<unknown>> = {
+ type Provider<T> = MaybeCallableProvider<T> &
+   (T extends ReadonlyArray<unknown>
+     ? number extends T["length"] ? ArrayProvider<T[number]> : TupleProvider<T>
+-    : {
+-        [K in Exclude<
+-          keyof T,
+-          symbol | keyof StubBase<never>
+-        >]: MethodOrProperty<T[K]>;
+-      } & {
++    : Pick<
++        {
++          [K in keyof T]: MethodOrProperty<T[K]>;
++        },
++        Exclude<keyof T, symbol | keyof StubBase<never>>
++      > & {
+         map<V>(
+           callback: (value: MapCallbackValue<NonNullable<T>>) => MapCallbackReturn<V>
+         ): Result<Array<V>>;

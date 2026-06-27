@@ -89,3 +89,4 @@ patchedDependencies:
   "@cloudflare/workers-types@4.20260621.1": "@cloudflare__workers-types.patch"
   "alchemy@0.83.3": "patches/alchemy@0.83.3.patch"
   "@better-auth/oauth-provider@1.6.9": "patches/@better-auth__oauth-provider@1.6.9.patch"
+  "capnweb@0.8.0": "patches/capnweb@0.8.0.patch"
