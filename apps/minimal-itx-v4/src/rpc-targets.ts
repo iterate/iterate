@@ -761,7 +761,7 @@ export class ItxEntrypoint
   extends WorkerEntrypoint<Env, ItxAuthCredentials>
   implements Pick<RpcTargetImplementation<UnauthenticatedItx>, "authenticate">
 {
-  authenticate(input: ItxAuthCredentials = this.ctx.props) {
+  authenticate(input: Parameters<UnauthenticatedItx["authenticate"]>[0] = this.ctx.props) {
     return new UnauthenticatedItxRpcTarget(new Headers(), this.ctx).authenticate(input);
   }
 }

@@ -114,6 +114,105 @@ test("rpc-target-implementation-signatures reads methods from mapped helper impl
   );
 });
 
+test("rpc-target-implementation-signatures supports direct interface implementations", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/rpc-target-implementation-signatures": "error",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
+
+  fixture.write(
+    "types.ts",
+    [
+      "export interface Greeter {",
+      "  getGreeting(params: { enthusiasm: number }): string;",
+      "}",
+    ].join("\n"),
+  );
+  fixture.write(
+    "implementation.ts",
+    [
+      'import type { Greeter } from "./types.ts";',
+      "",
+      "class MyGreeter implements Greeter {",
+      "  getGreeting(input: { enthusiasm: number }): string {",
+      '    return "hello";',
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  fixture.runOxlint(["implementation.ts", "--fix"]);
+
+  assert.equal(
+    fixture.read("implementation.ts"),
+    [
+      'import type { Greeter } from "./types.ts";',
+      "",
+      "class MyGreeter implements Greeter {",
+      '  getGreeting(input: Parameters<Greeter["getGreeting"]>[0]) {',
+      '    return "hello";',
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+});
+
+test("rpc-target-implementation-signatures preserves defaults in nested helper implementations", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/rpc-target-implementation-signatures": "error",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
+
+  fixture.write(
+    "types.ts",
+    [
+      "export type RpcTargetImplementation<T> = T;",
+      "export interface Greeter {",
+      "  getGreeting(params: { enthusiasm: number }): string;",
+      "}",
+    ].join("\n"),
+  );
+  fixture.write(
+    "implementation.ts",
+    [
+      'import type { Greeter, RpcTargetImplementation } from "./types.ts";',
+      "",
+      "const defaultInput = { enthusiasm: 1 };",
+      "",
+      'class MyGreeter implements Pick<RpcTargetImplementation<Greeter>, "getGreeting"> {',
+      "  getGreeting(input: { enthusiasm: number } = defaultInput): string {",
+      '    return "hello";',
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  fixture.runOxlint(["implementation.ts", "--fix"]);
+
+  assert.equal(
+    fixture.read("implementation.ts"),
+    [
+      'import type { Greeter, RpcTargetImplementation } from "./types.ts";',
+      "",
+      "const defaultInput = { enthusiasm: 1 };",
+      "",
+      'class MyGreeter implements Pick<RpcTargetImplementation<Greeter>, "getGreeting"> {',
+      '  getGreeting(input: Parameters<Greeter["getGreeting"]>[0] = defaultInput) {',
+      '    return "hello";',
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+});
+
 test("typed-no-floating-promises reports only unhandled promise-like expression statements", () => {
   using fixture = createOxlintFixture({
     rules: {

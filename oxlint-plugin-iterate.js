@@ -255,36 +255,44 @@ function getStreamProcessorContractType(context, node) {
  * @param {import("eslint").Rule.RuleContext} context
  * @param {import("estree").ClassDeclaration | import("estree").ClassExpression} node
  */
-function getRpcTargetContract(context, node) {
+function getRpcTargetContracts(context, node) {
   if (!node.body.range) return undefined;
   const classText = context.sourceCode.getText(node);
   const headerLength = node.body.range[0] - (node.range?.[0] || 0);
   const classHeader = classText.slice(0, headerLength);
-  const implementedType = getFirstImplementedGenericType(classHeader);
-  if (!implementedType) return undefined;
+  const implementedTypes = getImplementedContractTypes(classHeader);
   const classStart = node.range?.[0] || 0;
-  return {
+  return implementedTypes.map((implementedType) => ({
     name: implementedType.contractText,
     position: classStart + implementedType.contractStart,
-  };
+  }));
 }
 
 /** @param {string} classHeader */
-function getFirstImplementedGenericType(classHeader) {
+function getImplementedContractTypes(classHeader) {
   const implementsMatch = classHeader.match(/\bimplements\b/);
-  if (!implementsMatch) return undefined;
+  if (!implementsMatch) return [];
 
   const implementsStart = implementsMatch.index + implementsMatch[0].length;
   const implementsText = classHeader.slice(implementsStart);
-  for (const candidate of splitTopLevelTypes(implementsText)) {
-    const generic = getGenericTypeInfo(candidate.text);
-    if (!generic) continue;
+  return splitTopLevelTypes(implementsText)
+    .map((candidate) => getReadableContractType(candidate.text, implementsStart + candidate.start))
+    .filter(Boolean);
+}
+
+/**
+ * @param {string} text
+ * @param {number} start
+ */
+function getReadableContractType(text, start) {
+  const generic = getGenericTypeInfo(text);
+  if (!generic) {
     return {
-      contractText: generic.firstTypeArgument,
-      contractStart: implementsStart + candidate.start + generic.firstTypeArgumentStart,
+      contractText: text,
+      contractStart: start,
     };
   }
-  return undefined;
+  return getReadableContractType(generic.firstTypeArgument, start + generic.firstTypeArgumentStart);
 }
 
 /** @param {string} text */
@@ -368,7 +376,7 @@ function getParameterTypeAnnotation(parameter) {
  * @param {{ parameters: string[]; hasRestParameter: boolean }} contractMethod
  * @param {string} contractName
  * @param {string} methodName
- * @param {{ name: string; optional: boolean }[]} implementationParameters
+ * @param {{ defaultText?: string; name: string; optional: boolean }[]} implementationParameters
  */
 function expectedRpcTargetParameterText(
   contractMethod,
@@ -387,7 +395,10 @@ function expectedRpcTargetParameterText(
     const implementationParameter = implementationParameters[0];
     const name = implementationParameter?.name || contractMethod.parameters[0] || "args";
     const optional = implementationParameter?.optional ? "?" : "";
-    return `${name}${optional}: ${parametersType}[0]`;
+    const defaultText = implementationParameter?.defaultText
+      ? ` = ${implementationParameter.defaultText}`
+      : "";
+    return `${name}${optional}: ${parametersType}[0]${defaultText}`;
   }
   const names =
     implementationParameters.length === contractMethod.parameters.length
@@ -405,14 +416,22 @@ function getMethodParameterText(context, element) {
 }
 
 /**
+ * @param {import("eslint").Rule.RuleContext} context
  * @param {import("estree").MethodDefinition} element
  */
-function getMethodParameterInfo(element) {
+function getMethodParameterInfo(context, element) {
   return element.value.params.map((parameter) => {
     if (parameter.type === "RestElement") {
       return {
         name: getPropertyName(parameter.argument) || "args",
         optional: false,
+      };
+    }
+    if (parameter.type === "AssignmentPattern") {
+      return {
+        defaultText: context.sourceCode.getText(parameter.right),
+        name: getPropertyName(parameter.left) || "args",
+        optional: Boolean(parameter.left.optional),
       };
     }
     return {
@@ -869,18 +888,33 @@ const plugin = {
 
         return {
           "ClassDeclaration, ClassExpression": (node) => {
-            const contract = getRpcTargetContract(context, node);
-            if (!contract) return;
+            const contracts = getRpcTargetContracts(context, node);
+            if (!contracts?.length) return;
 
             service ??= getTypeAwareLintService();
-            const properties = service.getCallablePropertiesOfNamedType(
-              context.filename,
-              contract.name,
-              contract.position,
+            const classMethodNames = new Set(
+              node.body.body
+                .filter((element) => element.type === "MethodDefinition")
+                .map((element) => getClassElementName(element))
+                .filter(Boolean),
             );
-            if (!properties) return;
+            const contract = contracts
+              .map((candidate) => ({
+                candidate,
+                properties: service.getCallablePropertiesOfNamedType(
+                  context.filename,
+                  candidate.name,
+                  candidate.position,
+                ),
+              }))
+              .find(({ properties }) =>
+                properties?.some((property) => classMethodNames.has(property.name)),
+              );
+            if (!contract?.properties) return;
 
-            const methods = new Map(properties.map((property) => [property.name, property]));
+            const methods = new Map(
+              contract.properties.map((property) => [property.name, property]),
+            );
             for (const element of node.body.body) {
               if (element.type !== "MethodDefinition") continue;
               if (element.kind === "constructor") continue;
@@ -890,10 +924,10 @@ const plugin = {
               const method = methods.get(methodName);
               if (!method) continue;
 
-              const implementationParameters = getMethodParameterInfo(element);
+              const implementationParameters = getMethodParameterInfo(context, element);
               const expectedParameterText = expectedRpcTargetParameterText(
                 method,
-                contract.name,
+                contract.candidate.name,
                 methodName,
                 implementationParameters,
               );
@@ -902,7 +936,7 @@ const plugin = {
               if (actualParameters !== expectedParameters) {
                 context.report({
                   node: element,
-                  message: `Format ${contract.name}.${methodName} params as \`${expectedParameterText}\`.`,
+                  message: `Format ${contract.candidate.name}.${methodName} params as \`${expectedParameterText}\`.`,
                   fix: (fixer) =>
                     compactFixes([
                       fixMethodParameters(context, element, expectedParameterText, fixer),
@@ -915,7 +949,7 @@ const plugin = {
               if (hasMethodReturnType(element)) {
                 context.report({
                   node: element,
-                  message: `Do not annotate a return type on ${contract.name}.${methodName}; let the contract drive it.`,
+                  message: `Do not annotate a return type on ${contract.candidate.name}.${methodName}; let the contract drive it.`,
                   fix: (fixer) => fixMethodReturnType(element, fixer),
                 });
               }
