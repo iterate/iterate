@@ -765,3 +765,17 @@ export class ItxEntrypoint
     return new UnauthenticatedItxRpcTarget(new Headers(), this.ctx).authenticate(input);
   }
 }
+
+interface Foo {
+  f(a: string): void;
+  g(a: 1): void;
+}
+
+export class Bar implements Foo {
+  g(a: Parameters<Foo["g"]>[0]) {
+    throw new Error("Method not implemented.");
+  }
+  f(a: Parameters<Foo["f"]>[0]) {
+    console.log(a);
+  }
+}

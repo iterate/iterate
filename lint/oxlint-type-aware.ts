@@ -10,6 +10,7 @@ import {
   type Symbol,
   type Type,
 } from "@typescript/native-preview/unstable/sync";
+import type { CallExpression, Expression, Node } from "estree";
 
 const IGNORED_DIRS = new Set([
   ".alchemy",
@@ -93,13 +94,13 @@ export class TypeAwareLintService {
     return { project, type };
   }
 
-  getTypeAtNodeStart(fileName: string, node: RangedNode) {
+  getTypeAtNodeStart(fileName: string, node: Node) {
     const position = node.range?.[0];
     if (typeof position !== "number") return undefined;
     return this.getTypeAtPosition(fileName, position);
   }
 
-  getThenableInfo(fileName: string, node: ExpressionNode) {
+  getThenableInfo(fileName: string, node: Expression) {
     const typed = this.getExpressionTypeInfo(fileName, node);
     if (!typed) return undefined;
     if (!this.isThenableType(typed.project, typed.type)) return undefined;
@@ -110,14 +111,14 @@ export class TypeAwareLintService {
     };
   }
 
-  getExpressionTypeInfo(fileName: string, node: ExpressionNode) {
+  getExpressionTypeInfo(fileName: string, node: Expression) {
     if (node.type === "CallExpression") {
       return this.getCallReturnTypeInfo(fileName, node);
     }
     return this.getTypeAtNodeStart(fileName, node);
   }
 
-  getCallReturnTypeInfo(fileName: string, node: CallExpressionNode) {
+  getCallReturnTypeInfo(fileName: string, node: CallExpression) {
     const calleePosition = getCallablePosition(node.callee);
     if (calleePosition === undefined) return undefined;
 
@@ -156,13 +157,14 @@ export class TypeAwareLintService {
     return properties.some((property: Symbol) => property.name === "then");
   }
 
-  getSnapshot() {
+  getSnapshot(): Snapshot {
     if (!this.api) {
       this.api = this.createApi();
     }
     if (!this.snapshot) {
       this.updateSnapshot({ openProjects: this.getTsconfigFiles() });
     }
+    if (!this.snapshot) throw new Error("Failed to create TypeScript snapshot");
     return this.snapshot;
   }
 
@@ -223,7 +225,7 @@ export class TypeAwareLintService {
   }
 
   trackProjectFiles(project: Project | undefined) {
-    if (isInferredProject(project)) return;
+    if (!project || isInferredProject(project)) return;
     for (const fileName of project.rootFiles) {
       this.rememberFileMtime(fileName);
     }
@@ -268,25 +270,8 @@ export class TypeAwareLintService {
   }
 }
 
-type RangedNode = {
-  range?: [number, number];
-  type?: string;
-};
-
-type CallableNode = RangedNode & {
-  property?: RangedNode;
-};
-
-type CallExpressionNode = RangedNode & {
-  type: "CallExpression";
-  callee?: CallableNode;
-};
-
-type ExpressionNode = RangedNode | CallExpressionNode;
-
-function getCallablePosition(callee: CallableNode | undefined) {
-  if (!callee) return undefined;
-  if (callee.type === "MemberExpression") return callee.property?.range?.[0];
+function getCallablePosition(callee: CallExpression["callee"]) {
+  if (callee.type === "MemberExpression") return callee.property.range?.[0];
   return callee.range?.[0];
 }
 

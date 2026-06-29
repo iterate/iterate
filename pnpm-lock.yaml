@@ -1016,6 +1016,12 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  lint:
+    devDependencies:
+      '@types/estree':
+        specifier: 1.0.9
+        version: 1.0.9
+
   packages/iterate:
     dependencies:
       '@clack/prompts':
@@ -20555,7 +20561,7 @@ snapshots:
 
   '@types/eslint@8.56.12':
     dependencies:
-      '@types/estree': 1.0.8
+      '@types/estree': 1.0.9
       '@types/json-schema': 7.0.15
 
   '@types/estree-jsx@1.0.5':
@@ -24471,7 +24477,7 @@ snapshots:
 
   hast-util-to-jsx-runtime@2.3.6:
     dependencies:
-      '@types/estree': 1.0.8
+      '@types/estree': 1.0.9
       '@types/hast': 3.0.4
       '@types/unist': 3.0.3
       comma-separated-tokens: 2.0.3
