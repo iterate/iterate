@@ -12,8 +12,6 @@ import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
 import { useItx } from "~/itx/itx-react.tsx";
 import type { ItxProjects } from "~/itx/handle.ts";
 
-type CustomHostnameStatus = Awaited<ReturnType<ItxProjects["customHostnameStatus"]>>;
-
 export function ProjectSettingsPanel({
   project,
   routeConfig,
@@ -223,7 +221,7 @@ function CustomHostnameCloudflareStatus({
   status,
 }: {
   isPending: boolean;
-  status: CustomHostnameStatus | undefined;
+  status: Awaited<ReturnType<ItxProjects["customHostnameStatus"]>> | undefined;
 }) {
   if (isPending) {
     return <p className="text-xs text-muted-foreground">Checking Cloudflare hostname status...</p>;

@@ -7,10 +7,8 @@ import { getInitialProcessorState } from "@iterate-com/shared/streams/stream-pro
 import type { StreamEvent, StreamEventInput } from "@iterate-com/shared/streams/stream-event";
 import { AgentProcessorContract, type AgentState } from "./contract.ts";
 import { AgentProcessor } from "./implementation.ts";
-import type {
-  StreamProcessorStream,
-  StreamProcessorSnapshot,
-} from "~/domains/streams/engine/stream-processor.ts";
+import type { StreamProcessorSnapshot } from "~/domains/streams/engine/stream-processor.ts";
+import type { StreamRpc } from "~/domains/streams/engine/types.ts";
 import {
   AGENT_CHAT_CAPABILITY_INSTRUCTIONS,
   AGENT_WORKSPACE_CAPABILITY_INSTRUCTIONS,
@@ -945,7 +943,7 @@ function initialState(): AgentState {
 }
 
 function newAgentProcessor(args: {
-  stream: StreamProcessorStream;
+  stream: StreamRpc;
   isAgentsRootStream?: () => boolean;
   snapshot?: StreamProcessorSnapshot<AgentState>;
   readStreamEvents?: () => Promise<StreamEvent[]>;
@@ -983,7 +981,7 @@ function memoryStream() {
         };
         return committed;
       }),
-  } as unknown as StreamProcessorStream;
+  } as unknown as StreamRpc;
   return { stream, appended };
 }
 

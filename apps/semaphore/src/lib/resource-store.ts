@@ -17,18 +17,6 @@ import {
   type SemaphoreResourceRecord,
 } from "~/contract.ts";
 
-type ResourceRow = {
-  type: string;
-  slug: string;
-  data: string;
-  lease_state: string;
-  leased_until?: number | null;
-  last_acquired_at?: number | null;
-  last_released_at?: number | null;
-  created_at: string;
-  updated_at: string;
-};
-
 export class ResourceInputError extends Error {}
 
 export function parseType(input: string): string {
@@ -46,6 +34,18 @@ function parseData(value: string): SemaphoreJsonObject {
     throw error;
   }
 }
+
+type ResourceRow = {
+  type: string;
+  slug: string;
+  data: string;
+  lease_state: string;
+  leased_until?: number | null;
+  last_acquired_at?: number | null;
+  last_released_at?: number | null;
+  created_at: string;
+  updated_at: string;
+};
 
 function rowToResourceRecord(row: ResourceRow): SemaphoreResourceRecord {
   return {

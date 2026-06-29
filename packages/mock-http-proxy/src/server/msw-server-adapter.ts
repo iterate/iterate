@@ -16,7 +16,6 @@ import {
 
 type AnyHandler = msw.RequestHandler | msw.WebSocketHandler;
 type UnhandledAction = "bypass" | "error";
-type LifecycleEmitter = Pick<EventEmitter, "on" | "emit" | "removeListener" | "removeAllListeners">;
 
 type NativeMswServerApi = Pick<
   mswNode.SetupServerApi,
@@ -420,7 +419,10 @@ export function createNativeMswServer(
   ) as AnyHandler[];
 
   const msw = setupServer(...handlers);
-  const lifecycleEmitter: LifecycleEmitter = new EventEmitter();
+  const lifecycleEmitter: Pick<
+    EventEmitter,
+    "on" | "emit" | "removeListener" | "removeAllListeners"
+  > = new EventEmitter();
   const onUnhandledRequest = options.onUnhandledRequest ?? "warn";
   const resolutionContextBaseUrl = options.resolutionContextBaseUrl;
   const transformRequest = options.transformRequest;

@@ -22,7 +22,7 @@ import { ItxError } from "../errors.ts";
 import { replayPathCall, type PathCall } from "../itx.ts";
 import type { ProjectAccess } from "../refs.ts";
 import { getStreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
-import type { StreamRpc } from "~/domains/streams/engine/types.ts";
+import type { StreamRpc, StreamSubscriptionHandle } from "~/domains/streams/engine/types.ts";
 import {
   formatDurableObjectName,
   normalizeDurableObjectProjectId,
@@ -205,7 +205,7 @@ export class ItxStream extends RpcTarget {
     return await this.client().reduce(input as never);
   }
 
-  async subscribe(input: Parameters<StreamRpc["subscribe"]>[0]): Promise<ItxStreamSubscription> {
+  async subscribe(input: Parameters<StreamRpc["subscribe"]>[0]): Promise<StreamSubscriptionHandle> {
     const processEventBatch = input.processEventBatch;
     const retainedProcessEventBatch =
       (processEventBatch as { dup?(): typeof processEventBatch }).dup?.() ?? processEventBatch;
@@ -238,10 +238,18 @@ export class ItxStream extends RpcTarget {
 /** Disposer for ItxStream.subscribe — callable from any execution mode. */
 export class ItxStreamSubscription extends RpcTarget {
   constructor(
-    private readonly handle: { unsubscribe(): void },
+    private readonly handle: StreamSubscriptionHandle,
     private readonly release: () => void = () => {},
   ) {
     super();
+  }
+
+  get subscriptionKey() {
+    return this.handle.subscriptionKey;
+  }
+
+  get streamMaxOffset() {
+    return this.handle.streamMaxOffset;
   }
 
   async unsubscribe() {

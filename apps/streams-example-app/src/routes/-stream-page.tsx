@@ -1429,7 +1429,7 @@ function StreamControlTool({
               subscriptionKey,
               subscriber: durableObjectProcessorSubscriber({
                 bindingName: "STREAM_PROCESSOR_RUNNER",
-                durableObjectName: `${core.path}:${subscriptionKey}`,
+                durableObjectName: `${DEFAULT_STREAM_PROJECT_ID}:${core.path}:${subscriptionKey}`,
                 processorName: "circuit-breaker",
               }),
             },

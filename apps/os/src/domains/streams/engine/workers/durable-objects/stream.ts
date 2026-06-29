@@ -9,7 +9,6 @@ import {
 import type { StreamSubscriptionHandshake } from "../stream-processor-host.ts";
 import { getInitialProcessorState } from "../../shared/stream-processors.ts";
 import type { ProcessEventBatch, StreamCoreProcessorState } from "../../types.ts";
-import type { StreamProcessorStream } from "../../stream-processor.ts";
 import { CoreStreamProcessor } from "../../processors/core/implementation.ts";
 import { CoreProcessorContract, type CoreProcessorState } from "../../processors/core/contract.ts";
 import type { LiveStreamSubscriberDescriptor, StreamRpc } from "../../types.ts";
@@ -71,7 +70,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
   // against reduced state; this DO supplies the storage and RPC mechanics it
   // needs (committed-event reads, the live state, Callable dispatch).
   coreProcessor: CoreStreamProcessor = new CoreStreamProcessor({
-    stream: new StreamRpcTarget(this) as unknown as StreamProcessorStream,
+    stream: new StreamRpcTarget(this),
     keepAliveWhile: (work) => void this.ctx.waitUntil(work()),
     getEvents: (args) => this.getEvents(args),
     currentState: () => this.#coreProcessorState,
@@ -762,7 +761,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
         exports: (this.ctx as { exports?: Record<string, unknown> }).exports,
       },
       payload: {
-        stream: new StreamRpcTarget(this) as unknown as StreamProcessorStream,
+        stream: new StreamRpcTarget(this),
         subscriptionKey: args.subscriptionKey,
         streamMaxOffset: this.#coreProcessorState.maxOffset,
         streamRuntimeState: { coreProcessorState: this.#coreProcessorState },

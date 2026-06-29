@@ -11,13 +11,6 @@ type RetainableProcessEventBatch = ProcessEventBatch &
     onRpcBroken?(callback: (error: unknown) => void): void;
   };
 
-type RetainedGetProcessorRuntimeState = GetProcessorRuntimeState & Disposable;
-
-type RetainableGetProcessorRuntimeState = GetProcessorRuntimeState &
-  Partial<Disposable> & {
-    dup?(): RetainedGetProcessorRuntimeState;
-  };
-
 export function retainProcessEventBatch(
   processEventBatch: ProcessEventBatch,
   opts: {
@@ -93,6 +86,13 @@ export function retainProcessEventBatch(
   }
   return callback;
 }
+
+type RetainedGetProcessorRuntimeState = GetProcessorRuntimeState & Disposable;
+
+type RetainableGetProcessorRuntimeState = GetProcessorRuntimeState &
+  Partial<Disposable> & {
+    dup?(): RetainedGetProcessorRuntimeState;
+  };
 
 export function retainGetProcessorRuntimeState(
   getRuntimeState: GetProcessorRuntimeState | undefined,

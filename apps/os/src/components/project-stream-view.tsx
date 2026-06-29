@@ -58,6 +58,7 @@ import type {
 } from "~/domains/streams/engine/browser/stream-browser-db.ts";
 import {
   acquireStreamRuntime,
+  asBrowserStreamClient,
   type StreamBrowserStore,
   type StreamRuntimeState,
 } from "~/domains/streams/engine/browser/stream-browser-store.ts";
@@ -67,6 +68,7 @@ import {
   BrowserRawEventsProcessor,
   type BrowserRawEventsState,
 } from "~/domains/streams/engine/processors/browser-raw-events/implementation.ts";
+import type { StreamRpc } from "~/domains/streams/engine/types.ts";
 import { AgentFeedView } from "~/components/agent-feed.tsx";
 import { AgentPillComposer, type AgentComposerMode } from "~/components/agent-pill-composer.tsx";
 import { ExampleEventsPanel } from "~/components/example-events-panel.tsx";
@@ -74,13 +76,14 @@ import { openGlobalCommandPalette } from "~/components/global-command-palette-ev
 import { PresenceAvatar, StreamProcessorsPanel } from "~/components/stream-processors-panel.tsx";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/domains/durable-object-names.ts";
 import { useItx } from "~/itx/itx-react.tsx";
-import {
-  itxStreamBrowserClient,
-  type ItxStreamForBrowserRuntime,
-} from "~/lib/itx-stream-browser-client.ts";
 import { presenceLabel, sparklinePoints, useSimulatedRttMetrics } from "~/lib/stream-presence.ts";
 import { useStreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useVirtualizedTailScroll } from "~/lib/use-virtualized-tail-scroll.ts";
+
+const DEFAULT_RAW_EVENT_YAML =
+  "type: events.iterate.com/os/manual-event\npayload:\n  message: Hello from OS\n";
+
+const MAX_PRESENCE_AVATARS = 4;
 
 type ProjectStreamMessageComposer = {
   placeholder?: string;
@@ -94,14 +97,7 @@ type StreamPathLinkRenderer = (input: {
   className?: string;
   path: StreamPath;
 }) => ReactNode;
-type ItxStreamSource = (
-  streamPath: StreamPath,
-) => ItxStreamForBrowserRuntime | Promise<ItxStreamForBrowserRuntime>;
-
-const DEFAULT_RAW_EVENT_YAML =
-  "type: events.iterate.com/os/manual-event\npayload:\n  message: Hello from OS\n";
-
-const MAX_PRESENCE_AVATARS = 4;
+type ItxStreamSource = (streamPath: StreamPath) => StreamRpc | Promise<StreamRpc>;
 
 export function ProjectStreamView({
   autoFocusMessageComposer = false,
@@ -141,7 +137,10 @@ export function ProjectStreamView({
   );
   const streamClientFactory = useMemo(
     () => async (input: { streamPath: string }) =>
-      itxStreamBrowserClient(await resolvedStreamSource(StreamPath.parse(input.streamPath))),
+      asBrowserStreamClient(
+        await resolvedStreamSource(StreamPath.parse(input.streamPath)),
+        () => {},
+      ),
     [resolvedStreamSource],
   );
   const store = useMemo(
@@ -532,6 +531,7 @@ export function ProjectStreamView({
               ))
             }
             reductionKey={reductionKey}
+            streamPath={streamPath}
           />
         ) : activeTab === "raw" ? (
           <ProjectStreamRawView
@@ -632,6 +632,7 @@ function useReducedStreamState<TState>(args: {
   /** Distinguishes caches when several reductions share one reductionKey. */
   cacheScope: string;
   initialState: () => TState;
+  normalizeEvent?: (event: Event) => Event;
   reduceEvent: (state: TState, event: Event) => TState;
 }): ReducedStreamState<TState> {
   const rowsResult = useStreamQuery(
@@ -640,7 +641,7 @@ function useReducedStreamState<TState>(args: {
   );
   const cacheRef = useRef<ReductionCache<TState> | null>(null);
   const cacheKey = `${args.cacheScope}:${args.reductionKey}`;
-  const { initialState, reduceEvent } = args;
+  const { initialState, normalizeEvent, reduceEvent } = args;
 
   return useMemo(() => {
     const cached = cacheRef.current?.key === cacheKey ? cacheRef.current : null;
@@ -673,6 +674,7 @@ function useReducedStreamState<TState>(args: {
       } catch {
         continue;
       }
+      event = normalizeEvent?.(event) ?? event;
       events.push(event);
       state = reduceEvent(state, event);
     }
@@ -686,7 +688,7 @@ function useReducedStreamState<TState>(args: {
     };
 
     return { status: "ok" as const, state, events };
-  }, [rowsResult, cacheKey, initialState, reduceEvent]);
+  }, [rowsResult, cacheKey, initialState, normalizeEvent, reduceEvent]);
 }
 
 /**
@@ -733,17 +735,25 @@ function ProjectStreamFeedView({
   emptyLabel,
   renderStreamPathLink,
   reductionKey,
+  streamPath,
 }: {
   database: StreamBrowserDatabase;
   emptyLabel: string;
   renderStreamPathLink: StreamPathLinkRenderer;
   reductionKey: string;
+  streamPath: StreamPath;
 }) {
+  const normalizeEvent = useCallback(
+    (event: Event): Event =>
+      event.streamPath == null ? ({ ...event, streamPath: streamPath.toString() } as Event) : event,
+    [streamPath],
+  );
   const feed = useReducedStreamState<EventsStreamViewState>({
     database,
     reductionKey,
     cacheScope: StreamViewProcessorContract.slug,
     initialState: () => getInitialProcessorState(StreamViewProcessorContract),
+    normalizeEvent,
     reduceEvent: reduceStreamViewEvent,
   });
   const [rendererMode, setRendererMode] = useState<EventsStreamRendererMode>("raw-pretty");

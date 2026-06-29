@@ -43,10 +43,6 @@ type ProjectListResult = {
   total: number;
 };
 
-type ProjectWithIngressUrl = ProjectListItem & {
-  ingressUrl: string;
-};
-
 export class ProjectsCapability extends RpcTarget {
   constructor(
     private readonly props: {
@@ -97,7 +93,7 @@ export class ProjectsCapability extends RpcTarget {
     id?: string;
     slug: string;
     organizationSlug?: string;
-  }): Promise<ProjectWithIngressUrl> {
+  }): Promise<ProjectListItem & { ingressUrl: string }> {
     const context = this.props.context;
 
     // A user may pass `id` only to (re-)adopt a project they already own in

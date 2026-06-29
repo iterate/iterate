@@ -22,10 +22,6 @@ type SerializableJsonValue =
   | SerializableJsonValue[]
   | { [key: string]: SerializableJsonValue };
 
-type SerializableSemaphoreResource = Omit<SemaphoreResourceRecord, "data"> & {
-  data: Record<string, SerializableJsonValue>;
-};
-
 function toSerializableJsonValue(value: unknown): SerializableJsonValue {
   if (
     value === null ||
@@ -48,6 +44,10 @@ function toSerializableJsonValue(value: unknown): SerializableJsonValue {
 
   throw new Error("Semaphore resource data must be JSON-serializable");
 }
+
+type SerializableSemaphoreResource = Omit<SemaphoreResourceRecord, "data"> & {
+  data: Record<string, SerializableJsonValue>;
+};
 
 function serializeResource(resource: SemaphoreResourceRecord): SerializableSemaphoreResource {
   return {

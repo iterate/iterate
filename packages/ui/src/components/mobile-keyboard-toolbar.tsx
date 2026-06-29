@@ -1,18 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { cn } from "../lib/utils.ts";
 
-interface MobileKeyboardToolbarProps {
-  onKeyPress: (key: string) => void;
-  ctrlActive?: boolean;
-  keyboardVisible?: boolean;
-  onCtrlToggle?: () => void;
-  onToggleKeyboard?: () => void;
-  onSearch?: (query: string) => void;
-  onSearchNext?: (query: string) => void;
-  onSearchPrev?: (query: string) => void;
-  onSearchClose?: () => void;
-}
-
 interface KeyDef {
   label: string;
   key?: string;
@@ -118,6 +106,18 @@ const REPEAT_INTERVAL_MS = 80;
 
 function haptic() {
   navigator.vibrate?.(10);
+}
+
+interface MobileKeyboardToolbarProps {
+  onKeyPress: (key: string) => void;
+  ctrlActive?: boolean;
+  keyboardVisible?: boolean;
+  onCtrlToggle?: () => void;
+  onToggleKeyboard?: () => void;
+  onSearch?: (query: string) => void;
+  onSearchNext?: (query: string) => void;
+  onSearchPrev?: (query: string) => void;
+  onSearchClose?: () => void;
 }
 
 export function MobileKeyboardToolbar({

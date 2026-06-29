@@ -37,18 +37,12 @@ type LiveProjectProcessorState = {
   status: LiveStatus;
 };
 
-type LiveProjectProcessorSnapshot = LiveProjectProcessorState & {
-  refreshSnapshot: () => Promise<void>;
-};
-
 const REACTIVITY_TEST_STREAM_PATH = "/reactivity-test";
 const REACTIVITY_TEST_EVENT_TYPE = "events.iterate.com/reactivity-test/appended";
 
-type ReactivityActionKind = "batch" | "single";
-
 type ReactivityActionState = {
   error?: string;
-  kind?: ReactivityActionKind;
+  kind?: "batch" | "single";
   marker?: string;
   status: "idle" | "running" | "done" | "error";
 };
@@ -65,6 +59,10 @@ type ReactivityTestStreamState = {
   events: ReactivityTestEvent[];
   lastBatchAt?: number;
   status: LiveStatus;
+};
+
+type LiveProjectProcessorSnapshot = LiveProjectProcessorState & {
+  refreshSnapshot: () => Promise<void>;
 };
 
 function useLiveProjectProcessorSnapshot(): LiveProjectProcessorSnapshot {

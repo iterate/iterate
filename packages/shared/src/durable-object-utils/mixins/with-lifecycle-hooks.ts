@@ -59,17 +59,6 @@ type LifecycleHook<StructuredName extends LifecycleStructuredName> = (
   structuredName: StructuredName,
 ) => void | Promise<void>;
 
-type DurableObjectBranded = {
-  /**
-   * `DurableObjectNamespace<T>` is meant to contain real Durable Object
-   * instances, not arbitrary objects that happen to implement `initialize()`.
-   * Cloudflare's DurableObject instance type includes this brand, so requiring
-   * it keeps `getInitializedDoStub({ namespace, ... })` tied to actual DO
-   * namespaces.
-   */
-  __DURABLE_OBJECT_BRAND: never;
-};
-
 type StructuredNameOf<TInstance> =
   TInstance extends LifecycleHooksMembers<infer StructuredName> ? StructuredName : never;
 
@@ -97,10 +86,6 @@ export type D1ObjectCatalogOptions<StructuredName extends LifecycleStructuredNam
   getDatabase(env: Env): D1Database;
   indexes?: D1ObjectCatalogIndexDefinitions<StructuredName>;
 };
-
-type D1ObjectCatalogSetting<StructuredName extends LifecycleStructuredName, Env> =
-  | "none"
-  | D1ObjectCatalogOptions<StructuredName, Env>;
 
 /**
  * Type-only protected surface.
@@ -233,6 +218,10 @@ export class InitializeInitialStateMismatchError extends Error {
  * `registerOnInstanceWake()`, and call `ensureStarted()` before public methods
  * touch initialized state.
  */
+type D1ObjectCatalogSetting<StructuredName extends LifecycleStructuredName, Env> =
+  | "none"
+  | D1ObjectCatalogOptions<StructuredName, Env>;
+
 export function withLifecycleHooks<
   StructuredName extends LifecycleStructuredName = string,
   InitialState = undefined,
@@ -615,6 +604,17 @@ export function withLifecycleHooks<
  * miss. A future helper shape should move the D1 preflight outside the stub
  * wake, then call `ensureStarted()` on catalog hits so drift is surfaced.
  */
+type DurableObjectBranded = {
+  /**
+   * `DurableObjectNamespace<T>` is meant to contain real Durable Object
+   * instances, not arbitrary objects that happen to implement `initialize()`.
+   * Cloudflare's DurableObject instance type includes this brand, so requiring
+   * it keeps `getInitializedDoStub({ namespace, ... })` tied to actual DO
+   * namespaces.
+   */
+  __DURABLE_OBJECT_BRAND: never;
+};
+
 export async function getInitializedDoStub<
   TInstance extends DurableObjectBranded,
   const AllowCreate extends boolean,

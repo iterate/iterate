@@ -1,4 +1,4 @@
-import { test as base } from "@playwright/test";
+import { test as base, type Page, type TestInfo } from "@playwright/test";
 import {
   addPlugins,
   hydrationWaiter,
@@ -10,10 +10,30 @@ import { createProjectFixture as createForgedProjectFixture } from "./forged-ses
 
 type ForgedProjectFixture = Awaited<ReturnType<typeof createForgedProjectFixture>>;
 
+const addPagePlugins = (page: Page, testInfo: TestInfo) =>
+  addPlugins({
+    page,
+    testInfo,
+    plugins: [
+      hydrationWaiter({ timeout: 30_000 }),
+      uiErrorReporter(),
+      spinnerWaiter({ spinnerTimeout: 30_000 }),
+      process.env.VIDEO_MODE === "1" &&
+        videoMode({
+          skipStackFrames: ["test-support/test.ts"],
+          deadAirThreshold: 300,
+          finalHold: 1,
+          highlight: { mode: "pointer", duration: 1000 },
+        }),
+    ],
+    boxedStackPrefixes: (defaults) => [...defaults, import.meta.dirname],
+  });
+
 export const test = base.extend<{
   helpers: {
     createFixture: (slugPrefix: string) => Promise<ForgedProjectFixture>;
   };
+  page: Awaited<ReturnType<typeof addPagePlugins>>;
 }>({
   helpers: async ({ baseURL, page }, use) => {
     if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
@@ -22,18 +42,7 @@ export const test = base.extend<{
     });
   },
   page: async ({ page: basePage }, use, testInfo) => {
-    await using page = await addPlugins({
-      page: basePage,
-      testInfo,
-      plugins: [
-        hydrationWaiter({ timeout: 30_000 }),
-        uiErrorReporter(),
-        spinnerWaiter({ spinnerTimeout: 30_000 }),
-        process.env.VIDEO_MODE === "1" && videoMode({ skipStackFrames: ["test-support/test.ts"] }),
-      ],
-      boxedStackPrefixes: (defaults) => [...defaults, import.meta.dirname],
-    });
-
+    await using page = await addPagePlugins(basePage, testInfo);
     await use(page);
   },
 });

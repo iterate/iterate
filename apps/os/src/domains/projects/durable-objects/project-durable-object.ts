@@ -30,6 +30,7 @@ import {
 import { durableObjectProcessorSubscriber } from "~/domains/streams/engine/shared/callable-subscriber.ts";
 import {
   getInitializedStreamStub,
+  getStreamRpcStub,
   type StreamDurableObjectNamespace,
   type StreamDurableObject,
 } from "~/domains/streams/stream-runtime.ts";
@@ -93,6 +94,11 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
     (deps) =>
       new ProjectProcessor({
         ...deps,
+        stream: getStreamRpcStub({
+          durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+          projectId: this.projectId,
+          path: PROJECT_STREAM_PATH,
+        }),
         appConfig: () => this.getAppConfig(),
         env: this.env,
         exports: this.ctx.exports,

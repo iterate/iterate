@@ -113,6 +113,7 @@
     "@tanstack/router/create-route-property-order": "warn",
     "iterate/no-capnweb-http-batch": "error",
     "iterate/import-rules": "warn",
+    "iterate/no-sr-only-data-attributes": "error",
     "iterate/relative-import-extensions": "error",
     "iterate/zod-schema-naming": "error",
     "iterate/drizzle-conventions": "error",
@@ -120,6 +121,8 @@
     "iterate/no-implied-eval": "error",
     "iterate/stream-processor-override-args": "error",
     "iterate/no-single-use-helpers": "error",
+    "iterate/colocate-single-use-types": "error",
+    "iterate/no-single-use-types": "error",
     "prefer-const": "off",
     "iterate/prefer-const": "error",
     "iterate/isolated-codemode": [

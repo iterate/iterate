@@ -80,11 +80,7 @@ import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
 
 type PublicConfig = PublicAppConfig<AppConfig>;
 
-type AppSidebarProps = {
-  routeConfig: PublicRouteConfig;
-};
-
-export function AppSidebar({ routeConfig }: AppSidebarProps) {
+export function AppSidebar({ routeConfig }: { routeConfig: PublicRouteConfig }) {
   const { data } = useQuery({
     queryKey: myProjectsQueryKey,
     queryFn: () => listMyProjectsServerFn({ data: myProjectsListInput }),

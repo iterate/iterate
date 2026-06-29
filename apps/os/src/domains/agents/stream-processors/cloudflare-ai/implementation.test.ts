@@ -13,10 +13,8 @@ import { getInitialProcessorState } from "@iterate-com/shared/streams/stream-pro
 import type { StreamEvent, StreamEventInput } from "@iterate-com/shared/streams/stream-event";
 import { CloudflareAiProcessorContract, type CloudflareAiState } from "./contract.ts";
 import { CloudflareAiProcessor } from "./implementation.ts";
-import type {
-  StreamProcessorStream,
-  StreamProcessorSnapshot,
-} from "~/domains/streams/engine/stream-processor.ts";
+import type { StreamProcessorSnapshot } from "~/domains/streams/engine/stream-processor.ts";
+import type { StreamRpc } from "~/domains/streams/engine/types.ts";
 
 describe("CloudflareAiProcessor", () => {
   it("executes a fresh agent LLM request", async () => {
@@ -268,7 +266,7 @@ function stateWithRequest(
 }
 
 function newProcessor(args: {
-  stream: StreamProcessorStream;
+  stream: StreamRpc;
   runs: string[];
   bodies?: unknown[];
   snapshot?: StreamProcessorSnapshot<CloudflareAiState>;
@@ -380,7 +378,7 @@ function memoryStream() {
         };
         return committed;
       }),
-  } as unknown as StreamProcessorStream;
+  } as unknown as StreamRpc;
   return { stream, appended };
 }
 

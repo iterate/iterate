@@ -14,7 +14,6 @@ import { toast } from "sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { cn } from "@iterate-com/ui/lib/utils";
 
-type SourceCodeLanguage = "typescript" | "json" | "yaml" | "text";
 export type SourceCodeBlockExtension = Exclude<
   NonNullable<ConstructorParameters<typeof EditorView>[0]>["extensions"],
   undefined
@@ -181,7 +180,7 @@ function selectAll(view: EditorView) {
 export interface SourceCodeBlockProps {
   code: string;
   className?: string;
-  language?: SourceCodeLanguage;
+  language?: "typescript" | "json" | "yaml" | "text";
   showCopyButton?: boolean;
   showLineNumbers?: boolean;
   plainChrome?: boolean;

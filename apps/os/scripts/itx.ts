@@ -38,19 +38,6 @@ type RunOptions = {
   baseUrl?: string;
 };
 
-type AgentSmokeOptions = {
-  /** Agent stream path, e.g. /agents/smoke. */
-  agentPath: string;
-  /** OS base URL. Defaults to APP_CONFIG_BASE_URL. */
-  baseUrl?: string;
-  /** Single user message to send to the agent. */
-  message: string;
-  /** Project id or slug to connect into over ITX. */
-  project: string;
-  /** Maximum time to wait for an assistant response. */
-  timeoutMs?: number;
-};
-
 /** Run an itx script body against a deployed OS worker over Cap'n Web. */
 export async function run(options: RunOptions) {
   const code = options.eval ?? (options.file ? await readFile(options.file, "utf8") : undefined);
@@ -80,6 +67,19 @@ export async function run(options: RunOptions) {
   // The Cap'n Web WebSocket would otherwise keep the process alive.
   process.exit(0);
 }
+
+type AgentSmokeOptions = {
+  /** Agent stream path, e.g. /agents/smoke. */
+  agentPath: string;
+  /** OS base URL. Defaults to APP_CONFIG_BASE_URL. */
+  baseUrl?: string;
+  /** Single user message to send to the agent. */
+  message: string;
+  /** Project id or slug to connect into over ITX. */
+  project: string;
+  /** Maximum time to wait for an assistant response. */
+  timeoutMs?: number;
+};
 
 /** Send one user message to an agent over ITX and wait for the assistant response. */
 export async function agentSmoke(options: AgentSmokeOptions) {

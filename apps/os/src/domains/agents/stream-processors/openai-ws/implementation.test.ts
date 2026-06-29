@@ -9,10 +9,8 @@ import { getInitialProcessorState } from "@iterate-com/shared/streams/stream-pro
 import type { StreamEvent, StreamEventInput } from "@iterate-com/shared/streams/stream-event";
 import { OpenAiWsProcessorContract, type OpenAiWsState } from "./contract.ts";
 import { OpenAiWsProcessor, type OpenAiResponsesWebSocket } from "./implementation.ts";
-import type {
-  StreamProcessorStream,
-  StreamProcessorSnapshot,
-} from "~/domains/streams/engine/stream-processor.ts";
+import type { StreamProcessorSnapshot } from "~/domains/streams/engine/stream-processor.ts";
+import type { StreamRpc } from "~/domains/streams/engine/types.ts";
 
 type JsonValue = z.infer<ReturnType<typeof z.json>>;
 
@@ -602,7 +600,7 @@ function testState(): OpenAiWsState {
 }
 
 function newProcessor(args: {
-  stream: StreamProcessorStream;
+  stream: StreamRpc;
   appended: StreamEventInput[];
   sockets: FakeOpenAiResponsesWebSocket[];
   snapshot?: StreamProcessorSnapshot<OpenAiWsState>;
@@ -723,7 +721,7 @@ function memoryStream() {
         };
         return committed;
       }),
-  } as unknown as StreamProcessorStream;
+  } as unknown as StreamRpc;
   return { stream, appended };
 }
 

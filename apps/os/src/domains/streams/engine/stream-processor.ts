@@ -1,4 +1,4 @@
-import { RpcTarget, type RpcStub } from "capnweb";
+import { RpcTarget } from "capnweb";
 import type { z } from "zod";
 import type { StreamEvent } from "./shared/event.ts";
 import type { StreamRpc } from "./types.ts";
@@ -13,12 +13,6 @@ import {
 } from "./shared/stream-processors.ts";
 
 /**
- * Platform capabilities the host hands every processor as part of its
- * flattened deps.
- */
-export type StreamProcessorStream = RpcStub<RpcTarget & StreamRpc>;
-
-/**
  * The structural slice of a processor contract that the class needs. Contracts
  * built with `defineProcessorContract(...)` satisfy this; the full contract
  * type flows through the `Contract` type parameter so event/state inference
@@ -31,6 +25,8 @@ export type StreamProcessorContract = {
   events: EventCatalog;
   processorDeps?: readonly unknown[];
   consumes: readonly string[];
+  consumesAllEvents?: true;
+  emits: readonly string[];
 };
 
 /**
@@ -39,8 +35,8 @@ export type StreamProcessorContract = {
  * and an optional `keepAliveWhile` hook for hosts whose runtime would otherwise
  * shut down while async work is in flight (e.g. a Durable Object).
  */
-export type StreamProcessorBaseDeps<Contract, Stream extends StreamProcessorStream> = {
-  stream: Stream;
+type StreamProcessorBaseDeps<Contract extends StreamProcessorContract> = {
+  stream: StreamRpc;
   keepAliveWhile?: (work: () => Promise<unknown>) => void;
 } & StreamProcessorStateStorage<ProcessorState<Contract>>;
 
@@ -113,10 +109,6 @@ export type StreamProcessorRuntimeState<State> = {
 type MaybePromise<T> = T | Promise<T>;
 type StateChangeCallback<State> = (state: State) => unknown;
 type RetainedStateChangeCallback<State> = StateChangeCallback<State> & Disposable;
-type RetainableStateChangeCallback<State> = StateChangeCallback<State> &
-  Partial<Disposable> & {
-    dup?(): RetainedStateChangeCallback<State>;
-  };
 export type StreamProcessorStateUnsubscribe = (() => void) & Disposable;
 
 /**
@@ -138,8 +130,7 @@ export type StreamProcessorStateStorage<State> = {
 export type StreamProcessorDeps<
   Contract extends StreamProcessorContract,
   ProcessorSpecificDeps extends object = object,
-  Stream extends StreamProcessorStream = StreamProcessorStream,
-> = StreamProcessorBaseDeps<Contract, Stream> & ProcessorSpecificDeps;
+> = StreamProcessorBaseDeps<Contract> & ProcessorSpecificDeps;
 
 /**
  * Class-based stream processor.
@@ -172,10 +163,7 @@ export type StreamProcessorDeps<
 // class dependency once processor hosting has settled.
 export abstract class StreamProcessor<
   Contract extends StreamProcessorContract,
-  Deps extends StreamProcessorBaseDeps<Contract, StreamProcessorStream> = StreamProcessorBaseDeps<
-    Contract,
-    StreamProcessorStream
-  >,
+  Deps extends StreamProcessorBaseDeps<Contract> = StreamProcessorBaseDeps<Contract>,
 > extends RpcTarget {
   abstract readonly contract: Contract;
   protected readonly deps: Deps;
@@ -465,6 +453,11 @@ export abstract class StreamProcessor<
     return this.#state;
   }
 }
+
+type RetainableStateChangeCallback<State> = StateChangeCallback<State> &
+  Partial<Disposable> & {
+    dup?(): RetainedStateChangeCallback<State>;
+  };
 
 function retainStateChangeCallback<State>(
   cb: StateChangeCallback<State>,

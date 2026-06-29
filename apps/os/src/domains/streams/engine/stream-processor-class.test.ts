@@ -11,13 +11,13 @@ import {
   StreamProcessor,
   type StreamProcessorDeps,
   type StreamProcessorSnapshot,
-  type StreamProcessorStream,
 } from "./stream-processor.ts";
+import type { StreamRpc } from "./types.ts";
 
 const iso = new Date(0).toISOString();
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-const stream = () => ({ append() {}, appendBatch() {} }) as unknown as StreamProcessorStream;
+const stream = () => ({ append() {}, appendBatch() {} }) as unknown as StreamRpc;
 
 // ---------------------------------------------------------------------------
 // counter — a named-only contract with spy hooks injected through deps
@@ -116,7 +116,6 @@ const SameStateContract = defineProcessorContract({
   emits: [],
 });
 type SameStateContract = typeof SameStateContract;
-type SameState = { seen: number };
 
 class SameStateProcessor extends StreamProcessor<SameStateContract> {
   readonly contract = SameStateContract;
@@ -222,7 +221,7 @@ describe("state change subscriptions", () => {
 
   it("does not notify when a reducer returns the same state object", async () => {
     const processor = new SameStateProcessor({ stream: stream() });
-    const states: SameState[] = [];
+    const states: Array<{ seen: number }> = [];
     const unsubscribe = await processor.onStateChange((state) => states.push(state));
 
     await processor.ingest({

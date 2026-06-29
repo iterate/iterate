@@ -34,8 +34,6 @@
 //                                  deterministically against the deployment's
 //                                  own fixture in itx-openapi.e2e.test.ts
 
-import { expect } from "vitest";
-
 export type ExampleRunContext = {
   /** Unique per example × runtime, for stream/event payload assertions. */
   marker: string;
@@ -44,7 +42,7 @@ export type ExampleRunContext = {
 
 export type ExampleCase = {
   vars?: (ctx: ExampleRunContext) => Record<string, unknown>;
-  assert: (result: unknown, ctx: ExampleRunContext) => void;
+  assert: (result: unknown, ctx: ExampleRunContext, expect: typeof import("vitest").expect) => void;
 };
 
 /** Example ids that intentionally have no matrix case (see header). */
@@ -61,19 +59,19 @@ export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
 export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   "list-and-describe-project": {
     vars: ({ projectId }) => ({ projectId }),
-    assert: (result, { projectId }) => {
+    assert: (result, { projectId }, expect) => {
       expect(result).toMatchObject({ context: `${projectId}:/`, project: { id: projectId } });
     },
   },
   "append-and-read-stream": {
     vars: ({ marker }) => ({ note: marker }),
-    assert: (result, { marker }) => {
+    assert: (result, { marker }, expect) => {
       expect(result).toMatchObject({ appended: { payload: { note: marker } } });
       expect((result as { count: number }).count).toBeGreaterThan(0);
     },
   },
   "provide-plain-object": {
-    assert: (result) => {
+    assert: (result, _ctx, expect) => {
       expect(result).toEqual({
         deep: { answer: 42, question: "life, the universe, everything" },
         ultimate: 42,
@@ -81,44 +79,44 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     },
   },
   "provide-path-call-sdk": {
-    assert: (result) => {
+    assert: (result, _ctx, expect) => {
       expect(result).toMatchObject({ method: "chat.postMessage", provider: "live-session" });
     },
   },
   "provide-durable-worker-cap": {
-    assert: (result) => {
+    assert: (result, _ctx, expect) => {
       expect(result).toEqual({ greeting: "hello, world", sum: 5 });
     },
   },
   "worker-cap-uses-its-own-itx": {
     // The todo stream accumulates across runtimes (same project, same path) —
     // containment, not equality.
-    assert: (result) => {
+    assert: (result, _ctx, expect) => {
       expect(result).toContain("ship the capability layer");
       expect(result).toContain("delete the mounts");
     },
   },
   "deep-auto-proxy": {
-    assert: (result) => {
+    assert: (result, _ctx, expect) => {
       expect(result).toEqual({ echo: { echoed: { hi: 1 } }, sum: 5 });
     },
   },
   "worker-to-worker": {
-    assert: (result) => {
+    assert: (result, _ctx, expect) => {
       expect(result).toEqual({ count: 7, price: 42, total: 294 });
     },
   },
   "stateful-facet-cap": {
     // The counter facet persists across runtimes — strictly positive and even
     // (each run increments twice), not exactly 2.
-    assert: (result) => {
+    assert: (result, _ctx, expect) => {
       const current = (result as { current: number }).current;
       expect(typeof current).toBe("number");
       expect(current).toBeGreaterThanOrEqual(2);
     },
   },
   "extend-child-context": {
-    assert: (result) => {
+    assert: (result, _ctx, expect) => {
       expect(result).toMatchObject({ fromChild: "child" });
       const capabilities = (result as { capabilities: Array<{ from?: string; name: string }> })
         .capabilities;
@@ -132,12 +130,12 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   },
   "journal-is-the-record": {
     vars: ({ marker }) => ({ capName: `journal_${marker.replace(/-/g, "_")}` }),
-    assert: (result) => {
+    assert: (result, _ctx, expect) => {
       expect(result).toEqual({ record: ["capability-provided", "capability-revoked"] });
     },
   },
   "http-cap": {
-    assert: (result) => {
+    assert: (result, _ctx, expect) => {
       const url = (result as { url: string }).url;
       expect(typeof url).toBe("string");
       expect(url).toContain("hello--");
@@ -145,7 +143,7 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     },
   },
   "import-npm-via-esm-sh": {
-    assert: (result, { projectId }) => {
+    assert: (result, { projectId }, expect) => {
       expect(result).toMatchObject({ context: `${projectId}:/`, project: { id: projectId } });
     },
   },

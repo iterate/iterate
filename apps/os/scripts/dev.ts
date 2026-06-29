@@ -40,13 +40,6 @@ export type StartOptions = {
   timeoutMs?: number;
 };
 
-type LoadOsDopplerSecretsOptions = {
-  /** Doppler config to load. Defaults to the local apps/os Doppler setup. */
-  config?: string;
-  /** Environment used for the Doppler CLI process. Defaults to process.env. */
-  env?: NodeJS.ProcessEnv;
-};
-
 const APP_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const ALCHEMY_DIR = resolve(APP_ROOT, ".alchemy");
 const LOG_PATH = localDevServerLogPath(APP_ROOT);
@@ -450,6 +443,13 @@ function loadDevServerEnv(options: Pick<StartOptions, "config" | "skipDoppler">)
 
   return { ...process.env, ...dopplerEnv.secrets };
 }
+
+type LoadOsDopplerSecretsOptions = {
+  /** Doppler config to load. Defaults to the local apps/os Doppler setup. */
+  config?: string;
+  /** Environment used for the Doppler CLI process. Defaults to process.env. */
+  env?: NodeJS.ProcessEnv;
+};
 
 function loadOsSecrets(options: LoadOsDopplerSecretsOptions = {}) {
   try {
