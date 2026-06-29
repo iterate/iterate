@@ -4,6 +4,12 @@ import type { WorkerRef, WorkerSource } from "./types.ts";
 
 export const WORKER_COMPATIBILITY_DATE = "2026-05-01";
 
+/**
+ * Fully materialized Worker Loader input plus a cache key for the source bytes.
+ * The cache key is source identity only; runtime scope and exported symbol are
+ * added by `loadResolvedWorker` so the same source can be used in multiple ITX
+ * paths without leaking bindings or entrypoint props across scopes.
+ */
 export type ResolvedWorkerSource = {
   cacheKey: string;
   mainModule: string;
@@ -33,6 +39,9 @@ export async function resolveWorkerSource({
     };
   }
 
+  // Repo source is deliberately late-bound: a WorkerRef names "the worker file
+  // at this repo path", not a frozen commit. That keeps source changes visible
+  // on next use while the repo itself remains responsible for producing modules.
   const resolved = await env.REPO.getByName(
     DurableObjectNameCodec.stringify({
       projectId,
@@ -67,6 +76,9 @@ export function loadResolvedWorker({
   resolved: ResolvedWorkerSource;
   workerScopeKey: string;
 }): WorkerStub {
+  // The Worker Loader cache must separate all runtime-relevant dimensions. In
+  // particular `workerScopeKey` prevents a worker loaded for an agent path from
+  // reusing a project-root `env.ITX` binding, even if the module bytes match.
   const exportKey =
     ref.type === "stateless"
       ? `entrypoint:${ref.entrypoint ?? "default"}`

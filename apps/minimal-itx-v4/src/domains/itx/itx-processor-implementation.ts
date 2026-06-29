@@ -147,6 +147,9 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     const previousLive = this.#liveCapabilities.get(key);
     let record: CapabilityRecord;
     if (capability.type === "worker") {
+      // Worker capabilities are durable records: after this append, any caller
+      // can resolve the mounted path and load the worker from its ref. We validate
+      // eagerly so a bad ref never enters the capability table.
       const workerRef = WorkerRefSchema.parse(capability.workerRef);
       await this.#workerRunner.validate(workerRef);
       record = {
@@ -203,6 +206,9 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     const hit = resolveLongestPrefix(this.state.capabilities, path);
     if (!hit) throw new Error(`no capability "${path.join(".")}"`);
     if (hit.record.type === "worker") {
+      // The mounted path is routing metadata only. The worker sees the remaining
+      // method path (`db.sql` -> `sql`) and its own WorkerRef path remains the ITX
+      // stream scope that supplies env.ITX.
       return await this.#workerRunner.invokeCapability({
         args,
         path: hit.rest,
@@ -281,6 +287,9 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
         }
       }
     `;
+    // runScript is deliberately expressed as a stateless inline WorkerRef. That
+    // keeps script execution on the same WorkerRunner path as project workers
+    // and provided stateless capabilities; ITX adds only the journal events.
     return {
       path: this.#path,
       source: {

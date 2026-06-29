@@ -1,7 +1,6 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import {
-  authCredentialsFromItxEntrypointProps,
   scopeFromItxEntrypointProps,
   TRUSTED_INTERNAL_ITX_PROPS,
   type ItxEntrypointProps,
@@ -13,7 +12,10 @@ export class ItxEntrypoint
   extends WorkerEntrypoint<Env, ItxEntrypointProps>
   implements Pick<UnauthenticatedItx, "authenticate">
 {
-  authenticate(input: ItxAuthCredentials = authCredentialsFromItxEntrypointProps(this.ctx.props)) {
+  authenticate(input: ItxAuthCredentials) {
+    if (input === undefined) {
+      throw new Error("env.ITX.authenticate() requires explicit ITX auth credentials");
+    }
     return new UnauthenticatedItxRpcTarget(new Headers(), this.ctx).authenticate(input);
   }
 

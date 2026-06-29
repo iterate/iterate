@@ -15,6 +15,13 @@ type StatefulWorkerRpc = {
   validate(ref: StatefulWorkerRef): Promise<void>;
 };
 
+/**
+ * Small internal executor for WorkerRefs.
+ *
+ * This is intentionally not an RpcTarget. Public capability-tree access goes
+ * through `WorkerRpcTarget`; ITX processors use this directly so mounted
+ * capabilities, project workers, and run-script all share one execution path.
+ */
 export class WorkerRunner {
   readonly #bindings: WorkerBindings;
   readonly #loader: Env["LOADER"];
@@ -59,6 +66,10 @@ export class WorkerRunner {
     ref: WorkerRef;
   }): Promise<unknown> {
     if (ref.type === "stateful") {
+      // Method replay must happen inside StatefulWorkerDurableObject. Returning
+      // a dynamic facet stub through one DO and then invoking it from another RPC
+      // target has produced opaque internal RPC failures; keeping the replay at
+      // the owning DO boundary also keeps storage affinity explicit.
       return await this.#statefulWorker(ref).invokeCapability({ args, path, ref });
     }
 
@@ -92,6 +103,13 @@ export class WorkerRunner {
   }
 }
 
+/**
+ * Durable identity for a stateful worker.
+ *
+ * The path is the event stream / ITX scope path. The worker-specific durable key
+ * is a query prop so a DO name remains fetchable at the stream path in the
+ * future while still allowing multiple durable workers under that path.
+ */
 export function statefulWorkerDurableObjectName(projectId: string, ref: StatefulWorkerRef): string {
   return DurableObjectNameCodec.stringify({
     projectId,

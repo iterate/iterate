@@ -4,6 +4,7 @@ import { DEFAULT_ITX_BASE_URL } from "../src/client.ts";
 
 const baseUrl = DEFAULT_ITX_BASE_URL;
 const dev = spawn("pnpm", ["dev"], {
+  detached: true,
   env: process.env,
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -40,5 +41,13 @@ try {
   const code = await new Promise<number | null>((resolve) => e2e.on("exit", resolve));
   process.exitCode = code ?? 1;
 } finally {
-  dev.kill("SIGTERM");
+  if (dev.pid !== undefined) {
+    try {
+      // Kill the whole Wrangler process group. Killing only the top-level pnpm
+      // process can leave workerd listening on 8791 after a failed test run.
+      process.kill(-dev.pid, "SIGTERM");
+    } catch {
+      dev.kill("SIGTERM");
+    }
+  }
 }

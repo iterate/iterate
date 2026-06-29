@@ -172,6 +172,8 @@ class ProjectRpcTarget extends RpcTarget implements Project {
   }
 
   get worker() {
+    // `project.worker` is only a convenience alias for the default repo-backed
+    // stateless worker. The general API is `project.workers.get(ref)`.
     return this.workers.get<ProjectWorker>(defaultProjectWorkerRef());
   }
 }

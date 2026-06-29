@@ -6,6 +6,14 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
+/**
+ * Declarative source for a dynamic worker.
+ *
+ * `inline` is the simplest execution primitive: the caller already has module
+ * text and asks the Worker Loader to run it. `repo` keeps source identity
+ * separate from runtime identity; the repo resolves the current worker source
+ * and contributes its own cache key, so future repo commits affect the next use.
+ */
 export type WorkerSource =
   | {
       type: "inline";
@@ -19,16 +27,32 @@ export type WorkerSource =
     };
 
 type WorkerRefBase = {
+  /**
+   * ITX scope path for the worker's `env.ITX` binding and for stateful worker
+   * Durable Object names. This is intentionally not the mounted capability path:
+   * one worker can be mounted at `db`, `counter`, etc. while all events still
+   * belong to the host stream path.
+   */
   path: string;
+  /** Props passed to the exported WorkerEntrypoint, mirroring Cloudflare bindings. */
   props?: Record<string, JsonValue>;
   source: WorkerSource;
 };
 
+/** Stateless workers are WorkerEntrypoint exports loaded directly from source. */
 export type StatelessWorkerRef = WorkerRefBase & {
   type: "stateless";
   entrypoint?: string;
 };
 
+/**
+ * Stateful workers are Durable Object class exports hosted by
+ * `StatefulWorkerDurableObject`.
+ *
+ * `durableWorkerKey` is the durable identity under `{ projectId, path }`. It is
+ * not a source cache key: source changes deliberately affect the next use of the
+ * same durable worker identity.
+ */
 export type StatefulWorkerRef = WorkerRefBase & {
   type: "stateful";
   className: string;
@@ -37,6 +61,7 @@ export type StatefulWorkerRef = WorkerRefBase & {
 
 export type WorkerRef = StatelessWorkerRef | StatefulWorkerRef;
 
+/** Capability-tree entry point for ad-hoc project-scoped worker refs. */
 export interface WorkerCollection {
   get<T = unknown>(ref: WorkerRef): T;
 }

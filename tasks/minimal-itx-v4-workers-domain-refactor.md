@@ -43,6 +43,13 @@ Companion note for the first implementation pass that replaces the v4
 - Source changes deliberately affect the next use of a worker ref.
 - Stateful worker facets keep the same durable identity and abort/restart when
   the resolved source/class version changes.
+- Stateful worker runtime bookkeeping uses SQLite-backed Durable Object
+  synchronous KV (`ctx.storage.kv`) rather than awaited storage APIs. Cloudflare's
+  current SQLite DO guidance calls out synchronous KV/SQL as the preferred path
+  for keeping storage work in one DO turn.
+- Provided worker capabilities are expected to call sibling capabilities through
+  their scoped `env.ITX` binding. The host ITX context supplies that binding; a
+  worker ref does not carry ITX auth or reserved internal props.
 
 ## Current implementation shape
 
@@ -95,6 +102,10 @@ Useful precedent from apps/os:
 - No reserved prop keys. Worker refs can carry `props`, and the runner passes
   them through as `ctx.props`.
 - No helpers that tie ITX capability paths to `durableWorkerKey`.
+- No separate abstraction layer above `WorkerRunner` yet. A review of the first
+  pass found one over-split helper in `StatefulWorkerDurableObject`; that was
+  collapsed so "load dynamic DO class, version-check it, return the facet" stays
+  in one method.
 
 ## Open questions
 
@@ -117,6 +128,10 @@ Useful precedent from apps/os:
 8. Should stateful worker direct calls and ITX-mounted worker calls share the
    same `durableWorkerKey` intentionally, or should tests/docs discourage that
    until a clearer sharing story exists?
+9. Should the direct `StatefulWorkerDurableObject.get(ref)` method remain public?
+   Current ITX and worker RPC paths use `invokeCapability` so method replay
+   happens inside the owning DO; `get(ref)` is useful for direct worker refs but
+   could be revisited if it encourages cross-DO facet stub plumbing.
 
 ## Difficulties encountered
 
@@ -129,3 +144,14 @@ Useful precedent from apps/os:
 - The existing project worker, ITX script runner, and dynamic capability code
   had all grown their own worker-loading paths. This pass concentrates them on
   the workers domain while keeping project event forwarding working.
+- Returning a dynamic durable facet stub out of the stateful worker DO and then
+  replaying a method path elsewhere produced opaque internal RPC failures. The
+  current design keeps stateful worker method replay inside
+  `StatefulWorkerDurableObject.invokeCapability`, which also makes the storage
+  affinity boundary explicit.
+- The stateful worker runner's own version marker uses sync KV, and dynamic
+  stateful worker fixtures/templates also use sync KV. This is part of the
+  expected contract for SQLite-backed dynamic Durable Object facets.
+- Tests now cover repo-sourced and inline worker capabilities across project and
+  agent scopes, both stateless and stateful, including capabilities calling
+  other capabilities through `env.ITX`.

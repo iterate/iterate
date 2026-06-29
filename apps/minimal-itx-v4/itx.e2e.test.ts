@@ -10,6 +10,7 @@ import type { ItxWebSocketMessage } from "./test-helpers.ts";
 import type { UnauthenticatedItx } from "./src/domains/itx/types.ts";
 import { TRUSTED_INTERNAL_ITX_TOKEN } from "./src/auth.ts";
 import { RepoArtifactNameCodec } from "./src/domains/repos/repo-artifact-name.ts";
+import type { WorkerRef } from "./src/domains/workers/types.ts";
 import {
   StreamProcessor,
   type StreamProcessorSnapshot,
@@ -383,13 +384,13 @@ describe("minimal itx v4", () => {
 
             export class CounterDurableObject extends DurableObject {
               async increment() {
-                const n = ((await this.ctx.storage.get("n")) ?? 0) + 1;
-                await this.ctx.storage.put("n", n);
+                const n = ((this.ctx.storage.kv.get("n")) ?? 0) + 1;
+                this.ctx.storage.kv.put("n", n);
                 return n;
               }
 
               async current() {
-                return (await this.ctx.storage.get("n")) ?? 0;
+                return this.ctx.storage.kv.get("n") ?? 0;
               }
             }
 
@@ -468,11 +469,9 @@ describe("minimal itx v4", () => {
 
                 export class ProbeEntrypoint extends WorkerEntrypoint {
                   async inspect() {
-                    const root = await this.env.ITX.authenticate();
                     const project = await this.env.ITX.get();
                     const repo = await project.repo;
                     return {
-                      principal: await root.whoami(),
                       repo: await repo.whoami(),
                     };
                   }
@@ -488,7 +487,6 @@ describe("minimal itx v4", () => {
     );
     // @ts-expect-error - dynamic capability root
     expect(await project.probe.inspect()).toEqual({
-      principal: "trusted-internal",
       repo: `repo ${description.projectId}:/`,
     });
 
@@ -564,6 +562,224 @@ describe("minimal itx v4", () => {
     await project.db.sql("INSERT INTO records VALUES (?)", "mounted");
     // @ts-expect-error - dynamic database capability mounted by this test.
     expect(await project.db.sql("SELECT value FROM records")).toEqual([{ value: "mounted" }]);
+  });
+
+  test("Worker capabilities cover project/agent, stateful/stateless, repo/inline refs and env.ITX cross-calls", async () => {
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+
+    using project = itx.projects.create({ slug: "worker-capability-matrix" });
+    const { projectId } = await project.describe();
+    const agentPath = `/agents/worker-capability-${crypto.randomUUID()}`;
+    using agent = project.agents.get(agentPath);
+
+    await project.repo.commitFiles({
+      changes: [
+        {
+          path: "worker.js",
+          content: `
+            import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
+
+            export default class ProjectWorker extends WorkerEntrypoint {
+              fetch(req) {
+                return new Response(\`matrix project worker \${new URL(req.url).pathname}\`);
+              }
+
+              processEvent(input) {
+                console.log("matrix project worker processed", input.event.type);
+              }
+            }
+
+            export class RepoProjectCounterDurableObject extends DurableObject {
+              async increment(label) {
+                const count = ((this.ctx.storage.kv.get("count")) ?? 0) + 1;
+                this.ctx.storage.kv.put("count", count);
+                const project = await this.env.ITX.get();
+                const description = await project.describe();
+                return {
+                  count,
+                  label,
+                  scope: \`project:\${description.projectId}\`,
+                };
+              }
+            }
+
+            export class RepoAgentEntrypoint extends WorkerEntrypoint {
+              async echo(label) {
+                const agent = await this.env.ITX.get();
+                return {
+                  label,
+                  whoami: await agent.whoami(),
+                };
+              }
+            }
+          `,
+        },
+      ],
+      message: "Add worker capability matrix fixtures",
+    });
+
+    const repoWorkerSource = {
+      repoPath: "/",
+      sourcePath: "worker.js",
+      type: "repo",
+    } as const;
+    const inlineProjectStateless: WorkerRef = {
+      entrypoint: "InlineProjectEntrypoint",
+      path: "/",
+      source: {
+        mainModule: "inline-project.js",
+        modules: {
+          "inline-project.js": `
+            import { WorkerEntrypoint } from "cloudflare:workers";
+
+            export class InlineProjectEntrypoint extends WorkerEntrypoint {
+              async describeScope() {
+                const project = await this.env.ITX.get();
+                const description = await project.describe();
+                return {
+                  projectId: description.projectId,
+                  via: "inline-project-stateless",
+                };
+              }
+
+              async callRepoCounter(label) {
+                const project = await this.env.ITX.get();
+                return await project.repoCounter.increment(label);
+              }
+            }
+          `,
+        },
+        type: "inline",
+      },
+      type: "stateless",
+    };
+    const inlineAgentStateful: WorkerRef = {
+      className: "InlineAgentCounterDurableObject",
+      durableWorkerKey: `inline-agent-counter-${crypto.randomUUID()}`,
+      path: agentPath,
+      source: {
+        mainModule: "inline-agent-counter.js",
+        modules: {
+          "inline-agent-counter.js": `
+            import { DurableObject } from "cloudflare:workers";
+
+            export class InlineAgentCounterDurableObject extends DurableObject {
+              async increment(label) {
+                const count = ((this.ctx.storage.kv.get("count")) ?? 0) + 1;
+                this.ctx.storage.kv.put("count", count);
+                const agent = await this.env.ITX.get();
+                return {
+                  count,
+                  label,
+                  whoami: await agent.whoami(),
+                };
+              }
+
+              async callRepoAgent(label) {
+                const agent = await this.env.ITX.get();
+                return await agent.repoAgent.echo(label);
+              }
+            }
+          `,
+        },
+        type: "inline",
+      },
+      type: "stateful",
+    };
+
+    disposeRpcResult(
+      await project.provideCapability({
+        path: ["repoCounter"],
+        capability: {
+          type: "worker",
+          workerRef: {
+            className: "RepoProjectCounterDurableObject",
+            durableWorkerKey: `repo-project-counter-${crypto.randomUUID()}`,
+            path: "/",
+            source: repoWorkerSource,
+            type: "stateful",
+          },
+        },
+      }),
+    );
+    disposeRpcResult(
+      await project.provideCapability({
+        path: ["inlineProject"],
+        capability: { type: "worker", workerRef: inlineProjectStateless },
+      }),
+    );
+    disposeRpcResult(
+      await agent.provideCapability({
+        path: ["repoAgent"],
+        capability: {
+          type: "worker",
+          workerRef: {
+            entrypoint: "RepoAgentEntrypoint",
+            path: agentPath,
+            source: repoWorkerSource,
+            type: "stateless",
+          },
+        },
+      }),
+    );
+    disposeRpcResult(
+      await agent.provideCapability({
+        path: ["inlineCounter"],
+        capability: { type: "worker", workerRef: inlineAgentStateful },
+      }),
+    );
+
+    const projectCapabilities = project as typeof project & {
+      inlineProject: {
+        callRepoCounter(label: string): Promise<{ count: number; label: string; scope: string }>;
+        describeScope(): Promise<{ projectId: string; via: string }>;
+      };
+      repoCounter: {
+        increment(label: string): Promise<{ count: number; label: string; scope: string }>;
+      };
+    };
+    const agentCapabilities = agent as typeof agent & {
+      inlineCounter: {
+        callRepoAgent(label: string): Promise<{ label: string; whoami: string }>;
+        increment(label: string): Promise<{ count: number; label: string; whoami: string }>;
+      };
+      repoAgent: {
+        echo(label: string): Promise<{ label: string; whoami: string }>;
+      };
+    };
+
+    expect(await projectCapabilities.inlineProject.describeScope()).toEqual({
+      projectId,
+      via: "inline-project-stateless",
+    });
+    expect(await projectCapabilities.repoCounter.increment("direct-project-durable")).toEqual({
+      count: 1,
+      label: "direct-project-durable",
+      scope: `project:${projectId}`,
+    });
+    expect(await projectCapabilities.inlineProject.callRepoCounter("project-cross-call")).toEqual({
+      count: 2,
+      label: "project-cross-call",
+      scope: `project:${projectId}`,
+    });
+
+    expect(await agentCapabilities.repoAgent.echo("direct-agent-stateless")).toEqual({
+      label: "direct-agent-stateless",
+      whoami: `agent ${projectId}:${agentPath}`,
+    });
+    expect(await agentCapabilities.inlineCounter.increment("direct-agent-durable")).toEqual({
+      count: 1,
+      label: "direct-agent-durable",
+      whoami: `agent ${projectId}:${agentPath}`,
+    });
+    expect(await agentCapabilities.inlineCounter.callRepoAgent("agent-cross-call")).toEqual({
+      label: "agent-cross-call",
+      whoami: `agent ${projectId}:${agentPath}`,
+    });
   });
 
   test("Agent ask runs the faux web-chat loop and agent scripts can call project tools", async () => {

@@ -9,6 +9,14 @@ import type { StatefulWorkerRef } from "./types.ts";
 const FACET_NAME = "target";
 const VERSION_STORAGE_KEY = "workers:stateful-worker-version";
 
+/**
+ * Hosts one stateful dynamic worker facet.
+ *
+ * The outer DO owns durable identity and Cloudflare storage. The inner facet is
+ * the Durable Object class exported by the dynamic worker source. We keep one
+ * stable facet name (`target`) so source changes do not create a new storage
+ * identity; instead the facet is aborted and re-created against the same DO.
+ */
 export class StatefulWorkerDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   readonly #itxScope = scopedItxEntrypointProps({
@@ -17,7 +25,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
   });
 
   async validate(ref: StatefulWorkerRef): Promise<void> {
-    await this.#durableObjectClass(ref);
+    await this.#facet(ref);
   }
 
   async get(ref: StatefulWorkerRef): Promise<unknown> {
@@ -41,16 +49,6 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
   }
 
   async #facet(ref: StatefulWorkerRef): Promise<unknown> {
-    const { klass, version } = await this.#durableObjectClass(ref);
-    const previous = await this.ctx.storage.get<string>(VERSION_STORAGE_KEY);
-    if (previous && previous !== version) {
-      this.ctx.facets.abort(FACET_NAME, `stateful worker source changed for ${this.ctx.id.name}`);
-    }
-    if (previous !== version) await this.ctx.storage.put(VERSION_STORAGE_KEY, version);
-    return this.ctx.facets.get(FACET_NAME, () => ({ class: klass }));
-  }
-
-  async #durableObjectClass(ref: StatefulWorkerRef) {
     this.#assertRefMatchesName(ref);
     const resolved = await resolveWorkerSource({
       projectId: this.#name.projectId,
@@ -58,6 +56,9 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     });
     const worker = loadResolvedWorker({
       bindings: {
+        // The hosted Durable Object class sees the same scoped ITX binding as a
+        // stateless worker at this path. That is what lets a provided durable
+        // capability call sibling capabilities through `this.env.ITX.get()`.
         ITX: this.ctx.exports.ItxEntrypoint({ props: this.#itxScope }),
       },
       loader: this.env.LOADER,
@@ -70,13 +71,20 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     if (!klass) {
       throw new Error(`Worker source did not export DurableObject ${ref.className}.`);
     }
-    return {
-      klass,
-      version: JSON.stringify({
-        className: ref.className,
-        sourceCacheKey: resolved.cacheKey,
-      }),
-    };
+    const version = JSON.stringify({
+      className: ref.className,
+      sourceCacheKey: resolved.cacheKey,
+    });
+
+    // SQLite-backed Durable Objects expose sync KV as `storage.kv`. Avoiding
+    // awaited storage calls here keeps the facet version check/update in one DO
+    // turn and matches Cloudflare's current guidance for SQLite-backed DOs.
+    const previous = this.ctx.storage.kv.get<string>(VERSION_STORAGE_KEY);
+    if (previous && previous !== version) {
+      this.ctx.facets.abort(FACET_NAME, `stateful worker source changed for ${this.ctx.id.name}`);
+    }
+    if (previous !== version) this.ctx.storage.kv.put(VERSION_STORAGE_KEY, version);
+    return this.ctx.facets.get(FACET_NAME, () => ({ class: klass }));
   }
 
   #assertRefMatchesName(ref: StatefulWorkerRef) {

@@ -5,6 +5,7 @@ import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
 } from "../streams/engine/workers/stream-processor-host.ts";
+import type { Stream } from "../streams/types.ts";
 import { WorkerRunner } from "../workers/worker-runner.ts";
 import { ItxProcessorContract } from "./itx-processor-contract.ts";
 import {
@@ -37,9 +38,13 @@ export class ItxDurableObject extends DurableObject<Env> {
           projectId: this.#name.projectId,
           workerScopeKey: itxEntrypointScopeCacheKey(this.#itxScope),
         }),
+        // The stream processor needs append/read/wait/subscribe methods, which
+        // the StreamDurableObject stub exposes. The public `Stream` interface
+        // also has `at()` for client-side path derivation, so this remains a
+        // narrow RPC-stub-to-capability cast instead of a real implementation.
         stream: this.ctx.exports.StreamDurableObject.getByName(
           this.#name.durableObjectName,
-        ) as never,
+        ) as unknown as Stream,
       }),
   );
 

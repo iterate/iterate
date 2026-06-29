@@ -7,11 +7,8 @@ export type ItxEntrypointScope = {
   projectId: string;
 };
 
-export type ScopedItxEntrypointProps = ItxEntrypointScope & {
-  auth?: ItxAuthCredentials;
-};
-
-export type ItxEntrypointProps = ItxAuthCredentials | ScopedItxEntrypointProps;
+export type ScopedItxEntrypointProps = ItxEntrypointScope;
+export type ItxEntrypointProps = ScopedItxEntrypointProps;
 
 export const TRUSTED_INTERNAL_ITX_PROPS = {
   token: TRUSTED_INTERNAL_ITX_TOKEN,
@@ -25,18 +22,10 @@ export function scopedItxEntrypointProps(input: ItxEntrypointScope): ScopedItxEn
   };
 }
 
-export function authCredentialsFromItxEntrypointProps(
-  props: ItxEntrypointProps | undefined,
-): ItxAuthCredentials {
-  if (props === undefined) return TRUSTED_INTERNAL_ITX_PROPS;
-  if (isItxAuthCredentials(props)) return props;
-  return props.auth ?? TRUSTED_INTERNAL_ITX_PROPS;
-}
-
 export function scopeFromItxEntrypointProps(
   props: ItxEntrypointProps | undefined,
 ): ItxEntrypointScope {
-  if (props === undefined || isItxAuthCredentials(props)) {
+  if (props === undefined) {
     throw new Error("env.ITX.get() requires scoped ITX binding props with projectId and path");
   }
   if (props.projectId.trim() === "") {
@@ -53,13 +42,4 @@ export function itxEntrypointScopeCacheKey(scope: ItxEntrypointScope): string {
     path: normalizePath(scope.path),
     projectId: scope.projectId,
   });
-}
-
-function isItxAuthCredentials(props: ItxEntrypointProps): props is ItxAuthCredentials {
-  return (
-    "type" in props &&
-    (props.type === "from-server-cookie" ||
-      props.type === "token" ||
-      props.type === "trusted-internal")
-  );
 }

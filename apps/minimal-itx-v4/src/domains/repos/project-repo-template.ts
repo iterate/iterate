@@ -13,13 +13,13 @@ const DEFAULT_PROJECT_WORKER_SOURCE = `
 
   export class CounterDurableObject extends DurableObject {
     async increment() {
-      const n = ((await this.ctx.storage.get("n")) ?? 0) + 1;
-      await this.ctx.storage.put("n", n);
+      const n = ((this.ctx.storage.kv.get("n")) ?? 0) + 1;
+      this.ctx.storage.kv.put("n", n);
       return n;
     }
 
     async current() {
-      return (await this.ctx.storage.get("n")) ?? 0;
+      return this.ctx.storage.kv.get("n") ?? 0;
     }
   }
 `;
