@@ -140,7 +140,7 @@ class ProjectWorkerRpcTarget extends RpcTarget implements ProjectWorker {
   }
 }
 
-export class ProjectRpcTarget extends RpcTarget implements Project {
+class ProjectRpcTarget extends RpcTarget implements Project {
   constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);

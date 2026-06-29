@@ -20,21 +20,21 @@ const MAX_DURABLE_OBJECT_NAME_BYTES = 256;
 const GLOBAL_DURABLE_OBJECT_HOST = "global";
 const DURABLE_OBJECT_HOST_SUFFIX = ".iterate";
 
-export type ProjectDurableObjectNameParts = {
+type ProjectDurableObjectNameParts = {
   projectId: string;
   path: string;
   props?: Record<string, string>;
 };
 
-export type DurableObjectNameParts = ProjectDurableObjectNameParts | SharedDurableObjectNameParts;
+type DurableObjectNameParts = ProjectDurableObjectNameParts | SharedDurableObjectNameParts;
 
-export type SharedDurableObjectNameParts = {
+type SharedDurableObjectNameParts = {
   projectId: string | null;
   path: string;
   props?: Record<string, string>;
 };
 
-export type ParsedDurableObjectName = {
+type ParsedDurableObjectName = {
   durableObjectName: string;
   projectId: string | null;
   path: string;

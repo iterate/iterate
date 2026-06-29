@@ -37,7 +37,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentCollecti
   }
 }
 
-export class AgentRpcTarget extends RpcTarget implements Agent {
+class AgentRpcTarget extends RpcTarget implements Agent {
   constructor(
     readonly props: { auth: ItxAuth; ctx: CfExecutionContext; path: string; projectId: string },
   ) {

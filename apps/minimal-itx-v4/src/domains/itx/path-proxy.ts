@@ -27,7 +27,7 @@ const RESERVED_DYNAMIC_PATH_SEGMENTS: ReadonlySet<string> = new Set([
   "valueOf",
 ]);
 
-export function isReservedDynamicPathSegment(segment: string): boolean {
+function isReservedDynamicPathSegment(segment: string): boolean {
   return RESERVED_DYNAMIC_PATH_SEGMENTS.has(segment);
 }
 
