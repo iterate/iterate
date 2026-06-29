@@ -5,10 +5,7 @@ import { describe, expectTypeOf, it } from "vitest";
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
 import type { StreamEvent } from "./src/domains/streams/types.ts";
-import {
-  StreamProcessor,
-  type StreamProcessorStream,
-} from "./src/domains/streams/engine/stream-processor.ts";
+import { StreamProcessor } from "./src/domains/streams/engine/stream-processor.ts";
 
 type IsNever<Value> = [Value] extends [never] ? true : false;
 
@@ -108,7 +105,7 @@ describe("stream processor type helpers", () => {
           type: "events.iterate.com/toy/emitted",
           payload: { output: "ok" },
         });
-        expectTypeOf(appended).toExtend<StreamEvent[]>();
+        expectTypeOf(appended).toExtend<Promise<StreamEvent[]>>();
 
         append(
           {
@@ -121,7 +118,7 @@ describe("stream processor type helpers", () => {
           },
         );
 
-        (this.stream.at("../sibling") as StreamProcessorStream).append({
+        this.stream.at("../sibling").append({
           type: "events.iterate.com/toy/emitted",
           payload: { output: "cross-stream" },
         });

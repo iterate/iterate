@@ -25,7 +25,7 @@ export type CommitRepoFilesResult = {
 export interface Repo {
   commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult>;
   create(): Promise<Repo>;
-  whoami(): string;
+  whoami(): Promise<string>;
 }
 
 export interface RepoCollection {

@@ -15,7 +15,6 @@
 import type { StreamEvent, StreamEventInput } from "../../../types.ts";
 import type { ConsumedEvent } from "../../shared/stream-processors.ts";
 import type { ProcessEventBatch, ProcessorRuntimeState } from "../../types.ts";
-import type { StreamProcessorStream } from "../../stream-processor.ts";
 import { StreamProcessor } from "../../stream-processor.ts";
 import {
   retainGetProcessorRuntimeState,
@@ -43,6 +42,8 @@ type CoreProcessorContract = typeof CoreProcessorContract;
  * processor without a live stream behind it; connection methods assert.
  */
 type CoreProcessorDeps = {
+  /** Append to this same stream in the Stream DO's synchronous append turn. */
+  appendHere?: (...events: StreamEventInput[]) => StreamEvent[];
   /** Read committed events for the delivery pump. */
   getEvents?: (args: { afterOffset: number; limit: number }) => StreamEvent[];
   /** The live reduced core state (owned by the Stream DO between appends). */
@@ -134,7 +135,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
       runInBackground: (work) => this.runInBackground(work),
       append: (...input) => {
         const events = input.map((event) => this.buildEmittedEvent(event) as StreamEventInput);
-        return (this.stream.append as (...events: StreamEventInput[]) => StreamEvent[])(...events);
+        return Promise.resolve(this.#appendHere(...events));
       },
     });
   }
@@ -355,7 +356,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
     args.runInBackground(async () => {
       await Promise.all(
         ancestorPaths.map(async (ancestorPath) => {
-          const stream = this.stream.at(ancestorPath) as StreamProcessorStream;
+          const stream = this.stream.at(ancestorPath);
           await stream.append({
             type: "events.iterate.com/stream/child-stream-created",
             idempotencyKey: `child-stream-created:${ancestorPath}:${path}`,
@@ -734,10 +735,14 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
    */
   #appendPresenceFact(event: StreamEventInput): void {
     try {
-      void this.stream.append(event);
+      this.#appendHere(event);
     } catch (error) {
       console.error("stream presence fact append failed", { type: event.type, error });
     }
+  }
+
+  #appendHere(...events: StreamEventInput[]): StreamEvent[] {
+    return this.#requireDep("appendHere")(...events);
   }
 
   #currentState(): CoreProcessorState {

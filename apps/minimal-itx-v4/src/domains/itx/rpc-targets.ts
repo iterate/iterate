@@ -7,10 +7,15 @@ import {
   TRUSTED_INTERNAL_ITX_TOKEN,
 } from "../../auth.ts";
 import { ProjectCollectionRpcTarget } from "../projects/rpc-targets.ts";
-import type { CfExecutionContext, RpcTargetImplementation } from "../../rpc-target-types.ts";
-import type { ItxAuth, ItxAuthCredentials, ItxRoot, UnauthenticatedItx } from "./types.ts";
+import type {
+  CfExecutionContext,
+  ItxAuth,
+  ItxAuthCredentials,
+  ItxRoot,
+  UnauthenticatedItx,
+} from "./types.ts";
 
-class ItxRootRpcTarget extends RpcTarget implements RpcTargetImplementation<ItxRoot> {
+class ItxRootRpcTarget extends RpcTarget implements ItxRoot {
   constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext }) {
     super();
   }
@@ -24,10 +29,7 @@ class ItxRootRpcTarget extends RpcTarget implements RpcTargetImplementation<ItxR
   }
 }
 
-export class UnauthenticatedItxRpcTarget
-  extends RpcTarget
-  implements RpcTargetImplementation<UnauthenticatedItx>
-{
+export class UnauthenticatedItxRpcTarget extends RpcTarget implements UnauthenticatedItx {
   constructor(
     readonly requestHeaders: Headers,
     readonly ctx: CfExecutionContext,

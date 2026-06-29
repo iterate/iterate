@@ -7,7 +7,8 @@
   "compatibility_flags": ["nodejs_compat"],
   "durable_objects": {
     "bindings": [
-      // The domain objects that host their own embedded itx processors.
+      // Domain objects own their domain workflows. ITX owns the dynamic capability host.
+      { "name": "ITX", "class_name": "ItxDurableObject" },
       { "name": "PROJECT", "class_name": "ProjectDurableObject" },
       { "name": "AGENT", "class_name": "AgentDurableObject" },
       { "name": "REPO", "class_name": "RepoDurableObject" },
@@ -28,6 +29,10 @@
     {
       "tag": "v3",
       "new_sqlite_classes": ["AgentDurableObject"],
+    },
+    {
+      "tag": "v4",
+      "new_sqlite_classes": ["ItxDurableObject"],
     },
   ],
   "artifacts": [

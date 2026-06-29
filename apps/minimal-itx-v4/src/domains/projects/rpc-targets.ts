@@ -11,11 +11,9 @@ import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "../repos/project-
 import { durableObjectProcessorSubscriber } from "../streams/engine/shared/callable-subscriber.ts";
 import { StreamCollectionRpcTarget, StreamRpcTarget } from "../streams/rpc-targets.ts";
 import { ItxCapabilityHostRpcTarget } from "../itx/capability-host-rpc-target.ts";
-import { type ItxProcessorRpc } from "../itx/itx-processor-implementation.ts";
 import { replayPath } from "../itx/live-capability.ts";
 import { withInvokeCapabilityFallback } from "../itx/path-proxy.ts";
-import type { CfExecutionContext, RpcTargetImplementation } from "../../rpc-target-types.ts";
-import type { ItxAuth, ItxAuthCredentials } from "../itx/types.ts";
+import type { CfExecutionContext, ItxAuth, ItxAuthCredentials } from "../itx/types.ts";
 import { TRUSTED_INTERNAL_ITX_TOKEN } from "../../auth.ts";
 import type { Stream } from "../streams/types.ts";
 import type { Project, ProjectCollection, ProjectWorker } from "./types.ts";
@@ -52,10 +50,7 @@ function projectProcessorSubscriptionEvent(projectId: string) {
   } satisfies Parameters<Stream["append"]>[0];
 }
 
-export class ProjectCollectionRpcTarget
-  extends RpcTarget
-  implements RpcTargetImplementation<ProjectCollection>
-{
+export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectCollection {
   constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext }) {
     super();
   }
@@ -110,7 +105,7 @@ export class ProjectCollectionRpcTarget
   }
 }
 
-class ProjectWorkerRpcTarget extends RpcTarget implements RpcTargetImplementation<ProjectWorker> {
+class ProjectWorkerRpcTarget extends RpcTarget implements ProjectWorker {
   constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -157,10 +152,7 @@ class ProjectWorkerRpcTarget extends RpcTarget implements RpcTargetImplementatio
   }
 }
 
-export class ProjectRpcTarget
-  extends ItxCapabilityHostRpcTarget
-  implements RpcTargetImplementation<Project>
-{
+export class ProjectRpcTarget extends ItxCapabilityHostRpcTarget implements Project {
   constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -177,8 +169,10 @@ export class ProjectRpcTarget
     return this.durableObjectStub.describe();
   }
 
-  protected itxProcessor(): ItxProcessorRpc {
-    return this.durableObjectStub.itxProcessor as unknown as ItxProcessorRpc;
+  protected itxProcessor() {
+    return env.ITX.getByName(
+      DurableObjectNameCodec.stringify({ path: "/", projectId: this.props.projectId }),
+    );
   }
 
   get streams() {

@@ -1,14 +1,14 @@
 export interface Stream {
-  append(...events: StreamEventInput[]): StreamEvent[];
+  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   at(path: string): Stream;
   getEvent(
     input: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
-  ): StreamEvent | undefined;
+  ): Promise<StreamEvent | undefined>;
   getEvents(input?: {
     afterOffset?: number;
     beforeOffset?: number | null;
     limit?: number;
-  }): StreamEvent[];
+  }): Promise<StreamEvent[]>;
   waitForEvent(input: {
     afterOffset?: number;
     eventTypes?: readonly string[];
@@ -22,31 +22,20 @@ export interface Stream {
     };
     runtime?: Record<string, unknown>;
   } | null>;
-  runtimeState(): {
+  runtimeState(): Promise<{
     coreProcessorState: unknown;
     runtime: {
       connections: Record<string, unknown>;
     };
-  };
-  kill(): void;
+  }>;
   subscribe(input: {
     subscriptionKey?: string;
-    processEventBatch: (batch: {
-      projectId: string | null;
-      path: string;
-      events: StreamEvent[];
-      streamMaxOffset: number;
-      state: unknown;
-    }) => unknown;
+    processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
     eventTypes?: readonly string[];
     events?: boolean;
     subscriber?: unknown;
-  }): {
-    subscriptionKey: string;
-    streamMaxOffset: number;
-    unsubscribe(): void;
-  };
+  }): Promise<StreamSubscriptionHandle>;
 }
 
 export interface StreamCollection {
@@ -69,4 +58,29 @@ export type StreamEventInput = {
 export type StreamEvent = StreamEventInput & {
   createdAt: string;
   offset: number;
+};
+
+export type SubscriptionKey = string;
+
+export type StreamEventBatch = {
+  projectId: string | null;
+  path: string;
+  events: StreamEvent[];
+  streamMaxOffset: number;
+  state: unknown;
+};
+
+export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
+
+export type ProcessorRuntimeState = {
+  snapshot: { offset: number; state: unknown };
+  runtime?: Record<string, unknown>;
+};
+
+export type GetProcessorRuntimeState = () => ProcessorRuntimeState | Promise<ProcessorRuntimeState>;
+
+export type StreamSubscriptionHandle = {
+  subscriptionKey: SubscriptionKey;
+  streamMaxOffset: number;
+  unsubscribe(): void;
 };

@@ -59,13 +59,13 @@ export class ProjectProcessor extends StreamProcessor<
           );
         }
         blockProcessorWhile(async () => {
-          append({
+          await append({
             type: "events.iterate.com/stream/subscription-configured",
             idempotencyKey: `stream-subscription:${this.deps.projectId}:${ItxProcessorContract.slug}`,
             payload: {
               subscriptionKey: ItxProcessorContract.slug,
               subscriber: durableObjectProcessorSubscriber({
-                bindingName: "PROJECT",
+                bindingName: "ITX",
                 durableObjectName: DurableObjectNameCodec.stringify({
                   projectId: this.deps.projectId,
                   path: "/",
@@ -74,7 +74,7 @@ export class ProjectProcessor extends StreamProcessor<
               }),
             },
           });
-          append({
+          await append({
             type: "events.iterate.com/repo/create-requested",
             idempotencyKey: `repo-create-requested:${this.deps.projectId}:${PROJECT_REPO_PATH}`,
             payload: {
@@ -96,7 +96,7 @@ export class ProjectProcessor extends StreamProcessor<
         }
         blockProcessorWhile(async () => {
           await this.deps.ensureDefaultWorkerLoaded();
-          append({
+          await append({
             type: "events.iterate.com/project/created",
             idempotencyKey: `project-created:${this.deps.projectId}`,
             payload: state.createRequest!,

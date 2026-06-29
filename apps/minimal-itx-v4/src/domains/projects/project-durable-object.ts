@@ -5,20 +5,17 @@ import {
 } from "../streams/engine/workers/stream-processor-host.ts";
 import type { Env } from "../../env.ts";
 import { TRUSTED_INTERNAL_ITX_TOKEN, trustedInternalAuthContext } from "../../auth.ts";
-import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
-import { ItxProcessor, type ItxProcessorRpc } from "../itx/itx-processor-implementation.ts";
 import { DynamicWorkerRuntimeRpcTarget } from "../dynamic-workers/rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "../repos/project-repo.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 import { ProjectRpcTarget } from "./rpc-targets.ts";
-import type { Project, ProjectWorker } from "./types.ts";
+import type { ProjectWorker } from "./types.ts";
 
 export class ProjectDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parseProjectScoped(this.ctx.id.name!);
   readonly #processorHost = createStreamProcessorHost(this.ctx);
-  readonly #stream = this.ctx.exports.StreamDurableObject.getByName(this.ctx.id.name!);
 
   readonly #dynamicWorkerRuntime = new DynamicWorkerRuntimeRpcTarget({
     bindings: {
@@ -35,8 +32,6 @@ export class ProjectDurableObject extends DurableObject<Env> {
     storage: this.ctx.storage,
   });
 
-  readonly #itxProcessor: ItxProcessorRpc;
-
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
 
@@ -50,21 +45,6 @@ export class ProjectDurableObject extends DurableObject<Env> {
           projectId: this.#name.projectId,
         }),
     );
-
-    this.#itxProcessor = this.#processorHost.add(
-      ItxProcessorContract.slug,
-      (deps) =>
-        new ItxProcessor({
-          ...deps,
-          dynamicWorkerRuntime: this.#dynamicWorkerRuntime,
-          host: { projectId: this.#name.projectId },
-          stream: this.#stream as never,
-        }),
-    );
-  }
-
-  get itxProcessor(): ItxProcessorRpc {
-    return this.#itxProcessor;
   }
 
   requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
@@ -119,22 +99,5 @@ export class ProjectDurableObject extends DurableObject<Env> {
       projectId: this.#name.projectId,
       name: this.ctx.id.name!,
     };
-  }
-
-  async runScript(code: string) {
-    return await this.#itxProcessor.runScript(code);
-  }
-
-  async provideCapability(input: Parameters<Project["provideCapability"]>[0]) {
-    await this.#itxProcessor.provideCapability(input);
-    return {
-      revoke: () => {
-        return this.revokeCapability({ path: input.path });
-      },
-    };
-  }
-
-  revokeCapability(input: Parameters<Project["revokeCapability"]>[0]) {
-    return this.#itxProcessor.revokeCapability(input);
   }
 }

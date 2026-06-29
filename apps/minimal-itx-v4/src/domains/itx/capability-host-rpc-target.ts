@@ -1,5 +1,4 @@
 import { RpcTarget } from "cloudflare:workers";
-import type { RpcTargetImplementation } from "../../rpc-target-types.ts";
 import {
   type ItxProcessorRpc,
   type ProvideCapabilityInput,
@@ -7,28 +6,25 @@ import {
 import { isReservedDynamicPathSegment } from "./path-proxy.ts";
 import type { ItxCapabilityHost } from "./types.ts";
 
-export abstract class ItxCapabilityHostRpcTarget
-  extends RpcTarget
-  implements RpcTargetImplementation<ItxCapabilityHost>
-{
+export abstract class ItxCapabilityHostRpcTarget extends RpcTarget implements ItxCapabilityHost {
   protected abstract itxProcessor(): ItxProcessorRpc;
 
   async provideCapability(input: ProvideCapabilityInput) {
     this.#rejectBuiltinCollision(input.path);
     await this.itxProcessor().provideCapability(input);
     return {
-      revoke: () => {
-        return this.revokeCapability({ path: input.path });
+      revoke: async () => {
+        await this.revokeCapability({ path: input.path });
       },
     };
   }
 
-  revokeCapability(input: { path: string[] }) {
-    return this.itxProcessor().revokeCapability(input);
+  async revokeCapability(input: { path: string[] }) {
+    await this.itxProcessor().revokeCapability(input);
   }
 
-  runScript(code: string) {
-    return this.itxProcessor().runScript(code);
+  async runScript(code: string) {
+    return await this.itxProcessor().runScript(code);
   }
 
   invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {

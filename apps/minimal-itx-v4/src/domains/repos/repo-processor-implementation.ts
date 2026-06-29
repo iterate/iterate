@@ -53,7 +53,7 @@ export class RepoProcessor extends StreamProcessor<
 
     blockProcessorWhile(async () => {
       const payload = await this.deps.createRepoArtifact(event.payload);
-      append({
+      await append({
         type: "events.iterate.com/repo/created",
         idempotencyKey: `repo-created:${this.deps.projectId}:${this.deps.path}`,
         payload: {

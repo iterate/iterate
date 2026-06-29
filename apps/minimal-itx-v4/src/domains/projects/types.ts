@@ -5,7 +5,7 @@ import type { StreamCollection, StreamEvent } from "../streams/types.ts";
 
 export interface Project extends ItxCapabilityHost {
   streams: StreamCollection;
-  describe(): { projectId: string; name: string };
+  describe(): Promise<{ projectId: string; name: string }>;
   agents: AgentCollection;
   repos: RepoCollection;
   repo: Repo;
@@ -20,5 +20,5 @@ export interface ProjectCollection {
 
 export interface ProjectWorker {
   fetch(req: Request): Promise<Response>;
-  processEvent(input: { event: StreamEvent }): void | Promise<void>;
+  processEvent(input: { event: StreamEvent }): Promise<void>;
 }

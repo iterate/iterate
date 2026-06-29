@@ -1,10 +1,9 @@
 import { env, RpcTarget } from "cloudflare:workers";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { ItxAuth } from "../itx/types.ts";
-import type { RpcTargetImplementation } from "../../rpc-target-types.ts";
 import type { Stream, StreamCollection } from "./types.ts";
 
-export class StreamRpcTarget extends RpcTarget implements RpcTargetImplementation<Stream> {
+export class StreamRpcTarget extends RpcTarget implements Stream {
   constructor(readonly props: { auth: ItxAuth; projectId: string | null; path: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -24,7 +23,11 @@ export class StreamRpcTarget extends RpcTarget implements RpcTargetImplementatio
   }
 
   at(path: Parameters<Stream["at"]>[0]) {
-    return this.durableObjectStub.at(path) as unknown as Stream;
+    return new StreamRpcTarget({
+      auth: this.props.auth,
+      projectId: this.props.projectId,
+      path: resolveStreamPath(this.props.path, path),
+    });
   }
 
   getEvent(args: Parameters<Stream["getEvent"]>[0]) {
@@ -47,10 +50,6 @@ export class StreamRpcTarget extends RpcTarget implements RpcTargetImplementatio
     return this.durableObjectStub.runtimeState();
   }
 
-  kill() {
-    return this.durableObjectStub.kill();
-  }
-
   subscribe(args: Parameters<Stream["subscribe"]>[0]) {
     return this.durableObjectStub.subscribe(
       args as Parameters<typeof this.durableObjectStub.subscribe>[0],
@@ -58,10 +57,7 @@ export class StreamRpcTarget extends RpcTarget implements RpcTargetImplementatio
   }
 }
 
-export class StreamCollectionRpcTarget
-  extends RpcTarget
-  implements RpcTargetImplementation<StreamCollection>
-{
+export class StreamCollectionRpcTarget extends RpcTarget implements StreamCollection {
   constructor(readonly props: { auth: ItxAuth; projectId: string | null }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -74,4 +70,22 @@ export class StreamCollectionRpcTarget
       path,
     });
   }
+}
+
+function resolveStreamPath(basePath: string, streamPath: string): string {
+  const segments = streamPath.startsWith("/") ? [] : basePath.split("/").filter(Boolean);
+  for (const segment of streamPath.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") {
+      if (segments.length === 0) {
+        throw new Error(
+          `stream path "${streamPath}" escapes the stream root (resolved from "${basePath}")`,
+        );
+      }
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+  return segments.length === 0 ? "/" : `/${segments.join("/")}`;
 }

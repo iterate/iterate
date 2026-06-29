@@ -4,13 +4,9 @@ import { durableObjectProcessorSubscriber } from "../streams/engine/shared/calla
 import { StreamRpcTarget } from "../streams/rpc-targets.ts";
 import { ItxCapabilityHostRpcTarget } from "../itx/capability-host-rpc-target.ts";
 import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
-import {
-  type ItxProcessorRpc,
-  type ProvideCapabilityInput,
-} from "../itx/itx-processor-implementation.ts";
+import { type ProvideCapabilityInput } from "../itx/itx-processor-implementation.ts";
 import { withInvokeCapabilityFallback } from "../itx/path-proxy.ts";
-import type { CfExecutionContext, RpcTargetImplementation } from "../../rpc-target-types.ts";
-import type { ItxAuth } from "../itx/types.ts";
+import type { CfExecutionContext, ItxAuth } from "../itx/types.ts";
 import type { Stream } from "../streams/types.ts";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
 import type { Agent, AgentCollection } from "./types.ts";
@@ -50,7 +46,7 @@ function agentItxProcessorSubscriptionEvent(input: { path: string; projectId: st
     payload: {
       subscriptionKey: ItxProcessorContract.slug,
       subscriber: durableObjectProcessorSubscriber({
-        bindingName: "AGENT",
+        bindingName: "ITX",
         durableObjectName: DurableObjectNameCodec.stringify({
           projectId: input.projectId,
           path,
@@ -61,10 +57,7 @@ function agentItxProcessorSubscriptionEvent(input: { path: string; projectId: st
   } satisfies Parameters<Stream["append"]>[0];
 }
 
-export class AgentCollectionRpcTarget
-  extends RpcTarget
-  implements RpcTargetImplementation<AgentCollection>
-{
+export class AgentCollectionRpcTarget extends RpcTarget implements AgentCollection {
   constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -84,10 +77,7 @@ export class AgentCollectionRpcTarget
   }
 }
 
-export class AgentRpcTarget
-  extends ItxCapabilityHostRpcTarget
-  implements RpcTargetImplementation<Agent>
-{
+export class AgentRpcTarget extends ItxCapabilityHostRpcTarget implements Agent {
   constructor(
     readonly props: { auth: ItxAuth; ctx: CfExecutionContext; path: string; projectId: string },
   ) {
@@ -106,17 +96,22 @@ export class AgentRpcTarget
     );
   }
 
-  protected itxProcessor(): ItxProcessorRpc {
-    return this.durableObjectStub.itxProcessor as unknown as ItxProcessorRpc;
+  protected itxProcessor() {
+    return env.ITX.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: this.props.projectId,
+        path: this.props.path,
+      }),
+    );
   }
 
-  #projectItxProcessor(): ItxProcessorRpc {
-    return env.PROJECT.getByName(
+  #projectItxProcessor() {
+    return env.ITX.getByName(
       DurableObjectNameCodec.stringify({
         projectId: this.props.projectId,
         path: "/",
       }),
-    ).itxProcessor as unknown as ItxProcessorRpc;
+    );
   }
 
   get stream() {

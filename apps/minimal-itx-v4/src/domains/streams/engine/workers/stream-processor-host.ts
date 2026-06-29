@@ -21,21 +21,17 @@
 // stub, reads the processor's checkpoint, and subscribes so the stream pumps
 // batches into `processor.ingest`.
 
-import type {
-  StreamProcessorRuntimeState,
-  StreamProcessorSnapshot,
-  StreamProcessorStream,
-} from "../stream-processor.ts";
+import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "../stream-processor.ts";
 import type {
   CoreProcessorState,
   ProcessorContractAnnouncement,
 } from "../processors/core/contract.ts";
 import type { StreamSubscriptionHandle } from "../types.ts";
-import type { StreamEvent, StreamEventInput } from "../../types.ts";
+import type { Stream, StreamEvent, StreamEventInput } from "../../types.ts";
 
 /** What the Stream DO sends when dialing a subscriber's callable. */
 export type StreamSubscriptionHandshake = {
-  stream: StreamProcessorStream;
+  stream: Stream;
   subscriptionKey: string;
   streamMaxOffset: number;
   streamRuntimeState: { coreProcessorState: CoreProcessorState };
@@ -57,7 +53,7 @@ export type RequestStreamSubscriptionArgs = StreamSubscriptionHandshake & {
  * `new RepoProcessor({ ...deps, github })`.
  */
 type HostedProcessorDeps = {
-  stream: StreamProcessorStream;
+  stream: Stream;
   readState: () => StreamProcessorSnapshot<any> | undefined;
   writeState: (snapshot: StreamProcessorSnapshot<any>) => void;
   keepAliveWhile: (work: () => Promise<unknown>) => void;
@@ -91,7 +87,7 @@ type AnyHostedProcessor = {
 type HostedEntry = {
   processor: AnyHostedProcessor;
   /** Live stream stub retained across the subscription lifetime. */
-  stream: RetainedStreamProcessorStream | undefined;
+  stream: RetainedStream | undefined;
   handle: StreamSubscriptionHandle | undefined;
   projectId: string | null | undefined;
   path: string | undefined;
@@ -171,7 +167,7 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
     return entry;
   }
 
-  function requireStream(name: string): StreamProcessorStream {
+  function requireStream(name: string): Stream {
     const entry = requireEntry(name);
     if (entry.stream === undefined) {
       throw new Error(
@@ -367,9 +363,8 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
           getProcessorRuntimeState: (args) =>
             requireStream(name).getProcessorRuntimeState(args as never),
           runtimeState: () => requireStream(name).runtimeState(),
-          kill: () => requireStream(name).kill(),
           subscribe: (args) => requireStream(name).subscribe(args as never),
-        } as StreamProcessorStream,
+        },
         readState: () =>
           ctx.storage.kv.get<StreamProcessorSnapshot<any>>(snapshotKey(name)) ?? undefined,
         writeState: (snapshot) => void ctx.storage.kv.put(snapshotKey(name), snapshot),
@@ -405,7 +400,7 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
       // duplicated. Processor side effects may append later, so retain the
       // stream capability until the next handshake replaces it.
       // https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
-      entry.stream = retainStreamProcessorStream(args.stream);
+      entry.stream = retainStream(args.stream);
       entry.projectId = args.streamRuntimeState.coreProcessorState.projectId;
       entry.path = args.streamRuntimeState.coreProcessorState.path;
       entry.consecutiveIngestFailures = 0;
@@ -459,15 +454,15 @@ function announceContract(contract: {
   };
 }
 
-type RetainedStreamProcessorStream = StreamProcessorStream &
+type RetainedStream = Stream &
   Disposable & {
     onRpcBroken?(callback: (error: unknown) => void): void;
   };
 
-function retainStreamProcessorStream(stream: StreamProcessorStream): RetainedStreamProcessorStream {
-  const retainable = stream as StreamProcessorStream &
+function retainStream(stream: Stream): RetainedStream {
+  const retainable = stream as Stream &
     Partial<Disposable> & {
-      dup?(): RetainedStreamProcessorStream;
+      dup?(): RetainedStream;
     };
   const retained = retainable.dup?.() ?? retainable;
   const dispose = retained[Symbol.dispose]?.bind(retained);
@@ -475,5 +470,5 @@ function retainStreamProcessorStream(stream: StreamProcessorStream): RetainedStr
     [Symbol.dispose]() {
       dispose?.();
     },
-  }) as RetainedStreamProcessorStream;
+  }) as RetainedStream;
 }

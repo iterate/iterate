@@ -2,6 +2,10 @@ import type { DynamicWorkerRef } from "../dynamic-workers/types.ts";
 import type { ProjectCollection } from "../projects/types.ts";
 import type { StreamEvent } from "../streams/types.ts";
 
+export type CfExecutionContext = {
+  exports: ExecutionContext["exports"];
+};
+
 export interface UnauthenticatedItx {
   authenticate(input: ItxAuthCredentials): ItxRoot;
 }
@@ -18,9 +22,9 @@ export interface ItxCapabilityHost {
     result: unknown;
   }>;
   provideCapability(input: { path: string[]; capability: ProvidedCapability }): Promise<{
-    revoke(): void | Promise<void>;
+    revoke(): Promise<void>;
   }>;
-  revokeCapability(input: { path: string[] }): void | Promise<void>;
+  revokeCapability(input: { path: string[] }): Promise<void>;
 }
 
 export type ProvidedCapability =

@@ -16,7 +16,6 @@ import {
 } from "./schemas.ts";
 import type { StreamEvent } from "./types.ts";
 import type { StreamSubscriptionHandshake } from "./engine/workers/stream-processor-host.ts";
-import type { StreamProcessorStream } from "./engine/stream-processor.ts";
 import { getInitialProcessorState } from "./engine/shared/stream-processors.ts";
 import { CoreStreamProcessor } from "./engine/processors/core/implementation.ts";
 import {
@@ -36,6 +35,13 @@ type StreamAppendInput = z.infer<typeof StreamAppendInput>;
  *
  * HTTP/WebSocket Cap'n Web termination belongs at the fronting Worker, which
  * exposes this DO through `StreamRpcTarget`.
+ *
+ * IMPORTANT: this class is deliberately NOT `implements Stream`.
+ * `Stream` is the public async capability implemented by `StreamRpcTarget`.
+ * The methods on this Durable Object are storage/runtime implementation
+ * methods. The append/read methods that touch SQLite/KV directly must remain
+ * synchronous so a stream append assigns offsets, reduces state, and persists
+ * the batch in one await-free turn.
  */
 
 // Cloudflare Durable Objects cap each SQLite string/blob/table row at 2 MB.
@@ -71,7 +77,7 @@ const CORE_STATE_VERSION = 5;
 // Overridable via the STREAM_IDLE_TEARDOWN_MS env var (used by tests).
 const DEFAULT_STREAM_IDLE_TEARDOWN_MS = 5 * 60_000;
 
-export class StreamDurableObject extends DurableObject<Env> implements Stream {
+export class StreamDurableObject extends DurableObject<Env> {
   readonly name = parseStreamDurableObjectName(this.ctx.id.name);
 
   #coreProcessorState: CoreProcessorState;
@@ -81,21 +87,8 @@ export class StreamDurableObject extends DurableObject<Env> implements Stream {
   // against reduced state; this DO supplies the storage and RPC mechanics it
   // needs (committed-event reads, the live state, Callable dispatch).
   coreProcessor = new CoreStreamProcessor({
-    stream: {
-      append: (...events: PublicStreamEventInput[]) => this.append(...events),
-      at: (path: string) => this.at(path),
-      getEvent: (args: Parameters<StreamProcessorStream["getEvent"]>[0]) => this.getEvent(args),
-      getEvents: (args?: Parameters<StreamProcessorStream["getEvents"]>[0]) => this.getEvents(args),
-      waitForEvent: (args: Parameters<StreamProcessorStream["waitForEvent"]>[0]) =>
-        this.waitForEvent(args as never),
-      getProcessorRuntimeState: (
-        args: Parameters<StreamProcessorStream["getProcessorRuntimeState"]>[0],
-      ) => this.getProcessorRuntimeState(args),
-      runtimeState: () => this.runtimeState(),
-      kill: () => this.kill(),
-      subscribe: (args: Parameters<StreamProcessorStream["subscribe"]>[0]) =>
-        this.subscribe(args as never),
-    } as unknown as StreamProcessorStream,
+    appendHere: (...events) => this.append(...events),
+    stream: this.#streamCapability(this.name.path),
     keepAliveWhile: (work) => void this.ctx.waitUntil(work()),
     getEvents: (args) => this.getEvents(args),
     currentState: () => this.#coreProcessorState,
@@ -367,6 +360,10 @@ export class StreamDurableObject extends DurableObject<Env> implements Stream {
   /**
    * Synchronously assigns offsets, reduces, persists, then wakes delivery.
    *
+   * DO NOT make this method async. Do not insert an `await` anywhere in the
+   * offset/reduce/persist path it calls. This is the stream's commit point:
+   * storage writes and core state changes must happen in one synchronous turn.
+   *
    * What actually happens for `append(a, b)` on a stream at `maxOffset: 4`:
    * 1. `a` becomes offset 5, `b` becomes offset 6; each is folded into reduced state.
    *    An event whose `idempotencyKey` already exists is skipped and the existing
@@ -386,19 +383,47 @@ export class StreamDurableObject extends DurableObject<Env> implements Stream {
     }) as PublicStreamEvent[];
   }
 
-  at(streamPath: string): Stream {
-    const resolvedPath = resolveStreamPath(this.#coreProcessorState.path, streamPath);
-    if (resolvedPath === this.#coreProcessorState.path) return this;
-    return this.env.STREAM.getByName(
-      DurableObjectNameCodec.stringify({
-        path: resolvedPath,
-        projectId: this.name.projectId,
-      }),
-    ) as unknown as Stream;
+  #streamCapability(path: string): Stream {
+    return {
+      append: (...events) =>
+        path === this.name.path
+          ? Promise.resolve(this.append(...events))
+          : this.#streamStub(path).append(...events),
+      at: (streamPath) => this.#streamCapability(resolveStreamPath(path, streamPath)),
+      getEvent: (args) =>
+        path === this.name.path
+          ? Promise.resolve(this.getEvent(args))
+          : this.#streamStub(path).getEvent(args),
+      getEvents: (args) =>
+        path === this.name.path
+          ? Promise.resolve(this.getEvents(args))
+          : this.#streamStub(path).getEvents(args),
+      waitForEvent: (args) =>
+        path === this.name.path
+          ? this.waitForEvent(args)
+          : this.#streamStub(path).waitForEvent(args),
+      getProcessorRuntimeState: (args) =>
+        path === this.name.path
+          ? this.getProcessorRuntimeState(args)
+          : this.#streamStub(path).getProcessorRuntimeState(args),
+      runtimeState: () =>
+        path === this.name.path
+          ? Promise.resolve(this.runtimeState())
+          : this.#streamStub(path).runtimeState(),
+      subscribe: (args) =>
+        path === this.name.path
+          ? Promise.resolve(this.subscribe(args as Parameters<typeof this.subscribe>[0]))
+          : this.#streamStub(path).subscribe(args as never),
+    };
   }
 
-  appendInternal(args: { events: StreamAppendInput[] }): void {
-    this.#appendBatchHere({ events: args.events });
+  #streamStub(path: string) {
+    return this.env.STREAM.getByName(
+      DurableObjectNameCodec.stringify({
+        path,
+        projectId: this.name.projectId,
+      }),
+    );
   }
 
   #appendBatchHere(args: { events: StreamAppendInput[] }): StreamEvent[] {
@@ -528,6 +553,11 @@ export class StreamDurableObject extends DurableObject<Env> implements Stream {
     return events;
   }
 
+  /**
+   * Synchronous committed-event read used by the append transaction and
+   * delivery catch-up. Keep await-free; callers that cross an RPC seam get the
+   * async shape from `StreamRpcTarget`, not from this storage method.
+   */
   getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): StreamEvent | undefined {
@@ -539,6 +569,11 @@ export class StreamDurableObject extends DurableObject<Env> implements Stream {
     return event;
   }
 
+  /**
+   * Synchronous committed-event range read. Keep await-free so append,
+   * delivery, and state rebuild code can consume stream storage without
+   * yielding in the middle of stream-owned invariants.
+   */
   getEvents(
     args: {
       afterOffset?: number;
@@ -639,6 +674,12 @@ export class StreamDurableObject extends DurableObject<Env> implements Stream {
 
   /**
    * Subscribes to catch-up then live event batches.
+   *
+   * This method is synchronous because it mutates the in-memory connection
+   * table and returns the live handle for the current Durable Object
+   * incarnation. Cross-RPC callers still observe an async call through their
+   * stub; do not make this DO method async unless the connection lifecycle is
+   * redesigned.
    *
    * `subscribe({ subscriptionKey: "s", processEventBatch })` live-tails by default. Passing
    * `replayAfterOffset: 0` replays from the first event before live delivery; passing
@@ -768,7 +809,7 @@ export class StreamDurableObject extends DurableObject<Env> implements Stream {
           auth: trustedInternalAuthContext(),
           path: this.name.path,
           projectId: this.name.projectId,
-        }) as unknown as StreamProcessorStream,
+        }),
         subscriptionKey: args.subscriptionKey,
         streamMaxOffset: this.#coreProcessorState.maxOffset,
         streamRuntimeState: { coreProcessorState: this.#coreProcessorState },

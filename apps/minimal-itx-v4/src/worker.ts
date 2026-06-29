@@ -2,6 +2,7 @@ import { newHttpBatchRpcResponse, newWorkersWebSocketRpcResponse } from "capnweb
 import type { Env } from "./env.ts";
 import { ITX_AUTH_COOKIE } from "./auth.ts";
 import { AgentDurableObject } from "./domains/agents/agent-durable-object.ts";
+import { ItxDurableObject } from "./domains/itx/itx-durable-object.ts";
 import { ItxEntrypoint } from "./domains/itx/itx-entrypoint.ts";
 import { UnauthenticatedItxRpcTarget } from "./domains/itx/rpc-targets.ts";
 import { ProjectDurableObject } from "./domains/projects/project-durable-object.ts";
@@ -44,6 +45,7 @@ export default {
 
 export {
   ItxEntrypoint,
+  ItxDurableObject,
   AgentDurableObject,
   ProjectDurableObject,
   RepoDurableObject,

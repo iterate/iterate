@@ -3,7 +3,6 @@ import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { durableObjectProcessorSubscriber } from "../streams/engine/shared/callable-subscriber.ts";
 import { StreamRpcTarget } from "../streams/rpc-targets.ts";
 import type { ItxAuth } from "../itx/types.ts";
-import type { RpcTargetImplementation } from "../../rpc-target-types.ts";
 import type { Stream } from "../streams/types.ts";
 import type { Repo, RepoCollection } from "./types.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
@@ -63,7 +62,7 @@ async function requestRepoCreate(input: {
   return new RepoRpcTarget({ auth: input.auth, path, projectId: input.projectId });
 }
 
-export class RepoRpcTarget extends RpcTarget implements RpcTargetImplementation<Repo> {
+export class RepoRpcTarget extends RpcTarget implements Repo {
   constructor(readonly props: { auth: ItxAuth; path: string; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -95,10 +94,7 @@ export class RepoRpcTarget extends RpcTarget implements RpcTargetImplementation<
   }
 }
 
-export class RepoCollectionRpcTarget
-  extends RpcTarget
-  implements RpcTargetImplementation<RepoCollection>
-{
+export class RepoCollectionRpcTarget extends RpcTarget implements RepoCollection {
   constructor(readonly props: { auth: ItxAuth; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);

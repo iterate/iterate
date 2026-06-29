@@ -19,13 +19,6 @@ import {
 
 type MaybePromise<T> = T | Promise<T>;
 
-/** Stream capability the host hands every processor as `this.stream`. */
-export type StreamProcessorStream = {
-  [K in keyof Stream]: Stream[K] extends (...args: infer Args) => infer Result
-    ? (...args: Args) => MaybePromise<Awaited<Result>>
-    : Stream[K];
-};
-
 /**
  * The structural slice of a processor contract that the class needs. Contracts
  * built with `defineProcessorContract(...)` satisfy this; the full contract
@@ -50,7 +43,7 @@ type StreamProcessorContract = {
  * a Durable Object).
  */
 export type StreamProcessorBaseDeps<Contract> = {
-  stream: StreamProcessorStream;
+  stream: Stream;
   keepAliveWhile?: (work: () => Promise<unknown>) => void;
 } & StreamProcessorStateStorage<ProcessorState<Contract>>;
 
@@ -80,7 +73,7 @@ type SideEffectHelpers = {
 
 type EmitHelpers<Contract> = {
   /** Append one or more events listed in `contract.emits`. */
-  append: (...input: EmittedInput<Contract>[]) => StreamEvent[];
+  append: (...input: EmittedInput<Contract>[]) => Promise<StreamEvent[]>;
 };
 
 type ProcessEventArgs<Contract> = ReducedEvent<Contract> &
@@ -196,7 +189,7 @@ export abstract class StreamProcessor<
   Deps extends object = object,
 > extends RpcTarget {
   abstract readonly contract: Contract;
-  protected readonly stream: StreamProcessorStream;
+  protected readonly stream: Stream;
   protected readonly deps: Deps;
 
   #checkpointOffset = 0;
@@ -523,9 +516,9 @@ export abstract class StreamProcessor<
     this.#resolveEventWaiters(events);
   }
 
-  #appendEmitted(...input: EmittedInput<Contract>[]): StreamEvent[] {
+  #appendEmitted(...input: EmittedInput<Contract>[]): Promise<StreamEvent[]> {
     const events = input.map((event) => this.buildEmittedEvent(event) as StreamEventInput);
-    return (this.stream.append as (...events: StreamEventInput[]) => StreamEvent[])(...events);
+    return this.stream.append(...events);
   }
 
   #parseEventInput(args: {
