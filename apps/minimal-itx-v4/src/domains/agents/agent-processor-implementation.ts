@@ -56,6 +56,7 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
   }
 
   protected override processEvent({
+    append,
     blockProcessorWhile,
     event,
     runInBackground,
@@ -63,7 +64,7 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
     switch (event.type) {
       case "events.iterate.com/agent/create-requested":
         blockProcessorWhile(async () => {
-          await this.stream.append({
+          await append({
             type: "events.iterate.com/agent/created",
             idempotencyKey: `agent-created:${event.offset}`,
             payload: {},
@@ -72,7 +73,7 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
         return;
       case "events.iterate.com/agents/user-message-received":
         blockProcessorWhile(async () => {
-          await this.stream.append({
+          await append({
             type: "events.iterate.com/agent/input-added",
             idempotencyKey: `agent/input-added@${event.offset}`,
             payload: {
@@ -85,7 +86,7 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
         return;
       case "events.iterate.com/agent/input-added":
         blockProcessorWhile(async () => {
-          await this.stream.append({
+          await append({
             type: "events.iterate.com/agent/llm-request-scheduled",
             idempotencyKey: `agent/llm-request-scheduled@${event.offset}`,
             payload: {
@@ -100,6 +101,7 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
         runInBackground(async () => {
           await new Promise<void>((resolve) => setTimeout(resolve, event.payload.debounceMs));
           await this.#appendFauxLlmOutput({
+            append,
             inputOffset: event.payload.inputOffset,
             requestId: event.payload.requestId,
           });
@@ -109,7 +111,7 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
         blockProcessorWhile(async () => {
           const code = extractAsyncJsSnippet(event.payload.content);
           if (code === null) return;
-          await this.stream.append({
+          await append({
             type: "events.iterate.com/itx/script-execution-requested",
             idempotencyKey: `itx/script-execution-requested@${event.offset}`,
             payload: {
@@ -124,7 +126,11 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
     }
   }
 
-  async #appendFauxLlmOutput(input: { inputOffset: number; requestId: string }) {
+  async #appendFauxLlmOutput(input: {
+    append: Parameters<StreamProcessor<typeof AgentProcessorContract>["processEvent"]>[0]["append"];
+    inputOffset: number;
+    requestId: string;
+  }) {
     const inputEvent = await this.stream.getEvent({ offset: input.inputOffset });
     const userInput =
       inputEvent?.type === "events.iterate.com/agent/input-added" &&
@@ -132,7 +138,7 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
         ? inputEvent.payload.content
         : "";
     const code = fauxResponseScript(userInput);
-    await this.stream.append(
+    await input.append(
       {
         type: "events.iterate.com/agent/llm-request-requested",
         idempotencyKey: `agent/llm-request-requested@${input.inputOffset}`,

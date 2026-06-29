@@ -1,6 +1,5 @@
 import { StreamProcessor } from "../streams/engine/stream-processor.ts";
-import { durableObjectProcessorSubscriber } from "../streams/engine/shared/callable-subscriber.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { subscriptionConfiguredEvent } from "../streams/subscription-event.ts";
 import { PROJECT_REPO_PATH } from "../repos/project-repo.ts";
 import type { StreamEvent } from "../streams/types.ts";
 import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
@@ -59,21 +58,14 @@ export class ProjectProcessor extends StreamProcessor<
           );
         }
         blockProcessorWhile(async () => {
-          await append({
-            type: "events.iterate.com/stream/subscription-configured",
-            idempotencyKey: `stream-subscription:${this.deps.projectId}:${ItxProcessorContract.slug}`,
-            payload: {
-              subscriptionKey: ItxProcessorContract.slug,
-              subscriber: durableObjectProcessorSubscriber({
-                bindingName: "ITX",
-                durableObjectName: DurableObjectNameCodec.stringify({
-                  projectId: this.deps.projectId,
-                  path: "/",
-                }),
-                processorName: ItxProcessorContract.slug,
-              }),
-            },
-          });
+          await append(
+            subscriptionConfiguredEvent({
+              projectId: this.deps.projectId,
+              path: "/",
+              bindingName: "ITX",
+              processorName: ItxProcessorContract.slug,
+            }),
+          );
           await append({
             type: "events.iterate.com/repo/create-requested",
             idempotencyKey: `repo-create-requested:${this.deps.projectId}:${PROJECT_REPO_PATH}`,

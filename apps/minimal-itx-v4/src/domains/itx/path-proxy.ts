@@ -31,6 +31,23 @@ export function isReservedDynamicPathSegment(segment: string): boolean {
   return RESERVED_DYNAMIC_PATH_SEGMENTS.has(segment);
 }
 
+/**
+ * Guards `provideCapability` against shadowing the host's own surface: a
+ * capability path's root segment may not be a reserved RPC segment nor an
+ * existing builtin on the target RpcTarget (e.g. `streams`, `agents`). Runs in
+ * the isolate because it inspects the RpcTarget instance, which the DO can't see.
+ */
+export function rejectBuiltinCollision(target: object, path: string[]): void {
+  const root = path[0];
+  if (!root) return;
+  if (isReservedDynamicPathSegment(root)) {
+    throw new Error(`cannot provide capability "${root}": it is a reserved ITX path segment`);
+  }
+  if (root in target) {
+    throw new Error(`cannot provide capability "${root}": it is already on this ITX target`);
+  }
+}
+
 export function createInvokeCapabilityPathProxy(
   target: InvokeCapabilityTarget,
   path: string[] = [],

@@ -1,15 +1,10 @@
 import { env, RpcTarget } from "cloudflare:workers";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { durableObjectProcessorSubscriber } from "../streams/engine/shared/callable-subscriber.ts";
+import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
 import { StreamRpcTarget } from "../streams/rpc-targets.ts";
+import { subscriptionConfiguredEvent } from "../streams/subscription-event.ts";
 import type { ItxAuth } from "../itx/types.ts";
-import type { Stream } from "../streams/types.ts";
 import type { Repo, RepoCollection } from "./types.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
-
-function normalizeRepoPath(path: string): string {
-  return path === "" ? "/" : path.startsWith("/") ? path : `/${path}`;
-}
 
 function projectRootStream(props: { auth: ItxAuth; projectId: string }) {
   return new StreamRpcTarget({
@@ -19,37 +14,26 @@ function projectRootStream(props: { auth: ItxAuth; projectId: string }) {
   });
 }
 
-export function repoProcessorSubscriptionEvent(input: { path: string; projectId: string }) {
-  const path = normalizeRepoPath(input.path);
-  return {
-    type: "events.iterate.com/stream/subscription-configured",
-    idempotencyKey: `stream-subscription:${input.projectId}:${RepoProcessorContract.slug}:${path}`,
-    payload: {
-      subscriptionKey: `${RepoProcessorContract.slug}:${path}`,
-      subscriber: durableObjectProcessorSubscriber({
-        bindingName: "REPO",
-        durableObjectName: DurableObjectNameCodec.stringify({
-          projectId: input.projectId,
-          path,
-        }),
-        processorName: RepoProcessorContract.slug,
-      }),
-    },
-  } satisfies Parameters<Stream["append"]>[0];
-}
-
 async function requestRepoCreate(input: {
   auth: ItxAuth;
   path: string;
   projectId: string;
 }): Promise<RepoRpcTarget> {
-  const path = normalizeRepoPath(input.path);
+  const path = normalizePath(input.path);
   const stream = projectRootStream({ auth: input.auth, projectId: input.projectId });
-  const [, createRequested] = await stream.append(repoProcessorSubscriptionEvent(input), {
-    type: "events.iterate.com/repo/create-requested",
-    idempotencyKey: `repo-create-requested:${input.projectId}:${path}`,
-    payload: { projectId: input.projectId, path },
-  });
+  const [, createRequested] = await stream.append(
+    subscriptionConfiguredEvent({
+      projectId: input.projectId,
+      path,
+      bindingName: "REPO",
+      processorName: RepoProcessorContract.slug,
+    }),
+    {
+      type: "events.iterate.com/repo/create-requested",
+      idempotencyKey: `repo-create-requested:${input.projectId}:${path}`,
+      payload: { projectId: input.projectId, path },
+    },
+  );
 
   await stream.waitForEvent({
     afterOffset: createRequested.offset - 1,
@@ -72,7 +56,7 @@ export class RepoRpcTarget extends RpcTarget implements Repo {
     return env.REPO.getByName(
       DurableObjectNameCodec.stringify({
         projectId: this.props.projectId,
-        path: normalizeRepoPath(this.props.path),
+        path: normalizePath(this.props.path),
       }),
     );
   }
@@ -111,7 +95,7 @@ export class RepoCollectionRpcTarget extends RpcTarget implements RepoCollection
   get(path: string) {
     return new RepoRpcTarget({
       auth: this.props.auth,
-      path: normalizeRepoPath(path),
+      path: normalizePath(path),
       projectId: this.props.projectId,
     });
   }

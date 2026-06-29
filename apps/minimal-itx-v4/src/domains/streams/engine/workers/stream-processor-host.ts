@@ -59,14 +59,6 @@ type HostedProcessorDeps = {
   keepAliveWhile: (work: () => Promise<unknown>) => void;
 };
 
-type HostedProcessorRuntimeState = {
-  processorName: string;
-  snapshot: StreamProcessorSnapshot<unknown> | undefined;
-  runtime: {
-    subscription: { subscriptionKey: string; projectId: string | null; path: string } | undefined;
-  };
-};
-
 // Structural: the host drives the processor's public surface only. (A
 // `StreamProcessor<any, ...>` bound would compare #-private fields nominally
 // and reject concrete subclasses over their state types.)
@@ -131,8 +123,6 @@ type StreamProcessorHost = {
   add<P extends AnyHostedProcessor>(name: string, build: (deps: HostedProcessorDeps) => P): P;
   /** Wire this to a public RPC method; subscription callables dial it. */
   requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void>;
-  /** Durable processor state for tests and operator inspection. */
-  runtimeState(processorName?: string): HostedProcessorRuntimeState;
   /**
    * Drop every live subscription's retained stream stub now — the idle timer's
    * action, also callable directly (tests / operator "let this idle subscriber
@@ -408,27 +398,6 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
       await openSubscription(name);
     },
 
-    runtimeState(processorName) {
-      const name = resolveProcessorName(processorName);
-      const entry = requireEntry(name);
-      const subscriptionKey = ctx.storage.kv.get<string>(subscriptionKeyKey(name));
-      return {
-        processorName: name,
-        snapshot: ctx.storage.kv.get<StreamProcessorSnapshot<unknown>>(snapshotKey(name)),
-        runtime: {
-          subscription:
-            subscriptionKey === undefined ||
-            entry.projectId === undefined ||
-            entry.path === undefined
-              ? undefined
-              : {
-                  subscriptionKey,
-                  projectId: entry.projectId,
-                  path: entry.path,
-                },
-        },
-      };
-    },
     runIdleDisconnectNow,
   };
 }

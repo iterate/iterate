@@ -20,15 +20,6 @@ import type { ItxCapabilityHost } from "./types.ts";
 export type ProvideCapabilityInput = Parameters<ItxCapabilityHost["provideCapability"]>[0];
 export type RunScriptResult = Awaited<ReturnType<ItxCapabilityHost["runScript"]>>;
 
-export type ItxProcessorRpc = {
-  invokeCapability(input: { args?: unknown[]; path: string[] }): unknown;
-  provideCapability(
-    input: ProvideCapabilityInput,
-  ): { path: string[] } | Promise<{ path: string[] }>;
-  revokeCapability(input: { path: string[] }): void | Promise<void>;
-  runScript(code: string): RunScriptResult | Promise<RunScriptResult>;
-};
-
 type CompletedPayload = {
   error?: string;
   executionId: string;
@@ -84,10 +75,7 @@ function resolveLongestPrefix(records: CapabilityRecord[], path: string[]) {
   return best;
 }
 
-export class ItxProcessor
-  extends StreamProcessor<typeof ItxProcessorContract>
-  implements ItxProcessorRpc
-{
+export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
   readonly contract = ItxProcessorContract;
   #dynamicWorkerRuntime: DynamicWorkerRuntimeRpcTarget;
   #host: ProjectDurableObjectName;

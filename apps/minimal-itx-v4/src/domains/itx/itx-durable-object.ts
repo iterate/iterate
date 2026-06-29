@@ -10,14 +10,14 @@ import {
 import { ItxProcessorContract } from "./itx-processor-contract.ts";
 import {
   ItxProcessor,
-  type ItxProcessorRpc,
   type ProvideCapabilityInput,
+  type RunScriptResult,
 } from "./itx-processor-implementation.ts";
 
-export class ItxDurableObject extends DurableObject<Env> implements ItxProcessorRpc {
+export class ItxDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   readonly #processorHost = createStreamProcessorHost(this.ctx);
-  readonly #itxProcessor: ItxProcessorRpc = this.#processorHost.add(
+  readonly #itxProcessor = this.#processorHost.add(
     ItxProcessorContract.slug,
     (deps) =>
       new ItxProcessor({
@@ -47,19 +47,21 @@ export class ItxDurableObject extends DurableObject<Env> implements ItxProcessor
     return this.#processorHost.requestStreamSubscription(args);
   }
 
-  invokeCapability(input: { args?: unknown[]; path: string[] }) {
+  // Return types are pinned shallow so `DurableObjectStub<ItxDurableObject>`
+  // doesn't deep-instantiate the processor's inferred signatures (TS2589).
+  invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown> {
     return this.#itxProcessor.invokeCapability(input);
   }
 
-  provideCapability(input: ProvideCapabilityInput) {
+  provideCapability(input: ProvideCapabilityInput): Promise<{ path: string[] }> {
     return this.#itxProcessor.provideCapability(input);
   }
 
-  revokeCapability(input: { path: string[] }) {
+  revokeCapability(input: { path: string[] }): Promise<void> {
     return this.#itxProcessor.revokeCapability(input);
   }
 
-  runScript(code: string) {
+  runScript(code: string): Promise<RunScriptResult> {
     return this.#itxProcessor.runScript(code);
   }
 }

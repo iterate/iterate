@@ -14,7 +14,7 @@
 
 import type { StreamEvent, StreamEventInput } from "../../../types.ts";
 import type { StreamDurableObject } from "../../../stream-durable-object.ts";
-import type { ConsumedEvent } from "../../shared/stream-processors.ts";
+import { getEventSchema } from "../../shared/stream-processors.ts";
 import type { ProcessEventBatch, ProcessorRuntimeState } from "../../types.ts";
 import {
   retainGetProcessorRuntimeState,
@@ -31,10 +31,9 @@ import {
 } from "./contract.ts";
 
 type CoreProcessorContract = typeof CoreProcessorContract;
-type CoreEvent = ConsumedEvent<CoreProcessorContract>;
 
 type ReducedCoreEvent = {
-  event: CoreEvent;
+  event: StreamEvent;
   previousState: CoreProcessorState;
   state: CoreProcessorState;
 };
@@ -44,6 +43,69 @@ type ProcessCoreEventArgs = ReducedCoreEvent & {
   streamMaxOffset: number;
   runInBackground: (work: () => Promise<unknown>) => void;
 };
+
+const StreamCreatedEvent = getEventSchema({
+  type: "events.iterate.com/stream/created",
+  payloadSchema: CoreProcessorContract.events["events.iterate.com/stream/created"].payloadSchema,
+});
+const StreamWokenEvent = getEventSchema({
+  type: "events.iterate.com/stream/woken",
+  payloadSchema: CoreProcessorContract.events["events.iterate.com/stream/woken"].payloadSchema,
+});
+const StreamConfiguredEvent = getEventSchema({
+  type: "events.iterate.com/stream/configured",
+  payloadSchema: CoreProcessorContract.events["events.iterate.com/stream/configured"].payloadSchema,
+});
+const StreamMetadataUpdatedEvent = getEventSchema({
+  type: "events.iterate.com/stream/metadata-updated",
+  payloadSchema:
+    CoreProcessorContract.events["events.iterate.com/stream/metadata-updated"].payloadSchema,
+});
+const StreamChildStreamCreatedEvent = getEventSchema({
+  type: "events.iterate.com/stream/child-stream-created",
+  payloadSchema:
+    CoreProcessorContract.events["events.iterate.com/stream/child-stream-created"].payloadSchema,
+});
+const StreamSubscriptionConfiguredEvent = getEventSchema({
+  type: "events.iterate.com/stream/subscription-configured",
+  payloadSchema:
+    CoreProcessorContract.events["events.iterate.com/stream/subscription-configured"].payloadSchema,
+});
+const StreamSubscriptionRemovedEvent = getEventSchema({
+  type: "events.iterate.com/stream/subscription-removed",
+  payloadSchema:
+    CoreProcessorContract.events["events.iterate.com/stream/subscription-removed"].payloadSchema,
+});
+const StreamSubscriberConnectedEvent = getEventSchema({
+  type: "events.iterate.com/stream/subscriber-connected",
+  payloadSchema:
+    CoreProcessorContract.events["events.iterate.com/stream/subscriber-connected"].payloadSchema,
+});
+const StreamSubscriberDisconnectedEvent = getEventSchema({
+  type: "events.iterate.com/stream/subscriber-disconnected",
+  payloadSchema:
+    CoreProcessorContract.events["events.iterate.com/stream/subscriber-disconnected"].payloadSchema,
+});
+const StreamErrorOccurredEvent = getEventSchema({
+  type: "events.iterate.com/stream/error-occurred",
+  payloadSchema:
+    CoreProcessorContract.events["events.iterate.com/stream/error-occurred"].payloadSchema,
+});
+const StreamPausedEvent = getEventSchema({
+  type: "events.iterate.com/stream/paused",
+  payloadSchema: CoreProcessorContract.events["events.iterate.com/stream/paused"].payloadSchema,
+});
+const StreamResumedEvent = getEventSchema({
+  type: "events.iterate.com/stream/resumed",
+  payloadSchema: CoreProcessorContract.events["events.iterate.com/stream/resumed"].payloadSchema,
+});
+
+function parsedPayload<Payload>(event: { payload?: Payload; type: string }): Payload {
+  if (event.payload === undefined) {
+    throw new Error(`Core event "${event.type}" is missing payload after schema validation.`);
+  }
+  return event.payload;
+}
 
 export class CoreStreamProcessor {
   readonly contract = CoreProcessorContract;
@@ -100,7 +162,7 @@ export class CoreStreamProcessor {
 
   /** Reduce one committed event against caller-owned state. */
   reduceEvent(args: { event: StreamEvent; state: CoreProcessorState }): CoreProcessorState {
-    return this.#reduce({ event: args.event as CoreEvent, state: args.state });
+    return this.#reduce({ event: args.event, state: args.state });
   }
 
   /**
@@ -114,7 +176,7 @@ export class CoreStreamProcessor {
     state: CoreProcessorState;
   }): void {
     this.#processEvent({
-      event: args.event as ConsumedEvent<CoreProcessorContract>,
+      event: args.event,
       previousState: args.previousState,
       state: args.state,
       checkpointOffset: args.event.offset,
@@ -123,15 +185,16 @@ export class CoreStreamProcessor {
     });
   }
 
-  // Reduce is on the synchronous DO append hot path and runs per event, so it
-  // does NOT re-parse the whole state on the way out: `state` was already
-  // validated at the trust boundary (the KV read in stream.ts and the
-  // event-log recovery path both parse), and `args.event` is validated
-  // upstream, so `next` is constructed entirely from already-typed values.
-  // Re-validating the growing connectionsByKey/processorsBySlug/
-  // subscriptionsByKey records on every appended event was quadratic work for
-  // no added safety.
-  #reduce(args: { event: CoreEvent; state: CoreProcessorState }): CoreProcessorState {
+  // Reduce is on the synchronous DO append hot path and runs per event. Known
+  // core event payloads are parsed in their switch branches before state access;
+  // non-core events still count toward the stream offset/event counters.
+  //
+  // Do NOT re-parse the whole state on the way out: `state` was already
+  // validated at the trust boundary (the KV read in stream.ts and the event-log
+  // recovery path both parse). Re-validating the growing connectionsByKey/
+  // processorsBySlug/subscriptionsByKey records on every appended event was
+  // quadratic work for no added safety.
+  #reduce(args: { event: StreamEvent; state: CoreProcessorState }): CoreProcessorState {
     const state = args.state;
     let next: CoreProcessorState = {
       ...state,
@@ -140,15 +203,19 @@ export class CoreStreamProcessor {
     };
 
     switch (args.event.type) {
-      case "events.iterate.com/stream/paused":
+      case "events.iterate.com/stream/paused": {
+        const event = StreamPausedEvent.parse(args.event);
+        const payload = parsedPayload(event);
         next = {
           ...next,
           paused: true,
-          pauseReason: args.event.payload.reason ?? null,
+          pauseReason: payload.reason ?? null,
         };
         break;
+      }
 
       case "events.iterate.com/stream/resumed":
+        StreamResumedEvent.parse(args.event);
         next = {
           ...next,
           paused: false,
@@ -156,41 +223,48 @@ export class CoreStreamProcessor {
         };
         break;
 
-      case "events.iterate.com/stream/created":
-        if (args.event.offset !== 1) {
+      case "events.iterate.com/stream/created": {
+        const event = StreamCreatedEvent.parse(args.event);
+        const payload = parsedPayload(event);
+        if (event.offset !== 1) {
           throw new Error(
             "events.iterate.com/stream/created must be the first event and have offset 1",
           );
         }
         next = {
           ...next,
-          projectId: args.event.payload.projectId,
-          path: args.event.payload.path,
-          createdAt: args.event.createdAt,
+          projectId: payload.projectId,
+          path: payload.path,
+          createdAt: event.createdAt,
         };
         break;
+      }
 
-      case "events.iterate.com/stream/woken":
+      case "events.iterate.com/stream/woken": {
+        const event = StreamWokenEvent.parse(args.event);
+        const payload = parsedPayload(event);
         // A new stream incarnation means every previous delivery connection
         // died with the old one. Clearing the roster here is what keeps it
         // truthful without heartbeats: surviving subscribers re-dial and their
         // fresh subscriber-connected events re-land below.
         next = {
           ...next,
-          incarnationId: args.event.payload.incarnationId,
+          incarnationId: payload.incarnationId,
           connectionsByKey: {},
         };
         break;
+      }
 
       case "events.iterate.com/stream/subscriber-connected": {
-        const { subscriptionKey, direction, subscriber } = args.event.payload;
+        const event = StreamSubscriberConnectedEvent.parse(args.event);
+        const { subscriptionKey, direction, subscriber } = parsedPayload(event);
         next = {
           ...next,
           connectionsByKey: {
             ...next.connectionsByKey,
             [subscriptionKey]: {
               direction,
-              connectedAtOffset: args.event.offset,
+              connectedAtOffset: event.offset,
               ...(subscriber === undefined ? {} : { subscriber }),
             },
           },
@@ -204,7 +278,7 @@ export class CoreStreamProcessor {
             processorsBySlug: {
               ...next.processorsBySlug,
               [announcement.slug]: {
-                announcedAtOffset: args.event.offset,
+                announcedAtOffset: event.offset,
                 announcement,
               },
             },
@@ -214,31 +288,40 @@ export class CoreStreamProcessor {
       }
 
       case "events.iterate.com/stream/subscriber-disconnected": {
-        const { [args.event.payload.subscriptionKey]: _closed, ...connectionsByKey } =
-          next.connectionsByKey;
+        const event = StreamSubscriberDisconnectedEvent.parse(args.event);
+        const payload = parsedPayload(event);
+        const { [payload.subscriptionKey]: _closed, ...connectionsByKey } = next.connectionsByKey;
         next = { ...next, connectionsByKey };
         break;
       }
 
-      case "events.iterate.com/stream/configured":
+      case "events.iterate.com/stream/configured": {
+        const event = StreamConfiguredEvent.parse(args.event);
+        const payload = parsedPayload(event);
         next = {
           ...next,
           config: {
             ...next.config,
-            ...args.event.payload.config,
+            ...payload.config,
           },
         };
         break;
+      }
 
-      case "events.iterate.com/stream/metadata-updated":
+      case "events.iterate.com/stream/metadata-updated": {
+        const event = StreamMetadataUpdatedEvent.parse(args.event);
+        const payload = parsedPayload(event);
         next = {
           ...next,
-          metadata: args.event.payload.metadata,
+          metadata: payload.metadata,
         };
         break;
+      }
 
       case "events.iterate.com/stream/child-stream-created": {
-        const announcedPath = args.event.payload.childPath;
+        const event = StreamChildStreamCreatedEvent.parse(args.event);
+        const payload = parsedPayload(event);
+        const announcedPath = payload.childPath;
         let childPath: string | null;
         if (announcedPath === state.path) {
           childPath = null;
@@ -264,29 +347,38 @@ export class CoreStreamProcessor {
         break;
       }
 
-      case "events.iterate.com/stream/subscription-configured":
+      case "events.iterate.com/stream/subscription-configured": {
+        const event = StreamSubscriptionConfiguredEvent.parse(args.event);
+        const payload = parsedPayload(event);
         next = {
           ...next,
           subscriptionsByKey: {
             ...next.subscriptionsByKey,
-            [args.event.payload.subscriptionKey]: {
+            [payload.subscriptionKey]: {
               latestConfiguredEvent: {
-                offset: args.event.offset,
-                type: args.event.type,
-                payload: args.event.payload,
-                createdAt: args.event.createdAt,
+                offset: event.offset,
+                type: event.type,
+                payload,
+                createdAt: event.createdAt,
               },
             },
           },
         };
         break;
+      }
 
       case "events.iterate.com/stream/subscription-removed": {
-        const { [args.event.payload.subscriptionKey]: _removed, ...subscriptionsByKey } =
+        const event = StreamSubscriptionRemovedEvent.parse(args.event);
+        const payload = parsedPayload(event);
+        const { [payload.subscriptionKey]: _removed, ...subscriptionsByKey } =
           next.subscriptionsByKey;
         next = { ...next, subscriptionsByKey };
         break;
       }
+
+      case "events.iterate.com/stream/error-occurred":
+        StreamErrorOccurredEvent.parse(args.event);
+        break;
 
       default:
         break;

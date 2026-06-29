@@ -58,7 +58,7 @@ const textEncoder = new TextEncoder();
 // - 4: subscriber presence — connectionsByKey roster added; processorsBySlug
 //      reshaped to fold contract announcements from subscriber-connected
 //      events instead of the removed processor-registered event.
-// - 5: stream coordinate field renamed from projectId to projectId.
+// - 5: stream coordinate fields normalized to projectId/path.
 const CORE_STATE_VERSION = 5;
 
 // How long a stream may hold idle OUTBOUND delivery connections before the
@@ -526,9 +526,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (args.idempotencyKey !== undefined) {
       return this.#readEventByIdempotencyKey(args.idempotencyKey);
     }
-    const event = this.#readEventByOffset(args.offset);
-    if (event === undefined) throw new Error(`No stream event found at offset ${args.offset}.`);
-    return event;
+    return this.#readEventByOffset(args.offset);
   }
 
   /**
@@ -622,18 +620,6 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
   }
 
-  reduce(args: {
-    event: StreamEvent;
-    coreProcessorState?: CoreProcessorState;
-  }): CoreProcessorState {
-    const base = args.coreProcessorState ?? this.#coreProcessorState;
-
-    return this.coreProcessor.reduceEvent({
-      event: args.event,
-      state: base,
-    });
-  }
-
   /**
    * Subscribes to catch-up then live event batches.
    *
@@ -674,18 +660,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       subscriptionKey,
       direction: "inbound",
     });
-  }
-
-  subscribeOutbound(args: {
-    subscriptionKey: string;
-    processEventBatch: ProcessEventBatch;
-    replayAfterOffset?: number;
-    /** Only deliver these event types. Omit (or include `"*"`) for everything. */
-    eventTypes?: readonly string[];
-    /** Who is subscribing; lands on the stream's presence roster. */
-    subscriber?: LiveStreamSubscriberDescriptor;
-  }): { subscriptionKey: string; streamMaxOffset: number; unsubscribe(): void } {
-    return this.coreProcessor.openConnection({ ...args, direction: "outbound" });
   }
 
   getProcessorRuntimeState(args: { subscriptionKey: string }) {

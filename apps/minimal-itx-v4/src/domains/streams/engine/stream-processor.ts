@@ -1,4 +1,3 @@
-import { RpcTarget } from "capnweb";
 import type { z } from "zod";
 import type { Stream, StreamEvent, StreamEventInput } from "../types.ts";
 import {
@@ -181,13 +180,10 @@ export type StreamProcessorConstructorArgs<
  * only written after the hooks (plus any `blockProcessorWhile` work) succeed.
  * `ingest` itself must not be overridden.
  */
-// Extending RpcTarget is a convenience for exposing processors directly over Cap'n Web.
-// The processing model should not fundamentally depend on RPC; we may remove this base
-// class dependency once processor hosting has settled.
 export abstract class StreamProcessor<
   Contract extends StreamProcessorContract,
   Deps extends object = object,
-> extends RpcTarget {
+> {
   abstract readonly contract: Contract;
   protected readonly stream: Stream;
   protected readonly deps: Deps;
@@ -209,7 +205,6 @@ export abstract class StreamProcessor<
   readonly #eventWaiters = new Set<EventWaiter>();
 
   constructor(args: StreamProcessorConstructorArgs<Contract, Deps>) {
-    super();
     // Base deps are destructured out; everything else is the subclass's Deps.
     const { stream, keepAliveWhile, readState, writeState, ...deps } = args;
     this.stream = stream;

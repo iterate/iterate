@@ -1,60 +1,20 @@
 import { env, RpcTarget } from "cloudflare:workers";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { durableObjectProcessorSubscriber } from "../streams/engine/shared/callable-subscriber.ts";
+import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
 import { StreamRpcTarget } from "../streams/rpc-targets.ts";
-import { ItxCapabilityHostRpcTarget } from "../itx/capability-host-rpc-target.ts";
+import { subscriptionConfiguredEvent } from "../streams/subscription-event.ts";
 import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
 import { type ProvideCapabilityInput } from "../itx/itx-processor-implementation.ts";
-import { withInvokeCapabilityFallback } from "../itx/path-proxy.ts";
+import { rejectBuiltinCollision, withInvokeCapabilityFallback } from "../itx/path-proxy.ts";
 import type { CfExecutionContext, ItxAuth } from "../itx/types.ts";
-import type { Stream } from "../streams/types.ts";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
 import type { Agent, AgentCollection } from "./types.ts";
 
 function normalizeAgentPath(path: string): string {
-  const normalized = path === "" ? "/" : path.startsWith("/") ? path : `/${path}`;
+  const normalized = normalizePath(path);
   if (!normalized.startsWith("/agents/")) {
     throw new Error(`agent path must start with "/agents/", got "${normalized}"`);
   }
   return normalized;
-}
-
-function agentProcessorSubscriptionEvent(input: { path: string; projectId: string }) {
-  const path = normalizeAgentPath(input.path);
-  return {
-    type: "events.iterate.com/stream/subscription-configured",
-    idempotencyKey: `stream-subscription:${input.projectId}:${path}:${AgentProcessorContract.slug}`,
-    payload: {
-      subscriptionKey: AgentProcessorContract.slug,
-      subscriber: durableObjectProcessorSubscriber({
-        bindingName: "AGENT",
-        durableObjectName: DurableObjectNameCodec.stringify({
-          projectId: input.projectId,
-          path,
-        }),
-        processorName: AgentProcessorContract.slug,
-      }),
-    },
-  } satisfies Parameters<Stream["append"]>[0];
-}
-
-function agentItxProcessorSubscriptionEvent(input: { path: string; projectId: string }) {
-  const path = normalizeAgentPath(input.path);
-  return {
-    type: "events.iterate.com/stream/subscription-configured",
-    idempotencyKey: `stream-subscription:${input.projectId}:${path}:${ItxProcessorContract.slug}`,
-    payload: {
-      subscriptionKey: ItxProcessorContract.slug,
-      subscriber: durableObjectProcessorSubscriber({
-        bindingName: "ITX",
-        durableObjectName: DurableObjectNameCodec.stringify({
-          projectId: input.projectId,
-          path,
-        }),
-        processorName: ItxProcessorContract.slug,
-      }),
-    },
-  } satisfies Parameters<Stream["append"]>[0];
 }
 
 export class AgentCollectionRpcTarget extends RpcTarget implements AgentCollection {
@@ -77,7 +37,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentCollecti
   }
 }
 
-export class AgentRpcTarget extends ItxCapabilityHostRpcTarget implements Agent {
+export class AgentRpcTarget extends RpcTarget implements Agent {
   constructor(
     readonly props: { auth: ItxAuth; ctx: CfExecutionContext; path: string; projectId: string },
   ) {
@@ -87,16 +47,7 @@ export class AgentRpcTarget extends ItxCapabilityHostRpcTarget implements Agent 
     return withInvokeCapabilityFallback(this);
   }
 
-  get durableObjectStub() {
-    return env.AGENT.getByName(
-      DurableObjectNameCodec.stringify({
-        projectId: this.props.projectId,
-        path: this.props.path,
-      }),
-    );
-  }
-
-  protected itxProcessor() {
+  #itx() {
     return env.ITX.getByName(
       DurableObjectNameCodec.stringify({
         projectId: this.props.projectId,
@@ -105,7 +56,7 @@ export class AgentRpcTarget extends ItxCapabilityHostRpcTarget implements Agent 
     );
   }
 
-  #projectItxProcessor() {
+  #projectItx() {
     return env.ITX.getByName(
       DurableObjectNameCodec.stringify({
         projectId: this.props.projectId,
@@ -158,42 +109,63 @@ export class AgentRpcTarget extends ItxCapabilityHostRpcTarget implements Agent 
     return `agent ${this.props.projectId}:${this.props.path}`;
   }
 
-  override async provideCapability(input: ProvideCapabilityInput) {
+  async provideCapability(input: ProvideCapabilityInput) {
+    rejectBuiltinCollision(this, input.path);
     await this.#ensureProcessorsConfigured();
-    return await super.provideCapability(input);
+    await this.#itx().provideCapability(input);
+    return {
+      revoke: async () => {
+        await this.#itx().revokeCapability({ path: input.path });
+      },
+    };
   }
 
-  override async revokeCapability(input: { path: string[] }) {
+  async revokeCapability(input: { path: string[] }) {
     await this.#ensureProcessorsConfigured();
-    return await super.revokeCapability(input);
+    await this.#itx().revokeCapability(input);
   }
 
-  override async runScript(code: string) {
+  async runScript(code: string) {
     await this.#ensureProcessorsConfigured();
-    return await super.runScript(code);
+    return await this.#itx().runScript(code);
   }
 
-  override async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
+  async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
     await this.#ensureProcessorsConfigured();
     try {
-      return await this.itxProcessor().invokeCapability({ args, path });
+      return await this.#itx().invokeCapability({ args, path });
     } catch (error) {
       if (!isMissingCapabilityError(error, path)) throw error;
-      return await this.#projectItxProcessor().invokeCapability({ args, path });
+      return await this.#projectItx().invokeCapability({ args, path });
     }
   }
 
+  // Configure this agent's AGENT + ITX processors on its stream the first time
+  // any capability op runs. `subscriptionKey` is the sole identity (no
+  // idempotency key), so we append only the subscriptions the stream's reduced
+  // state doesn't already carry — re-running this is then a cheap no-op.
   async #ensureProcessorsConfigured() {
-    await this.stream.append(
-      agentProcessorSubscriptionEvent({
-        path: this.props.path,
+    const desired = [
+      subscriptionConfiguredEvent({
         projectId: this.props.projectId,
-      }),
-      agentItxProcessorSubscriptionEvent({
         path: this.props.path,
-        projectId: this.props.projectId,
+        bindingName: "AGENT",
+        processorName: AgentProcessorContract.slug,
       }),
+      subscriptionConfiguredEvent({
+        projectId: this.props.projectId,
+        path: this.props.path,
+        bindingName: "ITX",
+        processorName: ItxProcessorContract.slug,
+      }),
+    ];
+    const { coreProcessorState } = await this.stream.runtimeState();
+    const missing = desired.filter(
+      (event) => !(event.payload.subscriptionKey in coreProcessorState.subscriptionsByKey),
     );
+    if (missing.length > 0) {
+      await this.stream.append(...missing);
+    }
   }
 }
 

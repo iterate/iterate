@@ -2,20 +2,16 @@ import { env, RpcTarget } from "cloudflare:workers";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { DynamicWorkerRuntimeRpcTarget } from "../dynamic-workers/rpc-targets.ts";
 import { AgentCollectionRpcTarget } from "../agents/rpc-targets.ts";
-import {
-  RepoCollectionRpcTarget,
-  RepoRpcTarget,
-  repoProcessorSubscriptionEvent,
-} from "../repos/rpc-targets.ts";
+import { RepoCollectionRpcTarget, RepoRpcTarget } from "../repos/rpc-targets.ts";
+import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
 import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "../repos/project-repo.ts";
-import { durableObjectProcessorSubscriber } from "../streams/engine/shared/callable-subscriber.ts";
 import { StreamCollectionRpcTarget, StreamRpcTarget } from "../streams/rpc-targets.ts";
-import { ItxCapabilityHostRpcTarget } from "../itx/capability-host-rpc-target.ts";
+import { subscriptionConfiguredEvent } from "../streams/subscription-event.ts";
 import { replayPath } from "../itx/live-capability.ts";
-import { withInvokeCapabilityFallback } from "../itx/path-proxy.ts";
+import { rejectBuiltinCollision, withInvokeCapabilityFallback } from "../itx/path-proxy.ts";
+import { type ProvideCapabilityInput } from "../itx/itx-processor-implementation.ts";
 import type { CfExecutionContext, ItxAuth, ItxAuthCredentials } from "../itx/types.ts";
 import { TRUSTED_INTERNAL_ITX_TOKEN } from "../../auth.ts";
-import type { Stream } from "../streams/types.ts";
 import type { Project, ProjectCollection, ProjectWorker } from "./types.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 
@@ -30,24 +26,6 @@ function projectRootStream(props: { auth: ItxAuth; projectId: string }) {
     projectId: props.projectId,
     path: "/",
   });
-}
-
-function projectProcessorSubscriptionEvent(projectId: string) {
-  return {
-    type: "events.iterate.com/stream/subscription-configured",
-    idempotencyKey: `stream-subscription:${projectId}:${ProjectProcessorContract.slug}`,
-    payload: {
-      subscriptionKey: ProjectProcessorContract.slug,
-      subscriber: durableObjectProcessorSubscriber({
-        bindingName: "PROJECT",
-        durableObjectName: DurableObjectNameCodec.stringify({
-          projectId,
-          path: "/",
-        }),
-        processorName: ProjectProcessorContract.slug,
-      }),
-    },
-  } satisfies Parameters<Stream["append"]>[0];
 }
 
 export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectCollection {
@@ -78,8 +56,18 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
     });
 
     const [, , createRequested] = await stream.append(
-      projectProcessorSubscriptionEvent(args.projectId),
-      repoProcessorSubscriptionEvent({ projectId: args.projectId, path: PROJECT_REPO_PATH }),
+      subscriptionConfiguredEvent({
+        projectId: args.projectId,
+        path: "/",
+        bindingName: "PROJECT",
+        processorName: ProjectProcessorContract.slug,
+      }),
+      subscriptionConfiguredEvent({
+        projectId: args.projectId,
+        path: PROJECT_REPO_PATH,
+        bindingName: "REPO",
+        processorName: RepoProcessorContract.slug,
+      }),
       {
         type: "events.iterate.com/project/create-requested",
         idempotencyKey: `project-create-requested:${args.projectId}`,
@@ -152,7 +140,7 @@ class ProjectWorkerRpcTarget extends RpcTarget implements ProjectWorker {
   }
 }
 
-export class ProjectRpcTarget extends ItxCapabilityHostRpcTarget implements Project {
+export class ProjectRpcTarget extends RpcTarget implements Project {
   constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -169,10 +157,32 @@ export class ProjectRpcTarget extends ItxCapabilityHostRpcTarget implements Proj
     return this.durableObjectStub.describe();
   }
 
-  protected itxProcessor() {
+  #itx() {
     return env.ITX.getByName(
       DurableObjectNameCodec.stringify({ path: "/", projectId: this.props.projectId }),
     );
+  }
+
+  async provideCapability(input: ProvideCapabilityInput) {
+    rejectBuiltinCollision(this, input.path);
+    await this.#itx().provideCapability(input);
+    return {
+      revoke: async () => {
+        await this.#itx().revokeCapability({ path: input.path });
+      },
+    };
+  }
+
+  async revokeCapability(input: { path: string[] }) {
+    await this.#itx().revokeCapability(input);
+  }
+
+  async runScript(code: string) {
+    return await this.#itx().runScript(code);
+  }
+
+  invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
+    return this.#itx().invokeCapability({ args, path });
   }
 
   get streams() {

@@ -70,7 +70,8 @@ type DurableObjectNameCodecType = {
   parse(name: string, options: AllowNullProjectIdOptions): ParsedDurableObjectName;
 };
 
-function normalizePath(path: string): string {
+/** Normalizes a path to a leading-slash form (`""` → `"/"`, `"x"` → `"/x"`). */
+export function normalizePath(path: string): string {
   return path === "" ? "/" : path.startsWith("/") ? path : `/${path}`;
 }
 
