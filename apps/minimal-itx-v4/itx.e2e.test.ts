@@ -177,8 +177,6 @@ describe("minimal itx v4", () => {
 
   test("Authenticated itx whoami returns principal", async () => {
     using session = withItxSession();
-    session.authenticate();
-    session.authenticate();
     using itx = session.authenticate({
       type: "token",
       token: {
