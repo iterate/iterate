@@ -6,7 +6,7 @@
   },
   "include": [
     "src/client.ts",
-    "itx.e2e.test.ts",
+    "*.e2e.test.ts",
     "test-helpers.ts",
     "scripts/*.ts",
     "vitest.config.ts"
