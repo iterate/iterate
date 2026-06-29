@@ -1018,9 +1018,18 @@ importers:
 
   lint:
     devDependencies:
+      '@types/eslint':
+        specifier: 8.56.12
+        version: 8.56.12
+      '@types/esquery':
+        specifier: ^1.5.4
+        version: 1.5.4
       '@types/estree':
         specifier: 1.0.9
         version: 1.0.9
+      '@typescript-eslint/types':
+        specifier: 8.56.1
+        version: 8.56.1
 
   packages/iterate:
     dependencies:
@@ -7116,6 +7125,9 @@ packages:
 
   '@types/eslint@8.56.12':
     resolution: {integrity: sha512-03ruubjWyOHlmljCVoxSuNDdmfZDzsrrz0P2LeJsOXr+ZwFQ+0yQIwNCwt/GYhV7Z31fgtXJTAEs+FYlEL851g==}
+
+  '@types/esquery@1.5.4':
+    resolution: {integrity: sha512-yYO4Q8H+KJHKW1rEeSzHxcZi90durqYgWVfnh5K6ZADVBjBv2e1NEveYX5yT2bffgN7RqzH3k9930m+i2yBoMA==}
 
   '@types/estree-jsx@1.0.5':
     resolution: {integrity: sha512-52CcUVNFyfb1A2ALocQw/Dd1BQFNmSdkuC3BkZ6iqhdMfQz7JWOFRuJFloOzjk+6WijU56m9oKXFAXc7o3Towg==}
@@ -20563,6 +20575,10 @@ snapshots:
     dependencies:
       '@types/estree': 1.0.9
       '@types/json-schema': 7.0.15
+
+  '@types/esquery@1.5.4':
+    dependencies:
+      '@types/estree': 1.0.9
 
   '@types/estree-jsx@1.0.5':
     dependencies:

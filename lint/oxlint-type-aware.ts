@@ -7,7 +7,6 @@ import {
   SymbolFlags,
   type Project,
   type Snapshot,
-  type Symbol,
   type Type,
 } from "@typescript/native-preview/unstable/sync";
 import type { CallExpression, Expression, Node } from "estree";

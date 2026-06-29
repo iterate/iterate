@@ -6,6 +6,9 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@types/estree": "1.0.9"
+    "@types/eslint": "8.56.12",
+    "@types/esquery": "^1.5.4",
+    "@types/estree": "1.0.9",
+    "@typescript-eslint/types": "8.56.1"
   }
 }

@@ -4,15 +4,31 @@ import { dirname, resolve } from "node:path";
 import { SignatureKind } from "@typescript/native-preview/unstable/sync";
 import esquery from "esquery";
 import unicorn from "eslint-plugin-unicorn";
+import type { ESLint, Rule, Scope, SourceCode } from "eslint";
+import type { Program, Node, Expression } from "estree";
 
-import { getTypeAwareLintService } from "./lint/oxlint-type-aware.ts";
+import { getTypeAwareLintService, type TypeAwareLintFileService } from "./oxlint-type-aware.ts";
+
+type ContractTypeReference = {
+  contractStart: number;
+  contractText: string;
+};
+
+type TypeTextReference = {
+  start: number;
+  text: string;
+};
+
+type ImportKindNode = {
+  importKind?: string;
+};
+
+type RuleLike = NonNullable<ESLint.Plugin["rules"]>[string];
 
 const LIFECYCLE_HOOKS = new Set(["beforeAll", "beforeEach", "afterAll", "afterEach"]);
 const VI_MOCK_CALLS = new Set(["vi.mock", "vi.doMock"]);
 const PROPERTY_MATCHERS = new Set(["toBe", "toEqual", "toStrictEqual"]);
-
-/** @param {string} name */
-const getExpectedName = (name) => {
+const getExpectedName = (name: string) => {
   const acronyms = ["API", "HTML", "JSON", "ORPC", "MCP"];
   const acronymStart = acronyms.find(
     (a) => name.toLowerCase().startsWith(a.toLowerCase()) && name[a.length]?.match(/[A-Z]/),
@@ -23,9 +39,7 @@ const getExpectedName = (name) => {
     name.slice(capitaliseLetters).replace(/Schema$/, "")
   );
 };
-
-/** @param {import("estree").MemberExpression | import("estree").Identifier | import("estree").CallExpression} callee */
-const getCalleeName = (callee) => {
+const getCalleeName = (callee: any) => {
   if (callee.type === "Identifier") return callee.name;
   if (callee.type !== "MemberExpression") return null;
   if (callee.property.type === "Identifier") return callee.property.name;
@@ -34,23 +48,14 @@ const getCalleeName = (callee) => {
   }
   return null;
 };
-
-/** @param {import("estree").Node | undefined} node */
-function getPropertyName(node) {
+function getPropertyName(node: Node | undefined) {
   if (!node) return undefined;
   if (node.type === "Identifier") return node.name;
   if (node.type === "Literal" && typeof node.value === "string") return node.value;
   return undefined;
 }
-
-/** @param {string} filename */
-function normalizePathForLint(filename) {
-  return filename.replaceAll("\\", "/");
-}
-
-/** @param {string} filename */
-function isAllowedRawDurableObjectBindingAccessFile(filename) {
-  const path = normalizePathForLint(filename);
+function isAllowedRawDurableObjectBindingAccessFile(filename: string) {
+  const path = filename.replaceAll("\\", "/");
 
   if (!path.includes("/apps/os/src/")) return true;
   if (path.includes("/apps/os/docs/")) return true;
@@ -69,9 +74,7 @@ function isAllowedRawDurableObjectBindingAccessFile(filename) {
     path.endsWith("-capability.ts")
   );
 }
-
-/** @param {import("estree").Node | undefined} node */
-function getRawEnvBindingName(node) {
+function getRawEnvBindingName(node: any) {
   if (!node || node.type !== "MemberExpression") return undefined;
   const bindingName = getPropertyName(node.property);
   if (!bindingName) return undefined;
@@ -85,9 +88,7 @@ function getRawEnvBindingName(node) {
   }
   return undefined;
 }
-
-/** @param {import("estree").Node | undefined} node */
-function getTestLintCallName(node) {
+function getTestLintCallName(node: any): string | undefined {
   if (!node) return undefined;
   if (node.type === "Identifier") return node.name;
   if (node.type !== "MemberExpression") return undefined;
@@ -96,34 +97,21 @@ function getTestLintCallName(node) {
   if (!objectName || !propertyName) return undefined;
   return `${objectName}.${propertyName}`;
 }
-
-/** @param {import("estree").Node} node */
-function getTestLintCallObjectName(node) {
+function getTestLintCallObjectName(node: any): string | undefined {
   if (node.type === "Identifier") return node.name;
   if (node.type === "MemberExpression") return getTestLintCallName(node);
   if (node.type === "CallExpression") return getTestLintCallName(node.callee);
   return undefined;
 }
-
-/** @param {import("estree").Node} callee */
-function isDescribeCall(callee) {
+function isDescribeCall(callee: any) {
   const name = getTestLintCallName(callee);
   return name === "describe" || Boolean(name?.startsWith("describe."));
 }
-
-/** @param {import("estree").Node} callee */
-function isLifecycleHookCall(callee) {
-  return callee.type === "Identifier" && LIFECYCLE_HOOKS.has(callee.name);
-}
-
-/** @param {import("estree").Node} callee */
-function isViMockCall(callee) {
+function isViMockCall(callee: any) {
   const name = getTestLintCallName(callee);
   return Boolean(name && VI_MOCK_CALLS.has(name));
 }
-
-/** @param {import("estree").Node | undefined} node */
-function isTestCallExpression(node) {
+function isTestCallExpression(node: any): boolean {
   if (!node || node.type !== "CallExpression") return false;
   const name = getTestLintCallName(node.callee);
   if (name === "test" || name === "it" || name?.startsWith("test.") || name?.startsWith("it.")) {
@@ -131,12 +119,10 @@ function isTestCallExpression(node) {
   }
   return isTestCallExpression(node.callee);
 }
-
-/** @param {import("estree").Node} node */
-function isFunctionLikeDeclaration(node) {
+function isFunctionLikeDeclaration(node: any) {
   if (node.type === "FunctionDeclaration" || node.type === "ClassDeclaration") return true;
   if (node.type !== "VariableDeclaration") return false;
-  return node.declarations.some((declarator) => {
+  return node.declarations.some((declarator: any) => {
     const init = declarator.init;
     return (
       init &&
@@ -147,15 +133,7 @@ function isFunctionLikeDeclaration(node) {
   });
 }
 
-/**
- * Counts the source lines spanned by a function's body content: the statements between the
- * braces, or the expression of a concise arrow. Brace-only lines don't count, so
- * `function f() {\n  return x;\n}` is 1 line.
- *
- * @param {import("eslint").SourceCode} sourceCode
- * @param {import("estree").Function} fn
- */
-function getFunctionBodyLineCount(sourceCode, fn) {
+function getFunctionBodyLineCount(sourceCode: SourceCode, fn: any) {
   const body = fn.body;
   if (!body) return Infinity; // overload signatures / declare function
   let start;
@@ -173,73 +151,45 @@ function getFunctionBodyLineCount(sourceCode, fn) {
   return sourceCode.getText().slice(start, end).split("\n").length;
 }
 
-/**
- * @param {import("eslint").SourceCode} sourceCode
- * @param {import("estree").Function} fn
- */
-function hasCommentInsideFunction(sourceCode, fn) {
+function hasCommentInsideFunction(sourceCode: SourceCode, fn: any) {
   const bodyRange = fn.body?.range;
   if (!bodyRange) return false;
 
-  return sourceCode.getAllComments().some((comment) => {
+  return sourceCode.getAllComments().some((comment: any) => {
     if (!comment.range) return false;
     return comment.range[0] > bodyRange[0] && comment.range[1] < bodyRange[1];
   });
 }
 
-/**
- * @param {import("eslint").SourceCode} sourceCode
- * @param {import("estree").Node} node
- */
-function hasLeadingJsDocComment(sourceCode, node) {
+function hasLeadingJsDocComment(sourceCode: SourceCode, node: any) {
   const nodeStartLine = node.loc?.start.line;
 
-  return sourceCode.getCommentsBefore(node).some((comment) => {
+  return sourceCode.getCommentsBefore(node).some((comment: any) => {
     if (comment.type !== "Block") return false;
     if (!comment.value.trim().startsWith("*")) return false;
     return !nodeStartLine || comment.loc?.end.line === nodeStartLine - 1;
   });
 }
 
-/**
- * @param {import("eslint").SourceCode} sourceCode
- * @param {import("estree").Function} fn
- */
-function hasTypePredicateReturnType(sourceCode, fn) {
+function hasTypePredicateReturnType(sourceCode: SourceCode, fn: any) {
   const returnType = fn.returnType || fn.typeAnnotation;
   if (!returnType) return false;
 
   const returnTypeText = sourceCode.getText(returnType);
   return /\basserts\b/.test(returnTypeText) || /\bis\b/.test(returnTypeText);
 }
-
-/** @param {import("estree").Function} fn */
-function hasIfStatement(fn) {
-  return esquery.match(fn, esquery.parse("IfStatement")).length > 0;
-}
-
-/**
- * @param {import("eslint").Scope.Scope | null} scope
- * @param {string} name
- */
-function findVariableInScopeChain(scope, name) {
+function findVariableInScopeChain(scope: Scope.Scope | null, name: string) {
   for (let current = scope; current; current = current.upper) {
-    const variable = current.variables.find((v) => v.name === name);
+    const variable = current.variables.find((v: any) => v.name === name);
     if (variable) return variable;
   }
   return undefined;
 }
-
-/** @param {string} text */
-function compactTypeText(text) {
+function compactTypeText(text: string) {
   return text.replace(/\s+/g, "");
 }
 
-/**
- * @param {import("eslint").Rule.RuleContext} context
- * @param {import("estree").ClassDeclaration | import("estree").ClassExpression} node
- */
-function getMechanicalClassImplContracts(context, node) {
+function getMechanicalClassImplContracts(context: Rule.RuleContext, node: any) {
   if (!node.body.range) return undefined;
   const classText = context.sourceCode.getText(node);
   const headerLength = node.body.range[0] - (node.range?.[0] || 0);
@@ -252,14 +202,11 @@ function getMechanicalClassImplContracts(context, node) {
   }));
 }
 
-/**
- * @param {string} classHeader
- */
-function getImplementedContractTypes(classHeader) {
+function getImplementedContractTypes(classHeader: string) {
   const implementsMatch = classHeader.match(/\bimplements\b/);
   if (!implementsMatch) return [];
 
-  const implementsStart = implementsMatch.index + implementsMatch[0].length;
+  const implementsStart = (implementsMatch.index || 0) + implementsMatch[0].length;
   const implementsText = classHeader.slice(implementsStart);
   return splitTopLevelTypes(implementsText)
     .flatMap((candidate) =>
@@ -268,11 +215,7 @@ function getImplementedContractTypes(classHeader) {
     .filter(Boolean);
 }
 
-/**
- * @param {string} text
- * @param {number} start
- */
-function getReadableContractTypes(text, start) {
+function getReadableContractTypes(text: string, start: number): ContractTypeReference[] {
   const generic = getGenericTypeInfo(text);
   if (!generic) {
     return [{ contractText: text, contractStart: start }];
@@ -281,11 +224,8 @@ function getReadableContractTypes(text, start) {
     getReadableContractTypes(argument.text, start + argument.start),
   );
 }
-
-/** @param {string} text */
-function splitTopLevelTypes(text) {
-  /** @type {{ text: string; start: number }[]} */
-  const types = [];
+function splitTopLevelTypes(text: string): TypeTextReference[] {
+  const types: TypeTextReference[] = [];
   let depth = 0;
   let start = 0;
   for (let index = 0; index < text.length; index++) {
@@ -300,13 +240,12 @@ function splitTopLevelTypes(text) {
   return types;
 }
 
-/**
- * @param {{ text: string; start: number }[]} types
- * @param {string} source
- * @param {number} start
- * @param {number} end
- */
-function appendTopLevelType(types, source, start, end) {
+function appendTopLevelType(
+  types: TypeTextReference[],
+  source: string,
+  start: number,
+  end: number,
+) {
   const raw = source.slice(start, end);
   const trimmed = raw.trim();
   if (!trimmed) return;
@@ -315,9 +254,7 @@ function appendTopLevelType(types, source, start, end) {
     start: start + raw.indexOf(trimmed),
   });
 }
-
-/** @param {string} text */
-function getGenericTypeInfo(text) {
+function getGenericTypeInfo(text: string) {
   const openBracket = text.indexOf("<");
   if (openBracket === -1) return undefined;
   const closeBracket = findMatchingGenericClose(text, openBracket);
@@ -339,11 +276,7 @@ function getGenericTypeInfo(text) {
   };
 }
 
-/**
- * @param {string} text
- * @param {number} openBracket
- */
-function findMatchingGenericClose(text, openBracket) {
+function findMatchingGenericClose(text: string, openBracket: number) {
   let depth = 0;
   for (let index = openBracket; index < text.length; index++) {
     const character = text[index];
@@ -354,15 +287,11 @@ function findMatchingGenericClose(text, openBracket) {
   }
   return undefined;
 }
-
-/** @param {import("estree").Node} node */
-function getClassElementName(node) {
+function getClassElementName(node: any) {
   if (!("key" in node)) return undefined;
   return getPropertyName(node.key);
 }
-
-/** @param {import("estree").Node} node */
-function getClassElementImplementationFunction(node) {
+function getClassElementImplementationFunction(node: any) {
   if (node.type === "MethodDefinition") return node.value;
   if (node.type !== "PropertyDefinition" && node.type !== "FieldDefinition") return undefined;
   const value = node.value;
@@ -371,19 +300,13 @@ function getClassElementImplementationFunction(node) {
   }
   return value;
 }
-
-/** @param {string} text */
-function isSimpleImplementationParameterType(text) {
+function isSimpleImplementationParameterType(text: string) {
   return /^(bigint|boolean|null|number|object|string|symbol|undefined|unknown|void)(\[\])?$/.test(
     compactTypeText(text),
   );
 }
 
-/**
- * @param {import("eslint").Rule.RuleContext} context
- * @param {import("estree").Node} parameter
- */
-function getParameterTypeText(context, parameter) {
+function getParameterTypeText(context: Rule.RuleContext, parameter: any) {
   if (parameter.type === "AssignmentPattern") return getParameterTypeText(context, parameter.left);
   if (parameter.type === "RestElement") return getParameterTypeText(context, parameter.argument);
   if (!("typeAnnotation" in parameter)) return undefined;
@@ -391,30 +314,25 @@ function getParameterTypeText(context, parameter) {
   return annotation ? context.sourceCode.getText(annotation) : undefined;
 }
 
-/**
- * @param {import("eslint").Rule.RuleContext} context
- * @param {import("estree").Node} element
- */
-function hasOnlySimpleImplementationParameterTypes(context, element) {
+function hasOnlySimpleImplementationParameterTypes(context: Rule.RuleContext, element: any) {
   const parameters = getClassElementImplementationFunction(element)?.params || [];
   if (parameters.length !== 1) return false;
-  return parameters.every((parameter) => {
+  return parameters.every((parameter: any) => {
     const typeText = getParameterTypeText(context, parameter);
     return typeText !== undefined && isSimpleImplementationParameterType(typeText);
   });
 }
 
-/**
- * @param {import("./lint/oxlint-type-aware.ts").TypeAwareLintFileService} fileService
- * @param {{ name: string; position: number }} candidate
- */
-function getMechanicalClassImplContractMethods(fileService, candidate) {
+function getMechanicalClassImplContractMethods(
+  fileService: TypeAwareLintFileService,
+  candidate: { name: string; position: number },
+) {
   const typed = fileService.resolveTypeByName(candidate.name, candidate.position);
   if (!typed) return undefined;
 
   return fileService.project.checker
     .getPropertiesOfType(typed.type)
-    .map((property) => {
+    .map((property: any) => {
       const propertyType = fileService.project.checker.getTypeOfSymbol(property);
       if (!propertyType) return undefined;
       const signature = fileService.project.checker.getSignaturesOfType(
@@ -424,24 +342,18 @@ function getMechanicalClassImplContractMethods(fileService, candidate) {
       if (!signature) return undefined;
       return {
         name: property.name,
-        parameters: signature.getParameters().map((parameter) => parameter.name),
+        parameters: signature.getParameters().map((parameter: any) => parameter.name),
         hasRestParameter: signature.hasRestParameter,
       };
     })
     .filter(Boolean);
 }
 
-/**
- * @param {{ parameters: string[]; hasRestParameter: boolean }} contractMethod
- * @param {string} contractName
- * @param {string} methodName
- * @param {{ defaultText?: string; name: string; optional: boolean }[]} implementationParameters
- */
 function expectedMechanicalClassImplParameterText(
-  contractMethod,
-  contractName,
-  methodName,
-  implementationParameters,
+  contractMethod: { parameters: string[]; hasRestParameter: boolean },
+  contractName: string,
+  methodName: string,
+  implementationParameters: { defaultText?: string; name: string; optional: boolean }[],
 ) {
   const quotedMethod = JSON.stringify(methodName);
   const parametersType = `Parameters<${contractName}[${quotedMethod}]>`;
@@ -461,29 +373,21 @@ function expectedMechanicalClassImplParameterText(
   }
   const names =
     implementationParameters.length === contractMethod.parameters.length
-      ? implementationParameters.map((parameter) => parameter.name)
+      ? implementationParameters.map((parameter: any) => parameter.name)
       : contractMethod.parameters;
   return `...[${names.join(", ")}]: ${parametersType}`;
 }
 
-/**
- * @param {import("eslint").Rule.RuleContext} context
- * @param {import("estree").Node} element
- */
-function getMethodParameterText(context, element) {
+function getMethodParameterText(context: Rule.RuleContext, element: any) {
   return (
     getClassElementImplementationFunction(element)
-      ?.params.map((parameter) => context.sourceCode.getText(parameter))
+      ?.params.map((parameter: any) => context.sourceCode.getText(parameter))
       .join(", ") || ""
   );
 }
 
-/**
- * @param {import("eslint").Rule.RuleContext} context
- * @param {import("estree").Node} element
- */
-function getMethodParameterInfo(context, element) {
-  return (getClassElementImplementationFunction(element)?.params || []).map((parameter) => {
+function getMethodParameterInfo(context: Rule.RuleContext, element: any) {
+  return (getClassElementImplementationFunction(element)?.params || []).map((parameter: any) => {
     if (parameter.type === "RestElement") {
       return {
         name: getPropertyName(parameter.argument) || "args",
@@ -504,11 +408,7 @@ function getMethodParameterInfo(context, element) {
   });
 }
 
-/**
- * @param {import("eslint").Rule.RuleContext} context
- * @param {import("estree").Node} element
- */
-function getMethodParameterRange(context, element) {
+function getMethodParameterRange(context: Rule.RuleContext, element: any) {
   const keyEnd = element.key?.range?.[1];
   const implementationFunction = getClassElementImplementationFunction(element);
   const bodyStart = implementationFunction?.body?.range?.[0];
@@ -532,23 +432,18 @@ function getMethodParameterRange(context, element) {
   return undefined;
 }
 
-/**
- * @param {import("eslint").Rule.RuleContext} context
- * @param {import("estree").Node} element
- * @param {string} expectedParameters
- * @param {import("eslint").Rule.RuleFixer} fixer
- */
-function fixMethodParameters(context, element, expectedParameters, fixer) {
+function fixMethodParameters(
+  context: Rule.RuleContext,
+  element: any,
+  expectedParameters: string,
+  fixer: Rule.RuleFixer,
+) {
   const range = getMethodParameterRange(context, element);
   if (!range) return null;
-  return fixer.replaceTextRange(range, expectedParameters);
+  return fixer.replaceTextRange([range[0], range[1]], expectedParameters);
 }
 
-/**
- * @param {import("eslint").Rule.RuleContext} context
- * @param {[number, number] | undefined} range
- */
-function getRangeLocation(context, range) {
+function getRangeLocation(context: Rule.RuleContext, range: [number, number] | undefined) {
   const start = range?.[0];
   const end = range?.[1];
   if (start === undefined || end === undefined) return undefined;
@@ -559,94 +454,66 @@ function getRangeLocation(context, range) {
   };
 }
 
-/**
- * @param {import("eslint").Rule.RuleContext} context
- * @param {import("estree").Node} element
- */
-function getMethodParameterLocation(context, element) {
-  return getRangeLocation(context, getMethodParameterRange(context, element));
-}
-
-/**
- * @param {import("eslint").Rule.RuleContext} context
- * @param {import("estree").Node} element
- */
-function getMethodReturnTypeLocation(context, element) {
+function getMethodReturnTypeLocation(context: Rule.RuleContext, element: any) {
   const implementationFunction = getClassElementImplementationFunction(element);
   const returnType = implementationFunction?.returnType || implementationFunction?.typeAnnotation;
   return getRangeLocation(context, returnType?.range);
 }
 
-/**
- * @param {import("eslint").Rule.RuleContext} context
- * @param {import("estree").Node} element
- */
-function hasDisallowedMethodReturnType(context, element) {
+function hasDisallowedMethodReturnType(context: Rule.RuleContext, element: any) {
   const implementationFunction = getClassElementImplementationFunction(element);
   const returnType = implementationFunction?.returnType || implementationFunction?.typeAnnotation;
   if (!returnType) return false;
   return compactTypeText(context.sourceCode.getText(returnType)) !== ":never";
 }
 
-/**
- * @param {import("estree").Node} element
- * @param {import("eslint").Rule.RuleFixer} fixer
- */
-function fixMethodReturnType(element, fixer) {
+function fixMethodReturnType(element: any, fixer: Rule.RuleFixer) {
   const implementationFunction = getClassElementImplementationFunction(element);
   const returnType = implementationFunction?.returnType || implementationFunction?.typeAnnotation;
   if (!returnType?.range) return null;
   return fixer.removeRange(returnType.range);
 }
-
-/** @param {string} filename */
-function isTypeScriptSourceFile(filename) {
+function isTypeScriptSourceFile(filename: string) {
   return filename.endsWith(".ts") || filename.endsWith(".tsx");
 }
-
-/** @param {import("eslint").Rule.RuleContext} context */
-function getPreparedTypeAwareLintFileService(context) {
+function getPreparedTypeAwareLintFileService(context: Rule.RuleContext) {
   const service = getTypeAwareLintService();
   service.setFileText(context.filename, context.sourceCode.getText());
   return service.getFileService(context.filename);
 }
-
-/** @param {import("estree").Expression} expression */
-function isExplicitlyHandledPromiseExpression(expression) {
+function isExplicitlyHandledPromiseExpression(expression: Expression) {
   if (expression.type === "AwaitExpression") return true;
   return expression.type === "UnaryExpression" && expression.operator === "void";
 }
-
-/** @param {import("estree").CallExpression} node */
-function isPromiseHandlingCallExpression(node) {
+function isPromiseHandlingCallExpression(node: any) {
   if (node.callee.type !== "MemberExpression") return false;
   const propertyName = getPropertyName(node.callee.property);
   return propertyName === "catch" || propertyName === "then" || propertyName === "finally";
 }
-
-/** @param {string} text */
-function truncateTypeText(text) {
+function truncateTypeText(text: string) {
   const maxLength = 180;
   if (text.length <= maxLength) return text;
   return `${text.slice(0, maxLength)}...`;
 }
 
 const isolatedCodemodeRule = {
-  ...unicorn.rules["isolated-functions"],
+  ...unicorn.rules?.["isolated-functions"],
   create(context) {
-    const original = unicorn.rules["isolated-functions"].create(context);
+    const originalRule = unicorn.rules?.["isolated-functions"];
+    if (!originalRule) return {};
+    const original = (originalRule as any).create(context);
     for (const codemodeSelector of [":function[codemode]", ":function[codemode]:exit"]) {
       if (codemodeSelector in original) {
         const cb = original[codemodeSelector];
         delete original[codemodeSelector];
         const suffix = codemodeSelector.match(/:exit$/)?.[0] || "";
         const nonClashingCatchallFunctionSelector = `FunctionExpression[random!="${Math.random()}"]${suffix}`;
-        original[nonClashingCatchallFunctionSelector] = (node, ...args) => {
+        original[nonClashingCatchallFunctionSelector] = (node: any, ...args: any[]) => {
           const parentCallee = node.parent?.callee;
           if (!parentCallee) return;
           if (!context.sourceCode.getText(parentCallee).match(/\bcodemode\b/i)) return;
           if (!context.sourceCode.getText(parentCallee).match(/\bfixture\b/i)) return;
-          return cb(node, ...args);
+          return cb?.(node, ...args);
         };
         original[`Arrow${nonClashingCatchallFunctionSelector}`] =
           original[nonClashingCatchallFunctionSelector];
@@ -654,12 +521,11 @@ const isolatedCodemodeRule = {
     }
     return original;
   },
-};
-
-/** @param {import("estree").CallExpression} node */
-function getMatcherCall(node) {
+} as RuleLike;
+function getMatcherCall(node: any) {
   if (node.callee.type !== "MemberExpression") return undefined;
   const matcherName = getPropertyName(node.callee.property);
+  if (!matcherName) return undefined;
   if (!PROPERTY_MATCHERS.has(matcherName)) return undefined;
 
   let expectChain = node.callee.object;
@@ -685,11 +551,7 @@ function getMatcherCall(node) {
   return { actual, matcherName };
 }
 
-/**
- * @param {string} source
- * @param {string} filename
- */
-function getRelativeTsImportWithExtension(source, filename) {
+function getRelativeTsImportWithExtension(source: string, filename: string) {
   if (!filename) return undefined;
   if (!source.startsWith("./") && !source.startsWith("../")) return undefined;
 
@@ -705,11 +567,7 @@ function getRelativeTsImportWithExtension(source, filename) {
   return `${modulePath}.ts${queryIndex === -1 ? "" : source.slice(queryIndex)}`;
 }
 
-/**
- * @param {import("eslint").Rule.RuleContext} context
- * @param {import("estree").Literal} sourceNode
- */
-function reportMissingRelativeImportExtension(context, sourceNode) {
+function reportMissingRelativeImportExtension(context: Rule.RuleContext, sourceNode: any) {
   if (typeof sourceNode.value !== "string") return;
 
   const fixedSource = getRelativeTsImportWithExtension(sourceNode.value, context.filename || "");
@@ -718,7 +576,7 @@ function reportMissingRelativeImportExtension(context, sourceNode) {
   context.report({
     node: sourceNode,
     message: `Use "${fixedSource}" instead of "${sourceNode.value}".`,
-    fix: (fixer) => {
+    fix: (fixer: Rule.RuleFixer) => {
       const sourceText = context.sourceCode.getText(sourceNode);
       const quote = sourceText[0];
       const fixedSourceText =
@@ -731,8 +589,7 @@ function reportMissingRelativeImportExtension(context, sourceNode) {
 }
 
 // custom iterate-internal rules
-/** @type {import("eslint").ESLint.Plugin} */
-const plugin = {
+const plugin: ESLint.Plugin = {
   meta: {
     name: "iterate",
   },
@@ -792,7 +649,8 @@ const plugin = {
       },
       create: (context) => {
         return {
-          "VariableDeclarator[init.callee.object.name='z']": ({ init, id }) => {
+          "VariableDeclarator[init.callee.object.name='z']": (node: any) => {
+            const { init, id } = node as any;
             if (init.callee.property.name === "toJSONSchema") return;
             if (init.callee.property.name === "prettifyError") return;
 
@@ -809,7 +667,7 @@ const plugin = {
             }
           },
           "TSTypeAliasDeclaration[typeAnnotation.typeName.left.name='z'][typeAnnotation.typeName.right.name='infer']":
-            (node) => {
+            (node: any) => {
               const typeName = node.id.name;
               const variableName = node.typeAnnotation?.typeArguments?.params?.[0]?.exprName?.name;
 
@@ -847,21 +705,22 @@ const plugin = {
             if (node.kind !== "let") return;
             const scope = context.sourceCode.getScope(node);
             for (const declarator of node.declarations) {
-              if (!declarator.id || declarator.id.type !== "Identifier") continue;
+              const id = declarator.id;
+              if (!id || id.type !== "Identifier") continue;
               if (!declarator.init) continue; // `let x;` without init is fine
-              const variable = scope.variables.find((v) => v.name === declarator.id.name);
+              const variable = scope.variables.find((v: any) => v.name === id.name);
               if (!variable) continue;
               const isReassigned = variable.references.some(
-                (ref) => ref.isWrite() && ref.identifier !== declarator.id,
+                (ref) => ref.isWrite() && ref.identifier !== id,
               );
               if (isReassigned) continue;
               context.report({
-                node: declarator.id,
-                message: `'${declarator.id.name}' is never reassigned. Use \`const\` instead.`,
+                node: id,
+                message: `'${id.name}' is never reassigned. Use \`const\` instead.`,
                 suggest: [
                   {
                     desc: "Change to const, if you're finished tinkering",
-                    fix: (fixer) => {
+                    fix: (fixer: Rule.RuleFixer) => {
                       // Only fix if this is the only declarator — otherwise
                       // changing `let a = 1, b = 2` where only `a` is const is complex
                       if (node.declarations.length > 1) return null;
@@ -888,8 +747,7 @@ const plugin = {
       create(context) {
         if (!isTypeScriptSourceFile(context.filename || "")) return {};
 
-        /** @type {import("./lint/oxlint-type-aware.ts").TypeAwareLintFileService | undefined} */
-        let fileService;
+        let fileService: TypeAwareLintFileService | undefined;
 
         return {
           CallExpression(node) {
@@ -925,34 +783,34 @@ const plugin = {
       create(context) {
         if (!isTypeScriptSourceFile(context.filename || "")) return {};
 
-        /** @type {import("./lint/oxlint-type-aware.ts").TypeAwareLintFileService | undefined} */
-        let fileService;
+        let fileService: TypeAwareLintFileService | undefined;
 
         return {
-          "ClassDeclaration, ClassExpression": (node) => {
+          "ClassDeclaration, ClassExpression": (node: any) => {
             const contracts = getMechanicalClassImplContracts(context, node);
             if (!contracts?.length) return;
 
             fileService ??= getPreparedTypeAwareLintFileService(context);
             if (!fileService) return;
+            const typedFileService = fileService;
             const classMethodNames = new Set(
               node.body.body
-                .filter((element) => getClassElementImplementationFunction(element))
-                .map((element) => getClassElementName(element))
+                .filter((element: any) => getClassElementImplementationFunction(element))
+                .map((element: any) => getClassElementName(element))
                 .filter(Boolean),
             );
             const contract = contracts
               .map((candidate) => ({
                 candidate,
-                properties: getMechanicalClassImplContractMethods(fileService, candidate),
+                properties: getMechanicalClassImplContractMethods(typedFileService, candidate),
               }))
               .find(({ properties }) =>
-                properties?.some((property) => classMethodNames.has(property.name)),
+                properties?.some((property: any) => classMethodNames.has(property.name)),
               );
             if (!contract?.properties) return;
 
             const methods = new Map(
-              contract.properties.map((property) => [property.name, property]),
+              contract.properties.map((property: any) => [property.name, property]),
             );
             for (const element of node.body.body) {
               if (!getClassElementImplementationFunction(element)) continue;
@@ -978,9 +836,12 @@ const plugin = {
               ) {
                 context.report({
                   node: element,
-                  loc: getMethodParameterLocation(context, element),
+                  loc: getRangeLocation(
+                    context,
+                    getMethodParameterRange(context, element) as [number, number] | undefined,
+                  ),
                   message: `Infer implementation params from the contract: \`${expectedParameterText}\`.`,
-                  fix: (fixer) =>
+                  fix: (fixer: Rule.RuleFixer) =>
                     fixMethodParameters(context, element, expectedParameterText, fixer),
                 });
               }
@@ -990,7 +851,7 @@ const plugin = {
                   node: element,
                   loc: getMethodReturnTypeLocation(context, element),
                   message: `Infer the return type from the contract.`,
-                  fix: (fixer) => fixMethodReturnType(element, fixer),
+                  fix: (fixer: Rule.RuleFixer) => fixMethodReturnType(element, fixer),
                 });
               }
             }
@@ -1024,7 +885,7 @@ const plugin = {
             if (node.source.type !== "Literal") return;
             reportMissingRelativeImportExtension(context, node.source);
           },
-          TSImportType(node) {
+          TSImportType(node: any) {
             if (!node.argument) return;
             if (node.argument.type !== "Literal") return;
             reportMissingRelativeImportExtension(context, node.argument);
@@ -1043,7 +904,9 @@ const plugin = {
       create(context) {
         return {
           CallExpression(node) {
-            if (!isLifecycleHookCall(node.callee)) return;
+            if (node.callee.type !== "Identifier" || !LIFECYCLE_HOOKS.has(node.callee.name)) {
+              return;
+            }
             context.report({
               node,
               message:
@@ -1106,12 +969,7 @@ const plugin = {
       create(context) {
         const MAX_BODY_LINES = 1;
 
-        /**
-         * @param {import("estree").Identifier} id the helper's name binding
-         * @param {import("estree").Function} fn the function node
-         * @param {import("estree").Node} statement the enclosing declaration statement
-         */
-        function checkHelper(id, fn, statement) {
+        function checkHelper(id: any, fn: any, statement: any) {
           const exportParent = statement.parent?.type;
           if (
             exportParent === "ExportNamedDeclaration" ||
@@ -1128,7 +986,7 @@ const plugin = {
           ) {
             return;
           }
-          if (hasIfStatement(fn)) return;
+          if (esquery.match(fn, esquery.parse("IfStatement")).length > 0) return;
           if (hasLeadingJsDocComment(context.sourceCode, statement)) return;
           if (hasCommentInsideFunction(context.sourceCode, fn)) return;
           if (hasTypePredicateReturnType(context.sourceCode, fn)) return;
@@ -1137,16 +995,16 @@ const plugin = {
           const variable = findVariableInScopeChain(scope, id.name);
           if (!variable) return;
 
-          const reads = variable.references.filter((ref) => ref.isRead());
+          const reads = variable.references.filter((ref: any) => ref.isRead());
           // `export { helper }` / `export default helper` make it part of the module's surface
-          const isExportedReference = reads.some((ref) => {
+          const isExportedReference = reads.some((ref: any) => {
             const parentType = ref.identifier.parent?.type;
             return parentType === "ExportSpecifier" || parentType === "ExportDefaultDeclaration";
           });
           if (isExportedReference) return;
 
           // a recursive helper can't be inlined, so any self-reference disqualifies it
-          const hasSelfReference = reads.some((ref) => {
+          const hasSelfReference = reads.some((ref: any) => {
             const referenceStart = ref.identifier.range?.[0];
             if (referenceStart === undefined || !fn.range) return false;
             return referenceStart >= fn.range[0] && referenceStart < fn.range[1];
@@ -1272,18 +1130,16 @@ const plugin = {
       create: (context) => {
         return {
           ImportDeclaration: (node) => {
-            const parentBodyIndex = node.parent.body.indexOf(node);
-            const lastImportIndex = node.parent.body.findLastIndex(
-              (n) => n.type === "ImportDeclaration",
-            );
+            const parentBody = (node.parent as Program).body;
+            const parentBodyIndex = parentBody.indexOf(node);
+            const lastImportIndex = parentBody.findLastIndex((n) => n.type === "ImportDeclaration");
             if (parentBodyIndex === -1 || parentBodyIndex !== lastImportIndex) {
               return;
             }
-            const exportsBefore = node.parent.body
+            const exportsBefore = parentBody
               .slice(0, parentBodyIndex)
               .filter(
                 (n) =>
-                  n.type === "ExportDeclaration" ||
                   n.type === "ExportNamedDeclaration" ||
                   n.type === "ExportAllDeclaration" ||
                   n.type === "ExportDefaultDeclaration",
@@ -1296,9 +1152,10 @@ const plugin = {
               });
             });
           },
-          "ImportDeclaration[specifiers.length=0]": (node) => {
-            const parentBodyIndex = node.parent.body.indexOf(node);
-            const nonSideEffectImportBefore = node.parent.body
+          "ImportDeclaration[specifiers.length=0]": (node: any) => {
+            const parentBody = (node.parent as Program).body;
+            const parentBodyIndex = parentBody.indexOf(node as any);
+            const nonSideEffectImportBefore = parentBody
               .slice(0, parentBodyIndex)
               .find((n) => n.type === "ImportDeclaration" && n.specifiers.length);
             if (!nonSideEffectImportBefore) {
@@ -1307,12 +1164,11 @@ const plugin = {
             context.report({
               node,
               message: "Side-effect imports need to go before non-side-effect imports",
-              fix: (fixer) => {
+              fix: (fixer: Rule.RuleFixer) => {
                 return [
                   fixer.removeRange([node.range[0], node.range[1] + 1]),
                   fixer.insertTextBefore(
                     nonSideEffectImportBefore,
-                    // @ts-expect-error getText exists I swear
                     `${context.sourceCode.getText(node)}\n`,
                   ),
                 ];
@@ -1336,7 +1192,8 @@ const plugin = {
             if (node.source.value === "cloudflare:workers") {
               const waitUntilImport = node.specifiers.find(
                 (spec) =>
-                  (spec.type === "ImportSpecifier" && spec.imported.name === "waitUntil") ||
+                  (spec.type === "ImportSpecifier" &&
+                    getPropertyName(spec.imported) === "waitUntil") ||
                   spec.type === "ImportNamespaceSpecifier",
               );
               if (waitUntilImport) {
@@ -1361,7 +1218,7 @@ const plugin = {
       },
       create: (context) => {
         return {
-          "CallExpression[callee.type='MemberExpression']": (node) => {
+          "CallExpression[callee.type='MemberExpression']": (node: any) => {
             if (getPropertyName(node.callee.property) !== "getByName") return;
             const bindingName = getRawEnvBindingName(node.callee.object);
             if (!bindingName) return;
@@ -1384,15 +1241,13 @@ const plugin = {
         hasSuggestions: true,
         fixable: "code",
       },
-      /** @param {import('eslint').Rule.RuleContext} context */
       create: (context) => {
         const dbMutateMethods = ["insert", "update", "delete"];
-        /** @type {Record<string, Function>} */
-        const dbMutateEnforcementListeners = {};
+        const dbMutateEnforcementListeners: Record<string, (node: any) => void> = {};
         for (const m of dbMutateMethods) {
           const selector = `CallExpression[callee.object.type='Identifier'][callee.property.name='${m}'][arguments.0.type='Identifier']`;
           const selector2 = `CallExpression[callee.object.type='Identifier'][callee.property.name='${m}'][arguments.0.object.name='schemas']`;
-          dbMutateEnforcementListeners[selector] = (node) => {
+          dbMutateEnforcementListeners[selector] = (node: any) => {
             const before = context.sourceCode.getText(node.arguments[0]);
             const after = before.startsWith("schemas.")
               ? before.replace("schemas.", "schema.")
@@ -1410,7 +1265,7 @@ const plugin = {
               suggest: [
                 {
                   desc: `Change \`${before}\` to \`${after}\``,
-                  fix: (fixer) => fixer.replaceText(node.arguments[0], after),
+                  fix: (fixer: Rule.RuleFixer) => fixer.replaceText(node.arguments[0], after),
                 },
               ],
             });
@@ -1421,7 +1276,7 @@ const plugin = {
         return {
           ...dbMutateEnforcementListeners,
 
-          "CallExpression[callee.property.name='transaction']": (node) => {
+          "CallExpression[callee.property.name='transaction']": (node: any) => {
             const parentReference = context.sourceCode.getText(node.callee.object);
             const shouldUse = node.arguments[0].params[0]?.name;
             esquery.match(node, esquery.parse(`${node.callee.object.type}`)).forEach((m) => {
@@ -1433,7 +1288,7 @@ const plugin = {
                   suggest: [
                     {
                       desc: `Change \`${used}\` to \`${shouldUse}\``,
-                      fix: (fixer) => fixer.replaceText(m, shouldUse),
+                      fix: (fixer: Rule.RuleFixer) => fixer.replaceText(m, shouldUse),
                     },
                   ],
                 });
@@ -1451,7 +1306,7 @@ const plugin = {
         return {
           CallExpression: (node) => {
             if (node.callee.type === "Identifier" && node.callee.name === "expect") {
-              let expr = node;
+              let expr: any = node;
               while ((expr = expr.parent)) {
                 if (expr.type === "AwaitExpression") break;
               }
@@ -1512,26 +1367,6 @@ const plugin = {
         };
       },
     },
-    /**
-     * Contract packages (`apps/*-contract/src`) are imported by BOTH server
-     * and client (browser) code. They must contain nothing but oRPC contract
-     * definitions, Zod schemas, and lightweight client wiring. Pulling in
-     * anything heavier — Node built-ins, OpenTelemetry, evlog, vite, the
-     * shared barrel, etc. — breaks Vite production builds and bloats client
-     * bundles.
-     *
-     * This rule enforces an explicit allowlist of permitted runtime import
-     * sources. Type-only imports (`import type { … }`) are always fine
-     * because they're erased at build time.
-     *
-     * Allowlist entries:
-     * - `ALLOWED_RUNTIME_IMPORT_PREFIXES`: exact match or `pkg + "/..."` subpaths.
-     * - `ALLOWED_RUNTIME_IMPORT_REGEX`: optional RegExp `source` strings (must match
-     *   full specifier). Use only when a prefix is too broad.
-     *
-     * If you need to add a new package, verify it has ZERO transitive
-     * Node/server deps, then add a prefix or regex below.
-     */
     "contract-package-imports": {
       meta: {
         type: "problem",
@@ -1541,7 +1376,6 @@ const plugin = {
         },
       },
       create: (context) => {
-        /** @type {string[]} */
         const ALLOWED_RUNTIME_IMPORT_PREFIXES = [
           "zod",
           "@orpc/contract",
@@ -1550,7 +1384,6 @@ const plugin = {
           "@orpc/client",
           "@orpc/openapi-client",
         ];
-        /** @type {string[]} Full specifier must match (anchored in code). */
         const ALLOWED_RUNTIME_IMPORT_REGEX = [
           // OS's contract needs to share event-stream and codemode wire
           // schemas with the services that persist/execute those payloads.
@@ -1565,10 +1398,7 @@ const plugin = {
           (pattern) => new RegExp(`^${pattern}$`),
         );
 
-        /**
-         * @param {string} source
-         */
-        function isAllowedRuntimeImport(source) {
+        function isAllowedRuntimeImport(source: string) {
           if (
             ALLOWED_RUNTIME_IMPORT_PREFIXES.some(
               (pkg) => source === pkg || source.startsWith(pkg + "/"),
@@ -1591,13 +1421,15 @@ const plugin = {
         return {
           ImportDeclaration: (node) => {
             if (isTestFile) return;
-            if (node.importKind === "type") return;
+            if ((node as ImportKindNode).importKind === "type") return;
 
             const allSpecifiersTypeOnly =
-              node.specifiers.length > 0 && node.specifiers.every((s) => s.importKind === "type");
+              node.specifiers.length > 0 &&
+              node.specifiers.every((s) => (s as ImportKindNode).importKind === "type");
             if (allSpecifiersTypeOnly) return;
 
             const source = node.source.value;
+            if (typeof source !== "string") return;
 
             if (source.startsWith(".") || source.startsWith("/")) return;
 
@@ -1613,7 +1445,7 @@ const plugin = {
                 `\n\nRelative imports and \`import type\` are always fine.\n` +
                 `If "${source}" is genuinely lightweight (zero Node/server deps), add a ` +
                 `prefix to ALLOWED_RUNTIME_IMPORT_PREFIXES or a pattern to ` +
-                `ALLOWED_RUNTIME_IMPORT_REGEX in oxlint-plugin-iterate.js.`,
+                `ALLOWED_RUNTIME_IMPORT_REGEX in oxlint-plugin-iterate.ts.`,
             });
           },
         };

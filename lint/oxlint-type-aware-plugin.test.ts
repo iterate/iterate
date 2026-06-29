@@ -10,7 +10,7 @@ import { SignatureKind } from "@typescript/native-preview/unstable/sync";
 import { TypeAwareLintService } from "./oxlint-type-aware.ts";
 
 const repoRoot = resolve(import.meta.dirname, "..");
-const pluginPath = join(repoRoot, "oxlint-plugin-iterate.js");
+const pluginPath = join(repoRoot, "lint", "oxlint-plugin-iterate.ts");
 const oxlintBin = join(repoRoot, "node_modules", ".bin", "oxlint");
 
 test("mechanical-class-impl fixes implementation signatures from the TypeScript checker", () => {

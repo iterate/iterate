@@ -40,7 +40,7 @@
     "**/*ignoreme*"
   ],
   "jsPlugins": [
-    "./oxlint-plugin-iterate.js",
+    "./lint/oxlint-plugin-iterate.ts",
     "@tanstack/eslint-plugin-router",
     "eslint-plugin-codegen",
     "eslint-plugin-eslint-comments",
