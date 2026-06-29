@@ -9,10 +9,10 @@ const repoRoot = resolve(import.meta.dirname, "..");
 const pluginPath = join(repoRoot, "oxlint-plugin-iterate.js");
 const oxlintBin = join(repoRoot, "node_modules", ".bin", "oxlint");
 
-test("rpc-target-implementation-signatures fixes implementation signatures from the TypeScript checker", () => {
+test("mechanical-class-impl fixes implementation signatures from the TypeScript checker", () => {
   using fixture = createOxlintFixture({
     rules: {
-      "iterate/rpc-target-implementation-signatures": "error",
+      "iterate/mechanical-class-impl": "error",
       "iterate/typed-no-floating-promises": "off",
     },
   });
@@ -20,7 +20,7 @@ test("rpc-target-implementation-signatures fixes implementation signatures from 
   fixture.write(
     "types.ts",
     [
-      "export type RpcTargetImplementation<T> = T;",
+      "export type Mechanical<T> = T;",
       "export interface Greeter {",
       "  getGreeting(params: { enthusiasm: number }): string;",
       "  getFarewell(politeness: number, enthusiasm: number): void;",
@@ -30,9 +30,9 @@ test("rpc-target-implementation-signatures fixes implementation signatures from 
   fixture.write(
     "implementation.ts",
     [
-      'import type { Greeter, RpcTargetImplementation } from "./types.ts";',
+      'import type { Greeter, Mechanical } from "./types.ts";',
       "",
-      "class MyGreeter implements RpcTargetImplementation<Greeter> {",
+      "class MyGreeter implements Mechanical<Greeter> {",
       "  getGreeting(input: { enthusiasm: number }): string {",
       '    return "hello";',
       "  }",
@@ -49,9 +49,9 @@ test("rpc-target-implementation-signatures fixes implementation signatures from 
   assert.equal(
     fixture.read("implementation.ts"),
     [
-      'import type { Greeter, RpcTargetImplementation } from "./types.ts";',
+      'import type { Greeter, Mechanical } from "./types.ts";',
       "",
-      "class MyGreeter implements RpcTargetImplementation<Greeter> {",
+      "class MyGreeter implements Mechanical<Greeter> {",
       '  getGreeting(input: Parameters<Greeter["getGreeting"]>[0]) {',
       '    return "hello";',
       "  }",
@@ -64,13 +64,10 @@ test("rpc-target-implementation-signatures fixes implementation signatures from 
   );
 });
 
-test("rpc-target-implementation-signatures reads methods from mapped helper implementations", () => {
+test("mechanical-class-impl reads methods from mapped helper implementations", () => {
   using fixture = createOxlintFixture({
     rules: {
-      "iterate/rpc-target-implementation-signatures": [
-        "error",
-        { helperTypeNames: ["RpcTargetImplementation", "NiceRpcTarget"] },
-      ],
+      "iterate/mechanical-class-impl": "error",
       "iterate/typed-no-floating-promises": "off",
     },
   });
@@ -78,7 +75,7 @@ test("rpc-target-implementation-signatures reads methods from mapped helper impl
   fixture.write(
     "types.ts",
     [
-      "export type NiceRpcTarget<T> = {",
+      "export type MechanicalMap<T> = {",
       "  [K in keyof T]: T[K] extends (...args: infer A) => infer R ? (...args: A) => R : T[K];",
       "};",
       "export interface Greeter {",
@@ -89,9 +86,9 @@ test("rpc-target-implementation-signatures reads methods from mapped helper impl
   fixture.write(
     "implementation.ts",
     [
-      'import type { Greeter, NiceRpcTarget } from "./types.ts";',
+      'import type { Greeter, MechanicalMap } from "./types.ts";',
       "",
-      "class MyGreeter implements NiceRpcTarget<Greeter> {",
+      "class MyGreeter implements MechanicalMap<Greeter> {",
       "  getGreeting(input: { enthusiasm: number }): string {",
       '    return "hello";',
       "  }",
@@ -105,9 +102,9 @@ test("rpc-target-implementation-signatures reads methods from mapped helper impl
   assert.equal(
     fixture.read("implementation.ts"),
     [
-      'import type { Greeter, NiceRpcTarget } from "./types.ts";',
+      'import type { Greeter, MechanicalMap } from "./types.ts";',
       "",
-      "class MyGreeter implements NiceRpcTarget<Greeter> {",
+      "class MyGreeter implements MechanicalMap<Greeter> {",
       '  getGreeting(input: Parameters<Greeter["getGreeting"]>[0]) {',
       '    return "hello";',
       "  }",
@@ -117,13 +114,10 @@ test("rpc-target-implementation-signatures reads methods from mapped helper impl
   );
 });
 
-test("rpc-target-implementation-signatures supports direct interface implementations", () => {
+test("mechanical-class-impl supports direct interface implementations", () => {
   using fixture = createOxlintFixture({
     rules: {
-      "iterate/rpc-target-implementation-signatures": [
-        "error",
-        { allowDirectImplementations: true },
-      ],
+      "iterate/mechanical-class-impl": "error",
       "iterate/typed-no-floating-promises": "off",
     },
   });
@@ -167,10 +161,10 @@ test("rpc-target-implementation-signatures supports direct interface implementat
   );
 });
 
-test("rpc-target-implementation-signatures ignores unknown helper wrappers by default", () => {
+test("mechanical-class-impl follows arbitrary helper wrappers", () => {
   using fixture = createOxlintFixture({
     rules: {
-      "iterate/rpc-target-implementation-signatures": "error",
+      "iterate/mechanical-class-impl": "error",
       "iterate/typed-no-floating-promises": "off",
     },
   });
@@ -178,7 +172,7 @@ test("rpc-target-implementation-signatures ignores unknown helper wrappers by de
   fixture.write(
     "types.ts",
     [
-      "export type NiceRpcTarget<T> = {",
+      "export type MechanicalMap<T> = {",
       "  [K in keyof T]: T[K] extends (...args: infer A) => infer R ? (...args: A) => R : T[K];",
       "};",
       "export interface Greeter {",
@@ -189,9 +183,9 @@ test("rpc-target-implementation-signatures ignores unknown helper wrappers by de
   fixture.write(
     "implementation.ts",
     [
-      'import type { Greeter, NiceRpcTarget } from "./types.ts";',
+      'import type { Greeter, MechanicalMap } from "./types.ts";',
       "",
-      "class MyGreeter implements NiceRpcTarget<Greeter> {",
+      "class MyGreeter implements MechanicalMap<Greeter> {",
       "  getGreeting(input: { enthusiasm: number }): string {",
       '    return "hello";',
       "  }",
@@ -200,18 +194,27 @@ test("rpc-target-implementation-signatures ignores unknown helper wrappers by de
     ].join("\n"),
   );
 
-  fixture.runOxlint(["implementation.ts"]);
+  fixture.runOxlint(["implementation.ts", "--fix"]);
 
-  assert.match(
+  assert.equal(
     fixture.read("implementation.ts"),
-    /getGreeting\(input: \{ enthusiasm: number \}\): string/,
+    [
+      'import type { Greeter, MechanicalMap } from "./types.ts";',
+      "",
+      "class MyGreeter implements MechanicalMap<Greeter> {",
+      '  getGreeting(input: Parameters<Greeter["getGreeting"]>[0]) {',
+      '    return "hello";',
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
   );
 });
 
-test("rpc-target-implementation-signatures preserves defaults in nested helper implementations", () => {
+test("mechanical-class-impl preserves defaults in nested helper implementations", () => {
   using fixture = createOxlintFixture({
     rules: {
-      "iterate/rpc-target-implementation-signatures": "error",
+      "iterate/mechanical-class-impl": "error",
       "iterate/typed-no-floating-promises": "off",
     },
   });
@@ -219,7 +222,7 @@ test("rpc-target-implementation-signatures preserves defaults in nested helper i
   fixture.write(
     "types.ts",
     [
-      "export type RpcTargetImplementation<T> = T;",
+      "export type Mechanical<T> = T;",
       "export interface Greeter {",
       "  getGreeting(params: { enthusiasm: number }): string;",
       "}",
@@ -228,11 +231,11 @@ test("rpc-target-implementation-signatures preserves defaults in nested helper i
   fixture.write(
     "implementation.ts",
     [
-      'import type { Greeter, RpcTargetImplementation } from "./types.ts";',
+      'import type { Greeter, Mechanical } from "./types.ts";',
       "",
       "const defaultInput = { enthusiasm: 1 };",
       "",
-      'class MyGreeter implements Pick<RpcTargetImplementation<Greeter>, "getGreeting"> {',
+      'class MyGreeter implements Pick<Mechanical<Greeter>, "getGreeting"> {',
       "  getGreeting(input: { enthusiasm: number } = defaultInput): string {",
       '    return "hello";',
       "  }",
@@ -246,11 +249,11 @@ test("rpc-target-implementation-signatures preserves defaults in nested helper i
   assert.equal(
     fixture.read("implementation.ts"),
     [
-      'import type { Greeter, RpcTargetImplementation } from "./types.ts";',
+      'import type { Greeter, Mechanical } from "./types.ts";',
       "",
       "const defaultInput = { enthusiasm: 1 };",
       "",
-      'class MyGreeter implements Pick<RpcTargetImplementation<Greeter>, "getGreeting"> {',
+      'class MyGreeter implements Pick<Mechanical<Greeter>, "getGreeting"> {',
       '  getGreeting(input: Parameters<Greeter["getGreeting"]>[0] = defaultInput) {',
       '    return "hello";',
       "  }",
@@ -263,7 +266,7 @@ test("rpc-target-implementation-signatures preserves defaults in nested helper i
 test("typed-no-floating-promises reports only unhandled promise-like expression statements", () => {
   using fixture = createOxlintFixture({
     rules: {
-      "iterate/rpc-target-implementation-signatures": "off",
+      "iterate/mechanical-class-impl": "off",
       "iterate/typed-no-floating-promises": "error",
     },
   });

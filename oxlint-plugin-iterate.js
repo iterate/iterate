@@ -10,11 +10,6 @@ const LIFECYCLE_HOOKS = new Set(["beforeAll", "beforeEach", "afterAll", "afterEa
 const VI_MOCK_CALLS = new Set(["vi.mock", "vi.doMock"]);
 const PROPERTY_MATCHERS = new Set(["toBe", "toEqual", "toStrictEqual"]);
 const STREAM_PROCESSOR_OVERRIDE_METHODS = new Set(["reduce", "processEvent", "processEventBatch"]);
-const DEFAULT_RPC_TARGET_SIGNATURE_OPTIONS = {
-  allowDirectImplementations: false,
-  helperTypeNames: ["RpcTargetImplementation"],
-  utilityTypeNames: ["Pick"],
-};
 
 /** @param {string} name */
 const getExpectedName = (name) => {
@@ -259,14 +254,13 @@ function getStreamProcessorContractType(context, node) {
 /**
  * @param {import("eslint").Rule.RuleContext} context
  * @param {import("estree").ClassDeclaration | import("estree").ClassExpression} node
- * @param {ReturnType<typeof getRpcTargetSignatureRuleOptions>} options
  */
-function getRpcTargetContracts(context, node, options) {
+function getMechanicalClassImplContracts(context, node) {
   if (!node.body.range) return undefined;
   const classText = context.sourceCode.getText(node);
   const headerLength = node.body.range[0] - (node.range?.[0] || 0);
   const classHeader = classText.slice(0, headerLength);
-  const implementedTypes = getImplementedContractTypes(classHeader, options);
+  const implementedTypes = getImplementedContractTypes(classHeader);
   const classStart = node.range?.[0] || 0;
   return implementedTypes.map((implementedType) => ({
     name: implementedType.contractText,
@@ -276,9 +270,8 @@ function getRpcTargetContracts(context, node, options) {
 
 /**
  * @param {string} classHeader
- * @param {ReturnType<typeof getRpcTargetSignatureRuleOptions>} options
  */
-function getImplementedContractTypes(classHeader, options) {
+function getImplementedContractTypes(classHeader) {
   const implementsMatch = classHeader.match(/\bimplements\b/);
   if (!implementsMatch) return [];
 
@@ -286,7 +279,7 @@ function getImplementedContractTypes(classHeader, options) {
   const implementsText = classHeader.slice(implementsStart);
   return splitTopLevelTypes(implementsText)
     .flatMap((candidate) =>
-      getReadableContractTypes(candidate.text, implementsStart + candidate.start, options),
+      getReadableContractTypes(candidate.text, implementsStart + candidate.start),
     )
     .filter(Boolean);
 }
@@ -294,25 +287,14 @@ function getImplementedContractTypes(classHeader, options) {
 /**
  * @param {string} text
  * @param {number} start
- * @param {ReturnType<typeof getRpcTargetSignatureRuleOptions>} options
  */
-function getReadableContractTypes(text, start, options) {
+function getReadableContractTypes(text, start) {
   const generic = getGenericTypeInfo(text);
   if (!generic) {
-    if (!options.allowDirectImplementations) return [];
     return [{ contractText: text, contractStart: start }];
   }
-  if (options.helperTypeNames.has(generic.typeName)) {
-    return [
-      {
-        contractText: generic.firstTypeArgument,
-        contractStart: start + generic.firstTypeArgumentStart,
-      },
-    ];
-  }
-  if (!options.utilityTypeNames.has(generic.typeName)) return [];
   return generic.typeArguments.flatMap((argument) =>
-    getReadableContractTypes(argument.text, start + argument.start, options),
+    getReadableContractTypes(argument.text, start + argument.start),
   );
 }
 
@@ -407,7 +389,7 @@ function getParameterTypeAnnotation(parameter) {
  * @param {string} methodName
  * @param {{ defaultText?: string; name: string; optional: boolean }[]} implementationParameters
  */
-function expectedRpcTargetParameterText(
+function expectedMechanicalClassImplParameterText(
   contractMethod,
   contractName,
   methodName,
@@ -554,25 +536,6 @@ function truncateTypeText(text) {
   const maxLength = 180;
   if (text.length <= maxLength) return text;
   return `${text.slice(0, maxLength)}...`;
-}
-
-/** @param {import("eslint").Rule.RuleContext} context */
-function getRpcTargetSignatureRuleOptions(context) {
-  const input = context.options?.[0] || {};
-  const helperTypeNames = Array.isArray(input.helperTypeNames)
-    ? input.helperTypeNames
-    : DEFAULT_RPC_TARGET_SIGNATURE_OPTIONS.helperTypeNames;
-  const utilityTypeNames = Array.isArray(input.utilityTypeNames)
-    ? input.utilityTypeNames
-    : DEFAULT_RPC_TARGET_SIGNATURE_OPTIONS.utilityTypeNames;
-  return {
-    allowDirectImplementations: Boolean(
-      input.allowDirectImplementations ??
-      DEFAULT_RPC_TARGET_SIGNATURE_OPTIONS.allowDirectImplementations,
-    ),
-    helperTypeNames: new Set(helperTypeNames),
-    utilityTypeNames: new Set(utilityTypeNames),
-  };
 }
 
 const isolatedCodemodeRule = {
@@ -919,24 +882,14 @@ const plugin = {
         };
       },
     },
-    "rpc-target-implementation-signatures": {
+    "mechanical-class-impl": {
       meta: {
         type: "problem",
         fixable: "code",
-        schema: [
-          {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              allowDirectImplementations: { type: "boolean" },
-              helperTypeNames: { type: "array", items: { type: "string" } },
-              utilityTypeNames: { type: "array", items: { type: "string" } },
-            },
-          },
-        ],
+        schema: [],
         docs: {
           description:
-            "Require RpcTarget implementation method params to reference the implemented contract via Parameters<Contract[method]>.",
+            "Require class implementation method params to mechanically reference the implemented interface via Parameters<Contract[method]>.",
         },
       },
       create(context) {
@@ -944,11 +897,10 @@ const plugin = {
 
         /** @type {import("./oxlint-type-aware.js").TypeAwareLintService | undefined} */
         let service;
-        const options = getRpcTargetSignatureRuleOptions(context);
 
         return {
           "ClassDeclaration, ClassExpression": (node) => {
-            const contracts = getRpcTargetContracts(context, node, options);
+            const contracts = getMechanicalClassImplContracts(context, node);
             if (!contracts?.length) return;
 
             service ??= getTypeAwareLintService();
@@ -985,7 +937,7 @@ const plugin = {
               if (!method) continue;
 
               const implementationParameters = getMethodParameterInfo(context, element);
-              const expectedParameterText = expectedRpcTargetParameterText(
+              const expectedParameterText = expectedMechanicalClassImplParameterText(
                 method,
                 contract.candidate.name,
                 methodName,
@@ -996,7 +948,7 @@ const plugin = {
               if (actualParameters !== expectedParameters) {
                 context.report({
                   node: element,
-                  message: `Format ${contract.candidate.name}.${methodName} params as \`${expectedParameterText}\`.`,
+                  message: `Format ${contract.candidate.name}.${methodName} implementation params as \`${expectedParameterText}\`.`,
                   fix: (fixer) =>
                     compactFixes([
                       fixMethodParameters(context, element, expectedParameterText, fixer),
@@ -1009,7 +961,7 @@ const plugin = {
               if (hasMethodReturnType(element)) {
                 context.report({
                   node: element,
-                  message: `Do not annotate a return type on ${contract.candidate.name}.${methodName}; let the contract drive it.`,
+                  message: `Do not annotate a return type on ${contract.candidate.name}.${methodName}; let the implemented contract drive it.`,
                   fix: (fixer) => fixMethodReturnType(element, fixer),
                 });
               }

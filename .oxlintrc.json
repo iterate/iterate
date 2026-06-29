@@ -121,7 +121,7 @@
     "iterate/stream-processor-override-args": "error",
     "iterate/no-single-use-helpers": "error",
     "iterate/typed-no-floating-promises": "off",
-    "iterate/rpc-target-implementation-signatures": "off",
+    "iterate/mechanical-class-impl": "off",
     "prefer-const": "off",
     "iterate/prefer-const": "error",
     "iterate/isolated-codemode": [
@@ -271,7 +271,7 @@
     {
       "files": ["apps/minimal-itx-v4/src/rpc-targets.ts"],
       "rules": {
-        "iterate/rpc-target-implementation-signatures": "error"
+        "iterate/mechanical-class-impl": "error"
       }
     }
   ]
