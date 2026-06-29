@@ -2,7 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { itxEntrypointScopeCacheKey, scopedItxEntrypointProps } from "../itx/entrypoint-props.ts";
-import { replayPath } from "../itx/live-capability.ts";
+import { invokeFlattenedPath, replayPath } from "../itx/live-capability.ts";
 import { loadResolvedWorker, resolveWorkerSource } from "./worker-loader.ts";
 import type { StatefulWorkerRef } from "./types.ts";
 
@@ -24,32 +24,38 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     projectId: this.#name.projectId,
   });
 
-  async validate(ref: StatefulWorkerRef): Promise<void> {
-    await this.#facet(ref);
-  }
-
-  async get(ref: StatefulWorkerRef): Promise<unknown> {
-    return await this.#facet(ref);
-  }
-
   async invokeCapability({
     args = [],
+    flattenNestedPath = false,
     path,
     ref,
   }: {
     args?: unknown[];
+    flattenNestedPath?: boolean;
     path: string[];
     ref: StatefulWorkerRef;
   }) {
-    return await replayPath({
-      args,
-      path,
-      target: await this.#facet(ref),
-    });
+    // This method is intentionally the only public runtime entrypoint for the
+    // hosted facet. We do not expose `validate(ref)` or `get(ref)`: validation at
+    // provide-time made "store this worker recipe" mutate facet storage before
+    // the stream commit, and returning facet stubs across this extra DO boundary
+    // was the source of opaque RPC failures. Keeping invocation here makes the
+    // ownership boundary boring: the outer DO receives a call, resolves the
+    // current recipe, restarts the facet if the source changed, and performs the
+    // method replay without leaking the inner facet reference.
+    const target = await this.#facet(ref);
+    return flattenNestedPath
+      ? await invokeFlattenedPath({ args, path, target })
+      : await replayPath({ args, path, target });
   }
 
   async #facet(ref: StatefulWorkerRef): Promise<unknown> {
     this.#assertRefMatchesName(ref);
+    // WorkerRef is a deliberately late-bound recipe. Repo-backed refs should see
+    // source changes on next use, and inline refs are loaded only when someone
+    // actually calls the capability. That laziness is what keeps
+    // `provideCapability()` a pure stream append instead of a half-commit that
+    // might also create/abort facet state.
     const resolved = await resolveWorkerSource({
       projectId: this.#name.projectId,
       source: ref.source,

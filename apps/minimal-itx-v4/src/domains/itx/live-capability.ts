@@ -11,26 +11,27 @@ export type LiveCapability = {
  * - the isolate that stores a stub past the RPC method return duplicates it and
  *   later disposes the duplicate.
  *
- * A live capability can be:
- * - a top-level callable/function stub;
- * - a top-level RpcTarget stub whose members are invoked by path replay;
- * - a plain object member tree, where function/object members may themselves be
- *   RPC stubs;
- * - an explicit plain-object path-call carrier with an own `invokeCapability`
- *   method.
+ * A live capability can dispatch in two ways:
+ * - default member replay, where the remaining dotted path is walked on the
+ *   retained target;
+ * - flattened path dispatch, where the retained target's hardcoded
+ *   `invokeCapability` method receives the remaining path as data.
  *
  * Source docs:
  * https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
  * https://developers.cloudflare.com/workers/configuration/compatibility-flags/#duplicate-stubs-in-rpc-params-instead-of-transferring-ownership
  * https://github.com/cloudflare/capnweb#cloudflare-workers-rpc-interoperability
  */
-export function retainLiveCapabilityProvider(provider: unknown): LiveCapability {
+export function retainLiveCapabilityProvider(
+  provider: unknown,
+  options: { flattenNestedPath?: boolean } = {},
+): LiveCapability {
   const retainedProvider = deepRetainRpcStubs(provider);
   return {
     dispose: () => retainedProvider.dispose(),
     invoke: (path, args) =>
-      isPathCallCarrier(retainedProvider.value)
-        ? retainedProvider.value.invokeCapability({ path, args })
+      options.flattenNestedPath === true
+        ? invokeFlattenedPath({ args, path, target: retainedProvider.value })
         : replayPath({ args, path, target: retainedProvider.value }),
   };
 }
@@ -99,6 +100,22 @@ export async function replayPath({
   return await Reflect.apply(callable, receiver, args);
 }
 
+export async function invokeFlattenedPath({
+  args,
+  path,
+  target,
+}: {
+  args: unknown[];
+  path: string[];
+  target: unknown;
+}) {
+  return await replayPath({
+    args: [{ args, path }],
+    path: ["invokeCapability"],
+    target,
+  });
+}
+
 function deepCopyAndDupRpcStubs<T>(value: T, retainedStubs: Disposable[]): T {
   if (Array.isArray(value)) {
     const result = new Array(value.length);
@@ -128,16 +145,6 @@ function deepCopyAndDupRpcStubs<T>(value: T, retainedStubs: Disposable[]): T {
   }
 
   return value;
-}
-
-function isPathCallCarrier(value: unknown): value is {
-  invokeCapability(input: { args?: unknown[]; path: string[] }): unknown;
-} {
-  return (
-    isPlainObject(value) &&
-    Object.hasOwn(value, "invokeCapability") &&
-    typeof (value as { invokeCapability?: unknown }).invokeCapability === "function"
-  );
 }
 
 function isRpcStubLike(value: unknown): value is { dup(): unknown } {

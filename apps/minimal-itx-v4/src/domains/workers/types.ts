@@ -34,15 +34,22 @@ type WorkerRefBase = {
    * belong to the host stream path.
    */
   path: string;
-  /** Props passed to the exported WorkerEntrypoint, mirroring Cloudflare bindings. */
-  props?: Record<string, JsonValue>;
   source: WorkerSource;
 };
 
-/** Stateless workers are WorkerEntrypoint exports loaded directly from source. */
+/**
+ * Stateless workers are WorkerEntrypoint exports loaded directly from source.
+ *
+ * `props` are passed to `worker.getEntrypoint(name, { props })` and appear as
+ * `this.ctx.props` inside the exported WorkerEntrypoint. They deliberately live
+ * only on stateless refs: Durable Object facets are started with
+ * `ctx.facets.get(name, () => ({ class, id? }))`, which does not accept
+ * WorkerEntrypoint-style props.
+ */
 export type StatelessWorkerRef = WorkerRefBase & {
   type: "stateless";
   entrypoint?: string;
+  props?: Record<string, JsonValue>;
 };
 
 /**

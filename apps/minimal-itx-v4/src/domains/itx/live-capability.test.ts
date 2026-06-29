@@ -60,12 +60,28 @@ describe("live capability retention", () => {
     expect(plainObjectWithDup.dup).not.toHaveBeenCalled();
   });
 
-  it("keeps path-call dispatch separate from retention", async () => {
+  it("only flattens nested paths when explicitly requested", async () => {
     const invokeCapability = vi.fn(({ args, path }) => ({
       args,
       path,
     }));
     const capability = retainLiveCapabilityProvider({ invokeCapability });
+
+    await expect(Promise.resolve(capability.invoke(["tools", "echo"], ["hello"]))).rejects.toThrow(
+      /capability path "tools\.echo" hit undefined/,
+    );
+    expect(invokeCapability).not.toHaveBeenCalled();
+  });
+
+  it("flattens nested paths through a hardcoded invokeCapability method", async () => {
+    const invokeCapability = vi.fn(({ args, path }) => ({
+      args,
+      path,
+    }));
+    const capability = retainLiveCapabilityProvider(
+      { invokeCapability },
+      { flattenNestedPath: true },
+    );
 
     await expect(Promise.resolve(capability.invoke(["tools", "echo"], ["hello"]))).resolves.toEqual(
       {

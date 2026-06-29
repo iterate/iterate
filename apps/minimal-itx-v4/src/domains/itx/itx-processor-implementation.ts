@@ -6,7 +6,7 @@ import { normalizePath } from "../durable-object-names.ts";
 import type { StreamEvent } from "../streams/types.ts";
 import { hashString } from "../workers/worker-loader.ts";
 import { WorkerRef as WorkerRefSchema } from "../workers/schemas.ts";
-import type { JsonValue, WorkerRef } from "../workers/types.ts";
+import type { JsonValue, StatelessWorkerRef } from "../workers/types.ts";
 import type { WorkerRunner } from "../workers/worker-runner.ts";
 import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
 import { ItxProcessorContract, type CapabilityRecord } from "./itx-processor-contract.ts";
@@ -147,21 +147,33 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     const previousLive = this.#liveCapabilities.get(key);
     let record: CapabilityRecord;
     if (capability.type === "worker") {
-      // Worker capabilities are durable records: after this append, any caller
-      // can resolve the mounted path and load the worker from its ref. We validate
-      // eagerly so a bad ref never enters the capability table.
+      // Worker capabilities are durable recipes. `provideCapability()` is only
+      // allowed to validate the shape and append the record; it must not load the
+      // worker, touch Worker Loader, or create/abort a stateful facet. That keeps
+      // the stream append as the single commit point. Bad source, missing exports,
+      // or broken code now fail on first invocation, which is simpler than a
+      // provide-time "validation" path that can mutate runtime state before the
+      // capability-provided event exists.
       const workerRef = WorkerRefSchema.parse(capability.workerRef);
-      await this.#workerRunner.validate(workerRef);
       record = {
+        flattenNestedPath: capability.flattenNestedPath === true ? true : undefined,
         path,
         type: "worker",
         workerRef,
       };
     } else {
-      record = { path, type: "live" };
+      record = {
+        flattenNestedPath: capability.flattenNestedPath === true ? true : undefined,
+        path,
+        type: "live",
+      };
     }
     const nextLive =
-      capability.type === "live" ? retainLiveCapabilityProvider(capability.target) : undefined;
+      capability.type === "live"
+        ? retainLiveCapabilityProvider(capability.target, {
+            flattenNestedPath: capability.flattenNestedPath === true,
+          })
+        : undefined;
 
     let committedOffset: number;
     try {
@@ -211,6 +223,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
       // stream scope that supplies env.ITX.
       return await this.#workerRunner.invokeCapability({
         args,
+        flattenNestedPath: hit.record.flattenNestedPath === true,
         path: hit.rest,
         ref: hit.record.workerRef,
       });
@@ -276,7 +289,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     }
   }
 
-  #scriptWorkerRef(code: string): WorkerRef {
+  #scriptWorkerRef(code: string): StatelessWorkerRef {
     const source = `
       import { WorkerEntrypoint } from "cloudflare:workers";
       const fn = ${code};

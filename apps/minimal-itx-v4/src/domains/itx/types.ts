@@ -30,16 +30,28 @@ export interface ItxCapabilityHost {
   revokeCapability(input: { path: string[] }): Promise<void>;
 }
 
+export type FlattenedCapabilityInvocation = {
+  args: unknown[];
+  path: string[];
+};
+
+export type FlattenedCapabilityTarget = {
+  invokeCapability(input: FlattenedCapabilityInvocation): unknown;
+};
+
 export type ProvidedCapability =
-  | { type: "live"; target: unknown }
-  | { type: "worker"; workerRef: WorkerRef };
+  | { flattenNestedPath?: false; target: unknown; type: "live" }
+  | { flattenNestedPath: true; target: FlattenedCapabilityTarget; type: "live" }
+  | { flattenNestedPath?: boolean; type: "worker"; workerRef: WorkerRef };
 
 export type CapabilityRecord =
   | {
+      flattenNestedPath?: boolean;
       type: "live";
       path: string[];
     }
   | {
+      flattenNestedPath?: boolean;
       type: "worker";
       path: string[];
       workerRef: WorkerRef;

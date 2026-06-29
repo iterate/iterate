@@ -24,13 +24,13 @@ const WorkerSource = z.discriminatedUnion("type", [
 
 const WorkerRefBase = {
   path: z.string().transform(normalizePath),
-  props: z.record(z.string(), z.json()).optional(),
   source: WorkerSource,
 };
 
 const StatelessWorkerRef = z.strictObject({
   ...WorkerRefBase,
   entrypoint: z.string().optional(),
+  props: z.record(z.string(), z.json()).optional(),
   type: z.literal("stateless"),
 }) satisfies z.ZodType<StatelessWorkerRefType, unknown>;
 

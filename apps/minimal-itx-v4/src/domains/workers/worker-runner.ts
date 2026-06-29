@@ -1,18 +1,17 @@
 import { env } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { replayPath } from "../itx/live-capability.ts";
+import { invokeFlattenedPath, replayPath } from "../itx/live-capability.ts";
 import { loadResolvedWorker, resolveWorkerSource, type WorkerBindings } from "./worker-loader.ts";
 import type { StatefulWorkerRef, StatelessWorkerRef, WorkerRef } from "./types.ts";
 
 type StatefulWorkerRpc = {
-  get(ref: StatefulWorkerRef): Promise<unknown>;
   invokeCapability(input: {
     args?: unknown[];
+    flattenNestedPath?: boolean;
     path: string[];
     ref: StatefulWorkerRef;
   }): Promise<unknown>;
-  validate(ref: StatefulWorkerRef): Promise<void>;
 };
 
 /**
@@ -40,28 +39,18 @@ export class WorkerRunner {
     this.#workerScopeKey = props.workerScopeKey;
   }
 
-  async get<T = unknown>(ref: WorkerRef): Promise<T> {
-    if (ref.type === "stateful") {
-      return (await this.#statefulWorker(ref).get(ref)) as T;
-    }
+  async get<T = unknown>(ref: StatelessWorkerRef): Promise<T> {
     return (await this.#getStateless(ref)) as T;
-  }
-
-  async validate(ref: WorkerRef): Promise<void> {
-    if (ref.type === "stateful") {
-      await this.#statefulWorker(ref).validate(ref);
-      return;
-    }
-
-    await this.#getStateless(ref);
   }
 
   async invokeCapability({
     args = [],
+    flattenNestedPath = false,
     path,
     ref,
   }: {
     args?: unknown[];
+    flattenNestedPath?: boolean;
     path: string[];
     ref: WorkerRef;
   }): Promise<unknown> {
@@ -69,15 +58,23 @@ export class WorkerRunner {
       // Method replay must happen inside StatefulWorkerDurableObject. Returning
       // a dynamic facet stub through one DO and then invoking it from another RPC
       // target has produced opaque internal RPC failures; keeping the replay at
-      // the owning DO boundary also keeps storage affinity explicit.
-      return await this.#statefulWorker(ref).invokeCapability({ args, path, ref });
+      // the owning DO boundary also keeps storage affinity explicit. Stateful
+      // refs are also deliberately lazy: mounting a worker capability only
+      // commits the recipe to the stream, while this first real invocation is the
+      // point where source loading, version-marker writes, and facet restarts are
+      // allowed to mutate durable runtime state.
+      return await this.#statefulWorker(ref).invokeCapability({
+        args,
+        flattenNestedPath,
+        path,
+        ref,
+      });
     }
 
-    return await replayPath({
-      args,
-      path,
-      target: await this.#getStateless(ref),
-    });
+    const target = await this.#getStateless(ref);
+    return flattenNestedPath
+      ? await invokeFlattenedPath({ args, path, target })
+      : await replayPath({ args, path, target });
   }
 
   async #getStateless(ref: StatelessWorkerRef): Promise<unknown> {

@@ -70,13 +70,13 @@ export type WorkerSource =
 
 type WorkerRefBase = {
   path: string;
-  props?: Record<string, JsonValue>;
   source: WorkerSource;
 };
 
 export type StatelessWorkerRef = WorkerRefBase & {
   type: "stateless";
   entrypoint?: string;
+  props?: Record<string, JsonValue>;
 };
 
 export type StatefulWorkerRef = WorkerRefBase & {
@@ -522,7 +522,7 @@ Implementation:
 - [`itx-processor-implementation.ts`](../apps/minimal-itx-v4/src/domains/itx/itx-processor-implementation.ts)
 - [`stateful-worker-durable-object.ts`](../apps/minimal-itx-v4/src/domains/workers/stateful-worker-durable-object.ts)
 
-Current flow:
+Original reviewed flow:
 
 ```ts
 // provideCapability()
@@ -548,6 +548,12 @@ And `#facet(ref)` can:
 - Abort the existing facet if the version changed.
 - Create/resume the facet.
 
+Status note: the provide-time validation path has since been removed instead of
+split into a pure validation helper. That is intentionally simpler: worker
+capabilities now parse and append a durable recipe, and any bad source/missing
+export failure happens on first invocation. The important invariant is that
+`provideCapability()` does not load Worker Loader or mutate facet state.
+
 Why this smells:
 
 - Validation should not mutate durable state or abort a live facet.
@@ -558,12 +564,13 @@ Why this smells:
 
 Recommended direction:
 
-- Split pure validation from facet acquisition.
-- Pure validation should:
-  - parse the ref;
-  - resolve source;
-  - load the worker;
-  - verify the exported entrypoint/class exists.
+- Prefer no provide-time worker loading at all.
+- `provideCapability()` should:
+  - validate the shape of the ref;
+  - append the capability record;
+  - update the live in-memory map only after the append commits.
+- It should not resolve source.
+- It should not call Worker Loader.
 - It should not call `ctx.facets.get()`.
 - It should not write the version marker.
 - It should not call `ctx.facets.abort()`.
@@ -572,7 +579,7 @@ Recommended direction:
 
 Acceptance criteria:
 
-- `provideCapability()` validation has no durable side effects.
+- `provideCapability()` has no worker-loading or durable facet side effects.
 - Stateful source/class changes only abort/restart facets during committed
   runtime use.
 
@@ -598,16 +605,20 @@ Why this smells:
   name; it is in the outer DO name query prop.
 - The full `ref` is sent on every call, duplicating identity that is already in
   the DO name.
-- `StatefulWorkerDurableObject.get(ref)` remains public even though returning
-  facet stubs across this boundary previously produced opaque RPC failures.
+- `StatefulWorkerDurableObject.get(ref)` originally remained public even though
+  returning facet stubs across this boundary previously produced opaque RPC
+  failures. That method has since been removed; stateful worker calls now stay
+  on `invokeCapability(...)`.
 
 Possible directions:
 
 Option A: Keep the current one-outer-DO-per-durable-worker model, but tighten it.
 
-- Remove public `get(ref)` if it is not safe.
-- Keep only `validate(ref)` and `invokeCapability(...)`.
-- Use pure validation.
+- Remove public `get(ref)` if it is not safe. This has been done.
+- Keep only `invokeCapability(...)` unless a real public dry-run API becomes
+  necessary.
+- Keep provide-time worker refs lazy instead of adding a separate validation
+  path.
 - Keep `durableWorkerKey` in DO name query props.
 
 Option B: Make the worker runner DO a true supervisor for many facets under a
@@ -639,7 +650,10 @@ Acceptance criteria:
 - The relationship between stream path, durable worker key, outer DO name, and
   facet name is documented in one place.
 
-### 8. `props` are typed for stateful refs but only apply to stateless refs
+### 8. `props` are stateless-only
+
+Status: done. `props` now lives only on `StatelessWorkerRef`, and the strict
+schema rejects `props` on stateful refs.
 
 Implementation:
 
@@ -660,19 +674,20 @@ Current stateful behavior:
 return this.ctx.facets.get(FACET_NAME, () => ({ class: klass }));
 ```
 
-Why this smells:
+Why this mattered:
 
-- `props` on `WorkerRefBase` implies both stateless and stateful refs receive
-  props.
+- `props` on `WorkerRefBase` implied both stateless and stateful refs receive
+  props, but the implementation never passed them to Durable Object facets.
 - Cloudflare WorkerEntrypoint `ctx.props` applies naturally to stateless
   service bindings and loopback exports.
 - Durable Object facets expose startup options with `class` and optional `id`;
   they do not mirror WorkerEntrypoint props in the same way.
 
-Recommended direction:
+Implemented direction:
 
 - Move `props` from `WorkerRefBase` to `StatelessWorkerRef`.
-- If stateful workers need config, model it explicitly:
+- If stateful workers need config later, model it explicitly instead of
+  pretending WorkerEntrypoint props apply to facet startup:
 
 ```ts
 export type StatefulWorkerRef = {
@@ -888,8 +903,10 @@ Acceptance criteria:
 5. Keep scoped ITX dynamic-worker binding separate from unauthenticated ITX:
    - dynamic workers get `env.ITX.get()`;
    - public root keeps `authenticate(...)` through `UnauthenticatedItxRpcTarget`.
-6. Make stateful validation pure and non-mutating.
+6. Keep provided worker capabilities lazy: parse and append recipes, then load
+   workers only on invocation. This has been done for the eager validation path.
 7. Remove or hide `StatefulWorkerDurableObject.get(ref)` if not truly needed.
+   This has been done.
 
 ### Phase 2: Reduce path proxy centrality
 
@@ -1113,7 +1130,8 @@ This task is done when:
 - Dynamic worker refs/recipes are named honestly.
 - The scoped ITX dynamic-worker binding no longer exposes `authenticate`.
   This is already true after the follow-up cleanup.
-- Stateful validation is pure.
+- There is no provide-time worker validation path that loads Worker Loader or
+  mutates stateful facets.
 - `props` only exists where it actually works.
 - Dynamic workers block outbound network access by default.
 - Worker Loader cache keys are stable and collision-resistant enough for source

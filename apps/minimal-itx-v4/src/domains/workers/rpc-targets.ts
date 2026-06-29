@@ -95,23 +95,20 @@ class WorkerRpcTarget extends RpcTarget {
   }
 
   async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
-    if (this.#ref.type === "stateful") {
+    const ref = this.#ref;
+    if (ref.type === "stateful") {
       return await this.#statefulWorker().invokeCapability({
         args,
         path,
-        ref: this.#ref,
+        ref,
       });
     }
 
     return await replayPath({
       args,
       path,
-      target: await this.#runner.get(this.#ref),
+      target: await this.#runner.get(ref),
     });
-  }
-
-  async validate(): Promise<void> {
-    await this.#runner.validate(this.#ref);
   }
 
   #statefulWorker(): StatefulWorkerRpc {

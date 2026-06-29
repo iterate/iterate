@@ -133,32 +133,32 @@ function startMockSlack(): Promise<{
   });
 }
 
-function pathCallable(target: unknown): {
-  invokeCapability(input: { args?: unknown[]; path: string[] }): unknown;
-} {
-  return {
-    invokeCapability({ args = [], path }) {
-      if (path.length === 0) return target;
+class PathCallableTarget extends RpcTarget {
+  constructor(readonly target: unknown) {
+    super();
+  }
 
-      let receiver = target;
-      for (const segment of path.slice(0, -1)) {
-        if (receiver === null || (typeof receiver !== "object" && typeof receiver !== "function")) {
-          throw new Error(`path "${path.join(".")}" hit ${String(receiver)}`);
-        }
-        receiver = Reflect.get(receiver, segment);
-      }
+  invokeCapability({ args, path }: { args: unknown[]; path: string[] }) {
+    if (path.length === 0) return this.target;
 
-      const method = path.at(-1)!;
+    let receiver = this.target;
+    for (const segment of path.slice(0, -1)) {
       if (receiver === null || (typeof receiver !== "object" && typeof receiver !== "function")) {
         throw new Error(`path "${path.join(".")}" hit ${String(receiver)}`);
       }
-      const callable = Reflect.get(receiver, method);
-      if (typeof callable !== "function") {
-        throw new Error(`path "${path.join(".")}" did not resolve to a function`);
-      }
-      return Reflect.apply(callable, receiver, args);
-    },
-  };
+      receiver = Reflect.get(receiver, segment);
+    }
+
+    const method = path.at(-1)!;
+    if (receiver === null || (typeof receiver !== "object" && typeof receiver !== "function")) {
+      throw new Error(`path "${path.join(".")}" hit ${String(receiver)}`);
+    }
+    const callable = Reflect.get(receiver, method);
+    if (typeof callable !== "function") {
+      throw new Error(`path "${path.join(".")}" did not resolve to a function`);
+    }
+    return Reflect.apply(callable, receiver, args);
+  }
 }
 
 function fencedAgentScript(code: string): string {
@@ -562,6 +562,92 @@ describe("minimal itx v4", () => {
     await project.db.sql("INSERT INTO records VALUES (?)", "mounted");
     // @ts-expect-error - dynamic database capability mounted by this test.
     expect(await project.db.sql("SELECT value FROM records")).toEqual([{ value: "mounted" }]);
+  });
+
+  test("Worker capabilities can flatten nested paths into invokeCapability", async () => {
+    const marker = crypto.randomUUID();
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+    using project = itx.projects.create({ slug: `worker-flatten-${marker}` });
+
+    const source = {
+      mainModule: "router.js",
+      modules: {
+        "router.js": `
+          import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
+
+          export class RouterEntrypoint extends WorkerEntrypoint {
+            invokeCapability(input) {
+              return { kind: "stateless", marker: ${JSON.stringify(marker)}, ...input };
+            }
+          }
+
+          export class RouterDurableObject extends DurableObject {
+            invokeCapability(input) {
+              return { kind: "stateful", marker: ${JSON.stringify(marker)}, ...input };
+            }
+          }
+        `,
+      },
+      type: "inline",
+    } as const;
+
+    disposeRpcResult(
+      await project.provideCapability({
+        path: ["statelessRouter"],
+        capability: {
+          flattenNestedPath: true,
+          type: "worker",
+          workerRef: {
+            entrypoint: "RouterEntrypoint",
+            path: "/",
+            source,
+            type: "stateless",
+          },
+        },
+      }),
+    );
+    // @ts-expect-error - dynamic capability root
+    expect(await project.statelessRouter.tools.echo("hello")).toEqual({
+      args: ["hello"],
+      kind: "stateless",
+      marker,
+      path: ["tools", "echo"],
+    });
+    // @ts-expect-error - dynamic capability root
+    expect(await project.statelessRouter("root")).toEqual({
+      args: ["root"],
+      kind: "stateless",
+      marker,
+      path: [],
+    });
+
+    disposeRpcResult(
+      await project.provideCapability({
+        path: ["statefulRouter"],
+        capability: {
+          flattenNestedPath: true,
+          type: "worker",
+          workerRef: {
+            className: "RouterDurableObject",
+            durableWorkerKey: `router-${crypto.randomUUID()}`,
+            path: "/",
+            source,
+            type: "stateful",
+          },
+        },
+      }),
+    );
+    // @ts-expect-error - dynamic capability root
+    expect(await project.statefulRouter.tools.echo("hello")).toEqual({
+      args: ["hello"],
+      kind: "stateful",
+      marker,
+      path: ["tools", "echo"],
+    });
   });
 
   test("Worker capabilities cover project/agent, stateful/stateless, repo/inline refs and env.ITX cross-calls", async () => {
@@ -1507,8 +1593,69 @@ describe("minimal itx v4", () => {
     expect(await callerProject.math.add(20, 22)).toBe(42);
   });
 
-  test("Explicit path-call live capability carriers receive the remaining member path", async () => {
+  test("RpcTarget live capabilities can dispatch through nested RpcTarget getters", async () => {
     const marker = crypto.randomUUID();
+
+    class ChatSdk extends RpcTarget {
+      postMessage(input: { channel: string; text: string }) {
+        return {
+          input,
+          marker,
+          via: "nested-rpc-target-getter",
+        };
+      }
+    }
+
+    class SlackSdk extends RpcTarget {
+      get chat() {
+        return new ChatSdk();
+      }
+
+      invokeCapability() {
+        throw new Error("flattened dispatch should not be used in normal dispatch mode");
+      }
+    }
+
+    using providerSession = withItxSession();
+    using providerItx = providerSession.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+    using project = providerItx.projects.create({ slug: `nested-rpc-target-live-${marker}` });
+    const { projectId } = await project.describe();
+
+    await project.provideCapability({
+      path: ["slack"],
+      capability: { type: "live", target: new SlackSdk() },
+    });
+
+    using callerSession = withItxSession();
+    using callerItx = callerSession.authenticate({
+      type: "token",
+      token: {
+        principal: "alice",
+        projectScopes: [projectId],
+        type: "user",
+      },
+    });
+    using callerProject = callerItx.projects.get(projectId);
+
+    // @ts-expect-error - dynamic capability root
+    expect(await callerProject.slack.chat.postMessage({ channel: "C123", text: "hi" })).toEqual({
+      input: { channel: "C123", text: "hi" },
+      marker,
+      via: "nested-rpc-target-getter",
+    });
+  });
+
+  test("Flattened live capabilities receive the remaining member path", async () => {
+    const marker = crypto.randomUUID();
+
+    class Carrier extends RpcTarget {
+      invokeCapability({ args, path }: { args: unknown[]; path: string[] }) {
+        return { args, marker, path };
+      }
+    }
 
     using providerSession = withItxSession();
     using providerItx = providerSession.authenticate({
@@ -1522,12 +1669,9 @@ describe("minimal itx v4", () => {
       await project.provideCapability({
         path: ["carrier"],
         capability: {
+          flattenNestedPath: true,
           type: "live",
-          target: {
-            invokeCapability({ args, path }: { args?: unknown[]; path: string[] }) {
-              return { args, marker, path };
-            },
-          },
+          target: new Carrier(),
         },
       }),
     );
@@ -1651,8 +1795,9 @@ describe("minimal itx v4", () => {
       const provision = await project.provideCapability({
         path: ["slack"],
         capability: {
+          flattenNestedPath: true,
           type: "live",
-          target: pathCallable(slack),
+          target: new PathCallableTarget(slack),
         },
       });
       const { revoke } = provision;
