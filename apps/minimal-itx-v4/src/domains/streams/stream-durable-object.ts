@@ -419,10 +419,13 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   #streamStub(path: string) {
     return this.env.STREAM.getByName(
-      DurableObjectNameCodec.stringify({
-        path,
-        projectId: this.name.projectId,
-      }),
+      DurableObjectNameCodec.stringify(
+        {
+          path,
+          projectId: this.name.projectId,
+        },
+        { allowNullProjectId: true },
+      ),
     );
   }
 
@@ -840,7 +843,7 @@ function parseStreamDurableObjectName(name: string | undefined) {
   if (!name) {
     throw new Error("Stream Durable Object must be addressed by name.");
   }
-  return DurableObjectNameCodec.parse(name);
+  return DurableObjectNameCodec.parse(name, { allowNullProjectId: true });
 }
 
 function* chunkBytes(value: Uint8Array, chunkSize: number): Generator<[number, ArrayBuffer]> {

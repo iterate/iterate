@@ -8,6 +8,7 @@ import { DynamicWorkerRef as DynamicWorkerRefSchema } from "../dynamic-workers/s
 import type { DynamicWorkerRef, JsonValue } from "../dynamic-workers/types.ts";
 import type { StreamEvent } from "../streams/types.ts";
 import { TRUSTED_INTERNAL_ITX_TOKEN } from "../../auth.ts";
+import type { ProjectDurableObjectName } from "../durable-object-names.ts";
 import {
   replayPath,
   retainLiveCapabilityProvider,
@@ -26,11 +27,6 @@ export type ItxProcessorRpc = {
   ): { path: string[] } | Promise<{ path: string[] }>;
   revokeCapability(input: { path: string[] }): void | Promise<void>;
   runScript(code: string): RunScriptResult | Promise<RunScriptResult>;
-};
-
-type ItxHostContext = {
-  agentPath?: string;
-  projectId: string;
 };
 
 type CompletedPayload = {
@@ -94,13 +90,13 @@ export class ItxProcessor
 {
   readonly contract = ItxProcessorContract;
   #dynamicWorkerRuntime: DynamicWorkerRuntimeRpcTarget;
-  #host: ItxHostContext;
+  #host: ProjectDurableObjectName;
   #liveCapabilities = new Map<string, LiveCapability>();
 
   constructor(
     args: StreamProcessorConstructorArgs<typeof ItxProcessorContract, object> & {
       dynamicWorkerRuntime: DynamicWorkerRuntimeRpcTarget;
-      host: ItxHostContext;
+      host: ProjectDurableObjectName;
     },
   ) {
     super(args);
@@ -297,12 +293,10 @@ export class ItxProcessor
       export class ScriptEntrypoint extends WorkerEntrypoint {
         async run() {
           const root = await this.env.ITX.authenticate(this.ctx.props.auth);
-          const project = await root.projects.get(this.ctx.props.projectId);
-          const itx =
-            this.ctx.props.agentPath === undefined
-              ? project
-              : await project.agents.get(this.ctx.props.agentPath);
-          return await fn(await itx);
+          const { path, projectId } = this.ctx.props.host;
+          const project = await root.projects.get(projectId);
+          const itx = path === "/" ? project : await project.agents.get(path);
+          return await fn(itx);
         }
       }
     `;
@@ -320,8 +314,7 @@ export class ItxProcessor
             type: "trusted-internal",
             token: TRUSTED_INTERNAL_ITX_TOKEN,
           },
-          projectId: this.#host.projectId,
-          ...(this.#host.agentPath === undefined ? {} : { agentPath: this.#host.agentPath }),
+          host: this.#host,
         },
         type: "worker-entrypoint",
       },

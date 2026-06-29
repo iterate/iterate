@@ -14,7 +14,7 @@ import { ProjectRpcTarget } from "./rpc-targets.ts";
 import type { ProjectWorker } from "./types.ts";
 
 export class ProjectDurableObject extends DurableObject<Env> {
-  readonly #name = DurableObjectNameCodec.parseProjectScoped(this.ctx.id.name!);
+  readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   readonly #processorHost = createStreamProcessorHost(this.ctx);
 
   readonly #dynamicWorkerRuntime = new DynamicWorkerRuntimeRpcTarget({

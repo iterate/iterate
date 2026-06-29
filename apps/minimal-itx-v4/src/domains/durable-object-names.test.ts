@@ -20,12 +20,16 @@ describe("DurableObjectNameCodec", () => {
 
   it("encodes null projectId as the global host", () => {
     expect(
-      DurableObjectNameCodec.stringify({ projectId: null, path: "/repos/iterate-config-base" }),
-    ).toBe(`${DurableObjectNameCodec.globalHost}.iterate/repos/iterate-config-base`);
+      DurableObjectNameCodec.stringify(
+        { projectId: null, path: "/repos/iterate-config-base" },
+        { allowNullProjectId: true },
+      ),
+    ).toBe("global.iterate/repos/iterate-config-base");
   });
 
   it("parses URL-shaped names back into parts", () => {
     expect(DurableObjectNameCodec.parse("prj_123.iterate/repos/repo_123")).toEqual({
+      durableObjectName: "prj_123.iterate/repos/repo_123",
       projectId: "prj_123",
       path: "/repos/repo_123",
       props: {},
@@ -33,7 +37,12 @@ describe("DurableObjectNameCodec", () => {
   });
 
   it("parses the global host back to null projectId", () => {
-    expect(DurableObjectNameCodec.parse("global.iterate/repos/iterate-config-base")).toEqual({
+    expect(
+      DurableObjectNameCodec.parse("global.iterate/repos/iterate-config-base", {
+        allowNullProjectId: true,
+      }),
+    ).toEqual({
+      durableObjectName: "global.iterate/repos/iterate-config-base",
       projectId: null,
       path: "/repos/iterate-config-base",
       props: {},
@@ -42,6 +51,7 @@ describe("DurableObjectNameCodec", () => {
 
   it("parses query props back into a record", () => {
     expect(DurableObjectNameCodec.parse("prj_123.iterate/bla/bla?branch=main&env=prod")).toEqual({
+      durableObjectName: "prj_123.iterate/bla/bla?branch=main&env=prod",
       projectId: "prj_123",
       path: "/bla/bla",
       props: { branch: "main", env: "prod" },
@@ -54,16 +64,22 @@ describe("DurableObjectNameCodec", () => {
       path: "/agents/onboarding",
       props: { slot: "a" },
     };
-    expect(DurableObjectNameCodec.parse(DurableObjectNameCodec.stringify(input))).toEqual({
+    const durableObjectName = DurableObjectNameCodec.stringify(input);
+    expect(DurableObjectNameCodec.parse(durableObjectName)).toEqual({
       ...input,
+      durableObjectName,
       props: { slot: "a" },
     });
   });
 
   it("round-trips global names", () => {
     const input = { projectId: null, path: "/projects/catalog" };
-    expect(DurableObjectNameCodec.parse(DurableObjectNameCodec.stringify(input))).toEqual({
+    const durableObjectName = DurableObjectNameCodec.stringify(input, {
+      allowNullProjectId: true,
+    });
+    expect(DurableObjectNameCodec.parse(durableObjectName, { allowNullProjectId: true })).toEqual({
       ...input,
+      durableObjectName,
       props: {},
     });
   });
@@ -87,9 +103,15 @@ describe("DurableObjectNameCodec", () => {
     ).toThrow(/at most 256 bytes/);
   });
 
-  it("parseProjectScoped rejects global names", () => {
-    expect(() => DurableObjectNameCodec.parseProjectScoped("global.iterate/")).toThrow(
-      /must be project-scoped/,
-    );
+  it("rejects null project ids unless global names are allowed", () => {
+    const stringifyUnchecked = DurableObjectNameCodec.stringify as unknown as (input: {
+      path: string;
+      projectId: string | null;
+    }) => string;
+    expect(() => stringifyUnchecked({ projectId: null, path: "/" })).toThrow(/allowNullProjectId/);
+  });
+
+  it("rejects global names unless null project ids are allowed", () => {
+    expect(() => DurableObjectNameCodec.parse("global.iterate/")).toThrow(/allowNullProjectId/);
   });
 });

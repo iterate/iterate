@@ -11,10 +11,13 @@ export class StreamRpcTarget extends RpcTarget implements Stream {
 
   get durableObjectStub() {
     return env.STREAM.getByName(
-      DurableObjectNameCodec.stringify({
-        projectId: this.props.projectId,
-        path: this.props.path,
-      }),
+      DurableObjectNameCodec.stringify(
+        {
+          projectId: this.props.projectId,
+          path: this.props.path,
+        },
+        { allowNullProjectId: true },
+      ),
     );
   }
 

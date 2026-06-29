@@ -12,7 +12,7 @@ import { AgentRpcTarget } from "./rpc-targets.ts";
 import type { Agent } from "./types.ts";
 
 export class AgentDurableObject extends DurableObject<Env> {
-  readonly #name = DurableObjectNameCodec.parseProjectScoped(this.ctx.id.name!);
+  readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   readonly #processorHost = createStreamProcessorHost(this.ctx);
 
   constructor(ctx: DurableObjectState, env: Env) {

@@ -19,7 +19,7 @@ const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 const REPO_DIR = "/repo";
 
 export class RepoDurableObject extends DurableObject<Env> {
-  readonly #name = DurableObjectNameCodec.parseProjectScoped(this.ctx.id.name!);
+  readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   readonly #host = createStreamProcessorHost(this.ctx);
 
   constructor(ctx: DurableObjectState, env: Env) {
