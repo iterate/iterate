@@ -5,7 +5,9 @@ import { test } from "node:test";
 import { spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 
-import { TypeAwareLintService } from "../oxlint-type-aware.js";
+import { SignatureKind } from "@typescript/native-preview/unstable/sync";
+
+import { TypeAwareLintService } from "./oxlint-type-aware.ts";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const pluginPath = join(repoRoot, "oxlint-plugin-iterate.js");
@@ -340,7 +342,8 @@ test("type-aware lint service refreshes changed files without restarting the pro
   ].join("\n");
   fixture.write("implementation.ts", firstSource);
 
-  const firstProperties = service.getCallablePropertiesOfNamedType(
+  const firstProperties = getCallablePropertyNames(
+    service,
     join(fixture.root, "implementation.ts"),
     "Foo",
     firstSource.indexOf("Foo {"),
@@ -362,16 +365,14 @@ test("type-aware lint service refreshes changed files without restarting the pro
   ].join("\n");
   fixture.write("implementation.ts", secondSource);
 
-  const secondProperties = service.getCallablePropertiesOfNamedType(
+  const secondProperties = getCallablePropertyNames(
+    service,
     join(fixture.root, "implementation.ts"),
     "Foo",
     secondSource.indexOf("Foo {"),
   );
 
-  assert.deepEqual(
-    secondProperties?.map((property) => property.name),
-    ["f"],
-  );
+  assert.deepEqual(secondProperties, ["f"]);
 });
 
 test("type-aware lint service can read unsaved text overlays", () => {
@@ -396,7 +397,8 @@ test("type-aware lint service can read unsaved text overlays", () => {
   ].join("\n");
   fixture.write("implementation.ts", savedSource);
 
-  const firstProperties = service.getCallablePropertiesOfNamedType(
+  const firstProperties = getCallablePropertyNames(
+    service,
     fileName,
     "Foo",
     savedSource.indexOf("Foo {"),
@@ -418,16 +420,14 @@ test("type-aware lint service can read unsaved text overlays", () => {
   ].join("\n");
   service.setFileText(fileName, unsavedSource);
 
-  const secondProperties = service.getCallablePropertiesOfNamedType(
+  const secondProperties = getCallablePropertyNames(
+    service,
     fileName,
     "Foo",
     unsavedSource.indexOf("Foo {"),
   );
 
-  assert.deepEqual(
-    secondProperties?.map((property) => property.name),
-    ["f"],
-  );
+  assert.deepEqual(secondProperties, ["f"]);
   assert.equal(fixture.read("implementation.ts"), savedSource);
 });
 
@@ -642,6 +642,24 @@ test("typed-no-floating-promises reports only unhandled promise-like expression 
   assert.doesNotMatch(output, /5:1/);
   assert.doesNotMatch(output, /6:1/);
 });
+
+function getCallablePropertyNames(
+  service: TypeAwareLintService,
+  fileName: string,
+  name: string,
+  position: number,
+) {
+  const typed = service.resolveTypeByName(fileName, name, position);
+  if (!typed) return undefined;
+  return typed.project.checker
+    .getPropertiesOfType(typed.type)
+    .filter((property) => {
+      const propertyType = typed.project.checker.getTypeOfSymbol(property);
+      if (!propertyType) return false;
+      return typed.project.checker.getSignaturesOfType(propertyType, SignatureKind.Call).length > 0;
+    })
+    .map((property) => property.name);
+}
 
 function createOxlintFixture(input: { rules: Record<string, unknown> }) {
   const root = mkdtempSync(join(tmpdir(), "iterate-oxlint-type-aware-"));

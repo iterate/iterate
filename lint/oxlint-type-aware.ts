@@ -1,7 +1,15 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { API, SignatureKind, SymbolFlags } from "@typescript/native-preview/unstable/sync";
+import {
+  API,
+  SignatureKind,
+  SymbolFlags,
+  type Project,
+  type Snapshot,
+  type Symbol,
+  type Type,
+} from "@typescript/native-preview/unstable/sync";
 
 const IGNORED_DIRS = new Set([
   ".alchemy",
@@ -13,13 +21,9 @@ const IGNORED_DIRS = new Set([
   "node_modules",
 ]);
 
-/** @type {Map<string, TypeAwareLintService>} */
-const servicesByCwd = new Map();
+const servicesByCwd = new Map<string, TypeAwareLintService>();
 
-/**
- * @param {{ cwd?: string }} options
- */
-export function getTypeAwareLintService(options = {}) {
+export function getTypeAwareLintService(options: { cwd?: string } = {}) {
   const cwd = resolve(options.cwd || process.cwd());
   let service = servicesByCwd.get(cwd);
   if (!service) {
@@ -30,29 +34,17 @@ export function getTypeAwareLintService(options = {}) {
 }
 
 export class TypeAwareLintService {
-  /** @type {string} */
-  cwd;
-  /** @type {API | undefined} */
-  api;
-  /** @type {import("@typescript/native-preview/unstable/sync").Snapshot | undefined} */
-  snapshot;
-  /** @type {Set<string>} */
-  openFiles = new Set();
-  /** @type {string[] | undefined} */
-  tsconfigFiles;
-  /** @type {Map<string, import("@typescript/native-preview/unstable/sync").Project | undefined>} */
-  projectByFile = new Map();
-  /** @type {Map<string, number>} */
-  mtimesByFile = new Map();
-  /** @type {Map<string, string>} */
-  textByFile = new Map();
-  /** @type {Set<string>} */
-  textChangedFiles = new Set();
+  cwd: string;
+  api: API | undefined;
+  snapshot: Snapshot | undefined;
+  openFiles = new Set<string>();
+  tsconfigFiles: string[] | undefined;
+  projectByFile = new Map<string, Project | undefined>();
+  mtimesByFile = new Map<string, number>();
+  textByFile = new Map<string, string>();
+  textChangedFiles = new Set<string>();
 
-  /**
-   * @param {{ cwd: string }} input
-   */
-  constructor(input) {
+  constructor(input: { cwd: string }) {
     this.cwd = input.cwd;
   }
 
@@ -76,10 +68,7 @@ export class TypeAwareLintService {
     this.textChangedFiles.clear();
   }
 
-  /**
-   * @param {string} fileName
-   */
-  getProjectForFile(fileName) {
+  getProjectForFile(fileName: string) {
     const absoluteFileName = resolve(fileName);
     this.refreshSnapshotForChangedFiles([absoluteFileName]);
     const cached = this.projectByFile.get(absoluteFileName);
@@ -96,11 +85,7 @@ export class TypeAwareLintService {
     return project;
   }
 
-  /**
-   * @param {string} fileName
-   * @param {number} position
-   */
-  getTypeAtPosition(fileName, position) {
+  getTypeAtPosition(fileName: string, position: number) {
     const project = this.getProjectForFile(fileName);
     if (!project) return undefined;
     const type = project.checker.getTypeAtPosition(resolve(fileName), position);
@@ -108,21 +93,13 @@ export class TypeAwareLintService {
     return { project, type };
   }
 
-  /**
-   * @param {string} fileName
-   * @param {{ range?: [number, number] }} node
-   */
-  getTypeAtNodeStart(fileName, node) {
+  getTypeAtNodeStart(fileName: string, node: RangedNode) {
     const position = node.range?.[0];
     if (typeof position !== "number") return undefined;
     return this.getTypeAtPosition(fileName, position);
   }
 
-  /**
-   * @param {string} fileName
-   * @param {{ range?: [number, number], type?: string }} node
-   */
-  getThenableInfo(fileName, node) {
+  getThenableInfo(fileName: string, node: ExpressionNode) {
     const typed = this.getExpressionTypeInfo(fileName, node);
     if (!typed) return undefined;
     if (!this.isThenableType(typed.project, typed.type)) return undefined;
@@ -133,22 +110,14 @@ export class TypeAwareLintService {
     };
   }
 
-  /**
-   * @param {string} fileName
-   * @param {{ range?: [number, number], type?: string, callee?: { range?: [number, number], type?: string, property?: { range?: [number, number] } } }} node
-   */
-  getExpressionTypeInfo(fileName, node) {
+  getExpressionTypeInfo(fileName: string, node: ExpressionNode) {
     if (node.type === "CallExpression") {
       return this.getCallReturnTypeInfo(fileName, node);
     }
     return this.getTypeAtNodeStart(fileName, node);
   }
 
-  /**
-   * @param {string} fileName
-   * @param {{ callee?: { range?: [number, number], type?: string, property?: { range?: [number, number] } } }} node
-   */
-  getCallReturnTypeInfo(fileName, node) {
+  getCallReturnTypeInfo(fileName: string, node: CallExpressionNode) {
     const calleePosition = getCallablePosition(node.callee);
     if (calleePosition === undefined) return undefined;
 
@@ -167,12 +136,7 @@ export class TypeAwareLintService {
     return { project: calleeType.project, type };
   }
 
-  /**
-   * @param {string} fileName
-   * @param {string} name
-   * @param {number} position
-   */
-  resolveTypeByName(fileName, name, position) {
+  resolveTypeByName(fileName: string, name: string, position: number) {
     const project = this.getProjectForFile(fileName);
     if (!project) return undefined;
     const symbol = project.checker.resolveName(
@@ -187,33 +151,14 @@ export class TypeAwareLintService {
     return { project, symbol, type };
   }
 
-  /**
-   * @param {string} fileName
-   * @param {string} name
-   * @param {number} position
-   */
-  getCallablePropertiesOfNamedType(fileName, name, position) {
-    const typed = this.resolveTypeByName(fileName, name, position);
-    if (!typed) return undefined;
-
-    return getCallablePropertiesOfType(typed.project, typed.type);
-  }
-
-  /**
-   * @param {import("@typescript/native-preview/unstable/sync").Project} project
-   * @param {import("@typescript/native-preview/unstable/sync").Type} type
-   */
-  isThenableType(project, type) {
+  isThenableType(project: Project, type: Type) {
     const properties = project.checker.getPropertiesOfType(type);
-    return properties.some((property) => property.name === "then");
+    return properties.some((property: Symbol) => property.name === "then");
   }
 
   getSnapshot() {
     if (!this.api) {
-      this.api = new API({
-        cwd: this.cwd,
-        fs: { readFile: (fileName) => this.textByFile.get(resolve(fileName)) },
-      });
+      this.api = this.createApi();
     }
     if (!this.snapshot) {
       this.updateSnapshot({ openProjects: this.getTsconfigFiles() });
@@ -221,20 +166,14 @@ export class TypeAwareLintService {
     return this.snapshot;
   }
 
-  /**
-   * @param {string} fileName
-   */
-  openFile(fileName) {
+  openFile(fileName: string) {
     if (this.openFiles.has(fileName)) return;
     this.openFiles.add(fileName);
     this.projectByFile.clear();
     this.updateSnapshot({ openFiles: [fileName] });
   }
 
-  /**
-   * @param {Parameters<API["updateSnapshot"]>[0]} params
-   */
-  updateSnapshot(params) {
+  updateSnapshot(params: Parameters<API["updateSnapshot"]>[0]) {
     const previous = this.snapshot;
     this.snapshot = this.requireApi().updateSnapshot(params);
     previous?.dispose();
@@ -245,14 +184,18 @@ export class TypeAwareLintService {
 
   requireApi() {
     if (!this.api) {
-      this.api = new API({
-        cwd: this.cwd,
-        fs: {
-          readFile: (fileName) => this.textByFile.get(resolve(fileName)),
-        },
-      });
+      this.api = this.createApi();
     }
     return this.api;
+  }
+
+  createApi() {
+    return new API({
+      cwd: this.cwd,
+      fs: {
+        readFile: (fileName) => this.textByFile.get(resolve(fileName)),
+      },
+    });
   }
 
   getTsconfigFiles() {
@@ -262,10 +205,7 @@ export class TypeAwareLintService {
     return this.tsconfigFiles;
   }
 
-  /**
-   * @param {readonly string[]} fileNames
-   */
-  refreshSnapshotForChangedFiles(fileNames) {
+  refreshSnapshotForChangedFiles(fileNames: readonly string[]) {
     const changedFiles = [
       ...new Set([
         ...this.drainTextChangedFiles(fileNames),
@@ -282,20 +222,14 @@ export class TypeAwareLintService {
     });
   }
 
-  /**
-   * @param {import("@typescript/native-preview/unstable/sync").Project | undefined} project
-   */
-  trackProjectFiles(project) {
+  trackProjectFiles(project: Project | undefined) {
     if (isInferredProject(project)) return;
     for (const fileName of project.rootFiles) {
       this.rememberFileMtime(fileName);
     }
   }
 
-  /**
-   * @param {string} fileName
-   */
-  hasFileChanged(fileName) {
+  hasFileChanged(fileName: string) {
     const previous = this.mtimesByFile.get(fileName);
     const current = getFileMtime(fileName);
     if (previous === undefined) {
@@ -311,19 +245,12 @@ export class TypeAwareLintService {
     return true;
   }
 
-  /**
-   * @param {string} fileName
-   */
-  rememberFileMtime(fileName) {
+  rememberFileMtime(fileName: string) {
     const mtime = getFileMtime(fileName);
     if (mtime !== undefined) this.mtimesByFile.set(fileName, mtime);
   }
 
-  /**
-   * @param {string} fileName
-   * @param {string} text
-   */
-  setFileText(fileName, text) {
+  setFileText(fileName: string, text: string) {
     const absoluteFileName = resolve(fileName);
     if (this.textByFile.get(absoluteFileName) === text) return;
     this.textByFile.set(absoluteFileName, text);
@@ -331,10 +258,7 @@ export class TypeAwareLintService {
     this.mtimesByFile.set(absoluteFileName, getFileMtime(absoluteFileName) ?? -1);
   }
 
-  /**
-   * @param {readonly string[]} fileNames
-   */
-  drainTextChangedFiles(fileNames) {
+  drainTextChangedFiles(fileNames: readonly string[]) {
     const candidates = fileNames.map((fileName) => resolve(fileName));
     const changedFiles = candidates.filter((fileName) => this.textChangedFiles.has(fileName));
     for (const fileName of changedFiles) {
@@ -344,53 +268,36 @@ export class TypeAwareLintService {
   }
 }
 
-/**
- * @param {import("@typescript/native-preview/unstable/sync").Project} project
- * @param {import("@typescript/native-preview/unstable/sync").Type} type
- */
-function getCallablePropertiesOfType(project, type) {
-  return project.checker
-    .getPropertiesOfType(type)
-    .map((property) => {
-      const propertyType = project.checker.getTypeOfSymbol(property);
-      const signature = project.checker.getSignaturesOfType(propertyType, SignatureKind.Call)[0];
-      if (!signature) return undefined;
-      return {
-        name: property.name,
-        parameters: signature.getParameters().map((parameter) => parameter.name),
-        hasRestParameter: signature.hasRestParameter,
-      };
-    })
-    .filter(Boolean);
-}
+type RangedNode = {
+  range?: [number, number];
+  type?: string;
+};
 
-/**
- * @param {{ range?: [number, number], type?: string, property?: { range?: [number, number] }} | undefined} callee
- */
-function getCallablePosition(callee) {
+type CallableNode = RangedNode & {
+  property?: RangedNode;
+};
+
+type CallExpressionNode = RangedNode & {
+  type: "CallExpression";
+  callee?: CallableNode;
+};
+
+type ExpressionNode = RangedNode | CallExpressionNode;
+
+function getCallablePosition(callee: CallableNode | undefined) {
   if (!callee) return undefined;
   if (callee.type === "MemberExpression") return callee.property?.range?.[0];
   return callee.range?.[0];
 }
 
-/**
- * @param {import("@typescript/native-preview/unstable/sync").Project | undefined} project
- */
-function isInferredProject(project) {
+function isInferredProject(project: Project | undefined) {
   return !project || project.configFileName === "/dev/null/inferred";
 }
 
-/**
- * @param {string} root
- */
-function findTsconfigFiles(root) {
-  /** @type {string[]} */
-  const results = [];
+function findTsconfigFiles(root: string) {
+  const results: string[] = [];
 
-  /**
-   * @param {string} dir
-   */
-  function visit(dir) {
+  function visit(dir: string) {
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
@@ -414,8 +321,7 @@ function findTsconfigFiles(root) {
   return results.sort();
 }
 
-/** @param {string} fileName */
-function getFileMtime(fileName) {
+function getFileMtime(fileName: string) {
   try {
     return statSync(fileName).mtimeMs;
   } catch {

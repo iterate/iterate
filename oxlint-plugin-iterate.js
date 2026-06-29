@@ -1,10 +1,11 @@
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
+import { SignatureKind } from "@typescript/native-preview/unstable/sync";
 import esquery from "esquery";
 import unicorn from "eslint-plugin-unicorn";
 
-import { getTypeAwareLintService } from "./oxlint-type-aware.js";
+import { getTypeAwareLintService } from "./lint/oxlint-type-aware.ts";
 
 const LIFECYCLE_HOOKS = new Set(["beforeAll", "beforeEach", "afterAll", "afterEach"]);
 const VI_MOCK_CALLS = new Set(["vi.mock", "vi.doMock"]);
@@ -401,6 +402,34 @@ function hasOnlySimpleImplementationParameterTypes(context, element) {
     const typeText = getParameterTypeText(context, parameter);
     return typeText !== undefined && isSimpleImplementationParameterType(typeText);
   });
+}
+
+/**
+ * @param {import("./lint/oxlint-type-aware.ts").TypeAwareLintService} service
+ * @param {import("eslint").Rule.RuleContext} context
+ * @param {{ name: string; position: number }} candidate
+ */
+function getMechanicalClassImplContractMethods(service, context, candidate) {
+  const typed = service.resolveTypeByName(context.filename, candidate.name, candidate.position);
+  if (!typed) return undefined;
+
+  return typed.project.checker
+    .getPropertiesOfType(typed.type)
+    .map((property) => {
+      const propertyType = typed.project.checker.getTypeOfSymbol(property);
+      if (!propertyType) return undefined;
+      const signature = typed.project.checker.getSignaturesOfType(
+        propertyType,
+        SignatureKind.Call,
+      )[0];
+      if (!signature) return undefined;
+      return {
+        name: property.name,
+        parameters: signature.getParameters().map((parameter) => parameter.name),
+        hasRestParameter: signature.hasRestParameter,
+      };
+    })
+    .filter(Boolean);
 }
 
 /**
@@ -860,7 +889,7 @@ const plugin = {
       create(context) {
         if (!isTypeScriptSourceFile(context.filename || "")) return {};
 
-        /** @type {import("./oxlint-type-aware.js").TypeAwareLintService | undefined} */
+        /** @type {import("./lint/oxlint-type-aware.ts").TypeAwareLintService | undefined} */
         let service;
 
         return {
@@ -896,7 +925,7 @@ const plugin = {
       create(context) {
         if (!isTypeScriptSourceFile(context.filename || "")) return {};
 
-        /** @type {import("./oxlint-type-aware.js").TypeAwareLintService | undefined} */
+        /** @type {import("./lint/oxlint-type-aware.ts").TypeAwareLintService | undefined} */
         let service;
 
         return {
@@ -914,11 +943,7 @@ const plugin = {
             const contract = contracts
               .map((candidate) => ({
                 candidate,
-                properties: service.getCallablePropertiesOfNamedType(
-                  context.filename,
-                  candidate.name,
-                  candidate.position,
-                ),
+                properties: getMechanicalClassImplContractMethods(service, context, candidate),
               }))
               .find(({ properties }) =>
                 properties?.some((property) => classMethodNames.has(property.name)),
