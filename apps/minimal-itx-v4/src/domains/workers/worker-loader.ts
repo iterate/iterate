@@ -57,6 +57,7 @@ export async function resolveWorkerSource({
 
 export function loadResolvedWorker({
   bindings,
+  globalOutbound,
   loader,
   projectId,
   ref,
@@ -64,6 +65,7 @@ export function loadResolvedWorker({
   workerScopeKey,
 }: {
   bindings: WorkerBindings;
+  globalOutbound: Fetcher;
   loader: WorkerLoader;
   projectId: string;
   ref: WorkerRef;
@@ -90,6 +92,7 @@ export function loadResolvedWorker({
     compatibilityDate: WORKER_COMPATIBILITY_DATE,
     compatibilityFlags: ["nodejs_compat"],
     env: bindings,
+    globalOutbound,
     mainModule: resolved.mainModule,
     modules: resolved.modules,
   }));

@@ -10,6 +10,7 @@ import { itxEntrypointScopeCacheKey, scopedItxEntrypointProps } from "../itx/ent
 import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "../repos/project-repo.ts";
 import { StreamRpcTarget } from "../streams/rpc-targets.ts";
 import { WorkerRunner } from "../workers/worker-runner.ts";
+import { projectEgressFetcher } from "./egress.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 import type { ProjectWorker } from "./types.ts";
@@ -34,6 +35,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
         props: this.#itxScope,
       }),
     },
+    globalOutbound: projectEgressFetcher(this.ctx.exports, this.#name.projectId),
     loader: this.env.LOADER,
     projectId: this.#name.projectId,
     workerScopeKey: itxEntrypointScopeCacheKey(this.#itxScope),

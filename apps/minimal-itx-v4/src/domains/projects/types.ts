@@ -8,6 +8,7 @@ export interface Project extends ItxCapabilityHost {
   streams: StreamCollection;
   describe(): Promise<{ projectId: string; name: string }>;
   agents: AgentCollection;
+  egress: ProjectEgress;
   repos: RepoCollection;
   repo: Repo;
   worker: ProjectWorker;
@@ -23,4 +24,9 @@ export interface ProjectCollection {
 export interface ProjectWorker {
   fetch(req: Request): Promise<Response>;
   processEvent(input: { event: StreamEvent }): Promise<void>;
+  testFetch(input: { headerValue: string; url: string }): Promise<unknown>;
+}
+
+export interface ProjectEgress {
+  fetch(req: Request): Promise<Response>;
 }

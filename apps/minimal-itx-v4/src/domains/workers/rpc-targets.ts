@@ -4,6 +4,7 @@ import { normalizePath } from "../durable-object-names.ts";
 import { itxEntrypointScopeCacheKey, scopedItxEntrypointProps } from "../itx/entrypoint-props.ts";
 import { replayPath } from "../itx/live-capability.ts";
 import { withInvokeCapabilityFallback } from "../itx/path-proxy.ts";
+import { projectEgressFetcher } from "../projects/egress.ts";
 import type { CfExecutionContext, ItxAuth } from "../itx/types.ts";
 import { WorkerRef as WorkerRefSchema } from "./schemas.ts";
 import type { WorkerCollection, WorkerRef } from "./types.ts";
@@ -79,6 +80,7 @@ class WorkerRpcTarget extends RpcTarget {
         // under the project/agent/ITX object that is doing the hosting.
         ITX: props.ctx.exports.ItxEntrypoint({ props: itxScope }),
       },
+      globalOutbound: projectEgressFetcher(props.ctx.exports, props.projectId),
       loader: props.loader,
       projectId: props.projectId,
       workerScopeKey: itxEntrypointScopeCacheKey(itxScope),

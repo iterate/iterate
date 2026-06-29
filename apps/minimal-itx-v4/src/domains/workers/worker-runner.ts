@@ -2,8 +2,13 @@ import { env } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { invokeFlattenedPath, replayPath } from "../itx/live-capability.ts";
-import { loadResolvedWorker, resolveWorkerSource, type WorkerBindings } from "./worker-loader.ts";
-import type { StatefulWorkerRef, StatelessWorkerRef, WorkerRef } from "./types.ts";
+import {
+  loadResolvedWorker,
+  resolveWorkerSource,
+  type ResolvedWorkerSource,
+  type WorkerBindings,
+} from "./worker-loader.ts";
+import type { StatefulWorkerRef, WorkerRef } from "./types.ts";
 
 type StatefulWorkerRpc = {
   invokeCapability(input: {
@@ -23,24 +28,63 @@ type StatefulWorkerRpc = {
  */
 export class WorkerRunner {
   readonly #bindings: WorkerBindings;
+  readonly #globalOutbound: Fetcher;
   readonly #loader: Env["LOADER"];
   readonly #projectId: string;
   readonly #workerScopeKey: string;
 
   constructor(props: {
     bindings: WorkerBindings;
+    globalOutbound: Fetcher;
     loader: Env["LOADER"];
     projectId: string;
     workerScopeKey: string;
   }) {
     this.#bindings = props.bindings;
+    this.#globalOutbound = props.globalOutbound;
     this.#loader = props.loader;
     this.#projectId = props.projectId;
     this.#workerScopeKey = props.workerScopeKey;
   }
 
-  async get<T = unknown>(ref: StatelessWorkerRef): Promise<T> {
-    return (await this.#getStateless(ref)) as T;
+  async get<T = unknown>(ref: WorkerRef): Promise<T> {
+    return (await this.getHandle<T>(ref)).handle;
+  }
+
+  /**
+   * Materialize any dynamic WorkerRef through the same loader path. Stateless
+   * refs return named WorkerEntrypoints; stateful refs return exported Durable
+   * Object classes for the outer StatefulWorkerDurableObject facet host.
+   */
+  async getHandle<T = unknown>(
+    ref: WorkerRef,
+  ): Promise<{ handle: T; resolved: ResolvedWorkerSource }> {
+    const resolved = await resolveWorkerSource({
+      projectId: this.#projectId,
+      source: ref.source,
+    });
+    const worker = loadResolvedWorker({
+      bindings: this.#bindings,
+      globalOutbound: this.#globalOutbound,
+      loader: this.#loader,
+      projectId: this.#projectId,
+      ref,
+      resolved,
+      workerScopeKey: this.#workerScopeKey,
+    });
+
+    if (ref.type === "stateful") {
+      const klass = worker.getDurableObjectClass?.(ref.className);
+      if (!klass) {
+        throw new Error(`Worker source did not export DurableObject ${ref.className}.`);
+      }
+      return { handle: klass as T, resolved };
+    }
+
+    return {
+      handle: worker.getEntrypoint(ref.entrypoint, { props: ref.props ?? {} }) as T,
+      resolved,
+    };
   }
 
   async invokeCapability({
@@ -71,26 +115,10 @@ export class WorkerRunner {
       });
     }
 
-    const target = await this.#getStateless(ref);
+    const target = await this.get(ref);
     return flattenNestedPath
       ? await invokeFlattenedPath({ args, path, target })
       : await replayPath({ args, path, target });
-  }
-
-  async #getStateless(ref: StatelessWorkerRef): Promise<unknown> {
-    const resolved = await resolveWorkerSource({
-      projectId: this.#projectId,
-      source: ref.source,
-    });
-    const worker = loadResolvedWorker({
-      bindings: this.#bindings,
-      loader: this.#loader,
-      projectId: this.#projectId,
-      ref,
-      resolved,
-      workerScopeKey: this.#workerScopeKey,
-    });
-    return worker.getEntrypoint(ref.entrypoint, { props: ref.props ?? {} });
   }
 
   #statefulWorker(ref: StatefulWorkerRef): StatefulWorkerRpc {

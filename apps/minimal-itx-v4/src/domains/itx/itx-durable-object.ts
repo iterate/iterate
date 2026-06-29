@@ -6,6 +6,7 @@ import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
 } from "../streams/engine/workers/stream-processor-host.ts";
+import { projectEgressFetcher } from "../projects/egress.ts";
 import { StreamRpcTarget } from "../streams/rpc-targets.ts";
 import { WorkerRunner } from "../workers/worker-runner.ts";
 import { ItxProcessorContract } from "./itx-processor-contract.ts";
@@ -41,6 +42,7 @@ export class ItxDurableObject extends DurableObject<Env> {
               props: this.#itxScope,
             }),
           },
+          globalOutbound: projectEgressFetcher(this.ctx.exports, this.#name.projectId),
           loader: this.env.LOADER,
           projectId: this.#name.projectId,
           workerScopeKey: itxEntrypointScopeCacheKey(this.#itxScope),

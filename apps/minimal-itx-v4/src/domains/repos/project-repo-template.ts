@@ -9,6 +9,13 @@ const DEFAULT_PROJECT_WORKER_SOURCE = `
     processEvent(input) {
       console.log("project worker processed", input.event.type);
     }
+
+    async testFetch(input) {
+      const response = await fetch(input.url, {
+        headers: { "x-itx-egress-proof": input.headerValue },
+      });
+      return await response.json();
+    }
   }
 
   export class CounterDurableObject extends DurableObject {

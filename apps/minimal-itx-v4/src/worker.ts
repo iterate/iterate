@@ -6,6 +6,7 @@ import { ItxDurableObject } from "./domains/itx/itx-durable-object.ts";
 import { ItxEntrypoint } from "./domains/itx/itx-entrypoint.ts";
 import { UnauthenticatedItxRpcTarget } from "./domains/itx/rpc-targets.ts";
 import { ProjectDurableObject } from "./domains/projects/project-durable-object.ts";
+import { ProjectEgressEntrypoint } from "./domains/projects/egress.ts";
 import { RepoDurableObject } from "./domains/repos/repo-durable-object.ts";
 import { StreamDurableObject } from "./domains/streams/stream-durable-object.ts";
 import { StatefulWorkerDurableObject } from "./domains/workers/stateful-worker-durable-object.ts";
@@ -46,6 +47,7 @@ export default {
 
 export {
   ItxEntrypoint,
+  ProjectEgressEntrypoint,
   StatefulWorkerDurableObject,
   ItxDurableObject,
   AgentDurableObject,

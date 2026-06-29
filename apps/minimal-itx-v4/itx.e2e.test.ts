@@ -19,6 +19,8 @@ import {
 const PROJECT_WORKER_FORWARDED_EVENT_TYPE = "events.iterate.test/project-worker-forwarded";
 const AGENT_WEB_MESSAGE_SENT_TYPE = "events.iterate.com/agents/web-message-sent";
 const AGENT_OUTPUT_ADDED_TYPE = "events.iterate.com/agent/output-added";
+const EGRESS_ECHO_URL = "https://postman-echo.com/get";
+const EGRESS_PROOF_HEADER = "x-itx-egress-proof";
 
 const ProjectWorkerForwardingProbeContract = defineProcessorContract({
   slug: "minimal-itx-v4.project-worker-forwarding-probe",
@@ -70,6 +72,16 @@ function parseBody(body: string, contentType: string | string[] | undefined): Re
     }
   }
   return Object.fromEntries(new URLSearchParams(body));
+}
+
+function echoedEgressProofHeader(body: unknown): string {
+  const headers =
+    ((body as { headers?: Record<string, string | string[]> }).headers as Record<
+      string,
+      string | string[]
+    >) ?? {};
+  const value = headers[EGRESS_PROOF_HEADER] ?? headers[EGRESS_PROOF_HEADER.toUpperCase()] ?? "";
+  return Array.isArray(value) ? value.join(", ") : String(value);
 }
 
 function startMockSlack(): Promise<{
@@ -328,6 +340,33 @@ describe("minimal itx v4", () => {
       // @ts-expect-error - TODO maybe some niceties
       newConnectionProject.someMethodInTestRunner.getSecret(getSecret),
     ).rejects.toThrow(/no capability "someMethodInTestRunner.getSecret"/);
+  });
+
+  test("Project egress substitutes secret placeholders for explicit and project worker fetches", async () => {
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+
+    using project = itx.projects.create({ slug: `project-egress-${crypto.randomUUID()}` });
+    const { projectId } = await project.describe();
+    const secretReference = 'Bearer getSecret("/secrets/egress-proof")';
+    const expected = `Bearer This is /secrets/egress-proof for ${projectId}`;
+
+    const explicitResponse = await project.egress.fetch(
+      new Request(EGRESS_ECHO_URL, {
+        headers: { [EGRESS_PROOF_HEADER]: secretReference },
+      }),
+    );
+    expect(explicitResponse.status).toBe(200);
+    expect(echoedEgressProofHeader(await explicitResponse.json())).toBe(expected);
+
+    const workerBody = await project.worker.testFetch({
+      headerValue: secretReference,
+      url: EGRESS_ECHO_URL,
+    });
+    expect(echoedEgressProofHeader(workerBody)).toBe(expected);
   });
 
   test("Project repos, workers, runScript, and dynamic worker refs compose", async () => {

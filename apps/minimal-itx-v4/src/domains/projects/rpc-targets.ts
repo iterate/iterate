@@ -12,6 +12,7 @@ import { type ProvideCapabilityInput } from "../itx/itx-processor-implementation
 import type { CfExecutionContext, ItxAuth, RevokeCapabilityInput } from "../itx/types.ts";
 import { WorkerCollectionRpcTarget } from "../workers/rpc-targets.ts";
 import type { WorkerRef } from "../workers/types.ts";
+import { ProjectEgressRpcTarget } from "./egress.ts";
 import type { Project, ProjectCollection, ProjectWorker } from "./types.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 
@@ -147,6 +148,10 @@ class ProjectRpcTarget extends RpcTarget implements Project {
       ctx: this.props.ctx,
       projectId: this.props.projectId,
     });
+  }
+
+  get egress() {
+    return new ProjectEgressRpcTarget({ projectId: this.props.projectId });
   }
 
   get repos() {

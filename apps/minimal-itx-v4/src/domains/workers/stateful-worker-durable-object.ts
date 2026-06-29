@@ -3,7 +3,8 @@ import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { itxEntrypointScopeCacheKey, scopedItxEntrypointProps } from "../itx/entrypoint-props.ts";
 import { invokeFlattenedPath, replayPath } from "../itx/live-capability.ts";
-import { loadResolvedWorker, resolveWorkerSource } from "./worker-loader.ts";
+import { projectEgressFetcher } from "../projects/egress.ts";
+import { WorkerRunner } from "./worker-runner.ts";
 import type { StatefulWorkerRef } from "./types.ts";
 
 const FACET_NAME = "target";
@@ -22,6 +23,18 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
   readonly #itxScope = scopedItxEntrypointProps({
     path: this.#name.path,
     projectId: this.#name.projectId,
+  });
+  readonly #workerRunner = new WorkerRunner({
+    bindings: {
+      // The hosted Durable Object class sees the same scoped ITX binding as a
+      // stateless worker at this path. That is what lets a provided durable
+      // capability call sibling capabilities through `this.env.ITX.get()`.
+      ITX: this.ctx.exports.ItxEntrypoint({ props: this.#itxScope }),
+    },
+    globalOutbound: projectEgressFetcher(this.ctx.exports, this.#name.projectId),
+    loader: this.env.LOADER,
+    projectId: this.#name.projectId,
+    workerScopeKey: itxEntrypointScopeCacheKey(this.#itxScope),
   });
 
   async invokeCapability({
@@ -56,27 +69,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     // actually calls the capability. That laziness is what keeps
     // `provideCapability()` a pure stream append instead of a half-commit that
     // might also create/abort facet state.
-    const resolved = await resolveWorkerSource({
-      projectId: this.#name.projectId,
-      source: ref.source,
-    });
-    const worker = loadResolvedWorker({
-      bindings: {
-        // The hosted Durable Object class sees the same scoped ITX binding as a
-        // stateless worker at this path. That is what lets a provided durable
-        // capability call sibling capabilities through `this.env.ITX.get()`.
-        ITX: this.ctx.exports.ItxEntrypoint({ props: this.#itxScope }),
-      },
-      loader: this.env.LOADER,
-      projectId: this.#name.projectId,
-      ref,
-      resolved,
-      workerScopeKey: itxEntrypointScopeCacheKey(this.#itxScope),
-    });
-    const klass = worker.getDurableObjectClass?.(ref.className);
-    if (!klass) {
-      throw new Error(`Worker source did not export DurableObject ${ref.className}.`);
-    }
+    const { handle: klass, resolved } = await this.#workerRunner.getHandle<DurableObjectClass>(ref);
     const version = JSON.stringify({
       className: ref.className,
       sourceCacheKey: resolved.cacheKey,
