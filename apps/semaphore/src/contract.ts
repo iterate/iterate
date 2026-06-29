@@ -8,7 +8,7 @@ import { z } from "zod";
  * oRPC contract for the semaphore app, plus `createSemaphoreClient` for typed
  * HTTP access. Everything that talks to semaphore imports from this one file:
  * the worker implementation (`src/orpc/*`), the seed scripts, the e2e tests,
- * and the repo-root preview tooling (`scripts/preview/router.ts`).
+ * and the repo-root preview tooling (`scripts/preview/preview.ts`).
  */
 
 const MAX_LEASE_MS = 30 * 24 * 60 * 60 * 1000;

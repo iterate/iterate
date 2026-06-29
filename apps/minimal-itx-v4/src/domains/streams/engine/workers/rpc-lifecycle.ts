@@ -20,8 +20,6 @@ type RetainableRpcCallback<T extends (...args: any[]) => unknown> = T &
 
 type RetainedProcessEventBatch = FireAndForgetRetainedRpcCallback<ProcessEventBatch> & Disposable;
 
-type RetainedGetProcessorRuntimeState = RetainedRpcCallback<GetProcessorRuntimeState> & Disposable;
-
 /**
  * Retains an RPC callback stub by duplicating it when the transport exposes
  * `.dup()`.
@@ -126,7 +124,7 @@ export function retainProcessEventBatch(
 
 export function retainGetProcessorRuntimeState(
   getRuntimeState: GetProcessorRuntimeState | undefined,
-): RetainedGetProcessorRuntimeState | undefined {
+): (RetainedRpcCallback<GetProcessorRuntimeState> & Disposable) | undefined {
   if (getRuntimeState === undefined) return undefined;
   const retained = retainRpcCallback(getRuntimeState);
   const dispose = retained[Symbol.dispose]?.bind(retained);

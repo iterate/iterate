@@ -15,14 +15,11 @@ Use `preview_N` or `prd` configs for deployed workers. For local dev, use
 ## Common CLI Targets
 
 ```bash
-# Local dev through the discovery file. Requires `pnpm dev` or `pnpm cli dev start --detach`.
+# Local dev through the discovery file. Requires `pnpm dev` or `pnpm dev start --detach`.
 pnpm cli itx --help
 
 # Fully-local dev server with an explicit config.
 doppler run --config dev -- pnpm cli itx --help
-
-# Explicit local/captun override, if you are not using the discovery file.
-doppler run --config dev -- pnpm cli --base-url http://localhost:<port> itx --help
 
 # Production.
 doppler run --config prd -- pnpm cli itx --help
@@ -56,16 +53,18 @@ List projects from the global admin handle:
 
 ```bash
 doppler run --config prd -- pnpm cli itx run \
-  -e 'return await itx.projects.list({ limit: 20 })'
+  --eval 'return await itx.projects.list({ limit: 20 })'
 ```
 
 ### Project MCP
 
-The OS MCP transport is served at the configured MCP base URL. Production is
-`https://mcp.iterate.com`; fully-local dev defaults to `<baseUrl>/api/__mcp`.
-`/projects/:slug/mcp` is the dashboard UI, not the transport URL. Admin-token
-sessions expose all projects and the `exec_js` tool requires a project slug when
-it runs.
+The OS MCP transport is the app worker's `/api/mcp` Start route. Production
+advertises `https://mcp.iterate.com` as the canonical OAuth resource URL, and
+ingress rewrites that hostname to the same route. The app-host
+`https://os.iterate.com/api/mcp` route is also valid. Fully-local dev defaults
+to `<baseUrl>/api/mcp`. `/projects/:slug/mcp` is the dashboard UI, not the
+transport URL. Admin-token sessions expose all projects and the `exec_js` tool
+requires a project slug when it runs.
 
 ```text
 https://mcp.iterate.com
@@ -81,7 +80,7 @@ doppler run --config prd -- pnpm cli claude-mcp
 For previews, run under the preview Doppler config:
 
 ```bash
-doppler run --config preview_3 -- pnpm cli itx run -e 'return await itx.projects.list({ limit: 20 })'
+doppler run --config preview_3 -- pnpm cli itx run --eval 'return await itx.projects.list({ limit: 20 })'
 doppler run --config preview_3 -- pnpm cli claude-mcp
 ```
 
@@ -104,7 +103,7 @@ hard-coding disposable preview projects.
 
 ```bash
 doppler run --config preview_3 -- pnpm cli itx run \
-  -e 'return await itx.projects.list({ limit: 20 })'
+  --eval 'return await itx.projects.list({ limit: 20 })'
 ```
 
 ## Useful itx Snippets
@@ -112,22 +111,22 @@ doppler run --config preview_3 -- pnpm cli itx run \
 ```bash
 # Confirm the project resolves.
 doppler run --config prd -- pnpm cli itx run \
-  -e 'return await itx.projects.get("iterate")'
+  --eval 'return await itx.projects.get("iterate")'
 
 # List initialized child streams under root.
 doppler run --config prd -- pnpm cli itx run \
   --context iterate \
-  -e 'return await itx.streams.get("/").runtimeState()'
+  --eval 'return await itx.streams.get("/").runtimeState()'
 
 # Read a stream.
 doppler run --config prd -- pnpm cli itx run \
   --context iterate \
-  -e 'return await itx.streams.get("/debugging-docs/example").getEvents({ beforeOffset: "end", limit: 100 })'
+  --eval 'return await itx.streams.get("/debugging-docs/example").getEvents({ beforeOffset: "end", limit: 100 })'
 
 # Inspect an agent runtime state.
 doppler run --config prd -- pnpm cli itx run \
   --context iterate \
-  -e 'return await itx.agents.create().getRuntimeState({ agentPath: "/agents/default" })'
+  --eval 'return await itx.agents.create().getRuntimeState({ agentPath: "/agents/default" })'
 ```
 
 ## Cloudflare Debugging

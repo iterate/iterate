@@ -10,7 +10,6 @@ import { cn } from "@iterate-com/ui/lib/utils";
 const THEMES = { light: "", dark: ".dark" } as const;
 
 const INITIAL_DIMENSION = { width: 320, height: 200 } as const;
-type TooltipNameType = number | string;
 
 export type ChartConfig = Record<
   string,
@@ -23,11 +22,7 @@ export type ChartConfig = Record<
   )
 >;
 
-type ChartContextProps = {
-  config: ChartConfig;
-};
-
-const ChartContext = React.createContext<ChartContextProps | null>(null);
+const ChartContext = React.createContext<{ config: ChartConfig } | null>(null);
 
 function useChart() {
   const context = React.useContext(ChartContext);
@@ -130,7 +125,7 @@ function ChartTooltipContent({
     nameKey?: string;
     labelKey?: string;
   } & Omit<
-    RechartsPrimitive.DefaultTooltipContentProps<TooltipValueType, TooltipNameType>,
+    RechartsPrimitive.DefaultTooltipContentProps<TooltipValueType, number | string>,
     "accessibilityLayer"
   >) {
   const { config } = useChart();

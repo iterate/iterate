@@ -74,6 +74,7 @@ export const AppConfig = z.object({
       jwks: JSONWebKeySet.optional(),
       serviceToken: redacted(z.string().trim().min(1)).optional(),
       resource: publicValue(z.url()).optional(),
+      emailOtpEnabled: publicValue(z.boolean().default(false)),
     })
     .optional(),
   openAiApiKey: redacted(z.string().trim().min(1)),

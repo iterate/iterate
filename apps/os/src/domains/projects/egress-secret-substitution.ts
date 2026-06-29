@@ -11,8 +11,6 @@ type SecretReference = {
 
 const SECRET_REFERENCE_NAME = "getSecret(";
 
-type SecretReferenceParseResult = [errorResponse: Response | null, references: SecretReference[]];
-
 type SecretReferenceResolutionResult = [errorResponse: Response | null, value: string];
 
 export type SubstituteProjectEgressSecretHeadersResult = [
@@ -50,7 +48,7 @@ export async function substituteProjectEgressSecretHeaders(input: {
 export function parseSecretReferences(input: {
   header: string;
   value: string;
-}): SecretReferenceParseResult {
+}): [errorResponse: Response | null, references: SecretReference[]] {
   const references: SecretReference[] = [];
   let searchStart = 0;
 

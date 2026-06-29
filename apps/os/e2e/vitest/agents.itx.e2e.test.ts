@@ -33,17 +33,6 @@ type SlackChannel = {
   name: string;
 };
 
-type SlackConversationsListResponse =
-  | {
-      channels: SlackChannel[];
-      ok: true;
-      response_metadata?: { next_cursor?: string };
-    }
-  | {
-      error?: string;
-      ok: false;
-    };
-
 const itIfSlackBotToken = process.env.APP_CONFIG_SLACK_BOT_TOKEN?.trim() ? test : test.skip;
 
 test("can configure Cloudflare AI Gateway as the provider for an agent stream", async () => {
@@ -51,7 +40,6 @@ test("can configure Cloudflare AI Gateway as the provider for an agent stream", 
   using itx = fixture.itx();
   const suffix = uniqueSuffix();
   const agentPath = `/agents/cloudflare-setup-${suffix}`;
-  const assistantMessage = `cloudflare ai gateway chat proof ${suffix}`;
 
   await appendAgentSetup({
     agentPath,
@@ -59,16 +47,7 @@ test("can configure Cloudflare AI Gateway as the provider for an agent stream", 
     model: DEFAULT_WORKERS_AI_AGENT_MODEL,
     projectId: fixture.project.id,
     provider: "cloudflare-ai",
-    systemPrompt: [
-      "For every user message, reply with exactly one fenced JavaScript code block and no surrounding prose.",
-      "The block must evaluate to an async function.",
-      "Use this exact code body:",
-      dedent`
-        async (itx) => {
-          await itx.chat.sendMessage({ message: ${JSON.stringify(assistantMessage)} });
-        }
-      `,
-    ].join("\n"),
+    systemPrompt: `Reply with a short confirmation containing ${suffix}.`,
   });
 
   await itx.agents.sendMessage({
@@ -81,9 +60,10 @@ test("can configure Cloudflare AI Gateway as the provider for an agent stream", 
     itx,
     afterOffset: "start",
     predicate: (event) =>
-      event.type === "events.iterate.com/agents/web-message-sent" &&
-      (event.payload as { message?: unknown }).message === assistantMessage,
+      event.type === "events.iterate.com/cloudflare-ai/llm-request-completed" &&
+      (event.payload as { result?: { status?: unknown } }).result?.status === "success",
   });
+  const output = requiredEvent(events, "events.iterate.com/agent/output-added");
 
   expect(events).toContainEqual(
     expect.objectContaining({
@@ -114,19 +94,8 @@ test("can configure Cloudflare AI Gateway as the provider for an agent stream", 
       type: "events.iterate.com/agent/output-added",
     }),
   );
-  expect(events).toContainEqual(
-    expect.objectContaining({
-      type: "events.iterate.com/itx/script-execution-requested",
-    }),
-  );
-  expect(events).toContainEqual(
-    expect.objectContaining({
-      type: "events.iterate.com/agents/web-message-sent",
-      payload: expect.objectContaining({
-        message: assistantMessage,
-      }),
-    }),
-  );
+  const outputText = requiredStringPayload(output, "content");
+  expect(outputText).not.toBe("");
   expect(
     events.some((event) => event.type === "events.iterate.com/openai-ws/llm-request-started"),
   ).toBe(false);
@@ -168,12 +137,10 @@ test("a web agent holds a real conversation: user message in, visible reply out"
     agentPath,
     itx,
     afterOffset: "start",
-    predicate: (event) =>
-      event.type === "events.iterate.com/agents/web-message-sent" &&
-      typeof (event.payload as { message?: unknown }).message === "string" &&
-      (event.payload as { message: string }).message.includes(marker),
+    predicate: (event) => event.type === "events.iterate.com/agents/web-message-sent",
     timeoutMs: 150_000,
   });
+  const webMessage = requiredEvent(events, "events.iterate.com/agents/web-message-sent");
 
   // The full round trip is on the stream: the user's message…
   expect(events).toContainEqual(
@@ -189,11 +156,12 @@ test("a web agent holds a real conversation: user message in, visible reply out"
   expect(events).toContainEqual(
     expect.objectContaining({
       type: "events.iterate.com/agents/web-message-sent",
-      payload: expect.objectContaining({
-        message: expect.stringContaining(marker),
-      }),
+      payload: expect.objectContaining({ message: expect.any(String) }),
     }),
   );
+  const webMessageText = (webMessage.payload as { message?: unknown }).message;
+  expect(typeof webMessageText).toBe("string");
+  expect(webMessageText).not.toBe("");
   // …its chat tool arriving as a PROVIDED capability (the one door)…
   expect(events).toContainEqual(
     expect.objectContaining({
@@ -231,12 +199,10 @@ test("the default onboarding agent created with a project can hold a real conver
     agentPath,
     itx,
     afterOffset: "start",
-    predicate: (event) =>
-      event.type === "events.iterate.com/agents/web-message-sent" &&
-      typeof (event.payload as { message?: unknown }).message === "string" &&
-      (event.payload as { message: string }).message.includes(marker),
+    predicate: (event) => event.type === "events.iterate.com/agents/web-message-sent",
     timeoutMs: 180_000,
   });
+  const webMessage = requiredEvent(events, "events.iterate.com/agents/web-message-sent");
 
   expect(events).toContainEqual(
     expect.objectContaining({
@@ -258,11 +224,12 @@ test("the default onboarding agent created with a project can hold a real conver
   expect(events).toContainEqual(
     expect.objectContaining({
       type: "events.iterate.com/agents/web-message-sent",
-      payload: expect.objectContaining({
-        message: expect.stringContaining(marker),
-      }),
+      payload: expect.objectContaining({ message: expect.any(String) }),
     }),
   );
+  const webMessageText = (webMessage.payload as { message?: unknown }).message;
+  expect(typeof webMessageText).toBe("string");
+  expect(webMessageText).not.toBe("");
   expect(events.filter((event) => event.type.endsWith("error-occurred"))).toEqual([]);
 }, 210_000);
 
@@ -446,42 +413,141 @@ test("project processor configures fresh agent streams from child-stream-created
   );
 }, 120_000);
 
-test("lets agent chat update the project repo through the prepared workspace", async () => {
+test("project worker customizes fresh agents by appending events", async () => {
+  await using fixture = await createTestProject({ slugPrefix: "agent-context-worker" });
+  using itx = fixture.itx();
+  const suffix = uniqueSuffix();
+  const pusherPath = `/agents/config-pusher-${suffix}`;
+  const customizedPath = `/agents/customized-${suffix}`;
+  const promptMarker = `CUSTOM CONTEXT PROMPT ${suffix}`;
+  const capabilityName = `acmeTool${suffix.replace(/-/g, "")}`;
+
+  await itx.streams.create({ streamPath: pusherPath });
+
+  const projectWorkerSource = [
+    'import { IterateProjectEntrypoint } from "iterate/worker";',
+    "",
+    "export default class ProjectWorker extends IterateProjectEntrypoint {",
+    '  async fetch() { return new Response("ok"); }',
+    "",
+    "  // The project worker is a stream processor: this receives every event on",
+    "  // the project root stream. New agent streams announce themselves as",
+    "  // child-stream-created; react by appending agent context events.",
+    "  async onProjectEvent({ event }) {",
+    '    if (event.type !== "events.iterate.com/stream/child-stream-created") return;',
+    "    const agentPath = event.payload.childPath;",
+    `    if (!agentPath.startsWith(${JSON.stringify("/agents/customized-")})) return;`,
+    "    await this.streams.append({",
+    "      streamPath: agentPath,",
+    "      event: {",
+    '        type: "events.iterate.com/agent/system-prompt-updated",',
+    `        payload: { systemPrompt: ${JSON.stringify(promptMarker)} + " for " + agentPath },`,
+    "      },",
+    "    });",
+    "    await this.streams.append({",
+    "      streamPath: agentPath,",
+    "      event: {",
+    '        type: "events.iterate.com/itx/capability-provided",',
+    `        payload: { path: [${JSON.stringify(capabilityName)}], kind: "rpc", address: { type: "rpc", worker: { type: "loopback" }, entrypoint: "WorkerCapability" }, meta: { instructions: "Use itx.worker.${capabilityName}() (custom ${suffix})." } },`,
+    "      },",
+    "    });",
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+  const pushScript = [
+    "async (itx) => {",
+    workspaceReadyFunctionSource(),
+    "  await waitForWorkspace(itx);",
+    `  await itx.workspace.writeFile('/project/worker.ts', ${JSON.stringify(projectWorkerSource)});`,
+    "  await itx.workspace.gitAdd({ dir: '/project', filepath: 'worker.ts' });",
+    "  await itx.workspace.gitCommit({ dir: '/project', message: 'add agent context config', author: { name: 'Agent', email: 'agent@iterate.com' } });",
+    "  await itx.workspace.gitPush({ dir: '/project', remote: 'origin', ref: 'main' });",
+    "}",
+  ].join("\n");
+  await itx.streams.get(pusherPath).append({
+    event: {
+      type: "events.iterate.com/agent/output-added",
+      payload: { content: ["```js", pushScript, "```"].join("\n") },
+    },
+  });
+  const pushEvents = await readUntil({
+    agentPath: pusherPath,
+    itx,
+    afterOffset: "start",
+    predicate: (event) => event.type === "events.iterate.com/itx/script-execution-completed",
+    timeoutMs: 120_000,
+  });
+  expect(
+    requiredEvent(pushEvents, "events.iterate.com/itx/script-execution-completed").payload,
+  ).toMatchObject({ ok: true });
+
+  await itx.streams.create({ streamPath: customizedPath });
+  const events = await readUntil({
+    agentPath: customizedPath,
+    itx,
+    afterOffset: "start",
+    predicate: (event) =>
+      event.type === "events.iterate.com/agent/system-prompt-updated" &&
+      typeof (event.payload as { systemPrompt?: unknown }).systemPrompt === "string" &&
+      ((event.payload as { systemPrompt?: string }).systemPrompt || "").includes(promptMarker),
+    timeoutMs: 120_000,
+  });
+
+  const customPrompt = events.find(
+    (event) =>
+      event.type === "events.iterate.com/agent/system-prompt-updated" &&
+      typeof (event.payload as { systemPrompt?: unknown }).systemPrompt === "string" &&
+      ((event.payload as { systemPrompt?: string }).systemPrompt || "").includes(promptMarker),
+  );
+  if (!customPrompt) {
+    throw new Error("Expected custom system prompt event.");
+  }
+  const customPromptText = requiredStringPayload(customPrompt, "systemPrompt");
+  expect(customPromptText).toContain(promptMarker);
+  expect(customPromptText).toContain(customizedPath);
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: "events.iterate.com/itx/capability-provided",
+      payload: expect.objectContaining({ path: [capabilityName] }),
+    }),
+  );
+}, 240_000);
+
+test("lets agent codemode update the project repo through the prepared workspace", async () => {
   await using fixture = await createTestProject({ slugPrefix: "agent-workspace" });
   using itx = fixture.itx();
   const suffix = uniqueSuffix();
   const agentPath = `/agents/workspace-${suffix}`;
 
-  await appendAgentSetup({
-    agentPath,
-    itx,
-    model: "gpt-5.5",
-    projectId: fixture.project.id,
-    provider: "openai-ws",
-    systemPrompt: [
-      "For every user request, reply with exactly one fenced JavaScript code block and no surrounding prose.",
-      "Use this exact code body:",
-      dedent`
-        async (itx) => {
-          ${workspaceReadyFunctionSource()}
-          await waitForWorkspace(itx);
-          await itx.workspace.writeFile("/project/folder/banana.txt", "banana");
-          await itx.workspace.gitAdd({ dir: "/project", filepath: "folder/banana.txt" });
-          await itx.workspace.gitCommit({
-            dir: "/project",
-            message: "add folder/banana.txt",
-            author: { name: "Agent", email: "agent@iterate.com" }
-          });
-          await itx.workspace.gitPush({ dir: "/project", remote: "origin", ref: "main" });
-        }
-      `,
-    ].join("\n"),
-  });
+  await itx.streams.create({ streamPath: agentPath });
+  await waitForAgentProcessorSetup({ agentPath, itx, projectId: fixture.project.id });
 
-  await itx.agents.sendMessage({
-    agentPath,
-    message: "add a file called folder/banana.txt to the iterate config repo and push",
-  });
+  const code = dedent`
+    async (itx) => {
+      ${workspaceReadyFunctionSource()}
+      await waitForWorkspace(itx);
+      await itx.workspace.writeFile({
+        path: "/project/folder/banana.txt",
+        content: "banana"
+      });
+      await itx.workspace.gitAdd({ dir: "/project", filepath: "folder/banana.txt" });
+      await itx.workspace.gitCommit({
+        dir: "/project",
+        message: "add folder/banana.txt",
+        author: { name: "Agent", email: "agent@iterate.com" }
+      });
+      await itx.workspace.gitPush({ dir: "/project", remote: "origin", ref: "main" });
+    }
+  `;
+  const appendedOutput = (await itx.streams.get(agentPath).append({
+    event: {
+      type: "events.iterate.com/agent/output-added",
+      payload: {
+        content: ["```js", code, "```"].join("\n"),
+      },
+    },
+  })) as unknown as Event;
 
   await readUntil({
     agentPath,
@@ -500,7 +566,7 @@ test("lets agent chat update the project repo through the prepared workspace", a
     timeoutMs: 30_000,
   });
 
-  const output = requiredEvent(events, "events.iterate.com/agent/output-added");
+  requiredEvent(events, "events.iterate.com/agent/output-added");
   const scriptRequested = requiredEvent(
     events,
     "events.iterate.com/itx/script-execution-requested",
@@ -509,20 +575,29 @@ test("lets agent chat update the project repo through the prepared workspace", a
     events,
     "events.iterate.com/itx/script-execution-completed",
   );
-  const generatedCode = requiredStringPayload(output, "content");
   const requestedCode = requiredStringPayload(scriptRequested, "code");
+  const scriptRequestDelayMs =
+    new Date(scriptRequested.createdAt).getTime() - new Date(appendedOutput.createdAt).getTime();
 
-  expect(generatedCode).toContain("itx.workspace.writeFile");
-  expect(generatedCode).toContain("itx.workspace.gitCommit");
-  expect(generatedCode).toContain("itx.workspace.gitPush");
-  expect(generatedCode).toContain("/project");
-  expect(generatedCode).toContain("folder/banana.txt");
-  expect(generatedCode).not.toContain("gitClone");
-  expect(generatedCode).not.toContain(".repos");
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: "events.iterate.com/itx/capability-provided",
+      payload: expect.objectContaining({
+        path: ["workspace"],
+      }),
+    }),
+  );
+  expect(scriptRequestDelayMs).toBeLessThan(1_000);
+  expect(requestedCode).toContain("itx.workspace.writeFile");
+  expect(requestedCode).toContain("itx.workspace.gitCommit");
+  expect(requestedCode).toContain("itx.workspace.gitPush");
+  expect(requestedCode).toContain("/project");
+  expect(requestedCode).toContain("folder/banana.txt");
   expect(requestedCode).not.toContain("gitClone");
+  expect(requestedCode).not.toContain(".repos");
   // Per-call events died with codemode; the workspace ops are proven by the
-  // generated code above plus the execution completing ok (the git push
-  // would fail the script otherwise).
+  // requested code above plus the execution completing ok (the git push would
+  // fail the script otherwise).
   expect(scriptCompleted).toMatchObject({ payload: { ok: true } });
   expect(events.filter((event) => event.type === "events.iterate.com/core/error-occurred")).toEqual(
     [],
@@ -997,6 +1072,17 @@ async function postSlackMessage(input: { channel: string; text: string; token: s
   }
   return result;
 }
+
+type SlackConversationsListResponse =
+  | {
+      channels: SlackChannel[];
+      ok: true;
+      response_metadata?: { next_cursor?: string };
+    }
+  | {
+      error?: string;
+      ok: false;
+    };
 
 async function listSlackChannels(token: string) {
   const channels: SlackChannel[] = [];

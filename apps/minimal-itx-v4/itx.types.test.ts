@@ -24,10 +24,6 @@ declare class ProofStreamDurableObject implements Rpc.DurableObjectBranded {
   at(path: string): ProofStreamDurableObject;
 }
 
-interface ProofEnv {
-  STREAM: DurableObjectNamespace<ProofStreamDurableObject>;
-}
-
 describe("Cloudflare Durable Object RPC types", () => {
   it("keeps DurableObjectNamespace.getByName RPC returns from collapsing to never", () => {
     // Regression proof for workerd#5200:
@@ -37,7 +33,9 @@ describe("Cloudflare Durable Object RPC types", () => {
     // Rpc.Serializable<R> test. Without @cloudflare__workers-types.patch,
     // DurableObjectNamespace<ProofStreamDurableObject> turns append() into
     // `never`; with the patch it remains the RPC promise shape we can await.
-    function assertGeneratedWorkerEnvStreamAppend(env: ProofEnv) {
+    function assertGeneratedWorkerEnvStreamAppend(env: {
+      STREAM: DurableObjectNamespace<ProofStreamDurableObject>;
+    }) {
       const events = env.STREAM.getByName("bla").append({ type: "hello-world" });
 
       expectTypeOf<IsNever<typeof events>>().toEqualTypeOf<false>();

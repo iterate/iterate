@@ -1,4 +1,3 @@
-import OpenAI from "openai";
 import { DurableObject } from "cloudflare:workers";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import type { StreamEvent } from "@iterate-com/shared/streams/stream-event";
@@ -23,9 +22,9 @@ import {
   type CloudflareAiBinding,
 } from "~/domains/agents/stream-processors/cloudflare-ai/implementation.ts";
 import { OpenAiWsProcessor } from "~/domains/agents/stream-processors/openai-ws/implementation.ts";
-import { createOpenAiResponsesWebSocketClient } from "~/domains/agents/stream-processors/openai-ws/cloudflare-responses-websocket.ts";
 import {
   getInitializedStreamStub,
+  getStreamRpcStub,
   getStreamDurableObjectName,
   type StreamDurableObjectNamespace,
   type StreamDurableObject,
@@ -48,7 +47,10 @@ import {
   type AgentDurableObjectName,
   agentLlmProcessorSlug,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
-import { AGENT_CHAT_CAPABILITY_INSTRUCTIONS } from "~/domains/agents/agent-prompt-guidance.ts";
+import {
+  AGENT_CHAT_CAPABILITY_INSTRUCTIONS,
+  AGENT_WORKSPACE_CAPABILITY_INSTRUCTIONS,
+} from "~/domains/agents/agent-prompt-guidance.ts";
 import { buildProjectStreamViewerUrl } from "~/lib/stream-viewer-url.ts";
 import { formatDurableObjectName, parseDurableObjectName } from "~/domains/durable-object-names.ts";
 
@@ -84,7 +86,7 @@ export type CloneProjectRepoInput = {
 /** Bump when agentContextCapabilities changes — re-provides the agent's tools
  * onto its own context (each provide appends an itx/capability-provided event
  * that both folds into the capability table and renders into the LLM's view). */
-const AGENT_CONTEXT_CAPABILITIES_VERSION = "8";
+const AGENT_CONTEXT_CAPABILITIES_VERSION = "10";
 
 export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
   readonly name = parseDurableObjectName(this.ctx.id.name!);
@@ -95,6 +97,7 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
     (deps) =>
       new AgentProcessor({
         ...deps,
+        stream: this.agentStreamRpc(),
         isAgentsRootStream: () => this.name.path === AGENTS_STREAM_PATH,
         readStreamEvents: () => this.readSubscribedStreamEvents("agent"),
         setupAgentRuntime: async () => {
@@ -109,14 +112,15 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
       // the Cloudflare AI processor.
       return new CloudflareAiProcessor({
         ...deps,
+        stream: this.agentStreamRpc(),
         ai: this.env.AI,
         readStreamEvents: () => this.readSubscribedStreamEvents("openai-ws"),
       });
     }
     return new OpenAiWsProcessor({
       ...deps,
-      openResponsesWebSocket: async () =>
-        createOpenAiResponsesWebSocketClient(new OpenAI({ apiKey })),
+      stream: this.agentStreamRpc(),
+      apiKey,
       readStreamEvents: () => this.readSubscribedStreamEvents("openai-ws"),
     });
   });
@@ -125,6 +129,7 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
     (deps) =>
       new CloudflareAiProcessor({
         ...deps,
+        stream: this.agentStreamRpc(),
         ai: this.env.AI,
         readStreamEvents: () => this.readSubscribedStreamEvents("cloudflare-ai"),
       }),
@@ -155,6 +160,15 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
       );
     }
     return { path: this.name.path, projectId: this.name.projectId };
+  }
+
+  private agentStreamRpc(): StreamRpc {
+    const params = this.projectScopedName();
+    return getStreamRpcStub({
+      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+      projectId: params.projectId,
+      path: StreamPath.parse(params.path),
+    });
   }
 
   private projectId(): string {
@@ -666,9 +680,7 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
           type: "rpc",
           worker: { type: "loopback" },
         },
-        instructions:
-          "This agent's private workspace filesystem: itx.workspace.readFile/writeFile plus the " +
-          "flat git methods gitClone/gitAdd/gitCommit/gitPush/gitStatus.",
+        instructions: AGENT_WORKSPACE_CAPABILITY_INSTRUCTIONS,
         name: "workspace",
       },
     ];

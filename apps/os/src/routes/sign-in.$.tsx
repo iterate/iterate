@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
+import { extractPublicConfigSchema } from "@iterate-com/shared/config";
 import { z } from "zod";
+import { MailIcon } from "lucide-react";
 import { useAuthClient } from "@iterate-com/auth/client";
 import { Button } from "@iterate-com/ui/components/button";
 import {
@@ -10,42 +12,97 @@ import {
   CardHeader,
   CardTitle,
 } from "@iterate-com/ui/components/card";
+import { Separator } from "@iterate-com/ui/components/separator";
+import { AppConfig } from "../config.ts";
+import { getPublicConfigServerFn } from "~/lib/public-route-config.ts";
+
+const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
 
 export const Route = createFileRoute("/sign-in/$")({
   validateSearch: z.looseObject({
     redirect_url: z.string().optional(),
+  }),
+  loader: async () => ({
+    config: PublicConfigSchema.parse(JSON.parse(await getPublicConfigServerFn())),
   }),
   component: SignInRoute,
 });
 
 function SignInRoute() {
   const { signIn } = useAuthClient();
+  const { config } = Route.useLoaderData();
   const { redirect_url: redirectUrl } = Route.useSearch();
   const returnTo = safeRedirectPath(redirectUrl);
-  const [redirecting, setRedirecting] = useState(false);
+  const emailOtpEnabled = config.iterateAuth?.emailOtpEnabled ?? false;
+  const [redirectingTo, setRedirectingTo] = useState<"email" | "google" | null>(null);
+
+  function startEmailSignIn() {
+    setRedirectingTo("email");
+    signIn({ returnTo, loginHint: "email" });
+  }
+
+  function startGoogleSignIn() {
+    setRedirectingTo("google");
+    signIn({ returnTo, loginHint: "google" });
+  }
 
   return (
-    <main className="grid min-h-svh place-items-center bg-background p-4">
+    <main className="flex min-h-screen items-center justify-center p-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
-          <CardTitle className="text-xl">Sign in to OS</CardTitle>
-          <CardDescription>Continue with Iterate to open your projects.</CardDescription>
+          <CardTitle className="text-xl">Sign in</CardTitle>
+          <CardDescription>Sign in to your Iterate account</CardDescription>
         </CardHeader>
-        <CardContent>
+        <Separator />
+        <CardContent className="space-y-3 pt-6">
+          {emailOtpEnabled ? (
+            <Button
+              className="w-full border-border bg-background text-foreground shadow-sm transition-colors hover:bg-muted"
+              variant="outline"
+              size="lg"
+              disabled={redirectingTo !== null}
+              onClick={startEmailSignIn}
+            >
+              <MailIcon className="size-4" />
+              {redirectingTo === "email" ? "Redirecting..." : "Sign in with email"}
+            </Button>
+          ) : null}
           <Button
             className="w-full"
+            variant="outline"
             size="lg"
-            disabled={redirecting}
-            onClick={() => {
-              setRedirecting(true);
-              signIn({ returnTo });
-            }}
+            disabled={redirectingTo !== null}
+            onClick={startGoogleSignIn}
           >
-            {redirecting ? "Redirecting…" : "Continue with Iterate"}
+            <GoogleIcon />
+            {redirectingTo === "google" ? "Redirecting..." : "Sign in with Google"}
           </Button>
         </CardContent>
       </Card>
     </main>
+  );
+}
+
+function GoogleIcon() {
+  return (
+    <svg className="size-4" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"
+        fill="#4285F4"
+      />
+      <path
+        d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+        fill="#34A853"
+      />
+      <path
+        d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+        fill="#FBBC05"
+      />
+      <path
+        d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+        fill="#EA4335"
+      />
+    </svg>
   );
 }
 

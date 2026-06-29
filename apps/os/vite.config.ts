@@ -40,7 +40,10 @@ export default defineConfig(({ command }) => ({
   // package can break that pairing and surface as sqlite3_open_v2 failures.
   // capnweb is excluded so exactly one module instance exists in the dev graph
   // (its session/export tables and RpcTarget identity break across copies).
-  optimizeDeps: { exclude: ["@journeyapps/wa-sqlite", "capnweb"] },
+  optimizeDeps: {
+    exclude: ["@journeyapps/wa-sqlite", "capnweb"],
+    include: ["@typescript/vfs", "@valtown/codemirror-ts/worker", "typescript"],
+  },
   build: {
     rollupOptions: {
       output: {

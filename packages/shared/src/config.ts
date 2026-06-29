@@ -19,8 +19,6 @@ interface AppConfigSchemaMetadata {
   baseSchema?: z.ZodTypeAny;
 }
 
-type NoPublicFields = "__no_public_fields__";
-
 type UnpublicConfigDeep<T> =
   T extends Tagged<infer TValue, typeof publicConfigTag>
     ? UnpublicConfigDeep<TValue>
@@ -46,7 +44,7 @@ type RawPublicAppConfig<T> = T extends object
         ? UnpublicConfigDeep<T[K]>
         : IsPlainObject<T[K]> extends true
           ? RawPublicAppConfig<T[K]>
-          : NoPublicFields;
+          : "__no_public_fields__";
     }
   : never;
 

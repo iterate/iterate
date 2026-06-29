@@ -26,7 +26,6 @@ import { ensureLocalDevOAuthClient } from "./src/auth/dev-oauth-client-bootstrap
 import { AppConfig } from "./src/config.ts";
 import type { ItxDurableObject } from "./src/itx/itx-durable-object.ts";
 import type { ProjectDurableObject } from "./src/domains/projects/durable-objects/project-durable-object.ts";
-import type { ProjectMcpServerConnection } from "./src/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 import type { AgentDurableObject } from "./src/domains/agents/durable-objects/agent-durable-object.ts";
 import type { RepoDurableObject } from "./src/domains/repos/durable-objects/repo-durable-object.ts";
 import type { SlackAgentDurableObject } from "./src/domains/slack/durable-objects/slack-agent-durable-object.ts";
@@ -168,6 +167,10 @@ const env: Record<string, string | undefined> = {
     process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID ?? process.env.ITERATE_OAUTH_CLIENT_ID,
   APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET:
     process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET ?? process.env.ITERATE_OAUTH_CLIENT_SECRET,
+  APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED:
+    process.env.APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED ??
+    process.env.VITE_ENABLE_EMAIL_OTP_SIGNIN ??
+    (process.env.ALCHEMY_STAGE?.startsWith("dev") ? "true" : undefined),
   APP_CONFIG_ITERATE_AUTH__JWKS: await resolveStaticAuthJwks(resolvedAuthIssuer),
   APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN:
     process.env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN ?? process.env.ITERATE_AUTH_SERVICE_TOKEN,
@@ -212,7 +215,6 @@ const workerNames = {
   app: `${ctx.workerName}-app`,
   ingress: ctx.workerName,
   itx: `${ctx.workerName}-itx`,
-  mcp: `${ctx.workerName}-mcp`,
   project: `${ctx.workerName}-project`,
   repo: `${ctx.workerName}-repo`,
   slackAgent: `${ctx.workerName}-slack-agent`,
@@ -237,6 +239,9 @@ const mcpRouteHostname = routeHostnameForUrl(ctx.runtimeConfig.mcp?.baseUrl);
 const eventDocsRouteHostname = eventDocsHostnameForAppBaseUrl(ctx.runtimeConfig.baseUrl);
 const artifactsAccountId = requireEnv("CLOUDFLARE_ACCOUNT_ID");
 const artifactsNamespace = `${ctx.workerName}-repos`;
+// Stream namespace for worker-global (non-project-scoped) streams, such as the
+// raw Cloudflare event capture stream at /cloudflare/events.
+const globalStreamNamespace = `${ctx.workerName}-global`;
 
 // ---- Durable Object namespaces ---------------------------------------------
 // One declaration per class, `scriptName` = the OWNING worker. Alchemy strips
@@ -256,14 +261,6 @@ const itxContext = DurableObjectNamespace<ItxDurableObject>("itx-context", {
   scriptName: workerNames.itx,
   sqlite: true,
 });
-const projectMcpServerConnection = DurableObjectNamespace<ProjectMcpServerConnection>(
-  "project-mcp-server-connection-local",
-  {
-    className: "ProjectMcpServerConnection",
-    scriptName: workerNames.mcp,
-    sqlite: true,
-  },
-);
 const project = DurableObjectNamespace<ProjectDurableObject>("project", {
   className: "ProjectDurableObject",
   scriptName: workerNames.project,
@@ -402,8 +399,8 @@ async function osWorker<B extends Bindings>(
 }
 
 // Bindings needed by the loopback capability surface (workers/shared/
-// loopback-exports.ts) — every itx-hosting worker (project, agent, itx, mcp,
-// app) carries these so any capability can be provided on any context.
+// loopback-exports.ts) — every itx-hosting worker (project, agent, itx, app)
+// carries these so any capability can be provided on any context.
 const loopbackUnionBindings = {
   AI: Ai(),
   AGENT: agent,
@@ -422,7 +419,7 @@ const loopbackUnionBindings = {
 // The Durable Object workers deploy CONCURRENTLY: cross-script DO bindings
 // are name-strings (no resource ordering), and the bootstrap filter works
 // off the missing-set computed above, so ordering between them never
-// matters. Only the app worker (service-binds mcp + project) and the
+// matters. Only the app worker (service-binds project for local dev) and the
 // ingress worker (service-binds the app) order after them.
 const [
   workspaceWorker,
@@ -431,7 +428,6 @@ const [
   itxWorker,
   agentWorker,
   slackIntegrationWorker,
-  mcpWorker,
   projectWorker,
   streamWorker,
 ] = await Promise.all([
@@ -445,6 +441,7 @@ const [
     entrypoint: "./src/workers/slack-agent.ts",
     bindings: {
       AGENT: agent,
+      DB: db,
       DO_CATALOG: db,
       SLACK_AGENT: slackAgent,
       STREAM: stream,
@@ -466,6 +463,7 @@ const [
       ARTIFACTS_ACCOUNT_ID: artifactsAccountId,
       ARTIFACTS_NAMESPACE: artifactsNamespace,
       DO_CATALOG: db,
+      GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
       REPO: repo,
       STREAM: stream,
     },
@@ -479,8 +477,8 @@ const [
   }),
   osWorker("agent", {
     entrypoint: "./src/workers/agent.ts",
-    // openai needs Node APIs.
-    compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"],
+    // Own-zone fetches must route through Worker routes, same as app/project/itx hosts.
+    compatibilityFlags: ["global_fetch_strictly_public"],
     bindings: loopbackUnionBindings,
   }),
   osWorker("slackIntegration", {
@@ -495,15 +493,6 @@ const [
       ...(slackBotToken == null
         ? {}
         : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
-    },
-  }),
-  osWorker("mcp", {
-    entrypoint: "./src/workers/mcp.ts",
-    // McpAgent (agents) and @iterate-com/auth (better-auth) need Node APIs.
-    compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"],
-    bindings: {
-      ...loopbackUnionBindings,
-      PROJECT_MCP_SERVER_CONNECTION: projectMcpServerConnection,
     },
   }),
   osWorker("project", {
@@ -577,9 +566,8 @@ const appWorker = await IterateAppWorker(ctx, {
     ARTIFACTS: Artifacts({ namespace: artifactsNamespace }),
     ARTIFACTS_ACCOUNT_ID: artifactsAccountId,
     ARTIFACTS_NAMESPACE: artifactsNamespace,
-    MCP: mcpWorker,
+    GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
     PROJECT_HOST: projectWorker,
-    PROJECT_MCP_SERVER_CONNECTION: projectMcpServerConnection,
     SLACK_AGENT: slackAgent,
     SLACK_INTEGRATION: slackIntegration,
   },
@@ -588,7 +576,7 @@ const appWorker = await IterateAppWorker(ctx, {
   // Without this flag, same-zone subrequests bypass Worker routes and go to
   // origin, which breaks auth-worker discovery on production iterate.com
   // hostnames.
-  compatibilityFlags: ["global_fetch_strictly_public"],
+  compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"],
   // No workers.dev URL: the app worker is reachable only through the ingress
   // worker's service binding, which is what makes the internal routing
   // headers (workers/shared/router.ts) trustworthy.
@@ -604,7 +592,6 @@ const ingressWorker = await osWorker("ingress", {
   bindings: {
     APP: appWorker,
     DB: db,
-    MCP: mcpWorker,
     PROJECT_HOST: projectWorker,
   },
 });
@@ -632,7 +619,6 @@ export const workers = {
   app: appWorker,
   ingress: ingressWorker,
   itx: itxWorker,
-  mcp: mcpWorker,
   project: projectWorker,
   repo: repoWorker,
   slackAgent: slackAgentWorker,
@@ -653,7 +639,9 @@ if (!ctx.app.local) process.exit(0);
  * project bases are normal bases too: `<slug>.iterate-preview-N.app`.
  */
 function projectRouteHostnamesForBase(base: string) {
-  return [base, `*.${base}`];
+  // Cloudflare accepts `*.base`, but the live preview zone only invoked the
+  // worker for project hosts after the broader catch-all `*base` route existed.
+  return [base, `*.${base}`, `*${base}`];
 }
 
 function routeHostnameForUrl(url: string | undefined) {

@@ -130,7 +130,7 @@ Verify the agent actually answered (the live UI may not update — see gotchas):
 ```bash
 doppler run --config preview_N -- pnpm cli itx run \
   --context my-smoke \
-  -e 'return await itx.agents.create().getRuntimeState({ agentPath: "/agents/my-agent" })'
+  --eval 'return await itx.agents.create().getRuntimeState({ agentPath: "/agents/my-agent" })'
 ```
 
 ### Gotchas (hit and confirmed 2026-06-10)

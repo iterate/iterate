@@ -19,9 +19,9 @@ Leftovers deliberately deferred from the per-DO worker split PR
   fields it needs (mcp base URL, project hostname bases, base URL) would
   get it under 50KB. Only worth it if ingress cold starts ever show up in
   traces — it is route-bound and essentially always warm.
-- **`nodejs_compat` trimming**: workspace/repo/agent/mcp carry full
+- **`nodejs_compat` trimming**: workspace/repo/agent carry full
   `nodejs_compat`. Audit whether `nodejs_als` + targeted polyfills suffice
-  once upstream deps (@cloudflare/shell, openai, agents) clarify their
+  once upstream deps (@cloudflare/shell, openai) clarify their
   node-builtin usage.
 - **Dashboards/queries**: PostHog and any saved Cloudflare observability
   queries that filter on `service = os-prd` need the per-worker names

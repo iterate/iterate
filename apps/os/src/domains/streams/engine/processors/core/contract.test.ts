@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { StreamEvent } from "../../shared/event.ts";
 import { durableObjectProcessorSubscriber } from "../../shared/callable-subscriber.ts";
+import type { StreamRpc } from "../../types.ts";
 import { CoreProcessorContract, type CoreProcessorState } from "./contract.ts";
 import { CoreStreamProcessor } from "./implementation.ts";
 
@@ -12,7 +13,7 @@ const callableSubscriber = (processorName: string) =>
   });
 
 const processor = new CoreStreamProcessor({
-  iterateContext: { stream: { append: () => {}, appendBatch: () => {} } },
+  stream: { append: () => {}, appendBatch: () => {} } as unknown as StreamRpc,
 });
 
 function reduce(args: { contract?: unknown; state: CoreProcessorState; event: StreamEvent }) {

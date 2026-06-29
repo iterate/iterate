@@ -5,9 +5,9 @@ and user-facing projections.
 
 ## Language
 
-**StreamProcessorRunner**:
-A component that runs one or more stream processor implementations against one or more streams, owns reduced-state persistence/progress, provides stream capabilities, performs catch-up, and invokes lifecycle hooks.
-_Avoid_: host, runtime, adapter, mount
+**StreamProcessorHost**:
+A component that runs one or more stream processor implementations against one stream subscription surface, owns reduced-state persistence/progress, provides stream capabilities, performs catch-up, and invokes lifecycle hooks. In OS production this host is embedded in the domain Durable Object that owns the processor's runtime dependencies.
+_Avoid_: runner, adapter, mount
 
 **Runtime dependencies**:
 Backend-only services passed to a processor implementation factory, such as AI bindings, code executors, MCP clients, loaders, or third-party API clients.
@@ -78,8 +78,8 @@ A mutually exclusive Connection from one Slack team to one ProjectId for inbound
 _Avoid_: Slack secret, Slack app config
 
 **Processor Subscription**:
-A durable registration that asks the Stream Runtime to deliver one Event Stream Path to a StreamProcessorRunner.
-_Avoid_: Domain DO callback, afterAppend subscriber, WebSocket subscription
+A durable registration that asks the Stream Runtime to deliver one Event Stream Path to a hosted stream processor.
+_Avoid_: afterAppend callback, ad hoc WebSocket listener
 
 **App Config**:
 Typed runtime configuration serialized into the deployed app and readable by running app code.
@@ -91,8 +91,8 @@ _Avoid_: app config, runtime config
 
 ## Relationships
 
-- A **StreamProcessorRunner** provides stream capabilities to processor implementations.
-- A **StreamProcessorRunner** receives **Runtime dependencies** indirectly by constructing processor implementations.
+- A **StreamProcessorHost** provides stream capabilities to processor implementations.
+- A **StreamProcessorHost** receives **Runtime dependencies** from the domain Durable Object that constructs processor implementations.
 - **Runtime dependencies** are not safe for frontend imports.
 - **Processor dependencies** are safe for frontend imports when they are full public contracts.
 - A processor can use a **Processor dependency** to consume or emit another processor's events.
@@ -119,11 +119,11 @@ _Avoid_: app config, runtime config
 - A **Slack Team Claim** is the lookup record for routing inbound Slack webhooks to the claimed ProjectId.
 - Google Connections are project-level in the current OS secrets slice.
 - Navigating to or reading a project stream may initialize that stream; a separate create command is not required for ordinary stream discovery.
-- During the OS `packages/streams` migration, **Processor Subscriptions** deliver events to standalone **StreamProcessorRunners**; domain Durable Objects remain command and capability owners rather than processor hosts.
+- In OS, **Processor Subscriptions** deliver events to processors hosted inside the relevant domain Durable Object through `createStreamProcessorHost`; domain Durable Objects remain command and capability owners and inject runtime dependencies.
 - The OS `packages/streams` migration is a POC cutover, not a backwards-compatible data migration; existing stream histories may be discarded.
 - During the OS `packages/streams` migration, OS-specific processor contracts stay in OS code for now; `@iterate-com/streams` remains app-agnostic runtime infrastructure.
 - The first OS `packages/streams` migration slice is creating and accessing a **Project** through oRPC with current OS behavior preserved after the stream cutover.
-- The first OS `packages/streams` migration slice may use a compatibility adapter to run existing OS processor contracts in the new **StreamProcessorRunner**.
+- The first OS `packages/streams` migration slice used host-side compatibility where needed while keeping processor dependencies explicit.
 - The first OS `packages/streams` migration slice keeps broad project stream append authority; stream safety and event-type policy are out of scope.
 - The OS `packages/streams` migration uses only the new **Processor Subscription** event schema; legacy callable subscription events are not translated.
 - **SecretsCapability** and **Workspace** lifecycle are out of scope for the first OS `packages/streams` migration slice.
@@ -133,8 +133,8 @@ _Avoid_: app config, runtime config
 
 ## Example dialogue
 
-> **Dev:** "Should the AI binding be part of the StreamProcessorRunner?"
-> **Domain expert:** "No — the StreamProcessorRunner creates the processor implementation, and the AI binding is one of that implementation's Runtime dependencies."
+> **Dev:** "Should the AI binding be part of the stream processor contract?"
+> **Domain expert:** "No — the domain Durable Object injects the AI binding as one of the processor implementation's Runtime dependencies."
 
 > **Dev:** "Codemode depends on Agent — is that a Runtime dependency?"
 > **Domain expert:** "No — Agent is a Processor dependency when Codemode imports Agent's public contract and reducer. Codemode's code executor is a Runtime dependency."
@@ -150,13 +150,13 @@ _Avoid_: app config, runtime config
 
 ## Flagged ambiguities
 
-- "host", "runtime", "adapter", and "runner" were all used for the component that runs processors against streams — resolved: use **StreamProcessorRunner**.
+- "host", "runtime", "adapter", and "runner" were all used for the component that runs processors against streams — resolved: use **StreamProcessorHost** for production OS hosting; standalone **StreamProcessorRunner** exists only in stream-engine test support/example contexts.
 - "dependencies" was used for both public processor contracts and backend services — resolved: use **Processor dependencies** for public contracts/catalogs and **Runtime dependencies** for backend services.
 - "well-behaved processor defaults" sounded moralizing and vague — resolved: use **Standard processor behavior** for the shared self-registration pieces.
 - "project" identity was mixed between slugs and IDs — resolved: use **ProjectId** for durable identity and **ProjectSlug** for routing labels.
 - Durable stream implementation was treated as app-owned — resolved: use **ProjectId** as the project-scoped API identifier and keep stream runtime infrastructure app-agnostic.
 - OS stream access was coupled to the Events contract — resolved: expose an **OS Streams API** that wraps the shared Stream Runtime directly.
-- Processor subscriptions were described as WebSocket callbacks or domain Durable Object `afterAppend` callbacks — resolved for the OS `packages/streams` migration: use **Processor Subscriptions** to standalone **StreamProcessorRunners**.
+- Processor subscriptions were described as WebSocket callbacks or domain Durable Object `afterAppend` callbacks — resolved: use **Processor Subscriptions** delivered to hosted stream processors.
 - Stream migration was initially discussed as a staged compatibility move with side-by-side bindings — resolved for the POC: cut over the existing `STREAM` binding and port functionality until tests pass again.
 - Moving all stream processor contracts into `@iterate-com/streams` would make the generic stream runtime OS-aware — resolved for now: keep OS-specific processor contracts in OS code.
 - "Getting started" could mean proving a domain processor such as Repo first or proving raw stream browsing first — resolved: start by replacing old streams in OS and proving a **Project** can be created and accessed through oRPC after the cutover, without intentionally bypassing current Project lifecycle behavior.

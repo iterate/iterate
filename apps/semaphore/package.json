@@ -9,11 +9,10 @@
   "scripts": {
     "alchemy:up": "tsx ./alchemy.run.ts",
     "alchemy:down": "tsx ./alchemy.run.ts --destroy",
-    "cli": "doppler run --project semaphore -- iterate-app-cli",
+    "cli": "doppler run --project semaphore -- tsx ./scripts/cli.ts",
     "dev": "doppler run --project semaphore -- pnpm exec tsx ./alchemy.run.ts",
     "build": "doppler run -- pnpm exec vite build",
     "deploy": "doppler run --project semaphore --config prd -- pnpm exec tsx ./alchemy.run.ts",
-    "rpc": "pnpm cli rpc",
     "seed:environment-config-leases": "pnpm cli seed-environment-config-leases",
     "typecheck": "tsc --noEmit",
     "test": "pnpm typecheck",
@@ -27,12 +26,6 @@
     "sqlfu:generate": "sqlfu generate && pnpm exec oxfmt sql/.generated migrations/.generated",
     "sqlfu:migrate": "sqlfu migrate",
     "sqlfu:ui": "sqlfu"
-  },
-  "iterateAppCli": {
-    "remote": {
-      "defaultBaseUrl": "https://semaphore.iterate.com",
-      "auth": "shared-api-secret-bearer"
-    }
   },
   "dependencies": {
     "@iterate-com/shared": "workspace:*",
@@ -54,7 +47,7 @@
     "react-dom": "^19.2.0",
     "sqlfu": "0.0.3-14",
     "tailwindcss": "^4.1.18",
-    "trpc-cli": "0.14.0",
+    "trpc-cli": "0.15.1",
     "zod": "^4.3.6"
   },
   "devDependencies": {

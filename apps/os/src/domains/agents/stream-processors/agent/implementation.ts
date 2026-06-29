@@ -22,24 +22,30 @@ import {
   type AgentConsumedEvent,
   type AgentState,
 } from "./contract.ts";
-import { StreamProcessor } from "~/domains/streams/engine/stream-processor.ts";
+import {
+  StreamProcessor,
+  type StreamProcessorDeps,
+} from "~/domains/streams/engine/stream-processor.ts";
 import { ITX_EVENT_TYPES } from "~/itx/contract.ts";
 
 export { AgentProcessorContract } from "./contract.ts";
 
 export type AgentProcessorContract = typeof AgentProcessorContract;
 
-export type AgentProcessorDeps = {
-  isAgentsRootStream(): boolean;
-  setupAgentRuntime(): Promise<unknown>;
-  /**
-   * Reads the full committed history of the agent's stream. The debounce-timer
-   * handoff rebuilds agent state from durable history at the last possible
-   * moment so the provider request reflects the committed stream, not a
-   * potentially stale warm reduction (see `#requestScheduledLlmWork`).
-   */
-  readStreamEvents(): Promise<StreamEvent[]>;
-};
+export type AgentProcessorDeps = StreamProcessorDeps<
+  AgentProcessorContract,
+  {
+    isAgentsRootStream(): boolean;
+    setupAgentRuntime(): Promise<unknown>;
+    /**
+     * Reads the full committed history of the agent's stream. The debounce-timer
+     * handoff rebuilds agent state from durable history at the last possible
+     * moment so the provider request reflects the committed stream, not a
+     * potentially stale warm reduction (see `#requestScheduledLlmWork`).
+     */
+    readStreamEvents(): Promise<StreamEvent[]>;
+  }
+>;
 
 type LlmRequestPolicy = Extract<
   AgentConsumedEvent,
@@ -93,7 +99,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           args.blockProcessorWhile(async () => {
             await this.deps.setupAgentRuntime();
             if (event.payload.systemPrompt !== undefined) {
-              await this.ctx.stream.append({
+              await this.deps.stream.append({
                 event: {
                   type: "events.iterate.com/agent/system-prompt-updated",
                   idempotencyKey: buildProcessorIdempotencyKey({
@@ -113,7 +119,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         args.blockProcessorWhile(async () => {
           await this.deps.setupAgentRuntime();
           await this.#appendEventTypeExplanation({ eventType: event.type });
-          await this.ctx.stream.append({
+          await this.deps.stream.append({
             event: {
               type: "events.iterate.com/agent/input-added",
               idempotencyKey: buildProcessorIdempotencyKey({
@@ -139,7 +145,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         if (this.deps.isAgentsRootStream()) return;
         args.blockProcessorWhile(async () => {
           await this.#appendEventTypeExplanation({ eventType: event.type });
-          await this.ctx.stream.append({
+          await this.deps.stream.append({
             event: {
               type: "events.iterate.com/agent/input-added",
               idempotencyKey: buildProcessorIdempotencyKey({
@@ -367,7 +373,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     if (script == null) return;
 
     await this.deps.setupAgentRuntime();
-    await this.ctx.stream.append({
+    await this.deps.stream.append({
       event: {
         type: ITX_EVENT_TYPES.scriptExecutionRequested,
         idempotencyKey: buildProcessorIdempotencyKey({
@@ -393,14 +399,16 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     const executionId = event.payload.executionId;
     if (typeof executionId !== "string" || executionId.trim() === "") return;
 
-    const logs = Array.isArray(event.payload.logs) ? (event.payload.logs as string[]) : [];
+    const logs = Array.isArray(event.payload.logs)
+      ? event.payload.logs.filter((line): line is string => typeof line === "string")
+      : [];
     const outcome =
       event.payload.ok === true
         ? ({ status: "returned", value: event.payload.result } as const)
         : ({ error: event.payload.error ?? "Unknown script error", status: "threw" } as const);
     if (outcome.status === "returned" && outcome.value === undefined && logs.length === 0) return;
 
-    await this.ctx.stream.append({
+    await this.deps.stream.append({
       event: {
         type: "events.iterate.com/agent/input-added",
         idempotencyKey: `agent-itx-execution-result:${executionId}`,
@@ -446,7 +454,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   async #appendLlmRequestScheduled(args: { sourceEvent: { offset: number }; state: AgentState }) {
     this.#llmRequestSeq += 1;
     const requestId = `req_${Date.now()}_${this.#llmRequestSeq}`;
-    const scheduledEvent = (await this.ctx.stream.append({
+    const scheduledEvent = (await this.deps.stream.append({
       event: {
         type: "events.iterate.com/agent/llm-request-scheduled",
         idempotencyKey: buildProcessorIdempotencyKey({
@@ -487,7 +495,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     sourceEvent: { offset: number };
   }) {
     this.#cancelScheduledLlmRequest({ requestId: args.requestId });
-    await this.ctx.stream.append({
+    await this.deps.stream.append({
       event: {
         type: "events.iterate.com/agent/llm-request-cancelled",
         idempotencyKey: buildProcessorIdempotencyKey({
@@ -508,7 +516,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     llmRequestId: number;
     sourceEvent: { offset: number };
   }) {
-    await this.ctx.stream.append({
+    await this.deps.stream.append({
       event: {
         type: "events.iterate.com/agent/llm-request-cancelled",
         idempotencyKey: buildProcessorIdempotencyKey({
@@ -600,7 +608,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       if (stateAtRequest.llmProvider === null) return;
       // Request-by-reference: no body. Providers rebuild the chat request from
       // committed history up to this event's offset.
-      await this.ctx.stream.append({
+      await this.deps.stream.append({
         event: {
           type: "events.iterate.com/agent/llm-request-requested",
           idempotencyKey: buildProcessorIdempotencyKey({
@@ -629,7 +637,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   }
 
   async #emitQueued(args: { sourceEvent: { offset: number } }) {
-    await this.ctx.stream.append({
+    await this.deps.stream.append({
       event: {
         type: "events.iterate.com/agent/llm-request-queued",
         idempotencyKey: buildProcessorIdempotencyKey({
@@ -649,7 +657,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     requestId?: string;
     llmRequestId?: number;
   }) {
-    await this.ctx.stream.append({
+    await this.deps.stream.append({
       event: {
         type: "events.iterate.com/agent/status-updated",
         idempotencyKey: buildProcessorIdempotencyKey({
@@ -668,7 +676,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   }
 
   async #appendRewrite(args: { event: { offset: number }; key: string; content: string }) {
-    await this.ctx.stream.append({
+    await this.deps.stream.append({
       event: {
         type: "events.iterate.com/agent/input-added",
         idempotencyKey: buildProcessorIdempotencyKey({
@@ -688,7 +696,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     const explanation = eventTypeExplanation(args.eventType);
     if (explanation == null) return;
 
-    await this.ctx.stream.append({
+    await this.deps.stream.append({
       event: {
         type: "events.iterate.com/agent/input-added",
         idempotencyKey: buildProcessorIdempotencyKey({

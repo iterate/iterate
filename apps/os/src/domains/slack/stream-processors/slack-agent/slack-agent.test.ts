@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { StreamEvent, StreamEventInput } from "@iterate-com/shared/streams/stream-event";
-import {
-  SlackAgentProcessor,
-  eyesReactionTargetFromWebhookPayload,
-  type SlackAgentProcessorDeps,
-} from "./implementation.ts";
+import { SlackAgentProcessor, eyesReactionTargetFromWebhookPayload } from "./implementation.ts";
+import type { StreamRpc } from "~/domains/streams/engine/types.ts";
 
 describe("eyesReactionTargetFromWebhookPayload", () => {
   const humanMessagePayload = (event: Record<string, unknown> = {}) => ({
@@ -355,6 +352,47 @@ describe("SlackAgentProcessor", () => {
     expect(appended).toEqual([]);
   });
 
+  it("renders human reaction events as non-triggering agent input", async () => {
+    const { appended, processor } = createProcessor();
+
+    await processor.ingest({
+      events: [
+        committedEvent({
+          offset: 50,
+          type: "events.iterate.com/slack/webhook-received",
+          payload: {
+            body: {
+              type: "event_callback",
+              event: {
+                type: "reaction_added",
+                user: "U_USER",
+                reaction: "eyes",
+                item: { type: "message", channel: "C123", ts: "1772136259.000000" },
+                item_user: "U_OTHER_USER",
+                event_ts: "1772136260.000000",
+              },
+              authorizations: [
+                { team_id: "T123", user_id: "U_BOT", is_bot: true, is_enterprise_install: false },
+              ],
+            },
+          },
+        }),
+      ],
+      streamMaxOffset: 50,
+    });
+    await flushBackgroundWork();
+
+    expect(appended).toHaveLength(1);
+    expect(appended[0]!.event).toMatchObject({
+      type: "events.iterate.com/agent/input-added",
+      idempotencyKey: "slack-agent/slack-webhook-to-agent-input@50",
+      payload: {
+        content: expect.stringContaining("type: reaction_added"),
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
+      },
+    });
+  });
+
   it("ignores messages posted by our own bot", async () => {
     const { appended, processor } = createProcessor();
 
@@ -443,29 +481,30 @@ describe("SlackAgentProcessor", () => {
 });
 
 function createProcessor(
-  deps: Partial<SlackAgentProcessorDeps> & {
+  deps: {
+    callSlackApi?: (method: string, body: Record<string, unknown>) => Promise<void>;
     onAppend?: (event: StreamEventInput) => void;
   } = {},
 ) {
   const { onAppend, ...processorDeps } = deps;
   const appended: Array<{ streamPath?: string; event: StreamEventInput }> = [];
   const processor = new SlackAgentProcessor({
-    iterateContext: {
-      stream: {
-        append: async ({ event, streamPath }) => {
+    stream: {
+      append: async (args: { event: StreamEventInput; streamPath?: string }) => {
+        const { event, streamPath } = args;
+        onAppend?.(event);
+        appended.push({ event, streamPath });
+        return committedEvent({ ...event, offset: appended.length });
+      },
+      appendBatch: async (args: { events: StreamEventInput[]; streamPath?: string }) => {
+        return args.events.map((event) => {
+          const streamPath = args.streamPath;
           onAppend?.(event);
           appended.push({ event, streamPath });
           return committedEvent({ ...event, offset: appended.length });
-        },
-        appendBatch: async ({ events, streamPath }) => {
-          return events.map((event) => {
-            onAppend?.(event);
-            appended.push({ event, streamPath });
-            return committedEvent({ ...event, offset: appended.length });
-          });
-        },
+        });
       },
-    },
+    } as unknown as StreamRpc,
     ...processorDeps,
   });
   return { appended, processor };

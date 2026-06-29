@@ -6,7 +6,6 @@ import {
   streamEventOffsetSchema,
   StreamEventSourceSchema,
   type StreamEvent,
-  type StreamEventInput,
 } from "./stream-event.ts";
 
 export type { StreamEvent, StreamEventInput } from "./stream-event.ts";
@@ -78,9 +77,8 @@ export type EventCatalogWithPayloadExamples<Events extends EventCatalog> = {
  * - `consumes` and `emits` should stay as visible string arrays in the
  *   contract, not hidden behind helper constants;
  * - a processor may consume or emit events owned by `processorDeps`;
- * - reducers and `afterAppend` should receive a union of only consumed events;
- * - `streamApi.append(...)` should accept ordinary object literals, but only
- *   for event types listed in `emits`, with the matching payload shape.
+ * - reducers and processor hooks should receive a union of only consumed events;
+ * - processor hooks should receive a union of only consumed events.
  *
  * The consequence is that the event type string is not stored inside the event
  * definition value. It is the key of the event catalog object. These helper
@@ -183,18 +181,6 @@ export type EventFromDefinitionForType<Definition, Type extends string> =
     : never;
 
 /**
- * Turn an event definition plus its catalog key into append input.
- *
- * We accept both Zod input and output payload shapes. That lets authors use
- * Zod defaults/transforms in payload schemas without forcing append callers to
- * provide already-parsed output. Runners still validate at the append boundary.
- */
-export type InputFromDefinitionForType<Definition, Type extends string> =
-  Definition extends EventDefinition<string, infer PayloadOutput, infer PayloadInput>
-    ? StreamEventInput<Type, PayloadOutput | PayloadInput>
-    : never;
-
-/**
  * An event delivered through the `"*"` wildcard that is not individually named
  * in `consumes`. Its `type` is typed as the literal `"*"` — mirroring the
  * contract entry it matched — so that narrowing over named consumed events
@@ -218,7 +204,7 @@ export type WildcardConsumedEvent = StreamEvent<"*", unknown> & { payload: unkno
 
 /**
  * Build the union of stream events corresponding to a `consumes` string
- * array. This is what makes reducer/`afterAppend` narrowing work:
+ * array. This is what makes reducer and hook narrowing work:
  *
  * ```ts
  * reduce({ event }) {
@@ -251,34 +237,6 @@ export type EventFromType<
   Type extends string,
 > = Type extends unknown
   ? EventFromDefinitionForType<EventDefinitionForType<Events, ProcessorDeps, Type>, Type>
-  : never;
-
-/**
- * Build the union of append inputs corresponding to an `emits` string array.
- * This is what makes raw object-literal appends work without generated
- * `.createInput(...)` helpers:
- *
- * ```ts
- * await streamApi.append({
- *   event: {
- *     type: "events.iterate.com/agent/input-added",
- *     payload: { content: "hello" },
- *   },
- * });
- * ```
- */
-export type InputFromTypes<
-  Events extends EventCatalog,
-  ProcessorDeps extends readonly unknown[],
-  Types extends readonly string[],
-> = InputFromType<Events, ProcessorDeps, Types[number]>;
-
-export type InputFromType<
-  Events extends EventCatalog,
-  ProcessorDeps extends readonly unknown[],
-  Type extends string,
-> = Type extends unknown
-  ? InputFromDefinitionForType<EventDefinitionForType<Events, ProcessorDeps, Type>, Type>
   : never;
 
 export type ProcessorContractShape<
@@ -391,6 +349,7 @@ export type ProcessorContractInput<
   processorDeps: ProcessorDeps;
   events: Events & EventCatalogWithPayloadExamples<Events>;
   consumes: Consumes & ResolvedConsumedEventTypesOnly<Events, ProcessorDeps, Consumes>;
+  consumesAllEvents?: true;
   emits: Emits & ResolvedEventTypesOnly<Events, ProcessorDeps, Emits>;
   reduce?: ProcessorContractShape<StateSchema, Events, ProcessorDeps, Consumes, Emits>["reduce"];
 };
@@ -409,6 +368,7 @@ export type ProcessorContractInputWithoutDeps<
   processorDeps?: never;
   events: Events & EventCatalogWithPayloadExamples<Events>;
   consumes: Consumes & ResolvedConsumedEventTypesOnly<Events, readonly [], Consumes>;
+  consumesAllEvents?: true;
   emits: Emits & ResolvedEventTypesOnly<Events, readonly [], Emits>;
   reduce?: ProcessorContractShape<StateSchema, Events, readonly [], Consumes, Emits>["reduce"];
 };
@@ -433,47 +393,20 @@ export type ProcessorState<Contract> = Contract extends {
  * This intentionally depends on `contract.consumes`, not on every resolvable
  * event. A processor can depend on a contract for append permission or schema
  * lookup without receiving all of that contract's events in `reduce` and
- * `afterAppend`.
+ * `processEvent`.
  */
 export type ConsumedEvent<Contract> = Contract extends {
   events: EventCatalog;
   consumes: infer Consumes extends readonly string[];
 }
-  ? EventFromTypes<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>, Consumes>
+  ? Contract extends { consumesAllEvents: true }
+    ? EventFromTypes<
+        ContractEventCatalog<Contract>,
+        ProcessorDepsOf<Contract>,
+        readonly ["*", ...Consumes]
+      >
+    : EventFromTypes<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>, Consumes>
   : never;
-
-/**
- * The append input union allowed for `streamApi.append(...)`.
- *
- * This intentionally depends on `contract.emits`. It enforces the requirement
- * from the design discussion that a processor gets a type error if it appends
- * an event it did not declare in `emits`, while still letting authors pass
- * plain object literals.
- */
-export type EmittedInput<Contract> = Contract extends {
-  events: EventCatalog;
-  emits: infer Emits extends readonly string[];
-}
-  ? InputFromTypes<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>, Emits>
-  : never;
-
-export type ProcessorStreamApi<Contract> = {
-  append(args: { event: EmittedInput<Contract>; streamPath?: string }): Promise<StreamEvent>;
-  appendBatch(args: {
-    events: EmittedInput<Contract>[];
-    streamPath?: string;
-  }): Promise<StreamEvent[]>;
-  read(args?: {
-    streamPath?: string;
-    afterOffset?: number | "start" | "end";
-    beforeOffset?: number | "start" | "end";
-  }): Promise<StreamEvent[]>;
-  subscribe(args?: {
-    streamPath?: string;
-    afterOffset?: number | "start" | "end";
-    signal?: AbortSignal;
-  }): AsyncIterable<StreamEvent>;
-};
 
 export type ProcessorReduction<Contract> = {
   event: ConsumedEvent<Contract>;
@@ -597,7 +530,7 @@ export function defineProcessorContract(contract: unknown) {
 /**
  * Compile-time exhaustiveness guard for discriminated unions.
  *
- * Use this at the end of `switch (event.type)` in reducers and `afterAppend`
+ * Use this at the end of `switch (event.type)` in reducers and `processEvent`
  * hooks when the processor should deliberately handle every event in
  * `contract.consumes`.
  *

@@ -59,7 +59,7 @@ Examples:
 - `APP_CONFIG_PROJECT_HOSTNAME_BASES` is App Config.
 - `CLOUDFLARE_ACCOUNT_ID` is Deployment Config.
 - `CLOUDFLARE_API_TOKEN` is Deployment Config.
-- `OS_ARTIFACTS_NAMESPACE` (read by `apps/os/scripts/seed-iterate-config-base-repo.ts`)
+- `OS_ARTIFACTS_NAMESPACE` (read by `apps/os/scripts/artifacts.ts`)
   is Deployment Config.
 
 ## Cloudflare Accounts
@@ -111,9 +111,10 @@ doppler run --project os --config preview_2 -- pnpm run destroy
 ## Local Development
 
 Use `pnpm dev` for normal local OS development. It is the attached shorthand
-for `cd apps/os && pnpm cli dev start`, which wraps Doppler and Alchemy.
-Additional args forward to the CLI dev group, so `pnpm dev status`,
-`pnpm dev attach`, and `pnpm dev restart --detach` are supported.
+for the `apps/os/scripts/dev.ts` local lifecycle module, which loads Doppler
+secrets into the local Alchemy dev server env. Additional args forward to that
+module, so `pnpm dev status`, `pnpm dev attach`, and
+`pnpm dev restart --detach` are supported.
 
 ```bash
 pnpm install
@@ -133,15 +134,15 @@ For an explicit app/config:
 
 ```bash
 cd apps/os
-doppler run --project os --config dev -- pnpm cli dev start
+doppler run --project os --config dev -- pnpm dev start
 ```
 
 OS dev configs run fully locally on `http://localhost:<port>`. Personal configs
 such as `dev_jonas`, `dev_misha`, and `dev_rahul` may still carry personal
 integration secrets, but they should not carry app/MCP/project-host URL
 overrides. OS writes the selected localhost URL to
-`apps/os/.alchemy/dev-server.json`, and local MCP is path-mounted at
-`<baseUrl>/api/__mcp`; `mcp.localhost` is not portable across local resolvers.
+`apps/os/.alchemy/dev-server.json`, and local MCP is served at
+`<baseUrl>/api/mcp`; `mcp.localhost` is not portable across local resolvers.
 
 ## Environment Configs
 
@@ -194,9 +195,13 @@ Use the repo preview CLI for PRs so Semaphore owns the lease:
 ```bash
 doppler run --project _shared --config prd -- pnpm preview status
 doppler run --project _shared --config prd -- pnpm preview reconcile
-GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview sync --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview deploy --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview test --pull-request-number 1234
 GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview cleanup --pull-request-number 1234
 ```
+
+For PR commands, the CLI only needs a GitHub token and pull request number; it
+derives the repository, head SHA, and base SHA through GitHub.
 
 Direct app deploys to `preview_N` are useful for debugging the primitive, but
 they bypass Semaphore and can collide with a PR that owns the same lease.
@@ -210,15 +215,15 @@ and prevents two PRs from deploying to the same slot simultaneously.
 
 #### How leases work
 
-| Concept   | Meaning                                                            |
-| --------- | ------------------------------------------------------------------ |
-| Resource  | A preview slot (type `environment-config-lease`, slug `preview-N`) |
-| Lease     | Time-bound claim; identified by a `leaseId` UUID                   |
-| `leaseMs` | How long the lease is held (milliseconds; max 30 days)             |
-| `waitMs`  | How long to wait if no slot is available (max 5 minutes)           |
-| Acquire   | Claim any available slot of a given type                           |
-| Release   | Return a slot early (requires the matching `leaseId`)              |
-| Renew     | Extend the expiry on an active lease                               |
+| Concept   | Meaning                                                                |
+| --------- | ---------------------------------------------------------------------- |
+| Resource  | A preview slot (type `environment-config-lease`, slug `preview-N`)     |
+| Lease     | Time-bound claim; identified by a `leaseId` UUID                       |
+| `leaseMs` | API field for how long the lease is held (milliseconds; max 30 days)   |
+| `waitMs`  | API field for how long to wait if no slot is available (max 5 minutes) |
+| Acquire   | Claim any available slot of a given type                               |
+| Release   | Return a slot early (requires the matching `leaseId`)                  |
+| Renew     | Extend the expiry on an active lease                                   |
 
 Each resource type gets its own Durable Object that serializes lease
 operations, manages a waiter queue, and reaps expired leases via alarms. D1
@@ -236,10 +241,14 @@ doppler run --project _shared --config prd -- pnpm preview status
 # Reconcile inventory: check Doppler configs and Cloudflare zones exist
 doppler run --project _shared --config prd -- pnpm preview reconcile
 
-# Acquire a preview slot for a PR (used by CI)
+# Deploy and test a PR preview (used by CI)
 GITHUB_TOKEN="$(gh auth token)" \
   doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- \
-  pnpm preview sync --pull-request-number 1234
+  pnpm preview deploy --pull-request-number 1234
+
+GITHUB_TOKEN="$(gh auth token)" \
+  doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- \
+  pnpm preview test --pull-request-number 1234
 
 # Release a preview slot after PR cleanup
 GITHUB_TOKEN="$(gh auth token)" \

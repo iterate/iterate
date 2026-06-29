@@ -24,7 +24,8 @@ const DISCONNECTED_TYPE = "events.iterate.com/stream/subscriber-disconnected";
 let counter = 0;
 function freshNames() {
   counter += 1;
-  return { streamName: `idle:/idle/t${counter}`, runnerName: `idle-runner-${counter}` };
+  const streamName = `idle:/idle/t${counter}`;
+  return { streamName, runnerName: `${streamName}:runner-${counter}` };
 }
 
 async function appendEvent(

@@ -26,18 +26,14 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "e2e/vitest.config.ts",
       "e2e/tui-test/tui-test.config.ts",
       "e2e/tui-test/run.ts",
-      // Mounted into the CLI by packages/iterate/src/os/router.ts, which knip
-      // doesn't traverse (the iterate package isn't a knip workspace).
-      "scripts/dev-server.ts",
-      "scripts/itx-agent-smoke.ts",
-      "scripts/itx-run.ts",
-      "scripts/seed-iterate-config-base-repo.ts",
-      "scripts/setup-artifact-event-subscriptions.ts",
+      // Local operational commands mounted by scripts/cli.ts.
+      "scripts/artifacts.ts",
+      "scripts/cli.ts",
+      "scripts/dev.ts",
+      "scripts/itx.ts",
       "sqlfu.config.ts",
       "src/durable-objects/codemode-session.vitest.config.ts",
       "src/durable-objects/codemode-session-test-entry.ts",
-      "src/durable-objects/iterate-mcp-server.vitest.config.ts",
-      "src/durable-objects/iterate-mcp-server-test-entry.ts",
       "src/durable-objects/project-ingress.vitest.config.ts",
       "src/durable-objects/project-ingress-test-entry.ts",
       "src/durable-objects/itx-stream-subscribe.vitest.config.ts",
@@ -60,7 +56,12 @@ function makeSemaphoreCloudflareAppWorkspace(workerEnvShim: string): WorkspaceCo
   const base = makeCloudflareTanStackAppWorkspace(workerEnvShim);
   return {
     ...base,
-    entry: [...(base.entry ?? []), "sqlfu.config.ts"],
+    entry: [
+      ...(base.entry ?? []),
+      "scripts/cli.ts",
+      "scripts/seed-environment-config-leases.ts",
+      "sqlfu.config.ts",
+    ],
     ignoreDependencies: [...(base.ignoreDependencies ?? []), "miniflare"],
   };
 }
@@ -125,12 +126,7 @@ function makeSharedWorkspace(): WorkspaceConfig {
     // This package exposes many subpath exports from package.json rather than a
     // single `src/index.ts`, so keep the workspace config minimal and let Knip
     // use the declared export map as the public entry surface.
-    entry: [
-      "bin/iterate-app-cli.js",
-      "src/apps/cli-entry.ts",
-      "src/durable-object-utils/e2e/alchemy.run.ts",
-      "src/**/*.test.ts",
-    ],
+    entry: ["src/durable-object-utils/e2e/alchemy.run.ts", "src/**/*.test.ts"],
     project: ["src/**/*.ts"],
     ignoreDependencies: ["alchemy", "cloudflare", "wrangler"],
   };
@@ -140,6 +136,8 @@ const config: KnipConfig = {
   // Keep the config honest in CI/local runs: if Knip thinks our patterns or
   // workspace setup drifted, fail instead of silently warning.
   treatConfigHintsAsErrors: true,
+  entry: ["playwright.config.ts", "specs/**/*.spec.ts"],
+  project: ["playwright.config.ts", "specs/**/*.ts"],
   // Keep this root command intentionally scoped. When Knip includes dependent
   // workspaces for a selected package, we still do not want it wandering into
   // unrelated apps with heavyweight config loading.

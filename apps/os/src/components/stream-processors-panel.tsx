@@ -56,6 +56,11 @@ export function PresenceAvatar({
  * a facet of "the stream's consumers". Overview lists every consumer with
  * (simulated) RTT/lag; clicking one drills into its announced contract.
  */
+type ProcessorRuntimeStateResult = {
+  runtimeState: ProcessorRuntimeState | null;
+  streamMaxOffset: number;
+};
+
 export function StreamProcessorsPanel({
   presence,
   metrics,
@@ -180,11 +185,6 @@ type ProcessorRuntimeStateLoad =
       streamMaxOffset: number | null;
     }
   | { status: "error"; subscriptionKey: string; message: string };
-
-type ProcessorRuntimeStateResult = {
-  runtimeState: ProcessorRuntimeState | null;
-  streamMaxOffset: number;
-};
 
 function ProcessorsOverview({
   presence,

@@ -3,11 +3,11 @@ import { z } from "zod";
 import {
   defineProcessorContract,
   type ConsumedEvent,
-  type EmittedInput,
   type WildcardConsumedEvent,
 } from "./shared/stream-processors.ts";
 import type { StreamEvent } from "./shared/event.ts";
 import { StreamProcessor } from "./stream-processor.ts";
+import type { StreamRpc } from "./types.ts";
 
 const DependencyProcessorContract = defineProcessorContract({
   slug: "test.dependency",
@@ -56,6 +56,7 @@ class TypeInferenceProcessor extends StreamProcessor<TypeInferenceProcessorContr
     args: Parameters<StreamProcessor<TypeInferenceProcessorContract>["reduce"]>[0],
   ) {
     expectTypeOf(args.state).toEqualTypeOf<TypeInferenceProcessorState>();
+    expectTypeOf(this.deps.stream).toEqualTypeOf<StreamRpc>();
 
     switch (args.event.type) {
       case "events.test/dependency/input":
@@ -109,37 +110,14 @@ class TypeInferenceProcessor extends StreamProcessor<TypeInferenceProcessorContr
 }
 
 describe("StreamProcessor class type inference", () => {
-  it("infers consumed dependency events and emitted dependency inputs", () => {
-    new TypeInferenceProcessor({ iterateContext: { stream: { append() {}, appendBatch() {} } } });
+  it("infers consumed dependency events and exposes the stream RPC", () => {
+    new TypeInferenceProcessor({
+      stream: { append() {}, appendBatch() {} } as unknown as StreamRpc,
+    });
 
     expectTypeOf<TypeInferenceProcessorContract["emits"][number]>().toEqualTypeOf<
       "events.test/dependency/output" | "events.test/local/output"
     >();
-
-    const dependencyOutput = {
-      type: "events.test/dependency/output",
-      payload: { accepted: true },
-    } satisfies EmittedInput<TypeInferenceProcessorContract>;
-    const localOutput = {
-      type: "events.test/local/output",
-      payload: { total: 1 },
-    } satisfies EmittedInput<TypeInferenceProcessorContract>;
-
-    const wrongType = {
-      // @ts-expect-error undeclared event type is not emitted by this processor
-      type: "events.test/other/output",
-      payload: { accepted: true },
-    } satisfies EmittedInput<TypeInferenceProcessorContract>;
-    const wrongDependencyPayload = {
-      type: "events.test/dependency/output",
-      // @ts-expect-error dependency output payload must match the dependency contract
-      payload: { total: 1 },
-    } satisfies EmittedInput<TypeInferenceProcessorContract>;
-
-    void dependencyOutput;
-    void localOutput;
-    void wrongType;
-    void wrongDependencyPayload;
   });
 });
 
@@ -203,7 +181,9 @@ describe("consumes wildcard typing", () => {
   });
 
   it("['*', ...named] is the named union plus the wildcard member", () => {
-    new MixedWildcardProcessor({ iterateContext: { stream: { append() {}, appendBatch() {} } } });
+    new MixedWildcardProcessor({
+      stream: { append() {}, appendBatch() {} } as unknown as StreamRpc,
+    });
 
     type Consumed = ConsumedEvent<MixedWildcardContract>;
     expectTypeOf<

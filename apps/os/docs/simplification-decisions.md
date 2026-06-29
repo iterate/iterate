@@ -59,7 +59,7 @@ OS no longer imports anything from `@iterate-com/shared/apps/*`:
 - **`AppContext` → `RequestContext`** (`src/request-context.ts`), which _is_
   the TanStack Start request context (the `Register` augmentation lives next
   to the type). It now carries request-scoped state only: config, db, log,
-  auth principal/session, waitUntil, `ctx.exports`, project scope.
+  auth principal/session, waitUntil, and `ctx.exports`.
 - **Worker bindings are read from `import { env } from "cloudflare:workers"`**
   at the point of use instead of being threaded through context as optional
   fields. This deleted a dozen `if (!context.X) throw "binding not available"`
@@ -77,9 +77,6 @@ OS no longer imports anything from `@iterate-com/shared/apps/*`:
   namespace for CLI discovery and browser public-config bootstrap. That surface
   has since been removed from OS; current operator work uses `pnpm cli itx ...`
   and `/api/itx`.
-- **Deliberate exception:** `scripts/cli.ts` keeps using the shared CLI
-  harness (`@iterate-com/shared/apps/cli`) — it is cross-app tooling, not
-  runtime code, and inlining it would be bloat, not simplification.
 - Dropped `externalEgressProxy` from the config schema: nothing in OS consumed
   it and no Doppler config sets it (checked prd).
 
@@ -108,18 +105,14 @@ structural changes, all verified by bisection:
      explicit type annotations.
 - The request context is registered on **both** `@tanstack/react-start` and
   `@tanstack/react-router`: in the installed versions `handler.fetch` types its
-  context from react-router's Register while middleware/getGlobalStartContext
+  context from react-router's Register while middleware and server functions
   read react-start's. These are distinct interfaces.
 - `iterateAuthMiddleware` is now `createMiddleware({ type: "request" })` — it
   is registered as requestMiddleware and returns raw Responses, which is the
   request-middleware contract.
-- Upstream type bug worked around: once the footer registers `config`,
-  `getGlobalStartContext()`'s return type collapses to `undefined`
-  (`AssignAllMiddleware<[]>` degenerates to `never` inside
-  `AssignAllServerRequestContext`). `getRequestContext()` /
-  `requireRequestContext()` in `src/request-context.ts` are the typed accessors
-  that state the runtime truth; nothing else should call
-  `getGlobalStartContext` directly.
+- Server routes and server functions use TanStack's native handler `context`
+  argument directly; `src/request-context.ts` only defines the OS request
+  context shape and Register augmentation.
 
 ### 6. Security: closed an unauthenticated secret leak in `__internal/debug` (2026-06-10)
 
@@ -132,7 +125,7 @@ before this PR. Rotate those secrets.
 
 The leak was in the old shared app internal router helper. OS's inline
 `__internal` router already returns a static `{ runtime: "workerd" }`, and
-semaphore now implements the same static debug response in its local router.
+semaphore now implements the same static debug response in the app worker.
 
 ### 7. Preview smoke test: real agent conversation end to end (2026-06-10)
 
@@ -159,9 +152,9 @@ Two findings worth keeping:
   server-side, debug the itx WebSocket path and stream subscription state.
 
 - **`Preview / deploy` red was `apps/semaphore`, not `apps/os` — a dropped
-  `baseUrl` in the migrated config.** On PR #1411 the deploy job failed at
-  `scripts/preview/router.ts:113` after a ~9-minute silent gap (the readiness
-  poll's 10-min budget, `preview.ts:43`). The misleading part: `os`'s readiness
+  `baseUrl` in the migrated config.** On PR #1411 the deploy job failed in the
+  preview deploy step after a ~9-minute silent gap (the readiness poll's 10-min
+  budget, `preview.ts:43`). The misleading part: `os`'s readiness
   passed (`status: awaiting-tests`); the recorded state showed **semaphore**
   `deploy-failed` with `Readiness check returned 522 for
 https://semaphore.iterate-preview-2.com/api/__internal/health`. The semaphore

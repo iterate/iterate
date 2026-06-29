@@ -37,8 +37,8 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
 ```
 
 - **Config selection**: `pnpm dev` preserves an existing `doppler run`
-  environment; otherwise it enters Doppler using the `apps/os` local setup. For
-  a one-off config, use
+  environment; otherwise it loads Doppler secrets from the `apps/os` local setup
+  into the spawned dev server. For a one-off config, use
   `doppler run --project os --config dev_<you> -- pnpm dev`; do not set
   `DOPPLER_CONFIG` by hand.
 - **Which config?** `dev`, `dev_jonas`, `dev_misha`, and `dev_rahul` all run
@@ -61,10 +61,10 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   captun URL, runtime config keeps the public URL and the discovery file remains
   the local target.
   Scripts and CLIs that need "the local dev server" read that file — no
-  flags, no guessing. `pnpm dev` is the attached shorthand for
-  `cd apps/os && pnpm cli dev start`; extra args forward, so
-  `pnpm dev status`, `pnpm dev attach`, and `pnpm dev restart --detach` are the
-  short forms for `pnpm cli dev ...`. A second start attaches to the existing
+  flags, no guessing. `pnpm dev` runs `apps/os/scripts/dev.ts`; extra args
+  forward, so `pnpm dev status`, `pnpm dev attach`, and
+  `pnpm dev restart --detach` use the same local lifecycle module. A second
+  start attaches to the existing
   live server; use `restart` to replace it. The file appears ~10–15s before
   the port actually accepts connections (Vite is still booting) — poll the
   base URL until it returns a response before driving it.
@@ -76,15 +76,15 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   Browser project ingress uses `*.localhost`; curl/Node on macOS usually do
   not resolve those names, so non-browser clients should use
   `localhost:<port>` with a Host header.
-- Local MCP is deliberately path-mounted on the curlable app origin:
-  `http://localhost:<port>/api/__mcp`. Do not use `mcp.localhost` for local
+- Local MCP is the normal OS app route:
+  `http://localhost:<port>/api/mcp`. Do not use `mcp.localhost` for local
   scripts unless you have configured local wildcard DNS yourself.
   Smoke it with the MCP Inspector from `apps/os`:
 
   ```bash
   doppler run --project os --config dev -- sh -lc '
     BASE=$(node -p "require(\"./.alchemy/dev-server.json\").baseUrl")
-    npx -y @modelcontextprotocol/inspector --cli "$BASE/api/__mcp" \
+    npx -y @modelcontextprotocol/inspector --cli "$BASE/api/mcp" \
       --transport http \
       --method tools/list \
       --header "Authorization: Bearer $APP_CONFIG_ADMIN_API_SECRET"
@@ -96,7 +96,7 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   ```bash
   doppler run --project os --config dev -- sh -lc '
     BASE=$(node -p "require(\"./.alchemy/dev-server.json\").baseUrl")
-    npx -y @modelcontextprotocol/inspector --cli "$BASE/api/__mcp" \
+    npx -y @modelcontextprotocol/inspector --cli "$BASE/api/mcp" \
       --transport http \
       --method tools/call \
       --tool-name exec_js \
@@ -171,8 +171,9 @@ The working recipe to browse OS as a minted identity:
 
 ```bash
 # 1. create a project via the operator path (admin API secret)
-(cd apps/os && doppler run --project os --config dev -- pnpm cli --base-url http://localhost:<port> \
-  rpc projects create --slug my-proj      # → note the returned "id"
+(cd apps/os && doppler run --project os --config dev -- pnpm cli itx run \
+  --base-url http://localhost:<port> \
+  --eval 'return await itx.projects.create({ slug: "my-proj" })' # note the returned "id"
 )
 
 # 2. mint with BOTH org and project claims (the org can be any made-up id —
@@ -191,6 +192,44 @@ creating an org + project on first sign-in (test emails `+...test@` with OTP
 The `browserSignInUrl` embeds the (short-lived) tokens as query params — treat
 it as a secret: it can appear in browser history and edge request logs, so
 don't paste it into shared channels.
+
+### Playwright specs against local dev or previews
+
+Root Playwright specs use the same forge key and admin API secret, but mint the
+session cookie directly instead of going through the browser sign-in URL. If
+`apps/os` has a Doppler config selected, `pnpm spec` can read the needed secrets
+directly; wrap the command in `doppler run` when you want to force a particular
+config:
+
+```bash
+# local dev: starts or reuses the local OS dev server when APP_CONFIG_BASE_URL is unset
+pnpm spec
+
+# same thing, forcing a specific Doppler config
+doppler run --project os --config dev -- pnpm spec
+
+# deployed preview: the Doppler config supplies APP_CONFIG_BASE_URL for the OS worker
+doppler run --project os --config preview_3 -- pnpm spec
+
+# arbitrary deployed OS worker: preserve an explicit APP_CONFIG_BASE_URL override
+APP_CONFIG_BASE_URL=https://os-preview-3.iterate.com \
+  doppler run --project os --config preview_3 --preserve-env=APP_CONFIG_BASE_URL -- pnpm spec
+```
+
+Forged-session specs validate one env contract: `APP_CONFIG_ADMIN_API_SECRET`
+for project fixture setup, plus `APP_CONFIG_ITERATE_AUTH__CLIENT_ID`,
+`APP_CONFIG_ITERATE_AUTH__ISSUER`, and `AUTH_FORGE_PRIVATE_JWK` for JWT
+minting. Those values are expected to come from the same `os` Doppler config as
+the worker under test. The access-token resource is derived from the target OS
+base URL (`http://localhost` for loopback local dev, otherwise the normalized
+base URL). The helper validates `process.env` first, then falls back to
+`doppler secrets download --no-file --format json` from `apps/os` when those
+values are missing; it never infers auth values from redirects.
+`APP_CONFIG_BASE_URL` is the only target override; when it is unset, Playwright
+runs the OS dev script through Node with `start`, `--detach`, `--keep-alive`,
+and `--port <port>`, so it reuses the same per-worktree dev server recorded in
+`apps/os/.alchemy/dev-server.json`, then waits directly on that server's
+`/api/health`.
 
 ### Minting in production
 
@@ -267,7 +306,7 @@ The slot's OS↔auth OAuth client credentials are **constants in Doppler**
 the matching `APP_CONFIG_ITERATE_AUTH__*`). Every auth deploy reseeds them
 into its database, so the DB can never drift from Doppler and the two apps
 need no deploy-time coordination. Provisioning/rotation:
-`pnpm tsx scripts/preview/provision-auth-preview-configs.ts [--rotate]`.
+`doppler run --project _shared --config prd -- pnpm preview provision-auth-preview-configs --rotate`.
 
 ### Creating a preview environment from your machine
 
@@ -294,7 +333,7 @@ doppler run --project _shared --config prd -- pnpm preview release --slot 9 --le
 ```
 
 For the PR-centric flow (managed PR comment, tests, cleanup) use
-`pnpm preview sync|deploy|test|cleanup --pull-request-number N` under
+`pnpm preview deploy|test|cleanup --pull-request-number N` under
 `doppler run --project _shared --config prd` — see
 [devops-cloudflare-doppler-alchemy-setup.md](devops-cloudflare-doppler-alchemy-setup.md).
 

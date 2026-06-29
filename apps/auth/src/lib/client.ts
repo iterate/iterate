@@ -20,24 +20,11 @@ export type PublicSessionResponse =
   | { authenticated: false }
   | Pick<Extract<SessionResponse, { authenticated: true }>, "authenticated" | "session" | "user">;
 
-type IterateAuthClientConfig = {
-  /** Base path where the auth handler is mounted, e.g. "/api/iterate-auth" (Default) */
-  authHandlerBasePath?: string;
-};
-
-type LogoutOptions = {
-  /**
-   * Also sign out of the upstream auth server. This must use browser navigation
-   * so the auth server can clear its own HttpOnly cookies.
-   */
-  global?: boolean;
-  /** Destination after logout. Defaults to the current origin. */
-  returnTo?: string;
-};
-
 type LoginOptions = {
   /** Destination after OAuth callback. Defaults to the current origin. */
   returnTo?: string;
+  /** Preferred sign-in method for the auth server login page. */
+  loginHint?: "email" | "google";
 };
 
 type RefreshOptions = {
@@ -63,7 +50,20 @@ export type AuthClientProviderProps = {
   signOutReturnTo?: string | (() => string);
 };
 
-const AuthClientContext = createContext<AuthClientContextValue | null>(null);
+type IterateAuthClientConfig = {
+  /** Base path where the auth handler is mounted, e.g. "/api/iterate-auth" (Default) */
+  authHandlerBasePath?: string;
+};
+
+type LogoutOptions = {
+  /**
+   * Also sign out of the upstream auth server. This must use browser navigation
+   * so the auth server can clear its own HttpOnly cookies.
+   */
+  global?: boolean;
+  /** Destination after logout. Defaults to the current origin. */
+  returnTo?: string;
+};
 
 export function createIterateAuthClient(config: IterateAuthClientConfig = {}) {
   const base = (config.authHandlerBasePath ?? "/api/iterate-auth").replace(/\/$/, "");
@@ -87,6 +87,9 @@ export function createIterateAuthClient(config: IterateAuthClientConfig = {}) {
       if (options.returnTo) {
         url.searchParams.set("return_to", options.returnTo);
       }
+      if (options.loginHint) {
+        url.searchParams.set("login_hint", options.loginHint);
+      }
       window.location.href = url.toString();
     },
     fetchSession,
@@ -101,6 +104,8 @@ export function createIterateAuthClient(config: IterateAuthClientConfig = {}) {
     },
   };
 }
+
+const AuthClientContext = createContext<AuthClientContextValue | null>(null);
 
 const defaultAuthClient = createIterateAuthClient();
 

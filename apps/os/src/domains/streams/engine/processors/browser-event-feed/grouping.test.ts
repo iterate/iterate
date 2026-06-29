@@ -252,7 +252,7 @@ describe("event-feed grouping", () => {
     expect(perEvent).toEqual(planFeedOps(INITIAL_FEED_STATE, events).endState);
   });
 
-  it("folding one event at a time matches folding the whole batch (reduce vs afterAppendBatch)", () => {
+  it("folding one event at a time matches folding the whole batch", () => {
     const events = [
       event(1, CREATED),
       event(2, WOKEN),

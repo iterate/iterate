@@ -47,9 +47,8 @@ and global query projections aligned.
 - Mount the shared Durable Object utility routes needed for Project
   initialization, catalog reads, and repair workflows on the OS Worker
   entrypoint.
-- Rename the current MCP server connection Durable Object/catalog class from
-  `IterateMcpServer` to `ProjectMcpServerConnection` when implementing the new
-  ingress entrypoint shape.
+- Keep inbound MCP out of projection repair paths; it is handled by the
+  stateless app-worker MCP route.
 - Add observability for projection write failures and repair results.
 - Add tests for partial-failure scenarios once the first implementation exists.
 

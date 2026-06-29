@@ -1,6 +1,3 @@
-type PostHog = import("posthog-js").PostHog;
-type PostHogInterface = import("posthog-js").PostHogInterface;
-
 // posthog-js only ever runs in the browser; the SSR branch keeps it out of the
 // server bundle.
 const loadPosthog = import.meta.env.SSR ? null : () => import("posthog-js");
@@ -65,7 +62,7 @@ function buildPosthogInitOptions(options: SetupPosthogOptions) {
           },
         }),
     loaded: options.appStage
-      ? (client: PostHogInterface) => {
+      ? (client: import("posthog-js").PostHogInterface) => {
           client.register({
             $environment: options.appStage,
           });
@@ -74,7 +71,7 @@ function buildPosthogInitOptions(options: SetupPosthogOptions) {
   };
 }
 
-function setupPosthog(client: PostHog, options: SetupPosthogOptions) {
+function setupPosthog(client: import("posthog-js").PostHog, options: SetupPosthogOptions) {
   if (!shouldEnablePosthog(options.apiKey) || typeof window === "undefined") return;
 
   if (window.__iteratePosthogInitialized && window.__iteratePosthogApiKey === options.apiKey) {

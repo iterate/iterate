@@ -14,11 +14,6 @@ import {
   upsertProjectSecretSummary,
 } from "~/domains/secrets/secrets-store.ts";
 
-type SecretsCapabilityEnv = {
-  APP_CONFIG?: string;
-  DB?: D1Database;
-};
-
 type SecretsCapabilityProps = {
   projectId?: string;
 };
@@ -36,7 +31,7 @@ type SecretsCapabilityClient = Pick<
 >;
 
 export class SecretsCapability extends WorkerEntrypoint<
-  SecretsCapabilityEnv,
+  { APP_CONFIG?: string; DB?: D1Database },
   SecretsCapabilityProps
 > {
   /**

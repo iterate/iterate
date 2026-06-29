@@ -3,9 +3,10 @@ import {
   streamRpcPath,
   withStreamConnectionFromBrowser,
 } from "./stream-rpc.ts";
-import type {
-  BrowserStreamClient,
-  BrowserStreamClientFactory,
+import {
+  asBrowserStreamClient,
+  type BrowserStreamClient,
+  type BrowserStreamClientFactory,
 } from "~/domains/streams/engine/browser/stream-browser-store.ts";
 
 export const createCapnwebStreamClient: BrowserStreamClientFactory = async (
@@ -21,17 +22,5 @@ export const createCapnwebStreamClient: BrowserStreamClientFactory = async (
     onConnectionStatusChange: args.onConnectionStatusChange,
   });
 
-  return {
-    append: (appendArgs) => connection.stream.append(appendArgs),
-    appendBatch: (appendArgs) => connection.stream.appendBatch(appendArgs),
-    runtimeState: () => connection.stream.runtimeState(),
-    getProcessorRuntimeState: (runtimeStateArgs) =>
-      connection.stream.getProcessorRuntimeState(runtimeStateArgs),
-    subscribe: (subscribeArgs) => connection.stream.subscribe(subscribeArgs),
-    kill: () => connection.stream.kill(),
-    reset: () => connection.stream.reset(),
-    [Symbol.dispose]() {
-      connection[Symbol.dispose]();
-    },
-  };
+  return asBrowserStreamClient(connection.stream, () => connection[Symbol.dispose]());
 };

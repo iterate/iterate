@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import type { StreamEvent } from "@iterate-com/shared/streams/stream-event";
+import type { StreamEvent, StreamEventInput } from "@iterate-com/shared/streams/stream-event";
+import { ProjectProcessor, defaultAgentSystemPrompt } from "./implementation.ts";
+import type { StreamRpc } from "~/domains/streams/engine/types.ts";
 
 vi.mock("~/domains/repos/entrypoints/repo-capability.ts", () => ({
   ensureProjectRepoInfoForProject: async () => ({
@@ -13,17 +15,29 @@ vi.mock("~/domains/slack/durable-objects/slack-agent-durable-object.ts", () => (
     `${input.projectId}:${input.path}`,
 }));
 
-import { ProjectProcessor, defaultAgentSystemPrompt } from "./implementation.ts";
-import { SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE } from "~/domains/agents/agent-prompt-guidance.ts";
+import {
+  AGENT_WORKSPACE_CAPABILITY_INSTRUCTIONS,
+  SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE,
+} from "~/domains/agents/agent-prompt-guidance.ts";
 import { DEFAULT_WORKERS_AI_AGENT_MODEL } from "~/domains/agents/stream-processors/agent/contract.ts";
 
 describe("project agent prompts", () => {
   it("tells web agents to await chat sends without returning side-effect results", () => {
-    const prompt = defaultAgentSystemPrompt("/agents/onboarding");
+    const prompt = defaultAgentSystemPrompt("/agents/web/demo");
 
     expect(prompt).toContain("await itx.chat.sendMessage({ message })");
     expect(prompt).toContain(SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE);
+    expect(prompt).toContain(AGENT_WORKSPACE_CAPABILITY_INSTRUCTIONS);
     expect(prompt).not.toContain("return await itx.chat.sendMessage");
+    expect(prompt).toContain("/project/ONBOARDING.md");
+  });
+
+  it("includes onboarding markdown instructions for the onboarding agent", () => {
+    const prompt = defaultAgentSystemPrompt("/agents/onboarding");
+
+    expect(prompt).toContain("ONBOARDING.md");
+    expect(prompt).toContain("Ask one focused question");
+    expect(prompt).toContain("events.iterate.com/project/onboarding-completed");
   });
 
   it("tells slack agents to await replies without returning side-effect results", () => {
@@ -31,6 +45,8 @@ describe("project agent prompts", () => {
 
     expect(prompt).toContain("await itx.slack.chat.postMessage");
     expect(prompt).toContain(SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE);
+    expect(prompt).toContain("itx.workspace.readFile");
+    expect(prompt).toContain("require('fs')");
     expect(prompt).not.toContain("return await itx.slack.chat.postMessage");
   });
 });
@@ -121,12 +137,7 @@ describe("ProjectProcessor worker forwarding", () => {
     const appendedBatches: Array<{ events: unknown[]; streamPath?: string }> = [];
     const processor = newProcessor({
       forwardToProjectWorker: async () => undefined,
-      stream: {
-        append: async () => undefined,
-        appendBatch: async (batch) => {
-          appendedBatches.push(batch);
-        },
-      },
+      stream: recordingStream(appendedBatches),
     });
 
     await processor.ingest({
@@ -169,8 +180,42 @@ describe("ProjectProcessor worker forwarding", () => {
             subscriptionKey: "agent:project_1:/agents/onboarding:openai-ws",
           }),
         }),
+        expect.objectContaining({
+          type: "events.iterate.com/agent/input-added",
+          idempotencyKey: "project-onboarding:start",
+          payload: expect.objectContaining({
+            content: expect.stringContaining("Start onboarding now"),
+          }),
+        }),
       ],
     });
+  });
+
+  it("does not proactively trigger ordinary fresh agent streams", async () => {
+    const appendedBatches: Array<{ events: unknown[]; streamPath?: string }> = [];
+    const processor = newProcessor({
+      forwardToProjectWorker: async () => undefined,
+      stream: recordingStream(appendedBatches),
+    });
+
+    await processor.ingest({
+      events: [
+        childStreamCreated({
+          childPath: "/agents/web/demo",
+          createdAt: "2026-01-01T00:00:01.000Z",
+          offset: 4,
+        }),
+      ],
+      streamMaxOffset: 4,
+    });
+
+    expect(appendedBatches).toHaveLength(1);
+    expect(appendedBatches[0]?.events).not.toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/agent/input-added",
+        idempotencyKey: "project-onboarding:start",
+      }),
+    );
   });
 
   it("does not advance the checkpoint past a failed project worker forward", async () => {
@@ -231,19 +276,28 @@ describe("ProjectProcessor worker forwarding", () => {
 
 function newProcessor(deps: {
   forwardToProjectWorker: (event: StreamEvent) => Promise<void>;
-  stream?: {
-    append: (input: never) => unknown;
-    appendBatch: (input: { events: unknown[]; streamPath?: string }) => unknown;
-  };
+  stream?: StreamRpc;
 }) {
+  const { forwardToProjectWorker, stream } = deps;
   return new ProjectProcessor({
     appConfig: () => ({ projectHostnameBases: ["iterate.localhost"] }) as never,
     env: {} as never,
     exports: {},
-    iterateContext: { stream: deps.stream ?? { append: () => {}, appendBatch: () => {} } },
+    forwardToProjectWorker,
+    stream: stream ?? ({ append: () => {}, appendBatch: () => {} } as unknown as StreamRpc),
     projectId: () => "project_1",
-    ...deps,
   });
+}
+
+function recordingStream(appendedBatches: Array<{ events: unknown[]; streamPath?: string }>) {
+  let offset = 0;
+  return {
+    append: async (args: { event: StreamEventInput }) => event({ ...args.event, offset: ++offset }),
+    appendBatch: async (batch: { events: StreamEventInput[]; streamPath?: string }) => {
+      appendedBatches.push(batch);
+      return batch.events.map((input) => event({ ...input, offset: ++offset }));
+    },
+  } as unknown as StreamRpc;
 }
 
 function event(args: {

@@ -1,7 +1,7 @@
 import { RpcTarget } from "capnweb";
 import type { z } from "zod";
-import type { ProcessorStream } from "./types.ts";
 import type { StreamEvent } from "./shared/event.ts";
+import type { StreamRpc } from "./types.ts";
 import {
   assertObjectProcessorState,
   getConsumedEventDefinition,
@@ -11,15 +11,6 @@ import {
   type EventCatalog,
   type ProcessorState,
 } from "./shared/stream-processors.ts";
-
-/**
- * Platform capabilities the host hands every processor, exposed to subclasses
- * as `this.ctx`. Today that is just the stream append surface; richer hosts can
- * substitute their own context type via the class's `IterateContext` parameter.
- */
-export type StreamProcessorIterateContext = {
-  stream: ProcessorStream;
-};
 
 /**
  * The structural slice of a processor contract that the class needs. Contracts
@@ -34,16 +25,18 @@ export type StreamProcessorContract = {
   events: EventCatalog;
   processorDeps?: readonly unknown[];
   consumes: readonly string[];
+  consumesAllEvents?: true;
+  emits: readonly string[];
 };
 
 /**
  * Host-provided constructor dependencies shared by every processor:
- * the iterate context, optional checkpoint storage (`readState`/`writeState`),
+ * the stream RPC stub, optional checkpoint storage (`readState`/`writeState`),
  * and an optional `keepAliveWhile` hook for hosts whose runtime would otherwise
  * shut down while async work is in flight (e.g. a Durable Object).
  */
-export type StreamProcessorBaseDeps<Contract, IterateContext> = {
-  iterateContext: IterateContext;
+type StreamProcessorBaseDeps<Contract extends StreamProcessorContract> = {
+  stream: StreamRpc;
   keepAliveWhile?: (work: () => Promise<unknown>) => void;
 } & StreamProcessorStateStorage<ProcessorState<Contract>>;
 
@@ -116,10 +109,6 @@ export type StreamProcessorRuntimeState<State> = {
 type MaybePromise<T> = T | Promise<T>;
 type StateChangeCallback<State> = (state: State) => unknown;
 type RetainedStateChangeCallback<State> = StateChangeCallback<State> & Disposable;
-type RetainableStateChangeCallback<State> = StateChangeCallback<State> &
-  Partial<Disposable> & {
-    dup?(): RetainedStateChangeCallback<State>;
-  };
 export type StreamProcessorStateUnsubscribe = (() => void) & Disposable;
 
 /** A pending `waitUntilEvent` waiter: the match predicate, the resolver to fire
@@ -144,15 +133,14 @@ export type StreamProcessorStateStorage<State> = {
 };
 
 /**
- * Constructor args are the base deps plus the subclass's own `Deps` flattened
- * into one object, e.g. `new BrowserRawEventsProcessor({ iterateContext, sql,
- * readState, writeState })`.
+ * A processor's constructor deps are the host deps plus the subclass's own
+ * processor-specific deps flattened into one object, e.g.
+ * `new BrowserRawEventsProcessor({ stream, sql, readState, writeState })`.
  */
-export type StreamProcessorConstructorArgs<
+export type StreamProcessorDeps<
   Contract extends StreamProcessorContract,
-  Deps extends object,
-  IterateContext = StreamProcessorIterateContext,
-> = StreamProcessorBaseDeps<Contract, IterateContext> & Deps;
+  ProcessorSpecificDeps extends object = object,
+> = StreamProcessorBaseDeps<Contract> & ProcessorSpecificDeps;
 
 /**
  * Class-based stream processor.
@@ -185,11 +173,9 @@ export type StreamProcessorConstructorArgs<
 // class dependency once processor hosting has settled.
 export abstract class StreamProcessor<
   Contract extends StreamProcessorContract,
-  Deps extends object = object,
-  IterateContext = StreamProcessorIterateContext,
+  Deps extends StreamProcessorBaseDeps<Contract> = StreamProcessorBaseDeps<Contract>,
 > extends RpcTarget {
   abstract readonly contract: Contract;
-  protected readonly ctx: IterateContext;
   protected readonly deps: Deps;
 
   #checkpointOffset = 0;
@@ -208,12 +194,10 @@ export abstract class StreamProcessor<
   readonly #stateChangeCallbacks = new Set<RetainedStateChangeCallback<ProcessorState<Contract>>>();
   readonly #eventWaiters = new Set<EventWaiter>();
 
-  constructor(args: StreamProcessorConstructorArgs<Contract, Deps, IterateContext>) {
+  constructor(deps: Deps) {
     super();
-    // Base deps are destructured out; everything else is the subclass's Deps.
-    const { iterateContext, keepAliveWhile, readState, writeState, ...deps } = args;
-    this.ctx = iterateContext;
-    this.deps = deps as Deps;
+    const { keepAliveWhile, readState, writeState } = deps;
+    this.deps = deps;
     this.#keepAliveWhile = keepAliveWhile;
     this.#readState = readState ?? (() => this.#memorySnapshot);
     this.#writeState =
@@ -564,6 +548,11 @@ export abstract class StreamProcessor<
     return this.#state;
   }
 }
+
+type RetainableStateChangeCallback<State> = StateChangeCallback<State> &
+  Partial<Disposable> & {
+    dup?(): RetainedStateChangeCallback<State>;
+  };
 
 function retainStateChangeCallback<State>(
   cb: StateChangeCallback<State>,

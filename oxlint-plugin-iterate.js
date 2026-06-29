@@ -145,6 +145,91 @@ function isFunctionLikeDeclaration(node) {
   });
 }
 
+/** @param {import("estree").Node} node */
+function isFunctionExpressionNode(node) {
+  return node.type === "FunctionExpression" || node.type === "ArrowFunctionExpression";
+}
+
+/**
+ * @param {import("estree").Node | undefined} node
+ * @returns {import("estree").Node | undefined}
+ */
+function getExportWrapper(node) {
+  if (
+    node?.type === "ExportNamedDeclaration" ||
+    node?.type === "ExportDefaultDeclaration" ||
+    node?.type === "ExportAllDeclaration"
+  ) {
+    return node;
+  }
+  return undefined;
+}
+
+/**
+ * @param {import("estree").Node} node
+ * @returns {import("estree").Node | undefined}
+ */
+function getFunctionColocationStatement(node) {
+  if (node.type === "FunctionDeclaration") {
+    return getExportWrapper(node.parent) || node;
+  }
+
+  if (!isFunctionExpressionNode(node)) return undefined;
+
+  const declarator = node.parent;
+  if (declarator?.type !== "VariableDeclarator" || declarator.init !== node) return undefined;
+  const declaration = declarator.parent;
+  if (declaration?.type !== "VariableDeclaration") return undefined;
+  return getExportWrapper(declaration.parent) || declaration;
+}
+
+/**
+ * @param {import("estree").Node} node
+ * @returns {import("estree").Node | undefined}
+ */
+function getTypeReferenceFunctionStatement(node) {
+  for (let current = node.parent; current; current = current.parent) {
+    if (current.type === "FunctionDeclaration") {
+      return getFunctionColocationStatement(current);
+    }
+    if (isFunctionExpressionNode(current)) {
+      const statement = getFunctionColocationStatement(current);
+      if (statement) return statement;
+    }
+    if (
+      current.type === "VariableDeclarator" &&
+      current.init &&
+      isFunctionExpressionNode(current.init)
+    ) {
+      return getFunctionColocationStatement(current.init);
+    }
+  }
+  return undefined;
+}
+
+/**
+ * @param {import("estree").Node} typeDeclaration
+ * @param {import("estree").Node} functionStatement
+ */
+function isImmediatelyBeside(typeDeclaration, functionStatement) {
+  const body = typeDeclaration.parent?.body;
+  if (!Array.isArray(body) || body !== functionStatement.parent?.body) return false;
+
+  const typeIndex = body.indexOf(typeDeclaration);
+  const functionIndex = body.indexOf(functionStatement);
+  if (typeIndex === -1 || functionIndex === -1) return false;
+
+  const start = Math.min(typeIndex, functionIndex) + 1;
+  const end = Math.max(typeIndex, functionIndex);
+  const between = body.slice(start, end);
+  return between.every((statement) => isTypeDeclarationStatement(statement));
+}
+
+/** @param {import("estree").Node} statement */
+function isTypeDeclarationStatement(statement) {
+  return statement.type === "TSTypeAliasDeclaration" || statement.type === "TSInterfaceDeclaration";
+}
+
 /**
  * Counts the source lines spanned by a function's body content: the statements between the
  * braces, or the expression of a concise arrow. Brace-only lines don't count, so
@@ -201,6 +286,18 @@ function hasLeadingJsDocComment(sourceCode, node) {
 
 /**
  * @param {import("eslint").SourceCode} sourceCode
+ * @param {readonly [number, number] | undefined} range
+ */
+function hasCommentInRange(sourceCode, range) {
+  if (!range) return false;
+  return sourceCode.getAllComments().some((comment) => {
+    if (!comment.range) return false;
+    return comment.range[0] >= range[0] && comment.range[1] <= range[1];
+  });
+}
+
+/**
+ * @param {import("eslint").SourceCode} sourceCode
  * @param {import("estree").Function} fn
  */
 function hasTypePredicateReturnType(sourceCode, fn) {
@@ -231,6 +328,66 @@ function findVariableInScopeChain(scope, name) {
 /** @param {string} text */
 function compactTypeText(text) {
   return text.replace(/\s+/g, "");
+}
+
+/** @param {import("estree").Node | undefined} node */
+function stringLiteralValue(node) {
+  if (!node) return undefined;
+  if (node.type === "Literal" && typeof node.value === "string") return node.value;
+  return undefined;
+}
+
+/** @param {unknown} attributeName */
+function getJSXAttributeName(attributeName) {
+  if (!attributeName || typeof attributeName !== "object") return undefined;
+  if (attributeName.type === "JSXIdentifier") return attributeName.name;
+  if (attributeName.type === "JSXNamespacedName") {
+    return `${attributeName.namespace.name}:${attributeName.name.name}`;
+  }
+  return undefined;
+}
+
+/** @param {string} classText */
+function hasSrOnlyClassToken(classText) {
+  return classText.split(/\s+/).includes("sr-only");
+}
+
+/** @param {import("estree").Node | undefined} node */
+function hasSrOnlyClassExpression(node) {
+  const literal = stringLiteralValue(node);
+  if (literal !== undefined) return hasSrOnlyClassToken(literal);
+
+  if (!node) return false;
+
+  if (node.type === "TemplateLiteral") {
+    return node.quasis.some((quasi) => hasSrOnlyClassToken(quasi.value.cooked || ""));
+  }
+
+  if (node.type === "ArrayExpression") {
+    return node.elements.some((element) => hasSrOnlyClassExpression(element));
+  }
+
+  if (node.type === "ConditionalExpression") {
+    return hasSrOnlyClassExpression(node.consequent) || hasSrOnlyClassExpression(node.alternate);
+  }
+
+  if (node.type === "LogicalExpression") {
+    return hasSrOnlyClassExpression(node.left) || hasSrOnlyClassExpression(node.right);
+  }
+
+  if (node.type === "CallExpression") {
+    return node.arguments.some((argument) => hasSrOnlyClassExpression(argument));
+  }
+
+  return false;
+}
+
+/** @param {import("estree").Node | undefined} attributeValue */
+function jsxAttributeHasSrOnlyClass(attributeValue) {
+  const literal = stringLiteralValue(attributeValue);
+  if (literal !== undefined) return hasSrOnlyClassToken(literal);
+  if (attributeValue?.type !== "JSXExpressionContainer") return false;
+  return hasSrOnlyClassExpression(attributeValue.expression);
 }
 
 /**
@@ -336,6 +493,30 @@ function getRelativeTsImportWithExtension(source, filename) {
 }
 
 /**
+ * @param {string} text
+ */
+function inlineTypeText(text) {
+  return text.replaceAll(/\s+/g, " ").trim();
+}
+
+/**
+ * @param {import("eslint").SourceCode} sourceCode
+ * @param {import("estree").Identifier} identifier
+ * @param {string} inlineTypeText
+ */
+function inlinedTypeUseLineLength(sourceCode, identifier, inlineTypeText) {
+  const line = identifier.loc?.start.line;
+  if (!line) return Infinity;
+  const sourceLine = sourceCode.lines[line - 1];
+  if (!sourceLine) return Infinity;
+
+  const startColumn = identifier.loc.start.column;
+  const endColumn = identifier.loc.end.column;
+  return `${sourceLine.slice(0, startColumn)}${inlineTypeText}${sourceLine.slice(endColumn)}`
+    .length;
+}
+
+/**
  * @param {import("eslint").Rule.RuleContext} context
  * @param {import("estree").Literal} sourceNode
  */
@@ -407,6 +588,111 @@ const plugin = {
                   "Avoid using publicProcedure unless the procedure truly must be publicly accessible - prefer one of the authenticated procedures instead",
               });
             }
+          },
+        };
+      },
+    },
+    "no-sr-only-data-attributes": {
+      meta: {
+        docs: {
+          description:
+            "Forbid data-* attributes on sr-only elements; hidden test/data hooks should not masquerade as visible UI.",
+        },
+        type: "problem",
+      },
+      create: (context) => {
+        return {
+          JSXOpeningElement: (node) => {
+            const attributes = node.attributes.filter(
+              (attribute) => attribute.type === "JSXAttribute",
+            );
+            const classNameAttribute = attributes.find(
+              (attribute) => getJSXAttributeName(attribute.name) === "className",
+            );
+            if (!jsxAttributeHasSrOnlyClass(classNameAttribute?.value)) return;
+
+            for (const attribute of attributes) {
+              const attributeName = getJSXAttributeName(attribute.name);
+              if (!attributeName?.startsWith("data-")) continue;
+              context.report({
+                node: attribute,
+                message:
+                  `Do not put ${attributeName} on an sr-only element. ` +
+                  `Use a visible wrapper for UI locators, or hidden/script JSON for machine-readable test data.`,
+              });
+            }
+          },
+        };
+      },
+    },
+    "no-single-use-types": {
+      meta: {
+        type: "suggestion",
+        docs: {
+          description:
+            "Flag non-exported single-use type aliases that can be inlined while keeping the use line under 100 columns.",
+        },
+      },
+      create(context) {
+        const MAX_INLINED_LINE_LENGTH = 99;
+
+        return {
+          TSTypeAliasDeclaration(node) {
+            const parentType = node.parent?.type;
+            if (
+              parentType === "ExportNamedDeclaration" ||
+              parentType === "ExportDefaultDeclaration"
+            ) {
+              return;
+            }
+            if (node.typeParameters) return;
+            if (hasLeadingJsDocComment(context.sourceCode, node)) return;
+            if (hasCommentInRange(context.sourceCode, node.typeAnnotation?.range)) return;
+
+            const variable = findVariableInScopeChain(
+              context.sourceCode.getScope(node),
+              node.id.name,
+            );
+            if (!variable) return;
+
+            const reads = variable.references.filter((ref) => ref.isRead());
+            const readsInsideAlias = reads.some((ref) => {
+              const referenceStart = ref.identifier.range?.[0];
+              if (referenceStart === undefined || !node.range) return false;
+              return referenceStart >= node.range[0] && referenceStart < node.range[1];
+            });
+            if (readsInsideAlias) return;
+
+            const outsideAliasReads = reads.filter((ref) => {
+              const referenceStart = ref.identifier.range?.[0];
+              if (referenceStart === undefined || !node.range) return true;
+              return referenceStart < node.range[0] || referenceStart >= node.range[1];
+            });
+            if (outsideAliasReads.length !== 1) return;
+
+            const reference = outsideAliasReads[0];
+            const referenceParentType = reference.identifier.parent?.type;
+            if (
+              referenceParentType === "ExportSpecifier" ||
+              referenceParentType === "ExportDefaultDeclaration"
+            ) {
+              return;
+            }
+
+            const inlineText = inlineTypeText(context.sourceCode.getText(node.typeAnnotation));
+            if (
+              inlinedTypeUseLineLength(context.sourceCode, reference.identifier, inlineText) >
+              MAX_INLINED_LINE_LENGTH
+            ) {
+              return;
+            }
+
+            context.report({
+              node: node.id,
+              message:
+                `${node.id.name} is a non-exported single-use type alias that fits inline. ` +
+                `Inline \`${inlineText}\` at its only use instead of keeping a separate type.`,
+            });
           },
         };
       },
@@ -750,6 +1036,53 @@ const plugin = {
             }
             checkHelper(node.id, node.init, node.parent);
           },
+        };
+      },
+    },
+    "colocate-single-use-types": {
+      meta: {
+        type: "suggestion",
+        docs: {
+          description:
+            "Require non-exported single-use type aliases and interfaces to sit immediately beside the function they serve.",
+        },
+      },
+      create(context) {
+        /**
+         * @param {import("estree").Node} node
+         */
+        function checkTypeDeclaration(node) {
+          const typeName = node.id?.name;
+          if (!typeName) return;
+          if (node.declare) return;
+          if (getExportWrapper(node.parent)) return;
+
+          const scope = context.sourceCode.getScope(node);
+          const variable = findVariableInScopeChain(scope, typeName);
+          if (!variable) return;
+
+          const reads = variable.references.filter((ref) => ref.isRead());
+          const isExportedReference = reads.some((ref) => {
+            const parentType = ref.identifier.parent?.type;
+            return parentType === "ExportSpecifier" || parentType === "ExportDefaultDeclaration";
+          });
+          if (isExportedReference) return;
+          if (reads.length !== 1) return;
+
+          const functionStatement = getTypeReferenceFunctionStatement(reads[0].identifier);
+          if (!functionStatement) return;
+          if (isImmediatelyBeside(node, functionStatement)) return;
+
+          context.report({
+            node: node.id,
+            message:
+              `${typeName} is a non-exported type used by one function. ` +
+              `Move it immediately before or immediately after that function.`,
+          });
+        }
+
+        return {
+          "TSTypeAliasDeclaration, TSInterfaceDeclaration": checkTypeDeclaration,
         };
       },
     },

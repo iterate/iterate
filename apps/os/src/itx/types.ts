@@ -297,8 +297,8 @@ export interface ItxBuiltins {
    * its owning project, even if this handle was wider.
    *
    * The child IS a stream coordinate: pass `path` to put it on a meaningful
-   * stream (an MCP session's, a run's), or take the generated `/itx/<id>`
-   * catch-all. Extending an existing path is get-or-create.
+   * stream (an agent's, a run's), or take the generated `/itx/<id>` catch-all.
+   * Extending an existing path is get-or-create.
    */
   extend(opts?: { name?: string; path?: string }): Promise<ItxHandle>;
 
@@ -638,7 +638,11 @@ export type ProcessorRuntimeState = {
   };
   runtime?: Record<string, unknown>;
 };
-export type StreamSubscriptionHandle = { unsubscribe(): void };
+export type StreamSubscriptionHandle = {
+  subscriptionKey: string;
+  streamMaxOffset: number;
+  unsubscribe(): void;
+};
 export type StreamSubscriberDescriptor = { description?: string; [key: string]: unknown };
 export type StreamSubscriptionBatch = {
   events: StreamEvent[];

@@ -1,5 +1,3 @@
-type PathCall = { args?: unknown[]; path: string[] };
-
 export type Retained<T> = Disposable & {
   dispose(): void;
   readonly value: T;
@@ -133,7 +131,7 @@ function deepCopyAndDupRpcStubs<T>(value: T, retainedStubs: Disposable[]): T {
 }
 
 function isPathCallCarrier(value: unknown): value is {
-  invokeCapability(input: PathCall): unknown;
+  invokeCapability(input: { args?: unknown[]; path: string[] }): unknown;
 } {
   return (
     isPlainObject(value) &&

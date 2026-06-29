@@ -175,8 +175,14 @@ The checkpoint offset advances across unconsumed events too: a processor that
 only consumes `invoice.paid` still checkpoints past unrelated `page.view`
 events, so replays do not rescan them.
 
-Host-provided constructor deps (`StreamProcessorBaseDeps`):
+Constructor deps are flat. Every processor receives host-provided deps plus its
+own processor-specific deps in one object; the same flattened object is exposed
+inside the class as `this.deps`.
 
+Host-provided deps (`StreamProcessorBaseDeps`):
+
+- `stream` — RPC stub for the subscribed stream (`this.deps.stream` inside
+  processor classes).
 - `readState`/`writeState` — where checkpoints live (in-memory by default;
   Durable Object storage or browser SQLite in real hosts).
 - `keepAliveWhile(work)` — keeps the host runtime alive while detached async

@@ -41,7 +41,6 @@ type CompletedPayload = {
   executionId: string;
   result?: JsonSerializableTrustMeBro;
 };
-type ScriptRunner = { run(): Promise<unknown> };
 const INVALID_PATH_SEGMENTS = new Set([
   "__proto__",
   "constructor",
@@ -281,7 +280,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
     };
 
     try {
-      const worker = await this.#dynamicWorkers.get<ScriptRunner>(
+      const worker = await this.#dynamicWorkers.get<{ run(): Promise<unknown> }>(
         this.#scriptWorkerRef(input.code),
       );
       const result = await worker.run();

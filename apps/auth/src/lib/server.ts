@@ -527,6 +527,10 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
     url.searchParams.set("nonce", nonce);
     url.searchParams.set("code_challenge", challenge);
     url.searchParams.set("code_challenge_method", "S256");
+    const loginHint = requestURL.searchParams.get("login_hint");
+    if (loginHint === "email" || loginHint === "google") {
+      url.searchParams.set("login_hint", loginHint);
+    }
 
     setCookie(
       c,

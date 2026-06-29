@@ -126,10 +126,6 @@ export type StreamProcessorRuntimeState<State> = {
 type MaybePromise<T> = T | Promise<T>;
 type StateChangeCallback<State> = (state: State) => unknown;
 type RetainedStateChangeCallback<State> = StateChangeCallback<State> & Disposable;
-type RetainableStateChangeCallback<State> = StateChangeCallback<State> &
-  Partial<Disposable> & {
-    dup?(): RetainedStateChangeCallback<State>;
-  };
 export type StreamProcessorStateUnsubscribe = (() => void) & Disposable;
 
 /** A pending `waitUntilEvent` waiter: the match predicate, the resolver to fire
@@ -635,7 +631,10 @@ export abstract class StreamProcessor<
 function retainStateChangeCallback<State>(
   cb: StateChangeCallback<State>,
 ): RetainedStateChangeCallback<State> {
-  const retainable = cb as RetainableStateChangeCallback<State>;
+  const retainable = cb as StateChangeCallback<State> &
+    Partial<Disposable> & {
+      dup?(): RetainedStateChangeCallback<State>;
+    };
   const retained = retainable.dup?.() ?? retainable;
   const dispose = retained[Symbol.dispose]?.bind(retained);
   return Object.assign((state: State) => retained(state), {

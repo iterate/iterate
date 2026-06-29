@@ -1,6 +1,6 @@
 import { workflow } from "@jlarky/gha-ts/workflow-types";
-import { cloudflareAppSharedPaths } from "../../../scripts/preview/apps.ts";
-import type { CloudflarePreviewApp as CloudflareApp } from "../../../scripts/preview/apps.ts";
+import { cloudflareAppSharedPaths } from "../../../scripts/preview/preview.ts";
+import type { CloudflarePreviewApp as CloudflareApp } from "../../../scripts/preview/preview.ts";
 import * as utils from "./index.ts";
 
 declare const appDisplayName: string;

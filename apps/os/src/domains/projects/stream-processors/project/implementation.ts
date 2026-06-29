@@ -30,7 +30,10 @@
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import type { StreamEvent } from "@iterate-com/shared/streams/stream-event";
 import { projectFacts, ProjectProcessorContract, type ProjectProcessorState } from "./contract.ts";
-import { StreamProcessor } from "~/domains/streams/engine/stream-processor.ts";
+import {
+  StreamProcessor,
+  type StreamProcessorDeps,
+} from "~/domains/streams/engine/stream-processor.ts";
 import { durableObjectProcessorSubscriber } from "~/domains/streams/engine/shared/callable-subscriber.ts";
 import {
   getInitializedStreamStub,
@@ -39,7 +42,10 @@ import {
 } from "~/domains/streams/stream-runtime.ts";
 import type { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
 import { agentProcessorSubscriptionConfiguredEvents } from "~/domains/agents/agent-stream-subscriptions.ts";
-import { SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE } from "~/domains/agents/agent-prompt-guidance.ts";
+import {
+  AGENT_WORKSPACE_CAPABILITY_INSTRUCTIONS,
+  SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE,
+} from "~/domains/agents/agent-prompt-guidance.ts";
 import { DEFAULT_WORKERS_AI_AGENT_MODEL } from "~/domains/agents/stream-processors/agent/contract.ts";
 import {
   getSlackAgentDurableObjectName,
@@ -50,6 +56,7 @@ import { SlackAgentProcessorContract } from "~/domains/slack/stream-processors/s
 import { SlackProcessorContract } from "~/domains/slack/stream-processors/slack/contract.ts";
 import { ensureProjectRepoInfoForProject } from "~/domains/repos/entrypoints/repo-capability.ts";
 import type { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
+import { PROJECT_REPO_ONBOARDING_MD } from "~/domains/repos/project-repo-template.ts";
 import type { AppConfig } from "~/config.ts";
 import { SLACK_INTEGRATION_STREAM_PATH } from "~/domains/secrets/integration-stream-constants.ts";
 
@@ -89,26 +96,29 @@ function appendChildStream(
  * High-level deps from the hosting DO: bindings, its loopback exports, and
  * the worker host. The step LOGIC lives in this class, not behind closures.
  */
-export type ProjectProcessorDeps = {
-  env: {
-    AGENT: DurableObjectNamespace<AgentDurableObject>;
-    DB: D1Database;
-    REPO: DurableObjectNamespace<RepoDurableObject>;
-    SLACK_AGENT: DurableObjectNamespace<SlackAgentDurableObject>;
-    STREAM: DurableObjectNamespace<StreamDurableObject>;
-  };
-  /** The hosting DO's `ctx.exports` (loopback entrypoints for project-owned side effects). */
-  exports: unknown;
-  /** The hosting DO's own project id — payloads must match (see #ownEvent). */
-  projectId: () => string;
-  appConfig: () => AppConfig;
-  /**
-   * Delivers one root-stream event to the project's worker processEvent hook.
-   * User-code failures are swallowed by the host; platform failures throw so
-   * the processor checkpoint holds and the event is replayed.
-   */
-  forwardToProjectWorker: (event: StreamEvent) => Promise<void>;
-};
+export type ProjectProcessorDeps = StreamProcessorDeps<
+  ProjectProcessorContract,
+  {
+    env: {
+      AGENT: DurableObjectNamespace<AgentDurableObject>;
+      DB: D1Database;
+      REPO: DurableObjectNamespace<RepoDurableObject>;
+      SLACK_AGENT: DurableObjectNamespace<SlackAgentDurableObject>;
+      STREAM: DurableObjectNamespace<StreamDurableObject>;
+    };
+    /** The hosting DO's `ctx.exports` (loopback entrypoints for project-owned side effects). */
+    exports: unknown;
+    /** The hosting DO's own project id — payloads must match (see #ownEvent). */
+    projectId: () => string;
+    appConfig: () => AppConfig;
+    /**
+     * Delivers one root-stream event to the project's worker processEvent hook.
+     * User-code failures are swallowed by the host; platform failures throw so
+     * the processor checkpoint holds and the event is replayed.
+     */
+    forwardToProjectWorker: (event: StreamEvent) => Promise<void>;
+  }
+>;
 
 export class ProjectProcessor extends StreamProcessor<
   ProjectProcessorContract,
@@ -157,6 +167,7 @@ export class ProjectProcessor extends StreamProcessor<
     for (const reducedEvent of args.reducedEvents) {
       await this.#processRootEvent({
         event: reducedEvent.event,
+        previousState: reducedEvent.previousState,
         state: reducedEvent.state,
       });
     }
@@ -164,9 +175,10 @@ export class ProjectProcessor extends StreamProcessor<
 
   async #processRootEvent(args: {
     event: Parameters<StreamProcessor<ProjectProcessorContract>["processEvent"]>[0]["event"];
+    previousState: ProjectProcessorState;
     state: ProjectProcessorState;
   }) {
-    const { event, state } = args;
+    const { event, previousState, state } = args;
     if (event.type === "events.iterate.com/stream/child-stream-created") {
       await this.#reactToChildStreamCreated(event);
     }
@@ -178,6 +190,7 @@ export class ProjectProcessor extends StreamProcessor<
             `on project "${this.deps.projectId()}" (offset ${event.offset}).`,
         );
       } else {
+        if (previousState.phase !== "none") return;
         await this.#createProject(event.payload);
       }
       return;
@@ -195,7 +208,7 @@ export class ProjectProcessor extends StreamProcessor<
     const facts = projectFacts({ config: this.deps.appConfig(), projectId, slug });
     await this.#upsertProjectProjection({ projectId, slug });
     await this.#crossPostToGlobalProjects({ projectId, slug });
-    await this.ctx.stream.append({
+    await this.deps.stream.append({
       event: {
         type: "events.iterate.com/project/created",
         idempotencyKey: `project-created:${projectId}`,
@@ -207,7 +220,7 @@ export class ProjectProcessor extends StreamProcessor<
       agentPath: ONBOARDING_AGENT_PATH,
       projectId,
     });
-    await this.ctx.stream.append({
+    await this.deps.stream.append({
       event: {
         type: "events.iterate.com/project/create-completed",
         idempotencyKey: `project-create-completed:${projectId}`,
@@ -258,7 +271,7 @@ export class ProjectProcessor extends StreamProcessor<
       env: this.deps.env,
       projectId: input.projectId,
     });
-    await this.ctx.stream.append({
+    await this.deps.stream.append({
       event: {
         type: "events.iterate.com/project/repo-initialized",
         idempotencyKey: `project-repo-initialized:${input.projectId}:${repo.path}`,
@@ -318,7 +331,7 @@ export class ProjectProcessor extends StreamProcessor<
    * processors can safely ignore requests addressed to another provider.
    */
   async #appendAgentStreamBirthCertificate(input: { agentPath: StreamPath; projectId: string }) {
-    await this.ctx.stream.appendBatch({
+    await this.deps.stream.appendBatch({
       streamPath: input.agentPath,
       events: [
         {
@@ -345,12 +358,25 @@ export class ProjectProcessor extends StreamProcessor<
         ...(isSlackAgentPath(input.agentPath)
           ? [slackAgentProcessorSubscriptionConfiguredEvent(input)]
           : []),
+        ...(input.agentPath === ONBOARDING_AGENT_PATH
+          ? [
+              {
+                type: "events.iterate.com/agent/input-added",
+                idempotencyKey: "project-onboarding:start",
+                payload: {
+                  content:
+                    "Start onboarding now. Send the first onboarding message for this new project. " +
+                    "Follow ONBOARDING.md and ask exactly one focused question.",
+                },
+              },
+            ]
+          : []),
       ],
     });
   }
 
   async #appendSlackIntegrationBirthCertificate(input: { projectId: string }) {
-    await this.ctx.stream.append({
+    await this.deps.stream.append({
       streamPath: SLACK_INTEGRATION_STREAM_PATH,
       event: {
         type: "events.iterate.com/stream/subscription-configured",
@@ -375,8 +401,15 @@ function isSlackAgentPath(agentPath: string) {
 
 export function defaultAgentSystemPrompt(agentPath: string) {
   const isSlack = isSlackAgentPath(agentPath);
+  const isOnboarding = agentPath === ONBOARDING_AGENT_PATH;
   return [
     `You are the iterate AI agent running on stream ${agentPath}.`,
+    ...(isOnboarding
+      ? [
+          "You are this project's onboarding agent. Follow the project repo file ONBOARDING.md exactly:",
+          PROJECT_REPO_ONBOARDING_MD,
+        ]
+      : []),
     "Respond with exactly one fenced JavaScript code block and no surrounding prose.",
     "The code block must contain a single async arrow function: async (itx) => { ... }.",
     "Use capabilities announced as itx/capability-provided events.",
@@ -385,6 +418,7 @@ export function defaultAgentSystemPrompt(agentPath: string) {
       : `For web chat, reply with await itx.chat.sendMessage({ message }). ${SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE}`,
     "Use itx.streams.get(path) to read and append project stream events.",
     "Use the project repo as durable memory for stable project knowledge.",
+    AGENT_WORKSPACE_CAPABILITY_INSTRUCTIONS,
   ].join("\n\n");
 }
 

@@ -21,14 +21,20 @@ import {
   buildProcessorIdempotencyKey,
 } from "@iterate-com/shared/streams/stream-processors";
 import { SlackAgentProcessorContract, type SlackAgentProcessorState } from "./contract.ts";
-import { StreamProcessor } from "~/domains/streams/engine/stream-processor.ts";
+import {
+  StreamProcessor,
+  type StreamProcessorDeps,
+} from "~/domains/streams/engine/stream-processor.ts";
 export { SlackAgentProcessorContract } from "./contract.ts";
 
 export type SlackAgentProcessorContract = typeof SlackAgentProcessorContract;
 
-export type SlackAgentProcessorDeps = {
-  callSlackApi?(method: string, body: Record<string, unknown>): Promise<void>;
-};
+export type SlackAgentProcessorDeps = StreamProcessorDeps<
+  SlackAgentProcessorContract,
+  {
+    callSlackApi?(method: string, body: Record<string, unknown>): Promise<void>;
+  }
+>;
 
 export class SlackAgentProcessor extends StreamProcessor<
   SlackAgentProcessorContract,
@@ -83,8 +89,12 @@ export class SlackAgentProcessor extends StreamProcessor<
         // is nothing to announce here.
         return;
       case "events.iterate.com/slack/webhook-received": {
-        const appendAgentInput = async () => {
-          await this.ctx.stream.append({
+        const appendAgentInput = async (
+          input: {
+            llmRequestPolicy?: { behaviour: "dont-trigger-request" };
+          } = {},
+        ) => {
+          await this.deps.stream.append({
             event: {
               type: "events.iterate.com/agent/input-added",
               idempotencyKey: buildProcessorIdempotencyKey({
@@ -94,6 +104,9 @@ export class SlackAgentProcessor extends StreamProcessor<
               }),
               payload: {
                 content: slackWebhookAgentInput(event.payload),
+                ...(input.llmRequestPolicy == null
+                  ? {}
+                  : { llmRequestPolicy: input.llmRequestPolicy }),
               },
             },
           });
@@ -107,7 +120,7 @@ export class SlackAgentProcessor extends StreamProcessor<
           .loose()
           .safeParse(event.payload.body);
         if (!parsed.success) {
-          args.runInBackground(appendAgentInput);
+          args.blockProcessorWhile(appendAgentInput);
           return;
         }
 
@@ -116,6 +129,15 @@ export class SlackAgentProcessor extends StreamProcessor<
         const botBotId = state.botBotId ?? botBotIdFromPayload(event.payload);
         if (isOwnBotMessage(slackEvent, botBotId)) return;
         if (isBotAction(slackEvent, state.botUserId)) return;
+        if (readStringField(slackEvent, "type") !== "message") {
+          args.blockProcessorWhile(async () => {
+            await appendAgentInput({
+              llmRequestPolicy: { behaviour: "dont-trigger-request" },
+            });
+            await this.#addEyesReactionForMessageTarget(target);
+          });
+          return;
+        }
 
         const channel = target?.channel ?? state.channel ?? readStringField(slackEvent, "channel");
         const threadTs =
@@ -133,7 +155,7 @@ export class SlackAgentProcessor extends StreamProcessor<
           // The script request must commit before the eyes reaction signals
           // receipt, so both run in one blocking closure.
           args.blockProcessorWhile(async () => {
-            await this.ctx.stream.append({
+            await this.deps.stream.append({
               event: {
                 type: "events.iterate.com/itx/script-execution-requested",
                 idempotencyKey: buildProcessorIdempotencyKey({

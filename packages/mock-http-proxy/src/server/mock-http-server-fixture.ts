@@ -58,21 +58,6 @@ export type MockHttpServerFixture = AsyncDisposable &
   };
 export type MockHttpServer = MockHttpServerFixture;
 
-type TemporaryDirectoryFixture = Disposable & {
-  path: string;
-};
-
-type UseMitmProxyOptions = {
-  proxyTargetUrl: string;
-  port?: number;
-};
-
-type MitmProxyFixture = AsyncDisposable & {
-  url: string;
-  port: number;
-  envForNode(): Record<string, string>;
-};
-
 function resolveOnUnhandledRequest(
   explicit: msw.SharedOptions["onUnhandledRequest"] | undefined,
 ): msw.SharedOptions["onUnhandledRequest"] {
@@ -329,6 +314,10 @@ function toOriginalUrl(
   return new URL(rawUrl, `https://${host}`);
 }
 
+type TemporaryDirectoryFixture = Disposable & {
+  path: string;
+};
+
 export function useTemporaryDirectory(prefix = "mock-http-proxy-api-"): TemporaryDirectoryFixture {
   const path = mkdtempSync(join(tmpdir(), prefix));
   return {
@@ -338,6 +327,17 @@ export function useTemporaryDirectory(prefix = "mock-http-proxy-api-"): Temporar
     },
   };
 }
+
+type UseMitmProxyOptions = {
+  proxyTargetUrl: string;
+  port?: number;
+};
+
+type MitmProxyFixture = AsyncDisposable & {
+  url: string;
+  port: number;
+  envForNode(): Record<string, string>;
+};
 
 export async function useMitmProxy(options: UseMitmProxyOptions): Promise<MitmProxyFixture> {
   const ca = await mockttp.generateCACertificate();

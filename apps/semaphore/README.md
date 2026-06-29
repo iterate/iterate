@@ -26,7 +26,7 @@ Cloudflare-only: TanStack Start + oRPC + sqlfu/D1 inventory storage, with a Dura
 ## Scripts
 
 ```bash
-pnpm cli          # doppler + iterate local-router commands
+pnpm cli          # doppler + app CLI commands
 pnpm dev          # doppler + Alchemy local (Vite); optional PORT= for fixed port; Ctrl+C to stop
 pnpm build        # production client/server bundle
 pnpm deploy       # deploy prd through Doppler and alchemy.run.ts
@@ -39,13 +39,13 @@ pnpm test:e2e     # requires `SEMAPHORE_BASE_URL`
 
 ## Environment config leases for PR previews
 
-Semaphore owns the environment config lease inventory used by PR previews. The preview router usually runs through the `os` production Doppler config:
+Semaphore owns the environment config lease inventory used by PR previews. The repo-root preview CLI usually runs through the shared production Doppler config:
 
 ```bash
 doppler run --project _shared --config prd -- pnpm preview status
 ```
 
-The router reads `SEMAPHORE_API_TOKEN` first and falls back to `APP_CONFIG_SHARED_API_SECRET`. To seed or repair the preview inventory from this package, run:
+The preview CLI reads `SEMAPHORE_API_TOKEN` first and falls back to `APP_CONFIG_SHARED_API_SECRET`. To seed or repair the preview inventory from this package, run:
 
 ```bash
 doppler run --project semaphore --config prd -- pnpm --dir apps/semaphore seed:environment-config-leases

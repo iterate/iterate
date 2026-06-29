@@ -79,6 +79,7 @@ describe("browser Cap'n Web REPL", () => {
     ).resolves.toEqual({
       consoleOutput: "",
       code: DEFAULT_BROWSER_REPL_CODE,
+      id: expect.any(String),
       output: JSON.stringify({ projects: [{ id: "proj_123" }], total: 1, limit: 5 }, null, 2),
       outputLanguage: "json",
       result: { projects: [{ id: "proj_123" }], total: 1, limit: 5 },

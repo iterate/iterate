@@ -11,8 +11,8 @@ It combines:
 - Iterate Auth Worker for first-party sessions, organizations, project claims,
   and MCP OAuth.
 - sqlfu and Cloudflare D1 for app projections.
-- Durable Objects for project lifecycle, ingress, MCP sessions, agents, repos,
-  workspaces, itx contexts, and shared streams.
+- Durable Objects for project lifecycle, ingress, agents, repos, workspaces,
+  itx contexts, and shared streams.
 
 ## How To Use It
 
@@ -44,7 +44,7 @@ project-local, such as `/agents/default` or `/integrations/slack`.
 Run from `apps/os`.
 
 ```bash
-pnpm dev                 # local OS/TanStack dev through Doppler
+pnpm dev                 # local OS/TanStack dev with Doppler-backed env
 pnpm typecheck           # TypeScript
 pnpm test                # unit tests
 pnpm e2e -t "OS preview smoke"
@@ -78,19 +78,19 @@ config only when you need personal integration secrets.
 pnpm dev
 
 # Equivalent explicit form:
-doppler run --project os --config dev -- pnpm cli dev start
+doppler run --project os --config dev -- pnpm dev start
 
 # Terminal 2: run real-worker e2e against the discovered local server.
 doppler run --project os --config dev -- pnpm e2e
 ```
 
 `pnpm dev` is the shorthand for the local Doppler/Alchemy dev flow. It uses the
-local Doppler setup for `apps/os`; inside Doppler, `DOPPLER_CONFIG` is set to
-values such as `dev` or `dev_<user>`. The dev wrapper writes output to
-`.alchemy/dev-server.log`, so a second terminal can follow it with
-`tail -f .alchemy/dev-server.log`.
+local Doppler setup for `apps/os` and starts Alchemy with that env. The spawned
+dev server gets `DOPPLER_CONFIG` values such as `dev` or `dev_<user>`. The dev
+wrapper writes output to `.alchemy/dev-server.log`, so a second terminal can
+follow it with `tail -f .alchemy/dev-server.log`.
 
-The same local server lifecycle is also available through the app CLI:
+The same local server lifecycle is available through the dev module:
 
 ```bash
 pnpm dev status
@@ -102,8 +102,8 @@ pnpm dev restart --detach
 pnpm dev kill
 ```
 
-`pnpm dev <action> [flags]` forwards to `pnpm cli dev <action> [flags]`; use
-the longer form only when you are already working in the app CLI.
+`pnpm dev <action> [flags]` runs `scripts/dev.ts` directly; use
+`pnpm cli dev <action>` only when you are already working in the app CLI.
 
 The shared `dev` config behaves the same way:
 
@@ -121,7 +121,7 @@ production when a flow needs a public callback URL.
 
 `pnpm cli` uses `scripts/cli.ts`: if already inside `doppler run`, it preserves
 that config; otherwise it enters Doppler using the local `apps/os` setup. Local
-CLI commands are loaded from `packages/iterate/src/os/router.ts`. Use
+CLI commands are plain TypeScript modules under `apps/os/scripts`. Use
 `doppler run --config <config> -- <command>` when you want preview/prd app
 config explicitly.
 
@@ -133,16 +133,16 @@ doppler run --config prd -- pnpm cli claude-mcp
 ```
 
 The canonical MCP endpoint comes from `APP_CONFIG_MCP__BASE_URL`, for example
-`https://mcp.iterate.com` in production. Local dev deliberately keeps MCP
-path-mounted on the curlable app origin: `<APP_CONFIG_BASE_URL>/api/__mcp`, for
-example `http://localhost:5176/api/__mcp`.
+`https://mcp.iterate.com` in production. Local dev serves MCP on the normal app
+route: `<APP_CONFIG_BASE_URL>/api/mcp`, for example
+`http://localhost:5176/api/mcp`.
 
 Smoke local MCP with the Inspector:
 
 ```bash
 doppler run --project os --config dev -- sh -lc '
   BASE=$(node -p "require(\"./.alchemy/dev-server.json\").baseUrl")
-  npx -y @modelcontextprotocol/inspector --cli "$BASE/api/__mcp" \
+  npx -y @modelcontextprotocol/inspector --cli "$BASE/api/mcp" \
     --transport http \
     --method tools/list \
     --header "Authorization: Bearer $APP_CONFIG_ADMIN_API_SECRET"
@@ -154,7 +154,7 @@ Then call `exec_js` with a real project slug:
 ```bash
 doppler run --project os --config dev -- sh -lc '
   BASE=$(node -p "require(\"./.alchemy/dev-server.json\").baseUrl")
-  npx -y @modelcontextprotocol/inspector --cli "$BASE/api/__mcp" \
+  npx -y @modelcontextprotocol/inspector --cli "$BASE/api/mcp" \
     --transport http \
     --method tools/call \
     --tool-name exec_js \

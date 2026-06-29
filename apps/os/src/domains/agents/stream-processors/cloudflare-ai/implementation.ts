@@ -29,15 +29,17 @@ import {
   parseLlmRequestRequestedEventAt,
 } from "../llm-request-helpers.ts";
 import { CloudflareAiProcessorContract, type CloudflareAiState } from "./contract.ts";
-import { StreamProcessor } from "~/domains/streams/engine/stream-processor.ts";
+import {
+  StreamProcessor,
+  type StreamProcessorDeps,
+} from "~/domains/streams/engine/stream-processor.ts";
 
 export { CloudflareAiProcessorContract } from "./contract.ts";
 
 export type CloudflareAiProcessorContract = typeof CloudflareAiProcessorContract;
 
-type CloudflareAiConsumedEvent = ConsumedEvent<CloudflareAiProcessorContract>;
 type LlmRequestRequestedEvent = Extract<
-  CloudflareAiConsumedEvent,
+  ConsumedEvent<CloudflareAiProcessorContract>,
   { type: "events.iterate.com/agent/llm-request-requested" }
 >;
 type JsonValue = z.infer<ReturnType<typeof z.json>>;
@@ -63,15 +65,18 @@ export type CloudflareAiBinding = {
   aiGatewayLogId?: string;
 };
 
-export type CloudflareAiProcessorDeps = {
-  /** Undefined when the worker has no AI binding; requests then fail with a clear error event. */
-  ai: CloudflareAiBinding | undefined;
-  /**
-   * Reads the full committed history of the agent's stream so the processor
-   * can confirm the request is still current before appending agent output.
-   */
-  readStreamEvents(): Promise<StreamEvent[]>;
-};
+export type CloudflareAiProcessorDeps = StreamProcessorDeps<
+  CloudflareAiProcessorContract,
+  {
+    /** Undefined when the worker has no AI binding; requests then fail with a clear error event. */
+    ai: CloudflareAiBinding | undefined;
+    /**
+     * Reads the full committed history of the agent's stream so the processor
+     * can confirm the request is still current before appending agent output.
+     */
+    readStreamEvents(): Promise<StreamEvent[]>;
+  }
+>;
 
 export class CloudflareAiProcessor extends StreamProcessor<
   CloudflareAiProcessorContract,
@@ -559,7 +564,7 @@ export class CloudflareAiProcessor extends StreamProcessor<
       buffered += decoder.decode(value, { stream: true });
       // SSE frames are blank-line separated; the last split piece may be a
       // partial frame, so it stays buffered for the next read.
-      const frames = buffered.split("\n\n");
+      const frames = buffered.split(/\r?\n\r?\n/);
       buffered = frames.pop() ?? "";
       for (const frame of frames) await handleFrame(frame);
     }
@@ -570,7 +575,7 @@ export class CloudflareAiProcessor extends StreamProcessor<
   }
 
   async #append(event: { type: string; idempotencyKey: string; payload: unknown }) {
-    await this.ctx.stream.append({ event });
+    await this.deps.stream.append({ event });
   }
 }
 

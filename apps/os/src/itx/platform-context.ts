@@ -42,7 +42,7 @@ export const PLATFORM_PROJECT_CONTEXT_ID = "platform:project";
 export const PROJECT_WORKER_SOURCE = {
   bundle: {},
   commit: "latest",
-  path: "worker.js",
+  path: "worker.ts",
   repoPath: "/repos/project",
   type: "repo",
 } as const satisfies import("./itx.ts").WorkerSource;
@@ -135,6 +135,13 @@ const PLATFORM_PROJECT_CAPABILITIES: PlatformCapability[] = [
     name: "integrations",
   },
   {
+    address: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },
+    instructions:
+      "Gmail for this project's connected Google account: " +
+      "itx.gmail.request({ path, method?, query?, body? }) proxies a Gmail REST API call.",
+    name: "gmail",
+  },
+  {
     address: { entrypoint: "ReposCapability", type: "rpc", worker: { type: "loopback" } },
     instructions:
       "The project's git repos: itx.repos.ensureProjectRepoInfo(), " +
@@ -174,7 +181,7 @@ const PLATFORM_PROJECT_CAPABILITIES: PlatformCapability[] = [
     address: { type: "rpc", worker: { type: "source", source: PROJECT_WORKER_SOURCE } },
     instructions:
       "The project's own worker — the code in the project's repo " +
-      "(worker.js), built per commit and tracking pushes: " +
+      "(worker.ts), built per commit and tracking pushes: " +
       "itx.worker.someExportedFunction(args) reaches any public method of its default export.",
     name: "worker",
   },

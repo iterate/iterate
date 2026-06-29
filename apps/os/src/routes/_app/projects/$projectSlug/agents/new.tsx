@@ -39,12 +39,7 @@ function NewAgentPage() {
       const itx = await connectItx({ projectId: params.projectSlug });
       await itx.streams.create({ streamPath: agentPath });
       await waitForProjectAgentSetup(itx, agentPath);
-      await itx.streams.get(agentPath).append({
-        event: {
-          type: "events.iterate.com/agent/input-added",
-          payload: { content },
-        },
-      });
+      await itx.agents.sendMessage({ agentPath, message: content, channel: "web" });
       return agentPath;
     },
     onSuccess: (agentPath) => {

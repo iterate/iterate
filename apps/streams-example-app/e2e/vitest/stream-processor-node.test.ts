@@ -24,12 +24,7 @@ async function hostEcho(args: {
   };
 }) {
   const processor = new EchoExampleProcessor({
-    iterateContext: {
-      stream: {
-        append: (appendArgs) => args.stream.append(appendArgs as never),
-        appendBatch: (batchArgs) => args.stream.appendBatch(batchArgs as never),
-      },
-    },
+    stream: args.stream,
     readState: args.storage.load,
     writeState: args.storage.save,
   });

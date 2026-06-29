@@ -42,7 +42,6 @@ overrides:
   '@babel/parser': ^7.28.0
   '@tanstack/query-core': 5.91.0
   '@tanstack/react-query': 5.91.0
-  trpc-cli: 0.14.0
   wrangler: 4.102.0
 
 patchedDependencies:
@@ -73,6 +72,15 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
     devDependencies:
+      '@iterate-com/auth-contract':
+        specifier: workspace:*
+        version: link:apps/auth-contract
+      '@iterate-com/shared':
+        specifier: workspace:*
+        version: link:packages/shared
+      '@playwright/test':
+        specifier: 1.60.0
+        version: 1.60.0
       '@tanstack/eslint-plugin-router':
         specifier: ^1.139.0
         version: 1.161.4(eslint@9.39.3(jiti@2.7.0))(typescript@5.9.3)
@@ -106,21 +114,33 @@ importers:
       is-ci:
         specifier: 4.1.0
         version: 4.1.0
+      json5:
+        specifier: ^2.2.3
+        version: 2.2.3
       knip:
         specifier: ^6.0.5
         version: 6.0.5
       lint-staged:
         specifier: ^16.2.7
         version: 16.3.2
+      middlewright:
+        specifier: 0.1.1
+        version: 0.1.1(@playwright/test@1.60.0)
       oxfmt:
         specifier: ^0.35.0
         version: 0.35.0
       oxlint:
         specifier: ^1.50.0
         version: 1.51.0
+      playwright:
+        specifier: 1.60.0
+        version: 1.60.0
       skills:
         specifier: ^1.4.5
         version: 1.4.5
+      trpc-cli:
+        specifier: 0.15.1
+        version: 0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
       tsx:
         specifier: ^4.20.6
         version: 4.21.0
@@ -170,8 +190,8 @@ importers:
         specifier: ^0.35.0
         version: 0.35.0
       trpc-cli:
-        specifier: 0.14.0
-        version: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
+        specifier: 0.15.1
+        version: 0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
       tsx:
         specifier: ^4.20.6
         version: 4.21.0
@@ -246,7 +266,7 @@ importers:
         version: 2.0.7(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       sqlfu:
         specifier: 0.0.3-14
-        version: 0.0.3-14(ecd375f85a77b8dc4927c7f82f3851ea)
+        version: 0.0.3-14(1fa8c663434a6f42f7ec24eda157e869)
       tailwindcss:
         specifier: ^4.2.1
         version: 4.2.1
@@ -590,7 +610,7 @@ importers:
         version: 0.8.0
       captun:
         specifier: https://pkg.pr.new/captun@6aa1207
-        version: https://pkg.pr.new/captun@6aa1207(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(valibot@1.2.0(typescript@5.9.3))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(ws@8.19.0)
+        version: https://pkg.pr.new/captun@6aa1207(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(ws@8.19.0)
       comlink:
         specifier: ^4.4.2
         version: 4.4.2
@@ -600,9 +620,6 @@ importers:
       lucide-react:
         specifier: ^0.553.0
         version: 0.553.0(react@19.2.4)
-      openai:
-        specifier: ^6.36.0
-        version: 6.36.0(ws@8.19.0)(zod@4.3.6)
       react:
         specifier: ^19.2.0
         version: 19.2.4
@@ -611,7 +628,7 @@ importers:
         version: 19.2.4(react@19.2.4)
       sqlfu:
         specifier: 0.0.3-14
-        version: 0.0.3-14(343f3288f384aa46a406f6131458bd90)
+        version: 0.0.3-14(b84aa2381dadabbdac4130f00d716b78)
       tailwindcss:
         specifier: ^4.1.18
         version: 4.2.1
@@ -663,7 +680,7 @@ importers:
         version: 6.0.1(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.0)(@babel/runtime@7.28.6)(rolldown@1.1.0)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       '@vitest/browser-playwright':
         specifier: ^4.1.7
-        version: 4.1.8(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(playwright@1.57.0)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.8)
+        version: 4.1.8(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(playwright@1.60.0)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.8)
       alchemy:
         specifier: ^0.83.3
         version: 0.83.3(patch_hash=c837ce6f9ef4f420a7d2360823f65ec7a6c649c756ae76f7c12baf906f13c5f5)(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.33.2(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260617.1)(wrangler@4.102.0(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@25.6.0))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260617.1)(wrangler@4.102.0(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039)))
@@ -679,12 +696,15 @@ importers:
       miniflare:
         specifier: catalog:cloudflare
         version: 4.20260424.0
-      playwright:
-        specifier: 1.57.0
-        version: 1.57.0
+      openai:
+        specifier: ^6.36.0
+        version: 6.36.0(ws@8.19.0)(zod@4.3.6)
       tinyexec:
         specifier: ^1.0.2
         version: 1.1.1
+      trpc-cli:
+        specifier: 0.15.1
+        version: 0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
       tsx:
         specifier: ^4.20.3
         version: 4.21.0
@@ -759,13 +779,13 @@ importers:
         version: 19.2.4(react@19.2.4)
       sqlfu:
         specifier: 0.0.3-14
-        version: 0.0.3-14(6825507c844607f166cc081b2dbd01e7)
+        version: 0.0.3-14(ced6661f18e84920a3e62afbd90aaf6f)
       tailwindcss:
         specifier: ^4.1.18
         version: 4.2.1
       trpc-cli:
-        specifier: 0.14.0
-        version: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
+        specifier: 0.15.1
+        version: 0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -935,8 +955,8 @@ importers:
         specifier: ^19.2.0
         version: 19.2.4
       trpc-cli:
-        specifier: 0.14.0
-        version: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12)
+        specifier: 0.15.1
+        version: 0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12)
       yaml:
         specifier: ^2.8.3
         version: 2.8.3
@@ -1023,9 +1043,6 @@ importers:
 
   packages/shared:
     dependencies:
-      '@clack/prompts':
-        specifier: ^1.2.0
-        version: 1.2.0
       '@orpc/client':
         specifier: 1.13.14
         version: 1.13.14(@opentelemetry/api@1.9.0)
@@ -1040,13 +1057,13 @@ importers:
         version: 1.13.14(@opentelemetry/api@1.9.0)
       alchemy:
         specifier: ^0.83.3
-        version: 0.83.3(patch_hash=c837ce6f9ef4f420a7d2360823f65ec7a6c649c756ae76f7c12baf906f13c5f5)(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.33.2(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260617.1)(wrangler@4.102.0(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260617.1)(wrangler@4.102.0(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039)))
+        version: 0.83.3(patch_hash=c837ce6f9ef4f420a7d2360823f65ec7a6c649c756ae76f7c12baf906f13c5f5)(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.33.2(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260617.1)(wrangler@4.102.0(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260617.1)(wrangler@4.102.0(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039)))
       dequal:
         specifier: ^2.0.3
         version: 2.0.3
       evlog:
         specifier: ^1.8.0
-        version: 1.11.0(nitro@3.0.260311-beta(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)(@libsql/client@0.15.15)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(giget@3.2.0)(jiti@2.7.0)(lru-cache@11.2.6)(miniflare@4.20260617.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)))(ofetch@2.0.0-alpha.3)(react@19.2.4)
+        version: 1.11.0(nitro@3.0.260311-beta(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)(@libsql/client@0.15.15)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(giget@3.2.0)(jiti@2.7.0)(lru-cache@11.2.6)(miniflare@4.20260617.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(ofetch@2.0.0-alpha.3)(react@19.2.4)
       get-port:
         specifier: ^7.1.0
         version: 7.1.0
@@ -1058,13 +1075,10 @@ importers:
         version: 10.2.4
       nitro:
         specifier: 3.0.260311-beta
-        version: 3.0.260311-beta(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)(@libsql/client@0.15.15)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(giget@3.2.0)(jiti@2.7.0)(lru-cache@11.2.6)(miniflare@4.20260617.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
+        version: 3.0.260311-beta(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)(@libsql/client@0.15.15)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(giget@3.2.0)(jiti@2.7.0)(lru-cache@11.2.6)(miniflare@4.20260617.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       react:
         specifier: ^19.2.4
         version: 19.2.4
-      trpc-cli:
-        specifier: 0.14.0
-        version: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
       tsx:
         specifier: ^4.21.0
         version: 4.21.0
@@ -1076,17 +1090,14 @@ importers:
         version: 1.2.0
       vite:
         specifier: 7.3.1
-        version: 7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
-      yaml:
-        specifier: ^2.8.2
-        version: 2.8.2
+        version: 7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
       zod:
         specifier: ^4.1.11
         version: 4.3.6
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: catalog:cloudflare
-        version: 0.14.9(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))(@vitest/runner@4.1.8)(@vitest/snapshot@4.1.8)(vitest@4.1.5(@opentelemetry/api@1.9.0)(@types/node@25.3.3)(jsdom@27.4.0(@noble/hashes@2.0.1))(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)))
+        version: 0.14.9(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))(@vitest/runner@4.1.8)(@vitest/snapshot@4.1.8)(vitest@4.1.5(@opentelemetry/api@1.9.0)(@types/node@25.3.3)(jsdom@27.4.0(@noble/hashes@2.0.1))(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039)
@@ -1104,7 +1115,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.5
-        version: 4.1.5(@opentelemetry/api@1.9.0)(@types/node@25.3.3)(jsdom@27.4.0(@noble/hashes@2.0.1))(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
+        version: 4.1.5(@opentelemetry/api@1.9.0)(@types/node@25.3.3)(jsdom@27.4.0(@noble/hashes@2.0.1))(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       wrangler:
         specifier: 4.102.0
         version: 4.102.0(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))
@@ -9037,6 +9048,10 @@ packages:
   embla-carousel@8.6.0:
     resolution: {integrity: sha512-SjWyZBHJPbqxHOzckOfo8lHisEaJWmwd23XppYFYVh10bU66/Pn5tkVkbkCMZVdbUE5eTCI2nD8OyIP4Z+uwkA==}
 
+  emittery@1.2.1:
+    resolution: {integrity: sha512-sFz64DCRjirhwHLxofFqxYQm6DCp6o0Ix7jwKQvuCHPn4GMRZNuBZyLPu9Ccmk/QSCAMZt6FOUqA8JZCQvA9fw==}
+    engines: {node: '>=14.16'}
+
   emoji-regex@10.6.0:
     resolution: {integrity: sha512-toUI84YS5YmxW219erniWD0CIVOo46xGKColeNQRgOzDorgBi1v4D71/OFzgD9GO2UGKIv1C3Sp8DAn0+j5w7A==}
 
@@ -10931,6 +10946,12 @@ packages:
     resolution: {integrity: sha512-PXwfBhYu0hBCPw8Dn0E+WDYb7af3dSLVWKi3HGv84IdF4TyFoC0ysxFd0Goxw7nSv4T/PzEJQxsYsEiFCKo2BA==}
     engines: {node: '>=8.6'}
 
+  middlewright@0.1.1:
+    resolution: {integrity: sha512-SrusVrCIxCZ8su1xZU+XJ+mnLxOX3NLOgQdyeOKdifpQdXQJNlgi5B4fO6VjMxS5rJ/2Dlm40vSuZ8Vrm0ib7g==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      '@playwright/test': '>=1.49.0'
+
   mime-db@1.52.0:
     resolution: {integrity: sha512-sPU4uV7dYlvtWJxwwxHD0PuihVNiE7TyAbQ5SWxDCB9mUYvOgroQOwYQQOKPJ8CIbE+1ETVlOoK1UC2nU3gYvg==}
     engines: {node: '>= 0.6'}
@@ -11640,11 +11661,6 @@ packages:
     engines: {node: '>=18'}
     hasBin: true
 
-  playwright-core@1.57.0:
-    resolution: {integrity: sha512-agTcKlMw/mjBWOnD6kFZttAAGHgi/Nw0CZ2o6JqWSbMlI219lAFLZZCyqByTsvVAJq5XA5H8cA6PrvBRpBWEuQ==}
-    engines: {node: '>=18'}
-    hasBin: true
-
   playwright-core@1.60.0:
     resolution: {integrity: sha512-9bW6zvX/m0lEbgTKJ6YppOKx8H3VOPBMOCFh2irXFOT4BbHgrx5hPjwJYLT40Lu+4qtD36qKc/Hn56StUW57IA==}
     engines: {node: '>=18'}
@@ -11652,11 +11668,6 @@ packages:
 
   playwright@1.56.1:
     resolution: {integrity: sha512-aFi5B0WovBHTEvpM3DzXTUaeN6eN0qWnTkKx4NQaH4Wvcmc153PdaY2UBdSYKaGYw+UyWXSVyxDUg5DoPEttjw==}
-    engines: {node: '>=18'}
-    hasBin: true
-
-  playwright@1.57.0:
-    resolution: {integrity: sha512-ilYQj1s8sr2ppEJ2YVadYBN0Mb3mdo9J0wQ+UuDhzYqURwSoW4n1Xs5vs7ORwgDGmyEh33tRMeS8KhdkMoLXQw==}
     engines: {node: '>=18'}
     hasBin: true
 
@@ -12869,6 +12880,56 @@ packages:
 
   trpc-cli@0.14.0:
     resolution: {integrity: sha512-Ibin1oLB6gGWfx/YfzbS+GYy3t2RbMUm+qUal8VYtGMt5kpwL6FteMNz1Mk9x7w0jB72xGxQm4B5VWtnO/Nihw==}
+    engines: {node: '>=18'}
+    hasBin: true
+    peerDependencies:
+      '@orpc/server': 1.13.14
+      '@trpc/server': ^10.45.2 || ^11.0.1
+      '@valibot/to-json-schema': ^1.1.0
+      effect: ^3.14.2 || ^4.0.0
+      valibot: ^1.1.0
+      zod: ^3.24.0 || ^4.0.0
+    peerDependenciesMeta:
+      '@orpc/server':
+        optional: true
+      '@trpc/server':
+        optional: true
+      '@valibot/to-json-schema':
+        optional: true
+      effect:
+        optional: true
+      valibot:
+        optional: true
+      zod:
+        optional: true
+
+  trpc-cli@0.14.1:
+    resolution: {integrity: sha512-yXycwKWAu322fJGQqdh9fbEPTLjmqnwrpHiLnLNM+kPEwDxXlkH3gbO9iOTmN5CNOBo+8Uk+Tuae+XS8uANz/w==}
+    engines: {node: '>=18'}
+    hasBin: true
+    peerDependencies:
+      '@orpc/server': 1.13.14
+      '@trpc/server': ^10.45.2 || ^11.0.1
+      '@valibot/to-json-schema': ^1.1.0
+      effect: ^3.14.2 || ^4.0.0
+      valibot: ^1.1.0
+      zod: ^3.24.0 || ^4.0.0
+    peerDependenciesMeta:
+      '@orpc/server':
+        optional: true
+      '@trpc/server':
+        optional: true
+      '@valibot/to-json-schema':
+        optional: true
+      effect:
+        optional: true
+      valibot:
+        optional: true
+      zod:
+        optional: true
+
+  trpc-cli@0.15.1:
+    resolution: {integrity: sha512-HwXQWABCwEoGwujY0GwH8U1FdEQnFrb9Zb8y+dG4pkry4ALngczVuW33aYRPOg8SiJ4m8qZvTiw3y1FqRxZ7Pg==}
     engines: {node: '>=18'}
     hasBin: true
     peerDependencies:
@@ -15182,12 +15243,12 @@ snapshots:
       - utf-8-validate
       - workerd
 
-  '@cloudflare/vite-plugin@1.33.2(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260617.1)(wrangler@4.102.0(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039)))':
+  '@cloudflare/vite-plugin@1.33.2(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260617.1)(wrangler@4.102.0(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039)))':
     dependencies:
       '@cloudflare/unenv-preset': 2.16.1(unenv@2.0.0-rc.24)(workerd@1.20260617.1)
       miniflare: 4.20260424.0
       unenv: 2.0.0-rc.24
-      vite: 7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
+      vite: 7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
       wrangler: 4.102.0(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))
       ws: 8.19.0
     transitivePeerDependencies:
@@ -15263,14 +15324,14 @@ snapshots:
       - utf-8-validate
       - workerd
 
-  '@cloudflare/vitest-pool-workers@0.14.9(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))(@vitest/runner@4.1.8)(@vitest/snapshot@4.1.8)(vitest@4.1.5(@opentelemetry/api@1.9.0)(@types/node@25.3.3)(jsdom@27.4.0(@noble/hashes@2.0.1))(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)))':
+  '@cloudflare/vitest-pool-workers@0.14.9(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))(@vitest/runner@4.1.8)(@vitest/snapshot@4.1.8)(vitest@4.1.5(@opentelemetry/api@1.9.0)(@types/node@25.3.3)(jsdom@27.4.0(@noble/hashes@2.0.1))(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))':
     dependencies:
       '@vitest/runner': 4.1.8
       '@vitest/snapshot': 4.1.8
       cjs-module-lexer: 1.4.3
       esbuild: 0.27.3
       miniflare: 4.20260421.0
-      vitest: 4.1.5(@opentelemetry/api@1.9.0)(@types/node@25.3.3)(jsdom@27.4.0(@noble/hashes@2.0.1))(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
+      vitest: 4.1.5(@opentelemetry/api@1.9.0)(@types/node@25.3.3)(jsdom@27.4.0(@noble/hashes@2.0.1))(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       wrangler: 4.102.0(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))
       zod: 3.25.76
     transitivePeerDependencies:
@@ -20795,19 +20856,6 @@ snapshots:
       - vite
     optional: true
 
-  '@vitest/browser-playwright@4.1.8(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(playwright@1.57.0)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.8)':
-    dependencies:
-      '@vitest/browser': 4.1.8(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.8)
-      '@vitest/mocker': 4.1.8(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
-      playwright: 1.57.0
-      tinyrainbow: 3.1.0
-      vitest: 4.1.8(@opentelemetry/api@1.9.0)(@types/node@25.6.0)(@vitest/browser-playwright@4.1.8)(jsdom@27.4.0(@noble/hashes@2.0.1))(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
-    transitivePeerDependencies:
-      - bufferutil
-      - msw
-      - utf-8-validate
-      - vite
-
   '@vitest/browser-playwright@4.1.8(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(playwright@1.60.0)(vite@8.0.16(@types/node@25.6.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.8)':
     dependencies:
       '@vitest/browser': 4.1.8(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(vite@8.0.16(@types/node@25.6.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.8)
@@ -20821,6 +20869,19 @@ snapshots:
       - utf-8-validate
       - vite
     optional: true
+
+  '@vitest/browser-playwright@4.1.8(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(playwright@1.60.0)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.8)':
+    dependencies:
+      '@vitest/browser': 4.1.8(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.8)
+      '@vitest/mocker': 4.1.8(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
+      playwright: 1.60.0
+      tinyrainbow: 3.1.0
+      vitest: 4.1.8(@opentelemetry/api@1.9.0)(@types/node@25.6.0)(@vitest/browser-playwright@4.1.8)(jsdom@27.4.0(@noble/hashes@2.0.1))(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
+    transitivePeerDependencies:
+      - bufferutil
+      - msw
+      - utf-8-validate
+      - vite
 
   '@vitest/browser-playwright@4.1.8(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(playwright@1.60.0)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.8)':
     dependencies:
@@ -21048,14 +21109,14 @@ snapshots:
       msw: 2.12.10(@types/node@25.3.3)(typescript@5.9.3)
       vite: 7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
 
-  '@vitest/mocker@4.1.5(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))':
+  '@vitest/mocker@4.1.5(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))':
     dependencies:
       '@vitest/spy': 4.1.5
       estree-walker: 3.0.3
       magic-string: 0.30.21
     optionalDependencies:
       msw: 2.13.3(@types/node@25.3.3)(typescript@5.9.3)
-      vite: 7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
+      vite: 7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
 
   '@vitest/mocker@4.1.8(msw@2.13.3(@types/node@24.12.4)(typescript@6.0.3))(vite@8.0.16(@types/node@24.12.4)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))':
     dependencies:
@@ -21403,7 +21464,7 @@ snapshots:
       json-schema-traverse: 1.0.0
       require-from-string: 2.0.2
 
-  alchemy@0.83.3(patch_hash=c837ce6f9ef4f420a7d2360823f65ec7a6c649c756ae76f7c12baf906f13c5f5)(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.33.2(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260617.1)(wrangler@4.102.0(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260617.1)(wrangler@4.102.0(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))):
+  alchemy@0.83.3(patch_hash=c837ce6f9ef4f420a7d2360823f65ec7a6c649c756ae76f7c12baf906f13c5f5)(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.33.2(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260617.1)(wrangler@4.102.0(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260617.1)(wrangler@4.102.0(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))):
     dependencies:
       '@aws-sdk/credential-providers': 3.1002.0
       '@cloudflare/unenv-preset': 2.7.7(unenv@2.0.0-rc.21)(workerd@1.20260617.1)
@@ -21437,9 +21498,9 @@ snapshots:
       yaml: 2.8.3
     optionalDependencies:
       '@aws-sdk/client-s3': 3.1002.0
-      '@cloudflare/vite-plugin': 1.33.2(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260617.1)(wrangler@4.102.0(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039)))
+      '@cloudflare/vite-plugin': 1.33.2(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260617.1)(wrangler@4.102.0(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039)))
       '@libsql/client': 0.15.15
-      vite: 7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
+      vite: 7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
     transitivePeerDependencies:
       - '@aws-sdk/client-rds-data'
       - '@electric-sql/pglite'
@@ -22382,7 +22443,7 @@ snapshots:
       '@inquirer/prompts': 8.4.3(@types/node@25.6.0)
       '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       capnweb: 0.8.0
-      trpc-cli: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.4.3)
+      trpc-cli: 0.14.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.4.3)
       zod: 4.4.3
     optionalDependencies:
       vite: 8.0.16(@types/node@25.6.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
@@ -22397,12 +22458,12 @@ snapshots:
       - valibot
       - ws
 
-  captun@https://pkg.pr.new/captun@6aa1207(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(valibot@1.2.0(typescript@5.9.3))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(ws@8.19.0):
+  captun@https://pkg.pr.new/captun@6aa1207(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(ws@8.19.0):
     dependencies:
       '@inquirer/prompts': 8.4.3(@types/node@25.6.0)
       '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       capnweb: 0.8.0
-      trpc-cli: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(valibot@1.2.0(typescript@5.9.3))(zod@4.4.3)
+      trpc-cli: 0.14.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.4.3)
       zod: 4.4.3
     optionalDependencies:
       vite: 8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
@@ -23206,6 +23267,8 @@ snapshots:
 
   embla-carousel@8.6.0: {}
 
+  emittery@1.2.1: {}
+
   emoji-regex@10.6.0: {}
 
   emoji-regex@8.0.0: {}
@@ -23732,9 +23795,9 @@ snapshots:
     dependencies:
       eventsource-parser: 3.0.6
 
-  evlog@1.11.0(nitro@3.0.260311-beta(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)(@libsql/client@0.15.15)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(giget@3.2.0)(jiti@2.7.0)(lru-cache@11.2.6)(miniflare@4.20260617.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)))(ofetch@2.0.0-alpha.3)(react@19.2.4):
+  evlog@1.11.0(nitro@3.0.260311-beta(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)(@libsql/client@0.15.15)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(giget@3.2.0)(jiti@2.7.0)(lru-cache@11.2.6)(miniflare@4.20260617.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(ofetch@2.0.0-alpha.3)(react@19.2.4):
     optionalDependencies:
-      nitro: 3.0.260311-beta(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)(@libsql/client@0.15.15)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(giget@3.2.0)(jiti@2.7.0)(lru-cache@11.2.6)(miniflare@4.20260617.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
+      nitro: 3.0.260311-beta(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)(@libsql/client@0.15.15)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(giget@3.2.0)(jiti@2.7.0)(lru-cache@11.2.6)(miniflare@4.20260617.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       ofetch: 2.0.0-alpha.3
       react: 19.2.4
 
@@ -25680,6 +25743,14 @@ snapshots:
       braces: 3.0.3
       picomatch: 2.3.1
 
+  middlewright@0.1.1(@playwright/test@1.60.0):
+    dependencies:
+      '@playwright/test': 1.60.0
+      dedent: 1.7.2
+      emittery: 1.2.1
+    transitivePeerDependencies:
+      - babel-plugin-macros
+
   mime-db@1.52.0: {}
 
   mime-db@1.54.0: {}
@@ -26088,7 +26159,7 @@ snapshots:
 
   nf3@0.3.11: {}
 
-  nitro@3.0.260311-beta(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)(@libsql/client@0.15.15)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(giget@3.2.0)(jiti@2.7.0)(lru-cache@11.2.6)(miniflare@4.20260617.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)):
+  nitro@3.0.260311-beta(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)(@libsql/client@0.15.15)(aws4fetch@1.0.20)(better-sqlite3@12.6.2)(chokidar@5.0.0)(dotenv@17.3.1)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(giget@3.2.0)(jiti@2.7.0)(lru-cache@11.2.6)(miniflare@4.20260617.0)(mysql2@3.18.2(@types/node@25.3.3))(rollup@4.59.0)(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)):
     dependencies:
       consola: 3.4.2
       crossws: 0.4.4(srvx@0.11.12)
@@ -26109,7 +26180,7 @@ snapshots:
       giget: 3.2.0
       jiti: 2.7.0
       rollup: 4.59.0
-      vite: 7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
+      vite: 7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
     transitivePeerDependencies:
       - '@azure/app-configuration'
       - '@azure/cosmos'
@@ -26690,19 +26761,11 @@ snapshots:
 
   playwright-core@1.56.1: {}
 
-  playwright-core@1.57.0: {}
-
   playwright-core@1.60.0: {}
 
   playwright@1.56.1:
     dependencies:
       playwright-core: 1.56.1
-    optionalDependencies:
-      fsevents: 2.3.2
-
-  playwright@1.57.0:
-    dependencies:
-      playwright-core: 1.57.0
     optionalDependencies:
       fsevents: 2.3.2
 
@@ -27839,48 +27902,51 @@ snapshots:
   sql.js@1.14.1:
     optional: true
 
-  sqlfu@0.0.3-14(343f3288f384aa46a406f6131458bd90):
+  sqlfu@0.0.3-14(1fa8c663434a6f42f7ec24eda157e869):
     dependencies:
       '@clack/prompts': 1.2.0
       '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      trpc-cli: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
-      zod: 4.3.6
-    optionalDependencies:
-      better-auth: 1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.25(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(better-sqlite3@12.6.2)(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@25.6.0))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.6.0))(pg@8.19.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(solid-js@1.9.11)(vitest@4.1.8)(vue@3.5.30(typescript@5.9.3))
-    transitivePeerDependencies:
-      - '@opentelemetry/api'
-      - '@trpc/server'
-      - '@valibot/to-json-schema'
-      - crossws
-      - fastify
-      - valibot
-      - ws
-
-  sqlfu@0.0.3-14(6825507c844607f166cc081b2dbd01e7):
-    dependencies:
-      '@clack/prompts': 1.2.0
-      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      trpc-cli: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
-      zod: 4.3.6
-    optionalDependencies:
-      better-auth: 1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vite@8.0.0(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(better-sqlite3@12.6.2)(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@5.9.3))
-    transitivePeerDependencies:
-      - '@opentelemetry/api'
-      - '@trpc/server'
-      - '@valibot/to-json-schema'
-      - crossws
-      - fastify
-      - valibot
-      - ws
-
-  sqlfu@0.0.3-14(ecd375f85a77b8dc4927c7f82f3851ea):
-    dependencies:
-      '@clack/prompts': 1.2.0
-      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      trpc-cli: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
+      trpc-cli: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
       zod: 4.3.6
     optionalDependencies:
       better-auth: 1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(better-sqlite3@12.6.2)(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@25.6.0))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.6.0))(pg@8.19.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(solid-js@1.9.11)(vitest@4.1.8)(vue@3.5.30(typescript@5.9.3))
+      effect: 3.19.19
+    transitivePeerDependencies:
+      - '@opentelemetry/api'
+      - '@trpc/server'
+      - '@valibot/to-json-schema'
+      - crossws
+      - fastify
+      - valibot
+      - ws
+
+  sqlfu@0.0.3-14(b84aa2381dadabbdac4130f00d716b78):
+    dependencies:
+      '@clack/prompts': 1.2.0
+      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+      trpc-cli: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
+      zod: 4.3.6
+    optionalDependencies:
+      better-auth: 1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.25(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(better-sqlite3@12.6.2)(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@25.6.0))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.6.0))(pg@8.19.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(solid-js@1.9.11)(vitest@4.1.8)(vue@3.5.30(typescript@5.9.3))
+      effect: 3.19.19
+    transitivePeerDependencies:
+      - '@opentelemetry/api'
+      - '@trpc/server'
+      - '@valibot/to-json-schema'
+      - crossws
+      - fastify
+      - valibot
+      - ws
+
+  sqlfu@0.0.3-14(ced6661f18e84920a3e62afbd90aaf6f):
+    dependencies:
+      '@clack/prompts': 1.2.0
+      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+      trpc-cli: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
+      zod: 4.3.6
+    optionalDependencies:
+      better-auth: 1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vite@8.0.0(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(better-sqlite3@12.6.2)(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260621.1(patch_hash=9916849fbf258c6990a3ea56566376713c1f765f9c2c6fc3b5f2cc5b6e04f039))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1))(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(solid-js@1.9.11)(vitest@4.0.15)(vue@3.5.30(typescript@5.9.3))
+      effect: 3.19.19
     transitivePeerDependencies:
       - '@opentelemetry/api'
       - '@trpc/server'
@@ -28205,17 +28271,6 @@ snapshots:
 
   trough@2.2.0: {}
 
-  trpc-cli@0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12):
-    dependencies:
-      commander: 14.0.3
-    optionalDependencies:
-      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      '@trpc/server': 11.12.0(typescript@5.9.3)
-      '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@5.9.3))
-      effect: 3.19.19
-      valibot: 1.2.0(typescript@5.9.3)
-      zod: 4.1.12
-
   trpc-cli@0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6):
     dependencies:
       commander: 14.0.3
@@ -28227,7 +28282,7 @@ snapshots:
       valibot: 1.2.0(typescript@5.9.3)
       zod: 4.3.6
 
-  trpc-cli@0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.4.3):
+  trpc-cli@0.14.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.4.3):
     dependencies:
       commander: 14.0.3
     optionalDependencies:
@@ -28238,25 +28293,27 @@ snapshots:
       valibot: 1.2.0(typescript@5.9.3)
       zod: 4.4.3
 
-  trpc-cli@0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6):
+  trpc-cli@0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12):
     dependencies:
       commander: 14.0.3
     optionalDependencies:
       '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       '@trpc/server': 11.12.0(typescript@5.9.3)
       '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@5.9.3))
+      effect: 3.19.19
+      valibot: 1.2.0(typescript@5.9.3)
+      zod: 4.1.12
+
+  trpc-cli@0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6):
+    dependencies:
+      commander: 14.0.3
+    optionalDependencies:
+      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+      '@trpc/server': 11.12.0(typescript@5.9.3)
+      '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@5.9.3))
+      effect: 3.19.19
       valibot: 1.2.0(typescript@5.9.3)
       zod: 4.3.6
-
-  trpc-cli@0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(valibot@1.2.0(typescript@5.9.3))(zod@4.4.3):
-    dependencies:
-      commander: 14.0.3
-    optionalDependencies:
-      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      '@trpc/server': 11.12.0(typescript@5.9.3)
-      '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@5.9.3))
-      valibot: 1.2.0(typescript@5.9.3)
-      zod: 4.4.3
 
   ts-api-utils@2.4.0(typescript@5.9.3):
     dependencies:
@@ -28697,23 +28754,6 @@ snapshots:
       tsx: 4.21.0
       yaml: 2.8.3
 
-  vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2):
-    dependencies:
-      esbuild: 0.27.4
-      fdir: 6.5.0(picomatch@4.0.3)
-      picomatch: 4.0.3
-      postcss: 8.5.8
-      rollup: 4.59.0
-      tinyglobby: 0.2.15
-    optionalDependencies:
-      '@types/node': 25.3.3
-      fsevents: 2.3.3
-      jiti: 2.7.0
-      lightningcss: 1.32.0
-      terser: 5.46.0
-      tsx: 4.21.0
-      yaml: 2.8.2
-
   vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3):
     dependencies:
       esbuild: 0.27.4
@@ -28969,10 +29009,10 @@ snapshots:
       - tsx
       - yaml
 
-  vitest@4.1.5(@opentelemetry/api@1.9.0)(@types/node@25.3.3)(jsdom@27.4.0(@noble/hashes@2.0.1))(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)):
+  vitest@4.1.5(@opentelemetry/api@1.9.0)(@types/node@25.3.3)(jsdom@27.4.0(@noble/hashes@2.0.1))(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)):
     dependencies:
       '@vitest/expect': 4.1.5
-      '@vitest/mocker': 4.1.5(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
+      '@vitest/mocker': 4.1.5(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(vite@7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       '@vitest/pretty-format': 4.1.5
       '@vitest/runner': 4.1.5
       '@vitest/snapshot': 4.1.5
@@ -28989,7 +29029,7 @@ snapshots:
       tinyexec: 1.1.1
       tinyglobby: 0.2.16
       tinyrainbow: 3.1.0
-      vite: 7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
+      vite: 7.3.1(@types/node@25.3.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
       why-is-node-running: 2.3.0
     optionalDependencies:
       '@opentelemetry/api': 1.9.0
@@ -29083,7 +29123,7 @@ snapshots:
     optionalDependencies:
       '@opentelemetry/api': 1.9.0
       '@types/node': 25.6.0
-      '@vitest/browser-playwright': 4.1.8(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(playwright@1.57.0)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.8)
+      '@vitest/browser-playwright': 4.1.8(msw@2.13.3(@types/node@25.6.0)(typescript@5.9.3))(playwright@1.60.0)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(vitest@4.1.8)
       jsdom: 27.4.0(@noble/hashes@2.0.1)
     transitivePeerDependencies:
       - msw

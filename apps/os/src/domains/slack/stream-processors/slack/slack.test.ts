@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { StreamEvent, StreamEventInput } from "@iterate-com/shared/streams/stream-event";
-import { SlackProcessor, type SlackProcessorDeps } from "./implementation.ts";
+import { SlackProcessor } from "./implementation.ts";
+import type { StreamRpc } from "~/domains/streams/engine/types.ts";
 
 describe("SlackProcessor", () => {
   it("reduces Slack connection state", async () => {
@@ -129,23 +130,23 @@ describe("SlackProcessor", () => {
     const appended: Array<{ streamPath?: string; event: StreamEventInput }> = [];
     let failNextAppend = true;
     const processor = new SlackProcessor({
-      iterateContext: {
-        stream: {
-          append: async ({ event, streamPath }) => {
-            if (failNextAppend) {
-              failNextAppend = false;
-              throw new Error("cold StreamsCapability RPC failed");
-            }
+      stream: {
+        append: async (args: { event: StreamEventInput; streamPath?: string }) => {
+          const { event, streamPath } = args;
+          if (failNextAppend) {
+            failNextAppend = false;
+            throw new Error("cold StreamsCapability RPC failed");
+          }
+          appended.push({ event, streamPath });
+          return committedEvent({ ...event, offset: appended.length });
+        },
+        appendBatch: async (args: { events: StreamEventInput[]; streamPath?: string }) =>
+          args.events.map((event) => {
+            const streamPath = args.streamPath;
             appended.push({ event, streamPath });
             return committedEvent({ ...event, offset: appended.length });
-          },
-          appendBatch: async ({ events, streamPath }) =>
-            events.map((event) => {
-              appended.push({ event, streamPath });
-              return committedEvent({ ...event, offset: appended.length });
-            }),
-        },
-      },
+          }),
+      } as unknown as StreamRpc,
     });
 
     // First delivery: the append throws. ingest MUST reject and the checkpoint
@@ -290,23 +291,27 @@ describe("SlackProcessor", () => {
   });
 });
 
-function createProcessor(deps: SlackProcessorDeps = {}) {
+function createProcessor(
+  deps: {
+    acknowledgeRoutedWebhook?: (input: { payload: unknown }) => Promise<void> | void;
+  } = {},
+) {
   const appended: Array<{ streamPath?: string; event: StreamEventInput }> = [];
   const processor = new SlackProcessor({
-    iterateContext: {
-      stream: {
-        append: async ({ event, streamPath }) => {
+    stream: {
+      append: async (args: { event: StreamEventInput; streamPath?: string }) => {
+        const { event, streamPath } = args;
+        appended.push({ event, streamPath });
+        return committedEvent({ ...event, offset: appended.length });
+      },
+      appendBatch: async (args: { events: StreamEventInput[]; streamPath?: string }) => {
+        return args.events.map((event) => {
+          const streamPath = args.streamPath;
           appended.push({ event, streamPath });
           return committedEvent({ ...event, offset: appended.length });
-        },
-        appendBatch: async ({ events, streamPath }) => {
-          return events.map((event) => {
-            appended.push({ event, streamPath });
-            return committedEvent({ ...event, offset: appended.length });
-          });
-        },
+        });
       },
-    },
+    } as unknown as StreamRpc,
     ...deps,
   });
   return { appended, processor };

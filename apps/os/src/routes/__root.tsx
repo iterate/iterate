@@ -5,6 +5,7 @@ import {
   Outlet,
   Scripts,
   createRootRouteWithContext,
+  useHydrated,
 } from "@tanstack/react-router";
 import { extractPublicConfigSchema } from "@iterate-com/shared/config";
 import { AuthClientProvider } from "@iterate-com/auth/client";
@@ -66,12 +67,14 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 });
 
 function RootDocument({ children }: { children: ReactNode }) {
+  const isHydrated = useHydrated();
+
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
         <HeadContent />
       </head>
-      <body>
+      <body className="min-h-screen bg-background font-sans antialiased" data-hydrated={isHydrated}>
         {children}
         <Scripts />
       </body>

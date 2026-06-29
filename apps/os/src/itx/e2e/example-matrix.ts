@@ -4,10 +4,10 @@
 // itx.browser.test.ts (vitest's browser project); everything else is here.
 //
 //   node            AsyncFunction over a Cap'n Web stub in this process
-//   cli             `iterate-app-cli itx run -e …` (a real spawned CLI)
+//   cli             `tsx ./scripts/cli.ts itx run --eval …` (a real spawned CLI)
 //   dynamic-worker  POST /api/itx/run with the body wrapped as a function
-//   config-worker   the body baked into the project's repo worker.js, exposed
-//                   as a project source capability (env.ITERATE.context)
+//   project-worker  the body baked into the project's repo
+//                   worker.ts, invoked via itx.worker (this.itx.context)
 
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -20,7 +20,7 @@ import { adminApiSecret, baseUrl, connectGlobal } from "./e2e-env.ts";
 const execFileAsync = promisify(execFile);
 const OS_APP_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 
-export const MATRIX_RUNTIMES = ["node", "cli", "dynamic-worker", "config-worker"] as const;
+export const MATRIX_RUNTIMES = ["node", "cli", "dynamic-worker", "project-worker"] as const;
 export type MatrixRuntime = (typeof MATRIX_RUNTIMES)[number] & ItxExampleRuntime;
 
 const AsyncFunction = async function () {}.constructor as new (
@@ -43,17 +43,16 @@ export async function runExampleCode(
         return await runInCli(input);
       case "dynamic-worker":
         return await runInDynamicWorker(input);
-      case "config-worker":
-        return await runInConfigWorker(input);
+      case "project-worker":
+        return await runInProjectWorker(input);
     }
   });
 }
 
 const LOADER_CONTENTION_MESSAGE = "Too many concurrent dynamic workers";
-const CONFIG_WORKER_RPC_DISCONNECT_MESSAGE = "Network connection lost.";
+const PROJECT_WORKER_RPC_DISCONNECT_MESSAGE = "Network connection lost.";
 const LOADER_CONTENTION_BACKOFF_MS = [2_000, 5_000, 10_000];
 const PROJECT_WORKER_LATEST_PROBE_WINDOW_MS = 10_000;
-const MATRIX_WORKER_CAPABILITY = "itxMatrixWorker";
 
 async function retryOnWorkerStartupContention<T>(
   runtime: MatrixRuntime,
@@ -70,9 +69,9 @@ async function retryOnWorkerStartupContention<T>(
         String((error as { stderr?: unknown }).stderr ?? ""),
       ].join("\n");
       const isLoaderContention = message.includes(LOADER_CONTENTION_MESSAGE);
-      const isConfigWorkerRpcDisconnect =
-        runtime === "config-worker" && message.includes(CONFIG_WORKER_RPC_DISCONNECT_MESSAGE);
-      if (!isLoaderContention && !isConfigWorkerRpcDisconnect) throw error;
+      const isProjectWorkerRpcDisconnect =
+        runtime === "project-worker" && message.includes(PROJECT_WORKER_RPC_DISCONNECT_MESSAGE);
+      if (!isLoaderContention && !isProjectWorkerRpcDisconnect) throw error;
       await new Promise((resolve) => setTimeout(resolve, backoffMs));
     }
   }
@@ -99,10 +98,11 @@ async function runInCli(input: {
     "pnpm",
     [
       "exec",
-      "iterate-app-cli",
+      "tsx",
+      "./scripts/cli.ts",
       "itx",
       "run",
-      "-e",
+      "--eval",
       input.code,
       "--vars",
       JSON.stringify(input.vars),
@@ -143,49 +143,41 @@ async function runInDynamicWorker(input: {
   return body.result;
 }
 
-async function runInConfigWorker(input: {
+async function runInProjectWorker(input: {
   code: string;
   id?: string;
   projectId: string;
   vars: Record<string, unknown>;
 }): Promise<unknown> {
-  if (!input.id) throw new Error("config-worker runs are invoked by example id.");
+  if (!input.id) throw new Error("project-worker runs are invoked by example id.");
   using itx = connectGlobal();
   using projectItx = await itx.projects.get(input.projectId);
-  const worker = (projectItx as never as Record<string, any>)[MATRIX_WORKER_CAPABILITY];
-  const result = JSON.parse(
-    (await worker.runItxExample({ id: input.id, vars: input.vars })) as string,
-  );
-  if (isConfigWorkerErrorResult(result)) {
-    throw new Error(
-      `config-worker example failed: ${result.error.name}: ${result.error.message}\n${result.error.stack}`,
-    );
-  }
-  return (result as { value: unknown }).value;
+  const worker = (projectItx as never as Record<string, any>).worker;
+  return await worker.runItxExample({ id: input.id, vars: input.vars });
 }
 
 /**
- * The project-repo worker.js for the matrix project: every config-worker
+ * The project-repo worker.ts for the matrix project: every project-worker
  * example baked in as `async ({ itx, vars }) => { <body> }`, dispatched by id
- * through ONE exported method. The harness provides worker.js as an explicit
- * source capability and calls `runItxExample(...)`; the script's handle is the
- * config worker's own env.ITERATE.context — the same project-scoped itx every
- * other runtime connects to from outside.
+ * through ONE exported method. `itx.worker.runItxExample(...)` reaches it via
+ * the Project DO's path replay, and the script's handle is the project
+ * worker's own this.itx.context — the same project-scoped itx every other
+ * runtime connects to from outside.
  */
-export function configWorkerRunnerSource(examples: ItxExample[]): string {
+export function projectWorkerRunnerSource(examples: ItxExample[]): string {
   const scripts = examples
     .map(
       (example) =>
         `  ${JSON.stringify(example.id)}: async ({ itx, vars }) => {\n${example.code}\n  },`,
     )
     .join("\n");
-  return `import { WorkerEntrypoint } from "cloudflare:workers";
+  return `import { IterateProjectEntrypoint } from "iterate/worker";
 
 const scripts = {
 ${scripts}
 };
 
-export default class extends WorkerEntrypoint {
+export default class ItxExampleRunner extends IterateProjectEntrypoint {
   async fetch() {
     return new Response("itx example runner");
   }
@@ -193,33 +185,11 @@ export default class extends WorkerEntrypoint {
   async runItxExample({ id, vars }) {
     const script = scripts[id];
     if (!script) throw new Error("unknown example: " + id);
-    try {
-      const itx = await this.env.ITERATE.context;
-      return JSON.stringify({ value: await script({ itx, vars: vars ?? {} }) });
-    } catch (error) {
-      return JSON.stringify({
-        error: {
-          message: error instanceof Error ? error.message : String(error),
-          name: error instanceof Error ? error.name : "Error",
-          stack: error instanceof Error ? error.stack : "",
-        },
-      });
-    }
+    const itx = await this.itx.context;
+    return await script({ itx, vars: vars || {} });
   }
 }
 `;
-}
-
-function isConfigWorkerErrorResult(
-  result: unknown,
-): result is { error: { message: string; name: string; stack: string } } {
-  return (
-    typeof result === "object" &&
-    result !== null &&
-    "error" in result &&
-    typeof (result as { error?: unknown }).error === "object" &&
-    (result as { error?: unknown }).error !== null
-  );
 }
 
 /**
@@ -282,7 +252,7 @@ export async function pushProjectRepoFiles(input: {
     method: "POST",
   });
   const body = (await response.json()) as { error?: string; result?: unknown };
-  if (!response.ok) throw new Error(`config worker push failed: ${body.error}`);
+  if (!response.ok) throw new Error(`project worker push failed: ${body.error}`);
   const repo = await (
     projectItx as never as { repos: { get(input: { path: string }): unknown } }
   ).repos.get({ path: "/repos/project" });
@@ -297,28 +267,12 @@ export async function pushProjectRepoFiles(input: {
       (item) => item.path === path,
     );
     if (file?.content !== input.files[path]) {
-      throw new Error(`config worker push did not persist ${path}: ${JSON.stringify(files)}`);
+      throw new Error(`project worker push did not persist ${path}: ${JSON.stringify(files)}`);
     }
   }
-  await projectItx.provideCapability({
-    name: MATRIX_WORKER_CAPABILITY,
-    capability: {
-      type: "rpc",
-      worker: {
-        type: "source",
-        source: {
-          bundle: {},
-          commit: "latest",
-          path: "worker.js",
-          repoPath: "/repos/project",
-          type: "repo",
-        },
-      },
-    },
-  });
   // Source dials intentionally use a short "latest" probe window. The matrix
   // immediately calls the just-pushed worker, so wait once here rather than
-  // making every config-worker example race the stale key.
+  // making every project-worker example race the stale key.
   await new Promise((resolve) => setTimeout(resolve, PROJECT_WORKER_LATEST_PROBE_WINDOW_MS + 250));
 }
 

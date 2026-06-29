@@ -9,8 +9,8 @@
  *
  * Lanes, in priority order:
  *
- *  1. Known OS hosts                          → app worker
- *  2. MCP host/path                           → MCP worker
+ *  1. `/api/mcp` on any host                  → app worker
+ *  2. Known OS hosts                          → app worker
  *  3. Project platform/custom host            → project-host worker
  *  4. Everything else                         → 404
  *
@@ -21,30 +21,24 @@
  */
 
 import type { AppConfig } from "~/config.ts";
-import { matchMcpRequestUrl } from "~/domains/inbound-mcp-server/mcp-url-routing.ts";
 import { normalizeIngressHost } from "~/ingress/host-headers.ts";
 import { parseProjectPlatformHosts } from "~/ingress/project-platform-host-routing.ts";
 import { eventDocsHostnameForAppBaseUrl } from "~/lib/event-docs-host.ts";
+import { MCP_START_MOUNT_PATH } from "~/lib/mcp-base-url.ts";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 
 /** Internal header carrying the resolved project target across the service binding hop. */
 export const RESOLVED_INGRESS_HEADER = "x-iterate-resolved-ingress";
 
-/** Set by the ingress worker when it has already classified the request
- * (value: the lane name). The app worker skips re-routing when present. */
-export const ROUTED_LANE_HEADER = "x-iterate-routed-lane";
-
 type RouteTargets = {
-  /** MCP worker service binding (handleMcpFetch lives there). */
-  MCP?: Fetcher;
   /** Project worker service binding (project-host lane: itx connect + callable dispatch). */
   PROJECT_HOST?: Fetcher;
 };
 
 /**
- * Route a request to the MCP or project-host lane, or return null for the
- * app lane (the caller forwards to the app worker / falls through to the
- * local app pipeline).
+ * Route a request to the project-host lane, or return null for the app lane
+ * (the caller forwards to the app worker / falls through to the local app
+ * pipeline).
  */
 export async function routeOsRequest(input: {
   config: AppConfig;
@@ -61,11 +55,6 @@ export async function routeOsRequest(input: {
     method: request.method,
     url: request.url,
   });
-
-  if (decision.lane === "mcp") {
-    if (!targets.MCP) return null; // no MCP lane wired (tests) — let the caller decide
-    return await targets.MCP.fetch(request);
-  }
 
   if (decision.lane === "project" || decision.lane === "itx") {
     if (!targets.PROJECT_HOST) return null;
@@ -85,7 +74,6 @@ export async function routeOsRequest(input: {
 export async function decideIngressRoute(input: {
   config: {
     baseUrl?: string;
-    mcp?: { baseUrl: string };
     projectHostnameBases?: readonly string[];
   };
   db: D1Database;
@@ -107,15 +95,12 @@ export async function decideIngressRoute(input: {
     if (!hasPort) publicUrl.port = "";
   }
 
-  // The same gate handleMcpFetch uses — covers both the dedicated MCP
-  // hostname (config.mcp.baseUrl) and the localhost path-mounted endpoint
-  // (/api/__mcp) used when no explicit MCP base URL is configured.
-  const mcpMatch = matchMcpRequestUrl({
-    appBaseUrl: input.config.baseUrl,
-    mcpBaseUrl: input.config.mcp?.baseUrl,
-    requestUrl: publicUrl.toString(),
-  });
-  if (mcpMatch) return { lane: "mcp" } as const;
+  if (
+    publicUrl.pathname === MCP_START_MOUNT_PATH ||
+    publicUrl.pathname.startsWith(`${MCP_START_MOUNT_PATH}/`)
+  ) {
+    return { lane: "os" } as const;
+  }
 
   const requestHost = normalizeIngressHost(
     headers.get("x-iterate-ingress-hostname") ??
@@ -124,7 +109,11 @@ export async function decideIngressRoute(input: {
   );
   const appHostname = normalizeIngressHost(new URL(input.config.baseUrl ?? input.url).hostname);
   const eventDocsHostname = eventDocsHostnameForAppBaseUrl(input.config.baseUrl);
-  if (requestHost === appHostname || requestHost === eventDocsHostname) {
+  if (
+    requestHost === appHostname ||
+    requestHost === eventDocsHostname ||
+    isLoopbackAppHostAlias(requestHost, input.config.projectHostnameBases ?? [])
+  ) {
     return { lane: "os" } as const;
   }
 
@@ -182,6 +171,13 @@ export async function decideIngressRoute(input: {
   }
 
   return { lane: "notFound" } as const;
+}
+
+function isLoopbackAppHostAlias(requestHost: string, projectHostnameBases: readonly string[]) {
+  return projectHostnameBases.some((rawBase) => {
+    const base = normalizeIngressHost(normalizeProjectHostnameBase(rawBase));
+    return requestHost === base && (base === "localhost" || base.endsWith(".localhost"));
+  });
 }
 
 /** Parse the resolved-rule header set by {@link routeOsRequest}; null when

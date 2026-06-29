@@ -2,17 +2,6 @@ import type { ReactNode } from "react";
 import { Button } from "./button.tsx";
 import { Spinner } from "./spinner.tsx";
 
-type ErrorFallbackProps = {
-  error: unknown;
-  reset: () => void;
-  secondaryAction?: ReactNode;
-};
-
-type NotFoundFallbackProps = {
-  action?: ReactNode;
-  [key: string]: unknown;
-};
-
 export function DefaultPendingComponent() {
   return (
     <div className="flex min-h-screen items-center justify-center">
@@ -20,6 +9,11 @@ export function DefaultPendingComponent() {
     </div>
   );
 }
+
+type NotFoundFallbackProps = {
+  action?: ReactNode;
+  [key: string]: unknown;
+};
 
 export function DefaultNotFoundComponent({ action }: NotFoundFallbackProps = {}) {
   return (
@@ -34,6 +28,12 @@ export function DefaultNotFoundComponent({ action }: NotFoundFallbackProps = {})
     </div>
   );
 }
+
+type ErrorFallbackProps = {
+  error: unknown;
+  reset: () => void;
+  secondaryAction?: ReactNode;
+};
 
 export function DefaultErrorComponent({ error, reset, secondaryAction }: ErrorFallbackProps) {
   const message = error instanceof Error ? error.message : "An unexpected error occurred";

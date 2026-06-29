@@ -1,4 +1,7 @@
+import type { StreamEvent } from "@iterate-com/shared/streams/stream-processors";
 import type { Event, StreamPath } from "@iterate-com/shared/streams/types";
+
+export type EventsStreamSourceEvent = Event | StreamEvent;
 
 /**
  * Serializable data that selects a known stream UI renderer and passes props to
@@ -29,7 +32,7 @@ export type EventsStreamMessageElementProps = {
    */
   format?: "text" | "markdown";
   timestamp: number;
-  raw: Event;
+  raw: EventsStreamSourceEvent;
 };
 
 /**
@@ -48,7 +51,7 @@ export type EventsStreamPromptContextElementProps = {
   text: string;
   llmRequestPolicy: EventsStreamPromptContextLlmRequestPolicy;
   timestamp: number;
-  raw: Event;
+  raw: EventsStreamSourceEvent;
 };
 
 export type EventsStreamPromptContextLlmRequestPolicy =
@@ -70,7 +73,7 @@ export type EventsStreamPromptContextElement = EventsStreamRenderedElement<
 export type EventsStreamAgentOutputElementProps = {
   text: string;
   timestamp: number;
-  raw: Event;
+  raw: EventsStreamSourceEvent;
 };
 
 /**
@@ -87,7 +90,7 @@ export type EventsStreamAgentOutputElement = EventsStreamRenderedElement<
 export type EventsStreamSystemPromptElementProps = {
   text: string;
   timestamp: number;
-  raw: Event;
+  raw: EventsStreamSourceEvent;
 };
 
 /**
@@ -106,7 +109,7 @@ export type EventsStreamLlmRequestBoundaryElementProps = {
   outcome?: "completed" | "failed" | "cancelled";
   requestId: string;
   timestamp: number;
-  raw: Event;
+  raw: EventsStreamSourceEvent;
 };
 
 /**
@@ -126,7 +129,7 @@ export type EventsStreamRawEventSummary = {
   eventType: string;
   createdAt: string;
   timestamp: number;
-  raw: Event;
+  raw: EventsStreamSourceEvent;
 };
 
 /**
@@ -153,7 +156,7 @@ export type EventsStreamGroupedRawEventElement = EventsStreamRenderedElement<
  * Props for a single JSON/YAML dump of the full event stream.
  */
 export type EventsStreamRawJsonDumpElementProps = {
-  events: Event[];
+  events: EventsStreamSourceEvent[];
 };
 
 /**
@@ -170,7 +173,7 @@ export type EventsStreamRawJsonDumpElement = EventsStreamRenderedElement<
 export type EventsStreamLifecycleElementProps = {
   label: string;
   timestamp: number;
-  raw: Event;
+  raw: EventsStreamSourceEvent;
 };
 
 /**
@@ -188,7 +191,7 @@ export type EventsStreamChildStreamCreatedElementProps = {
   parentPath: StreamPath;
   childPath: StreamPath;
   timestamp: number;
-  raw: Event;
+  raw: EventsStreamSourceEvent;
 };
 
 /**
@@ -206,7 +209,7 @@ export type EventsStreamMetadataUpdatedElementProps = {
   path: StreamPath;
   metadata: Record<string, unknown>;
   timestamp: number;
-  raw: Event;
+  raw: EventsStreamSourceEvent;
 };
 
 /**
@@ -223,7 +226,7 @@ export type EventsStreamMetadataUpdatedElement = EventsStreamRenderedElement<
 export type EventsStreamErrorElementProps = {
   message: string;
   timestamp: number;
-  raw: Event;
+  raw: EventsStreamSourceEvent;
 };
 
 /**
@@ -241,7 +244,7 @@ export type EventsStreamCodemodeBlockElementProps = {
   script: string;
   language: "javascript";
   timestamp: number;
-  raw: Event;
+  raw: EventsStreamSourceEvent;
 };
 
 /**
@@ -262,7 +265,7 @@ export type EventsStreamCodemodeResultElementProps = {
   logs: string[];
   durationMs: number;
   timestamp: number;
-  raw: Event;
+  raw: EventsStreamSourceEvent;
 };
 
 /**

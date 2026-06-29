@@ -15,16 +15,6 @@ import {
   type StreamProcessorSnapshot,
 } from "./src/domains/streams/engine/stream-processor.ts";
 
-type MockSlack = {
-  calls: string[];
-  close(): Promise<void>;
-  url: string;
-};
-
-type PathCallable = {
-  invokeCapability(input: { args?: unknown[]; path: string[] }): unknown;
-};
-
 const PROJECT_WORKER_FORWARDED_EVENT_TYPE = "events.iterate.test/project-worker-forwarded";
 const AGENT_WEB_MESSAGE_SENT_TYPE = "events.iterate.com/agents/web-message-sent";
 const AGENT_OUTPUT_ADDED_TYPE = "events.iterate.com/agent/output-added";
@@ -81,7 +71,11 @@ function parseBody(body: string, contentType: string | string[] | undefined): Re
   return Object.fromEntries(new URLSearchParams(body));
 }
 
-function startMockSlack(): Promise<MockSlack> {
+function startMockSlack(): Promise<{
+  calls: string[];
+  close(): Promise<void>;
+  url: string;
+}> {
   const calls: string[] = [];
   const server = http.createServer((req, res) => {
     const method = (req.url ?? "").replace(/^\//, "").split("?")[0] ?? "";
@@ -138,7 +132,9 @@ function startMockSlack(): Promise<MockSlack> {
   });
 }
 
-function pathCallable(target: unknown): PathCallable {
+function pathCallable(target: unknown): {
+  invokeCapability(input: { args?: unknown[]; path: string[] }): unknown;
+} {
   return {
     invokeCapability({ args = [], path }) {
       if (path.length === 0) return target;

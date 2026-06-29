@@ -30,6 +30,7 @@ import {
 import { durableObjectProcessorSubscriber } from "~/domains/streams/engine/shared/callable-subscriber.ts";
 import {
   getInitializedStreamStub,
+  getStreamRpcStub,
   type StreamDurableObjectNamespace,
   type StreamDurableObject,
 } from "~/domains/streams/stream-runtime.ts";
@@ -93,6 +94,11 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
     (deps) =>
       new ProjectProcessor({
         ...deps,
+        stream: getStreamRpcStub({
+          durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+          projectId: this.projectId,
+          path: PROJECT_STREAM_PATH,
+        }),
         appConfig: () => this.getAppConfig(),
         env: this.env,
         exports: this.ctx.exports,
@@ -214,7 +220,7 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
    * config landed — and serving the previous worker would consume the very
    * trigger the new config exists to handle. USER failures (the project's hook
    * throwing) are swallowed — an author's bug must never wedge root-stream
-   * delivery; a MISSING worker (no repo, no worker.js yet) is a normal skip;
+   * delivery; a MISSING worker (no repo, no worker.ts yet) is a normal skip;
    * PLATFORM failures (build/git errors) throw so the checkpoint holds and the
    * event is redelivered rather than dropped.
    */

@@ -41,6 +41,7 @@ minimumReleaseAgeExclude:
   - "@mariozechner/pi-coding-agent"
   - "@mariozechner/pi-agent-core"
   - "@mariozechner/pi-tui"
+  - middlewright
   - schematch
   - sqlfu
   - trpc-cli
@@ -82,7 +83,6 @@ overrides:
   "@babel/parser": "^7.28.0"
   "@tanstack/query-core": "5.91.0"
   "@tanstack/react-query": "5.91.0"
-  "trpc-cli": "0.14.0"
   "wrangler": "4.102.0"
 
 patchedDependencies:

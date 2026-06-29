@@ -9,10 +9,12 @@ import { ORPCError } from "@orpc/server";
 import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import type { RequestContext } from "~/request-context.ts";
 import {
+  countAllProjects,
   deleteProject,
   getProjectById,
   getProjectBySlug,
   insertProject,
+  listAllProjects,
 } from "~/db/queries/.generated/index.ts";
 import { getProjectDurableObjectStub } from "~/domains/projects/durable-objects/project-durable-object-ref.ts";
 import { isProjectId } from "~/domains/projects/project-id.ts";
@@ -39,10 +41,6 @@ type ProjectListItem = {
 type ProjectListResult = {
   projects: ProjectListItem[];
   total: number;
-};
-
-type ProjectWithIngressUrl = ProjectListItem & {
-  ingressUrl: string;
 };
 
 export class ProjectsCapability extends RpcTarget {
@@ -73,11 +71,29 @@ export class ProjectsCapability extends RpcTarget {
     return { projects, total: authProjects.length };
   }
 
+  async listAllForAdmin(
+    input: { limit?: number; offset?: number } = {},
+  ): Promise<ProjectListResult> {
+    const context = this.props.context;
+    if (!context.principal || !principalIsAdmin(context.principal)) {
+      throw new ORPCError("FORBIDDEN", { message: "Admin access required." });
+    }
+
+    const limit = input.limit ?? 100;
+    const offset = input.offset ?? 0;
+    const [totalRow, rows] = await Promise.all([
+      countAllProjects(context.db),
+      listAllProjects(context.db, { limit, offset }),
+    ]);
+
+    return { projects: rows.map((row) => toProject(row)), total: totalRow?.total ?? 0 };
+  }
+
   async create(input: {
     id?: string;
     slug: string;
     organizationSlug?: string;
-  }): Promise<ProjectWithIngressUrl> {
+  }): Promise<ProjectListItem & { ingressUrl: string }> {
     const context = this.props.context;
 
     // A user may pass `id` only to (re-)adopt a project they already own in

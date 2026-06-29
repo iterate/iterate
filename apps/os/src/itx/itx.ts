@@ -16,15 +16,14 @@
 // something speaking `call({ path, args })` (dial.ts builds it; the core
 // never touches env or a project id), `parentItx` is a stub of the parent
 // context's core (chain delegation — the defaults are simply the chain's
-// code-rooted final link, platform-context.ts), and the stream's
-// append/read pair rides in as the processor's iterate context.
+// code-rooted final link, platform-context.ts), and `stream` is the raw stream
+// RPC used to append and replay the context event log.
 //
 // ONE host: ItxDurableObject (the generic context host) exposes the core via
 // an `itx()` method — a method, not a property, because workerd does not
 // pipeline calls through property accesses, so the method form keeps
 // `node.itx().invoke(…)` a single pipelined round trip.
 
-import type { StreamEvent } from "@iterate-com/shared/streams/stream-event";
 import { ItxContract, ITX_EVENT_TYPES, type ItxState } from "./contract.ts";
 import {
   replayPathCall,
@@ -44,7 +43,10 @@ import {
   type WorkerRef,
   type WorkerSource,
 } from "./types.ts";
-import { StreamProcessor } from "~/domains/streams/engine/stream-processor.ts";
+import {
+  StreamProcessor,
+  type StreamProcessorDeps,
+} from "~/domains/streams/engine/stream-processor.ts";
 
 // Server-side one-stop: the calling-convention pieces live in path-proxy.ts
 // only because Node/browser providers import them at runtime, and the data
@@ -210,39 +212,30 @@ export function reduceItxEvent(
 
 // ---- the class ------------------------------------------------------------------
 
-/** The context's stream as the core consumes it: append + getEvents. */
-export type ContextStream = {
-  append(args: {
-    event: { type: string; payload: Record<string, unknown> };
-  }): Promise<{ offset: number }>;
-  getEvents(input: { afterOffset: number }): Promise<StreamEvent[]>;
-};
+export type ItxDeps = StreamProcessorDeps<
+  typeof ItxContract,
+  {
+    /** This context's identity — its coordinate ref (`<projectId>:<path>`),
+     * stamped as the owner of provides and as origin when delegating. */
+    contextRef: string;
+    /** This context's own address — stamped as origin when delegating. */
+    selfAddress: CapabilityAddress;
+    /** THE only dial effect: address → something speaking call({ path, args }). */
+    dial: CapabilityDial;
+    /** The parent context's link, or null at the chain root. A function
+     * because a generic context learns its parent from its own birth
+     * certificate (state), which exists only after the stream is consumed.
+     * `from` is how describe() labels entries inherited through this link —
+     * the parent's context id, or "defaults" at the code root (the internal
+     * platform:project id never leaves the chain). */
+    parentItx: () => { from: string; stub: ItxStub } | null;
+    /** Processor-mode execution: run one enqueued script-execution-requested
+     * event (the runner appends the completed event to this context's stream). */
+    runScript?: (input: { code: string; executionId: string }) => Promise<unknown>;
+  }
+>;
 
-export type ItxIterateContext = {
-  stream: ContextStream;
-};
-
-export type ItxDeps = {
-  /** This context's identity — its coordinate ref (`<projectId>:<path>`),
-   * stamped as the owner of provides and as origin when delegating. */
-  contextRef: string;
-  /** This context's own address — stamped as origin when delegating. */
-  selfAddress: CapabilityAddress;
-  /** THE only dial effect: address → something speaking call({ path, args }). */
-  dial: CapabilityDial;
-  /** The parent context's link, or null at the chain root. A function
-   * because a generic context learns its parent from its own birth
-   * certificate (state), which exists only after the stream is consumed.
-   * `from` is how describe() labels entries inherited through this link —
-   * the parent's context id, or "defaults" at the code root (the internal
-   * platform:project id never leaves the chain). */
-  parentItx: () => { from: string; stub: ItxStub } | null;
-  /** Processor-mode execution: run one enqueued script-execution-requested
-   * event (the runner appends the completed event to this context's stream). */
-  runScript?: (input: { code: string; executionId: string }) => Promise<unknown>;
-};
-
-export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterateContext> {
+export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps> {
   readonly contract = ItxContract;
 
   /** Session-bound, dup-retained live provider stubs keyed by dotted path.
@@ -506,7 +499,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
    * ingesting just the appended event) keeps consumption contiguous when
    * concurrent writers interleave offsets. */
   async #append(type: string, payload: Record<string, unknown>): Promise<void> {
-    await this.ctx.stream.append({ event: { payload, type } });
+    await this.deps.stream.append({ event: { payload, type } });
     this.#appendCount += 1;
     await this.#catchUp();
   }
@@ -539,7 +532,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     const done = (async () => {
       try {
         const { offset } = await this.snapshot();
-        const events = await this.ctx.stream.getEvents({ afterOffset: offset });
+        const events = await this.deps.stream.getEvents({ afterOffset: offset });
         if (events.length > 0) {
           await this.ingest({ events, streamMaxOffset: events.at(-1)!.offset });
         }
@@ -583,16 +576,16 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     const release = this.#liveStubReleases.get(name);
     this.#liveStubReleases.delete(name);
     if (opts.record) {
-      void this.ctx.stream
-        .append({
+      void Promise.resolve(
+        this.deps.stream.append({
           event: {
             payload: { path: name.split(".") },
             type: ITX_EVENT_TYPES.capabilityDisconnected,
           },
-        })
-        .catch((error) => {
-          console.error(`[itx] capability-disconnected append failed for "${name}":`, error);
-        });
+        }),
+      ).catch((error: unknown) => {
+        console.error(`[itx] capability-disconnected append failed for "${name}":`, error);
+      });
     }
     release?.();
   }

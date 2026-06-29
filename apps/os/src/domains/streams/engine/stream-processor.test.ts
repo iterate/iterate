@@ -14,7 +14,8 @@ import { CircuitBreakerProcessor } from "./processors/circuit-breaker/implementa
 import { CoreStreamProcessor } from "./processors/core/implementation.ts";
 import { CoreProcessorContract } from "./processors/core/contract.ts";
 import type { StreamCoreProcessorState } from "./types.ts";
-import type { StreamProcessorIterateContext, StreamProcessorSnapshot } from "./stream-processor.ts";
+import type { StreamProcessorSnapshot } from "./stream-processor.ts";
+import type { StreamRpc } from "./types.ts";
 
 const iso = (ms = 0) => new Date(ms).toISOString();
 // Both example processors append via runInBackground, so tests tick the
@@ -37,24 +38,24 @@ function event(args: {
   };
 }
 
-// A stream stub that records appends in memory — just the `{ append,
-// appendBatch }` surface the class's iterateContext needs.
+// A stream stub that records appends in memory. These tests only exercise the
+// append surface, so the fake is cast to the full RPC stub type.
 function memoryStream(options: { startOffset?: number } = {}) {
   let nextOffset = options.startOffset ?? 100;
   const committed: StreamEvent[] = [];
-  const stream: StreamProcessorIterateContext["stream"] = {
-    append: (args) => {
+  const stream = {
+    append: (args: { event: StreamEventInput }) => {
       const e: StreamEvent = { ...args.event, offset: nextOffset++, createdAt: iso(1) };
       committed.push(e);
       return e;
     },
-    appendBatch: (args) =>
+    appendBatch: (args: { events: StreamEventInput[] }) =>
       args.events.map((input) => {
         const e: StreamEvent = { ...input, offset: nextOffset++, createdAt: iso(1) };
         committed.push(e);
         return e;
       }),
-  };
+  } as unknown as StreamRpc;
   return { stream, committed };
 }
 
@@ -70,7 +71,7 @@ describe("echo example processor", () => {
     const { stream, committed } = memoryStream();
     const writes: StreamProcessorSnapshot<{ seen: number }>[] = [];
     const processor = new EchoExampleProcessor({
-      iterateContext: { stream },
+      stream,
       writeState: (snapshot) => void writes.push(snapshot),
     });
 
@@ -86,7 +87,7 @@ describe("echo example processor", () => {
 
   it("dedups a re-delivered batch instead of emitting twice", async () => {
     const { stream, committed } = memoryStream();
-    const processor = new EchoExampleProcessor({ iterateContext: { stream } });
+    const processor = new EchoExampleProcessor({ stream });
 
     await processor.ingest({ events: [echoInput(1), echoInput(2)], streamMaxOffset: 2 });
     await processor.ingest({ events: [echoInput(1), echoInput(2)], streamMaxOffset: 2 });
@@ -102,7 +103,7 @@ describe("echo example processor", () => {
   it("resumes from a persisted snapshot and ignores already-processed offsets", async () => {
     const { stream, committed } = memoryStream();
     const processor = new EchoExampleProcessor({
-      iterateContext: { stream },
+      stream,
       readState: () => ({ offset: 5, state: { seen: 2 } }),
     });
 
@@ -146,13 +147,12 @@ class CoreStreamSim {
   append(path: string, input: StreamEventInput, createdAtMs = 0): StreamEvent {
     const entry = this.#entry(path);
     const coreInline = new CoreStreamProcessor({
-      iterateContext: {
-        stream: {
-          append: (args) => this.append(args.streamPath ?? path, args.event, createdAtMs),
-          appendBatch: (args) =>
-            args.events.map((event) => this.append(args.streamPath ?? path, event, createdAtMs)),
-        },
-      },
+      stream: {
+        append: (args: { streamPath?: string; event: StreamEventInput }) =>
+          this.append(args.streamPath ?? path, args.event, createdAtMs),
+        appendBatch: (args: { streamPath?: string; events: StreamEventInput[] }) =>
+          args.events.map((event) => this.append(args.streamPath ?? path, event, createdAtMs)),
+      } as unknown as StreamRpc,
     });
 
     coreInline.validateAppend({
@@ -239,13 +239,12 @@ describe("core stream state and subscription processors", () => {
 
     const writes: StreamProcessorSnapshot<unknown>[] = [];
     const processor = new CircuitBreakerProcessor({
-      iterateContext: {
-        stream: {
-          append: (args) => sim.append(args.streamPath ?? "/cb", args.event),
-          appendBatch: (args) =>
-            args.events.map((event) => sim.append(args.streamPath ?? "/cb", event)),
-        },
-      },
+      stream: {
+        append: (args: { streamPath?: string; event: StreamEventInput }) =>
+          sim.append(args.streamPath ?? "/cb", args.event),
+        appendBatch: (args: { streamPath?: string; events: StreamEventInput[] }) =>
+          args.events.map((event) => sim.append(args.streamPath ?? "/cb", event)),
+      } as unknown as StreamRpc,
       writeState: (snapshot) => void writes.push(snapshot),
     });
 

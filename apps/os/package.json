@@ -8,10 +8,9 @@
   },
   "scripts": {
     "cli": "tsx ./scripts/cli.ts",
-    "dev": "pnpm cli dev",
-    "dev:local": "tsx ./scripts/dev.ts --no-doppler",
+    "dev": "tsx ./scripts/dev.ts",
+    "dev:local": "tsx ./scripts/dev.ts --skip-doppler",
     "build": "doppler run -- pnpm exec vite build",
-    "rpc": "pnpm cli rpc",
     "probe:do-duration": "tsx ./scripts/do-duration-probe.ts",
     "deploy": "doppler run -- tsx ./alchemy.run.ts",
     "destroy": "doppler run -- tsx ./alchemy.run.ts --destroy",
@@ -33,15 +32,6 @@
     "test:smoke": "RUNTIME_SMOKE_FULL=1 vitest run --exclude 'src/durable-objects/*.test.ts' --exclude 'src/itx/e2e/**' --exclude '**/*.workers.test.ts'",
     "test:watch": "vitest --exclude 'src/durable-objects/*.test.ts' --exclude 'src/itx/e2e/**' --exclude '**/*.workers.test.ts'"
   },
-  "iterateAppCli": {
-    "localRouterPaths": [
-      "../../packages/iterate/src/os/router.ts"
-    ],
-    "remote": {
-      "auth": "shared-api-secret-bearer",
-      "defaultBaseUrl": "https://os.iterate.com"
-    }
-  },
   "dependencies": {
     "@cloudflare/shell": "^0.3.4",
     "@cloudflare/worker-bundler": "^0.1.3",
@@ -53,6 +43,7 @@
     "@iterate-com/auth-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
+    "@journeyapps/wa-sqlite": "^1.7.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@opentui/core": "0.1.102",
     "@opentui/react": "0.1.102",
@@ -75,14 +66,12 @@
     "comlink": "^4.4.2",
     "json5": "^2.2.3",
     "lucide-react": "^0.553.0",
-    "openai": "^6.36.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "sqlfu": "0.0.3-14",
     "tailwindcss": "^4.1.18",
     "yaml": "^2.8.3",
-    "zod": "^4.3.6",
-    "@journeyapps/wa-sqlite": "^1.7.0"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "catalog:cloudflare",
@@ -104,8 +93,9 @@
     "iterate": "workspace:*",
     "jsdom": "27.4.0",
     "miniflare": "catalog:cloudflare",
-    "playwright": "1.57.0",
+    "openai": "^6.36.0",
     "tinyexec": "^1.0.2",
+    "trpc-cli": "0.15.1",
     "tsx": "^4.20.3",
     "typescript": "^5.9.3",
     "vite": "^8.0.0",

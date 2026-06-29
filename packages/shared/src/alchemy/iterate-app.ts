@@ -227,31 +227,51 @@ export async function IterateRoutes(
 
     const dnsRouteHosts = routeHosts.filter(shouldCreateDnsRecordForRouteHostname);
     await Promise.all(
-      dnsRouteHosts.map(async (hostname) => {
-        const zoneId =
-          routeZoneIds.get(hostname) ??
-          findActiveZoneForHostname({
-            accountId: cloudflareApi.accountId,
-            hostname,
-            zones,
-          }).zoneId;
-        const record = {
-          type: "A" as const,
-          name: hostname,
-          content: "192.0.2.1",
-          proxied: true,
-          ttl: 1,
+      dnsRouteHosts.flatMap((hostname) =>
+        placeholderDnsRecordsForHostname({
           comment: `Managed by ${slug} alchemy (${app.stage}).`,
-        };
-
-        await ensureCloudflareDnsRecord({
-          cloudflareApi,
-          record,
-          zoneId,
-        });
-      }),
+          hostname,
+        }).map(async (record) => {
+          const zoneId =
+            routeZoneIds.get(record.name) ??
+            findActiveZoneForHostname({
+              accountId: cloudflareApi.accountId,
+              hostname: record.name,
+              zones,
+            }).zoneId;
+          await ensureCloudflareDnsRecord({
+            cloudflareApi,
+            record,
+            zoneId,
+          });
+        }),
+      ),
     );
   }
+}
+
+function placeholderDnsRecordsForHostname(input: {
+  comment: string;
+  hostname: string;
+}): DesiredCloudflareDnsRecord[] {
+  return [
+    {
+      type: "A",
+      name: input.hostname,
+      content: "192.0.2.1",
+      proxied: true,
+      ttl: 1,
+      comment: input.comment,
+    },
+    {
+      type: "AAAA",
+      name: input.hostname,
+      content: "100::",
+      proxied: true,
+      ttl: 1,
+      comment: input.comment,
+    },
+  ];
 }
 
 /**
@@ -270,32 +290,27 @@ export async function ensureProxiedDnsForHostnames(input: {
   const cloudflareApi = await createCloudflareApi({});
   const zones = await listCloudflareZones(cloudflareApi);
   await Promise.all(
-    input.hostnames.map(async (hostname) => {
-      const { zoneId } = findActiveZoneForHostname({
-        accountId: cloudflareApi.accountId,
-        hostname,
-        zones,
-      });
-      await ensureCloudflareDnsRecord({
-        cloudflareApi,
-        record: {
-          type: "A" as const,
-          name: hostname,
-          content: "192.0.2.1",
-          proxied: true,
-          ttl: 1,
-          comment: input.comment,
-        },
-        zoneId,
-      });
-    }),
+    input.hostnames.flatMap((hostname) =>
+      placeholderDnsRecordsForHostname({ comment: input.comment, hostname }).map(async (record) => {
+        const zoneId = findActiveZoneForHostname({
+          accountId: cloudflareApi.accountId,
+          hostname: record.name,
+          zones,
+        }).zoneId;
+        await ensureCloudflareDnsRecord({
+          cloudflareApi,
+          record,
+          zoneId,
+        });
+      }),
+    ),
   );
 }
 
 function routeResourceIdForHostname(hostname: string) {
-  return hostname.startsWith("*.")
-    ? `route-wildcard-${slugify(hostname.slice(2))}`
-    : `route-${slugify(hostname)}`;
+  if (hostname.startsWith("*.")) return `route-wildcard-${slugify(hostname.slice(2))}`;
+  if (hostname.startsWith("*")) return `route-catchall-${slugify(hostname.slice(1))}`;
+  return `route-${slugify(hostname)}`;
 }
 
 function shouldCreateDnsRecordForRouteHostname(hostname: string) {
@@ -323,7 +338,7 @@ async function ensureCloudflareDnsRecord(input: {
     name: string;
     proxied: boolean;
     ttl: number;
-    type: "A";
+    type: "A" | "AAAA";
   };
   zoneId: string;
 }) {
@@ -338,19 +353,17 @@ async function ensureCloudflareDnsRecord(input: {
   }
 
   const listResult = (await listResponse.json()) as {
-    result?: Array<{ id: string; name?: string; proxied?: boolean; type?: string }>;
+    result?: ExistingCloudflareDnsRecord[];
   };
-  const existingProxiedRecord = listResult.result?.find(
-    (record) => record.name === input.record.name && record.proxied,
-  );
-  if (existingProxiedRecord) return;
+  const plan = planCloudflareDnsRecordReconciliation({
+    desired: input.record,
+    existing: listResult.result || [],
+  });
+  if (plan.action === "keep") return;
 
-  const existingRecordId = listResult.result?.find(
-    (record) => record.name === input.record.name && record.type === input.record.type,
-  )?.id;
-  const response = existingRecordId
+  const response = plan.recordId
     ? await input.cloudflareApi.put(
-        `/zones/${input.zoneId}/dns_records/${existingRecordId}`,
+        `/zones/${input.zoneId}/dns_records/${plan.recordId}`,
         input.record,
       )
     : await input.cloudflareApi.post(`/zones/${input.zoneId}/dns_records`, input.record);
@@ -360,6 +373,71 @@ async function ensureCloudflareDnsRecord(input: {
       `Failed to upsert DNS record ${input.record.name}: ${response.status} ${await response.text()}`,
     );
   }
+
+  await Promise.all(
+    plan.deleteRecordIds.map(async (recordId) => {
+      const deleteResponse = await input.cloudflareApi.delete(
+        `/zones/${input.zoneId}/dns_records/${recordId}`,
+      );
+      if (!deleteResponse.ok) {
+        throw new Error(
+          `Failed to delete duplicate DNS record ${input.record.name}: ${deleteResponse.status} ${await deleteResponse.text()}`,
+        );
+      }
+    }),
+  );
+}
+
+type ExistingCloudflareDnsRecord = {
+  content?: string;
+  id: string;
+  name?: string;
+  proxied?: boolean;
+  type?: string;
+};
+
+type DesiredCloudflareDnsRecord = {
+  comment: string;
+  content: string;
+  name: string;
+  proxied: boolean;
+  ttl: number;
+  type: "A" | "AAAA";
+};
+
+export function planCloudflareDnsRecordReconciliation(input: {
+  desired: DesiredCloudflareDnsRecord;
+  existing: ExistingCloudflareDnsRecord[];
+}): { action: "keep" } | { action: "upsert"; deleteRecordIds: string[]; recordId: string | null } {
+  const sameName = input.existing.filter((record) => record.name === input.desired.name);
+  const proxiedSameName = sameName.filter((record) => record.proxied === true);
+
+  // A proxied CNAME or non-address shape is already enough to put the hostname on
+  // Cloudflare's edge. Leave it alone to avoid fighting hand-managed origins.
+  if (
+    proxiedSameName.some(
+      (record) =>
+        record.type !== "A" && record.type !== "AAAA" && record.type !== input.desired.type,
+    )
+  ) {
+    return { action: "keep" };
+  }
+
+  const sameType = sameName.filter((record) => record.type === input.desired.type);
+  const desiredRecord = sameType.find(
+    (record) =>
+      record.proxied === input.desired.proxied && record.content === input.desired.content,
+  );
+  if (desiredRecord && sameType.length === 1) return { action: "keep" };
+
+  const target = desiredRecord || sameType[0];
+  return {
+    action: "upsert",
+    deleteRecordIds: sameType
+      .filter((record) => record.id !== target?.id)
+      .map((record) => record.id),
+    recordId: target?.id || null,
+  };
 }
 
 async function listCloudflareZones(cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>) {
@@ -422,7 +500,7 @@ export function selectBestCloudflareZoneForHostname(input: {
   hostname: string;
   zones: CloudflareZone[];
 }) {
-  const cleanHostname = input.hostname.replace(/^\*\./, "");
+  const cleanHostname = input.hostname.replace(/^\*\.?/, "");
   const matchingZones = input.zones
     .filter((zone) => cleanHostname === zone.name || cleanHostname.endsWith(`.${zone.name}`))
     .sort((a, b) => b.name.length - a.name.length);

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ChangeEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { useMutation } from "@tanstack/react-query";
@@ -28,6 +28,7 @@ const getLoginState = createServerFn({ method: "GET" }).handler(({ context }) =>
 export const Route = createFileRoute("/login")({
   validateSearch: z.looseObject({
     redirect: z.string().optional(),
+    login_hint: z.enum(["email", "google"]).optional().catch(undefined),
     sig: z.string().optional(),
   }),
   beforeLoad: async ({ search }) => {
@@ -45,6 +46,12 @@ function RouteComponent() {
   const redirectTo = safeRedirectPath(search.redirect);
   const { emailOtpEnabled, session } = Route.useLoaderData();
   const signedInSession = session && isOAuthProviderFlowSearch(search) ? session : null;
+  const loginHint =
+    !signedInSession && search.login_hint === "email" && emailOtpEnabled
+      ? search.login_hint
+      : !signedInSession && search.login_hint === "google"
+        ? search.login_hint
+        : undefined;
 
   return (
     <div className="flex min-h-screen items-center justify-center p-4">
@@ -64,7 +71,11 @@ function RouteComponent() {
           {signedInSession ? (
             <SignedInAccountCard redirectTo={redirectTo} session={signedInSession} />
           ) : (
-            <LoginActions redirectTo={redirectTo} emailOtpEnabled={emailOtpEnabled} />
+            <LoginActions
+              redirectTo={redirectTo}
+              emailOtpEnabled={emailOtpEnabled}
+              loginHint={loginHint}
+            />
           )}
         </CardContent>
       </Card>
@@ -144,17 +155,20 @@ function SignedInAccountCard({
 function LoginActions({
   redirectTo,
   emailOtpEnabled,
+  loginHint,
 }: {
   redirectTo: string;
   emailOtpEnabled: boolean;
+  loginHint?: "email" | "google";
 }) {
-  const [emailMode, setEmailMode] = useState(false);
+  const [emailMode, setEmailMode] = useState(loginHint === "email" && emailOtpEnabled);
   const [isHydrated, setIsHydrated] = useState(false);
-  const googleSignIn = useMutation({
-    mutationFn: () =>
+  const consumedGoogleHint = useRef(false);
+  const { isPending: googleSignInPending, mutate: signInWithGoogle } = useMutation({
+    mutationFn: async () =>
       authClient.signIn.social({
         provider: "google",
-        callbackURL: redirectTo,
+        callbackURL: await getPostLoginRedirectUrl(redirectTo),
       }),
   });
 
@@ -162,8 +176,34 @@ function LoginActions({
     setIsHydrated(true);
   }, []);
 
+  useEffect(() => {
+    let googleHintAlreadyConsumed = false;
+    try {
+      googleHintAlreadyConsumed =
+        sessionStorage.getItem("iterate-auth-google-login-hint") === window.location.href;
+    } catch {
+      googleHintAlreadyConsumed = false;
+    }
+
+    if (
+      isHydrated &&
+      loginHint === "google" &&
+      !consumedGoogleHint.current &&
+      !googleHintAlreadyConsumed &&
+      !googleSignInPending
+    ) {
+      consumedGoogleHint.current = true;
+      try {
+        sessionStorage.setItem("iterate-auth-google-login-hint", window.location.href);
+      } catch {
+        // Ignore storage failures; the in-memory ref still prevents same-mount retries.
+      }
+      signInWithGoogle();
+    }
+  }, [googleSignInPending, isHydrated, loginHint, signInWithGoogle]);
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" data-hydrated={isHydrated}>
       {emailOtpEnabled ? (
         <EmailOtpSignIn
           redirectTo={redirectTo}
@@ -187,12 +227,12 @@ function LoginActions({
             className="w-full"
             variant="outline"
             size="lg"
-            disabled={googleSignIn.isPending || !isHydrated}
+            disabled={googleSignInPending || !isHydrated}
             data-testid="google-login-button"
-            onClick={() => googleSignIn.mutate()}
+            onClick={() => signInWithGoogle()}
           >
             <GoogleIcon />
-            {googleSignIn.isPending ? "Redirecting..." : "Continue with Google"}
+            {googleSignInPending ? "Redirecting..." : "Continue with Google"}
           </Button>
         </>
       ) : null}
@@ -255,14 +295,22 @@ function EmailOtpSignIn({
 
   return (
     <div className="space-y-3">
-      {!showExpandedForm ? (
+      {!showExpandedForm && !isHydrated ? (
+        <Button
+          className="w-full border-border bg-background text-foreground shadow-sm transition-colors"
+          variant="outline"
+          size="lg"
+          data-spinner="true"
+          disabled
+        >
+          Loading...
+        </Button>
+      ) : !showExpandedForm ? (
         <Button
           className="w-full border-border bg-background text-foreground shadow-sm transition-colors hover:bg-muted"
           variant="outline"
           size="lg"
           data-testid="email-login-button"
-          aria-disabled={!isHydrated}
-          disabled={!isHydrated}
           onClick={() => onExpandedChange(true)}
         >
           Continue with email

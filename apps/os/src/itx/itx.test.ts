@@ -18,6 +18,7 @@ import {
   type ItxStub,
   type ProvideCapabilityInput,
 } from "./itx.ts";
+import type { StreamRpc } from "~/domains/streams/engine/types.ts";
 
 const AI_ADDRESS: CapabilityAddress = {
   type: "rpc",
@@ -53,11 +54,14 @@ function fakeStream(seed: Array<{ type: string; payload: Record<string, unknown>
     events,
     stream: {
       append: async (args: { event: { type: string; payload: Record<string, unknown> } }) => {
-        return { offset: push(args.event).offset };
+        return push(args.event);
       },
+      appendBatch: async (args: {
+        events: Array<{ type: string; payload: Record<string, unknown> }>;
+      }) => args.events.map((event) => push(event)),
       getEvents: async (input: { afterOffset: number }) =>
         events.filter((event) => event.offset > input.afterOffset),
-    },
+    } as unknown as StreamRpc,
   };
 }
 
@@ -99,7 +103,7 @@ function makeItx(
   return new Itx({
     contextRef: input.contextRef ?? "prj_1:/",
     dial: input.dial ?? fakeDial().dial,
-    iterateContext: { stream: input.stream ?? fakeStream().stream },
+    stream: input.stream ?? fakeStream().stream,
     parentItx: () =>
       input.parent ? { from: input.parentFrom ?? "prj_1:/", stub: input.parent } : null,
     runScript: input.runScript,
@@ -285,7 +289,7 @@ describe("the stream is the only authority", () => {
       new Itx({
         contextRef: "prj_1:/agents/asdasdasd",
         dial,
-        iterateContext: { stream },
+        stream,
         parentItx: () => null,
         readState: async () => checkpoint,
         selfAddress: SELF_ADDRESS,

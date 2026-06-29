@@ -83,7 +83,12 @@ describe("dynamic path proxy", () => {
   it("hides reserved path segments from function-backed path proxies", () => {
     const proxy = createInvokeCapabilityPathProxy({
       invokeCapability: () => "unreachable",
-    }) as ReservedProbe;
+    }) as {
+      alpha: {
+        then: unknown;
+      };
+      then: unknown;
+    };
 
     expect(proxy.then).toBeUndefined();
     expect(proxy.alpha.then).toBeUndefined();
@@ -103,11 +108,4 @@ type PlainTarget = {
       sayHello(name: string): string;
     };
   };
-};
-
-type ReservedProbe = {
-  alpha: {
-    then: unknown;
-  };
-  then: unknown;
 };

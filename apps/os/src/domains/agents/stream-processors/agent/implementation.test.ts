@@ -7,11 +7,12 @@ import { getInitialProcessorState } from "@iterate-com/shared/streams/stream-pro
 import type { StreamEvent, StreamEventInput } from "@iterate-com/shared/streams/stream-event";
 import { AgentProcessorContract, type AgentState } from "./contract.ts";
 import { AgentProcessor } from "./implementation.ts";
-import type {
-  StreamProcessorIterateContext,
-  StreamProcessorSnapshot,
-} from "~/domains/streams/engine/stream-processor.ts";
-import { AGENT_CHAT_CAPABILITY_INSTRUCTIONS } from "~/domains/agents/agent-prompt-guidance.ts";
+import type { StreamProcessorSnapshot } from "~/domains/streams/engine/stream-processor.ts";
+import type { StreamRpc } from "~/domains/streams/engine/types.ts";
+import {
+  AGENT_CHAT_CAPABILITY_INSTRUCTIONS,
+  AGENT_WORKSPACE_CAPABILITY_INSTRUCTIONS,
+} from "~/domains/agents/agent-prompt-guidance.ts";
 
 describe("AgentProcessor", () => {
   afterEach(() => {
@@ -117,6 +118,43 @@ describe("AgentProcessor", () => {
         payload: { systemPrompt: "Use the project tools." },
       }),
     ]);
+  });
+
+  it("uses config-updated system prompts for inputs delivered in the same batch", async () => {
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({ stream });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/agent/config-updated",
+          payload: { systemPrompt: "Onboard the project from ONBOARDING.md." },
+          offset: 10,
+        }),
+        providerSelectedEvent({ offset: 11 }),
+        agentEvent({
+          type: "events.iterate.com/agent/input-added",
+          payload: {
+            content: "Start onboarding now.",
+            llmRequestPolicy: { behaviour: "after-current-request" },
+          },
+          offset: 12,
+        }),
+      ],
+      streamMaxOffset: 12,
+    });
+
+    await expect(processor.snapshot()).resolves.toMatchObject({
+      state: { systemPrompt: "Onboard the project from ONBOARDING.md." },
+    });
+    expect(appended).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "events.iterate.com/agent/llm-request-scheduled",
+          idempotencyKey: "agent/llm-request-scheduled@12",
+        }),
+      ]),
+    );
   });
 
   it("does not render received chat messages on the agents root stream", async () => {
@@ -499,6 +537,34 @@ describe("AgentProcessor", () => {
     expect(payload.content).toContain("offset 44");
   });
 
+  it("renders workspace capability instructions with the prepared project repo path", async () => {
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({ stream });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/itx/capability-provided",
+          payload: {
+            path: ["workspace"],
+            meta: { instructions: AGENT_WORKSPACE_CAPABILITY_INSTRUCTIONS },
+          },
+          offset: 45,
+        }),
+      ],
+      streamMaxOffset: 45,
+    });
+
+    const payload = appended[1]?.payload as { content: string };
+    expect(payload.content).toContain("itx.workspace.readFile");
+    expect(payload.content).toContain("project repo is already cloned at /project");
+    expect(payload.content).toContain("/project/ONBOARDING.md");
+    expect(payload.content).toContain("git dir /project");
+    expect(payload.content).toContain("Do not use unannounced APIs");
+    expect(payload.content).toContain("itx.repo");
+    expect(payload.content).toContain("probing missing itx capabilities can throw");
+  });
+
   it("recovers a scheduled request whose debounce timer died with a previous incarnation", async () => {
     const { stream, appended } = memoryStream();
     const scheduledEvent = agentEvent({
@@ -729,9 +795,12 @@ describe("AgentProcessor", () => {
   it("retries the handoff append instead of dropping the turn when it fails", async () => {
     vi.useFakeTimers();
     const { stream, appended } = memoryStream();
-    const originalAppend = stream.append.bind(stream);
+    const mutableStream = stream as unknown as {
+      append(args: { event: StreamEventInput }): unknown;
+    };
+    const originalAppend = mutableStream.append.bind(mutableStream);
     let failNextRequestAppend = true;
-    stream.append = (args: Parameters<typeof stream.append>[0]) => {
+    mutableStream.append = (args: { event: StreamEventInput }) => {
       const event = args.event as { type: string };
       if (
         failNextRequestAppend &&
@@ -836,14 +905,14 @@ function initialState(): AgentState {
 }
 
 function newAgentProcessor(args: {
-  stream: StreamProcessorIterateContext["stream"];
+  stream: StreamRpc;
   isAgentsRootStream?: () => boolean;
   snapshot?: StreamProcessorSnapshot<AgentState>;
   readStreamEvents?: () => Promise<StreamEvent[]>;
   setupAgentRuntime?: () => Promise<unknown>;
 }) {
   return new AgentProcessor({
-    iterateContext: { stream: args.stream },
+    stream: args.stream,
     isAgentsRootStream: args.isAgentsRootStream ?? (() => false),
     readState: () => args.snapshot,
     readStreamEvents: args.readStreamEvents ?? (async () => []),
@@ -854,8 +923,8 @@ function newAgentProcessor(args: {
 function memoryStream() {
   let nextOffset = 100;
   const appended: StreamEventInput[] = [];
-  const stream: StreamProcessorIterateContext["stream"] = {
-    append: (args) => {
+  const stream = {
+    append: (args: { event: StreamEventInput }) => {
       appended.push(args.event);
       const committed: StreamEvent = {
         ...args.event,
@@ -864,7 +933,7 @@ function memoryStream() {
       };
       return committed;
     },
-    appendBatch: (args) =>
+    appendBatch: (args: { events: StreamEventInput[] }) =>
       args.events.map((input) => {
         appended.push(input);
         const committed: StreamEvent = {
@@ -874,7 +943,7 @@ function memoryStream() {
         };
         return committed;
       }),
-  };
+  } as unknown as StreamRpc;
   return { stream, appended };
 }
 

@@ -4,16 +4,6 @@ import { env, platform, stderr, stdout } from "node:process";
 import { fileURLToPath } from "node:url";
 import { slugify } from "../../slugify.ts";
 
-type CommandOptions = {
-  readonly env?: Record<string, string>;
-  readonly allowFailure?: boolean;
-};
-
-type DeploymentOutput = {
-  readonly url?: string;
-  readonly routes?: readonly string[];
-};
-
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const stage = env.ALCHEMY_STAGE ?? slugify(`do-utils-e2e-${Date.now().toString(36)}`);
 const alchemyEntrypoint = "./src/durable-object-utils/e2e/alchemy.run.ts";
@@ -67,6 +57,11 @@ if (failed) {
   process.exitCode = 1;
 }
 
+type CommandOptions = {
+  readonly env?: Record<string, string>;
+  readonly allowFailure?: boolean;
+};
+
 function run(command: string, args: readonly string[], options: CommandOptions = {}): string {
   stdout.write(`$ ${command} ${args.join(" ")}\n`);
 
@@ -111,6 +106,11 @@ function getBaseUrl(output: string): string {
     "Alchemy deployment did not report a worker URL. Set DURABLE_OBJECT_UTILS_E2E_WORKER_ROUTES to a hostname route or enable workers.dev for the account.",
   );
 }
+
+type DeploymentOutput = {
+  readonly url?: string;
+  readonly routes?: readonly string[];
+};
 
 function parseDeploymentOutput(output: string): DeploymentOutput {
   const jsonLine = output

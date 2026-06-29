@@ -30,15 +30,13 @@ const FRIENDLY_RENDERERS: Record<string, (payload: Record<string, unknown>) => s
   "events.iterate.com/itx/context-created": (p) => `context created: ${p.name ?? ""}`,
 };
 
-type TailStatus = "connecting" | "live" | "error";
-
 export function ItxActivityTail(_props: { projectId: string }) {
   // The project layout route wraps this in <ItxProvider projectId={slug}>, so
   // useItxEffect's injected handle is THIS project's shared socket — the projectId
   // prop is no longer needed to address the connection.
   const [raw, setRaw] = useState(false);
   const [events, setEvents] = useState<readonly StreamEvent[]>([]);
-  const [status, setStatus] = useState<TailStatus>("connecting");
+  const [status, setStatus] = useState<"connecting" | "live" | "error">("connecting");
   const [error, setError] = useState<string>();
 
   useItxEffect(async (itx) => {

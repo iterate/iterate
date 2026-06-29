@@ -4,7 +4,7 @@
  * itx resolves loopback capabilities through `ctx.exports` (dial.ts), and
  * `ctx.exports` only sees classes exported from the *same* worker script. In
  * the per-DO worker topology (docs/worker-topology.md) several workers host
- * dials — project, agent, itx-context, mcp, and the app worker — so each of
+ * dials — project, agent, itx-context, and the app worker — so each of
  * their entry modules re-exports this module verbatim. One list, identical
  * `ctx.exports` everywhere, no per-worker drift.
  *

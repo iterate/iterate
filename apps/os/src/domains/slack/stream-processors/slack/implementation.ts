@@ -10,23 +10,29 @@ import {
 } from "@iterate-com/shared/streams/stream-processors";
 import type { StreamEventInput } from "@iterate-com/shared/streams/stream-event";
 import { SlackProcessorContract, type SlackProcessorState } from "./contract.ts";
-import { StreamProcessor } from "~/domains/streams/engine/stream-processor.ts";
+import {
+  StreamProcessor,
+  type StreamProcessorDeps,
+} from "~/domains/streams/engine/stream-processor.ts";
 export { SlackProcessorContract } from "./contract.ts";
 
 export type SlackProcessorContract = typeof SlackProcessorContract;
 
-export type SlackProcessorDeps = {
-  /**
-   * Acknowledge a routed webhook to the source platform (e.g. the 👀
-   * reaction) as soon as the router has decided where it goes, instead of
-   * waiting for the routed stream's own processors to wake — several Durable
-   * Object cold starts later on a fresh thread. The host owns filtering
-   * (which webhooks deserve an ack) and delivery; the router only reports
-   * "this webhook is being forwarded". Best-effort: failures must not affect
-   * routing.
-   */
-  acknowledgeRoutedWebhook?(input: { payload: unknown }): Promise<void> | void;
-};
+export type SlackProcessorDeps = StreamProcessorDeps<
+  SlackProcessorContract,
+  {
+    /**
+     * Acknowledge a routed webhook to the source platform (e.g. the 👀
+     * reaction) as soon as the router has decided where it goes, instead of
+     * waiting for the routed stream's own processors to wake — several Durable
+     * Object cold starts later on a fresh thread. The host owns filtering
+     * (which webhooks deserve an ack) and delivery; the router only reports
+     * "this webhook is being forwarded". Best-effort: failures must not affect
+     * routing.
+     */
+    acknowledgeRoutedWebhook?(input: { payload: unknown }): Promise<void> | void;
+  }
+>;
 
 export class SlackProcessor extends StreamProcessor<SlackProcessorContract, SlackProcessorDeps> {
   readonly contract = SlackProcessorContract;
@@ -132,15 +138,14 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
       // message — which is exactly the prd outage of 2026-06-15: the first
       // message on a freshly-created project hit a cold cross-worker
       // StreamsCapability RPC that threw after ~4s, the forward was dropped, and
-      // the agent never saw it (the thread stream was created by the prewarm
-      // below but never received the webhook). The ack/prewarm above stay
-      // best-effort and remain on `runInBackground`.
+      // the agent never saw it. The source-platform ack above stays
+      // best-effort and remains on `runInBackground`.
       //
       // Every append carries an idempotency key derived from the source event,
       // so the replay dedupes instead of double-forwarding.
       args.blockProcessorWhile(async () => {
-        await this.ctx.stream.append({ event: routeEvent });
-        await this.ctx.stream.appendBatch({
+        await this.deps.stream.append({ event: routeEvent });
+        await this.deps.stream.appendBatch({
           streamPath,
           events: [routeEvent, forwardedWebhookEvent],
         });
@@ -159,7 +164,7 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
     // Block the checkpoint so a failed append replays the webhook instead of
     // dropping it; the idempotency key makes the replay a no-op if it landed.
     args.blockProcessorWhile(async () => {
-      await this.ctx.stream.append({ streamPath, event: forwardedWebhookEvent });
+      await this.deps.stream.append({ streamPath, event: forwardedWebhookEvent });
     });
   }
 }

@@ -218,7 +218,7 @@ const RAW_EVENTS_RUNTIME: BrowserProcessorConfig = {
       subscriptionKey,
     });
     return new BrowserRawEventsProcessor({
-      iterateContext: { stream },
+      stream,
       sql,
       readState: storage.readState,
       writeState: storage.writeState,
@@ -1429,7 +1429,7 @@ function StreamControlTool({
               subscriptionKey,
               subscriber: durableObjectProcessorSubscriber({
                 bindingName: "STREAM_PROCESSOR_RUNNER",
-                durableObjectName: `${core.path}:${subscriptionKey}`,
+                durableObjectName: `${DEFAULT_STREAM_PROJECT_ID}:${core.path}:${subscriptionKey}`,
                 processorName: "circuit-breaker",
               }),
             },

@@ -10,7 +10,7 @@ a _deployed_ preview against _production_ auth.
 
 - **Deployed preview** (`os.iterate-preview-N.com`): uses production auth. No
   test OTP — you sign in as a real allowlisted user. Best for final proof.
-- **Normal OS local dev**: `pnpm dev` or `pnpm cli dev start --detach` runs OS
+- **Normal OS local dev**: `pnpm dev` or `pnpm dev start --detach` runs OS
   on a random localhost port and uses shared dev auth at
   `auth.iterate-dev.com`.
 - **Local OS + Auth stack** (this doc): `pnpm dev-all` runs Auth on
