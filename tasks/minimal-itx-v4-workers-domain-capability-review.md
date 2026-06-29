@@ -896,9 +896,12 @@ Acceptance criteria:
 
 ### Phase 1: Make the current model honest and safer
 
-1. Add `enable_ctx_exports` to `wrangler.jsonc`.
+1. Add `enable_ctx_exports` to `wrangler.jsonc`. Obsolete for this app:
+   `compatibility_date` is `2026-05-01`, and workerd rejects the flag because
+   `ctx.exports` is already enabled by default after `2025-11-17`.
 2. Set `globalOutbound: null` for dynamic workers by default.
-3. Replace `hashString()` with SHA-256/stable source hashing.
+3. Replace `hashString()` with SHA-256/stable source hashing. This has been
+   done.
 4. Move `props` to `StatelessWorkerRef`.
 5. Keep scoped ITX dynamic-worker binding separate from unauthenticated ITX:
    - dynamic workers get `env.ITX.get()`;

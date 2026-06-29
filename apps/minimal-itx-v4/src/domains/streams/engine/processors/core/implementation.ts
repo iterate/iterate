@@ -14,8 +14,13 @@
 
 import type { StreamEvent, StreamEventInput } from "../../../types.ts";
 import type { StreamDurableObject } from "../../../stream-durable-object.ts";
+import { StreamSubscriptionRpcTarget } from "../../../subscription-handle.ts";
 import { getEventSchema } from "../../shared/stream-processors.ts";
-import type { ProcessEventBatch, ProcessorRuntimeState } from "../../types.ts";
+import type {
+  ProcessEventBatch,
+  ProcessorRuntimeState,
+  StreamSubscriptionHandle,
+} from "../../types.ts";
 import {
   retainGetProcessorRuntimeState,
   retainProcessEventBatch,
@@ -618,7 +623,7 @@ export class CoreStreamProcessor {
     events?: boolean;
     subscriber?: LiveStreamSubscriberDescriptor;
     onClose?: () => void;
-  }): { subscriptionKey: string; streamMaxOffset: number; unsubscribe(): void } {
+  }): StreamSubscriptionHandle {
     const subscriptionKey = args.subscriptionKey.trim();
     if (subscriptionKey.length === 0) throw new Error("subscriptionKey must not be blank.");
     // Replacing any existing connection for this key.
@@ -786,11 +791,11 @@ export class CoreStreamProcessor {
     });
     connection.wake();
 
-    return {
+    return new StreamSubscriptionRpcTarget({
+      close: () => connection.close("unsubscribed"),
       subscriptionKey,
       streamMaxOffset: this.#currentState().maxOffset,
-      unsubscribe: () => connection.close("unsubscribed"),
-    };
+    });
   }
 
   /**

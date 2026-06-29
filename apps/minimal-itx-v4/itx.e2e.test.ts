@@ -179,10 +179,6 @@ async function waitForCondition(
   throw new Error(`Timed out waiting for ${opts.description}`);
 }
 
-function disposeRpcResult(result: unknown): void {
-  (result as Partial<Disposable>)[Symbol.dispose]?.();
-}
-
 // These are hand written tests - they MUST pass
 describe("minimal itx v4", () => {
   test("Unauthenticated itx can't do anything", async () => {
@@ -291,7 +287,7 @@ describe("minimal itx v4", () => {
 
     const getSecret = async () => "bananas";
 
-    const provision = await project.provideCapability({
+    using provision = await project.provideCapability({
       path: ["someMethodInTestRunner"],
       capability: {
         type: "live",
@@ -300,7 +296,6 @@ describe("minimal itx v4", () => {
         },
       },
     });
-    const { revoke } = provision;
 
     // @ts-expect-error - TODO maybe some niceties
     expect(await project.someMethodInTestRunner.getSecret(getSecret)).toBe("bananas");
@@ -323,7 +318,7 @@ describe("minimal itx v4", () => {
       await newConnectionProject.someMethodInTestRunner.getSecret(getSecret),
     ).toBe("bananas");
 
-    await revoke();
+    await provision.revoke();
 
     // @ts-expect-error
     await expect(project.someMethodInTestRunner.getSecret(getSecret)).rejects.toThrow(
@@ -333,7 +328,6 @@ describe("minimal itx v4", () => {
       // @ts-expect-error - TODO maybe some niceties
       newConnectionProject.someMethodInTestRunner.getSecret(getSecret),
     ).rejects.toThrow(/no capability "someMethodInTestRunner.getSecret"/);
-    disposeRpcResult(provision);
   });
 
   test("Project repos, workers, runScript, and dynamic worker refs compose", async () => {
@@ -416,7 +410,7 @@ describe("minimal itx v4", () => {
       source: "committed-worker",
     });
 
-    const explicitWorker = project.workers.get({
+    using explicitWorker = project.workers.get({
       path: "/",
       source: {
         repoPath: "/",
@@ -426,15 +420,13 @@ describe("minimal itx v4", () => {
       type: "stateless",
     }) as unknown as {
       someMethod(): Promise<{ projectId: string; source: string }>;
-      [Symbol.dispose]?(): void;
-    };
+    } & Disposable;
     expect(await explicitWorker.someMethod()).toEqual({
       projectId: description.projectId,
       source: "committed-worker",
     });
-    disposeRpcResult(explicitWorker);
 
-    const directDb = project.workers.get({
+    using directDb = project.workers.get({
       className: "DatabaseDurableObject",
       durableWorkerKey: `direct-db-${crypto.randomUUID()}`,
       path: "/",
@@ -446,25 +438,21 @@ describe("minimal itx v4", () => {
       type: "stateful",
     }) as unknown as {
       sql(query: string, ...bindings: unknown[]): Promise<Array<Record<string, unknown>>>;
-      [Symbol.dispose]?(): void;
-    };
+    } & Disposable;
     await directDb.sql("CREATE TABLE messages (body TEXT)");
     await directDb.sql("INSERT INTO messages VALUES (?)", "hello");
     expect(await directDb.sql("SELECT body FROM messages")).toEqual([{ body: "hello" }]);
-    disposeRpcResult(directDb);
-
-    disposeRpcResult(
-      await project.provideCapability({
-        path: ["probe"],
-        capability: {
-          type: "worker",
-          workerRef: {
-            entrypoint: "ProbeEntrypoint",
-            path: "/",
-            source: {
-              mainModule: "probe.js",
-              modules: {
-                "probe.js": `
+    using _probeProvision = await project.provideCapability({
+      path: ["probe"],
+      capability: {
+        type: "worker",
+        workerRef: {
+          entrypoint: "ProbeEntrypoint",
+          path: "/",
+          source: {
+            mainModule: "probe.js",
+            modules: {
+              "probe.js": `
                 import { WorkerEntrypoint } from "cloudflare:workers";
 
                 export class ProbeEntrypoint extends WorkerEntrypoint {
@@ -477,85 +465,78 @@ describe("minimal itx v4", () => {
                   }
                 }
               `,
-              },
-              type: "inline",
             },
-            type: "stateless",
+            type: "inline",
           },
+          type: "stateless",
         },
-      }),
-    );
+      },
+    });
     // @ts-expect-error - dynamic capability root
     expect(await project.probe.inspect()).toEqual({
       repo: `repo ${description.projectId}:/`,
     });
 
-    disposeRpcResult(
-      await project.provideCapability({
-        path: ["projectWorkerRef"],
-        capability: {
-          type: "worker",
-          workerRef: {
-            path: "/",
-            source: {
-              repoPath: "/",
-              sourcePath: "worker.js",
-              type: "repo",
-            },
-            type: "stateless",
+    using _projectWorkerRefProvision = await project.provideCapability({
+      path: ["projectWorkerRef"],
+      capability: {
+        type: "worker",
+        workerRef: {
+          path: "/",
+          source: {
+            repoPath: "/",
+            sourcePath: "worker.js",
+            type: "repo",
           },
+          type: "stateless",
         },
-      }),
-    );
+      },
+    });
     // @ts-expect-error - dynamic capability root
     const workerRefResponse = await project.projectWorkerRef.fetch(
       new Request("https://example.com/ref"),
     );
     expect(await workerRefResponse.text()).toBe("updated project worker fetched /ref");
 
-    disposeRpcResult(
-      await project.provideCapability({
-        path: ["counterFacet"],
-        capability: {
-          type: "worker",
-          workerRef: {
-            className: "CounterDurableObject",
-            durableWorkerKey: `counter-facet-${crypto.randomUUID()}`,
-            path: "/",
-            source: {
-              repoPath: "/",
-              sourcePath: "worker.js",
-              type: "repo",
-            },
-            type: "stateful",
+    using _counterFacetProvision = await project.provideCapability({
+      path: ["counterFacet"],
+      capability: {
+        type: "worker",
+        workerRef: {
+          className: "CounterDurableObject",
+          durableWorkerKey: `counter-facet-${crypto.randomUUID()}`,
+          path: "/",
+          source: {
+            repoPath: "/",
+            sourcePath: "worker.js",
+            type: "repo",
           },
+          type: "stateful",
         },
-      }),
-    );
+      },
+    });
     // @ts-expect-error - dynamic capability root
     expect(await project.counterFacet.increment()).toBe(1);
     // @ts-expect-error - dynamic capability root
     expect(await project.counterFacet.current()).toBe(1);
 
-    disposeRpcResult(
-      await project.provideCapability({
-        path: ["db"],
-        capability: {
-          type: "worker",
-          workerRef: {
-            className: "DatabaseDurableObject",
-            durableWorkerKey: `mounted-db-${crypto.randomUUID()}`,
-            path: "/",
-            source: {
-              repoPath: "/",
-              sourcePath: "worker.js",
-              type: "repo",
-            },
-            type: "stateful",
+    using _dbProvision = await project.provideCapability({
+      path: ["db"],
+      capability: {
+        type: "worker",
+        workerRef: {
+          className: "DatabaseDurableObject",
+          durableWorkerKey: `mounted-db-${crypto.randomUUID()}`,
+          path: "/",
+          source: {
+            repoPath: "/",
+            sourcePath: "worker.js",
+            type: "repo",
           },
+          type: "stateful",
         },
-      }),
-    );
+      },
+    });
     // @ts-expect-error - dynamic database capability mounted by this test.
     await project.db.sql("CREATE TABLE records (value TEXT)");
     // @ts-expect-error - dynamic database capability mounted by this test.
@@ -595,21 +576,19 @@ describe("minimal itx v4", () => {
       type: "inline",
     } as const;
 
-    disposeRpcResult(
-      await project.provideCapability({
-        path: ["statelessRouter"],
-        capability: {
-          flattenNestedPath: true,
-          type: "worker",
-          workerRef: {
-            entrypoint: "RouterEntrypoint",
-            path: "/",
-            source,
-            type: "stateless",
-          },
+    using _statelessRouterProvision = await project.provideCapability({
+      path: ["statelessRouter"],
+      capability: {
+        flattenNestedPath: true,
+        type: "worker",
+        workerRef: {
+          entrypoint: "RouterEntrypoint",
+          path: "/",
+          source,
+          type: "stateless",
         },
-      }),
-    );
+      },
+    });
     // @ts-expect-error - dynamic capability root
     expect(await project.statelessRouter.tools.echo("hello")).toEqual({
       args: ["hello"],
@@ -625,22 +604,20 @@ describe("minimal itx v4", () => {
       path: [],
     });
 
-    disposeRpcResult(
-      await project.provideCapability({
-        path: ["statefulRouter"],
-        capability: {
-          flattenNestedPath: true,
-          type: "worker",
-          workerRef: {
-            className: "RouterDurableObject",
-            durableWorkerKey: `router-${crypto.randomUUID()}`,
-            path: "/",
-            source,
-            type: "stateful",
-          },
+    using _statefulRouterProvision = await project.provideCapability({
+      path: ["statefulRouter"],
+      capability: {
+        flattenNestedPath: true,
+        type: "worker",
+        workerRef: {
+          className: "RouterDurableObject",
+          durableWorkerKey: `router-${crypto.randomUUID()}`,
+          path: "/",
+          source,
+          type: "stateful",
         },
-      }),
-    );
+      },
+    });
     // @ts-expect-error - dynamic capability root
     expect(await project.statefulRouter.tools.echo("hello")).toEqual({
       args: ["hello"],
@@ -777,47 +754,39 @@ describe("minimal itx v4", () => {
       type: "stateful",
     };
 
-    disposeRpcResult(
-      await project.provideCapability({
-        path: ["repoCounter"],
-        capability: {
-          type: "worker",
-          workerRef: {
-            className: "RepoProjectCounterDurableObject",
-            durableWorkerKey: `repo-project-counter-${crypto.randomUUID()}`,
-            path: "/",
-            source: repoWorkerSource,
-            type: "stateful",
-          },
+    using _repoCounterProvision = await project.provideCapability({
+      path: ["repoCounter"],
+      capability: {
+        type: "worker",
+        workerRef: {
+          className: "RepoProjectCounterDurableObject",
+          durableWorkerKey: `repo-project-counter-${crypto.randomUUID()}`,
+          path: "/",
+          source: repoWorkerSource,
+          type: "stateful",
         },
-      }),
-    );
-    disposeRpcResult(
-      await project.provideCapability({
-        path: ["inlineProject"],
-        capability: { type: "worker", workerRef: inlineProjectStateless },
-      }),
-    );
-    disposeRpcResult(
-      await agent.provideCapability({
-        path: ["repoAgent"],
-        capability: {
-          type: "worker",
-          workerRef: {
-            entrypoint: "RepoAgentEntrypoint",
-            path: agentPath,
-            source: repoWorkerSource,
-            type: "stateless",
-          },
+      },
+    });
+    using _inlineProjectProvision = await project.provideCapability({
+      path: ["inlineProject"],
+      capability: { type: "worker", workerRef: inlineProjectStateless },
+    });
+    using _repoAgentProvision = await agent.provideCapability({
+      path: ["repoAgent"],
+      capability: {
+        type: "worker",
+        workerRef: {
+          entrypoint: "RepoAgentEntrypoint",
+          path: agentPath,
+          source: repoWorkerSource,
+          type: "stateless",
         },
-      }),
-    );
-    disposeRpcResult(
-      await agent.provideCapability({
-        path: ["inlineCounter"],
-        capability: { type: "worker", workerRef: inlineAgentStateful },
-      }),
-    );
+      },
+    });
+    using _inlineCounterProvision = await agent.provideCapability({
+      path: ["inlineCounter"],
+      capability: { type: "worker", workerRef: inlineAgentStateful },
+    });
 
     const projectCapabilities = project as typeof project & {
       inlineProject: {
@@ -879,19 +848,17 @@ describe("minimal itx v4", () => {
     const agentPath = `/agents/project-tool-${crypto.randomUUID()}`;
     using agent = project.agents.get(agentPath);
 
-    disposeRpcResult(
-      await project.provideCapability({
-        path: ["projectTool"],
-        capability: {
-          type: "live",
-          target: {
-            format(input: { text: string }) {
-              return `project tool saw ${input.text}`;
-            },
+    using _projectToolProvision = await project.provideCapability({
+      path: ["projectTool"],
+      capability: {
+        type: "live",
+        target: {
+          format(input: { text: string }) {
+            return `project tool saw ${input.text}`;
           },
         },
-      }),
-    );
+      },
+    });
 
     const reply = await agent.ask({ message: "hello agent" });
     expect(reply).toMatchObject({
@@ -954,18 +921,17 @@ describe("minimal itx v4", () => {
     using agent = project.agents.get(agentPath);
     const durableWorkerKey = `agent-counter-${crypto.randomUUID()}`;
 
-    disposeRpcResult(
-      await agent.provideCapability({
-        path: ["agentProbe"],
-        capability: {
-          type: "worker",
-          workerRef: {
-            entrypoint: "AgentProbeEntrypoint",
-            path: agentPath,
-            source: {
-              mainModule: "agent-probe.js",
-              modules: {
-                "agent-probe.js": `
+    using _agentProbeProvision = await agent.provideCapability({
+      path: ["agentProbe"],
+      capability: {
+        type: "worker",
+        workerRef: {
+          entrypoint: "AgentProbeEntrypoint",
+          path: agentPath,
+          source: {
+            mainModule: "agent-probe.js",
+            modules: {
+              "agent-probe.js": `
                 import { WorkerEntrypoint } from "cloudflare:workers";
 
                 export class AgentProbeEntrypoint extends WorkerEntrypoint {
@@ -979,33 +945,30 @@ describe("minimal itx v4", () => {
                   }
                 }
               `,
-              },
-              type: "inline",
             },
-            type: "stateless",
+            type: "inline",
           },
+          type: "stateless",
         },
-      }),
-    );
-    disposeRpcResult(
-      await agent.provideCapability({
-        path: ["agentCounter"],
-        capability: {
-          type: "worker",
-          workerRef: {
-            className: "CounterDurableObject",
-            durableWorkerKey,
-            path: agentPath,
-            source: {
-              repoPath: "/",
-              sourcePath: "worker.js",
-              type: "repo",
-            },
-            type: "stateful",
+      },
+    });
+    using _agentCounterProvision = await agent.provideCapability({
+      path: ["agentCounter"],
+      capability: {
+        type: "worker",
+        workerRef: {
+          className: "CounterDurableObject",
+          durableWorkerKey,
+          path: agentPath,
+          source: {
+            repoPath: "/",
+            sourcePath: "worker.js",
+            type: "repo",
           },
+          type: "stateful",
         },
-      }),
-    );
+      },
+    });
 
     await expect(
       // @ts-expect-error - proves agent-provided capabilities are not mounted on the project.
@@ -1102,18 +1065,14 @@ describe("minimal itx v4", () => {
       type: "stateless" as const,
     });
 
-    disposeRpcResult(
-      await project.provideCapability({
-        path: ["scopeProbe"],
-        capability: { type: "worker", workerRef: scopeProbeWorkerRef("/") },
-      }),
-    );
-    disposeRpcResult(
-      await agent.provideCapability({
-        path: ["scopeProbe"],
-        capability: { type: "worker", workerRef: scopeProbeWorkerRef(agentPath) },
-      }),
-    );
+    using _projectScopeProbeProvision = await project.provideCapability({
+      path: ["scopeProbe"],
+      capability: { type: "worker", workerRef: scopeProbeWorkerRef("/") },
+    });
+    using _agentScopeProbeProvision = await agent.provideCapability({
+      path: ["scopeProbe"],
+      capability: { type: "worker", workerRef: scopeProbeWorkerRef(agentPath) },
+    });
 
     // @ts-expect-error - dynamic project capability mounted by this test.
     expect(await project.scopeProbe.projectScope()).toEqual({ kind: "project", projectId });
@@ -1258,7 +1217,7 @@ describe("minimal itx v4", () => {
     });
 
     const initial = await processor.snapshot();
-    const subscription = await outputStream.subscribe({
+    using subscription = await outputStream.subscribe({
       eventTypes: [PROJECT_WORKER_FORWARDED_EVENT_TYPE],
       processEventBatch: (batch) => processor.ingest(batch),
       replayAfterOffset: initial.offset,
@@ -1317,7 +1276,7 @@ describe("minimal itx v4", () => {
     using stream = project.streams.get(streamPath);
     const delivered: number[] = [];
 
-    const subscription = await stream.subscribe({
+    using subscription = await stream.subscribe({
       eventTypes: [eventType],
       processEventBatch: (batch) => {
         for (const event of batch.events) {
@@ -1331,12 +1290,13 @@ describe("minimal itx v4", () => {
       },
       subscriptionKey: `capnweb-callback-${marker}`,
     });
-    expect(subscription.subscriptionKey).toBe(`capnweb-callback-${marker}`);
+    const openedSubscriptionKey = await subscription.subscriptionKey;
+    expect(openedSubscriptionKey).toBe(`capnweb-callback-${marker}`);
 
     await waitForCondition(
       async () => {
         const runtimeState = await stream.runtimeState();
-        return runtimeState.runtime.connections[subscription.subscriptionKey] !== undefined;
+        return runtimeState.runtime.connections[openedSubscriptionKey] !== undefined;
       },
       { description: "stream runtime to show the direct Cap'n Web callback connection" },
     );
@@ -1357,11 +1317,10 @@ describe("minimal itx v4", () => {
     expect(delivered).toEqual([1, 2]);
 
     await subscription.unsubscribe();
-    (subscription as Partial<Disposable>)[Symbol.dispose]?.();
     await waitForCondition(
       async () => {
         const runtimeState = await stream.runtimeState();
-        return runtimeState.runtime.connections[subscription.subscriptionKey] === undefined;
+        return runtimeState.runtime.connections[openedSubscriptionKey] === undefined;
       },
       { description: "stream runtime to remove the direct Cap'n Web callback connection" },
     );
@@ -1389,7 +1348,7 @@ describe("minimal itx v4", () => {
     const first: number[] = [];
     const second: number[] = [];
 
-    const firstSubscription = await stream.subscribe({
+    using firstSubscription = await stream.subscribe({
       eventTypes: [eventType],
       processEventBatch: (batch) => {
         first.push(
@@ -1400,7 +1359,7 @@ describe("minimal itx v4", () => {
       },
       subscriptionKey,
     });
-    const secondSubscription = await stream.subscribe({
+    using secondSubscription = await stream.subscribe({
       eventTypes: [eventType],
       processEventBatch: (batch) => {
         second.push(
@@ -1411,8 +1370,8 @@ describe("minimal itx v4", () => {
       },
       subscriptionKey,
     });
-    expect(firstSubscription.subscriptionKey).toBe(subscriptionKey);
-    expect(secondSubscription.subscriptionKey).toBe(subscriptionKey);
+    expect(await firstSubscription.subscriptionKey).toBe(subscriptionKey);
+    expect(await secondSubscription.subscriptionKey).toBe(subscriptionKey);
 
     await firstSubscription.unsubscribe();
     await stream.append({
@@ -1427,8 +1386,6 @@ describe("minimal itx v4", () => {
     expect(second).toEqual([1]);
 
     await secondSubscription.unsubscribe();
-    (firstSubscription as Partial<Disposable>)[Symbol.dispose]?.();
-    (secondSubscription as Partial<Disposable>)[Symbol.dispose]?.();
   });
 
   test("Cap'n Web nested subscriber processor callbacks survive the stateless Worker proxy", async () => {
@@ -1443,7 +1400,7 @@ describe("minimal itx v4", () => {
     });
     using project = itx.projects.create({ slug: `capnweb-subscribe-nested-${marker}` });
     using stream = project.streams.get(streamPath);
-    const subscription = await stream.subscribe({
+    using subscription = await stream.subscribe({
       processEventBatch: () => {},
       subscriber: {
         description: "minimal-itx-v4 e2e nested subscriber callback forwarding probe",
@@ -1474,7 +1431,6 @@ describe("minimal itx v4", () => {
     );
 
     await subscription.unsubscribe();
-    (subscription as Partial<Disposable>)[Symbol.dispose]?.();
   });
 
   test("Nested plain-object live capability members survive after provideCapability returns", async () => {
@@ -1488,21 +1444,19 @@ describe("minimal itx v4", () => {
     using project = providerItx.projects.create({ slug: `nested-live-${marker}` });
     const { projectId } = await project.describe();
 
-    disposeRpcResult(
-      await project.provideCapability({
-        path: ["tools"],
-        capability: {
-          type: "live",
-          target: {
-            math: {
-              add(a: number, b: number) {
-                return { marker, sum: a + b };
-              },
+    using _toolsProvision = await project.provideCapability({
+      path: ["tools"],
+      capability: {
+        type: "live",
+        target: {
+          math: {
+            add(a: number, b: number) {
+              return { marker, sum: a + b };
             },
           },
         },
-      }),
-    );
+      },
+    });
 
     using callerSession = withItxSession();
     using callerItx = callerSession.authenticate({
@@ -1530,15 +1484,13 @@ describe("minimal itx v4", () => {
     using project = providerItx.projects.create({ slug: `bare-function-live-${marker}` });
     const { projectId } = await project.describe();
 
-    disposeRpcResult(
-      await project.provideCapability({
-        path: ["add"],
-        capability: {
-          type: "live",
-          target: (a: number, b: number) => ({ marker, sum: a + b }),
-        },
-      }),
-    );
+    using _addProvision = await project.provideCapability({
+      path: ["add"],
+      capability: {
+        type: "live",
+        target: (a: number, b: number) => ({ marker, sum: a + b }),
+      },
+    });
 
     using callerSession = withItxSession();
     using callerItx = callerSession.authenticate({
@@ -1571,12 +1523,10 @@ describe("minimal itx v4", () => {
     using project = providerItx.projects.create({ slug: `rpc-target-live-${marker}` });
     const { projectId } = await project.describe();
 
-    disposeRpcResult(
-      await project.provideCapability({
-        path: ["math"],
-        capability: { type: "live", target: new MathSdk() },
-      }),
-    );
+    using _mathProvision = await project.provideCapability({
+      path: ["math"],
+      capability: { type: "live", target: new MathSdk() },
+    });
 
     using callerSession = withItxSession();
     using callerItx = callerSession.authenticate({
@@ -1665,16 +1615,14 @@ describe("minimal itx v4", () => {
     using project = providerItx.projects.create({ slug: `path-call-live-${marker}` });
     const { projectId } = await project.describe();
 
-    disposeRpcResult(
-      await project.provideCapability({
-        path: ["carrier"],
-        capability: {
-          flattenNestedPath: true,
-          type: "live",
-          target: new Carrier(),
-        },
-      }),
-    );
+    using _carrierProvision = await project.provideCapability({
+      path: ["carrier"],
+      capability: {
+        flattenNestedPath: true,
+        type: "live",
+        target: new Carrier(),
+      },
+    });
 
     using callerSession = withItxSession();
     using callerItx = callerSession.authenticate({
@@ -1705,7 +1653,7 @@ describe("minimal itx v4", () => {
     });
     using project = itx.projects.create({ slug: `replace-live-${marker}` });
 
-    const oldProvision = await project.provideCapability({
+    using _oldProvision = await project.provideCapability({
       path: ["replaceProbe"],
       capability: {
         type: "live",
@@ -1720,7 +1668,7 @@ describe("minimal itx v4", () => {
     // @ts-expect-error - dynamic capability root
     expect(await project.replaceProbe.value()).toBe(`old:${marker}`);
 
-    const newProvision = await project.provideCapability({
+    using _newProvision = await project.provideCapability({
       path: ["replaceProbe"],
       capability: {
         type: "live",
@@ -1731,9 +1679,6 @@ describe("minimal itx v4", () => {
         },
       },
     });
-    disposeRpcResult(oldProvision);
-    disposeRpcResult(newProvision);
-
     // @ts-expect-error - dynamic capability root
     expect(await project.replaceProbe.value()).toBe(`new:${marker}`);
   });
@@ -1748,7 +1693,7 @@ describe("minimal itx v4", () => {
     });
     using project = itx.projects.create({ slug: `failed-replace-live-${marker}` });
 
-    const provision = await project.provideCapability({
+    using _provision = await project.provideCapability({
       path: ["replaceProbe"],
       capability: {
         type: "live",
@@ -1772,7 +1717,6 @@ describe("minimal itx v4", () => {
 
     // @ts-expect-error - dynamic capability root
     expect(await project.replaceProbe.value()).toBe(`old:${marker}`);
-    disposeRpcResult(provision);
   });
 
   test("Authenticated project can provide the Slack SDK as nested dotted callables", async () => {
@@ -1792,7 +1736,7 @@ describe("minimal itx v4", () => {
         slackApiUrl: mock.url,
       });
 
-      const provision = await project.provideCapability({
+      using provision = await project.provideCapability({
         path: ["slack"],
         capability: {
           flattenNestedPath: true,
@@ -1800,7 +1744,6 @@ describe("minimal itx v4", () => {
           target: new PathCallableTarget(slack),
         },
       });
-      const { revoke } = provision;
 
       using callerSession = withItxSession();
       using callerItx = callerSession.authenticate({
@@ -1837,8 +1780,7 @@ describe("minimal itx v4", () => {
       });
       expect(mock.calls).toEqual(expect.arrayContaining(["chat.postMessage", "users.list"]));
 
-      await revoke();
-      disposeRpcResult(provision);
+      await provision.revoke();
       await expect(
         // @ts-expect-error - dynamic capability root
         callerProject.slack.chat.postMessage({ channel: "C123", text: "after revoke" }),

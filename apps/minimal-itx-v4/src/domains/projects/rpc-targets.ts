@@ -7,8 +7,9 @@ import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "../repos/project-
 import { StreamCollectionRpcTarget, StreamRpcTarget } from "../streams/rpc-targets.ts";
 import { subscriptionConfiguredEvent } from "../streams/subscription-event.ts";
 import { rejectBuiltinCollision, withInvokeCapabilityFallback } from "../itx/path-proxy.ts";
+import { CapabilityProvisionRpcTarget } from "../itx/capability-provision.ts";
 import { type ProvideCapabilityInput } from "../itx/itx-processor-implementation.ts";
-import type { CfExecutionContext, ItxAuth } from "../itx/types.ts";
+import type { CfExecutionContext, ItxAuth, RevokeCapabilityInput } from "../itx/types.ts";
 import { WorkerCollectionRpcTarget } from "../workers/rpc-targets.ts";
 import type { WorkerRef } from "../workers/types.ts";
 import type { Project, ProjectCollection, ProjectWorker } from "./types.ts";
@@ -112,15 +113,16 @@ class ProjectRpcTarget extends RpcTarget implements Project {
 
   async provideCapability(input: ProvideCapabilityInput) {
     rejectBuiltinCollision(this, input.path);
-    await this.#itx().provideCapability(input);
-    return {
-      revoke: async () => {
-        await this.#itx().revokeCapability({ path: input.path });
-      },
-    };
+    const provision = await this.#itx().provideCapability(input);
+    return new CapabilityProvisionRpcTarget({
+      ctx: this.props.ctx,
+      path: input.path,
+      providedAtOffset: provision.providedAtOffset,
+      revoke: (revokeInput) => this.#itx().revokeCapability(revokeInput),
+    });
   }
 
-  async revokeCapability(input: { path: string[] }) {
+  async revokeCapability(input: RevokeCapabilityInput) {
     await this.#itx().revokeCapability(input);
   }
 

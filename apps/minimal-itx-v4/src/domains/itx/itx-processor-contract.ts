@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
-import { CapabilityRecord } from "./schemas.ts";
+import {
+  CapabilityProvidedPayload,
+  CapabilityRecord,
+  CapabilityRevokedPayload,
+} from "./schemas.ts";
 export type { CapabilityRecord } from "./types.ts";
 
 export const ItxProcessorContract = defineProcessorContract({
@@ -15,11 +19,11 @@ export const ItxProcessorContract = defineProcessorContract({
   events: {
     "events.iterate.com/itx/capability-provided": {
       description: "A capability was mounted at a path.",
-      payloadSchema: CapabilityRecord,
+      payloadSchema: CapabilityProvidedPayload,
     },
     "events.iterate.com/itx/capability-revoked": {
       description: "A dynamic capability was removed.",
-      payloadSchema: z.looseObject({ path: z.array(z.string()) }),
+      payloadSchema: CapabilityRevokedPayload,
     },
     "events.iterate.com/itx/script-execution-requested": {
       description: "A script should run in this ITX context.",

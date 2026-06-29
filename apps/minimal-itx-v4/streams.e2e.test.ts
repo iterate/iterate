@@ -34,7 +34,7 @@ test("creates a project and uses project streams through v4 ITX", async () => {
   using stream = project.streams.get(streamPath);
 
   const seen: StreamEvent[] = [];
-  const subscription = await stream.subscribe({
+  using subscription = await stream.subscribe({
     replayAfterOffset: 0,
     processEventBatch: (batch) => {
       seen.push(...batch.events);
@@ -79,7 +79,6 @@ test("creates a project and uses project streams through v4 ITX", async () => {
   });
 
   await subscription.unsubscribe();
-  (subscription as Partial<Disposable>)[Symbol.dispose]?.();
 });
 
 test("stream subscribe replays history, tails live appends, and unsubscribes", async () => {
@@ -100,7 +99,7 @@ test("stream subscribe replays history, tails live appends, and unsubscribes", a
 
   const seen: { marker: string; offset: number }[] = [];
   const batchStates: CoreStreamState[] = [];
-  const subscription = await stream.subscribe({
+  using subscription = await stream.subscribe({
     replayAfterOffset: 0,
     processEventBatch: (batch) => {
       batchStates.push(coreState(batch.state));
@@ -134,7 +133,6 @@ test("stream subscribe replays history, tails live appends, and unsubscribes", a
   expect(batchStates.at(-1)!.eventCount).toBeGreaterThanOrEqual(Math.max(...offsets));
 
   await subscription.unsubscribe();
-  (subscription as Partial<Disposable>)[Symbol.dispose]?.();
   const countAtUnsubscribe = seen.length;
   await stream.append({ type: STREAM_EVENT_TYPE, payload: { marker: `after-${marker}` } });
   await new Promise((resolve) => setTimeout(resolve, 750));
@@ -157,7 +155,7 @@ test("state-only stream subscribe pushes initial state immediately, then state a
   await stream.append({ type: STREAM_EVENT_TYPE, payload: { marker: `seed-${marker}` } });
 
   const states: CoreStreamState[] = [];
-  const subscription = await stream.subscribe({
+  using subscription = await stream.subscribe({
     events: false,
     processEventBatch: (batch: StreamEventBatch) => {
       states.push(coreState(batch.state));
@@ -182,7 +180,6 @@ test("state-only stream subscribe pushes initial state immediately, then state a
   );
 
   await subscription.unsubscribe();
-  (subscription as Partial<Disposable>)[Symbol.dispose]?.();
 });
 
 function coreState(value: unknown): CoreStreamState {

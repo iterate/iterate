@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { WorkerRef, WorkerSource } from "./types.ts";
+import { stableSha256 } from "./source-cache-key.ts";
 
 const WORKER_COMPATIBILITY_DATE = "2026-05-01";
 
@@ -18,12 +19,6 @@ export type ResolvedWorkerSource = {
 
 export type WorkerBindings = Record<string, unknown>;
 
-export function hashString(s: string): string {
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
-  return (h >>> 0).toString(36);
-}
-
 export async function resolveWorkerSource({
   projectId,
   source,
@@ -33,7 +28,7 @@ export async function resolveWorkerSource({
 }): Promise<ResolvedWorkerSource> {
   if (source.type === "inline") {
     return {
-      cacheKey: hashString(JSON.stringify(source)),
+      cacheKey: await stableSha256({ source, type: "inline-worker-source" }),
       mainModule: source.mainModule,
       modules: source.modules,
     };
@@ -51,13 +46,12 @@ export async function resolveWorkerSource({
 
   return {
     ...resolved,
-    cacheKey: hashString(
-      JSON.stringify({
-        repoPath: source.repoPath,
-        repoSourceCacheKey: resolved.cacheKey,
-        sourcePath: source.sourcePath,
-      }),
-    ),
+    cacheKey: await stableSha256({
+      repoPath: source.repoPath,
+      repoSourceCacheKey: resolved.cacheKey,
+      sourcePath: source.sourcePath,
+      type: "repo-worker-source",
+    }),
   };
 }
 

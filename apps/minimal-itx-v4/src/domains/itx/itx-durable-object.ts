@@ -58,11 +58,13 @@ export class ItxDurableObject extends DurableObject<Env> {
     return this.#itxProcessor.invokeCapability(input);
   }
 
-  provideCapability(input: ProvideCapabilityInput): Promise<{ path: string[] }> {
+  provideCapability(
+    input: ProvideCapabilityInput,
+  ): Promise<{ path: string[]; providedAtOffset: number }> {
     return this.#itxProcessor.provideCapability(input);
   }
 
-  revokeCapability(input: { path: string[] }): Promise<void> {
+  revokeCapability(input: { path: string[]; providedAtOffset?: number }): Promise<void> {
     return this.#itxProcessor.revokeCapability(input);
   }
 

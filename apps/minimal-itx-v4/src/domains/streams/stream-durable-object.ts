@@ -2,7 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
 import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import type { Stream, StreamEvent, StreamEventInput } from "./types.ts";
+import type { Stream, StreamEvent, StreamEventInput, StreamSubscriptionHandle } from "./types.ts";
 import type { ProcessEventBatch } from "./engine/types.ts";
 import {
   StreamEvent as StreamEventSchema,
@@ -645,11 +645,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    * delivery. Replay is meaningless without events, so state-only
    * subscriptions are implicitly live-from-now (`replayAfterOffset` ignored).
    */
-  subscribe(args: Parameters<Stream["subscribe"]>[0]): {
-    subscriptionKey: string;
-    streamMaxOffset: number;
-    unsubscribe(): void;
-  } {
+  subscribe(args: Parameters<Stream["subscribe"]>[0]): StreamSubscriptionHandle {
     const subscriptionKey = args.subscriptionKey?.trim() || crypto.randomUUID();
     return this.coreProcessor.openConnection({
       ...args,

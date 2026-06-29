@@ -4,13 +4,17 @@ import {
 } from "../streams/engine/stream-processor.ts";
 import { normalizePath } from "../durable-object-names.ts";
 import type { StreamEvent } from "../streams/types.ts";
-import { hashString } from "../workers/worker-loader.ts";
+import { sha256Hex } from "../workers/source-cache-key.ts";
 import { WorkerRef as WorkerRefSchema } from "../workers/schemas.ts";
 import type { JsonValue, StatelessWorkerRef } from "../workers/types.ts";
 import type { WorkerRunner } from "../workers/worker-runner.ts";
 import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
 import { ItxProcessorContract, type CapabilityRecord } from "./itx-processor-contract.ts";
-import type { ItxCapabilityHost } from "./types.ts";
+import type {
+  CapabilityProvidedPayload,
+  ItxCapabilityHost,
+  RevokeCapabilityInput,
+} from "./types.ts";
 
 export type ProvideCapabilityInput = Parameters<ItxCapabilityHost["provideCapability"]>[0];
 export type RunScriptResult = Awaited<ReturnType<ItxCapabilityHost["runScript"]>>;
@@ -93,7 +97,14 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
   }: Parameters<StreamProcessor<typeof ItxProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
       case "events.iterate.com/itx/capability-provided": {
-        const row = event.payload;
+        const row: CapabilityRecord = {
+          ...event.payload,
+          // The stream offset is the provision identity. It is stable,
+          // observable, and already exists because the append event is the
+          // commit point for a mount. Handles use it to revoke exactly the
+          // mount they received, without introducing a second generated id.
+          providedAtOffset: event.offset,
+        };
         const exists = state.capabilities.some((capability) => samePath(capability.path, row.path));
         return {
           ...state,
@@ -104,13 +115,19 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
             : [...state.capabilities, row],
         };
       }
-      case "events.iterate.com/itx/capability-revoked":
+      case "events.iterate.com/itx/capability-revoked": {
+        const revoke = event.payload;
         return {
           ...state,
-          capabilities: state.capabilities.filter(
-            (capability) => !samePath(capability.path, event.payload.path),
-          ),
+          capabilities: state.capabilities.filter((capability) => {
+            if (!samePath(capability.path, revoke.path)) return true;
+            return (
+              revoke.providedAtOffset !== undefined &&
+              capability.providedAtOffset !== revoke.providedAtOffset
+            );
+          }),
         };
+      }
       case "events.iterate.com/itx/script-execution-requested":
         return {
           ...state,
@@ -145,7 +162,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     assertCapabilityPath(path);
     const key = liveKey(path);
     const previousLive = this.#liveCapabilities.get(key);
-    let record: CapabilityRecord;
+    let record: CapabilityProvidedPayload;
     if (capability.type === "worker") {
       // Worker capabilities are durable recipes. `provideCapability()` is only
       // allowed to validate the shape and append the record; it must not load the
@@ -197,16 +214,23 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     previousLive?.dispose();
 
     await this.waitUntilEvent({ offset: committedOffset });
-    return { path };
+    return { path, providedAtOffset: committedOffset };
   }
 
-  async revokeCapability({ path }: { path: string[] }) {
+  async revokeCapability({ path, providedAtOffset }: RevokeCapabilityInput) {
     assertCapabilityPath(path);
+    const current = this.state.capabilities.find((record) => samePath(record.path, path));
+    if (providedAtOffset !== undefined && current?.providedAtOffset !== providedAtOffset) {
+      return;
+    }
     const key = liveKey(path);
     const previousLive = this.#liveCapabilities.get(key);
     const [committed] = await this.stream.append({
       type: "events.iterate.com/itx/capability-revoked",
-      payload: { path },
+      payload: {
+        path,
+        ...(providedAtOffset === undefined ? {} : { providedAtOffset }),
+      },
     });
     this.#liveCapabilities.delete(key);
     previousLive?.dispose();
@@ -280,7 +304,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
 
     try {
       const worker = await this.#workerRunner.get<{ run(): Promise<unknown> }>(
-        this.#scriptWorkerRef(input.code),
+        await this.#scriptWorkerRef(input.code),
       );
       const result = await worker.run();
       await complete({ result });
@@ -289,7 +313,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     }
   }
 
-  #scriptWorkerRef(code: string): StatelessWorkerRef {
+  async #scriptWorkerRef(code: string): Promise<StatelessWorkerRef> {
     const source = `
       import { WorkerEntrypoint } from "cloudflare:workers";
       const fn = ${code};
@@ -311,7 +335,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
         type: "inline",
       },
       entrypoint: "ScriptEntrypoint",
-      props: { scriptHash: hashString(code) },
+      props: { scriptHash: await sha256Hex(code) },
       type: "stateless",
     };
   }

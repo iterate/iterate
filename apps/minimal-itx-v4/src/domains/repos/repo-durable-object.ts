@@ -8,7 +8,8 @@ import {
 import { StreamRpcTarget } from "../streams/rpc-targets.ts";
 import type { Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
-import { hashString, type ResolvedWorkerSource } from "../workers/worker-loader.ts";
+import { stableSha256 } from "../workers/source-cache-key.ts";
+import type { ResolvedWorkerSource } from "../workers/worker-loader.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { CommitRepoFilesInput, CommitRepoFilesResult, RepoFileChange } from "./types.ts";
 import { RepoArtifactNameCodec } from "./repo-artifact-name.ts";
@@ -61,7 +62,11 @@ export class RepoDurableObject extends DurableObject<Env> {
     }
 
     return {
-      cacheKey: hashString(`${tree.commitOid}:${args.path}`),
+      cacheKey: await stableSha256({
+        commitOid: tree.commitOid,
+        path: args.path,
+        type: "repo-commit-worker-source",
+      }),
       mainModule: args.path,
       modules: tree.modules,
     };

@@ -5,6 +5,7 @@ import type { WorkerRef } from "../workers/types.ts";
 
 export type CfExecutionContext = {
   exports: ExecutionContext["exports"];
+  waitUntil?: ExecutionContext["waitUntil"];
 };
 
 export interface UnauthenticatedItx {
@@ -24,10 +25,17 @@ export interface ItxCapabilityHost {
     executionId: string;
     result: unknown;
   }>;
-  provideCapability(input: { path: string[]; capability: ProvidedCapability }): Promise<{
-    revoke(): Promise<void>;
-  }>;
-  revokeCapability(input: { path: string[] }): Promise<void>;
+  provideCapability(input: {
+    path: string[];
+    capability: ProvidedCapability;
+  }): Promise<CapabilityProvision>;
+  revokeCapability(input: RevokeCapabilityInput): Promise<void>;
+}
+
+export interface CapabilityProvision extends Disposable {
+  readonly path: string[];
+  readonly providedAtOffset: number;
+  revoke(): Promise<void>;
 }
 
 export type FlattenedCapabilityInvocation = {
@@ -44,7 +52,7 @@ export type ProvidedCapability =
   | { flattenNestedPath: true; target: FlattenedCapabilityTarget; type: "live" }
   | { flattenNestedPath?: boolean; type: "worker"; workerRef: WorkerRef };
 
-export type CapabilityRecord =
+export type CapabilityProvidedPayload =
   | {
       flattenNestedPath?: boolean;
       type: "live";
@@ -56,6 +64,15 @@ export type CapabilityRecord =
       path: string[];
       workerRef: WorkerRef;
     };
+
+export type CapabilityRecord = CapabilityProvidedPayload & {
+  providedAtOffset: number;
+};
+
+export type RevokeCapabilityInput = {
+  path: string[];
+  providedAtOffset?: number;
+};
 
 export type ItxAuthCredentials =
   | { type: "from-server-cookie" }

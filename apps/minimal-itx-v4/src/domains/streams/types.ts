@@ -79,7 +79,7 @@ export type ProcessorRuntimeState = {
 
 export type GetProcessorRuntimeState = () => ProcessorRuntimeState | Promise<ProcessorRuntimeState>;
 
-export type StreamSubscriptionHandle = {
+export type StreamSubscriptionHandle = Disposable & {
   subscriptionKey: SubscriptionKey;
   streamMaxOffset: number;
   unsubscribe(): void;

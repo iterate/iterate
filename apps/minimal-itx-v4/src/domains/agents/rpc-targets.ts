@@ -2,10 +2,11 @@ import { env, RpcTarget } from "cloudflare:workers";
 import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
 import { StreamRpcTarget } from "../streams/rpc-targets.ts";
 import { subscriptionConfiguredEvent } from "../streams/subscription-event.ts";
+import { CapabilityProvisionRpcTarget } from "../itx/capability-provision.ts";
 import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
 import { type ProvideCapabilityInput } from "../itx/itx-processor-implementation.ts";
 import { rejectBuiltinCollision, withInvokeCapabilityFallback } from "../itx/path-proxy.ts";
-import type { CfExecutionContext, ItxAuth } from "../itx/types.ts";
+import type { CfExecutionContext, ItxAuth, RevokeCapabilityInput } from "../itx/types.ts";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
 import type { Agent, AgentCollection } from "./types.ts";
 
@@ -112,15 +113,16 @@ class AgentRpcTarget extends RpcTarget implements Agent {
   async provideCapability(input: ProvideCapabilityInput) {
     rejectBuiltinCollision(this, input.path);
     await this.#ensureProcessorsConfigured();
-    await this.#itx().provideCapability(input);
-    return {
-      revoke: async () => {
-        await this.#itx().revokeCapability({ path: input.path });
-      },
-    };
+    const provision = await this.#itx().provideCapability(input);
+    return new CapabilityProvisionRpcTarget({
+      ctx: this.props.ctx,
+      path: input.path,
+      providedAtOffset: provision.providedAtOffset,
+      revoke: (revokeInput) => this.#itx().revokeCapability(revokeInput),
+    });
   }
 
-  async revokeCapability(input: { path: string[] }) {
+  async revokeCapability(input: RevokeCapabilityInput) {
     await this.#ensureProcessorsConfigured();
     await this.#itx().revokeCapability(input);
   }
