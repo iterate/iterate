@@ -86,75 +86,11 @@ export class TypeAwareLintService {
     return project;
   }
 
-  getTypeAtPosition(fileName: string, position: number) {
-    const project = this.getProjectForFile(fileName);
-    if (!project) return undefined;
-    const type = project.checker.getTypeAtPosition(resolve(fileName), position);
-    if (!type) return undefined;
-    return { project, type };
-  }
-
-  getTypeAtNodeStart(fileName: string, node: Node) {
-    const position = node.range?.[0];
-    if (typeof position !== "number") return undefined;
-    return this.getTypeAtPosition(fileName, position);
-  }
-
-  getThenableInfo(fileName: string, node: Expression) {
-    const typed = this.getExpressionTypeInfo(fileName, node);
-    if (!typed) return undefined;
-    if (!this.isThenableType(typed.project, typed.type)) return undefined;
-    return {
-      text: typed.project.checker.typeToString(typed.type),
-      type: typed.type,
-      project: typed.project,
-    };
-  }
-
-  getExpressionTypeInfo(fileName: string, node: Expression) {
-    if (node.type === "CallExpression") {
-      return this.getCallReturnTypeInfo(fileName, node);
-    }
-    return this.getTypeAtNodeStart(fileName, node);
-  }
-
-  getCallReturnTypeInfo(fileName: string, node: CallExpression) {
-    const calleePosition = getCallablePosition(node.callee);
-    if (calleePosition === undefined) return undefined;
-
-    const calleeType = this.getTypeAtPosition(fileName, calleePosition);
-    if (!calleeType) return undefined;
-
-    const signatures = calleeType.project.checker.getSignaturesOfType(
-      calleeType.type,
-      SignatureKind.Call,
-    );
-    const signature = signatures[0];
-    if (!signature) return undefined;
-
-    const type = calleeType.project.checker.getReturnTypeOfSignature(signature);
-    if (!type) return undefined;
-    return { project: calleeType.project, type };
-  }
-
-  resolveTypeByName(fileName: string, name: string, position: number) {
-    const project = this.getProjectForFile(fileName);
-    if (!project) return undefined;
-    const symbol = project.checker.resolveName(
-      name,
-      SymbolFlags.Type,
-      { document: resolve(fileName), position },
-      true,
-    );
-    if (!symbol) return undefined;
-    const type = project.checker.getDeclaredTypeOfSymbol(symbol);
-    if (!type) return undefined;
-    return { project, symbol, type };
-  }
-
-  isThenableType(project: Project, type: Type) {
-    const properties = project.checker.getPropertiesOfType(type);
-    return properties.some((property: Symbol) => property.name === "then");
+  getFileService(fileName: string) {
+    return new TypeAwareLintFileService({
+      fileName,
+      project: this.getProjectForFile(fileName),
+    });
   }
 
   getSnapshot(): Snapshot {
@@ -267,6 +203,79 @@ export class TypeAwareLintService {
       this.textChangedFiles.delete(fileName);
     }
     return changedFiles;
+  }
+}
+
+export class TypeAwareLintFileService {
+  fileName: string;
+  project: Project | undefined;
+
+  constructor(input: { fileName: string; project: Project | undefined }) {
+    this.fileName = resolve(input.fileName);
+    this.project = input.project;
+  }
+
+  getTypeAtPosition(position: number) {
+    if (!this.project) return undefined;
+    return this.project.checker.getTypeAtPosition(this.fileName, position);
+  }
+
+  getTypeAtNodeStart(node: Node) {
+    const position = node.range?.[0];
+    if (typeof position !== "number") return undefined;
+    return this.getTypeAtPosition(position);
+  }
+
+  getThenableInfo(node: Expression) {
+    if (!this.project) return undefined;
+    const type = this.getExpressionType(node);
+    if (!type || !this.isThenableType(type)) return undefined;
+    return {
+      text: this.project.checker.typeToString(type),
+      type,
+    };
+  }
+
+  getExpressionType(node: Expression) {
+    if (node.type === "CallExpression") {
+      return this.getCallReturnType(node);
+    }
+    return this.getTypeAtNodeStart(node);
+  }
+
+  getCallReturnType(node: CallExpression) {
+    if (!this.project) return undefined;
+    const calleePosition = getCallablePosition(node.callee);
+    if (calleePosition === undefined) return undefined;
+
+    const calleeType = this.getTypeAtPosition(calleePosition);
+    if (!calleeType) return undefined;
+
+    const signatures = this.project.checker.getSignaturesOfType(calleeType, SignatureKind.Call);
+    const signature = signatures[0];
+    if (!signature) return undefined;
+
+    return this.project.checker.getReturnTypeOfSignature(signature);
+  }
+
+  resolveTypeByName(name: string, position: number) {
+    if (!this.project) return undefined;
+    const symbol = this.project.checker.resolveName(
+      name,
+      SymbolFlags.Type,
+      { document: this.fileName, position },
+      true,
+    );
+    if (!symbol) return undefined;
+    const type = this.project.checker.getDeclaredTypeOfSymbol(symbol);
+    if (!type) return undefined;
+    return { symbol, type };
+  }
+
+  isThenableType(type: Type) {
+    if (!this.project) return false;
+    const properties = this.project.checker.getPropertiesOfType(type);
+    return properties.some((property: Symbol) => property.name === "then");
   }
 }
 

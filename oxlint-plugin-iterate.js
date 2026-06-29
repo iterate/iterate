@@ -405,23 +405,21 @@ function hasOnlySimpleImplementationParameterTypes(context, element) {
 }
 
 /**
- * @param {import("./lint/oxlint-type-aware.ts").TypeAwareLintService} service
- * @param {import("eslint").Rule.RuleContext} context
+ * @param {import("./lint/oxlint-type-aware.ts").TypeAwareLintFileService} fileService
  * @param {{ name: string; position: number }} candidate
  */
-function getMechanicalClassImplContractMethods(service, context, candidate) {
-  const typed = service.resolveTypeByName(context.filename, candidate.name, candidate.position);
+function getMechanicalClassImplContractMethods(fileService, candidate) {
+  const typed = fileService.resolveTypeByName(candidate.name, candidate.position);
   if (!typed) return undefined;
+  const project = fileService.project;
+  if (!project) return undefined;
 
-  return typed.project.checker
+  return project.checker
     .getPropertiesOfType(typed.type)
     .map((property) => {
-      const propertyType = typed.project.checker.getTypeOfSymbol(property);
+      const propertyType = project.checker.getTypeOfSymbol(property);
       if (!propertyType) return undefined;
-      const signature = typed.project.checker.getSignaturesOfType(
-        propertyType,
-        SignatureKind.Call,
-      )[0];
+      const signature = project.checker.getSignaturesOfType(propertyType, SignatureKind.Call)[0];
       if (!signature) return undefined;
       return {
         name: property.name,
@@ -606,10 +604,10 @@ function isTypeScriptSourceFile(filename) {
 }
 
 /** @param {import("eslint").Rule.RuleContext} context */
-function getPreparedTypeAwareLintService(context) {
+function getPreparedTypeAwareLintFileService(context) {
   const service = getTypeAwareLintService();
   service.setFileText(context.filename, context.sourceCode.getText());
-  return service;
+  return service.getFileService(context.filename);
 }
 
 /** @param {import("estree").Expression} expression */
@@ -889,8 +887,8 @@ const plugin = {
       create(context) {
         if (!isTypeScriptSourceFile(context.filename || "")) return {};
 
-        /** @type {import("./lint/oxlint-type-aware.ts").TypeAwareLintService | undefined} */
-        let service;
+        /** @type {import("./lint/oxlint-type-aware.ts").TypeAwareLintFileService | undefined} */
+        let fileService;
 
         return {
           CallExpression(node) {
@@ -898,8 +896,8 @@ const plugin = {
             if (isExplicitlyHandledPromiseExpression(node.parent.expression)) return;
             if (isPromiseHandlingCallExpression(node)) return;
 
-            service ??= getPreparedTypeAwareLintService(context);
-            const thenable = service.getThenableInfo(context.filename, node);
+            fileService ??= getPreparedTypeAwareLintFileService(context);
+            const thenable = fileService.getThenableInfo(node);
             if (!thenable) return;
 
             context.report({
@@ -925,15 +923,15 @@ const plugin = {
       create(context) {
         if (!isTypeScriptSourceFile(context.filename || "")) return {};
 
-        /** @type {import("./lint/oxlint-type-aware.ts").TypeAwareLintService | undefined} */
-        let service;
+        /** @type {import("./lint/oxlint-type-aware.ts").TypeAwareLintFileService | undefined} */
+        let fileService;
 
         return {
           "ClassDeclaration, ClassExpression": (node) => {
             const contracts = getMechanicalClassImplContracts(context, node);
             if (!contracts?.length) return;
 
-            service ??= getPreparedTypeAwareLintService(context);
+            fileService ??= getPreparedTypeAwareLintFileService(context);
             const classMethodNames = new Set(
               node.body.body
                 .filter((element) => getClassElementImplementationFunction(element))
@@ -943,7 +941,7 @@ const plugin = {
             const contract = contracts
               .map((candidate) => ({
                 candidate,
-                properties: getMechanicalClassImplContractMethods(service, context, candidate),
+                properties: getMechanicalClassImplContractMethods(fileService, candidate),
               }))
               .find(({ properties }) =>
                 properties?.some((property) => classMethodNames.has(property.name)),
