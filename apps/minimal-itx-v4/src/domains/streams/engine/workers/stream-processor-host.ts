@@ -30,12 +30,12 @@ import type {
   CoreProcessorState,
   ProcessorContractAnnouncement,
 } from "../processors/core/contract.ts";
-import type { StreamEvent, StreamEventInput } from "../shared/event.ts";
-import type { StreamRpc, StreamSubscriptionHandle } from "../../../../../types.ts";
+import type { StreamSubscriptionHandle } from "../types.ts";
+import type { StreamEvent, StreamEventInput } from "../../types.ts";
 
 /** What the Stream DO sends when dialing a subscriber's callable. */
 export type StreamSubscriptionHandshake = {
-  stream: StreamRpc;
+  stream: StreamProcessorStream;
   subscriptionKey: string;
   streamMaxOffset: number;
   streamRuntimeState: { coreProcessorState: CoreProcessorState };
@@ -56,14 +56,14 @@ export type RequestStreamSubscriptionArgs = StreamSubscriptionHandshake & {
  * processor constructor along with processor-specific deps:
  * `new RepoProcessor({ ...deps, github })`.
  */
-export type HostedProcessorDeps = {
+type HostedProcessorDeps = {
   stream: StreamProcessorStream;
   readState: () => StreamProcessorSnapshot<any> | undefined;
   writeState: (snapshot: StreamProcessorSnapshot<any>) => void;
   keepAliveWhile: (work: () => Promise<unknown>) => void;
 };
 
-export type HostedProcessorRuntimeState = {
+type HostedProcessorRuntimeState = {
   processorName: string;
   snapshot: StreamProcessorSnapshot<unknown> | undefined;
   runtime: {
@@ -91,7 +91,7 @@ type AnyHostedProcessor = {
 type HostedEntry = {
   processor: AnyHostedProcessor;
   /** Live stream stub retained across the subscription lifetime. */
-  stream: RetainedStreamRpc | undefined;
+  stream: RetainedStreamProcessorStream | undefined;
   handle: StreamSubscriptionHandle | undefined;
   projectId: string | null | undefined;
   path: string | undefined;
@@ -125,7 +125,7 @@ const MAX_CONSECUTIVE_INGEST_FAILURES = 3;
 // durable alarm's only extra power, waking a hibernated DO, is exactly wrong.
 const HOST_IDLE_TEARDOWN_MS = 5 * 60_000;
 
-export type StreamProcessorHost = {
+type StreamProcessorHost = {
   /**
    * Register a named processor. The builder receives the host-provided base
    * deps (checkpoint storage in DO KV keyed by `name` and late-bound stream
@@ -171,7 +171,7 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
     return entry;
   }
 
-  function requireStream(name: string): StreamRpc {
+  function requireStream(name: string): StreamProcessorStream {
     const entry = requireEntry(name);
     if (entry.stream === undefined) {
       throw new Error(
@@ -405,7 +405,7 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
       // duplicated. Processor side effects may append later, so retain the
       // stream capability until the next handshake replaces it.
       // https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
-      entry.stream = retainStreamRpc(args.stream);
+      entry.stream = retainStreamProcessorStream(args.stream);
       entry.projectId = args.streamRuntimeState.coreProcessorState.projectId;
       entry.path = args.streamRuntimeState.coreProcessorState.path;
       entry.consecutiveIngestFailures = 0;
@@ -459,15 +459,15 @@ function announceContract(contract: {
   };
 }
 
-type RetainedStreamRpc = StreamRpc &
+type RetainedStreamProcessorStream = StreamProcessorStream &
   Disposable & {
     onRpcBroken?(callback: (error: unknown) => void): void;
   };
 
-function retainStreamRpc(stream: StreamRpc): RetainedStreamRpc {
-  const retainable = stream as StreamRpc &
+function retainStreamProcessorStream(stream: StreamProcessorStream): RetainedStreamProcessorStream {
+  const retainable = stream as StreamProcessorStream &
     Partial<Disposable> & {
-      dup?(): RetainedStreamRpc;
+      dup?(): RetainedStreamProcessorStream;
     };
   const retained = retainable.dup?.() ?? retainable;
   const dispose = retained[Symbol.dispose]?.bind(retained);
@@ -475,5 +475,5 @@ function retainStreamRpc(stream: StreamRpc): RetainedStreamRpc {
     [Symbol.dispose]() {
       dispose?.();
     },
-  }) as RetainedStreamRpc;
+  }) as RetainedStreamProcessorStream;
 }

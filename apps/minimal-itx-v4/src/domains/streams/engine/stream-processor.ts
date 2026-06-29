@@ -1,7 +1,6 @@
 import { RpcTarget } from "capnweb";
 import type { z } from "zod";
-import type { RpcTargetImplementation, Stream } from "../../../../types.ts";
-import type { StreamEvent, StreamEventInput } from "./shared/event.ts";
+import type { Stream, StreamEvent, StreamEventInput } from "../types.ts";
 import {
   assertObjectProcessorState,
   getConsumedEventDefinition,
@@ -18,8 +17,14 @@ import {
   type ProcessorState,
 } from "./shared/stream-processors.ts";
 
+type MaybePromise<T> = T | Promise<T>;
+
 /** Stream capability the host hands every processor as `this.stream`. */
-export type StreamProcessorStream = RpcTargetImplementation<Stream>;
+export type StreamProcessorStream = {
+  [K in keyof Stream]: Stream[K] extends (...args: infer Args) => infer Result
+    ? (...args: Args) => MaybePromise<Awaited<Result>>
+    : Stream[K];
+};
 
 /**
  * The structural slice of a processor contract that the class needs. Contracts
@@ -27,7 +32,7 @@ export type StreamProcessorStream = RpcTargetImplementation<Stream>;
  * type flows through the `Contract` type parameter so event/state inference
  * reaches the hooks.
  */
-export type StreamProcessorContract = {
+type StreamProcessorContract = {
   slug: string;
   stateSchema: z.ZodType;
   initialState?: unknown;
@@ -123,10 +128,8 @@ export type StreamProcessorRuntimeState<State> = {
   runtime?: Record<string, unknown>;
 };
 
-type MaybePromise<T> = T | Promise<T>;
 type StateChangeCallback<State> = (state: State) => unknown;
 type RetainedStateChangeCallback<State> = StateChangeCallback<State> & Disposable;
-export type StreamProcessorStateUnsubscribe = (() => void) & Disposable;
 
 /** A pending `waitUntilEvent` waiter: the match predicate, the resolver to fire
  *  when a delivered event matches, and an optional timeout handle to clear on
@@ -264,7 +267,7 @@ export abstract class StreamProcessor<
 
   async onStateChange(
     cb: StateChangeCallback<ProcessorState<Contract>>,
-  ): Promise<StreamProcessorStateUnsubscribe> {
+  ): Promise<(() => void) & Disposable> {
     await this.#loadState();
     const retained = retainStateChangeCallback(cb);
     this.#stateChangeCallbacks.add(retained);

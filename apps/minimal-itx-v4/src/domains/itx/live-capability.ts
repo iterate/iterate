@@ -1,8 +1,3 @@
-export type Retained<T> = Disposable & {
-  dispose(): void;
-  readonly value: T;
-};
-
 export type LiveCapability = {
   dispose(): void;
   invoke(path: string[], args: unknown[]): unknown;
@@ -53,6 +48,11 @@ export function retainLiveCapabilityProvider(provider: unknown): LiveCapability 
  * concrete `.dup()` results. Disposal releases exactly those duped stubs, never
  * arbitrary local values that merely happen to be reachable from the provider.
  */
+type Retained<T> = Disposable & {
+  dispose(): void;
+  readonly value: T;
+};
+
 export function deepRetainRpcStubs<T>(value: T): Retained<T> {
   const retainedStubs: Disposable[] = [];
   const retainedValue = deepCopyAndDupRpcStubs(value, retainedStubs);

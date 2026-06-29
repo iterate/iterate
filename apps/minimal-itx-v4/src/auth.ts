@@ -20,9 +20,7 @@
 // "from-server-cookie" }`. A real system resolves principal → access from the
 // auth service's JWT/session shape; here the token already is that dummy data.
 
-import type { ItxAuth, ItxAuthToken } from "../types.ts";
-
-export type ItxAuthContext = ItxAuth;
+import type { ItxAuth, ItxAuthToken } from "./domains/itx/types.ts";
 
 export const ITX_AUTH_COOKIE = "minimal-itx-auth";
 export const TRUSTED_INTERNAL_ITX_TOKEN = "trusted-internal-itx-token";

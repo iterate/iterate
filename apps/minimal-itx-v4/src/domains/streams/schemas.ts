@@ -1,4 +1,8 @@
 import { z } from "zod";
+import type {
+  StreamEvent as StreamEventType,
+  StreamEventInput as StreamEventInputType,
+} from "./types.ts";
 
 export const StreamEventInput = z.object({
   type: z.string(),
@@ -11,8 +15,7 @@ export const StreamEventInput = z.object({
     .strict()
     .optional(),
   idempotencyKey: z.string().trim().min(1).optional(),
-});
-export type StreamEventInput = z.infer<typeof StreamEventInput>;
+}) satisfies z.ZodType<StreamEventInputType, unknown>;
 
 export const StreamEvent = z.object({
   type: z.string(),
@@ -27,5 +30,4 @@ export const StreamEvent = z.object({
   idempotencyKey: z.string().trim().min(1).optional(),
   offset: z.number().int().nonnegative(),
   createdAt: z.string(),
-});
-export type StreamEvent = z.infer<typeof StreamEvent>;
+}) satisfies z.ZodType<StreamEventType, unknown>;

@@ -1,4 +1,4 @@
-export const DEFAULT_PROJECT_WORKER_SOURCE = `
+const DEFAULT_PROJECT_WORKER_SOURCE = `
   import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 
   export default class ProjectWorker extends WorkerEntrypoint {

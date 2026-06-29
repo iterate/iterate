@@ -1,23 +1,20 @@
 import {
   StreamProcessor,
   type StreamProcessorConstructorArgs,
-} from "../domains/streams/engine/stream-processor.ts";
-import type { DynamicWorkersRpcTarget } from "../domains/dynamic-workers/dynamic-workers-rpc-target.ts";
-import { hashString } from "../domains/dynamic-workers/dynamic-worker-loader.ts";
-import { DynamicWorkerRef as DynamicWorkerRefSchema } from "../domains/dynamic-workers/dynamic-worker-ref.ts";
-import type {
-  DynamicWorkerRef,
-  ItxCapabilityHost,
-  JsonSerializableTrustMeBro,
-  StreamEvent,
-} from "../../types.ts";
-import { TRUSTED_INTERNAL_ITX_TOKEN } from "../auth.ts";
+} from "../streams/engine/stream-processor.ts";
+import type { DynamicWorkerRuntimeRpcTarget } from "../dynamic-workers/rpc-targets.ts";
+import { hashString } from "../dynamic-workers/dynamic-worker-loader.ts";
+import { DynamicWorkerRef as DynamicWorkerRefSchema } from "../dynamic-workers/schemas.ts";
+import type { DynamicWorkerRef, JsonValue } from "../dynamic-workers/types.ts";
+import type { StreamEvent } from "../streams/types.ts";
+import { TRUSTED_INTERNAL_ITX_TOKEN } from "../../auth.ts";
 import {
   replayPath,
   retainLiveCapabilityProvider,
   type LiveCapability,
 } from "./live-capability.ts";
-import { ItxContract, type CapabilityRecord } from "./processor-contract.ts";
+import { ItxProcessorContract, type CapabilityRecord } from "./itx-processor-contract.ts";
+import type { ItxCapabilityHost } from "./types.ts";
 
 export type ProvideCapabilityInput = Parameters<ItxCapabilityHost["provideCapability"]>[0];
 export type RunScriptResult = Awaited<ReturnType<ItxCapabilityHost["runScript"]>>;
@@ -31,7 +28,7 @@ export type ItxProcessorRpc = {
   runScript(code: string): RunScriptResult | Promise<RunScriptResult>;
 };
 
-export type ItxHostContext = {
+type ItxHostContext = {
   agentPath?: string;
   projectId: string;
 };
@@ -39,7 +36,7 @@ export type ItxHostContext = {
 type CompletedPayload = {
   error?: string;
   executionId: string;
-  result?: JsonSerializableTrustMeBro;
+  result?: JsonValue;
 };
 const INVALID_PATH_SEGMENTS = new Set([
   "__proto__",
@@ -58,7 +55,7 @@ const samePath = (a: string[], b: string[]) =>
 
 const liveKey = (path: string[]) => JSON.stringify(path);
 
-export function assertCapabilityPath(path: string[]) {
+function assertCapabilityPath(path: string[]) {
   if (!Array.isArray(path) || path.length === 0) {
     throw new Error("capability path must contain at least one segment");
   }
@@ -73,9 +70,9 @@ export function assertCapabilityPath(path: string[]) {
   }
 }
 
-function json(value: unknown): JsonSerializableTrustMeBro {
+function json(value: unknown): JsonValue {
   if (value === undefined) return null;
-  return JSON.parse(JSON.stringify(value)) as JsonSerializableTrustMeBro;
+  return JSON.parse(JSON.stringify(value)) as JsonValue;
 }
 
 function resolveLongestPrefix(records: CapabilityRecord[], path: string[]) {
@@ -91,27 +88,30 @@ function resolveLongestPrefix(records: CapabilityRecord[], path: string[]) {
   return best;
 }
 
-export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements ItxProcessorRpc {
-  readonly contract = ItxContract;
-  #dynamicWorkers: DynamicWorkersRpcTarget;
+export class ItxProcessor
+  extends StreamProcessor<typeof ItxProcessorContract>
+  implements ItxProcessorRpc
+{
+  readonly contract = ItxProcessorContract;
+  #dynamicWorkerRuntime: DynamicWorkerRuntimeRpcTarget;
   #host: ItxHostContext;
   #liveCapabilities = new Map<string, LiveCapability>();
 
   constructor(
-    args: StreamProcessorConstructorArgs<typeof ItxContract, object> & {
-      dynamicWorkers: DynamicWorkersRpcTarget;
+    args: StreamProcessorConstructorArgs<typeof ItxProcessorContract, object> & {
+      dynamicWorkerRuntime: DynamicWorkerRuntimeRpcTarget;
       host: ItxHostContext;
     },
   ) {
     super(args);
-    this.#dynamicWorkers = args.dynamicWorkers;
+    this.#dynamicWorkerRuntime = args.dynamicWorkerRuntime;
     this.#host = args.host;
   }
 
   protected override reduce({
     event,
     state,
-  }: Parameters<StreamProcessor<typeof ItxContract>["reduce"]>[0]) {
+  }: Parameters<StreamProcessor<typeof ItxProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
       case "events.iterate.com/itx/capability-provided": {
         const row = event.payload;
@@ -154,7 +154,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
     event,
     runInBackground,
     state,
-  }: Parameters<StreamProcessor<typeof ItxContract>["processEvent"]>[0]): undefined {
+  }: Parameters<StreamProcessor<typeof ItxProcessorContract>["processEvent"]>[0]): undefined {
     if (event.type !== "events.iterate.com/itx/script-execution-requested") return;
     if (state.pendingScriptExecutions[event.payload.executionId] !== true) return;
     runInBackground(() =>
@@ -221,7 +221,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
     if (!hit) throw new Error(`no capability "${path.join(".")}"`);
     if (hit.record.type === "dynamic-worker") {
       const prefix = `capability:${hit.record.path.join(".")}`;
-      const target = this.#dynamicWorkers.get({
+      const target = this.#dynamicWorkerRuntime.get({
         ...hit.record.workerRef,
         cacheKey: hit.record.workerRef.cacheKey
           ? `${prefix}:${hit.record.workerRef.cacheKey}`
@@ -266,7 +266,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
 
   async #executeScript(input: { code: string; executionId: string }) {
     const complete = (payload: { error?: string; result?: unknown }) => {
-      const completionPayload: JsonSerializableTrustMeBro =
+      const completionPayload: JsonValue =
         payload.error !== undefined
           ? { error: payload.error, executionId: input.executionId }
           : {
@@ -280,7 +280,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
     };
 
     try {
-      const worker = await this.#dynamicWorkers.get<{ run(): Promise<unknown> }>(
+      const worker = await this.#dynamicWorkerRuntime.get<{ run(): Promise<unknown> }>(
         this.#scriptWorkerRef(input.code),
       );
       const result = await worker.run();

@@ -1,0 +1,221 @@
+import { env, RpcTarget } from "cloudflare:workers";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { DynamicWorkerRuntimeRpcTarget } from "../dynamic-workers/rpc-targets.ts";
+import { AgentCollectionRpcTarget } from "../agents/rpc-targets.ts";
+import {
+  RepoCollectionRpcTarget,
+  RepoRpcTarget,
+  repoProcessorSubscriptionEvent,
+} from "../repos/rpc-targets.ts";
+import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "../repos/project-repo.ts";
+import { durableObjectProcessorSubscriber } from "../streams/engine/shared/callable-subscriber.ts";
+import { StreamCollectionRpcTarget, StreamRpcTarget } from "../streams/rpc-targets.ts";
+import { ItxCapabilityHostRpcTarget } from "../itx/capability-host-rpc-target.ts";
+import { type ItxProcessorRpc } from "../itx/itx-processor-implementation.ts";
+import { replayPath } from "../itx/live-capability.ts";
+import { withInvokeCapabilityFallback } from "../itx/path-proxy.ts";
+import type { CfExecutionContext, RpcTargetImplementation } from "../../rpc-target-types.ts";
+import type { ItxAuth, ItxAuthCredentials } from "../itx/types.ts";
+import { TRUSTED_INTERNAL_ITX_TOKEN } from "../../auth.ts";
+import type { Stream } from "../streams/types.ts";
+import type { Project, ProjectCollection, ProjectWorker } from "./types.ts";
+import { ProjectProcessorContract } from "./project-processor-contract.ts";
+
+const TRUSTED_INTERNAL_ITX_PROPS = {
+  token: TRUSTED_INTERNAL_ITX_TOKEN,
+  type: "trusted-internal",
+} satisfies ItxAuthCredentials;
+
+function projectRootStream(props: { auth: ItxAuth; projectId: string }) {
+  return new StreamRpcTarget({
+    auth: props.auth,
+    projectId: props.projectId,
+    path: "/",
+  });
+}
+
+function projectProcessorSubscriptionEvent(projectId: string) {
+  return {
+    type: "events.iterate.com/stream/subscription-configured",
+    idempotencyKey: `stream-subscription:${projectId}:${ProjectProcessorContract.slug}`,
+    payload: {
+      subscriptionKey: ProjectProcessorContract.slug,
+      subscriber: durableObjectProcessorSubscriber({
+        bindingName: "PROJECT",
+        durableObjectName: DurableObjectNameCodec.stringify({
+          projectId,
+          path: "/",
+        }),
+        processorName: ProjectProcessorContract.slug,
+      }),
+    },
+  } satisfies Parameters<Stream["append"]>[0];
+}
+
+export class ProjectCollectionRpcTarget
+  extends RpcTarget
+  implements RpcTargetImplementation<ProjectCollection>
+{
+  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext }) {
+    super();
+  }
+
+  get(projectId: string) {
+    return new ProjectRpcTarget({
+      auth: this.props.auth,
+      ctx: this.props.ctx,
+      projectId: projectId,
+    });
+  }
+
+  async create(args: Parameters<ProjectCollection["create"]>[0]) {
+    if (!this.props.auth.isAdmin()) {
+      throw new Error(`principal "${this.props.auth.principal}" cannot create projects`);
+    }
+
+    if (args.projectId === undefined) {
+      args.projectId = "prj_" + crypto.randomUUID();
+    }
+
+    const stream = projectRootStream({
+      auth: this.props.auth,
+      projectId: args.projectId,
+    });
+
+    const [, , createRequested] = await stream.append(
+      projectProcessorSubscriptionEvent(args.projectId),
+      repoProcessorSubscriptionEvent({ projectId: args.projectId, path: PROJECT_REPO_PATH }),
+      {
+        type: "events.iterate.com/project/create-requested",
+        idempotencyKey: `project-create-requested:${args.projectId}`,
+        payload: { projectId: args.projectId, slug: args.slug },
+      },
+    );
+    await stream.waitForEvent({
+      afterOffset: createRequested.offset - 1,
+      eventTypes: ["events.iterate.com/project/created"],
+      predicate: (event) => event.payload?.projectId === args.projectId,
+      timeoutMs: 60_000,
+    });
+
+    return new ProjectRpcTarget({
+      auth: this.props.auth,
+      ctx: this.props.ctx,
+      projectId: args.projectId,
+    });
+  }
+
+  list(): string[] {
+    return this.props.auth.listAccessibleProjects();
+  }
+}
+
+class ProjectWorkerRpcTarget extends RpcTarget implements RpcTargetImplementation<ProjectWorker> {
+  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+    return withInvokeCapabilityFallback(this);
+  }
+
+  async fetch(req: Request) {
+    return await (await this.defaultProjectWorker()).fetch(req);
+  }
+
+  async processEvent(input: Parameters<ProjectWorker["processEvent"]>[0]) {
+    return await (await this.defaultProjectWorker()).processEvent(input);
+  }
+
+  async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
+    return await replayPath({
+      args,
+      path,
+      target: await this.defaultProjectWorker(),
+    });
+  }
+
+  private defaultProjectWorker() {
+    return new DynamicWorkerRuntimeRpcTarget({
+      bindings: {
+        ITX: this.props.ctx.exports.ItxEntrypoint({ props: TRUSTED_INTERNAL_ITX_PROPS }),
+      },
+      loader: env.LOADER,
+      projectId: this.props.projectId,
+    }).get<ProjectWorker>({
+      source: {
+        repoPath: PROJECT_REPO_PATH,
+        sourcePath: PROJECT_WORKER_SOURCE_PATH,
+        type: "repo",
+      },
+      target: {
+        props: {
+          auth: TRUSTED_INTERNAL_ITX_PROPS,
+          projectId: this.props.projectId,
+        },
+        type: "worker-entrypoint",
+      },
+    });
+  }
+}
+
+export class ProjectRpcTarget
+  extends ItxCapabilityHostRpcTarget
+  implements RpcTargetImplementation<Project>
+{
+  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+    return withInvokeCapabilityFallback(this);
+  }
+
+  get durableObjectStub() {
+    return env.PROJECT.getByName(
+      DurableObjectNameCodec.stringify({ path: "/", projectId: this.props.projectId }),
+    );
+  }
+
+  describe() {
+    return this.durableObjectStub.describe();
+  }
+
+  protected itxProcessor(): ItxProcessorRpc {
+    return this.durableObjectStub.itxProcessor as unknown as ItxProcessorRpc;
+  }
+
+  get streams() {
+    return new StreamCollectionRpcTarget({
+      auth: this.props.auth,
+      projectId: this.props.projectId,
+    });
+  }
+
+  get agents() {
+    return new AgentCollectionRpcTarget({
+      auth: this.props.auth,
+      ctx: this.props.ctx,
+      projectId: this.props.projectId,
+    });
+  }
+
+  get repos() {
+    return new RepoCollectionRpcTarget({
+      auth: this.props.auth,
+      projectId: this.props.projectId,
+    });
+  }
+
+  get repo() {
+    return new RepoRpcTarget({
+      auth: this.props.auth,
+      path: PROJECT_REPO_PATH,
+      projectId: this.props.projectId,
+    });
+  }
+
+  get worker() {
+    return new ProjectWorkerRpcTarget({
+      auth: this.props.auth,
+      ctx: this.props.ctx,
+      projectId: this.props.projectId,
+    });
+  }
+}

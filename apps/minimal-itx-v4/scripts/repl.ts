@@ -2,14 +2,10 @@ import repl from "node:repl";
 import process from "node:process";
 
 import { RpcTarget } from "capnweb";
-import {
-  connectItx,
-  DEFAULT_ITX_BASE_URL,
-  type ItxAuthToken,
-  type ProjectItxRpc,
-  type RootRpc,
-  type RpcStub,
-} from "../src/client.ts";
+import type { RpcStub } from "capnweb";
+import { connectItx, DEFAULT_ITX_BASE_URL } from "../src/client.ts";
+import type { ItxAuthToken, ItxRoot } from "../src/domains/itx/types.ts";
+import type { Project } from "../src/domains/projects/types.ts";
 
 const baseUrl = (
   process.env.ITX_BASE ||
@@ -28,14 +24,14 @@ const unauthenticated = connectItx({ baseUrl });
 const root = unauthenticated.authenticate({
   type: "token",
   token: adminToken,
-}) as unknown as RpcStub<RootRpc>;
+}) as unknown as RpcStub<ItxRoot>;
 await root.projects.create({ projectId, slug: projectId });
 
 const userRoot = unauthenticated.authenticate({
   type: "token",
   token,
-}) as unknown as RpcStub<RootRpc>;
-const itx = userRoot.projects.get(projectId) as unknown as RpcStub<ProjectItxRpc>;
+}) as unknown as RpcStub<ItxRoot>;
+const itx = userRoot.projects.get(projectId) as unknown as RpcStub<Project>;
 
 const server = repl.start({
   ignoreUndefined: true,

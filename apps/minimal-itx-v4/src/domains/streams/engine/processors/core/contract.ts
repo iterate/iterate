@@ -11,7 +11,7 @@
 
 import { z } from "zod";
 import { Callable } from "@iterate-com/shared/callable/types.ts";
-import type { GetProcessorRuntimeState } from "../../../../../../types.ts";
+import type { GetProcessorRuntimeState } from "../../types.ts";
 import { defineProcessorContract } from "../../shared/stream-processors.ts";
 
 /**
@@ -27,7 +27,7 @@ const SupportedOutboundSubscriber = z.object({
   callable: Callable,
 });
 
-export const SupportedSubscriptionConfiguredEvent = z.object({
+const SupportedSubscriptionConfiguredEvent = z.object({
   offset: z.number().int().min(0),
   type: z.literal("events.iterate.com/stream/subscription-configured"),
   payload: z.object({
@@ -58,7 +58,7 @@ export const ProcessorContractAnnouncement = z.object({
 
 export type ProcessorContractAnnouncement = z.infer<typeof ProcessorContractAnnouncement>;
 
-export const StreamSubscriberProcessorDescriptor = z.preprocess(
+const StreamSubscriberProcessorDescriptor = z.preprocess(
   (value) =>
     isRecord(value) && !isRecord(value.announcement) && typeof value.slug === "string"
       ? { announcement: value }
@@ -69,9 +69,7 @@ export const StreamSubscriberProcessorDescriptor = z.preprocess(
   }),
 );
 
-export type StreamSubscriberProcessorDescriptor = z.infer<
-  typeof StreamSubscriberProcessorDescriptor
->;
+type StreamSubscriberProcessorDescriptor = z.infer<typeof StreamSubscriberProcessorDescriptor>;
 
 /**
  * Identity the connecting party passes in its subscribe call. All fields are
@@ -310,6 +308,3 @@ export const CoreProcessorContract = defineProcessorContract({
 });
 
 export type CoreProcessorState = z.infer<typeof CoreProcessorContract.stateSchema>;
-
-export type SubscriptionConfiguredEvent =
-  CoreProcessorState["subscriptionsByKey"][string]["latestConfiguredEvent"];

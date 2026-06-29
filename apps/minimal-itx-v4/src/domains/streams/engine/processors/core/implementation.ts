@@ -12,9 +12,9 @@
 // announcements) and mutate runtime state (dial configured-but-unconnected
 // outbound subscribers, close connections whose configuration disappeared).
 
-import type { StreamEvent, StreamEventInput } from "../../shared/event.ts";
+import type { StreamEvent, StreamEventInput } from "../../../types.ts";
 import type { ConsumedEvent } from "../../shared/stream-processors.ts";
-import type { ProcessEventBatch, ProcessorRuntimeState } from "../../../../../../types.ts";
+import type { ProcessEventBatch, ProcessorRuntimeState } from "../../types.ts";
 import type { StreamProcessorStream } from "../../stream-processor.ts";
 import { StreamProcessor } from "../../stream-processor.ts";
 import {
@@ -31,7 +31,7 @@ import {
   type StreamSubscriberDisconnectReason,
 } from "./contract.ts";
 
-export type CoreProcessorContract = typeof CoreProcessorContract;
+type CoreProcessorContract = typeof CoreProcessorContract;
 
 /**
  * Runtime hooks the hosting Stream DO provides. The split keeps the DO the
@@ -42,7 +42,7 @@ export type CoreProcessorContract = typeof CoreProcessorContract;
  * Optional so reduce-only usage (tests, state rebuilds) can construct the
  * processor without a live stream behind it; connection methods assert.
  */
-export type CoreProcessorDeps = {
+type CoreProcessorDeps = {
   /** Read committed events for the delivery pump. */
   getEvents?: (args: { afterOffset: number; limit: number }) => StreamEvent[];
   /** The live reduced core state (owned by the Stream DO between appends). */

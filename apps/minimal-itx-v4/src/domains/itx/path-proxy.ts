@@ -1,13 +1,8 @@
-export type DynamicPathCall = {
-  args: unknown[];
-  path: string[];
+type InvokeCapabilityTarget = {
+  invokeCapability(call: { args: unknown[]; path: string[] }): unknown;
 };
 
-export type InvokeCapabilityTarget = {
-  invokeCapability(call: DynamicPathCall): unknown;
-};
-
-export const RESERVED_DYNAMIC_PATH_SEGMENTS: ReadonlySet<string> = new Set([
+const RESERVED_DYNAMIC_PATH_SEGMENTS: ReadonlySet<string> = new Set([
   "__defineGetter__",
   "__defineSetter__",
   "__lookupGetter__",
@@ -31,10 +26,6 @@ export const RESERVED_DYNAMIC_PATH_SEGMENTS: ReadonlySet<string> = new Set([
   "toString",
   "valueOf",
 ]);
-
-export type DynamicPathFallbackOptions = {
-  isReserved?: (segment: string) => boolean;
-};
 
 export function isReservedDynamicPathSegment(segment: string): boolean {
   return RESERVED_DYNAMIC_PATH_SEGMENTS.has(segment);
@@ -89,7 +80,7 @@ export function createInvokeCapabilityPathProxy(
 
 export function withInvokeCapabilityFallback<T extends object & InvokeCapabilityTarget>(
   target: T,
-  options: DynamicPathFallbackOptions = {},
+  options: { isReserved?: (segment: string) => boolean } = {},
 ): T {
   const isReserved = options.isReserved ?? isReservedDynamicPathSegment;
 

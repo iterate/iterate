@@ -9,9 +9,11 @@ import type {
 import {
   StreamEvent as StreamEventSchema,
   StreamEventInput as StreamEventInputSchema,
-  type StreamEvent as BaseStreamEvent,
-  type StreamEventInput as BaseStreamEventInput,
-} from "./event.ts";
+} from "../../schemas.ts";
+import type {
+  StreamEvent as BaseStreamEvent,
+  StreamEventInput as BaseStreamEventInput,
+} from "../../types.ts";
 
 export * from "@iterate-com/shared/streams/stream-processors";
 
@@ -77,7 +79,7 @@ type ConsumedInputFromTypes<
   Types extends readonly string[],
 > = "*" extends Types[number] ? BaseStreamEventInput : InputFromTypes<Events, ProcessorDeps, Types>;
 
-export type WildcardConsumedEvent = TypedStreamEvent<"*", unknown> & { payload: unknown };
+type WildcardConsumedEvent = TypedStreamEvent<"*", unknown> & { payload: unknown };
 
 export type ConsumedEvent<Contract> = Contract extends {
   events: EventCatalog;

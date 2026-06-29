@@ -2,10 +2,11 @@ import { newHttpBatchRpcResponse, newWorkersWebSocketRpcResponse } from "capnweb
 import type { Env } from "./env.ts";
 import { ITX_AUTH_COOKIE } from "./auth.ts";
 import { AgentDurableObject } from "./domains/agents/agent-durable-object.ts";
+import { ItxEntrypoint } from "./domains/itx/itx-entrypoint.ts";
+import { UnauthenticatedItxRpcTarget } from "./domains/itx/rpc-targets.ts";
 import { ProjectDurableObject } from "./domains/projects/project-durable-object.ts";
 import { RepoDurableObject } from "./domains/repos/repo-durable-object.ts";
 import { StreamDurableObject } from "./domains/streams/stream-durable-object.ts";
-import { ItxEntrypoint, UnauthenticatedItxRpcTarget } from "./rpc-targets.ts";
 
 export default {
   async fetch(request: Request, _env: Env, ctx: ExecutionContext) {

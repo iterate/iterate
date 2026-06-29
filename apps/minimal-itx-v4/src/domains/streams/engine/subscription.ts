@@ -1,6 +1,6 @@
-import type { ProcessEventBatch, StreamEventBatch } from "../../../../types.ts";
+import type { ProcessEventBatch, StreamEventBatch } from "./types.ts";
 
-export type StreamSubscription = AsyncDisposable &
+type StreamSubscription = AsyncDisposable &
   AsyncIterable<StreamEventBatch> & {
     readonly subscriptionKey: string | undefined;
     readonly streamMaxOffset: number | undefined;

@@ -1,4 +1,4 @@
-export type RepoArtifactNameParts = {
+type RepoArtifactNameParts = {
   projectId: string;
   path: string;
 };

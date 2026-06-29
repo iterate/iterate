@@ -1,4 +1,4 @@
-import type { GetProcessorRuntimeState, ProcessEventBatch } from "../../../../../types.ts";
+import type { GetProcessorRuntimeState, ProcessEventBatch } from "../types.ts";
 
 type RetainedRpcCallback<T extends (...args: any[]) => unknown> = T &
   Partial<Disposable> & {
@@ -36,7 +36,7 @@ type RetainedProcessEventBatch = FireAndForgetRetainedRpcCallback<ProcessEventBa
  * https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/#stubs-received-as-parameters-in-an-rpc-call
  * https://github.com/cloudflare/capnweb#resource-management-and-disposal
  */
-export function retainRpcCallback<T extends (...args: any[]) => unknown>(
+function retainRpcCallback<T extends (...args: any[]) => unknown>(
   callback: T,
 ): RetainedRpcCallback<T> {
   const retainable = callback as RetainableRpcCallback<T>;
@@ -153,7 +153,7 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
   );
 }
 
-export function disposeIgnoredRpcResult(result: unknown): void {
+function disposeIgnoredRpcResult(result: unknown): void {
   if (
     result !== null &&
     (typeof result === "object" || typeof result === "function") &&

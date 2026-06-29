@@ -1,7 +1,7 @@
 import { env, RpcTarget } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import type { DynamicWorkerRef, DynamicWorkerSource } from "./dynamic-worker-ref.ts";
+import type { DynamicWorkerRef, DynamicWorkerSource } from "./types.ts";
 import {
   hashString,
   type ResolvedWorkerSource,
@@ -10,7 +10,7 @@ import {
 
 type WorkerBindings = Record<string, unknown>;
 
-export class DynamicWorkersRpcTarget extends RpcTarget {
+export class DynamicWorkerRuntimeRpcTarget extends RpcTarget {
   #bindings: WorkerBindings;
   #facets?: DurableObjectState["facets"];
   #loader: Env["LOADER"];

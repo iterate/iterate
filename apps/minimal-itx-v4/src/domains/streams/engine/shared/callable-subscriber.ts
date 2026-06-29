@@ -5,11 +5,6 @@
 
 import type { Callable } from "@iterate-com/shared/callable/types.ts";
 
-export type CallableSubscriber = {
-  type: "callable";
-  callable: Callable;
-};
-
 /**
  * Subscriber descriptor for a processor hosted on a Durable Object reachable
  * through an env binding on the worker that runs the Stream DO.
@@ -23,7 +18,7 @@ export function durableObjectProcessorSubscriber(args: {
   processorName: string;
   /** RPC method wired to `host.requestStreamSubscription`. */
   rpcMethod?: string;
-}): CallableSubscriber {
+}): { type: "callable"; callable: Callable } {
   return {
     type: "callable",
     callable: {

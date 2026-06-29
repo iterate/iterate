@@ -2,20 +2,19 @@ import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
 import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type {
-  ProcessEventBatch,
   Stream,
   StreamEvent as PublicStreamEvent,
   StreamEventInput as PublicStreamEventInput,
-  StreamRpc,
-} from "../../../types.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { StreamRpcTarget } from "../../rpc-targets.ts";
+} from "./types.ts";
+import type { ProcessEventBatch } from "./engine/types.ts";
+import { StreamRpcTarget } from "./rpc-targets.ts";
 import {
   StreamEvent as StreamEventSchema,
   StreamEventInput as StreamEventInputSchema,
-  type StreamEvent,
-} from "./engine/shared/event.ts";
+} from "./schemas.ts";
+import type { StreamEvent } from "./types.ts";
 import type { StreamSubscriptionHandshake } from "./engine/workers/stream-processor-host.ts";
 import type { StreamProcessorStream } from "./engine/stream-processor.ts";
 import { getInitialProcessorState } from "./engine/shared/stream-processors.ts";
@@ -769,7 +768,7 @@ export class StreamDurableObject extends DurableObject<Env> implements Stream {
           auth: trustedInternalAuthContext(),
           path: this.name.path,
           projectId: this.name.projectId,
-        }) as unknown as StreamRpc,
+        }) as unknown as StreamProcessorStream,
         subscriptionKey: args.subscriptionKey,
         streamMaxOffset: this.#coreProcessorState.maxOffset,
         streamRuntimeState: { coreProcessorState: this.#coreProcessorState },

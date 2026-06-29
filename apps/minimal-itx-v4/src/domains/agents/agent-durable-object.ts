@@ -1,24 +1,25 @@
 import { DurableObject } from "cloudflare:workers";
-import type { Agent, RpcTargetImplementation } from "../../../types.ts";
 import { TRUSTED_INTERNAL_ITX_TOKEN, trustedInternalAuthContext } from "../../auth.ts";
 import type { Env } from "../../env.ts";
-import { ItxProcessor, type ItxProcessorRpc } from "../../itx/processor.ts";
-import { ItxContract } from "../../itx/processor-contract.ts";
-import { AgentRpcTarget } from "../../rpc-targets.ts";
+import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
+import { ItxProcessor, type ItxProcessorRpc } from "../itx/itx-processor-implementation.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { DynamicWorkersRpcTarget } from "../dynamic-workers/dynamic-workers-rpc-target.ts";
+import { DynamicWorkerRuntimeRpcTarget } from "../dynamic-workers/rpc-targets.ts";
 import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
 } from "../streams/engine/workers/stream-processor-host.ts";
-import { AgentProcessor, AgentProcessorContract } from "./agent-processor.ts";
+import { AgentProcessorContract } from "./agent-processor-contract.ts";
+import { AgentProcessor } from "./agent-processor-implementation.ts";
+import { AgentRpcTarget } from "./rpc-targets.ts";
+import type { Agent } from "./types.ts";
 
 export class AgentDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parseProjectScoped(this.ctx.id.name!);
   readonly #processorHost = createStreamProcessorHost(this.ctx);
   readonly #stream = this.ctx.exports.StreamDurableObject.getByName(this.ctx.id.name!);
 
-  readonly #dynamicWorkers = new DynamicWorkersRpcTarget({
+  readonly #dynamicWorkerRuntime = new DynamicWorkerRuntimeRpcTarget({
     bindings: {
       // The binding is intentionally the boring unauthenticated root. Script
       // workers authenticate and then walk to project/agent from their own
@@ -50,11 +51,11 @@ export class AgentDurableObject extends DurableObject<Env> {
     this.#processorHost.add(AgentProcessorContract.slug, (deps) => new AgentProcessor(deps));
 
     this.#itxProcessor = this.#processorHost.add(
-      ItxContract.slug,
+      ItxProcessorContract.slug,
       (deps) =>
         new ItxProcessor({
           ...deps,
-          dynamicWorkers: this.#dynamicWorkers,
+          dynamicWorkerRuntime: this.#dynamicWorkerRuntime,
           host: { agentPath: this.#name.path, projectId: this.#name.projectId },
           stream: this.#stream as never,
         }),
@@ -69,7 +70,7 @@ export class AgentDurableObject extends DurableObject<Env> {
     return this.#processorHost.requestStreamSubscription(args);
   }
 
-  getCapability(): RpcTargetImplementation<Agent> {
+  getCapability() {
     return new AgentRpcTarget({
       auth: trustedInternalAuthContext(),
       ctx: this.ctx,
@@ -78,11 +79,11 @@ export class AgentDurableObject extends DurableObject<Env> {
     });
   }
 
-  get rpcTarget(): RpcTargetImplementation<Agent> {
+  get rpcTarget() {
     return this.getCapability();
   }
 
-  get stream(): RpcTargetImplementation<Agent>["stream"] {
+  get stream() {
     return this.getCapability().stream;
   }
 

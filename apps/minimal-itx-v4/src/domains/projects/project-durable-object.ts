@@ -5,21 +5,22 @@ import {
 } from "../streams/engine/workers/stream-processor-host.ts";
 import type { Env } from "../../env.ts";
 import { TRUSTED_INTERNAL_ITX_TOKEN, trustedInternalAuthContext } from "../../auth.ts";
-import { ItxProcessor, type ItxProcessorRpc } from "../../itx/processor.ts";
-import { ItxContract } from "../../itx/processor-contract.ts";
-import { DynamicWorkersRpcTarget } from "../dynamic-workers/dynamic-workers-rpc-target.ts";
+import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
+import { ItxProcessor, type ItxProcessorRpc } from "../itx/itx-processor-implementation.ts";
+import { DynamicWorkerRuntimeRpcTarget } from "../dynamic-workers/rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import type { Project, ProjectWorker, RpcTargetImplementation } from "../../../types.ts";
 import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "../repos/project-repo.ts";
-import { ProjectRpcTarget } from "../../rpc-targets.ts";
-import { ProjectProcessor, ProjectProcessorContract } from "./project-processor.ts";
+import { ProjectProcessorContract } from "./project-processor-contract.ts";
+import { ProjectProcessor } from "./project-processor-implementation.ts";
+import { ProjectRpcTarget } from "./rpc-targets.ts";
+import type { Project, ProjectWorker } from "./types.ts";
 
 export class ProjectDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parseProjectScoped(this.ctx.id.name!);
   readonly #processorHost = createStreamProcessorHost(this.ctx);
   readonly #stream = this.ctx.exports.StreamDurableObject.getByName(this.ctx.id.name!);
 
-  readonly #dynamicWorkers = new DynamicWorkersRpcTarget({
+  readonly #dynamicWorkerRuntime = new DynamicWorkerRuntimeRpcTarget({
     bindings: {
       ITX: this.ctx.exports.ItxEntrypoint({
         props: {
@@ -51,11 +52,11 @@ export class ProjectDurableObject extends DurableObject<Env> {
     );
 
     this.#itxProcessor = this.#processorHost.add(
-      ItxContract.slug,
+      ItxProcessorContract.slug,
       (deps) =>
         new ItxProcessor({
           ...deps,
-          dynamicWorkers: this.#dynamicWorkers,
+          dynamicWorkerRuntime: this.#dynamicWorkerRuntime,
           host: { projectId: this.#name.projectId },
           stream: this.#stream as never,
         }),
@@ -70,7 +71,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     return this.#processorHost.requestStreamSubscription(args);
   }
 
-  getCapability(): RpcTargetImplementation<Project> {
+  getCapability() {
     return new ProjectRpcTarget({
       auth: trustedInternalAuthContext(),
       ctx: this.ctx,
@@ -90,7 +91,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   private defaultProjectWorker() {
-    return this.#dynamicWorkers.get<ProjectWorker>({
+    return this.#dynamicWorkerRuntime.get<ProjectWorker>({
       source: {
         repoPath: PROJECT_REPO_PATH,
         sourcePath: PROJECT_WORKER_SOURCE_PATH,
@@ -109,7 +110,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     });
   }
 
-  get rpcTarget(): RpcTargetImplementation<Project> {
+  get rpcTarget() {
     return this.getCapability();
   }
 

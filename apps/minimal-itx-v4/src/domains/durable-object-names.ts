@@ -17,19 +17,17 @@
 
 const MAX_DURABLE_OBJECT_NAME_BYTES = 256;
 
-export type DurableObjectNameParts = {
+type DurableObjectNameParts = {
   projectId: string | null;
   path: string;
   props?: Record<string, string>;
 };
 
-export type ParsedDurableObjectName = {
+type ParsedDurableObjectName = {
   projectId: string | null;
   path: string;
   props: Record<string, string>;
 };
-
-export type ProjectScopedDurableObjectName = ParsedDurableObjectName & { projectId: string };
 
 function normalizePath(path: string): string {
   return path === "" ? "/" : path.startsWith("/") ? path : `/${path}`;
@@ -123,7 +121,7 @@ export const DurableObjectNameCodec = {
     return { projectId, path, props };
   },
 
-  parseProjectScoped(name: string): ProjectScopedDurableObjectName {
+  parseProjectScoped(name: string): ParsedDurableObjectName & { projectId: string } {
     const parsed = this.parse(name);
     if (parsed.projectId === null) {
       throw new Error(`Durable Object name must be project-scoped, got global name "${name}".`);

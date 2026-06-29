@@ -8,14 +8,11 @@ import {
 import type { Env } from "../../env.ts";
 import { hashString, type ResolvedWorkerSource } from "../dynamic-workers/dynamic-worker-loader.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import type {
-  CommitRepoFilesInput,
-  CommitRepoFilesResult,
-  RepoFileChange,
-} from "../../../types.ts";
+import type { CommitRepoFilesInput, CommitRepoFilesResult, RepoFileChange } from "./types.ts";
 import { RepoArtifactNameCodec } from "./repo-artifact-name.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.ts";
-import { RepoProcessor, RepoProcessorContract } from "./repo-processor.ts";
+import { RepoProcessorContract } from "./repo-processor-contract.ts";
+import { RepoProcessor } from "./repo-processor-implementation.ts";
 
 const REPO_DEFAULT_BRANCH = "main";
 const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;

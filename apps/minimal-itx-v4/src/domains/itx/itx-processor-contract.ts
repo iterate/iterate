@@ -1,22 +1,9 @@
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
-import { DynamicWorkerRef } from "../domains/dynamic-workers/dynamic-worker-ref.ts";
-import type { CapabilityRecord as CapabilityRecordType } from "../../types.ts";
+import { CapabilityRecord } from "./schemas.ts";
+export type { CapabilityRecord } from "./types.ts";
 
-export const CapabilityRecord = z.discriminatedUnion("type", [
-  z.strictObject({
-    path: z.array(z.string()),
-    type: z.literal("live"),
-  }),
-  z.strictObject({
-    path: z.array(z.string()),
-    type: z.literal("dynamic-worker"),
-    workerRef: DynamicWorkerRef,
-  }),
-]);
-export type CapabilityRecord = CapabilityRecordType;
-
-export const ItxContract = defineProcessorContract({
+export const ItxProcessorContract = defineProcessorContract({
   slug: "itx-v2",
   version: "0.1.0",
   description: "A tiny dynamic capability table and script execution journal.",

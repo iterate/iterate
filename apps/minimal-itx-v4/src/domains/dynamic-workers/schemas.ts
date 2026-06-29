@@ -2,9 +2,9 @@ import { z } from "zod";
 import type {
   DynamicWorkerRef as DynamicWorkerRefType,
   DynamicWorkerSource as DynamicWorkerSourceType,
-} from "../../../types.ts";
+} from "./types.ts";
 
-export const DynamicWorkerSource = z.discriminatedUnion("type", [
+const DynamicWorkerSource = z.discriminatedUnion("type", [
   z.strictObject({
     mainModule: z.string(),
     modules: z.record(z.string(), z.string()),
@@ -15,8 +15,7 @@ export const DynamicWorkerSource = z.discriminatedUnion("type", [
     sourcePath: z.string(),
     type: z.literal("repo"),
   }),
-]);
-export type DynamicWorkerSource = DynamicWorkerSourceType;
+]) satisfies z.ZodType<DynamicWorkerSourceType, unknown>;
 
 export const DynamicWorkerRef = z.strictObject({
   cacheKey: z.string().optional(),
@@ -32,5 +31,4 @@ export const DynamicWorkerRef = z.strictObject({
       type: z.literal("durable-object"),
     }),
   ]),
-});
-export type DynamicWorkerRef = DynamicWorkerRefType;
+}) satisfies z.ZodType<DynamicWorkerRefType, unknown>;

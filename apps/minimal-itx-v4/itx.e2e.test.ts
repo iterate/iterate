@@ -7,7 +7,7 @@ import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
 import { buildUrl, withItxSession } from "./test-helpers.ts";
 import type { ItxWebSocketMessage } from "./test-helpers.ts";
-import type { UnauthenticatedItx } from "./types.ts";
+import type { UnauthenticatedItx } from "./src/domains/itx/types.ts";
 import { TRUSTED_INTERNAL_ITX_TOKEN } from "./src/auth.ts";
 import { RepoArtifactNameCodec } from "./src/domains/repos/repo-artifact-name.ts";
 import {

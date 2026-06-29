@@ -99,6 +99,29 @@ function makeStreamsExampleAppWorkspace(): WorkspaceConfig {
   };
 }
 
+function makeMinimalItxV4Workspace(): WorkspaceConfig {
+  return {
+    entry: [
+      "src/worker.ts!",
+      "vitest.config.ts",
+      "*.test.ts",
+      "*.e2e.test.ts",
+      "scripts/**/*.ts",
+      "tsconfig.wrangler-proof.json",
+    ],
+    project: [
+      "*.test.ts",
+      "*.e2e.test.ts",
+      "scripts/**/*.ts",
+      "src/**/*.ts!",
+      "test-helpers.ts",
+      "worker-configuration.d.ts",
+    ],
+    ignoreDependencies: ["cloudflare"],
+    ignoreBinaries: ["wrangler"],
+  };
+}
+
 function makeCloudflareTanStackAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   return {
     entry: ["alchemy.run.ts", "vite.config.ts", "scripts/router.ts", "src/worker.ts!"],
@@ -146,6 +169,7 @@ const config: KnipConfig = {
     "!apps/os",
     "!apps/semaphore",
     "!apps/streams-example-app",
+    "!apps/minimal-itx-v4",
     "packages/*",
     "!packages/shared",
   ],
@@ -171,6 +195,7 @@ const config: KnipConfig = {
     "apps/semaphore": makeSemaphoreCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/os": makeOsCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/streams-example-app": makeStreamsExampleAppWorkspace(),
+    "apps/minimal-itx-v4": makeMinimalItxV4Workspace(),
     "packages/shared": makeSharedWorkspace(),
   },
 };
