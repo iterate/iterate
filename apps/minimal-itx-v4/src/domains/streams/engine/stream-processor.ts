@@ -50,8 +50,8 @@ export type StreamProcessorBaseDeps<Contract> = {
 } & StreamProcessorStateStorage<ProcessorState<Contract>>;
 
 // These arg shapes are intentionally not exported: subclass overrides annotate their
-// args as `Parameters<StreamProcessor<Contract>["method"]>[0]` (enforced by the
-// `iterate/stream-processor-override-args` lint rule) so there is exactly one spelling.
+// args as `Parameters<StreamProcessor<Contract>["method"]>[0]` so there is exactly
+// one spelling.
 //
 // State and events are passed by reference. Hooks must treat them as immutable:
 // `reduce` returns a new state object instead of mutating its input.
