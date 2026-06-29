@@ -411,15 +411,16 @@ function hasOnlySimpleImplementationParameterTypes(context, element) {
 function getMechanicalClassImplContractMethods(fileService, candidate) {
   const typed = fileService.resolveTypeByName(candidate.name, candidate.position);
   if (!typed) return undefined;
-  const project = fileService.project;
-  if (!project) return undefined;
 
-  return project.checker
+  return fileService.project.checker
     .getPropertiesOfType(typed.type)
     .map((property) => {
-      const propertyType = project.checker.getTypeOfSymbol(property);
+      const propertyType = fileService.project.checker.getTypeOfSymbol(property);
       if (!propertyType) return undefined;
-      const signature = project.checker.getSignaturesOfType(propertyType, SignatureKind.Call)[0];
+      const signature = fileService.project.checker.getSignaturesOfType(
+        propertyType,
+        SignatureKind.Call,
+      )[0];
       if (!signature) return undefined;
       return {
         name: property.name,
@@ -897,6 +898,7 @@ const plugin = {
             if (isPromiseHandlingCallExpression(node)) return;
 
             fileService ??= getPreparedTypeAwareLintFileService(context);
+            if (!fileService) return;
             const thenable = fileService.getThenableInfo(node);
             if (!thenable) return;
 
@@ -932,6 +934,7 @@ const plugin = {
             if (!contracts?.length) return;
 
             fileService ??= getPreparedTypeAwareLintFileService(context);
+            if (!fileService) return;
             const classMethodNames = new Set(
               node.body.body
                 .filter((element) => getClassElementImplementationFunction(element))

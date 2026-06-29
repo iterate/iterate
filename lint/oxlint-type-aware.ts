@@ -87,9 +87,11 @@ export class TypeAwareLintService {
   }
 
   getFileService(fileName: string) {
+    const project = this.getProjectForFile(fileName);
+    if (!project) return undefined;
     return new TypeAwareLintFileService({
       fileName,
-      project: this.getProjectForFile(fileName),
+      project,
     });
   }
 
@@ -208,15 +210,14 @@ export class TypeAwareLintService {
 
 export class TypeAwareLintFileService {
   fileName: string;
-  project: Project | undefined;
+  project: Project;
 
-  constructor(input: { fileName: string; project: Project | undefined }) {
+  constructor(input: { fileName: string; project: Project }) {
     this.fileName = resolve(input.fileName);
     this.project = input.project;
   }
 
   getTypeAtPosition(position: number) {
-    if (!this.project) return undefined;
     return this.project.checker.getTypeAtPosition(this.fileName, position);
   }
 
@@ -227,7 +228,6 @@ export class TypeAwareLintFileService {
   }
 
   getThenableInfo(node: Expression) {
-    if (!this.project) return undefined;
     const type = this.getExpressionType(node);
     if (!type || !this.isThenableType(type)) return undefined;
     return {
@@ -244,7 +244,6 @@ export class TypeAwareLintFileService {
   }
 
   getCallReturnType(node: CallExpression) {
-    if (!this.project) return undefined;
     const calleePosition = getCallablePosition(node.callee);
     if (calleePosition === undefined) return undefined;
 
@@ -259,7 +258,6 @@ export class TypeAwareLintFileService {
   }
 
   resolveTypeByName(name: string, position: number) {
-    if (!this.project) return undefined;
     const symbol = this.project.checker.resolveName(
       name,
       SymbolFlags.Type,
@@ -273,9 +271,8 @@ export class TypeAwareLintFileService {
   }
 
   isThenableType(type: Type) {
-    if (!this.project) return false;
     const properties = this.project.checker.getPropertiesOfType(type);
-    return properties.some((property: Symbol) => property.name === "then");
+    return properties.some((property) => property.name === "then");
   }
 }
 

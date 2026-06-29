@@ -650,16 +650,17 @@ function getCallablePropertyNames(
   position: number,
 ) {
   const fileService = service.getFileService(fileName);
+  if (!fileService) return undefined;
   const typed = fileService.resolveTypeByName(name, position);
   if (!typed) return undefined;
-  const project = fileService.project;
-  if (!project) return undefined;
-  return project.checker
+  return fileService.project.checker
     .getPropertiesOfType(typed.type)
     .filter((property) => {
-      const propertyType = project.checker.getTypeOfSymbol(property);
+      const propertyType = fileService.project.checker.getTypeOfSymbol(property);
       if (!propertyType) return false;
-      return project.checker.getSignaturesOfType(propertyType, SignatureKind.Call).length > 0;
+      return (
+        fileService.project.checker.getSignaturesOfType(propertyType, SignatureKind.Call).length > 0
+      );
     })
     .map((property) => property.name);
 }
