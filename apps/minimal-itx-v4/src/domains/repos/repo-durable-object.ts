@@ -139,7 +139,7 @@ export class RepoDurableObject extends DurableObject<Env> {
 async function artifactToken(artifacts: Artifacts, name: string) {
   const repo = await artifacts.get(name);
   const { plaintext } = await repo.createToken("write", REPO_WRITE_TOKEN_TTL_SECONDS);
-  return stripArtifactTokenQuery(plaintext);
+  return plaintext.split("?expires=")[0] ?? plaintext;
 }
 
 async function seedArtifactRepo(input: {
@@ -355,10 +355,6 @@ function normalizeRepoFilePath(path: string): string {
     throw new Error(`Invalid repo file path: "${path}".`);
   }
   return normalized;
-}
-
-function stripArtifactTokenQuery(token: string) {
-  return token.split("?expires=")[0] ?? token;
 }
 
 async function ensureBranchRef(input: { branch: string; git: ReturnType<typeof createGit> }) {

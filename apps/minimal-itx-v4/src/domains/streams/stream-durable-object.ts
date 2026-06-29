@@ -15,7 +15,6 @@ import {
   StreamEvent as StreamEventSchema,
   StreamEventInput as StreamEventInputSchema,
   type StreamEvent,
-  type StreamEventInput,
 } from "./engine/shared/event.ts";
 import type { StreamSubscriptionHandshake } from "./engine/workers/stream-processor-host.ts";
 import type { StreamProcessorStream } from "./engine/stream-processor.ts";

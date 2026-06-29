@@ -18,7 +18,6 @@ import type { ProcessEventBatch, ProcessorRuntimeState } from "../../../../../..
 import type { StreamProcessorStream } from "../../stream-processor.ts";
 import { StreamProcessor } from "../../stream-processor.ts";
 import {
-  disposeIgnoredRpcResult,
   retainGetProcessorRuntimeState,
   retainProcessEventBatch,
 } from "../../workers/rpc-lifecycle.ts";
@@ -594,8 +593,8 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
     //
     // Inbound connections (capnweb via the fronting worker) deliberately do
     // NOT observe results: pulling them would make every browser tab send a
-    // resolve frame per batch, and their liveness is already covered by
-    // onRpcBroken on the terminated socket.
+    // resolve frame per batch. They rely on explicit unsubscribe and the
+    // transport's best-effort onRpcBroken signal instead.
     const processEventBatch = retainProcessEventBatch(
       args.processEventBatch,
       args.direction === "outbound"
@@ -649,13 +648,13 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
           connection.batchesSent += 1;
           connection.eventsSent += events.length;
           connection.lastDeliveredAt = new Date().toISOString();
-          // Batch-first, fire-and-forget: never await the remote result. Both
-          // Workers RPC and Cap'n Web return disposable thenables for remote calls;
-          // dispose ignored results so we do not retain return capabilities.
+          // Batch-first, fire-and-forget: never await the remote result. The
+          // retained callback wrapper owns remote-call result disposal and, for
+          // outbound subscribers, optional delivery-error observation.
           // https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
           // https://github.com/cloudflare/capnweb#memory-management
           const currentState = this.#currentState();
-          const pendingBatch = processEventBatch({
+          processEventBatch({
             projectId: currentState.projectId,
             path: currentState.path,
             events,
@@ -664,7 +663,6 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
             // two always correspond (state-at-streamMaxOffset; see types.ts).
             state: currentState,
           });
-          disposeIgnoredRpcResult(pendingBatch);
           await Promise.resolve();
         }
       } finally {

@@ -48,10 +48,6 @@ export function createInvokeCapabilityPathProxy(
   const valueFor = (key: string) =>
     createInvokeCapabilityPathProxy(target, [...path, key], isReserved);
 
-  function pathTarget() {
-    return undefined;
-  }
-
   // Cap'n Web and Workers RPC can transport functions as callable capabilities.
   // Dynamic dotted fallback therefore uses a function-backed proxy instead of a
   // RpcTarget instance: each missing property extends the path, and applying the
@@ -64,7 +60,7 @@ export function createInvokeCapabilityPathProxy(
   // See:
   // https://github.com/cloudflare/capnweb#cloudflare-workers-rpc-interoperability
   // https://developers.cloudflare.com/workers/runtime-apis/rpc/
-  return new Proxy(pathTarget, {
+  return new Proxy(function () {}, {
     apply(_target, _thisArg, args) {
       return target.invokeCapability({ args: [...args], path });
     },

@@ -20,5 +20,20 @@ Somebody calls
 
 # Important considerations
 
-- rpc stubs of functions and rpc targets that are passed by reference as arguments into capnweb rpc methods need to be dup()-ed once in every isolate they pass through, if they are meant to not be disposed when the rpc call they came with returns
-  - for example, itx.streams.get("/bla").subscribe({ processEventBatch: (batch) => { ... } }) needs to be dup()-ed once in the stateless worker that runs the StreamRpcTarget and then AGAIN inside the durable object isolate that holds the subscriptions. If this ever seems relevant, please research the capnweb and workers rpc docs about dup-ing
+- rpc stubs of functions and rpc targets need to be dup()-ed by the isolate that
+  keeps them after the RPC method that received them returns. Transparent
+  forwarding layers should pass arguments through. With Cloudflare Workers'
+  `rpc_params_dup_stubs` behavior (default from compatibility date 2026-01-20),
+  parameter stubs are duplicated while forwarding and match Cap'n Web's
+  ownership model.
+  - references:
+    <https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/>,
+    <https://developers.cloudflare.com/workers/configuration/compatibility-flags/#duplicate-stubs-in-rpc-params-instead-of-transferring-ownership>,
+    <https://github.com/cloudflare/capnweb#cloudflare-workers-rpc-interoperability>
+  - for example, `StreamRpcTarget.subscribe()` forwards `processEventBatch`
+    directly to the Stream Durable Object. The Stream Durable Object retains the
+    callback because it stores the subscription connection and calls the callback
+    later. The stateless worker proxy does not retain or wrap it.
+  - live `provideCapability()` targets follow the same rule: the ITX processor
+    that stores the live capability must retain the stubs it will call later and
+    dispose those retained stubs when the capability is replaced or revoked.

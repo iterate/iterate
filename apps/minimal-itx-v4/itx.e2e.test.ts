@@ -1,7 +1,7 @@
 import http from "node:http";
 import { describe, expect, test } from "vitest";
 // oxlint-disable-next-line iterate/no-capnweb-http-batch -- this regression test intentionally proves the one-shot HTTP batch shape.
-import { newHttpBatchRpcSession } from "capnweb";
+import { newHttpBatchRpcSession, RpcTarget } from "capnweb";
 import { WebClient } from "@slack/web-api";
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
@@ -168,6 +168,24 @@ function fencedAgentScript(code: string): string {
   return ["The faux LLM produced this codemode block.", "```js", code.trim(), "```"].join("\n");
 }
 
+async function waitForCondition(
+  predicate: () => boolean | Promise<boolean>,
+  opts: { description: string; intervalMs?: number; timeoutMs?: number },
+): Promise<void> {
+  const timeoutMs = opts.timeoutMs ?? 5_000;
+  const intervalMs = opts.intervalMs ?? 50;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error(`Timed out waiting for ${opts.description}`);
+}
+
+function disposeRpcResult(result: unknown): void {
+  (result as Partial<Disposable>)[Symbol.dispose]?.();
+}
+
 // These are hand written tests - they MUST pass
 describe("minimal itx v4", () => {
   test("Unauthenticated itx can't do anything", async () => {
@@ -276,7 +294,7 @@ describe("minimal itx v4", () => {
 
     const getSecret = async () => "bananas";
 
-    const { revoke } = await project.provideCapability({
+    const provision = await project.provideCapability({
       path: ["someMethodInTestRunner"],
       capability: {
         type: "live",
@@ -285,6 +303,7 @@ describe("minimal itx v4", () => {
         },
       },
     });
+    const { revoke } = provision;
 
     // @ts-expect-error - TODO maybe some niceties
     expect(await project.someMethodInTestRunner.getSecret(getSecret)).toBe("bananas");
@@ -301,9 +320,10 @@ describe("minimal itx v4", () => {
       },
     });
 
+    using newConnectionProject = newItx.projects.get(description.projectId);
     expect(
       // @ts-expect-error - TODO maybe some niceties
-      await newItx.projects.get(description.projectId).someMethodInTestRunner.getSecret(getSecret),
+      await newConnectionProject.someMethodInTestRunner.getSecret(getSecret),
     ).toBe("bananas");
 
     await revoke();
@@ -314,8 +334,9 @@ describe("minimal itx v4", () => {
     );
     await expect(
       // @ts-expect-error - TODO maybe some niceties
-      newItx.projects.get(description.projectId).someMethodInTestRunner.getSecret(getSecret),
+      newConnectionProject.someMethodInTestRunner.getSecret(getSecret),
     ).rejects.toThrow(/no capability "someMethodInTestRunner.getSecret"/);
+    disposeRpcResult(provision);
   });
 
   test("Project repos, workers, runScript, and dynamic worker refs compose", async () => {
@@ -392,15 +413,16 @@ describe("minimal itx v4", () => {
       source: "committed-worker",
     });
 
-    await project.provideCapability({
-      path: ["probe"],
-      capability: {
-        type: "dynamic-worker",
-        workerRef: {
-          source: {
-            mainModule: "probe.js",
-            modules: {
-              "probe.js": `
+    disposeRpcResult(
+      await project.provideCapability({
+        path: ["probe"],
+        capability: {
+          type: "dynamic-worker",
+          workerRef: {
+            source: {
+              mainModule: "probe.js",
+              modules: {
+                "probe.js": `
                 import { WorkerEntrypoint } from "cloudflare:workers";
 
                 export class ProbeEntrypoint extends WorkerEntrypoint {
@@ -415,57 +437,62 @@ describe("minimal itx v4", () => {
                   }
                 }
               `,
+              },
+              type: "inline",
             },
-            type: "inline",
+            target: { entrypoint: "ProbeEntrypoint", type: "worker-entrypoint" },
           },
-          target: { entrypoint: "ProbeEntrypoint", type: "worker-entrypoint" },
         },
-      },
-    });
+      }),
+    );
     // @ts-expect-error - dynamic capability root
     expect(await project.probe.inspect()).toEqual({
       principal: "trusted-internal",
       repo: `repo ${description.projectId}:/`,
     });
 
-    await project.provideCapability({
-      path: ["projectWorkerRef"],
-      capability: {
-        type: "dynamic-worker",
-        workerRef: {
-          source: {
-            repoPath: "/",
-            sourcePath: "worker.js",
-            type: "repo",
+    disposeRpcResult(
+      await project.provideCapability({
+        path: ["projectWorkerRef"],
+        capability: {
+          type: "dynamic-worker",
+          workerRef: {
+            source: {
+              repoPath: "/",
+              sourcePath: "worker.js",
+              type: "repo",
+            },
+            target: { type: "worker-entrypoint" },
           },
-          target: { type: "worker-entrypoint" },
         },
-      },
-    });
+      }),
+    );
     // @ts-expect-error - dynamic capability root
     const workerRefResponse = await project.projectWorkerRef.fetch(
       new Request("https://example.com/ref"),
     );
     expect(await workerRefResponse.text()).toBe("updated project worker fetched /ref");
 
-    await project.provideCapability({
-      path: ["counterFacet"],
-      capability: {
-        type: "dynamic-worker",
-        workerRef: {
-          cacheKey: `counter-facet-${crypto.randomUUID()}`,
-          source: {
-            repoPath: "/",
-            sourcePath: "worker.js",
-            type: "repo",
-          },
-          target: {
-            className: "CounterDurableObject",
-            type: "durable-object",
+    disposeRpcResult(
+      await project.provideCapability({
+        path: ["counterFacet"],
+        capability: {
+          type: "dynamic-worker",
+          workerRef: {
+            cacheKey: `counter-facet-${crypto.randomUUID()}`,
+            source: {
+              repoPath: "/",
+              sourcePath: "worker.js",
+              type: "repo",
+            },
+            target: {
+              className: "CounterDurableObject",
+              type: "durable-object",
+            },
           },
         },
-      },
-    });
+      }),
+    );
     // @ts-expect-error - dynamic capability root
     expect(await project.counterFacet.increment()).toBe(1);
     // @ts-expect-error - dynamic capability root
@@ -483,17 +510,19 @@ describe("minimal itx v4", () => {
     const agentPath = `/agents/project-tool-${crypto.randomUUID()}`;
     using agent = project.agents.get(agentPath);
 
-    await project.provideCapability({
-      path: ["projectTool"],
-      capability: {
-        type: "live",
-        target: {
-          format(input: { text: string }) {
-            return `project tool saw ${input.text}`;
+    disposeRpcResult(
+      await project.provideCapability({
+        path: ["projectTool"],
+        capability: {
+          type: "live",
+          target: {
+            format(input: { text: string }) {
+              return `project tool saw ${input.text}`;
+            },
           },
         },
-      },
-    });
+      }),
+    );
 
     const reply = await agent.ask({ message: "hello agent" });
     expect(reply).toMatchObject({
@@ -556,15 +585,16 @@ describe("minimal itx v4", () => {
     using agent = project.agents.get(agentPath);
     const counterCacheKey = `agent-counter-${crypto.randomUUID()}`;
 
-    await agent.provideCapability({
-      path: ["agentProbe"],
-      capability: {
-        type: "dynamic-worker",
-        workerRef: {
-          source: {
-            mainModule: "agent-probe.js",
-            modules: {
-              "agent-probe.js": `
+    disposeRpcResult(
+      await agent.provideCapability({
+        path: ["agentProbe"],
+        capability: {
+          type: "dynamic-worker",
+          workerRef: {
+            source: {
+              mainModule: "agent-probe.js",
+              modules: {
+                "agent-probe.js": `
                 import { WorkerEntrypoint } from "cloudflare:workers";
 
                 export class AgentProbeEntrypoint extends WorkerEntrypoint {
@@ -580,39 +610,42 @@ describe("minimal itx v4", () => {
                   }
                 }
               `,
+              },
+              type: "inline",
             },
-            type: "inline",
-          },
-          target: {
-            entrypoint: "AgentProbeEntrypoint",
-            props: {
-              agentPath,
-              auth: { type: "trusted-internal", token: TRUSTED_INTERNAL_ITX_TOKEN },
-              projectId,
+            target: {
+              entrypoint: "AgentProbeEntrypoint",
+              props: {
+                agentPath,
+                auth: { type: "trusted-internal", token: TRUSTED_INTERNAL_ITX_TOKEN },
+                projectId,
+              },
+              type: "worker-entrypoint",
             },
-            type: "worker-entrypoint",
           },
         },
-      },
-    });
-    await agent.provideCapability({
-      path: ["agentCounter"],
-      capability: {
-        type: "dynamic-worker",
-        workerRef: {
-          cacheKey: counterCacheKey,
-          source: {
-            repoPath: "/",
-            sourcePath: "worker.js",
-            type: "repo",
-          },
-          target: {
-            className: "CounterDurableObject",
-            type: "durable-object",
+      }),
+    );
+    disposeRpcResult(
+      await agent.provideCapability({
+        path: ["agentCounter"],
+        capability: {
+          type: "dynamic-worker",
+          workerRef: {
+            cacheKey: counterCacheKey,
+            source: {
+              repoPath: "/",
+              sourcePath: "worker.js",
+              type: "repo",
+            },
+            target: {
+              className: "CounterDurableObject",
+              type: "durable-object",
+            },
           },
         },
-      },
-    });
+      }),
+    );
 
     await expect(
       // @ts-expect-error - proves agent-provided capabilities are not mounted on the project.
@@ -867,6 +900,420 @@ describe("minimal itx v4", () => {
     expect(processor.state).toEqual(stateAtUnsubscribe);
   });
 
+  test("Cap'n Web stream subscribe callback survives the stateless Worker proxy", async () => {
+    const marker = crypto.randomUUID();
+    const eventType = "events.iterate.test/capnweb-subscribe-callback-forwarded";
+    const streamPath = `/capnweb-subscribe-callback-${marker}`;
+
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+    using project = itx.projects.create({ slug: `capnweb-subscribe-callback-${marker}` });
+    using stream = project.streams.get(streamPath);
+    const delivered: number[] = [];
+
+    const subscription = await stream.subscribe({
+      eventTypes: [eventType],
+      processEventBatch: (batch) => {
+        for (const event of batch.events) {
+          if (event.type === eventType && event.payload?.marker === marker) {
+            delivered.push(event.payload.sequence as number);
+          }
+        }
+      },
+      subscriber: {
+        description: "minimal-itx-v4 e2e direct Cap'n Web callback forwarding probe",
+      },
+      subscriptionKey: `capnweb-callback-${marker}`,
+    });
+    expect(subscription.subscriptionKey).toBe(`capnweb-callback-${marker}`);
+
+    await waitForCondition(
+      async () => {
+        const runtimeState = await stream.runtimeState();
+        return runtimeState.runtime.connections[subscription.subscriptionKey] !== undefined;
+      },
+      { description: "stream runtime to show the direct Cap'n Web callback connection" },
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await stream.append({
+      type: eventType,
+      payload: { marker, sequence: 1 },
+    });
+    await stream.append({
+      type: eventType,
+      payload: { marker, sequence: 2 },
+    });
+
+    await waitForCondition(() => delivered.includes(1) && delivered.includes(2), {
+      description: "Cap'n Web callback deliveries after subscribe returned",
+    });
+    expect(delivered).toEqual([1, 2]);
+
+    await subscription.unsubscribe();
+    (subscription as Partial<Disposable>)[Symbol.dispose]?.();
+    await waitForCondition(
+      async () => {
+        const runtimeState = await stream.runtimeState();
+        return runtimeState.runtime.connections[subscription.subscriptionKey] === undefined;
+      },
+      { description: "stream runtime to remove the direct Cap'n Web callback connection" },
+    );
+    await stream.append({
+      type: eventType,
+      payload: { marker, sequence: 3 },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(delivered).toEqual([1, 2]);
+  });
+
+  test("Cap'n Web stream subscribe with the same key replaces the old callback", async () => {
+    const marker = crypto.randomUUID();
+    const eventType = "events.iterate.test/capnweb-subscribe-callback-replaced";
+    const streamPath = `/capnweb-subscribe-replaced-${marker}`;
+    const subscriptionKey = `capnweb-replaced-${marker}`;
+
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+    using project = itx.projects.create({ slug: `capnweb-subscribe-replaced-${marker}` });
+    using stream = project.streams.get(streamPath);
+    const first: number[] = [];
+    const second: number[] = [];
+
+    const firstSubscription = await stream.subscribe({
+      eventTypes: [eventType],
+      processEventBatch: (batch) => {
+        first.push(
+          ...batch.events
+            .filter((event) => event.type === eventType && event.payload?.marker === marker)
+            .map((event) => event.payload!.sequence as number),
+        );
+      },
+      subscriptionKey,
+    });
+    const secondSubscription = await stream.subscribe({
+      eventTypes: [eventType],
+      processEventBatch: (batch) => {
+        second.push(
+          ...batch.events
+            .filter((event) => event.type === eventType && event.payload?.marker === marker)
+            .map((event) => event.payload!.sequence as number),
+        );
+      },
+      subscriptionKey,
+    });
+    expect(firstSubscription.subscriptionKey).toBe(subscriptionKey);
+    expect(secondSubscription.subscriptionKey).toBe(subscriptionKey);
+
+    await firstSubscription.unsubscribe();
+    await stream.append({
+      type: eventType,
+      payload: { marker, sequence: 1 },
+    });
+
+    await waitForCondition(() => second.includes(1), {
+      description: "replacement subscriber delivery",
+    });
+    expect(first).toEqual([]);
+    expect(second).toEqual([1]);
+
+    await secondSubscription.unsubscribe();
+    (firstSubscription as Partial<Disposable>)[Symbol.dispose]?.();
+    (secondSubscription as Partial<Disposable>)[Symbol.dispose]?.();
+  });
+
+  test("Cap'n Web nested subscriber processor callbacks survive the stateless Worker proxy", async () => {
+    const marker = crypto.randomUUID();
+    const streamPath = `/capnweb-subscribe-nested-${marker}`;
+    const subscriptionKey = `capnweb-nested-${marker}`;
+
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+    using project = itx.projects.create({ slug: `capnweb-subscribe-nested-${marker}` });
+    using stream = project.streams.get(streamPath);
+    const subscription = await stream.subscribe({
+      processEventBatch: () => {},
+      subscriber: {
+        description: "minimal-itx-v4 e2e nested subscriber callback forwarding probe",
+        processor: {
+          announcement: {
+            consumes: ["*"],
+            description: "Nested callback forwarding probe",
+            emits: [],
+            ownedEvents: [],
+            slug: "minimal-itx-v4.e2e.nested-callback-probe",
+            version: "0.1.0",
+          },
+          getRuntimeState: () => ({
+            runtime: { marker },
+            snapshot: { offset: 123, state: { marker } },
+          }),
+        },
+      },
+      subscriptionKey,
+    });
+
+    await waitForCondition(
+      async () => {
+        const state = await stream.getProcessorRuntimeState({ subscriptionKey });
+        return state?.runtime?.marker === marker && state.snapshot.offset === 123;
+      },
+      { description: "nested getRuntimeState callback after subscribe returned" },
+    );
+
+    await subscription.unsubscribe();
+    (subscription as Partial<Disposable>)[Symbol.dispose]?.();
+  });
+
+  test("Nested plain-object live capability members survive after provideCapability returns", async () => {
+    const marker = crypto.randomUUID();
+
+    using providerSession = withItxSession();
+    using providerItx = providerSession.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+    using project = providerItx.projects.create({ slug: `nested-live-${marker}` });
+    const { projectId } = await project.describe();
+
+    disposeRpcResult(
+      await project.provideCapability({
+        path: ["tools"],
+        capability: {
+          type: "live",
+          target: {
+            math: {
+              add(a: number, b: number) {
+                return { marker, sum: a + b };
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    using callerSession = withItxSession();
+    using callerItx = callerSession.authenticate({
+      type: "token",
+      token: {
+        principal: "alice",
+        projectScopes: [projectId],
+        type: "user",
+      },
+    });
+    using callerProject = callerItx.projects.get(projectId);
+
+    // @ts-expect-error - dynamic capability root
+    expect(await callerProject.tools.math.add(20, 22)).toEqual({ marker, sum: 42 });
+  });
+
+  test("Live bare function capabilities survive provideCapability return", async () => {
+    const marker = crypto.randomUUID();
+
+    using providerSession = withItxSession();
+    using providerItx = providerSession.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+    using project = providerItx.projects.create({ slug: `bare-function-live-${marker}` });
+    const { projectId } = await project.describe();
+
+    disposeRpcResult(
+      await project.provideCapability({
+        path: ["add"],
+        capability: {
+          type: "live",
+          target: (a: number, b: number) => ({ marker, sum: a + b }),
+        },
+      }),
+    );
+
+    using callerSession = withItxSession();
+    using callerItx = callerSession.authenticate({
+      type: "token",
+      token: {
+        principal: "alice",
+        projectScopes: [projectId],
+        type: "user",
+      },
+    });
+    using callerProject = callerItx.projects.get(projectId);
+
+    // @ts-expect-error - dynamic capability root
+    expect(await callerProject.add(20, 22)).toEqual({ marker, sum: 42 });
+  });
+
+  test("Top-level RpcTarget live capabilities dispatch by member path", async () => {
+    class MathSdk extends RpcTarget {
+      add(a: number, b: number) {
+        return a + b;
+      }
+    }
+    const marker = crypto.randomUUID();
+
+    using providerSession = withItxSession();
+    using providerItx = providerSession.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+    using project = providerItx.projects.create({ slug: `rpc-target-live-${marker}` });
+    const { projectId } = await project.describe();
+
+    disposeRpcResult(
+      await project.provideCapability({
+        path: ["math"],
+        capability: { type: "live", target: new MathSdk() },
+      }),
+    );
+
+    using callerSession = withItxSession();
+    using callerItx = callerSession.authenticate({
+      type: "token",
+      token: {
+        principal: "alice",
+        projectScopes: [projectId],
+        type: "user",
+      },
+    });
+    using callerProject = callerItx.projects.get(projectId);
+
+    // @ts-expect-error - dynamic capability root
+    expect(await callerProject.math.add(20, 22)).toBe(42);
+  });
+
+  test("Explicit path-call live capability carriers receive the remaining member path", async () => {
+    const marker = crypto.randomUUID();
+
+    using providerSession = withItxSession();
+    using providerItx = providerSession.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+    using project = providerItx.projects.create({ slug: `path-call-live-${marker}` });
+    const { projectId } = await project.describe();
+
+    disposeRpcResult(
+      await project.provideCapability({
+        path: ["carrier"],
+        capability: {
+          type: "live",
+          target: {
+            invokeCapability({ args, path }: { args?: unknown[]; path: string[] }) {
+              return { args, marker, path };
+            },
+          },
+        },
+      }),
+    );
+
+    using callerSession = withItxSession();
+    using callerItx = callerSession.authenticate({
+      type: "token",
+      token: {
+        principal: "alice",
+        projectScopes: [projectId],
+        type: "user",
+      },
+    });
+    using callerProject = callerItx.projects.get(projectId);
+
+    // @ts-expect-error - dynamic capability root
+    expect(await callerProject.carrier.tools.echo("hello")).toEqual({
+      args: ["hello"],
+      marker,
+      path: ["tools", "echo"],
+    });
+  });
+
+  test("Successful live capability replacement uses the new target", async () => {
+    const marker = crypto.randomUUID();
+
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+    using project = itx.projects.create({ slug: `replace-live-${marker}` });
+
+    const oldProvision = await project.provideCapability({
+      path: ["replaceProbe"],
+      capability: {
+        type: "live",
+        target: {
+          value() {
+            return `old:${marker}`;
+          },
+        },
+      },
+    });
+
+    // @ts-expect-error - dynamic capability root
+    expect(await project.replaceProbe.value()).toBe(`old:${marker}`);
+
+    const newProvision = await project.provideCapability({
+      path: ["replaceProbe"],
+      capability: {
+        type: "live",
+        target: {
+          value() {
+            return `new:${marker}`;
+          },
+        },
+      },
+    });
+    disposeRpcResult(oldProvision);
+    disposeRpcResult(newProvision);
+
+    // @ts-expect-error - dynamic capability root
+    expect(await project.replaceProbe.value()).toBe(`new:${marker}`);
+  });
+
+  test("Failed capability replacement keeps the previous live capability usable", async () => {
+    const marker = crypto.randomUUID();
+
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+    using project = itx.projects.create({ slug: `failed-replace-live-${marker}` });
+
+    const provision = await project.provideCapability({
+      path: ["replaceProbe"],
+      capability: {
+        type: "live",
+        target: {
+          value() {
+            return `old:${marker}`;
+          },
+        },
+      },
+    });
+
+    await expect(
+      project.provideCapability({
+        path: ["replaceProbe"],
+        capability: {
+          type: "dynamic-worker",
+          workerRef: { source: { type: "inline" }, target: { type: "worker-entrypoint" } } as never,
+        },
+      }),
+    ).rejects.toThrow();
+
+    // @ts-expect-error - dynamic capability root
+    expect(await project.replaceProbe.value()).toBe(`old:${marker}`);
+    disposeRpcResult(provision);
+  });
+
   test("Authenticated project can provide the Slack SDK as nested dotted callables", async () => {
     const mock = await startMockSlack();
     try {
@@ -884,13 +1331,14 @@ describe("minimal itx v4", () => {
         slackApiUrl: mock.url,
       });
 
-      const { revoke } = await project.provideCapability({
+      const provision = await project.provideCapability({
         path: ["slack"],
         capability: {
           type: "live",
           target: pathCallable(slack),
         },
       });
+      const { revoke } = provision;
 
       using callerSession = withItxSession();
       using callerItx = callerSession.authenticate({
@@ -901,7 +1349,7 @@ describe("minimal itx v4", () => {
           principal: "alice",
         },
       });
-      const callerProject = callerItx.projects.get(description.projectId);
+      using callerProject = callerItx.projects.get(description.projectId);
 
       // @ts-expect-error - dynamic capability root
       const posted = await callerProject.slack.chat.postMessage({
@@ -928,6 +1376,7 @@ describe("minimal itx v4", () => {
       expect(mock.calls).toEqual(expect.arrayContaining(["chat.postMessage", "users.list"]));
 
       await revoke();
+      disposeRpcResult(provision);
       await expect(
         // @ts-expect-error - dynamic capability root
         callerProject.slack.chat.postMessage({ channel: "C123", text: "after revoke" }),

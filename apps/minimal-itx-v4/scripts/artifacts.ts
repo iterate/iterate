@@ -290,7 +290,11 @@ class ArtifactsApi {
     for (let attempt = 0; attempt < 5; attempt++) {
       try {
         const response = await fetch(url, {
-          body: body ? JSON.stringify(dropUndefinedValues(body)) : undefined,
+          body: body
+            ? JSON.stringify(
+                Object.fromEntries(Object.entries(body).filter(([, value]) => value !== undefined)),
+              )
+            : undefined,
           headers: {
             authorization: `Bearer ${this.token}`,
             "content-type": "application/json",
@@ -307,13 +311,13 @@ class ArtifactsApi {
         const errors = envelope.errors ?? [];
         const message = cloudflareErrorMessage(envelope);
         const error = new CloudflareApiError(response.status, errors, message);
-        if (isTransient(error) && attempt < 4) {
+        if ([429, 500, 502, 503, 504].includes(error.status) && attempt < 4) {
           await sleep(250 * 2 ** attempt);
           continue;
         }
         throw error;
       } catch (error) {
-        if (isNetworkError(error) && attempt < 4) {
+        if (error instanceof TypeError && attempt < 4) {
           await sleep(250 * 2 ** attempt);
           continue;
         }
@@ -385,7 +389,8 @@ function readWranglerAuthToken() {
 
 function configValue(key: string) {
   const config = readFileSync(WRANGLER_CONFIG, "utf8");
-  const match = new RegExp(`"${escapeRegExp(key)}"\\s*:\\s*"([^"]+)"`).exec(config);
+  const escapedKey = key.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`"${escapedKey}"\\s*:\\s*"([^"]+)"`).exec(config);
   return match?.[1];
 }
 
@@ -424,23 +429,11 @@ function isConflict(error: unknown) {
   );
 }
 
-function isTransient(error: unknown) {
-  return error instanceof CloudflareApiError && [429, 500, 502, 503, 504].includes(error.status);
-}
-
-function isNetworkError(error: unknown) {
-  return error instanceof TypeError;
-}
-
 function cloudflareErrorMessage(payload: CloudflareEnvelope<unknown>) {
   const messages = [...(payload.errors ?? []), ...(payload.messages ?? [])]
     .map((entry) => entry.message)
     .filter((message) => typeof message === "string" && message.length > 0);
   return messages.length > 0 ? messages.join("; ") : JSON.stringify(payload);
-}
-
-function dropUndefinedValues(input: Record<string, unknown>) {
-  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
 }
 
 function print(json: boolean, value: unknown, text?: string) {
@@ -464,10 +457,6 @@ Auth:
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function escapeRegExp(value: string) {
-  return value.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 const { command, flags, positional } = parseArgs(process.argv.slice(2));

@@ -16,13 +16,8 @@ import type {
   Agents,
   Repos,
   Stream,
-  ProcessEventBatch,
 } from "../types.ts";
 import { DurableObjectNameCodec } from "./domains/durable-object-names.ts";
-import {
-  disposeIgnoredRpcResult,
-  retainProcessEventBatch,
-} from "./domains/streams/engine/workers/rpc-lifecycle.ts";
 import type { Env } from "./env.ts";
 import {
   FakeAuthContext,
@@ -38,11 +33,9 @@ import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "./domains/repos/p
 import { RepoProcessorContract } from "./domains/repos/repo-processor.ts";
 import { durableObjectProcessorSubscriber } from "./domains/streams/engine/shared/callable-subscriber.ts";
 import { ItxContract } from "./itx/processor-contract.ts";
-import { replayPath, type ItxProcessorRpc, type ProvideCapabilityInput } from "./itx/processor.ts";
+import { replayPath } from "./itx/live-capability.ts";
+import { type ItxProcessorRpc, type ProvideCapabilityInput } from "./itx/processor.ts";
 import { isReservedDynamicPathSegment, withInvokeCapabilityFallback } from "./itx/path-proxy.ts";
-
-type StreamProcessEventBatch = Parameters<Stream["subscribe"]>[0]["processEventBatch"];
-type StreamProcessEventBatchInput = Parameters<StreamProcessEventBatch>[0];
 
 const TRUSTED_INTERNAL_ITX_PROPS = {
   token: TRUSTED_INTERNAL_ITX_TOKEN,
@@ -96,53 +89,23 @@ export class StreamRpcTarget extends RpcTarget implements RpcTargetImplementatio
     return this.durableObjectStub.kill();
   }
 
-  async subscribe(args: Parameters<Stream["subscribe"]>[0]) {
-    // The target can proxy ordinary methods directly. subscribe() is the special
-    // case because it receives a callback that lives beyond the RPC return; keep
-    // that callback retained locally and forward a fire-and-forget callback to
-    // the source stream.
-    const clientProcessEventBatch = retainProcessEventBatch(args.processEventBatch);
-    let disposed = false;
-    const dispose = () => {
-      if (disposed) return;
-      disposed = true;
-      clientProcessEventBatch[Symbol.dispose]();
-    };
-    const processEventBatch: StreamProcessEventBatch & Disposable = Object.assign(
-      (batch: StreamProcessEventBatchInput) => {
-        const pendingBatch = clientProcessEventBatch(batch as Parameters<ProcessEventBatch>[0]);
-        disposeIgnoredRpcResult(pendingBatch);
-      },
-      { [Symbol.dispose]: dispose },
+  subscribe(args: Parameters<Stream["subscribe"]>[0]) {
+    // Transparent proxy: this stateless Cap'n Web target does not store or call
+    // the subscriber callback, so it should not wrap or duplicate it. Workers
+    // RPC duplicates stubs embedded in call parameters as of the 2026-01-20
+    // `rpc_params_dup_stubs` compatibility change, which is the exact
+    // "browser callback -> stateless Worker -> Durable Object subscription"
+    // forwarding shape:
+    // https://developers.cloudflare.com/workers/configuration/compatibility-flags/#duplicate-stubs-in-rpc-params-instead-of-transferring-ownership
+    //
+    // The Stream Durable Object is the layer that stores `processEventBatch`
+    // beyond the subscribe RPC return. That layer owns `.dup()`,
+    // delivery-result disposal, and connection-table teardown:
+    // https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/#stubs-received-as-parameters-in-an-rpc-call
+    // https://github.com/cloudflare/capnweb#cloudflare-workers-rpc-interoperability
+    return this.durableObjectStub.subscribe(
+      args as Parameters<typeof this.durableObjectStub.subscribe>[0],
     );
-
-    try {
-      const subscription = await this.durableObjectStub.subscribe({
-        subscriptionKey: args.subscriptionKey,
-        replayAfterOffset: args.replayAfterOffset,
-        eventTypes: args.eventTypes,
-        events: args.events,
-        subscriber: args.subscriber,
-        processEventBatch,
-      });
-
-      clientProcessEventBatch.onRpcBroken?.(() => {
-        disposeIgnoredRpcResult(subscription.unsubscribe());
-        dispose();
-      });
-
-      return {
-        subscriptionKey: subscription.subscriptionKey,
-        streamMaxOffset: subscription.streamMaxOffset,
-        unsubscribe() {
-          disposeIgnoredRpcResult(subscription.unsubscribe());
-          dispose();
-        },
-      };
-    } catch (error) {
-      clientProcessEventBatch[Symbol.dispose]();
-      throw error;
-    }
   }
 }
 

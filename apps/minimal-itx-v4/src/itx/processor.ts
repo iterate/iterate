@@ -12,6 +12,11 @@ import type {
   StreamEvent,
 } from "../../types.ts";
 import { TRUSTED_INTERNAL_ITX_TOKEN } from "../auth.ts";
+import {
+  replayPath,
+  retainLiveCapabilityProvider,
+  type LiveCapability,
+} from "./live-capability.ts";
 import { ItxContract, type CapabilityRecord } from "./processor-contract.ts";
 
 export type ProvideCapabilityInput = Parameters<ItxCapabilityHost["provideCapability"]>[0];
@@ -74,64 +79,6 @@ function json(value: unknown): JsonSerializableTrustMeBro {
   return JSON.parse(JSON.stringify(value)) as JsonSerializableTrustMeBro;
 }
 
-function retain(target: unknown): unknown {
-  if (
-    target &&
-    (typeof target === "object" || typeof target === "function") &&
-    typeof (target as { dup?: unknown }).dup === "function"
-  ) {
-    return (target as { dup: () => unknown }).dup();
-  }
-  if (Array.isArray(target)) return target.map(retain);
-  if (target && typeof target === "object" && Object.getPrototypeOf(target) === Object.prototype) {
-    return Object.fromEntries(Object.entries(target).map(([key, value]) => [key, retain(value)]));
-  }
-  return target;
-}
-
-function dispose(target: unknown) {
-  if (
-    target &&
-    (typeof target === "object" || typeof target === "function") &&
-    typeof (target as { [Symbol.dispose]?: unknown })[Symbol.dispose] === "function"
-  ) {
-    (target as { [Symbol.dispose]: () => void })[Symbol.dispose]();
-  }
-  if (Array.isArray(target)) {
-    for (const value of target) dispose(value);
-  } else if (target && typeof target === "object") {
-    for (const value of Object.values(target)) dispose(value);
-  }
-}
-
-export async function replayPath({
-  args,
-  path,
-  target,
-}: {
-  args: unknown[];
-  path: string[];
-  target: unknown;
-}) {
-  if (path.length === 0) return typeof target === "function" ? await target(...args) : target;
-  let receiver = await target;
-  for (let i = 0; i < path.length - 1; i++) {
-    if (!receiver || (typeof receiver !== "object" && typeof receiver !== "function")) {
-      throw new Error(`capability path "${path.join(".")}" hit ${String(receiver)}`);
-    }
-    receiver = await Reflect.get(receiver, path[i]);
-  }
-  const method = path.at(-1)!;
-  if (!receiver || (typeof receiver !== "object" && typeof receiver !== "function")) {
-    throw new Error(`capability path "${path.join(".")}" hit ${String(receiver)}`);
-  }
-  const callable = Reflect.get(receiver, method);
-  if (typeof callable !== "function") {
-    throw new Error(`capability path "${path.join(".")}" did not resolve to a function`);
-  }
-  return await Reflect.apply(callable, receiver, args);
-}
-
 function resolveLongestPrefix(records: CapabilityRecord[], path: string[]) {
   let best: { record: CapabilityRecord; rest: string[] } | null = null;
   for (const record of records) {
@@ -143,25 +90,6 @@ function resolveLongestPrefix(records: CapabilityRecord[], path: string[]) {
     }
   }
   return best;
-}
-
-type LiveCapability = {
-  dispose(): void;
-  invoke(path: string[], args: unknown[]): unknown;
-};
-
-function retainLiveCapability(capability: unknown): LiveCapability {
-  const retained = retain(capability);
-  const invoker = retained as {
-    invokeCapability?: (input: { args?: unknown[]; path: string[] }) => unknown;
-  };
-  return {
-    dispose: () => dispose(retained),
-    invoke: (path, args) =>
-      typeof invoker.invokeCapability === "function"
-        ? invoker.invokeCapability({ path, args })
-        : replayPath({ args, path, target: retained }),
-  };
 }
 
 export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements ItxProcessorRpc {
@@ -238,7 +166,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
   async provideCapability({ capability, path }: ProvideCapabilityInput) {
     assertCapabilityPath(path);
     const key = liveKey(path);
-    this.#liveCapabilities.get(key)?.dispose();
+    const previousLive = this.#liveCapabilities.get(key);
     const record: CapabilityRecord =
       capability.type === "dynamic-worker"
         ? {
@@ -247,29 +175,44 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
             workerRef: DynamicWorkerRefSchema.parse(capability.workerRef),
           }
         : { path, type: "live" };
+    const nextLive =
+      capability.type === "live" ? retainLiveCapabilityProvider(capability.target) : undefined;
 
-    if (capability.type === "dynamic-worker") {
+    let committedOffset: number;
+    try {
+      const [committed] = await this.stream.append({
+        type: "events.iterate.com/itx/capability-provided",
+        payload: record,
+      });
+      committedOffset = committed.offset;
+    } catch (error) {
+      nextLive?.dispose();
+      throw error;
+    }
+
+    // The append is the durable commit point. From here on, keep the ephemeral
+    // live-provider map aligned with the record that will fold from the stream.
+    if (nextLive === undefined) {
       this.#liveCapabilities.delete(key);
     } else {
-      this.#liveCapabilities.set(key, retainLiveCapability(capability.target));
+      this.#liveCapabilities.set(key, nextLive);
     }
-    const [committed] = await this.stream.append({
-      type: "events.iterate.com/itx/capability-provided",
-      payload: record,
-    });
-    await this.waitUntilEvent({ offset: committed.offset });
+    previousLive?.dispose();
+
+    await this.waitUntilEvent({ offset: committedOffset });
     return { path };
   }
 
   async revokeCapability({ path }: { path: string[] }) {
     assertCapabilityPath(path);
     const key = liveKey(path);
-    this.#liveCapabilities.get(key)?.dispose();
-    this.#liveCapabilities.delete(key);
+    const previousLive = this.#liveCapabilities.get(key);
     const [committed] = await this.stream.append({
       type: "events.iterate.com/itx/capability-revoked",
       payload: { path },
     });
+    this.#liveCapabilities.delete(key);
+    previousLive?.dispose();
     await this.waitUntilEvent({ offset: committed.offset });
   }
 
