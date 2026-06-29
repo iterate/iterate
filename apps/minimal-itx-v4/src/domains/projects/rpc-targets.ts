@@ -1,17 +1,16 @@
 import { env, RpcTarget } from "cloudflare:workers";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { DynamicWorkerRuntimeRpcTarget } from "../dynamic-workers/rpc-targets.ts";
 import { AgentCollectionRpcTarget } from "../agents/rpc-targets.ts";
 import { RepoCollectionRpcTarget, RepoRpcTarget } from "../repos/rpc-targets.ts";
 import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
 import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "../repos/project-repo.ts";
 import { StreamCollectionRpcTarget, StreamRpcTarget } from "../streams/rpc-targets.ts";
 import { subscriptionConfiguredEvent } from "../streams/subscription-event.ts";
-import { replayPath } from "../itx/live-capability.ts";
 import { rejectBuiltinCollision, withInvokeCapabilityFallback } from "../itx/path-proxy.ts";
 import { type ProvideCapabilityInput } from "../itx/itx-processor-implementation.ts";
-import { itxEntrypointScopeCacheKey, scopedItxEntrypointProps } from "../itx/entrypoint-props.ts";
 import type { CfExecutionContext, ItxAuth } from "../itx/types.ts";
+import { WorkerCollectionRpcTarget } from "../workers/rpc-targets.ts";
+import type { WorkerRef } from "../workers/types.ts";
 import type { Project, ProjectCollection, ProjectWorker } from "./types.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 
@@ -85,54 +84,6 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
 
   list(): string[] {
     return this.props.auth.listAccessibleProjects();
-  }
-}
-
-class ProjectWorkerRpcTarget extends RpcTarget implements ProjectWorker {
-  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
-    super();
-    props.auth.assertCanAccessProject(props.projectId);
-    return withInvokeCapabilityFallback(this);
-  }
-
-  async fetch(req: Request) {
-    return await (await this.defaultProjectWorker()).fetch(req);
-  }
-
-  async processEvent(input: Parameters<ProjectWorker["processEvent"]>[0]) {
-    return await (await this.defaultProjectWorker()).processEvent(input);
-  }
-
-  async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
-    return await replayPath({
-      args,
-      path,
-      target: await this.defaultProjectWorker(),
-    });
-  }
-
-  private defaultProjectWorker() {
-    const itxScope = scopedItxEntrypointProps({
-      path: "/",
-      projectId: this.props.projectId,
-    });
-    return new DynamicWorkerRuntimeRpcTarget({
-      bindings: {
-        ITX: this.props.ctx.exports.ItxEntrypoint({ props: itxScope }),
-      },
-      loader: env.LOADER,
-      projectId: this.props.projectId,
-      workerScopeKey: itxEntrypointScopeCacheKey(itxScope),
-    }).get<ProjectWorker>({
-      source: {
-        repoPath: PROJECT_REPO_PATH,
-        sourcePath: PROJECT_WORKER_SOURCE_PATH,
-        type: "repo",
-      },
-      target: {
-        type: "worker-entrypoint",
-      },
-    });
   }
 }
 
@@ -211,11 +162,28 @@ class ProjectRpcTarget extends RpcTarget implements Project {
     });
   }
 
-  get worker() {
-    return new ProjectWorkerRpcTarget({
+  get workers() {
+    return new WorkerCollectionRpcTarget({
       auth: this.props.auth,
       ctx: this.props.ctx,
+      loader: env.LOADER,
       projectId: this.props.projectId,
     });
   }
+
+  get worker() {
+    return this.workers.get<ProjectWorker>(defaultProjectWorkerRef());
+  }
+}
+
+function defaultProjectWorkerRef(): WorkerRef {
+  return {
+    path: "/",
+    source: {
+      repoPath: PROJECT_REPO_PATH,
+      sourcePath: PROJECT_WORKER_SOURCE_PATH,
+      type: "repo",
+    },
+    type: "stateless",
+  };
 }

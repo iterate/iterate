@@ -2,16 +2,13 @@ import {
   StreamProcessor,
   type StreamProcessorConstructorArgs,
 } from "../streams/engine/stream-processor.ts";
-import type { DynamicWorkerRuntimeRpcTarget } from "../dynamic-workers/rpc-targets.ts";
-import { hashString } from "../dynamic-workers/dynamic-worker-loader.ts";
-import { DynamicWorkerRef as DynamicWorkerRefSchema } from "../dynamic-workers/schemas.ts";
-import type { DynamicWorkerRef, JsonValue } from "../dynamic-workers/types.ts";
+import { normalizePath } from "../durable-object-names.ts";
 import type { StreamEvent } from "../streams/types.ts";
-import {
-  replayPath,
-  retainLiveCapabilityProvider,
-  type LiveCapability,
-} from "./live-capability.ts";
+import { hashString } from "../workers/worker-loader.ts";
+import { WorkerRef as WorkerRefSchema } from "../workers/schemas.ts";
+import type { JsonValue, WorkerRef } from "../workers/types.ts";
+import type { WorkerRunner } from "../workers/worker-runner.ts";
+import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
 import { ItxProcessorContract, type CapabilityRecord } from "./itx-processor-contract.ts";
 import type { ItxCapabilityHost } from "./types.ts";
 
@@ -75,16 +72,19 @@ function resolveLongestPrefix(records: CapabilityRecord[], path: string[]) {
 
 export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
   readonly contract = ItxProcessorContract;
-  #dynamicWorkerRuntime: DynamicWorkerRuntimeRpcTarget;
+  #path: string;
+  #workerRunner: WorkerRunner;
   #liveCapabilities = new Map<string, LiveCapability>();
 
   constructor(
     args: StreamProcessorConstructorArgs<typeof ItxProcessorContract, object> & {
-      dynamicWorkerRuntime: DynamicWorkerRuntimeRpcTarget;
+      path: string;
+      workerRunner: WorkerRunner;
     },
   ) {
     super(args);
-    this.#dynamicWorkerRuntime = args.dynamicWorkerRuntime;
+    this.#path = normalizePath(args.path);
+    this.#workerRunner = args.workerRunner;
   }
 
   protected override reduce({
@@ -145,14 +145,18 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     assertCapabilityPath(path);
     const key = liveKey(path);
     const previousLive = this.#liveCapabilities.get(key);
-    const record: CapabilityRecord =
-      capability.type === "dynamic-worker"
-        ? {
-            path,
-            type: "dynamic-worker",
-            workerRef: DynamicWorkerRefSchema.parse(capability.workerRef),
-          }
-        : { path, type: "live" };
+    let record: CapabilityRecord;
+    if (capability.type === "worker") {
+      const workerRef = WorkerRefSchema.parse(capability.workerRef);
+      await this.#workerRunner.validate(workerRef);
+      record = {
+        path,
+        type: "worker",
+        workerRef,
+      };
+    } else {
+      record = { path, type: "live" };
+    }
     const nextLive =
       capability.type === "live" ? retainLiveCapabilityProvider(capability.target) : undefined;
 
@@ -198,15 +202,12 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     assertCapabilityPath(path);
     const hit = resolveLongestPrefix(this.state.capabilities, path);
     if (!hit) throw new Error(`no capability "${path.join(".")}"`);
-    if (hit.record.type === "dynamic-worker") {
-      const prefix = `capability:${hit.record.path.join(".")}`;
-      const target = this.#dynamicWorkerRuntime.get({
-        ...hit.record.workerRef,
-        cacheKey: hit.record.workerRef.cacheKey
-          ? `${prefix}:${hit.record.workerRef.cacheKey}`
-          : prefix,
+    if (hit.record.type === "worker") {
+      return await this.#workerRunner.invokeCapability({
+        args,
+        path: hit.rest,
+        ref: hit.record.workerRef,
       });
-      return await replayPath({ args, path: hit.rest, target });
     }
     const live = this.#liveCapabilities.get(liveKey(hit.record.path));
     if (!live) {
@@ -259,7 +260,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     };
 
     try {
-      const worker = await this.#dynamicWorkerRuntime.get<{ run(): Promise<unknown> }>(
+      const worker = await this.#workerRunner.get<{ run(): Promise<unknown> }>(
         this.#scriptWorkerRef(input.code),
       );
       const result = await worker.run();
@@ -269,7 +270,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     }
   }
 
-  #scriptWorkerRef(code: string): DynamicWorkerRef {
+  #scriptWorkerRef(code: string): WorkerRef {
     const source = `
       import { WorkerEntrypoint } from "cloudflare:workers";
       const fn = ${code};
@@ -281,16 +282,15 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
       }
     `;
     return {
-      cacheKey: `script:${hashString(code)}`,
+      path: this.#path,
       source: {
         mainModule: "main.js",
         modules: { "main.js": source },
         type: "inline",
       },
-      target: {
-        entrypoint: "ScriptEntrypoint",
-        type: "worker-entrypoint",
-      },
+      entrypoint: "ScriptEntrypoint",
+      props: { scriptHash: hashString(code) },
+      type: "stateless",
     };
   }
 }

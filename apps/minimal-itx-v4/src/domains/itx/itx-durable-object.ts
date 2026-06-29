@@ -1,11 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { DynamicWorkerRuntimeRpcTarget } from "../dynamic-workers/rpc-targets.ts";
 import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
 } from "../streams/engine/workers/stream-processor-host.ts";
+import { WorkerRunner } from "../workers/worker-runner.ts";
 import { ItxProcessorContract } from "./itx-processor-contract.ts";
 import {
   ItxProcessor,
@@ -26,16 +26,15 @@ export class ItxDurableObject extends DurableObject<Env> {
     (deps) =>
       new ItxProcessor({
         ...deps,
-        dynamicWorkerRuntime: new DynamicWorkerRuntimeRpcTarget({
+        path: this.#name.path,
+        workerRunner: new WorkerRunner({
           bindings: {
             ITX: this.ctx.exports.ItxEntrypoint({
               props: this.#itxScope,
             }),
           },
-          facets: this.ctx.facets,
           loader: this.env.LOADER,
           projectId: this.#name.projectId,
-          storage: this.ctx.storage,
           workerScopeKey: itxEntrypointScopeCacheKey(this.#itxScope),
         }),
         stream: this.ctx.exports.StreamDurableObject.getByName(

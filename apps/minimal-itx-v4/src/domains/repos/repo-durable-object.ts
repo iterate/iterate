@@ -6,7 +6,7 @@ import {
   type RequestStreamSubscriptionArgs,
 } from "../streams/engine/workers/stream-processor-host.ts";
 import type { Env } from "../../env.ts";
-import { hashString, type ResolvedWorkerSource } from "../dynamic-workers/dynamic-worker-loader.ts";
+import { hashString, type ResolvedWorkerSource } from "../workers/worker-loader.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { CommitRepoFilesInput, CommitRepoFilesResult, RepoFileChange } from "./types.ts";
 import { RepoArtifactNameCodec } from "./repo-artifact-name.ts";

@@ -8,6 +8,7 @@ import { UnauthenticatedItxRpcTarget } from "./domains/itx/rpc-targets.ts";
 import { ProjectDurableObject } from "./domains/projects/project-durable-object.ts";
 import { RepoDurableObject } from "./domains/repos/repo-durable-object.ts";
 import { StreamDurableObject } from "./domains/streams/stream-durable-object.ts";
+import { StatefulWorkerDurableObject } from "./domains/workers/stateful-worker-durable-object.ts";
 
 export default {
   async fetch(request: Request, _env: Env, ctx: ExecutionContext) {
@@ -45,6 +46,7 @@ export default {
 
 export {
   ItxEntrypoint,
+  StatefulWorkerDurableObject,
   ItxDurableObject,
   AgentDurableObject,
   ProjectDurableObject,

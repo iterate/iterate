@@ -12,6 +12,7 @@
       { "name": "PROJECT", "class_name": "ProjectDurableObject" },
       { "name": "AGENT", "class_name": "AgentDurableObject" },
       { "name": "REPO", "class_name": "RepoDurableObject" },
+      { "name": "WORKER", "class_name": "StatefulWorkerDurableObject" },
       // The real durable event log from apps/os — a context's capability table
       // is the fold of one of these streams.
       { "name": "STREAM", "class_name": "StreamDurableObject" },
@@ -33,6 +34,10 @@
     {
       "tag": "v4",
       "new_sqlite_classes": ["ItxDurableObject"],
+    },
+    {
+      "tag": "v5",
+      "new_sqlite_classes": ["StatefulWorkerDurableObject"],
     },
   ],
   "artifacts": [

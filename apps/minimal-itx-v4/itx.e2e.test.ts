@@ -392,6 +392,12 @@ describe("minimal itx v4", () => {
                 return (await this.ctx.storage.get("n")) ?? 0;
               }
             }
+
+            export class DatabaseDurableObject extends DurableObject {
+              sql(query, ...bindings) {
+                return this.ctx.storage.sql.exec(query, ...bindings).toArray();
+              }
+            }
           `,
         },
       ],
@@ -409,12 +415,51 @@ describe("minimal itx v4", () => {
       source: "committed-worker",
     });
 
+    const explicitWorker = project.workers.get({
+      path: "/",
+      source: {
+        repoPath: "/",
+        sourcePath: "worker.js",
+        type: "repo",
+      },
+      type: "stateless",
+    }) as unknown as {
+      someMethod(): Promise<{ projectId: string; source: string }>;
+      [Symbol.dispose]?(): void;
+    };
+    expect(await explicitWorker.someMethod()).toEqual({
+      projectId: description.projectId,
+      source: "committed-worker",
+    });
+    disposeRpcResult(explicitWorker);
+
+    const directDb = project.workers.get({
+      className: "DatabaseDurableObject",
+      durableWorkerKey: `direct-db-${crypto.randomUUID()}`,
+      path: "/",
+      source: {
+        repoPath: "/",
+        sourcePath: "worker.js",
+        type: "repo",
+      },
+      type: "stateful",
+    }) as unknown as {
+      sql(query: string, ...bindings: unknown[]): Promise<Array<Record<string, unknown>>>;
+      [Symbol.dispose]?(): void;
+    };
+    await directDb.sql("CREATE TABLE messages (body TEXT)");
+    await directDb.sql("INSERT INTO messages VALUES (?)", "hello");
+    expect(await directDb.sql("SELECT body FROM messages")).toEqual([{ body: "hello" }]);
+    disposeRpcResult(directDb);
+
     disposeRpcResult(
       await project.provideCapability({
         path: ["probe"],
         capability: {
-          type: "dynamic-worker",
+          type: "worker",
           workerRef: {
+            entrypoint: "ProbeEntrypoint",
+            path: "/",
             source: {
               mainModule: "probe.js",
               modules: {
@@ -436,7 +481,7 @@ describe("minimal itx v4", () => {
               },
               type: "inline",
             },
-            target: { entrypoint: "ProbeEntrypoint", type: "worker-entrypoint" },
+            type: "stateless",
           },
         },
       }),
@@ -451,14 +496,15 @@ describe("minimal itx v4", () => {
       await project.provideCapability({
         path: ["projectWorkerRef"],
         capability: {
-          type: "dynamic-worker",
+          type: "worker",
           workerRef: {
+            path: "/",
             source: {
               repoPath: "/",
               sourcePath: "worker.js",
               type: "repo",
             },
-            target: { type: "worker-entrypoint" },
+            type: "stateless",
           },
         },
       }),
@@ -473,18 +519,17 @@ describe("minimal itx v4", () => {
       await project.provideCapability({
         path: ["counterFacet"],
         capability: {
-          type: "dynamic-worker",
+          type: "worker",
           workerRef: {
-            cacheKey: `counter-facet-${crypto.randomUUID()}`,
+            className: "CounterDurableObject",
+            durableWorkerKey: `counter-facet-${crypto.randomUUID()}`,
+            path: "/",
             source: {
               repoPath: "/",
               sourcePath: "worker.js",
               type: "repo",
             },
-            target: {
-              className: "CounterDurableObject",
-              type: "durable-object",
-            },
+            type: "stateful",
           },
         },
       }),
@@ -493,6 +538,32 @@ describe("minimal itx v4", () => {
     expect(await project.counterFacet.increment()).toBe(1);
     // @ts-expect-error - dynamic capability root
     expect(await project.counterFacet.current()).toBe(1);
+
+    disposeRpcResult(
+      await project.provideCapability({
+        path: ["db"],
+        capability: {
+          type: "worker",
+          workerRef: {
+            className: "DatabaseDurableObject",
+            durableWorkerKey: `mounted-db-${crypto.randomUUID()}`,
+            path: "/",
+            source: {
+              repoPath: "/",
+              sourcePath: "worker.js",
+              type: "repo",
+            },
+            type: "stateful",
+          },
+        },
+      }),
+    );
+    // @ts-expect-error - dynamic database capability mounted by this test.
+    await project.db.sql("CREATE TABLE records (value TEXT)");
+    // @ts-expect-error - dynamic database capability mounted by this test.
+    await project.db.sql("INSERT INTO records VALUES (?)", "mounted");
+    // @ts-expect-error - dynamic database capability mounted by this test.
+    expect(await project.db.sql("SELECT value FROM records")).toEqual([{ value: "mounted" }]);
   });
 
   test("Agent ask runs the faux web-chat loop and agent scripts can call project tools", async () => {
@@ -579,14 +650,16 @@ describe("minimal itx v4", () => {
     const { projectId } = await project.describe();
     const agentPath = `/agents/agent-only-${crypto.randomUUID()}`;
     using agent = project.agents.get(agentPath);
-    const counterCacheKey = `agent-counter-${crypto.randomUUID()}`;
+    const durableWorkerKey = `agent-counter-${crypto.randomUUID()}`;
 
     disposeRpcResult(
       await agent.provideCapability({
         path: ["agentProbe"],
         capability: {
-          type: "dynamic-worker",
+          type: "worker",
           workerRef: {
+            entrypoint: "AgentProbeEntrypoint",
+            path: agentPath,
             source: {
               mainModule: "agent-probe.js",
               modules: {
@@ -607,10 +680,7 @@ describe("minimal itx v4", () => {
               },
               type: "inline",
             },
-            target: {
-              entrypoint: "AgentProbeEntrypoint",
-              type: "worker-entrypoint",
-            },
+            type: "stateless",
           },
         },
       }),
@@ -619,18 +689,17 @@ describe("minimal itx v4", () => {
       await agent.provideCapability({
         path: ["agentCounter"],
         capability: {
-          type: "dynamic-worker",
+          type: "worker",
           workerRef: {
-            cacheKey: counterCacheKey,
+            className: "CounterDurableObject",
+            durableWorkerKey,
+            path: agentPath,
             source: {
               repoPath: "/",
               sourcePath: "worker.js",
               type: "repo",
             },
-            target: {
-              className: "CounterDurableObject",
-              type: "durable-object",
-            },
+            type: "stateful",
           },
         },
       }),
@@ -645,7 +714,7 @@ describe("minimal itx v4", () => {
       eventTypes: [AGENT_WEB_MESSAGE_SENT_TYPE],
       predicate: (event) =>
         typeof event.payload?.message === "string" &&
-        event.payload.message.includes(counterCacheKey),
+        event.payload.message.includes(durableWorkerKey),
       timeoutMs: 30_000,
     });
 
@@ -661,7 +730,7 @@ describe("minimal itx v4", () => {
               type: ${JSON.stringify(AGENT_WEB_MESSAGE_SENT_TYPE)},
               payload: {
                 message: JSON.stringify({
-                  counterCacheKey: ${JSON.stringify(counterCacheKey)},
+                  durableWorkerKey: ${JSON.stringify(durableWorkerKey)},
                   current,
                   first,
                   probe,
@@ -675,14 +744,14 @@ describe("minimal itx v4", () => {
 
     const event = await scriptReply;
     const message = JSON.parse(String(event.payload?.message)) as {
-      counterCacheKey: string;
       current: number;
+      durableWorkerKey: string;
       first: number;
       probe: { input: string; projectId: string; whoami: string };
     };
     expect(message).toEqual({
-      counterCacheKey,
       current: 1,
+      durableWorkerKey,
       first: 1,
       probe: {
         input: "agent-only",
@@ -703,8 +772,9 @@ describe("minimal itx v4", () => {
     const { projectId } = await project.describe();
     const agentPath = `/agents/scope-cache-${crypto.randomUUID()}`;
     using agent = project.agents.get(agentPath);
-    const scopeProbeWorkerRef = {
-      cacheKey: `scope-probe-${crypto.randomUUID()}`,
+    const scopeProbeWorkerRef = (path: string) => ({
+      entrypoint: "ScopeProbeEntrypoint",
+      path,
       source: {
         mainModule: "scope-probe.js",
         modules: {
@@ -727,22 +797,19 @@ describe("minimal itx v4", () => {
         },
         type: "inline" as const,
       },
-      target: {
-        entrypoint: "ScopeProbeEntrypoint",
-        type: "worker-entrypoint" as const,
-      },
-    };
+      type: "stateless" as const,
+    });
 
     disposeRpcResult(
       await project.provideCapability({
         path: ["scopeProbe"],
-        capability: { type: "dynamic-worker", workerRef: scopeProbeWorkerRef },
+        capability: { type: "worker", workerRef: scopeProbeWorkerRef("/") },
       }),
     );
     disposeRpcResult(
       await agent.provideCapability({
         path: ["scopeProbe"],
-        capability: { type: "dynamic-worker", workerRef: scopeProbeWorkerRef },
+        capability: { type: "worker", workerRef: scopeProbeWorkerRef(agentPath) },
       }),
     );
 
@@ -1337,8 +1404,8 @@ describe("minimal itx v4", () => {
       project.provideCapability({
         path: ["replaceProbe"],
         capability: {
-          type: "dynamic-worker",
-          workerRef: { source: { type: "inline" }, target: { type: "worker-entrypoint" } } as never,
+          type: "worker",
+          workerRef: { source: { type: "inline" }, type: "stateless" } as never,
         },
       }),
     ).rejects.toThrow();

@@ -14,7 +14,7 @@ export const ItxProcessorContract = defineProcessorContract({
   initialState: { capabilities: [], pendingScriptExecutions: {} },
   events: {
     "events.iterate.com/itx/capability-provided": {
-      description: "A dynamic capability was mounted at a path.",
+      description: "A capability was mounted at a path.",
       payloadSchema: CapabilityRecord,
     },
     "events.iterate.com/itx/capability-revoked": {

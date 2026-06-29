@@ -1,7 +1,7 @@
-import type { DynamicWorkerRef } from "../dynamic-workers/types.ts";
 import type { Agent } from "../agents/types.ts";
 import type { Project, ProjectCollection } from "../projects/types.ts";
 import type { StreamEvent } from "../streams/types.ts";
+import type { WorkerRef } from "../workers/types.ts";
 
 export type CfExecutionContext = {
   exports: ExecutionContext["exports"];
@@ -32,7 +32,7 @@ export interface ItxCapabilityHost {
 
 export type ProvidedCapability =
   | { type: "live"; target: unknown }
-  | { type: "dynamic-worker"; workerRef: DynamicWorkerRef };
+  | { type: "worker"; workerRef: WorkerRef };
 
 export type CapabilityRecord =
   | {
@@ -40,9 +40,9 @@ export type CapabilityRecord =
       path: string[];
     }
   | {
-      type: "dynamic-worker";
+      type: "worker";
       path: string[];
-      workerRef: DynamicWorkerRef;
+      workerRef: WorkerRef;
     };
 
 export type ItxAuthCredentials =
