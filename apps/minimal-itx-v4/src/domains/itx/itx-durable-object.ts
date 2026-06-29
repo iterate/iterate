@@ -1,5 +1,4 @@
 import { DurableObject } from "cloudflare:workers";
-import { TRUSTED_INTERNAL_ITX_TOKEN } from "../../auth.ts";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { DynamicWorkerRuntimeRpcTarget } from "../dynamic-workers/rpc-targets.ts";
@@ -13,9 +12,14 @@ import {
   type ProvideCapabilityInput,
   type RunScriptResult,
 } from "./itx-processor-implementation.ts";
+import { itxEntrypointScopeCacheKey, scopedItxEntrypointProps } from "./entrypoint-props.ts";
 
 export class ItxDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
+  readonly #itxScope = scopedItxEntrypointProps({
+    path: this.#name.path,
+    projectId: this.#name.projectId,
+  });
   readonly #processorHost = createStreamProcessorHost(this.ctx);
   readonly #itxProcessor = this.#processorHost.add(
     ItxProcessorContract.slug,
@@ -25,18 +29,15 @@ export class ItxDurableObject extends DurableObject<Env> {
         dynamicWorkerRuntime: new DynamicWorkerRuntimeRpcTarget({
           bindings: {
             ITX: this.ctx.exports.ItxEntrypoint({
-              props: {
-                type: "trusted-internal",
-                token: TRUSTED_INTERNAL_ITX_TOKEN,
-              },
+              props: this.#itxScope,
             }),
           },
           facets: this.ctx.facets,
           loader: this.env.LOADER,
           projectId: this.#name.projectId,
           storage: this.ctx.storage,
+          workerScopeKey: itxEntrypointScopeCacheKey(this.#itxScope),
         }),
-        host: this.#name,
         stream: this.ctx.exports.StreamDurableObject.getByName(
           this.#name.durableObjectName,
         ) as never,

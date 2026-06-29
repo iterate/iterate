@@ -4,9 +4,9 @@ import {
   type RequestStreamSubscriptionArgs,
 } from "../streams/engine/workers/stream-processor-host.ts";
 import type { Env } from "../../env.ts";
-import { TRUSTED_INTERNAL_ITX_TOKEN } from "../../auth.ts";
 import { DynamicWorkerRuntimeRpcTarget } from "../dynamic-workers/rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { itxEntrypointScopeCacheKey, scopedItxEntrypointProps } from "../itx/entrypoint-props.ts";
 import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "../repos/project-repo.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
@@ -15,20 +15,22 @@ import type { ProjectWorker } from "./types.ts";
 export class ProjectDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   readonly #processorHost = createStreamProcessorHost(this.ctx);
+  readonly #itxScope = scopedItxEntrypointProps({
+    path: this.#name.path,
+    projectId: this.#name.projectId,
+  });
 
   readonly #dynamicWorkerRuntime = new DynamicWorkerRuntimeRpcTarget({
     bindings: {
       ITX: this.ctx.exports.ItxEntrypoint({
-        props: {
-          type: "trusted-internal",
-          token: TRUSTED_INTERNAL_ITX_TOKEN,
-        },
+        props: this.#itxScope,
       }),
     },
     facets: this.ctx.facets,
     loader: this.env.LOADER,
     projectId: this.#name.projectId,
     storage: this.ctx.storage,
+    workerScopeKey: itxEntrypointScopeCacheKey(this.#itxScope),
   });
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -69,13 +71,6 @@ export class ProjectDurableObject extends DurableObject<Env> {
         type: "repo",
       },
       target: {
-        props: {
-          auth: {
-            type: "trusted-internal",
-            token: TRUSTED_INTERNAL_ITX_TOKEN,
-          },
-          projectId: this.#name.projectId,
-        },
         type: "worker-entrypoint",
       },
     });

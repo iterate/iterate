@@ -1,5 +1,6 @@
 import type { DynamicWorkerRef } from "../dynamic-workers/types.ts";
-import type { ProjectCollection } from "../projects/types.ts";
+import type { Agent } from "../agents/types.ts";
+import type { Project, ProjectCollection } from "../projects/types.ts";
 import type { StreamEvent } from "../streams/types.ts";
 
 export type CfExecutionContext = {
@@ -14,6 +15,8 @@ export interface ItxRoot {
   projects: ProjectCollection;
   whoami(): string;
 }
+
+export type ScopedItx = Project | Agent;
 
 export interface ItxCapabilityHost {
   runScript(code: string): Promise<{

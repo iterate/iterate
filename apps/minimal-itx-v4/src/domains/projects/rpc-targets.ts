@@ -10,15 +10,10 @@ import { subscriptionConfiguredEvent } from "../streams/subscription-event.ts";
 import { replayPath } from "../itx/live-capability.ts";
 import { rejectBuiltinCollision, withInvokeCapabilityFallback } from "../itx/path-proxy.ts";
 import { type ProvideCapabilityInput } from "../itx/itx-processor-implementation.ts";
-import type { CfExecutionContext, ItxAuth, ItxAuthCredentials } from "../itx/types.ts";
-import { TRUSTED_INTERNAL_ITX_TOKEN } from "../../auth.ts";
+import { itxEntrypointScopeCacheKey, scopedItxEntrypointProps } from "../itx/entrypoint-props.ts";
+import type { CfExecutionContext, ItxAuth } from "../itx/types.ts";
 import type { Project, ProjectCollection, ProjectWorker } from "./types.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
-
-const TRUSTED_INTERNAL_ITX_PROPS = {
-  token: TRUSTED_INTERNAL_ITX_TOKEN,
-  type: "trusted-internal",
-} satisfies ItxAuthCredentials;
 
 function projectRootStream(props: { auth: ItxAuth; projectId: string }) {
   return new StreamRpcTarget({
@@ -117,12 +112,17 @@ class ProjectWorkerRpcTarget extends RpcTarget implements ProjectWorker {
   }
 
   private defaultProjectWorker() {
+    const itxScope = scopedItxEntrypointProps({
+      path: "/",
+      projectId: this.props.projectId,
+    });
     return new DynamicWorkerRuntimeRpcTarget({
       bindings: {
-        ITX: this.props.ctx.exports.ItxEntrypoint({ props: TRUSTED_INTERNAL_ITX_PROPS }),
+        ITX: this.props.ctx.exports.ItxEntrypoint({ props: itxScope }),
       },
       loader: env.LOADER,
       projectId: this.props.projectId,
+      workerScopeKey: itxEntrypointScopeCacheKey(itxScope),
     }).get<ProjectWorker>({
       source: {
         repoPath: PROJECT_REPO_PATH,
@@ -130,10 +130,6 @@ class ProjectWorkerRpcTarget extends RpcTarget implements ProjectWorker {
         type: "repo",
       },
       target: {
-        props: {
-          auth: TRUSTED_INTERNAL_ITX_PROPS,
-          projectId: this.props.projectId,
-        },
         type: "worker-entrypoint",
       },
     });

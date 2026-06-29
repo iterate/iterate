@@ -16,6 +16,7 @@ export class DynamicWorkerRuntimeRpcTarget extends RpcTarget {
   #loader: Env["LOADER"];
   #projectId: string;
   #storage?: DurableObjectStorage;
+  #workerScopeKey: string;
 
   constructor(props: {
     bindings: WorkerBindings;
@@ -23,6 +24,7 @@ export class DynamicWorkerRuntimeRpcTarget extends RpcTarget {
     loader: Env["LOADER"];
     projectId: string;
     storage?: DurableObjectStorage;
+    workerScopeKey?: string;
   }) {
     super();
     this.#bindings = props.bindings;
@@ -30,6 +32,7 @@ export class DynamicWorkerRuntimeRpcTarget extends RpcTarget {
     this.#loader = props.loader;
     this.#projectId = props.projectId;
     this.#storage = props.storage;
+    this.#workerScopeKey = props.workerScopeKey ?? "default";
   }
 
   get<T = unknown>(ref: DynamicWorkerRef): Promise<T> {
@@ -96,6 +99,7 @@ export class DynamicWorkerRuntimeRpcTarget extends RpcTarget {
     const cacheKey = [
       "worker-loader",
       this.#projectId,
+      this.#workerScopeKey,
       ref.cacheKey ?? "anonymous",
       resolved.cacheKey,
     ].join(":");

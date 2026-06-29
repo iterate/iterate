@@ -7,8 +7,6 @@ import { hashString } from "../dynamic-workers/dynamic-worker-loader.ts";
 import { DynamicWorkerRef as DynamicWorkerRefSchema } from "../dynamic-workers/schemas.ts";
 import type { DynamicWorkerRef, JsonValue } from "../dynamic-workers/types.ts";
 import type { StreamEvent } from "../streams/types.ts";
-import { TRUSTED_INTERNAL_ITX_TOKEN } from "../../auth.ts";
-import type { ProjectDurableObjectName } from "../durable-object-names.ts";
 import {
   replayPath,
   retainLiveCapabilityProvider,
@@ -78,18 +76,15 @@ function resolveLongestPrefix(records: CapabilityRecord[], path: string[]) {
 export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
   readonly contract = ItxProcessorContract;
   #dynamicWorkerRuntime: DynamicWorkerRuntimeRpcTarget;
-  #host: ProjectDurableObjectName;
   #liveCapabilities = new Map<string, LiveCapability>();
 
   constructor(
     args: StreamProcessorConstructorArgs<typeof ItxProcessorContract, object> & {
       dynamicWorkerRuntime: DynamicWorkerRuntimeRpcTarget;
-      host: ProjectDurableObjectName;
     },
   ) {
     super(args);
     this.#dynamicWorkerRuntime = args.dynamicWorkerRuntime;
-    this.#host = args.host;
   }
 
   protected override reduce({
@@ -280,10 +275,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
       const fn = ${code};
       export class ScriptEntrypoint extends WorkerEntrypoint {
         async run() {
-          const root = await this.env.ITX.authenticate(this.ctx.props.auth);
-          const { path, projectId } = this.ctx.props.host;
-          const project = await root.projects.get(projectId);
-          const itx = path === "/" ? project : await project.agents.get(path);
+          const itx = await this.env.ITX.get();
           return await fn(itx);
         }
       }
@@ -297,13 +289,6 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
       },
       target: {
         entrypoint: "ScriptEntrypoint",
-        props: {
-          auth: {
-            type: "trusted-internal",
-            token: TRUSTED_INTERNAL_ITX_TOKEN,
-          },
-          host: this.#host,
-        },
         type: "worker-entrypoint",
       },
     };

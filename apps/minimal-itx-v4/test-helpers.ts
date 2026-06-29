@@ -1,10 +1,31 @@
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import WebSocket from "ws";
-import type { UnauthenticatedItx } from "./src/domains/itx/types.ts";
+import type { Agent } from "./src/domains/agents/types.ts";
+import type { ItxAuthCredentials, ItxRoot, UnauthenticatedItx } from "./src/domains/itx/types.ts";
+import { withOwnedRpcSession } from "./src/domains/itx/rpc-disposal.ts";
+import type { Project } from "./src/domains/projects/types.ts";
 
 const DEFAULT_BASE_URL = "http://localhost:8791";
 
 export type ItxWebSocketMessage = [timestamp: number, direction: "in" | "out", data: unknown];
+
+type ItxSessionInput = {
+  onWebSocketMessage?: (message: ItxWebSocketMessage) => void;
+};
+
+type AuthenticatedItxSessionInput = ItxSessionInput & {
+  auth: ItxAuthCredentials;
+};
+
+type ProjectItxSessionInput = AuthenticatedItxSessionInput & {
+  path?: "/";
+  projectId: string;
+};
+
+type AgentItxSessionInput = AuthenticatedItxSessionInput & {
+  agentPath: string;
+  projectId: string;
+};
 
 export function buildUrl({
   path,
@@ -39,11 +60,17 @@ function parseFrame(data: unknown): unknown {
  * Returns a bog standard capnweb websocket RpcStub using newWebSocketRpcSession but allows
  * the caller to pass in a function to record the websocket messages.
  */
+export function withItxSession(input: AgentItxSessionInput): RpcStub<Agent>;
+export function withItxSession(input: ProjectItxSessionInput): RpcStub<Project>;
+export function withItxSession(input: AuthenticatedItxSessionInput): RpcStub<ItxRoot>;
+export function withItxSession(input?: ItxSessionInput): RpcStub<UnauthenticatedItx>;
 export function withItxSession(
-  input: {
-    onWebSocketMessage?: (message: ItxWebSocketMessage) => void;
-  } = {},
-): RpcStub<UnauthenticatedItx> {
+  input:
+    | AgentItxSessionInput
+    | AuthenticatedItxSessionInput
+    | ItxSessionInput
+    | ProjectItxSessionInput = {},
+): RpcStub<Agent> | RpcStub<ItxRoot> | RpcStub<Project> | RpcStub<UnauthenticatedItx> {
   const socket = new WebSocket(buildUrl({ path: "/api/itx", protocol: "ws" }), {
     handshakeTimeout: 10_000,
   });
@@ -61,7 +88,17 @@ export function withItxSession(
 
   socket.on("message", (data) => record("in", data));
 
-  return newWebSocketRpcSession<UnauthenticatedItx>(
+  const session = newWebSocketRpcSession<UnauthenticatedItx>(
     socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
   );
+  if (!("auth" in input)) return session;
+
+  const root = session.authenticate(input.auth) as RpcStub<ItxRoot>;
+  if (!("projectId" in input)) return withOwnedRpcSession(root, session);
+
+  const project = root.projects.get(input.projectId) as RpcStub<Project>;
+  if (!("agentPath" in input)) return withOwnedRpcSession(project, root, session);
+
+  const agent = project.agents.get(input.agentPath) as RpcStub<Agent>;
+  return withOwnedRpcSession(agent, project, root, session);
 }

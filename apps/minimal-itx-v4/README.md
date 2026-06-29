@@ -50,10 +50,19 @@ using itx = unauthenticatedItx.authenticate({
 ```
 
 Dynamic workers receive an `env.ITX` binding whose props include a trusted
-internal auth credential. Inside loaded code:
+internal project/path scope. Inside loaded code:
 
 ```ts
-const itx = await env.ITX.authenticate();
+const itx = await env.ITX.get();
+```
+
+External clients still connect to `/api/itx` and call `authenticate(...)`.
+`connectItx` overloads are only client-side convenience:
+
+```ts
+using root = connectItx({ auth, baseUrl });
+using project = connectItx({ auth, baseUrl, projectId: "prj_ref" });
+using agent = connectItx({ agentPath: "/agents/demo", auth, baseUrl, projectId: "prj_ref" });
 ```
 
 Run the local Miniflare-backed worker and test it:

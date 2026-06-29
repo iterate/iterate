@@ -424,7 +424,7 @@ describe("minimal itx v4", () => {
                 export class ProbeEntrypoint extends WorkerEntrypoint {
                   async inspect() {
                     const root = await this.env.ITX.authenticate();
-                    const project = await root.projects.get(${JSON.stringify(description.projectId)});
+                    const project = await this.env.ITX.get();
                     const repo = await project.repo;
                     return {
                       principal: await root.whoami(),
@@ -595,12 +595,10 @@ describe("minimal itx v4", () => {
 
                 export class AgentProbeEntrypoint extends WorkerEntrypoint {
                   async inspect(input) {
-                    const root = await this.env.ITX.authenticate(this.ctx.props.auth);
-                    const project = await root.projects.get(this.ctx.props.projectId);
-                    const agent = await project.agents.get(this.ctx.props.agentPath);
+                    const agent = await this.env.ITX.get();
                     return {
                       input,
-                      projectId: (await project.describe()).projectId,
+                      projectId: ${JSON.stringify(projectId)},
                       whoami: await agent.whoami(),
                     };
                   }
@@ -611,11 +609,6 @@ describe("minimal itx v4", () => {
             },
             target: {
               entrypoint: "AgentProbeEntrypoint",
-              props: {
-                agentPath,
-                auth: { type: "trusted-internal", token: TRUSTED_INTERNAL_ITX_TOKEN },
-                projectId,
-              },
               type: "worker-entrypoint",
             },
           },
@@ -699,6 +692,69 @@ describe("minimal itx v4", () => {
     });
   });
 
+  test("Dynamic worker env.ITX.get() is scoped by project and agent host path", async () => {
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+
+    using project = itx.projects.create({ slug: "dynamic-worker-scope-cache" });
+    const { projectId } = await project.describe();
+    const agentPath = `/agents/scope-cache-${crypto.randomUUID()}`;
+    using agent = project.agents.get(agentPath);
+    const scopeProbeWorkerRef = {
+      cacheKey: `scope-probe-${crypto.randomUUID()}`,
+      source: {
+        mainModule: "scope-probe.js",
+        modules: {
+          "scope-probe.js": `
+            import { WorkerEntrypoint } from "cloudflare:workers";
+
+            export class ScopeProbeEntrypoint extends WorkerEntrypoint {
+              async projectScope() {
+                const itx = await this.env.ITX.get();
+                const description = await itx.describe();
+                return { kind: "project", projectId: description.projectId };
+              }
+
+              async agentScope() {
+                const itx = await this.env.ITX.get();
+                return { kind: "agent", whoami: await itx.whoami() };
+              }
+            }
+          `,
+        },
+        type: "inline" as const,
+      },
+      target: {
+        entrypoint: "ScopeProbeEntrypoint",
+        type: "worker-entrypoint" as const,
+      },
+    };
+
+    disposeRpcResult(
+      await project.provideCapability({
+        path: ["scopeProbe"],
+        capability: { type: "dynamic-worker", workerRef: scopeProbeWorkerRef },
+      }),
+    );
+    disposeRpcResult(
+      await agent.provideCapability({
+        path: ["scopeProbe"],
+        capability: { type: "dynamic-worker", workerRef: scopeProbeWorkerRef },
+      }),
+    );
+
+    // @ts-expect-error - dynamic project capability mounted by this test.
+    expect(await project.scopeProbe.projectScope()).toEqual({ kind: "project", projectId });
+    // @ts-expect-error - dynamic agent capability mounted by this test.
+    expect(await agent.scopeProbe.agentScope()).toEqual({
+      kind: "agent",
+      whoami: `agent ${projectId}:${agentPath}`,
+    });
+  });
+
   test("Dynamic project worker processEvent can cross-post project events", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
@@ -724,16 +780,7 @@ describe("minimal itx v4", () => {
               async processEvent({ event }) {
                 if (event.metadata?.crossPostMarker !== ${JSON.stringify(marker)}) return;
 
-                const root = await this.env.ITX.authenticate(this.ctx.props.auth);
-                // TODO(workers-rpc-pipelining): This should eventually collapse to
-                // root.projects.get(this.ctx.props.projectId).streams.get(...).
-                // Workers RPC exposes prototype getters, but workerd does not reliably
-                // promise-pipeline through getter/property hops on an unresolved RPC
-                // result. That is why apps/os uses method-shaped boundaries like
-                // node.itx().invoke(...) and PathProxy/replayPathCall for deep dotted
-                // traversal. Keep this explicit await until v4 has the same kind of
-                // method-shaped or path-proxy bridge for project-scoped ITX handles.
-                const project = await root.projects.get(this.ctx.props.projectId);
+                const project = await this.env.ITX.get();
                 await project.streams.get("/cross-posted").append({
                   type: "events.iterate.com/test/cross-posted",
                   idempotencyKey: \`project-worker-cross-post:\${event.offset}\`,
@@ -814,16 +861,7 @@ describe("minimal itx v4", () => {
                 if (event.type !== "events.iterate.com/stream/child-stream-created") return;
                 if (event.payload.childPath !== TRIGGER_PATH) return;
 
-                const root = await this.env.ITX.authenticate(this.ctx.props.auth);
-                // TODO(workers-rpc-pipelining): This should eventually collapse to
-                // root.projects.get(this.ctx.props.projectId).streams.get(...).
-                // Workers RPC exposes prototype getters, but workerd does not reliably
-                // promise-pipeline through getter/property hops on an unresolved RPC
-                // result. That is why apps/os uses method-shaped boundaries like
-                // node.itx().invoke(...) and PathProxy/replayPathCall for deep dotted
-                // traversal. Keep this explicit await until v4 has the same kind of
-                // method-shaped or path-proxy bridge for project-scoped ITX handles.
-                const project = await root.projects.get(this.ctx.props.projectId);
+                const project = await this.env.ITX.get();
                 await project.streams.get(OUTPUT_PATH).append({
                   type: FORWARDED_EVENT_TYPE,
                   payload: {
