@@ -2,10 +2,10 @@
 //
 // The Stream Durable Object runs this processor inline during append instead
 // of through a subscription runner, because stream bookkeeping must be updated
-// before committed events are delivered to subscribers. Apart from that
-// co-location, core has the same shape as any other processor: reduced state
-// (stream identity, subscriptions, the presence roster) plus non-serializable
-// runtime state it reconciles against — the live delivery connections.
+// before committed events are delivered to subscribers. It deliberately does
+// not extend StreamProcessor: the reducer and contract are processor-like, but
+// this class still owns the live delivery connection runtime for now. Splitting
+// that connection machinery out is the next cleanup.
 //
 // `processEvent` is the reconciler. Its two operations are the universal ones:
 // append events (subscriber-connected/disconnected presence facts, ancestor
@@ -13,9 +13,9 @@
 // outbound subscribers, close connections whose configuration disappeared).
 
 import type { StreamEvent, StreamEventInput } from "../../../types.ts";
+import type { StreamDurableObject } from "../../../stream-durable-object.ts";
 import type { ConsumedEvent } from "../../shared/stream-processors.ts";
 import type { ProcessEventBatch, ProcessorRuntimeState } from "../../types.ts";
-import { StreamProcessor } from "../../stream-processor.ts";
 import {
   retainGetProcessorRuntimeState,
   retainProcessEventBatch,
@@ -31,32 +31,24 @@ import {
 } from "./contract.ts";
 
 type CoreProcessorContract = typeof CoreProcessorContract;
+type CoreEvent = ConsumedEvent<CoreProcessorContract>;
 
-/**
- * Runtime hooks the hosting Stream DO provides. The split keeps the DO the
- * owner of storage and RPC mechanics while core owns the decisions: core
- * decides WHEN to dial or close, the DO knows HOW to read committed events and
- * dispatch a subscriber's Callable.
- *
- * Optional so reduce-only usage (tests, state rebuilds) can construct the
- * processor without a live stream behind it; connection methods assert.
- */
-type CoreProcessorDeps = {
-  /** Append to this same stream in the Stream DO's synchronous append turn. */
-  appendHere?: (...events: StreamEventInput[]) => StreamEvent[];
-  /** Read committed events for the delivery pump. */
-  getEvents?: (args: { afterOffset: number; limit: number }) => StreamEvent[];
-  /** The live reduced core state (owned by the Stream DO between appends). */
-  currentState?: () => CoreProcessorState;
-  /** Dispatch one configured outbound subscriber's Callable with the handshake. */
-  dial?: (args: {
-    configured: CoreProcessorState["subscriptionsByKey"][string];
-    subscriptionKey: string;
-  }) => Promise<void>;
+type ReducedCoreEvent = {
+  event: CoreEvent;
+  previousState: CoreProcessorState;
+  state: CoreProcessorState;
 };
 
-export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, CoreProcessorDeps> {
+type ProcessCoreEventArgs = ReducedCoreEvent & {
+  checkpointOffset: number;
+  streamMaxOffset: number;
+  runInBackground: (work: () => Promise<unknown>) => void;
+};
+
+export class CoreStreamProcessor {
   readonly contract = CoreProcessorContract;
+
+  constructor(readonly stream: StreamDurableObject) {}
 
   /**
    * Live delivery connections, keyed by subscriptionKey — the runtime state
@@ -108,35 +100,26 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
 
   /** Reduce one committed event against caller-owned state. */
   reduceEvent(args: { event: StreamEvent; state: CoreProcessorState }): CoreProcessorState {
-    return this.reduceRawEvent(args)?.state ?? args.state;
+    return this.#reduce({ event: args.event as CoreEvent, state: args.state });
   }
 
   /**
    * Run `processEvent` side effects for one already-reduced event. Inline
-   * appends are synchronous, so blocking work is unavailable here — side
-   * effects must use `runInBackground` and be idempotent.
+   * processing has no checkpoint to block, so side effects must be scheduled
+   * after the append commit and be idempotent.
    */
   processReducedEvent(args: {
     event: StreamEvent;
     previousState: CoreProcessorState;
     state: CoreProcessorState;
   }): void {
-    this.processEvent({
+    this.#processEvent({
       event: args.event as ConsumedEvent<CoreProcessorContract>,
       previousState: args.previousState,
       state: args.state,
       checkpointOffset: args.event.offset,
       streamMaxOffset: args.event.offset,
-      blockProcessorWhile: () => {
-        throw new Error(
-          "blockProcessorWhile is unavailable when processing a reduced event inline",
-        );
-      },
-      runInBackground: (work) => this.runInBackground(work),
-      append: (...input) => {
-        const events = input.map((event) => this.buildEmittedEvent(event) as StreamEventInput);
-        return Promise.resolve(this.#appendHere(...events));
-      },
+      runInBackground: (work) => this.#runInBackground(work),
     });
   }
 
@@ -148,9 +131,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
   // Re-validating the growing connectionsByKey/processorsBySlug/
   // subscriptionsByKey records on every appended event was quadratic work for
   // no added safety.
-  override reduce(
-    args: Parameters<StreamProcessor<CoreProcessorContract>["reduce"]>[0],
-  ): CoreProcessorState {
+  #reduce(args: { event: CoreEvent; state: CoreProcessorState }): CoreProcessorState {
     const state = args.state;
     let next: CoreProcessorState = {
       ...state,
@@ -324,9 +305,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
    *   ordinary consequence of the woken fact.
    * - `subscription-configured`: the desired connection set changed.
    */
-  protected override processEvent(
-    args: Parameters<StreamProcessor<CoreProcessorContract>["processEvent"]>[0],
-  ): undefined {
+  #processEvent(args: ProcessCoreEventArgs): undefined {
     switch (args.event.type) {
       case "events.iterate.com/stream/woken":
       case "events.iterate.com/stream/subscription-configured":
@@ -341,9 +320,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
     }
   }
 
-  #announceToAncestors(
-    args: Parameters<StreamProcessor<CoreProcessorContract>["processEvent"]>[0],
-  ): void {
+  #announceToAncestors(args: ProcessCoreEventArgs): void {
     if (args.state.path === "/") return;
 
     const pathSegments = args.state.path.split("/").filter(Boolean);
@@ -355,14 +332,13 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
     const path = args.state.path;
     args.runInBackground(async () => {
       await Promise.all(
-        ancestorPaths.map(async (ancestorPath) => {
-          const stream = this.stream.at(ancestorPath);
-          await stream.append({
+        ancestorPaths.map((ancestorPath) =>
+          this.stream.appendToStreamPath(ancestorPath, {
             type: "events.iterate.com/stream/child-stream-created",
             idempotencyKey: `child-stream-created:${ancestorPath}:${path}`,
             payload: { childPath: path },
-          });
-        }),
+          }),
+        ),
       );
     });
   }
@@ -488,9 +464,9 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
 
       // Reserve the key before any await so a concurrent reconcile can't dial twice.
       this.#connecting.add(subscriptionKey);
-      this.runInBackground(async () => {
+      this.#runInBackground(async () => {
         try {
-          await this.#requireDep("dial")({ configured, subscriptionKey });
+          await this.stream.connectCoreOutboundConnection({ configured, subscriptionKey });
         } catch (error) {
           console.error("Stream outbound connection failed", { error, subscriptionKey });
         } finally {
@@ -553,8 +529,6 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
   }): { subscriptionKey: string; streamMaxOffset: number; unsubscribe(): void } {
     const subscriptionKey = args.subscriptionKey.trim();
     if (subscriptionKey.length === 0) throw new Error("subscriptionKey must not be blank.");
-    const getEvents = this.#requireDep("getEvents");
-
     // Replacing any existing connection for this key.
     this.#connections.get(subscriptionKey)?.close("replaced");
 
@@ -621,7 +595,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
         while (open) {
           let events: StreamEvent[] = [];
           if (deliverEvents) {
-            const readEvents = getEvents({ afterOffset: cursor, limit: 100 }); // limit hardcoded for now
+            const readEvents = this.stream.getEvents({ afterOffset: cursor, limit: 100 }); // limit hardcoded for now
             const lastOffset = readEvents.at(-1)?.offset;
             if (lastOffset === undefined) {
               // Caught up; the next append wakes us again. The first drain
@@ -735,30 +709,18 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
    */
   #appendPresenceFact(event: StreamEventInput): void {
     try {
-      this.#appendHere(event);
+      this.stream.append(event);
     } catch (error) {
       console.error("stream presence fact append failed", { type: event.type, error });
     }
   }
 
-  #appendHere(...events: StreamEventInput[]): StreamEvent[] {
-    return this.#requireDep("appendHere")(...events);
+  #runInBackground(work: () => Promise<unknown>): void {
+    this.stream.runCoreProcessorInBackground(work);
   }
 
   #currentState(): CoreProcessorState {
-    return this.#requireDep("currentState")();
-  }
-
-  #requireDep<Name extends keyof CoreProcessorDeps>(
-    name: Name,
-  ): NonNullable<CoreProcessorDeps[Name]> {
-    const dep = this.deps[name];
-    if (dep === undefined) {
-      throw new Error(
-        `CoreStreamProcessor connection management requires the "${name}" dep; this instance was constructed for reduce-only use`,
-      );
-    }
-    return dep;
+    return this.stream.runtimeState().coreProcessorState;
   }
 }
 
