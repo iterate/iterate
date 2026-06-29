@@ -54,7 +54,7 @@ export class WorkerCollectionRpcTarget extends RpcTarget implements WorkerCollec
  * and eventually call `invokeCapability`. Explicit `fetch` and `processEvent`
  * methods keep common WorkerEntrypoint methods discoverable and typed.
  */
-export class WorkerRpcTarget extends RpcTarget {
+class WorkerRpcTarget extends RpcTarget {
   readonly #runner: WorkerRunner;
   readonly #ref: WorkerRef;
   readonly #projectId: string;

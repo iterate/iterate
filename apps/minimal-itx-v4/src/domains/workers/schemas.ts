@@ -28,13 +28,13 @@ const WorkerRefBase = {
   source: WorkerSource,
 };
 
-export const StatelessWorkerRef = z.strictObject({
+const StatelessWorkerRef = z.strictObject({
   ...WorkerRefBase,
   entrypoint: z.string().optional(),
   type: z.literal("stateless"),
 }) satisfies z.ZodType<StatelessWorkerRefType, unknown>;
 
-export const StatefulWorkerRef = z.strictObject({
+const StatefulWorkerRef = z.strictObject({
   ...WorkerRefBase,
   className: z.string(),
   durableWorkerKey: z.string().regex(DURABLE_WORKER_KEY),

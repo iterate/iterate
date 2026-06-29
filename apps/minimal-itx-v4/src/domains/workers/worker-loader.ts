@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { WorkerRef, WorkerSource } from "./types.ts";
 
-export const WORKER_COMPATIBILITY_DATE = "2026-05-01";
+const WORKER_COMPATIBILITY_DATE = "2026-05-01";
 
 /**
  * Fully materialized Worker Loader input plus a cache key for the source bytes.

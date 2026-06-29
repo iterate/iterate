@@ -41,7 +41,7 @@ type ParsedDurableObjectName = {
   props: Record<string, string>;
 };
 
-export type ProjectDurableObjectName = {
+type ProjectDurableObjectName = {
   durableObjectName: string;
   projectId: string;
   path: string;
