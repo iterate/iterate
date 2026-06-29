@@ -1,6 +1,4 @@
-import { TRUSTED_INTERNAL_ITX_TOKEN } from "../../auth.ts";
 import { normalizePath } from "../durable-object-names.ts";
-import type { ItxAuthCredentials } from "./types.ts";
 
 export type ItxEntrypointScope = {
   path: string;
@@ -9,11 +7,6 @@ export type ItxEntrypointScope = {
 
 export type ScopedItxEntrypointProps = ItxEntrypointScope;
 export type ItxEntrypointProps = ScopedItxEntrypointProps;
-
-export const TRUSTED_INTERNAL_ITX_PROPS = {
-  token: TRUSTED_INTERNAL_ITX_TOKEN,
-  type: "trusted-internal",
-} satisfies ItxAuthCredentials;
 
 export function scopedItxEntrypointProps(input: ItxEntrypointScope): ScopedItxEntrypointProps {
   return {

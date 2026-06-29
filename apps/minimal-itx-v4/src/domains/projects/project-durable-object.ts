@@ -4,9 +4,11 @@ import {
   type RequestStreamSubscriptionArgs,
 } from "../streams/engine/workers/stream-processor-host.ts";
 import type { Env } from "../../env.ts";
+import { trustedInternalAuthContext } from "../../auth.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { itxEntrypointScopeCacheKey, scopedItxEntrypointProps } from "../itx/entrypoint-props.ts";
 import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "../repos/project-repo.ts";
+import { StreamRpcTarget } from "../streams/rpc-targets.ts";
 import { WorkerRunner } from "../workers/worker-runner.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
@@ -14,7 +16,13 @@ import type { ProjectWorker } from "./types.ts";
 
 export class ProjectDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
-  readonly #processorHost = createStreamProcessorHost(this.ctx);
+  readonly #processorHost = createStreamProcessorHost(this.ctx, {
+    stream: new StreamRpcTarget({
+      auth: trustedInternalAuthContext(),
+      path: this.#name.path,
+      projectId: this.#name.projectId,
+    }),
+  });
   readonly #itxScope = scopedItxEntrypointProps({
     path: this.#name.path,
     projectId: this.#name.projectId,

@@ -2015,41 +2015,6 @@ describe("minimal itx v4", () => {
 //     expect(await response.text()).toBe("project worker fetched /ref");
 //   });
 
-//   test("invokes dynamic workers that call back through env.ITX.authenticate()", async () => {
-//     using providerRoot = connectUnauthenticated();
-//     using provider = projectItx(providerRoot);
-//     using callerRoot = connectUnauthenticated();
-//     using caller = projectItx<ProjectItxRpc & { probe: { repoWhoami(): string } }>(callerRoot);
-
-//     await provider.provideCapability({
-//       capability: {
-//         type: "dynamic-worker",
-//         workerRef: {
-//           source: {
-//             mainModule: "probe.js",
-//             modules: {
-//               "probe.js": `
-//               import { WorkerEntrypoint } from "cloudflare:workers";
-//               export class ProbeEntrypoint extends WorkerEntrypoint {
-//                 async repoWhoami() {
-//                   const itx = await this.env.ITX.authenticate();
-//                   const repo = await itx.repo;
-//                   return await repo.whoami();
-//                 }
-//               }
-//             `,
-//             },
-//             type: "inline",
-//           },
-//           target: { entrypoint: "ProbeEntrypoint", type: "worker-entrypoint" },
-//         },
-//       },
-//       path: ["probe"],
-//     });
-
-//     expect(await caller.probe.repoWhoami()).toBe("repo prj_ref:/repos/project");
-//   });
-
 //   test("invokes durable object dynamic capability refs", async () => {
 //     using providerRoot = connectUnauthenticated();
 //     using provider = projectItx(providerRoot);

@@ -1,16 +1,24 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
+import { trustedInternalAuthContext } from "../../auth.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
 } from "../streams/engine/workers/stream-processor-host.ts";
+import { StreamRpcTarget } from "../streams/rpc-targets.ts";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
 
 export class AgentDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
-  readonly #processorHost = createStreamProcessorHost(this.ctx);
+  readonly #processorHost = createStreamProcessorHost(this.ctx, {
+    stream: new StreamRpcTarget({
+      auth: trustedInternalAuthContext(),
+      path: this.#name.path,
+      projectId: this.#name.projectId,
+    }),
+  });
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);

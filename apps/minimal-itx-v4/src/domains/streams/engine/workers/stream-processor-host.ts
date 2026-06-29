@@ -4,7 +4,7 @@
 //
 // ```ts
 // export class AgentDurableObject extends DurableObject<Env> {
-//   host = createStreamProcessorHost(this.ctx);
+//   host = createStreamProcessorHost(this.ctx, { stream });
 //   agent = this.host.add("agent", (deps) => new AgentProcessor({ ...deps, openai }));
 //   search = this.host.add("search", (deps) => new SearchProcessor(deps));
 //
@@ -17,24 +17,18 @@
 // The Stream DO reaches this entry point by dispatching the Callable stored in
 // the stream's `subscription-configured` event; the callable's
 // `transformInput.shallowMerge` carries `processorName` so one DO can host any
-// number of named processors. On handshake the host retains the live stream
-// stub, reads the processor's checkpoint, and subscribes so the stream pumps
-// batches into `processor.ingest`.
+// number of named processors. On handshake the host reads the processor's
+// checkpoint and subscribes with its own stable stream capability, so the stream
+// pumps batches into `processor.ingest`.
 
 import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "../stream-processor.ts";
-import type {
-  CoreProcessorState,
-  ProcessorContractAnnouncement,
-} from "../processors/core/contract.ts";
+import type { ProcessorContractAnnouncement } from "../processors/core/contract.ts";
 import type { StreamSubscriptionHandle } from "../types.ts";
-import type { Stream, StreamEvent, StreamEventInput } from "../../types.ts";
+import type { Stream, StreamEvent } from "../../types.ts";
 
-/** What the Stream DO sends when dialing a subscriber's callable. */
+/** What the Stream DO sends when asking a hosted processor to subscribe. */
 export type StreamSubscriptionHandshake = {
-  stream: Stream;
   subscriptionKey: string;
-  streamMaxOffset: number;
-  streamRuntimeState: { coreProcessorState: CoreProcessorState };
 };
 
 /**
@@ -78,11 +72,7 @@ type AnyHostedProcessor = {
 
 type HostedEntry = {
   processor: AnyHostedProcessor;
-  /** Live stream stub retained across the subscription lifetime. */
-  stream: RetainedStream | undefined;
   handle: StreamSubscriptionHandle | undefined;
-  projectId: string | null | undefined;
-  path: string | undefined;
   /** Consecutive ingest failures since the last successful batch. */
   consecutiveIngestFailures: number;
   /**
@@ -102,39 +92,38 @@ type HostedEntry = {
 // subscriber/processor (or a later re-dial) to decide whether to re-establish.
 const MAX_CONSECUTIVE_INGEST_FAILURES = 3;
 
-// Belt-and-braces companion to the Stream DO's idle teardown. A host that holds a
-// subscription's retained stream stub (`entry.stream`) pins the producer Stream
-// DO resident. If no batch arrives for this long, the host unsubscribes and
-// disposes its stream stubs so BOTH this subscriber DO and the producer can
-// hibernate; the durable checkpoint + subscription-key persist, so the producer
-// re-dials and the host re-handshakes when activity resumes. In-memory timer for
-// the same reason as the Stream DO side: the stubs are in-memory and the DO is
-// resident while it holds them, so the timer is guaranteed to fire — and a
-// durable alarm's only extra power, waking a hibernated DO, is exactly wrong.
+// Belt-and-braces companion to the Stream DO's idle teardown. A live subscription
+// handle pins the delivery connection. If no batch arrives for this long, the
+// host unsubscribes so this subscriber DO and the producer can hibernate; the
+// durable checkpoint + subscription-key persist, so the producer re-dials and
+// the host re-handshakes when activity resumes. In-memory timer for the same
+// reason as the Stream DO side: a durable alarm's only extra power — waking a
+// hibernated DO — is exactly wrong.
 const HOST_IDLE_TEARDOWN_MS = 5 * 60_000;
 
 type StreamProcessorHost = {
   /**
    * Register a named processor. The builder receives the host-provided base
-   * deps (checkpoint storage in DO KV keyed by `name` and late-bound stream
-   * context) and must construct the processor with them. Call during DO field
-   * initialization.
+   * deps (checkpoint storage in DO KV keyed by `name` and the host's stable
+   * stream capability) and must construct the processor with them. Call during
+   * DO field initialization.
    */
   add<P extends AnyHostedProcessor>(name: string, build: (deps: HostedProcessorDeps) => P): P;
   /** Wire this to a public RPC method; subscription callables dial it. */
   requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void>;
   /**
-   * Drop every live subscription's retained stream stub now — the idle timer's
-   * action, also callable directly (tests / operator "let this idle subscriber
-   * sleep"). Unsubscribes from the producer (so the producer disposes its
-   * callback stub and frees this DO) and disposes the stream handle (freeing the
-   * producer Stream DO). The durable checkpoint + subscription-key persist, so
-   * the producer re-dials and this host re-handshakes on the next activity.
+   * Drop every live subscription now — the idle timer's action, also callable
+   * directly (tests / operator "let this idle subscriber sleep"). The durable
+   * checkpoint + subscription-key persist, so the producer re-dials and this
+   * host re-handshakes on the next activity.
    */
   runIdleDisconnectNow(): void;
 };
 
-export function createStreamProcessorHost(ctx: DurableObjectState): StreamProcessorHost {
+export function createStreamProcessorHost(
+  ctx: DurableObjectState,
+  options: { stream: Stream },
+): StreamProcessorHost {
   const entries = new Map<string, HostedEntry>();
 
   // One id per host DO instance. It rides on each subscription's
@@ -157,16 +146,6 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
     return entry;
   }
 
-  function requireStream(name: string): Stream {
-    const entry = requireEntry(name);
-    if (entry.stream === undefined) {
-      throw new Error(
-        `Stream processor "${name}" has no stream subscription yet; appends are only possible after the stream has dialed this host`,
-      );
-    }
-    return entry.stream;
-  }
-
   function resolveProcessorName(processorName: string | undefined): string {
     if (processorName !== undefined) return processorName;
     if (entries.size === 1) return [...entries.keys()][0]!;
@@ -175,19 +154,17 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
     );
   }
 
-  // In-memory idle teardown: drop retained stream stubs after a quiet spell so
-  // this subscriber DO (and the producer it pins) can hibernate. See
-  // HOST_IDLE_TEARDOWN_MS.
+  // In-memory idle teardown: unsubscribe after a quiet spell so this subscriber
+  // DO (and the producer connection it pins) can hibernate. See HOST_IDLE_TEARDOWN_MS.
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
 
   function hasLiveSubscription(): boolean {
-    for (const entry of entries.values()) if (entry.stream !== undefined) return true;
+    for (const entry of entries.values()) if (entry.handle !== undefined) return true;
     return false;
   }
 
   // (Re)armed on every handshake and every delivered batch; cleared once no
-  // entry holds a live stream stub. The DO is resident while it holds stubs, so
-  // the timer is guaranteed to fire.
+  // entry holds a live subscription handle.
   function armIdleTimer(): void {
     if (idleTimer !== undefined) {
       clearTimeout(idleTimer);
@@ -200,26 +177,19 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
   function runIdleDisconnectNow(): void {
     idleTimer = undefined;
     for (const entry of entries.values()) {
-      const stream = entry.stream;
-      if (stream === undefined) continue;
+      const handle = entry.handle;
+      if (handle === undefined) continue;
       // Bump the generation so any batch still queued on this connection is
-      // dropped by the gate in openSubscription. Then unsubscribe — the producer
-      // closes the connection and disposes its callback stub, freeing THIS DO —
-      // and dispose our retained stream stub, freeing the producer Stream DO.
-      // The durable checkpoint + subscription-key persist (we only clear the
-      // in-memory handle/stream/projectId/path), so the producer's next re-dial
+      // dropped by the gate in openSubscription. Then unsubscribe; the durable
+      // checkpoint + subscription-key persist, so the producer's next re-dial
       // re-handshakes us from where we left off.
       entry.generation += 1;
       try {
-        entry.handle?.unsubscribe();
+        handle.unsubscribe();
       } catch {
-        // The producer may already be gone; the stub is dead either way.
+        // The producer may already be gone; the handle is dead either way.
       }
       entry.handle = undefined;
-      stream[Symbol.dispose]();
-      entry.stream = undefined;
-      entry.projectId = undefined;
-      entry.path = undefined;
     }
   }
 
@@ -228,10 +198,6 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
   // a failed batch replays from the last good offset instead of being skipped.
   async function openSubscription(name: string): Promise<void> {
     const entry = requireEntry(name);
-    const stream = entry.stream;
-    if (stream === undefined) {
-      throw new Error(`Stream processor "${name}" cannot subscribe before its stream is retained`);
-    }
     const subscriptionKey = ctx.storage.kv.get<string>(subscriptionKeyKey(name));
     if (subscriptionKey === undefined) {
       throw new Error(`Stream processor "${name}" has no stored subscription key`);
@@ -244,7 +210,7 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
     // truth.
     const generation = entry.generation;
     const snapshot = await entry.processor.snapshot();
-    entry.handle = await stream.subscribe({
+    entry.handle = await options.stream.subscribe({
       subscriptionKey,
       replayAfterOffset: snapshot.offset,
       // The contract is the filter: the stream only delivers event types the
@@ -291,7 +257,7 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
         return entry.ingestChain;
       },
     });
-    // A fresh handshake holds a live stream stub now; start the idle countdown.
+    // A fresh handshake opened a live subscription; start the idle countdown.
     armIdleTimer();
   }
 
@@ -324,7 +290,7 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
     // decide whether to re-establish the subscription.
     const offset = (await entry.processor.snapshot()).offset;
     const message = (error instanceof Error ? error.message : String(error)) || "unknown error";
-    await entry.stream?.append({
+    await options.stream.append({
       type: "events.iterate.com/stream/error-occurred",
       idempotencyKey: `processor-ingest-failed:${name}:${offset}`,
       payload: {
@@ -344,17 +310,7 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
         throw new Error(`Stream processor "${name}" is already registered on this host`);
       }
       const processor = build({
-        stream: {
-          append: (...events: StreamEventInput[]) => requireStream(name).append(...events),
-          at: (path: string) => requireStream(name).at(path),
-          getEvent: (args) => requireStream(name).getEvent(args as never),
-          getEvents: (args) => requireStream(name).getEvents(args),
-          waitForEvent: (args) => requireStream(name).waitForEvent(args as never),
-          getProcessorRuntimeState: (args) =>
-            requireStream(name).getProcessorRuntimeState(args as never),
-          runtimeState: () => requireStream(name).runtimeState(),
-          subscribe: (args) => requireStream(name).subscribe(args as never),
-        },
+        stream: options.stream,
         readState: () =>
           ctx.storage.kv.get<StreamProcessorSnapshot<any>>(snapshotKey(name)) ?? undefined,
         writeState: (snapshot) => void ctx.storage.kv.put(snapshotKey(name), snapshot),
@@ -362,10 +318,7 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
       });
       entries.set(name, {
         processor,
-        stream: undefined,
         handle: undefined,
-        projectId: undefined,
-        path: undefined,
         consecutiveIngestFailures: 0,
         generation: 0,
         ingestChain: Promise.resolve(),
@@ -380,19 +333,12 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
       ctx.storage.kv.put(subscriptionKeyKey(name), args.subscriptionKey);
 
       entry.handle?.unsubscribe();
-      entry.stream?.[Symbol.dispose]();
       // Invalidate the previous connection (same as recoverFromIngestFailure):
       // this handshake replaces it, so any batch still queued on it must be
       // dropped by the generation gate — the new connection's replay from the
       // checkpoint is authoritative.
       entry.generation += 1;
-      // Workers RPC parameter stubs are disposed when the call returns unless
-      // duplicated. Processor side effects may append later, so retain the
-      // stream capability until the next handshake replaces it.
-      // https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
-      entry.stream = retainStream(args.stream);
-      entry.projectId = args.streamRuntimeState.coreProcessorState.projectId;
-      entry.path = args.streamRuntimeState.coreProcessorState.path;
+      entry.handle = undefined;
       entry.consecutiveIngestFailures = 0;
 
       await openSubscription(name);
@@ -421,23 +367,4 @@ function announceContract(contract: {
       ...(definition.description === undefined ? {} : { description: definition.description }),
     })),
   };
-}
-
-type RetainedStream = Stream &
-  Disposable & {
-    onRpcBroken?(callback: (error: unknown) => void): void;
-  };
-
-function retainStream(stream: Stream): RetainedStream {
-  const retainable = stream as Stream &
-    Partial<Disposable> & {
-      dup?(): RetainedStream;
-    };
-  const retained = retainable.dup?.() ?? retainable;
-  const dispose = retained[Symbol.dispose]?.bind(retained);
-  return Object.assign(retained, {
-    [Symbol.dispose]() {
-      dispose?.();
-    },
-  }) as RetainedStream;
 }

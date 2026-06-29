@@ -1,11 +1,9 @@
 import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
 import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
-import { trustedInternalAuthContext } from "../../auth.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { Stream, StreamEvent, StreamEventInput } from "./types.ts";
 import type { ProcessEventBatch } from "./engine/types.ts";
-import { StreamRpcTarget } from "./rpc-targets.ts";
 import {
   StreamEvent as StreamEventSchema,
   StreamEventInput as StreamEventInputSchema,
@@ -725,10 +723,8 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /**
    * Dials a configured subscriber by dispatching its Callable descriptor with
-   * the subscription handshake. The payload carries a live stream RpcTarget —
-   * Callable's workers-rpc dispatch is plain Workers RPC, so the stub survives —
-   * and the host is expected to call back `subscribe` to start receiving
-   * batches.
+   * the subscription handshake. The host owns the stream capability for its
+   * processor; the handshake only carries the subscription identity.
    */
   async connectCoreOutboundConnection(args: {
     configured: CoreProcessorState["subscriptionsByKey"][string];
@@ -741,14 +737,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         exports: (this.ctx as { exports?: Record<string, unknown> }).exports,
       },
       payload: {
-        stream: new StreamRpcTarget({
-          auth: trustedInternalAuthContext(),
-          path: this.name.path,
-          projectId: this.name.projectId,
-        }),
         subscriptionKey: args.subscriptionKey,
-        streamMaxOffset: this.#coreProcessorState.maxOffset,
-        streamRuntimeState: { coreProcessorState: this.#coreProcessorState },
       } satisfies StreamSubscriptionHandshake,
     });
   }

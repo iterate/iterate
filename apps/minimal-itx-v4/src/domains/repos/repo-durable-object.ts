@@ -5,7 +5,9 @@ import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
 } from "../streams/engine/workers/stream-processor-host.ts";
+import { StreamRpcTarget } from "../streams/rpc-targets.ts";
 import type { Env } from "../../env.ts";
+import { trustedInternalAuthContext } from "../../auth.ts";
 import { hashString, type ResolvedWorkerSource } from "../workers/worker-loader.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { CommitRepoFilesInput, CommitRepoFilesResult, RepoFileChange } from "./types.ts";
@@ -20,7 +22,13 @@ const REPO_DIR = "/repo";
 
 export class RepoDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
-  readonly #host = createStreamProcessorHost(this.ctx);
+  readonly #host = createStreamProcessorHost(this.ctx, {
+    stream: new StreamRpcTarget({
+      auth: trustedInternalAuthContext(),
+      path: this.#name.path,
+      projectId: this.#name.projectId,
+    }),
+  });
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);

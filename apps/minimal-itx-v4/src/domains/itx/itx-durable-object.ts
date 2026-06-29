@@ -1,11 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
+import { trustedInternalAuthContext } from "../../auth.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
 } from "../streams/engine/workers/stream-processor-host.ts";
-import type { Stream } from "../streams/types.ts";
+import { StreamRpcTarget } from "../streams/rpc-targets.ts";
 import { WorkerRunner } from "../workers/worker-runner.ts";
 import { ItxProcessorContract } from "./itx-processor-contract.ts";
 import {
@@ -21,7 +22,13 @@ export class ItxDurableObject extends DurableObject<Env> {
     path: this.#name.path,
     projectId: this.#name.projectId,
   });
-  readonly #processorHost = createStreamProcessorHost(this.ctx);
+  readonly #processorHost = createStreamProcessorHost(this.ctx, {
+    stream: new StreamRpcTarget({
+      auth: trustedInternalAuthContext(),
+      path: this.#name.path,
+      projectId: this.#name.projectId,
+    }),
+  });
   readonly #itxProcessor = this.#processorHost.add(
     ItxProcessorContract.slug,
     (deps) =>
@@ -38,13 +45,6 @@ export class ItxDurableObject extends DurableObject<Env> {
           projectId: this.#name.projectId,
           workerScopeKey: itxEntrypointScopeCacheKey(this.#itxScope),
         }),
-        // The stream processor needs append/read/wait/subscribe methods, which
-        // the StreamDurableObject stub exposes. The public `Stream` interface
-        // also has `at()` for client-side path derivation, so this remains a
-        // narrow RPC-stub-to-capability cast instead of a real implementation.
-        stream: this.ctx.exports.StreamDurableObject.getByName(
-          this.#name.durableObjectName,
-        ) as unknown as Stream,
       }),
   );
 

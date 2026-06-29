@@ -88,6 +88,22 @@ The REPL exposes `itx`, `root`, `RpcTarget`, `baseUrl`, `projectId`, and `token`
 Defaults are `http://127.0.0.1:8791`, project `prj_ref`, and the demo tokens
 from `src/auth.ts`.
 
+## Stream Processor Hosting
+
+Stream processors receive a full public `Stream` capability. A processor-hosting
+Durable Object creates a trusted internal `StreamRpcTarget` for its own stream
+and passes it to `createStreamProcessorHost(...)`; processors do not receive raw
+Durable Object stubs.
+
+Outbound subscription handshakes are identity-only: the stream Durable Object
+tells the processor host which `subscriptionKey` to open, and the host calls
+`.subscribe(...)` on its own stable stream capability. No stream capability is
+passed through the handshake.
+
+The stream Durable Object's storage methods remain implementation details.
+Append/read methods that touch SQLite/KV directly stay synchronous internally;
+the public `Stream` interface remains async through `StreamRpcTarget`.
+
 ## Cloudflare Workers RPC Types
 
 This app currently relies on the root-level `@cloudflare__workers-types.patch`.
