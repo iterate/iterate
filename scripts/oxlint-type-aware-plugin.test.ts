@@ -217,6 +217,61 @@ test("mechanical-class-impl allows omitted implementation params", () => {
   );
 });
 
+test("mechanical-class-impl allows simple implementation param types", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/mechanical-class-impl": "error",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
+
+  fixture.write(
+    "types.ts",
+    [
+      "export interface Greeter {",
+      "  setName(name: string): void;",
+      "  setEnabled(enabled: boolean): void;",
+      "  setScores(scores: number[]): void;",
+      "}",
+    ].join("\n"),
+  );
+  fixture.write(
+    "implementation.ts",
+    [
+      'import type { Greeter } from "./types.ts";',
+      "",
+      "class MyGreeter implements Greeter {",
+      "  setName(name: string) {",
+      "  }",
+      "  setEnabled(enabled: boolean) {",
+      "  }",
+      "  setScores(scores: number[]) {",
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  fixture.runOxlint(["implementation.ts", "--fix"]);
+
+  assert.equal(
+    fixture.read("implementation.ts"),
+    [
+      'import type { Greeter } from "./types.ts";',
+      "",
+      "class MyGreeter implements Greeter {",
+      "  setName(name: string) {",
+      "  }",
+      "  setEnabled(enabled: boolean) {",
+      "  }",
+      "  setScores(scores: number[]) {",
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+});
+
 test("mechanical-class-impl fixes class field arrow implementations", () => {
   using fixture = createOxlintFixture({
     rules: {

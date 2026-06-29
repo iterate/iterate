@@ -371,6 +371,38 @@ function getClassElementImplementationFunction(node) {
   return value;
 }
 
+/** @param {string} text */
+function isSimpleImplementationParameterType(text) {
+  return /^(bigint|boolean|null|number|object|string|symbol|undefined|unknown|void)(\[\])?$/.test(
+    compactTypeText(text),
+  );
+}
+
+/**
+ * @param {import("eslint").Rule.RuleContext} context
+ * @param {import("estree").Node} parameter
+ */
+function getParameterTypeText(context, parameter) {
+  if (parameter.type === "AssignmentPattern") return getParameterTypeText(context, parameter.left);
+  if (parameter.type === "RestElement") return getParameterTypeText(context, parameter.argument);
+  if (!("typeAnnotation" in parameter)) return undefined;
+  const annotation = parameter.typeAnnotation?.typeAnnotation;
+  return annotation ? context.sourceCode.getText(annotation) : undefined;
+}
+
+/**
+ * @param {import("eslint").Rule.RuleContext} context
+ * @param {import("estree").Node} element
+ */
+function hasOnlySimpleImplementationParameterTypes(context, element) {
+  const parameters = getClassElementImplementationFunction(element)?.params || [];
+  if (parameters.length !== 1) return false;
+  return parameters.every((parameter) => {
+    const typeText = getParameterTypeText(context, parameter);
+    return typeText !== undefined && isSimpleImplementationParameterType(typeText);
+  });
+}
+
 /**
  * @param {{ parameters: string[]; hasRestParameter: boolean }} contractMethod
  * @param {string} contractName
@@ -914,7 +946,10 @@ const plugin = {
               );
               const actualParameters = compactTypeText(getMethodParameterText(context, element));
               const expectedParameters = compactTypeText(expectedParameterText);
-              if (actualParameters !== expectedParameters) {
+              if (
+                actualParameters !== expectedParameters &&
+                !hasOnlySimpleImplementationParameterTypes(context, element)
+              ) {
                 context.report({
                   node: element,
                   loc: getMethodParameterLocation(context, element),
