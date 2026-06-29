@@ -5,6 +5,8 @@ import { test } from "node:test";
 import { spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 
+import { TypeAwareLintService } from "../oxlint-type-aware.js";
+
 const repoRoot = resolve(import.meta.dirname, "..");
 const pluginPath = join(repoRoot, "oxlint-plugin-iterate.js");
 const oxlintBin = join(repoRoot, "node_modules", ".bin", "oxlint");
@@ -159,6 +161,297 @@ test("mechanical-class-impl supports direct interface implementations", () => {
       "",
     ].join("\n"),
   );
+});
+
+test("mechanical-class-impl allows omitted implementation params", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/mechanical-class-impl": "error",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
+
+  fixture.write(
+    "types.ts",
+    [
+      "export interface IPerson {",
+      "  sayHello(): string;",
+      '  sayGoodbye(params: { mood: "happy" | "sad" | "neutral" }): string;',
+      "}",
+    ].join("\n"),
+  );
+  fixture.write(
+    "implementation.ts",
+    [
+      'import type { IPerson } from "./types.ts";',
+      "",
+      "class CPerson implements IPerson {",
+      "  sayHello(): never {",
+      '    throw new Error("Method not implemented.");',
+      "  }",
+      "  sayGoodbye(): never {",
+      '    throw new Error("Method not implemented.");',
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  fixture.runOxlint(["implementation.ts", "--fix"]);
+
+  assert.equal(
+    fixture.read("implementation.ts"),
+    [
+      'import type { IPerson } from "./types.ts";',
+      "",
+      "class CPerson implements IPerson {",
+      "  sayHello(): never {",
+      '    throw new Error("Method not implemented.");',
+      "  }",
+      "  sayGoodbye(): never {",
+      '    throw new Error("Method not implemented.");',
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+});
+
+test("mechanical-class-impl fixes class field arrow implementations", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/mechanical-class-impl": "error",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
+
+  fixture.write(
+    "types.ts",
+    [
+      "export interface IPerson {",
+      '  sayGoodbye(params: { mood: "happy" | "sad" | "neutral" }): string;',
+      "}",
+    ].join("\n"),
+  );
+  fixture.write(
+    "implementation.ts",
+    [
+      'import type { IPerson } from "./types.ts";',
+      "",
+      "class CPerson implements IPerson {",
+      "  sayGoodbye = (_params: any): string => {",
+      '    return "bye";',
+      "  };",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  fixture.runOxlint(["implementation.ts", "--fix"]);
+
+  assert.equal(
+    fixture.read("implementation.ts"),
+    [
+      'import type { IPerson } from "./types.ts";',
+      "",
+      "class CPerson implements IPerson {",
+      '  sayGoodbye = (_params: Parameters<IPerson["sayGoodbye"]>[0]) => {',
+      '    return "bye";',
+      "  };",
+      "}",
+      "",
+    ].join("\n"),
+  );
+});
+
+test("type-aware lint service refreshes changed files without restarting the process", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/mechanical-class-impl": "error",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
+  const service = new TypeAwareLintService({ cwd: fixture.root });
+  using _service = { [Symbol.dispose]: () => service.close() };
+  const firstSource = [
+    "interface Foo {}",
+    "",
+    "export class Bar implements Foo {",
+    "  f(a: 1): void {",
+    "    console.log(a);",
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+  fixture.write("implementation.ts", firstSource);
+
+  const firstProperties = service.getCallablePropertiesOfNamedType(
+    join(fixture.root, "implementation.ts"),
+    "Foo",
+    firstSource.indexOf("Foo {"),
+  );
+
+  assert.deepEqual(firstProperties, []);
+
+  const secondSource = [
+    "interface Foo {",
+    "  f(a: 1): void;",
+    "}",
+    "",
+    "export class Bar implements Foo {",
+    "  f(a: 1): void {",
+    "    console.log(a);",
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+  fixture.write("implementation.ts", secondSource);
+
+  const secondProperties = service.getCallablePropertiesOfNamedType(
+    join(fixture.root, "implementation.ts"),
+    "Foo",
+    secondSource.indexOf("Foo {"),
+  );
+
+  assert.deepEqual(
+    secondProperties?.map((property) => property.name),
+    ["f"],
+  );
+});
+
+test("type-aware lint service can read unsaved text overlays", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/mechanical-class-impl": "error",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
+  const service = new TypeAwareLintService({ cwd: fixture.root });
+  using _service = { [Symbol.dispose]: () => service.close() };
+  const fileName = join(fixture.root, "implementation.ts");
+  const savedSource = [
+    "interface Foo {}",
+    "",
+    "export class Bar implements Foo {",
+    "  f(a: 1): void {",
+    "    console.log(a);",
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+  fixture.write("implementation.ts", savedSource);
+
+  const firstProperties = service.getCallablePropertiesOfNamedType(
+    fileName,
+    "Foo",
+    savedSource.indexOf("Foo {"),
+  );
+
+  assert.deepEqual(firstProperties, []);
+
+  const unsavedSource = [
+    "interface Foo {",
+    "  f(a: 1): void;",
+    "}",
+    "",
+    "export class Bar implements Foo {",
+    "  f(a: 1): void {",
+    "    console.log(a);",
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+  service.setFileText(fileName, unsavedSource);
+
+  const secondProperties = service.getCallablePropertiesOfNamedType(
+    fileName,
+    "Foo",
+    unsavedSource.indexOf("Foo {"),
+  );
+
+  assert.deepEqual(
+    secondProperties?.map((property) => property.name),
+    ["f"],
+  );
+  assert.equal(fixture.read("implementation.ts"), savedSource);
+});
+
+test("mechanical-class-impl reports only the method params when params are not mechanical", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/mechanical-class-impl": "error",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
+
+  fixture.write(
+    "types.ts",
+    [
+      "export interface Greeter {",
+      "  getGreeting(params: { enthusiasm: number }): string;",
+      "}",
+    ].join("\n"),
+  );
+  const implementation = [
+    'import type { Greeter } from "./types.ts";',
+    "",
+    "class MyGreeter implements Greeter {",
+    "  getGreeting(input: { enthusiasm: number }): string {",
+    '    return "hello";',
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+  fixture.write("implementation.ts", implementation);
+
+  const result = fixture.runOxlint(["implementation.ts"], {
+    expectFailure: true,
+    format: "json",
+  });
+  const output = JSON.parse(result.stdout);
+  const span = output.diagnostics[0].labels[0].span;
+  const reportedText = implementation.slice(span.offset, span.offset + span.length);
+
+  assert.equal(reportedText, "input: { enthusiasm: number }");
+});
+
+test("mechanical-class-impl reports only the return type when return type is disallowed", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/mechanical-class-impl": "error",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
+
+  fixture.write(
+    "types.ts",
+    [
+      "export interface Greeter {",
+      "  getGreeting(params: { enthusiasm: number }): string;",
+      "}",
+    ].join("\n"),
+  );
+  const implementation = [
+    'import type { Greeter } from "./types.ts";',
+    "",
+    "class MyGreeter implements Greeter {",
+    '  getGreeting(input: Parameters<Greeter["getGreeting"]>[0]): string {',
+    '    return "hello";',
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+  fixture.write("implementation.ts", implementation);
+
+  const result = fixture.runOxlint(["implementation.ts"], {
+    expectFailure: true,
+    format: "json",
+  });
+  const output = JSON.parse(result.stdout);
+  const span = output.diagnostics[0].labels[0].span;
+  const reportedText = implementation.slice(span.offset, span.offset + span.length);
+
+  assert.equal(reportedText, ": string");
 });
 
 test("mechanical-class-impl follows arbitrary helper wrappers", () => {
@@ -350,10 +643,18 @@ function createOxlintFixture(input: { rules: Record<string, unknown> }) {
     read(path: string) {
       return readFileSync(join(root, path), "utf8");
     },
-    runOxlint(args: string[], options: { expectFailure?: boolean } = {}) {
+    runOxlint(args: string[], options: { expectFailure?: boolean; format?: string } = {}) {
       const result = spawnSync(
         oxlintBin,
-        [...args, "--config", configPath, "--threads", "1", "--format", "stylish"],
+        [
+          ...args,
+          "--config",
+          configPath,
+          "--threads",
+          "1",
+          "--format",
+          options.format || "stylish",
+        ],
         {
           cwd: root,
           encoding: "utf8",

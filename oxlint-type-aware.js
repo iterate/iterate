@@ -42,6 +42,12 @@ export class TypeAwareLintService {
   tsconfigFiles;
   /** @type {Map<string, import("@typescript/native-preview/unstable/sync").Project | undefined>} */
   projectByFile = new Map();
+  /** @type {Map<string, number>} */
+  mtimesByFile = new Map();
+  /** @type {Map<string, string>} */
+  textByFile = new Map();
+  /** @type {Set<string>} */
+  textChangedFiles = new Set();
 
   /**
    * @param {{ cwd: string }} input
@@ -65,6 +71,9 @@ export class TypeAwareLintService {
     this.api = undefined;
     this.openFiles.clear();
     this.projectByFile.clear();
+    this.mtimesByFile.clear();
+    this.textByFile.clear();
+    this.textChangedFiles.clear();
   }
 
   /**
@@ -72,6 +81,7 @@ export class TypeAwareLintService {
    */
   getProjectForFile(fileName) {
     const absoluteFileName = resolve(fileName);
+    this.refreshSnapshotForChangedFiles([absoluteFileName]);
     const cached = this.projectByFile.get(absoluteFileName);
     if (cached) return cached;
 
@@ -82,6 +92,7 @@ export class TypeAwareLintService {
     }
 
     this.projectByFile.set(absoluteFileName, project);
+    this.trackProjectFiles(project);
     return project;
   }
 
@@ -199,10 +210,13 @@ export class TypeAwareLintService {
 
   getSnapshot() {
     if (!this.api) {
-      this.api = new API({ cwd: this.cwd });
+      this.api = new API({
+        cwd: this.cwd,
+        fs: { readFile: (fileName) => this.textByFile.get(resolve(fileName)) },
+      });
     }
     if (!this.snapshot) {
-      this.snapshot = this.api.updateSnapshot({ openProjects: this.getTsconfigFiles() });
+      this.updateSnapshot({ openProjects: this.getTsconfigFiles() });
     }
     return this.snapshot;
   }
@@ -214,12 +228,29 @@ export class TypeAwareLintService {
     if (this.openFiles.has(fileName)) return;
     this.openFiles.add(fileName);
     this.projectByFile.clear();
-    this.snapshot = this.requireApi().updateSnapshot({ openFiles: [fileName] });
+    this.updateSnapshot({ openFiles: [fileName] });
+  }
+
+  /**
+   * @param {Parameters<API["updateSnapshot"]>[0]} params
+   */
+  updateSnapshot(params) {
+    const previous = this.snapshot;
+    this.snapshot = this.requireApi().updateSnapshot(params);
+    previous?.dispose();
+    for (const project of this.snapshot.getProjects()) {
+      this.trackProjectFiles(project);
+    }
   }
 
   requireApi() {
     if (!this.api) {
-      this.api = new API({ cwd: this.cwd });
+      this.api = new API({
+        cwd: this.cwd,
+        fs: {
+          readFile: (fileName) => this.textByFile.get(resolve(fileName)),
+        },
+      });
     }
     return this.api;
   }
@@ -229,6 +260,87 @@ export class TypeAwareLintService {
       this.tsconfigFiles = findTsconfigFiles(this.cwd);
     }
     return this.tsconfigFiles;
+  }
+
+  /**
+   * @param {readonly string[]} fileNames
+   */
+  refreshSnapshotForChangedFiles(fileNames) {
+    const changedFiles = [
+      ...new Set([
+        ...this.drainTextChangedFiles(fileNames),
+        ...fileNames.filter((fileName) => this.hasFileChanged(fileName)),
+      ]),
+    ];
+    if (changedFiles.length === 0) return;
+
+    this.projectByFile.clear();
+    this.updateSnapshot({
+      fileChanges: { changed: changedFiles },
+      openFiles: [...this.openFiles],
+      openProjects: this.getTsconfigFiles(),
+    });
+  }
+
+  /**
+   * @param {import("@typescript/native-preview/unstable/sync").Project | undefined} project
+   */
+  trackProjectFiles(project) {
+    if (isInferredProject(project)) return;
+    for (const fileName of project.rootFiles) {
+      this.rememberFileMtime(fileName);
+    }
+  }
+
+  /**
+   * @param {string} fileName
+   */
+  hasFileChanged(fileName) {
+    const previous = this.mtimesByFile.get(fileName);
+    const current = getFileMtime(fileName);
+    if (previous === undefined) {
+      if (current !== undefined) this.mtimesByFile.set(fileName, current);
+      return false;
+    }
+    if (current === previous) return false;
+    if (current === undefined) {
+      this.mtimesByFile.delete(fileName);
+    } else {
+      this.mtimesByFile.set(fileName, current);
+    }
+    return true;
+  }
+
+  /**
+   * @param {string} fileName
+   */
+  rememberFileMtime(fileName) {
+    const mtime = getFileMtime(fileName);
+    if (mtime !== undefined) this.mtimesByFile.set(fileName, mtime);
+  }
+
+  /**
+   * @param {string} fileName
+   * @param {string} text
+   */
+  setFileText(fileName, text) {
+    const absoluteFileName = resolve(fileName);
+    if (this.textByFile.get(absoluteFileName) === text) return;
+    this.textByFile.set(absoluteFileName, text);
+    this.textChangedFiles.add(absoluteFileName);
+    this.mtimesByFile.set(absoluteFileName, getFileMtime(absoluteFileName) ?? -1);
+  }
+
+  /**
+   * @param {readonly string[]} fileNames
+   */
+  drainTextChangedFiles(fileNames) {
+    const candidates = fileNames.map((fileName) => resolve(fileName));
+    const changedFiles = candidates.filter((fileName) => this.textChangedFiles.has(fileName));
+    for (const fileName of changedFiles) {
+      this.textChangedFiles.delete(fileName);
+    }
+    return changedFiles;
   }
 }
 
@@ -300,4 +412,13 @@ function findTsconfigFiles(root) {
 
   visit(root);
   return results.sort();
+}
+
+/** @param {string} fileName */
+function getFileMtime(fileName) {
+  try {
+    return statSync(fileName).mtimeMs;
+  } catch {
+    return undefined;
+  }
 }

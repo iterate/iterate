@@ -377,6 +377,17 @@ function getClassElementName(node) {
   return getPropertyName(node.key);
 }
 
+/** @param {import("estree").Node} node */
+function getClassElementImplementationFunction(node) {
+  if (node.type === "MethodDefinition") return node.value;
+  if (node.type !== "PropertyDefinition" && node.type !== "FieldDefinition") return undefined;
+  const value = node.value;
+  if (value?.type !== "ArrowFunctionExpression" && value?.type !== "FunctionExpression") {
+    return undefined;
+  }
+  return value;
+}
+
 /** @param {import("estree").Node} parameter */
 function getParameterTypeAnnotation(parameter) {
   if (!("typeAnnotation" in parameter)) return undefined;
@@ -397,7 +408,7 @@ function expectedMechanicalClassImplParameterText(
 ) {
   const quotedMethod = JSON.stringify(methodName);
   const parametersType = `Parameters<${contractName}[${quotedMethod}]>`;
-  if (contractMethod.parameters.length === 0) return "";
+  if (contractMethod.parameters.length === 0 || implementationParameters.length === 0) return "";
   if (contractMethod.hasRestParameter) {
     const name = implementationParameters[0]?.name || contractMethod.parameters[0] || "args";
     return `...${name}: ${parametersType}`;
@@ -420,18 +431,22 @@ function expectedMechanicalClassImplParameterText(
 
 /**
  * @param {import("eslint").Rule.RuleContext} context
- * @param {import("estree").MethodDefinition} element
+ * @param {import("estree").Node} element
  */
 function getMethodParameterText(context, element) {
-  return element.value.params.map((parameter) => context.sourceCode.getText(parameter)).join(", ");
+  return (
+    getClassElementImplementationFunction(element)
+      ?.params.map((parameter) => context.sourceCode.getText(parameter))
+      .join(", ") || ""
+  );
 }
 
 /**
  * @param {import("eslint").Rule.RuleContext} context
- * @param {import("estree").MethodDefinition} element
+ * @param {import("estree").Node} element
  */
 function getMethodParameterInfo(context, element) {
-  return element.value.params.map((parameter) => {
+  return (getClassElementImplementationFunction(element)?.params || []).map((parameter) => {
     if (parameter.type === "RestElement") {
       return {
         name: getPropertyName(parameter.argument) || "args",
@@ -454,11 +469,12 @@ function getMethodParameterInfo(context, element) {
 
 /**
  * @param {import("eslint").Rule.RuleContext} context
- * @param {import("estree").MethodDefinition} element
+ * @param {import("estree").Node} element
  */
 function getMethodParameterRange(context, element) {
   const keyEnd = element.key?.range?.[1];
-  const bodyStart = element.value.body?.range?.[0];
+  const implementationFunction = getClassElementImplementationFunction(element);
+  const bodyStart = implementationFunction?.body?.range?.[0];
   if (keyEnd === undefined || bodyStart === undefined) {
     return undefined;
   }
@@ -481,7 +497,7 @@ function getMethodParameterRange(context, element) {
 
 /**
  * @param {import("eslint").Rule.RuleContext} context
- * @param {import("estree").MethodDefinition} element
+ * @param {import("estree").Node} element
  * @param {string} expectedParameters
  * @param {import("eslint").Rule.RuleFixer} fixer
  */
@@ -492,23 +508,56 @@ function fixMethodParameters(context, element, expectedParameters, fixer) {
 }
 
 /**
- * @param {Array<import("eslint").Rule.Fix | null>} fixes
+ * @param {import("eslint").Rule.RuleContext} context
+ * @param {[number, number] | undefined} range
  */
-function compactFixes(fixes) {
-  return fixes.filter(Boolean);
-}
-
-/** @param {import("estree").MethodDefinition} element */
-function hasMethodReturnType(element) {
-  return Boolean(element.value.returnType || element.value.typeAnnotation);
+function getRangeLocation(context, range) {
+  const start = range?.[0];
+  const end = range?.[1];
+  if (start === undefined || end === undefined) return undefined;
+  if (typeof context.sourceCode.getLocFromIndex !== "function") return undefined;
+  return {
+    start: context.sourceCode.getLocFromIndex(start),
+    end: context.sourceCode.getLocFromIndex(end),
+  };
 }
 
 /**
- * @param {import("estree").MethodDefinition} element
+ * @param {import("eslint").Rule.RuleContext} context
+ * @param {import("estree").Node} element
+ */
+function getMethodParameterLocation(context, element) {
+  return getRangeLocation(context, getMethodParameterRange(context, element));
+}
+
+/**
+ * @param {import("eslint").Rule.RuleContext} context
+ * @param {import("estree").Node} element
+ */
+function getMethodReturnTypeLocation(context, element) {
+  const implementationFunction = getClassElementImplementationFunction(element);
+  const returnType = implementationFunction?.returnType || implementationFunction?.typeAnnotation;
+  return getRangeLocation(context, returnType?.range);
+}
+
+/**
+ * @param {import("eslint").Rule.RuleContext} context
+ * @param {import("estree").Node} element
+ */
+function hasDisallowedMethodReturnType(context, element) {
+  const implementationFunction = getClassElementImplementationFunction(element);
+  const returnType = implementationFunction?.returnType || implementationFunction?.typeAnnotation;
+  if (!returnType) return false;
+  return compactTypeText(context.sourceCode.getText(returnType)) !== ":never";
+}
+
+/**
+ * @param {import("estree").Node} element
  * @param {import("eslint").Rule.RuleFixer} fixer
  */
 function fixMethodReturnType(element, fixer) {
-  const returnType = element.value.returnType || element.value.typeAnnotation;
+  const implementationFunction = getClassElementImplementationFunction(element);
+  const returnType = implementationFunction?.returnType || implementationFunction?.typeAnnotation;
   if (!returnType?.range) return null;
   return fixer.removeRange(returnType.range);
 }
@@ -516,6 +565,13 @@ function fixMethodReturnType(element, fixer) {
 /** @param {string} filename */
 function isTypeScriptSourceFile(filename) {
   return filename.endsWith(".ts") || filename.endsWith(".tsx");
+}
+
+/** @param {import("eslint").Rule.RuleContext} context */
+function getPreparedTypeAwareLintService(context) {
+  const service = getTypeAwareLintService();
+  service.setFileText(context.filename, context.sourceCode.getText());
+  return service;
 }
 
 /** @param {import("estree").Expression} expression */
@@ -868,7 +924,7 @@ const plugin = {
             if (isExplicitlyHandledPromiseExpression(node.parent.expression)) return;
             if (isPromiseHandlingCallExpression(node)) return;
 
-            service ??= getTypeAwareLintService();
+            service ??= getPreparedTypeAwareLintService(context);
             const thenable = service.getThenableInfo(context.filename, node);
             if (!thenable) return;
 
@@ -903,10 +959,10 @@ const plugin = {
             const contracts = getMechanicalClassImplContracts(context, node);
             if (!contracts?.length) return;
 
-            service ??= getTypeAwareLintService();
+            service ??= getPreparedTypeAwareLintService(context);
             const classMethodNames = new Set(
               node.body.body
-                .filter((element) => element.type === "MethodDefinition")
+                .filter((element) => getClassElementImplementationFunction(element))
                 .map((element) => getClassElementName(element))
                 .filter(Boolean),
             );
@@ -928,8 +984,8 @@ const plugin = {
               contract.properties.map((property) => [property.name, property]),
             );
             for (const element of node.body.body) {
-              if (element.type !== "MethodDefinition") continue;
-              if (element.kind === "constructor") continue;
+              if (!getClassElementImplementationFunction(element)) continue;
+              if (element.type === "MethodDefinition" && element.kind === "constructor") continue;
               const methodName = getClassElementName(element);
               if (!methodName) continue;
 
@@ -948,20 +1004,18 @@ const plugin = {
               if (actualParameters !== expectedParameters) {
                 context.report({
                   node: element,
-                  message: `Format ${contract.candidate.name}.${methodName} implementation params as \`${expectedParameterText}\`.`,
+                  loc: getMethodParameterLocation(context, element),
+                  message: `Infer implementation params from the contract: \`${expectedParameterText}\`.`,
                   fix: (fixer) =>
-                    compactFixes([
-                      fixMethodParameters(context, element, expectedParameterText, fixer),
-                      fixMethodReturnType(element, fixer),
-                    ]),
+                    fixMethodParameters(context, element, expectedParameterText, fixer),
                 });
-                continue;
               }
 
-              if (hasMethodReturnType(element)) {
+              if (hasDisallowedMethodReturnType(context, element)) {
                 context.report({
                   node: element,
-                  message: `Do not annotate a return type on ${contract.candidate.name}.${methodName}; let the implemented contract drive it.`,
+                  loc: getMethodReturnTypeLocation(context, element),
+                  message: `Infer the return type from the contract.`,
                   fix: (fixer) => fixMethodReturnType(element, fixer),
                 });
               }
