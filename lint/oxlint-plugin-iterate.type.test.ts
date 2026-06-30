@@ -1,7 +1,7 @@
 import type { CallExpression, Identifier, VariableDeclarator } from "estree";
 import { expectTypeOf, test } from "vitest";
 
-import type { StrictPlugin } from "./oxlint-plugin-iterate.ts";
+import type { StrictPlugin } from "./types.ts";
 
 test("infers listener node types from selector strings", () => {
   const plugin = {
