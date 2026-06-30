@@ -36,15 +36,18 @@ export function resolveStreamPath(basePath: string, streamPath: string): string 
  * existing outbound connection instead of creating duplicates.
  */
 export function subscriptionConfiguredEvent(input: {
-  projectId: string;
+  projectId: string | null;
   path: string;
   bindingName: string;
   processorName: string;
 }) {
-  const durableObjectName = DurableObjectNameCodec.stringify({
-    projectId: input.projectId,
-    path: input.path,
-  });
+  const durableObjectName = DurableObjectNameCodec.stringify(
+    {
+      projectId: input.projectId,
+      path: input.path,
+    },
+    { allowNullProjectId: true },
+  );
   return {
     type: "events.iterate.com/stream/subscription-configured" as const,
     payload: {

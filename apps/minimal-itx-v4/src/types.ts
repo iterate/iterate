@@ -226,6 +226,8 @@ export interface UnauthenticatedItx {
 // [[ Needs to gain StreamCollection (which can even access "global" streams with projectId null) and RepoCollection (which can also access "global" repos with projectId null) ]]
 export interface ItxRoot {
   projects: ProjectCollection;
+  repos: RepoCollection;
+  streams: StreamCollection;
   whoami(): string;
 }
 

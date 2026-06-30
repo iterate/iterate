@@ -22,7 +22,7 @@ const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 const REPO_DIR = "/repo";
 
 export class RepoDurableObject extends DurableObject<Env> {
-  readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
+  readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!, { allowNullProjectId: true });
   readonly #host = createStreamProcessorHost(this.ctx, {
     stream: new StreamRpcTarget({
       auth: trustedInternalAuthContext(),
@@ -89,7 +89,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     });
   }
 
-  private async createArtifactRepo(_input: { path: string; projectId: string }) {
+  private async createArtifactRepo(_input: { path: string; projectId: string | null }) {
     const artifactName = this.artifactName();
     await this.getOrCreateArtifact(artifactName);
     const defaultBranch = REPO_DEFAULT_BRANCH;

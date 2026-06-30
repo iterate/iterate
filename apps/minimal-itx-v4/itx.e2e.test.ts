@@ -342,6 +342,28 @@ describe("minimal itx v4", () => {
     ).rejects.toThrow(/no capability "someMethodInTestRunner.getSecret"/);
   });
 
+  test("Trusted internal root can access global streams and repos", async () => {
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+
+    const path = `/global-${crypto.randomUUID()}`;
+    const [streamEvent] = await itx.streams.get(path).append({
+      type: "events.iterate.test/global-stream",
+      payload: { path },
+    });
+    expect(streamEvent).toMatchObject({
+      offset: 3,
+      payload: { path },
+      type: "events.iterate.test/global-stream",
+    });
+
+    using repo = await itx.repos.create({ path });
+    expect(await repo.whoami()).toBe(`repo null:${path}`);
+  });
+
   test("Project egress substitutes secret placeholders for explicit and project worker fetches", async () => {
     using session = withItxSession();
     using itx = session.authenticate({

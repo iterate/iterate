@@ -115,7 +115,7 @@ class StreamCollectionRpcTarget extends RpcTarget implements StreamCollection {
   }
 }
 
-function projectRootStream(props: { auth: ItxAuth; projectId: string }) {
+function rootStream(props: { auth: ItxAuth; projectId: string | null }) {
   return new StreamRpcTarget({
     auth: props.auth,
     projectId: props.projectId,
@@ -126,10 +126,14 @@ function projectRootStream(props: { auth: ItxAuth; projectId: string }) {
 async function requestRepoCreate(input: {
   auth: ItxAuth;
   path: string;
-  projectId: string;
+  projectId: string | null;
 }): Promise<RepoRpcTarget> {
   const path = normalizePath(input.path);
-  const stream = projectRootStream({ auth: input.auth, projectId: input.projectId });
+  const stream = new StreamRpcTarget({
+    auth: input.auth,
+    path,
+    projectId: input.projectId,
+  });
   const [, createRequested] = await stream.append(
     subscriptionConfiguredEvent({
       projectId: input.projectId,
@@ -156,17 +160,20 @@ async function requestRepoCreate(input: {
 }
 
 class RepoRpcTarget extends RpcTarget implements Repo {
-  constructor(readonly props: { auth: ItxAuth; path: string; projectId: string }) {
+  constructor(readonly props: { auth: ItxAuth; path: string; projectId: string | null }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
   }
 
   get durableObjectStub() {
     return env.REPO.getByName(
-      DurableObjectNameCodec.stringify({
-        projectId: this.props.projectId,
-        path: normalizePath(this.props.path),
-      }),
+      DurableObjectNameCodec.stringify(
+        {
+          projectId: this.props.projectId,
+          path: normalizePath(this.props.path),
+        },
+        { allowNullProjectId: true },
+      ),
     );
   }
 
@@ -188,7 +195,7 @@ class RepoRpcTarget extends RpcTarget implements Repo {
 }
 
 class RepoCollectionRpcTarget extends RpcTarget implements RepoCollection {
-  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+  constructor(readonly props: { auth: ItxAuth; projectId: string | null }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
   }
@@ -432,7 +439,7 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
       args.projectId = "prj_" + crypto.randomUUID();
     }
 
-    const stream = projectRootStream({
+    const stream = rootStream({
       auth: this.props.auth,
       projectId: args.projectId,
     });
@@ -647,6 +654,20 @@ function defaultProjectWorkerRef(): StatelessWorkerRef {
 class ItxRootRpcTarget extends RpcTarget implements ItxRoot {
   constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext }) {
     super();
+  }
+
+  get streams() {
+    return new StreamCollectionRpcTarget({
+      auth: this.props.auth,
+      projectId: null,
+    });
+  }
+
+  get repos() {
+    return new RepoCollectionRpcTarget({
+      auth: this.props.auth,
+      projectId: null,
+    });
   }
 
   get projects() {

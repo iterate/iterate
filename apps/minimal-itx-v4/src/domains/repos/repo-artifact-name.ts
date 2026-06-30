@@ -1,9 +1,10 @@
 type RepoArtifactNameParts = {
-  projectId: string;
+  projectId: string | null;
   path: string;
 };
 
 const SEPARATOR = "--";
+const GLOBAL_REPO_ARTIFACT_PROJECT_ID = "global";
 
 function normalizeRepoPath(path: string): string {
   if (path === "") return "/";
@@ -12,6 +13,11 @@ function normalizeRepoPath(path: string): string {
 
 function assertProjectId(projectId: string): void {
   if (projectId.length === 0) throw new Error("Repo artifact projectId must be non-empty.");
+  if (projectId === GLOBAL_REPO_ARTIFACT_PROJECT_ID) {
+    throw new Error(
+      `"${GLOBAL_REPO_ARTIFACT_PROJECT_ID}" is reserved for deployment-wide repo artifacts; use projectId null instead.`,
+    );
+  }
   if (/[/?#]/.test(projectId)) {
     throw new Error(`Repo artifact projectId contains illegal URL characters: "${projectId}".`);
   }
@@ -36,8 +42,9 @@ function base64UrlDecode(value: string): string {
 
 export const RepoArtifactNameCodec = {
   stringify({ projectId, path }: RepoArtifactNameParts): string {
-    assertProjectId(projectId);
-    return `${projectId}${SEPARATOR}${base64UrlEncode(normalizeRepoPath(path))}`;
+    const artifactProjectId = projectId ?? GLOBAL_REPO_ARTIFACT_PROJECT_ID;
+    if (projectId !== null) assertProjectId(projectId);
+    return `${artifactProjectId}${SEPARATOR}${base64UrlEncode(normalizeRepoPath(path))}`;
   },
 
   parse(name: string): RepoArtifactNameParts {
@@ -46,8 +53,10 @@ export const RepoArtifactNameCodec = {
       throw new Error(`Repo artifact name must be "{projectId}${SEPARATOR}{path}", got "${name}".`);
     }
 
-    const projectId = name.slice(0, separatorIndex);
-    assertProjectId(projectId);
+    const artifactProjectId = name.slice(0, separatorIndex);
+    const projectId =
+      artifactProjectId === GLOBAL_REPO_ARTIFACT_PROJECT_ID ? null : artifactProjectId;
+    if (projectId !== null) assertProjectId(projectId);
 
     const path = base64UrlDecode(name.slice(separatorIndex + SEPARATOR.length));
     if (!path.startsWith("/")) {

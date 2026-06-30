@@ -2,13 +2,13 @@ import { StreamProcessor } from "../streams/engine/stream-processor.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
 
 type RepoProcessorDeps = {
-  createRepoArtifact(input: { path: string; projectId: string }): Promise<{
+  createRepoArtifact(input: { path: string; projectId: string | null }): Promise<{
     artifactName: string;
     defaultBranch: string;
     remote: string;
   }>;
   path: string;
-  projectId: string;
+  projectId: string | null;
 };
 
 export class RepoProcessor extends StreamProcessor<

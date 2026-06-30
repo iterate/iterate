@@ -23,7 +23,7 @@ export const RepoProcessorContract = defineProcessorContract({
     "events.iterate.com/repo/create-requested": {
       description: "A repo creation was requested.",
       payloadSchema: z.object({
-        projectId: z.string(),
+        projectId: z.string().nullable(),
         path: z.string(),
       }),
     },
@@ -33,7 +33,7 @@ export const RepoProcessorContract = defineProcessorContract({
         artifactName: z.string(),
         defaultBranch: z.string(),
         path: z.string(),
-        projectId: z.string(),
+        projectId: z.string().nullable(),
         remote: z.string(),
       }),
     },

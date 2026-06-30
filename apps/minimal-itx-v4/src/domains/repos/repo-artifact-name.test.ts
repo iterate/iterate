@@ -20,4 +20,15 @@ describe("RepoArtifactNameCodec", () => {
       projectId: "prj_with-hyphens",
     });
   });
+
+  test("round-trips global repo paths", () => {
+    expect(RepoArtifactNameCodec.stringify({ projectId: null, path: "/" })).toBe("global--Lw");
+    expect(RepoArtifactNameCodec.parse("global--Lw")).toEqual({
+      path: "/",
+      projectId: null,
+    });
+    expect(() => RepoArtifactNameCodec.stringify({ projectId: "global", path: "/" })).toThrow(
+      /reserved/,
+    );
+  });
 });
