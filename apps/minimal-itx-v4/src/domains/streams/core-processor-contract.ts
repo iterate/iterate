@@ -35,7 +35,8 @@ import { defineProcessorContract } from "./stream-processor.ts";
 //      old transport-direction subscription model.
 // - 7: core's empty state is expressed directly by this schema's optional and
 //      defaulted fields instead of a separate initial state object.
-export const CORE_STATE_VERSION = 7;
+// - 8: cross-post stream rules are reduced into core state.
+export const CORE_STATE_VERSION = 8;
 
 /**
  * Persisted configured subscriber target. The stream resolves these narrow
@@ -207,6 +208,25 @@ export const CoreProcessorContract = defineProcessorContract({
     configuredSubscribersByKey: z
       .record(z.string(), z.object({ latestConfiguredEvent: StreamSubscriptionConfiguredEvent }))
       .default({}),
+    rulesById: z
+      .record(
+        z.string(),
+        z.object({
+          latestConfiguredEvent: z.object({
+            offset: z.number().int().min(0),
+            type: z.literal("events.iterate.com/stream/rule-configured"),
+            payload: z.object({
+              ruleId: z.string().trim().min(1),
+              type: z.literal("cross-post"),
+              projectId: z.string().trim().min(1).nullable().optional(),
+              path: z.string().trim().min(1),
+              eventTypes: z.array(z.string().trim().min(1)).min(1),
+            }),
+            createdAt: z.string(),
+          }),
+        }),
+      )
+      .default({}),
     /**
      * Live presence roster: who is connected to this stream right now, keyed
      * by subscriptionKey — the event-sourced mirror of the runtime connection
@@ -264,6 +284,16 @@ export const CoreProcessorContract = defineProcessorContract({
         subscriptionKey: z.string().trim().min(1),
       }),
     },
+    "events.iterate.com/stream/rule-configured": {
+      description: "Configures or replaces a local stream rule.",
+      payloadSchema: z.object({
+        ruleId: z.string().trim().min(1),
+        type: z.literal("cross-post"),
+        projectId: z.string().trim().min(1).nullable().optional(),
+        path: z.string().trim().min(1),
+        eventTypes: z.array(z.string().trim().min(1)).min(1),
+      }),
+    },
     "events.iterate.com/stream/subscriber-connected": {
       description:
         "A delivery connection to one subscriber opened. Appended by the stream itself, once per actual open — which is why presence facts carry no idempotency keys: a re-handshake after a transient break genuinely is a new connection and must re-land on the roster. Reconciling processors treat this as 'someone's runtime state was reset'; it is always the tail of any batch it shares (appended after the handshake fixes the replay offset), so state-at-event equals batch-final state.",
@@ -316,6 +346,7 @@ export const CoreProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/child-stream-created",
     "events.iterate.com/stream/subscription-configured",
     "events.iterate.com/stream/subscription-removed",
+    "events.iterate.com/stream/rule-configured",
     "events.iterate.com/stream/subscriber-connected",
     "events.iterate.com/stream/subscriber-disconnected",
     "events.iterate.com/stream/error-occurred",

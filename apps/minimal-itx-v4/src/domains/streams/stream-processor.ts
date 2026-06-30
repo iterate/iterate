@@ -194,6 +194,19 @@ type InputFromType<
   ? InputFromDefinitionForType<EventDefinitionForType<Events, ProcessorDeps, Type>, Type>
   : never;
 
+type ParsedInputFromDefinitionForType<Definition, Type extends string> =
+  Definition extends EventDefinition<string, infer PayloadOutput, unknown>
+    ? TypedStreamEventInput<Type, PayloadOutput> & { payload: PayloadOutput }
+    : never;
+
+type ParsedInputFromType<
+  Events extends EventCatalog,
+  ProcessorDeps extends readonly unknown[],
+  Type extends string,
+> = Type extends unknown
+  ? ParsedInputFromDefinitionForType<EventDefinitionForType<Events, ProcessorDeps, Type>, Type>
+  : never;
+
 export type ResolvedEventInput<Contract> = Contract extends {
   events: EventCatalog;
 }
@@ -327,6 +340,35 @@ type ProcessorContractParseEvent<
   (
     event: BaseStreamEvent,
   ): EventFromType<Events, ProcessorDeps, ResolvedEventType<Events, ProcessorDeps>>;
+};
+
+/**
+ * Same idea as `parseEvent`, but for append inputs that do not yet have an
+ * offset or createdAt.
+ *
+ * This exists for stream-owned pre-commit policy. The Stream Durable Object has
+ * to reject some contract-owned events before they become durable facts. The
+ * motivating case is `events.iterate.com/stream/subscription-configured`: if a
+ * bad configured subscriber target is only rejected later during the wake side
+ * effect, the invalid event has already been appended and reduced into
+ * `configuredSubscribersByKey`. The lifecycle tests named
+ * "configured durable object subscribers must target the stream project",
+ * "global streams reject project-scoped configured durable object subscribers",
+ * and "global streams reject configured worker subscribers" all depend on this
+ * parser: they assert both that append rejects and that no
+ * `subscription-configured` fact is left behind.
+ */
+type ProcessorContractParseEventInput<
+  Events extends EventCatalog,
+  ProcessorDeps extends readonly unknown[],
+> = {
+  <const Type extends ResolvedEventType<Events, ProcessorDeps>>(
+    type: Type,
+    event: BaseStreamEventInput,
+  ): ParsedInputFromType<Events, ProcessorDeps, Type>;
+  (
+    event: BaseStreamEventInput,
+  ): ParsedInputFromType<Events, ProcessorDeps, ResolvedEventType<Events, ProcessorDeps>>;
 };
 
 type DefaultableObjectStateSchema<StateSchema extends z.ZodType> =
@@ -463,6 +505,12 @@ function getEventInputSchema<
   TypedStreamEventInput<Type, z.output<PayloadSchema>>,
   TypedStreamEventInput<Type, z.input<PayloadSchema>>
 > {
+  // This deliberately mirrors `getEventSchema(...)` without offset/createdAt.
+  // It gives pre-append policy code the same payload validation as reducers,
+  // without fabricating a committed event just to get at the typed payload. In
+  // practice this keeps the Stream DO's validation for
+  // `subscription-configured` tied to the contract schema instead of hand-coded
+  // object checks that could drift from the event definition.
   return z
     .object({
       type: z.literal(args.type),
@@ -487,8 +535,9 @@ function getEventInputSchema<
  * This is a typed identity plus validation and one convenience method. It keeps
  * the contract object exactly where event ownership is declared while adding
  * `contract.buildEvent(...)`, which is just the pure `buildEvent({ contract,
- * event })` helper with the contract pre-bound, and `contract.parseEvent(...)`
- * for committed stream events owned by this contract or its processor deps.
+ * event })` helper with the contract pre-bound, `contract.parseEvent(...)` for
+ * committed stream events owned by this contract or its processor deps, and
+ * `contract.parseEventInput(...)` for pre-commit append inputs.
  *
  * The overloads enforce the important invariants at authoring time:
  *
@@ -522,6 +571,7 @@ export function defineProcessorContract<
   emits: Emits;
   buildEvent: ProcessorContractBuildEvent<Events, ProcessorDeps>;
   parseEvent: ProcessorContractParseEvent<Events, ProcessorDeps>;
+  parseEventInput: ProcessorContractParseEventInput<Events, ProcessorDeps>;
 };
 export function defineProcessorContract<
   const StateSchema extends z.ZodType,
@@ -539,6 +589,7 @@ export function defineProcessorContract<
   emits: Emits;
   buildEvent: ProcessorContractBuildEvent<Events, readonly []>;
   parseEvent: ProcessorContractParseEvent<Events, readonly []>;
+  parseEventInput: ProcessorContractParseEventInput<Events, readonly []>;
 };
 export function defineProcessorContract(contract: unknown) {
   assertNoLocalProcessorDepEventConflicts(contract);
@@ -551,6 +602,9 @@ export function defineProcessorContract(contract: unknown) {
   }
   if ("parseEvent" in contract) {
     throw new Error(`Processor "${getProcessorSlug(contract)}" must not define parseEvent.`);
+  }
+  if ("parseEventInput" in contract) {
+    throw new Error(`Processor "${getProcessorSlug(contract)}" must not define parseEventInput.`);
   }
   const typedContract = contract as {
     events: EventCatalog;
@@ -579,6 +633,32 @@ export function defineProcessorContract(contract: unknown) {
         );
       }
       return getEventSchema({
+        type: eventType,
+        payloadSchema: eventDefinition.payloadSchema,
+      }).parse(event);
+    },
+    parseEventInput(typeOrEvent: string | BaseStreamEventInput, maybeEvent?: BaseStreamEventInput) {
+      // Used by the Stream DO append gate. Keeping this next to parseEvent is
+      // intentional: both methods resolve the payload schema from the contract
+      // catalog, so a future edit to a core event schema automatically affects
+      // both committed-event reduction and pre-commit validation.
+      const eventType = typeof typeOrEvent === "string" ? typeOrEvent : typeOrEvent.type;
+      const event = typeof typeOrEvent === "string" ? maybeEvent : typeOrEvent;
+      if (event === undefined) {
+        throw new Error(
+          `Processor "${getProcessorSlug(typedContract)}" parseEventInput missing event.`,
+        );
+      }
+      const eventDefinition = getResolvedEventDefinition({
+        contract: typedContract,
+        eventType,
+      });
+      if (eventDefinition == null) {
+        throw new Error(
+          `Processor "${getProcessorSlug(typedContract)}" cannot parse unresolved event "${eventType}".`,
+        );
+      }
+      return getEventInputSchema({
         type: eventType,
         payloadSchema: eventDefinition.payloadSchema,
       }).parse(event);

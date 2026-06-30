@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { withItxSession } from "./test-helpers.ts";
 import { TRUSTED_INTERNAL_ITX_TOKEN } from "./src/auth.ts";
-import type { Stream, StreamEvent } from "./src/types.ts";
+import type { Stream, StreamEvent, StreamEventInput } from "./src/types.ts";
 
 type RuntimeConnection = {
   subscriptionType?: "configured" | "ephemeral";
@@ -27,7 +27,21 @@ type StreamRuntimeState = {
 
 const WAIT_FOR_EVENT_TYPE = "events.iterate.test/lifecycle-wait-never";
 
-test.skip("configured processor subscriptions are recorded as configured runtime connections", async () => {
+// These tests are intentionally about subscription lifecycle policy, not about
+// the old inbound/outbound transport direction. The current model has two
+// subscription types:
+// - configured: durable desired state in `configuredSubscribersByKey`; the
+//   stream may drop the live callback while idle because it can wake the target
+//   again from the stored configuration.
+// - ephemeral: a direct caller supplied a live callback via `subscribe()`; the
+//   stream must keep it until unsubscribe, RPC break, or session end because
+//   there is no durable wakeup path.
+//
+// Several of these started life as failing regression tests for streams keeping
+// Durable Objects alive through retained callback stubs. The now-active tests
+// prove the configured path is teardownable and re-wakeable, while direct
+// Cap'n Web subscriptions are cleaned up when their session is disposed.
+test("configured processor subscriptions are recorded as configured runtime connections", async () => {
   const marker = crypto.randomUUID();
 
   using session = withItxSession();
@@ -47,7 +61,158 @@ test.skip("configured processor subscriptions are recorded as configured runtime
   }
 });
 
-test.skip("stream idle teardown severs configured processor subscriptions", async () => {
+test("ephemeral subscriptions cannot reuse a configured subscription key", async () => {
+  // A subscription key that exists in `configuredSubscribersByKey` is not just a
+  // caller-chosen label; it is the durable identity of a wakeable subscriber.
+  // Allowing a direct `subscribe()` call to reuse that key would let an
+  // ephemeral callback replace or "steal" traffic from the configured
+  // subscriber, and it would make idle teardown ambiguous: the same key would
+  // sometimes be safe to drop/re-wake and sometimes not. This test ties to the
+  // guard in `StreamDurableObject.subscribe(...)` that rejects configured keys
+  // on the public ephemeral path.
+  const marker = crypto.randomUUID();
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "trusted-internal",
+    token: TRUSTED_INTERNAL_ITX_TOKEN,
+  });
+  using project = itx.projects.create({ slug: `lifecycle-key-reserved-${marker}` });
+  using stream = project.streams.get("/");
+
+  const { keys } = await waitForConfiguredProcessorConnections(stream);
+  const [subscriptionKey] = keys;
+  if (subscriptionKey === undefined) {
+    throw new Error("expected project bootstrap to configure at least one subscriber");
+  }
+
+  await expect(async () => {
+    const handle = await stream.subscribe({
+      processEventBatch: () => undefined,
+      subscriptionKey,
+    });
+    await handle.unsubscribe();
+  }).rejects.toThrow(/reserved for a configured subscriber/);
+});
+
+test("configured durable object subscribers must target the stream project", async () => {
+  // This pins the important pre-commit rule for project-scoped streams: a
+  // configured Durable Object subscriber may only name a Durable Object address
+  // with the same projectId as the stream. If append accepted this event and the
+  // wake side effect merely failed later, the stream would still retain a bad
+  // durable desired-state record and keep trying to wake it on future appends.
+  // The final `expectNoSubscriptionConfiguredEvent(...)` assertion is the
+  // critical part: it proves rejection happened before the event was committed.
+  const marker = crypto.randomUUID();
+  const subscriptionKey = `configured-cross-project-${marker}`;
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "trusted-internal",
+    token: TRUSTED_INTERNAL_ITX_TOKEN,
+  });
+  using project = itx.projects.create({ slug: `configured-cross-project-${marker}` });
+  const { projectId } = await project.describe();
+  using stream = project.streams.get(`/configured-cross-project-${marker}`);
+
+  await expect(
+    stream.append(
+      subscriptionConfiguredEvent({
+        subscriptionKey,
+        subscriber: {
+          address: {
+            path: "/",
+            projectId: `${projectId}-other`,
+            props: {},
+          },
+          type: "repo",
+        },
+      }),
+    ),
+  ).rejects.toThrow(/does not match stream projectId/);
+
+  await expectNoSubscriptionConfiguredEvent(stream, subscriptionKey);
+});
+
+test("global streams reject project-scoped configured durable object subscribers", async () => {
+  // The same invariant applies to deployment-wide/global streams. A stream with
+  // `projectId: null` may only configure subscribers whose Durable Object
+  // address also has `projectId: null`; it must not become a global registry that
+  // can wake arbitrary project Durable Objects. This covers the null-project
+  // branch of the same append-time validation as the previous test.
+  const marker = crypto.randomUUID();
+  const subscriptionKey = `configured-global-cross-project-${marker}`;
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "trusted-internal",
+    token: TRUSTED_INTERNAL_ITX_TOKEN,
+  });
+  using stream = itx.streams.get(`/configured-global-cross-project-${marker}`);
+
+  await expect(
+    stream.append(
+      subscriptionConfiguredEvent({
+        subscriptionKey,
+        subscriber: {
+          address: {
+            path: "/",
+            projectId: `prj_${marker}`,
+            props: {},
+          },
+          type: "repo",
+        },
+      }),
+    ),
+  ).rejects.toThrow(/does not match stream projectId/);
+
+  await expectNoSubscriptionConfiguredEvent(stream, subscriptionKey);
+});
+
+test("global streams reject configured worker subscribers", async () => {
+  // Worker subscribers are slightly different from Durable Object subscribers:
+  // the event stores a WorkerRef, not a Durable Object address. The wake path
+  // scopes that WorkerRef with the stream's own projectId, so project streams
+  // are safe by construction. A global stream has no projectId to provide, so
+  // accepting this event would create durable desired state that can never be
+  // woken safely. This test makes that rejection happen during append, before
+  // `configuredSubscribersByKey` is updated.
+  const marker = crypto.randomUUID();
+  const subscriptionKey = `configured-global-worker-${marker}`;
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "trusted-internal",
+    token: TRUSTED_INTERNAL_ITX_TOKEN,
+  });
+  using stream = itx.streams.get(`/configured-global-worker-${marker}`);
+
+  await expect(
+    stream.append(
+      subscriptionConfiguredEvent({
+        subscriptionKey,
+        subscriber: {
+          type: "worker",
+          workerRef: {
+            path: "/subscribers/noop",
+            source: {
+              mainModule: "index.ts",
+              modules: {
+                "index.ts": "export default { wakeStreamSubscriber() {} };",
+              },
+              type: "inline",
+            },
+            type: "stateless",
+          },
+        },
+      }),
+    ),
+  ).rejects.toThrow(/configured worker subscribers require a project-scoped stream/);
+
+  await expectNoSubscriptionConfiguredEvent(stream, subscriptionKey);
+});
+
+test("stream idle teardown severs configured processor subscriptions", async () => {
   const marker = crypto.randomUUID();
 
   using session = withItxSession();
@@ -89,7 +254,7 @@ test.skip("stream idle teardown severs configured processor subscriptions", asyn
   }
 });
 
-test.skip("append after idle teardown re-wakes configured subscriber from its checkpoint", async () => {
+test("append after idle teardown re-wakes configured subscriber from its checkpoint", async () => {
   const marker = crypto.randomUUID();
 
   using session = withItxSession();
@@ -126,7 +291,7 @@ test.skip("append after idle teardown re-wakes configured subscriber from its ch
   }
 });
 
-test.skip("closing a Cap'n Web session without unsubscribe removes its stream subscription", async () => {
+test("closing a Cap'n Web session without unsubscribe removes its stream subscription", async () => {
   const marker = crypto.randomUUID();
   const streamPath = `/lifecycle-session-close-${marker}`;
   const subscriptionKey = `lifecycle-session-close-${marker}`;
@@ -158,6 +323,7 @@ test.skip("closing a Cap'n Web session without unsubscribe removes its stream su
     expect(await subscription.subscriptionKey).toBe(subscriptionKey);
 
     await waitForRuntimeConnection(observerStream, subscriptionKey);
+    delivered.length = 0;
 
     disposeRpc(subscriberSession);
 
@@ -308,6 +474,43 @@ function configuredSubscriptionKeys(state: StreamRuntimeState): string[] {
 
 function asStreamRuntimeState(value: unknown): StreamRuntimeState {
   return value as StreamRuntimeState;
+}
+
+function subscriptionConfiguredEvent(input: {
+  subscriber: Record<string, unknown>;
+  subscriptionKey: string;
+}): StreamEventInput {
+  // These tests hand-author the public event instead of using the bootstrap
+  // helper on purpose. The bug class we care about is "a caller with append
+  // authority can put an unsafe configured subscriber into durable stream
+  // state." If we only tested helper-generated events, we would miss that the
+  // Stream Durable Object itself is the trust boundary.
+  return {
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: {
+      subscriptionKey: input.subscriptionKey,
+      subscriber: input.subscriber,
+    },
+  };
+}
+
+async function expectNoSubscriptionConfiguredEvent(
+  stream: Stream,
+  subscriptionKey: string,
+): Promise<void> {
+  // Rejecting during the later wake side effect is not enough; by then the
+  // event is already durable and reduced into `configuredSubscribersByKey`.
+  // Every target-safety test calls this helper to assert the append gate failed
+  // before the bad desired-state fact reached storage.
+  const events = await stream.getEvents({ afterOffset: 0 });
+  expect(events).not.toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        payload: expect.objectContaining({ subscriptionKey }),
+        type: "events.iterate.com/stream/subscription-configured",
+      }),
+    ]),
+  );
 }
 
 function disposeRpc(value: unknown): void {

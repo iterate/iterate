@@ -390,6 +390,40 @@ export class StreamDurableObject extends DurableObject<Env> {
    * append based on core state.
    */
   #validateCoreAppend(args: { event: StreamEventInput; state: CoreProcessorState }): void {
+    if (args.event.type === "events.iterate.com/stream/subscription-configured") {
+      // Configured subscriptions are durable desired state. Once this event is
+      // committed, the reducer stores it in `configuredSubscribersByKey` and the
+      // stream is allowed to re-wake that subscriber forever. That means target
+      // validation must happen here, before offset assignment and storage, not
+      // inside the later fire-and-forget wake path.
+      //
+      // The safety problem this prevents:
+      // 1. A project-scoped stream accepts a configured subscriber whose Durable
+      //    Object address belongs to another project.
+      // 2. Append succeeds, so the bad target becomes durable stream state.
+      // 3. Wake fails or logs later, but future appends keep reconciling the
+      //    same invalid configured subscriber.
+      //
+      // The lifecycle tests that pin this are:
+      // - "configured durable object subscribers must target the stream project"
+      // - "global streams reject project-scoped configured durable object subscribers"
+      // - "global streams reject configured worker subscribers"
+      // Each one also asserts the rejected event was not committed.
+      const event = CoreProcessorContract.parseEventInput(
+        "events.iterate.com/stream/subscription-configured",
+        args.event,
+      );
+      this.#validateConfiguredSubscriberTarget(event.payload.subscriber);
+    }
+
+    if (args.event.type === "events.iterate.com/stream/rule-configured") {
+      const event = CoreProcessorContract.parseEventInput(
+        "events.iterate.com/stream/rule-configured",
+        args.event,
+      );
+      this.#validateStreamRuleTarget(event.payload);
+    }
+
     if (!args.state.paused) return;
 
     // Presence facts pass through the pause door alongside resume/error/woken:
@@ -606,6 +640,28 @@ export class StreamDurableObject extends DurableObject<Env> {
         break;
       }
 
+      case "events.iterate.com/stream/rule-configured": {
+        const event = CoreProcessorContract.parseEvent(
+          "events.iterate.com/stream/rule-configured",
+          args.event,
+        );
+        next = {
+          ...next,
+          rulesById: {
+            ...next.rulesById,
+            [event.payload.ruleId]: {
+              latestConfiguredEvent: {
+                offset: event.offset,
+                type: event.type,
+                payload: event.payload,
+                createdAt: event.createdAt,
+              },
+            },
+          },
+        };
+        break;
+      }
+
       case "events.iterate.com/stream/error-occurred":
         CoreProcessorContract.parseEvent("events.iterate.com/stream/error-occurred", args.event);
         break;
@@ -636,10 +692,13 @@ export class StreamDurableObject extends DurableObject<Env> {
       case "events.iterate.com/stream/subscription-removed":
         this.#reconcileConnections();
         return;
+      case "events.iterate.com/stream/rule-configured":
+        return;
       case "events.iterate.com/stream/created":
         this.#announceToAncestors(args);
         return;
       default:
+        this.#crossPostMatchingRules(args);
         return;
     }
   }
@@ -663,6 +722,50 @@ export class StreamDurableObject extends DurableObject<Env> {
             payload: { childPath: path },
           }),
         ),
+      );
+    });
+  }
+
+  #crossPostMatchingRules(args: ProcessCoreEventArgs): void {
+    if (args.event.source?.crossPost !== undefined) return;
+
+    const matchingRules = Object.values(args.state.rulesById).filter(({ latestConfiguredEvent }) =>
+      latestConfiguredEvent.payload.eventTypes.includes(args.event.type),
+    );
+    if (matchingRules.length === 0) return;
+
+    const sourceProjectId = args.state.projectId ?? this.name.projectId;
+    const sourcePath = args.state.path ?? this.name.path;
+
+    args.runInBackground(async () => {
+      await Promise.all(
+        matchingRules.map(({ latestConfiguredEvent }) => {
+          const rule = latestConfiguredEvent.payload;
+          const { createdAt, offset, ...copy } = args.event;
+          return this.#appendToStreamCoordinate(
+            {
+              path: rule.path,
+              projectId: rule.projectId === undefined ? this.name.projectId : rule.projectId,
+            },
+            {
+              ...copy,
+              source: {
+                ...copy.source,
+                crossPost: {
+                  ruleId: rule.ruleId,
+                  from: {
+                    createdAt,
+                    offset,
+                    path: sourcePath,
+                    projectId: sourceProjectId,
+                    type: args.event.type,
+                  },
+                },
+              },
+              idempotencyKey: `cross-post:${rule.ruleId}:${sourceProjectId ?? "global"}:${sourcePath}:${offset}`,
+            },
+          );
+        }),
       );
     });
   }
@@ -811,16 +914,17 @@ export class StreamDurableObject extends DurableObject<Env> {
     return events;
   }
 
-  appendToStreamPath(path: string, ...events: StreamEventInput[]) {
+  #appendToStreamCoordinate(
+    coordinate: { projectId: string | null; path: string },
+    ...events: StreamEventInput[]
+  ) {
     return this.env.STREAM.getByName(
-      DurableObjectNameCodec.stringify(
-        {
-          path,
-          projectId: this.name.projectId,
-        },
-        { allowNullProjectId: true },
-      ),
+      DurableObjectNameCodec.stringify(coordinate, { allowNullProjectId: true }),
     ).append(...events);
+  }
+
+  appendToStreamPath(path: string, ...events: StreamEventInput[]) {
+    return this.#appendToStreamCoordinate({ path, projectId: this.name.projectId }, ...events);
   }
 
   runCoreProcessorInBackground(work: () => Promise<unknown>): void {
@@ -1366,12 +1470,17 @@ export class StreamDurableObject extends DurableObject<Env> {
     subscriber: ConfiguredStreamSubscriber;
   }): Promise<void> {
     const subscriber = args.subscriber;
+    // This is a belt-and-braces check. Normal writes are rejected in
+    // `#validateCoreAppend(...)`, before they become durable state. Keeping the
+    // same validation on the wake path protects older/broken persisted state and
+    // any future internal caller that reaches this method without going through
+    // append first.
+    this.#validateConfiguredSubscriberTarget(subscriber);
     if (subscriber.type === "worker") {
       await this.#wakeWorkerSubscriber(subscriber.workerRef, args.request);
       return;
     }
 
-    this.#assertSameProject(subscriber.address.projectId, subscriber.type);
     const durableObjectName = DurableObjectNameCodec.stringify(subscriber.address, {
       allowNullProjectId: true,
     });
@@ -1423,6 +1532,44 @@ export class StreamDurableObject extends DurableObject<Env> {
       path: ["wakeStreamSubscriber"],
       ref: workerRef,
     });
+  }
+
+  #validateConfiguredSubscriberTarget(subscriber: ConfiguredStreamSubscriber): void {
+    if (subscriber.type === "worker") {
+      // Worker subscribers do not carry a Durable Object address in the event.
+      // Instead, the wake path builds an ITX/project scope from this stream's
+      // own projectId and then invokes the WorkerRef inside that scope. That is
+      // why workers are safe for project streams without a separate target
+      // projectId field, and why global streams must reject them: there is no
+      // project boundary to supply to the WorkerRunner. The test named
+      // "global streams reject configured worker subscribers" covers this
+      // before-commit behavior.
+      if (this.name.projectId === null) {
+        throw new Error("configured worker subscribers require a project-scoped stream");
+      }
+      return;
+    }
+    // Durable Object subscribers do carry an address in the event. The address
+    // projectId has to equal the stream's projectId exactly; a global stream
+    // (`projectId: null`) may only target a global address, and a project stream
+    // may only target Durable Objects in that same project. This is the concrete
+    // form of the configured-subscriber safety invariant: durable wakeup state
+    // must never encode cross-project authority.
+    this.#assertSameProject(subscriber.address.projectId, subscriber.type);
+  }
+
+  #validateStreamRuleTarget(rule: { projectId?: string | null }): void {
+    if (
+      rule.projectId === undefined ||
+      rule.projectId === this.name.projectId ||
+      rule.projectId === null
+    ) {
+      return;
+    }
+
+    throw new Error(
+      `cross-post rule target projectId ${rule.projectId} does not match stream projectId ${this.name.projectId ?? "null"}`,
+    );
   }
 
   #assertSameProject(projectId: string | null, subscriberType: ConfiguredStreamSubscriber["type"]) {

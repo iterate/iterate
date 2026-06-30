@@ -11,6 +11,21 @@ export const StreamEventInput = z.object({
   source: z
     .object({
       processor: z.object({ slug: z.string(), version: z.string() }).strict().optional(),
+      crossPost: z
+        .object({
+          ruleId: z.string().trim().min(1),
+          from: z
+            .object({
+              createdAt: z.string(),
+              offset: z.number().int().nonnegative(),
+              path: z.string().trim().min(1),
+              projectId: z.string().trim().min(1).nullable(),
+              type: z.string().trim().min(1),
+            })
+            .strict(),
+        })
+        .strict()
+        .optional(),
     })
     .strict()
     .optional(),
@@ -24,6 +39,21 @@ export const StreamEvent = z.object({
   source: z
     .object({
       processor: z.object({ slug: z.string(), version: z.string() }).strict().optional(),
+      crossPost: z
+        .object({
+          ruleId: z.string().trim().min(1),
+          from: z
+            .object({
+              createdAt: z.string(),
+              offset: z.number().int().nonnegative(),
+              path: z.string().trim().min(1),
+              projectId: z.string().trim().min(1).nullable(),
+              type: z.string().trim().min(1),
+            })
+            .strict(),
+        })
+        .strict()
+        .optional(),
     })
     .strict()
     .optional(),

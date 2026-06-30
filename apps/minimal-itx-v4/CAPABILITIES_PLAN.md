@@ -37,7 +37,7 @@ that every API described here exists today.
 - Those entrypoints are addressed through a generalized dialer shape.
 - MCP and OpenAPI clients fetch through project egress.
 - The OpenAPI client dispatches by flat `operationId`.
-- The MCP client exposes tools as callable capability methods.
+- The MCP client exposes tools as invokable capability methods.
 
 Minimal v4 should take the useful result without copying the whole OS dialer
 model. In v4, MCP and OpenAPI helpers should be normal `ProjectRpcTarget`

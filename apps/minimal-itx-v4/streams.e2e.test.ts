@@ -12,6 +12,7 @@ import { withItxSession } from "./test-helpers.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const STREAM_EVENT_TYPE = "events.iterate.test/minimal-v4/stream-e2e";
+const CROSS_POST_EVENT_TYPE = "events.iterate.test/minimal-v4/cross-post";
 
 type CoreStreamState = {
   eventCount: number;
@@ -180,6 +181,174 @@ test("state-only stream subscribe pushes initial state immediately, then state a
   );
 
   await subscription.unsubscribe();
+});
+
+test("stream rules cross-post matching events with source provenance", async () => {
+  const marker = crypto.randomUUID();
+  const sourcePath = `/e2e/os-port/cross-post/source/${marker}`;
+  const targetPath = `/e2e/os-port/cross-post/target/${marker}`;
+  const ruleId = `copy-${marker}`;
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "trusted-internal",
+    token: TRUSTED_INTERNAL_ITX_TOKEN,
+  });
+  using project = itx.projects.create({ slug: `os-stream-cross-post-${RUN_SUFFIX}-${marker}` });
+  const projectDescription = await project.describe();
+  using source = project.streams.get(sourcePath);
+  using target = project.streams.get(targetPath);
+
+  await source.append({
+    type: "events.iterate.com/stream/rule-configured",
+    payload: {
+      eventTypes: [CROSS_POST_EVENT_TYPE],
+      path: targetPath,
+      ruleId,
+      type: "cross-post",
+    },
+  });
+
+  const copied = target.waitForEvent({
+    eventTypes: [CROSS_POST_EVENT_TYPE],
+    timeoutMs: 10_000,
+  });
+  const [sourceEvent] = await source.append({
+    type: CROSS_POST_EVENT_TYPE,
+    payload: { marker },
+  });
+  const copiedEvent = await copied;
+
+  expect(copiedEvent).toMatchObject({
+    idempotencyKey: `cross-post:${ruleId}:${projectDescription.projectId}:${sourcePath}:${sourceEvent!.offset}`,
+    payload: { marker },
+    source: {
+      crossPost: {
+        ruleId,
+        from: {
+          createdAt: sourceEvent!.createdAt,
+          offset: sourceEvent!.offset,
+          path: sourcePath,
+          projectId: projectDescription.projectId,
+          type: CROSS_POST_EVENT_TYPE,
+        },
+      },
+    },
+    type: CROSS_POST_EVENT_TYPE,
+  });
+});
+
+test("stream rules do not recursively cross-post events that are already cross-posted", async () => {
+  const marker = crypto.randomUUID();
+  const sourcePath = `/e2e/os-port/cross-post-loop/source/${marker}`;
+  const targetPath = `/e2e/os-port/cross-post-loop/target/${marker}`;
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "trusted-internal",
+    token: TRUSTED_INTERNAL_ITX_TOKEN,
+  });
+  using project = itx.projects.create({
+    slug: `os-stream-cross-post-loop-${RUN_SUFFIX}-${marker}`,
+  });
+  using source = project.streams.get(sourcePath);
+  using target = project.streams.get(targetPath);
+
+  await Promise.all([
+    source.append({
+      type: "events.iterate.com/stream/rule-configured",
+      payload: {
+        eventTypes: [CROSS_POST_EVENT_TYPE],
+        path: targetPath,
+        ruleId: `source-to-target-${marker}`,
+        type: "cross-post",
+      },
+    }),
+    target.append({
+      type: "events.iterate.com/stream/rule-configured",
+      payload: {
+        eventTypes: [CROSS_POST_EVENT_TYPE],
+        path: sourcePath,
+        ruleId: `target-to-source-${marker}`,
+        type: "cross-post",
+      },
+    }),
+  ]);
+
+  const copied = target.waitForEvent({
+    eventTypes: [CROSS_POST_EVENT_TYPE],
+    timeoutMs: 10_000,
+  });
+  await source.append({
+    type: CROSS_POST_EVENT_TYPE,
+    payload: { marker },
+  });
+  await copied;
+
+  await new Promise((resolve) => setTimeout(resolve, 750));
+  const sourceEvents = await source.getEvents({ afterOffset: 0 });
+  const sourceCopies = sourceEvents.filter(
+    (event) => event.type === CROSS_POST_EVENT_TYPE && event.source?.crossPost !== undefined,
+  );
+  expect(sourceCopies).toEqual([]);
+});
+
+test("stream rules can cross-post project stream events to global streams", async () => {
+  const marker = crypto.randomUUID();
+  const sourcePath = `/e2e/os-port/cross-post-global/source/${marker}`;
+  const globalPath = `/e2e/os-port/cross-post-global/target/${marker}`;
+  const ruleId = `project-to-global-${marker}`;
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "trusted-internal",
+    token: TRUSTED_INTERNAL_ITX_TOKEN,
+  });
+  using project = itx.projects.create({
+    slug: `os-stream-cross-post-global-${RUN_SUFFIX}-${marker}`,
+  });
+  const projectDescription = await project.describe();
+  using source = project.streams.get(sourcePath);
+  using globalTarget = itx.streams.get(globalPath);
+
+  await source.append({
+    type: "events.iterate.com/stream/rule-configured",
+    payload: {
+      eventTypes: [CROSS_POST_EVENT_TYPE],
+      path: globalPath,
+      projectId: null,
+      ruleId,
+      type: "cross-post",
+    },
+  });
+
+  const copied = globalTarget.waitForEvent({
+    eventTypes: [CROSS_POST_EVENT_TYPE],
+    timeoutMs: 10_000,
+  });
+  const [sourceEvent] = await source.append({
+    type: CROSS_POST_EVENT_TYPE,
+    payload: { marker },
+  });
+  const copiedEvent = await copied;
+
+  expect(copiedEvent).toMatchObject({
+    idempotencyKey: `cross-post:${ruleId}:${projectDescription.projectId}:${sourcePath}:${sourceEvent!.offset}`,
+    payload: { marker },
+    source: {
+      crossPost: {
+        ruleId,
+        from: {
+          path: sourcePath,
+          projectId: projectDescription.projectId,
+        },
+      },
+    },
+    type: CROSS_POST_EVENT_TYPE,
+  });
+
+  const globalState = await globalTarget.runtimeState();
+  expect(coreState(globalState.coreProcessorState).projectId).toBe(null);
 });
 
 function coreState(value: unknown): CoreStreamState {

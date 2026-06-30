@@ -135,7 +135,15 @@ async function waitForDefaultProjectWorker(itx: ProjectRpcTarget): Promise<void>
   let lastError: unknown;
   for (let attempt = 1; attempt <= PROJECT_WORKER_READY_ATTEMPTS; attempt += 1) {
     try {
-      await itx.worker.fetch(new Request(PROJECT_WORKER_READY_URL));
+      const response = await itx.worker.fetch(new Request(PROJECT_WORKER_READY_URL));
+      // This probe only cares that the project worker accepted the request. The
+      // returned Response can be a Cap'n Web RPC stub, and keeping that stub
+      // alive after the probe succeeds is exactly the lifecycle pattern these
+      // stream tests are trying to avoid: a short-lived readiness check should
+      // not retain a remote object until the whole project bootstrap session
+      // ends. Dispose when the runtime supplies Symbol.dispose; local/miniflare
+      // Response objects without that hook are a no-op here.
+      disposeRpcResult(response);
       return;
     } catch (error) {
       lastError = error;
@@ -146,4 +154,9 @@ async function waitForDefaultProjectWorker(itx: ProjectRpcTarget): Promise<void>
   throw new Error("Default project worker did not become ready before project/created.", {
     cause: lastError,
   });
+}
+
+function disposeRpcResult(value: unknown): void {
+  const dispose = (value as { [Symbol.dispose]?: () => void } | null | undefined)?.[Symbol.dispose];
+  dispose?.call(value);
 }

@@ -181,16 +181,28 @@ export interface CapabilityProvision extends Disposable {
 }
 
 /** Append input before the stream assigns offset and timestamp. */
+export type StreamEventSource = {
+  processor?: {
+    slug: string;
+    version: string;
+  };
+  crossPost?: {
+    ruleId: string;
+    from: {
+      createdAt: string;
+      offset: number;
+      path: string;
+      projectId: string | null;
+      type: string;
+    };
+  };
+};
+
 export type StreamEventInput = {
   type: string;
   payload?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
-  source?: {
-    processor?: {
-      slug: string;
-      version: string;
-    };
-  };
+  source?: StreamEventSource;
   idempotencyKey?: string;
 };
 
