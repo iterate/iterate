@@ -94,7 +94,10 @@ export class StreamRpcTarget extends RpcTarget implements Stream {
 
   subscribe(args: Parameters<Stream["subscribe"]>[0]) {
     return this.durableObjectStub.subscribe(
-      // [[ Why is this needed? some type invocation depth or circles? ]]
+      // The public Stream signature is the stable contract. Workers RPC stubs
+      // re-materialize that method through generated Durable Object types, so
+      // this cast keeps the forwarding layer from deep-instantiating both sides
+      // of the callback-heavy subscribe type.
       args as Parameters<typeof this.durableObjectStub.subscribe>[0],
     );
   }
@@ -309,8 +312,10 @@ class AgentRpcTarget extends RpcTarget implements Agent {
   async provideCapability(input: ProvideCapabilityInput) {
     rejectBuiltinCollision(this, input.path);
     const provision = await this.#itx.provideCapability(input);
-    // [[ Why can we not just write return this.itx.provideCapability(input) ]]
 
+    // The ITX Durable Object returns the durable mount coordinates. The public
+    // RPC surface returns an ownership handle that can revoke that exact mount
+    // on explicit revoke or disposal.
     return new CapabilityProvisionRpcTarget({
       ctx: this.props.ctx,
       path: input.path,
@@ -320,7 +325,6 @@ class AgentRpcTarget extends RpcTarget implements Agent {
   }
 
   async revokeCapability(input: RevokeCapabilityInput) {
-    // [[ This line is v suspicious - should delete and turn into one-liner]]
     await this.#itx.revokeCapability(input);
   }
 
@@ -482,12 +486,13 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
   }
 }
 
-// [[ Why is there a random type here? ]]
 type ProjectRpcTargetProps = { auth: ItxAuth; ctx: CfExecutionContext; projectId: string };
 
+// Internal affordances used by domain hosts that intentionally inject a
+// ProjectRpcTarget as a capability dependency. Keeping them behind a symbol
+// prevents accidental exposure on the public Cap'n Web surface.
 export const ProjectRpcTargetInternals = Symbol("ProjectRpcTargetInternals");
 
-// [[ Do we really need this to be parameterised by props type? this seems unnecessarily messy - can we simplify ]]
 export class ProjectRpcTarget extends RpcTarget implements Project {
   constructor(readonly props: ProjectRpcTargetProps) {
     super();
@@ -518,7 +523,9 @@ export class ProjectRpcTarget extends RpcTarget implements Project {
   async provideCapability(input: ProvideCapabilityInput) {
     rejectBuiltinCollision(this, input.path);
     const provision = await this.#itx.provideCapability(input);
-    // [[ why is this not returned from #itx.provideCapability? ]]
+    // The ITX Durable Object returns the durable mount coordinates. The public
+    // RPC surface returns an ownership handle that can revoke that exact mount
+    // on explicit revoke or disposal.
     return new CapabilityProvisionRpcTarget({
       ctx: this.props.ctx,
       path: input.path,
