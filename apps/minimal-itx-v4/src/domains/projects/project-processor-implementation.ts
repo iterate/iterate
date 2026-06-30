@@ -1,7 +1,7 @@
 import { StreamProcessor } from "../streams/engine/stream-processor.ts";
 import { subscriptionConfiguredEvent } from "../streams/subscription-event.ts";
 import { PROJECT_REPO_PATH } from "../repos/project-repo.ts";
-import type { StreamEvent } from "../streams/types.ts";
+import type { StreamEvent } from "../../types.ts";
 import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 type ProjectProcessorDeps = {

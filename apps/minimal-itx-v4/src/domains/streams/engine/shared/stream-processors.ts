@@ -13,7 +13,7 @@ import {
 import type {
   StreamEvent as BaseStreamEvent,
   StreamEventInput as BaseStreamEventInput,
-} from "../../types.ts";
+} from "../../../../types.ts";
 
 export * from "@iterate-com/shared/streams/stream-processors";
 

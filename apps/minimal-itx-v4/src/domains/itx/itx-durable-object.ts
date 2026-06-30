@@ -7,7 +7,7 @@ import {
   type RequestStreamSubscriptionArgs,
 } from "../streams/engine/workers/stream-processor-host.ts";
 import { projectEgressFetcher } from "../projects/egress.ts";
-import { StreamRpcTarget } from "../streams/rpc-targets.ts";
+import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { WorkerRunner } from "../workers/worker-runner.ts";
 import { ItxProcessorContract } from "./itx-processor-contract.ts";
 import {

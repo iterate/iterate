@@ -24,7 +24,7 @@
 import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "../stream-processor.ts";
 import type { ProcessorContractAnnouncement } from "../processors/core/contract.ts";
 import type { StreamSubscriptionHandle } from "../types.ts";
-import type { Stream, StreamEvent } from "../../types.ts";
+import type { Stream, StreamEvent } from "../../../../types.ts";
 
 /** What the Stream DO sends when asking a hosted processor to subscribe. */
 export type StreamSubscriptionHandshake = {

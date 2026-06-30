@@ -4,4 +4,4 @@ export type {
   ProcessorRuntimeState,
   StreamEventBatch,
   StreamSubscriptionHandle,
-} from "../types.ts";
+} from "../../../types.ts";

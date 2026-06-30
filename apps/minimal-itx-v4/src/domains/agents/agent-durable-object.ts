@@ -6,7 +6,7 @@ import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
 } from "../streams/engine/workers/stream-processor-host.ts";
-import { StreamRpcTarget } from "../streams/rpc-targets.ts";
+import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
 

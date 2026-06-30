@@ -4,7 +4,7 @@
 import { describe, expectTypeOf, it } from "vitest";
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
-import type { StreamEvent } from "./src/domains/streams/types.ts";
+import type { StreamEvent } from "./src/types.ts";
 import { StreamProcessor } from "./src/domains/streams/engine/stream-processor.ts";
 
 type IsNever<Value> = [Value] extends [never] ? true : false;

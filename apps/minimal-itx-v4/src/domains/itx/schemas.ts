@@ -4,7 +4,7 @@ import type {
   CapabilityProvidedPayload as CapabilityProvidedPayloadType,
   CapabilityRecord as CapabilityRecordType,
   RevokeCapabilityInput,
-} from "./types.ts";
+} from "../../types.ts";
 
 export const CapabilityProvidedPayload = z.discriminatedUnion("type", [
   z.strictObject({

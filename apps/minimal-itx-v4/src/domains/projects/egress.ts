@@ -1,6 +1,6 @@
 import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
-import type { ProjectEgress } from "./types.ts";
+import type { ProjectEgress } from "../../types.ts";
 
 const SECRET_PLACEHOLDER = /getSecret\("([^"]+)"\)/g;
 

@@ -4,7 +4,7 @@ import { ITX_AUTH_COOKIE } from "./auth.ts";
 import { AgentDurableObject } from "./domains/agents/agent-durable-object.ts";
 import { ItxDurableObject } from "./domains/itx/itx-durable-object.ts";
 import { ItxEntrypoint } from "./domains/itx/itx-entrypoint.ts";
-import { UnauthenticatedItxRpcTarget } from "./domains/itx/rpc-targets.ts";
+import { UnauthenticatedItxRpcTarget } from "./rpc-targets.ts";
 import { ProjectDurableObject } from "./domains/projects/project-durable-object.ts";
 import { ProjectEgressEntrypoint } from "./domains/projects/egress.ts";
 import { RepoDurableObject } from "./domains/repos/repo-durable-object.ts";

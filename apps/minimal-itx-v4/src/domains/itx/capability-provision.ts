@@ -1,5 +1,9 @@
 import { RpcTarget } from "cloudflare:workers";
-import type { CapabilityProvision, CfExecutionContext, RevokeCapabilityInput } from "./types.ts";
+import type {
+  CapabilityProvision,
+  CfExecutionContext,
+  RevokeCapabilityInput,
+} from "../../types.ts";
 
 type RevokeCapability = (input: RevokeCapabilityInput) => Promise<void>;
 

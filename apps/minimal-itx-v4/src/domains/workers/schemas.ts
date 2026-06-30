@@ -5,7 +5,7 @@ import type {
   StatelessWorkerRef as StatelessWorkerRefType,
   WorkerRef as WorkerRefType,
   WorkerSource as WorkerSourceType,
-} from "./types.ts";
+} from "../../types.ts";
 
 const DURABLE_WORKER_KEY = /^[a-z][a-z0-9-]{0,62}$/;
 

@@ -3,18 +3,19 @@ import {
   type StreamProcessorConstructorArgs,
 } from "../streams/engine/stream-processor.ts";
 import { normalizePath } from "../durable-object-names.ts";
-import type { StreamEvent } from "../streams/types.ts";
-import { sha256Hex } from "../workers/source-cache-key.ts";
-import { WorkerRef as WorkerRefSchema } from "../workers/schemas.ts";
-import type { JsonValue, StatelessWorkerRef } from "../workers/types.ts";
-import type { WorkerRunner } from "../workers/worker-runner.ts";
-import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
-import { ItxProcessorContract, type CapabilityRecord } from "./itx-processor-contract.ts";
 import type {
   CapabilityProvidedPayload,
   ItxCapabilityHost,
+  JsonValue,
   RevokeCapabilityInput,
-} from "./types.ts";
+  StatelessWorkerRef,
+  StreamEvent,
+} from "../../types.ts";
+import { sha256Hex } from "../workers/source-cache-key.ts";
+import { WorkerRef as WorkerRefSchema } from "../workers/schemas.ts";
+import type { WorkerRunner } from "../workers/worker-runner.ts";
+import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
+import { ItxProcessorContract, type CapabilityRecord } from "./itx-processor-contract.ts";
 
 export type ProvideCapabilityInput = Parameters<ItxCapabilityHost["provideCapability"]>[0];
 export type RunScriptResult = Awaited<ReturnType<ItxCapabilityHost["runScript"]>>;

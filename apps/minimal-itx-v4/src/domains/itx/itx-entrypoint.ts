@@ -1,10 +1,9 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import type { Env } from "../../env.ts";
-import { AgentItxRpcTarget, ProjectCollectionRpcTarget } from "../projects/rpc-targets.ts";
-import type { Project } from "../projects/types.ts";
+import { AgentItxRpcTarget, ProjectCollectionRpcTarget } from "../../rpc-targets.ts";
+import type { AgentItx, Project } from "../../types.ts";
 import { scopeFromItxEntrypointProps, type ItxEntrypointProps } from "./entrypoint-props.ts";
-import type { AgentItx } from "./types.ts";
 
 export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
   async get(): Promise<AgentItx | Project> {

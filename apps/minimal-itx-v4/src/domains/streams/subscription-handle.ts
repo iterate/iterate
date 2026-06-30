@@ -1,5 +1,5 @@
 import { RpcTarget } from "cloudflare:workers";
-import type { StreamSubscriptionHandle } from "./types.ts";
+import type { StreamSubscriptionHandle } from "../../types.ts";
 
 /**
  * RPC ownership handle for a live stream connection.

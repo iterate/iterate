@@ -4,15 +4,15 @@ import {
   type RpcCompatible as CapnRpcCompatible,
   type RpcStub as CapnRpcStub,
 } from "capnweb";
-import type { Agent } from "./domains/agents/types.ts";
 import { withOwnedRpcSession } from "./domains/itx/rpc-disposal.ts";
 import type {
+  Agent,
   AgentItx,
   ItxAuthCredentials,
   ItxRoot,
+  Project,
   UnauthenticatedItx,
-} from "./domains/itx/types.ts";
-import type { Project } from "./domains/projects/types.ts";
+} from "./types.ts";
 
 export const DEFAULT_ITX_BASE_URL = "http://127.0.0.1:8791";
 

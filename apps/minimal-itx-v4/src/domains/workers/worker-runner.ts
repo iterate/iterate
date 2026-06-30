@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
+import type { StatefulWorkerRef, StatelessWorkerRef, WorkerRef } from "../../types.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { invokeFlattenedPath, replayPath } from "../itx/live-capability.ts";
 import {
@@ -8,7 +9,6 @@ import {
   type ResolvedWorkerSource,
   type WorkerBindings,
 } from "./worker-loader.ts";
-import type { StatefulWorkerRef, StatelessWorkerRef, WorkerRef } from "./types.ts";
 
 type StatefulWorkerRpc = {
   invokeCapability(input: {

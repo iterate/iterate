@@ -1,11 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
+import type { StatefulWorkerRef } from "../../types.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { itxEntrypointProps, itxEntrypointScopeCacheKey } from "../itx/entrypoint-props.ts";
 import { invokeFlattenedPath, replayPath } from "../itx/live-capability.ts";
 import { projectEgressFetcher } from "../projects/egress.ts";
 import { WorkerRunner } from "./worker-runner.ts";
-import type { StatefulWorkerRef } from "./types.ts";
 
 const FACET_NAME = "target";
 const VERSION_STORAGE_KEY = "workers:stateful-worker-version";

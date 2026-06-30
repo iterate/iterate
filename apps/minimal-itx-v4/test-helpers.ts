@@ -1,9 +1,13 @@
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import WebSocket from "ws";
-import type { Agent } from "./src/domains/agents/types.ts";
-import type { ItxAuthCredentials, ItxRoot, UnauthenticatedItx } from "./src/domains/itx/types.ts";
 import { withOwnedRpcSession } from "./src/domains/itx/rpc-disposal.ts";
-import type { Project } from "./src/domains/projects/types.ts";
+import type {
+  Agent,
+  ItxAuthCredentials,
+  ItxRoot,
+  Project,
+  UnauthenticatedItx,
+} from "./src/types.ts";
 
 const DEFAULT_BASE_URL = "http://localhost:8791";
 

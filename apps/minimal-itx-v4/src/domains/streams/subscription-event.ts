@@ -1,6 +1,6 @@
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import type { Stream } from "../../types.ts";
 import { durableObjectProcessorSubscriber } from "./engine/shared/callable-subscriber.ts";
-import type { Stream } from "./types.ts";
 
 /**
  * Builds a `subscription-configured` event that points a stream at a named

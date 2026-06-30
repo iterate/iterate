@@ -12,7 +12,7 @@
 // announcements) and mutate runtime state (dial configured-but-unconnected
 // outbound subscribers, close connections whose configuration disappeared).
 
-import type { StreamEvent, StreamEventInput } from "../../../types.ts";
+import type { StreamEvent, StreamEventInput } from "../../../../../types.ts";
 import type { StreamDurableObject } from "../../../stream-durable-object.ts";
 import { StreamSubscriptionRpcTarget } from "../../../subscription-handle.ts";
 import { getEventSchema } from "../../shared/stream-processors.ts";

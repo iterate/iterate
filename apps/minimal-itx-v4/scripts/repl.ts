@@ -4,8 +4,7 @@ import process from "node:process";
 import { RpcTarget } from "capnweb";
 import type { RpcStub } from "capnweb";
 import { connectItx, DEFAULT_ITX_BASE_URL } from "../src/client.ts";
-import type { ItxAuthToken, ItxRoot } from "../src/domains/itx/types.ts";
-import type { Project } from "../src/domains/projects/types.ts";
+import type { ItxAuthToken, ItxRoot, Project } from "../src/types.ts";
 
 const baseUrl = (
   process.env.ITX_BASE ||

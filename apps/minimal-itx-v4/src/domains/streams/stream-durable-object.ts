@@ -2,7 +2,12 @@ import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
 import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import type { Stream, StreamEvent, StreamEventInput, StreamSubscriptionHandle } from "./types.ts";
+import type {
+  Stream,
+  StreamEvent,
+  StreamEventInput,
+  StreamSubscriptionHandle,
+} from "../../types.ts";
 import type { ProcessEventBatch } from "./engine/types.ts";
 import {
   StreamEvent as StreamEventSchema,

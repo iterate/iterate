@@ -5,13 +5,13 @@ import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
 } from "../streams/engine/workers/stream-processor-host.ts";
-import { StreamRpcTarget } from "../streams/rpc-targets.ts";
+import { StreamRpcTarget } from "../../rpc-targets.ts";
 import type { Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { stableSha256 } from "../workers/source-cache-key.ts";
 import type { ResolvedWorkerSource } from "../workers/worker-loader.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import type { CommitRepoFilesInput, CommitRepoFilesResult, RepoFileChange } from "./types.ts";
+import type { CommitRepoFilesInput, CommitRepoFilesResult, RepoFileChange } from "../../types.ts";
 import { RepoArtifactNameCodec } from "./repo-artifact-name.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";

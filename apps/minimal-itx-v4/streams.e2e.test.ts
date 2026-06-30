@@ -7,7 +7,7 @@
 
 import { expect, test } from "vitest";
 import { TRUSTED_INTERNAL_ITX_TOKEN } from "./src/auth.ts";
-import type { StreamEvent, StreamEventBatch } from "./src/domains/streams/types.ts";
+import type { StreamEvent, StreamEventBatch } from "./src/types.ts";
 import { withItxSession } from "./test-helpers.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);

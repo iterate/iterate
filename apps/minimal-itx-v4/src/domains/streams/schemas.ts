@@ -2,7 +2,7 @@ import { z } from "zod";
 import type {
   StreamEvent as StreamEventType,
   StreamEventInput as StreamEventInputType,
-} from "./types.ts";
+} from "../../types.ts";
 
 export const StreamEventInput = z.object({
   type: z.string(),

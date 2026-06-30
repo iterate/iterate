@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import type { Stream, StreamEvent, StreamEventInput } from "../types.ts";
+import type { Stream, StreamEvent, StreamEventInput } from "../../../types.ts";
 import {
   assertObjectProcessorState,
   getConsumedEventDefinition,

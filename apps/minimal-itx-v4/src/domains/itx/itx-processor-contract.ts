@@ -5,7 +5,7 @@ import {
   CapabilityRecord,
   CapabilityRevokedPayload,
 } from "./schemas.ts";
-export type { CapabilityRecord } from "./types.ts";
+export type { CapabilityRecord } from "../../types.ts";
 
 export const ItxProcessorContract = defineProcessorContract({
   slug: "itx-v2",
