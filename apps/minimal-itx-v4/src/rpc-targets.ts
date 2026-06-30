@@ -40,8 +40,6 @@ import type {
   McpClientCollection,
   OpenApiCollection,
   Project,
-  CapabilityDescription,
-  ProjectDescription,
   ProjectCollection,
   ProjectRepoCollection,
   ProjectStreamCollection,
@@ -629,7 +627,13 @@ export class ProjectRpcTarget extends RpcTarget implements Project {
     ]);
     return {
       ...project,
-      capabilities: [...projectBuiltinCapabilities(), ...mountedCapabilities],
+      capabilities: [
+        ...PROJECT_BUILTIN_CAPABILITY_PATHS.map((path) => ({
+          path: [path],
+          type: "builtin" as const,
+        })),
+        ...mountedCapabilities,
+      ],
     };
   }
 
@@ -778,10 +782,6 @@ async function projectProcessorState(projectId: string) {
   const processor = await project.processor;
   const { state } = await processor.snapshot();
   return state;
-}
-
-function projectBuiltinCapabilities(): CapabilityDescription[] {
-  return PROJECT_BUILTIN_CAPABILITY_PATHS.map((path) => ({ path: [path], type: "builtin" }));
 }
 
 class ItxRootRpcTarget extends RpcTarget implements ItxRoot {

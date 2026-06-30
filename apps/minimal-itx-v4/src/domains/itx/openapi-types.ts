@@ -54,7 +54,7 @@ export function deriveOpenApiCapabilityTypes(spec: Record<string, unknown>): str
   const members = [
     "  describe(): Promise<{ instructions: string; types: string }>;",
     ...listOpenApiOperations(spec).flatMap((operation) => {
-      if (!isCallableProperty(operation.operationId)) return [];
+      if (!/^[A-Za-z_$][\w$]*$/.test(operation.operationId)) return [];
       return [
         ...(operation.summary ? [``, `  /** ${escapeJsDoc(operation.summary)} */`] : [""]),
         `  ${operation.operationId}(input: ${operationInputType(operation, spec)}): Promise<${operationResponseType(operation, spec)}>;`,
@@ -123,8 +123,4 @@ export function isObjectSchema(schema: JsonSchema | undefined): schema is Schema
     typeof schema === "object" &&
     (schema.type === "object" || (schema.type === undefined && schema.properties != null))
   );
-}
-
-function isCallableProperty(name: string): boolean {
-  return /^[A-Za-z_$][\w$]*$/.test(name);
 }
