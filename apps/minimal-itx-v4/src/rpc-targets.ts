@@ -16,7 +16,7 @@ import { ProjectEgressRpcTarget, projectEgressFetcher } from "./domains/projects
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "./domains/repos/project-repo.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
-import { subscriptionConfiguredEvent } from "./domains/streams/subscription-event.ts";
+import { resolveStreamPath, subscriptionConfiguredEvent } from "./domains/streams/util.ts";
 import { WorkerRef as WorkerRefSchema } from "./domains/workers/schemas.ts";
 import { WorkerRunner } from "./domains/workers/worker-runner.ts";
 import type {
@@ -113,25 +113,6 @@ class StreamCollectionRpcTarget extends RpcTarget implements StreamCollection {
       path,
     });
   }
-}
-
-// [[ This helper method should not be in here - it should be in domains/streams in some utility module ]]
-function resolveStreamPath(basePath: string, streamPath: string): string {
-  const segments = streamPath.startsWith("/") ? [] : basePath.split("/").filter(Boolean);
-  for (const segment of streamPath.split("/")) {
-    if (segment === "" || segment === ".") continue;
-    if (segment === "..") {
-      if (segments.length === 0) {
-        throw new Error(
-          `stream path "${streamPath}" escapes the stream root (resolved from "${basePath}")`,
-        );
-      }
-      segments.pop();
-      continue;
-    }
-    segments.push(segment);
-  }
-  return segments.length === 0 ? "/" : `/${segments.join("/")}`;
 }
 
 function projectRootStream(props: { auth: ItxAuth; projectId: string }) {
