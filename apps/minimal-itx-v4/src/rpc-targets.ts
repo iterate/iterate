@@ -95,6 +95,7 @@ export class StreamRpcTarget extends RpcTarget implements Stream {
 
   subscribe(args: Parameters<Stream["subscribe"]>[0]) {
     return this.durableObjectStub.subscribe(
+      // [[ Why is this needed? some type invocation depth or circles? ]]
       args as Parameters<typeof this.durableObjectStub.subscribe>[0],
     );
   }
@@ -115,6 +116,7 @@ class StreamCollectionRpcTarget extends RpcTarget implements StreamCollection {
   }
 }
 
+// [[ This helper method should not be in here - it should be in domains/streams in some utility module ]]
 function resolveStreamPath(basePath: string, streamPath: string): string {
   const segments = streamPath.startsWith("/") ? [] : basePath.split("/").filter(Boolean);
   for (const segment of streamPath.split("/")) {
@@ -266,6 +268,7 @@ class AgentRpcTarget extends RpcTarget implements Agent {
     return withInvokeCapabilityFallback(this);
   }
 
+  // [[ Should this really be a method? ]]
   #itx() {
     return env.ITX.getByName(
       DurableObjectNameCodec.stringify({
@@ -323,6 +326,8 @@ class AgentRpcTarget extends RpcTarget implements Agent {
     rejectBuiltinCollision(this, input.path);
     await this.#ensureProcessorsConfigured();
     const provision = await this.#itx().provideCapability(input);
+    // [[ Why can we not just write return this.itx.provideCapability(input) ]]
+
     return new CapabilityProvisionRpcTarget({
       ctx: this.props.ctx,
       path: input.path,
@@ -332,6 +337,7 @@ class AgentRpcTarget extends RpcTarget implements Agent {
   }
 
   async revokeCapability(input: RevokeCapabilityInput) {
+    // [[ This line is v suspicious - should delete and turn into one-liner]]
     await this.#ensureProcessorsConfigured();
     await this.#itx().revokeCapability(input);
   }
@@ -345,6 +351,8 @@ class AgentRpcTarget extends RpcTarget implements Agent {
     await this.#ensureProcessorsConfigured();
     return await this.#itx().invokeCapability({ args, path });
   }
+
+  // [[ This seems super bad and messy - it's an expensive ensureProcessorsConfigured method that is called A LOT. We should be able to avoid it - and even if there are race conditions etc, it should be fine, because the processors should attach from _the beginning_. is this not the case?]]
 
   // Configure this agent's AGENT + ITX processors on its stream the first time
   // any capability op runs. `subscriptionKey` is the sole identity (no
@@ -448,6 +456,9 @@ class WorkerRpcTarget extends RpcTarget {
     // Keep every dynamic worker invocation behind WorkerRunner. Stateless
     // entrypoints, stateful DO facets, provided worker capabilities, and
     // project.worker all then share the same loader/egress/ITX binding rules.
+    // Return values pass through untouched on purpose: an RpcTarget returned by
+    // the dynamic worker must remain a live object-capability so Cap'n Web can
+    // serialize it as a chained/pipelined stub for the outer caller.
     return await this.#runner.invokeCapability({
       args,
       path,
@@ -521,8 +532,10 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
   }
 }
 
+// [[ Why is there a random type here? ]]
 type ProjectRpcTargetProps = { auth: ItxAuth; ctx: CfExecutionContext; projectId: string };
 
+// [[ Do we really need this to be parameterised by props type? this seems unnecessarily messy - can we simplify ]]
 class ProjectRpcTarget<Props extends ProjectRpcTargetProps = ProjectRpcTargetProps>
   extends RpcTarget
   implements Project
@@ -543,6 +556,8 @@ class ProjectRpcTarget<Props extends ProjectRpcTargetProps = ProjectRpcTargetPro
     return this.durableObjectStub.describe();
   }
 
+  // [[ this should not be a method, right? maybe a getter? ]]
+
   #itx() {
     return env.ITX.getByName(
       DurableObjectNameCodec.stringify({ path: "/", projectId: this.props.projectId }),
@@ -552,6 +567,7 @@ class ProjectRpcTarget<Props extends ProjectRpcTargetProps = ProjectRpcTargetPro
   async provideCapability(input: ProvideCapabilityInput) {
     rejectBuiltinCollision(this, input.path);
     const provision = await this.#itx().provideCapability(input);
+    // [[ why is this not returned from #itx.provideCapability? ]]
     return new CapabilityProvisionRpcTarget({
       ctx: this.props.ctx,
       path: input.path,
@@ -622,6 +638,16 @@ class ProjectRpcTarget<Props extends ProjectRpcTargetProps = ProjectRpcTargetPro
   }
 }
 
+/**
+ * AgentItxRpcTarget is what `itx` is in the context of an agent. So when the LLM writes functions
+ * async (itx) => {...}, itx is the same as ProjectRpcTarget, except it ALSO has this .agent getter,
+ * which is an itx capability host itself and we can have things like
+ * itx.agent.sendMessage({ message }) available to the agent
+ *
+ * But itx.streams.get("/some/stream") also works, because AgentItxRpcTarget extends ProjectRpcTarget
+ *
+ * This is a little bit messy but fine for now
+ */
 export class AgentItxRpcTarget
   extends ProjectRpcTarget<ProjectRpcTargetProps & { agentPath: string }>
   implements AgentItx

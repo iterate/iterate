@@ -2,6 +2,7 @@ import type { z } from "zod";
 import type { Stream, StreamEvent, StreamEventInput } from "../../../types.ts";
 import {
   assertObjectProcessorState,
+  buildEvent as buildContractEvent,
   getConsumedEventDefinition,
   getEmittedEventDefinition,
   getEventInputSchema,
@@ -14,6 +15,7 @@ import {
   type EventDefinition,
   type ProcessorEventInput,
   type ProcessorState,
+  type ResolvedEventInput,
 } from "./shared/stream-processors.ts";
 
 type MaybePromise<T> = T | Promise<T>;
@@ -351,15 +353,14 @@ export abstract class StreamProcessor<
    */
   protected async prepare(): Promise<void> {}
 
-  /** Build and validate an append input for any event this processor consumes or emits. */
-  protected buildEvent(event: ProcessorEventInput<Contract>): ProcessorEventInput<Contract> {
-    return this.#parseEventInput({
+  /** Build and validate an append input for any event resolvable by this processor contract. */
+  protected buildEvent(
+    event: ResolvedEventInput<Contract> & { type: string },
+  ): ResolvedEventInput<Contract> & { type: string } {
+    return buildContractEvent({
+      contract: this.contract,
       event,
-      eventDefinition:
-        getEmittedEventDefinition({ contract: this.contract, eventType: event.type }) ??
-        getConsumedEventDefinition({ contract: this.contract, eventType: event.type }),
-      kind: "consumed or emitted",
-    }) as ProcessorEventInput<Contract>;
+    });
   }
 
   /** Build and validate an append input for an event listed in `contract.consumes`. */

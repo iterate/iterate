@@ -5,6 +5,7 @@ import type {
   EventDefinition,
   EventDefinitionForType,
   ProcessorDepsOf,
+  ResolvedEventType,
 } from "@iterate-com/shared/streams/stream-processors";
 import {
   StreamEvent as StreamEventSchema,
@@ -65,6 +66,16 @@ type InputFromType<
   Type extends string,
 > = Type extends unknown
   ? InputFromDefinitionForType<EventDefinitionForType<Events, ProcessorDeps, Type>, Type>
+  : never;
+
+export type ResolvedEventInput<Contract> = Contract extends {
+  events: EventCatalog;
+}
+  ? InputFromType<
+      ContractEventCatalog<Contract>,
+      ProcessorDepsOf<Contract>,
+      ResolvedEventType<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>>
+    >
   : never;
 
 type InputFromTypes<
@@ -150,6 +161,30 @@ export function getEventInputSchema<
     TypedStreamEventInput<Type, z.output<PayloadSchema>>,
     TypedStreamEventInput<Type, z.input<PayloadSchema>>
   >;
+}
+
+export function buildEvent<
+  const Contract extends {
+    slug?: string;
+    events: EventCatalog;
+    processorDeps?: readonly unknown[];
+  },
+  const Event extends ResolvedEventInput<Contract> & { type: string },
+>(args: { contract: Contract; event: Event }): Event {
+  const eventDefinition = getResolvedEventDefinition({
+    contract: args.contract,
+    eventType: args.event.type,
+  });
+
+  if (eventDefinition === undefined) {
+    const processor = args.contract.slug == null ? "contract" : `processor "${args.contract.slug}"`;
+    throw new Error(`${processor} cannot build unresolved event "${args.event.type}".`);
+  }
+
+  return getEventInputSchema({
+    type: args.event.type,
+    payloadSchema: eventDefinition.payloadSchema,
+  }).parse(args.event) as Event;
 }
 
 export function getEmittedEventDefinition(args: {

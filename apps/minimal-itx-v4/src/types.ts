@@ -1,3 +1,7 @@
+// [[ There should be a comment at the top of this file explaining the whole system in a nutshell ]]
+
+// [[ Bottom of file! ]]
+
 export type JsonValue =
   | string
   | number
@@ -5,6 +9,8 @@ export type JsonValue =
   | null
   | JsonValue[]
   | { [key: string]: JsonValue };
+
+// [[ This worker stuff is decent and well commented but should be further down the file ]]
 
 /**
  * Declarative source for a dynamic worker.
@@ -75,6 +81,7 @@ export interface WorkerCollection {
   get<T extends object = Record<string, unknown>>(ref: WorkerRef): WorkerCapability<T>;
 }
 
+// [[ Needs docstrings - should be relatively close to top of file ]]
 export interface Stream {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   at(path: string): Stream;
@@ -147,13 +154,17 @@ export type StreamEventBatch = {
   state: unknown;
 };
 
+// [[ Why is this a named type and not inline? Also bad type name ]]
 export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
 
+// [[ Why is this a named type and not inline? ]]
 export type ProcessorRuntimeState = {
   snapshot: { offset: number; state: unknown };
   runtime?: Record<string, unknown>;
 };
 
+// [[ A bit of a smell that this is | Promise ]]
+// [[ Why is this a named type and not inline? ]]
 export type GetProcessorRuntimeState = () => ProcessorRuntimeState | Promise<ProcessorRuntimeState>;
 
 export type StreamSubscriptionHandle = Disposable & {
@@ -162,6 +173,7 @@ export type StreamSubscriptionHandle = Disposable & {
   unsubscribe(): void;
 };
 
+// [[ Why is this a named type and not inline? ]]
 export type RepoFileChange =
   | {
       path: string;
@@ -172,6 +184,7 @@ export type RepoFileChange =
       delete: true;
     };
 
+// [[ Why is this a named type and not inline? ]]
 export type CommitRepoFilesInput = {
   author?: { email: string; name: string };
   branch?: string;
@@ -179,6 +192,7 @@ export type CommitRepoFilesInput = {
   message: string;
 };
 
+// [[ Why is this a named type and not inline? ]]
 export type CommitRepoFilesResult = {
   branch: string;
   changedPaths: string[];
@@ -197,15 +211,19 @@ export interface RepoCollection {
   get(path: string): Repo;
 }
 
+// [[ Why are we dragging this around here? where is it used? Seems a little messy - should if anything be at very bottom and well commented ]]
 export type CfExecutionContext = {
   exports: ExecutionContext["exports"];
   waitUntil?: ExecutionContext["waitUntil"];
 };
 
+// [[ Should be at top of file... ]]
 export interface UnauthenticatedItx {
   authenticate(input: ItxAuthCredentials): ItxRoot;
 }
 
+// [[ ... and followed directly by this and then ProjectCollection ]]
+// [[ Needs to gain StreamCollection (which can even access "global" streams with projectId null) and RepoCollection (which can also access "global" repos with projectId null) ]]
 export interface ItxRoot {
   projects: ProjectCollection;
   whoami(): string;
@@ -233,6 +251,7 @@ export interface ItxCapabilityHost {
   revokeCapability(input: RevokeCapabilityInput): Promise<void>;
 }
 
+// [[ Needs docstring - in general they ALL do ]]
 export interface CapabilityProvision extends Disposable {
   readonly path: string[];
   readonly providedAtOffset: number;
@@ -305,6 +324,7 @@ export interface AgentCollection {
   get(path: string): Agent;
 }
 
+// [[ I think instead of extends ItxCapabilityHost, we can just inline it here and  ]]
 export interface Project extends ItxCapabilityHost {
   streams: StreamCollection;
   describe(): Promise<{ projectId: string; name: string }>;
@@ -322,6 +342,7 @@ export interface ProjectCollection {
   list(): string[];
 }
 
+// [[ Not sure this belongs here - it just happens to be the shape of worker.js right now but obvs it is user-defined ]]
 export interface ProjectWorker {
   fetch(req: Request): Promise<Response>;
   processEvent(input: { event: StreamEvent }): Promise<void>;

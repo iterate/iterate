@@ -666,6 +666,112 @@ describe("minimal itx v4", () => {
     });
   });
 
+  test("Dynamic workers can return RpcTarget capabilities that keep chaining", async () => {
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+    using project = itx.projects.create({ slug: `returned-rpc-target-${crypto.randomUUID()}` });
+
+    type ReturnedTool = {
+      child: { value(): Promise<{ label: string; via: string }> };
+      greet(name: string): Promise<{ greeting: string; via: string }>;
+    };
+    type FactoryWorker = Disposable & {
+      makeTool(label: string): PromiseLike<ReturnedTool> & ReturnedTool;
+    };
+
+    const source = {
+      mainModule: "returned-rpc-target.js",
+      modules: {
+        "returned-rpc-target.js": `
+          import { DurableObject, RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+
+          class ChildTarget extends RpcTarget {
+            constructor(label) {
+              super();
+              this.label = label;
+            }
+
+            value() {
+              return { label: this.label, via: "child-target" };
+            }
+          }
+
+          class ToolTarget extends RpcTarget {
+            constructor(label) {
+              super();
+              this.label = label;
+            }
+
+            greet(name) {
+              return { greeting: this.label + ":" + name, via: "tool-target" };
+            }
+
+            get child() {
+              return new ChildTarget(this.label);
+            }
+          }
+
+          export class FactoryEntrypoint extends WorkerEntrypoint {
+            makeTool(label) {
+              return new ToolTarget(label);
+            }
+          }
+
+          export class FactoryDurableObject extends DurableObject {
+            makeTool(label) {
+              return new ToolTarget(label);
+            }
+          }
+        `,
+      },
+      type: "inline",
+    } as const;
+
+    using statelessWorker = project.workers.get({
+      entrypoint: "FactoryEntrypoint",
+      path: "/",
+      source,
+      type: "stateless",
+    }) as unknown as FactoryWorker;
+    const statelessTool = await statelessWorker.makeTool("stateless-awaited");
+    expect(await statelessTool.greet("Ada")).toEqual({
+      greeting: "stateless-awaited:Ada",
+      via: "tool-target",
+    });
+    expect(await statelessTool.child.value()).toEqual({
+      label: "stateless-awaited",
+      via: "child-target",
+    });
+    expect(await statelessWorker.makeTool("stateless-pipelined").greet("Bob")).toEqual({
+      greeting: "stateless-pipelined:Bob",
+      via: "tool-target",
+    });
+
+    using statefulWorker = project.workers.get({
+      className: "FactoryDurableObject",
+      durableWorkerKey: `returned-target-${crypto.randomUUID()}`,
+      path: "/",
+      source,
+      type: "stateful",
+    }) as unknown as FactoryWorker;
+    const statefulTool = await statefulWorker.makeTool("stateful-awaited");
+    expect(await statefulTool.greet("Ada")).toEqual({
+      greeting: "stateful-awaited:Ada",
+      via: "tool-target",
+    });
+    expect(await statefulTool.child.value()).toEqual({
+      label: "stateful-awaited",
+      via: "child-target",
+    });
+    expect(await statefulWorker.makeTool("stateful-pipelined").greet("Bob")).toEqual({
+      greeting: "stateful-pipelined:Bob",
+      via: "tool-target",
+    });
+  });
+
   test("Worker capabilities cover project/agent, stateful/stateless, repo/inline refs and env.ITX cross-calls", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
