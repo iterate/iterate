@@ -375,6 +375,37 @@ test("type-aware lint service refreshes changed files without restarting the pro
   assert.deepEqual(secondProperties, ["f"]);
 });
 
+test("type-aware lint service keeps all open files in snapshot updates", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/mechanical-class-impl": "off",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
+  const service = new TypeAwareLintService({ cwd: fixture.root });
+  using _service = { [Symbol.dispose]: () => service.close() };
+  const firstFile = join(fixture.root, "first.ts");
+  const secondFile = join(fixture.root, "second.ts");
+  const tsconfigFile = join(fixture.root, "tsconfig.json");
+  const updates: NonNullable<Parameters<TypeAwareLintService["updateSnapshot"]>[0]>[] = [];
+  service.updateSnapshot = (params) => {
+    if (!params) throw new Error("Expected snapshot update params");
+    updates.push(params);
+  };
+
+  service.openFile(firstFile);
+  service.openFile(secondFile);
+
+  assert.deepEqual(
+    updates.map((update) => update.openFiles),
+    [[firstFile], [firstFile, secondFile]],
+  );
+  assert.deepEqual(
+    updates.map((update) => update.openProjects),
+    [[tsconfigFile], [tsconfigFile]],
+  );
+});
+
 test("type-aware lint service can read unsaved text overlays", () => {
   using fixture = createOxlintFixture({
     rules: {

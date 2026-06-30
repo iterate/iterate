@@ -109,7 +109,10 @@ export class TypeAwareLintService {
     if (this.openFiles.has(fileName)) return;
     this.openFiles.add(fileName);
     this.projectByFile.clear();
-    this.updateSnapshot({ openFiles: [fileName] });
+    this.updateSnapshot({
+      openFiles: [...this.openFiles],
+      openProjects: this.getTsconfigFiles(),
+    });
   }
 
   updateSnapshot(params: Parameters<API["updateSnapshot"]>[0]) {
