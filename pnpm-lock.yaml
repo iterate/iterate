@@ -53,7 +53,7 @@ patchedDependencies:
     hash: c837ce6f9ef4f420a7d2360823f65ec7a6c649c756ae76f7c12baf906f13c5f5
     path: patches/alchemy@0.83.3.patch
   capnweb@0.8.0:
-    hash: 151ae266a55bdbc94dadef0751b3921aefb46c8c28b6a206a7b47edd52a09ca4
+    hash: e344999b4917e71122b7b2b1838077c1837447247e8e5c7c9c63dfedd913db24
     path: patches/capnweb@0.8.0.patch
 
 importers:
@@ -568,7 +568,7 @@ importers:
         version: 0.11.0(@babel/core@7.29.0)(@babel/runtime@7.28.6)(@cloudflare/codemode@0.3.4(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@tanstack/ai@0.10.2)(ai@6.0.159(zod@4.3.6))(zod@4.3.6))(@cloudflare/workers-types@4.20260426.1)(@tanstack/ai@0.10.2)(ai@6.0.159(zod@4.3.6))(react@19.2.4)(rolldown@1.1.0)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(zod@4.3.6)
       capnweb:
         specifier: https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz
-        version: https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz(patch_hash=151ae266a55bdbc94dadef0751b3921aefb46c8c28b6a206a7b47edd52a09ca4)
+        version: https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz(patch_hash=e344999b4917e71122b7b2b1838077c1837447247e8e5c7c9c63dfedd913db24)
       captun:
         specifier: https://pkg.pr.new/captun@6aa1207
         version: https://pkg.pr.new/captun@6aa1207(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(ws@8.19.0)
@@ -819,7 +819,7 @@ importers:
         version: 3.14.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       capnweb:
         specifier: https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz
-        version: https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz(patch_hash=151ae266a55bdbc94dadef0751b3921aefb46c8c28b6a206a7b47edd52a09ca4)
+        version: https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz(patch_hash=e344999b4917e71122b7b2b1838077c1837447247e8e5c7c9c63dfedd913db24)
       react:
         specifier: ^19.2.0
         version: 19.2.4
@@ -22514,13 +22514,13 @@ snapshots:
 
   caniuse-lite@1.0.30001793: {}
 
-  capnweb@https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz(patch_hash=151ae266a55bdbc94dadef0751b3921aefb46c8c28b6a206a7b47edd52a09ca4): {}
+  capnweb@https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz(patch_hash=e344999b4917e71122b7b2b1838077c1837447247e8e5c7c9c63dfedd913db24): {}
 
   captun@https://pkg.pr.new/captun@6aa1207(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(vite@8.0.16(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(ws@8.19.0):
     dependencies:
       '@inquirer/prompts': 8.4.3(@types/node@25.6.0)
       '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      capnweb: https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz(patch_hash=151ae266a55bdbc94dadef0751b3921aefb46c8c28b6a206a7b47edd52a09ca4)
+      capnweb: https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz(patch_hash=e344999b4917e71122b7b2b1838077c1837447247e8e5c7c9c63dfedd913db24)
       trpc-cli: 0.14.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.4.3)
       zod: 4.4.3
     optionalDependencies:
@@ -22540,7 +22540,7 @@ snapshots:
     dependencies:
       '@inquirer/prompts': 8.4.3(@types/node@25.6.0)
       '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      capnweb: https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz(patch_hash=151ae266a55bdbc94dadef0751b3921aefb46c8c28b6a206a7b47edd52a09ca4)
+      capnweb: https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz(patch_hash=e344999b4917e71122b7b2b1838077c1837447247e8e5c7c9c63dfedd913db24)
       trpc-cli: 0.14.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.4.3)
       zod: 4.4.3
     optionalDependencies:
