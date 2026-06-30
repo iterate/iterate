@@ -30,13 +30,6 @@ export function resolveStreamPath(basePath: string, streamPath: string): string 
   return segments.length === 0 ? "/" : `/${segments.join("/")}`;
 }
 
-export function durableObjectProcessorSubscriptionKey(input: {
-  durableObjectName: string;
-  processorSlug: string;
-}): string {
-  return `${input.durableObjectName}#${input.processorSlug}`;
-}
-
 /**
  * Builds the public `events.iterate.com/stream/subscription-configured` fact
  * for a processor hosted by one of this app's Durable Objects.
@@ -83,11 +76,7 @@ export function buildDurableObjectProcessorSubscriptionConfiguredEvent(input: {
       ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
       payload: {
         subscriptionKey:
-          input.subscriptionKey ??
-          durableObjectProcessorSubscriptionKey({
-            durableObjectName: input.durableObjectName,
-            processorSlug: input.processorSlug,
-          }),
+          input.subscriptionKey ?? `${input.durableObjectName}#${input.processorSlug}`,
         subscriber: {
           address,
           type: input.subscriberType,

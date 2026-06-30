@@ -20,15 +20,15 @@ const MAX_DURABLE_OBJECT_NAME_BYTES = 256;
 const GLOBAL_DURABLE_OBJECT_HOST = "global";
 const DURABLE_OBJECT_HOST_SUFFIX = ".iterate";
 
-export type DurableObjectName = string;
+type DurableObjectName = string;
 
-export type ProjectDurableObjectAddressInput = {
+type ProjectDurableObjectAddressInput = {
   projectId: string;
   path: string;
   props?: Record<string, string>;
 };
 
-export type DurableObjectAddressInput = {
+type DurableObjectAddressInput = {
   projectId: string | null;
   path: string;
   props?: Record<string, string>;
@@ -40,7 +40,7 @@ export type DurableObjectAddress = {
   props: Record<string, string>;
 };
 
-export type ProjectDurableObjectAddress = {
+type ProjectDurableObjectAddress = {
   projectId: string;
   path: string;
   props: Record<string, string>;

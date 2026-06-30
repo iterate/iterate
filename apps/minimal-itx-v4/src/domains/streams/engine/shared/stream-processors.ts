@@ -8,8 +8,6 @@ import type {
   StreamEventInput as BaseStreamEventInput,
 } from "../../../../types.ts";
 
-export type { StreamEvent, StreamEventInput } from "../../../../types.ts";
-
 // =============================================================================
 // Stream processor contract model.
 //
@@ -19,17 +17,6 @@ export type { StreamEvent, StreamEventInput } from "../../../../types.ts";
 // app's non-generic `StreamEvent` / `StreamEventInput` types with the
 // `<Type, Payload>` generics the contract machinery needs.
 // =============================================================================
-
-export type ProcessorIdempotencyKeyProcessor =
-  | string
-  | { slug: string }
-  | { contract: { slug: string } };
-
-export type ProcessorIdempotencyKeyArgs = {
-  processor: ProcessorIdempotencyKeyProcessor;
-  key: string;
-  sourceEvent?: Pick<BaseStreamEvent, "offset">;
-};
 
 export type EventExample<Payload = unknown> = {
   description: string;
@@ -48,8 +35,7 @@ export type EventDefinition<
 
 export type EventCatalog = Record<string, EventDefinition<string, unknown, unknown>>;
 
-export type NoInferValue<Value> = [Value][Value extends unknown ? 0 : never];
-export type ProcessorStateObject = Record<string, unknown>;
+type NoInferValue<Value> = [Value][Value extends unknown ? 0 : never];
 
 type EventDefinitionWithPayloadExamples<Value> = Value extends {
   payloadSchema: infer PayloadSchema extends z.ZodType;
@@ -61,7 +47,7 @@ type EventDefinitionWithPayloadExamples<Value> = Value extends {
     : Value
   : never;
 
-export type EventCatalogWithPayloadExamples<Events extends EventCatalog> = {
+type EventCatalogWithPayloadExamples<Events extends EventCatalog> = {
   [Key in keyof Events]: EventDefinitionWithPayloadExamples<Events[Key]>;
 };
 
@@ -121,7 +107,7 @@ export type EventTypeFromProcessorDeps<ProcessorDeps extends readonly unknown[]>
 /**
  * Looks up one event definition by string key from one processor dependency.
  */
-export type EventDefinitionFromProcessorDep<
+type EventDefinitionFromProcessorDep<
   ProcessorDep,
   Type extends string,
 > = ProcessorDep extends unknown
@@ -130,7 +116,7 @@ export type EventDefinitionFromProcessorDep<
     : never
   : never;
 
-export type EventDefinitionFromProcessorDeps<
+type EventDefinitionFromProcessorDeps<
   ProcessorDeps extends readonly unknown[],
   Type extends string,
 > = EventDefinitionFromProcessorDep<ProcessorDeps[number], Type>;
@@ -141,7 +127,7 @@ export type EventDefinitionFromProcessorDeps<
  * Local events win over dependency events in the type-level lookup, but runtime
  * validation rejects duplicate ownership.
  */
-export type EventDefinitionForType<
+type EventDefinitionForType<
   Events extends EventCatalog,
   ProcessorDeps extends readonly unknown[],
   Type extends string,
@@ -252,13 +238,11 @@ export type EmittedInput<Contract> = Contract extends {
   ? InputFromTypes<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>, Emits>
   : never;
 
-export type ProcessorEventInput<Contract> = ConsumedInput<Contract> | EmittedInput<Contract>;
-
 // =============================================================================
 // Processor contract shape and authoring-time input types.
 // =============================================================================
 
-export type ProcessorContractShape<
+type ProcessorContractShape<
   StateSchema extends z.ZodType = z.ZodType,
   Events extends EventCatalog = EventCatalog,
   ProcessorDeps extends readonly unknown[] = readonly unknown[],
@@ -321,13 +305,13 @@ export type ProcessorContractShape<
   }): z.output<NoInferValue<StateSchema>> | null | undefined;
 };
 
-export type UnresolvedEventTypes<
+type UnresolvedEventTypes<
   Events extends EventCatalog,
   ProcessorDeps extends readonly unknown[],
   Types extends readonly string[],
 > = Exclude<Types[number], ResolvedEventType<Events, ProcessorDeps>>;
 
-export type UnresolvedConsumedEventTypes<
+type UnresolvedConsumedEventTypes<
   Events extends EventCatalog,
   ProcessorDeps extends readonly unknown[],
   Types extends readonly string[],
@@ -341,19 +325,19 @@ export type UnresolvedConsumedEventTypes<
  * unchanged. If any string is unresolved, this returns `never`, causing the
  * `defineProcessorContract(...)` call to fail where the bad string is written.
  */
-export type ResolvedEventTypesOnly<
+type ResolvedEventTypesOnly<
   Events extends EventCatalog,
   ProcessorDeps extends readonly unknown[],
   Types extends readonly string[],
 > = [UnresolvedEventTypes<Events, ProcessorDeps, Types>] extends [never] ? unknown : never;
 
-export type ResolvedConsumedEventTypesOnly<
+type ResolvedConsumedEventTypesOnly<
   Events extends EventCatalog,
   ProcessorDeps extends readonly unknown[],
   Types extends readonly string[],
 > = [UnresolvedConsumedEventTypes<Events, ProcessorDeps, Types>] extends [never] ? unknown : never;
 
-export type ProcessorContractInput<
+type ProcessorContractInput<
   StateSchema extends z.ZodType,
   Events extends EventCatalog,
   ProcessorDeps extends readonly unknown[],
@@ -373,7 +357,7 @@ export type ProcessorContractInput<
   reduce?: ProcessorContractShape<StateSchema, Events, ProcessorDeps, Consumes, Emits>["reduce"];
 };
 
-export type ProcessorContractInputWithoutDeps<
+type ProcessorContractInputWithoutDeps<
   StateSchema extends z.ZodType,
   Events extends EventCatalog,
   Consumes extends readonly string[],
@@ -405,12 +389,6 @@ export type ProcessorState<Contract> = Contract extends {
 }
   ? z.output<State>
   : never;
-
-export type ProcessorReduction<Contract> = {
-  event: ConsumedEvent<Contract>;
-  previousState: ProcessorState<Contract>;
-  state: ProcessorState<Contract>;
-};
 
 // =============================================================================
 // Runtime event parsers (bound to this app's event schemas).
@@ -568,23 +546,6 @@ export function defineProcessorContract(contract: unknown) {
   return contract;
 }
 
-/**
- * Compile-time exhaustiveness guard for discriminated unions.
- *
- * Use this at the end of `switch (event.type)` in reducers and `processEvent`
- * hooks when the processor should deliberately handle every event in
- * `contract.consumes`.
- */
-export function assertNever(value: never): never {
-  throw new Error(`Unhandled discriminated union member: ${JSON.stringify(value)}`);
-}
-
-export function buildProcessorIdempotencyKey(args: ProcessorIdempotencyKeyArgs): string {
-  const key = `${getProcessorIdempotencySlug(args.processor)}/${args.key}`;
-  if (args.sourceEvent == null) return key;
-  return `${key}@${args.sourceEvent.offset}`;
-}
-
 export function getInitialProcessorState<
   const Contract extends {
     stateSchema: z.ZodType;
@@ -592,58 +553,6 @@ export function getInitialProcessorState<
   },
 >(contract: Contract): ProcessorState<Contract> {
   return contract.stateSchema.parse(contract.initialState) as ProcessorState<Contract>;
-}
-
-export function runProcessorReduce<
-  const Contract extends {
-    events: EventCatalog;
-    processorDeps?: readonly unknown[];
-    consumes: readonly string[];
-    reduce?: (args: {
-      contract: Contract;
-      state: ProcessorState<Contract>;
-      event: ConsumedEvent<Contract>;
-    }) => ProcessorState<Contract> | null | undefined;
-  },
->(args: {
-  event: BaseStreamEvent;
-  processor: { contract: Contract };
-  state: ProcessorState<Contract>;
-}): ProcessorReduction<Contract> | undefined {
-  const previousState = args.state;
-  const eventDefinition = getConsumedEventDefinition({
-    contract: args.processor.contract,
-    eventType: args.event.type,
-  });
-
-  if (eventDefinition == null) {
-    return undefined;
-  }
-
-  // `eventDefinition` was resolved by string lookup across local `events` and
-  // `processorDeps`. Rebuilding the parser from the string key and payload
-  // schema keeps replay and live delivery on the same validation path.
-  const event = getEventSchema({
-    type: args.event.type,
-    payloadSchema: eventDefinition.payloadSchema,
-  }).parse(args.event) as ConsumedEvent<Contract>;
-  const nextState =
-    args.processor.contract.reduce?.({
-      contract: args.processor.contract,
-      state: args.state,
-      event,
-    }) ?? args.state;
-
-  assertObjectProcessorState({
-    processorSlug: getProcessorSlug(args.processor.contract),
-    value: nextState,
-  });
-
-  return {
-    event,
-    previousState,
-    state: nextState,
-  };
 }
 
 /**
@@ -801,10 +710,4 @@ function getProcessorSlug(contract: unknown): string {
   }
 
   return "unknown";
-}
-
-function getProcessorIdempotencySlug(processor: ProcessorIdempotencyKeyProcessor): string {
-  if (typeof processor === "string") return processor;
-  if ("contract" in processor) return processor.contract.slug;
-  return processor.slug;
 }
