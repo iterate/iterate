@@ -305,7 +305,7 @@ class AgentRpcTarget extends RpcTarget implements Agent {
     return `agent ${this.props.projectId}:${this.props.path}`;
   }
 
-  async provideCapability(input: ProvideCapabilityInput) {
+  async provideCapability(input: Parameters<Agent["provideCapability"]>[0]) {
     rejectBuiltinCollision(this, input.path);
     const provision = await this.#itx.provideCapability(input);
 
@@ -320,7 +320,7 @@ class AgentRpcTarget extends RpcTarget implements Agent {
     });
   }
 
-  async revokeCapability(input: RevokeCapabilityInput) {
+  async revokeCapability(input: Parameters<Agent["revokeCapability"]>[0]) {
     await this.#itx.revokeCapability(input);
   }
 
@@ -352,7 +352,7 @@ class WorkerCollectionRpcTarget extends RpcTarget implements WorkerCollection {
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  get<T extends object = Record<string, unknown>>(ref: WorkerRef): WorkerCapability<T> {
+  get<T extends object = Record<string, unknown>>(ref: Parameters<WorkerCollection["get"]>[0]) {
     const parsed = WorkerRefSchema.parse(ref);
     return new WorkerRpcTarget({
       ctx: this.props.ctx,
@@ -478,7 +478,7 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
     });
   }
 
-  list(): string[] {
+  list() {
     return this.props.auth.listAccessibleProjects();
   }
 }
@@ -512,7 +512,7 @@ export class ProjectRpcTarget extends RpcTarget implements Project {
     );
   }
 
-  async provideCapability(input: ProvideCapabilityInput) {
+  async provideCapability(input: Parameters<Project["provideCapability"]>[0]) {
     rejectBuiltinCollision(this, input.path);
     const provision = await this.#itx.provideCapability(input);
     // The ITX Durable Object returns the durable mount coordinates. The public
@@ -526,7 +526,7 @@ export class ProjectRpcTarget extends RpcTarget implements Project {
     });
   }
 
-  async revokeCapability(input: RevokeCapabilityInput) {
+  async revokeCapability(input: Parameters<Project["revokeCapability"]>[0]) {
     await this.#itx.revokeCapability(input);
   }
 
@@ -659,7 +659,7 @@ export class UnauthenticatedItxRpcTarget extends RpcTarget implements Unauthenti
     super();
   }
 
-  authenticate(input: ItxAuthCredentials) {
+  authenticate(input: Parameters<UnauthenticatedItx["authenticate"]>[0]) {
     let auth: ItxAuth | null = null;
 
     if (input.type === "token") {
