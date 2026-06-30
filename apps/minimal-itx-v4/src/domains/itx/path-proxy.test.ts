@@ -1,6 +1,6 @@
 import { RpcStub, RpcTarget } from "capnweb";
 import { describe, expect, it } from "vitest";
-import { createInvokeCapabilityPathProxy, withInvokeCapabilityFallback } from "./path-proxy.ts";
+import { createInvokeCapabilityPathProxy, withInvokeCapabilityFallback } from "./utils.ts";
 
 class HostTarget extends RpcTarget {
   calls: DynamicCall[] = [];

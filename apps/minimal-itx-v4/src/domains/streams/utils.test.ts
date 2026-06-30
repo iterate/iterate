@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveStreamPath } from "./util.ts";
+import { resolveStreamPath } from "./utils.ts";
 
 describe("stream utilities", () => {
   it("resolves child and sibling paths inside the held stream root", () => {

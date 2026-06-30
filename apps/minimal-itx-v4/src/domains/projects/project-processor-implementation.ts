@@ -1,6 +1,6 @@
 import { StreamProcessor } from "../streams/engine/stream-processor.ts";
-import { subscriptionConfiguredEvent } from "../streams/util.ts";
-import { PROJECT_REPO_PATH } from "../repos/project-repo.ts";
+import { subscriptionConfiguredEvent } from "../streams/utils.ts";
+import { PROJECT_REPO_PATH } from "../repos/utils.ts";
 import type { StreamEvent } from "../../types.ts";
 import { ProjectRpcTargetInternals, type ProjectRpcTarget } from "../../rpc-targets.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";

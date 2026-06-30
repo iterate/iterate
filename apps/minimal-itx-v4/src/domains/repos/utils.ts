@@ -6,6 +6,21 @@ type RepoArtifactNameParts = {
 const SEPARATOR = "--";
 const GLOBAL_REPO_ARTIFACT_PROJECT_ID = "global";
 
+/**
+ * The project repo intentionally lives at the project stream root. Keeping the
+ * path here lets project creation, project processors, and worker refs share the
+ * same default repo address instead of each baking in their own `"/"` literal.
+ */
+export const PROJECT_REPO_PATH = "/";
+
+/**
+ * Minimal ITX currently uses one default repo-backed worker source. This shared
+ * filename keeps the public `project.worker` alias and the seeded repo template
+ * pointed at the same module while the broader repo/workers model is still
+ * being proven.
+ */
+export const PROJECT_WORKER_SOURCE_PATH = "worker.js";
+
 function normalizeRepoPath(path: string): string {
   if (path === "") return "/";
   return path.startsWith("/") ? path : `/${path}`;
@@ -40,6 +55,13 @@ function base64UrlDecode(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
+/**
+ * Encodes repo artifact names for Cloudflare Artifacts.
+ *
+ * Project-scoped and deployment-wide repos share one Artifact namespace. The
+ * codec keeps those two scopes unambiguous and makes repo Durable Object names,
+ * tests, and e2e artifact lookups use the same reversible mapping.
+ */
 export const RepoArtifactNameCodec = {
   stringify({ projectId, path }: RepoArtifactNameParts): string {
     const artifactProjectId = projectId ?? GLOBAL_REPO_ARTIFACT_PROJECT_ID;

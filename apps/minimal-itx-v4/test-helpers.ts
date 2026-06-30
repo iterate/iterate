@@ -1,6 +1,6 @@
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import WebSocket from "ws";
-import { withOwnedRpcSession } from "./src/domains/itx/rpc-disposal.ts";
+import { withOwnedRpcSession } from "./src/domains/itx/utils.ts";
 import type {
   Agent,
   ItxAuthCredentials,

@@ -8,15 +8,21 @@ import {
 } from "./auth.ts";
 import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
+import { normalizeAgentPath } from "./domains/agents/utils.ts";
 import { CapabilityProvisionRpcTarget } from "./domains/itx/capability-provision.ts";
-import { itxEntrypointProps, itxEntrypointScopeCacheKey } from "./domains/itx/entrypoint-props.ts";
+import {
+  itxEntrypointProps,
+  itxEntrypointScopeCacheKey,
+  rejectBuiltinCollision,
+  withInvokeCapabilityFallback,
+} from "./domains/itx/utils.ts";
 import { type ProvideCapabilityInput } from "./domains/itx/itx-processor-implementation.ts";
-import { rejectBuiltinCollision, withInvokeCapabilityFallback } from "./domains/itx/path-proxy.ts";
-import { ProjectEgressRpcTarget, projectEgressFetcher } from "./domains/projects/egress.ts";
+import { ProjectEgressRpcTarget } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
-import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "./domains/repos/project-repo.ts";
+import { projectEgressFetcher } from "./domains/projects/utils.ts";
+import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "./domains/repos/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
-import { resolveStreamPath, subscriptionConfiguredEvent } from "./domains/streams/util.ts";
+import { resolveStreamPath, subscriptionConfiguredEvent } from "./domains/streams/utils.ts";
 import { WorkerRef as WorkerRefSchema } from "./domains/workers/schemas.ts";
 import { WorkerRunner } from "./domains/workers/worker-runner.ts";
 import type {
@@ -218,14 +224,6 @@ class RepoCollectionRpcTarget extends RpcTarget implements RepoCollection {
       projectId: this.props.projectId,
     });
   }
-}
-
-function normalizeAgentPath(path: string): string {
-  const normalized = normalizePath(path);
-  if (!normalized.startsWith("/agents/")) {
-    throw new Error(`agent path must start with "/agents/", got "${normalized}"`);
-  }
-  return normalized;
 }
 
 class AgentCollectionRpcTarget extends RpcTarget implements AgentCollection {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sha256Hex, stableSha256 } from "./source-cache-key.ts";
+import { sha256Hex, stableSha256 } from "./utils.ts";
 
 describe("worker source cache keys", () => {
   it("uses standard SHA-256 hex digests", async () => {

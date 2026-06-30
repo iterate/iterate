@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { RepoArtifactNameCodec } from "./repo-artifact-name.ts";
+import { RepoArtifactNameCodec } from "./utils.ts";
 
 describe("RepoArtifactNameCodec", () => {
   test("round-trips project-scoped repo paths", () => {

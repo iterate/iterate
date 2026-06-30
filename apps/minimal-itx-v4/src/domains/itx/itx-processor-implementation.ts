@@ -11,7 +11,7 @@ import type {
   StatelessWorkerRef,
   StreamEvent,
 } from "../../types.ts";
-import { sha256Hex } from "../workers/source-cache-key.ts";
+import { sha256Hex } from "../workers/utils.ts";
 import { WorkerRef as WorkerRefSchema } from "../workers/schemas.ts";
 import type { WorkerRunner } from "../workers/worker-runner.ts";
 import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";

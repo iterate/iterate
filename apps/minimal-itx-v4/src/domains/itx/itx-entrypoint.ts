@@ -3,7 +3,7 @@ import { trustedInternalAuthContext } from "../../auth.ts";
 import type { Env } from "../../env.ts";
 import { AgentItxRpcTarget, ProjectCollectionRpcTarget } from "../../rpc-targets.ts";
 import type { AgentItx, Project } from "../../types.ts";
-import { scopeFromItxEntrypointProps, type ItxEntrypointProps } from "./entrypoint-props.ts";
+import { scopeFromItxEntrypointProps, type ItxEntrypointProps } from "./utils.ts";
 
 export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
   async get(): Promise<AgentItx | Project> {

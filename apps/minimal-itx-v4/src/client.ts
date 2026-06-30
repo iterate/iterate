@@ -4,7 +4,7 @@ import {
   type RpcCompatible as CapnRpcCompatible,
   type RpcStub as CapnRpcStub,
 } from "capnweb";
-import { withOwnedRpcSession } from "./domains/itx/rpc-disposal.ts";
+import { withOwnedRpcSession } from "./domains/itx/utils.ts";
 import type {
   Agent,
   AgentItx,

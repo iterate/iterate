@@ -6,7 +6,7 @@ import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
 } from "../streams/engine/workers/stream-processor-host.ts";
-import { projectEgressFetcher } from "../projects/egress.ts";
+import { projectEgressFetcher } from "../projects/utils.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { WorkerRunner } from "../workers/worker-runner.ts";
 import { ItxProcessorContract } from "./itx-processor-contract.ts";
@@ -15,11 +15,13 @@ import {
   type ProvideCapabilityInput,
   type RunScriptResult,
 } from "./itx-processor-implementation.ts";
-import { itxEntrypointProps, itxEntrypointScopeCacheKey } from "./entrypoint-props.ts";
+import { itxEntrypointProps, itxEntrypointScopeCacheKey } from "./utils.ts";
 
 export class ItxDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
-  // [[ Overly abstract / verbose? can be deleted i hope? ]]
+  // The host-supplied ITX binding scope and Worker Loader cache scope must be
+  // built from the same normalized value, otherwise a worker can load with one
+  // scope key and resolve `env.ITX.get()` against a different path.
   readonly #itxScope = itxEntrypointProps({
     path: this.#name.path,
     projectId: this.#name.projectId,

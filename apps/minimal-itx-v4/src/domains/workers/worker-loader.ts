@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { WorkerRef, WorkerSource } from "../../types.ts";
-import { stableSha256 } from "./source-cache-key.ts";
+import { stableSha256 } from "./utils.ts";
 
 const WORKER_COMPATIBILITY_DATE = "2026-05-01";
 

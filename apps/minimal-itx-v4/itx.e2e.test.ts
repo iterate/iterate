@@ -9,7 +9,7 @@ import { buildUrl, withItxSession } from "./test-helpers.ts";
 import type { ItxWebSocketMessage } from "./test-helpers.ts";
 import type { UnauthenticatedItx } from "./src/types.ts";
 import { TRUSTED_INTERNAL_ITX_TOKEN } from "./src/auth.ts";
-import { RepoArtifactNameCodec } from "./src/domains/repos/repo-artifact-name.ts";
+import { RepoArtifactNameCodec } from "./src/domains/repos/utils.ts";
 import type { WorkerRef } from "./src/types.ts";
 import {
   StreamProcessor,
