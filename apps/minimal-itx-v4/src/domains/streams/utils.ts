@@ -30,8 +30,6 @@ export function resolveStreamPath(basePath: string, streamPath: string): string 
   return segments.length === 0 ? "/" : `/${segments.join("/")}`;
 }
 
-type DurableObjectProcessorSubscriberType = Exclude<ConfiguredStreamSubscriber["type"], "worker">;
-
 export function durableObjectProcessorSubscriptionKey(input: {
   durableObjectName: string;
   processorSlug: string;
@@ -71,7 +69,7 @@ export function buildDurableObjectProcessorSubscriptionConfiguredEvent(input: {
   durableObjectName: string;
   idempotencyKey?: string;
   processorSlug: string;
-  subscriberType: DurableObjectProcessorSubscriberType;
+  subscriberType: Exclude<ConfiguredStreamSubscriber["type"], "worker">;
   subscriptionKey?: string;
 }) {
   const address = DurableObjectNameCodec.parse(input.durableObjectName, {

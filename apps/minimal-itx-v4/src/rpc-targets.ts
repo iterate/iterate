@@ -16,7 +16,6 @@ import {
   rejectBuiltinCollision,
   withInvokeCapabilityFallback,
 } from "./domains/itx/utils.ts";
-import { type ProvideCapabilityInput } from "./domains/itx/itx-processor-implementation.ts";
 import { ProjectEgressRpcTarget } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
@@ -34,14 +33,12 @@ import type {
   AgentItx,
   CfExecutionContext,
   ItxAuth,
-  ItxAuthCredentials,
   ItxRoot,
   Project,
   ProjectCollection,
   ProjectWorker,
   Repo,
   RepoCollection,
-  RevokeCapabilityInput,
   StatelessWorkerRef,
   Stream,
   StreamCollection,

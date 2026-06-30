@@ -13,7 +13,6 @@ import {
   type EmittedInput,
   type EventCatalog,
   type EventDefinition,
-  type ProcessorEventInput,
   type ProcessorState,
   type ResolvedEventInput,
 } from "./shared/stream-processors.ts";

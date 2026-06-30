@@ -136,7 +136,7 @@ describe("StreamProcessor class type inference", () => {
     expectTypeOf(dependency.type).toEqualTypeOf<"events.test/dependency/output">();
     expectTypeOf(dependency.payload.accepted).toMatchTypeOf<boolean>();
 
-    if (false) {
+    function assertInvalidBuildEvents() {
       buildEvent({
         contract: TypeInferenceProcessorContract,
         // @ts-expect-error event type is not owned locally or by processorDeps
@@ -149,6 +149,7 @@ describe("StreamProcessor class type inference", () => {
         event: { type: "events.test/local/output", payload: { total: "1" } },
       });
     }
+    void assertInvalidBuildEvents;
   });
 });
 
@@ -269,7 +270,7 @@ describe("consumes wildcard typing", () => {
     expectTypeOf(local.type).toEqualTypeOf<"events.test/mixed/named">();
     expectTypeOf(local.payload.reason).toMatchTypeOf<string>();
 
-    if (false) {
+    function assertInvalidWildcardBuildEvents() {
       buildEvent({
         contract: WildcardOnlyContract,
         // @ts-expect-error wildcard consumes does not make arbitrary events buildable
@@ -282,6 +283,7 @@ describe("consumes wildcard typing", () => {
         event: { type: "events.test/mixed/unknown", payload: { reason: "nope" } },
       });
     }
+    void assertInvalidWildcardBuildEvents;
   });
 
   it("buildEvent keeps dependency and local narrowing under wildcard consumes", () => {
@@ -303,13 +305,14 @@ describe("consumes wildcard typing", () => {
     // @ts-expect-error dependency event payload does not include local fields
     dependency.payload.value;
 
-    if (false) {
+    function assertInvalidWildcardDependencyBuildEvents() {
       buildEvent({
         contract: WildcardConsumesDependencyContract,
         // @ts-expect-error unknown events are not buildable even though consumes includes "*"
         event: { type: "events.test/wildcard/unknown", payload: { value: "nope" } },
       });
     }
+    void assertInvalidWildcardDependencyBuildEvents;
   });
 
   it("buildEvent does not widen when a structural contract has wildcard emits", () => {
@@ -327,13 +330,14 @@ describe("consumes wildcard typing", () => {
     expectTypeOf(dependency.type).toEqualTypeOf<"events.test/dependency/output">();
     expectTypeOf(dependency.payload.accepted).toMatchTypeOf<boolean>();
 
-    if (false) {
+    function assertInvalidStructuralWildcardBuildEvents() {
       buildEvent({
         contract: StructuralWildcardEmitsContract,
         // @ts-expect-error wildcard emits does not make arbitrary events buildable
         event: { type: "events.test/structural-wildcard/unknown", payload: {} },
       });
     }
+    void assertInvalidStructuralWildcardBuildEvents;
   });
 });
 

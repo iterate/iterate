@@ -174,7 +174,7 @@ describe("stream processor type helpers", () => {
     ).toEqualTypeOf<"events.iterate.test/build-event/dependency-output">();
     expectTypeOf(structuralDependency.payload.accepted).toMatchTypeOf<boolean>();
 
-    if (false) {
+    function assertInvalidBuildEvents() {
       buildEvent({
         contract: WildcardConsumesContract,
         // @ts-expect-error wildcard consumes does not make arbitrary events buildable
@@ -196,6 +196,7 @@ describe("stream processor type helpers", () => {
         event: { type: "events.iterate.test/build-event/not-owned", payload: {} },
       });
     }
+    void assertInvalidBuildEvents;
   });
 
   it("narrows hook append helpers to the processor emits contract", () => {

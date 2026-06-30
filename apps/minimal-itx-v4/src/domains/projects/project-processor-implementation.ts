@@ -12,13 +12,11 @@ const PROJECT_WORKER_READY_ATTEMPTS = 20;
 const PROJECT_WORKER_READY_RETRY_MS = 100;
 const PROJECT_WORKER_READY_URL = "https://minimal-itx-v4.localhost/__itx_project_ready";
 
-type ProjectProcessorDeps = {
-  itx: ProjectRpcTarget;
-};
-
 export class ProjectProcessor extends StreamProcessor<
   typeof ProjectProcessorContract,
-  ProjectProcessorDeps
+  {
+    itx: ProjectRpcTarget;
+  }
 > {
   readonly contract = ProjectProcessorContract;
 
