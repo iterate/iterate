@@ -1,0 +1,26 @@
+diff --git a/dist/index-workers.d.cts b/dist/index-workers.d.cts
+index e69de29..e69de29 100644
+--- a/dist/index-workers.d.cts
++++ b/dist/index-workers.d.cts
+@@ -102,7 +102,7 @@ type TupleProvider<T extends ReadonlyArray<unknown>> = { [K in TupleIndexKeys<T>
+ };
+ type TupleProvider<T extends ReadonlyArray<unknown>> = { [K in TupleIndexKeys<T>]: MethodOrProperty<T[K]> } & ArrayProvider<T[number]>; // Base type for all other types providing RPC-like interfaces.
+ // Rewrites all methods/properties to be `MethodOrProperty`s, while preserving callable types.
+-type Provider<T> = MaybeCallableProvider<T> & (T extends ReadonlyArray<unknown> ? number extends T["length"] ? ArrayProvider<T[number]> : TupleProvider<T> : { [K in Exclude<keyof T, symbol | keyof StubBase<never>>]: MethodOrProperty<T[K]> } & {
++type Provider<T> = MaybeCallableProvider<T> & (T extends ReadonlyArray<unknown> ? number extends T["length"] ? ArrayProvider<T[number]> : TupleProvider<T> : Pick<{ [K in keyof T]: MethodOrProperty<T[K]> }, Exclude<keyof T, symbol | keyof StubBase<never>>> & {
+   map<V>(callback: (value: MapCallbackValue<NonNullable<T>>) => MapCallbackReturn<V>): Result<Array<V>>;
+ });
+ //#endregion
+diff --git a/dist/index-workers.d.ts b/dist/index-workers.d.ts
+index e69de29..e69de29 100644
+--- a/dist/index-workers.d.ts
++++ b/dist/index-workers.d.ts
+@@ -102,7 +102,7 @@ type TupleProvider<T extends ReadonlyArray<unknown>> = { [K in TupleIndexKeys<T>
+ };
+ type TupleProvider<T extends ReadonlyArray<unknown>> = { [K in TupleIndexKeys<T>]: MethodOrProperty<T[K]> } & ArrayProvider<T[number]>; // Base type for all other types providing RPC-like interfaces.
+ // Rewrites all methods/properties to be `MethodOrProperty`s, while preserving callable types.
+-type Provider<T> = MaybeCallableProvider<T> & (T extends ReadonlyArray<unknown> ? number extends T["length"] ? ArrayProvider<T[number]> : TupleProvider<T> : { [K in Exclude<keyof T, symbol | keyof StubBase<never>>]: MethodOrProperty<T[K]> } & {
++type Provider<T> = MaybeCallableProvider<T> & (T extends ReadonlyArray<unknown> ? number extends T["length"] ? ArrayProvider<T[number]> : TupleProvider<T> : Pick<{ [K in keyof T]: MethodOrProperty<T[K]> }, Exclude<keyof T, symbol | keyof StubBase<never>>> & {
+   map<V>(callback: (value: MapCallbackValue<NonNullable<T>>) => MapCallbackReturn<V>): Result<Array<V>>;
+ });
+ //#endregion

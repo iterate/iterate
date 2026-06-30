@@ -3,14 +3,21 @@ import { dirname, resolve } from "node:path";
 
 import esquery from "esquery";
 import unicorn from "eslint-plugin-unicorn";
+import type { Rule, Scope, SourceCode } from "eslint";
+import type { Program, Node } from "estree";
+
+import { mechanicalClassImplRule } from "./rules/mechanical-class-impl.ts";
+import { tseslintRules } from "./rules/tseslint.ts";
+import type { StrictPlugin, StrictRule } from "./types.ts";
+
+type ImportKindNode = {
+  importKind?: string;
+};
 
 const LIFECYCLE_HOOKS = new Set(["beforeAll", "beforeEach", "afterAll", "afterEach"]);
 const VI_MOCK_CALLS = new Set(["vi.mock", "vi.doMock"]);
 const PROPERTY_MATCHERS = new Set(["toBe", "toEqual", "toStrictEqual"]);
-const STREAM_PROCESSOR_OVERRIDE_METHODS = new Set(["reduce", "processEvent", "processEventBatch"]);
-
-/** @param {string} name */
-const getExpectedName = (name) => {
+const getExpectedName = (name: string) => {
   const acronyms = ["API", "HTML", "JSON", "ORPC", "MCP"];
   const acronymStart = acronyms.find(
     (a) => name.toLowerCase().startsWith(a.toLowerCase()) && name[a.length]?.match(/[A-Z]/),
@@ -21,9 +28,7 @@ const getExpectedName = (name) => {
     name.slice(capitaliseLetters).replace(/Schema$/, "")
   );
 };
-
-/** @param {import("estree").MemberExpression | import("estree").Identifier | import("estree").CallExpression} callee */
-const getCalleeName = (callee) => {
+const getCalleeName = (callee: any) => {
   if (callee.type === "Identifier") return callee.name;
   if (callee.type !== "MemberExpression") return null;
   if (callee.property.type === "Identifier") return callee.property.name;
@@ -32,23 +37,14 @@ const getCalleeName = (callee) => {
   }
   return null;
 };
-
-/** @param {import("estree").Node | undefined} node */
-function getPropertyName(node) {
+function getPropertyName(node: Node | undefined) {
   if (!node) return undefined;
   if (node.type === "Identifier") return node.name;
   if (node.type === "Literal" && typeof node.value === "string") return node.value;
   return undefined;
 }
-
-/** @param {string} filename */
-function normalizePathForLint(filename) {
-  return filename.replaceAll("\\", "/");
-}
-
-/** @param {string} filename */
-function isAllowedRawDurableObjectBindingAccessFile(filename) {
-  const path = normalizePathForLint(filename);
+function isAllowedRawDurableObjectBindingAccessFile(filename: string) {
+  const path = filename.replaceAll("\\", "/");
 
   if (!path.includes("/apps/os/src/")) return true;
   if (path.includes("/apps/os/docs/")) return true;
@@ -67,9 +63,7 @@ function isAllowedRawDurableObjectBindingAccessFile(filename) {
     path.endsWith("-capability.ts")
   );
 }
-
-/** @param {import("estree").Node | undefined} node */
-function getRawEnvBindingName(node) {
+function getRawEnvBindingName(node: any) {
   if (!node || node.type !== "MemberExpression") return undefined;
   const bindingName = getPropertyName(node.property);
   if (!bindingName) return undefined;
@@ -83,9 +77,7 @@ function getRawEnvBindingName(node) {
   }
   return undefined;
 }
-
-/** @param {import("estree").Node | undefined} node */
-function getTestLintCallName(node) {
+function getTestLintCallName(node: any): string | undefined {
   if (!node) return undefined;
   if (node.type === "Identifier") return node.name;
   if (node.type !== "MemberExpression") return undefined;
@@ -94,34 +86,21 @@ function getTestLintCallName(node) {
   if (!objectName || !propertyName) return undefined;
   return `${objectName}.${propertyName}`;
 }
-
-/** @param {import("estree").Node} node */
-function getTestLintCallObjectName(node) {
+function getTestLintCallObjectName(node: any): string | undefined {
   if (node.type === "Identifier") return node.name;
   if (node.type === "MemberExpression") return getTestLintCallName(node);
   if (node.type === "CallExpression") return getTestLintCallName(node.callee);
   return undefined;
 }
-
-/** @param {import("estree").Node} callee */
-function isDescribeCall(callee) {
+function isDescribeCall(callee: any) {
   const name = getTestLintCallName(callee);
   return name === "describe" || Boolean(name?.startsWith("describe."));
 }
-
-/** @param {import("estree").Node} callee */
-function isLifecycleHookCall(callee) {
-  return callee.type === "Identifier" && LIFECYCLE_HOOKS.has(callee.name);
-}
-
-/** @param {import("estree").Node} callee */
-function isViMockCall(callee) {
+function isViMockCall(callee: any) {
   const name = getTestLintCallName(callee);
   return Boolean(name && VI_MOCK_CALLS.has(name));
 }
-
-/** @param {import("estree").Node | undefined} node */
-function isTestCallExpression(node) {
+function isTestCallExpression(node: any): boolean {
   if (!node || node.type !== "CallExpression") return false;
   const name = getTestLintCallName(node.callee);
   if (name === "test" || name === "it" || name?.startsWith("test.") || name?.startsWith("it.")) {
@@ -129,12 +108,10 @@ function isTestCallExpression(node) {
   }
   return isTestCallExpression(node.callee);
 }
-
-/** @param {import("estree").Node} node */
-function isFunctionLikeDeclaration(node) {
+function isFunctionLikeDeclaration(node: any) {
   if (node.type === "FunctionDeclaration" || node.type === "ClassDeclaration") return true;
   if (node.type !== "VariableDeclaration") return false;
-  return node.declarations.some((declarator) => {
+  return node.declarations.some((declarator: any) => {
     const init = declarator.init;
     return (
       init &&
@@ -145,16 +122,11 @@ function isFunctionLikeDeclaration(node) {
   });
 }
 
-/** @param {import("estree").Node} node */
-function isFunctionExpressionNode(node) {
+function isFunctionExpressionNode(node: any) {
   return node.type === "FunctionExpression" || node.type === "ArrowFunctionExpression";
 }
 
-/**
- * @param {import("estree").Node | undefined} node
- * @returns {import("estree").Node | undefined}
- */
-function getExportWrapper(node) {
+function getExportWrapper(node: any) {
   if (
     node?.type === "ExportNamedDeclaration" ||
     node?.type === "ExportDefaultDeclaration" ||
@@ -165,11 +137,7 @@ function getExportWrapper(node) {
   return undefined;
 }
 
-/**
- * @param {import("estree").Node} node
- * @returns {import("estree").Node | undefined}
- */
-function getFunctionColocationStatement(node) {
+function getFunctionColocationStatement(node: any) {
   if (node.type === "FunctionDeclaration") {
     return getExportWrapper(node.parent) || node;
   }
@@ -183,11 +151,7 @@ function getFunctionColocationStatement(node) {
   return getExportWrapper(declaration.parent) || declaration;
 }
 
-/**
- * @param {import("estree").Node} node
- * @returns {import("estree").Node | undefined}
- */
-function getTypeReferenceFunctionStatement(node) {
+function getTypeReferenceFunctionStatement(node: any) {
   for (let current = node.parent; current; current = current.parent) {
     if (current.type === "FunctionDeclaration") {
       return getFunctionColocationStatement(current);
@@ -207,11 +171,7 @@ function getTypeReferenceFunctionStatement(node) {
   return undefined;
 }
 
-/**
- * @param {import("estree").Node} typeDeclaration
- * @param {import("estree").Node} functionStatement
- */
-function isImmediatelyBeside(typeDeclaration, functionStatement) {
+function isImmediatelyBeside(typeDeclaration: any, functionStatement: any) {
   const body = typeDeclaration.parent?.body;
   if (!Array.isArray(body) || body !== functionStatement.parent?.body) return false;
 
@@ -222,12 +182,10 @@ function isImmediatelyBeside(typeDeclaration, functionStatement) {
   const start = Math.min(typeIndex, functionIndex) + 1;
   const end = Math.max(typeIndex, functionIndex);
   const between = body.slice(start, end);
-  return between.every((statement) => isTypeDeclarationStatement(statement));
-}
-
-/** @param {import("estree").Node} statement */
-function isTypeDeclarationStatement(statement) {
-  return statement.type === "TSTypeAliasDeclaration" || statement.type === "TSInterfaceDeclaration";
+  return between.every(
+    (statement) =>
+      statement.type === "TSTypeAliasDeclaration" || statement.type === "TSInterfaceDeclaration",
+  );
 }
 
 /**
@@ -235,10 +193,8 @@ function isTypeDeclarationStatement(statement) {
  * braces, or the expression of a concise arrow. Brace-only lines don't count, so
  * `function f() {\n  return x;\n}` is 1 line.
  *
- * @param {import("eslint").SourceCode} sourceCode
- * @param {import("estree").Function} fn
  */
-function getFunctionBodyLineCount(sourceCode, fn) {
+function getFunctionBodyLineCount(sourceCode: SourceCode, fn: any) {
   const body = fn.body;
   if (!body) return Infinity; // overload signatures / declare function
   let start;
@@ -256,39 +212,27 @@ function getFunctionBodyLineCount(sourceCode, fn) {
   return sourceCode.getText().slice(start, end).split("\n").length;
 }
 
-/**
- * @param {import("eslint").SourceCode} sourceCode
- * @param {import("estree").Function} fn
- */
-function hasCommentInsideFunction(sourceCode, fn) {
+function hasCommentInsideFunction(sourceCode: SourceCode, fn: any) {
   const bodyRange = fn.body?.range;
   if (!bodyRange) return false;
 
-  return sourceCode.getAllComments().some((comment) => {
+  return sourceCode.getAllComments().some((comment: any) => {
     if (!comment.range) return false;
     return comment.range[0] > bodyRange[0] && comment.range[1] < bodyRange[1];
   });
 }
 
-/**
- * @param {import("eslint").SourceCode} sourceCode
- * @param {import("estree").Node} node
- */
-function hasLeadingJsDocComment(sourceCode, node) {
+function hasLeadingJsDocComment(sourceCode: SourceCode, node: any) {
   const nodeStartLine = node.loc?.start.line;
 
-  return sourceCode.getCommentsBefore(node).some((comment) => {
+  return sourceCode.getCommentsBefore(node).some((comment: any) => {
     if (comment.type !== "Block") return false;
     if (!comment.value.trim().startsWith("*")) return false;
     return !nodeStartLine || comment.loc?.end.line === nodeStartLine - 1;
   });
 }
 
-/**
- * @param {import("eslint").SourceCode} sourceCode
- * @param {readonly [number, number] | undefined} range
- */
-function hasCommentInRange(sourceCode, range) {
+function hasCommentInRange(sourceCode: SourceCode, range: readonly [number, number] | undefined) {
   if (!range) return false;
   return sourceCode.getAllComments().some((comment) => {
     if (!comment.range) return false;
@@ -296,49 +240,27 @@ function hasCommentInRange(sourceCode, range) {
   });
 }
 
-/**
- * @param {import("eslint").SourceCode} sourceCode
- * @param {import("estree").Function} fn
- */
-function hasTypePredicateReturnType(sourceCode, fn) {
+function hasTypePredicateReturnType(sourceCode: SourceCode, fn: any) {
   const returnType = fn.returnType || fn.typeAnnotation;
   if (!returnType) return false;
 
   const returnTypeText = sourceCode.getText(returnType);
   return /\basserts\b/.test(returnTypeText) || /\bis\b/.test(returnTypeText);
 }
-
-/** @param {import("estree").Function} fn */
-function hasIfStatement(fn) {
-  return esquery.match(fn, esquery.parse("IfStatement")).length > 0;
-}
-
-/**
- * @param {import("eslint").Scope.Scope | null} scope
- * @param {string} name
- */
-function findVariableInScopeChain(scope, name) {
+function findVariableInScopeChain(scope: Scope.Scope | null, name: string) {
   for (let current = scope; current; current = current.upper) {
-    const variable = current.variables.find((v) => v.name === name);
+    const variable = current.variables.find((v: any) => v.name === name);
     if (variable) return variable;
   }
   return undefined;
 }
-
-/** @param {string} text */
-function compactTypeText(text) {
-  return text.replace(/\s+/g, "");
-}
-
-/** @param {import("estree").Node | undefined} node */
-function stringLiteralValue(node) {
+function stringLiteralValue(node: any) {
   if (!node) return undefined;
   if (node.type === "Literal" && typeof node.value === "string") return node.value;
   return undefined;
 }
 
-/** @param {unknown} attributeName */
-function getJSXAttributeName(attributeName) {
+function getJSXAttributeName(attributeName: any) {
   if (!attributeName || typeof attributeName !== "object") return undefined;
   if (attributeName.type === "JSXIdentifier") return attributeName.name;
   if (attributeName.type === "JSXNamespacedName") {
@@ -347,24 +269,22 @@ function getJSXAttributeName(attributeName) {
   return undefined;
 }
 
-/** @param {string} classText */
-function hasSrOnlyClassToken(classText) {
+function hasSrOnlyClassToken(classText: string) {
   return classText.split(/\s+/).includes("sr-only");
 }
 
-/** @param {import("estree").Node | undefined} node */
-function hasSrOnlyClassExpression(node) {
+function hasSrOnlyClassExpression(node: any): boolean {
   const literal = stringLiteralValue(node);
   if (literal !== undefined) return hasSrOnlyClassToken(literal);
 
   if (!node) return false;
 
   if (node.type === "TemplateLiteral") {
-    return node.quasis.some((quasi) => hasSrOnlyClassToken(quasi.value.cooked || ""));
+    return node.quasis.some((quasi: any) => hasSrOnlyClassToken(quasi.value.cooked || ""));
   }
 
   if (node.type === "ArrayExpression") {
-    return node.elements.some((element) => hasSrOnlyClassExpression(element));
+    return node.elements.some((element: any) => hasSrOnlyClassExpression(element));
   }
 
   if (node.type === "ConditionalExpression") {
@@ -376,64 +296,37 @@ function hasSrOnlyClassExpression(node) {
   }
 
   if (node.type === "CallExpression") {
-    return node.arguments.some((argument) => hasSrOnlyClassExpression(argument));
+    return node.arguments.some((argument: any) => hasSrOnlyClassExpression(argument));
   }
 
   return false;
 }
 
-/** @param {import("estree").Node | undefined} attributeValue */
-function jsxAttributeHasSrOnlyClass(attributeValue) {
+function jsxAttributeHasSrOnlyClass(attributeValue: any) {
   const literal = stringLiteralValue(attributeValue);
   if (literal !== undefined) return hasSrOnlyClassToken(literal);
   if (attributeValue?.type !== "JSXExpressionContainer") return false;
   return hasSrOnlyClassExpression(attributeValue.expression);
 }
 
-/**
- * Extracts the contract type argument from `class X extends StreamProcessor<Contract, ...>`.
- * Text-based on purpose (no type checker in lint): it reads the first type argument up to a
- * `,`, `>`, or newline, which works because contracts are concrete `typeof` aliases by
- * convention — a contract type expression containing its own `<`/`,` would not be matched.
- *
- * @param {import("eslint").Rule.RuleContext} context
- * @param {import("estree").ClassDeclaration | import("estree").ClassExpression} node
- */
-function getStreamProcessorContractType(context, node) {
-  if (!node.superClass) return undefined;
-  const classHeader = context.sourceCode.getText(node).slice(0, node.body.range?.[0] ?? undefined);
-  const match = classHeader.match(/\bextends\s+StreamProcessor\s*<\s*([^,\n>]+)/);
-  return match?.[1]?.trim();
-}
-
-/** @param {import("estree").Node} node */
-function getClassElementName(node) {
-  if (!("key" in node)) return undefined;
-  return getPropertyName(node.key);
-}
-
-/** @param {import("estree").Node} parameter */
-function getParameterTypeAnnotation(parameter) {
-  if (!("typeAnnotation" in parameter)) return undefined;
-  return parameter.typeAnnotation?.typeAnnotation;
-}
-
 const isolatedCodemodeRule = {
-  ...unicorn.rules["isolated-functions"],
+  ...unicorn.rules?.["isolated-functions"],
   create(context) {
-    const original = unicorn.rules["isolated-functions"].create(context);
+    const originalRule = unicorn.rules?.["isolated-functions"];
+    if (!originalRule) return {};
+    const original = originalRule.create(context as never);
     for (const codemodeSelector of [":function[codemode]", ":function[codemode]:exit"]) {
       if (codemodeSelector in original) {
         const cb = original[codemodeSelector];
         delete original[codemodeSelector];
         const suffix = codemodeSelector.match(/:exit$/)?.[0] || "";
         const nonClashingCatchallFunctionSelector = `FunctionExpression[random!="${Math.random()}"]${suffix}`;
-        original[nonClashingCatchallFunctionSelector] = (node, ...args) => {
+        original[nonClashingCatchallFunctionSelector] = (node: any, ...args: any[]) => {
           const parentCallee = node.parent?.callee;
           if (!parentCallee) return;
           if (!context.sourceCode.getText(parentCallee).match(/\bcodemode\b/i)) return;
           if (!context.sourceCode.getText(parentCallee).match(/\bfixture\b/i)) return;
-          return cb(node, ...args);
+          return cb?.(node, ...args);
         };
         original[`Arrow${nonClashingCatchallFunctionSelector}`] =
           original[nonClashingCatchallFunctionSelector];
@@ -441,12 +334,11 @@ const isolatedCodemodeRule = {
     }
     return original;
   },
-};
-
-/** @param {import("estree").CallExpression} node */
-function getMatcherCall(node) {
+} as StrictRule;
+function getMatcherCall(node: any) {
   if (node.callee.type !== "MemberExpression") return undefined;
   const matcherName = getPropertyName(node.callee.property);
+  if (!matcherName) return undefined;
   if (!PROPERTY_MATCHERS.has(matcherName)) return undefined;
 
   let expectChain = node.callee.object;
@@ -472,11 +364,7 @@ function getMatcherCall(node) {
   return { actual, matcherName };
 }
 
-/**
- * @param {string} source
- * @param {string} filename
- */
-function getRelativeTsImportWithExtension(source, filename) {
+function getRelativeTsImportWithExtension(source: string, filename: string) {
   if (!filename) return undefined;
   if (!source.startsWith("./") && !source.startsWith("../")) return undefined;
 
@@ -492,19 +380,7 @@ function getRelativeTsImportWithExtension(source, filename) {
   return `${modulePath}.ts${queryIndex === -1 ? "" : source.slice(queryIndex)}`;
 }
 
-/**
- * @param {string} text
- */
-function inlineTypeText(text) {
-  return text.replaceAll(/\s+/g, " ").trim();
-}
-
-/**
- * @param {import("eslint").SourceCode} sourceCode
- * @param {import("estree").Identifier} identifier
- * @param {string} inlineTypeText
- */
-function inlinedTypeUseLineLength(sourceCode, identifier, inlineTypeText) {
+function inlinedTypeUseLineLength(sourceCode: SourceCode, identifier: any, inlineTypeText: string) {
   const line = identifier.loc?.start.line;
   if (!line) return Infinity;
   const sourceLine = sourceCode.lines[line - 1];
@@ -516,11 +392,7 @@ function inlinedTypeUseLineLength(sourceCode, identifier, inlineTypeText) {
     .length;
 }
 
-/**
- * @param {import("eslint").Rule.RuleContext} context
- * @param {import("estree").Literal} sourceNode
- */
-function reportMissingRelativeImportExtension(context, sourceNode) {
+function reportMissingRelativeImportExtension(context: Rule.RuleContext, sourceNode: any) {
   if (typeof sourceNode.value !== "string") return;
 
   const fixedSource = getRelativeTsImportWithExtension(sourceNode.value, context.filename || "");
@@ -529,7 +401,7 @@ function reportMissingRelativeImportExtension(context, sourceNode) {
   context.report({
     node: sourceNode,
     message: `Use "${fixedSource}" instead of "${sourceNode.value}".`,
-    fix: (fixer) => {
+    fix: (fixer: Rule.RuleFixer) => {
       const sourceText = context.sourceCode.getText(sourceNode);
       const quote = sourceText[0];
       const fixedSourceText =
@@ -542,8 +414,7 @@ function reportMissingRelativeImportExtension(context, sourceNode) {
 }
 
 // custom iterate-internal rules
-/** @type {import("eslint").ESLint.Plugin} */
-const plugin = {
+const plugin: StrictPlugin = {
   meta: {
     name: "iterate",
   },
@@ -602,12 +473,12 @@ const plugin = {
       },
       create: (context) => {
         return {
-          JSXOpeningElement: (node) => {
+          JSXOpeningElement: (node: any) => {
             const attributes = node.attributes.filter(
-              (attribute) => attribute.type === "JSXAttribute",
+              (attribute: any) => attribute.type === "JSXAttribute",
             );
             const classNameAttribute = attributes.find(
-              (attribute) => getJSXAttributeName(attribute.name) === "className",
+              (attribute: any) => getJSXAttributeName(attribute.name) === "className",
             );
             if (!jsxAttributeHasSrOnlyClass(classNameAttribute?.value)) return;
 
@@ -637,7 +508,7 @@ const plugin = {
         const MAX_INLINED_LINE_LENGTH = 99;
 
         return {
-          TSTypeAliasDeclaration(node) {
+          TSTypeAliasDeclaration(node: any) {
             const parentType = node.parent?.type;
             if (
               parentType === "ExportNamedDeclaration" ||
@@ -671,7 +542,7 @@ const plugin = {
             if (outsideAliasReads.length !== 1) return;
 
             const reference = outsideAliasReads[0];
-            const referenceParentType = reference.identifier.parent?.type;
+            const referenceParentType = (reference.identifier as any).parent?.type;
             if (
               referenceParentType === "ExportSpecifier" ||
               referenceParentType === "ExportDefaultDeclaration"
@@ -679,7 +550,10 @@ const plugin = {
               return;
             }
 
-            const inlineText = inlineTypeText(context.sourceCode.getText(node.typeAnnotation));
+            const inlineText = context.sourceCode
+              .getText(node.typeAnnotation)
+              .replaceAll(/\s+/g, " ")
+              .trim();
             if (
               inlinedTypeUseLineLength(context.sourceCode, reference.identifier, inlineText) >
               MAX_INLINED_LINE_LENGTH
@@ -708,7 +582,8 @@ const plugin = {
       },
       create: (context) => {
         return {
-          "VariableDeclarator[init.callee.object.name='z']": ({ init, id }) => {
+          "VariableDeclarator[init.callee.object.name='z']": (node) => {
+            const { init, id } = node as any;
             if (init.callee.property.name === "toJSONSchema") return;
             if (init.callee.property.name === "prettifyError") return;
 
@@ -725,7 +600,7 @@ const plugin = {
             }
           },
           "TSTypeAliasDeclaration[typeAnnotation.typeName.left.name='z'][typeAnnotation.typeName.right.name='infer']":
-            (node) => {
+            (node: any) => {
               const typeName = node.id.name;
               const variableName = node.typeAnnotation?.typeArguments?.params?.[0]?.exprName?.name;
 
@@ -763,21 +638,22 @@ const plugin = {
             if (node.kind !== "let") return;
             const scope = context.sourceCode.getScope(node);
             for (const declarator of node.declarations) {
-              if (!declarator.id || declarator.id.type !== "Identifier") continue;
+              const id = declarator.id;
+              if (!id || id.type !== "Identifier") continue;
               if (!declarator.init) continue; // `let x;` without init is fine
-              const variable = scope.variables.find((v) => v.name === declarator.id.name);
+              const variable = scope.variables.find((v: any) => v.name === id.name);
               if (!variable) continue;
               const isReassigned = variable.references.some(
-                (ref) => ref.isWrite() && ref.identifier !== declarator.id,
+                (ref) => ref.isWrite() && ref.identifier !== id,
               );
               if (isReassigned) continue;
               context.report({
-                node: declarator.id,
-                message: `'${declarator.id.name}' is never reassigned. Use \`const\` instead.`,
+                node: id,
+                message: `'${id.name}' is never reassigned. Use \`const\` instead.`,
                 suggest: [
                   {
                     desc: "Change to const, if you're finished tinkering",
-                    fix: (fixer) => {
+                    fix: (fixer: Rule.RuleFixer) => {
                       // Only fix if this is the only declarator — otherwise
                       // changing `let a = 1, b = 2` where only `a` is const is complex
                       if (node.declarations.length > 1) return null;
@@ -793,70 +669,8 @@ const plugin = {
         };
       },
     },
-    "stream-processor-override-args": {
-      meta: {
-        type: "problem",
-        docs: {
-          description:
-            "StreamProcessor subclass override args must reference the base method parameter type.",
-        },
-      },
-      create: (context) => {
-        return {
-          "ClassDeclaration, ClassExpression": (node) => {
-            const contractType = getStreamProcessorContractType(context, node);
-            if (!contractType) return;
-
-            for (const element of node.body.body) {
-              const methodName = getClassElementName(element);
-              // The serialization guarantee lives in ingest; overriding it would let
-              // subclass work escape the serialized batch section.
-              if (methodName === "ingest") {
-                context.report({
-                  node: element,
-                  message:
-                    "ingest is StreamProcessor's host-facing sink and must stay on the base class. Implement the processEvent or processEventBatch hook instead.",
-                });
-                continue;
-              }
-
-              // Near-miss hook names: defining these would silently never be called.
-              if (methodName === "processEvents" || methodName === "processBatch") {
-                context.report({
-                  node: element,
-                  message: `StreamProcessor has no hook named ${methodName}. The hooks are reduce, processEvent (one event), and processEventBatch (whole batch).`,
-                });
-                continue;
-              }
-
-              if (!methodName || !STREAM_PROCESSOR_OVERRIDE_METHODS.has(methodName)) {
-                continue;
-              }
-              if (element.type !== "MethodDefinition") continue;
-
-              const firstParameter = element.value.params[0];
-              const typeAnnotation = firstParameter
-                ? getParameterTypeAnnotation(firstParameter)
-                : undefined;
-              const actual =
-                typeAnnotation === undefined
-                  ? undefined
-                  : compactTypeText(context.sourceCode.getText(typeAnnotation));
-              const expected = compactTypeText(
-                `Parameters<StreamProcessor<${contractType}>["${methodName}"]>[0]`,
-              );
-
-              if (actual === expected) continue;
-
-              context.report({
-                node: firstParameter ?? element,
-                message: `Annotate ${methodName}'s args as \`Parameters<StreamProcessor<${contractType}>["${methodName}"]>[0]\`.`,
-              });
-            }
-          },
-        };
-      },
-    },
+    ...tseslintRules,
+    "mechanical-class-impl": mechanicalClassImplRule,
     "isolated-codemode": isolatedCodemodeRule,
     "relative-import-extensions": {
       meta: {
@@ -883,7 +697,7 @@ const plugin = {
             if (node.source.type !== "Literal") return;
             reportMissingRelativeImportExtension(context, node.source);
           },
-          TSImportType(node) {
+          TSImportType(node: any) {
             if (!node.argument) return;
             if (node.argument.type !== "Literal") return;
             reportMissingRelativeImportExtension(context, node.argument);
@@ -902,7 +716,9 @@ const plugin = {
       create(context) {
         return {
           CallExpression(node) {
-            if (!isLifecycleHookCall(node.callee)) return;
+            if (node.callee.type !== "Identifier" || !LIFECYCLE_HOOKS.has(node.callee.name)) {
+              return;
+            }
             context.report({
               node,
               message:
@@ -965,12 +781,7 @@ const plugin = {
       create(context) {
         const MAX_BODY_LINES = 1;
 
-        /**
-         * @param {import("estree").Identifier} id the helper's name binding
-         * @param {import("estree").Function} fn the function node
-         * @param {import("estree").Node} statement the enclosing declaration statement
-         */
-        function checkHelper(id, fn, statement) {
+        function checkHelper(id: any, fn: any, statement: any) {
           const exportParent = statement.parent?.type;
           if (
             exportParent === "ExportNamedDeclaration" ||
@@ -987,7 +798,7 @@ const plugin = {
           ) {
             return;
           }
-          if (hasIfStatement(fn)) return;
+          if (esquery.match(fn, esquery.parse("IfStatement")).length > 0) return;
           if (hasLeadingJsDocComment(context.sourceCode, statement)) return;
           if (hasCommentInsideFunction(context.sourceCode, fn)) return;
           if (hasTypePredicateReturnType(context.sourceCode, fn)) return;
@@ -996,16 +807,16 @@ const plugin = {
           const variable = findVariableInScopeChain(scope, id.name);
           if (!variable) return;
 
-          const reads = variable.references.filter((ref) => ref.isRead());
+          const reads = variable.references.filter((ref: any) => ref.isRead());
           // `export { helper }` / `export default helper` make it part of the module's surface
-          const isExportedReference = reads.some((ref) => {
+          const isExportedReference = reads.some((ref: any) => {
             const parentType = ref.identifier.parent?.type;
             return parentType === "ExportSpecifier" || parentType === "ExportDefaultDeclaration";
           });
           if (isExportedReference) return;
 
           // a recursive helper can't be inlined, so any self-reference disqualifies it
-          const hasSelfReference = reads.some((ref) => {
+          const hasSelfReference = reads.some((ref: any) => {
             const referenceStart = ref.identifier.range?.[0];
             if (referenceStart === undefined || !fn.range) return false;
             return referenceStart >= fn.range[0] && referenceStart < fn.range[1];
@@ -1048,10 +859,7 @@ const plugin = {
         },
       },
       create(context) {
-        /**
-         * @param {import("estree").Node} node
-         */
-        function checkTypeDeclaration(node) {
+        function checkTypeDeclaration(node: any) {
           const typeName = node.id?.name;
           if (!typeName) return;
           if (node.declare) return;
@@ -1063,7 +871,7 @@ const plugin = {
 
           const reads = variable.references.filter((ref) => ref.isRead());
           const isExportedReference = reads.some((ref) => {
-            const parentType = ref.identifier.parent?.type;
+            const parentType = (ref.identifier as any).parent?.type;
             return parentType === "ExportSpecifier" || parentType === "ExportDefaultDeclaration";
           });
           if (isExportedReference) return;
@@ -1178,18 +986,16 @@ const plugin = {
       create: (context) => {
         return {
           ImportDeclaration: (node) => {
-            const parentBodyIndex = node.parent.body.indexOf(node);
-            const lastImportIndex = node.parent.body.findLastIndex(
-              (n) => n.type === "ImportDeclaration",
-            );
+            const parentBody = (node.parent as Program).body;
+            const parentBodyIndex = parentBody.indexOf(node);
+            const lastImportIndex = parentBody.findLastIndex((n) => n.type === "ImportDeclaration");
             if (parentBodyIndex === -1 || parentBodyIndex !== lastImportIndex) {
               return;
             }
-            const exportsBefore = node.parent.body
+            const exportsBefore = parentBody
               .slice(0, parentBodyIndex)
               .filter(
                 (n) =>
-                  n.type === "ExportDeclaration" ||
                   n.type === "ExportNamedDeclaration" ||
                   n.type === "ExportAllDeclaration" ||
                   n.type === "ExportDefaultDeclaration",
@@ -1202,9 +1008,10 @@ const plugin = {
               });
             });
           },
-          "ImportDeclaration[specifiers.length=0]": (node) => {
-            const parentBodyIndex = node.parent.body.indexOf(node);
-            const nonSideEffectImportBefore = node.parent.body
+          "ImportDeclaration[specifiers.length=0]": (node: any) => {
+            const parentBody = (node.parent as Program).body;
+            const parentBodyIndex = parentBody.indexOf(node as any);
+            const nonSideEffectImportBefore = parentBody
               .slice(0, parentBodyIndex)
               .find((n) => n.type === "ImportDeclaration" && n.specifiers.length);
             if (!nonSideEffectImportBefore) {
@@ -1213,12 +1020,11 @@ const plugin = {
             context.report({
               node,
               message: "Side-effect imports need to go before non-side-effect imports",
-              fix: (fixer) => {
+              fix: (fixer: Rule.RuleFixer) => {
                 return [
                   fixer.removeRange([node.range[0], node.range[1] + 1]),
                   fixer.insertTextBefore(
                     nonSideEffectImportBefore,
-                    // @ts-expect-error getText exists I swear
                     `${context.sourceCode.getText(node)}\n`,
                   ),
                 ];
@@ -1242,7 +1048,8 @@ const plugin = {
             if (node.source.value === "cloudflare:workers") {
               const waitUntilImport = node.specifiers.find(
                 (spec) =>
-                  (spec.type === "ImportSpecifier" && spec.imported.name === "waitUntil") ||
+                  (spec.type === "ImportSpecifier" &&
+                    getPropertyName(spec.imported) === "waitUntil") ||
                   spec.type === "ImportNamespaceSpecifier",
               );
               if (waitUntilImport) {
@@ -1267,7 +1074,7 @@ const plugin = {
       },
       create: (context) => {
         return {
-          "CallExpression[callee.type='MemberExpression']": (node) => {
+          "CallExpression[callee.type='MemberExpression']": (node: any) => {
             if (getPropertyName(node.callee.property) !== "getByName") return;
             const bindingName = getRawEnvBindingName(node.callee.object);
             if (!bindingName) return;
@@ -1290,15 +1097,13 @@ const plugin = {
         hasSuggestions: true,
         fixable: "code",
       },
-      /** @param {import('eslint').Rule.RuleContext} context */
       create: (context) => {
         const dbMutateMethods = ["insert", "update", "delete"];
-        /** @type {Record<string, Function>} */
-        const dbMutateEnforcementListeners = {};
+        const dbMutateEnforcementListeners: Record<string, (node: any) => void> = {};
         for (const m of dbMutateMethods) {
           const selector = `CallExpression[callee.object.type='Identifier'][callee.property.name='${m}'][arguments.0.type='Identifier']`;
           const selector2 = `CallExpression[callee.object.type='Identifier'][callee.property.name='${m}'][arguments.0.object.name='schemas']`;
-          dbMutateEnforcementListeners[selector] = (node) => {
+          dbMutateEnforcementListeners[selector] = (node: any) => {
             const before = context.sourceCode.getText(node.arguments[0]);
             const after = before.startsWith("schemas.")
               ? before.replace("schemas.", "schema.")
@@ -1316,7 +1121,7 @@ const plugin = {
               suggest: [
                 {
                   desc: `Change \`${before}\` to \`${after}\``,
-                  fix: (fixer) => fixer.replaceText(node.arguments[0], after),
+                  fix: (fixer: Rule.RuleFixer) => fixer.replaceText(node.arguments[0], after),
                 },
               ],
             });
@@ -1327,7 +1132,7 @@ const plugin = {
         return {
           ...dbMutateEnforcementListeners,
 
-          "CallExpression[callee.property.name='transaction']": (node) => {
+          "CallExpression[callee.property.name='transaction']": (node: any) => {
             const parentReference = context.sourceCode.getText(node.callee.object);
             const shouldUse = node.arguments[0].params[0]?.name;
             esquery.match(node, esquery.parse(`${node.callee.object.type}`)).forEach((m) => {
@@ -1339,7 +1144,7 @@ const plugin = {
                   suggest: [
                     {
                       desc: `Change \`${used}\` to \`${shouldUse}\``,
-                      fix: (fixer) => fixer.replaceText(m, shouldUse),
+                      fix: (fixer: Rule.RuleFixer) => fixer.replaceText(m, shouldUse),
                     },
                   ],
                 });
@@ -1357,7 +1162,7 @@ const plugin = {
         return {
           CallExpression: (node) => {
             if (node.callee.type === "Identifier" && node.callee.name === "expect") {
-              let expr = node;
+              let expr: any = node;
               while ((expr = expr.parent)) {
                 if (expr.type === "AwaitExpression") break;
               }
@@ -1418,26 +1223,6 @@ const plugin = {
         };
       },
     },
-    /**
-     * Contract packages (`apps/*-contract/src`) are imported by BOTH server
-     * and client (browser) code. They must contain nothing but oRPC contract
-     * definitions, Zod schemas, and lightweight client wiring. Pulling in
-     * anything heavier — Node built-ins, OpenTelemetry, evlog, vite, the
-     * shared barrel, etc. — breaks Vite production builds and bloats client
-     * bundles.
-     *
-     * This rule enforces an explicit allowlist of permitted runtime import
-     * sources. Type-only imports (`import type { … }`) are always fine
-     * because they're erased at build time.
-     *
-     * Allowlist entries:
-     * - `ALLOWED_RUNTIME_IMPORT_PREFIXES`: exact match or `pkg + "/..."` subpaths.
-     * - `ALLOWED_RUNTIME_IMPORT_REGEX`: optional RegExp `source` strings (must match
-     *   full specifier). Use only when a prefix is too broad.
-     *
-     * If you need to add a new package, verify it has ZERO transitive
-     * Node/server deps, then add a prefix or regex below.
-     */
     "contract-package-imports": {
       meta: {
         type: "problem",
@@ -1447,7 +1232,6 @@ const plugin = {
         },
       },
       create: (context) => {
-        /** @type {string[]} */
         const ALLOWED_RUNTIME_IMPORT_PREFIXES = [
           "zod",
           "@orpc/contract",
@@ -1456,7 +1240,6 @@ const plugin = {
           "@orpc/client",
           "@orpc/openapi-client",
         ];
-        /** @type {string[]} Full specifier must match (anchored in code). */
         const ALLOWED_RUNTIME_IMPORT_REGEX = [
           // OS's contract needs to share event-stream and codemode wire
           // schemas with the services that persist/execute those payloads.
@@ -1471,10 +1254,7 @@ const plugin = {
           (pattern) => new RegExp(`^${pattern}$`),
         );
 
-        /**
-         * @param {string} source
-         */
-        function isAllowedRuntimeImport(source) {
+        function isAllowedRuntimeImport(source: string) {
           if (
             ALLOWED_RUNTIME_IMPORT_PREFIXES.some(
               (pkg) => source === pkg || source.startsWith(pkg + "/"),
@@ -1497,13 +1277,15 @@ const plugin = {
         return {
           ImportDeclaration: (node) => {
             if (isTestFile) return;
-            if (node.importKind === "type") return;
+            if ((node as ImportKindNode).importKind === "type") return;
 
             const allSpecifiersTypeOnly =
-              node.specifiers.length > 0 && node.specifiers.every((s) => s.importKind === "type");
+              node.specifiers.length > 0 &&
+              node.specifiers.every((s) => (s as ImportKindNode).importKind === "type");
             if (allSpecifiersTypeOnly) return;
 
             const source = node.source.value;
+            if (typeof source !== "string") return;
 
             if (source.startsWith(".") || source.startsWith("/")) return;
 
@@ -1519,7 +1301,7 @@ const plugin = {
                 `\n\nRelative imports and \`import type\` are always fine.\n` +
                 `If "${source}" is genuinely lightweight (zero Node/server deps), add a ` +
                 `prefix to ALLOWED_RUNTIME_IMPORT_PREFIXES or a pattern to ` +
-                `ALLOWED_RUNTIME_IMPORT_REGEX in oxlint-plugin-iterate.js.`,
+                `ALLOWED_RUNTIME_IMPORT_REGEX in oxlint-plugin-iterate.ts.`,
             });
           },
         };
