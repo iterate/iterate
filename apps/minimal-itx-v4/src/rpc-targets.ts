@@ -34,6 +34,7 @@ import type {
   Agent,
   AgentCollection,
   AgentItx,
+  Ai,
   CfExecutionContext,
   ItxAuth,
   ItxRoot,
@@ -57,6 +58,11 @@ import type {
   DynamicWorkerCollection,
   DynamicWorkerRef,
 } from "./types.ts";
+
+type AiBinding = {
+  models?: () => unknown;
+  run(model: string, body: unknown): Promise<unknown>;
+};
 
 export class StreamRpcTarget extends RpcTarget implements Stream {
   constructor(readonly props: { auth: ItxAuth; projectId: string | null; path: string }) {
@@ -347,6 +353,23 @@ class SecretRpcTarget extends RpcTarget implements Secret {
   }
 }
 
+class AiRpcTarget extends RpcTarget implements Ai {
+  constructor(readonly binding: AiBinding) {
+    super();
+  }
+
+  models() {
+    if (typeof this.binding.models !== "function") {
+      throw new Error("AI binding does not expose models().");
+    }
+    return Promise.resolve(this.binding.models());
+  }
+
+  run(...[model, body]: Parameters<Ai["run"]>) {
+    return this.binding.run(model, body);
+  }
+}
+
 class AgentRpcTarget extends RpcTarget implements Agent {
   constructor(
     readonly props: { auth: ItxAuth; ctx: CfExecutionContext; path: string; projectId: string },
@@ -590,6 +613,7 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
 
 type ProjectRpcTargetProps = { auth: ItxAuth; ctx: CfExecutionContext; projectId: string };
 const PROJECT_BUILTIN_CAPABILITY_PATHS = [
+  "ai",
   "agents",
   "egress",
   "mcp",
@@ -639,6 +663,10 @@ export class ProjectRpcTarget extends RpcTarget implements Project {
 
   get processor() {
     return this.durableObjectStub.processor;
+  }
+
+  get ai() {
+    return new AiRpcTarget(env.AI);
   }
 
   get #itx() {

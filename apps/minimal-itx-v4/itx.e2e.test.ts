@@ -362,6 +362,19 @@ describe("minimal itx v4", () => {
     ).rejects.toThrow(/no capability "someMethodInTestRunner.getSecret"/);
   });
 
+  test("Project describe exposes Workers AI as a builtin capability", async () => {
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+
+    using project = itx.projects.create({ slug: "ai-builtin" });
+    const description = await project.describe();
+
+    expect(description.capabilities).toContainEqual({ path: ["ai"], type: "builtin" });
+  });
+
   test("Trusted internal root can access global streams and repos", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
