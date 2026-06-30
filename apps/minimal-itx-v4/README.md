@@ -106,7 +106,7 @@ the public `Stream` interface remains async through `StreamRpcTarget`.
 
 ## Cloudflare Workers RPC Types
 
-This app currently relies on the root-level `@cloudflare__workers-types.patch`.
+This app currently relies on `patches/@cloudflare__workers-types@4.20260621.1.patch`.
 The patch is still needed for `@cloudflare/workers-types@4.20260621.1`: upstream
 types return `never` when an RPC method returns a non-serializable nested object,
 but v4 passes typed capability objects over Durable Object RPC. The patch changes
