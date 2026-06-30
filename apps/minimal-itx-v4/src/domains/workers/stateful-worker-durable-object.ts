@@ -1,11 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
-import type { StatefulWorkerRef } from "../../types.ts";
+import type { StatefulDynamicWorkerRef } from "../../types.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { itxEntrypointProps, itxEntrypointScopeCacheKey } from "../itx/utils.ts";
 import { invokeFlattenedPath, replayPath } from "../itx/live-capability.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
-import { WorkerRunner } from "./worker-runner.ts";
+import { DynamicWorkerRunner } from "./worker-runner.ts";
 
 const FACET_NAME = "target";
 const VERSION_STORAGE_KEY = "workers:stateful-worker-version";
@@ -24,7 +24,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     path: this.#name.path,
     projectId: this.#name.projectId,
   });
-  readonly #workerRunner = new WorkerRunner({
+  readonly #workerRunner = new DynamicWorkerRunner({
     bindings: {
       // The hosted Durable Object class sees the same scoped ITX binding as a
       // stateless worker at this path. That is what lets a provided durable
@@ -46,7 +46,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     args?: unknown[];
     flattenNestedPath?: boolean;
     path: string[];
-    ref: StatefulWorkerRef;
+    ref: StatefulDynamicWorkerRef;
   }) {
     // This method is intentionally the only public runtime entrypoint for the
     // hosted facet. We do not expose `validate(ref)` or `get(ref)`: validation at
@@ -62,9 +62,9 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
       : await replayPath({ args, path, target });
   }
 
-  async #facet(ref: StatefulWorkerRef): Promise<unknown> {
+  async #facet(ref: StatefulDynamicWorkerRef): Promise<unknown> {
     this.#assertRefMatchesName(ref);
-    // WorkerRef is a deliberately late-bound recipe. Repo-backed refs should see
+    // DynamicWorkerRef is a deliberately late-bound recipe. Repo-backed refs should see
     // source changes on next use, and inline refs are loaded only when someone
     // actually calls the capability. That laziness is what keeps
     // `provideCapability()` a pure stream append instead of a half-commit that
@@ -86,7 +86,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     return this.ctx.facets.get(FACET_NAME, () => ({ class: klass }));
   }
 
-  #assertRefMatchesName(ref: StatefulWorkerRef) {
+  #assertRefMatchesName(ref: StatefulDynamicWorkerRef) {
     const durableWorkerKey = this.#name.props.durableWorkerKey;
     if (durableWorkerKey === undefined) {
       throw new Error("Stateful worker Durable Object name requires durableWorkerKey query prop.");

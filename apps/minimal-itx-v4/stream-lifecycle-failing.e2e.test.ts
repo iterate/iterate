@@ -171,8 +171,8 @@ test("global streams reject project-scoped configured durable object subscribers
 
 test("global streams reject configured worker subscribers", async () => {
   // Worker subscribers are slightly different from Durable Object subscribers:
-  // the event stores a WorkerRef, not a Durable Object address. The wake path
-  // scopes that WorkerRef with the stream's own projectId, so project streams
+  // the event stores a DynamicWorkerRef, not a Durable Object address. The wake path
+  // scopes that DynamicWorkerRef with the stream's own projectId, so project streams
   // are safe by construction. A global stream has no projectId to provide, so
   // accepting this event would create durable desired state that can never be
   // woken safely. This test makes that rejection happen during append, before

@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@cloudflare/shell": "^0.3.4",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "capnweb": "^0.8.0",
     "ws": "^8.18.0",
     "zod": "~4.3.6"

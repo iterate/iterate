@@ -110,6 +110,7 @@ const MAX_CONSECUTIVE_INGEST_FAILURES = 3;
 const HOST_IDLE_TEARDOWN_MS = 5 * 60_000;
 
 type StreamProcessorHost = {
+  readonly stream: ConfiguredStream;
   /**
    * Register a named processor. The builder receives the host-provided base
    * deps (checkpoint storage in DO KV keyed by `name` and the host's stable
@@ -312,6 +313,7 @@ export function createStreamProcessorHost(
   }
 
   return {
+    stream: options.stream,
     add(name, build) {
       if (entries.has(name)) {
         throw new Error(`Stream processor "${name}" is already registered on this host`);

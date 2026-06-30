@@ -1,13 +1,14 @@
 import { env, RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import type { ProjectEgress } from "../../types.ts";
-import { fetchProjectEgress } from "./utils.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
 
 /**
- * Project-scoped outbound fetch. This is deliberately much smaller than the OS
- * egress system: no policy registry, no live shadowing, and no real secret
- * store yet. The goal is to prove that explicit project egress and dynamic
- * worker global fetch share one pipe.
+ * Public project egress facet.
+ *
+ * The Project Durable Object is the single egress decision point: it owns the
+ * live runtime interceptor slot and, when there is no interceptor, performs the
+ * terminal secret-substitution fetch path.
  */
 export class ProjectEgressRpcTarget extends RpcTarget implements ProjectEgress {
   constructor(readonly props: { projectId: string }) {
@@ -15,10 +16,11 @@ export class ProjectEgressRpcTarget extends RpcTarget implements ProjectEgress {
   }
 
   fetch(request: Request): Promise<Response> {
-    return fetchProjectEgress(request, {
-      projectId: this.props.projectId,
-      secrets: env.SECRET,
-    });
+    return projectStub(env.PROJECT, this.props.projectId).fetch(request);
+  }
+
+  intercept(handler: Parameters<ProjectEgress["intercept"]>[0]) {
+    return projectStub(env.PROJECT, this.props.projectId).interceptEgress(handler);
   }
 }
 
@@ -26,15 +28,16 @@ export class ProjectEgressRpcTarget extends RpcTarget implements ProjectEgress {
  * Host-minted Fetcher for Dynamic Worker `globalOutbound`. Workerd requires a
  * platform Fetcher here; a plain object with fetch() fails runtime validation.
  *
- * This stays in the project egress domain beside `ProjectEgressRpcTarget`
- * because both public RPC egress and dynamic-worker egress must share the same
- * placeholder substitution behavior.
+ * This named entrypoint stays as the Worker Loader gateway, but it immediately
+ * forwards to the Project Durable Object so explicit RPC egress and dynamic
+ * worker bare `fetch()` share one decision point.
  */
 export class ProjectEgressEntrypoint extends WorkerEntrypoint<Env, { projectId: string }> {
   fetch(request: Request): Promise<Response> {
-    return fetchProjectEgress(request, {
-      projectId: this.ctx.props.projectId,
-      secrets: this.env.SECRET,
-    });
+    return projectStub(this.env.PROJECT, this.ctx.props.projectId).fetch(request);
   }
+}
+
+function projectStub(projects: Env["PROJECT"], projectId: string) {
+  return projects.getByName(DurableObjectNameCodec.stringify({ path: "/", projectId }));
 }

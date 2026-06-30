@@ -45,15 +45,17 @@ export interface ProjectCollection {
  */
 export interface Project extends ItxCapabilityHost {
   agents: AgentCollection;
-  describe(): Promise<{ projectId: string; name: string }>;
+  describe(): Promise<ProjectDescription>;
   egress: ProjectEgress;
+  mcp: McpClientCollection;
+  openapi: OpenApiCollection;
   processor: StreamProcessorRpc<ProjectProcessorState>;
   repo: Repo;
   repos: ProjectRepoCollection;
   secrets: SecretCollection;
   streams: ProjectStreamCollection;
   worker: ProjectWorker;
-  workers: WorkerCollection;
+  workers: DynamicWorkerCollection;
 }
 
 /**
@@ -240,13 +242,80 @@ export interface StreamProcessorRpc<State = unknown> {
 }
 
 /** Capability-tree entry point for ad-hoc project-scoped worker refs. */
-export interface WorkerCollection {
-  get<T extends object = Record<string, unknown>>(ref: WorkerRef): WorkerCapability<T>;
+export interface DynamicWorkerCollection {
+  get<T extends object = Record<string, unknown>>(
+    ref: DynamicWorkerRef,
+  ): DynamicWorkerCapability<T>;
 }
 
-/** Project-owned egress fetcher used by dynamic workers and explicit callers. */
+/** Live replacement for project egress. It sees getSecret(...) placeholders, never material. */
+export type ProjectEgressInterceptor = (req: Request) => Promise<Response>;
+
+/** Disposable handle for one live project egress interception. */
+export interface ProjectEgressIntercept extends Disposable {
+  release(): Promise<void>;
+}
+
+/**
+ * Project-owned egress facet.
+ *
+ * `fetch` is the explicit outbound door. Dynamic workers' bare `fetch()` uses
+ * the same project egress path through the WorkerEntrypoint gateway.
+ *
+ * `intercept` installs one live runtime replacement on the Project Durable
+ * Object. Last writer wins; disposing or releasing the handle clears only the
+ * interceptor it installed if it is still current.
+ */
 export interface ProjectEgress {
   fetch(req: Request): Promise<Response>;
+  intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;
+}
+
+export interface CapabilityDescriptionMetadata {
+  instructions: string;
+  types: string;
+}
+
+export type ProjectDescription = {
+  capabilities: CapabilityDescription[];
+  name: string;
+  projectId: string;
+};
+
+export type CapabilityDescription = {
+  instructions?: string;
+  path: string[];
+  providedAtOffset?: number;
+  type: "builtin" | "live" | "dynamic-worker" | "mcp" | "openapi";
+  types?: string;
+};
+
+export interface OpenApiCollection {
+  connect(input: OpenApiConnectInput): Promise<OpenApiRpc>;
+}
+
+export type OpenApiConnectInput = {
+  baseUrl?: string;
+  headers?: Record<string, string>;
+  specUrl: string;
+};
+
+export interface OpenApiRpc {
+  describe(): Promise<CapabilityDescriptionMetadata>;
+}
+
+export interface McpClientCollection {
+  connect(input: McpClientConnectInput): Promise<McpClientRpc>;
+}
+
+export type McpClientConnectInput = {
+  headers?: Record<string, string>;
+  timeoutMs?: number;
+  url: string;
+};
+
+export interface McpClientRpc {
+  describe(): Promise<CapabilityDescriptionMetadata>;
 }
 
 /**
@@ -261,10 +330,7 @@ export interface ItxCapabilityHost {
     executionId: string;
     result: unknown;
   }>;
-  provideCapability(input: {
-    path: string[];
-    capability: ProvidedCapability;
-  }): Promise<CapabilityProvision>;
+  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;
   revokeCapability(input: RevokeCapabilityInput): Promise<void>;
 }
 
@@ -402,30 +468,74 @@ export type FlattenedCapabilityTarget = {
   invokeCapability(input: FlattenedCapabilityInvocation): unknown;
 };
 
-/**
- * Capability recipe accepted by `provideCapability`.
- *
- * Live targets are retained in the current ITX Durable Object incarnation.
- * Worker targets are durable recipes and load only when invoked.
- */
-export type ProvidedCapability =
-  | { flattenNestedPath?: false; target: unknown; type: "live" }
-  | { flattenNestedPath: true; target: FlattenedCapabilityTarget; type: "live" }
-  | { flattenNestedPath?: boolean; type: "worker"; workerRef: WorkerRef };
+/** Capability recipe accepted by `provideCapability`. */
+export type ProvideCapabilityInput =
+  | {
+      flattenNestedPath?: false;
+      instructions?: string;
+      path: string[];
+      target: unknown;
+      type: "live";
+      types?: string;
+    }
+  | {
+      flattenNestedPath: true;
+      instructions?: string;
+      path: string[];
+      target: FlattenedCapabilityTarget;
+      type: "live";
+      types?: string;
+    }
+  | {
+      flattenNestedPath?: boolean;
+      instructions?: string;
+      path: string[];
+      ref: DynamicWorkerRef;
+      type: "dynamic-worker";
+      types?: string;
+    }
+  | ({
+      instructions?: string;
+      path: string[];
+      type: "mcp";
+      types?: string;
+    } & McpClientConnectInput)
+  | ({
+      instructions?: string;
+      path: string[];
+      type: "openapi";
+      types?: string;
+    } & OpenApiConnectInput);
 
 /** Event payload stored when a capability is mounted on an ITX stream. */
 export type CapabilityProvidedPayload =
   | {
       flattenNestedPath?: boolean;
-      type: "live";
+      instructions?: string;
       path: string[];
+      type: "live";
+      types?: string;
     }
   | {
       flattenNestedPath?: boolean;
-      type: "worker";
+      instructions?: string;
       path: string[];
-      workerRef: WorkerRef;
-    };
+      ref: DynamicWorkerRef;
+      type: "dynamic-worker";
+      types?: string;
+    }
+  | ({
+      instructions?: string;
+      path: string[];
+      type: "mcp";
+      types?: string;
+    } & McpClientConnectInput)
+  | ({
+      instructions?: string;
+      path: string[];
+      type: "openapi";
+      types?: string;
+    } & OpenApiConnectInput);
 
 /** Reduced capability table row: payload plus the providing event offset. */
 export type CapabilityRecord = CapabilityProvidedPayload & {
@@ -466,7 +576,7 @@ export interface ItxAuth {
  * separate from runtime identity; the repo resolves the current worker source
  * and contributes its own cache key, so future repo commits affect the next use.
  */
-export type WorkerSource =
+export type DynamicWorkerSource =
   | {
       type: "inline";
       mainModule: string;
@@ -478,7 +588,7 @@ export type WorkerSource =
       sourcePath: string;
     };
 
-type WorkerRefBase = {
+type DynamicWorkerRefBase = {
   /**
    * ITX scope path for the worker's `env.ITX` binding and for stateful worker
    * Durable Object names. This is intentionally not the mounted capability path:
@@ -486,7 +596,7 @@ type WorkerRefBase = {
    * belong to the host stream path.
    */
   path: string;
-  source: WorkerSource;
+  source: DynamicWorkerSource;
 };
 
 /**
@@ -498,7 +608,7 @@ type WorkerRefBase = {
  * `ctx.facets.get(name, () => ({ class, id? }))`, which does not accept
  * WorkerEntrypoint-style props.
  */
-export type StatelessWorkerRef = WorkerRefBase & {
+export type StatelessDynamicWorkerRef = DynamicWorkerRefBase & {
   type: "stateless";
   entrypoint?: string;
   props?: Record<string, JsonValue>;
@@ -512,17 +622,17 @@ export type StatelessWorkerRef = WorkerRefBase & {
  * not a source cache key: source changes deliberately affect the next use of the
  * same durable worker identity.
  */
-export type StatefulWorkerRef = WorkerRefBase & {
+export type StatefulDynamicWorkerRef = DynamicWorkerRefBase & {
   type: "stateful";
   className: string;
   durableWorkerKey: string;
 };
 
 /** Worker recipe accepted by `workers.get` and worker-backed capabilities. */
-export type WorkerRef = StatelessWorkerRef | StatefulWorkerRef;
+export type DynamicWorkerRef = StatelessDynamicWorkerRef | StatefulDynamicWorkerRef;
 
 /** Dynamic worker RPC stub plus the disposal operation owned by the caller. */
-export type WorkerCapability<T extends object = Record<string, unknown>> = T & Disposable;
+export type DynamicWorkerCapability<T extends object = Record<string, unknown>> = T & Disposable;
 
 /**
  * Default seeded project worker contract.

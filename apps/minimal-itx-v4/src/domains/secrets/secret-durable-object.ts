@@ -19,21 +19,17 @@ import {
 
 export class SecretDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
-  readonly #stream = new StreamRpcTarget({
-    auth: trustedInternalAuthContext(),
-    path: this.#name.path,
-    projectId: this.#name.projectId,
+  readonly #processorHost = createStreamProcessorHost(this.ctx, {
+    stream: new StreamRpcTarget({
+      auth: trustedInternalAuthContext(),
+      path: this.#name.path,
+      projectId: this.#name.projectId,
+    }),
   });
-  readonly #processorHost = createStreamProcessorHost(this.ctx, { stream: this.#stream });
-  readonly #secretProcessor: SecretProcessor;
-
-  constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
-    this.#secretProcessor = this.#processorHost.add(
-      SecretProcessorContract.slug,
-      (deps) => new SecretProcessor(deps),
-    );
-  }
+  readonly #secretProcessor = this.#processorHost.add(
+    SecretProcessorContract.slug,
+    (deps) => new SecretProcessor(deps),
+  );
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
     return this.#processorHost.wakeStreamSubscriber(args);
@@ -57,7 +53,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       throw new Error("secret.update with egress requires existing material");
     }
 
-    const [event] = await this.#stream.append({
+    const [event] = await this.#processorHost.stream.append({
       type: "events.iterate.com/secret/updated",
       payload: {
         ...(input.egress === undefined ? {} : { egress: normalizeEgress(input.egress) }),
@@ -108,7 +104,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       state.encryptedMaterial,
       this.env.SECRET_ENCRYPTION_KEY,
     );
-    await this.#stream.append({
+    await this.#processorHost.stream.append({
       type: "events.iterate.com/secret/used",
       payload: {
         usedAt: new Date().toISOString(),

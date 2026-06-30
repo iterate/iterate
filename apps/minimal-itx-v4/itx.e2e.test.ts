@@ -5,12 +5,13 @@ import { newHttpBatchRpcSession, RpcTarget } from "capnweb";
 import { WebClient } from "@slack/web-api";
 import { z } from "zod";
 import { defineProcessorContract } from "./src/domains/streams/stream-processor.ts";
+import { startMockMcp, startMockOpenApi } from "./itx-capability-fixtures.ts";
 import { buildUrl, withItxSession } from "./test-helpers.ts";
 import type { ItxWebSocketMessage } from "./test-helpers.ts";
 import type { UnauthenticatedItx } from "./src/types.ts";
 import { TRUSTED_INTERNAL_ITX_TOKEN } from "./src/auth.ts";
 import { RepoArtifactNameCodec } from "./src/domains/repos/utils.ts";
-import type { WorkerRef } from "./src/types.ts";
+import type { DynamicWorkerRef } from "./src/types.ts";
 import {
   StreamProcessor,
   type StreamProcessorSnapshot,
@@ -322,11 +323,9 @@ describe("minimal itx v4", () => {
 
     using provision = await project.provideCapability({
       path: ["someMethodInTestRunner"],
-      capability: {
-        type: "live",
-        target: {
-          getSecret: (secretGetter: () => Promise<string>) => secretGetter(),
-        },
+      type: "live",
+      target: {
+        getSecret: (secretGetter: () => Promise<string>) => secretGetter(),
       },
     });
 
@@ -491,6 +490,203 @@ describe("minimal itx v4", () => {
     }
   });
 
+  test("Project egress intercept catches explicit and worker fetches before secret substitution", async () => {
+    const echo = await startEgressEcho();
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+
+    try {
+      using project = itx.projects.create({
+        slug: `project-egress-intercept-${crypto.randomUUID()}`,
+      });
+      const secretPath = `/secrets/egress-intercept/${crypto.randomUUID()}`;
+      using secret = project.secrets.get(secretPath);
+      await secret.update({
+        egress: { urls: [echo.url] },
+        material: "intercept-secret-material",
+      });
+      await waitForCondition(async () => (await secret.describe()).hasMaterial, {
+        description: "intercept proof secret to be available",
+      });
+
+      const secretReference = `Bearer getSecret({ path: "${secretPath}" })`;
+      using intercept = await project.egress.intercept(async (request) => {
+        return Response.json({
+          intercepted: true,
+          proof: request.headers.get(EGRESS_PROOF_HEADER),
+          url: request.url,
+        });
+      });
+
+      const explicitResponse = await project.egress.fetch(
+        new Request(echo.url, {
+          headers: { [EGRESS_PROOF_HEADER]: secretReference },
+        }),
+      );
+      await expect(explicitResponse.json()).resolves.toEqual({
+        intercepted: true,
+        proof: secretReference,
+        url: echo.url,
+      });
+
+      const workerBody = await project.worker.testFetch({
+        headerValue: secretReference,
+        url: echo.url,
+      });
+      expect(workerBody).toEqual({
+        intercepted: true,
+        proof: secretReference,
+        url: echo.url,
+      });
+      expect(JSON.stringify(workerBody)).not.toContain("intercept-secret-material");
+      expect((await secret.describe()).audit.usedCount).toBe(0);
+
+      await intercept.release();
+
+      const terminalResponse = await project.egress.fetch(
+        new Request(echo.url, {
+          headers: { [EGRESS_PROOF_HEADER]: secretReference },
+        }),
+      );
+      expect(echoedEgressProofHeader(await terminalResponse.json())).toBe(
+        "Bearer intercept-secret-material",
+      );
+    } finally {
+      await echo.close();
+    }
+  });
+
+  test("OpenAPI built-in connects directly and mounts as a described capability", async () => {
+    const api = await startMockOpenApi();
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+
+    try {
+      using project = itx.projects.create({ slug: `openapi-${crypto.randomUUID()}` });
+      const secretPath = `/secrets/openapi/${crypto.randomUUID()}`;
+      using secret = project.secrets.get(secretPath);
+      await secret.update({
+        egress: { urls: [api.url] },
+        material: "openapi-secret",
+      });
+      await waitForCondition(async () => (await secret.describe()).hasMaterial, {
+        description: "OpenAPI secret to be available",
+      });
+
+      const headers = { authorization: `Bearer getSecret({ path: "${secretPath}" })` };
+      const specUrl = `${api.url}/openapi.json`;
+
+      // Ad-hoc connect returns an RPC target immediately usable by scripts.
+      const direct = await project.openapi.connect({ headers, specUrl });
+      expect(await direct.describe()).toMatchObject({
+        instructions: expect.stringContaining("Tiny Pets"),
+        types: expect.stringContaining("export type Capability"),
+      });
+      await expect(
+        // @ts-expect-error - OpenAPI operations are derived at runtime.
+        direct.findPetsByStatus({ status: "available" }),
+      ).resolves.toEqual([{ id: 1, name: "available-pet", status: "available" }]);
+
+      // Mounted capabilities run the same connect path at provide time so
+      // project.describe() has the generated declarations without another API.
+      using _provision = await project.provideCapability({
+        headers,
+        path: ["pets"],
+        specUrl,
+        type: "openapi",
+      });
+      const described = await project.describe();
+      expect(described.capabilities).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            instructions: expect.stringContaining("Tiny Pets"),
+            path: ["pets"],
+            type: "openapi",
+            types: expect.stringContaining("findPetsByStatus"),
+          }),
+        ]),
+      );
+      await expect(
+        // @ts-expect-error - mounted OpenAPI capability root.
+        project.pets.findPetsByStatus({ status: "pending" }),
+      ).resolves.toEqual([{ id: 1, name: "pending-pet", status: "pending" }]);
+
+      expect(api.authHeaders).toEqual(expect.arrayContaining(["Bearer openapi-secret"]));
+    } finally {
+      await api.close();
+    }
+  });
+
+  test("MCP built-in connects directly and mounts as a described capability", async () => {
+    const mcp = await startMockMcp();
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+
+    try {
+      using project = itx.projects.create({ slug: `mcp-${crypto.randomUUID()}` });
+      const secretPath = `/secrets/mcp/${crypto.randomUUID()}`;
+      using secret = project.secrets.get(secretPath);
+      await secret.update({
+        egress: { urls: [mcp.url] },
+        material: "mcp-secret",
+      });
+      await waitForCondition(async () => (await secret.describe()).hasMaterial, {
+        description: "MCP secret to be available",
+      });
+
+      const headers = { authorization: `Bearer getSecret({ path: "${secretPath}" })` };
+
+      // Ad-hoc connect lists tools during connect and returns a callable RPC
+      // target. Calls reconnect per invocation, which keeps this proof stateless.
+      const direct = await project.mcp.connect({ headers, url: mcp.url });
+      expect(await direct.describe()).toMatchObject({
+        instructions: expect.stringContaining("Call tools directly"),
+        types: expect.stringContaining("search_docs"),
+      });
+      await expect(
+        // @ts-expect-error - MCP tools are derived at runtime.
+        direct.search_docs({ query: "Workers" }),
+      ).resolves.toEqual({ answer: "docs:Workers" });
+
+      using _provision = await project.provideCapability({
+        headers,
+        path: ["docs"],
+        type: "mcp",
+        url: mcp.url,
+      });
+      const described = await project.describe();
+      expect(described.capabilities).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: ["docs"],
+            type: "mcp",
+            types: expect.stringContaining("search_docs"),
+          }),
+        ]),
+      );
+      await expect(
+        // @ts-expect-error - mounted MCP capability root.
+        project.docs.search_docs({ query: "Durable Objects" }),
+      ).resolves.toEqual({ answer: "docs:Durable Objects" });
+
+      expect(mcp.methods).toEqual(
+        expect.arrayContaining(["initialize", "tools/list", "tools/call"]),
+      );
+      expect(mcp.authHeaders).toEqual(expect.arrayContaining(["Bearer mcp-secret"]));
+    } finally {
+      await mcp.close();
+    }
+  });
+
   test("Project repos, workers, runScript, and dynamic worker refs compose", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
@@ -605,32 +801,30 @@ describe("minimal itx v4", () => {
     expect(await directDb.sql("SELECT body FROM messages")).toEqual([{ body: "hello" }]);
     using _probeProvision = await project.provideCapability({
       path: ["probe"],
-      capability: {
-        type: "worker",
-        workerRef: {
-          entrypoint: "ProbeEntrypoint",
-          path: "/",
-          source: {
-            mainModule: "probe.js",
-            modules: {
-              "probe.js": `
-                import { WorkerEntrypoint } from "cloudflare:workers";
+      type: "dynamic-worker",
+      ref: {
+        entrypoint: "ProbeEntrypoint",
+        path: "/",
+        source: {
+          mainModule: "probe.js",
+          modules: {
+            "probe.js": `
+              import { WorkerEntrypoint } from "cloudflare:workers";
 
-                export class ProbeEntrypoint extends WorkerEntrypoint {
-                  async inspect() {
-                    const project = await this.env.ITX.get();
-                    const repo = await project.repo;
-                    return {
-                      repo: await repo.whoami(),
-                    };
-                  }
+              export class ProbeEntrypoint extends WorkerEntrypoint {
+                async inspect() {
+                  const project = await this.env.ITX.get();
+                  const repo = await project.repo;
+                  return {
+                    repo: await repo.whoami(),
+                  };
                 }
-              `,
-            },
-            type: "inline",
+              }
+            `,
           },
-          type: "stateless",
+          type: "inline",
         },
+        type: "stateless",
       },
     });
     // @ts-expect-error - dynamic capability root
@@ -640,17 +834,15 @@ describe("minimal itx v4", () => {
 
     using _projectWorkerRefProvision = await project.provideCapability({
       path: ["projectWorkerRef"],
-      capability: {
-        type: "worker",
-        workerRef: {
-          path: "/",
-          source: {
-            repoPath: "/",
-            sourcePath: "worker.js",
-            type: "repo",
-          },
-          type: "stateless",
+      type: "dynamic-worker",
+      ref: {
+        path: "/",
+        source: {
+          repoPath: "/",
+          sourcePath: "worker.js",
+          type: "repo",
         },
+        type: "stateless",
       },
     });
     // @ts-expect-error - dynamic capability root
@@ -661,19 +853,17 @@ describe("minimal itx v4", () => {
 
     using _counterFacetProvision = await project.provideCapability({
       path: ["counterFacet"],
-      capability: {
-        type: "worker",
-        workerRef: {
-          className: "CounterDurableObject",
-          durableWorkerKey: `counter-facet-${crypto.randomUUID()}`,
-          path: "/",
-          source: {
-            repoPath: "/",
-            sourcePath: "worker.js",
-            type: "repo",
-          },
-          type: "stateful",
+      type: "dynamic-worker",
+      ref: {
+        className: "CounterDurableObject",
+        durableWorkerKey: `counter-facet-${crypto.randomUUID()}`,
+        path: "/",
+        source: {
+          repoPath: "/",
+          sourcePath: "worker.js",
+          type: "repo",
         },
+        type: "stateful",
       },
     });
     // @ts-expect-error - dynamic capability root
@@ -683,19 +873,17 @@ describe("minimal itx v4", () => {
 
     using _dbProvision = await project.provideCapability({
       path: ["db"],
-      capability: {
-        type: "worker",
-        workerRef: {
-          className: "DatabaseDurableObject",
-          durableWorkerKey: `mounted-db-${crypto.randomUUID()}`,
-          path: "/",
-          source: {
-            repoPath: "/",
-            sourcePath: "worker.js",
-            type: "repo",
-          },
-          type: "stateful",
+      type: "dynamic-worker",
+      ref: {
+        className: "DatabaseDurableObject",
+        durableWorkerKey: `mounted-db-${crypto.randomUUID()}`,
+        path: "/",
+        source: {
+          repoPath: "/",
+          sourcePath: "worker.js",
+          type: "repo",
         },
+        type: "stateful",
       },
     });
     // @ts-expect-error - dynamic database capability mounted by this test.
@@ -704,6 +892,25 @@ describe("minimal itx v4", () => {
     await project.db.sql("INSERT INTO records VALUES (?)", "mounted");
     // @ts-expect-error - dynamic database capability mounted by this test.
     expect(await project.db.sql("SELECT value FROM records")).toEqual([{ value: "mounted" }]);
+  });
+
+  test("repo worker source projection is cleared when the main worker file is deleted", async () => {
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+
+    using project = itx.projects.create({ slug: "deleted-worker-source-projection" });
+    const warmResponse = await project.worker.fetch(new Request("https://example.com/warm"));
+    expect(await warmResponse.text()).toBe("project worker fetched /warm");
+
+    await project.repo.commitFiles({
+      changes: [{ delete: true, path: "worker.js" }],
+      message: "Delete default project worker",
+    });
+
+    await expect(project.worker.fetch(new Request("https://example.com/warm"))).rejects.toThrow();
   });
 
   test("Worker capabilities can flatten nested paths into invokeCapability", async () => {
@@ -739,15 +946,13 @@ describe("minimal itx v4", () => {
 
     using _statelessRouterProvision = await project.provideCapability({
       path: ["statelessRouter"],
-      capability: {
-        flattenNestedPath: true,
-        type: "worker",
-        workerRef: {
-          entrypoint: "RouterEntrypoint",
-          path: "/",
-          source,
-          type: "stateless",
-        },
+      flattenNestedPath: true,
+      type: "dynamic-worker",
+      ref: {
+        entrypoint: "RouterEntrypoint",
+        path: "/",
+        source,
+        type: "stateless",
       },
     });
     // @ts-expect-error - dynamic capability root
@@ -767,16 +972,14 @@ describe("minimal itx v4", () => {
 
     using _statefulRouterProvision = await project.provideCapability({
       path: ["statefulRouter"],
-      capability: {
-        flattenNestedPath: true,
-        type: "worker",
-        workerRef: {
-          className: "RouterDurableObject",
-          durableWorkerKey: `router-${crypto.randomUUID()}`,
-          path: "/",
-          source,
-          type: "stateful",
-        },
+      flattenNestedPath: true,
+      type: "dynamic-worker",
+      ref: {
+        className: "RouterDurableObject",
+        durableWorkerKey: `router-${crypto.randomUUID()}`,
+        path: "/",
+        source,
+        type: "stateful",
       },
     });
     // @ts-expect-error - dynamic capability root
@@ -957,7 +1160,7 @@ describe("minimal itx v4", () => {
       sourcePath: "worker.js",
       type: "repo",
     } as const;
-    const inlineProjectStateless: WorkerRef = {
+    const inlineProjectStateless: DynamicWorkerRef = {
       entrypoint: "InlineProjectEntrypoint",
       path: "/",
       source: {
@@ -987,7 +1190,7 @@ describe("minimal itx v4", () => {
       },
       type: "stateless",
     };
-    const inlineAgentStateful: WorkerRef = {
+    const inlineAgentStateful: DynamicWorkerRef = {
       className: "InlineAgentCounterDurableObject",
       durableWorkerKey: `inline-agent-counter-${crypto.randomUUID()}`,
       path: agentPath,
@@ -1023,36 +1226,34 @@ describe("minimal itx v4", () => {
 
     using _repoCounterProvision = await project.provideCapability({
       path: ["repoCounter"],
-      capability: {
-        type: "worker",
-        workerRef: {
-          className: "RepoProjectCounterDurableObject",
-          durableWorkerKey: `repo-project-counter-${crypto.randomUUID()}`,
-          path: "/",
-          source: repoWorkerSource,
-          type: "stateful",
-        },
+      type: "dynamic-worker",
+      ref: {
+        className: "RepoProjectCounterDurableObject",
+        durableWorkerKey: `repo-project-counter-${crypto.randomUUID()}`,
+        path: "/",
+        source: repoWorkerSource,
+        type: "stateful",
       },
     });
     using _inlineProjectProvision = await project.provideCapability({
       path: ["inlineProject"],
-      capability: { type: "worker", workerRef: inlineProjectStateless },
+      type: "dynamic-worker",
+      ref: inlineProjectStateless,
     });
     using _repoAgentProvision = await agent.provideCapability({
       path: ["repoAgent"],
-      capability: {
-        type: "worker",
-        workerRef: {
-          entrypoint: "RepoAgentEntrypoint",
-          path: agentPath,
-          source: repoWorkerSource,
-          type: "stateless",
-        },
+      type: "dynamic-worker",
+      ref: {
+        entrypoint: "RepoAgentEntrypoint",
+        path: agentPath,
+        source: repoWorkerSource,
+        type: "stateless",
       },
     });
     using _inlineCounterProvision = await agent.provideCapability({
       path: ["inlineCounter"],
-      capability: { type: "worker", workerRef: inlineAgentStateful },
+      type: "dynamic-worker",
+      ref: inlineAgentStateful,
     });
 
     const projectCapabilities = project as typeof project & {
@@ -1117,12 +1318,10 @@ describe("minimal itx v4", () => {
 
     using _projectToolProvision = await project.provideCapability({
       path: ["projectTool"],
-      capability: {
-        type: "live",
-        target: {
-          format(input: { text: string }) {
-            return `project tool saw ${input.text}`;
-          },
+      type: "live",
+      target: {
+        format(input: { text: string }) {
+          return `project tool saw ${input.text}`;
         },
       },
     });
@@ -1251,50 +1450,46 @@ describe("minimal itx v4", () => {
 
     using _agentProbeProvision = await agent.provideCapability({
       path: ["agentProbe"],
-      capability: {
-        type: "worker",
-        workerRef: {
-          entrypoint: "AgentProbeEntrypoint",
-          path: agentPath,
-          source: {
-            mainModule: "agent-probe.js",
-            modules: {
-              "agent-probe.js": `
-                import { WorkerEntrypoint } from "cloudflare:workers";
+      type: "dynamic-worker",
+      ref: {
+        entrypoint: "AgentProbeEntrypoint",
+        path: agentPath,
+        source: {
+          mainModule: "agent-probe.js",
+          modules: {
+            "agent-probe.js": `
+              import { WorkerEntrypoint } from "cloudflare:workers";
 
-                export class AgentProbeEntrypoint extends WorkerEntrypoint {
-                  async inspect(input) {
-                    const itx = await this.env.ITX.get();
-                    return {
-                      input,
-                      projectId: ${JSON.stringify(projectId)},
-                      whoami: await itx.agent.whoami(),
-                    };
-                  }
+              export class AgentProbeEntrypoint extends WorkerEntrypoint {
+                async inspect(input) {
+                  const itx = await this.env.ITX.get();
+                  return {
+                    input,
+                    projectId: ${JSON.stringify(projectId)},
+                    whoami: await itx.agent.whoami(),
+                  };
                 }
-              `,
-            },
-            type: "inline",
+              }
+            `,
           },
-          type: "stateless",
+          type: "inline",
         },
+        type: "stateless",
       },
     });
     using _agentCounterProvision = await agent.provideCapability({
       path: ["agentCounter"],
-      capability: {
-        type: "worker",
-        workerRef: {
-          className: "CounterDurableObject",
-          durableWorkerKey,
-          path: agentPath,
-          source: {
-            repoPath: "/",
-            sourcePath: "worker.js",
-            type: "repo",
-          },
-          type: "stateful",
+      type: "dynamic-worker",
+      ref: {
+        className: "CounterDurableObject",
+        durableWorkerKey,
+        path: agentPath,
+        source: {
+          repoPath: "/",
+          sourcePath: "worker.js",
+          type: "repo",
         },
+        type: "stateful",
       },
     });
 
@@ -1395,11 +1590,13 @@ describe("minimal itx v4", () => {
 
     using _projectScopeProbeProvision = await project.provideCapability({
       path: ["scopeProbe"],
-      capability: { type: "worker", workerRef: scopeProbeWorkerRef("/") },
+      type: "dynamic-worker",
+      ref: scopeProbeWorkerRef("/"),
     });
     using _agentScopeProbeProvision = await agent.provideCapability({
       path: ["scopeProbe"],
-      capability: { type: "worker", workerRef: scopeProbeWorkerRef(agentPath) },
+      type: "dynamic-worker",
+      ref: scopeProbeWorkerRef(agentPath),
     });
 
     // @ts-expect-error - dynamic project capability mounted by this test.
@@ -1774,13 +1971,11 @@ describe("minimal itx v4", () => {
 
     using _toolsProvision = await project.provideCapability({
       path: ["tools"],
-      capability: {
-        type: "live",
-        target: {
-          math: {
-            add(a: number, b: number) {
-              return { marker, sum: a + b };
-            },
+      type: "live",
+      target: {
+        math: {
+          add(a: number, b: number) {
+            return { marker, sum: a + b };
           },
         },
       },
@@ -1814,10 +2009,8 @@ describe("minimal itx v4", () => {
 
     using _addProvision = await project.provideCapability({
       path: ["add"],
-      capability: {
-        type: "live",
-        target: (a: number, b: number) => ({ marker, sum: a + b }),
-      },
+      type: "live",
+      target: (a: number, b: number) => ({ marker, sum: a + b }),
     });
 
     using callerSession = withItxSession();
@@ -1853,7 +2046,8 @@ describe("minimal itx v4", () => {
 
     using _mathProvision = await project.provideCapability({
       path: ["math"],
-      capability: { type: "live", target: new MathSdk() },
+      type: "live",
+      target: new MathSdk(),
     });
 
     using callerSession = withItxSession();
@@ -1904,7 +2098,8 @@ describe("minimal itx v4", () => {
 
     await project.provideCapability({
       path: ["slack"],
-      capability: { type: "live", target: new SlackSdk() },
+      type: "live",
+      target: new SlackSdk(),
     });
 
     using callerSession = withItxSession();
@@ -1945,11 +2140,9 @@ describe("minimal itx v4", () => {
 
     using _carrierProvision = await project.provideCapability({
       path: ["carrier"],
-      capability: {
-        flattenNestedPath: true,
-        type: "live",
-        target: new Carrier(),
-      },
+      flattenNestedPath: true,
+      type: "live",
+      target: new Carrier(),
     });
 
     using callerSession = withItxSession();
@@ -1983,12 +2176,10 @@ describe("minimal itx v4", () => {
 
     using _oldProvision = await project.provideCapability({
       path: ["replaceProbe"],
-      capability: {
-        type: "live",
-        target: {
-          value() {
-            return `old:${marker}`;
-          },
+      type: "live",
+      target: {
+        value() {
+          return `old:${marker}`;
         },
       },
     });
@@ -1998,12 +2189,10 @@ describe("minimal itx v4", () => {
 
     using _newProvision = await project.provideCapability({
       path: ["replaceProbe"],
-      capability: {
-        type: "live",
-        target: {
-          value() {
-            return `new:${marker}`;
-          },
+      type: "live",
+      target: {
+        value() {
+          return `new:${marker}`;
         },
       },
     });
@@ -2023,12 +2212,10 @@ describe("minimal itx v4", () => {
 
     using _provision = await project.provideCapability({
       path: ["replaceProbe"],
-      capability: {
-        type: "live",
-        target: {
-          value() {
-            return `old:${marker}`;
-          },
+      type: "live",
+      target: {
+        value() {
+          return `old:${marker}`;
         },
       },
     });
@@ -2036,10 +2223,8 @@ describe("minimal itx v4", () => {
     await expect(
       project.provideCapability({
         path: ["replaceProbe"],
-        capability: {
-          type: "worker",
-          workerRef: { source: { type: "inline" }, type: "stateless" } as never,
-        },
+        type: "dynamic-worker",
+        ref: { source: { type: "inline" }, type: "stateless" } as never,
       }),
     ).rejects.toThrow();
 
@@ -2066,11 +2251,9 @@ describe("minimal itx v4", () => {
 
       using provision = await project.provideCapability({
         path: ["slack"],
-        capability: {
-          flattenNestedPath: true,
-          type: "live",
-          target: new PathFunctionTarget(slack),
-        },
+        flattenNestedPath: true,
+        type: "live",
+        target: new PathFunctionTarget(slack),
       });
 
       using callerSession = withItxSession();

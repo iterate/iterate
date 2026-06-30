@@ -488,6 +488,9 @@ importers:
       '@cloudflare/shell':
         specifier: ^0.3.4
         version: 0.3.6(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@tanstack/ai@0.10.2)(ai@6.0.159(zod@4.3.6))(zod@4.3.6)
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.29.0
+        version: 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6)
       capnweb:
         specifier: https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz
         version: https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz(patch_hash=e344999b4917e71122b7b2b1838077c1837447247e8e5c7c9c63dfedd913db24)

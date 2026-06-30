@@ -5,18 +5,21 @@ import {
 import { normalizePath } from "../durable-object-names.ts";
 import type {
   CapabilityProvidedPayload,
+  CapabilityDescription,
   CapabilityRecord,
   ItxCapabilityHost,
   JsonValue,
   RevokeCapabilityInput,
-  StatelessWorkerRef,
+  StatelessDynamicWorkerRef,
   StreamEvent,
 } from "../../types.ts";
 import { sha256Hex } from "../workers/utils.ts";
-import { WorkerRef as WorkerRefSchema } from "../workers/schemas.ts";
-import type { WorkerRunner } from "../workers/worker-runner.ts";
+import { DynamicWorkerRef as DynamicWorkerRefSchema } from "../workers/schemas.ts";
+import type { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
 import { ItxProcessorContract } from "./itx-processor-contract.ts";
+import { McpClientRpcTarget, invokeMcpCapability } from "./mcp-client-rpc-target.ts";
+import { OpenApiRpcTarget, invokeOpenApiCapability } from "./openapi-rpc-target.ts";
 
 export type ProvideCapabilityInput = Parameters<ItxCapabilityHost["provideCapability"]>[0];
 export type RunScriptResult = Awaited<ReturnType<ItxCapabilityHost["runScript"]>>;
@@ -78,17 +81,20 @@ function resolveLongestPrefix(records: CapabilityRecord[], path: string[]) {
 
 export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
   readonly contract = ItxProcessorContract;
+  #egress: Fetcher;
   #path: string;
-  #workerRunner: WorkerRunner;
+  #workerRunner: DynamicWorkerRunner;
   #liveCapabilities = new Map<string, LiveCapability>();
 
   constructor(
     args: StreamProcessorConstructorArgs<typeof ItxProcessorContract, object> & {
+      egress: Fetcher;
       path: string;
-      workerRunner: WorkerRunner;
+      workerRunner: DynamicWorkerRunner;
     },
   ) {
     super(args);
+    this.#egress = args.egress;
     this.#path = normalizePath(args.path);
     this.#workerRunner = args.workerRunner;
   }
@@ -160,12 +166,13 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     );
   }
 
-  async provideCapability({ capability, path }: ProvideCapabilityInput) {
+  async provideCapability(input: ProvideCapabilityInput) {
+    const { path } = input;
     assertCapabilityPath(path);
     const key = liveKey(path);
     const previousLive = this.#liveCapabilities.get(key);
     let record: CapabilityProvidedPayload;
-    if (capability.type === "worker") {
+    if (input.type === "dynamic-worker") {
       // Worker capabilities are durable recipes. `provideCapability()` is only
       // allowed to validate the shape and append the record; it must not load the
       // worker, touch Worker Loader, or create/abort a stateful facet. That keeps
@@ -173,24 +180,51 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
       // or broken code now fail on first invocation, which is simpler than a
       // provide-time "validation" path that can mutate runtime state before the
       // capability-provided event exists.
-      const workerRef = WorkerRefSchema.parse(capability.workerRef);
+      const ref = DynamicWorkerRefSchema.parse(input.ref);
       record = {
-        flattenNestedPath: capability.flattenNestedPath === true ? true : undefined,
+        flattenNestedPath: input.flattenNestedPath === true ? true : undefined,
+        instructions: input.instructions,
         path,
-        type: "worker",
-        workerRef,
+        ref,
+        type: "dynamic-worker",
+        types: input.types,
       };
-    } else {
+    } else if (input.type === "live") {
       record = {
-        flattenNestedPath: capability.flattenNestedPath === true ? true : undefined,
+        flattenNestedPath: input.flattenNestedPath === true ? true : undefined,
+        instructions: input.instructions,
         path,
         type: "live",
+        types: input.types,
+      };
+    } else if (input.type === "mcp") {
+      // MCP/OpenAPI are durable configs, but provideCapability also proves the
+      // remote is reachable and captures its current self-description. Passing
+      // explicit instructions/types overwrites the derived values.
+      const description = await describeMcpCapability(input, {
+        egress: this.#egress,
+      });
+      record = {
+        ...input,
+        instructions: input.instructions ?? description.instructions,
+        types: input.types ?? description.types,
+      };
+    } else {
+      // OpenAPI uses the same connect path for ad-hoc project.openapi.connect()
+      // and durable mounts, so the direct and mounted surfaces cannot drift.
+      const description = await describeOpenApiCapability(input, {
+        egress: this.#egress,
+      });
+      record = {
+        ...input,
+        instructions: input.instructions ?? description.instructions,
+        types: input.types ?? description.types,
       };
     }
     const nextLive =
-      capability.type === "live"
-        ? retainLiveCapabilityProvider(capability.target, {
-            flattenNestedPath: capability.flattenNestedPath === true,
+      input.type === "live"
+        ? retainLiveCapabilityProvider(input.target, {
+            flattenNestedPath: input.flattenNestedPath === true,
           })
         : undefined;
 
@@ -243,15 +277,31 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     assertCapabilityPath(path);
     const hit = resolveLongestPrefix(this.state.capabilities, path);
     if (!hit) throw new Error(`no capability "${path.join(".")}"`);
-    if (hit.record.type === "worker") {
+    if (hit.record.type === "dynamic-worker") {
       // The mounted path is routing metadata only. The worker sees the remaining
-      // method path (`db.sql` -> `sql`) and its own WorkerRef path remains the ITX
+      // method path (`db.sql` -> `sql`) and its own DynamicWorkerRef path remains the ITX
       // stream scope that supplies env.ITX.
       return await this.#workerRunner.invokeCapability({
         args,
         flattenNestedPath: hit.record.flattenNestedPath === true,
         path: hit.rest,
-        ref: hit.record.workerRef,
+        ref: hit.record.ref,
+      });
+    }
+    if (hit.record.type === "mcp") {
+      return await invokeMcpCapability({
+        config: hit.record,
+        deps: { egress: this.#egress },
+        path: hit.rest,
+        rpcArgs: args,
+      });
+    }
+    if (hit.record.type === "openapi") {
+      return await invokeOpenApiCapability({
+        config: hit.record,
+        deps: { egress: this.#egress },
+        path: hit.rest,
+        rpcArgs: args,
       });
     }
     const live = this.#liveCapabilities.get(liveKey(hit.record.path));
@@ -259,6 +309,16 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
       throw new Error(`capability "${hit.record.path.join(".")}" is offline`);
     }
     return await live.invoke(hit.rest, args);
+  }
+
+  describeCapabilities(): CapabilityDescription[] {
+    return this.state.capabilities.map((record) => ({
+      instructions: record.instructions,
+      path: record.path,
+      providedAtOffset: record.providedAtOffset,
+      type: record.type,
+      types: record.types,
+    }));
   }
 
   async runScript(code: string): Promise<RunScriptResult> {
@@ -315,7 +375,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     }
   }
 
-  async #scriptWorkerRef(code: string): Promise<StatelessWorkerRef> {
+  async #scriptWorkerRef(code: string): Promise<StatelessDynamicWorkerRef> {
     const source = `
       import { WorkerEntrypoint } from "cloudflare:workers";
       const fn = ${code};
@@ -326,8 +386,8 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
         }
       }
     `;
-    // runScript is deliberately expressed as a stateless inline WorkerRef. That
-    // keeps script execution on the same WorkerRunner path as project workers
+    // runScript is deliberately expressed as a stateless inline DynamicWorkerRef. That
+    // keeps script execution on the same DynamicWorkerRunner path as project workers
     // and provided stateless capabilities; ITX adds only the journal events.
     return {
       path: this.#path,
@@ -341,4 +401,22 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
       type: "stateless",
     };
   }
+}
+
+type CapabilityConnectDeps = { egress: Fetcher };
+
+async function describeMcpCapability(
+  input: Extract<ProvideCapabilityInput, { type: "mcp" }>,
+  deps: CapabilityConnectDeps,
+) {
+  const target = await McpClientRpcTarget.connect(input, deps);
+  return await target.describe();
+}
+
+async function describeOpenApiCapability(
+  input: Extract<ProvideCapabilityInput, { type: "openapi" }>,
+  deps: CapabilityConnectDeps,
+) {
+  const target = await OpenApiRpcTarget.connect(input, deps);
+  return await target.describe();
 }

@@ -1,39 +1,86 @@
 import { z } from "zod";
 import { defineProcessorContract } from "../streams/stream-processor.ts";
-import { WorkerRef } from "../workers/schemas.ts";
+import { DynamicWorkerRef } from "../workers/schemas.ts";
 import type {
   CapabilityProvidedPayload as CapabilityProvidedPayloadType,
   CapabilityRecord as CapabilityRecordType,
   RevokeCapabilityInput,
 } from "../../types.ts";
 
+const CapabilityMetadata = {
+  instructions: z.string().optional(),
+  types: z.string().optional(),
+};
+
+const OpenApiFields = {
+  baseUrl: z.string().optional(),
+  headers: z.record(z.string(), z.string()).optional(),
+  specUrl: z.string(),
+};
+
+const McpFields = {
+  headers: z.record(z.string(), z.string()).optional(),
+  timeoutMs: z.number().int().positive().optional(),
+  url: z.string(),
+};
+
 const CapabilityProvidedPayload = z.discriminatedUnion("type", [
   z.strictObject({
+    ...CapabilityMetadata,
     flattenNestedPath: z.boolean().optional(),
     path: z.array(z.string()),
     type: z.literal("live"),
   }),
   z.strictObject({
+    ...CapabilityMetadata,
     flattenNestedPath: z.boolean().optional(),
     path: z.array(z.string()),
-    type: z.literal("worker"),
-    workerRef: WorkerRef,
+    ref: DynamicWorkerRef,
+    type: z.literal("dynamic-worker"),
+  }),
+  z.strictObject({
+    ...CapabilityMetadata,
+    ...McpFields,
+    path: z.array(z.string()),
+    type: z.literal("mcp"),
+  }),
+  z.strictObject({
+    ...CapabilityMetadata,
+    ...OpenApiFields,
+    path: z.array(z.string()),
+    type: z.literal("openapi"),
   }),
 ]) satisfies z.ZodType<CapabilityProvidedPayloadType, unknown>;
 
 const CapabilityRecord = z.discriminatedUnion("type", [
   z.strictObject({
+    ...CapabilityMetadata,
     flattenNestedPath: z.boolean().optional(),
     path: z.array(z.string()),
     providedAtOffset: z.number().int().nonnegative(),
     type: z.literal("live"),
   }),
   z.strictObject({
+    ...CapabilityMetadata,
     flattenNestedPath: z.boolean().optional(),
     path: z.array(z.string()),
     providedAtOffset: z.number().int().nonnegative(),
-    type: z.literal("worker"),
-    workerRef: WorkerRef,
+    ref: DynamicWorkerRef,
+    type: z.literal("dynamic-worker"),
+  }),
+  z.strictObject({
+    ...CapabilityMetadata,
+    ...McpFields,
+    path: z.array(z.string()),
+    providedAtOffset: z.number().int().nonnegative(),
+    type: z.literal("mcp"),
+  }),
+  z.strictObject({
+    ...CapabilityMetadata,
+    ...OpenApiFields,
+    path: z.array(z.string()),
+    providedAtOffset: z.number().int().nonnegative(),
+    type: z.literal("openapi"),
   }),
 ]) satisfies z.ZodType<CapabilityRecordType, unknown>;
 

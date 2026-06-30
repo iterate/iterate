@@ -10,6 +10,8 @@ import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
 import { normalizeAgentPath } from "./domains/agents/utils.ts";
 import { CapabilityProvisionRpcTarget } from "./domains/itx/capability-provision.ts";
+import { McpClientCollectionRpcTarget } from "./domains/itx/mcp-client-rpc-target.ts";
+import { OpenApiCollectionRpcTarget } from "./domains/itx/openapi-rpc-target.ts";
 import {
   itxEntrypointProps,
   itxEntrypointScopeCacheKey,
@@ -26,8 +28,8 @@ import {
   buildDurableObjectProcessorSubscriptionConfiguredEvent,
   resolveStreamPath,
 } from "./domains/streams/utils.ts";
-import { WorkerRef as WorkerRefSchema } from "./domains/workers/schemas.ts";
-import { WorkerRunner } from "./domains/workers/worker-runner.ts";
+import { DynamicWorkerRef as WorkerRefSchema } from "./domains/workers/schemas.ts";
+import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
 import type {
   Agent,
   AgentCollection,
@@ -35,7 +37,11 @@ import type {
   CfExecutionContext,
   ItxAuth,
   ItxRoot,
+  McpClientCollection,
+  OpenApiCollection,
   Project,
+  CapabilityDescription,
+  ProjectDescription,
   ProjectCollection,
   ProjectRepoCollection,
   ProjectStreamCollection,
@@ -44,14 +50,14 @@ import type {
   RepoCollection,
   Secret,
   SecretCollection,
-  StatelessWorkerRef,
+  StatelessDynamicWorkerRef,
   Stream,
   StreamCollection,
   StreamSubscriptionHandle,
   UnauthenticatedItx,
-  WorkerCapability,
-  WorkerCollection,
-  WorkerRef,
+  DynamicWorkerCapability,
+  DynamicWorkerCollection,
+  DynamicWorkerRef,
 } from "./types.ts";
 
 export class StreamRpcTarget extends RpcTarget implements Stream {
@@ -438,7 +444,7 @@ class AgentRpcTarget extends RpcTarget implements Agent {
  * `get(ref)` mirrors the desired capability-tree shape:
  * `itx.projects.get("prj").workers.get(ref).someRpcMethod()`.
  */
-class WorkerCollectionRpcTarget extends RpcTarget implements WorkerCollection {
+class DynamicWorkerCollectionRpcTarget extends RpcTarget implements DynamicWorkerCollection {
   constructor(
     readonly props: {
       auth: ItxAuth;
@@ -451,34 +457,36 @@ class WorkerCollectionRpcTarget extends RpcTarget implements WorkerCollection {
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  get<T extends object = Record<string, unknown>>(ref: Parameters<WorkerCollection["get"]>[0]) {
+  get<T extends object = Record<string, unknown>>(
+    ref: Parameters<DynamicWorkerCollection["get"]>[0],
+  ) {
     const parsed = WorkerRefSchema.parse(ref);
-    return new WorkerRpcTarget({
+    return new DynamicWorkerRpcTarget({
       ctx: this.props.ctx,
       loader: this.props.loader,
       projectId: this.props.projectId,
       ref: parsed,
-    }) as unknown as WorkerCapability<T>;
+    }) as unknown as DynamicWorkerCapability<T>;
   }
 }
 
 /**
- * RPC wrapper around a single WorkerRef.
+ * RPC wrapper around a single DynamicWorkerRef.
  *
  * The returned object is a path proxy: unknown properties become path segments
  * and eventually call `invokeCapability`. Dynamic workers do not share a fixed
  * method surface, so this wrapper deliberately exposes no method names beyond
  * the flattened capability dispatcher.
  */
-class WorkerRpcTarget extends RpcTarget {
-  readonly #runner: WorkerRunner;
-  readonly #ref: WorkerRef;
+class DynamicWorkerRpcTarget extends RpcTarget {
+  readonly #runner: DynamicWorkerRunner;
+  readonly #ref: DynamicWorkerRef;
 
   constructor(props: {
     ctx: CfExecutionContext;
     loader: Env["LOADER"];
     projectId: string;
-    ref: WorkerRef;
+    ref: DynamicWorkerRef;
   }) {
     super();
     this.#ref = props.ref;
@@ -486,7 +494,7 @@ class WorkerRpcTarget extends RpcTarget {
       path: normalizePath(props.ref.path),
       projectId: props.projectId,
     });
-    this.#runner = new WorkerRunner({
+    this.#runner = new DynamicWorkerRunner({
       bindings: {
         // The dynamic worker's ITX binding is supplied by the host context, not
         // by the worker ref. Props remain worker-supplied, but auth/scope stay
@@ -502,7 +510,7 @@ class WorkerRpcTarget extends RpcTarget {
   }
 
   async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
-    // Keep every dynamic worker invocation behind WorkerRunner. Stateless
+    // Keep every dynamic worker invocation behind DynamicWorkerRunner. Stateless
     // entrypoints, stateful DO facets, provided worker capabilities, and
     // project.worker all then share the same loader/egress/ITX binding rules.
     // Return values pass through untouched on purpose: an RpcTarget returned by
@@ -583,6 +591,19 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
 }
 
 type ProjectRpcTargetProps = { auth: ItxAuth; ctx: CfExecutionContext; projectId: string };
+const PROJECT_BUILTIN_CAPABILITY_PATHS = [
+  "agents",
+  "egress",
+  "mcp",
+  "openapi",
+  "processor",
+  "repo",
+  "repos",
+  "secrets",
+  "streams",
+  "worker",
+  "workers",
+] as const;
 
 export class ProjectRpcTarget extends RpcTarget implements Project {
   constructor(readonly props: ProjectRpcTargetProps) {
@@ -601,8 +622,15 @@ export class ProjectRpcTarget extends RpcTarget implements Project {
     );
   }
 
-  describe() {
-    return this.durableObjectStub.describe();
+  async describe(): Promise<ProjectDescription> {
+    const [project, mountedCapabilities] = await Promise.all([
+      this.durableObjectStub.describe(),
+      this.#itx.describeCapabilities(),
+    ]);
+    return {
+      ...project,
+      capabilities: [...projectBuiltinCapabilities(), ...mountedCapabilities],
+    };
   }
 
   get processor() {
@@ -660,6 +688,18 @@ export class ProjectRpcTarget extends RpcTarget implements Project {
     return new ProjectEgressRpcTarget({ projectId: this.props.projectId });
   }
 
+  get mcp(): McpClientCollection {
+    return new McpClientCollectionRpcTarget({
+      egress: projectEgressFetcher(this.props.ctx.exports, this.props.projectId),
+    });
+  }
+
+  get openapi(): OpenApiCollection {
+    return new OpenApiCollectionRpcTarget({
+      egress: projectEgressFetcher(this.props.ctx.exports, this.props.projectId),
+    });
+  }
+
   get repos() {
     return new ProjectRepoCollectionRpcTarget({
       auth: this.props.auth,
@@ -683,7 +723,7 @@ export class ProjectRpcTarget extends RpcTarget implements Project {
   }
 
   get workers() {
-    return new WorkerCollectionRpcTarget({
+    return new DynamicWorkerCollectionRpcTarget({
       auth: this.props.auth,
       ctx: this.props.ctx,
       loader: env.LOADER,
@@ -721,7 +761,7 @@ export class AgentItxRpcTarget extends ProjectRpcTarget implements AgentItx {
   }
 }
 
-function defaultProjectWorkerRef(): StatelessWorkerRef {
+function defaultProjectWorkerRef(): StatelessDynamicWorkerRef {
   return {
     path: "/",
     source: {
@@ -738,6 +778,10 @@ async function projectProcessorState(projectId: string) {
   const processor = await project.processor;
   const { state } = await processor.snapshot();
   return state;
+}
+
+function projectBuiltinCapabilities(): CapabilityDescription[] {
+  return PROJECT_BUILTIN_CAPABILITY_PATHS.map((path) => ({ path: [path], type: "builtin" }));
 }
 
 class ItxRootRpcTarget extends RpcTarget implements ItxRoot {

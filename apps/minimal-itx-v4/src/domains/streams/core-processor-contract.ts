@@ -13,7 +13,7 @@ import { z } from "zod";
 import type { GetProcessorRuntimeState } from "../../types.ts";
 import type { DurableObjectAddress as DurableObjectAddressType } from "../durable-object-names.ts";
 import { normalizePath } from "../durable-object-names.ts";
-import { WorkerRef } from "../workers/schemas.ts";
+import { DynamicWorkerRef } from "../workers/schemas.ts";
 import { defineProcessorContract } from "./stream-processor.ts";
 
 // Version of the persisted core reduced state ("state" in KV). Bump this when
@@ -72,7 +72,7 @@ export const ConfiguredStreamSubscriber = z.discriminatedUnion("type", [
   }),
   z.strictObject({
     type: z.literal("worker"),
-    workerRef: WorkerRef,
+    workerRef: DynamicWorkerRef,
   }),
 ]);
 

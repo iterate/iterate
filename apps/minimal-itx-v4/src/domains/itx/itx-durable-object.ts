@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
+import type { CapabilityDescription } from "../../types.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
@@ -8,7 +9,7 @@ import {
 } from "../streams/stream-processor-host.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
-import { WorkerRunner } from "../workers/worker-runner.ts";
+import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import { ItxProcessorContract } from "./itx-processor-contract.ts";
 import {
   ItxProcessor,
@@ -38,8 +39,9 @@ export class ItxDurableObject extends DurableObject<Env> {
     (deps) =>
       new ItxProcessor({
         ...deps,
+        egress: projectEgressFetcher(this.ctx.exports, this.#name.projectId),
         path: this.#name.path,
-        workerRunner: new WorkerRunner({
+        workerRunner: new DynamicWorkerRunner({
           bindings: {
             ITX: this.ctx.exports.ItxEntrypoint({
               props: this.#itxScope,
@@ -79,5 +81,9 @@ export class ItxDurableObject extends DurableObject<Env> {
 
   runScript(code: string): Promise<RunScriptResult> {
     return this.#itxProcessor.runScript(code);
+  }
+
+  describeCapabilities(): Promise<CapabilityDescription[]> {
+    return Promise.resolve(this.#itxProcessor.describeCapabilities());
   }
 }

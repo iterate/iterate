@@ -3,7 +3,7 @@ import { z } from "zod";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { itxEntrypointProps, itxEntrypointScopeCacheKey } from "../itx/utils.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
-import { WorkerRunner } from "../workers/worker-runner.ts";
+import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import type {
   ProcessEventBatch,
   ProcessorRuntimeState,
@@ -11,7 +11,7 @@ import type {
   StreamEvent,
   StreamEventInput,
   StreamSubscriptionHandle,
-  WorkerRef,
+  DynamicWorkerRef,
 } from "../../types.ts";
 import {
   StreamEvent as StreamEventSchema,
@@ -1513,7 +1513,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   async #wakeWorkerSubscriber(
-    workerRef: WorkerRef,
+    workerRef: DynamicWorkerRef,
     request: StreamSubscriberWakeRequest,
   ): Promise<void> {
     if (this.name.projectId === null) {
@@ -1523,7 +1523,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       path: workerRef.path,
       projectId: this.name.projectId,
     });
-    await new WorkerRunner({
+    await new DynamicWorkerRunner({
       bindings: {
         ITX: this.ctx.exports.ItxEntrypoint({ props: itxScope }),
       },
@@ -1542,10 +1542,10 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (subscriber.type === "worker") {
       // Worker subscribers do not carry a Durable Object address in the event.
       // Instead, the wake path builds an ITX/project scope from this stream's
-      // own projectId and then invokes the WorkerRef inside that scope. That is
+      // own projectId and then invokes the DynamicWorkerRef inside that scope. That is
       // why workers are safe for project streams without a separate target
       // projectId field, and why global streams must reject them: there is no
-      // project boundary to supply to the WorkerRunner. The test named
+      // project boundary to supply to the DynamicWorkerRunner. The test named
       // "global streams reject configured worker subscribers" covers this
       // before-commit behavior.
       if (this.name.projectId === null) {

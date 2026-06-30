@@ -1,4 +1,4 @@
-import { normalizePath } from "../durable-object-names.ts";
+import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
 
 /**
  * Agent RPC and agent-scoped ITX both use stream paths as durable identity.
@@ -11,4 +11,10 @@ export function normalizeAgentPath(path: string): string {
     throw new Error(`agent path must start with "/agents/", got "${normalized}"`);
   }
   return normalized;
+}
+
+export function parseAgentDurableObjectName(name: string) {
+  const parsed = DurableObjectNameCodec.parse(name);
+  normalizeAgentPath(parsed.path);
+  return parsed;
 }

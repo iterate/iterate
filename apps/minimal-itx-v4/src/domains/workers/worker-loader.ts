@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import type { WorkerRef, WorkerSource } from "../../types.ts";
+import type { DynamicWorkerRef, DynamicWorkerSource } from "../../types.ts";
 import { stableSha256 } from "./utils.ts";
 
 const WORKER_COMPATIBILITY_DATE = "2026-05-01";
@@ -24,7 +24,7 @@ export async function resolveWorkerSource({
   source,
 }: {
   projectId: string;
-  source: WorkerSource;
+  source: DynamicWorkerSource;
 }): Promise<ResolvedWorkerSource> {
   if (source.type === "inline") {
     return {
@@ -34,7 +34,7 @@ export async function resolveWorkerSource({
     };
   }
 
-  // Repo source is deliberately late-bound: a WorkerRef names "the worker file
+  // Repo source is deliberately late-bound: a DynamicWorkerRef names "the worker file
   // at this repo path", not a frozen commit. That keeps source changes visible
   // on next use while the repo itself remains responsible for producing modules.
   const resolved = await env.REPO.getByName(
@@ -68,7 +68,7 @@ export function loadResolvedWorker({
   globalOutbound: Fetcher;
   loader: WorkerLoader;
   projectId: string;
-  ref: WorkerRef;
+  ref: DynamicWorkerRef;
   resolved: ResolvedWorkerSource;
   workerScopeKey: string;
 }): WorkerStub {

@@ -12,7 +12,7 @@ import { stableSha256 } from "../workers/utils.ts";
 import type { ResolvedWorkerSource } from "../workers/worker-loader.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { CommitRepoFilesInput, CommitRepoFilesResult, RepoFileChange } from "../../types.ts";
-import { RepoArtifactNameCodec } from "./utils.ts";
+import { PROJECT_WORKER_SOURCE_PATH, RepoArtifactNameCodec } from "./utils.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
@@ -20,6 +20,14 @@ import { RepoProcessor } from "./repo-processor-implementation.ts";
 const REPO_DEFAULT_BRANCH = "main";
 const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 const REPO_DIR = "/repo";
+const WORKER_SOURCE_PROJECTION_VERSION = 1;
+
+type WorkerSourceProjection = ResolvedWorkerSource & {
+  branch: string;
+  commitOid: string;
+  sourcePath: string;
+  version: typeof WORKER_SOURCE_PROJECTION_VERSION;
+};
 
 export class RepoDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!, { allowNullProjectId: true });
@@ -30,21 +38,16 @@ export class RepoDurableObject extends DurableObject<Env> {
       projectId: this.#name.projectId,
     }),
   });
-  readonly #repoProcessor: RepoProcessor;
-
-  constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
-    this.#repoProcessor = this.#host.add(
-      RepoProcessorContract.slug,
-      (deps) =>
-        new RepoProcessor({
-          ...deps,
-          createRepoArtifact: (input) => this.createArtifactRepo(input),
-          path: this.#name.path,
-          projectId: this.#name.projectId,
-        }),
-    );
-  }
+  readonly #repoProcessor = this.#host.add(
+    RepoProcessorContract.slug,
+    (deps) =>
+      new RepoProcessor({
+        ...deps,
+        createRepoArtifact: (input) => this.createArtifactRepo(input),
+        path: this.#name.path,
+        projectId: this.#name.projectId,
+      }),
+  );
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
     return this.#host.wakeStreamSubscriber(args);
@@ -55,26 +58,24 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   async getWorkerSource(args: { path: string }): Promise<ResolvedWorkerSource> {
-    const repo = await this.repoGitAccess();
-    const tree = await readRepoModules({
-      branch: repo.defaultBranch,
-      remote: repo.remote,
-      token: repo.token,
+    const sourcePath = normalizeRepoFilePath(args.path);
+
+    // Hot path: project ingress and dynamic worker calls ask the Repo DO for
+    // loader-ready source on every request. The synchronous KV API already has
+    // the DO storage cache behind it, so a durable projection is enough here; an
+    // extra JS Map would only duplicate the runtime's own cache and make
+    // invalidation harder to reason about.
+    const projected = this.projectedWorkerSource({
+      branch: REPO_DEFAULT_BRANCH,
+      sourcePath,
     });
+    if (projected !== null) return projected;
 
-    if (!(args.path in tree.modules)) {
-      throw new Error(`repo ${this.#name.path} does not contain ${args.path}`);
-    }
-
-    return {
-      cacheKey: await stableSha256({
-        commitOid: tree.commitOid,
-        path: args.path,
-        type: "repo-commit-worker-source",
-      }),
-      mainModule: args.path,
-      modules: tree.modules,
-    };
+    return await this.materializeWorkerSourceProjection({
+      branch: REPO_DEFAULT_BRANCH,
+      overwrite: false,
+      sourcePath,
+    });
   }
 
   whoami(): string {
@@ -84,7 +85,7 @@ export class RepoDurableObject extends DurableObject<Env> {
   async commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult> {
     const parsed = parseCommitFilesInput(input);
     const repo = await this.repoGitAccess();
-    return await commitFilesToArtifactRepo({
+    const result = await commitFilesToArtifactRepo({
       author: parsed.author,
       branch: parsed.branch ?? repo.defaultBranch,
       changes: parsed.changes,
@@ -92,6 +93,104 @@ export class RepoDurableObject extends DurableObject<Env> {
       remote: repo.remote,
       token: repo.token,
     });
+
+    if (result.branch === repo.defaultBranch) {
+      // `commitFiles()` is our read-your-write boundary. Once it returns, callers
+      // expect `project.worker` and explicit repo-backed worker refs to see the
+      // pushed source, so main-branch commits refresh the durable source
+      // projection before the RPC resolves.
+      await this.refreshWorkerSourceProjectionsAfterMainCommit(result.changedPaths);
+    }
+
+    return result;
+  }
+
+  private projectedWorkerSource(input: { branch: string; sourcePath: string }) {
+    const key = workerSourceProjectionStorageKey(input);
+    const value = this.ctx.storage.kv.get<unknown>(key);
+    if (
+      isWorkerSourceProjection(value) &&
+      value.branch === input.branch &&
+      value.sourcePath === input.sourcePath &&
+      value.mainModule === input.sourcePath &&
+      typeof value.modules[input.sourcePath] === "string"
+    ) {
+      return projectionToResolvedWorkerSource(value);
+    }
+
+    if (value !== undefined) {
+      // This projection is an optimization over Git, not the repo authority. If a
+      // future shape change or failed deploy leaves junk in storage, discard it
+      // and fall back to Git materialization instead of serving ambiguous code.
+      this.ctx.storage.kv.delete(key);
+    }
+    return null;
+  }
+
+  private async materializeWorkerSourceProjection(input: {
+    branch: string;
+    overwrite: boolean;
+    sourcePath: string;
+  }): Promise<ResolvedWorkerSource> {
+    // This clone is intentionally outside the request hot path once the
+    // projection exists. We still keep it here as a lazy repair path for old
+    // projects and freshly-created repos, so project creation does not need a new
+    // repo/source-updated event just to seed the cache.
+    const repo = await this.repoGitAccess();
+    const source = await readRepoWorkerSource({
+      branch: input.branch,
+      path: input.sourcePath,
+      remote: repo.remote,
+      token: repo.token,
+    });
+    const projection = await workerSourceProjection({
+      branch: input.branch,
+      content: source.content,
+      commitOid: source.commitOid,
+      sourcePath: input.sourcePath,
+    });
+
+    if (!input.overwrite) {
+      // Lazy reads only fill a missing projection. A concurrent commit can push a
+      // newer worker and overwrite the latest pointer while this old clone is
+      // still running; in that case we return the newer durable projection and
+      // deliberately do not put the stale clone back into storage.
+      const current = this.projectedWorkerSource(input);
+      if (current !== null) return current;
+    }
+
+    this.ctx.storage.kv.put(workerSourceProjectionStorageKey(input), projection);
+    return projectionToResolvedWorkerSource(projection);
+  }
+
+  private async refreshWorkerSourceProjectionsAfterMainCommit(changedPaths: string[]) {
+    // Minimal ITX v4 currently treats repo-backed workers as single-file JS
+    // modules. Always refreshing the seeded project worker means README-only
+    // commits still advance the source cache key to the latest repo commit, while
+    // changed `.js` paths keep explicit dynamic refs from serving stale code.
+    const sourcePaths = new Set([
+      PROJECT_WORKER_SOURCE_PATH,
+      ...changedPaths.filter((path) => path.endsWith(".js")),
+    ]);
+
+    for (const sourcePath of sourcePaths) {
+      try {
+        await this.materializeWorkerSourceProjection({
+          branch: REPO_DEFAULT_BRANCH,
+          overwrite: true,
+          sourcePath,
+        });
+      } catch (error) {
+        if (!(error instanceof RepoSourceFileMissingError)) throw error;
+
+        // If a commit deletes a previously materialized worker file, the durable
+        // projection must disappear with it. Keeping the old projection would make
+        // `project.worker` keep serving code that is no longer in the repo.
+        this.ctx.storage.kv.delete(
+          workerSourceProjectionStorageKey({ branch: REPO_DEFAULT_BRANCH, sourcePath }),
+        );
+      }
+    }
   }
 
   private async createArtifactRepo(_input: { path: string; projectId: string | null }) {
@@ -284,7 +383,18 @@ async function commitFilesToArtifactRepo(input: {
   };
 }
 
-async function readRepoModules(input: { branch: string; remote: string; token: string }) {
+class RepoSourceFileMissingError extends Error {
+  constructor(path: string) {
+    super(`repo does not contain ${path}`);
+  }
+}
+
+async function readRepoWorkerSource(input: {
+  branch: string;
+  path: string;
+  remote: string;
+  token: string;
+}) {
   const filesystem = new InMemoryFs();
   const git = createGit(filesystem, REPO_DIR);
   await git.clone({
@@ -299,21 +409,66 @@ async function readRepoModules(input: { branch: string; remote: string; token: s
   const [head] = await git.log({ depth: 1 });
   if (!head) throw new Error("Repo has no commits.");
 
-  const modules: Record<string, string> = {};
-  const walk = async (dir: string) => {
-    for (const entry of await filesystem.readdirWithFileTypes(dir)) {
-      if (dir === REPO_DIR && entry.name === ".git") continue;
-      const entryPath = `${dir}/${entry.name}`;
-      if (entry.type === "directory") {
-        await walk(entryPath);
-      } else if (entryPath.endsWith(".js")) {
-        modules[entryPath.slice(REPO_DIR.length + 1)] = await filesystem.readFile(entryPath);
-      }
-    }
+  const absolutePath = `${REPO_DIR}/${input.path}`;
+  if (!(await filesystem.exists(absolutePath))) throw new RepoSourceFileMissingError(input.path);
+  return {
+    commitOid: head.oid,
+    content: await filesystem.readFile(absolutePath),
   };
-  await walk(REPO_DIR);
+}
 
-  return { commitOid: head.oid, modules };
+async function workerSourceProjection(input: {
+  branch: string;
+  content: string;
+  commitOid: string;
+  sourcePath: string;
+}): Promise<WorkerSourceProjection> {
+  return {
+    branch: input.branch,
+    cacheKey: await stableSha256({
+      commitOid: input.commitOid,
+      path: input.sourcePath,
+      type: "repo-commit-worker-source",
+    }),
+    commitOid: input.commitOid,
+    mainModule: input.sourcePath,
+    modules: { [input.sourcePath]: input.content },
+    sourcePath: input.sourcePath,
+    version: WORKER_SOURCE_PROJECTION_VERSION,
+  };
+}
+
+function projectionToResolvedWorkerSource(
+  projection: WorkerSourceProjection,
+): ResolvedWorkerSource {
+  return {
+    cacheKey: projection.cacheKey,
+    mainModule: projection.mainModule,
+    modules: projection.modules,
+  };
+}
+
+function workerSourceProjectionStorageKey(input: { branch: string; sourcePath: string }) {
+  // The value is "latest source at this branch/path", not immutable history. The
+  // immutable identity lives inside the projection as `commitOid` and `cacheKey`,
+  // which is what Worker Loader and stateful facet restart checks consume.
+  return `repo-worker-source:${input.branch}:${input.sourcePath}`;
+}
+
+function isWorkerSourceProjection(value: unknown): value is WorkerSourceProjection {
+  if (value === null || typeof value !== "object") return false;
+  const record = value as Partial<WorkerSourceProjection>;
+  return (
+    record.version === WORKER_SOURCE_PROJECTION_VERSION &&
+    typeof record.branch === "string" &&
+    typeof record.cacheKey === "string" &&
+    typeof record.commitOid === "string" &&
+    typeof record.mainModule === "string" &&
+    typeof record.sourcePath === "string" &&
+    record.modules !== null &&
+    typeof record.modules === "object" &&
+    Object.values(record.modules).every((module) => typeof module === "string")
+  );
 }
 
 function parseCommitFilesInput(input: CommitRepoFilesInput): CommitRepoFilesInput {

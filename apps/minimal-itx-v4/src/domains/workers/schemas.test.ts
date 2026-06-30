@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { WorkerRef } from "./schemas.ts";
+import { DynamicWorkerRef } from "./schemas.ts";
 
 const inlineSource = {
   mainModule: "worker.ts",
@@ -7,10 +7,10 @@ const inlineSource = {
   type: "inline",
 } as const;
 
-describe("WorkerRef schema", () => {
+describe("DynamicWorkerRef schema", () => {
   it("allows props on stateless entrypoint refs", () => {
     expect(
-      WorkerRef.parse({
+      DynamicWorkerRef.parse({
         path: "agents/alice",
         props: { answer: 42, nested: { ok: true } },
         source: inlineSource,
@@ -25,7 +25,7 @@ describe("WorkerRef schema", () => {
 
   it("rejects props on stateful durable worker refs", () => {
     expect(() =>
-      WorkerRef.parse({
+      DynamicWorkerRef.parse({
         className: "Counter",
         durableWorkerKey: "counter",
         path: "/agents/alice",
