@@ -278,44 +278,6 @@ _Avoid_: MCP authorization, route-specific permission
 The OS project-bound UI for discovering and inspecting every initialized Event Stream Path for one Project.
 _Avoid_: generic stream explorer, stream tree
 
-### itx
-
-**itx Context Node**:
-A Durable Object-backed capability context whose capability table is the fold of one Event Stream Path.
-_Avoid_: Agent host, Project host, embedded itx
-
-**itx Context Creator**:
-A trusted domain object or platform flow that creates an itx Context Node by appending its subscription and context-created events.
-_Avoid_: itx host, owner Durable Object
-
-**itx Context Seeder**:
-A trusted domain object or platform flow that mounts initial capabilities on an itx Context Node.
-_Avoid_: builtin injector, capability magic
-
-**Capability Address**:
-A serializable sturdy reference that the itx dialer can turn into a callable capability target.
-_Avoid_: WorkerEntrypoint, service binding, capability object
-
-**Trusted Capability Address**:
-A Capability Address written by platform or domain code that may name env bindings, loopback exports, Durable Object namespaces, or exact Durable Object names.
-_Avoid_: public address, user target
-
-**Untrusted Capability Address**:
-A provider-supplied Capability Address that cannot name host bindings, Durable Object namespaces, context refs, or mounted capability paths.
-_Avoid_: trusted address, raw binding ref
-
-**Dynamic Worker Address**:
-An Untrusted Capability Address that loads source code as a WorkerEntrypoint-backed Dynamic Worker.
-_Avoid_: SourceWorkerCapability, worker capability
-
-**Dynamic Durable Object Address**:
-An Untrusted Capability Address that loads source code exporting a Durable Object class and runs it as a facet of an itx Context Node.
-_Avoid_: dynamic Durable Object runner, durable worker entrypoint
-
-**WorkerEntrypoint Backend**:
-A Cloudflare RPC export mechanism used by some Capability Addresses, not the capability concept itself.
-_Avoid_: WorkerEntrypoint capability, capability type
-
 ### Agents
 
 **Agent**:
@@ -542,12 +504,6 @@ _Avoid_: Project MCP route, inbound MCP
 - The **Project Durable Object** is the lifecycle authority for a **Project**.
 - Every **Project** has one **Project Lifecycle Stream** at root Event Stream Path `/` for that Project ID.
 - The **Project Lifecycle Stream** records **Project Lifecycle Events** as facts, not frontend view state.
-- An **itx Context Node** is separate from the **Project Durable Object** and **Agent Durable Object** that may create or seed it.
-- An **itx Context Creator** appends the events that create an **itx Context Node**; it does not host that node's processor.
-- An **itx Context Seeder** may mount trusted built-ins by providing **Trusted Capability Addresses** to an **itx Context Node**.
-- An **Untrusted Capability Address** may be a **Dynamic Worker Address** or **Dynamic Durable Object Address**, but must not name host bindings or Durable Object namespaces.
-- A **Dynamic Durable Object Address** runs as a facet of the current **itx Context Node**, not as a separate dynamic Durable Object namespace.
-- A **WorkerEntrypoint Backend** may implement a trusted capability, but **WorkerEntrypoint Backend** is not the capability's domain name.
 - Resource streams such as `/repos/project` are child Event Stream Paths under the same Project ID.
 - The **Project Lifecycle Processor** may use **Project Lifecycle Reduced State** to decide follow-up work, but **Project Lifecycle Events** remain the shared durable facts.
 - The OS frontend may reduce **Project Lifecycle Events** with the same reducer as the **Project Lifecycle Processor**, but it does not own the Project lifecycle model.
@@ -942,6 +898,3 @@ context while the provider remains connected.
 - "base repo" sounded like a Cloudflare Artifact name or special case. Resolved: the **Iterate Config Base Repo** is a global **Repo Reference** with `projectId: null`.
 - Repo creation source used Artifact names and README bootstrap modes. Resolved: **Repo Creation Source** is only empty repo or fork from a **Repo Reference**; README writes are normal repo writes after creation.
 - The **Project Lifecycle Stream** path was ambiguous between `/project` and `/`. Resolved: use root `/`; resource streams such as `/repos/project` are child streams under the same Project ID.
-- "Agent hosts itx" and "Project hosts itx" made ownership unclear. Resolved: the **itx Context Node** hosts the itx processor; Project and Agent domain objects are **itx Context Creators** and **itx Context Seeders**.
-- "WorkerEntrypoint capability" conflated a Cloudflare RPC export mechanism with product authority. Resolved: use **WorkerEntrypoint Backend** only for the runtime backend; name capabilities by the authority they grant.
-- "dynamic Durable Object runner" introduced an unnecessary abstraction. Resolved: a **Dynamic Durable Object Address** is loaded by the itx dialer and materialized with Durable Object facets on the current **itx Context Node**.

@@ -1,7 +1,6 @@
 import { expect, it } from "vitest";
 import { z } from "zod";
 import {
-  buildEvent,
   defineProcessorContract,
   getInitialProcessorState,
   runProcessorReduce,
@@ -73,61 +72,4 @@ it("catalog-declared events also tolerate transport-added envelope keys", () => 
   });
 
   expect(reduction).toMatchObject({ state: { count: 1 } });
-});
-
-it("buildEvent validates local and dependency event inputs", () => {
-  const dependency = defineProcessorContract({
-    slug: "build-event-dependency",
-    version: "0.0.0",
-    description: "owns dependency events",
-    stateSchema: z.object({}),
-    initialState: {},
-    events: {
-      "test/build-event/dependency": {
-        payloadSchema: z.object({ accepted: z.boolean() }),
-      },
-    },
-    consumes: ["test/build-event/dependency"],
-    emits: [],
-  });
-  const contract = defineProcessorContract({
-    slug: "build-event",
-    version: "0.0.0",
-    description: "owns local events and depends on another owner",
-    stateSchema: z.object({}),
-    initialState: {},
-    processorDeps: [dependency],
-    events: {
-      "test/build-event/local": {
-        payloadSchema: z.object({ count: z.number().int() }),
-      },
-    },
-    consumes: ["test/build-event/local"],
-    emits: ["test/build-event/dependency"],
-  });
-
-  expect(
-    buildEvent({
-      contract,
-      event: { type: "test/build-event/local", payload: { count: 1 } },
-    }),
-  ).toEqual({ type: "test/build-event/local", payload: { count: 1 } });
-  expect(
-    buildEvent({
-      contract,
-      event: { type: "test/build-event/dependency", payload: { accepted: true } },
-    }),
-  ).toEqual({ type: "test/build-event/dependency", payload: { accepted: true } });
-  expect(() =>
-    buildEvent({
-      contract,
-      event: { type: "test/build-event/local", payload: { count: "1" } } as never,
-    }),
-  ).toThrow();
-  expect(() =>
-    buildEvent({
-      contract,
-      event: { type: "test/build-event/missing", payload: {} } as never,
-    }),
-  ).toThrow('processor "build-event" cannot build unresolved event "test/build-event/missing"');
 });

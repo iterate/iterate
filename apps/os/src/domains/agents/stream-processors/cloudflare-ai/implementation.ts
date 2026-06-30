@@ -127,7 +127,7 @@ export class CloudflareAiProcessor extends StreamProcessor<
 
   protected override processEvent(
     args: Parameters<StreamProcessor<CloudflareAiProcessorContract>["processEvent"]>[0],
-  ): undefined {
+  ): void {
     const { event, state } = args;
     switch (event.type) {
       case "events.iterate.com/cloudflare-ai/llm-request-started":

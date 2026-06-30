@@ -83,7 +83,7 @@ class CounterProcessor extends StreamProcessor<CounterContract, CounterDeps> {
 
   protected override processEvent(
     args: Parameters<StreamProcessor<CounterContract>["processEvent"]>[0],
-  ): undefined {
+  ): void {
     this.deps.onProcessEvent?.(args);
   }
 
@@ -558,106 +558,5 @@ describe("wildcard consumption", () => {
       }),
     ).rejects.toThrow();
     expect(processor.checkpointOffset).toBe(0);
-  });
-});
-
-describe("waitUntilEvent", () => {
-  it("resolves { offset } once the fold reaches it, with state already applied", async () => {
-    const processor = new CounterProcessor({ stream: stream() });
-
-    let resolvedAtOffset: number | undefined;
-    const waited = processor.waitUntilEvent({ offset: 2 }).then(() => {
-      resolvedAtOffset = processor.checkpointOffset;
-    });
-
-    await tick();
-    expect(resolvedAtOffset).toBeUndefined(); // nothing ingested yet
-
-    await processor.ingest({ events: [add(1, 5), add(2, 7)], streamMaxOffset: 2 });
-    await waited;
-
-    expect(resolvedAtOffset).toBe(2);
-    // read-your-writes: the matched event is folded by the time the promise settles.
-    expect(processor.state).toEqual({ total: 12 });
-  });
-
-  it("resolves { offset } immediately when the checkpoint is already past it", async () => {
-    const processor = new CounterProcessor({
-      stream: stream(),
-      readState: () => ({ offset: 5, state: { total: 9 } }),
-    });
-
-    await expect(processor.waitUntilEvent({ offset: 3 })).resolves.toBeUndefined();
-  });
-
-  it("resolves { offset } even when the event at that offset is not consumed", async () => {
-    // `ignored` is outside `consumes`, so reduce never runs and state never
-    // changes — but the checkpoint still advances, so the barrier must resolve
-    // (keying on delivery, not on a state change).
-    const processor = new CounterProcessor({ stream: stream() });
-
-    let resolved = false;
-    const waited = processor.waitUntilEvent({ offset: 1 }).then(() => void (resolved = true));
-
-    await processor.ingest({ events: [ignored(1)], streamMaxOffset: 1 });
-    await waited;
-
-    expect(resolved).toBe(true);
-    expect(processor.checkpointOffset).toBe(1);
-  });
-
-  it("resolves { predicate } on the first matching delivered event, not before", async () => {
-    const processor = new CounterProcessor({ stream: stream() });
-
-    let resolved = false;
-    const waited = processor
-      .waitUntilEvent({ predicate: (event) => event.offset === 2 })
-      .then(() => void (resolved = true));
-
-    await processor.ingest({ events: [add(1, 5)], streamMaxOffset: 1 });
-    await tick();
-    expect(resolved).toBe(false); // offset 1 does not match the predicate
-
-    await processor.ingest({ events: [add(2, 7)], streamMaxOffset: 2 });
-    await waited;
-    expect(resolved).toBe(true);
-  });
-
-  it("rejects only the waiter when a predicate throws", async () => {
-    const processor = new CounterProcessor({ stream: stream() });
-
-    const broken = processor.waitUntilEvent({
-      predicate: () => {
-        throw new Error("bad waiter");
-      },
-    });
-    const healthy = processor.waitUntilEvent({ offset: 1 });
-
-    await expect(
-      processor.ingest({ events: [add(1, 5)], streamMaxOffset: 1 }),
-    ).resolves.toBeUndefined();
-    await expect(broken).rejects.toThrow("bad waiter");
-    await expect(healthy).resolves.toBeUndefined();
-    expect(processor.state).toEqual({ total: 5 });
-    expect(processor.checkpointOffset).toBe(1);
-  });
-
-  it("rejects after timeoutMs when no matching event is delivered", async () => {
-    const processor = new CounterProcessor({ stream: stream() });
-
-    await expect(processor.waitUntilEvent({ offset: 99, timeoutMs: 10 })).rejects.toThrow(
-      /timed out after 10ms/,
-    );
-  });
-
-  it("clears the timeout when the event arrives before timeoutMs", async () => {
-    const processor = new CounterProcessor({ stream: stream() });
-
-    // A generous timeout that must NOT fire: the event arrives first, and the
-    // waiter clears its timer on resolution, so there is no late rejection.
-    const waited = processor.waitUntilEvent({ offset: 1, timeoutMs: 10_000 });
-    await processor.ingest({ events: [add(1, 5)], streamMaxOffset: 1 });
-
-    await expect(waited).resolves.toBeUndefined();
   });
 });

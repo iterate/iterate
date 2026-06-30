@@ -83,7 +83,7 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
 
   protected override processEvent(
     args: Parameters<StreamProcessor<SlackProcessorContract>["processEvent"]>[0],
-  ): undefined {
+  ): void {
     const { event, state } = args;
     if (event.type !== "events.iterate.com/slack/webhook-received") return;
 

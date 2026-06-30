@@ -86,7 +86,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
 
   protected override processEvent(
     args: Parameters<StreamProcessor<AgentProcessorContract>["processEvent"]>[0],
-  ): undefined {
+  ): void {
     const { event, previousState, state } = args;
     switch (event.type) {
       case "events.iterate.com/agent/system-prompt-updated":

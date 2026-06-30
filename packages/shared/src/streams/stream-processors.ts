@@ -3,11 +3,9 @@ import {
   streamEventCreatedAtIsoSchema,
   streamEventIdempotencyKeySchema,
   StreamEventMetadata,
-  StreamEventInput as StreamEventInputSchema,
   streamEventOffsetSchema,
   StreamEventSourceSchema,
   type StreamEvent,
-  type StreamEventInput,
 } from "./stream-event.ts";
 
 export type { StreamEvent, StreamEventInput } from "./stream-event.ts";
@@ -241,29 +239,6 @@ export type EventFromType<
   ? EventFromDefinitionForType<EventDefinitionForType<Events, ProcessorDeps, Type>, Type>
   : never;
 
-export type EventInputFromDefinitionForType<Definition, Type extends string> =
-  Definition extends EventDefinition<string, infer PayloadOutput, infer PayloadInput>
-    ? StreamEventInput<Type, PayloadOutput | PayloadInput>
-    : never;
-
-export type EventInputFromType<
-  Events extends EventCatalog,
-  ProcessorDeps extends readonly unknown[],
-  Type extends string,
-> = Type extends unknown
-  ? EventInputFromDefinitionForType<EventDefinitionForType<Events, ProcessorDeps, Type>, Type>
-  : never;
-
-export type ResolvedEventInput<Contract> = Contract extends {
-  events: EventCatalog;
-}
-  ? EventInputFromType<
-      ContractEventCatalog<Contract>,
-      ProcessorDepsOf<Contract>,
-      ResolvedEventType<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>>
-    >
-  : never;
-
 export type ProcessorContractShape<
   StateSchema extends z.ZodType = z.ZodType,
   Events extends EventCatalog = EventCatalog,
@@ -478,63 +453,6 @@ export function getEventSchema<
     StreamEvent<Type, z.output<PayloadSchema>>,
     StreamEvent<Type, z.input<PayloadSchema>>
   >;
-}
-
-export function getEventInputSchema<
-  const Type extends string,
-  const PayloadSchema extends z.ZodType,
->(args: {
-  type: Type;
-  payloadSchema: PayloadSchema;
-}): z.ZodType<
-  StreamEventInput<Type, z.output<PayloadSchema>>,
-  StreamEventInput<Type, z.input<PayloadSchema>>
-> {
-  return z
-    .object({
-      type: z.literal(args.type),
-      payload: args.payloadSchema,
-      metadata: StreamEventInputSchema.shape.metadata,
-      source: StreamEventInputSchema.shape.source,
-      idempotencyKey: StreamEventInputSchema.shape.idempotencyKey,
-      offset: StreamEventInputSchema.shape.offset,
-    })
-    .strict() as unknown as z.ZodType<
-    StreamEventInput<Type, z.output<PayloadSchema>>,
-    StreamEventInput<Type, z.input<PayloadSchema>>
-  >;
-}
-
-/**
- * Build and validate an append input for any event type resolvable by a
- * processor contract's local `events` catalog or `processorDeps`.
- *
- * This is intentionally pure: it performs contract lookup and Zod parsing only.
- * Callers that need stricter "only consumed" or "only emitted" gates should
- * check `contract.consumes` / `contract.emits` before calling it.
- */
-export function buildEvent<
-  const Contract extends {
-    slug?: string;
-    events: EventCatalog;
-    processorDeps?: readonly unknown[];
-  },
-  const Event extends ResolvedEventInput<Contract> & { type: string },
->(args: { contract: Contract; event: Event }): Event {
-  const eventDefinition = getResolvedEventDefinition({
-    contract: args.contract,
-    eventType: args.event.type,
-  });
-
-  if (eventDefinition === undefined) {
-    const processor = args.contract.slug == null ? "contract" : `processor "${args.contract.slug}"`;
-    throw new Error(`${processor} cannot build unresolved event "${args.event.type}".`);
-  }
-
-  return getEventInputSchema({
-    type: args.event.type,
-    payloadSchema: eventDefinition.payloadSchema,
-  }).parse(args.event) as Event;
 }
 
 /**

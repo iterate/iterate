@@ -79,7 +79,7 @@ export class SlackAgentProcessor extends StreamProcessor<
 
   protected override processEvent(
     args: Parameters<StreamProcessor<SlackAgentProcessorContract>["processEvent"]>[0],
-  ): undefined {
+  ): void {
     const { event, state } = args;
     switch (event.type) {
       case "events.iterate.com/slack/thread-route-configured":

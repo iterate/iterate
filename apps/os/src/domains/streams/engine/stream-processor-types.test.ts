@@ -1,7 +1,6 @@
 import { describe, expectTypeOf, it } from "vitest";
 import { z } from "zod";
 import {
-  buildEvent,
   defineProcessorContract,
   type ConsumedEvent,
   type WildcardConsumedEvent,
@@ -80,7 +79,7 @@ class TypeInferenceProcessor extends StreamProcessor<TypeInferenceProcessorContr
 
   protected override processEvent(
     args: Parameters<StreamProcessor<TypeInferenceProcessorContract>["processEvent"]>[0],
-  ): undefined {
+  ): void {
     expectTypeOf(args.previousState).toEqualTypeOf<TypeInferenceProcessorState>();
     expectTypeOf(args.state).toEqualTypeOf<TypeInferenceProcessorState>();
 
@@ -120,37 +119,6 @@ describe("StreamProcessor class type inference", () => {
       "events.test/dependency/output" | "events.test/local/output"
     >();
   });
-
-  it("buildEvent infers append inputs from local events and processor deps", () => {
-    const local = buildEvent({
-      contract: TypeInferenceProcessorContract,
-      event: { type: "events.test/local/output", payload: { total: 1 } },
-    });
-    expectTypeOf(local.type).toEqualTypeOf<"events.test/local/output">();
-    expectTypeOf(local.payload.total).toMatchTypeOf<number>();
-
-    const dependency = buildEvent({
-      contract: TypeInferenceProcessorContract,
-      event: { type: "events.test/dependency/output", payload: { accepted: true } },
-    });
-    expectTypeOf(dependency.type).toEqualTypeOf<"events.test/dependency/output">();
-    expectTypeOf(dependency.payload.accepted).toMatchTypeOf<boolean>();
-
-    function assertInvalidBuildEvents() {
-      buildEvent({
-        contract: TypeInferenceProcessorContract,
-        // @ts-expect-error event type is not owned locally or by processorDeps
-        event: { type: "events.test/missing", payload: {} },
-      });
-
-      buildEvent({
-        contract: TypeInferenceProcessorContract,
-        // @ts-expect-error payload shape must match the selected event type
-        event: { type: "events.test/local/output", payload: { total: "1" } },
-      });
-    }
-    void assertInvalidBuildEvents;
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -184,36 +152,6 @@ const MixedWildcardContract = defineProcessorContract({
 });
 
 type MixedWildcardContract = typeof MixedWildcardContract;
-
-const WildcardConsumesDependencyContract = defineProcessorContract({
-  slug: "test.wildcard-consumes-dependency",
-  version: "0.1.0",
-  description: "Consumes every event but only owns a small event catalog.",
-  stateSchema: z.object({}),
-  initialState: {},
-  processorDeps: [DependencyProcessorContract],
-  events: {
-    "events.test/wildcard/local-output": {
-      payloadSchema: z.object({ value: z.string() }),
-    },
-  },
-  consumes: ["*"],
-  emits: ["events.test/dependency/output", "events.test/wildcard/local-output"],
-});
-
-const StructuralWildcardEmitsContract = {
-  slug: "test.structural-wildcard-emits",
-  version: "0.1.0",
-  description: "A hand-authored shape used to prove buildEvent ignores wildcard emits.",
-  processorDeps: [DependencyProcessorContract],
-  events: {
-    "events.test/structural-wildcard/local": {
-      payloadSchema: z.object({ label: z.string() }),
-    },
-  },
-  consumes: [],
-  emits: ["*"] as const,
-};
 
 class MixedWildcardProcessor extends StreamProcessor<MixedWildcardContract> {
   readonly contract = MixedWildcardContract;
@@ -260,84 +198,6 @@ describe("consumes wildcard typing", () => {
     type Consumed = ConsumedEvent<typeof DependencyProcessorContract>;
     expectTypeOf<Extract<Consumed, { type: "*" }>>().toEqualTypeOf<never>();
     expectTypeOf<Consumed["type"]>().toEqualTypeOf<"events.test/dependency/input">();
-  });
-
-  it("buildEvent stays catalog-narrow when consumes contains '*'", () => {
-    const local = buildEvent({
-      contract: MixedWildcardContract,
-      event: { type: "events.test/mixed/named", payload: { reason: "because" } },
-    });
-    expectTypeOf(local.type).toEqualTypeOf<"events.test/mixed/named">();
-    expectTypeOf(local.payload.reason).toMatchTypeOf<string>();
-
-    function assertInvalidWildcardBuildEvents() {
-      buildEvent({
-        contract: WildcardOnlyContract,
-        // @ts-expect-error wildcard consumes does not make arbitrary events buildable
-        event: { type: "events.test/wildcard-only/anything", payload: { ok: true } },
-      });
-
-      buildEvent({
-        contract: MixedWildcardContract,
-        // @ts-expect-error wildcard consumes does not widen buildEvent past catalog events
-        event: { type: "events.test/mixed/unknown", payload: { reason: "nope" } },
-      });
-    }
-    void assertInvalidWildcardBuildEvents;
-  });
-
-  it("buildEvent keeps dependency and local narrowing under wildcard consumes", () => {
-    const local = buildEvent({
-      contract: WildcardConsumesDependencyContract,
-      event: { type: "events.test/wildcard/local-output", payload: { value: "ok" } },
-    });
-    expectTypeOf(local.type).toEqualTypeOf<"events.test/wildcard/local-output">();
-    expectTypeOf(local.payload.value).toMatchTypeOf<string>();
-    // @ts-expect-error local event payload does not include dependency fields
-    local.payload.accepted;
-
-    const dependency = buildEvent({
-      contract: WildcardConsumesDependencyContract,
-      event: { type: "events.test/dependency/output", payload: { accepted: false } },
-    });
-    expectTypeOf(dependency.type).toEqualTypeOf<"events.test/dependency/output">();
-    expectTypeOf(dependency.payload.accepted).toMatchTypeOf<boolean>();
-    // @ts-expect-error dependency event payload does not include local fields
-    dependency.payload.value;
-
-    function assertInvalidWildcardDependencyBuildEvents() {
-      buildEvent({
-        contract: WildcardConsumesDependencyContract,
-        // @ts-expect-error unknown events are not buildable even though consumes includes "*"
-        event: { type: "events.test/wildcard/unknown", payload: { value: "nope" } },
-      });
-    }
-    void assertInvalidWildcardDependencyBuildEvents;
-  });
-
-  it("buildEvent does not widen when a structural contract has wildcard emits", () => {
-    const local = buildEvent({
-      contract: StructuralWildcardEmitsContract,
-      event: { type: "events.test/structural-wildcard/local", payload: { label: "ok" } },
-    });
-    expectTypeOf(local.type).toEqualTypeOf<"events.test/structural-wildcard/local">();
-    expectTypeOf(local.payload.label).toMatchTypeOf<string>();
-
-    const dependency = buildEvent({
-      contract: StructuralWildcardEmitsContract,
-      event: { type: "events.test/dependency/output", payload: { accepted: true } },
-    });
-    expectTypeOf(dependency.type).toEqualTypeOf<"events.test/dependency/output">();
-    expectTypeOf(dependency.payload.accepted).toMatchTypeOf<boolean>();
-
-    function assertInvalidStructuralWildcardBuildEvents() {
-      buildEvent({
-        contract: StructuralWildcardEmitsContract,
-        // @ts-expect-error wildcard emits does not make arbitrary events buildable
-        event: { type: "events.test/structural-wildcard/unknown", payload: {} },
-      });
-    }
-    void assertInvalidStructuralWildcardBuildEvents;
   });
 });
 

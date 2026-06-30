@@ -110,7 +110,7 @@ export class RepoStreamProcessor extends StreamProcessor<
 
   protected override processEvent(
     args: Parameters<StreamProcessor<RepoStreamProcessorContract>["processEvent"]>[0],
-  ): undefined {
+  ): void {
     const { event, previousState } = args;
     if (event.type !== "events.iterate.com/repo/create-requested") return;
     if (previousState.repo !== null) return;

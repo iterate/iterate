@@ -111,16 +111,6 @@ type StateChangeCallback<State> = (state: State) => unknown;
 type RetainedStateChangeCallback<State> = StateChangeCallback<State> & Disposable;
 export type StreamProcessorStateUnsubscribe = (() => void) & Disposable;
 
-/** A pending `waitUntilEvent` waiter: the match predicate, the resolver to fire
- *  when a delivered event matches, and an optional timeout handle to clear on
- *  resolution (so a satisfied waiter never later rejects). */
-type EventWaiter = {
-  predicate: (event: StreamEvent) => boolean;
-  reject: (error: unknown) => void;
-  resolve: () => void;
-  timer?: ReturnType<typeof setTimeout>;
-};
-
 /**
  * Where checkpoints live. Hosts inject these; when omitted the processor keeps
  * an in-memory snapshot, which is enough for tests and stateless experiments.
@@ -192,7 +182,6 @@ export abstract class StreamProcessor<
     snapshot: StreamProcessorSnapshot<ProcessorState<Contract>>,
   ) => MaybePromise<void>;
   readonly #stateChangeCallbacks = new Set<RetainedStateChangeCallback<ProcessorState<Contract>>>();
-  readonly #eventWaiters = new Set<EventWaiter>();
 
   constructor(deps: Deps) {
     super();
@@ -271,67 +260,6 @@ export abstract class StreamProcessor<
   }
 
   /**
-   * Resolve once the processor INGESTS an event matching `predicate` — or, with
-   * the `{ offset }` form, once the fold has caught up to that stream offset.
-   *
-   * The promise settles inside the serialized ingest section AFTER the batch is
-   * durably checkpointed, so by the time it resolves `this.state` already
-   * reflects the matched event. That is what makes the `{ offset }` form a
-   * read-your-writes barrier: append an event, then `await
-   * waitUntilEvent({ offset })` on the offset `append` returned, and your next
-   * read is guaranteed to see your write. It replaces the usual spin-poll on
-   * `checkpointOffset`.
-   *
-   * `{ offset }` is implemented in terms of `{ predicate }`: it short-circuits
-   * when the checkpoint is already at/past the offset, otherwise it waits for
-   * the first delivered event at or beyond it. The predicate form only observes
-   * FUTURE deliveries (it does not scan history), so the offset form is what can
-   * also answer "this already happened". Keying on the delivered event — not on
-   * a state change — matters: the checkpoint advances for every event including
-   * ones `reduce` ignores, so this resolves even when the matched event produced
-   * no state change (where waiting on `onStateChange` would hang).
-   *
-   * `predicate` runs on every newly delivered event (consumed or not). If it
-   * throws, only that waiter rejects; the already-checkpointed ingest continues.
-   *
-   * `timeoutMs` bounds the wait: if no matching event is delivered in time the
-   * promise REJECTS (and the waiter is dropped), turning an indefinitely-stalled
-   * subscription into a loud, catchable error instead of a hang. Omit it to wait
-   * forever. A waiter that resolves normally clears its timer, so it can never
-   * both resolve and later reject.
-   */
-  waitUntilEvent(args: {
-    predicate: (event: StreamEvent) => boolean;
-    timeoutMs?: number;
-  }): Promise<void>;
-  waitUntilEvent(args: { offset: number; timeoutMs?: number }): Promise<void>;
-  async waitUntilEvent(
-    args:
-      | { predicate: (event: StreamEvent) => boolean; timeoutMs?: number }
-      | { offset: number; timeoutMs?: number },
-  ): Promise<void> {
-    if ("offset" in args) {
-      await this.#loadState();
-      if (this.#checkpointOffset >= args.offset) return;
-      const { offset, timeoutMs } = args;
-      // No await between the check above and registering the waiter below, so a
-      // batch cannot advance the checkpoint past `offset` in the gap and be missed.
-      return await this.waitUntilEvent({ predicate: (event) => event.offset >= offset, timeoutMs });
-    }
-    const { predicate, timeoutMs } = args;
-    await new Promise<void>((resolve, reject) => {
-      const waiter: EventWaiter = { predicate, reject, resolve };
-      this.#eventWaiters.add(waiter);
-      if (timeoutMs !== undefined) {
-        waiter.timer = setTimeout(() => {
-          this.#eventWaiters.delete(waiter);
-          reject(new Error(`waitUntilEvent timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-      }
-    });
-  }
-
-  /**
    * One-time async setup, run before the checkpoint is first read — whether
    * that happens via `snapshot()` or the first ingested batch. Override for
    * work that can invalidate the stored checkpoint, such as schema migrations
@@ -349,7 +277,7 @@ export abstract class StreamProcessor<
   }
 
   /** Synchronous per-event side-effect hook, called by the default `processEventBatch`. */
-  protected processEvent(_args: ProcessEventArgs<Contract>): undefined {}
+  protected processEvent(_args: ProcessEventArgs<Contract>): void {}
 
   /**
    * Batch-level side-effect hook. Runs inside the serialized section, after the
@@ -460,29 +388,6 @@ export abstract class StreamProcessor<
     this.#state = state;
     this.#checkpointOffset = checkpointOffset;
     if (!Object.is(previousState, state)) this.#notifyStateChange(state);
-    this.#resolveEventWaiters(events);
-  }
-
-  // Settle `waitUntilEvent` waiters whose predicate matches a just-delivered
-  // event. Runs after the durable write + checkpoint advance, so `this.state` is
-  // current when a waiter's promise resolves (the read-your-writes guarantee).
-  #resolveEventWaiters(events: readonly StreamEvent[]): void {
-    for (const waiter of this.#eventWaiters) {
-      let matched = false;
-      try {
-        matched = events.some(waiter.predicate);
-      } catch (error) {
-        this.#eventWaiters.delete(waiter);
-        if (waiter.timer !== undefined) clearTimeout(waiter.timer);
-        waiter.reject(error);
-        continue;
-      }
-      if (matched) {
-        this.#eventWaiters.delete(waiter);
-        if (waiter.timer !== undefined) clearTimeout(waiter.timer);
-        waiter.resolve();
-      }
-    }
   }
 
   #notifyStateChange(state: ProcessorState<Contract>): void {
