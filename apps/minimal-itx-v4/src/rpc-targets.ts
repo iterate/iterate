@@ -409,8 +409,9 @@ class WorkerCollectionRpcTarget extends RpcTarget implements WorkerCollection {
  * RPC wrapper around a single WorkerRef.
  *
  * The returned object is a path proxy: unknown properties become path segments
- * and eventually call `invokeCapability`. Explicit `fetch` and `processEvent`
- * methods keep common WorkerEntrypoint methods discoverable and typed.
+ * and eventually call `invokeCapability`. Dynamic workers do not share a fixed
+ * method surface, so this wrapper deliberately exposes no method names beyond
+ * the flattened capability dispatcher.
  */
 class WorkerRpcTarget extends RpcTarget {
   readonly #runner: WorkerRunner;
@@ -441,14 +442,6 @@ class WorkerRpcTarget extends RpcTarget {
       workerScopeKey: itxEntrypointScopeCacheKey(itxScope),
     });
     return withInvokeCapabilityFallback(this);
-  }
-
-  async fetch(req: Request): Promise<Response> {
-    return (await this.invokeCapability({ args: [req], path: ["fetch"] })) as Response;
-  }
-
-  async processEvent(input: unknown): Promise<unknown> {
-    return await this.invokeCapability({ args: [input], path: ["processEvent"] });
   }
 
   async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
