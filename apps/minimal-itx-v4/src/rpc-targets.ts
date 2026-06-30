@@ -71,11 +71,11 @@ export class StreamRpcTarget extends RpcTarget implements Stream {
   // Without explicit return annotations TypeScript infers through the generated
   // DurableObjectStub<StreamDurableObject> type and can chase the DO's internal
   // core-processor/runtime-state implementation instead of the RPC API.
-  append(...events: Parameters<Stream["append"]>): ReturnType<Stream["append"]> {
+  append(...events: Parameters<Stream["append"]>) {
     return this.durableObjectStub.append(...events);
   }
 
-  at(path: Parameters<Stream["at"]>[0]): ReturnType<Stream["at"]> {
+  at(path: Parameters<Stream["at"]>[0]) {
     return new StreamRpcTarget({
       auth: this.props.auth,
       projectId: this.props.projectId,
@@ -83,29 +83,27 @@ export class StreamRpcTarget extends RpcTarget implements Stream {
     });
   }
 
-  getEvent(args: Parameters<Stream["getEvent"]>[0]): ReturnType<Stream["getEvent"]> {
+  getEvent(args: Parameters<Stream["getEvent"]>[0]) {
     return this.durableObjectStub.getEvent(args);
   }
 
-  getEvents(args?: Parameters<Stream["getEvents"]>[0]): ReturnType<Stream["getEvents"]> {
+  getEvents(args?: Parameters<Stream["getEvents"]>[0]) {
     return this.durableObjectStub.getEvents(args);
   }
 
-  waitForEvent(args: Parameters<Stream["waitForEvent"]>[0]): ReturnType<Stream["waitForEvent"]> {
+  waitForEvent(args: Parameters<Stream["waitForEvent"]>[0]) {
     return this.durableObjectStub.waitForEvent(args);
   }
 
-  getProcessorRuntimeState(
-    args: Parameters<Stream["getProcessorRuntimeState"]>[0],
-  ): ReturnType<Stream["getProcessorRuntimeState"]> {
+  getProcessorRuntimeState(args: Parameters<Stream["getProcessorRuntimeState"]>[0]) {
     return this.durableObjectStub.getProcessorRuntimeState(args);
   }
 
-  runtimeState(): ReturnType<Stream["runtimeState"]> {
+  runtimeState() {
     return this.durableObjectStub.runtimeState();
   }
 
-  subscribe(args: Parameters<Stream["subscribe"]>[0]): ReturnType<Stream["subscribe"]> {
+  subscribe(args: Parameters<Stream["subscribe"]>[0]) {
     return this.durableObjectStub.subscribe(args);
   }
 

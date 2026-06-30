@@ -19,14 +19,14 @@
 // own stable stream capability, so the stream pumps batches into
 // `processor.ingest`.
 
-import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "./stream-processor.ts";
-import type { ProcessorContractAnnouncement } from "./core-processor-contract.ts";
 import type {
   ProcessEventBatch,
   Stream,
   StreamEvent,
   StreamSubscriptionHandle,
 } from "../../types.ts";
+import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "./stream-processor.ts";
+import type { ProcessorContractAnnouncement } from "./core-processor-contract.ts";
 
 type ConfiguredStream = Stream & {
   subscribeConfigured(input: {

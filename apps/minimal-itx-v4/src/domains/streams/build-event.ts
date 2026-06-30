@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { StreamEventInput as StreamEventInputSchema } from "./schemas.ts";
 import type { StreamEventInput } from "../../types.ts";
+import { StreamEventInput as StreamEventInputSchema } from "./schemas.ts";
 
 export type EventExample<Payload = unknown> = {
   description: string;

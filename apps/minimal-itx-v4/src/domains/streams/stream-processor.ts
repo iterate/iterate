@@ -1,10 +1,10 @@
 import { z } from "zod";
+import type { Stream, StreamEvent, StreamEventInput } from "../../types.ts";
 import {
   StreamEvent as StreamEventSchema,
   StreamEventInput as StreamEventInputSchema,
 } from "./schemas.ts";
 import { buildEvent as buildStreamEvent } from "./build-event.ts";
-import type { Stream, StreamEvent, StreamEventInput } from "../../types.ts";
 
 type BaseStreamEvent = StreamEvent;
 type BaseStreamEventInput = StreamEventInput;
