@@ -181,6 +181,9 @@ const config: KnipConfig = {
     "apps/os/src/**": ["exports", "types"],
     "apps/os/e2e/test-support/**": ["exports", "types"],
     "apps/streams-example-app/src/lib/use-initial-tail-scroll.ts": ["types"],
+    "apps/minimal-itx-v4/src/domains/secrets/utils.ts": ["types"],
+    "apps/minimal-itx-v4/src/domains/streams/build-event.ts": ["types"],
+    "apps/minimal-itx-v4/src/domains/streams/stream-processor.ts": ["types"],
     // TanStack Start resolves the router factory by convention from the
     // entrypoint, so there is no direct import Knip can follow.
     "apps/semaphore/src/router.tsx": ["exports"],
