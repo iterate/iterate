@@ -622,7 +622,7 @@ export class ProjectRpcTarget extends RpcTarget implements Project {
     );
   }
 
-  async describe(): Promise<ProjectDescription> {
+  async describe() {
     const [project, mountedCapabilities] = await Promise.all([
       this.durableObjectStub.describe(),
       this.#itx.describeCapabilities(),
