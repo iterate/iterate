@@ -1,10 +1,10 @@
 import { newHttpBatchRpcResponse, newWorkersWebSocketRpcResponse } from "capnweb";
 import type { Env } from "./env.ts";
-import { ITX_AUTH_COOKIE } from "./auth.ts";
+import { ITX_AUTH_COOKIE, trustedInternalAuthContext } from "./auth.ts";
 import { AgentDurableObject } from "./domains/agents/agent-durable-object.ts";
 import { ItxDurableObject } from "./domains/itx/itx-durable-object.ts";
 import { ItxEntrypoint } from "./domains/itx/itx-entrypoint.ts";
-import { UnauthenticatedItxRpcTarget } from "./rpc-targets.ts";
+import { ProjectCollectionRpcTarget, UnauthenticatedItxRpcTarget } from "./rpc-targets.ts";
 import { ProjectDurableObject } from "./domains/projects/project-durable-object.ts";
 import { ProjectEgressEntrypoint } from "./domains/projects/egress.ts";
 import { RepoDurableObject } from "./domains/repos/repo-durable-object.ts";
@@ -31,6 +31,15 @@ export default {
       return Response.json({ ok: true }, { headers: { "set-cookie": cookie } });
     }
 
+    const projectIngress = projectIngressRequest(request, url);
+    if (projectIngress !== null) {
+      const project = new ProjectCollectionRpcTarget({
+        auth: trustedInternalAuthContext(),
+        ctx,
+      }).get(projectIngress.projectId);
+      return await project.worker.fetch(projectIngress.request);
+    }
+
     if (url.pathname !== "/api/itx") return Response.json({ error: "not found" }, { status: 404 });
     if (request.method === "POST") {
       return newHttpBatchRpcResponse(
@@ -44,6 +53,30 @@ export default {
     );
   },
 } satisfies ExportedHandler<Env>;
+
+function projectIngressRequest(
+  request: Request,
+  url: URL,
+): { projectId: string; request: Request } | null {
+  const [projectId, ...pathSegments] = url.pathname.split("/").filter(Boolean);
+  if (projectId === undefined || !projectId.startsWith("prj_")) return null;
+
+  const workerUrl = new URL(request.url);
+  workerUrl.pathname = pathSegments.length === 0 ? "/" : `/${pathSegments.join("/")}`;
+  const headers = new Headers(request.headers);
+  headers.set("x-itx-project-id", projectId);
+  const init: RequestInit = {
+    body: request.body,
+    headers,
+    method: request.method,
+    redirect: request.redirect,
+  };
+  if (request.body !== null) {
+    (init as RequestInit & { duplex: "half" }).duplex = "half";
+  }
+
+  return { projectId, request: new Request(workerUrl, init) };
+}
 
 export {
   ItxEntrypoint,

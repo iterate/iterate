@@ -2,8 +2,52 @@ const DEFAULT_PROJECT_WORKER_SOURCE = `
   import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 
   export default class ProjectWorker extends WorkerEntrypoint {
-    fetch(req) {
+    async fetch(req) {
+      const url = new URL(req.url);
+      if (url.pathname === "/" && req.method === "GET") {
+        const counter = await this.counter();
+        return this.renderCounterPage(req, await counter.current());
+      }
+      if (url.pathname === "/increment" && req.method === "POST") {
+        const counter = await this.counter();
+        return this.renderCounterPage(req, await counter.increment());
+      }
       return new Response(\`project worker fetched \${new URL(req.url).pathname}\`);
+    }
+
+    counter() {
+      return this.env.ITX.get().then((project) =>
+        project.workers.get({
+          className: "CounterDurableObject",
+          durableWorkerKey: "project-ingress-counter",
+          path: "/",
+          source: {
+            repoPath: "/",
+            sourcePath: "worker.js",
+            type: "repo",
+          },
+          type: "stateful",
+        })
+      );
+    }
+
+    renderCounterPage(req, count) {
+      const projectId = req.headers.get("x-itx-project-id");
+      const action = projectId === null ? "/increment" : \`/\${projectId}/increment\`;
+      return new Response(
+        \`<!doctype html>
+          <html>
+            <body>
+              <main>
+                <p>count: \${count}</p>
+                <form method="post" action="\${action}">
+                  <button type="submit">increment</button>
+                </form>
+              </main>
+            </body>
+          </html>\`,
+        { headers: { "content-type": "text/html; charset=utf-8" } },
+      );
     }
 
     processEvent(input) {
