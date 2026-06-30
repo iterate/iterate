@@ -15,11 +15,11 @@ import {
   type ProvideCapabilityInput,
   type RunScriptResult,
 } from "./itx-processor-implementation.ts";
-import { itxEntrypointScopeCacheKey, scopedItxEntrypointProps } from "./entrypoint-props.ts";
+import { itxEntrypointProps, itxEntrypointScopeCacheKey } from "./entrypoint-props.ts";
 
 export class ItxDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
-  readonly #itxScope = scopedItxEntrypointProps({
+  readonly #itxScope = itxEntrypointProps({
     path: this.#name.path,
     projectId: this.#name.projectId,
   });

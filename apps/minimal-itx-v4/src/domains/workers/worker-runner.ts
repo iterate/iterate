@@ -8,7 +8,7 @@ import {
   type ResolvedWorkerSource,
   type WorkerBindings,
 } from "./worker-loader.ts";
-import type { StatefulWorkerRef, WorkerRef } from "./types.ts";
+import type { StatefulWorkerRef, StatelessWorkerRef, WorkerRef } from "./types.ts";
 
 type StatefulWorkerRpc = {
   invokeCapability(input: {
@@ -47,44 +47,31 @@ export class WorkerRunner {
     this.#workerScopeKey = props.workerScopeKey;
   }
 
-  async get<T = unknown>(ref: WorkerRef): Promise<T> {
-    return (await this.getHandle<T>(ref)).handle;
+  /**
+   * Stateless refs resolve to WorkerEntrypoint instances and can be invoked in
+   * this isolate. Keeping this separate from stateful class loading makes each
+   * caller state whether it wants a callable entrypoint or a Durable Object
+   * class to host behind StatefulWorkerDurableObject.
+   */
+  async getStatelessEntrypoint<T = unknown>(ref: StatelessWorkerRef): Promise<T> {
+    const { worker } = await this.#load(ref);
+    return worker.getEntrypoint(ref.entrypoint, { props: ref.props ?? {} }) as T;
   }
 
   /**
-   * Materialize any dynamic WorkerRef through the same loader path. Stateless
-   * refs return named WorkerEntrypoints; stateful refs return exported Durable
-   * Object classes for the outer StatefulWorkerDurableObject facet host.
+   * Stateful refs resolve only to a class plus source identity. The outer
+   * Durable Object owns storage/facet lifetime and is the only place that should
+   * instantiate or restart the hosted class.
    */
-  async getHandle<T = unknown>(
-    ref: WorkerRef,
-  ): Promise<{ handle: T; resolved: ResolvedWorkerSource }> {
-    const resolved = await resolveWorkerSource({
-      projectId: this.#projectId,
-      source: ref.source,
-    });
-    const worker = loadResolvedWorker({
-      bindings: this.#bindings,
-      globalOutbound: this.#globalOutbound,
-      loader: this.#loader,
-      projectId: this.#projectId,
-      ref,
-      resolved,
-      workerScopeKey: this.#workerScopeKey,
-    });
-
-    if (ref.type === "stateful") {
-      const klass = worker.getDurableObjectClass?.(ref.className);
-      if (!klass) {
-        throw new Error(`Worker source did not export DurableObject ${ref.className}.`);
-      }
-      return { handle: klass as T, resolved };
+  async loadStatefulClass<T extends DurableObjectClass = DurableObjectClass>(
+    ref: StatefulWorkerRef,
+  ): Promise<{ klass: T; resolved: ResolvedWorkerSource }> {
+    const { resolved, worker } = await this.#load(ref);
+    const klass = worker.getDurableObjectClass?.(ref.className);
+    if (!klass) {
+      throw new Error(`Worker source did not export DurableObject ${ref.className}.`);
     }
-
-    return {
-      handle: worker.getEntrypoint(ref.entrypoint, { props: ref.props ?? {} }) as T,
-      resolved,
-    };
+    return { klass: klass as T, resolved };
   }
 
   async invokeCapability({
@@ -115,10 +102,27 @@ export class WorkerRunner {
       });
     }
 
-    const target = await this.get(ref);
+    const target = await this.getStatelessEntrypoint(ref);
     return flattenNestedPath
       ? await invokeFlattenedPath({ args, path, target })
       : await replayPath({ args, path, target });
+  }
+
+  async #load(ref: WorkerRef): Promise<{ resolved: ResolvedWorkerSource; worker: WorkerStub }> {
+    const resolved = await resolveWorkerSource({
+      projectId: this.#projectId,
+      source: ref.source,
+    });
+    const worker = loadResolvedWorker({
+      bindings: this.#bindings,
+      globalOutbound: this.#globalOutbound,
+      loader: this.#loader,
+      projectId: this.#projectId,
+      ref,
+      resolved,
+      workerScopeKey: this.#workerScopeKey,
+    });
+    return { resolved, worker };
   }
 
   #statefulWorker(ref: StatefulWorkerRef): StatefulWorkerRpc {
@@ -135,7 +139,7 @@ export class WorkerRunner {
  * is a query prop so a DO name remains fetchable at the stream path in the
  * future while still allowing multiple durable workers under that path.
  */
-export function statefulWorkerDurableObjectName(projectId: string, ref: StatefulWorkerRef): string {
+function statefulWorkerDurableObjectName(projectId: string, ref: StatefulWorkerRef): string {
   return DurableObjectNameCodec.stringify({
     projectId,
     path: ref.path,

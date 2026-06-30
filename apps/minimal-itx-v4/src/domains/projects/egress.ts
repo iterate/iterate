@@ -16,7 +16,7 @@ export class ProjectEgressRpcTarget extends RpcTarget implements ProjectEgress {
   }
 
   fetch(request: Request): Promise<Response> {
-    return fetch(substituteProjectEgressHeaders(request, this.props.projectId));
+    return fetchProjectEgress(request, this.props.projectId);
   }
 }
 
@@ -26,7 +26,7 @@ export class ProjectEgressRpcTarget extends RpcTarget implements ProjectEgress {
  */
 export class ProjectEgressEntrypoint extends WorkerEntrypoint<Env, { projectId: string }> {
   fetch(request: Request): Promise<Response> {
-    return new ProjectEgressRpcTarget({ projectId: this.ctx.props.projectId }).fetch(request);
+    return fetchProjectEgress(request, this.ctx.props.projectId);
   }
 }
 
@@ -42,6 +42,10 @@ export function projectEgressFetcher(
   return (exports as unknown as ProjectEgressLoopbackExports).ProjectEgressEntrypoint({
     props: { projectId },
   });
+}
+
+function fetchProjectEgress(request: Request, projectId: string): Promise<Response> {
+  return fetch(substituteProjectEgressHeaders(request, projectId));
 }
 
 function substituteProjectEgressHeaders(request: Request, projectId: string): Request {

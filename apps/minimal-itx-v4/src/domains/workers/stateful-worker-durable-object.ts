@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { itxEntrypointScopeCacheKey, scopedItxEntrypointProps } from "../itx/entrypoint-props.ts";
+import { itxEntrypointProps, itxEntrypointScopeCacheKey } from "../itx/entrypoint-props.ts";
 import { invokeFlattenedPath, replayPath } from "../itx/live-capability.ts";
 import { projectEgressFetcher } from "../projects/egress.ts";
 import { WorkerRunner } from "./worker-runner.ts";
@@ -20,7 +20,7 @@ const VERSION_STORAGE_KEY = "workers:stateful-worker-version";
  */
 export class StatefulWorkerDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
-  readonly #itxScope = scopedItxEntrypointProps({
+  readonly #itxScope = itxEntrypointProps({
     path: this.#name.path,
     projectId: this.#name.projectId,
   });
@@ -69,7 +69,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     // actually calls the capability. That laziness is what keeps
     // `provideCapability()` a pure stream append instead of a half-commit that
     // might also create/abort facet state.
-    const { handle: klass, resolved } = await this.#workerRunner.getHandle<DurableObjectClass>(ref);
+    const { klass, resolved } = await this.#workerRunner.loadStatefulClass(ref);
     const version = JSON.stringify({
       className: ref.className,
       sourceCacheKey: resolved.cacheKey,

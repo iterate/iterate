@@ -68,7 +68,9 @@ export type StatefulWorkerRef = WorkerRefBase & {
 
 export type WorkerRef = StatelessWorkerRef | StatefulWorkerRef;
 
+export type WorkerCapability<T extends object = Record<string, unknown>> = T & Disposable;
+
 /** Capability-tree entry point for ad-hoc project-scoped worker refs. */
 export interface WorkerCollection {
-  get<T = unknown>(ref: WorkerRef): T;
+  get<T extends object = Record<string, unknown>>(ref: WorkerRef): WorkerCapability<T>;
 }

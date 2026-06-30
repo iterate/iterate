@@ -303,7 +303,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     };
 
     try {
-      const worker = await this.#workerRunner.get<{ run(): Promise<unknown> }>(
+      const worker = await this.#workerRunner.getStatelessEntrypoint<{ run(): Promise<unknown> }>(
         await this.#scriptWorkerRef(input.code),
       );
       const result = await worker.run();

@@ -1,22 +1,13 @@
-import { env, RpcTarget } from "cloudflare:workers";
+import { RpcTarget } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import { normalizePath } from "../durable-object-names.ts";
-import { itxEntrypointScopeCacheKey, scopedItxEntrypointProps } from "../itx/entrypoint-props.ts";
-import { replayPath } from "../itx/live-capability.ts";
+import { itxEntrypointProps, itxEntrypointScopeCacheKey } from "../itx/entrypoint-props.ts";
 import { withInvokeCapabilityFallback } from "../itx/path-proxy.ts";
 import { projectEgressFetcher } from "../projects/egress.ts";
 import type { CfExecutionContext, ItxAuth } from "../itx/types.ts";
 import { WorkerRef as WorkerRefSchema } from "./schemas.ts";
-import type { WorkerCollection, WorkerRef } from "./types.ts";
-import { WorkerRunner, statefulWorkerDurableObjectName } from "./worker-runner.ts";
-
-type StatefulWorkerRpc = {
-  invokeCapability(input: {
-    args?: unknown[];
-    path: string[];
-    ref: Extract<WorkerRef, { type: "stateful" }>;
-  }): Promise<unknown>;
-};
+import type { WorkerCapability, WorkerCollection, WorkerRef } from "./types.ts";
+import { WorkerRunner } from "./worker-runner.ts";
 
 /**
  * Public project-facing worker collection.
@@ -37,14 +28,14 @@ export class WorkerCollectionRpcTarget extends RpcTarget implements WorkerCollec
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  get<T = unknown>(ref: WorkerRef): T {
+  get<T extends object = Record<string, unknown>>(ref: WorkerRef): WorkerCapability<T> {
     const parsed = WorkerRefSchema.parse(ref);
     return new WorkerRpcTarget({
       ctx: this.props.ctx,
       loader: this.props.loader,
       projectId: this.props.projectId,
       ref: parsed,
-    }) as T;
+    }) as unknown as WorkerCapability<T>;
   }
 }
 
@@ -58,7 +49,6 @@ export class WorkerCollectionRpcTarget extends RpcTarget implements WorkerCollec
 class WorkerRpcTarget extends RpcTarget {
   readonly #runner: WorkerRunner;
   readonly #ref: WorkerRef;
-  readonly #projectId: string;
 
   constructor(props: {
     ctx: CfExecutionContext;
@@ -68,8 +58,7 @@ class WorkerRpcTarget extends RpcTarget {
   }) {
     super();
     this.#ref = props.ref;
-    this.#projectId = props.projectId;
-    const itxScope = scopedItxEntrypointProps({
+    const itxScope = itxEntrypointProps({
       path: normalizePath(props.ref.path),
       projectId: props.projectId,
     });
@@ -97,28 +86,13 @@ class WorkerRpcTarget extends RpcTarget {
   }
 
   async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
-    const ref = this.#ref;
-    if (ref.type === "stateful") {
-      return await this.#statefulWorker().invokeCapability({
-        args,
-        path,
-        ref,
-      });
-    }
-
-    return await replayPath({
+    // Keep every dynamic worker invocation behind WorkerRunner. Stateless
+    // entrypoints, stateful DO facets, provided worker capabilities, and
+    // project.worker all then share the same loader/egress/ITX binding rules.
+    return await this.#runner.invokeCapability({
       args,
       path,
-      target: await this.#runner.get(ref),
+      ref: this.#ref,
     });
-  }
-
-  #statefulWorker(): StatefulWorkerRpc {
-    if (this.#ref.type !== "stateful") {
-      throw new Error("Expected a stateful worker ref.");
-    }
-    return env.WORKER.getByName(
-      statefulWorkerDurableObjectName(this.#projectId, this.#ref),
-    ) as unknown as StatefulWorkerRpc;
   }
 }

@@ -161,7 +161,7 @@ function fauxResponseScript(input: string): string {
   const response = `This is the response to '${input}'`;
   return `
     async (itx) => {
-      await itx.stream.append({
+      await itx.agent.stream.append({
         type: "events.iterate.com/agents/web-message-sent",
         payload: { message: ${JSON.stringify(response)} },
       });

@@ -57,15 +57,6 @@ class AgentRpcTarget extends RpcTarget implements Agent {
     );
   }
 
-  #projectItx() {
-    return env.ITX.getByName(
-      DurableObjectNameCodec.stringify({
-        projectId: this.props.projectId,
-        path: "/",
-      }),
-    );
-  }
-
   get stream() {
     return new StreamRpcTarget({
       auth: this.props.auth,
@@ -134,12 +125,7 @@ class AgentRpcTarget extends RpcTarget implements Agent {
 
   async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
     await this.#ensureProcessorsConfigured();
-    try {
-      return await this.#itx().invokeCapability({ args, path });
-    } catch (error) {
-      if (!isMissingCapabilityError(error, path)) throw error;
-      return await this.#projectItx().invokeCapability({ args, path });
-    }
+    return await this.#itx().invokeCapability({ args, path });
   }
 
   // Configure this agent's AGENT + ITX processors on its stream the first time
@@ -169,14 +155,4 @@ class AgentRpcTarget extends RpcTarget implements Agent {
       await this.stream.append(...missing);
     }
   }
-}
-
-function isMissingCapabilityError(error: unknown, path: string[]): boolean {
-  const message =
-    error instanceof Error
-      ? error.message
-      : error && typeof error === "object" && "message" in error
-        ? String((error as { message: unknown }).message)
-        : String(error);
-  return message.includes(`no capability "${path.join(".")}"`);
 }

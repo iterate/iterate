@@ -711,10 +711,10 @@ describe("minimal itx v4", () => {
 
             export class RepoAgentEntrypoint extends WorkerEntrypoint {
               async echo(label) {
-                const agent = await this.env.ITX.get();
+                const itx = await this.env.ITX.get();
                 return {
                   label,
-                  whoami: await agent.whoami(),
+                  whoami: await itx.agent.whoami(),
                 };
               }
             }
@@ -773,17 +773,17 @@ describe("minimal itx v4", () => {
               async increment(label) {
                 const count = ((this.ctx.storage.kv.get("count")) ?? 0) + 1;
                 this.ctx.storage.kv.put("count", count);
-                const agent = await this.env.ITX.get();
+                const itx = await this.env.ITX.get();
                 return {
                   count,
                   label,
-                  whoami: await agent.whoami(),
+                  whoami: await itx.agent.whoami(),
                 };
               }
 
               async callRepoAgent(label) {
-                const agent = await this.env.ITX.get();
-                return await agent.repoAgent.echo(label);
+                const itx = await this.env.ITX.get();
+                return await itx.agent.repoAgent.echo(label);
               }
             }
           `,
@@ -932,7 +932,7 @@ describe("minimal itx v4", () => {
         content: fencedAgentScript(`
           async (itx) => {
             const message = await itx.projectTool.format({ text: "project-capability" });
-            await itx.stream.append({
+            await itx.agent.stream.append({
               type: ${JSON.stringify(AGENT_WEB_MESSAGE_SENT_TYPE)},
               payload: { message },
             });
@@ -975,11 +975,11 @@ describe("minimal itx v4", () => {
 
                 export class AgentProbeEntrypoint extends WorkerEntrypoint {
                   async inspect(input) {
-                    const agent = await this.env.ITX.get();
+                    const itx = await this.env.ITX.get();
                     return {
                       input,
                       projectId: ${JSON.stringify(projectId)},
-                      whoami: await agent.whoami(),
+                      whoami: await itx.agent.whoami(),
                     };
                   }
                 }
@@ -1027,10 +1027,10 @@ describe("minimal itx v4", () => {
       payload: {
         content: fencedAgentScript(`
           async (itx) => {
-            const probe = await itx.agentProbe.inspect("agent-only");
-            const first = await itx.agentCounter.increment();
-            const current = await itx.agentCounter.current();
-            await itx.stream.append({
+            const probe = await itx.agent.agentProbe.inspect("agent-only");
+            const first = await itx.agent.agentCounter.increment();
+            const current = await itx.agent.agentCounter.current();
+            await itx.agent.stream.append({
               type: ${JSON.stringify(AGENT_WEB_MESSAGE_SENT_TYPE)},
               payload: {
                 message: JSON.stringify({
@@ -1094,7 +1094,7 @@ describe("minimal itx v4", () => {
 
               async agentScope() {
                 const itx = await this.env.ITX.get();
-                return { kind: "agent", whoami: await itx.whoami() };
+                return { kind: "agent", whoami: await itx.agent.whoami() };
               }
             }
           `,

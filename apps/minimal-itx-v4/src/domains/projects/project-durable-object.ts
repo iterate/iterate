@@ -6,7 +6,7 @@ import {
 import type { Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { itxEntrypointScopeCacheKey, scopedItxEntrypointProps } from "../itx/entrypoint-props.ts";
+import { itxEntrypointProps, itxEntrypointScopeCacheKey } from "../itx/entrypoint-props.ts";
 import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "../repos/project-repo.ts";
 import { StreamRpcTarget } from "../streams/rpc-targets.ts";
 import { WorkerRunner } from "../workers/worker-runner.ts";
@@ -24,7 +24,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
       projectId: this.#name.projectId,
     }),
   });
-  readonly #itxScope = scopedItxEntrypointProps({
+  readonly #itxScope = itxEntrypointProps({
     path: this.#name.path,
     projectId: this.#name.projectId,
   });
@@ -72,7 +72,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   private defaultProjectWorker() {
-    return this.#workerRunner.get<ProjectWorker>({
+    return this.#workerRunner.getStatelessEntrypoint<ProjectWorker>({
       path: "/",
       source: {
         repoPath: PROJECT_REPO_PATH,

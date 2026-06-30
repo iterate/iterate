@@ -5,10 +5,9 @@ export type ItxEntrypointScope = {
   projectId: string;
 };
 
-export type ScopedItxEntrypointProps = ItxEntrypointScope;
-export type ItxEntrypointProps = ScopedItxEntrypointProps;
+export type ItxEntrypointProps = ItxEntrypointScope;
 
-export function scopedItxEntrypointProps(input: ItxEntrypointScope): ScopedItxEntrypointProps {
+export function itxEntrypointProps(input: ItxEntrypointScope): ItxEntrypointProps {
   return {
     path: normalizePath(input.path),
     projectId: input.projectId,
@@ -19,7 +18,7 @@ export function scopeFromItxEntrypointProps(
   props: ItxEntrypointProps | undefined,
 ): ItxEntrypointScope {
   if (props === undefined) {
-    throw new Error("env.ITX.get() requires scoped ITX binding props with projectId and path");
+    throw new Error("env.ITX.get() requires ITX binding props with projectId and path");
   }
   if (props.projectId.trim() === "") {
     throw new Error("env.ITX.get() requires a non-empty projectId");

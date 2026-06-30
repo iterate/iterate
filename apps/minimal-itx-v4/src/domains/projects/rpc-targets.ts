@@ -9,7 +9,7 @@ import { subscriptionConfiguredEvent } from "../streams/subscription-event.ts";
 import { rejectBuiltinCollision, withInvokeCapabilityFallback } from "../itx/path-proxy.ts";
 import { CapabilityProvisionRpcTarget } from "../itx/capability-provision.ts";
 import { type ProvideCapabilityInput } from "../itx/itx-processor-implementation.ts";
-import type { CfExecutionContext, ItxAuth, RevokeCapabilityInput } from "../itx/types.ts";
+import type { AgentItx, CfExecutionContext, ItxAuth, RevokeCapabilityInput } from "../itx/types.ts";
 import { WorkerCollectionRpcTarget } from "../workers/rpc-targets.ts";
 import type { WorkerRef } from "../workers/types.ts";
 import { ProjectEgressRpcTarget } from "./egress.ts";
@@ -89,8 +89,13 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
   }
 }
 
-class ProjectRpcTarget extends RpcTarget implements Project {
-  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
+type ProjectRpcTargetProps = { auth: ItxAuth; ctx: CfExecutionContext; projectId: string };
+
+class ProjectRpcTarget<Props extends ProjectRpcTargetProps = ProjectRpcTargetProps>
+  extends RpcTarget
+  implements Project
+{
+  constructor(readonly props: Props) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
     return withInvokeCapabilityFallback(this);
@@ -182,6 +187,18 @@ class ProjectRpcTarget extends RpcTarget implements Project {
     // `project.worker` is only a convenience alias for the default repo-backed
     // stateless worker. The general API is `project.workers.get(ref)`.
     return this.workers.get<ProjectWorker>(defaultProjectWorkerRef());
+  }
+}
+
+export class AgentItxRpcTarget
+  extends ProjectRpcTarget<ProjectRpcTargetProps & { agentPath: string }>
+  implements AgentItx
+{
+  get agent() {
+    // Agent-scoped ITX is deliberately "project plus agent". Project-level
+    // capabilities stay at the root; agent-only capabilities and message APIs
+    // live behind this explicit property instead of relying on fallback magic.
+    return this.agents.get(this.props.agentPath);
   }
 }
 

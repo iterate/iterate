@@ -17,7 +17,14 @@ export interface ItxRoot {
   whoami(): string;
 }
 
-export type ScopedItx = Project | Agent;
+/**
+ * Agent-scoped workers still run inside a project. Keep project capabilities at
+ * the root so code can move between project and agent contexts, and hang the
+ * narrower agent surface under `.agent` for agent-local stream/messages/tools.
+ */
+export interface AgentItx extends Project {
+  agent: Agent;
+}
 
 export interface ItxCapabilityHost {
   runScript(code: string): Promise<{

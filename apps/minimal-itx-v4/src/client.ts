@@ -6,7 +6,12 @@ import {
 } from "capnweb";
 import type { Agent } from "./domains/agents/types.ts";
 import { withOwnedRpcSession } from "./domains/itx/rpc-disposal.ts";
-import type { ItxAuthCredentials, ItxRoot, UnauthenticatedItx } from "./domains/itx/types.ts";
+import type {
+  AgentItx,
+  ItxAuthCredentials,
+  ItxRoot,
+  UnauthenticatedItx,
+} from "./domains/itx/types.ts";
 import type { Project } from "./domains/projects/types.ts";
 
 export const DEFAULT_ITX_BASE_URL = "http://127.0.0.1:8791";
@@ -21,7 +26,6 @@ type ConnectItxAuthenticatedInput = ConnectItxBaseInput & {
 
 type ConnectProjectItxInput = ConnectItxAuthenticatedInput & {
   projectId: string;
-  path?: "/";
 };
 
 type ConnectAgentItxInput = ConnectItxAuthenticatedInput & {
@@ -45,7 +49,34 @@ function connect<T extends CapnRpcCompatible<T>>(url: string): CapnRpcStub<T> {
   );
 }
 
-export function connectItx(input: ConnectAgentItxInput): CapnRpcStub<Agent>;
+type RpcSessionStub<T extends object> = CapnRpcStub<T> & {
+  [Symbol.dispose]?(): void;
+  dup(): RpcSessionStub<T>;
+};
+
+function agentItxStub(
+  project: RpcSessionStub<Project>,
+  agent: RpcSessionStub<Agent>,
+): RpcSessionStub<AgentItx> {
+  // The external `/api/itx` surface still exposes projects and agents as
+  // separate RPC objects. This client-side view matches Worker `env.ITX.get()`
+  // for agent contexts without adding another protocol branch.
+  return new Proxy(project, {
+    get(target, key, receiver) {
+      if (key === "agent") return agent;
+      if (key === "dup") return () => agentItxStub(target.dup(), agent.dup());
+      if (key === Symbol.dispose) {
+        return () => {
+          target[Symbol.dispose]?.();
+          agent[Symbol.dispose]?.();
+        };
+      }
+      return Reflect.get(target, key, receiver);
+    },
+  }) as RpcSessionStub<AgentItx>;
+}
+
+export function connectItx(input: ConnectAgentItxInput): CapnRpcStub<AgentItx>;
 export function connectItx(input: ConnectProjectItxInput): CapnRpcStub<Project>;
 export function connectItx(input: ConnectItxAuthenticatedInput): CapnRpcStub<ItxRoot>;
 export function connectItx(input?: ConnectItxBaseInput): CapnRpcStub<UnauthenticatedItx>;
@@ -56,7 +87,7 @@ export function connectItx(
     | ConnectItxBaseInput
     | ConnectProjectItxInput = {},
 ):
-  | CapnRpcStub<Agent>
+  | CapnRpcStub<AgentItx>
   | CapnRpcStub<ItxRoot>
   | CapnRpcStub<Project>
   | CapnRpcStub<UnauthenticatedItx> {
@@ -66,9 +97,9 @@ export function connectItx(
   const root = session.authenticate(input.auth) as CapnRpcStub<ItxRoot>;
   if (!("projectId" in input)) return withOwnedRpcSession(root, session);
 
-  const project = root.projects.get(input.projectId) as CapnRpcStub<Project>;
+  const project = root.projects.get(input.projectId) as RpcSessionStub<Project>;
   if (!("agentPath" in input)) return withOwnedRpcSession(project, root, session);
 
-  const agent = project.agents.get(input.agentPath) as CapnRpcStub<Agent>;
-  return withOwnedRpcSession(agent, project, root, session);
+  const agent = project.agents.get(input.agentPath) as RpcSessionStub<Agent>;
+  return withOwnedRpcSession(agentItxStub(project, agent), root, session);
 }
