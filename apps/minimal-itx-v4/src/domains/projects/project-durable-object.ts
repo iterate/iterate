@@ -19,11 +19,12 @@ export class ProjectDurableObject extends DurableObject<Env> {
       projectId: this.#name.projectId,
     }),
   });
+  readonly #projectProcessor: ProjectProcessor;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
 
-    this.#processorHost.add(
+    this.#projectProcessor = this.#processorHost.add(
       ProjectProcessorContract.slug,
       (deps) =>
         new ProjectProcessor({
@@ -46,5 +47,9 @@ export class ProjectDurableObject extends DurableObject<Env> {
       projectId: this.#name.projectId,
       name: this.ctx.id.name!,
     };
+  }
+
+  get processor() {
+    return this.#projectProcessor;
   }
 }

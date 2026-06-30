@@ -67,6 +67,10 @@ export const ConfiguredStreamSubscriber = z.discriminatedUnion("type", [
     type: z.literal("repo"),
   }),
   z.strictObject({
+    address: DurableObjectAddress,
+    type: z.literal("secret"),
+  }),
+  z.strictObject({
     type: z.literal("worker"),
     workerRef: WorkerRef,
   }),

@@ -1505,6 +1505,10 @@ export class StreamDurableObject extends DurableObject<Env> {
         ) as unknown as ConfiguredSubscriberTarget;
       case "repo":
         return this.env.REPO.getByName(durableObjectName) as unknown as ConfiguredSubscriberTarget;
+      case "secret":
+        return this.env.SECRET.getByName(
+          durableObjectName,
+        ) as unknown as ConfiguredSubscriberTarget;
     }
   }
 

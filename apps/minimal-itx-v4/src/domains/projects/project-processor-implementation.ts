@@ -1,11 +1,12 @@
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { PROJECT_REPO_PATH } from "../repos/utils.ts";
-import type { StreamEvent } from "../../types.ts";
+import type { StreamEvent, StreamListItem } from "../../types.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
+import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 
 const PROJECT_WORKER_READY_ATTEMPTS = 20;
@@ -31,6 +32,11 @@ export class ProjectProcessor extends StreamProcessor<
       case "events.iterate.com/project/created":
         if (event.payload.projectId !== this.deps.itx.projectId) return state;
         return { ...state, created: true };
+      case "events.iterate.com/stream/created":
+        if (event.payload.projectId !== this.deps.itx.projectId) return state;
+        return recordStream(state, event.payload.path, event.createdAt);
+      case "events.iterate.com/stream/child-stream-created":
+        return recordStream(state, event.payload.childPath, event.createdAt);
       default:
         return state;
     }
@@ -84,22 +90,34 @@ export class ProjectProcessor extends StreamProcessor<
         break;
       }
       case "events.iterate.com/stream/child-stream-created": {
-        if (!event.payload.childPath.startsWith("/agents/")) return;
+        const childPath = event.payload.childPath;
+        if (!childPath.startsWith("/agents/") && !childPath.startsWith("/secrets/")) return;
         blockProcessorWhile(async () => {
           const durableObjectName = DurableObjectNameCodec.stringify({
             projectId: this.deps.itx.projectId,
-            path: event.payload.childPath,
+            path: childPath,
           });
-          await this.deps.itx.streams.get(event.payload.childPath).append(
+          if (childPath.startsWith("/agents/")) {
+            await this.deps.itx.streams.get(childPath).append(
+              buildDurableObjectProcessorSubscriptionConfiguredEvent({
+                durableObjectName,
+                processorSlug: AgentProcessorContract.slug,
+                subscriberType: "agent",
+              }),
+              buildDurableObjectProcessorSubscriptionConfiguredEvent({
+                durableObjectName,
+                processorSlug: ItxProcessorContract.slug,
+                subscriberType: "itx",
+              }),
+            );
+            return;
+          }
+
+          await this.deps.itx.streams.get(childPath).append(
             buildDurableObjectProcessorSubscriptionConfiguredEvent({
               durableObjectName,
-              processorSlug: AgentProcessorContract.slug,
-              subscriberType: "agent",
-            }),
-            buildDurableObjectProcessorSubscriptionConfiguredEvent({
-              durableObjectName,
-              processorSlug: ItxProcessorContract.slug,
-              subscriberType: "itx",
+              processorSlug: SecretProcessorContract.slug,
+              subscriberType: "secret",
             }),
           );
         });
@@ -129,6 +147,32 @@ export class ProjectProcessor extends StreamProcessor<
         return;
     }
   }
+}
+
+function recordStream<
+  State extends {
+    agents: StreamListItem[];
+    repos: StreamListItem[];
+    secrets: StreamListItem[];
+    streams: StreamListItem[];
+  },
+>(state: State, path: string, createdAt: string): State {
+  const item = { path, createdAt };
+  return {
+    ...state,
+    agents: path.startsWith("/agents/") ? addStreamListItem(state.agents, item) : state.agents,
+    repos:
+      path === PROJECT_REPO_PATH || path.startsWith("/repos/")
+        ? addStreamListItem(state.repos, item)
+        : state.repos,
+    secrets: path.startsWith("/secrets/") ? addStreamListItem(state.secrets, item) : state.secrets,
+    streams: addStreamListItem(state.streams, item),
+  };
+}
+
+function addStreamListItem(items: StreamListItem[], item: StreamListItem): StreamListItem[] {
+  if (items.some((existing) => existing.path === item.path)) return items;
+  return [...items, item].sort((a, b) => a.path.localeCompare(b.path));
 }
 
 async function waitForDefaultProjectWorker(itx: ProjectRpcTarget): Promise<void> {

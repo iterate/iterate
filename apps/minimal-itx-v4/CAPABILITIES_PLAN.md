@@ -6,86 +6,110 @@ that every API described here exists today.
 
 ## Goals
 
-- Keep the `Project` RPC surface as the place where capability helpers live.
-  `AgentItx` extends `Project`, so agents inherit the same behavior.
+- Keep `Project` as the capability host. `AgentItx` extends `Project`, so
+  project capability behavior should be designed once and inherited by agents.
+- Preserve v4's current direct dotted capability surface: mounted capabilities
+  are accessed as `project.some.path(...)`, not under `project.capabilities`.
 - Make MCP and OpenAPI first-party conveniences because they are common, while
-  preserving the ability to implement equivalent behavior in dynamic workers.
-- Keep remote network behavior in the existing project fetch/egress layer.
-  Capability adapters name remote services and call fetch; egress resolves
-  secrets, applies policy, and performs requests.
-- Make mounted capabilities durable event-sourced recipes. Avoid eager
-  connection work during `provideCapability(...)`.
-- Avoid runtime probing of live capabilities for metadata. Use declared event
-  metadata for now.
+  keeping equivalent behavior implementable in dynamic workers.
+- Keep remote network behavior in project egress. MCP/OpenAPI adapters name
+  remote services and issue fetches; egress resolves secrets, enforces the
+  current secret egress rules, and performs requests.
+- Keep mounted capabilities durable and event-sourced. Remote first-party
+  recipes validate and describe before append; dynamic workers stay lazy.
+- Avoid runtime probing of live capabilities for metadata.
 
 ## Non-Goals
 
-- Do not add `itx.mount(...)` or separate mounting sugar.
-- Do not introduce a generalized dialer abstraction in v4 yet.
+- Do not add `itx.mount(...)` or a separate capability manager.
+- Do not introduce the generalized `apps/os` dialer abstraction in v4 yet.
 - Do not expose built-in WorkerEntrypoint mechanics as part of the minimal v4
   public model.
 - Do not preserve backward compatibility for the current `type: "worker"` /
   `workerRef` mounted capability recipe.
-- Do not add capability description update events, type discovery events, or
-  runtime target shape requirements yet.
+- Do not add capability description update events or runtime target shape
+  requirements.
+- Do not implement a full project type composer yet. Generated `types` strings
+  should make that possible later.
 
 ## Current Reference Points
 
-`apps/os` already proves the broad pattern:
+`apps/os` proves the broad pattern:
 
-- OS has loopback named WorkerEntrypoints for MCP and OpenAPI clients.
-- Those entrypoints are addressed through a generalized dialer shape.
+- MCP and OpenAPI are ordinary first-party clients, not special router magic.
 - MCP and OpenAPI clients fetch through project egress.
 - The OpenAPI client dispatches by flat `operationId`.
 - The MCP client exposes tools as invokable capability methods.
+- `apps/os/src/itx/capabilities/openapi-types.ts` derives TypeScript-ish
+  declarations from OpenAPI specs.
+- `packages/shared/src/type-tree/json-schema-types.ts` has direct precedent,
+  adapted from Cloudflare `@cloudflare/codemode`, for turning MCP-style JSON
+  Schema tool descriptors into TypeScript-ish declarations.
 
-Minimal v4 should take the useful result without copying the whole OS dialer
-model. In v4, MCP and OpenAPI helpers should be normal `ProjectRpcTarget`
-built-ins in `src/rpc-targets.ts`, alongside `streams`, `repos`, `workers`,
-`worker`, `agents`, and `egress`.
+Minimal v4 should take those useful pieces without copying the OS dialer model.
+MCP and OpenAPI helpers should be normal project built-ins, wired from
+`ProjectRpcTarget` in `src/rpc-targets.ts`, with implementation classes under
+`src/domains/itx`.
 
-## Two API Surfaces
+## Existing V4 Shape To Preserve
 
-There are two distinct surfaces.
+`ProjectRpcTarget` and `AgentRpcTarget` already return
+`withInvokeCapabilityFallback(this)`. Built-ins are explicit methods/getters,
+and unknown properties are routed through `invokeCapability({ path, args })`.
+
+That is the model:
+
+```ts
+project.streams; // built-in
+project.worker; // built-in
+project.pets.findPetsByStatus(...); // mounted capability
+project.github.issues.create(...); // mounted nested path
+```
+
+Mounted paths continue to use longest-prefix resolution in the ITX processor.
+The router should grow new recipe branches for `dynamic-worker`, `openapi`, and
+`mcp`; it should not gain a new namespace model.
+
+## Public Surfaces
+
+There are two surfaces.
 
 ### Durable Mounted Capabilities
 
-Mounted capabilities are installed explicitly:
+Mounted capabilities are installed explicitly with a flat
+`provideCapability(...)` input:
 
 ```ts
 await project.provideCapability({
   path: ["pets"],
-  capability: {
-    type: "openapi",
-    specUrl: "https://example.com/openapi.json",
-    baseUrl: "https://api.example.com",
-    headers: {
-      Authorization: 'Bearer getSecret("PETS_API_TOKEN")',
-    },
+  type: "openapi",
+  specUrl: "https://example.com/openapi.json",
+  baseUrl: "https://api.example.com",
+  headers: {
+    Authorization: 'Bearer getSecret({ path: "/secrets/pets-api-token" })',
   },
   instructions: "Use this for pet inventory and adoption workflows.",
-  types: "OpenAPI operation ids are exposed as dotted capability methods.",
 });
 ```
 
-The mount is durable because it is recorded in the ITX event stream. The recipe
-should be lazy: appending the event validates the recipe shape but does not
-connect to MCP, fetch an OpenAPI spec, load a dynamic worker, or allocate a
-stateful worker facet.
+`provideCapability(...)` appends one `capability-provided` event if it
+successfully mounts. If validation or remote discovery fails for a first-party
+remote recipe, the call rejects and appends no event. Any existing capability at
+that path remains unchanged.
 
 ### Ad-Hoc Clients
 
-Ad-hoc clients are temporary helpers for scripts and RPC sessions:
+Ad-hoc clients are temporary connected RPC targets for scripts and RPC sessions:
 
 ```ts
 const docs = await project.mcp.connect({
   url: "https://docs.example.com/mcp",
   headers: {
-    Authorization: 'Bearer getSecret("DOCS_MCP_TOKEN")',
+    Authorization: 'Bearer getSecret({ path: "/secrets/docs-mcp-token" })',
   },
 });
 
-await docs.listTools();
+await docs.describe();
 await docs.search_cloudflare_documentation({ query: "Workers RPC" });
 ```
 
@@ -94,60 +118,76 @@ const pets = await project.openapi.connect({
   specUrl: "https://example.com/openapi.json",
   baseUrl: "https://api.example.com",
   headers: {
-    Authorization: 'Bearer getSecret("PETS_API_TOKEN")',
+    Authorization: 'Bearer getSecret({ path: "/secrets/pets-api-token" })',
   },
 });
 
-await pets.listOperations();
+await pets.describe();
 await pets.findPetsByStatus({ status: "available" });
 ```
 
-These helpers should return dynamic dotted capability objects, not low-level
-transport clients. They are not durable mounts and should not add events.
+`connect(...)` actually connects/discovers. If it resolves, the returned RPC
+target can answer `describe()` without a first-use discovery call.
 
-## Public Capability Recipes
+## Flat Capability Recipes
 
-The mounted recipe union should move toward:
+The mounted input and event payload should move toward one flat discriminated
+union:
 
 ```ts
-type ProvidedCapability =
+type ProvideCapabilityInput =
   | {
       flattenNestedPath?: boolean;
+      instructions?: string;
+      path: string[];
       target: unknown;
       type: "live";
+      types?: string;
     }
   | {
       flattenNestedPath?: boolean;
+      instructions?: string;
+      path: string[];
       ref: DynamicWorkerRef;
       type: "dynamic-worker";
+      types?: string;
     }
   | {
       headers?: Record<string, string>;
+      instructions?: string;
+      path: string[];
       timeoutMs?: number;
       type: "mcp";
+      types?: string;
       url: string;
     }
   | {
       baseUrl?: string;
       headers?: Record<string, string>;
+      instructions?: string;
+      path: string[];
       specUrl: string;
       type: "openapi";
+      types?: string;
     };
 ```
 
-`instructions?: string` and `types?: string` stay on the
-`provideCapability(...)` input and the `capability-provided` event. They are
-plain string fields. No special runtime type exchange is needed now.
+The `capability-provided` event stores the same flat shape minus ephemeral
+fields such as a live `target`. `instructions` and `types` are plain optional
+strings on the event row.
 
-### Dynamic Worker Recipe
+`path` stays `string[]` for now. Do not add dot-string path sugar.
+
+## Dynamic Worker Recipe
 
 Rename the durable worker capability recipe:
 
 ```ts
 {
-  type: "dynamic-worker";
-  ref: DynamicWorkerRef;
-  flattenNestedPath?: boolean;
+  path: ["db"],
+  type: "dynamic-worker",
+  ref: DynamicWorkerRef,
+  flattenNestedPath: true,
 }
 ```
 
@@ -155,14 +195,14 @@ Remove the old shape:
 
 ```ts
 {
-  type: "worker";
-  workerRef: WorkerRef;
+  type: "worker",
+  workerRef: WorkerRef,
 }
 ```
 
 No compatibility aliases are required in minimal v4.
 
-The domain should be consistently named `dynamic-worker`:
+The dynamic worker domain should be consistently named:
 
 - source folder: `src/domains/dynamic-workers/`
 - event namespace / processor slug: `dynamic-worker`
@@ -170,23 +210,94 @@ The domain should be consistently named `dynamic-worker`:
   `StatefulDynamicWorkerRef`, `DynamicWorkerRunner`,
   `DynamicWorkerCollection`
 
-Keep the public project affordances short:
+Keep ergonomic public project names:
 
 - `project.workers`
 - `project.worker`
 - `itx.workers` where applicable
 
-The repo/domain folder can still use `worker` for source file names and brevity
-where it refers to user-authored worker code, such as `worker.js`.
+Dynamic-worker mounts validate the ref shape at provide time, but do not load
+source, touch Worker Loader, or allocate stateful facets until invocation.
 
-### MCP Recipe
+## OpenAPI RPC Targets
 
-The MCP mounted shape should be compatible with the common remote server entry
-style used by `mcp.json`, but flattened for this API:
+OpenAPI implementation classes should live under `src/domains/itx`:
+
+```ts
+OpenApiCollectionRpcTarget; // project.openapi
+OpenApiRpcTarget; // returned by project.openapi.connect(...)
+```
+
+`OpenApiCollectionRpcTarget.connect(input)` calls the same static connection
+path used by durable provide and mounted invocation:
+
+```ts
+OpenApiRpcTarget.connect(input, { egress, projectId });
+```
+
+OpenAPI config:
 
 ```ts
 {
-  type: "mcp";
+  specUrl: string;
+  baseUrl?: string;
+  headers?: Record<string, string>;
+}
+```
+
+`connect(...)` fetches and parses the spec through `egress.fetch`, builds the
+operation map, and returns an `OpenApiRpcTarget`. The target exposes only:
+
+```ts
+describe(): Promise<{ instructions: string; types: string }>;
+```
+
+Every other property/method is fallback-dispatched as an OpenAPI operation by
+flat `operationId`.
+
+No public `listOperations()` method for now. Raw operation discovery should be
+represented in `describe().instructions` and `describe().types`.
+
+Mounted OpenAPI provide uses the same connection path:
+
+```ts
+const adapter = await OpenApiRpcTarget.connect(config, { egress, projectId });
+const derived = await adapter.describe();
+```
+
+Then it appends the event with:
+
+```ts
+instructions: input.instructions ?? derived.instructions;
+types: input.types ?? derived.types;
+```
+
+This is overwrite, not merge. Caller-provided metadata wins.
+
+Mounted OpenAPI invocation can reconnect/refetch through the same connection
+path for simplicity. No cache is required for the first pass.
+
+## MCP Client RPC Targets
+
+MCP implementation classes should live under `src/domains/itx`:
+
+```ts
+McpClientCollectionRpcTarget; // project.mcp
+McpClientRpcTarget; // returned by project.mcp.connect(...)
+```
+
+`McpClientCollectionRpcTarget.connect(input)` calls the same static connection
+path used by durable provide and mounted invocation:
+
+```ts
+McpClientRpcTarget.connect(input, { egress, projectId });
+```
+
+MCP config should stay close to common `mcp.json` remote server entries, but
+flattened for this API:
+
+```ts
+{
   url: string;
   headers?: Record<string, string>;
   timeoutMs?: number;
@@ -194,87 +305,165 @@ style used by `mcp.json`, but flattened for this API:
 ```
 
 Do not nest this under `server`. Do not add an explicit transport field yet.
-Remote HTTP is the default. SSE or other transports can be added later if the
-fetch layer and adapter need them.
+Remote streamable HTTP is the default.
 
-The ad-hoc form omits the mounted `type`:
+MCP should be stateless like the current OS client:
 
-```ts
-await project.mcp.connect({
-  url: "https://example.com/mcp",
-  headers: { Authorization: 'Bearer getSecret("MCP_TOKEN")' },
-});
-```
+- `connect(...)` connects, lists tools, closes the MCP client, and returns an
+  `McpClientRpcTarget` holding discovered tool metadata.
+- `describe()` uses the stored tool metadata.
+- Each fallback tool invocation connects, calls the tool, and closes.
 
-### OpenAPI Recipe
-
-The OpenAPI mounted shape should be:
+The target exposes only:
 
 ```ts
-{
-  type: "openapi";
-  specUrl: string;
-  baseUrl?: string;
-  headers?: Record<string, string>;
-}
+describe(): Promise<{ instructions: string; types: string }>;
 ```
 
-The ad-hoc form omits the mounted `type`:
+Every other property/method is fallback-dispatched as an MCP tool name.
+
+No public `listTools()` method for now. Tool discovery should be represented in
+`describe().instructions` and `describe().types`.
+
+Mounted MCP provide uses the same connection path, derives metadata from
+`describe()`, and stores caller-provided metadata when supplied:
 
 ```ts
-await project.openapi.connect({
-  specUrl: "https://example.com/openapi.json",
-  baseUrl: "https://api.example.com",
-  headers: { Authorization: 'Bearer getSecret("OPENAPI_TOKEN")' },
-});
+instructions: input.instructions ?? derived.instructions;
+types: input.types ?? derived.types;
 ```
 
-Dispatch should be by flat `operationId`. Include a discovery method such as
-`listOperations()`.
+Mounted MCP invocation can reconnect/list/call/close through the same simple
+stateless path. No connection cache is required.
+
+## Types String Convention
+
+`types` should be a valid TypeScript source string that exports
+`type Capability`.
+
+Generated OpenAPI/MCP types should look like:
+
+```ts
+export type Capability = {
+  describe(): Promise<{ instructions: string; types: string }>;
+
+  /** Find pets by status */
+  findPetsByStatus(input: { status: string }): Promise<unknown>;
+};
+```
+
+Manual `types` should follow the same convention, but v4 should not validate
+this yet. No TypeScript parser is needed during provide.
+
+This convention is enough for a future composer to parse each capability's
+`types`, extract `Capability`, and mount it under the durable path. Do not build
+that composer in this pass.
+
+## Instructions Convention
+
+Generated `instructions` should briefly explain how to call the capability and
+should mention that `describe()` exists.
+
+Example OpenAPI guidance:
+
+```txt
+Call operations directly by operationId with one input object containing path
+params, query params, and body fields. Call describe() for this capability's
+instructions and TypeScript declarations.
+```
+
+Example MCP guidance:
+
+```txt
+Call tools directly by tool name with one input object matching the tool schema.
+Call describe() for this capability's instructions and TypeScript declarations.
+```
 
 ## Fetch, Egress, And Secrets
 
-MCP and OpenAPI adapters should not own egress policy. The fetch layer is the
-boundary:
+MCP and OpenAPI adapters should not own secret lookup or egress policy. They
+receive an `egress: Fetcher` and issue requests with `egress.fetch(request)`.
 
-- resolve `getSecret("KEY")` placeholders in headers
-- apply project outbound policy
-- perform network fetches
-- provide the same behavior to built-in helpers and dynamic workers
+`ItxProcessor` should receive the existing project egress fetcher directly:
 
-Dynamic workers receive only their `env.ITX` binding. If a dynamic worker wants
-MCP or OpenAPI access, it should call back into ITX, for example through
-`itx.mcp.connect(...)`, `itx.openapi.connect(...)`, or a mounted capability.
+```ts
+new ItxProcessor({
+  ...deps,
+  egress: projectEgressFetcher(this.ctx.exports, this.#name.projectId),
+  path: this.#name.path,
+  projectId: this.#name.projectId,
+  workerRunner,
+});
+```
+
+`ProjectRpcTarget` ad-hoc helpers should use the same helper:
+
+```ts
+OpenApiRpcTarget.connect(input, {
+  egress: projectEgressFetcher(this.props.ctx.exports, this.props.projectId),
+  projectId: this.props.projectId,
+});
+```
+
+The secrets domain now supports path-addressed secret references in headers:
+
+```ts
+getSecret({ path: "/secrets/pets-api-token" });
+```
+
+Secret material is not publicly readable. `project.secrets.get(path).update(...)`
+stores material and allowed egress URLs. Project egress routes requests with a
+single secret reference through the matching Secret Durable Object, which
+substitutes material only when the request origin is allowed and records usage
+audit events.
+
+That means MCP/OpenAPI integration tests can use real project secrets:
+
+```ts
+const secret = project.secrets.get("/secrets/pets-api-token");
+await secret.update({
+  material: "actual-token",
+  egress: { urls: [mockApiBaseUrl] },
+});
+
+await project.provideCapability({
+  path: ["pets"],
+  type: "openapi",
+  specUrl: `${mockApiBaseUrl}/openapi.json`,
+  headers: {
+    Authorization: 'Bearer getSecret({ path: "/secrets/pets-api-token" })',
+  },
+});
+```
+
+The adapter sees only the header placeholder. Egress owns substitution and
+policy. If a spec fetch or MCP handshake needs auth, the secret must allow that
+remote origin.
 
 ## Built-Ins Versus Dynamic Workers
 
 MCP and OpenAPI are first-party because they are common, not because they need
-special routing semantics. The mounted capability router can treat them as
-recipe types that instantiate the appropriate project helper on demand.
+special routing semantics. Equivalent behavior must remain possible in dynamic
+workers through ITX and project egress.
 
-Equivalent behavior must remain possible in dynamic workers:
-
-- OpenAPI should be proved first with a dependency-free dynamic worker test.
-- MCP needs worker bundling or vendored modules before a realistic dynamic
-  worker end-to-end test is useful.
-
-This means built-in MCP/OpenAPI code should avoid depending on private host
-state that dynamic workers could never access, except for the normal ITX
-capability and project egress path.
+OpenAPI dynamic-worker parity should be tested first because it can be done
+without npm module bundling. MCP dynamic-worker parity can follow once worker
+bundling or vendored MCP SDK support exists.
 
 ## Live Capabilities
 
-Do not force all live capabilities into an object with `run()` and
-`describe()`. Cap'n Web / Workers RPC does not give a reliable generic way to
-distinguish a bare function stub from an RPC target stub after crossing the
-boundary. Runtime shape probing should not be part of the design.
+Do not force live capabilities into an object with `run()` and `describe()`.
+Cap'n Web / Workers RPC does not give a reliable generic way to distinguish a
+bare function stub from an RPC target stub after crossing the boundary. Runtime
+shape probing should not be part of the design.
 
 Live capabilities remain either:
 
 - a normal object/function target replayed by dotted path
 - a flattened target when `flattenNestedPath: true`
 
-Descriptions are declared at mount time with `instructions` and `types`.
+Live capability descriptions are caller-declared with `instructions` and
+`types` on `provideCapability(...)`.
 
 ## Project Description
 
@@ -297,8 +486,8 @@ type ProjectDescription = {
 
 The inventory should include fixed project built-ins and mounted capabilities.
 It should be derived from declared/event metadata only. It should not call live
-targets, dynamic workers, MCP servers, or OpenAPI specs to discover metadata at
-describe time.
+targets, dynamic workers, MCP servers, or OpenAPI specs at project describe
+time.
 
 Built-ins to list include:
 
@@ -309,6 +498,7 @@ Built-ins to list include:
 - `worker`
 - `agents`
 - `egress`
+- `secrets`
 - `mcp`
 - `openapi`
 
@@ -319,45 +509,76 @@ reject a mounted capability whose root segment collides with an existing
 project RPC property or reserved segment. No additional reservation system is
 needed.
 
+Explicit methods on an adapter win over fallback dispatch. If a remote
+operation/tool conflicts with `describe`, we can solve that later.
+
 Dynamic dotted path fallback remains the dispatch mechanism for mounted
 capabilities.
 
 ## Implementation Sequence
 
-1. Rename worker-domain types and files to dynamic-worker terminology.
-2. Change `ProvidedCapability` and event schemas from `type: "worker"` /
-   `workerRef` to `type: "dynamic-worker"` / `ref`.
+1. Flatten `provideCapability(...)` and event payloads.
+2. Rename mounted worker recipes to `type: "dynamic-worker"` / `ref` and remove
+   `type: "worker"` / `workerRef`.
 3. Add `instructions?: string` and `types?: string` to
-   `provideCapability(...)` and the `capability-provided` event.
+   `provideCapability(...)`, `capability-provided`, and capability records.
 4. Update `project.describe()` to return project identity plus built-in and
    mounted capability descriptions.
-5. Add `project.openapi.connect(...)` and the OpenAPI mounted recipe path.
-6. Add OpenAPI end-to-end coverage for both built-in mounted/ad-hoc use and a
-   dynamic-worker implementation of equivalent behavior.
-7. Add `project.mcp.connect(...)` and the MCP mounted recipe path.
-8. Add MCP end-to-end coverage after worker bundling or vendored MCP client
-   support is available.
+5. Add OpenAPI type derivation under `src/domains/itx`, generating
+   `export type Capability = ...`.
+6. Add `OpenApiCollectionRpcTarget` and `OpenApiRpcTarget` under
+   `src/domains/itx`, and expose `project.openapi`.
+7. Add OpenAPI mounted provide/invoke support in the ITX processor.
+8. Add OpenAPI end-to-end coverage for ad-hoc connect, mounted provide/invoke,
+   `describe()`, generated `types`, and real secret-backed egress.
+9. Add MCP JSON Schema tool type derivation under `src/domains/itx`, generating
+   `export type Capability = ...`.
+10. Add `McpClientCollectionRpcTarget` and `McpClientRpcTarget` under
+    `src/domains/itx`, and expose `project.mcp`.
+11. Add MCP mounted provide/invoke support in the ITX processor.
+12. Add MCP end-to-end coverage for ad-hoc connect, mounted provide/invoke,
+    `describe()`, generated `types`, and real secret-backed egress.
+13. Add OpenAPI dynamic-worker parity coverage.
+14. Add MCP dynamic-worker parity coverage after worker bundling or vendored
+    MCP client support is available.
 
 ## Test Expectations
 
 Cover these behaviors:
 
-- mounted `dynamic-worker` recipes use `ref`, not `workerRef`
-- no old `type: "worker"` mounted capability shape is accepted
+- `provideCapability(...)` is flat; no nested `capability` property.
+- mounted `dynamic-worker` recipes use `ref`, not `workerRef`.
+- no old `type: "worker"` mounted capability shape is accepted.
 - `instructions` and `types` round-trip through `provideCapability(...)`,
-  stream events, and `project.describe()`
-- built-ins appear in `project.describe()`
-- mounted OpenAPI exposes operations by `operationId`
-- ad-hoc OpenAPI does not append capability events
-- OpenAPI dynamic worker can provide equivalent behavior through ITX
-- mounted MCP exposes tools as dotted methods
-- ad-hoc MCP does not append capability events
-- MCP dynamic worker proof is added once bundling support exists
+  stream events, and `project.describe()`.
+- generated remote `types` are valid source strings with
+  `export type Capability = ...`.
+- manual `types` are accepted as strings without validation.
+- built-ins, including `secrets`, `mcp`, and `openapi`, appear in
+  `project.describe()`.
+- OpenAPI `connect()` fails if the spec cannot be fetched or parsed.
+- OpenAPI `connect()` returns an RPC target with `describe()` and fallback
+  operation dispatch.
+- OpenAPI mounted provide connects/describes before append and appends no event
+  on failure.
+- OpenAPI invocation dispatches by flat `operationId`.
+- OpenAPI ad-hoc connect does not append capability events.
+- OpenAPI e2e tests use `project.secrets` and egress URL allowlists for auth.
+- MCP `connect()` connects, lists tools, closes, and returns an RPC target with
+  `describe()` and fallback tool dispatch.
+- MCP mounted provide connects/describes before append and appends no event on
+  failure.
+- MCP tool invocation connects/calls/closes statelessly.
+- MCP ad-hoc connect does not append capability events.
+- MCP e2e tests use `project.secrets` and egress URL allowlists for auth.
+- OpenAPI dynamic worker can provide equivalent behavior through ITX.
+- MCP dynamic worker proof is added once bundling support exists.
 
 ## Open Questions
 
 - Exact `ProjectDescription` field names can be adjusted during implementation.
-- Host matching for OpenAPI `specUrl`, `baseUrl`, and auth headers should be
-  decided in the fetch layer, not the adapter API.
+- Host matching for OpenAPI `specUrl`, `baseUrl`, and auth headers is currently
+  handled by egress/secret policy. The adapter API should stay simple unless
+  tests reveal a real leak or usability problem.
 - MCP transport variants can be added later when the default remote HTTP shape
   is insufficient.

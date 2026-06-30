@@ -3,6 +3,11 @@ import { defineProcessorContract } from "../streams/stream-processor.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
 
+const StreamListItem = z.object({
+  createdAt: z.string(),
+  path: z.string(),
+});
+
 export const ProjectProcessorContract = defineProcessorContract({
   slug: "project",
   version: "0.1.0",
@@ -16,6 +21,10 @@ export const ProjectProcessorContract = defineProcessorContract({
       .nullable()
       .default(null),
     created: z.boolean().default(false),
+    agents: z.array(StreamListItem).default([]),
+    repos: z.array(StreamListItem).default([]),
+    secrets: z.array(StreamListItem).default([]),
+    streams: z.array(StreamListItem).default([]),
   }),
   events: {
     "events.iterate.com/project/create-requested": {
@@ -38,6 +47,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-requested",
     "events.iterate.com/repo/created",
+    "events.iterate.com/stream/created",
     "events.iterate.com/stream/child-stream-created",
   ],
   processorDeps: [CoreProcessorContract, RepoProcessorContract],

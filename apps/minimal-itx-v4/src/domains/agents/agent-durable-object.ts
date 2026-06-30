@@ -19,6 +19,7 @@ export class AgentDurableObject extends DurableObject<Env> {
       projectId: this.#name.projectId,
     }),
   });
+  readonly #agentProcessor: AgentProcessor;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -29,10 +30,17 @@ export class AgentDurableObject extends DurableObject<Env> {
       );
     }
 
-    this.#processorHost.add(AgentProcessorContract.slug, (deps) => new AgentProcessor(deps));
+    this.#agentProcessor = this.#processorHost.add(
+      AgentProcessorContract.slug,
+      (deps) => new AgentProcessor(deps),
+    );
   }
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
     return this.#processorHost.wakeStreamSubscriber(args);
+  }
+
+  get processor() {
+    return this.#agentProcessor;
   }
 }

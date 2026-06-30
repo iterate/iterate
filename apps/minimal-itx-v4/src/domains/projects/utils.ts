@@ -1,4 +1,5 @@
-const SECRET_PLACEHOLDER = /getSecret\("([^"]+)"\)/g;
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { secretErrorResponse, secretReferencePathsFromHeaders } from "../secrets/utils.ts";
 
 /**
  * Narrow structural view of the loopback export we need from
@@ -31,30 +32,29 @@ export function projectEgressFetcher(
  * Shared egress implementation for the public RPC target and WorkerEntrypoint
  * loopback so both paths get identical placeholder substitution.
  */
-export function fetchProjectEgress(request: Request, projectId: string): Promise<Response> {
-  return fetch(substituteProjectEgressHeaders(request, projectId));
-}
+export function fetchProjectEgress(
+  request: Request,
+  input: {
+    projectId: string;
+    secrets: {
+      getByName(name: string): { fetch(request: Request): Promise<Response> };
+    };
+  },
+): Promise<Response> {
+  let secretPaths: string[];
+  try {
+    secretPaths = secretReferencePathsFromHeaders(request.headers);
+  } catch {
+    return Promise.resolve(secretErrorResponse("secret_reference_required", 400));
+  }
+  if (secretPaths.length === 0) return fetch(request);
+  if (secretPaths.length > 1) {
+    return Promise.resolve(secretErrorResponse("multiple_secret_paths_not_supported", 400));
+  }
 
-/**
- * Rebuilds the request because Headers are the only POC surface that currently
- * supports project-secret placeholders.
- */
-function substituteProjectEgressHeaders(request: Request, projectId: string): Request {
-  const headers = new Headers(request.headers);
-  headers.forEach((value, name) => {
-    headers.set(name, substituteSecretPlaceholders(value, projectId));
-  });
-  return new Request(request, { headers });
-}
-
-/**
- * Keeps the fake secret syntax in one place while egress is still a proof of
- * concept. The real OS path will replace this with policy-backed secret reads.
- */
-function substituteSecretPlaceholders(value: string, projectId: string): string {
-  // POC substitution only: real secret storage/policy intentionally stays out of
-  // minimal-itx-v4 until the egress shape is proven end to end.
-  return value.replaceAll(SECRET_PLACEHOLDER, (_match, path: string) => {
-    return `This is ${path} for ${projectId}`;
-  });
+  return input.secrets
+    .getByName(
+      DurableObjectNameCodec.stringify({ projectId: input.projectId, path: secretPaths[0]! }),
+    )
+    .fetch(request);
 }

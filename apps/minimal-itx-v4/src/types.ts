@@ -47,9 +47,11 @@ export interface Project extends ItxCapabilityHost {
   agents: AgentCollection;
   describe(): Promise<{ projectId: string; name: string }>;
   egress: ProjectEgress;
+  processor: StreamProcessorRpc<ProjectProcessorState>;
   repo: Repo;
-  repos: RepoCollection;
-  streams: StreamCollection;
+  repos: ProjectRepoCollection;
+  secrets: SecretCollection;
+  streams: ProjectStreamCollection;
   worker: ProjectWorker;
   workers: WorkerCollection;
 }
@@ -67,10 +69,12 @@ export interface AgentItx extends Project {
 /** Agent catalog within one project. */
 export interface AgentCollection {
   get(path: string): Agent;
+  list(): Promise<StreamListItem[]>;
 }
 
 /** Agent capability surface for message loops and agent-local dynamic tools. */
 export interface Agent extends ItxCapabilityHost {
+  processor: StreamProcessorRpc<AgentProcessorState>;
   stream: Stream;
   sendMessage(message: string): Promise<StreamEvent>;
   ask(input: { message: string }): Promise<StreamEvent>;
@@ -80,6 +84,11 @@ export interface Agent extends ItxCapabilityHost {
 /** Stream catalog for either a project or the deployment-wide global scope. */
 export interface StreamCollection {
   get(path: string): Stream;
+}
+
+/** Project-scoped stream catalog with reduced-state listing. */
+export interface ProjectStreamCollection extends StreamCollection {
+  list(): Promise<StreamListItem[]>;
 }
 
 /**
@@ -131,11 +140,103 @@ export interface RepoCollection {
   get(path: string): Repo;
 }
 
+/** Project-scoped repo catalog with reduced-state listing. */
+export interface ProjectRepoCollection extends RepoCollection {
+  list(): Promise<StreamListItem[]>;
+}
+
 /** Git-backed repo capability used by project workers and dynamic worker refs. */
 export interface Repo {
   commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult>;
   create(): Promise<Repo>;
+  processor: StreamProcessorRpc<RepoProcessorState>;
   whoami(): Promise<string>;
+}
+
+/** Secret catalog within one project. */
+export interface SecretCollection {
+  get(path: string): Secret;
+  list(): Promise<StreamListItem[]>;
+}
+
+/** Path-addressed secret capability. Secret material has no public read API. */
+export interface Secret {
+  describe(): Promise<SecretDescription>;
+  fetch(req: Request): Promise<Response>;
+  processor: StreamProcessorRpc<SecretProcessorState>;
+  update(input: SecretUpdateInput): Promise<StreamEvent>;
+}
+
+export type SecretUpdateInput = {
+  egress?: { urls: string[] };
+  material?: string;
+};
+
+export type SecretDescription = {
+  audit: {
+    lastUsedAt?: string;
+    lastUsedBy?: string;
+    lastUsedUrl?: string;
+    usedCount: number;
+  };
+  egress: { urls: string[] };
+  hasMaterial: boolean;
+};
+
+export type StreamListItem = {
+  createdAt: string;
+  path: string;
+};
+
+export type ProjectProcessorState = {
+  agents: StreamListItem[];
+  createRequest: { projectId: string; slug: string } | null;
+  created: boolean;
+  repos: StreamListItem[];
+  secrets: StreamListItem[];
+  streams: StreamListItem[];
+};
+
+export type AgentProcessorState = {
+  inputs: Array<{ content: string; offset: number }>;
+  outputs: Array<{ content: string; offset: number }>;
+  scheduledRequests: Record<string, number>;
+  scriptExecutionsCompleted: string[];
+};
+
+export type RepoProcessorState = {
+  artifactName: string | null;
+  created: boolean;
+  defaultBranch: string | null;
+  initialized: boolean;
+  remote: string | null;
+};
+
+export type SecretProcessorState = {
+  audit: {
+    lastUsedAt?: string;
+    lastUsedBy?: string;
+    lastUsedUrl?: string;
+    usedCount: number;
+  };
+  egress: { urls: string[] };
+  encryptedMaterial: {
+    algorithm: "AES-GCM-SHA256";
+    ciphertext: string;
+    iv: string;
+  } | null;
+};
+
+export type ProcessorSnapshot<State> = {
+  offset: number;
+  state: State;
+};
+
+export interface StreamProcessorRpc<State = unknown> {
+  getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
+  onStateChange(cb: (state: State) => unknown): Promise<(() => void) & Disposable>;
+  snapshot(): Promise<ProcessorSnapshot<State>>;
+  waitUntilEvent(input: { offset: number; timeoutMs?: number }): Promise<void>;
 }
 
 /** Capability-tree entry point for ad-hoc project-scoped worker refs. */
@@ -238,8 +339,8 @@ export type StreamEventBatch = {
 export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
 
 /** Serializable snapshot plus optional live runtime debug state for a processor. */
-export type ProcessorRuntimeState = {
-  snapshot: { offset: number; state: unknown };
+export type ProcessorRuntimeState<State = unknown> = {
+  snapshot: { offset: number; state: State };
   runtime?: Record<string, unknown>;
 };
 

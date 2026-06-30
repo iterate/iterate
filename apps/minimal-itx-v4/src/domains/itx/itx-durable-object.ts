@@ -57,6 +57,10 @@ export class ItxDurableObject extends DurableObject<Env> {
     return this.#processorHost.wakeStreamSubscriber(args);
   }
 
+  get processor() {
+    return this.#itxProcessor;
+  }
+
   // Return types are pinned shallow so `DurableObjectStub<ItxDurableObject>`
   // doesn't deep-instantiate the processor's inferred signatures (TS2589).
   invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown> {

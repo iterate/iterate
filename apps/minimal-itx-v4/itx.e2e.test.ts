@@ -19,7 +19,6 @@ import {
 const PROJECT_WORKER_FORWARDED_EVENT_TYPE = "events.iterate.test/project-worker-forwarded";
 const AGENT_WEB_MESSAGE_SENT_TYPE = "events.iterate.com/agent/web-message-sent";
 const AGENT_OUTPUT_ADDED_TYPE = "events.iterate.com/agent/output-added";
-const EGRESS_ECHO_URL = "https://postman-echo.com/get";
 const EGRESS_PROOF_HEADER = "x-itx-egress-proof";
 
 const ProjectWorkerForwardingProbeContract = defineProcessorContract({
@@ -139,6 +138,29 @@ function startMockSlack(): Promise<{
             server.close((error) => (error ? closeReject(error) : closeResolve()));
           }),
         url: `http://127.0.0.1:${port}/`,
+      });
+    });
+  });
+}
+
+function startEgressEcho(): Promise<{
+  close(): Promise<void>;
+  url: string;
+}> {
+  const server = http.createServer((req, res) => {
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ headers: req.headers }));
+  });
+
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      const port = (server.address() as { port: number }).port;
+      resolve({
+        close: () =>
+          new Promise((closeResolve, closeReject) => {
+            server.close((error) => (error ? closeReject(error) : closeResolve()));
+          }),
+        url: `http://127.0.0.1:${port}/egress-echo`,
       });
     });
   });
@@ -363,31 +385,110 @@ describe("minimal itx v4", () => {
     expect(await repo.whoami()).toBe(`repo null:${path}`);
   });
 
-  test("Project egress substitutes secret placeholders for explicit and project worker fetches", async () => {
+  test("Project egress substitutes path-addressed secrets for explicit and project worker fetches", async () => {
+    const echo = await startEgressEcho();
     using session = withItxSession();
     using itx = session.authenticate({
       type: "trusted-internal",
       token: TRUSTED_INTERNAL_ITX_TOKEN,
     });
 
-    using project = itx.projects.create({ slug: `project-egress-${crypto.randomUUID()}` });
-    const { projectId } = await project.describe();
-    const secretReference = 'Bearer getSecret("/secrets/egress-proof")';
-    const expected = `Bearer This is /secrets/egress-proof for ${projectId}`;
+    try {
+      using project = itx.projects.create({ slug: `project-egress-${crypto.randomUUID()}` });
+      const secretPath = `/secrets/egress-proof/${crypto.randomUUID()}`;
+      using secret = project.secrets.get(secretPath);
+      await secret.update({
+        egress: { urls: [echo.url] },
+        material: "actual-secret-material",
+      });
 
-    const explicitResponse = await project.egress.fetch(
-      new Request(EGRESS_ECHO_URL, {
-        headers: { [EGRESS_PROOF_HEADER]: secretReference },
-      }),
-    );
-    expect(explicitResponse.status).toBe(200);
-    expect(echoedEgressProofHeader(await explicitResponse.json())).toBe(expected);
+      const agentPath = `/agents/list-proof/${crypto.randomUUID()}`;
+      const repoPath = `/repos/list-proof/${crypto.randomUUID()}`;
+      await project.streams.get(agentPath).append({
+        type: "events.iterate.test/list-agent",
+      });
+      await project.streams.get(repoPath).append({
+        type: "events.iterate.test/list-repo",
+      });
+      await waitForCondition(
+        async () => (await project.secrets.list()).some((item) => item.path === secretPath),
+        { description: "secret stream to appear in project processor list" },
+      );
+      await waitForCondition(async () => (await secret.describe()).hasMaterial, {
+        description: "secret processor to fold the update",
+      });
 
-    const workerBody = await project.worker.testFetch({
-      headerValue: secretReference,
-      url: EGRESS_ECHO_URL,
-    });
-    expect(echoedEgressProofHeader(workerBody)).toBe(expected);
+      const described = await secret.describe();
+      expect(described).toMatchObject({
+        audit: { usedCount: 0 },
+        egress: { urls: [echo.url] },
+        hasMaterial: true,
+      });
+      expect(JSON.stringify(described)).not.toContain("actual-secret-material");
+
+      const secretReference = `Bearer getSecret({ path: "${secretPath}" })`;
+      const expected = "Bearer actual-secret-material";
+
+      const explicitResponse = await project.egress.fetch(
+        new Request(echo.url, {
+          headers: { [EGRESS_PROOF_HEADER]: secretReference },
+        }),
+      );
+      expect(explicitResponse.status).toBe(200);
+      expect(echoedEgressProofHeader(await explicitResponse.json())).toBe(expected);
+
+      const workerBody = await project.worker.testFetch({
+        headerValue: secretReference,
+        url: echo.url,
+      });
+      expect(echoedEgressProofHeader(workerBody)).toBe(expected);
+
+      await waitForCondition(async () => (await secret.describe()).audit.usedCount === 2, {
+        description: "secret usage audit to fold",
+      });
+      expect(await project.streams.list()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: "/" }),
+          expect.objectContaining({ path: secretPath }),
+        ]),
+      );
+      const projectState = (await project.processor.snapshot()).state;
+      expect(projectState.streams).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: "/" }),
+          expect.objectContaining({ path: agentPath }),
+          expect.objectContaining({ path: repoPath }),
+          expect.objectContaining({ path: secretPath }),
+        ]),
+      );
+      expect(projectState.agents).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: agentPath })]),
+      );
+      expect(projectState.repos).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: "/" }),
+          expect.objectContaining({ path: repoPath }),
+        ]),
+      );
+      expect(projectState.secrets).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: secretPath })]),
+      );
+      expect(await project.secrets.list()).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: secretPath })]),
+      );
+      expect((await project.agents.list()).some((item) => item.path.startsWith("/agents/"))).toBe(
+        true,
+      );
+      expect((await project.repos.list()).some((item) => item.path === "/")).toBe(true);
+      expect((await project.repos.list()).some((item) => item.path.startsWith("/repos/"))).toBe(
+        true,
+      );
+      expect((await project.agents.get(agentPath).processor.snapshot()).state.inputs).toEqual([]);
+      expect((await project.repo.processor.snapshot()).state.created).toBe(true);
+      expect((await secret.processor.snapshot()).state.egress).toEqual({ urls: [echo.url] });
+    } finally {
+      await echo.close();
+    }
   });
 
   test("Project repos, workers, runScript, and dynamic worker refs compose", async () => {

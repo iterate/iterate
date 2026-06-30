@@ -30,10 +30,11 @@ export class RepoDurableObject extends DurableObject<Env> {
       projectId: this.#name.projectId,
     }),
   });
+  readonly #repoProcessor: RepoProcessor;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.#host.add(
+    this.#repoProcessor = this.#host.add(
       RepoProcessorContract.slug,
       (deps) =>
         new RepoProcessor({
@@ -47,6 +48,10 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
     return this.#host.wakeStreamSubscriber(args);
+  }
+
+  get processor() {
+    return this.#repoProcessor;
   }
 
   async getWorkerSource(args: { path: string }): Promise<ResolvedWorkerSource> {

@@ -8,6 +8,7 @@ import { ProjectCollectionRpcTarget, UnauthenticatedItxRpcTarget } from "./rpc-t
 import { ProjectDurableObject } from "./domains/projects/project-durable-object.ts";
 import { ProjectEgressEntrypoint } from "./domains/projects/egress.ts";
 import { RepoDurableObject } from "./domains/repos/repo-durable-object.ts";
+import { SecretDurableObject } from "./domains/secrets/secret-durable-object.ts";
 import { StreamDurableObject } from "./domains/streams/stream-durable-object.ts";
 import { StatefulWorkerDurableObject } from "./domains/workers/stateful-worker-durable-object.ts";
 
@@ -86,5 +87,6 @@ export {
   AgentDurableObject,
   ProjectDurableObject,
   RepoDurableObject,
+  SecretDurableObject,
   StreamDurableObject,
 };

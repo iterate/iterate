@@ -21,6 +21,7 @@ import { ProjectProcessorContract } from "./domains/projects/project-processor-c
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
 import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "./domains/repos/utils.ts";
+import { normalizeSecretPath } from "./domains/secrets/utils.ts";
 import {
   buildDurableObjectProcessorSubscriptionConfiguredEvent,
   resolveStreamPath,
@@ -36,9 +37,13 @@ import type {
   ItxRoot,
   Project,
   ProjectCollection,
+  ProjectRepoCollection,
+  ProjectStreamCollection,
   ProjectWorker,
   Repo,
   RepoCollection,
+  Secret,
+  SecretCollection,
   StatelessWorkerRef,
   Stream,
   StreamCollection,
@@ -132,6 +137,19 @@ class StreamCollectionRpcTarget extends RpcTarget implements StreamCollection {
   }
 }
 
+class ProjectStreamCollectionRpcTarget
+  extends StreamCollectionRpcTarget
+  implements ProjectStreamCollection
+{
+  constructor(readonly projectProps: { auth: ItxAuth; projectId: string }) {
+    super(projectProps);
+  }
+
+  list() {
+    return projectProcessorState(this.projectProps.projectId).then((state) => state.streams);
+  }
+}
+
 function rootStream(props: { auth: ItxAuth; projectId: string | null }) {
   return new StreamRpcTarget({
     auth: props.auth,
@@ -212,6 +230,10 @@ class RepoRpcTarget extends RpcTarget implements Repo {
   commitFiles(input: Parameters<Repo["commitFiles"]>[0]) {
     return this.durableObjectStub.commitFiles(input);
   }
+
+  get processor() {
+    return this.durableObjectStub.processor;
+  }
 }
 
 class RepoCollectionRpcTarget extends RpcTarget implements RepoCollection {
@@ -237,6 +259,19 @@ class RepoCollectionRpcTarget extends RpcTarget implements RepoCollection {
   }
 }
 
+class ProjectRepoCollectionRpcTarget
+  extends RepoCollectionRpcTarget
+  implements ProjectRepoCollection
+{
+  constructor(readonly projectProps: { auth: ItxAuth; projectId: string }) {
+    super(projectProps);
+  }
+
+  list() {
+    return projectProcessorState(this.projectProps.projectId).then((state) => state.repos);
+  }
+}
+
 class AgentCollectionRpcTarget extends RpcTarget implements AgentCollection {
   constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
     super();
@@ -250,6 +285,61 @@ class AgentCollectionRpcTarget extends RpcTarget implements AgentCollection {
       path: normalizeAgentPath(path),
       projectId: this.props.projectId,
     });
+  }
+
+  list() {
+    return projectProcessorState(this.props.projectId).then((state) => state.agents);
+  }
+}
+
+class SecretCollectionRpcTarget extends RpcTarget implements SecretCollection {
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  get(path: string) {
+    return new SecretRpcTarget({
+      auth: this.props.auth,
+      path: normalizeSecretPath(path),
+      projectId: this.props.projectId,
+    });
+  }
+
+  list() {
+    return projectProcessorState(this.props.projectId).then((state) => state.secrets);
+  }
+}
+
+class SecretRpcTarget extends RpcTarget implements Secret {
+  constructor(readonly props: { auth: ItxAuth; path: string; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  get durableObjectStub() {
+    return env.SECRET.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: this.props.projectId,
+        path: normalizeSecretPath(this.props.path),
+      }),
+    );
+  }
+
+  describe() {
+    return this.durableObjectStub.describe();
+  }
+
+  fetch(request: Request) {
+    return this.durableObjectStub.fetch(request);
+  }
+
+  update(input: Parameters<Secret["update"]>[0]) {
+    return this.durableObjectStub.update(input);
+  }
+
+  get processor() {
+    return this.durableObjectStub.processor;
   }
 }
 
@@ -270,6 +360,19 @@ class AgentRpcTarget extends RpcTarget implements Agent {
         path: this.props.path,
       }),
     );
+  }
+
+  get durableObjectStub() {
+    return env.AGENT.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: this.props.projectId,
+        path: this.props.path,
+      }),
+    );
+  }
+
+  get processor() {
+    return this.durableObjectStub.processor;
   }
 
   get stream() {
@@ -502,6 +605,10 @@ export class ProjectRpcTarget extends RpcTarget implements Project {
     return this.durableObjectStub.describe();
   }
 
+  get processor() {
+    return this.durableObjectStub.processor;
+  }
+
   get #itx() {
     return env.ITX.getByName(
       DurableObjectNameCodec.stringify({ path: "/", projectId: this.props.projectId }),
@@ -535,7 +642,7 @@ export class ProjectRpcTarget extends RpcTarget implements Project {
   }
 
   get streams() {
-    return new StreamCollectionRpcTarget({
+    return new ProjectStreamCollectionRpcTarget({
       auth: this.props.auth,
       projectId: this.props.projectId,
     });
@@ -554,7 +661,14 @@ export class ProjectRpcTarget extends RpcTarget implements Project {
   }
 
   get repos() {
-    return new RepoCollectionRpcTarget({
+    return new ProjectRepoCollectionRpcTarget({
+      auth: this.props.auth,
+      projectId: this.props.projectId,
+    });
+  }
+
+  get secrets() {
+    return new SecretCollectionRpcTarget({
       auth: this.props.auth,
       projectId: this.props.projectId,
     });
@@ -617,6 +731,13 @@ function defaultProjectWorkerRef(): StatelessWorkerRef {
     },
     type: "stateless",
   };
+}
+
+async function projectProcessorState(projectId: string) {
+  const project = env.PROJECT.getByName(DurableObjectNameCodec.stringify({ path: "/", projectId }));
+  const processor = await project.processor;
+  const { state } = await processor.snapshot();
+  return state;
 }
 
 class ItxRootRpcTarget extends RpcTarget implements ItxRoot {

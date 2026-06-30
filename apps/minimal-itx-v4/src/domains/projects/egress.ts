@@ -1,4 +1,4 @@
-import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+import { env, RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import type { ProjectEgress } from "../../types.ts";
 import { fetchProjectEgress } from "./utils.ts";
@@ -15,7 +15,10 @@ export class ProjectEgressRpcTarget extends RpcTarget implements ProjectEgress {
   }
 
   fetch(request: Request): Promise<Response> {
-    return fetchProjectEgress(request, this.props.projectId);
+    return fetchProjectEgress(request, {
+      projectId: this.props.projectId,
+      secrets: env.SECRET,
+    });
   }
 }
 
@@ -29,6 +32,9 @@ export class ProjectEgressRpcTarget extends RpcTarget implements ProjectEgress {
  */
 export class ProjectEgressEntrypoint extends WorkerEntrypoint<Env, { projectId: string }> {
   fetch(request: Request): Promise<Response> {
-    return fetchProjectEgress(request, this.ctx.props.projectId);
+    return fetchProjectEgress(request, {
+      projectId: this.ctx.props.projectId,
+      secrets: this.env.SECRET,
+    });
   }
 }
