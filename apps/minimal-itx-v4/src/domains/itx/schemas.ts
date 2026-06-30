@@ -6,6 +6,8 @@ import type {
   RevokeCapabilityInput,
 } from "../../types.ts";
 
+// [[ Why is this here? shouldn't these be inline in itx-processor-contract.ts? ]]
+
 export const CapabilityProvidedPayload = z.discriminatedUnion("type", [
   z.strictObject({
     flattenNestedPath: z.boolean().optional(),

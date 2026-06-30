@@ -13,7 +13,7 @@ import { durableObjectProcessorSubscriber } from "./engine/shared/callable-subsc
  * re-appending the same key reconfigures the same subscription rather than
  * adding a new one. There is no separate idempotency key: callers that re-run
  * this on every operation should append only when the key is not already in the
- * stream's reduced subscriptions (see `AgentRpcTarget#ensureProcessorsConfigured`).
+ * stream's reduced subscriptions.
  */
 export function subscriptionConfiguredEvent(input: {
   projectId: string;

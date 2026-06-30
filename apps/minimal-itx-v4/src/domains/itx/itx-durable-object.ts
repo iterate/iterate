@@ -19,6 +19,7 @@ import { itxEntrypointProps, itxEntrypointScopeCacheKey } from "./entrypoint-pro
 
 export class ItxDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
+  // [[ Overly abstract / verbose? can be deleted i hope? ]]
   readonly #itxScope = itxEntrypointProps({
     path: this.#name.path,
     projectId: this.#name.projectId,

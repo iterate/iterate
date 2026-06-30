@@ -3,6 +3,7 @@ type DisposableLike = {
   dup?(): DisposableLike;
 };
 
+// [[ What is this? This sort of super complicated function needs to at least be explained ]]
 export function withOwnedRpcSession<T extends object>(stub: T, ...owned: DisposableLike[]): T {
   let disposed = false;
   return new Proxy(stub, {

@@ -55,6 +55,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-requested",
     "events.iterate.com/repo/created",
+    "events.iterate.com/stream/child-stream-created",
   ],
   processorDeps: [CoreProcessorContract],
   emits: [

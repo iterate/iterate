@@ -10,10 +10,8 @@ import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
 import { CapabilityProvisionRpcTarget } from "./domains/itx/capability-provision.ts";
 import { itxEntrypointProps, itxEntrypointScopeCacheKey } from "./domains/itx/entrypoint-props.ts";
-import { ItxProcessorContract } from "./domains/itx/itx-processor-contract.ts";
 import { type ProvideCapabilityInput } from "./domains/itx/itx-processor-implementation.ts";
 import { rejectBuiltinCollision, withInvokeCapabilityFallback } from "./domains/itx/path-proxy.ts";
-import { AgentProcessorContract } from "./domains/agents/agent-processor-contract.ts";
 import { ProjectEgressRpcTarget, projectEgressFetcher } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "./domains/repos/project-repo.ts";
@@ -35,6 +33,7 @@ import type {
   Repo,
   RepoCollection,
   RevokeCapabilityInput,
+  StatelessWorkerRef,
   Stream,
   StreamCollection,
   UnauthenticatedItx,
@@ -268,8 +267,7 @@ class AgentRpcTarget extends RpcTarget implements Agent {
     return withInvokeCapabilityFallback(this);
   }
 
-  // [[ Should this really be a method? ]]
-  #itx() {
+  get #itx() {
     return env.ITX.getByName(
       DurableObjectNameCodec.stringify({
         projectId: this.props.projectId,
@@ -287,7 +285,6 @@ class AgentRpcTarget extends RpcTarget implements Agent {
   }
 
   async create() {
-    await this.#ensureProcessorsConfigured();
     const [requested] = await this.stream.append({
       type: "events.iterate.com/agent/create-requested",
       idempotencyKey: `agent-create-requested:${this.props.projectId}:${this.props.path}`,
@@ -301,7 +298,6 @@ class AgentRpcTarget extends RpcTarget implements Agent {
   }
 
   async sendMessage(message: string) {
-    await this.#ensureProcessorsConfigured();
     const [event] = await this.stream.append({
       type: "events.iterate.com/agents/user-message-received",
       payload: { content: message, origin: "web" },
@@ -324,62 +320,28 @@ class AgentRpcTarget extends RpcTarget implements Agent {
 
   async provideCapability(input: ProvideCapabilityInput) {
     rejectBuiltinCollision(this, input.path);
-    await this.#ensureProcessorsConfigured();
-    const provision = await this.#itx().provideCapability(input);
+    const provision = await this.#itx.provideCapability(input);
     // [[ Why can we not just write return this.itx.provideCapability(input) ]]
 
     return new CapabilityProvisionRpcTarget({
       ctx: this.props.ctx,
       path: input.path,
       providedAtOffset: provision.providedAtOffset,
-      revoke: (revokeInput) => this.#itx().revokeCapability(revokeInput),
+      revoke: (revokeInput) => this.#itx.revokeCapability(revokeInput),
     });
   }
 
   async revokeCapability(input: RevokeCapabilityInput) {
     // [[ This line is v suspicious - should delete and turn into one-liner]]
-    await this.#ensureProcessorsConfigured();
-    await this.#itx().revokeCapability(input);
+    await this.#itx.revokeCapability(input);
   }
 
   async runScript(code: string) {
-    await this.#ensureProcessorsConfigured();
-    return await this.#itx().runScript(code);
+    return await this.#itx.runScript(code);
   }
 
   async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
-    await this.#ensureProcessorsConfigured();
-    return await this.#itx().invokeCapability({ args, path });
-  }
-
-  // [[ This seems super bad and messy - it's an expensive ensureProcessorsConfigured method that is called A LOT. We should be able to avoid it - and even if there are race conditions etc, it should be fine, because the processors should attach from _the beginning_. is this not the case?]]
-
-  // Configure this agent's AGENT + ITX processors on its stream the first time
-  // any capability op runs. `subscriptionKey` is the sole identity (no
-  // idempotency key), so we append only the subscriptions the stream's reduced
-  // state doesn't already carry — re-running this is then a cheap no-op.
-  async #ensureProcessorsConfigured() {
-    const desired = [
-      subscriptionConfiguredEvent({
-        projectId: this.props.projectId,
-        path: this.props.path,
-        bindingName: "AGENT",
-        processorName: AgentProcessorContract.slug,
-      }),
-      subscriptionConfiguredEvent({
-        projectId: this.props.projectId,
-        path: this.props.path,
-        bindingName: "ITX",
-        processorName: ItxProcessorContract.slug,
-      }),
-    ];
-    const { coreProcessorState } = await this.stream.runtimeState();
-    const missing = desired.filter(
-      (event) => !(event.payload.subscriptionKey in coreProcessorState.subscriptionsByKey),
-    );
-    if (missing.length > 0) {
-      await this.stream.append(...missing);
-    }
+    return await this.#itx.invokeCapability({ args, path });
   }
 }
 
@@ -535,15 +497,18 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
 // [[ Why is there a random type here? ]]
 type ProjectRpcTargetProps = { auth: ItxAuth; ctx: CfExecutionContext; projectId: string };
 
+export const ProjectRpcTargetInternals = Symbol("ProjectRpcTargetInternals");
+
 // [[ Do we really need this to be parameterised by props type? this seems unnecessarily messy - can we simplify ]]
-class ProjectRpcTarget<Props extends ProjectRpcTargetProps = ProjectRpcTargetProps>
-  extends RpcTarget
-  implements Project
-{
-  constructor(readonly props: Props) {
+export class ProjectRpcTarget extends RpcTarget implements Project {
+  constructor(readonly props: ProjectRpcTargetProps) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
     return withInvokeCapabilityFallback(this);
+  }
+
+  get projectId() {
+    return this.props.projectId;
   }
 
   get durableObjectStub() {
@@ -556,9 +521,7 @@ class ProjectRpcTarget<Props extends ProjectRpcTargetProps = ProjectRpcTargetPro
     return this.durableObjectStub.describe();
   }
 
-  // [[ this should not be a method, right? maybe a getter? ]]
-
-  #itx() {
+  get #itx() {
     return env.ITX.getByName(
       DurableObjectNameCodec.stringify({ path: "/", projectId: this.props.projectId }),
     );
@@ -566,26 +529,26 @@ class ProjectRpcTarget<Props extends ProjectRpcTargetProps = ProjectRpcTargetPro
 
   async provideCapability(input: ProvideCapabilityInput) {
     rejectBuiltinCollision(this, input.path);
-    const provision = await this.#itx().provideCapability(input);
+    const provision = await this.#itx.provideCapability(input);
     // [[ why is this not returned from #itx.provideCapability? ]]
     return new CapabilityProvisionRpcTarget({
       ctx: this.props.ctx,
       path: input.path,
       providedAtOffset: provision.providedAtOffset,
-      revoke: (revokeInput) => this.#itx().revokeCapability(revokeInput),
+      revoke: (revokeInput) => this.#itx.revokeCapability(revokeInput),
     });
   }
 
   async revokeCapability(input: RevokeCapabilityInput) {
-    await this.#itx().revokeCapability(input);
+    await this.#itx.revokeCapability(input);
   }
 
   async runScript(code: string) {
-    return await this.#itx().runScript(code);
+    return await this.#itx.runScript(code);
   }
 
   invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
-    return this.#itx().invokeCapability({ args, path });
+    return this.#itx.invokeCapability({ args, path });
   }
 
   get streams() {
@@ -636,6 +599,33 @@ class ProjectRpcTarget<Props extends ProjectRpcTargetProps = ProjectRpcTargetPro
     // stateless worker. The general API is `project.workers.get(ref)`.
     return this.workers.get<ProjectWorker>(defaultProjectWorkerRef());
   }
+
+  get [ProjectRpcTargetInternals]() {
+    return {
+      ensureDefaultWorkerLoaded: async () => {
+        const worker = await this.#defaultProjectWorker();
+        if (typeof worker.fetch !== "function") {
+          throw new Error("Default project worker does not expose fetch().");
+        }
+      },
+    };
+  }
+
+  #defaultProjectWorker() {
+    const itxScope = itxEntrypointProps({
+      path: "/",
+      projectId: this.props.projectId,
+    });
+    return new WorkerRunner({
+      bindings: {
+        ITX: this.props.ctx.exports.ItxEntrypoint({ props: itxScope }),
+      },
+      globalOutbound: projectEgressFetcher(this.props.ctx.exports, this.props.projectId),
+      loader: env.LOADER,
+      projectId: this.props.projectId,
+      workerScopeKey: itxEntrypointScopeCacheKey(itxScope),
+    }).getStatelessEntrypoint<ProjectWorker>(defaultProjectWorkerRef());
+  }
 }
 
 /**
@@ -648,19 +638,20 @@ class ProjectRpcTarget<Props extends ProjectRpcTargetProps = ProjectRpcTargetPro
  *
  * This is a little bit messy but fine for now
  */
-export class AgentItxRpcTarget
-  extends ProjectRpcTarget<ProjectRpcTargetProps & { agentPath: string }>
-  implements AgentItx
-{
+export class AgentItxRpcTarget extends ProjectRpcTarget implements AgentItx {
+  constructor(props: ProjectRpcTargetProps & { agentPath: string }) {
+    super(props);
+  }
+
   get agent() {
     // Agent-scoped ITX is deliberately "project plus agent". Project-level
     // capabilities stay at the root; agent-only capabilities and message APIs
     // live behind this explicit property instead of relying on fallback magic.
-    return this.agents.get(this.props.agentPath);
+    return this.agents.get((this.props as ProjectRpcTargetProps & { agentPath: string }).agentPath);
   }
 }
 
-function defaultProjectWorkerRef(): WorkerRef {
+function defaultProjectWorkerRef(): StatelessWorkerRef {
   return {
     path: "/",
     source: {

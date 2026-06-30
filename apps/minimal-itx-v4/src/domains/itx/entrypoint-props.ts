@@ -1,4 +1,5 @@
 import { normalizePath } from "../durable-object-names.ts";
+// [[ Do we need this file at all?! isn't this all just used in literally one or two places? this can probably be deleted and the ItxEntrypointScope concept deleted ]]
 
 export type ItxEntrypointScope = {
   path: string;
