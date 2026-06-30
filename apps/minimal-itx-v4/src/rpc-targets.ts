@@ -18,10 +18,8 @@ import {
 } from "./domains/itx/utils.ts";
 import { type ProvideCapabilityInput } from "./domains/itx/itx-processor-implementation.ts";
 import { ProjectEgressRpcTarget } from "./domains/projects/egress.ts";
-import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "./domains/repos/utils.ts";
-import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
 import { resolveStreamPath, subscriptionConfiguredEvent } from "./domains/streams/utils.ts";
 import { WorkerRef as WorkerRefSchema } from "./domains/workers/schemas.ts";
 import { WorkerRunner } from "./domains/workers/worker-runner.ts";
@@ -107,6 +105,15 @@ export class StreamRpcTarget extends RpcTarget implements Stream {
       args as Parameters<typeof this.durableObjectStub.subscribe>[0],
     );
   }
+
+  subscribeConfigured(args: Parameters<Stream["subscribe"]>[0] & { subscriptionKey: string }) {
+    if (this.props.auth.principal !== "trusted-internal") {
+      throw new Error("subscribeConfigured requires trusted internal auth");
+    }
+    return this.durableObjectStub.subscribeConfigured(
+      args as Parameters<typeof this.durableObjectStub.subscribeConfigured>[0],
+    );
+  }
 }
 
 class StreamCollectionRpcTarget extends RpcTarget implements StreamCollection {
@@ -147,8 +154,7 @@ async function requestRepoCreate(input: {
     subscriptionConfiguredEvent({
       projectId: input.projectId,
       path,
-      bindingName: "REPO",
-      processorName: RepoProcessorContract.slug,
+      subscriberType: "repo",
     }),
     {
       type: "events.iterate.com/repo/create-requested",
@@ -450,14 +456,12 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
       subscriptionConfiguredEvent({
         projectId: args.projectId,
         path: "/",
-        bindingName: "PROJECT",
-        processorName: ProjectProcessorContract.slug,
+        subscriberType: "project",
       }),
       subscriptionConfiguredEvent({
         projectId: args.projectId,
         path: PROJECT_REPO_PATH,
-        bindingName: "REPO",
-        processorName: RepoProcessorContract.slug,
+        subscriberType: "repo",
       }),
       {
         type: "events.iterate.com/project/create-requested",

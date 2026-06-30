@@ -4,7 +4,7 @@ import { describe, expect, test } from "vitest";
 import { newHttpBatchRpcSession, RpcTarget } from "capnweb";
 import { WebClient } from "@slack/web-api";
 import { z } from "zod";
-import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
+import { defineProcessorContract } from "./src/domains/streams/engine/shared/stream-processors.ts";
 import { buildUrl, withItxSession } from "./test-helpers.ts";
 import type { ItxWebSocketMessage } from "./test-helpers.ts";
 import type { UnauthenticatedItx } from "./src/types.ts";
@@ -145,7 +145,7 @@ function startMockSlack(): Promise<{
   });
 }
 
-class PathCallableTarget extends RpcTarget {
+class PathFunctionTarget extends RpcTarget {
   constructor(readonly target: unknown) {
     super();
   }
@@ -165,11 +165,11 @@ class PathCallableTarget extends RpcTarget {
     if (receiver === null || (typeof receiver !== "object" && typeof receiver !== "function")) {
       throw new Error(`path "${path.join(".")}" hit ${String(receiver)}`);
     }
-    const callable = Reflect.get(receiver, method);
-    if (typeof callable !== "function") {
+    const handler = Reflect.get(receiver, method);
+    if (typeof handler !== "function") {
       throw new Error(`path "${path.join(".")}" did not resolve to a function`);
     }
-    return Reflect.apply(callable, receiver, args);
+    return Reflect.apply(handler, receiver, args);
   }
 }
 
@@ -1886,7 +1886,7 @@ describe("minimal itx v4", () => {
     expect(await project.replaceProbe.value()).toBe(`old:${marker}`);
   });
 
-  test("Authenticated project can provide the Slack SDK as nested dotted callables", async () => {
+  test("Authenticated project can provide the Slack SDK as nested dotted functions", async () => {
     const mock = await startMockSlack();
     try {
       using session = withItxSession();
@@ -1908,7 +1908,7 @@ describe("minimal itx v4", () => {
         capability: {
           flattenNestedPath: true,
           type: "live",
-          target: new PathCallableTarget(slack),
+          target: new PathFunctionTarget(slack),
         },
       });
 

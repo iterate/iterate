@@ -8,37 +8,41 @@
 //   agent = this.host.add("agent", (deps) => new AgentProcessor({ ...deps, openai }));
 //   search = this.host.add("search", (deps) => new SearchProcessor(deps));
 //
-//   requestStreamSubscription(args: RequestStreamSubscriptionArgs) {
-//     return this.host.requestStreamSubscription(args);
+//   wakeStreamSubscriber(args: StreamSubscriberWakeRequest) {
+//     return this.host.wakeStreamSubscriber(args);
 //   }
 // }
 // ```
 //
-// The Stream DO reaches this entry point by dispatching the Callable stored in
-// the stream's `subscription-configured` event; the callable's
-// `transformInput.shallowMerge` carries `processorName` so one DO can host any
-// number of named processors. On handshake the host reads the processor's
-// checkpoint and subscribes with its own stable stream capability, so the stream
-// pumps batches into `processor.ingest`.
+// The Stream DO reaches this entry point from a configured subscriber target.
+// On wake, the host reads the processor's checkpoint and subscribes with its
+// own stable stream capability, so the stream pumps batches into
+// `processor.ingest`.
 
 import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "../stream-processor.ts";
 import type { ProcessorContractAnnouncement } from "../processors/core/contract.ts";
 import type { StreamSubscriptionHandle } from "../types.ts";
-import type { Stream, StreamEvent } from "../../../../types.ts";
+import type { ProcessEventBatch, Stream, StreamEvent } from "../../../../types.ts";
 
-/** What the Stream DO sends when asking a hosted processor to subscribe. */
-export type StreamSubscriptionHandshake = {
-  subscriptionKey: string;
+type ConfiguredStream = Stream & {
+  subscribeConfigured(input: {
+    subscriptionKey: string;
+    processEventBatch: ProcessEventBatch;
+    replayAfterOffset?: number;
+    eventTypes?: readonly string[];
+    events?: boolean;
+    subscriber?: unknown;
+  }): Promise<StreamSubscriptionHandle>;
 };
 
-/**
- * The handshake as received by a host DO's RPC method. `processorName` is
- * normally baked into the subscription's callable via
- * `transformInput.shallowMerge`; it may be omitted when the host has exactly
- * one processor.
- */
-export type RequestStreamSubscriptionArgs = StreamSubscriptionHandshake & {
-  processorName?: string;
+/** What the Stream DO sends when asking a hosted processor to subscribe back. */
+export type StreamSubscriberWakeRequest = {
+  stream: {
+    projectId: string | null;
+    path: string;
+    streamMaxOffset: number;
+  };
+  subscriptionKey: string;
 };
 
 /**
@@ -47,7 +51,7 @@ export type RequestStreamSubscriptionArgs = StreamSubscriptionHandshake & {
  * `new RepoProcessor({ ...deps, github })`.
  */
 type HostedProcessorDeps = {
-  stream: Stream;
+  stream: ConfiguredStream;
   readState: () => StreamProcessorSnapshot<any> | undefined;
   writeState: (snapshot: StreamProcessorSnapshot<any>) => void;
   keepAliveWhile: (work: () => Promise<unknown>) => void;
@@ -89,13 +93,13 @@ type HostedEntry = {
 // the stream replays the batch — this recovers transient failures. A batch that
 // keeps failing is poison: after this many consecutive failures we stop retrying,
 // record a stream/error-occurred event, and disconnect, leaving it to the
-// subscriber/processor (or a later re-dial) to decide whether to re-establish.
+// subscriber/processor (or a later wake) to decide whether to re-establish.
 const MAX_CONSECUTIVE_INGEST_FAILURES = 3;
 
 // Belt-and-braces companion to the Stream DO's idle teardown. A live subscription
 // handle pins the delivery connection. If no batch arrives for this long, the
 // host unsubscribes so this subscriber DO and the producer can hibernate; the
-// durable checkpoint + subscription-key persist, so the producer re-dials and
+// durable checkpoint + subscription-key persist, so the producer re-wakes us and
 // the host re-handshakes when activity resumes. In-memory timer for the same
 // reason as the Stream DO side: a durable alarm's only extra power — waking a
 // hibernated DO — is exactly wrong.
@@ -109,12 +113,12 @@ type StreamProcessorHost = {
    * DO field initialization.
    */
   add<P extends AnyHostedProcessor>(name: string, build: (deps: HostedProcessorDeps) => P): P;
-  /** Wire this to a public RPC method; subscription callables dial it. */
-  requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void>;
+  /** Wire this to the host DO's wakeStreamSubscriber RPC method. */
+  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void>;
   /**
-   * Drop every live subscription now — the idle timer's action, also callable
-   * directly (tests / operator "let this idle subscriber sleep"). The durable
-   * checkpoint + subscription-key persist, so the producer re-dials and this
+   * Drop every live subscription now — the idle timer's action, also exposed
+   * directly for tests / operator "let this idle subscriber sleep". The durable
+   * checkpoint + subscription-key persist, so the producer re-wakes this
    * host re-handshakes on the next activity.
    */
   runIdleDisconnectNow(): void;
@@ -122,7 +126,7 @@ type StreamProcessorHost = {
 
 export function createStreamProcessorHost(
   ctx: DurableObjectState,
-  options: { stream: Stream },
+  options: { stream: ConfiguredStream },
 ): StreamProcessorHost {
   const entries = new Map<string, HostedEntry>();
 
@@ -146,11 +150,10 @@ export function createStreamProcessorHost(
     return entry;
   }
 
-  function resolveProcessorName(processorName: string | undefined): string {
-    if (processorName !== undefined) return processorName;
+  function resolveProcessorName(): string {
     if (entries.size === 1) return [...entries.keys()][0]!;
     throw new Error(
-      `processorName is required when a host has more than one processor (registered: ${[...entries.keys()].join(", ")})`,
+      `wakeStreamSubscriber requires exactly one processor on this host (registered: ${[...entries.keys()].join(", ")})`,
     );
   }
 
@@ -181,7 +184,7 @@ export function createStreamProcessorHost(
       if (handle === undefined) continue;
       // Bump the generation so any batch still queued on this connection is
       // dropped by the gate in openSubscription. Then unsubscribe; the durable
-      // checkpoint + subscription-key persist, so the producer's next re-dial
+      // checkpoint + subscription-key persist, so the producer's next wake
       // re-handshakes us from where we left off.
       entry.generation += 1;
       try {
@@ -193,7 +196,7 @@ export function createStreamProcessorHost(
     }
   }
 
-  // (Re)opens the outbound subscription from the processor's durable checkpoint.
+  // (Re)opens the configured subscription from the processor's durable checkpoint.
   // Called for the initial handshake and again by `recoverFromIngestFailure`, so
   // a failed batch replays from the last good offset instead of being skipped.
   async function openSubscription(name: string): Promise<void> {
@@ -210,7 +213,7 @@ export function createStreamProcessorHost(
     // truth.
     const generation = entry.generation;
     const snapshot = await entry.processor.snapshot();
-    entry.handle = await options.stream.subscribe({
+    entry.handle = await options.stream.subscribeConfigured({
       subscriptionKey,
       replayAfterOffset: snapshot.offset,
       // The contract is the filter: the stream only delivers event types the
@@ -286,7 +289,7 @@ export function createStreamProcessorHost(
     }
 
     // Poison batch: stop retrying, record the failure on the stream, and stay
-    // disconnected. It is up to the subscriber/processor (or a later re-dial) to
+    // disconnected. It is up to the subscriber/processor (or a later wake) to
     // decide whether to re-establish the subscription.
     const offset = (await entry.processor.snapshot()).offset;
     const message = (error instanceof Error ? error.message : String(error)) || "unknown error";
@@ -326,8 +329,8 @@ export function createStreamProcessorHost(
       return processor;
     },
 
-    async requestStreamSubscription(args) {
-      const name = resolveProcessorName(args.processorName);
+    async wakeStreamSubscriber(args) {
+      const name = resolveProcessorName();
       const entry = requireEntry(name);
 
       ctx.storage.kv.put(subscriptionKeyKey(name), args.subscriptionKey);

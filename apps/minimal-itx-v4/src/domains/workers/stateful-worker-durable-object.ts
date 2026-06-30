@@ -93,7 +93,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     }
     if (ref.path !== this.#name.path || ref.durableWorkerKey !== durableWorkerKey) {
       throw new Error(
-        `Stateful worker ref ${ref.path}?durableWorkerKey=${ref.durableWorkerKey} does not match Durable Object ${this.#name.durableObjectName}.`,
+        `Stateful worker ref ${ref.path}?durableWorkerKey=${ref.durableWorkerKey} does not match Durable Object ${this.ctx.id.name}.`,
       );
     }
   }

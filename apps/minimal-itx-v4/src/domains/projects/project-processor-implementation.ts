@@ -3,8 +3,6 @@ import { subscriptionConfiguredEvent } from "../streams/utils.ts";
 import { PROJECT_REPO_PATH } from "../repos/utils.ts";
 import type { StreamEvent } from "../../types.ts";
 import { ProjectRpcTargetInternals, type ProjectRpcTarget } from "../../rpc-targets.ts";
-import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
-import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 
 type ProjectProcessorDeps = {
@@ -63,8 +61,7 @@ export class ProjectProcessor extends StreamProcessor<
             subscriptionConfiguredEvent({
               projectId: this.deps.itx.projectId,
               path: "/",
-              bindingName: "ITX",
-              processorName: ItxProcessorContract.slug,
+              subscriberType: "itx",
             }),
           );
           await append({
@@ -85,14 +82,12 @@ export class ProjectProcessor extends StreamProcessor<
             subscriptionConfiguredEvent({
               projectId: this.deps.itx.projectId,
               path: event.payload.childPath,
-              bindingName: "AGENT",
-              processorName: AgentProcessorContract.slug,
+              subscriberType: "agent",
             }),
             subscriptionConfiguredEvent({
               projectId: this.deps.itx.projectId,
               path: event.payload.childPath,
-              bindingName: "ITX",
-              processorName: ItxProcessorContract.slug,
+              subscriberType: "itx",
             }),
           );
         });

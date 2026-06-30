@@ -93,11 +93,11 @@ export async function replayPath({
   if (!isObjectLike(receiver)) {
     throw new Error(`capability path "${path.join(".")}" hit ${String(receiver)}`);
   }
-  const callable = Reflect.get(receiver, method);
-  if (typeof callable !== "function") {
+  const handler = Reflect.get(receiver, method);
+  if (typeof handler !== "function") {
     throw new Error(`capability path "${path.join(".")}" did not resolve to a function`);
   }
-  return await Reflect.apply(callable, receiver, args);
+  return await Reflect.apply(handler, receiver, args);
 }
 
 export async function invokeFlattenedPath({

@@ -223,7 +223,7 @@ export type StreamEventBatch = {
  * Callback invoked by the stream pump for each delivered batch.
  *
  * It stays as a named type because Workers RPC callback lifecycle helpers need
- * to duplicate, retain, and dispose exactly this callable shape.
+ * to duplicate, retain, and dispose exactly this callback shape.
  */
 export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
 

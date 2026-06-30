@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
+import { defineProcessorContract } from "../streams/engine/shared/stream-processors.ts";
 import { WorkerRef } from "../workers/schemas.ts";
 import type {
   CapabilityProvidedPayload as CapabilityProvidedPayloadType,

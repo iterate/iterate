@@ -9,8 +9,8 @@
 //
 // `processEvent` is the reconciler. Its two operations are the universal ones:
 // append events (subscriber-connected/disconnected presence facts, ancestor
-// announcements) and mutate runtime state (dial configured-but-unconnected
-// outbound subscribers, close connections whose configuration disappeared).
+// announcements) and mutate runtime state (wake configured-but-unconnected
+// subscribers, close configured connections whose configuration disappeared).
 
 import type { StreamEvent, StreamEventInput } from "../../../../../types.ts";
 import type { StreamDurableObject } from "../../../stream-durable-object.ts";
@@ -33,6 +33,7 @@ import {
   type ProcessorContractAnnouncement,
   type StreamSubscriberDescriptor,
   type StreamSubscriberDisconnectReason,
+  type StreamSubscriptionType,
 } from "./contract.ts";
 
 type CoreProcessorContract = typeof CoreProcessorContract;
@@ -49,6 +50,17 @@ type ProcessCoreEventArgs = ReducedCoreEvent & {
   runInBackground: (work: () => Promise<unknown>) => void;
 };
 
+type CoreSubscriptionArgs = {
+  subscriptionKey: string;
+  processEventBatch: ProcessEventBatch;
+  replayAfterOffset?: number;
+  eventTypes?: readonly string[];
+  /** `false` = state-only batches. Default `true`. */
+  events?: boolean;
+  subscriber?: LiveStreamSubscriberDescriptor;
+  onClose?: () => void;
+};
+
 const StreamCreatedEvent = getEventSchema({
   type: "events.iterate.com/stream/created",
   payloadSchema: CoreProcessorContract.events["events.iterate.com/stream/created"].payloadSchema,
@@ -56,10 +68,6 @@ const StreamCreatedEvent = getEventSchema({
 const StreamWokenEvent = getEventSchema({
   type: "events.iterate.com/stream/woken",
   payloadSchema: CoreProcessorContract.events["events.iterate.com/stream/woken"].payloadSchema,
-});
-const StreamConfiguredEvent = getEventSchema({
-  type: "events.iterate.com/stream/configured",
-  payloadSchema: CoreProcessorContract.events["events.iterate.com/stream/configured"].payloadSchema,
 });
 const StreamMetadataUpdatedEvent = getEventSchema({
   type: "events.iterate.com/stream/metadata-updated",
@@ -121,12 +129,12 @@ export class CoreStreamProcessor {
    * Live delivery connections, keyed by subscriptionKey — the runtime state
    * this processor reconciles. The reduced-state mirror is
    * `state.connectionsByKey`, maintained from the presence facts this class
-   * appends in `#openConnection`/`close`. Outbound connections are recreated
-   * from `state.subscriptionsByKey`, inbound from a fresh subscribe().
+   * appends when subscriptions start/close. Configured subscriptions are recreated
+   * from `state.configuredSubscribersByKey`, ephemeral from a fresh subscribe().
    */
   #connections = new Map<string, Connection>();
-  // subscriptionKeys with an outbound handshake in flight, so concurrent
-  // reconciliation runs never dial the same subscriber twice.
+  // subscriptionKeys with a configured subscriber wakeup in flight, so concurrent
+  // reconciliation runs never wake the same subscriber twice.
   #connecting = new Set<string>();
 
   /**
@@ -197,7 +205,7 @@ export class CoreStreamProcessor {
   // Do NOT re-parse the whole state on the way out: `state` was already
   // validated at the trust boundary (the KV read in stream.ts and the event-log
   // recovery path both parse). Re-validating the growing connectionsByKey/
-  // processorsBySlug/subscriptionsByKey records on every appended event was
+  // processorsBySlug/configuredSubscribersByKey records on every appended event was
   // quadratic work for no added safety.
   #reduce(args: { event: StreamEvent; state: CoreProcessorState }): CoreProcessorState {
     const state = args.state;
@@ -250,7 +258,7 @@ export class CoreStreamProcessor {
         const payload = parsedPayload(event);
         // A new stream incarnation means every previous delivery connection
         // died with the old one. Clearing the roster here is what keeps it
-        // truthful without heartbeats: surviving subscribers re-dial and their
+        // truthful without heartbeats: surviving subscribers reconnect and their
         // fresh subscriber-connected events re-land below.
         next = {
           ...next,
@@ -262,13 +270,14 @@ export class CoreStreamProcessor {
 
       case "events.iterate.com/stream/subscriber-connected": {
         const event = StreamSubscriberConnectedEvent.parse(args.event);
-        const { subscriptionKey, direction, subscriber } = parsedPayload(event);
+        const payload = parsedPayload(event);
+        const { subscriptionKey, subscriber, subscriptionType } = payload;
         next = {
           ...next,
           connectionsByKey: {
             ...next.connectionsByKey,
             [subscriptionKey]: {
-              direction,
+              subscriptionType,
               connectedAtOffset: event.offset,
               ...(subscriber === undefined ? {} : { subscriber }),
             },
@@ -297,19 +306,6 @@ export class CoreStreamProcessor {
         const payload = parsedPayload(event);
         const { [payload.subscriptionKey]: _closed, ...connectionsByKey } = next.connectionsByKey;
         next = { ...next, connectionsByKey };
-        break;
-      }
-
-      case "events.iterate.com/stream/configured": {
-        const event = StreamConfiguredEvent.parse(args.event);
-        const payload = parsedPayload(event);
-        next = {
-          ...next,
-          config: {
-            ...next.config,
-            ...payload.config,
-          },
-        };
         break;
       }
 
@@ -357,8 +353,8 @@ export class CoreStreamProcessor {
         const payload = parsedPayload(event);
         next = {
           ...next,
-          subscriptionsByKey: {
-            ...next.subscriptionsByKey,
+          configuredSubscribersByKey: {
+            ...next.configuredSubscribersByKey,
             [payload.subscriptionKey]: {
               latestConfiguredEvent: {
                 offset: event.offset,
@@ -375,9 +371,9 @@ export class CoreStreamProcessor {
       case "events.iterate.com/stream/subscription-removed": {
         const event = StreamSubscriptionRemovedEvent.parse(args.event);
         const payload = parsedPayload(event);
-        const { [payload.subscriptionKey]: _removed, ...subscriptionsByKey } =
-          next.subscriptionsByKey;
-        next = { ...next, subscriptionsByKey };
+        const { [payload.subscriptionKey]: _removed, ...configuredSubscribersByKey } =
+          next.configuredSubscribersByKey;
+        next = { ...next, configuredSubscribersByKey };
         break;
       }
 
@@ -397,7 +393,7 @@ export class CoreStreamProcessor {
    *
    * - `created`: announce this stream to every ancestor (idempotency-keyed).
    * - `woken`: a fresh stream incarnation has no connections; restore the
-   *   outbound ones the reduced state says should exist. This replaces the
+   *   configured ones the reduced state says should exist. This replaces the
    *   old constructor-time reconcile call — boot recovery is now just an
    *   ordinary consequence of the woken fact.
    * - `subscription-configured`: the desired connection set changed.
@@ -450,29 +446,29 @@ export class CoreStreamProcessor {
     for (const connection of this.#connections.values()) connection.wake();
   }
 
-  /** True if any live connection delivers outbound into a subscriber DO. */
-  hasLiveOutboundConnections(): boolean {
+  /** True if any live connection belongs to a configured, wakeable subscriber. */
+  hasLiveConfiguredConnections(): boolean {
     for (const connection of this.#connections.values()) {
-      if (connection.direction === "outbound") return true;
+      if (connection.subscriptionType === "configured") return true;
     }
     return false;
   }
 
   /**
-   * Deliberately drops every live OUTBOUND delivery connection so a quiet stream
+   * Deliberately drops every live configured delivery connection so a quiet stream
    * stops pinning subscriber DOs (and, via the hibernation cascade, itself) with
    * idle cross-isolate RPC sessions. Disposes each retained callback stub
    * (`connection.close` → `processEventBatch[Symbol.dispose]`) and appends a
-   * `subscriber-disconnected("idle")` fact. The durable `subscriptionsByKey`
-   * config is untouched, so the next append (`needsOutboundReconcile`) or a wake
-   * re-dials the subscriber, which re-handshakes from its durable checkpoint and
+   * `subscriber-disconnected("idle")` fact. The durable `configuredSubscribersByKey`
+   * config is untouched, so the next append (`needsConfiguredReconcile`) or a wake
+   * re-wakes the subscriber, which re-handshakes from its durable checkpoint and
    * replays anything the cursor advanced past. Returns the severed keys.
    */
-  closeIdleOutboundConnections(): string[] {
+  closeIdleConfiguredConnections(): string[] {
     const severed: string[] = [];
     // Snapshot first: close() mutates #connections.
     for (const [subscriptionKey, connection] of [...this.#connections]) {
-      if (connection.direction !== "outbound") continue;
+      if (connection.subscriptionType !== "configured") continue;
       severed.push(subscriptionKey);
       connection.close("idle");
     }
@@ -480,15 +476,16 @@ export class CoreStreamProcessor {
   }
 
   /**
-   * True if a configured outbound subscription currently has no live or
+   * True if a configured subscription currently has no live or
    * in-flight connection — i.e. one was severed (idle teardown here or on the
-   * subscriber, a clean unsubscribe, etc.) and needs re-dialing. Cheap
+   * subscriber, a clean unsubscribe, etc.) and needs re-waking. Cheap
    * O(subscriptions) scan; a no-op in steady state when everything is connected.
    */
-  needsOutboundReconcile(): boolean {
+  needsConfiguredReconcile(): boolean {
     const state = this.#currentState();
-    for (const subscriptionKey of Object.keys(state.subscriptionsByKey)) {
-      if (!this.#connections.has(subscriptionKey) && !this.#connecting.has(subscriptionKey)) {
+    for (const subscriptionKey of Object.keys(state.configuredSubscribersByKey)) {
+      const connection = this.#connections.get(subscriptionKey);
+      if (connection?.subscriptionType !== "configured" && !this.#connecting.has(subscriptionKey)) {
         return true;
       }
     }
@@ -499,7 +496,7 @@ export class CoreStreamProcessor {
   connectionsRuntimeState(): Record<
     string,
     {
-      direction: "inbound" | "outbound";
+      subscriptionType: StreamSubscriptionType;
       startedAt: string;
       cursor: number;
       batchesSent: number;
@@ -511,7 +508,7 @@ export class CoreStreamProcessor {
       [...this.#connections].map(([subscriptionKey, connection]) => [
         subscriptionKey,
         {
-          direction: connection.direction,
+          subscriptionType: connection.subscriptionType,
           startedAt: connection.startedAt,
           cursor: connection.cursor,
           batchesSent: connection.batchesSent,
@@ -529,43 +526,46 @@ export class CoreStreamProcessor {
     return (await connection?.getProcessorRuntimeState?.()) ?? null;
   }
 
-  /** Fire-and-forget outbound reconciliation; never blocks the append path. */
+  /** Fire-and-forget configured subscriber reconciliation; never blocks the append path. */
   reconcileConnections(): void {
     try {
-      this.#reconcileOutboundConnections();
+      this.#reconcileConfiguredConnections();
     } catch (error) {
-      console.error("Stream outbound reconciliation failed", error);
+      console.error("Stream configured subscriber reconciliation failed", error);
     }
   }
 
   /**
-   * Makes runtime outbound connections match the persisted subscription config:
-   * closes connections whose config disappeared, dials a subscriber for each
+   * Makes runtime configured connections match the persisted subscription config:
+   * closes connections whose config disappeared, wakes a subscriber for each
    * configured subscription that has none. Triggered by the woken and
-   * subscription-configured facts (see `processEvent`) and on outbound
+   * subscription-configured facts (see `processEvent`) and on configured
    * connection loss — never per-append.
    */
-  #reconcileOutboundConnections(): void {
+  #reconcileConfiguredConnections(): void {
     const state = this.#currentState();
     for (const [subscriptionKey, connection] of this.#connections) {
       if (
-        connection.direction === "outbound" &&
-        state.subscriptionsByKey[subscriptionKey] === undefined
+        connection.subscriptionType === "configured" &&
+        state.configuredSubscribersByKey[subscriptionKey] === undefined
       ) {
         connection.close("subscription-removed");
       }
     }
 
-    for (const [subscriptionKey, configured] of Object.entries(state.subscriptionsByKey)) {
-      if (this.#connections.has(subscriptionKey) || this.#connecting.has(subscriptionKey)) continue;
+    for (const [subscriptionKey, configured] of Object.entries(state.configuredSubscribersByKey)) {
+      const connection = this.#connections.get(subscriptionKey);
+      if (connection?.subscriptionType === "configured" || this.#connecting.has(subscriptionKey)) {
+        continue;
+      }
 
-      // Reserve the key before any await so a concurrent reconcile can't dial twice.
+      // Reserve the key before any await so a concurrent reconcile can't wake twice.
       this.#connecting.add(subscriptionKey);
       this.#runInBackground(async () => {
         try {
-          await this.stream.connectCoreOutboundConnection({ configured, subscriptionKey });
+          await this.stream.wakeConfiguredSubscriber({ configured, subscriptionKey });
         } catch (error) {
-          console.error("Stream outbound connection failed", { error, subscriptionKey });
+          console.error("Stream configured subscriber wakeup failed", { error, subscriptionKey });
         } finally {
           this.#connecting.delete(subscriptionKey);
         }
@@ -613,17 +613,17 @@ export class CoreStreamProcessor {
    * and sends one `events: []` batch per drain — consecutive appends a slow
    * subscriber missed coalesce into a single state delivery.
    */
-  openConnection(args: {
-    direction: "inbound" | "outbound";
-    subscriptionKey: string;
-    processEventBatch: ProcessEventBatch;
-    replayAfterOffset?: number;
-    eventTypes?: readonly string[];
-    /** `false` = state-only batches. Default `true`. */
-    events?: boolean;
-    subscriber?: LiveStreamSubscriberDescriptor;
-    onClose?: () => void;
-  }): StreamSubscriptionHandle {
+  subscribeEphemeral(args: CoreSubscriptionArgs): StreamSubscriptionHandle {
+    return this.#startSubscription({ ...args, subscriptionType: "ephemeral" });
+  }
+
+  subscribeConfigured(args: CoreSubscriptionArgs): StreamSubscriptionHandle {
+    return this.#startSubscription({ ...args, subscriptionType: "configured" });
+  }
+
+  #startSubscription(
+    args: CoreSubscriptionArgs & { subscriptionType: StreamSubscriptionType },
+  ): StreamSubscriptionHandle {
     const subscriptionKey = args.subscriptionKey.trim();
     if (subscriptionKey.length === 0) throw new Error("subscriptionKey must not be blank.");
     // Replacing any existing connection for this key.
@@ -655,27 +655,27 @@ export class CoreStreamProcessor {
     // callee duplicates them. Keep a retained callback because this stream calls
     // it later from the pump, after subscribe() has returned:
     // https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
-    // Outbound connections (native Workers RPC into a subscriber host DO)
+    // Configured connections (native Workers RPC into a subscriber host DO)
     // observe each delivery's result: a rejected delivery means the stub is
     // dead (callee evicted/redeployed/aborted), so drop the connection and
-    // re-dial — the subscriber re-handshakes from its durable checkpoint and
+    // re-wake — the subscriber re-handshakes from its durable checkpoint and
     // replay covers whatever the cursor already advanced past. Without this a
     // dead stub stayed in the connection map for the rest of the incarnation
     // and reconciliation skipped its key, stalling delivery forever.
     //
-    // Inbound connections (capnweb via the fronting worker) deliberately do
+    // Ephemeral connections (capnweb via the fronting worker) deliberately do
     // NOT observe results: pulling them would make every browser tab send a
     // resolve frame per batch. They rely on explicit unsubscribe and the
     // transport's best-effort onRpcBroken signal instead.
     const processEventBatch = retainProcessEventBatch(
       args.processEventBatch,
-      args.direction === "outbound"
+      args.subscriptionType === "configured"
         ? {
             onDeliveryError: (error) => {
               if (!open) return;
-              console.error("Stream event batch delivery failed; dropping connection for re-dial", {
+              console.error("Stream event batch delivery failed; dropping connection for re-wake", {
                 subscriptionKey,
-                direction: args.direction,
+                subscriptionType: args.subscriptionType,
                 error,
               });
               connection.close("delivery-failed");
@@ -722,7 +722,7 @@ export class CoreStreamProcessor {
           connection.lastDeliveredAt = new Date().toISOString();
           // Batch-first, fire-and-forget: never await the remote result. The
           // retained callback wrapper owns remote-call result disposal and, for
-          // outbound subscribers, optional delivery-error observation.
+          // configured subscribers, optional delivery-error observation.
           // https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
           // https://github.com/cloudflare/capnweb#memory-management
           const currentState = this.#currentState();
@@ -743,7 +743,7 @@ export class CoreStreamProcessor {
     };
 
     const connection: Connection = {
-      direction: args.direction,
+      subscriptionType: args.subscriptionType,
       startedAt: new Date().toISOString(),
       getProcessorRuntimeState: retainGetProcessorRuntimeState(
         args.subscriber?.processor?.getRuntimeState,
@@ -779,7 +779,7 @@ export class CoreStreamProcessor {
       type: "events.iterate.com/stream/subscriber-connected",
       payload: {
         subscriptionKey,
-        direction: args.direction,
+        subscriptionType: args.subscriptionType,
         ...(args.subscriber === undefined
           ? {}
           : { subscriber: serializableSubscriber(args.subscriber) }),
@@ -787,7 +787,7 @@ export class CoreStreamProcessor {
     });
     processEventBatch.onRpcBroken?.(() => {
       connection.close("rpc-broken");
-      if (args.direction === "outbound") this.reconcileConnections();
+      if (args.subscriptionType === "configured") this.reconcileConnections();
     });
     connection.wake();
 
@@ -823,11 +823,11 @@ export class CoreStreamProcessor {
 
 /**
  * A live delivery connection from this stream to one subscriber callback. Not persisted;
- * the callback and pump state live in the `openConnection` closure, so this is just the
+ * the callback and pump state live in the subscription closure, so this is just the
  * metrics counters plus the two control verbs.
  */
 type Connection = {
-  readonly direction: "inbound" | "outbound";
+  readonly subscriptionType: StreamSubscriptionType;
   readonly startedAt: string;
   /** Highest offset delivered to the callback; also the pump's resume cursor. */
   readonly cursor: number;

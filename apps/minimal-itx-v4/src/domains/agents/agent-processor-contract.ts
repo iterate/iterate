@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
+import { defineProcessorContract } from "../streams/engine/shared/stream-processors.ts";
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",

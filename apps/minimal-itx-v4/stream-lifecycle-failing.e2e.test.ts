@@ -4,12 +4,12 @@ import { TRUSTED_INTERNAL_ITX_TOKEN } from "./src/auth.ts";
 import type { Stream, StreamEvent } from "./src/types.ts";
 
 type RuntimeConnection = {
-  direction?: "inbound" | "outbound";
+  subscriptionType?: "configured" | "ephemeral";
   startedAt?: string;
 };
 
 type ReducedConnection = {
-  direction?: "inbound" | "outbound";
+  subscriptionType?: "configured" | "ephemeral";
   subscriber?: {
     description?: string;
   };
@@ -18,7 +18,7 @@ type ReducedConnection = {
 type StreamRuntimeState = {
   coreProcessorState: {
     connectionsByKey?: Record<string, ReducedConnection>;
-    subscriptionsByKey?: Record<string, unknown>;
+    configuredSubscribersByKey?: Record<string, unknown>;
   };
   runtime: {
     connections: Record<string, RuntimeConnection>;
@@ -27,7 +27,7 @@ type StreamRuntimeState = {
 
 const WAIT_FOR_EVENT_TYPE = "events.iterate.test/lifecycle-wait-never";
 
-test.skip("configured processor subscriptions are recorded as outbound runtime connections", async () => {
+test.skip("configured processor subscriptions are recorded as configured runtime connections", async () => {
   const marker = crypto.randomUUID();
 
   using session = withItxSession();
@@ -35,19 +35,19 @@ test.skip("configured processor subscriptions are recorded as outbound runtime c
     type: "trusted-internal",
     token: TRUSTED_INTERNAL_ITX_TOKEN,
   });
-  using project = itx.projects.create({ slug: `lifecycle-outbound-${marker}` });
+  using project = itx.projects.create({ slug: `lifecycle-configured-${marker}` });
   using stream = project.streams.get("/");
 
   const { keys, state } = await waitForConfiguredProcessorConnections(stream);
 
   expect(keys.length).toBeGreaterThan(0);
   for (const key of keys) {
-    expect(state.runtime.connections[key]?.direction).toBe("outbound");
-    expect(state.coreProcessorState.connectionsByKey?.[key]?.direction).toBe("outbound");
+    expect(state.runtime.connections[key]?.subscriptionType).toBe("configured");
+    expect(state.coreProcessorState.connectionsByKey?.[key]?.subscriptionType).toBe("configured");
   }
 });
 
-test.skip("stream idle teardown severs configured outbound processor subscriptions", async () => {
+test.skip("stream idle teardown severs configured processor subscriptions", async () => {
   const marker = crypto.randomUUID();
 
   using session = withItxSession();
@@ -89,7 +89,7 @@ test.skip("stream idle teardown severs configured outbound processor subscriptio
   }
 });
 
-test.skip("append after idle teardown re-dials configured subscriber from its checkpoint", async () => {
+test.skip("append after idle teardown re-wakes configured subscriber from its checkpoint", async () => {
   const marker = crypto.randomUUID();
 
   using session = withItxSession();
@@ -110,7 +110,7 @@ test.skip("append after idle teardown re-dials configured subscriber from its ch
       return keys.every((key) => state.runtime.connections[key] === undefined);
     },
     {
-      description: `configured processor connections to be absent before re-dial (${keys.join(", ")})`,
+      description: `configured processor connections to be absent before re-wake (${keys.join(", ")})`,
       timeoutMs: 1_500,
     },
   );
@@ -122,7 +122,7 @@ test.skip("append after idle teardown re-dials configured subscriber from its ch
 
   const { state } = await waitForConfiguredProcessorConnections(stream, { expectedKeys: keys });
   for (const key of keys) {
-    expect(state.runtime.connections[key]?.direction).toBe("outbound");
+    expect(state.runtime.connections[key]?.subscriptionType).toBe("configured");
   }
 });
 
@@ -303,7 +303,7 @@ async function forceStreamIdleTeardown(stream: Stream): Promise<void> {
 }
 
 function configuredSubscriptionKeys(state: StreamRuntimeState): string[] {
-  return Object.keys(state.coreProcessorState.subscriptionsByKey ?? {});
+  return Object.keys(state.coreProcessorState.configuredSubscribersByKey ?? {});
 }
 
 function asStreamRuntimeState(value: unknown): StreamRuntimeState {

@@ -396,11 +396,10 @@ export class RepoDurableObject extends DurableObject<Env> {
       idempotencyKey: `repo-subscription:${this.#name.projectId}:${this.#name.path}`,
       payload: {
         subscriptionKey: RepoProcessorContract.slug,
-        subscriber: durableObjectProcessorSubscriber({
-          bindingName: "REPO",
-          durableObjectName: DurableObjectNameCodec.stringify(this.#name),
-          processorName: RepoProcessorContract.slug,
-        }),
+        subscriber: {
+          address: this.#name,
+          type: "repo",
+        },
       },
     }); // NEW: setup lands on the repo stream, not the project root stream.
   }

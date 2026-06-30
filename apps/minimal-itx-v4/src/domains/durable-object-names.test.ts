@@ -29,7 +29,6 @@ describe("DurableObjectNameCodec", () => {
 
   it("parses URL-shaped names back into parts", () => {
     expect(DurableObjectNameCodec.parse("prj_123.iterate/repos/repo_123")).toEqual({
-      durableObjectName: "prj_123.iterate/repos/repo_123",
       projectId: "prj_123",
       path: "/repos/repo_123",
       props: {},
@@ -42,7 +41,6 @@ describe("DurableObjectNameCodec", () => {
         allowNullProjectId: true,
       }),
     ).toEqual({
-      durableObjectName: "global.iterate/repos/iterate-config-base",
       projectId: null,
       path: "/repos/iterate-config-base",
       props: {},
@@ -51,7 +49,6 @@ describe("DurableObjectNameCodec", () => {
 
   it("parses query props back into a record", () => {
     expect(DurableObjectNameCodec.parse("prj_123.iterate/bla/bla?branch=main&env=prod")).toEqual({
-      durableObjectName: "prj_123.iterate/bla/bla?branch=main&env=prod",
       projectId: "prj_123",
       path: "/bla/bla",
       props: { branch: "main", env: "prod" },
@@ -67,7 +64,6 @@ describe("DurableObjectNameCodec", () => {
     const durableObjectName = DurableObjectNameCodec.stringify(input);
     expect(DurableObjectNameCodec.parse(durableObjectName)).toEqual({
       ...input,
-      durableObjectName,
       props: { slot: "a" },
     });
   });
@@ -79,7 +75,6 @@ describe("DurableObjectNameCodec", () => {
     });
     expect(DurableObjectNameCodec.parse(durableObjectName, { allowNullProjectId: true })).toEqual({
       ...input,
-      durableObjectName,
       props: {},
     });
   });

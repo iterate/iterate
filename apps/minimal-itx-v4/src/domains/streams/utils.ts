@@ -1,6 +1,6 @@
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { DurableObjectNameCodec, type DurableObjectAddress } from "../durable-object-names.ts";
 import type { Stream } from "../../types.ts";
-import { durableObjectProcessorSubscriber } from "./engine/shared/callable-subscriber.ts";
+import type { ConfiguredStreamSubscriber } from "./engine/processors/core/contract.ts";
 
 /**
  * Stream capabilities expose `.at(relativePath)` to code that should stay
@@ -30,33 +30,29 @@ export function resolveStreamPath(basePath: string, streamPath: string): string 
 /**
  * Processor subscriptions are represented as stream facts, not imperative host
  * state. Domain processors and RPC bootstrap code use this helper when they
- * need to attach a named processor host to a stream while preserving the same
- * subscription identity scheme everywhere: `${processorName}:${hostName}`.
- * That identity lets appending the same configuration replace/reconcile the
- * existing outbound connection instead of creating duplicates.
+ * need to attach a configured processor host to a stream while preserving the
+ * same subscription identity scheme everywhere.
  */
 export function subscriptionConfiguredEvent(input: {
+  address?: DurableObjectAddress;
   projectId: string | null;
   path: string;
-  bindingName: string;
-  processorName: string;
+  subscriberType: Exclude<ConfiguredStreamSubscriber["type"], "worker">;
 }) {
-  const durableObjectName = DurableObjectNameCodec.stringify(
-    {
-      projectId: input.projectId,
-      path: input.path,
-    },
-    { allowNullProjectId: true },
-  );
+  const address = input.address ?? {
+    projectId: input.projectId,
+    path: input.path,
+    props: {},
+  };
+  const durableObjectName = DurableObjectNameCodec.stringify(address, { allowNullProjectId: true });
   return {
     type: "events.iterate.com/stream/subscription-configured" as const,
     payload: {
-      subscriptionKey: `${input.processorName}:${durableObjectName}`,
-      subscriber: durableObjectProcessorSubscriber({
-        bindingName: input.bindingName,
-        durableObjectName,
-        processorName: input.processorName,
-      }),
+      subscriptionKey: `${input.subscriberType}:${durableObjectName}`,
+      subscriber: {
+        address,
+        type: input.subscriberType,
+      },
     },
   } satisfies Parameters<Stream["append"]>[0];
 }

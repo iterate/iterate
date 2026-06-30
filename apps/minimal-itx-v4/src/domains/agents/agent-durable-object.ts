@@ -4,7 +4,7 @@ import { trustedInternalAuthContext } from "../../auth.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   createStreamProcessorHost,
-  type RequestStreamSubscriptionArgs,
+  type StreamSubscriberWakeRequest,
 } from "../streams/engine/workers/stream-processor-host.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
@@ -32,7 +32,7 @@ export class AgentDurableObject extends DurableObject<Env> {
     this.#processorHost.add(AgentProcessorContract.slug, (deps) => new AgentProcessor(deps));
   }
 
-  requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
-    return this.#processorHost.requestStreamSubscription(args);
+  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
+    return this.#processorHost.wakeStreamSubscriber(args);
   }
 }

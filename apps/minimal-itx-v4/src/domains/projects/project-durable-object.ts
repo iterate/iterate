@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import {
   createStreamProcessorHost,
-  type RequestStreamSubscriptionArgs,
+  type StreamSubscriberWakeRequest,
 } from "../streams/engine/workers/stream-processor-host.ts";
 import type { Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
@@ -37,8 +37,8 @@ export class ProjectDurableObject extends DurableObject<Env> {
     );
   }
 
-  requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
-    return this.#processorHost.requestStreamSubscription(args);
+  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
+    return this.#processorHost.wakeStreamSubscriber(args);
   }
 
   describe() {

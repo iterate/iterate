@@ -4,7 +4,7 @@ import { trustedInternalAuthContext } from "../../auth.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   createStreamProcessorHost,
-  type RequestStreamSubscriptionArgs,
+  type StreamSubscriberWakeRequest,
 } from "../streams/engine/workers/stream-processor-host.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
@@ -53,8 +53,8 @@ export class ItxDurableObject extends DurableObject<Env> {
       }),
   );
 
-  requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
-    return this.#processorHost.requestStreamSubscription(args);
+  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
+    return this.#processorHost.wakeStreamSubscriber(args);
   }
 
   // Return types are pinned shallow so `DurableObjectStub<ItxDurableObject>`

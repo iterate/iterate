@@ -47,10 +47,10 @@ export function retainProcessEventBatch(
   processEventBatch: ProcessEventBatch,
   opts: {
     /**
-     * Observes a rejected batch delivery for outbound subscriber connections.
+     * Observes a rejected batch delivery for configured subscriber connections.
      * Both Workers RPC and Cap'n Web reject the call result when the remote stub
      * is broken, so this is how a stream notices a dead DO-to-DO connection even
-     * when `onRpcBroken` is unavailable. Inbound browser/client subscriptions do
+     * when `onRpcBroken` is unavailable. Ephemeral browser/client subscriptions do
      * not pass this option: observing every delivery result would add a resolve
      * frame per batch, so those connections rely on explicit unsubscribe and the
      * transport's best-effort `onRpcBroken` signal.
@@ -80,7 +80,7 @@ export function retainProcessEventBatch(
         //
         // Observing the result is not free: pulling a Cap'n Web promise makes
         // the remote send a resolve frame per delivery. Callers that don't
-        // pass onDeliveryError keep the zero-return-traffic fast path. Inbound
+        // pass onDeliveryError keep the zero-return-traffic fast path. Ephemeral
         // browser/client subscriptions use explicit unsubscribe plus the
         // transport's best-effort onRpcBroken signal.
         void Promise.resolve(result)
@@ -100,9 +100,9 @@ export function retainProcessEventBatch(
   // descriptors, so an `Object.hasOwn` guard never wires it. `typeof` is also
   // unreliable in the other direction: property access on a Workers RPC stub
   // can fabricate a pipelined method that rejects at call time. Wire whatever
-  // the stub claims to have, defensively. For outbound subscribers, the
+  // the stub claims to have, defensively. For configured subscribers, the
   // onDeliveryError path still observes broken stubs even if this registration
-  // was only a pipelined fake; inbound subscribers remain explicit-unsubscribe
+  // was only a pipelined fake; ephemeral subscribers remain explicit-unsubscribe
   // plus best-effort onRpcBroken.
   const onRpcBroken = retained.onRpcBroken;
   if (typeof onRpcBroken === "function") {

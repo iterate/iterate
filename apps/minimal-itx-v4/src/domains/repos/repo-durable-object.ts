@@ -3,7 +3,7 @@ import { InMemoryFs } from "@cloudflare/shell";
 import { createGit } from "@cloudflare/shell/git";
 import {
   createStreamProcessorHost,
-  type RequestStreamSubscriptionArgs,
+  type StreamSubscriberWakeRequest,
 } from "../streams/engine/workers/stream-processor-host.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import type { Env } from "../../env.ts";
@@ -45,8 +45,8 @@ export class RepoDurableObject extends DurableObject<Env> {
     );
   }
 
-  requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
-    return this.#host.requestStreamSubscription(args);
+  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
+    return this.#host.wakeStreamSubscriber(args);
   }
 
   async getWorkerSource(args: { path: string }): Promise<ResolvedWorkerSource> {

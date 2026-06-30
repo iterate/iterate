@@ -50,8 +50,8 @@ export class WorkerRunner {
   /**
    * Stateless refs resolve to WorkerEntrypoint instances and can be invoked in
    * this isolate. Keeping this separate from stateful class loading makes each
-   * caller state whether it wants a callable entrypoint or a Durable Object
-   * class to host behind StatefulWorkerDurableObject.
+   * caller state whether it wants an invokable entrypoint or a Durable Object
+   * class hosted behind StatefulWorkerDurableObject.
    */
   async getStatelessEntrypoint<T = unknown>(ref: StatelessWorkerRef): Promise<T> {
     const { worker } = await this.#load(ref);

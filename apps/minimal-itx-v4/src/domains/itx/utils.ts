@@ -136,12 +136,11 @@ export function rejectBuiltinCollision(target: object, path: string[]): void {
 }
 
 /**
- * Builds the callable dotted-path fallback used by dynamic ITX capabilities.
+ * Builds the dotted-path fallback used by dynamic ITX capabilities.
  *
- * Cap'n Web and Workers RPC can transport functions as callable capabilities.
- * Dynamic dotted fallback therefore uses a function-backed proxy instead of a
- * RpcTarget instance: each missing property extends the path, and applying the
- * function performs one explicit invokeCapability({ path, args }) call.
+ * Dynamic dotted fallback uses a function-backed proxy instead of a RpcTarget
+ * instance: each missing property extends the path, and applying the function
+ * performs one explicit invokeCapability({ path, args }) call.
  */
 export function createInvokeCapabilityPathProxy(
   target: InvokeCapabilityTarget,
@@ -212,7 +211,7 @@ export function withInvokeCapabilityFallback<T extends object & InvokeCapability
       // Unknown dynamic roots must not look like instance fields to Cap'n Web.
       // That keeps Workers RPC's RpcTarget instance-property protection intact:
       // actual instance fields are still rejected by the transport, while
-      // missing roots are discovered later as callable path proxies.
+      // missing roots are discovered later as dynamic path proxies.
       return Reflect.getOwnPropertyDescriptor(target, key);
     },
   });

@@ -1,24 +1,28 @@
 import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
-import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { itxEntrypointProps, itxEntrypointScopeCacheKey } from "../itx/utils.ts";
+import { projectEgressFetcher } from "../projects/utils.ts";
+import { WorkerRunner } from "../workers/worker-runner.ts";
 import type {
   Stream,
   StreamEvent,
   StreamEventInput,
   StreamSubscriptionHandle,
+  WorkerRef,
 } from "../../types.ts";
 import type { ProcessEventBatch } from "./engine/types.ts";
 import {
   StreamEvent as StreamEventSchema,
   StreamEventInput as StreamEventInputSchema,
 } from "./schemas.ts";
-import type { StreamSubscriptionHandshake } from "./engine/workers/stream-processor-host.ts";
+import type { StreamSubscriberWakeRequest } from "./engine/workers/stream-processor-host.ts";
 import { getInitialProcessorState } from "./engine/shared/stream-processors.ts";
 import { CoreStreamProcessor } from "./engine/processors/core/implementation.ts";
 import {
   CoreProcessorContract,
   type CoreProcessorState,
+  type ConfiguredStreamSubscriber,
   type LiveStreamSubscriberDescriptor,
 } from "./engine/processors/core/contract.ts";
 import { createStreamSubscription } from "./engine/subscription.ts";
@@ -62,9 +66,12 @@ const textEncoder = new TextEncoder();
 //      reshaped to fold contract announcements from subscriber-connected
 //      events instead of the removed processor-registered event.
 // - 5: stream coordinate fields normalized to projectId/path.
-const CORE_STATE_VERSION = 5;
+// - 6: configured subscriber state and typed subscriber targets replaced the
+//      old transport-direction subscription model.
+// [[ This seems like it should use the version in of the core processor contract no? ]]
+const CORE_STATE_VERSION = 6;
 
-// How long a stream may hold idle OUTBOUND delivery connections before the
+// How long a stream may hold idle configured delivery connections before the
 // Stream DO severs them so it (and its subscribers) can hibernate instead of
 // accruing billable duration on cross-isolate RPC sessions that pin both DOs.
 // Tracked with an in-memory timer (NOT a DO alarm): the retained stubs we tear
@@ -78,7 +85,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   readonly name = parseStreamDurableObjectName(this.ctx.id.name);
 
   #coreProcessorState: CoreProcessorState;
-  /** In-memory idle teardown timer; armed only while outbound connections exist. */
+  /** In-memory idle teardown timer; armed only while configured connections exist. */
   #idleTimer: ReturnType<typeof setTimeout> | undefined;
   // The core processor owns reduced-state rules and live delivery decisions.
   // It is not a hosted StreamProcessor: it runs directly against this DO's
@@ -94,9 +101,9 @@ export class StreamDurableObject extends DurableObject<Env> {
     // When the durable object boots up the _first time_, we add a
     // events.iterate.com/stream/created event to the stream.
     //
-    // And every time it's woken up for any reason (inbound fetch, rpc or alarm),
+    // And every time it's woken up for any reason (fetch, RPC or alarm),
     // we append a "woken" event to the stream. The woken fact is also what
-    // restores outbound connections: the core processor's reconciler runs as
+    // restores configured connections: the core processor's reconciler runs as
     // its post-commit side effect, so a stream that wakes with configured
     // subscriptions but no new appends still reconnects.
     if (this.#coreProcessorState.eventCount === 0) {
@@ -112,6 +119,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
+  // [[ This can all be inlined in the constructor ]]
   #ensureStorageSchema(): void {
     // Keep storage normalized:
     // - `events` is the offset-ordered metadata/index table.
@@ -362,7 +370,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    *    After this line the append has succeeded.
    * 3. Post-commit fan-out: every live connection's `wake()` is called (its pump then
    *    reads offsets 5..6 from storage and delivers them); core post-commit work may
-   *    reconcile outbound subscriptions. Neither can fail the append.
+   *    reconcile configured subscriptions. Neither can fail the append.
    *
    * Returns the persisted events (including offsets + `createdAt`) in input order.
    */
@@ -458,33 +466,33 @@ export class StreamDurableObject extends DurableObject<Env> {
     // subscription-configured facts, which ran in the loop above.)
     this.coreProcessor.wakeConnections();
 
-    // Re-dial any configured subscription left without a live connection — e.g.
+    // Re-wake any configured subscription left without a live connection — e.g.
     // an idle teardown (here or on the subscriber), a clean unsubscribe, etc.
     // severed it. The subscriber re-handshakes from its durable checkpoint, so
     // replay covers this very event. Cheap (O(subscriptions)) and a no-op once
     // everything is connected.
     //
-    // Exactly ONE event type is excluded as a re-dial trigger:
+    // Exactly ONE event type is excluded as a re-wake trigger:
     // `subscriber-disconnected`. `connection.close()` appends one as it removes
-    // the connection from the map, so at that instant `needsOutboundReconcile()`
+    // the connection from the map, so at that instant `needsConfiguredReconcile()`
     // is transiently true for the just-closed key — reconciling on it would
-    // immediately re-dial and undo every teardown (idle / unsubscribed /
-    // replaced / …). Re-dial must wait for the next genuine append. Every OTHER
+    // immediately re-wake and undo every teardown (idle / unsubscribed /
+    // replaced / …). Re-wake must wait for the next genuine append. Every OTHER
     // event is safe to trigger on: `woken` and `subscription-configured` have
     // already reconciled via the core's reduced-event side effect (so the check
     // is a no-op), and `subscriber-connected` only lands while its key is
     // connected/connecting (also a no-op). We deliberately do NOT exclude the
     // whole `stream/*` event family — only this single self-undoing event.
     const SUBSCRIBER_DISCONNECTED_TYPE = "events.iterate.com/stream/subscriber-disconnected";
-    const hasRedialTriggeringAppend = newEvents.some(
+    const hasRewakeTriggeringAppend = newEvents.some(
       (event) => event.type !== SUBSCRIBER_DISCONNECTED_TYPE,
     );
-    if (hasRedialTriggeringAppend && this.coreProcessor.needsOutboundReconcile()) {
+    if (hasRewakeTriggeringAppend && this.coreProcessor.needsConfiguredReconcile()) {
       this.coreProcessor.reconcileConnections();
     }
 
     // Re-arm (or clear) the in-memory idle timer against the post-append
-    // connection set, so a stream that just went quiet sheds its outbound
+    // connection set, so a stream that just went quiet sheds its configured
     // delivery sessions and lets both DOs hibernate.
     this.#armOrClearIdleTimer();
 
@@ -652,12 +660,30 @@ export class StreamDurableObject extends DurableObject<Env> {
    */
   subscribe(args: Parameters<Stream["subscribe"]>[0]): StreamSubscriptionHandle {
     const subscriptionKey = args.subscriptionKey?.trim() || crypto.randomUUID();
-    return this.coreProcessor.openConnection({
+    if (this.#coreProcessorState.configuredSubscribersByKey[subscriptionKey] !== undefined) {
+      throw new Error(
+        `subscriptionKey "${subscriptionKey}" is reserved for a configured subscriber`,
+      );
+    }
+    return this.coreProcessor.subscribeEphemeral({
       ...args,
       processEventBatch: args.processEventBatch as ProcessEventBatch,
       subscriber: args.subscriber as LiveStreamSubscriberDescriptor | undefined,
       subscriptionKey,
-      direction: "inbound",
+    });
+  }
+
+  subscribeConfigured(args: ConfiguredSubscribeArgs): StreamSubscriptionHandle {
+    const subscriptionKey = args.subscriptionKey.trim();
+    if (subscriptionKey.length === 0) throw new Error("subscriptionKey must not be blank.");
+    if (this.#coreProcessorState.configuredSubscribersByKey[subscriptionKey] === undefined) {
+      throw new Error(`configured subscriber "${subscriptionKey}" is not configured`);
+    }
+    return this.coreProcessor.subscribeConfigured({
+      ...args,
+      processEventBatch: args.processEventBatch as ProcessEventBatch,
+      subscriber: args.subscriber as LiveStreamSubscriberDescriptor | undefined,
+      subscriptionKey,
     });
   }
 
@@ -682,29 +708,29 @@ export class StreamDurableObject extends DurableObject<Env> {
       : DEFAULT_STREAM_IDLE_TEARDOWN_MS;
   }
 
-  // Keep the in-memory idle timer armed only while the DO holds outbound
+  // Keep the in-memory idle timer armed only while the DO holds configured
   // delivery connections (the thing that pins it resident). Reset on every
-  // append; cleared once no outbound connection remains. No storage writes, and
+  // append; cleared once no configured connection remains. No storage writes, and
   // nothing scheduled against a hibernated DO.
   #armOrClearIdleTimer(): void {
     if (this.#idleTimer !== undefined) {
       clearTimeout(this.#idleTimer);
       this.#idleTimer = undefined;
     }
-    if (!this.coreProcessor.hasLiveOutboundConnections()) return;
+    if (!this.coreProcessor.hasLiveConfiguredConnections()) return;
     this.#idleTimer = setTimeout(() => this.runIdleTeardownNow(), this.#idleTeardownMs());
   }
 
   /**
-   * Sever every idle outbound connection now — the idle timer's action, also
-   * callable directly (tests / operator "put this quiet stream to sleep").
+   * Sever every idle configured connection now — the idle timer's action, also
+   * exposed directly for tests / operator "put this quiet stream to sleep".
    * Disposes the retained callback stubs so the freed subscriber DOs hibernate;
-   * the durable subscription config is kept, so the next append re-dials
-   * (`needsOutboundReconcile` in `append`).
+   * the durable subscription config is kept, so the next append re-wakes
+   * (`needsConfiguredReconcile` in `append`).
    */
   runIdleTeardownNow(): void {
     this.#idleTimer = undefined;
-    this.coreProcessor.closeIdleOutboundConnections();
+    this.coreProcessor.closeIdleConfiguredConnections();
   }
 
   /**
@@ -722,27 +748,106 @@ export class StreamDurableObject extends DurableObject<Env> {
     this.ctx.abort("kill requested");
   }
 
-  /**
-   * Dials a configured subscriber by dispatching its Callable descriptor with
-   * the subscription handshake. The host owns the stream capability for its
-   * processor; the handshake only carries the subscription identity.
-   */
-  async connectCoreOutboundConnection(args: {
-    configured: CoreProcessorState["subscriptionsByKey"][string];
+  async wakeConfiguredSubscriber(args: {
+    configured: CoreProcessorState["configuredSubscribersByKey"][string];
     subscriptionKey: string;
   }) {
-    await dispatchCallable({
-      callable: args.configured.latestConfiguredEvent.payload.subscriber.callable,
-      ctx: {
-        env: this.env as unknown as Record<string, unknown>,
-        exports: (this.ctx as { exports?: Record<string, unknown> }).exports,
-      },
-      payload: {
+    await this.#wakeConfiguredSubscriberTarget({
+      subscriber: args.configured.latestConfiguredEvent.payload.subscriber,
+      request: {
+        stream: {
+          projectId: this.#coreProcessorState.projectId,
+          path: this.#coreProcessorState.path,
+          streamMaxOffset: this.#coreProcessorState.maxOffset,
+        },
         subscriptionKey: args.subscriptionKey,
-      } satisfies StreamSubscriptionHandshake,
+      },
     });
   }
+
+  async #wakeConfiguredSubscriberTarget(args: {
+    request: StreamSubscriberWakeRequest;
+    subscriber: ConfiguredStreamSubscriber;
+  }): Promise<void> {
+    const subscriber = args.subscriber;
+    if (subscriber.type === "worker") {
+      await this.#wakeWorkerSubscriber(subscriber.workerRef, args.request);
+      return;
+    }
+
+    this.#assertSameProject(subscriber.address.projectId, subscriber.type);
+    const durableObjectName = DurableObjectNameCodec.stringify(subscriber.address, {
+      allowNullProjectId: true,
+    });
+    await this.#configuredSubscriberDurableObject(
+      subscriber.type,
+      durableObjectName,
+    ).wakeStreamSubscriber(args.request);
+  }
+
+  #configuredSubscriberDurableObject(
+    type: Exclude<ConfiguredStreamSubscriber["type"], "worker">,
+    durableObjectName: string,
+  ): ConfiguredSubscriberTarget {
+    switch (type) {
+      case "agent":
+        return this.env.AGENT.getByName(durableObjectName) as unknown as ConfiguredSubscriberTarget;
+      case "itx":
+        return this.env.ITX.getByName(durableObjectName) as unknown as ConfiguredSubscriberTarget;
+      case "project":
+        return this.env.PROJECT.getByName(
+          durableObjectName,
+        ) as unknown as ConfiguredSubscriberTarget;
+      case "repo":
+        return this.env.REPO.getByName(durableObjectName) as unknown as ConfiguredSubscriberTarget;
+    }
+  }
+
+  async #wakeWorkerSubscriber(
+    workerRef: WorkerRef,
+    request: StreamSubscriberWakeRequest,
+  ): Promise<void> {
+    if (this.name.projectId === null) {
+      throw new Error("configured worker subscribers require a project-scoped stream");
+    }
+    const itxScope = itxEntrypointProps({
+      path: workerRef.path,
+      projectId: this.name.projectId,
+    });
+    await new WorkerRunner({
+      bindings: {
+        ITX: this.ctx.exports.ItxEntrypoint({ props: itxScope }),
+      },
+      globalOutbound: projectEgressFetcher(this.ctx.exports, this.name.projectId),
+      loader: this.env.LOADER,
+      projectId: this.name.projectId,
+      workerScopeKey: itxEntrypointScopeCacheKey(itxScope),
+    }).invokeCapability({
+      args: [request],
+      path: ["wakeStreamSubscriber"],
+      ref: workerRef,
+    });
+  }
+
+  #assertSameProject(projectId: string | null, subscriberType: ConfiguredStreamSubscriber["type"]) {
+    if (projectId !== this.name.projectId) {
+      throw new Error(
+        `configured ${subscriberType} subscriber projectId ${projectId ?? "null"} does not match stream projectId ${this.name.projectId ?? "null"}`,
+      );
+    }
+    if (projectId === null && subscriberType !== "repo") {
+      throw new Error(`configured ${subscriberType} subscribers must be project-scoped`);
+    }
+  }
 }
+
+type ConfiguredSubscriberTarget = {
+  wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<void>;
+};
+
+type ConfiguredSubscribeArgs = Parameters<Stream["subscribe"]>[0] & {
+  subscriptionKey: string;
+};
 
 function parseStreamDurableObjectName(name: string | undefined) {
   if (!name) {

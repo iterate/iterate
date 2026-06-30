@@ -20,29 +20,27 @@ const MAX_DURABLE_OBJECT_NAME_BYTES = 256;
 const GLOBAL_DURABLE_OBJECT_HOST = "global";
 const DURABLE_OBJECT_HOST_SUFFIX = ".iterate";
 
-type ProjectDurableObjectNameParts = {
+export type DurableObjectName = string;
+
+export type ProjectDurableObjectAddressInput = {
   projectId: string;
   path: string;
   props?: Record<string, string>;
 };
 
-type DurableObjectNameParts = ProjectDurableObjectNameParts | SharedDurableObjectNameParts;
-
-type SharedDurableObjectNameParts = {
+export type DurableObjectAddressInput = {
   projectId: string | null;
   path: string;
   props?: Record<string, string>;
 };
 
-type ParsedDurableObjectName = {
-  durableObjectName: string;
+export type DurableObjectAddress = {
   projectId: string | null;
   path: string;
   props: Record<string, string>;
 };
 
-type ProjectDurableObjectName = {
-  durableObjectName: string;
+export type ProjectDurableObjectAddress = {
   projectId: string;
   path: string;
   props: Record<string, string>;
@@ -61,13 +59,16 @@ type AllowNullProjectIdOptions = {
 
 type DurableObjectNameCodecType = {
   /** Formats the project-scoped Durable Object name `{projectId}.iterate{path}`. */
-  stringify(input: ProjectDurableObjectNameParts): string;
+  stringify(input: ProjectDurableObjectAddressInput): DurableObjectName;
   /** Formats a name that may be shared across projects via `global.iterate`. */
-  stringify(input: DurableObjectNameParts, options: AllowNullProjectIdOptions): string;
+  stringify(
+    input: DurableObjectAddressInput,
+    options: AllowNullProjectIdOptions,
+  ): DurableObjectName;
   /** Parses a project-scoped Durable Object name. `global.iterate` is rejected by default. */
-  parse(name: string): ProjectDurableObjectName;
+  parse(name: DurableObjectName): ProjectDurableObjectAddress;
   /** Parses a name that may be shared across projects via `global.iterate`. */
-  parse(name: string, options: AllowNullProjectIdOptions): ParsedDurableObjectName;
+  parse(name: DurableObjectName, options: AllowNullProjectIdOptions): DurableObjectAddress;
 };
 
 /** Normalizes a path to a leading-slash form (`""` → `"/"`, `"x"` → `"/x"`). */
@@ -111,13 +112,13 @@ function parseAsDurableObjectUrl(name: string): URL {
   }
 }
 
-function stringifyDurableObjectName(input: ProjectDurableObjectNameParts): string;
+function stringifyDurableObjectName(input: ProjectDurableObjectAddressInput): DurableObjectName;
 function stringifyDurableObjectName(
-  input: DurableObjectNameParts,
+  input: DurableObjectAddressInput,
   options: AllowNullProjectIdOptions,
-): string;
+): DurableObjectName;
 function stringifyDurableObjectName(
-  { projectId, path, props = {} }: DurableObjectNameParts,
+  { projectId, path, props = {} }: DurableObjectAddressInput,
   options?: Partial<AllowNullProjectIdOptions>,
 ) {
   if (projectId === null && !options?.allowNullProjectId) {
@@ -136,15 +137,15 @@ function stringifyDurableObjectName(
   return name;
 }
 
-function parseDurableObjectName(name: string): ProjectDurableObjectName;
+function parseDurableObjectName(name: DurableObjectName): ProjectDurableObjectAddress;
 function parseDurableObjectName(
-  name: string,
+  name: DurableObjectName,
   options: AllowNullProjectIdOptions,
-): ParsedDurableObjectName;
+): DurableObjectAddress;
 function parseDurableObjectName(
-  name: string,
+  name: DurableObjectName,
   options?: Partial<AllowNullProjectIdOptions>,
-): ParsedDurableObjectName {
+): DurableObjectAddress {
   assertLegalDurableObjectName(name);
 
   const url = parseAsDurableObjectUrl(name);
@@ -170,7 +171,6 @@ function parseDurableObjectName(
   });
 
   return {
-    durableObjectName: name,
     projectId,
     path: normalizePath(url.pathname),
     props,
