@@ -1,4 +1,4 @@
-import { StreamProcessor } from "../streams/engine/stream-processor.ts";
+import { StreamProcessor } from "../streams/stream-processor.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
 
 type RepoProcessorDeps = {

@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { defineProcessorContract } from "../streams/engine/shared/stream-processors.ts";
-import { CoreProcessorContract } from "../streams/engine/processors/core/contract.ts";
+import { defineProcessorContract } from "../streams/stream-processor.ts";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
 export const RepoProcessorContract = defineProcessorContract({
   slug: "repo",
@@ -13,13 +13,6 @@ export const RepoProcessorContract = defineProcessorContract({
     initialized: z.boolean().default(false),
     remote: z.string().nullable().default(null),
   }),
-  initialState: {
-    artifactName: null,
-    created: false,
-    defaultBranch: null,
-    initialized: false,
-    remote: null,
-  },
   events: {
     "events.iterate.com/repo/create-requested": {
       description: "A repo creation was requested.",

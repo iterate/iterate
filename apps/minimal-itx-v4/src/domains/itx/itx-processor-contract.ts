@@ -1,12 +1,11 @@
 import { z } from "zod";
-import { defineProcessorContract } from "../streams/engine/shared/stream-processors.ts";
+import { defineProcessorContract } from "../streams/stream-processor.ts";
 import { WorkerRef } from "../workers/schemas.ts";
 import type {
   CapabilityProvidedPayload as CapabilityProvidedPayloadType,
   CapabilityRecord as CapabilityRecordType,
   RevokeCapabilityInput,
 } from "../../types.ts";
-export type { CapabilityRecord } from "../../types.ts";
 
 const CapabilityProvidedPayload = z.discriminatedUnion("type", [
   z.strictObject({
@@ -51,7 +50,6 @@ export const ItxProcessorContract = defineProcessorContract({
     capabilities: z.array(CapabilityRecord).default([]),
     pendingScriptExecutions: z.record(z.string(), z.boolean()).default({}),
   }),
-  initialState: { capabilities: [], pendingScriptExecutions: {} },
   events: {
     "events.iterate.com/itx/capability-provided": {
       description: "A capability was mounted at a path.",

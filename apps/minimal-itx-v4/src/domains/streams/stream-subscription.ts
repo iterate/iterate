@@ -1,4 +1,4 @@
-import type { ProcessEventBatch, StreamEventBatch } from "../../../types.ts";
+import type { ProcessEventBatch, StreamEventBatch } from "../../types.ts";
 
 type StreamSubscription = AsyncDisposable &
   AsyncIterable<StreamEventBatch> & {

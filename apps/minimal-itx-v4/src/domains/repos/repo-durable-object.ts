@@ -4,7 +4,7 @@ import { createGit } from "@cloudflare/shell/git";
 import {
   createStreamProcessorHost,
   type StreamSubscriberWakeRequest,
-} from "../streams/engine/workers/stream-processor-host.ts";
+} from "../streams/stream-processor-host.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import type { Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";

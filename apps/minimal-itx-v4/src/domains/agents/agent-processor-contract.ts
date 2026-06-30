@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineProcessorContract } from "../streams/engine/shared/stream-processors.ts";
+import { defineProcessorContract } from "../streams/stream-processor.ts";
 import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
 
 export const AgentProcessorContract = defineProcessorContract({
@@ -26,12 +26,6 @@ export const AgentProcessorContract = defineProcessorContract({
     scheduledRequests: z.record(z.string(), z.number()).default({}),
     scriptExecutionsCompleted: z.array(z.string()).default([]),
   }),
-  initialState: {
-    inputs: [],
-    outputs: [],
-    scheduledRequests: {},
-    scriptExecutionsCompleted: [],
-  },
   events: {
     "events.iterate.com/agent/user-message-received": {
       description: "The web UI sent a user message to the agent.",

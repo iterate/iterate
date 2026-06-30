@@ -2,7 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import {
   createStreamProcessorHost,
   type StreamSubscriberWakeRequest,
-} from "../streams/engine/workers/stream-processor-host.ts";
+} from "../streams/stream-processor-host.ts";
 import type { Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { ProjectRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";

@@ -6,6 +6,7 @@ import { projectEgressFetcher } from "../projects/utils.ts";
 import { WorkerRunner } from "../workers/worker-runner.ts";
 import type {
   ProcessEventBatch,
+  ProcessorRuntimeState,
   Stream,
   StreamEvent,
   StreamEventInput,
@@ -16,16 +17,22 @@ import {
   StreamEvent as StreamEventSchema,
   StreamEventInput as StreamEventInputSchema,
 } from "./schemas.ts";
-import type { StreamSubscriberWakeRequest } from "./engine/workers/stream-processor-host.ts";
-import { getInitialProcessorState } from "./engine/shared/stream-processors.ts";
-import { CoreStreamProcessor } from "./engine/processors/core/implementation.ts";
+import type { StreamSubscriberWakeRequest } from "./stream-processor-host.ts";
+import { StreamSubscriptionRpcTarget } from "./subscription-handle.ts";
+import { retainGetProcessorRuntimeState, retainProcessEventBatch } from "./rpc-lifecycle.ts";
 import {
+  CORE_STATE_VERSION,
   CoreProcessorContract,
+  ProcessorContractAnnouncement as ProcessorContractAnnouncementSchema,
   type CoreProcessorState,
   type ConfiguredStreamSubscriber,
   type LiveStreamSubscriberDescriptor,
-} from "./engine/processors/core/contract.ts";
-import { createStreamSubscription } from "./engine/subscription.ts";
+  type ProcessorContractAnnouncement,
+  type StreamSubscriberDescriptor,
+  type StreamSubscriberDisconnectReason,
+  type StreamSubscriptionType,
+} from "./core-processor-contract.ts";
+import { createStreamSubscription } from "./stream-subscription.ts";
 
 const StreamAppendInput = StreamEventInputSchema.extend({
   offset: z.number().int().nonnegative().optional(),
@@ -51,26 +58,6 @@ const StreamAppendInput = StreamEventInputSchema.extend({
 const EVENT_CHUNK_SIZE = 512 * 1024;
 const textEncoder = new TextEncoder();
 
-// Version of the persisted core reduced state ("state" in KV). Bump this when
-// the core reducer starts deriving NEW state from already-reduced events
-// (already-committed events are never re-reduced on the incremental catch-up
-// path). On wake, a stored version that differs from this constant discards
-// the persisted state and rebuilds it by replaying the full event log from the
-// DO's own SQLite — the same path used when KV state is missing entirely.
-//
-// History:
-// - 1 (implicit; no "stateVersion" key in KV): pre-descendantPaths state.
-// - 2: childPaths gained a sibling descendantPaths (full announced paths).
-// - 3: descendantPaths removed; callers should walk immediate childPaths.
-// - 4: subscriber presence — connectionsByKey roster added; processorsBySlug
-//      reshaped to fold contract announcements from subscriber-connected
-//      events instead of the removed processor-registered event.
-// - 5: stream coordinate fields normalized to projectId/path.
-// - 6: configured subscriber state and typed subscriber targets replaced the
-//      old transport-direction subscription model.
-// [[ This seems like it should use the version in of the core processor contract no? ]]
-const CORE_STATE_VERSION = 6;
-
 // How long a stream may hold idle configured delivery connections before the
 // Stream DO severs them so it (and its subscribers) can hibernate instead of
 // accruing billable duration on cross-isolate RPC sessions that pin both DOs.
@@ -81,16 +68,58 @@ const CORE_STATE_VERSION = 6;
 // Overridable via the STREAM_IDLE_TEARDOWN_MS env var (used by tests).
 const DEFAULT_STREAM_IDLE_TEARDOWN_MS = 5 * 60_000;
 
+type ConnectionRuntimeState = {
+  subscriptionType: StreamSubscriptionType;
+  startedAt: string;
+  cursor: number;
+  batchesSent: number;
+  eventsSent: number;
+  lastDeliveredAt?: string;
+};
+
+type StreamDurableObjectRuntimeState = {
+  coreProcessorState: CoreProcessorState;
+  runtime: {
+    connections: Record<string, ConnectionRuntimeState>;
+  };
+};
+
+type ReducedCoreEvent = {
+  event: StreamEvent;
+  previousState: CoreProcessorState;
+  state: CoreProcessorState;
+};
+
+type ProcessCoreEventArgs = ReducedCoreEvent & {
+  runInBackground: (work: () => Promise<unknown>) => void;
+};
+
+type CoreSubscriptionArgs = {
+  subscriptionKey: string;
+  processEventBatch: ProcessEventBatch;
+  replayAfterOffset?: number;
+  eventTypes?: readonly string[];
+  /** `false` = state-only batches. Default `true`. */
+  events?: boolean;
+  subscriber?: LiveStreamSubscriberDescriptor;
+  onClose?: () => void;
+};
+
 export class StreamDurableObject extends DurableObject<Env> {
   readonly name = parseStreamDurableObjectName(this.ctx.id.name);
 
   #coreProcessorState: CoreProcessorState;
   /** In-memory idle teardown timer; armed only while configured connections exist. */
   #idleTimer: ReturnType<typeof setTimeout> | undefined;
-  // The core processor owns reduced-state rules and live delivery decisions.
-  // It is not a hosted StreamProcessor: it runs directly against this DO's
-  // synchronous append/runtime surface.
-  coreProcessor = new CoreStreamProcessor(this);
+  /**
+   * Live delivery connections, keyed by subscriptionKey. Core reduced state
+   * mirrors this map from subscriber-connected/disconnected facts, but the
+   * callback stubs and pump cursors are incarnation-local runtime state.
+   */
+  #connections = new Map<string, Connection>();
+  // subscriptionKeys with a configured subscriber wakeup in flight, so concurrent
+  // reconciliation runs never wake the same subscriber twice.
+  #connecting = new Set<string>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -165,7 +194,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     const storedState = storedStateIsCurrent
       ? CoreProcessorContract.stateSchema.parse(stored)
       : this.#recoverCoreProcessorStateFromEventLog();
-    if (storedState === undefined) return getInitialProcessorState(CoreProcessorContract);
+    if (storedState === undefined) return CoreProcessorContract.stateSchema.parse({});
 
     const state = this.#catchUpCoreProcessorState(storedState);
 
@@ -338,7 +367,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     // If a deployed DO has rows but no KV state, replay the event log instead of
     // treating the stream as empty and trying to insert offset 1 again.
     return this.#reduceCoreProcessorState({
-      state: getInitialProcessorState(CoreProcessorContract),
+      state: CoreProcessorContract.stateSchema.parse({}),
       events,
     });
   }
@@ -350,9 +379,292 @@ export class StreamDurableObject extends DurableObject<Env> {
     let state = args.state;
     for (const event of args.events) {
       if (event.offset <= state.maxOffset) continue;
-      state = this.coreProcessor.reduceEvent({ event, state });
+      state = this.#reduceCoreEvent({ event, state });
     }
     return state;
+  }
+
+  /**
+   * Pre-append gate, called before an event is committed. This is stream-owned
+   * policy, not a hosted processor hook: only the stream itself can reject an
+   * append based on core state.
+   */
+  #validateCoreAppend(args: { event: StreamEventInput; state: CoreProcessorState }): void {
+    if (!args.state.paused) return;
+
+    // Presence facts pass through the pause door alongside resume/error/woken:
+    // a paused stream still has subscribers attaching (e.g. an operator's
+    // browser), and the roster must stay truthful for the stream to recover.
+    switch (args.event.type) {
+      case "events.iterate.com/stream/resumed":
+      case "events.iterate.com/stream/error-occurred":
+      case "events.iterate.com/stream/woken":
+      case "events.iterate.com/stream/subscriber-connected":
+      case "events.iterate.com/stream/subscriber-disconnected":
+        return;
+      default:
+        throw new Error(`stream paused: ${args.state.pauseReason ?? "unknown reason"}`);
+    }
+  }
+
+  // Reduce is on the synchronous DO append hot path and runs per event. Known
+  // core event payloads are parsed from CoreProcessorContract before state
+  // access; non-core events still count toward the stream offset/event counters.
+  //
+  // Do NOT re-parse the whole state on the way out: `state` was already
+  // validated at the trust boundary (the KV read and event-log recovery path
+  // both parse). Re-validating the growing connectionsByKey/processorsBySlug/
+  // configuredSubscribersByKey records on every append was quadratic work for
+  // no added safety.
+  #reduceCoreEvent(args: { event: StreamEvent; state: CoreProcessorState }): CoreProcessorState {
+    const state = args.state;
+    let next: CoreProcessorState = {
+      ...state,
+      eventCount: state.eventCount + 1,
+      maxOffset: args.event.offset,
+    };
+
+    switch (args.event.type) {
+      case "events.iterate.com/stream/paused": {
+        const event = CoreProcessorContract.parseEvent(
+          "events.iterate.com/stream/paused",
+          args.event,
+        );
+        next = {
+          ...next,
+          paused: true,
+          pauseReason: event.payload.reason ?? null,
+        };
+        break;
+      }
+
+      case "events.iterate.com/stream/resumed":
+        CoreProcessorContract.parseEvent("events.iterate.com/stream/resumed", args.event);
+        next = {
+          ...next,
+          paused: false,
+          pauseReason: null,
+        };
+        break;
+
+      case "events.iterate.com/stream/created": {
+        const event = CoreProcessorContract.parseEvent(
+          "events.iterate.com/stream/created",
+          args.event,
+        );
+        if (event.offset !== 1) {
+          throw new Error(
+            "events.iterate.com/stream/created must be the first event and have offset 1",
+          );
+        }
+        next = {
+          ...next,
+          projectId: event.payload.projectId,
+          path: event.payload.path,
+          createdAt: event.createdAt,
+        };
+        break;
+      }
+
+      case "events.iterate.com/stream/woken": {
+        const event = CoreProcessorContract.parseEvent(
+          "events.iterate.com/stream/woken",
+          args.event,
+        );
+        // A new stream incarnation means every previous delivery connection
+        // died with the old one. Clearing the roster here is what keeps it
+        // truthful without heartbeats: surviving subscribers reconnect and
+        // their fresh subscriber-connected events re-land below.
+        next = {
+          ...next,
+          incarnationId: event.payload.incarnationId,
+          connectionsByKey: {},
+        };
+        break;
+      }
+
+      case "events.iterate.com/stream/subscriber-connected": {
+        const event = CoreProcessorContract.parseEvent(
+          "events.iterate.com/stream/subscriber-connected",
+          args.event,
+        );
+        const { subscriptionKey, subscriber, subscriptionType } = event.payload;
+        next = {
+          ...next,
+          connectionsByKey: {
+            ...next.connectionsByKey,
+            [subscriptionKey]: {
+              subscriptionType,
+              connectedAtOffset: event.offset,
+              ...(subscriber === undefined ? {} : { subscriber }),
+            },
+          },
+        };
+        // A processor announcement on the connect event feeds the stream's
+        // contract documentation registry (replaces processor-registered).
+        const announcement = processorAnnouncementFromSubscriber(subscriber);
+        if (announcement !== undefined) {
+          next = {
+            ...next,
+            processorsBySlug: {
+              ...next.processorsBySlug,
+              [announcement.slug]: {
+                announcedAtOffset: event.offset,
+                announcement,
+              },
+            },
+          };
+        }
+        break;
+      }
+
+      case "events.iterate.com/stream/subscriber-disconnected": {
+        const event = CoreProcessorContract.parseEvent(
+          "events.iterate.com/stream/subscriber-disconnected",
+          args.event,
+        );
+        const { [event.payload.subscriptionKey]: _closed, ...connectionsByKey } =
+          next.connectionsByKey;
+        next = { ...next, connectionsByKey };
+        break;
+      }
+
+      case "events.iterate.com/stream/metadata-updated": {
+        const event = CoreProcessorContract.parseEvent(
+          "events.iterate.com/stream/metadata-updated",
+          args.event,
+        );
+        next = {
+          ...next,
+          metadata: event.payload.metadata,
+        };
+        break;
+      }
+
+      case "events.iterate.com/stream/child-stream-created": {
+        const event = CoreProcessorContract.parseEvent(
+          "events.iterate.com/stream/child-stream-created",
+          args.event,
+        );
+        if (state.path === undefined) break;
+        const announcedPath = event.payload.childPath;
+        let childPath: string | null;
+        if (announcedPath === state.path) {
+          childPath = null;
+        } else if (state.path === "/") {
+          const [firstSegment] = announcedPath.split("/").filter(Boolean);
+          childPath = firstSegment === undefined ? null : `/${firstSegment}`;
+        } else {
+          const parentPrefix = `${state.path}/`;
+          if (!announcedPath.startsWith(parentPrefix)) {
+            childPath = null;
+          } else {
+            const [firstSegment] = announcedPath
+              .slice(parentPrefix.length)
+              .split("/")
+              .filter(Boolean);
+            childPath = firstSegment === undefined ? null : `${state.path}/${firstSegment}`;
+          }
+        }
+
+        if (childPath !== null && !next.childPaths.includes(childPath)) {
+          next = { ...next, childPaths: [...next.childPaths, childPath] };
+        }
+        break;
+      }
+
+      case "events.iterate.com/stream/subscription-configured": {
+        const event = CoreProcessorContract.parseEvent(
+          "events.iterate.com/stream/subscription-configured",
+          args.event,
+        );
+        next = {
+          ...next,
+          configuredSubscribersByKey: {
+            ...next.configuredSubscribersByKey,
+            [event.payload.subscriptionKey]: {
+              latestConfiguredEvent: {
+                offset: event.offset,
+                type: event.type,
+                payload: event.payload,
+                createdAt: event.createdAt,
+              },
+            },
+          },
+        };
+        break;
+      }
+
+      case "events.iterate.com/stream/subscription-removed": {
+        const event = CoreProcessorContract.parseEvent(
+          "events.iterate.com/stream/subscription-removed",
+          args.event,
+        );
+        const { [event.payload.subscriptionKey]: _removed, ...configuredSubscribersByKey } =
+          next.configuredSubscribersByKey;
+        next = { ...next, configuredSubscribersByKey };
+        break;
+      }
+
+      case "events.iterate.com/stream/error-occurred":
+        CoreProcessorContract.parseEvent("events.iterate.com/stream/error-occurred", args.event);
+        break;
+
+      default:
+        break;
+    }
+    return next;
+  }
+
+  /**
+   * Run stream-owned post-commit side effects for one already-reduced event.
+   * Historical catch-up only reduces state; it does not replay side effects.
+   */
+  #processReducedCoreEvent(args: ReducedCoreEvent): void {
+    this.#processCoreEvent({
+      event: args.event,
+      previousState: args.previousState,
+      state: args.state,
+      runInBackground: (work) => this.runCoreProcessorInBackground(work),
+    });
+  }
+
+  #processCoreEvent(args: ProcessCoreEventArgs): undefined {
+    switch (args.event.type) {
+      case "events.iterate.com/stream/woken":
+      case "events.iterate.com/stream/subscription-configured":
+      case "events.iterate.com/stream/subscription-removed":
+        this.#reconcileConnections();
+        return;
+      case "events.iterate.com/stream/created":
+        this.#announceToAncestors(args);
+        return;
+      default:
+        return;
+    }
+  }
+
+  #announceToAncestors(args: ProcessCoreEventArgs): void {
+    const path = args.state.path;
+    if (path === undefined || path === "/") return;
+
+    const pathSegments = path.split("/").filter(Boolean);
+    const ancestorPaths = ["/"];
+    for (let index = 1; index < pathSegments.length; index += 1) {
+      ancestorPaths.push(`/${pathSegments.slice(0, index).join("/")}`);
+    }
+
+    args.runInBackground(async () => {
+      await Promise.all(
+        ancestorPaths.map((ancestorPath) =>
+          this.appendToStreamPath(ancestorPath, {
+            type: "events.iterate.com/stream/child-stream-created",
+            idempotencyKey: `child-stream-created:${ancestorPath}:${path}`,
+            payload: { childPath: path },
+          }),
+        ),
+      );
+    });
   }
 
   /**
@@ -402,7 +714,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         }
       }
 
-      this.coreProcessor.validateAppend({
+      this.#validateCoreAppend({
         event: input,
         state: workingCoreProcessorState,
       });
@@ -417,7 +729,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       const previousCoreProcessorState = workingCoreProcessorState;
-      workingCoreProcessorState = this.coreProcessor.reduceEvent({
+      workingCoreProcessorState = this.#reduceCoreEvent({
         event: committed,
         state: previousCoreProcessorState,
       });
@@ -457,14 +769,14 @@ export class StreamDurableObject extends DurableObject<Env> {
     // side effects are fire-and-forget (`runInBackground`), so this cannot fail
     // the append.
     for (const reduced of postCommitCoreEvents) {
-      this.coreProcessor.processReducedEvent(reduced);
+      this.#processReducedCoreEvent(reduced);
     }
 
     // 3. Wake live delivery. Append success is already decided above — this is
     // pure post-commit fan-out. (Connection reconciliation is not triggered
     // here: it is the core processor's side effect for the woken and
     // subscription-configured facts, which ran in the loop above.)
-    this.coreProcessor.wakeConnections();
+    this.#wakeConnections();
 
     // Re-wake any configured subscription left without a live connection — e.g.
     // an idle teardown (here or on the subscriber), a clean unsubscribe, etc.
@@ -487,8 +799,8 @@ export class StreamDurableObject extends DurableObject<Env> {
     const hasRewakeTriggeringAppend = newEvents.some(
       (event) => event.type !== SUBSCRIBER_DISCONNECTED_TYPE,
     );
-    if (hasRewakeTriggeringAppend && this.coreProcessor.needsConfiguredReconcile()) {
-      this.coreProcessor.reconcileConnections();
+    if (hasRewakeTriggeringAppend && this.#needsConfiguredReconcile()) {
+      this.#reconcileConnections();
     }
 
     // Re-arm (or clear) the in-memory idle timer against the post-append
@@ -566,6 +878,284 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
+  /** Re-arm every live connection's delivery pump after a commit. */
+  #wakeConnections(): void {
+    for (const connection of this.#connections.values()) connection.wake();
+  }
+
+  /** True if any live connection belongs to a configured, wakeable subscriber. */
+  #hasLiveConfiguredConnections(): boolean {
+    for (const connection of this.#connections.values()) {
+      if (connection.subscriptionType === "configured") return true;
+    }
+    return false;
+  }
+
+  /**
+   * Deliberately drops every live configured delivery connection so a quiet stream
+   * stops pinning subscriber DOs with idle cross-isolate RPC sessions. The
+   * durable subscription config is kept, so the next append re-wakes.
+   */
+  #closeIdleConfiguredConnections(): string[] {
+    const severed: string[] = [];
+    // Snapshot first: close() mutates #connections.
+    for (const [subscriptionKey, connection] of [...this.#connections]) {
+      if (connection.subscriptionType !== "configured") continue;
+      severed.push(subscriptionKey);
+      connection.close("idle");
+    }
+    return severed;
+  }
+
+  /**
+   * True if a configured subscription currently has no live or in-flight
+   * connection and needs re-waking.
+   */
+  #needsConfiguredReconcile(): boolean {
+    for (const subscriptionKey of Object.keys(
+      this.#coreProcessorState.configuredSubscribersByKey,
+    )) {
+      const connection = this.#connections.get(subscriptionKey);
+      if (connection?.subscriptionType !== "configured" && !this.#connecting.has(subscriptionKey)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Serializable debug view of the live connections, for runtimeState(). */
+  #connectionsRuntimeState(): Record<string, ConnectionRuntimeState> {
+    return Object.fromEntries(
+      [...this.#connections].map(([subscriptionKey, connection]) => [
+        subscriptionKey,
+        {
+          subscriptionType: connection.subscriptionType,
+          startedAt: connection.startedAt,
+          cursor: connection.cursor,
+          batchesSent: connection.batchesSent,
+          eventsSent: connection.eventsSent,
+          lastDeliveredAt: connection.lastDeliveredAt,
+        },
+      ]),
+    );
+  }
+
+  async #getProcessorRuntimeState(args: {
+    subscriptionKey: string;
+  }): Promise<ProcessorRuntimeState | null> {
+    const connection = this.#connections.get(args.subscriptionKey);
+    return (await connection?.getProcessorRuntimeState?.()) ?? null;
+  }
+
+  /** Fire-and-forget configured subscriber reconciliation; never blocks append. */
+  #reconcileConnections(): void {
+    try {
+      this.#reconcileConfiguredConnections();
+    } catch (error) {
+      console.error("Stream configured subscriber reconciliation failed", error);
+    }
+  }
+
+  /**
+   * Makes runtime configured connections match the persisted subscription config:
+   * closes connections whose config disappeared, wakes a subscriber for each
+   * configured subscription that has none. Triggered by woken/config changes and
+   * by configured connection loss, never per append.
+   */
+  #reconcileConfiguredConnections(): void {
+    const state = this.#coreProcessorState;
+    for (const [subscriptionKey, connection] of this.#connections) {
+      if (
+        connection.subscriptionType === "configured" &&
+        state.configuredSubscribersByKey[subscriptionKey] === undefined
+      ) {
+        connection.close("subscription-removed");
+      }
+    }
+
+    for (const [subscriptionKey, configured] of Object.entries(state.configuredSubscribersByKey)) {
+      const connection = this.#connections.get(subscriptionKey);
+      if (connection?.subscriptionType === "configured" || this.#connecting.has(subscriptionKey)) {
+        continue;
+      }
+
+      // Reserve the key before any await so a concurrent reconcile can't wake twice.
+      this.#connecting.add(subscriptionKey);
+      this.runCoreProcessorInBackground(async () => {
+        try {
+          await this.wakeConfiguredSubscriber({ configured, subscriptionKey });
+        } catch (error) {
+          console.error("Stream configured subscriber wakeup failed", { error, subscriptionKey });
+        } finally {
+          this.#connecting.delete(subscriptionKey);
+        }
+      });
+    }
+  }
+
+  #startSubscription(
+    args: CoreSubscriptionArgs & { subscriptionType: StreamSubscriptionType },
+  ): StreamSubscriptionHandle {
+    const subscriptionKey = args.subscriptionKey.trim();
+    if (subscriptionKey.length === 0) throw new Error("subscriptionKey must not be blank.");
+    // Replacing any existing connection for this key.
+    this.#connections.get(subscriptionKey)?.close("replaced");
+
+    // Optional event-type filter. The cursor still advances past non-matching
+    // events; they are skipped, not deferred.
+    const eventTypeFilter =
+      args.eventTypes === undefined || args.eventTypes.includes("*")
+        ? undefined
+        : new Set(args.eventTypes);
+
+    const deliverEvents = args.events !== false;
+    // State-only subscriptions are implicitly live-from-now: replay without
+    // events is meaningless, so replayAfterOffset is ignored in that mode.
+    let cursor = deliverEvents
+      ? (args.replayAfterOffset ?? this.#coreProcessorState.maxOffset)
+      : this.#coreProcessorState.maxOffset;
+    let initialBatchPending = true;
+    let draining = false;
+    let open = true;
+
+    const processEventBatch = retainProcessEventBatch(
+      args.processEventBatch,
+      args.subscriptionType === "configured"
+        ? {
+            onDeliveryError: (error) => {
+              if (!open) return;
+              console.error("Stream event batch delivery failed; dropping connection for re-wake", {
+                subscriptionKey,
+                subscriptionType: args.subscriptionType,
+                error,
+              });
+              connection.close("delivery-failed");
+              this.#reconcileConnections();
+            },
+          }
+        : {},
+    );
+
+    const pump = async () => {
+      if (draining) return;
+      draining = true;
+      try {
+        while (open) {
+          let events: StreamEvent[] = [];
+          if (deliverEvents) {
+            const readEvents = this.getEvents({ afterOffset: cursor, limit: 100 }); // limit hardcoded for now
+            const lastOffset = readEvents.at(-1)?.offset;
+            if (lastOffset === undefined) {
+              // Caught up; the next append wakes us again. The first drain
+              // still owes the initial state batch.
+              if (!initialBatchPending) return;
+            } else {
+              cursor = lastOffset;
+              events =
+                eventTypeFilter === undefined
+                  ? readEvents
+                  : readEvents.filter((event) => eventTypeFilter.has(event.type));
+              if (events.length === 0 && !initialBatchPending) continue;
+            }
+          } else {
+            const stateMaxOffset = this.#coreProcessorState.maxOffset;
+            if (stateMaxOffset <= cursor && !initialBatchPending) return;
+            cursor = stateMaxOffset;
+          }
+          initialBatchPending = false;
+          connection.batchesSent += 1;
+          connection.eventsSent += events.length;
+          connection.lastDeliveredAt = new Date().toISOString();
+          const currentState = this.#coreProcessorState;
+          if (currentState.projectId === undefined || currentState.path === undefined) {
+            throw new Error(
+              "Cannot deliver stream batch before stream coordinates are initialized.",
+            );
+          }
+          processEventBatch({
+            projectId: currentState.projectId,
+            path: currentState.path,
+            events,
+            streamMaxOffset: currentState.maxOffset,
+            // Read in the same synchronous block as streamMaxOffset, so the
+            // two always correspond (state-at-streamMaxOffset; see types.ts).
+            state: currentState,
+          });
+          await Promise.resolve();
+        }
+      } finally {
+        draining = false;
+      }
+    };
+
+    const connection: Connection = {
+      subscriptionType: args.subscriptionType,
+      startedAt: new Date().toISOString(),
+      getProcessorRuntimeState: retainGetProcessorRuntimeState(
+        args.subscriber?.processor?.getRuntimeState,
+      ),
+      get cursor() {
+        return cursor;
+      },
+      batchesSent: 0,
+      eventsSent: 0,
+      wake: () => void pump(),
+      close: (reason) => {
+        if (!open) return;
+        open = false;
+        if (this.#connections.get(subscriptionKey) === connection) {
+          this.#connections.delete(subscriptionKey);
+        }
+        processEventBatch[Symbol.dispose]();
+        connection.getProcessorRuntimeState?.[Symbol.dispose]();
+        this.#appendPresenceFact({
+          type: "events.iterate.com/stream/subscriber-disconnected",
+          payload: { subscriptionKey, reason },
+        });
+        args.onClose?.();
+      },
+    };
+
+    this.#connections.set(subscriptionKey, connection);
+    // The presence fact lands after the connection is registered and after the
+    // replay cursor is fixed, so connected is the tail of any first batch it
+    // shares with replayed events.
+    this.#appendPresenceFact({
+      type: "events.iterate.com/stream/subscriber-connected",
+      payload: {
+        subscriptionKey,
+        subscriptionType: args.subscriptionType,
+        ...(args.subscriber === undefined
+          ? {}
+          : { subscriber: serializableSubscriber(args.subscriber) }),
+      },
+    });
+    processEventBatch.onRpcBroken?.(() => {
+      connection.close("rpc-broken");
+      if (args.subscriptionType === "configured") this.#reconcileConnections();
+    });
+    connection.wake();
+
+    return new StreamSubscriptionRpcTarget({
+      close: () => connection.close("unsubscribed"),
+      subscriptionKey,
+      streamMaxOffset: this.#coreProcessorState.maxOffset,
+    });
+  }
+
+  /**
+   * Presence facts are observations appended exactly once per actual open/close,
+   * so they carry no idempotency keys. Close paths run during teardown where an
+   * append can fail; that must never mask the close itself, so failures log.
+   */
+  #appendPresenceFact(event: StreamEventInput): void {
+    try {
+      this.append(event);
+    } catch (error) {
+      console.error("stream presence fact append failed", { type: event.type, error });
+    }
+  }
+
   /**
    * One-shot convenience over `subscribe()`: replay from the requested cursor,
    * then live-tail until a caller predicate accepts an event.
@@ -604,9 +1194,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         eventTypes: args.eventTypes,
         replayAfterOffset: args.afterOffset,
         subscriber: { description: "waitForEvent" },
-        processEventBatch: subscription.processEventBatch as Parameters<
-          Stream["subscribe"]
-        >[0]["processEventBatch"],
+        processEventBatch: subscription.processEventBatch,
       });
 
       const match = (async () => {
@@ -665,11 +1253,12 @@ export class StreamDurableObject extends DurableObject<Env> {
         `subscriptionKey "${subscriptionKey}" is reserved for a configured subscriber`,
       );
     }
-    return this.coreProcessor.subscribeEphemeral({
+    return this.#startSubscription({
       ...args,
-      processEventBatch: args.processEventBatch as ProcessEventBatch,
+      processEventBatch: args.processEventBatch,
       subscriber: args.subscriber as LiveStreamSubscriberDescriptor | undefined,
       subscriptionKey,
+      subscriptionType: "ephemeral",
     });
   }
 
@@ -679,23 +1268,24 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (this.#coreProcessorState.configuredSubscribersByKey[subscriptionKey] === undefined) {
       throw new Error(`configured subscriber "${subscriptionKey}" is not configured`);
     }
-    return this.coreProcessor.subscribeConfigured({
+    return this.#startSubscription({
       ...args,
-      processEventBatch: args.processEventBatch as ProcessEventBatch,
+      processEventBatch: args.processEventBatch,
       subscriber: args.subscriber as LiveStreamSubscriberDescriptor | undefined,
       subscriptionKey,
+      subscriptionType: "configured",
     });
   }
 
   getProcessorRuntimeState(args: { subscriptionKey: string }) {
-    return this.coreProcessor.getProcessorRuntimeState(args);
+    return this.#getProcessorRuntimeState(args);
   }
 
-  runtimeState() {
+  runtimeState(): StreamDurableObjectRuntimeState {
     return {
       coreProcessorState: this.#coreProcessorState,
       runtime: {
-        connections: this.coreProcessor.connectionsRuntimeState(),
+        connections: this.#connectionsRuntimeState(),
       },
     };
   }
@@ -717,7 +1307,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       clearTimeout(this.#idleTimer);
       this.#idleTimer = undefined;
     }
-    if (!this.coreProcessor.hasLiveConfiguredConnections()) return;
+    if (!this.#hasLiveConfiguredConnections()) return;
     this.#idleTimer = setTimeout(() => this.runIdleTeardownNow(), this.#idleTeardownMs());
   }
 
@@ -730,7 +1320,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    */
   runIdleTeardownNow(): void {
     this.#idleTimer = undefined;
-    this.coreProcessor.closeIdleConfiguredConnections();
+    this.#closeIdleConfiguredConnections();
   }
 
   /**
@@ -752,13 +1342,19 @@ export class StreamDurableObject extends DurableObject<Env> {
     configured: CoreProcessorState["configuredSubscribersByKey"][string];
     subscriptionKey: string;
   }) {
+    const { maxOffset, path, projectId } = this.#coreProcessorState;
+    if (projectId === undefined || path === undefined) {
+      throw new Error(
+        "Cannot wake configured subscriber before stream coordinates are initialized.",
+      );
+    }
     await this.#wakeConfiguredSubscriberTarget({
       subscriber: args.configured.latestConfiguredEvent.payload.subscriber,
       request: {
         stream: {
-          projectId: this.#coreProcessorState.projectId,
-          path: this.#coreProcessorState.path,
-          streamMaxOffset: this.#coreProcessorState.maxOffset,
+          projectId,
+          path,
+          streamMaxOffset: maxOffset,
         },
         subscriptionKey: args.subscriptionKey,
       },
@@ -849,11 +1445,61 @@ type ConfiguredSubscribeArgs = Parameters<Stream["subscribe"]>[0] & {
   subscriptionKey: string;
 };
 
+/**
+ * A live delivery connection from this stream to one subscriber callback. Not
+ * persisted; the callback and pump state live in the subscription closure, so
+ * this is just metrics counters plus two control verbs.
+ */
+type Connection = {
+  readonly subscriptionType: StreamSubscriptionType;
+  readonly startedAt: string;
+  /** Highest offset delivered to the callback; also the pump's resume cursor. */
+  readonly cursor: number;
+  batchesSent: number;
+  eventsSent: number;
+  lastDeliveredAt?: string;
+  getProcessorRuntimeState?: (() => ProcessorRuntimeState | Promise<ProcessorRuntimeState>) &
+    Disposable;
+  /** Re-arm the delivery pump after events are committed. Idempotent while draining. */
+  wake(): void;
+  /** Stop the pump, dispose the callback, append the disconnect fact, drop from the map. */
+  close(reason: StreamSubscriberDisconnectReason): void;
+};
+
+function serializableSubscriber(
+  subscriber: LiveStreamSubscriberDescriptor,
+): StreamSubscriberDescriptor {
+  const processor =
+    subscriber.processor === undefined
+      ? undefined
+      : { announcement: subscriber.processor.announcement };
+  return {
+    ...(subscriber.incarnationId === undefined ? {} : { incarnationId: subscriber.incarnationId }),
+    ...(subscriber.description === undefined ? {} : { description: subscriber.description }),
+    ...(processor === undefined ? {} : { processor }),
+  };
+}
+
+function processorAnnouncementFromSubscriber(
+  subscriber: StreamSubscriberDescriptor | undefined,
+): ProcessorContractAnnouncement | undefined {
+  const processor = subscriber?.processor;
+  if (processor === undefined) return undefined;
+  const candidate =
+    isRecord(processor) && isRecord(processor.announcement) ? processor.announcement : processor;
+  const parsed = ProcessorContractAnnouncementSchema.safeParse(candidate);
+  return parsed.success ? parsed.data : undefined;
+}
+
 function parseStreamDurableObjectName(name: string | undefined) {
   if (!name) {
     throw new Error("Stream Durable Object must be addressed by name.");
   }
   return DurableObjectNameCodec.parse(name, { allowNullProjectId: true });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
 }
 
 function* chunkBytes(value: Uint8Array, chunkSize: number): Generator<[number, ArrayBuffer]> {

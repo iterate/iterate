@@ -3,12 +3,10 @@
 
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { z } from "zod";
-import {
-  buildEvent,
-  defineProcessorContract,
-} from "./src/domains/streams/engine/shared/stream-processors.ts";
+import { buildEvent } from "./src/domains/streams/build-event.ts";
+import { defineProcessorContract } from "./src/domains/streams/stream-processor.ts";
 import type { StreamEvent } from "./src/types.ts";
-import { StreamProcessor } from "./src/domains/streams/engine/stream-processor.ts";
+import { StreamProcessor } from "./src/domains/streams/stream-processor.ts";
 
 type IsNever<Value> = [Value] extends [never] ? true : false;
 
@@ -83,7 +81,6 @@ describe("stream processor type helpers", () => {
       version: "0.1.0",
       description: "Dependency processor used to prove dependency event inference.",
       stateSchema: z.object({}),
-      initialState: {},
       events: {
         "events.iterate.test/build-event/dependency-output": {
           payloadSchema: z.object({ accepted: z.boolean() }),
@@ -98,7 +95,6 @@ describe("stream processor type helpers", () => {
       version: "0.1.0",
       description: "Wildcard consumer used to prove buildEvent stays catalog-bound.",
       stateSchema: z.object({}),
-      initialState: {},
       processorDeps: [DependencyContract],
       events: {
         "events.iterate.test/build-event/local-output": {
@@ -124,6 +120,15 @@ describe("stream processor type helpers", () => {
     // @ts-expect-error local event payload does not include dependency fields
     local.payload.accepted;
 
+    const localViaContract = WildcardConsumesContract.buildEvent({
+      type: "events.iterate.test/build-event/local-output",
+      payload: { value: "contract-bound" },
+    });
+    expectTypeOf(
+      localViaContract.type,
+    ).toEqualTypeOf<"events.iterate.test/build-event/local-output">();
+    expectTypeOf(localViaContract.payload.value).toMatchTypeOf<string>();
+
     const dependency = buildEvent({
       contract: WildcardConsumesContract,
       event: {
@@ -137,6 +142,15 @@ describe("stream processor type helpers", () => {
     expectTypeOf(dependency.payload.accepted).toMatchTypeOf<boolean>();
     // @ts-expect-error dependency event payload does not include local fields
     dependency.payload.value;
+
+    const dependencyViaContract = WildcardConsumesContract.buildEvent({
+      type: "events.iterate.test/build-event/dependency-output",
+      payload: { accepted: true },
+    });
+    expectTypeOf(
+      dependencyViaContract.type,
+    ).toEqualTypeOf<"events.iterate.test/build-event/dependency-output">();
+    expectTypeOf(dependencyViaContract.payload.accepted).toMatchTypeOf<boolean>();
 
     const StructuralWildcardEmitsContract = {
       slug: "build-event-structural-wildcard-emits",
@@ -174,6 +188,61 @@ describe("stream processor type helpers", () => {
     ).toEqualTypeOf<"events.iterate.test/build-event/dependency-output">();
     expectTypeOf(structuralDependency.payload.accepted).toMatchTypeOf<boolean>();
 
+    const parsedLocal = WildcardConsumesContract.parseEvent(
+      "events.iterate.test/build-event/local-output",
+      {
+        type: "events.iterate.test/build-event/local-output",
+        payload: { value: "committed" },
+        offset: 1,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+    );
+    expectTypeOf(parsedLocal.type).toEqualTypeOf<"events.iterate.test/build-event/local-output">();
+    expectTypeOf(parsedLocal.payload.value).toMatchTypeOf<string>();
+    // @ts-expect-error parsed local event payload does not include dependency fields
+    parsedLocal.payload.accepted;
+
+    const parsedDependency = WildcardConsumesContract.parseEvent(
+      "events.iterate.test/build-event/dependency-output",
+      {
+        type: "events.iterate.test/build-event/dependency-output",
+        payload: { accepted: true },
+        offset: 2,
+        createdAt: "2026-01-01T00:00:01.000Z",
+      },
+    );
+    expectTypeOf(
+      parsedDependency.type,
+    ).toEqualTypeOf<"events.iterate.test/build-event/dependency-output">();
+    expectTypeOf(parsedDependency.payload.accepted).toMatchTypeOf<boolean>();
+    // @ts-expect-error parsed dependency event payload does not include local fields
+    parsedDependency.payload.value;
+
+    const parsedUnion = WildcardConsumesContract.parseEvent({
+      type: "events.iterate.test/build-event/local-output",
+      payload: { value: "union" },
+      offset: 3,
+      createdAt: "2026-01-01T00:00:02.000Z",
+    });
+    if (parsedUnion.type === "events.iterate.test/build-event/local-output") {
+      expectTypeOf(parsedUnion.payload.value).toMatchTypeOf<string>();
+      // @ts-expect-error union narrows away dependency fields
+      parsedUnion.payload.accepted;
+    } else {
+      expectTypeOf(parsedUnion.payload.accepted).toMatchTypeOf<boolean>();
+      // @ts-expect-error union narrows away local fields
+      parsedUnion.payload.value;
+    }
+
+    expect(() =>
+      WildcardConsumesContract.parseEvent("events.iterate.test/build-event/local-output", {
+        type: "events.iterate.test/build-event/local-output",
+        payload: { value: 123 },
+        offset: 4,
+        createdAt: "2026-01-01T00:00:03.000Z",
+      }),
+    ).toThrow();
+
     function assertInvalidBuildEvents() {
       buildEvent({
         contract: WildcardConsumesContract,
@@ -190,13 +259,119 @@ describe("stream processor type helpers", () => {
         },
       });
 
+      WildcardConsumesContract.buildEvent({
+        // @ts-expect-error contract-bound buildEvent is still limited to owned/dependency events
+        type: "events.iterate.test/build-event/unknown",
+        payload: { value: "otherwise-valid" },
+      });
+
       buildEvent({
         contract: StructuralWildcardEmitsContract,
         // @ts-expect-error wildcard emits does not make arbitrary events buildable
         event: { type: "events.iterate.test/build-event/not-owned", payload: {} },
       });
+
+      WildcardConsumesContract.parseEvent(
+        // @ts-expect-error contract-bound parseEvent is limited to owned/dependency events
+        "events.iterate.test/build-event/unknown",
+        {
+          type: "events.iterate.test/build-event/unknown",
+          payload: {},
+          offset: 5,
+          createdAt: "2026-01-01T00:00:04.000Z",
+        },
+      );
     }
     void assertInvalidBuildEvents;
+  });
+
+  it("requires processor state schemas to express an object-shaped empty state", () => {
+    const DefaultedStateContract = defineProcessorContract({
+      slug: "defaulted-state",
+      version: "0.1.0",
+      description: "Proves state schema defaults are the empty state.",
+      stateSchema: z.object({
+        optionalValue: z.string().optional(),
+        values: z.array(z.string()).default([]),
+      }),
+      events: {},
+      consumes: [],
+      emits: [],
+    });
+
+    expectTypeOf(DefaultedStateContract.stateSchema.parse({})).toEqualTypeOf<{
+      optionalValue?: string;
+      values: string[];
+    }>();
+
+    function assertInvalidStateSchemas() {
+      defineProcessorContract({
+        slug: "required-state",
+        version: "0.1.0",
+        description: "Invalid because required state cannot be derived from {}.",
+        // @ts-expect-error stateSchema must parse {}.
+        stateSchema: z.object({ required: z.string() }),
+        events: {},
+        consumes: [],
+        emits: [],
+      });
+
+      defineProcessorContract({
+        slug: "array-state",
+        version: "0.1.0",
+        description: "Invalid because processor state must be object-shaped.",
+        // @ts-expect-error stateSchema output must be object-shaped.
+        stateSchema: z.array(z.string()),
+        events: {},
+        consumes: [],
+        emits: [],
+      });
+    }
+    void assertInvalidStateSchemas;
+
+    expect(() =>
+      (defineProcessorContract as (contract: unknown) => unknown)({
+        slug: "array-state-runtime",
+        version: "0.1.0",
+        description: "Invalid at runtime when dynamically assembled.",
+        stateSchema: z.unknown().transform(() => []),
+        events: {},
+        consumes: [],
+        emits: [],
+      }),
+    ).toThrow('Processor "array-state-runtime" state must be an object.');
+  });
+
+  it("reserves contract helper names for defineProcessorContract", () => {
+    expect(() =>
+      (defineProcessorContract as (contract: unknown) => unknown)({
+        slug: "user-build-event-helper",
+        version: "0.1.0",
+        description: "Invalid because buildEvent is installed by defineProcessorContract.",
+        stateSchema: z.object({}),
+        events: {},
+        consumes: [],
+        emits: [],
+        buildEvent() {
+          return {};
+        },
+      }),
+    ).toThrow('Processor "user-build-event-helper" must not define buildEvent.');
+
+    expect(() =>
+      (defineProcessorContract as (contract: unknown) => unknown)({
+        slug: "user-parse-event-helper",
+        version: "0.1.0",
+        description: "Invalid because parseEvent is installed by defineProcessorContract.",
+        stateSchema: z.object({}),
+        events: {},
+        consumes: [],
+        emits: [],
+        parseEvent() {
+          return {};
+        },
+      }),
+    ).toThrow('Processor "user-parse-event-helper" must not define parseEvent.');
   });
 
   it("narrows hook append helpers to the processor emits contract", () => {
@@ -276,7 +451,6 @@ describe("stream processor type helpers", () => {
       version: "0.1.0",
       description: "Owns the event type.",
       stateSchema: z.object({}),
-      initialState: {},
       events: {
         "events.iterate.test/owned-once": {
           payloadSchema: z.object({ owner: z.string() }),
@@ -292,7 +466,6 @@ describe("stream processor type helpers", () => {
         version: "0.1.0",
         description: "Incorrectly shadows a dependency event type.",
         stateSchema: z.object({}),
-        initialState: {},
         processorDeps: [OwnerContract],
         events: {
           "events.iterate.test/owned-once": {

@@ -1,4 +1,4 @@
-import { StreamProcessor } from "../streams/engine/stream-processor.ts";
+import { StreamProcessor } from "../streams/stream-processor.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { PROJECT_REPO_PATH } from "../repos/utils.ts";
 import type { StreamEvent } from "../../types.ts";

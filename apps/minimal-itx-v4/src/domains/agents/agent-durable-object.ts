@@ -5,7 +5,7 @@ import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   createStreamProcessorHost,
   type StreamSubscriberWakeRequest,
-} from "../streams/engine/workers/stream-processor-host.ts";
+} from "../streams/stream-processor-host.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";

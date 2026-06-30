@@ -10,11 +10,32 @@
 // reconcile on presence facts list this contract in their `processorDeps`.
 
 import { z } from "zod";
-import type { GetProcessorRuntimeState } from "../../../../../types.ts";
-import { defineProcessorContract } from "../../shared/stream-processors.ts";
-import type { DurableObjectAddress as DurableObjectAddressType } from "../../../../durable-object-names.ts";
-import { normalizePath } from "../../../../durable-object-names.ts";
-import { WorkerRef } from "../../../../workers/schemas.ts";
+import type { GetProcessorRuntimeState } from "../../types.ts";
+import { defineProcessorContract } from "./stream-processor.ts";
+import type { DurableObjectAddress as DurableObjectAddressType } from "../durable-object-names.ts";
+import { normalizePath } from "../durable-object-names.ts";
+import { WorkerRef } from "../workers/schemas.ts";
+
+// Version of the persisted core reduced state ("state" in KV). Bump this when
+// the core reducer starts deriving NEW state from already-reduced events
+// (already-committed events are never re-reduced on the incremental catch-up
+// path). On wake, a stored version that differs from this constant discards
+// the persisted state and rebuilds it by replaying the full event log from the
+// DO's own SQLite -- the same path used when KV state is missing entirely.
+//
+// History:
+// - 1 (implicit; no "stateVersion" key in KV): pre-descendantPaths state.
+// - 2: childPaths gained a sibling descendantPaths (full announced paths).
+// - 3: descendantPaths removed; callers should walk immediate childPaths.
+// - 4: subscriber presence -- connectionsByKey roster added; processorsBySlug
+//      reshaped to fold contract announcements from subscriber-connected
+//      events instead of the removed processor-registered event.
+// - 5: stream coordinate fields normalized to projectId/path.
+// - 6: configured subscriber state and typed subscriber targets replaced the
+//      old transport-direction subscription model.
+// - 7: core's empty state is expressed directly by this schema's optional and
+//      defaulted fields instead of a separate initial state object.
+export const CORE_STATE_VERSION = 7;
 
 /**
  * Persisted configured subscriber target. The stream resolves these narrow
@@ -164,27 +185,28 @@ export const CoreProcessorContract = defineProcessorContract({
   version: "0.1.0",
   description: "Maintains the stream's own reduced state.",
   stateSchema: z.object({
-    projectId: z.string().trim().min(1).nullable(),
-    path: z.string().trim().min(1),
-    createdAt: z.string(),
-    incarnationId: z.string().trim().min(1),
-    metadata: z.record(z.string(), z.unknown()),
-    eventCount: z.number().int().min(0),
-    maxOffset: z.number().int().min(0),
-    childPaths: z.array(z.string().trim().min(1)),
-    paused: z.boolean(),
-    pauseReason: z.string().nullable(),
-    processorsBySlug: z.record(
-      z.string(),
-      z.object({
-        announcedAtOffset: z.number().int().min(0),
-        announcement: ProcessorContractAnnouncement,
-      }),
-    ),
-    configuredSubscribersByKey: z.record(
-      z.string(),
-      z.object({ latestConfiguredEvent: StreamSubscriptionConfiguredEvent }),
-    ),
+    projectId: z.string().trim().min(1).nullable().optional(),
+    path: z.string().trim().min(1).optional(),
+    createdAt: z.string().optional(),
+    incarnationId: z.string().trim().min(1).optional(),
+    metadata: z.record(z.string(), z.unknown()).default({}),
+    eventCount: z.number().int().min(0).default(0),
+    maxOffset: z.number().int().min(0).default(0),
+    childPaths: z.array(z.string().trim().min(1)).default([]),
+    paused: z.boolean().default(false),
+    pauseReason: z.string().nullable().default(null),
+    processorsBySlug: z
+      .record(
+        z.string(),
+        z.object({
+          announcedAtOffset: z.number().int().min(0),
+          announcement: ProcessorContractAnnouncement,
+        }),
+      )
+      .default({}),
+    configuredSubscribersByKey: z
+      .record(z.string(), z.object({ latestConfiguredEvent: StreamSubscriptionConfiguredEvent }))
+      .default({}),
     /**
      * Live presence roster: who is connected to this stream right now, keyed
      * by subscriptionKey — the event-sourced mirror of the runtime connection
@@ -192,30 +214,17 @@ export const CoreProcessorContract = defineProcessorContract({
      * stream incarnation; survivors reconnect and re-land), connected adds,
      * disconnected removes.
      */
-    connectionsByKey: z.record(
-      z.string(),
-      z.object({
-        subscriptionType: StreamSubscriptionType,
-        connectedAtOffset: z.number().int().min(0),
-        subscriber: StreamSubscriberDescriptor.optional(),
-      }),
-    ),
+    connectionsByKey: z
+      .record(
+        z.string(),
+        z.object({
+          subscriptionType: StreamSubscriptionType,
+          connectedAtOffset: z.number().int().min(0),
+          subscriber: StreamSubscriberDescriptor.optional(),
+        }),
+      )
+      .default({}),
   }),
-  initialState: {
-    projectId: null,
-    path: "uninitialized",
-    createdAt: "uninitialized",
-    incarnationId: "uninitialized",
-    metadata: {},
-    eventCount: 0,
-    maxOffset: 0,
-    childPaths: [],
-    paused: false,
-    pauseReason: null,
-    processorsBySlug: {},
-    configuredSubscribersByKey: {},
-    connectionsByKey: {},
-  },
   events: {
     "events.iterate.com/stream/created": {
       description: "Initializes the core reduced state for a stream.",

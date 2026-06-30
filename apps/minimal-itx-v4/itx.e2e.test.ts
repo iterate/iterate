@@ -4,7 +4,7 @@ import { describe, expect, test } from "vitest";
 import { newHttpBatchRpcSession, RpcTarget } from "capnweb";
 import { WebClient } from "@slack/web-api";
 import { z } from "zod";
-import { defineProcessorContract } from "./src/domains/streams/engine/shared/stream-processors.ts";
+import { defineProcessorContract } from "./src/domains/streams/stream-processor.ts";
 import { buildUrl, withItxSession } from "./test-helpers.ts";
 import type { ItxWebSocketMessage } from "./test-helpers.ts";
 import type { UnauthenticatedItx } from "./src/types.ts";
@@ -14,7 +14,7 @@ import type { WorkerRef } from "./src/types.ts";
 import {
   StreamProcessor,
   type StreamProcessorSnapshot,
-} from "./src/domains/streams/engine/stream-processor.ts";
+} from "./src/domains/streams/stream-processor.ts";
 
 const PROJECT_WORKER_FORWARDED_EVENT_TYPE = "events.iterate.test/project-worker-forwarded";
 const AGENT_WEB_MESSAGE_SENT_TYPE = "events.iterate.com/agent/web-message-sent";
@@ -30,7 +30,6 @@ const ProjectWorkerForwardingProbeContract = defineProcessorContract({
     childPaths: z.array(z.string()).default([]),
     markers: z.array(z.string()).default([]),
   }),
-  initialState: { childPaths: [], markers: [] },
   events: {
     [PROJECT_WORKER_FORWARDED_EVENT_TYPE]: {
       payloadSchema: z.object({

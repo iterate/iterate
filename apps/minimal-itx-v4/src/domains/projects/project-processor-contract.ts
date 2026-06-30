@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { defineProcessorContract } from "../streams/engine/shared/stream-processors.ts";
-import { CoreProcessorContract } from "../streams/engine/processors/core/contract.ts";
+import { defineProcessorContract } from "../streams/stream-processor.ts";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
 
 export const ProjectProcessorContract = defineProcessorContract({
@@ -17,7 +17,6 @@ export const ProjectProcessorContract = defineProcessorContract({
       .default(null),
     created: z.boolean().default(false),
   }),
-  initialState: { createRequest: null, created: false },
   events: {
     "events.iterate.com/project/create-requested": {
       description: "A project creation was requested.",

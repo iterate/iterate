@@ -1,10 +1,11 @@
 import {
   StreamProcessor,
   type StreamProcessorConstructorArgs,
-} from "../streams/engine/stream-processor.ts";
+} from "../streams/stream-processor.ts";
 import { normalizePath } from "../durable-object-names.ts";
 import type {
   CapabilityProvidedPayload,
+  CapabilityRecord,
   ItxCapabilityHost,
   JsonValue,
   RevokeCapabilityInput,
@@ -15,7 +16,7 @@ import { sha256Hex } from "../workers/utils.ts";
 import { WorkerRef as WorkerRefSchema } from "../workers/schemas.ts";
 import type { WorkerRunner } from "../workers/worker-runner.ts";
 import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
-import { ItxProcessorContract, type CapabilityRecord } from "./itx-processor-contract.ts";
+import { ItxProcessorContract } from "./itx-processor-contract.ts";
 
 export type ProvideCapabilityInput = Parameters<ItxCapabilityHost["provideCapability"]>[0];
 export type RunScriptResult = Awaited<ReturnType<ItxCapabilityHost["runScript"]>>;

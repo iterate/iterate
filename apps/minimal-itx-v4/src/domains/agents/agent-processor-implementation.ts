@@ -1,4 +1,4 @@
-import { StreamProcessor } from "../streams/engine/stream-processor.ts";
+import { StreamProcessor } from "../streams/stream-processor.ts";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
 
 const FAUX_LLM_DEBOUNCE_MS = 1_000;

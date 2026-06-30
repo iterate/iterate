@@ -2,8 +2,8 @@ import { DurableObjectNameCodec, type DurableObjectAddress } from "../durable-ob
 import {
   CoreProcessorContract,
   type ConfiguredStreamSubscriber,
-} from "./engine/processors/core/contract.ts";
-import { buildEvent } from "./engine/shared/stream-processors.ts";
+} from "./core-processor-contract.ts";
+import { buildEvent } from "./build-event.ts";
 
 /**
  * Stream capabilities expose `.at(relativePath)` to code that should stay

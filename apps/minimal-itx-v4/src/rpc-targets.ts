@@ -42,6 +42,7 @@ import type {
   StatelessWorkerRef,
   Stream,
   StreamCollection,
+  StreamSubscriptionHandle,
   UnauthenticatedItx,
   WorkerCapability,
   WorkerCollection,
@@ -66,11 +67,15 @@ export class StreamRpcTarget extends RpcTarget implements Stream {
     );
   }
 
-  append(...events: Parameters<Stream["append"]>) {
+  // Keep this forwarding surface pinned to the public `Stream` contract.
+  // Without explicit return annotations TypeScript infers through the generated
+  // DurableObjectStub<StreamDurableObject> type and can chase the DO's internal
+  // core-processor/runtime-state implementation instead of the RPC API.
+  append(...events: Parameters<Stream["append"]>): ReturnType<Stream["append"]> {
     return this.durableObjectStub.append(...events);
   }
 
-  at(path: Parameters<Stream["at"]>[0]) {
+  at(path: Parameters<Stream["at"]>[0]): ReturnType<Stream["at"]> {
     return new StreamRpcTarget({
       auth: this.props.auth,
       projectId: this.props.projectId,
@@ -78,43 +83,39 @@ export class StreamRpcTarget extends RpcTarget implements Stream {
     });
   }
 
-  getEvent(args: Parameters<Stream["getEvent"]>[0]) {
+  getEvent(args: Parameters<Stream["getEvent"]>[0]): ReturnType<Stream["getEvent"]> {
     return this.durableObjectStub.getEvent(args);
   }
 
-  getEvents(args?: Parameters<Stream["getEvents"]>[0]) {
+  getEvents(args?: Parameters<Stream["getEvents"]>[0]): ReturnType<Stream["getEvents"]> {
     return this.durableObjectStub.getEvents(args);
   }
 
-  waitForEvent(args: Parameters<Stream["waitForEvent"]>[0]) {
+  waitForEvent(args: Parameters<Stream["waitForEvent"]>[0]): ReturnType<Stream["waitForEvent"]> {
     return this.durableObjectStub.waitForEvent(args);
   }
 
-  getProcessorRuntimeState(args: Parameters<Stream["getProcessorRuntimeState"]>[0]) {
+  getProcessorRuntimeState(
+    args: Parameters<Stream["getProcessorRuntimeState"]>[0],
+  ): ReturnType<Stream["getProcessorRuntimeState"]> {
     return this.durableObjectStub.getProcessorRuntimeState(args);
   }
 
-  runtimeState() {
+  runtimeState(): ReturnType<Stream["runtimeState"]> {
     return this.durableObjectStub.runtimeState();
   }
 
-  subscribe(args: Parameters<Stream["subscribe"]>[0]) {
-    return this.durableObjectStub.subscribe(
-      // The public Stream signature is the stable contract. Workers RPC stubs
-      // re-materialize that method through generated Durable Object types, so
-      // this cast keeps the forwarding layer from deep-instantiating both sides
-      // of the callback-heavy subscribe type.
-      args as Parameters<typeof this.durableObjectStub.subscribe>[0],
-    );
+  subscribe(args: Parameters<Stream["subscribe"]>[0]): ReturnType<Stream["subscribe"]> {
+    return this.durableObjectStub.subscribe(args);
   }
 
-  subscribeConfigured(args: Parameters<Stream["subscribe"]>[0] & { subscriptionKey: string }) {
+  subscribeConfigured(
+    args: Parameters<Stream["subscribe"]>[0] & { subscriptionKey: string },
+  ): Promise<StreamSubscriptionHandle> {
     if (this.props.auth.principal !== "trusted-internal") {
       throw new Error("subscribeConfigured requires trusted internal auth");
     }
-    return this.durableObjectStub.subscribeConfigured(
-      args as Parameters<typeof this.durableObjectStub.subscribeConfigured>[0],
-    );
+    return this.durableObjectStub.subscribeConfigured(args);
   }
 }
 
