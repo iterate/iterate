@@ -71,7 +71,7 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
           });
         });
         return;
-      case "events.iterate.com/agents/user-message-received":
+      case "events.iterate.com/agent/user-message-received":
         blockProcessorWhile(async () => {
           await append({
             type: "events.iterate.com/agent/input-added",
@@ -162,7 +162,7 @@ function fauxResponseScript(input: string): string {
   return `
     async (itx) => {
       await itx.agent.stream.append({
-        type: "events.iterate.com/agents/web-message-sent",
+        type: "events.iterate.com/agent/web-message-sent",
         payload: { message: ${JSON.stringify(response)} },
       });
     }

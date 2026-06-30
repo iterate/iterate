@@ -1,9 +1,12 @@
 /// <reference types="@cloudflare/workers-types" />
 /// <reference path="./worker-configuration.d.ts" />
 
-import { describe, expectTypeOf, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { z } from "zod";
-import { defineProcessorContract } from "./src/domains/streams/engine/shared/stream-processors.ts";
+import {
+  buildEvent,
+  defineProcessorContract,
+} from "./src/domains/streams/engine/shared/stream-processors.ts";
 import type { StreamEvent } from "./src/types.ts";
 import { StreamProcessor } from "./src/domains/streams/engine/stream-processor.ts";
 
@@ -74,6 +77,127 @@ describe("Cloudflare Durable Object RPC types", () => {
 });
 
 describe("stream processor type helpers", () => {
+  it("buildEvent narrows catalog events even with wildcard consumes and emits", () => {
+    const DependencyContract = defineProcessorContract({
+      slug: "build-event-dependency",
+      version: "0.1.0",
+      description: "Dependency processor used to prove dependency event inference.",
+      stateSchema: z.object({}),
+      initialState: {},
+      events: {
+        "events.iterate.test/build-event/dependency-output": {
+          payloadSchema: z.object({ accepted: z.boolean() }),
+        },
+      },
+      consumes: [],
+      emits: ["events.iterate.test/build-event/dependency-output"],
+    });
+
+    const WildcardConsumesContract = defineProcessorContract({
+      slug: "build-event-wildcard-consumes",
+      version: "0.1.0",
+      description: "Wildcard consumer used to prove buildEvent stays catalog-bound.",
+      stateSchema: z.object({}),
+      initialState: {},
+      processorDeps: [DependencyContract],
+      events: {
+        "events.iterate.test/build-event/local-output": {
+          payloadSchema: z.object({ value: z.string() }),
+        },
+      },
+      consumes: ["*"],
+      emits: [
+        "events.iterate.test/build-event/dependency-output",
+        "events.iterate.test/build-event/local-output",
+      ],
+    });
+
+    const local = buildEvent({
+      contract: WildcardConsumesContract,
+      event: {
+        type: "events.iterate.test/build-event/local-output",
+        payload: { value: "ok" },
+      },
+    });
+    expectTypeOf(local.type).toEqualTypeOf<"events.iterate.test/build-event/local-output">();
+    expectTypeOf(local.payload.value).toMatchTypeOf<string>();
+    // @ts-expect-error local event payload does not include dependency fields
+    local.payload.accepted;
+
+    const dependency = buildEvent({
+      contract: WildcardConsumesContract,
+      event: {
+        type: "events.iterate.test/build-event/dependency-output",
+        payload: { accepted: true },
+      },
+    });
+    expectTypeOf(
+      dependency.type,
+    ).toEqualTypeOf<"events.iterate.test/build-event/dependency-output">();
+    expectTypeOf(dependency.payload.accepted).toMatchTypeOf<boolean>();
+    // @ts-expect-error dependency event payload does not include local fields
+    dependency.payload.value;
+
+    const StructuralWildcardEmitsContract = {
+      slug: "build-event-structural-wildcard-emits",
+      processorDeps: [DependencyContract],
+      events: {
+        "events.iterate.test/build-event/structural-local": {
+          payloadSchema: z.object({ label: z.string() }),
+        },
+      },
+      consumes: [] as const,
+      emits: ["*"] as const,
+    };
+
+    const structuralLocal = buildEvent({
+      contract: StructuralWildcardEmitsContract,
+      event: {
+        type: "events.iterate.test/build-event/structural-local",
+        payload: { label: "ok" },
+      },
+    });
+    expectTypeOf(
+      structuralLocal.type,
+    ).toEqualTypeOf<"events.iterate.test/build-event/structural-local">();
+    expectTypeOf(structuralLocal.payload.label).toMatchTypeOf<string>();
+
+    const structuralDependency = buildEvent({
+      contract: StructuralWildcardEmitsContract,
+      event: {
+        type: "events.iterate.test/build-event/dependency-output",
+        payload: { accepted: false },
+      },
+    });
+    expectTypeOf(
+      structuralDependency.type,
+    ).toEqualTypeOf<"events.iterate.test/build-event/dependency-output">();
+    expectTypeOf(structuralDependency.payload.accepted).toMatchTypeOf<boolean>();
+
+    if (false) {
+      buildEvent({
+        contract: WildcardConsumesContract,
+        // @ts-expect-error wildcard consumes does not make arbitrary events buildable
+        event: { type: "events.iterate.test/build-event/unknown", payload: {} },
+      });
+
+      buildEvent({
+        contract: WildcardConsumesContract,
+        event: {
+          type: "events.iterate.test/build-event/local-output",
+          // @ts-expect-error payload shape must match the selected event type
+          payload: { value: 123 },
+        },
+      });
+
+      buildEvent({
+        contract: StructuralWildcardEmitsContract,
+        // @ts-expect-error wildcard emits does not make arbitrary events buildable
+        event: { type: "events.iterate.test/build-event/not-owned", payload: {} },
+      });
+    }
+  });
+
   it("narrows hook append helpers to the processor emits contract", () => {
     const ToyProcessorContract = defineProcessorContract({
       slug: "toy",
@@ -143,5 +267,42 @@ describe("stream processor type helpers", () => {
     }
 
     void ToyProcessor;
+  });
+
+  it("rejects local event definitions that conflict with processor deps", () => {
+    const OwnerContract = defineProcessorContract({
+      slug: "event-owner",
+      version: "0.1.0",
+      description: "Owns the event type.",
+      stateSchema: z.object({}),
+      initialState: {},
+      events: {
+        "events.iterate.test/owned-once": {
+          payloadSchema: z.object({ owner: z.string() }),
+        },
+      },
+      consumes: [],
+      emits: ["events.iterate.test/owned-once"],
+    });
+
+    expect(() =>
+      defineProcessorContract({
+        slug: "event-shadow",
+        version: "0.1.0",
+        description: "Incorrectly shadows a dependency event type.",
+        stateSchema: z.object({}),
+        initialState: {},
+        processorDeps: [OwnerContract],
+        events: {
+          "events.iterate.test/owned-once": {
+            payloadSchema: z.object({ shadow: z.boolean() }),
+          },
+        },
+        consumes: ["events.iterate.test/owned-once"],
+        emits: [],
+      }),
+    ).toThrow(
+      'Processor "event-shadow" defines event "events.iterate.test/owned-once" that is already owned by processor dependency "event-owner".',
+    );
   });
 });

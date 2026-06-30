@@ -21,8 +21,12 @@
 
 import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "../stream-processor.ts";
 import type { ProcessorContractAnnouncement } from "../processors/core/contract.ts";
-import type { StreamSubscriptionHandle } from "../types.ts";
-import type { ProcessEventBatch, Stream, StreamEvent } from "../../../../types.ts";
+import type {
+  ProcessEventBatch,
+  Stream,
+  StreamEvent,
+  StreamSubscriptionHandle,
+} from "../../../../types.ts";
 
 type ConfiguredStream = Stream & {
   subscribeConfigured(input: {

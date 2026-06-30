@@ -5,13 +5,13 @@ import { itxEntrypointProps, itxEntrypointScopeCacheKey } from "../itx/utils.ts"
 import { projectEgressFetcher } from "../projects/utils.ts";
 import { WorkerRunner } from "../workers/worker-runner.ts";
 import type {
+  ProcessEventBatch,
   Stream,
   StreamEvent,
   StreamEventInput,
   StreamSubscriptionHandle,
   WorkerRef,
 } from "../../types.ts";
-import type { ProcessEventBatch } from "./engine/types.ts";
 import {
   StreamEvent as StreamEventSchema,
   StreamEventInput as StreamEventInputSchema,

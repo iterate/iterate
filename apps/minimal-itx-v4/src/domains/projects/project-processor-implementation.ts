@@ -1,8 +1,11 @@
 import { StreamProcessor } from "../streams/engine/stream-processor.ts";
-import { subscriptionConfiguredEvent } from "../streams/utils.ts";
+import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { PROJECT_REPO_PATH } from "../repos/utils.ts";
 import type { StreamEvent } from "../../types.ts";
 import { ProjectRpcTargetInternals, type ProjectRpcTarget } from "../../rpc-targets.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
+import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 
 type ProjectProcessorDeps = {
@@ -58,9 +61,12 @@ export class ProjectProcessor extends StreamProcessor<
         }
         blockProcessorWhile(async () => {
           await append(
-            subscriptionConfiguredEvent({
-              projectId: this.deps.itx.projectId,
-              path: "/",
+            buildDurableObjectProcessorSubscriptionConfiguredEvent({
+              durableObjectName: DurableObjectNameCodec.stringify({
+                projectId: this.deps.itx.projectId,
+                path: "/",
+              }),
+              processorSlug: ItxProcessorContract.slug,
               subscriberType: "itx",
             }),
           );
@@ -78,15 +84,19 @@ export class ProjectProcessor extends StreamProcessor<
       case "events.iterate.com/stream/child-stream-created": {
         if (!event.payload.childPath.startsWith("/agents/")) return;
         blockProcessorWhile(async () => {
+          const durableObjectName = DurableObjectNameCodec.stringify({
+            projectId: this.deps.itx.projectId,
+            path: event.payload.childPath,
+          });
           await this.deps.itx.streams.get(event.payload.childPath).append(
-            subscriptionConfiguredEvent({
-              projectId: this.deps.itx.projectId,
-              path: event.payload.childPath,
+            buildDurableObjectProcessorSubscriptionConfiguredEvent({
+              durableObjectName,
+              processorSlug: AgentProcessorContract.slug,
               subscriberType: "agent",
             }),
-            subscriptionConfiguredEvent({
-              projectId: this.deps.itx.projectId,
-              path: event.payload.childPath,
+            buildDurableObjectProcessorSubscriptionConfiguredEvent({
+              durableObjectName,
+              processorSlug: ItxProcessorContract.slug,
               subscriberType: "itx",
             }),
           );

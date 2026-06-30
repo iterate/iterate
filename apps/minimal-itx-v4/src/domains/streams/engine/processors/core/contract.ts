@@ -10,7 +10,7 @@
 // reconcile on presence facts list this contract in their `processorDeps`.
 
 import { z } from "zod";
-import type { GetProcessorRuntimeState } from "../../types.ts";
+import type { GetProcessorRuntimeState } from "../../../../../types.ts";
 import { defineProcessorContract } from "../../shared/stream-processors.ts";
 import type { DurableObjectAddress as DurableObjectAddressType } from "../../../../durable-object-names.ts";
 import { normalizePath } from "../../../../durable-object-names.ts";

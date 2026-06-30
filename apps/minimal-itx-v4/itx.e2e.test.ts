@@ -17,7 +17,7 @@ import {
 } from "./src/domains/streams/engine/stream-processor.ts";
 
 const PROJECT_WORKER_FORWARDED_EVENT_TYPE = "events.iterate.test/project-worker-forwarded";
-const AGENT_WEB_MESSAGE_SENT_TYPE = "events.iterate.com/agents/web-message-sent";
+const AGENT_WEB_MESSAGE_SENT_TYPE = "events.iterate.com/agent/web-message-sent";
 const AGENT_OUTPUT_ADDED_TYPE = "events.iterate.com/agent/output-added";
 const EGRESS_ECHO_URL = "https://postman-echo.com/get";
 const EGRESS_PROOF_HEADER = "x-itx-egress-proof";
@@ -1036,7 +1036,7 @@ describe("minimal itx v4", () => {
     const askEvents = await agent.stream.getEvents();
     expect(askEvents.map((event) => event.type)).toEqual(
       expect.arrayContaining([
-        "events.iterate.com/agents/user-message-received",
+        "events.iterate.com/agent/user-message-received",
         "events.iterate.com/agent/input-added",
         "events.iterate.com/agent/llm-request-scheduled",
         "events.iterate.com/agent/llm-request-requested",

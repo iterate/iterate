@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineProcessorContract } from "../streams/engine/shared/stream-processors.ts";
 import { CoreProcessorContract } from "../streams/engine/processors/core/contract.ts";
+import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
 
 export const ProjectProcessorContract = defineProcessorContract({
   slug: "project",
@@ -32,23 +33,6 @@ export const ProjectProcessorContract = defineProcessorContract({
         slug: z.string(),
       }),
     },
-    "events.iterate.com/repo/create-requested": {
-      description: "The project root repo should be created.",
-      payloadSchema: z.object({
-        projectId: z.string(),
-        path: z.string(),
-      }),
-    },
-    "events.iterate.com/repo/created": {
-      description: "A project repo was created.",
-      payloadSchema: z.object({
-        artifactName: z.string(),
-        defaultBranch: z.string(),
-        path: z.string(),
-        projectId: z.string(),
-        remote: z.string(),
-      }),
-    },
   },
   consumes: [
     "*",
@@ -57,7 +41,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/repo/created",
     "events.iterate.com/stream/child-stream-created",
   ],
-  processorDeps: [CoreProcessorContract],
+  processorDeps: [CoreProcessorContract, RepoProcessorContract],
   emits: [
     "events.iterate.com/project/created",
     "events.iterate.com/repo/create-requested",

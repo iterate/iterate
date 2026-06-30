@@ -20,7 +20,7 @@ import type {
   ProcessEventBatch,
   ProcessorRuntimeState,
   StreamSubscriptionHandle,
-} from "../../types.ts";
+} from "../../../../../types.ts";
 import {
   retainGetProcessorRuntimeState,
   retainProcessEventBatch,

@@ -1,6 +1,9 @@
 import { DurableObjectNameCodec, type DurableObjectAddress } from "../durable-object-names.ts";
-import type { Stream } from "../../types.ts";
-import type { ConfiguredStreamSubscriber } from "./engine/processors/core/contract.ts";
+import {
+  CoreProcessorContract,
+  type ConfiguredStreamSubscriber,
+} from "./engine/processors/core/contract.ts";
+import { buildEvent } from "./engine/shared/stream-processors.ts";
 
 /**
  * Stream capabilities expose `.at(relativePath)` to code that should stay
@@ -27,32 +30,71 @@ export function resolveStreamPath(basePath: string, streamPath: string): string 
   return segments.length === 0 ? "/" : `/${segments.join("/")}`;
 }
 
+type DurableObjectProcessorSubscriberType = Exclude<ConfiguredStreamSubscriber["type"], "worker">;
+
+export function durableObjectProcessorSubscriptionKey(input: {
+  durableObjectName: string;
+  processorSlug: string;
+}): string {
+  return `${input.durableObjectName}#${input.processorSlug}`;
+}
+
 /**
- * Processor subscriptions are represented as stream facts, not imperative host
- * state. Domain processors and RPC bootstrap code use this helper when they
- * need to attach a configured processor host to a stream while preserving the
- * same subscription identity scheme everywhere.
+ * Builds the public `events.iterate.com/stream/subscription-configured` fact
+ * for a processor hosted by one of this app's Durable Objects.
+ *
+ * This helper exists because that event has a deliberately involved payload:
+ * it must carry the opaque durable subscription key, a typed subscriber target
+ * (`agent`, `itx`, `project`, or `repo`), and the parsed Durable Object address
+ * the Stream Durable Object will later wake. The event itself remains the public
+ * interface: callers may append it directly, and this helper is only a
+ * convenience for the bootstrap paths that would otherwise duplicate the same
+ * shape in several places.
+ *
+ * Validation and trust checks do not live here. A caller that can append to a
+ * stream can always hand-write this event, so project/scope validation belongs
+ * in the Stream Durable Object's append/reconcile path. The helper only parses
+ * the target name and reuses the core processor contract via `buildEvent(...)`
+ * so ordinary call sites get the same payload typing and Zod validation as any
+ * other contract-owned event.
+ *
+ * The default `subscriptionKey` is `${durableObjectName}#${processorSlug}` and
+ * should be treated as opaque. `idempotencyKey` is an optional pass-through for
+ * unusual repair/debug flows; normal bootstrap call sites intentionally omit it
+ * so repeated configuration appends remain visible in the event log while
+ * debugging failed subscription setup. The subscriber payload shape is likely
+ * to change again as stream subscriptions settle, so keep new subscription
+ * setup code funneled through this helper unless it is intentionally testing
+ * hand-authored public events.
  */
-export function subscriptionConfiguredEvent(input: {
-  address?: DurableObjectAddress;
-  projectId: string | null;
-  path: string;
-  subscriberType: Exclude<ConfiguredStreamSubscriber["type"], "worker">;
+export function buildDurableObjectProcessorSubscriptionConfiguredEvent(input: {
+  durableObjectName: string;
+  idempotencyKey?: string;
+  processorSlug: string;
+  subscriberType: DurableObjectProcessorSubscriberType;
+  subscriptionKey?: string;
 }) {
-  const address = input.address ?? {
-    projectId: input.projectId,
-    path: input.path,
-    props: {},
-  };
-  const durableObjectName = DurableObjectNameCodec.stringify(address, { allowNullProjectId: true });
-  return {
-    type: "events.iterate.com/stream/subscription-configured" as const,
-    payload: {
-      subscriptionKey: `${input.subscriberType}:${durableObjectName}`,
-      subscriber: {
-        address,
-        type: input.subscriberType,
+  const address = DurableObjectNameCodec.parse(input.durableObjectName, {
+    allowNullProjectId: true,
+  }) satisfies DurableObjectAddress;
+
+  return buildEvent({
+    contract: CoreProcessorContract,
+    event: {
+      type: "events.iterate.com/stream/subscription-configured",
+      ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
+      payload: {
+        subscriptionKey:
+          input.subscriptionKey ??
+          durableObjectProcessorSubscriptionKey({
+            durableObjectName: input.durableObjectName,
+            processorSlug: input.processorSlug,
+          }),
+        subscriber: {
+          address,
+          type: input.subscriberType,
+        },
       },
     },
-  } satisfies Parameters<Stream["append"]>[0];
+  });
 }

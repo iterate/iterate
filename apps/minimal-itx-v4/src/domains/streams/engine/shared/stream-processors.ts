@@ -520,6 +520,10 @@ export function buildEvent<
  * - `initialState`, when present, must be valid input for `stateSchema`;
  * - every string in `consumes` and `emits` must resolve against local `events`
  *   plus `processorDeps`;
+ * - local `events` must not redefine an event already owned by a
+ *   `processorDeps` contract. Event ownership is intentionally one processor
+ *   deep: a processor can depend on another owner, but it cannot shadow that
+ *   owner's public event type with a second payload schema.
  * - `consumes` and `emits` are contextually typed as the resolved event string
  *   union, so editors can autocomplete event types from owned events and
  *   processor deps while still preserving the literal tuple for reducer and
@@ -560,6 +564,7 @@ export function defineProcessorContract<
   emits: Emits;
 };
 export function defineProcessorContract(contract: unknown) {
+  assertNoLocalProcessorDepEventConflicts(contract);
   return contract;
 }
 
@@ -745,6 +750,29 @@ function getDependencyEvents(dependency: unknown): EventCatalog | undefined {
   }
 
   return undefined;
+}
+
+function assertNoLocalProcessorDepEventConflicts(contract: unknown): void {
+  if (typeof contract !== "object" || contract === null || !("events" in contract)) return;
+  if (!isEventCatalog(contract.events)) return;
+
+  const processorSlug = getProcessorSlug(contract);
+  const processorDeps =
+    "processorDeps" in contract && Array.isArray(contract.processorDeps)
+      ? contract.processorDeps
+      : [];
+
+  for (const dependency of processorDeps) {
+    const dependencyEvents = getDependencyEvents(dependency);
+    if (dependencyEvents === undefined) continue;
+
+    for (const type of Object.keys(contract.events)) {
+      if (!Object.prototype.hasOwnProperty.call(dependencyEvents, type)) continue;
+      throw new Error(
+        `Processor "${processorSlug}" defines event "${type}" that is already owned by processor dependency "${getProcessorSlug(dependency)}".`,
+      );
+    }
+  }
 }
 
 function isEventCatalog(value: unknown): value is EventCatalog {

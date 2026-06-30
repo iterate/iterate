@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { defineProcessorContract } from "../streams/engine/shared/stream-processors.ts";
+import { CoreProcessorContract } from "../streams/engine/processors/core/contract.ts";
 
 export const RepoProcessorContract = defineProcessorContract({
   slug: "repo",
@@ -37,11 +38,8 @@ export const RepoProcessorContract = defineProcessorContract({
         remote: z.string(),
       }),
     },
-    "events.iterate.com/stream/created": {
-      description: "The repo stream exists.",
-      payloadSchema: z.looseObject({}),
-    },
   },
+  processorDeps: [CoreProcessorContract],
   consumes: [
     "events.iterate.com/repo/create-requested",
     "events.iterate.com/repo/created",

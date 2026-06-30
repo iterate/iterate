@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { defineProcessorContract } from "../streams/engine/shared/stream-processors.ts";
+import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
@@ -42,7 +43,7 @@ export const AgentProcessorContract = defineProcessorContract({
       description: "The agent was created.",
       payloadSchema: z.looseObject({}),
     },
-    "events.iterate.com/agents/user-message-received": {
+    "events.iterate.com/agent/user-message-received": {
       description: "The web UI sent a user message to the agent.",
       payloadSchema: z.looseObject({
         content: z.string(),
@@ -80,37 +81,23 @@ export const AgentProcessorContract = defineProcessorContract({
         requestId: z.string().optional(),
       }),
     },
-    "events.iterate.com/agents/web-message-sent": {
+    "events.iterate.com/agent/web-message-sent": {
       description: "A visible agent message was sent to the web UI.",
       payloadSchema: z.looseObject({
         message: z.string(),
       }),
     },
-    "events.iterate.com/itx/script-execution-requested": {
-      description: "A codemode block should run in this agent ITX context.",
-      payloadSchema: z.looseObject({
-        code: z.string(),
-        executionId: z.string(),
-      }),
-    },
-    "events.iterate.com/itx/script-execution-completed": {
-      description: "A codemode block finished in this agent ITX context.",
-      payloadSchema: z.looseObject({
-        error: z.string().optional(),
-        executionId: z.string(),
-        result: z.unknown().optional(),
-      }),
-    },
   },
+  processorDeps: [ItxProcessorContract],
   consumes: [
     "events.iterate.com/agent/create-requested",
     "events.iterate.com/agent/created",
-    "events.iterate.com/agents/user-message-received",
+    "events.iterate.com/agent/user-message-received",
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/llm-request-scheduled",
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/output-added",
-    "events.iterate.com/agents/web-message-sent",
+    "events.iterate.com/agent/web-message-sent",
     "events.iterate.com/itx/script-execution-requested",
     "events.iterate.com/itx/script-execution-completed",
   ],

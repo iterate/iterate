@@ -18,9 +18,14 @@ import {
 } from "./domains/itx/utils.ts";
 import { type ProvideCapabilityInput } from "./domains/itx/itx-processor-implementation.ts";
 import { ProjectEgressRpcTarget } from "./domains/projects/egress.ts";
+import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
+import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
 import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "./domains/repos/utils.ts";
-import { resolveStreamPath, subscriptionConfiguredEvent } from "./domains/streams/utils.ts";
+import {
+  buildDurableObjectProcessorSubscriptionConfiguredEvent,
+  resolveStreamPath,
+} from "./domains/streams/utils.ts";
 import { WorkerRef as WorkerRefSchema } from "./domains/workers/schemas.ts";
 import { WorkerRunner } from "./domains/workers/worker-runner.ts";
 import type {
@@ -139,6 +144,10 @@ function rootStream(props: { auth: ItxAuth; projectId: string | null }) {
   });
 }
 
+function streamDurableObjectName(props: { projectId: string | null; path: string }) {
+  return DurableObjectNameCodec.stringify(props, { allowNullProjectId: true });
+}
+
 async function requestRepoCreate(input: {
   auth: ItxAuth;
   path: string;
@@ -151,9 +160,9 @@ async function requestRepoCreate(input: {
     projectId: input.projectId,
   });
   const [, createRequested] = await stream.append(
-    subscriptionConfiguredEvent({
-      projectId: input.projectId,
-      path,
+    buildDurableObjectProcessorSubscriptionConfiguredEvent({
+      durableObjectName: streamDurableObjectName({ projectId: input.projectId, path }),
+      processorSlug: RepoProcessorContract.slug,
       subscriberType: "repo",
     }),
     {
@@ -294,7 +303,7 @@ class AgentRpcTarget extends RpcTarget implements Agent {
 
   async sendMessage(message: string) {
     const [event] = await this.stream.append({
-      type: "events.iterate.com/agents/user-message-received",
+      type: "events.iterate.com/agent/user-message-received",
       payload: { content: message, origin: "web" },
     });
     return event;
@@ -304,7 +313,7 @@ class AgentRpcTarget extends RpcTarget implements Agent {
     const sent = await this.sendMessage(input.message);
     return await this.stream.waitForEvent({
       afterOffset: sent.offset,
-      eventTypes: ["events.iterate.com/agents/web-message-sent"],
+      eventTypes: ["events.iterate.com/agent/web-message-sent"],
       timeoutMs: 45_000,
     });
   }
@@ -453,14 +462,17 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
     });
 
     const [, , createRequested] = await stream.append(
-      subscriptionConfiguredEvent({
-        projectId: args.projectId,
-        path: "/",
+      buildDurableObjectProcessorSubscriptionConfiguredEvent({
+        durableObjectName: streamDurableObjectName({ projectId: args.projectId, path: "/" }),
+        processorSlug: ProjectProcessorContract.slug,
         subscriberType: "project",
       }),
-      subscriptionConfiguredEvent({
-        projectId: args.projectId,
-        path: PROJECT_REPO_PATH,
+      buildDurableObjectProcessorSubscriptionConfiguredEvent({
+        durableObjectName: streamDurableObjectName({
+          projectId: args.projectId,
+          path: PROJECT_REPO_PATH,
+        }),
+        processorSlug: RepoProcessorContract.slug,
         subscriberType: "repo",
       }),
       {
