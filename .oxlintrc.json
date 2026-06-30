@@ -40,7 +40,7 @@
     "**/*ignoreme*"
   ],
   "jsPlugins": [
-    "./oxlint-plugin-iterate.js",
+    "./lint/oxlint-plugin-iterate.ts",
     "@tanstack/eslint-plugin-router",
     "eslint-plugin-codegen",
     "eslint-plugin-eslint-comments",
@@ -119,10 +119,11 @@
     "iterate/drizzle-conventions": "error",
     "iterate/no-raw-durable-object-binding-access": "error",
     "iterate/no-implied-eval": "error",
-    "iterate/stream-processor-override-args": "error",
     "iterate/no-single-use-helpers": "error",
     "iterate/colocate-single-use-types": "error",
     "iterate/no-single-use-types": "error",
+    "iterate/typed-no-floating-promises": "off",
+    "iterate/mechanical-class-impl": "off",
     "prefer-const": "off",
     "iterate/prefer-const": "error",
     "iterate/isolated-codemode": [
@@ -267,6 +268,12 @@
         "iterate/no-vi-mock": "error",
         "iterate/prefer-object-property-match": "error",
         "iterate/prefer-test-over-it": "error"
+      }
+    },
+    {
+      "files": ["apps/minimal-itx-v4/src/rpc-targets.ts"],
+      "rules": {
+        "iterate/mechanical-class-impl": "error"
       }
     }
   ]
