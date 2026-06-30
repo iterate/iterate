@@ -330,7 +330,7 @@ class SecretRpcTarget extends RpcTarget implements Secret {
     return this.durableObjectStub.describe();
   }
 
-  fetch(request: Request) {
+  fetch(request: Parameters<Secret["fetch"]>[0]) {
     return this.durableObjectStub.fetch(request);
   }
 
