@@ -2,11 +2,15 @@ import { StreamProcessor } from "../streams/engine/stream-processor.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { PROJECT_REPO_PATH } from "../repos/utils.ts";
 import type { StreamEvent } from "../../types.ts";
-import { ProjectRpcTargetInternals, type ProjectRpcTarget } from "../../rpc-targets.ts";
+import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
+
+const PROJECT_WORKER_READY_ATTEMPTS = 20;
+const PROJECT_WORKER_READY_RETRY_MS = 100;
+const PROJECT_WORKER_READY_URL = "https://minimal-itx-v4.localhost/__itx_project_ready";
 
 type ProjectProcessorDeps = {
   itx: ProjectRpcTarget;
@@ -113,7 +117,7 @@ export class ProjectProcessor extends StreamProcessor<
           return;
         }
         blockProcessorWhile(async () => {
-          await this.deps.itx[ProjectRpcTargetInternals].ensureDefaultWorkerLoaded();
+          await waitForDefaultProjectWorker(this.deps.itx);
           await append({
             type: "events.iterate.com/project/created",
             idempotencyKey: `project-created:${this.deps.itx.projectId}`,
@@ -127,4 +131,21 @@ export class ProjectProcessor extends StreamProcessor<
         return;
     }
   }
+}
+
+async function waitForDefaultProjectWorker(itx: ProjectRpcTarget): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= PROJECT_WORKER_READY_ATTEMPTS; attempt += 1) {
+    try {
+      await itx.worker.fetch(new Request(PROJECT_WORKER_READY_URL));
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt === PROJECT_WORKER_READY_ATTEMPTS) break;
+      await new Promise((resolve) => setTimeout(resolve, PROJECT_WORKER_READY_RETRY_MS));
+    }
+  }
+  throw new Error("Default project worker did not become ready before project/created.", {
+    cause: lastError,
+  });
 }

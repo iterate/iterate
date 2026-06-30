@@ -7,7 +7,6 @@ export const AgentProcessorContract = defineProcessorContract({
   version: "0.1.0",
   description: "Tiny faux-agent loop for minimal ITX v4.",
   stateSchema: z.object({
-    created: z.boolean().default(false),
     inputs: z
       .array(
         z.object({
@@ -28,21 +27,12 @@ export const AgentProcessorContract = defineProcessorContract({
     scriptExecutionsCompleted: z.array(z.string()).default([]),
   }),
   initialState: {
-    created: false,
     inputs: [],
     outputs: [],
     scheduledRequests: {},
     scriptExecutionsCompleted: [],
   },
   events: {
-    "events.iterate.com/agent/create-requested": {
-      description: "An agent creation was requested.",
-      payloadSchema: z.looseObject({}),
-    },
-    "events.iterate.com/agent/created": {
-      description: "The agent was created.",
-      payloadSchema: z.looseObject({}),
-    },
     "events.iterate.com/agent/user-message-received": {
       description: "The web UI sent a user message to the agent.",
       payloadSchema: z.looseObject({
@@ -90,8 +80,6 @@ export const AgentProcessorContract = defineProcessorContract({
   },
   processorDeps: [ItxProcessorContract],
   consumes: [
-    "events.iterate.com/agent/create-requested",
-    "events.iterate.com/agent/created",
     "events.iterate.com/agent/user-message-received",
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/llm-request-scheduled",
@@ -102,7 +90,6 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/itx/script-execution-completed",
   ],
   emits: [
-    "events.iterate.com/agent/created",
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/llm-request-scheduled",
     "events.iterate.com/agent/llm-request-requested",

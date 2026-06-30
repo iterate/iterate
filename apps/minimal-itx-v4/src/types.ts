@@ -66,14 +66,12 @@ export interface AgentItx extends Project {
 
 /** Agent catalog within one project. */
 export interface AgentCollection {
-  create(input: { path: string }): Promise<StreamEvent>;
   get(path: string): Agent;
 }
 
 /** Agent capability surface for message loops and agent-local dynamic tools. */
 export interface Agent extends ItxCapabilityHost {
   stream: Stream;
-  create(): Promise<StreamEvent>;
   sendMessage(message: string): Promise<StreamEvent>;
   ask(input: { message: string }): Promise<StreamEvent>;
   whoami(): string;

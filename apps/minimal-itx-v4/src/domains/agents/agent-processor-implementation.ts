@@ -11,8 +11,6 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
     state,
   }: Parameters<StreamProcessor<typeof AgentProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
-      case "events.iterate.com/agent/created":
-        return { ...state, created: true };
       case "events.iterate.com/agent/input-added":
         return {
           ...state,
@@ -62,15 +60,6 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
     runInBackground,
   }: Parameters<StreamProcessor<typeof AgentProcessorContract>["processEvent"]>[0]): undefined {
     switch (event.type) {
-      case "events.iterate.com/agent/create-requested":
-        blockProcessorWhile(async () => {
-          await append({
-            type: "events.iterate.com/agent/created",
-            idempotencyKey: `agent-created:${event.offset}`,
-            payload: {},
-          });
-        });
-        return;
       case "events.iterate.com/agent/user-message-received":
         blockProcessorWhile(async () => {
           await append({

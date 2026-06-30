@@ -247,10 +247,6 @@ class AgentCollectionRpcTarget extends RpcTarget implements AgentCollection {
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  async create(input: Parameters<AgentCollection["create"]>[0]) {
-    return await this.get(input.path).create();
-  }
-
   get(path: string) {
     return new AgentRpcTarget({
       auth: this.props.auth,
@@ -285,19 +281,6 @@ class AgentRpcTarget extends RpcTarget implements Agent {
       auth: this.props.auth,
       projectId: this.props.projectId,
       path: this.props.path,
-    });
-  }
-
-  async create() {
-    const [requested] = await this.stream.append({
-      type: "events.iterate.com/agent/create-requested",
-      idempotencyKey: `agent-create-requested:${this.props.projectId}:${this.props.path}`,
-      payload: {},
-    });
-    return await this.stream.waitForEvent({
-      afterOffset: requested.offset - 1,
-      eventTypes: ["events.iterate.com/agent/created"],
-      timeoutMs: 30_000,
     });
   }
 
@@ -502,11 +485,6 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
 
 type ProjectRpcTargetProps = { auth: ItxAuth; ctx: CfExecutionContext; projectId: string };
 
-// Internal affordances used by domain hosts that intentionally inject a
-// ProjectRpcTarget as a capability dependency. Keeping them behind a symbol
-// prevents accidental exposure on the public Cap'n Web surface.
-export const ProjectRpcTargetInternals = Symbol("ProjectRpcTargetInternals");
-
 export class ProjectRpcTarget extends RpcTarget implements Project {
   constructor(readonly props: ProjectRpcTargetProps) {
     super();
@@ -607,33 +585,6 @@ export class ProjectRpcTarget extends RpcTarget implements Project {
     // `project.worker` is only a convenience alias for the default repo-backed
     // stateless worker. The general API is `project.workers.get(ref)`.
     return this.workers.get<ProjectWorker>(defaultProjectWorkerRef());
-  }
-
-  get [ProjectRpcTargetInternals]() {
-    return {
-      ensureDefaultWorkerLoaded: async () => {
-        const worker = await this.#defaultProjectWorker();
-        if (typeof worker.fetch !== "function") {
-          throw new Error("Default project worker does not expose fetch().");
-        }
-      },
-    };
-  }
-
-  #defaultProjectWorker() {
-    const itxScope = itxEntrypointProps({
-      path: "/",
-      projectId: this.props.projectId,
-    });
-    return new WorkerRunner({
-      bindings: {
-        ITX: this.props.ctx.exports.ItxEntrypoint({ props: itxScope }),
-      },
-      globalOutbound: projectEgressFetcher(this.props.ctx.exports, this.props.projectId),
-      loader: env.LOADER,
-      projectId: this.props.projectId,
-      workerScopeKey: itxEntrypointScopeCacheKey(itxScope),
-    }).getStatelessEntrypoint<ProjectWorker>(defaultProjectWorkerRef());
   }
 }
 
