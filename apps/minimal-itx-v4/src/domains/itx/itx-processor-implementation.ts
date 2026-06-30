@@ -1,0 +1,422 @@
+import {
+  StreamProcessor,
+  type StreamProcessorConstructorArgs,
+} from "../streams/stream-processor.ts";
+import { normalizePath } from "../durable-object-names.ts";
+import type {
+  CapabilityProvidedPayload,
+  CapabilityDescription,
+  CapabilityRecord,
+  ItxCapabilityHost,
+  JsonValue,
+  RevokeCapabilityInput,
+  StatelessDynamicWorkerRef,
+  StreamEvent,
+} from "../../types.ts";
+import { sha256Hex } from "../workers/utils.ts";
+import { DynamicWorkerRef as DynamicWorkerRefSchema } from "../workers/schemas.ts";
+import type { DynamicWorkerRunner } from "../workers/worker-runner.ts";
+import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
+import { ItxProcessorContract } from "./itx-processor-contract.ts";
+import { McpClientRpcTarget, invokeMcpCapability } from "./mcp-client-rpc-target.ts";
+import { OpenApiRpcTarget, invokeOpenApiCapability } from "./openapi-rpc-target.ts";
+
+export type ProvideCapabilityInput = Parameters<ItxCapabilityHost["provideCapability"]>[0];
+export type RunScriptResult = Awaited<ReturnType<ItxCapabilityHost["runScript"]>>;
+
+type CompletedPayload = {
+  error?: string;
+  executionId: string;
+  result?: JsonValue;
+};
+const INVALID_PATH_SEGMENTS = new Set([
+  "__proto__",
+  "constructor",
+  "prototype",
+  "then",
+  "apply",
+  "call",
+  "bind",
+  "dup",
+  "onRpcBroken",
+]);
+
+const samePath = (a: string[], b: string[]) =>
+  a.length === b.length && a.every((segment, index) => segment === b[index]);
+
+const liveKey = (path: string[]) => JSON.stringify(path);
+
+function assertCapabilityPath(path: string[]) {
+  if (!Array.isArray(path) || path.length === 0) {
+    throw new Error("capability path must contain at least one segment");
+  }
+  for (const segment of path) {
+    if (
+      typeof segment !== "string" ||
+      !/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(segment) ||
+      INVALID_PATH_SEGMENTS.has(segment)
+    ) {
+      throw new Error(`invalid capability path segment "${String(segment)}"`);
+    }
+  }
+}
+
+function json(value: unknown): JsonValue {
+  if (value === undefined) return null;
+  return JSON.parse(JSON.stringify(value)) as JsonValue;
+}
+
+function resolveLongestPrefix(records: CapabilityRecord[], path: string[]) {
+  let best: { record: CapabilityRecord; rest: string[] } | null = null;
+  for (const record of records) {
+    const matches =
+      record.path.length <= path.length &&
+      record.path.every((segment, index) => segment === path[index]);
+    if (matches && (!best || record.path.length > best.record.path.length)) {
+      best = { record, rest: path.slice(record.path.length) };
+    }
+  }
+  return best;
+}
+
+export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
+  readonly contract = ItxProcessorContract;
+  #egress: Fetcher;
+  #path: string;
+  #workerRunner: DynamicWorkerRunner;
+  #liveCapabilities = new Map<string, LiveCapability>();
+
+  constructor(
+    args: StreamProcessorConstructorArgs<typeof ItxProcessorContract, object> & {
+      egress: Fetcher;
+      path: string;
+      workerRunner: DynamicWorkerRunner;
+    },
+  ) {
+    super(args);
+    this.#egress = args.egress;
+    this.#path = normalizePath(args.path);
+    this.#workerRunner = args.workerRunner;
+  }
+
+  protected override reduce({
+    event,
+    state,
+  }: Parameters<StreamProcessor<typeof ItxProcessorContract>["reduce"]>[0]) {
+    switch (event.type) {
+      case "events.iterate.com/itx/capability-provided": {
+        const row: CapabilityRecord = {
+          ...event.payload,
+          // The stream offset is the provision identity. It is stable,
+          // observable, and already exists because the append event is the
+          // commit point for a mount. Handles use it to revoke exactly the
+          // mount they received, without introducing a second generated id.
+          providedAtOffset: event.offset,
+        };
+        const exists = state.capabilities.some((capability) => samePath(capability.path, row.path));
+        return {
+          ...state,
+          capabilities: exists
+            ? state.capabilities.map((capability) =>
+                samePath(capability.path, row.path) ? row : capability,
+              )
+            : [...state.capabilities, row],
+        };
+      }
+      case "events.iterate.com/itx/capability-revoked": {
+        const revoke = event.payload;
+        return {
+          ...state,
+          capabilities: state.capabilities.filter((capability) => {
+            if (!samePath(capability.path, revoke.path)) return true;
+            return (
+              revoke.providedAtOffset !== undefined &&
+              capability.providedAtOffset !== revoke.providedAtOffset
+            );
+          }),
+        };
+      }
+      case "events.iterate.com/itx/script-execution-requested":
+        return {
+          ...state,
+          pendingScriptExecutions: {
+            ...state.pendingScriptExecutions,
+            [event.payload.executionId]: true,
+          },
+        };
+      case "events.iterate.com/itx/script-execution-completed": {
+        const pendingScriptExecutions = { ...state.pendingScriptExecutions };
+        delete pendingScriptExecutions[event.payload.executionId];
+        return { ...state, pendingScriptExecutions };
+      }
+      default:
+        return state;
+    }
+  }
+
+  protected override processEvent({
+    event,
+    runInBackground,
+    state,
+  }: Parameters<StreamProcessor<typeof ItxProcessorContract>["processEvent"]>[0]): undefined {
+    if (event.type !== "events.iterate.com/itx/script-execution-requested") return;
+    if (state.pendingScriptExecutions[event.payload.executionId] !== true) return;
+    runInBackground(() =>
+      this.#executeScript({ code: event.payload.code, executionId: event.payload.executionId }),
+    );
+  }
+
+  async provideCapability(input: ProvideCapabilityInput) {
+    const { path } = input;
+    assertCapabilityPath(path);
+    const key = liveKey(path);
+    const previousLive = this.#liveCapabilities.get(key);
+    let record: CapabilityProvidedPayload;
+    if (input.type === "dynamic-worker") {
+      // Worker capabilities are durable recipes. `provideCapability()` is only
+      // allowed to validate the shape and append the record; it must not load the
+      // worker, touch Worker Loader, or create/abort a stateful facet. That keeps
+      // the stream append as the single commit point. Bad source, missing exports,
+      // or broken code now fail on first invocation, which is simpler than a
+      // provide-time "validation" path that can mutate runtime state before the
+      // capability-provided event exists.
+      const ref = DynamicWorkerRefSchema.parse(input.ref);
+      record = {
+        flattenNestedPath: input.flattenNestedPath === true ? true : undefined,
+        instructions: input.instructions,
+        path,
+        ref,
+        type: "dynamic-worker",
+        types: input.types,
+      };
+    } else if (input.type === "live") {
+      record = {
+        flattenNestedPath: input.flattenNestedPath === true ? true : undefined,
+        instructions: input.instructions,
+        path,
+        type: "live",
+        types: input.types,
+      };
+    } else if (input.type === "mcp") {
+      // MCP/OpenAPI are durable configs, but provideCapability also proves the
+      // remote is reachable and captures its current self-description. Passing
+      // explicit instructions/types overwrites the derived values.
+      const description = await describeMcpCapability(input, {
+        egress: this.#egress,
+      });
+      record = {
+        ...input,
+        instructions: input.instructions ?? description.instructions,
+        types: input.types ?? description.types,
+      };
+    } else {
+      // OpenAPI uses the same connect path for ad-hoc project.openapi.connect()
+      // and durable mounts, so the direct and mounted surfaces cannot drift.
+      const description = await describeOpenApiCapability(input, {
+        egress: this.#egress,
+      });
+      record = {
+        ...input,
+        instructions: input.instructions ?? description.instructions,
+        types: input.types ?? description.types,
+      };
+    }
+    const nextLive =
+      input.type === "live"
+        ? retainLiveCapabilityProvider(input.target, {
+            flattenNestedPath: input.flattenNestedPath === true,
+          })
+        : undefined;
+
+    let committedOffset: number;
+    try {
+      const [committed] = await this.stream.append({
+        type: "events.iterate.com/itx/capability-provided",
+        payload: record,
+      });
+      committedOffset = committed.offset;
+    } catch (error) {
+      nextLive?.dispose();
+      throw error;
+    }
+
+    // The append is the durable commit point. From here on, keep the ephemeral
+    // live-provider map aligned with the record that will fold from the stream.
+    if (nextLive === undefined) {
+      this.#liveCapabilities.delete(key);
+    } else {
+      this.#liveCapabilities.set(key, nextLive);
+    }
+    previousLive?.dispose();
+
+    await this.waitUntilEvent({ offset: committedOffset });
+    return { path, providedAtOffset: committedOffset };
+  }
+
+  async revokeCapability({ path, providedAtOffset }: RevokeCapabilityInput) {
+    assertCapabilityPath(path);
+    const current = this.state.capabilities.find((record) => samePath(record.path, path));
+    if (providedAtOffset !== undefined && current?.providedAtOffset !== providedAtOffset) {
+      return;
+    }
+    const key = liveKey(path);
+    const previousLive = this.#liveCapabilities.get(key);
+    const [committed] = await this.stream.append({
+      type: "events.iterate.com/itx/capability-revoked",
+      payload: {
+        path,
+        ...(providedAtOffset === undefined ? {} : { providedAtOffset }),
+      },
+    });
+    this.#liveCapabilities.delete(key);
+    previousLive?.dispose();
+    await this.waitUntilEvent({ offset: committed.offset });
+  }
+
+  async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
+    assertCapabilityPath(path);
+    const hit = resolveLongestPrefix(this.state.capabilities, path);
+    if (!hit) throw new Error(`no capability "${path.join(".")}"`);
+    if (hit.record.type === "dynamic-worker") {
+      // The mounted path is routing metadata only. The worker sees the remaining
+      // method path (`db.sql` -> `sql`) and its own DynamicWorkerRef path remains the ITX
+      // stream scope that supplies env.ITX.
+      return await this.#workerRunner.invokeCapability({
+        args,
+        flattenNestedPath: hit.record.flattenNestedPath === true,
+        path: hit.rest,
+        ref: hit.record.ref,
+      });
+    }
+    if (hit.record.type === "mcp") {
+      return await invokeMcpCapability({
+        config: hit.record,
+        deps: { egress: this.#egress },
+        path: hit.rest,
+        rpcArgs: args,
+      });
+    }
+    if (hit.record.type === "openapi") {
+      return await invokeOpenApiCapability({
+        config: hit.record,
+        deps: { egress: this.#egress },
+        path: hit.rest,
+        rpcArgs: args,
+      });
+    }
+    const live = this.#liveCapabilities.get(liveKey(hit.record.path));
+    if (!live) {
+      throw new Error(`capability "${hit.record.path.join(".")}" is offline`);
+    }
+    return await live.invoke(hit.rest, args);
+  }
+
+  describeCapabilities(): CapabilityDescription[] {
+    return this.state.capabilities.map((record) => ({
+      instructions: record.instructions,
+      path: record.path,
+      providedAtOffset: record.providedAtOffset,
+      type: record.type,
+      types: record.types,
+    }));
+  }
+
+  async runScript(code: string): Promise<RunScriptResult> {
+    const executionId = crypto.randomUUID();
+    const completed = this.#waitForScriptCompletion(executionId);
+    await this.stream.append({
+      type: "events.iterate.com/itx/script-execution-requested",
+      payload: { code, executionId },
+    });
+    const event = await completed;
+    const payload = event.payload as CompletedPayload;
+    if (payload.error !== undefined) throw new Error(String(payload.error));
+    return { completedEvent: event, executionId, result: payload.result ?? null };
+  }
+
+  async #waitForScriptCompletion(executionId: string) {
+    let completed: StreamEvent | undefined;
+    await this.waitUntilEvent({
+      predicate: (event) => {
+        if (event.type !== "events.iterate.com/itx/script-execution-completed") return false;
+        const payload = event.payload as CompletedPayload;
+        if (payload.executionId !== executionId) return false;
+        completed = event as StreamEvent;
+        return true;
+      },
+    });
+    if (!completed) throw new Error(`script execution "${executionId}" completed without an event`);
+    return completed;
+  }
+
+  async #executeScript(input: { code: string; executionId: string }) {
+    const complete = (payload: { error?: string; result?: unknown }) => {
+      const completionPayload: JsonValue =
+        payload.error !== undefined
+          ? { error: payload.error, executionId: input.executionId }
+          : {
+              executionId: input.executionId,
+              result: "result" in payload ? json(payload.result) : null,
+            };
+      return this.stream.append({
+        type: "events.iterate.com/itx/script-execution-completed",
+        payload: completionPayload,
+      });
+    };
+
+    try {
+      const worker = await this.#workerRunner.getStatelessEntrypoint<{ run(): Promise<unknown> }>(
+        await this.#scriptWorkerRef(input.code),
+      );
+      const result = await worker.run();
+      await complete({ result });
+    } catch (error) {
+      await complete({ error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  async #scriptWorkerRef(code: string): Promise<StatelessDynamicWorkerRef> {
+    const source = `
+      import { WorkerEntrypoint } from "cloudflare:workers";
+      const fn = ${code};
+      export class ScriptEntrypoint extends WorkerEntrypoint {
+        async run() {
+          const itx = await this.env.ITX.get();
+          return await fn(itx);
+        }
+      }
+    `;
+    // runScript is deliberately expressed as a stateless inline DynamicWorkerRef. That
+    // keeps script execution on the same DynamicWorkerRunner path as project workers
+    // and provided stateless capabilities; ITX adds only the journal events.
+    return {
+      path: this.#path,
+      source: {
+        mainModule: "main.js",
+        modules: { "main.js": source },
+        type: "inline",
+      },
+      entrypoint: "ScriptEntrypoint",
+      props: { scriptHash: await sha256Hex(code) },
+      type: "stateless",
+    };
+  }
+}
+
+type CapabilityConnectDeps = { egress: Fetcher };
+
+async function describeMcpCapability(
+  input: Extract<ProvideCapabilityInput, { type: "mcp" }>,
+  deps: CapabilityConnectDeps,
+) {
+  const target = await McpClientRpcTarget.connect(input, deps);
+  return await target.describe();
+}
+
+async function describeOpenApiCapability(
+  input: Extract<ProvideCapabilityInput, { type: "openapi" }>,
+  deps: CapabilityConnectDeps,
+) {
+  const target = await OpenApiRpcTarget.connect(input, deps);
+  return await target.describe();
+}

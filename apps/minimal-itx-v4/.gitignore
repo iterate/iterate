@@ -1,0 +1,4 @@
+.wrangler/
+.vitest-attachments/
+__screenshots__/
+worker-configuration.d.ts

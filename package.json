@@ -19,7 +19,7 @@
     "lint:check": "pnpm lint",
     "lint:fix": "oxlint . --fix",
     "test:oxlint-plugin": "pnpm --dir lint test",
-    "knip": "knip --workspace apps/os --workspace apps/semaphore --workspace apps/streams-example-app --workspace packages/shared",
+    "knip": "knip --workspace apps/os --workspace apps/semaphore --workspace apps/streams-example-app --workspace apps/minimal-itx-v4 --workspace packages/shared",
     "prepare": "is-ci || husky",
     "spec": "playwright test --config playwright.config.ts",
     "vitest": "pnpm --dir apps/os test",

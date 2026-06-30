@@ -1,0 +1,72 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "minimal-itx-v4",
+  "account_id": "376ef7ed81b0573f93524de763666c15",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-05-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "traces": {
+      "enabled": true,
+    },
+  },
+  "durable_objects": {
+    "bindings": [
+      // Domain objects own their domain workflows. ITX owns the dynamic capability host.
+      { "name": "ITX", "class_name": "ItxDurableObject" },
+      { "name": "PROJECT", "class_name": "ProjectDurableObject" },
+      { "name": "AGENT", "class_name": "AgentDurableObject" },
+      { "name": "REPO", "class_name": "RepoDurableObject" },
+      { "name": "SECRET", "class_name": "SecretDurableObject" },
+      { "name": "WORKER", "class_name": "StatefulWorkerDurableObject" },
+      // The real durable event log from apps/os — a context's capability table
+      // is the fold of one of these streams.
+      { "name": "STREAM", "class_name": "StreamDurableObject" },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ProjectDurableObject", "StreamDurableObject"],
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["RepoDurableObject"],
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["AgentDurableObject"],
+    },
+    {
+      "tag": "v4",
+      "new_sqlite_classes": ["ItxDurableObject"],
+    },
+    {
+      "tag": "v5",
+      "new_sqlite_classes": ["StatefulWorkerDurableObject"],
+    },
+    {
+      "tag": "v6",
+      "new_sqlite_classes": ["SecretDurableObject"],
+    },
+  ],
+  "artifacts": [
+    {
+      "binding": "ARTIFACTS",
+      "namespace": "minimal-itx-v3-repos",
+      "remote": true,
+    },
+  ],
+  "vars": {
+    "ARTIFACTS_ACCOUNT_ID": "376ef7ed81b0573f93524de763666c15",
+    "ARTIFACTS_NAMESPACE": "minimal-itx-v3-repos",
+    "SECRET_ENCRYPTION_KEY": "minimal-itx-v4-secret-encryption-key",
+  },
+  // Dynamic capabilities and codemode build and run workers from addresses at runtime.
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "dev": {
+    "port": 8791,
+  },
+}

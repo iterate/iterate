@@ -99,6 +99,29 @@ function makeStreamsExampleAppWorkspace(): WorkspaceConfig {
   };
 }
 
+function makeMinimalItxV4Workspace(): WorkspaceConfig {
+  return {
+    entry: [
+      "src/worker.ts!",
+      "vitest.config.ts",
+      "*.test.ts",
+      "*.e2e.test.ts",
+      "scripts/**/*.ts",
+      "tsconfig.wrangler-proof.json",
+    ],
+    project: [
+      "*.test.ts",
+      "*.e2e.test.ts",
+      "scripts/**/*.ts",
+      "src/**/*.ts!",
+      "test-helpers.ts",
+      "worker-configuration.d.ts",
+    ],
+    ignoreDependencies: ["cloudflare"],
+    ignoreBinaries: ["wrangler"],
+  };
+}
+
 function makeCloudflareTanStackAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   return {
     entry: ["alchemy.run.ts", "vite.config.ts", "scripts/router.ts", "src/worker.ts!"],
@@ -146,6 +169,7 @@ const config: KnipConfig = {
     "!apps/os",
     "!apps/semaphore",
     "!apps/streams-example-app",
+    "!apps/minimal-itx-v4",
     "packages/*",
     "!packages/shared",
   ],
@@ -157,6 +181,9 @@ const config: KnipConfig = {
     "apps/os/src/**": ["exports", "types"],
     "apps/os/e2e/test-support/**": ["exports", "types"],
     "apps/streams-example-app/src/lib/use-initial-tail-scroll.ts": ["types"],
+    "apps/minimal-itx-v4/src/domains/secrets/utils.ts": ["types"],
+    "apps/minimal-itx-v4/src/domains/streams/build-event.ts": ["types"],
+    "apps/minimal-itx-v4/src/domains/streams/stream-processor.ts": ["types"],
     // TanStack Start resolves the router factory by convention from the
     // entrypoint, so there is no direct import Knip can follow.
     "apps/semaphore/src/router.tsx": ["exports"],
@@ -171,6 +198,7 @@ const config: KnipConfig = {
     "apps/semaphore": makeSemaphoreCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/os": makeOsCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/streams-example-app": makeStreamsExampleAppWorkspace(),
+    "apps/minimal-itx-v4": makeMinimalItxV4Workspace(),
     "packages/shared": makeSharedWorkspace(),
   },
 };
