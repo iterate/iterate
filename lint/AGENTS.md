@@ -1,0 +1,1 @@
+When creating new rules for this repo, usually they should be committed and pushed to a branch _before_ fixing newfound violations on pre-existing code. This is because we want to use CI going red as a way for humans to evaluate whether the rule is useful or not.

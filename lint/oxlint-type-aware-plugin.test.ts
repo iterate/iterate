@@ -674,6 +674,104 @@ test("typed-no-floating-promises reports only unhandled promise-like expression 
   assert.doesNotMatch(output, /6:1/);
 });
 
+test("no-pointless-casts removes casts that do not affect typechecking", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/no-pointless-casts": "error",
+    },
+  });
+
+  fixture.write(
+    "casts.ts",
+    [
+      'const redundant = "hello" as string;',
+      "declare const maybe: string | number;",
+      "const needed: string = maybe as string;",
+      "export {};",
+      "",
+    ].join("\n"),
+  );
+
+  fixture.runOxlint(["casts.ts", "--fix"]);
+
+  assert.equal(
+    fixture.read("casts.ts"),
+    [
+      'const redundant = "hello";',
+      "declare const maybe: string | number;",
+      "const needed: string = maybe as string;",
+      "export {};",
+      "",
+    ].join("\n"),
+  );
+});
+
+test("no-pointless-casts tries whole chains before individual casts", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/no-pointless-casts": "error",
+    },
+  });
+
+  fixture.write(
+    "chains.ts",
+    [
+      "type Person = { name: string };",
+      'const literal = { name: "Misha" } as unknown as Person;',
+      "declare const raw: unknown;",
+      "const person = raw as unknown as Person;",
+      "person.name;",
+      "export {};",
+      "",
+    ].join("\n"),
+  );
+
+  fixture.runOxlint(["chains.ts", "--fix"]);
+
+  assert.equal(
+    fixture.read("chains.ts"),
+    [
+      "type Person = { name: string };",
+      'const literal = { name: "Misha" };',
+      "declare const raw: unknown;",
+      "const person = raw as Person;",
+      "person.name;",
+      "export {};",
+      "",
+    ].join("\n"),
+  );
+});
+
+test("no-pointless-casts keeps casts that suppress excess property diagnostics", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/no-pointless-casts": "error",
+    },
+  });
+
+  fixture.write(
+    "excess-properties.ts",
+    [
+      "type Named = { name: string };",
+      'const named: Named = { name: "Misha", extra: true } as Named;',
+      "export {};",
+      "",
+    ].join("\n"),
+  );
+
+  fixture.runOxlint(["excess-properties.ts", "--fix"]);
+
+  assert.equal(
+    fixture.read("excess-properties.ts"),
+    [
+      "type Named = { name: string };",
+      'const named: Named = { name: "Misha", extra: true } as Named;',
+      "export {};",
+      "",
+    ].join("\n"),
+  );
+});
+
 function getCallablePropertyNames(
   service: TypeAwareLintService,
   fileName: string,

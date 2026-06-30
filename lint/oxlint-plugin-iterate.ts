@@ -7,6 +7,7 @@ import type { Rule, Scope, SourceCode } from "eslint";
 import type { Program, Node } from "estree";
 
 import { mechanicalClassImplRule } from "./rules/mechanical-class-impl.ts";
+import { noPointlessCastsRule } from "./rules/no-pointless-casts.ts";
 import { tseslintRules } from "./rules/tseslint.ts";
 import type { StrictPlugin, StrictRule } from "./types.ts";
 
@@ -419,6 +420,7 @@ const plugin: StrictPlugin = {
     name: "iterate",
   },
   rules: {
+    "no-pointless-casts": noPointlessCastsRule,
     "no-capnweb-http-batch": {
       meta: {
         docs: {
