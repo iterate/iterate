@@ -4,10 +4,6 @@ import { StreamProcessor } from "../streams/stream-processor.ts";
 import { buildAgentLlmRequestBody, reduceAgentEvents } from "./agent-processor-implementation.ts";
 import { CloudflareAiProcessorContract } from "./cloudflare-ai-processor-contract.ts";
 
-export type AiLike = {
-  run(model: string, body: unknown): Promise<unknown>;
-};
-
 type LlmRequestRequestedEvent = Extract<
   ReturnType<typeof CloudflareAiProcessorContract.parseEvent>,
   { type: "events.iterate.com/agent/llm-request-requested" }
@@ -16,7 +12,7 @@ type LlmRequestRequestedEvent = Extract<
 export class CloudflareAiProcessor extends StreamProcessor<
   typeof CloudflareAiProcessorContract,
   {
-    ai: AiLike;
+    ai: { run(model: string, body: unknown): Promise<unknown> };
     readStreamEvents(): Promise<StreamEvent[]>;
   }
 > {

@@ -186,7 +186,7 @@ export function reduceAgentEvents(events: readonly StreamEvent[]): AgentState {
   return state;
 }
 
-export function buildLlmChatRequest(state: AgentState) {
+function buildLlmChatRequest(state: AgentState) {
   return {
     messages: [{ role: "system" as const, content: state.systemPrompt }, ...state.history],
   };
