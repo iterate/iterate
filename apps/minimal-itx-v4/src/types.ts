@@ -470,6 +470,7 @@ export type CommitRepoFilesResult = {
 /** Dynamic invocation envelope used by flattened live capabilities. */
 export type FlattenedCapabilityInvocation = {
   args: unknown[];
+  flattenNestedPath?: boolean;
   path: string[];
 };
 

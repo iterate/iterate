@@ -552,7 +552,15 @@ class DynamicWorkerRpcTarget extends RpcTarget {
     return withInvokeCapabilityFallback(this);
   }
 
-  async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
+  async invokeCapability({
+    args = [],
+    flattenNestedPath = false,
+    path,
+  }: {
+    args?: unknown[];
+    flattenNestedPath?: boolean;
+    path: string[];
+  }) {
     // Keep every dynamic worker invocation behind DynamicWorkerRunner. Stateless
     // entrypoints, stateful DO facets, provided worker capabilities, and
     // project.worker all then share the same loader/egress/ITX binding rules.
@@ -561,6 +569,7 @@ class DynamicWorkerRpcTarget extends RpcTarget {
     // serialize it as a chained/pipelined stub for the outer caller.
     return await this.#runner.invokeCapability({
       args,
+      flattenNestedPath,
       path,
       ref: this.#ref,
     });

@@ -819,6 +819,10 @@ describe("minimal itx v4", () => {
               addFunction() {
                 return (left, right) => left + right;
               }
+
+              invokeCapability({ args, path }) {
+                return { args, path, via: "flattened-expression-worker" };
+              }
             }
           `,
         },
@@ -838,6 +842,21 @@ describe("minimal itx v4", () => {
       // @ts-expect-error - mounted expression capability root.
       project.exprWorker.echo({ ok: true }),
     ).resolves.toEqual({ input: { ok: true }, via: "expression-worker" });
+
+    using _flatWorkerProvision = await project.provideCapability({
+      expression: ["workers", ["get", workerRef]],
+      flattenNestedPaths: true,
+      path: ["exprFlatWorker"],
+      type: "itx-expression",
+    });
+    await expect(
+      // @ts-expect-error - mounted expression worker with flattened dispatch.
+      project.exprFlatWorker.tools.echo("hello"),
+    ).resolves.toEqual({
+      args: ["hello"],
+      path: ["tools", "echo"],
+      via: "flattened-expression-worker",
+    });
 
     using _functionProvision = await project.provideCapability({
       expression: ["workers", ["get", workerRef], ["addFunction"]],
