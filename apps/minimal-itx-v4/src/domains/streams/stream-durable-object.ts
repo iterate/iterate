@@ -1574,16 +1574,19 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   #validateStreamRuleTarget(rule: { projectId?: string | null }): void {
-    if (
-      rule.projectId === undefined ||
-      rule.projectId === this.name.projectId ||
-      rule.projectId === null
-    ) {
-      return;
-    }
+    // A cross-post writes into the target stream using THIS Stream DO's own
+    // authority, so a rule may only target streams within the source stream's
+    // own project scope. `undefined` means "same project as the source". This is
+    // the same cross-project safety invariant enforced for configured
+    // subscribers (#assertSameProject): durable rule state must never let a
+    // project-scoped stream push events into a global (`projectId: null`) or
+    // other-project stream, which would be a privilege escalation — global
+    // streams are otherwise admin-only.
+    const targetProjectId = rule.projectId === undefined ? this.name.projectId : rule.projectId;
+    if (targetProjectId === this.name.projectId) return;
 
     throw new Error(
-      `cross-post rule target projectId ${rule.projectId} does not match stream projectId ${this.name.projectId ?? "null"}`,
+      `cross-post rule target projectId ${targetProjectId ?? "null"} does not match stream projectId ${this.name.projectId ?? "null"}`,
     );
   }
 
