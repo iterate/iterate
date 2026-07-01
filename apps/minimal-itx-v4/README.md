@@ -57,8 +57,8 @@ const itx = await env.ITX.get();
 ```
 
 Project and agent-scoped ITX also expose Workers AI through `itx.ai`. The
-minimal app implements this as an `AiRpcTarget` around the platform `env.AI`
-binding:
+minimal app implements this as an `AiRpcTarget` that proxies the platform
+`env.AI` binding directly:
 
 ```ts
 const reply = await itx.ai.run("@cf/moonshotai/kimi-k2.7-code", {
@@ -66,12 +66,13 @@ const reply = await itx.ai.run("@cf/moonshotai/kimi-k2.7-code", {
 });
 ```
 
-The wrapper is intentionally binding-shaped: `run(model, body)` forwards to the
-home binding, and `models()` forwards when the binding exposes it. The agent
-runtime should treat model names as opaque. Cloudflare's AI binding can run
-Workers AI `@cf/...` models and AI Gateway third-party model names through the
-same `run(...)` entry point, so the agent core should not bake in a provider
-catalog.
+The wrapper keeps the Cloudflare binding shape visible: `run(model, body)`
+forwards to `env.AI.run(...)`, `models()` forwards to `env.AI.models()`, and the
+constructor can carry AI Gateway options that are passed as the third
+`env.AI.run(...)` argument. The agent runtime should treat model names as
+opaque. Cloudflare's AI binding can run Workers AI `@cf/...` models and AI
+Gateway third-party model names through the same `run(...)` entry point, so the
+agent core should not bake in a provider catalog.
 
 External clients still connect to `/api/itx` and call `authenticate(...)`.
 `connectItx` overloads are only client-side convenience:
@@ -171,11 +172,11 @@ type AiLike = {
 };
 ```
 
-The Cloudflare AI provider receives `env.AI` behind this `AiLike` boundary and
-calls `ai.run(model, { ...body, stream: true })`. The public `project.ai`
-capability is an `AiRpcTarget` over the same binding for direct scripts.
-Response parsing should accept the shapes OS already supports: Workers AI
-`{ response }`, OpenAI-compatible chat completions `{ choices }`, Anthropic
+The Cloudflare AI provider receives only this minimal `run(...)` shape and calls
+`ai.run(model, { ...body, stream: true })`. The public `project.ai` capability
+uses `AiRpcTarget` to proxy the Worker-global `env.AI` binding for direct
+scripts. Response parsing should accept the shapes OS already supports: Workers
+AI `{ response }`, OpenAI-compatible chat completions `{ choices }`, Anthropic
 message blocks `{ content: [...] }`, and streaming SSE chunks from those
 families. Other AI bindings can be mounted by providing the same `run(model,
 body)` capability shape, while the agent protocol and history reduction stay

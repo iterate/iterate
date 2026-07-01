@@ -60,11 +60,6 @@ import type {
   DynamicWorkerRef,
 } from "./types.ts";
 
-type AiBinding = {
-  models?: () => unknown;
-  run(model: string, body: unknown): Promise<unknown>;
-};
-
 export class StreamRpcTarget extends RpcTarget implements Stream {
   constructor(readonly props: { auth: ItxAuth; projectId: string | null; path: string }) {
     super();
@@ -354,20 +349,21 @@ class SecretRpcTarget extends RpcTarget implements Secret {
   }
 }
 
+type AiRunOptions = NonNullable<Parameters<Cloudflare.Env["AI"]["run"]>[2]>;
+
 class AiRpcTarget extends RpcTarget implements Ai {
-  constructor(readonly binding: AiBinding) {
+  constructor(readonly props: { gateway?: AiRunOptions["gateway"] } = {}) {
     super();
   }
 
   models() {
-    if (typeof this.binding.models !== "function") {
-      throw new Error("AI binding does not expose models().");
-    }
-    return Promise.resolve(this.binding.models());
+    return Promise.resolve(env.AI.models());
   }
 
   run(...[model, body]: Parameters<Ai["run"]>) {
-    return this.binding.run(model, body);
+    const options: AiRunOptions | undefined =
+      this.props.gateway === undefined ? undefined : { gateway: this.props.gateway };
+    return env.AI.run(model, body as Record<string, unknown>, options);
   }
 }
 
@@ -692,7 +688,7 @@ export class ProjectRpcTarget extends RpcTarget implements Project {
   }
 
   get ai() {
-    return new AiRpcTarget(env.AI);
+    return new AiRpcTarget();
   }
 
   get #itx() {
