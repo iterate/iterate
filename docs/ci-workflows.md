@@ -70,7 +70,7 @@ Most workflows still run on GitHub Actions. Depot is used there as a runner
 provider by setting `runs-on` to a Depot runner label, for example:
 
 ```yaml
-runs-on: depot-ubuntu-24.04-64
+runs-on: depot-ubuntu-24.04
 ```
 
 This is still GitHub Actions. It uses GitHub workflow triggers, GitHub secrets,

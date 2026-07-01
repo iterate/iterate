@@ -44,6 +44,7 @@ export interface ProjectCollection {
  * capabilities cannot shadow core project operations.
  */
 export interface Project extends ItxCapabilityHost {
+  ai: Ai;
   agents: AgentCollection;
   describe(): Promise<ProjectDescription>;
   egress: ProjectEgress;
@@ -66,6 +67,18 @@ export interface Project extends ItxCapabilityHost {
  */
 export interface AgentItx extends Project {
   agent: Agent;
+  chat: AgentChat;
+}
+
+/** Agent-local web chat response tool exposed inside agent script execution. */
+export interface AgentChat {
+  sendMessage(input: { message: string }): Promise<StreamEvent>;
+}
+
+/** Workers AI binding exposed through ITX as a project/agent capability. */
+export interface Ai {
+  models(): Promise<unknown>;
+  run(model: string, body: unknown): Promise<unknown>;
 }
 
 /** Agent catalog within one project. */
@@ -200,10 +213,16 @@ export type ProjectProcessorState = {
 };
 
 export type AgentProcessorState = {
-  inputs: Array<{ content: string; offset: number }>;
-  outputs: Array<{ content: string; offset: number }>;
-  scheduledRequests: Record<string, number>;
+  currentRequest:
+    | { phase: "scheduled"; requestId: string; scheduledOffset: number }
+    | { phase: "requested"; llmRequestId: number }
+    | null;
+  history: Array<{ role: "user" | "assistant"; content: string }>;
+  llmConfig: { model: string };
+  llmProvider: "cloudflare-ai";
+  pendingTriggerOffset: number | null;
   scriptExecutionsCompleted: string[];
+  systemPrompt: string;
 };
 
 export type RepoProcessorState = {

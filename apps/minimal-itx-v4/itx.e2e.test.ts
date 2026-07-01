@@ -18,7 +18,7 @@ import {
 } from "./src/domains/streams/stream-processor.ts";
 
 const PROJECT_WORKER_FORWARDED_EVENT_TYPE = "events.iterate.test/project-worker-forwarded";
-const AGENT_WEB_MESSAGE_SENT_TYPE = "events.iterate.com/agent/web-message-sent";
+const AGENT_WEB_MESSAGE_SENT_TYPE = "events.iterate.com/agents/web-message-sent";
 const AGENT_OUTPUT_ADDED_TYPE = "events.iterate.com/agent/output-added";
 const EGRESS_PROOF_HEADER = "x-itx-egress-proof";
 
@@ -339,6 +339,19 @@ describe("minimal itx v4", () => {
     ).rejects.toThrow(/no capability "someMethodInTestRunner.getSecret"/);
   });
 
+  test("Project describe exposes Workers AI as a builtin capability", async () => {
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+
+    using project = itx.projects.create({ slug: "ai-builtin" });
+    const description = await project.describe();
+
+    expect(description.capabilities).toContainEqual({ path: ["ai"], type: "builtin" });
+  });
+
   test("Trusted internal root can access global streams and repos", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
@@ -459,7 +472,7 @@ describe("minimal itx v4", () => {
       expect((await project.repos.list()).some((item) => item.path.startsWith("/repos/"))).toBe(
         true,
       );
-      expect((await project.agents.get(agentPath).processor.snapshot()).state.inputs).toEqual([]);
+      expect((await project.agents.get(agentPath).processor.snapshot()).state.history).toEqual([]);
       expect((await project.repo.processor.snapshot()).state.created).toBe(true);
       expect((await secret.processor.snapshot()).state.egress).toEqual({ urls: [echo.url] });
     } finally {
@@ -1695,7 +1708,7 @@ describe("minimal itx v4", () => {
     });
   });
 
-  test("Agent ask runs the faux web-chat loop and agent scripts can call project tools", async () => {
+  test("Agent scripts can send web-chat messages and call project tools", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
       type: "trusted-internal",
@@ -1716,28 +1729,7 @@ describe("minimal itx v4", () => {
       },
     });
 
-    const reply = await agent.ask({ message: "hello agent" });
-    expect(reply).toMatchObject({
-      type: AGENT_WEB_MESSAGE_SENT_TYPE,
-      payload: { message: "This is the response to 'hello agent'" },
-    });
-
-    const askEvents = await agent.stream.getEvents();
-    expect(askEvents.map((event) => event.type)).toEqual(
-      expect.arrayContaining([
-        "events.iterate.com/agent/user-message-received",
-        "events.iterate.com/agent/input-added",
-        "events.iterate.com/agent/llm-request-scheduled",
-        "events.iterate.com/agent/llm-request-requested",
-        AGENT_OUTPUT_ADDED_TYPE,
-        "events.iterate.com/itx/script-execution-requested",
-        "events.iterate.com/itx/script-execution-completed",
-        AGENT_WEB_MESSAGE_SENT_TYPE,
-      ]),
-    );
-
     const projectToolReply = agent.stream.waitForEvent({
-      afterOffset: reply.offset,
       eventTypes: [AGENT_WEB_MESSAGE_SENT_TYPE],
       predicate: (event) => event.payload?.message === "project tool saw project-capability",
       timeoutMs: 30_000,
@@ -1749,10 +1741,7 @@ describe("minimal itx v4", () => {
         content: fencedAgentScript(`
           async (itx) => {
             const message = await itx.projectTool.format({ text: "project-capability" });
-            await itx.agent.stream.append({
-              type: ${JSON.stringify(AGENT_WEB_MESSAGE_SENT_TYPE)},
-              payload: { message },
-            });
+            await itx.chat.sendMessage({ message });
           }
         `),
       },
@@ -1762,6 +1751,17 @@ describe("minimal itx v4", () => {
       type: AGENT_WEB_MESSAGE_SENT_TYPE,
       payload: { message: "project tool saw project-capability" },
     });
+
+    const events = await agent.stream.getEvents();
+    expect(events.map((event) => event.type)).toEqual(
+      expect.arrayContaining([
+        AGENT_OUTPUT_ADDED_TYPE,
+        "events.iterate.com/itx/script-execution-requested",
+        "events.iterate.com/itx/script-execution-completed",
+        AGENT_WEB_MESSAGE_SENT_TYPE,
+        "events.iterate.com/agent/input-added",
+      ]),
+    );
   });
 
   test("New agent streams install processors and replay existing child events", async () => {
@@ -1778,10 +1778,7 @@ describe("minimal itx v4", () => {
 
     const content = fencedAgentScript(`
       async (itx) => {
-        await itx.agent.stream.append({
-          type: ${JSON.stringify(AGENT_WEB_MESSAGE_SENT_TYPE)},
-          payload: { message: ${JSON.stringify(marker)} },
-        });
+        await itx.chat.sendMessage({ message: ${JSON.stringify(marker)} });
       }
     `);
     const [historicalOutput] = await agent.stream.append({
@@ -1808,7 +1805,18 @@ describe("minimal itx v4", () => {
     const agentSubscriptionOffset = events.find(
       (event) =>
         event.type === "events.iterate.com/stream/subscription-configured" &&
-        (event.payload as { subscriber?: { type?: string } }).subscriber?.type === "agent",
+        (event.payload as { subscriptionKey?: string; subscriber?: { type?: string } }).subscriber
+          ?.type === "agent" &&
+        String((event.payload as { subscriptionKey?: string }).subscriptionKey).endsWith("#agent"),
+    )?.offset;
+    const cloudflareAiSubscriptionOffset = events.find(
+      (event) =>
+        event.type === "events.iterate.com/stream/subscription-configured" &&
+        (event.payload as { subscriptionKey?: string; subscriber?: { type?: string } }).subscriber
+          ?.type === "agent" &&
+        String((event.payload as { subscriptionKey?: string }).subscriptionKey).endsWith(
+          "#cloudflare-ai",
+        ),
     )?.offset;
     const itxSubscriptionOffset = events.find(
       (event) =>
@@ -1818,10 +1826,15 @@ describe("minimal itx v4", () => {
     const scriptRequestedOffset = events.find(
       (event) => event.type === "events.iterate.com/itx/script-execution-requested",
     )?.offset;
+    const modelSelectionOffset = events.find(
+      (event) => event.type === "events.iterate.com/agent/llm-provider-selected",
+    )?.offset;
 
     expect(outputOffset).toBe(historicalOutput.offset);
     expect(agentSubscriptionOffset).toBeGreaterThan(historicalOutput.offset);
+    expect(cloudflareAiSubscriptionOffset).toBeGreaterThan(historicalOutput.offset);
     expect(itxSubscriptionOffset).toBeGreaterThan(historicalOutput.offset);
+    expect(modelSelectionOffset).toBeGreaterThan(historicalOutput.offset);
     expect(scriptRequestedOffset).toBeGreaterThan(agentSubscriptionOffset!);
   });
 
@@ -1916,16 +1929,13 @@ describe("minimal itx v4", () => {
             const probe = await itx.agent.agentProbe.inspect("agent-only");
             const first = await itx.agent.agentCounter.increment();
             const current = await itx.agent.agentCounter.current();
-            await itx.agent.stream.append({
-              type: ${JSON.stringify(AGENT_WEB_MESSAGE_SENT_TYPE)},
-              payload: {
-                message: JSON.stringify({
-                  durableWorkerKey: ${JSON.stringify(durableWorkerKey)},
-                  current,
-                  first,
-                  probe,
-                }),
-              },
+            await itx.chat.sendMessage({
+              message: JSON.stringify({
+                durableWorkerKey: ${JSON.stringify(durableWorkerKey)},
+                current,
+                first,
+                probe,
+              }),
             });
           }
         `),

@@ -56,6 +56,24 @@ internal project/path scope. Inside loaded code:
 const itx = await env.ITX.get();
 ```
 
+Project and agent-scoped ITX also expose Workers AI through `itx.ai`. The
+minimal app implements this as an `AiRpcTarget` that proxies the platform
+`env.AI` binding directly:
+
+```ts
+const reply = await itx.ai.run("@cf/moonshotai/kimi-k2.7-code", {
+  messages: [{ role: "user", content: "Say hello" }],
+});
+```
+
+The wrapper keeps the Cloudflare binding shape visible: `run(model, body)`
+forwards to `env.AI.run(...)`, `models()` forwards to `env.AI.models()`, and the
+constructor can carry AI Gateway options that are passed as the third
+`env.AI.run(...)` argument. The agent runtime should treat model names as
+opaque. Cloudflare's AI binding can run Workers AI `@cf/...` models and AI
+Gateway third-party model names through the same `run(...)` entry point, so the
+agent core should not bake in a provider catalog.
+
 External clients still connect to `/api/itx` and call `authenticate(...)`.
 `connectItx` overloads are only client-side convenience:
 
@@ -87,6 +105,92 @@ ITX_BASE=https://your-worker.workers.dev pnpm repl
 The REPL exposes `itx`, `root`, `RpcTarget`, `baseUrl`, `projectId`, and `token`.
 Defaults are `http://127.0.0.1:8791`, project `prj_ref`, and the demo tokens
 from `src/auth.ts`.
+
+## Web Chat LLM Agent
+
+The minimal LLM agent should mirror the real `apps/os` agent shape, but keep
+only the web-chat channel. Slack-specific paths, prompts, and `itx.slack` tools
+do not belong here.
+
+The public entry is still an agent capability:
+
+```ts
+using agent = project.agents.get("/agents/demo");
+await agent.sendMessage("What changed today?");
+const reply = await agent.ask({ message: "Summarize the stream." });
+```
+
+`sendMessage` appends one channel event to the agent stream:
+
+```ts
+{
+  type: "events.iterate.com/agents/user-message-received",
+  payload: { origin: "web", content: message },
+}
+```
+
+The agent core processor owns model-visible history and request scheduling. It
+does not call a model directly:
+
+1. Render web input into `events.iterate.com/agent/input-added`.
+2. Apply the input policy: `after-current-request`, `interrupt-current-request`,
+   or `dont-trigger-request`.
+3. Debounce and append `events.iterate.com/agent/llm-request-requested` with
+   `{ provider, model }`.
+4. Re-render tool responses from `events.iterate.com/agents/web-message-sent`
+   back into history with `dont-trigger-request`.
+5. Extract the fenced JavaScript async arrow function from
+   `events.iterate.com/agent/output-added` and enqueue ITX script execution.
+
+The default web-chat prompt follows the OS agent contract: respond with exactly
+one fenced JavaScript code block and no surrounding prose. The code block must
+contain a single async arrow function:
+
+```js
+async (itx) => {
+  await itx.chat.sendMessage({ message: "Done." });
+};
+```
+
+LLM requests are request-by-reference. The `llm-request-requested` event carries
+no prompt body; its offset is the `llmRequestId`. A subscribed provider
+processor rebuilds the chat request by reducing committed agent history up to
+that offset, then executes the provider call and appends:
+
+```ts
+{ type: "events.iterate.com/<provider>/llm-request-started", payload: { llmRequestId, model } }
+{ type: "events.iterate.com/<provider>/llm-response-chunk", payload: { llmRequestId, sequence, chunk } }
+{ type: "events.iterate.com/agent/output-added", payload: { llmRequestId, content } }
+{ type: "events.iterate.com/agent/llm-request-completed", payload: { llmRequestId, provider, result } }
+```
+
+Provider support should stay behind one small binding boundary:
+
+```ts
+type AiLike = {
+  run(model: string, body: unknown): Promise<unknown>;
+};
+```
+
+The Cloudflare AI provider receives only this minimal `run(...)` shape and calls
+`ai.run(model, { ...body, stream: true })`. The public `project.ai` capability
+uses `AiRpcTarget` to proxy the Worker-global `env.AI` binding for direct
+scripts. Response parsing should accept the shapes OS already supports: Workers
+AI `{ response }`, OpenAI-compatible chat completions `{ choices }`, Anthropic
+message blocks `{ content: [...] }`, and streaming SSE chunks from those
+families. Other AI bindings can be mounted by providing the same `run(model,
+body)` capability shape, while the agent protocol and history reduction stay
+unchanged.
+
+The only agent-local channel tool is web chat:
+
+```ts
+await itx.chat.sendMessage({ message: "Done." });
+```
+
+That tool appends `events.iterate.com/agents/web-message-sent`. The agent core
+then records it as model-visible assistant context without triggering another
+LLM request.
 
 ## Stream Processor Hosting
 
