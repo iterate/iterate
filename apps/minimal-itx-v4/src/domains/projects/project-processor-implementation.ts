@@ -4,7 +4,12 @@ import { PROJECT_REPO_PATH } from "../repos/utils.ts";
 import type { StreamEvent, StreamListItem } from "../../types.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
+import {
+  AgentProcessorContract,
+  DEFAULT_AGENT_MODEL,
+  DEFAULT_AGENT_SYSTEM_PROMPT,
+} from "../agents/agent-processor-contract.ts";
+import { CloudflareAiProcessorContract } from "../agents/cloudflare-ai-processor-contract.ts";
 import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
 import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
@@ -106,9 +111,28 @@ export class ProjectProcessor extends StreamProcessor<
               }),
               buildDurableObjectProcessorSubscriptionConfiguredEvent({
                 durableObjectName,
+                processorSlug: CloudflareAiProcessorContract.slug,
+                subscriberType: "agent",
+              }),
+              buildDurableObjectProcessorSubscriptionConfiguredEvent({
+                durableObjectName,
                 processorSlug: ItxProcessorContract.slug,
                 subscriberType: "itx",
               }),
+              {
+                type: "events.iterate.com/agent/config-updated",
+                idempotencyKey: `agent/config-updated:${this.deps.itx.projectId}:${childPath}`,
+                payload: { systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT },
+              },
+              {
+                type: "events.iterate.com/agent/llm-provider-selected",
+                idempotencyKey: `agent/llm-provider-selected:${this.deps.itx.projectId}:${childPath}`,
+                payload: {
+                  ifUnset: true,
+                  model: DEFAULT_AGENT_MODEL,
+                  provider: "cloudflare-ai",
+                },
+              },
             );
             return;
           }

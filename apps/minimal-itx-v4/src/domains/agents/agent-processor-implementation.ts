@@ -1,7 +1,17 @@
+import { z } from "zod";
+import type { StreamEvent } from "../../types.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
-import { AgentProcessorContract } from "./agent-processor-contract.ts";
+import {
+  AgentProcessorContract,
+  DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
+} from "./agent-processor-contract.ts";
 
-const FAUX_LLM_DEBOUNCE_MS = 1_000;
+type AgentState = z.infer<typeof AgentProcessorContract.stateSchema>;
+type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
+type LlmRequestPolicy = Extract<
+  AgentConsumedEvent,
+  { type: "events.iterate.com/agent/input-added" }
+>["payload"]["llmRequestPolicy"];
 
 export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContract> {
   readonly contract = AgentProcessorContract;
@@ -10,89 +20,74 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
     event,
     state,
   }: Parameters<StreamProcessor<typeof AgentProcessorContract>["reduce"]>[0]) {
-    switch (event.type) {
-      case "events.iterate.com/agent/input-added":
-        return {
-          ...state,
-          inputs: [
-            ...state.inputs,
-            {
-              content: event.payload.content,
-              offset: event.offset,
-            },
-          ],
-        };
-      case "events.iterate.com/agent/llm-request-scheduled":
-        return {
-          ...state,
-          scheduledRequests: {
-            ...state.scheduledRequests,
-            [event.payload.requestId]: event.payload.inputOffset,
-          },
-        };
-      case "events.iterate.com/agent/llm-request-requested": {
-        const scheduledRequests = { ...state.scheduledRequests };
-        delete scheduledRequests[event.payload.requestId];
-        return { ...state, scheduledRequests };
-      }
-      case "events.iterate.com/agent/output-added":
-        return {
-          ...state,
-          outputs: [...state.outputs, { content: event.payload.content, offset: event.offset }],
-        };
-      case "events.iterate.com/itx/script-execution-completed":
-        return {
-          ...state,
-          scriptExecutionsCompleted: [
-            ...state.scriptExecutionsCompleted,
-            event.payload.executionId,
-          ],
-        };
-      default:
-        return state;
-    }
+    return reduceAgentEvent({ event, state });
   }
 
   protected override processEvent({
     append,
     blockProcessorWhile,
     event,
+    previousState,
     runInBackground,
+    state,
   }: Parameters<StreamProcessor<typeof AgentProcessorContract>["processEvent"]>[0]): undefined {
     switch (event.type) {
-      case "events.iterate.com/agent/user-message-received":
-        blockProcessorWhile(async () => {
-          await append({
+      case "events.iterate.com/agent/config-updated":
+        if (event.payload.systemPrompt === undefined) return;
+        const { systemPrompt } = event.payload;
+        blockProcessorWhile(() =>
+          append({
+            type: "events.iterate.com/agent/system-prompt-updated",
+            idempotencyKey: `agent/system-prompt-updated@${event.offset}`,
+            payload: { systemPrompt },
+          }),
+        );
+        return;
+      case "events.iterate.com/agents/user-message-received":
+        blockProcessorWhile(() =>
+          append({
             type: "events.iterate.com/agent/input-added",
-            idempotencyKey: `agent/input-added@${event.offset}`,
+            idempotencyKey: `agent/render-web-message@${event.offset}`,
             payload: {
               content: event.payload.content,
-              origin: event.payload.origin,
-              sourceOffset: event.offset,
+              llmRequestPolicy: { behaviour: "after-current-request" },
             },
-          });
-        });
+          }),
+        );
+        return;
+      case "events.iterate.com/agents/web-message-sent":
+        blockProcessorWhile(() =>
+          append({
+            type: "events.iterate.com/agent/input-added",
+            idempotencyKey: `agent/render-web-response@${event.offset}`,
+            payload: {
+              content: `The assistant sent this visible web-chat message: ${event.payload.message}`,
+              llmRequestPolicy: { behaviour: "dont-trigger-request" },
+            },
+          }),
+        );
         return;
       case "events.iterate.com/agent/input-added":
         blockProcessorWhile(async () => {
-          await append({
-            type: "events.iterate.com/agent/llm-request-scheduled",
-            idempotencyKey: `agent/llm-request-scheduled@${event.offset}`,
-            payload: {
-              debounceMs: FAUX_LLM_DEBOUNCE_MS,
-              inputOffset: event.offset,
-              requestId: `faux-llm-request:${event.offset}`,
-            },
+          await this.#handleInputAdded({
+            append,
+            event,
+            policy: event.payload.llmRequestPolicy,
+            previousState,
+            state,
           });
         });
         return;
       case "events.iterate.com/agent/llm-request-scheduled":
         runInBackground(async () => {
           await new Promise<void>((resolve) => setTimeout(resolve, event.payload.debounceMs));
-          await this.#appendFauxLlmOutput({
-            append,
-            inputOffset: event.payload.inputOffset,
-            requestId: event.payload.requestId,
+          await append({
+            type: "events.iterate.com/agent/llm-request-requested",
+            idempotencyKey: `agent/llm-request-requested@${event.offset}`,
+            payload: {
+              model: event.payload.model,
+              provider: event.payload.provider,
+            },
           });
         });
         return;
@@ -110,52 +105,198 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
           });
         });
         return;
+      case "events.iterate.com/agent/llm-request-completed":
+      case "events.iterate.com/agent/llm-request-cancelled":
+        if (state.currentRequest !== null || state.pendingTriggerOffset === null) return;
+        blockProcessorWhile(() =>
+          this.#appendLlmRequestScheduled({
+            append,
+            sourceOffset: state.pendingTriggerOffset!,
+            state,
+          }),
+        );
+        return;
       default:
         return;
     }
   }
 
-  async #appendFauxLlmOutput(input: {
+  async #handleInputAdded(input: {
     append: Parameters<StreamProcessor<typeof AgentProcessorContract>["processEvent"]>[0]["append"];
-    inputOffset: number;
-    requestId: string;
+    event: Extract<AgentConsumedEvent, { type: "events.iterate.com/agent/input-added" }>;
+    policy: LlmRequestPolicy;
+    previousState: AgentState;
+    state: AgentState;
   }) {
-    const inputEvent = await this.stream.getEvent({ offset: input.inputOffset });
-    const userInput =
-      inputEvent?.type === "events.iterate.com/agent/input-added" &&
-      typeof inputEvent.payload?.content === "string"
-        ? inputEvent.payload.content
-        : "";
-    const code = fauxResponseScript(userInput);
-    await input.append(
-      {
-        type: "events.iterate.com/agent/llm-request-requested",
-        idempotencyKey: `agent/llm-request-requested@${input.inputOffset}`,
-        payload: input,
+    if (input.policy.behaviour === "dont-trigger-request") return;
+
+    if (
+      input.policy.behaviour === "interrupt-current-request" &&
+      input.previousState.currentRequest !== null
+    ) {
+      await input.append(cancelEventForCurrentRequest(input.previousState.currentRequest));
+      await this.#appendLlmRequestScheduled({
+        append: input.append,
+        sourceOffset: input.event.offset,
+        state: input.state,
+      });
+      return;
+    }
+
+    if (input.previousState.currentRequest !== null) return;
+    await this.#appendLlmRequestScheduled({
+      append: input.append,
+      sourceOffset: input.event.offset,
+      state: input.state,
+    });
+  }
+
+  async #appendLlmRequestScheduled(input: {
+    append: Parameters<StreamProcessor<typeof AgentProcessorContract>["processEvent"]>[0]["append"];
+    sourceOffset: number;
+    state: AgentState;
+  }) {
+    const requestId = `llm-request:${input.sourceOffset}`;
+    await input.append({
+      type: "events.iterate.com/agent/llm-request-scheduled",
+      idempotencyKey: `agent/llm-request-scheduled@${input.sourceOffset}`,
+      payload: {
+        debounceMs: DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
+        model: input.state.llmConfig.model,
+        provider: input.state.llmProvider,
+        requestId,
       },
-      {
-        type: "events.iterate.com/agent/output-added",
-        idempotencyKey: `agent/output-added@${input.inputOffset}`,
-        payload: {
-          content: ["```js", code, "```"].join("\n"),
-          inputOffset: input.inputOffset,
-          requestId: input.requestId,
-        },
-      },
-    );
+    });
   }
 }
 
-function fauxResponseScript(input: string): string {
-  const response = `This is the response to '${input}'`;
-  return `
-    async (itx) => {
-      await itx.agent.stream.append({
-        type: "events.iterate.com/agent/web-message-sent",
-        payload: { message: ${JSON.stringify(response)} },
+export function reduceAgentEvents(events: readonly StreamEvent[]): AgentState {
+  let state = AgentProcessorContract.stateSchema.parse({});
+  for (const event of events) {
+    try {
+      state = reduceAgentEvent({
+        event: AgentProcessorContract.parseEvent(event) as AgentConsumedEvent,
+        state,
       });
+    } catch {
+      continue;
     }
-  `.trim();
+  }
+  return state;
+}
+
+export function buildLlmChatRequest(state: AgentState) {
+  return {
+    messages: [{ role: "system" as const, content: state.systemPrompt }, ...state.history],
+  };
+}
+
+export function buildAgentLlmRequestBody(input: {
+  events: readonly StreamEvent[];
+  llmRequestId: number;
+}) {
+  return buildLlmChatRequest(
+    reduceAgentEvents(input.events.filter((event) => event.offset <= input.llmRequestId)),
+  );
+}
+
+function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState }): AgentState {
+  const { event, state } = input;
+  switch (event.type) {
+    case "events.iterate.com/agent/config-updated":
+      return state;
+    case "events.iterate.com/agent/system-prompt-updated":
+      return { ...state, systemPrompt: event.payload.systemPrompt };
+    case "events.iterate.com/agent/input-added": {
+      const shouldTrigger = event.payload.llmRequestPolicy.behaviour !== "dont-trigger-request";
+      return {
+        ...state,
+        history: [...state.history, { role: "user", content: event.payload.content }],
+        pendingTriggerOffset: shouldTrigger ? event.offset : state.pendingTriggerOffset,
+      };
+    }
+    case "events.iterate.com/agent/output-added":
+      return {
+        ...state,
+        history: [...state.history, { role: "assistant", content: event.payload.content }],
+      };
+    case "events.iterate.com/agent/llm-provider-selected":
+      return {
+        ...state,
+        llmConfig: { model: event.payload.model },
+        llmProvider: event.payload.provider,
+      };
+    case "events.iterate.com/agent/llm-request-scheduled":
+      return {
+        ...state,
+        currentRequest: {
+          phase: "scheduled",
+          requestId: event.payload.requestId,
+          scheduledOffset: event.offset,
+        },
+        pendingTriggerOffset: null,
+      };
+    case "events.iterate.com/agent/llm-request-requested":
+      return {
+        ...state,
+        currentRequest: { phase: "requested", llmRequestId: event.offset },
+      };
+    case "events.iterate.com/agent/llm-request-completed":
+      if (
+        state.currentRequest?.phase !== "requested" ||
+        state.currentRequest.llmRequestId !== event.payload.llmRequestId
+      ) {
+        return state;
+      }
+      return { ...state, currentRequest: null };
+    case "events.iterate.com/agent/llm-request-cancelled":
+      if (
+        event.payload.phase === "scheduled" &&
+        state.currentRequest?.phase === "scheduled" &&
+        state.currentRequest.requestId === event.payload.requestId
+      ) {
+        return { ...state, currentRequest: null };
+      }
+      if (
+        event.payload.phase === "requested" &&
+        state.currentRequest?.phase === "requested" &&
+        state.currentRequest.llmRequestId === event.payload.llmRequestId
+      ) {
+        return { ...state, currentRequest: null };
+      }
+      return state;
+    case "events.iterate.com/itx/script-execution-completed":
+      return {
+        ...state,
+        scriptExecutionsCompleted: [...state.scriptExecutionsCompleted, event.payload.executionId],
+      };
+    default:
+      return state;
+  }
+}
+
+function cancelEventForCurrentRequest(request: NonNullable<AgentState["currentRequest"]>) {
+  if (request.phase === "scheduled") {
+    return {
+      type: "events.iterate.com/agent/llm-request-cancelled" as const,
+      idempotencyKey: `agent/llm-request-cancelled@scheduled:${request.scheduledOffset}`,
+      payload: {
+        phase: "scheduled" as const,
+        reason: "interrupted-by-user-input" as const,
+        requestId: request.requestId,
+      },
+    };
+  }
+
+  return {
+    type: "events.iterate.com/agent/llm-request-cancelled" as const,
+    idempotencyKey: `agent/llm-request-cancelled@requested:${request.llmRequestId}`,
+    payload: {
+      phase: "requested" as const,
+      reason: "interrupted-by-user-input" as const,
+      llmRequestId: request.llmRequestId,
+    },
+  };
 }
 
 function extractAsyncJsSnippet(content: string): string | null {
