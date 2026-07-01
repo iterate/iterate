@@ -23,16 +23,15 @@ import { retainGetProcessorRuntimeState, retainProcessEventBatch } from "./rpc-l
 import {
   CORE_STATE_VERSION,
   CoreProcessorContract,
-  ProcessorContractAnnouncement as ProcessorContractAnnouncementSchema,
+  StreamSubscriberDescriptor as StreamSubscriberDescriptorSchema,
+  type ConfiguredSubscriberDurableObjectType,
   type CoreProcessorState,
   type ConfiguredStreamSubscriber,
   type LiveStreamSubscriberDescriptor,
-  type ProcessorContractAnnouncement,
   type StreamSubscriberDescriptor,
   type StreamSubscriberDisconnectReason,
   type StreamSubscriptionType,
 } from "./core-processor-contract.ts";
-import { createStreamSubscription } from "./stream-subscription.ts";
 
 const StreamAppendInput = StreamEventInputSchema.extend({
   offset: z.number().int().nonnegative().optional(),
@@ -148,16 +147,11 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
-  // [[ This can all be inlined in the constructor ]]
+  // Storage is normalized into two tables: `events` is the offset-ordered
+  // metadata/index, and `event_chunks` holds the full event JSON as bounded
+  // UTF-8 byte rows (Durable Object SQLite caps a cell at ~2 MB, so large events
+  // are split; see EVENT_CHUNK_SIZE).
   #ensureStorageSchema(): void {
-    // Keep storage normalized:
-    // - `events` is the offset-ordered metadata/index table.
-    // - `event_chunks` stores the full event JSON as bounded UTF-8 byte rows.
-    this.#createEventsTable();
-    this.#createEventChunksTable();
-  }
-
-  #createEventsTable(): void {
     this.ctx.storage.sql.exec(`
       -- Stream-owned append log metadata. Full event JSON is stored in event_chunks.
       -- offset is the replay cursor; idempotency_key's unique constraint is its lookup index.
@@ -168,9 +162,6 @@ export class StreamDurableObject extends DurableObject<Env> {
         idempotency_key text unique
       )
     `);
-  }
-
-  #createEventChunksTable(): void {
     this.ctx.storage.sql.exec(`
       -- Full committed event JSON split into ordered byte chunks. The WITHOUT ROWID
       -- primary key is the lookup index used by point reads and range replay.
@@ -535,8 +526,10 @@ export class StreamDurableObject extends DurableObject<Env> {
           },
         };
         // A processor announcement on the connect event feeds the stream's
-        // contract documentation registry (replaces processor-registered).
-        const announcement = processorAnnouncementFromSubscriber(subscriber);
+        // contract documentation registry. The subscriber was validated by the
+        // descriptor schema when the connect event was parsed above, so the
+        // announcement (when present) is already well-formed.
+        const announcement = subscriber?.processor?.announcement;
         if (announcement !== undefined) {
           next = {
             ...next,
@@ -801,16 +794,23 @@ export class StreamDurableObject extends DurableObject<Env> {
     const idempotencyHitsInBatch = new Map<string, StreamEvent>();
     // 1. Prepare events and reduced state.
     for (const eventInput of eventInputs) {
-      const input = StreamAppendInput.strict().parse(eventInput);
+      // `offset` is an optional optimistic-concurrency assertion, not part of the
+      // event body. Split it off immediately so it never reaches core-event
+      // validation or the committed event: the pre-commit gate strict-parses the
+      // body against the contract schema, which has no `offset` key, so leaving it
+      // attached made every asserted append of a core policy event
+      // (subscription-configured, rule-configured) fail with a spurious
+      // "Unrecognized key: offset" instead of performing the assertion.
+      const { offset: expectedOffset, ...body } = StreamAppendInput.strict().parse(eventInput);
 
-      if (input.idempotencyKey !== undefined) {
+      if (body.idempotencyKey !== undefined) {
         // Same-batch idempotency should behave like already-persisted idempotency.
         const existing =
-          idempotencyHitsInBatch.get(input.idempotencyKey) ??
-          this.getEvent({ idempotencyKey: input.idempotencyKey });
+          idempotencyHitsInBatch.get(body.idempotencyKey) ??
+          this.getEvent({ idempotencyKey: body.idempotencyKey });
         if (existing !== undefined) {
-          if (input.offset !== undefined && input.offset !== existing.offset) {
-            throw new Error(`idempotency hit at offset ${existing.offset}, got ${input.offset}`);
+          if (expectedOffset !== undefined && expectedOffset !== existing.offset) {
+            throw new Error(`idempotency hit at offset ${existing.offset}, got ${expectedOffset}`);
           }
           events.push(existing);
           continue;
@@ -818,17 +818,17 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       this.#validateCoreAppend({
-        event: input,
+        event: body,
         state: workingCoreProcessorState,
       });
 
       const committed: StreamEvent = {
-        ...input,
+        ...body,
         offset: workingCoreProcessorState.maxOffset + 1,
         createdAt: new Date().toISOString(),
       };
-      if (input.offset !== undefined && input.offset !== committed.offset) {
-        throw new Error(`expected offset ${committed.offset}, got ${input.offset}`);
+      if (expectedOffset !== undefined && expectedOffset !== committed.offset) {
+        throw new Error(`expected offset ${committed.offset}, got ${expectedOffset}`);
       }
 
       const previousCoreProcessorState = workingCoreProcessorState;
@@ -1102,6 +1102,20 @@ export class StreamDurableObject extends DurableObject<Env> {
   ): StreamSubscriptionHandle {
     const subscriptionKey = args.subscriptionKey.trim();
     if (subscriptionKey.length === 0) throw new Error("subscriptionKey must not be blank.");
+
+    // Validate the caller-supplied descriptor at the boundary. The public
+    // `Stream.subscribe` contract types `subscriber` as `unknown`, so without
+    // this check a malformed descriptor would only fail later, deep inside the
+    // reducer, while appending the `subscriber-connected` presence fact. That
+    // append is wrapped in a catch-and-log, so the connection would already be
+    // live and delivering with NO entry on the presence roster — the runtime
+    // connection map and its event-sourced mirror would silently disagree.
+    // Parsing the serializable projection here rejects the subscribe call before
+    // any connection is registered. The live `getRuntimeState` capability is not
+    // part of the serializable descriptor and is preserved separately below.
+    const presenceDescriptor =
+      args.subscriber === undefined ? undefined : serializableSubscriber(args.subscriber);
+
     // Replacing any existing connection for this key.
     this.#connections.get(subscriptionKey)?.close("replaced");
 
@@ -1229,9 +1243,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       payload: {
         subscriptionKey,
         subscriptionType: args.subscriptionType,
-        ...(args.subscriber === undefined
-          ? {}
-          : { subscriber: serializableSubscriber(args.subscriber) }),
+        ...(presenceDescriptor === undefined ? {} : { subscriber: presenceDescriptor }),
       },
     });
     processEventBatch.onRpcBroken?.(() => {
@@ -1268,7 +1280,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    * incarnation dies, the wait dies too; callers that need retry semantics
    * should call again with the same `afterOffset`.
    */
-  async waitForEvent(args: Parameters<Stream["waitForEvent"]>[0]) {
+  async waitForEvent(args: Parameters<Stream["waitForEvent"]>[0]): Promise<StreamEvent> {
     if (args.eventTypes === undefined && args.predicate === undefined) {
       throw new Error("waitForEvent requires eventTypes or predicate.");
     }
@@ -1283,43 +1295,50 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
 
     const predicate = args.predicate ?? (() => true);
-    const seenEvents: StreamEvent[] = [];
-    const subscription = createStreamSubscription();
-    const timeout = Promise.withResolvers<never>();
+    const found = Promise.withResolvers<StreamEvent>();
+
+    // Bound the memory a long wait on a busy stream can hold: keep a count and a
+    // small ring of recent types for the timeout message rather than every seen
+    // event (events can be multi-megabyte).
+    let seenCount = 0;
+    const recentTypes: string[] = [];
+
+    // Scan delivered batches in order. Predicate work is chained instead of run
+    // inline so an async predicate never blocks stream delivery, and a later
+    // batch can never overtake an earlier one. The first match wins; a predicate
+    // that throws rejects the wait.
+    let scan: Promise<void> = Promise.resolve();
+    const handle = this.subscribe({
+      eventTypes: args.eventTypes,
+      replayAfterOffset: args.afterOffset,
+      subscriber: { description: "waitForEvent" },
+      processEventBatch: ({ events }) => {
+        scan = scan.then(async () => {
+          for (const event of events) {
+            seenCount += 1;
+            recentTypes.push(event.type);
+            if (recentTypes.length > 20) recentTypes.shift();
+            if (await predicate(event)) found.resolve(event);
+          }
+        });
+        void scan.catch((error: unknown) => found.reject(error));
+      },
+    });
+
     const timer = setTimeout(() => {
-      timeout.reject(
-        new Error(`Timed out waiting for stream event. Saw: ${JSON.stringify(seenEvents)}`),
+      found.reject(
+        new Error(
+          `Timed out waiting for stream event after ${args.timeoutMs}ms ` +
+            `(saw ${seenCount} events; recent types: ${recentTypes.join(", ") || "none"}).`,
+        ),
       );
     }, args.timeoutMs);
-    let handle: { unsubscribe(): void } | undefined;
 
     try {
-      handle = this.subscribe({
-        eventTypes: args.eventTypes,
-        replayAfterOffset: args.afterOffset,
-        subscriber: { description: "waitForEvent" },
-        processEventBatch: subscription.processEventBatch,
-      });
-
-      const match = (async () => {
-        // Batches are queued synchronously; async predicate work happens here
-        // so stream delivery is never blocked on caller code.
-        for await (const batch of subscription) {
-          seenEvents.push(...batch.events);
-          for (const event of batch.events) {
-            if (await predicate(event)) return event;
-          }
-        }
-        throw new Error("Stream subscription closed before matching event.");
-      })();
-
-      // If timeout wins, cleanup closes the iterator; observe that loser too.
-      void match.catch(() => {});
-      return await Promise.race([match, timeout.promise]);
+      return await found.promise;
     } finally {
       clearTimeout(timer);
-      handle?.unsubscribe();
-      await subscription[Symbol.asyncDispose]();
+      handle.unsubscribe();
     }
   }
 
@@ -1491,25 +1510,17 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   #configuredSubscriberDurableObject(
-    type: Exclude<ConfiguredStreamSubscriber["type"], "worker">,
+    type: ConfiguredSubscriberDurableObjectType,
     durableObjectName: string,
   ): ConfiguredSubscriberTarget {
-    switch (type) {
-      case "agent":
-        return this.env.AGENT.getByName(durableObjectName) as unknown as ConfiguredSubscriberTarget;
-      case "itx":
-        return this.env.ITX.getByName(durableObjectName) as unknown as ConfiguredSubscriberTarget;
-      case "project":
-        return this.env.PROJECT.getByName(
-          durableObjectName,
-        ) as unknown as ConfiguredSubscriberTarget;
-      case "repo":
-        return this.env.REPO.getByName(durableObjectName) as unknown as ConfiguredSubscriberTarget;
-      case "secret":
-        return this.env.SECRET.getByName(
-          durableObjectName,
-        ) as unknown as ConfiguredSubscriberTarget;
-    }
+    const namespace = {
+      agent: this.env.AGENT,
+      itx: this.env.ITX,
+      project: this.env.PROJECT,
+      repo: this.env.REPO,
+      secret: this.env.SECRET,
+    }[type];
+    return namespace.getByName(durableObjectName) as unknown as ConfiguredSubscriberTarget;
   }
 
   async #wakeWorkerSubscriber(
@@ -1563,16 +1574,19 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   #validateStreamRuleTarget(rule: { projectId?: string | null }): void {
-    if (
-      rule.projectId === undefined ||
-      rule.projectId === this.name.projectId ||
-      rule.projectId === null
-    ) {
-      return;
-    }
+    // A cross-post writes into the target stream using THIS Stream DO's own
+    // authority, so a rule may only target streams within the source stream's
+    // own project scope. `undefined` means "same project as the source". This is
+    // the same cross-project safety invariant enforced for configured
+    // subscribers (#assertSameProject): durable rule state must never let a
+    // project-scoped stream push events into a global (`projectId: null`) or
+    // other-project stream, which would be a privilege escalation — global
+    // streams are otherwise admin-only.
+    const targetProjectId = rule.projectId === undefined ? this.name.projectId : rule.projectId;
+    if (targetProjectId === this.name.projectId) return;
 
     throw new Error(
-      `cross-post rule target projectId ${rule.projectId} does not match stream projectId ${this.name.projectId ?? "null"}`,
+      `cross-post rule target projectId ${targetProjectId ?? "null"} does not match stream projectId ${this.name.projectId ?? "null"}`,
     );
   }
 
@@ -1617,29 +1631,16 @@ type Connection = {
   close(reason: StreamSubscriberDisconnectReason): void;
 };
 
-function serializableSubscriber(
-  subscriber: LiveStreamSubscriberDescriptor,
-): StreamSubscriberDescriptor {
-  const processor =
-    subscriber.processor === undefined
-      ? undefined
-      : { announcement: subscriber.processor.announcement };
-  return {
-    ...(subscriber.incarnationId === undefined ? {} : { incarnationId: subscriber.incarnationId }),
-    ...(subscriber.description === undefined ? {} : { description: subscriber.description }),
-    ...(processor === undefined ? {} : { processor }),
-  };
-}
-
-function processorAnnouncementFromSubscriber(
-  subscriber: StreamSubscriberDescriptor | undefined,
-): ProcessorContractAnnouncement | undefined {
-  const processor = subscriber?.processor;
-  if (processor === undefined) return undefined;
-  const candidate =
-    isRecord(processor) && isRecord(processor.announcement) ? processor.announcement : processor;
-  const parsed = ProcessorContractAnnouncementSchema.safeParse(candidate);
-  return parsed.success ? parsed.data : undefined;
+/**
+ * Projects a caller-supplied subscriber descriptor down to its serializable,
+ * persisted form and validates it in one step. Parsing against the descriptor
+ * schema strips the live, non-serializable `getRuntimeState` capability (it is
+ * retained separately for the connection lifetime) and rejects a malformed
+ * descriptor at the subscribe boundary, so a bad descriptor can never reach the
+ * reducer and leave a live connection missing from the presence roster.
+ */
+function serializableSubscriber(subscriber: unknown): StreamSubscriberDescriptor {
+  return StreamSubscriberDescriptorSchema.parse(subscriber);
 }
 
 function parseStreamDurableObjectName(name: string | undefined) {
@@ -1647,10 +1648,6 @@ function parseStreamDurableObjectName(name: string | undefined) {
     throw new Error("Stream Durable Object must be addressed by name.");
   }
   return DurableObjectNameCodec.parse(name, { allowNullProjectId: true });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object";
 }
 
 function* chunkBytes(value: Uint8Array, chunkSize: number): Generator<[number, ArrayBuffer]> {

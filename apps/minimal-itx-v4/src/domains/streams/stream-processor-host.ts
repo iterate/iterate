@@ -120,13 +120,6 @@ type StreamProcessorHost = {
   add<P extends AnyHostedProcessor>(name: string, build: (deps: HostedProcessorDeps) => P): P;
   /** Wire this to the host DO's wakeStreamSubscriber RPC method. */
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void>;
-  /**
-   * Drop every live subscription now — the idle timer's action, also exposed
-   * directly for tests / operator "let this idle subscriber sleep". The durable
-   * checkpoint + subscription-key persist, so the producer re-wakes this
-   * host re-handshakes on the next activity.
-   */
-  runIdleDisconnectNow(): void;
 };
 
 export function createStreamProcessorHost(
@@ -220,7 +213,13 @@ export function createStreamProcessorHost(
     // truth.
     const generation = entry.generation;
     const snapshot = await entry.processor.snapshot();
-    entry.handle = await options.stream.subscribeConfigured({
+    // Another wake / recovery may have bumped the generation while we awaited the
+    // snapshot. If so, that newer handshake owns the entry now; opening ours
+    // would overwrite its live handle with a superseded connection whose batches
+    // the generation gate drops — stalling delivery until the idle teardown. Bail
+    // out and let the newer handshake win.
+    if (generation !== entry.generation) return;
+    const handle = await options.stream.subscribeConfigured({
       subscriptionKey,
       replayAfterOffset: snapshot.offset,
       // The contract is the filter: the stream only delivers event types the
@@ -267,6 +266,14 @@ export function createStreamProcessorHost(
         return entry.ingestChain;
       },
     });
+    // The subscribe await above is another window in which a newer handshake can
+    // take over. If it did, unsubscribe the connection we just opened rather than
+    // publishing it as the entry's live handle (which would strand the newer one).
+    if (generation !== entry.generation) {
+      handle.unsubscribe();
+      return;
+    }
+    entry.handle = handle;
     // A fresh handshake opened a live subscription; start the idle countdown.
     armIdleTimer();
   }
@@ -354,8 +361,6 @@ export function createStreamProcessorHost(
 
       await openSubscription(name);
     },
-
-    runIdleDisconnectNow,
   };
 }
 

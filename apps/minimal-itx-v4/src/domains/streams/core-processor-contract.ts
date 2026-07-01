@@ -49,26 +49,27 @@ const DurableObjectAddress = z.strictObject({
   props: z.record(z.string(), z.string()).default({}),
 }) satisfies z.ZodType<DurableObjectAddressType, unknown>;
 
-export const ConfiguredStreamSubscriber = z.discriminatedUnion("type", [
+/**
+ * The Durable Object kinds a stream may wake as a configured subscriber. Every
+ * one is addressed the same way (a validated `DurableObjectAddress`); only the
+ * binding they resolve to differs, so they share one union member rather than
+ * five identical ones.
+ */
+export const ConfiguredSubscriberDurableObjectType = z.enum([
+  "agent",
+  "itx",
+  "project",
+  "repo",
+  "secret",
+]);
+export type ConfiguredSubscriberDurableObjectType = z.infer<
+  typeof ConfiguredSubscriberDurableObjectType
+>;
+
+export const ConfiguredStreamSubscriber = z.union([
   z.strictObject({
+    type: ConfiguredSubscriberDurableObjectType,
     address: DurableObjectAddress,
-    type: z.literal("agent"),
-  }),
-  z.strictObject({
-    address: DurableObjectAddress,
-    type: z.literal("itx"),
-  }),
-  z.strictObject({
-    address: DurableObjectAddress,
-    type: z.literal("project"),
-  }),
-  z.strictObject({
-    address: DurableObjectAddress,
-    type: z.literal("repo"),
-  }),
-  z.strictObject({
-    address: DurableObjectAddress,
-    type: z.literal("secret"),
   }),
   z.strictObject({
     type: z.literal("worker"),
@@ -112,19 +113,6 @@ export const ProcessorContractAnnouncement = z.object({
 
 export type ProcessorContractAnnouncement = z.infer<typeof ProcessorContractAnnouncement>;
 
-const StreamSubscriberProcessorDescriptor = z.preprocess(
-  (value) =>
-    isRecord(value) && !isRecord(value.announcement) && typeof value.slug === "string"
-      ? { announcement: value }
-      : value,
-  z.object({
-    /** Serializable processor contract announcement persisted into presence facts. */
-    announcement: ProcessorContractAnnouncement,
-  }),
-);
-
-type StreamSubscriberProcessorDescriptor = z.infer<typeof StreamSubscriberProcessorDescriptor>;
-
 /**
  * Identity the connecting party passes in its subscribe call. All fields are
  * optional: anonymous ephemeral watchers (a stream-viewer tab) may pass nothing,
@@ -140,7 +128,12 @@ export const StreamSubscriberDescriptor = z.object({
   /** Human-readable label, e.g. "browser" or "orpc-bridge". */
   description: z.string().optional(),
   /** Present when the subscriber is a stream processor. */
-  processor: StreamSubscriberProcessorDescriptor.optional(),
+  processor: z
+    .object({
+      /** Serializable processor contract announcement persisted into presence facts. */
+      announcement: ProcessorContractAnnouncement,
+    })
+    .optional(),
 });
 
 export type StreamSubscriberDescriptor = z.infer<typeof StreamSubscriberDescriptor>;
@@ -180,10 +173,6 @@ export const StreamSubscriberDisconnectReason = z.enum([
 ]);
 
 export type StreamSubscriberDisconnectReason = z.infer<typeof StreamSubscriberDisconnectReason>;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object";
-}
 
 export const CoreProcessorContract = defineProcessorContract({
   slug: "core",

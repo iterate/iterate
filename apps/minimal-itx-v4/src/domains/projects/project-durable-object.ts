@@ -3,6 +3,7 @@ import {
   createStreamProcessorHost,
   type StreamSubscriberWakeRequest,
 } from "../streams/stream-processor-host.ts";
+import { StreamProcessorRpcTarget } from "../streams/stream-processor.ts";
 import type { Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { ProjectRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
@@ -52,7 +53,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   get processor() {
-    return this.#projectProcessor;
+    return new StreamProcessorRpcTarget(this.#projectProcessor);
   }
 
   async fetch(request: Request): Promise<Response> {

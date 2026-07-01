@@ -293,7 +293,7 @@ test("stream rules do not recursively cross-post events that are already cross-p
   expect(sourceCopies).toEqual([]);
 });
 
-test("stream rules can cross-post project stream events to global streams", async () => {
+test("stream rules cannot cross-post project stream events into global streams", async () => {
   const marker = crypto.randomUUID();
   const sourcePath = `/e2e/os-port/cross-post-global/source/${marker}`;
   const globalPath = `/e2e/os-port/cross-post-global/target/${marker}`;
@@ -307,48 +307,34 @@ test("stream rules can cross-post project stream events to global streams", asyn
   using project = itx.projects.create({
     slug: `os-stream-cross-post-global-${RUN_SUFFIX}-${marker}`,
   });
-  const projectDescription = await project.describe();
   using source = project.streams.get(sourcePath);
   using globalTarget = itx.streams.get(globalPath);
 
-  await source.append({
-    type: "events.iterate.com/stream/rule-configured",
-    payload: {
-      eventTypes: [CROSS_POST_EVENT_TYPE],
-      path: globalPath,
-      projectId: null,
-      ruleId,
-      type: "cross-post",
-    },
-  });
-
-  const copied = globalTarget.waitForEvent({
-    eventTypes: [CROSS_POST_EVENT_TYPE],
-    timeoutMs: 10_000,
-  });
-  const [sourceEvent] = await source.append({
-    type: CROSS_POST_EVENT_TYPE,
-    payload: { marker },
-  });
-  const copiedEvent = await copied;
-
-  expect(copiedEvent).toMatchObject({
-    idempotencyKey: `cross-post:${ruleId}:${projectDescription.projectId}:${sourcePath}:${sourceEvent!.offset}`,
-    payload: { marker },
-    source: {
-      crossPost: {
+  // A cross-post writes into the target stream using the source Stream DO's own
+  // authority. A project-scoped stream must therefore NOT be able to configure a
+  // rule targeting a global (projectId: null) stream: that would let any project
+  // principal inject events into deployment-wide streams, which are otherwise
+  // admin-only. The rule-configured append must be rejected before it commits.
+  await expect(
+    source.append({
+      type: "events.iterate.com/stream/rule-configured",
+      payload: {
+        eventTypes: [CROSS_POST_EVENT_TYPE],
+        path: globalPath,
+        projectId: null,
         ruleId,
-        from: {
-          path: sourcePath,
-          projectId: projectDescription.projectId,
-        },
+        type: "cross-post",
       },
-    },
-    type: CROSS_POST_EVENT_TYPE,
-  });
+    }),
+  ).rejects.toThrow(/does not match stream projectId/);
 
-  const globalState = await globalTarget.runtimeState();
-  expect(coreState(globalState.coreProcessorState).projectId).toBe(null);
+  // Because the rule never committed, appending a matching event cross-posts
+  // nothing to the global stream.
+  await source.append({ type: CROSS_POST_EVENT_TYPE, payload: { marker } });
+  await new Promise((resolve) => setTimeout(resolve, 750));
+
+  const globalEvents = await globalTarget.getEvents({ afterOffset: 0 });
+  expect(globalEvents.some((event) => event.type === CROSS_POST_EVENT_TYPE)).toBe(false);
 });
 
 function coreState(value: unknown): CoreStreamState {
