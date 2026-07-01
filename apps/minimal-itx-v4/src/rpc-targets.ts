@@ -588,7 +588,12 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
   }
 }
 
-type ProjectRpcTargetProps = { auth: ItxAuth; ctx: CfExecutionContext; projectId: string };
+type ProjectRpcTargetProps = {
+  auth: ItxAuth;
+  ctx: CfExecutionContext;
+  itxPath?: string;
+  projectId: string;
+};
 const PROJECT_BUILTIN_CAPABILITY_PATHS = [
   "agents",
   "egress",
@@ -643,7 +648,10 @@ export class ProjectRpcTarget extends RpcTarget implements Project {
 
   get #itx() {
     return env.ITX.getByName(
-      DurableObjectNameCodec.stringify({ path: "/", projectId: this.props.projectId }),
+      DurableObjectNameCodec.stringify({
+        path: this.props.itxPath ?? "/",
+        projectId: this.props.projectId,
+      }),
     );
   }
 

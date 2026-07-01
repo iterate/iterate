@@ -34,7 +34,7 @@ export class McpClientCollectionRpcTarget extends RpcTarget implements McpClient
   }
 }
 
-export class McpClientRpcTarget extends RpcTarget implements McpClientRpc {
+class McpClientRpcTarget extends RpcTarget implements McpClientRpc {
   static async connect(input: McpClientConnectInput, deps: McpClientDeps) {
     const options = requestOptions(input);
     const client = await connectMcp(input, deps.egress, options);
@@ -57,11 +57,11 @@ export class McpClientRpcTarget extends RpcTarget implements McpClientRpc {
     return withInvokeCapabilityFallback(this);
   }
 
-  async describe(): Promise<CapabilityDescriptionMetadata> {
+  async __describe(): Promise<CapabilityDescriptionMetadata> {
     return {
       instructions:
         "Call tools directly by tool name with one input object matching the tool schema. " +
-        "Call describe() for this capability's instructions and TypeScript declarations.",
+        "Call __describe() for this capability's instructions and TypeScript declarations.",
       types: deriveMcpCapabilityTypes(this.props.tools),
     };
   }
@@ -77,31 +77,9 @@ export class McpClientRpcTarget extends RpcTarget implements McpClientRpc {
   }
 }
 
-export async function invokeMcpCapability(args: {
-  config: McpClientConnectInput;
-  deps: McpClientDeps;
-  path: string[];
-  rpcArgs?: unknown[];
-}) {
-  // The stream stores only connection config. Each call reconnects, invokes,
-  // and closes, matching the stateless Streamable HTTP path used by apps/os.
-  const options = requestOptions(args.config);
-  const client = await connectMcp(args.config, args.deps.egress, options);
-  try {
-    return await executeMcpToolCall({
-      args: args.rpcArgs ?? [],
-      client,
-      options,
-      path: args.path,
-    });
-  } finally {
-    await client.close().catch(() => {});
-  }
-}
-
 function deriveMcpCapabilityTypes(tools: McpTool[]): string {
   const members = [
-    "  describe(): Promise<{ instructions: string; types: string }>;",
+    "  __describe(): Promise<{ instructions: string; types: string }>;",
     ...tools.flatMap((tool) => {
       const inputType = jsonSchemaToTypeString(
         tool.inputSchema ?? { type: "object" },

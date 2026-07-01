@@ -9,17 +9,21 @@ import type {
   CapabilityRecord,
   ItxCapabilityHost,
   JsonValue,
+  Project,
   RevokeCapabilityInput,
   StatelessDynamicWorkerRef,
   StreamEvent,
 } from "../../types.ts";
 import { sha256Hex } from "../workers/utils.ts";
-import { DynamicWorkerRef as DynamicWorkerRefSchema } from "../workers/schemas.ts";
 import type { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
 import { ItxProcessorContract } from "./itx-processor-contract.ts";
-import { McpClientRpcTarget, invokeMcpCapability } from "./mcp-client-rpc-target.ts";
-import { OpenApiRpcTarget, invokeOpenApiCapability } from "./openapi-rpc-target.ts";
+import {
+  describeKnownBuiltinExpression,
+  evaluateItxExpression,
+  invokeNormalizedCapability,
+  normalizeCapabilityProvider,
+} from "./itx-expression.ts";
 
 export type ProvideCapabilityInput = Parameters<ItxCapabilityHost["provideCapability"]>[0];
 export type RunScriptResult = Awaited<ReturnType<ItxCapabilityHost["runScript"]>>;
@@ -37,6 +41,7 @@ const INVALID_PATH_SEGMENTS = new Set([
   "apply",
   "call",
   "bind",
+  "__describe",
   "dup",
   "onRpcBroken",
 ]);
@@ -81,20 +86,20 @@ function resolveLongestPrefix(records: CapabilityRecord[], path: string[]) {
 
 export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
   readonly contract = ItxProcessorContract;
-  #egress: Fetcher;
+  #itx: Project;
   #path: string;
   #workerRunner: DynamicWorkerRunner;
   #liveCapabilities = new Map<string, LiveCapability>();
 
   constructor(
     args: StreamProcessorConstructorArgs<typeof ItxProcessorContract, object> & {
-      egress: Fetcher;
+      itx: Project;
       path: string;
       workerRunner: DynamicWorkerRunner;
     },
   ) {
     super(args);
-    this.#egress = args.egress;
+    this.#itx = args.itx;
     this.#path = normalizePath(args.path);
     this.#workerRunner = args.workerRunner;
   }
@@ -172,59 +177,42 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     const key = liveKey(path);
     const previousLive = this.#liveCapabilities.get(key);
     let record: CapabilityProvidedPayload;
-    if (input.type === "dynamic-worker") {
-      // Worker capabilities are durable recipes. `provideCapability()` is only
-      // allowed to validate the shape and append the record; it must not load the
-      // worker, touch Worker Loader, or create/abort a stateful facet. That keeps
-      // the stream append as the single commit point. Bad source, missing exports,
-      // or broken code now fail on first invocation, which is simpler than a
-      // provide-time "validation" path that can mutate runtime state before the
-      // capability-provided event exists.
-      const ref = DynamicWorkerRefSchema.parse(input.ref);
+    let nextLiveInput: { flattenNestedPath: boolean; target: unknown } | undefined;
+    if (input.type === "live") {
+      if (!Object.hasOwn(input, "capability")) {
+        throw new Error('live capabilities require "capability"');
+      }
+      const flattenNestedPath = input.flattenNestedPaths === true;
       record = {
-        flattenNestedPath: input.flattenNestedPath === true ? true : undefined,
-        instructions: input.instructions,
-        path,
-        ref,
-        type: "dynamic-worker",
-        types: input.types,
-      };
-    } else if (input.type === "live") {
-      record = {
-        flattenNestedPath: input.flattenNestedPath === true ? true : undefined,
+        flattenNestedPaths: flattenNestedPath ? true : undefined,
         instructions: input.instructions,
         path,
         type: "live",
         types: input.types,
       };
-    } else if (input.type === "mcp") {
-      // MCP/OpenAPI are durable configs, but provideCapability also proves the
-      // remote is reachable and captures its current self-description. Passing
-      // explicit instructions/types overwrites the derived values.
-      const description = await describeMcpCapability(input, {
-        egress: this.#egress,
-      });
+      nextLiveInput = {
+        flattenNestedPath,
+        target: input.capability,
+      };
+    } else if (input.type === "itx-expression") {
+      assertExpressionDoesNotReferenceOwnMount(input);
+      const provider = await this.#describeExpressionProvider(input);
       record = {
-        ...input,
-        instructions: input.instructions ?? description.instructions,
-        types: input.types ?? description.types,
+        expression: input.expression,
+        flattenNestedPaths: provider.flattenNestedPath === true ? true : undefined,
+        instructions: provider.instructions,
+        path,
+        type: "itx-expression",
+        types: provider.types,
       };
     } else {
-      // OpenAPI uses the same connect path for ad-hoc project.openapi.connect()
-      // and durable mounts, so the direct and mounted surfaces cannot drift.
-      const description = await describeOpenApiCapability(input, {
-        egress: this.#egress,
-      });
-      record = {
-        ...input,
-        instructions: input.instructions ?? description.instructions,
-        types: input.types ?? description.types,
-      };
+      input satisfies never;
+      throw new Error(`unsupported capability input ${(input as { type?: unknown }).type}`);
     }
     const nextLive =
-      input.type === "live"
-        ? retainLiveCapabilityProvider(input.target, {
-            flattenNestedPath: input.flattenNestedPath === true,
+      nextLiveInput !== undefined
+        ? retainLiveCapabilityProvider(nextLiveInput.target, {
+            flattenNestedPath: nextLiveInput.flattenNestedPath,
           })
         : undefined;
 
@@ -277,32 +265,10 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     assertCapabilityPath(path);
     const hit = resolveLongestPrefix(this.state.capabilities, path);
     if (!hit) throw new Error(`no capability "${path.join(".")}"`);
-    if (hit.record.type === "dynamic-worker") {
-      // The mounted path is routing metadata only. The worker sees the remaining
-      // method path (`db.sql` -> `sql`) and its own DynamicWorkerRef path remains the ITX
-      // stream scope that supplies env.ITX.
-      return await this.#workerRunner.invokeCapability({
-        args,
-        flattenNestedPath: hit.record.flattenNestedPath === true,
-        path: hit.rest,
-        ref: hit.record.ref,
-      });
-    }
-    if (hit.record.type === "mcp") {
-      return await invokeMcpCapability({
-        config: hit.record,
-        deps: { egress: this.#egress },
-        path: hit.rest,
-        rpcArgs: args,
-      });
-    }
-    if (hit.record.type === "openapi") {
-      return await invokeOpenApiCapability({
-        config: hit.record,
-        deps: { egress: this.#egress },
-        path: hit.rest,
-        rpcArgs: args,
-      });
+    if (hit.record.type === "itx-expression") {
+      const evaluated = await evaluateItxExpression(this.#itx, hit.record.expression);
+      const provider = await normalizeCapabilityProvider(evaluated, hit.record);
+      return await invokeNormalizedCapability(provider, hit.rest, args);
     }
     const live = this.#liveCapabilities.get(liveKey(hit.record.path));
     if (!live) {
@@ -401,22 +367,30 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
       type: "stateless",
     };
   }
+
+  async #describeExpressionProvider(
+    input: Extract<ProvideCapabilityInput, { type: "itx-expression" }>,
+  ) {
+    const evaluated = await evaluateItxExpression(this.#itx, input.expression);
+    const provider = await normalizeCapabilityProvider(evaluated, input);
+    const description = await describeKnownBuiltinExpression(input.expression, provider);
+    return {
+      ...provider,
+      instructions: input.instructions ?? provider.instructions ?? description?.instructions,
+      types: input.types ?? provider.types ?? description?.types,
+    };
+  }
 }
 
-type CapabilityConnectDeps = { egress: Fetcher };
-
-async function describeMcpCapability(
-  input: Extract<ProvideCapabilityInput, { type: "mcp" }>,
-  deps: CapabilityConnectDeps,
-) {
-  const target = await McpClientRpcTarget.connect(input, deps);
-  return await target.describe();
-}
-
-async function describeOpenApiCapability(
-  input: Extract<ProvideCapabilityInput, { type: "openapi" }>,
-  deps: CapabilityConnectDeps,
-) {
-  const target = await OpenApiRpcTarget.connect(input, deps);
-  return await target.describe();
+function assertExpressionDoesNotReferenceOwnMount(
+  input: Extract<ProvideCapabilityInput, { type: "itx-expression" }>,
+): void {
+  const startsWithOwnPath = input.path.every(
+    (segment, index) => input.expression[index] === segment,
+  );
+  if (startsWithOwnPath) {
+    throw new Error(
+      `itx-expression capability "${input.path.join(".")}" cannot reference its own mount path`,
+    );
+  }
 }

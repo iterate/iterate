@@ -8,7 +8,7 @@ import {
   type StreamSubscriberWakeRequest,
 } from "../streams/stream-processor-host.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
-import { StreamRpcTarget } from "../../rpc-targets.ts";
+import { ProjectRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import { ItxProcessorContract } from "./itx-processor-contract.ts";
 import {
@@ -39,7 +39,12 @@ export class ItxDurableObject extends DurableObject<Env> {
     (deps) =>
       new ItxProcessor({
         ...deps,
-        egress: projectEgressFetcher(this.ctx.exports, this.#name.projectId),
+        itx: new ProjectRpcTarget({
+          auth: trustedInternalAuthContext(),
+          ctx: this.ctx,
+          itxPath: this.#name.path,
+          projectId: this.#name.projectId,
+        }),
         path: this.#name.path,
         workerRunner: new DynamicWorkerRunner({
           bindings: {

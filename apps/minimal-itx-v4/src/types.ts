@@ -286,7 +286,7 @@ export type CapabilityDescription = {
   instructions?: string;
   path: string[];
   providedAtOffset?: number;
-  type: "builtin" | "live" | "dynamic-worker" | "mcp" | "openapi";
+  type: "builtin" | "live" | "itx-expression";
   types?: string;
 };
 
@@ -301,7 +301,7 @@ export type OpenApiConnectInput = {
 };
 
 export interface OpenApiRpc {
-  describe(): Promise<CapabilityDescriptionMetadata>;
+  __describe(): Promise<CapabilityDescriptionMetadata>;
 }
 
 export interface McpClientCollection {
@@ -315,7 +315,7 @@ export type McpClientConnectInput = {
 };
 
 export interface McpClientRpc {
-  describe(): Promise<CapabilityDescriptionMetadata>;
+  __describe(): Promise<CapabilityDescriptionMetadata>;
 }
 
 /**
@@ -468,74 +468,62 @@ export type FlattenedCapabilityTarget = {
   invokeCapability(input: FlattenedCapabilityInvocation): unknown;
 };
 
+/** Optional package shape returned by a provider method when metadata travels with a capability. */
+export type CapabilityPackage = {
+  capability: unknown;
+  flattenNestedPaths?: boolean;
+  instructions?: string;
+  types?: string;
+};
+
+/** Durable expression over the project ITX surface. */
+export type ItxExpressionStep = string | [method: string, ...args: unknown[]];
+export type ItxExpression = ItxExpressionStep[];
+
 /** Capability recipe accepted by `provideCapability`. */
 export type ProvideCapabilityInput =
   | {
-      flattenNestedPath?: false;
+      capability: unknown;
+      flattenNestedPaths?: false;
       instructions?: string;
       path: string[];
-      target: unknown;
       type: "live";
       types?: string;
     }
   | {
-      flattenNestedPath: true;
+      capability: FlattenedCapabilityTarget;
+      flattenNestedPaths: true;
       instructions?: string;
       path: string[];
-      target: FlattenedCapabilityTarget;
       type: "live";
       types?: string;
     }
   | {
-      flattenNestedPath?: boolean;
+      expression: ItxExpression;
+      flattenNestedPaths?: boolean;
       instructions?: string;
       path: string[];
-      ref: DynamicWorkerRef;
-      type: "dynamic-worker";
+      type: "itx-expression";
       types?: string;
-    }
-  | ({
-      instructions?: string;
-      path: string[];
-      type: "mcp";
-      types?: string;
-    } & McpClientConnectInput)
-  | ({
-      instructions?: string;
-      path: string[];
-      type: "openapi";
-      types?: string;
-    } & OpenApiConnectInput);
+    };
 
 /** Event payload stored when a capability is mounted on an ITX stream. */
 export type CapabilityProvidedPayload =
   | {
-      flattenNestedPath?: boolean;
+      flattenNestedPaths?: boolean;
       instructions?: string;
       path: string[];
       type: "live";
       types?: string;
     }
   | {
-      flattenNestedPath?: boolean;
+      expression: ItxExpression;
+      flattenNestedPaths?: boolean;
       instructions?: string;
       path: string[];
-      ref: DynamicWorkerRef;
-      type: "dynamic-worker";
+      type: "itx-expression";
       types?: string;
-    }
-  | ({
-      instructions?: string;
-      path: string[];
-      type: "mcp";
-      types?: string;
-    } & McpClientConnectInput)
-  | ({
-      instructions?: string;
-      path: string[];
-      type: "openapi";
-      types?: string;
-    } & OpenApiConnectInput);
+    };
 
 /** Reduced capability table row: payload plus the providing event offset. */
 export type CapabilityRecord = CapabilityProvidedPayload & {

@@ -1,9 +1,9 @@
 import { z } from "zod";
 import { defineProcessorContract } from "../streams/stream-processor.ts";
-import { DynamicWorkerRef } from "../workers/schemas.ts";
 import type {
   CapabilityProvidedPayload as CapabilityProvidedPayloadType,
   CapabilityRecord as CapabilityRecordType,
+  ItxExpressionStep as ItxExpressionStepType,
   RevokeCapabilityInput,
 } from "../../types.ts";
 
@@ -12,75 +12,49 @@ const CapabilityMetadata = {
   types: z.string().optional(),
 };
 
-const OpenApiFields = {
-  baseUrl: z.string().optional(),
-  headers: z.record(z.string(), z.string()).optional(),
-  specUrl: z.string(),
-};
+const ItxExpressionStep: z.ZodType<ItxExpressionStepType> = z.union([
+  z.string(),
+  z
+    .array(z.unknown())
+    .refine((step): step is [string, ...unknown[]] => typeof step[0] === "string", {
+      message: "call expression steps must start with a method name",
+    }),
+]);
 
-const McpFields = {
-  headers: z.record(z.string(), z.string()).optional(),
-  timeoutMs: z.number().int().positive().optional(),
-  url: z.string(),
+const ItxExpressionFields = {
+  expression: z.array(ItxExpressionStep),
+  flattenNestedPaths: z.boolean().optional(),
 };
 
 const CapabilityProvidedPayload = z.discriminatedUnion("type", [
   z.strictObject({
     ...CapabilityMetadata,
-    flattenNestedPath: z.boolean().optional(),
+    flattenNestedPaths: z.boolean().optional(),
     path: z.array(z.string()),
     type: z.literal("live"),
   }),
   z.strictObject({
     ...CapabilityMetadata,
-    flattenNestedPath: z.boolean().optional(),
+    ...ItxExpressionFields,
     path: z.array(z.string()),
-    ref: DynamicWorkerRef,
-    type: z.literal("dynamic-worker"),
-  }),
-  z.strictObject({
-    ...CapabilityMetadata,
-    ...McpFields,
-    path: z.array(z.string()),
-    type: z.literal("mcp"),
-  }),
-  z.strictObject({
-    ...CapabilityMetadata,
-    ...OpenApiFields,
-    path: z.array(z.string()),
-    type: z.literal("openapi"),
+    type: z.literal("itx-expression"),
   }),
 ]) satisfies z.ZodType<CapabilityProvidedPayloadType, unknown>;
 
 const CapabilityRecord = z.discriminatedUnion("type", [
   z.strictObject({
     ...CapabilityMetadata,
-    flattenNestedPath: z.boolean().optional(),
+    flattenNestedPaths: z.boolean().optional(),
     path: z.array(z.string()),
     providedAtOffset: z.number().int().nonnegative(),
     type: z.literal("live"),
   }),
   z.strictObject({
     ...CapabilityMetadata,
-    flattenNestedPath: z.boolean().optional(),
+    ...ItxExpressionFields,
     path: z.array(z.string()),
     providedAtOffset: z.number().int().nonnegative(),
-    ref: DynamicWorkerRef,
-    type: z.literal("dynamic-worker"),
-  }),
-  z.strictObject({
-    ...CapabilityMetadata,
-    ...McpFields,
-    path: z.array(z.string()),
-    providedAtOffset: z.number().int().nonnegative(),
-    type: z.literal("mcp"),
-  }),
-  z.strictObject({
-    ...CapabilityMetadata,
-    ...OpenApiFields,
-    path: z.array(z.string()),
-    providedAtOffset: z.number().int().nonnegative(),
-    type: z.literal("openapi"),
+    type: z.literal("itx-expression"),
   }),
 ]) satisfies z.ZodType<CapabilityRecordType, unknown>;
 

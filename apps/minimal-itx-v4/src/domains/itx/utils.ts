@@ -14,6 +14,7 @@ const RESERVED_DYNAMIC_PATH_SEGMENTS: ReadonlySet<string> = new Set([
   "__defineSetter__",
   "__lookupGetter__",
   "__lookupSetter__",
+  "__describe",
   "__proto__",
   "apply",
   "bind",

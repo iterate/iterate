@@ -10,7 +10,7 @@ type SchemaNode = Record<string, unknown>;
 
 // OpenAPI support is deliberately small: operationId is the RPC method name,
 // args[0] is one object, and this file turns enough of the spec into a
-// `types` string for project.describe() and capability.describe().
+// `types` string for project.describe() and capability.__describe().
 export type OpenApiOperation = {
   method: string;
   operationId: string;
@@ -52,7 +52,7 @@ export function listOpenApiOperations(spec: Record<string, unknown>): OpenApiOpe
 // it under its mounted path.
 export function deriveOpenApiCapabilityTypes(spec: Record<string, unknown>): string {
   const members = [
-    "  describe(): Promise<{ instructions: string; types: string }>;",
+    "  __describe(): Promise<{ instructions: string; types: string }>;",
     ...listOpenApiOperations(spec).flatMap((operation) => {
       if (!/^[A-Za-z_$][\w$]*$/.test(operation.operationId)) return [];
       return [
