@@ -7,6 +7,7 @@ import {
   createStreamProcessorHost,
   type StreamSubscriberWakeRequest,
 } from "../streams/stream-processor-host.ts";
+import { StreamProcessorRpcTarget } from "../streams/stream-processor.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import { ItxRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
@@ -87,7 +88,7 @@ export class ItxDurableObject extends DurableObject<Env> {
   }
 
   get processor() {
-    return this.#itxProcessor;
+    return new StreamProcessorRpcTarget(this.#itxProcessor);
   }
 
   // Return types are pinned shallow so `DurableObjectStub<ItxDurableObject>`

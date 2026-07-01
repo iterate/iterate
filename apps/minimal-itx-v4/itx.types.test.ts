@@ -3,7 +3,7 @@
 
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { z } from "zod";
-import { buildEvent } from "./src/domains/streams/build-event.ts";
+import { buildEvent } from "./src/domains/streams/stream-processor.ts";
 import { defineProcessorContract } from "./src/domains/streams/stream-processor.ts";
 import type { StreamEvent } from "./src/types.ts";
 import { StreamProcessor } from "./src/domains/streams/stream-processor.ts";

@@ -8,6 +8,7 @@ import {
   createStreamProcessorHost,
   type StreamSubscriberWakeRequest,
 } from "../streams/stream-processor-host.ts";
+import { StreamProcessorRpcTarget } from "../streams/stream-processor.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "./crypto.ts";
 import { SecretProcessor } from "./secret-processor-implementation.ts";
 import { SecretProcessorContract } from "./secret-processor-contract.ts";
@@ -36,7 +37,7 @@ export class SecretDurableObject extends DurableObject<Env> {
   }
 
   get processor() {
-    return this.#secretProcessor;
+    return new StreamProcessorRpcTarget(this.#secretProcessor);
   }
 
   async update(input: SecretUpdateInput) {
