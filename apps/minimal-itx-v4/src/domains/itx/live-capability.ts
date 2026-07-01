@@ -110,7 +110,7 @@ export async function invokeFlattenedPath({
   target: unknown;
 }) {
   return await replayPath({
-    args: [{ args, path }],
+    args: [{ args, flattenNestedPath: true, path }],
     path: ["invokeCapability"],
     target,
   });

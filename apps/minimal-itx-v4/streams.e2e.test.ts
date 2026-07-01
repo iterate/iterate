@@ -210,6 +210,7 @@ test("stream rules cross-post matching events with source provenance", async () 
   });
 
   const copied = target.waitForEvent({
+    afterOffset: 0,
     eventTypes: [CROSS_POST_EVENT_TYPE],
     timeoutMs: 10_000,
   });
@@ -276,6 +277,7 @@ test("stream rules do not recursively cross-post events that are already cross-p
   ]);
 
   const copied = target.waitForEvent({
+    afterOffset: 0,
     eventTypes: [CROSS_POST_EVENT_TYPE],
     timeoutMs: 10_000,
   });

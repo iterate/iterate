@@ -1,13 +1,7 @@
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import WebSocket from "ws";
 import { withOwnedRpcSession } from "./src/domains/itx/utils.ts";
-import type {
-  Agent,
-  ItxAuthCredentials,
-  ItxRoot,
-  Project,
-  UnauthenticatedItx,
-} from "./src/types.ts";
+import type { Agent, ItxAuthCredentials, Itx, Session, UnauthenticatedItx } from "./src/types.ts";
 
 const DEFAULT_BASE_URL = "http://localhost:8791";
 
@@ -65,8 +59,8 @@ function parseFrame(data: unknown): unknown {
  * the caller to pass in a function to record the websocket messages.
  */
 export function withItxSession(input: AgentItxSessionInput): RpcStub<Agent>;
-export function withItxSession(input: ProjectItxSessionInput): RpcStub<Project>;
-export function withItxSession(input: AuthenticatedItxSessionInput): RpcStub<ItxRoot>;
+export function withItxSession(input: ProjectItxSessionInput): RpcStub<Itx>;
+export function withItxSession(input: AuthenticatedItxSessionInput): RpcStub<Session>;
 export function withItxSession(input?: ItxSessionInput): RpcStub<UnauthenticatedItx>;
 export function withItxSession(
   input:
@@ -74,7 +68,7 @@ export function withItxSession(
     | AuthenticatedItxSessionInput
     | ItxSessionInput
     | ProjectItxSessionInput = {},
-): RpcStub<Agent> | RpcStub<ItxRoot> | RpcStub<Project> | RpcStub<UnauthenticatedItx> {
+): RpcStub<Agent> | RpcStub<Session> | RpcStub<Itx> | RpcStub<UnauthenticatedItx> {
   const socket = new WebSocket(buildUrl({ path: "/api/itx", protocol: "ws" }), {
     handshakeTimeout: 10_000,
   });
@@ -97,10 +91,10 @@ export function withItxSession(
   );
   if (!("auth" in input)) return session;
 
-  const root = session.authenticate(input.auth) as RpcStub<ItxRoot>;
+  const root = session.authenticate(input.auth) as RpcStub<Session>;
   if (!("projectId" in input)) return withOwnedRpcSession(root, session);
 
-  const project = root.projects.get(input.projectId) as RpcStub<Project>;
+  const project = root.projects.get(input.projectId) as RpcStub<Itx>;
   if (!("agentPath" in input)) return withOwnedRpcSession(project, root, session);
 
   const agent = project.agents.get(input.agentPath) as RpcStub<Agent>;

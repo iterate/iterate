@@ -1,14 +1,7 @@
 import { RpcTarget } from "cloudflare:workers";
-import type {
-  CapabilityDescriptionMetadata,
-  OpenApiCollection,
-  OpenApiConnectInput,
-  OpenApiRpc,
-} from "../../types.ts";
-import { replayPath } from "./live-capability.ts";
+import type { OpenApiCollection, OpenApiConnectInput, OpenApiRpc } from "../../types.ts";
 import { withInvokeCapabilityFallback } from "./utils.ts";
 import {
-  deriveOpenApiCapabilityTypes,
   isObjectSchema,
   listOpenApiOperations,
   operationBodySchema,
@@ -18,7 +11,7 @@ import {
 // First-party OpenAPI is just an RpcTarget hosted by Project. The only special
 // power it receives is project egress, which is also the path a user-provided
 // dynamic worker would use through env.ITX. That keeps the built-in and dynamic
-// implementations aligned: fetch spec, derive describe(), then dispatch calls.
+// implementations aligned: fetch spec, derive operations, then dispatch calls.
 type OpenApiDeps = { egress: Fetcher };
 
 export class OpenApiCollectionRpcTarget extends RpcTarget implements OpenApiCollection {
@@ -31,7 +24,7 @@ export class OpenApiCollectionRpcTarget extends RpcTarget implements OpenApiColl
   }
 }
 
-export class OpenApiRpcTarget extends RpcTarget implements OpenApiRpc {
+class OpenApiRpcTarget extends RpcTarget {
   static async connect(input: OpenApiConnectInput, deps: OpenApiDeps) {
     const spec = await fetchSpec(input, deps.egress);
     return new OpenApiRpcTarget({
@@ -54,18 +47,6 @@ export class OpenApiRpcTarget extends RpcTarget implements OpenApiRpc {
     return withInvokeCapabilityFallback(this);
   }
 
-  async describe(): Promise<CapabilityDescriptionMetadata> {
-    const info = (this.props.spec.info ?? {}) as { title?: string; version?: string };
-    const title = info.title ?? "OpenAPI API";
-    return {
-      instructions:
-        `${title}${info.version ? ` v${info.version}` : ""}: ` +
-        "call operations directly by operationId with one input object containing path params, " +
-        "query params, and body fields. Call describe() for this capability's instructions and TypeScript declarations.",
-      types: deriveOpenApiCapabilityTypes(this.props.spec),
-    };
-  }
-
   async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
     const operationId = path[0];
     if (!operationId) throw new Error("OpenAPI operation calls need an operationId path.");
@@ -86,19 +67,6 @@ export class OpenApiRpcTarget extends RpcTarget implements OpenApiRpc {
       spec: this.props.spec,
     });
   }
-}
-
-export async function invokeOpenApiCapability(args: {
-  config: OpenApiConnectInput;
-  deps: OpenApiDeps;
-  path: string[];
-  rpcArgs?: unknown[];
-}) {
-  // Mounted OpenAPI capabilities are stored as plain config in the ITX stream.
-  // Reconnecting here keeps the record durable and avoids adding another cache
-  // or Durable Object just to hold a parsed spec for this reference app.
-  const target = await OpenApiRpcTarget.connect(args.config, args.deps);
-  return await replayPath({ args: args.rpcArgs ?? [], path: args.path, target });
 }
 
 async function fetchSpec(

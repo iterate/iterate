@@ -11,6 +11,7 @@ import { RepoDurableObject } from "./domains/repos/repo-durable-object.ts";
 import { SecretDurableObject } from "./domains/secrets/secret-durable-object.ts";
 import { StreamDurableObject } from "./domains/streams/stream-durable-object.ts";
 import { StatefulWorkerDurableObject } from "./domains/workers/stateful-worker-durable-object.ts";
+import { e2eFixtureResponse } from "./e2e-fixtures.ts";
 
 export default {
   async fetch(request: Request, _env: Env, ctx: ExecutionContext) {
@@ -31,6 +32,9 @@ export default {
       ].join("; ");
       return Response.json({ ok: true }, { headers: { "set-cookie": cookie } });
     }
+
+    const fixtureResponse = await e2eFixtureResponse(request);
+    if (fixtureResponse !== null) return fixtureResponse;
 
     const projectIngress = projectIngressRequest(request, url);
     if (projectIngress !== null) {

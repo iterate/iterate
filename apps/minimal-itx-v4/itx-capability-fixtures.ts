@@ -1,9 +1,45 @@
 import http from "node:http";
 
+const E2E_FIXTURE_PREFIX = "/__itx_e2e";
+
 type FixtureServer = {
   close(): Promise<void>;
   url: string;
 };
+
+type CapabilityFixtureInput = {
+  expectedAuthorization?: string;
+};
+
+function deployedFixtureBaseUrl(): string | null {
+  const raw = process.env.ITX_BASE_URL?.trim();
+  if (!raw) return null;
+
+  const url = new URL(raw);
+  if (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1") {
+    return null;
+  }
+
+  url.pathname = "/";
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
+function deployedFixtureUrl(
+  baseUrl: string,
+  kind: "egress-echo" | "mcp" | "openapi",
+  expectedAuthorization?: string,
+): string {
+  const url = new URL(baseUrl);
+  const prefix = `${E2E_FIXTURE_PREFIX}/${kind}`;
+  const encodedAuthorization =
+    expectedAuthorization === undefined ? "_" : encodeURIComponent(expectedAuthorization);
+  url.pathname = kind === "egress-echo" ? prefix : `${prefix}/${encodedAuthorization}`;
+  url.search = "";
+  url.hash = "";
+  return url.toString().replace(/\/$/, "");
+}
 
 function listen(
   handler: (req: http.IncomingMessage, res: http.ServerResponse, baseUrl: string) => void,
@@ -27,10 +63,46 @@ function listen(
   });
 }
 
-export async function startMockOpenApi(): Promise<FixtureServer & { authHeaders: string[] }> {
+export async function startEgressEcho(): Promise<FixtureServer> {
+  const deployedBaseUrl = deployedFixtureBaseUrl();
+  if (deployedBaseUrl !== null) {
+    return {
+      close: async () => {},
+      url: deployedFixtureUrl(deployedBaseUrl, "egress-echo"),
+    };
+  }
+
+  const server = await listen((req, res) => {
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ headers: req.headers }));
+  }, "/egress-echo");
+  return server;
+}
+
+export async function startMockOpenApi(
+  input: CapabilityFixtureInput = {},
+): Promise<FixtureServer & { authHeaders: string[] }> {
+  const deployedBaseUrl = deployedFixtureBaseUrl();
+  if (deployedBaseUrl !== null) {
+    return {
+      authHeaders: [],
+      close: async () => {},
+      url: deployedFixtureUrl(deployedBaseUrl, "openapi", input.expectedAuthorization),
+    };
+  }
+
   const authHeaders: string[] = [];
   const server = await listen((req, res, baseUrl) => {
     authHeaders.push(String(req.headers.authorization ?? ""));
+    if (
+      input.expectedAuthorization !== undefined &&
+      req.headers.authorization !== input.expectedAuthorization
+    ) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "unexpected_authorization" }));
+      return;
+    }
+
     const requestUrl = new URL(req.url ?? "/", baseUrl);
     res.setHeader("content-type", "application/json");
 
@@ -73,9 +145,19 @@ export async function startMockOpenApi(): Promise<FixtureServer & { authHeaders:
   return { ...server, authHeaders };
 }
 
-export async function startMockMcp(): Promise<
-  FixtureServer & { authHeaders: string[]; methods: string[] }
-> {
+export async function startMockMcp(
+  input: CapabilityFixtureInput = {},
+): Promise<FixtureServer & { authHeaders: string[]; methods: string[] }> {
+  const deployedBaseUrl = deployedFixtureBaseUrl();
+  if (deployedBaseUrl !== null) {
+    return {
+      authHeaders: [],
+      close: async () => {},
+      methods: [],
+      url: deployedFixtureUrl(deployedBaseUrl, "mcp", input.expectedAuthorization),
+    };
+  }
+
   const authHeaders: string[] = [];
   const methods: string[] = [];
   const server = await listen((req, res) => {
@@ -95,6 +177,15 @@ export async function startMockMcp(): Promise<
         params?: { arguments?: Record<string, unknown> };
       };
       authHeaders.push(String(req.headers.authorization ?? ""));
+      if (
+        input.expectedAuthorization !== undefined &&
+        req.headers.authorization !== input.expectedAuthorization
+      ) {
+        res.writeHead(401, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "unexpected_authorization", id: payload.id }));
+        return;
+      }
+
       methods.push(String(payload.method ?? ""));
       res.setHeader("content-type", "application/json");
 

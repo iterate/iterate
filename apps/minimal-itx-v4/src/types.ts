@@ -11,39 +11,74 @@
  * appending and reducing events.
  */
 
-/** Entry point exposed before any principal or project authority is known. */
+// -----------------------------------------------------------------------------
+// The three nouns. Keeping them distinct is what makes this system legible:
+//
+// - a SESSION is what `authenticate()` returns. It is a catalog that *vends*
+//   itxs; it is not itself an itx.
+// - a PROJECT is the tenant / isolation boundary — a `prj_…` id, its Durable
+//   Objects, its streams. You never hold a "project object"; you hold an itx
+//   scoped into a project.
+// - an ITX is a capability context scoped into one project at one path. It is
+//   the `itx` in every `async (itx) => { … }` script and what `env.ITX.get()`
+//   returns. `session.projects.get(id)` gives you the itx at the project root;
+//   a nested scope (`/agents/bla`) is the SAME type at a deeper path.
+// -----------------------------------------------------------------------------
+
+/**
+ * Entry point exposed before any principal or project authority is known.
+ *
+ * `/api/itx` hands every caller one of these; the only thing it can do is
+ * `authenticate(...)`, which on success returns a {@link Session}. This is the
+ * canonical Cap'n Web pattern: authority cannot be forged, only handed back by a
+ * method that already checked you.
+ */
 export interface UnauthenticatedItx {
-  authenticate(input: ItxAuthCredentials): ItxRoot;
+  authenticate(input: ItxAuthCredentials): Session;
 }
 
 /**
- * Authenticated root catalog.
+ * What you authenticate into: a catalog that vends itxs.
  *
- * `projects` is project-scoped. `streams` and `repos` are deployment-wide
- * surfaces backed by `projectId: null`, so only admin/internal auth should be
- * able to reach them.
+ * A session is NOT an itx — it is the directory you use to reach one.
+ * `projects` is principal-scoped. `streams` and `repos` here are the
+ * deployment-wide surfaces backed by `projectId: null`, so only admin/internal
+ * auth can reach them.
  */
-export interface ItxRoot {
+export interface Session {
   projects: ProjectCollection;
   repos: RepoCollection;
   streams: StreamCollection;
   whoami(): string;
 }
 
-/** Project catalog visible from the authenticated root. */
+/** Catalog of projects reachable from a {@link Session}. */
 export interface ProjectCollection {
-  get(projectId: string): Project;
-  create(args: { projectId?: string; slug: string }): Promise<Project>;
+  get(projectId: string): Itx;
+  create(args: { projectId?: string; slug: string }): Promise<Itx>;
   list(): string[];
 }
 
 /**
- * Project capability surface.
+ * An **itx**: a capability context scoped into one project at one path.
  *
- * The built-ins are deliberately explicit so user-provided dynamic
- * capabilities cannot shadow core project operations.
+ * The same interface serves the project root (`itxPath: "/"`) and every nested
+ * scope (`/agents/bla`, `/agents/slack/ts-124`, …). A nested scope is not a
+ * different type — it exposes all the project built-ins below PLUS the dynamic
+ * capabilities mounted on its own scope and inherited from every enclosing scope
+ * (resolution chains child → parent → project; a nearer scope shadows a farther
+ * one). `agent`/`chat` are present only when the scope sits under `/agents/`.
+ *
+ * DESIGN NOTE — why the built-ins are explicit members, not dynamic entries:
+ * this object is an RpcTarget that sits *in front of* the ITX Durable Object. A
+ * call like `itx.streams.get("/x")` resolves against these known members in the
+ * isolate and never touches the ITX DO, so the hot path pays no extra round trip
+ * to check whether `streams` was shadowed. The deliberate trade-off is that a
+ * dynamic capability therefore CANNOT shadow a built-in name — the built-in
+ * always wins. If shadowable built-ins turn out to be needed often, we'd move
+ * resolution behind the DO and accept the round trip; today we don't.
  */
-export interface Project extends ItxCapabilityHost {
+export interface Itx extends ItxCapabilityHost {
   ai: Ai;
   agents: AgentCollection;
   describe(): Promise<ProjectDescription>;
@@ -57,17 +92,11 @@ export interface Project extends ItxCapabilityHost {
   streams: ProjectStreamCollection;
   worker: ProjectWorker;
   workers: DynamicWorkerCollection;
-}
-
-/**
- * Agent-scoped ITX is still project-scoped ITX.
- *
- * Project capabilities stay at the root so code can move between project and
- * agent contexts; the narrower agent-local surface hangs under `.agent`.
- */
-export interface AgentItx extends Project {
-  agent: Agent;
-  chat: AgentChat;
+  // Present only on an agent-scoped itx (path under `/agents/`). `agent` is this
+  // agent's own control surface; `chat` is its web-chat door. They are getters
+  // derived from the scope path, not mounted capabilities — see rpc-targets.ts.
+  agent?: Agent;
+  chat?: AgentChat;
 }
 
 /** Agent-local web chat response tool exposed inside agent script execution. */
@@ -89,6 +118,7 @@ export interface AgentCollection {
 
 /** Agent capability surface for message loops and agent-local dynamic tools. */
 export interface Agent extends ItxCapabilityHost {
+  chat: AgentChat;
   processor: StreamProcessorRpc<AgentProcessorState>;
   stream: Stream;
   sendMessage(message: string): Promise<StreamEvent>;
@@ -290,11 +320,6 @@ export interface ProjectEgress {
   intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;
 }
 
-export interface CapabilityDescriptionMetadata {
-  instructions: string;
-  types: string;
-}
-
 export type ProjectDescription = {
   capabilities: CapabilityDescription[];
   name: string;
@@ -305,7 +330,14 @@ export type CapabilityDescription = {
   instructions?: string;
   path: string[];
   providedAtOffset?: number;
-  type: "builtin" | "live" | "dynamic-worker" | "mcp" | "openapi";
+  /**
+   * The itx scope path this capability is declared at (`"/"`, `"/agents/bla"`, …).
+   * Set when a scope reports capabilities it inherited from an enclosing scope,
+   * so the reader can tell a local mount from an inherited one. Absent on
+   * built-ins (they exist at every scope).
+   */
+  scope?: string;
+  type: "builtin" | "live" | "itx-expression";
   types?: string;
 };
 
@@ -319,9 +351,7 @@ export type OpenApiConnectInput = {
   specUrl: string;
 };
 
-export interface OpenApiRpc {
-  describe(): Promise<CapabilityDescriptionMetadata>;
-}
+export type OpenApiRpc = object;
 
 export interface McpClientCollection {
   connect(input: McpClientConnectInput): Promise<McpClientRpc>;
@@ -333,9 +363,7 @@ export type McpClientConnectInput = {
   url: string;
 };
 
-export interface McpClientRpc {
-  describe(): Promise<CapabilityDescriptionMetadata>;
-}
+export type McpClientRpc = object;
 
 /**
  * Shared host operations for objects that can own dynamic ITX capabilities.
@@ -479,6 +507,7 @@ export type CommitRepoFilesResult = {
 /** Dynamic invocation envelope used by flattened live capabilities. */
 export type FlattenedCapabilityInvocation = {
   args: unknown[];
+  flattenNestedPath?: boolean;
   path: string[];
 };
 
@@ -487,74 +516,54 @@ export type FlattenedCapabilityTarget = {
   invokeCapability(input: FlattenedCapabilityInvocation): unknown;
 };
 
+/** Durable expression over the project ITX surface. */
+export type ItxExpressionStep = string | [method: string, ...args: unknown[]];
+export type ItxExpression = ItxExpressionStep[];
+
 /** Capability recipe accepted by `provideCapability`. */
 export type ProvideCapabilityInput =
   | {
-      flattenNestedPath?: false;
+      capability: unknown;
+      flattenNestedPaths?: false;
       instructions?: string;
       path: string[];
-      target: unknown;
       type: "live";
       types?: string;
     }
   | {
-      flattenNestedPath: true;
+      capability: FlattenedCapabilityTarget;
+      flattenNestedPaths: true;
       instructions?: string;
       path: string[];
-      target: FlattenedCapabilityTarget;
       type: "live";
       types?: string;
     }
   | {
-      flattenNestedPath?: boolean;
+      expression: ItxExpression;
+      flattenNestedPaths?: boolean;
       instructions?: string;
       path: string[];
-      ref: DynamicWorkerRef;
-      type: "dynamic-worker";
+      type: "itx-expression";
       types?: string;
-    }
-  | ({
-      instructions?: string;
-      path: string[];
-      type: "mcp";
-      types?: string;
-    } & McpClientConnectInput)
-  | ({
-      instructions?: string;
-      path: string[];
-      type: "openapi";
-      types?: string;
-    } & OpenApiConnectInput);
+    };
 
 /** Event payload stored when a capability is mounted on an ITX stream. */
 export type CapabilityProvidedPayload =
   | {
-      flattenNestedPath?: boolean;
+      flattenNestedPaths?: boolean;
       instructions?: string;
       path: string[];
       type: "live";
       types?: string;
     }
   | {
-      flattenNestedPath?: boolean;
+      expression: ItxExpression;
+      flattenNestedPaths?: boolean;
       instructions?: string;
       path: string[];
-      ref: DynamicWorkerRef;
-      type: "dynamic-worker";
+      type: "itx-expression";
       types?: string;
-    }
-  | ({
-      instructions?: string;
-      path: string[];
-      type: "mcp";
-      types?: string;
-    } & McpClientConnectInput)
-  | ({
-      instructions?: string;
-      path: string[];
-      type: "openapi";
-      types?: string;
-    } & OpenApiConnectInput);
+    };
 
 /** Reduced capability table row: payload plus the providing event offset. */
 export type CapabilityRecord = CapabilityProvidedPayload & {

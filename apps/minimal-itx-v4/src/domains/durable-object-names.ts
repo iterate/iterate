@@ -76,6 +76,22 @@ export function normalizePath(path: string): string {
   return path === "" ? "/" : path.startsWith("/") ? path : `/${path}`;
 }
 
+/**
+ * The immediate parent scope path, or `null` at the root.
+ *
+ * Itx capability scopes form a hierarchy along the path (`/agents/slack/ts-124`
+ * is enclosed by `/agents/slack`, then `/agents`, then `/`). Capability
+ * resolution chains up this hierarchy, so each ITX Durable Object needs to know
+ * only its immediate parent; the recursion up to `/` (which has no parent, and
+ * therefore terminates the chain) emerges from each scope forwarding one hop.
+ */
+export function parentScopePath(path: string): string | null {
+  const normalized = normalizePath(path);
+  if (normalized === "/") return null;
+  const parent = normalized.slice(0, normalized.lastIndexOf("/"));
+  return parent === "" ? "/" : parent;
+}
+
 function assertLegalDurableObjectName(name: string): void {
   if (name.length === 0) {
     throw new Error("Durable Object name must be non-empty.");

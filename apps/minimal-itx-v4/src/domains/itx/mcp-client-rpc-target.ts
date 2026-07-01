@@ -1,14 +1,8 @@
 import { RpcTarget } from "cloudflare:workers";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type {
-  CapabilityDescriptionMetadata,
-  McpClientCollection,
-  McpClientConnectInput,
-  McpClientRpc,
-} from "../../types.ts";
+import type { McpClientCollection, McpClientConnectInput, McpClientRpc } from "../../types.ts";
 import { withInvokeCapabilityFallback } from "./utils.ts";
-import { escapeJsDoc, jsonSchemaToTypeString, propertyKey } from "./json-schema-types.ts";
 
 // MCP is common enough to expose as a built-in, but the built-in stays tiny:
 // it is an RpcTarget that gets a project egress Fetcher and otherwise uses the
@@ -17,12 +11,6 @@ import { escapeJsDoc, jsonSchemaToTypeString, propertyKey } from "./json-schema-
 type McpClientDeps = { egress: Fetcher };
 
 type McpRequestOptions = { timeout?: number };
-
-type McpTool = {
-  description?: string;
-  inputSchema?: Record<string, unknown>;
-  name: string;
-};
 
 export class McpClientCollectionRpcTarget extends RpcTarget implements McpClientCollection {
   constructor(readonly props: McpClientDeps) {
@@ -34,40 +22,25 @@ export class McpClientCollectionRpcTarget extends RpcTarget implements McpClient
   }
 }
 
-export class McpClientRpcTarget extends RpcTarget implements McpClientRpc {
+class McpClientRpcTarget extends RpcTarget {
   static async connect(input: McpClientConnectInput, deps: McpClientDeps) {
-    const options = requestOptions(input);
-    const client = await connectMcp(input, deps.egress, options);
-    try {
-      const tools = await listMcpTools(client, options);
-      return new McpClientRpcTarget({ config: input, egress: deps.egress, tools });
-    } finally {
-      await client.close().catch(() => {});
-    }
+    return new McpClientRpcTarget({ config: input, egress: deps.egress });
   }
 
   constructor(
     readonly props: {
       config: McpClientConnectInput;
       egress: Fetcher;
-      tools: McpTool[];
     },
   ) {
     super();
     return withInvokeCapabilityFallback(this);
   }
 
-  async describe(): Promise<CapabilityDescriptionMetadata> {
-    return {
-      instructions:
-        "Call tools directly by tool name with one input object matching the tool schema. " +
-        "Call describe() for this capability's instructions and TypeScript declarations.",
-      types: deriveMcpCapabilityTypes(this.props.tools),
-    };
-  }
-
   async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
-    const options = requestOptions(this.props.config);
+    const options = this.props.config.timeoutMs
+      ? { timeout: this.props.config.timeoutMs }
+      : undefined;
     const client = await connectMcp(this.props.config, this.props.egress, options);
     try {
       return await executeMcpToolCall({ args, client, options, path });
@@ -75,46 +48,6 @@ export class McpClientRpcTarget extends RpcTarget implements McpClientRpc {
       await client.close().catch(() => {});
     }
   }
-}
-
-export async function invokeMcpCapability(args: {
-  config: McpClientConnectInput;
-  deps: McpClientDeps;
-  path: string[];
-  rpcArgs?: unknown[];
-}) {
-  // The stream stores only connection config. Each call reconnects, invokes,
-  // and closes, matching the stateless Streamable HTTP path used by apps/os.
-  const options = requestOptions(args.config);
-  const client = await connectMcp(args.config, args.deps.egress, options);
-  try {
-    return await executeMcpToolCall({
-      args: args.rpcArgs ?? [],
-      client,
-      options,
-      path: args.path,
-    });
-  } finally {
-    await client.close().catch(() => {});
-  }
-}
-
-function deriveMcpCapabilityTypes(tools: McpTool[]): string {
-  const members = [
-    "  describe(): Promise<{ instructions: string; types: string }>;",
-    ...tools.flatMap((tool) => {
-      const inputType = jsonSchemaToTypeString(
-        tool.inputSchema ?? { type: "object" },
-        tool.inputSchema ?? {},
-      );
-      return [
-        "",
-        `  /** ${escapeJsDoc(tool.description?.trim() || tool.name)} */`,
-        `  ${propertyKey(tool.name)}(input: ${inputType}): Promise<unknown>;`,
-      ];
-    }),
-  ];
-  return `export type Capability = {\n${members.join("\n")}\n};`;
 }
 
 async function connectMcp(
@@ -149,15 +82,6 @@ async function connectMcp(
     await client.close().catch(() => {});
     throw error;
   }
-}
-
-async function listMcpTools(client: Client, options?: McpRequestOptions): Promise<McpTool[]> {
-  const response = await client.listTools(undefined, options);
-  return response.tools.map((tool) => ({
-    description: tool.description,
-    inputSchema: tool.inputSchema as Record<string, unknown> | undefined,
-    name: tool.name,
-  }));
 }
 
 async function executeMcpToolCall(input: {
@@ -202,10 +126,6 @@ async function executeMcpToolCall(input: {
   }
 
   return result;
-}
-
-function requestOptions(input: McpClientConnectInput): McpRequestOptions | undefined {
-  return input.timeoutMs ? { timeout: input.timeoutMs } : undefined;
 }
 
 function extractTextContent(content: unknown) {
