@@ -39,6 +39,7 @@ export const AgentProcessorContract = defineProcessorContract({
       })
       .default({ model: DEFAULT_AGENT_MODEL }),
     llmProvider: z.literal("cloudflare-ai").default("cloudflare-ai"),
+    llmProviderConfigured: z.boolean().default(false),
     currentRequest: z
       .discriminatedUnion("phase", [
         z.object({
@@ -119,6 +120,7 @@ export const AgentProcessorContract = defineProcessorContract({
       payloadSchema: z.object({
         model: z.string().min(1),
         provider: z.literal("cloudflare-ai"),
+        requestId: z.string(),
       }),
     },
     "events.iterate.com/agent/llm-request-completed": {

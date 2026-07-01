@@ -174,6 +174,69 @@ describe("minimal web-chat agent processors", () => {
     });
   });
 
+  it("does not fire a second LLM call when a second message arrives during the first request", async () => {
+    const stream = new MemoryStream();
+    const aiCalls: unknown[] = [];
+    let resolveFirstCall!: () => void;
+    const firstCallInFlight = new Promise<void>((resolve) => {
+      resolveFirstCall = resolve;
+    });
+    const agent = new AgentProcessor({ stream });
+    const cloudflareAi = new CloudflareAiProcessor({
+      stream,
+      ai: {
+        async run(_model, body) {
+          aiCalls.push(body);
+          resolveFirstCall();
+          return { response: "```js\nasync (itx) => {}\n```" };
+        },
+      },
+      readStreamEvents: () => stream.getEvents(),
+    });
+    const cursors = new Map<object, number>();
+    const deliver = (processor: ProcessorLike) => deliverNewEvents({ processor, stream, cursors });
+
+    // First user message — triggers llm-request-scheduled (with debounce)
+    await stream.append({
+      type: "events.iterate.com/agents/user-message-received",
+      payload: { origin: "web", content: "message one" },
+    });
+    await deliver(agent);
+    await deliver(agent);
+    await deliver(agent);
+
+    // Second user message arrives before debounce fires — queued as pending
+    await stream.append({
+      type: "events.iterate.com/agents/user-message-received",
+      payload: { origin: "web", content: "message two" },
+    });
+    await deliver(agent);
+
+    // Wait for the LLM call to complete (both messages included in it)
+    await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-requested"],
+      timeoutMs: 2_000,
+    });
+    await deliver(agent);
+    await deliver(cloudflareAi);
+    await firstCallInFlight;
+    await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-completed"],
+      timeoutMs: 2_000,
+    });
+    await deliver(agent);
+
+    // Give the processor time to fire a spurious second request if the bug is present
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await deliver(agent);
+
+    expect(aiCalls).toHaveLength(1);
+    const firstCall = aiCalls[0] as { messages: Array<{ role: string; content: string }> };
+    expect(firstCall.messages.map((m) => m.content)).toEqual(
+      expect.arrayContaining(["message one", "message two"]),
+    );
+  });
+
   it("treats Workers AI terminal stream chunks without choices as successful completion", async () => {
     const stream = new MemoryStream();
     const cloudflareAi = new CloudflareAiProcessor({
@@ -224,6 +287,7 @@ describe("minimal web-chat agent processors", () => {
         payload: {
           model: "@cf/moonshotai/kimi-k2.7-code",
           provider: "cloudflare-ai",
+          requestId: "llm-request:1",
         },
       },
     );

@@ -88,6 +88,7 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
             payload: {
               model: event.payload.model,
               provider: event.payload.provider,
+              requestId: event.payload.requestId,
             },
           });
         });
@@ -222,10 +223,12 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
         history: [...state.history, { role: "assistant", content: event.payload.content }],
       };
     case "events.iterate.com/agent/llm-provider-selected":
+      if (event.payload.ifUnset && state.llmProviderConfigured) return state;
       return {
         ...state,
         llmConfig: { model: event.payload.model },
         llmProvider: event.payload.provider,
+        llmProviderConfigured: true,
       };
     case "events.iterate.com/agent/llm-request-scheduled":
       return {
@@ -238,9 +241,15 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
         pendingTriggerOffset: null,
       };
     case "events.iterate.com/agent/llm-request-requested":
+      if (
+        state.currentRequest?.phase !== "scheduled" ||
+        state.currentRequest.requestId !== event.payload.requestId
+      )
+        return state;
       return {
         ...state,
         currentRequest: { phase: "requested", llmRequestId: event.offset },
+        pendingTriggerOffset: null,
       };
     case "events.iterate.com/agent/llm-request-completed":
       if (
