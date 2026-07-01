@@ -11,6 +11,21 @@ import type {
 
 const DEFAULT_BASE_URL = "http://localhost:8791";
 
+/**
+ * The deployment admin API secret gating the `admin-secret` and `impersonate`
+ * credential lanes. Provided by the Doppler config the suite runs under.
+ */
+export function adminSecret(): string {
+  const secret =
+    process.env.OS_ADMIN_API_SECRET?.trim() || process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
+  if (!secret) {
+    throw new Error(
+      "Engine e2e needs OS_ADMIN_API_SECRET or APP_CONFIG_ADMIN_API_SECRET (run under doppler).",
+    );
+  }
+  return secret;
+}
+
 export type ItxWebSocketMessage = [timestamp: number, direction: "in" | "out", data: unknown];
 
 type ItxSessionInput = {

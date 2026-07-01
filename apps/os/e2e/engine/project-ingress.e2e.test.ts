@@ -1,14 +1,13 @@
 import { expect, test } from "vitest";
-import { TRUSTED_INTERNAL_ITX_TOKEN } from "../../src/next/auth.ts";
-import { buildUrl, withItxSession } from "./test-helpers.ts";
+import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 
 test("project ingress should serve a counter page backed by worker.js state", async () => {
   const marker = crypto.randomUUID();
 
   using session = withItxSession();
   using itx = session.authenticate({
-    type: "trusted-internal",
-    token: TRUSTED_INTERNAL_ITX_TOKEN,
+    type: "admin-secret",
+    secret: adminSecret(),
   });
   using project = itx.projects.create({ slug: `project-ingress-${marker}` });
   const { projectId } = await project.describe();

@@ -1,7 +1,6 @@
 import { expect, test } from "vitest";
-import { TRUSTED_INTERNAL_ITX_TOKEN } from "../../src/next/auth.ts";
 import type { Stream, StreamEvent, StreamEventInput } from "../../src/next/types.ts";
-import { withItxSession } from "./test-helpers.ts";
+import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 type RuntimeConnection = {
   subscriptionType?: "configured" | "ephemeral";
@@ -46,8 +45,8 @@ test("configured processor subscriptions are recorded as configured runtime conn
 
   using session = withItxSession();
   using itx = session.authenticate({
-    type: "trusted-internal",
-    token: TRUSTED_INTERNAL_ITX_TOKEN,
+    type: "admin-secret",
+    secret: adminSecret(),
   });
   using project = itx.projects.create({ slug: `lifecycle-configured-${marker}` });
   using stream = project.streams.get("/");
@@ -74,8 +73,8 @@ test("ephemeral subscriptions cannot reuse a configured subscription key", async
 
   using session = withItxSession();
   using itx = session.authenticate({
-    type: "trusted-internal",
-    token: TRUSTED_INTERNAL_ITX_TOKEN,
+    type: "admin-secret",
+    secret: adminSecret(),
   });
   using project = itx.projects.create({ slug: `lifecycle-key-reserved-${marker}` });
   using stream = project.streams.get("/");
@@ -108,8 +107,8 @@ test("configured durable object subscribers must target the stream project", asy
 
   using session = withItxSession();
   using itx = session.authenticate({
-    type: "trusted-internal",
-    token: TRUSTED_INTERNAL_ITX_TOKEN,
+    type: "admin-secret",
+    secret: adminSecret(),
   });
   using project = itx.projects.create({ slug: `configured-cross-project-${marker}` });
   const { projectId } = await project.describe();
@@ -145,8 +144,8 @@ test("global streams reject project-scoped configured durable object subscribers
 
   using session = withItxSession();
   using itx = session.authenticate({
-    type: "trusted-internal",
-    token: TRUSTED_INTERNAL_ITX_TOKEN,
+    type: "admin-secret",
+    secret: adminSecret(),
   });
   using stream = itx.streams.get(`/configured-global-cross-project-${marker}`);
 
@@ -182,8 +181,8 @@ test("global streams reject configured worker subscribers", async () => {
 
   using session = withItxSession();
   using itx = session.authenticate({
-    type: "trusted-internal",
-    token: TRUSTED_INTERNAL_ITX_TOKEN,
+    type: "admin-secret",
+    secret: adminSecret(),
   });
   using stream = itx.streams.get(`/configured-global-worker-${marker}`);
 
@@ -217,8 +216,8 @@ test("stream idle teardown severs configured processor subscriptions", async () 
 
   using session = withItxSession();
   using itx = session.authenticate({
-    type: "trusted-internal",
-    token: TRUSTED_INTERNAL_ITX_TOKEN,
+    type: "admin-secret",
+    secret: adminSecret(),
   });
   using project = itx.projects.create({ slug: `lifecycle-idle-${marker}` });
   using stream = project.streams.get("/");
@@ -259,8 +258,8 @@ test("append after idle teardown re-wakes configured subscriber from its checkpo
 
   using session = withItxSession();
   using itx = session.authenticate({
-    type: "trusted-internal",
-    token: TRUSTED_INTERNAL_ITX_TOKEN,
+    type: "admin-secret",
+    secret: adminSecret(),
   });
   using project = itx.projects.create({ slug: `lifecycle-redial-${marker}` });
   using stream = project.streams.get("/");
@@ -298,8 +297,8 @@ test("closing a Cap'n Web session without unsubscribe removes its stream subscri
 
   using observerSession = withItxSession();
   using observerItx = observerSession.authenticate({
-    type: "trusted-internal",
-    token: TRUSTED_INTERNAL_ITX_TOKEN,
+    type: "admin-secret",
+    secret: adminSecret(),
   });
   using project = observerItx.projects.create({ slug: `lifecycle-session-close-${marker}` });
   const { projectId } = await project.describe();
@@ -309,8 +308,8 @@ test("closing a Cap'n Web session without unsubscribe removes its stream subscri
   const subscriberSession = withItxSession();
   try {
     const subscriberItx = subscriberSession.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
     const subscriberProject = subscriberItx.projects.get(projectId);
     const subscriberStream = subscriberProject.streams.get(streamPath);
@@ -355,8 +354,8 @@ test.skip("dropping a WebSocket waitForEvent caller cleans up the internal waitF
 
   using observerSession = withItxSession();
   using observerItx = observerSession.authenticate({
-    type: "trusted-internal",
-    token: TRUSTED_INTERNAL_ITX_TOKEN,
+    type: "admin-secret",
+    secret: adminSecret(),
   });
   using project = observerItx.projects.create({ slug: `lifecycle-wait-${marker}` });
   const { projectId } = await project.describe();
@@ -365,8 +364,8 @@ test.skip("dropping a WebSocket waitForEvent caller cleans up the internal waitF
   const waiterSession = withItxSession();
   try {
     const waiterItx = waiterSession.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
     const waiterProject = waiterItx.projects.get(projectId);
     const waiterStream = waiterProject.streams.get(streamPath);

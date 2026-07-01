@@ -6,9 +6,8 @@
 // stay out of this file.
 
 import { expect, test } from "vitest";
-import { TRUSTED_INTERNAL_ITX_TOKEN } from "../../src/next/auth.ts";
 import type { StreamEvent, StreamEventBatch } from "../../src/next/types.ts";
-import { withItxSession } from "./test-helpers.ts";
+import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const STREAM_EVENT_TYPE = "events.iterate.test/minimal-v4/stream-e2e";
@@ -27,8 +26,8 @@ test("creates a project and uses project streams through v4 ITX", async () => {
 
   using session = withItxSession();
   using itx = session.authenticate({
-    type: "trusted-internal",
-    token: TRUSTED_INTERNAL_ITX_TOKEN,
+    type: "admin-secret",
+    secret: adminSecret(),
   });
   using project = itx.projects.create({ slug: `os-stream-smoke-${RUN_SUFFIX}-${marker}` });
   const projectDescription = await project.describe();
@@ -88,8 +87,8 @@ test("stream subscribe replays history, tails live appends, and unsubscribes", a
 
   using session = withItxSession();
   using itx = session.authenticate({
-    type: "trusted-internal",
-    token: TRUSTED_INTERNAL_ITX_TOKEN,
+    type: "admin-secret",
+    secret: adminSecret(),
   });
   using project = itx.projects.create({ slug: `os-stream-subscribe-${RUN_SUFFIX}-${marker}` });
   const projectDescription = await project.describe();
@@ -146,8 +145,8 @@ test("state-only stream subscribe pushes initial state immediately, then state a
 
   using session = withItxSession();
   using itx = session.authenticate({
-    type: "trusted-internal",
-    token: TRUSTED_INTERNAL_ITX_TOKEN,
+    type: "admin-secret",
+    secret: adminSecret(),
   });
   using project = itx.projects.create({ slug: `os-stream-state-${RUN_SUFFIX}-${marker}` });
   const projectDescription = await project.describe();
@@ -191,8 +190,8 @@ test("stream rules cross-post matching events with source provenance", async () 
 
   using session = withItxSession();
   using itx = session.authenticate({
-    type: "trusted-internal",
-    token: TRUSTED_INTERNAL_ITX_TOKEN,
+    type: "admin-secret",
+    secret: adminSecret(),
   });
   using project = itx.projects.create({ slug: `os-stream-cross-post-${RUN_SUFFIX}-${marker}` });
   const projectDescription = await project.describe();
@@ -246,8 +245,8 @@ test("stream rules do not recursively cross-post events that are already cross-p
 
   using session = withItxSession();
   using itx = session.authenticate({
-    type: "trusted-internal",
-    token: TRUSTED_INTERNAL_ITX_TOKEN,
+    type: "admin-secret",
+    secret: adminSecret(),
   });
   using project = itx.projects.create({
     slug: `os-stream-cross-post-loop-${RUN_SUFFIX}-${marker}`,
@@ -303,8 +302,8 @@ test("stream rules cannot cross-post project stream events into global streams",
 
   using session = withItxSession();
   using itx = session.authenticate({
-    type: "trusted-internal",
-    token: TRUSTED_INTERNAL_ITX_TOKEN,
+    type: "admin-secret",
+    secret: adminSecret(),
   });
   using project = itx.projects.create({
     slug: `os-stream-cross-post-global-${RUN_SUFFIX}-${marker}`,

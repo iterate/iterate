@@ -7,40 +7,25 @@
  * legacy stack keeps owning `/api/itx`.
  */
 import { newHttpBatchRpcResponse, newWorkersWebSocketRpcResponse } from "capnweb";
-import type { Env } from "../env.ts";
-import { ITX_AUTH_COOKIE, trustedInternalAuthContext } from "../auth.ts";
-import { ProjectCollectionRpcTarget, UnauthenticatedItxRpcTarget } from "../rpc-targets.ts";
+import { trustedInternalAuthContext } from "../auth.ts";
 import { e2eFixtureResponse } from "../e2e-fixtures.ts";
+import type { Env } from "../env.ts";
+import { ProjectCollectionRpcTarget, UnauthenticatedItxRpcTarget } from "../rpc-targets.ts";
+import { parseConfig } from "~/config.ts";
 
 export { ItxEntrypoint } from "../domains/itx/itx-entrypoint.ts";
 export { ProjectEgressEntrypoint } from "../domains/projects/egress.ts";
 
 export default {
-  async fetch(request: Request, _env: Env, ctx: ExecutionContext) {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
-
-    // To test cookie auth, callers can post the JWT they'd like to have written as a cookie to /api/login
-    // In this demo implementation of itx, we just trust the caller to pick their own jwt.
-    if (url.pathname === "/api/login") {
-      if (request.method !== "POST")
-        return Response.json({ error: "method not allowed" }, { status: 405 });
-      const token = await request.text();
-      const cookie = [
-        `${ITX_AUTH_COOKIE}=${encodeURIComponent(token)}`,
-        "Path=/",
-        "HttpOnly",
-        url.protocol === "https:" ? "SameSite=None" : "SameSite=Lax",
-        ...(url.protocol === "https:" ? ["Secure"] : []),
-      ].join("; ");
-      return Response.json({ ok: true }, { headers: { "set-cookie": cookie } });
-    }
 
     const fixtureResponse = await e2eFixtureResponse(request);
     if (fixtureResponse !== null) return fixtureResponse;
 
     const projectIngress = projectIngressRequest(request, url);
     if (projectIngress !== null) {
-      const project = new ProjectCollectionRpcTarget({
+      const project = await new ProjectCollectionRpcTarget({
         auth: trustedInternalAuthContext(),
         ctx,
       }).get(projectIngress.projectId);
@@ -48,16 +33,19 @@ export default {
     }
 
     if (url.pathname !== "/api/itx") return Response.json({ error: "not found" }, { status: 404 });
+    // Parse config per request, not at module scope: workerd may reuse an
+    // isolate across binding-only deploys, and a module-scope copy can serve
+    // stale secrets after a rotation.
+    const unauthenticated = new UnauthenticatedItxRpcTarget({
+      config: parseConfig(env as never),
+      ctx,
+      headers: request.headers,
+      requestUrl: request.url,
+    });
     if (request.method === "POST") {
-      return newHttpBatchRpcResponse(
-        request,
-        new UnauthenticatedItxRpcTarget(request.headers, ctx),
-      );
+      return newHttpBatchRpcResponse(request, unauthenticated);
     }
-    return newWorkersWebSocketRpcResponse(
-      request,
-      new UnauthenticatedItxRpcTarget(request.headers, ctx),
-    );
+    return newWorkersWebSocketRpcResponse(request, unauthenticated);
   },
 } satisfies ExportedHandler<Env>;
 

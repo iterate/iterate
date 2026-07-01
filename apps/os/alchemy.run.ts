@@ -500,7 +500,10 @@ const nextEngineBindings = {
 };
 // @cloudflare/shell (repo git) and the dynamic worker loader need Node APIs —
 // the minimal-itx-v4 original ran its whole worker with nodejs_compat.
-const nextEngineCompatibilityFlags = ["nodejs_compat"];
+// global_fetch_strictly_public: same-zone subrequests (auth worker on previews,
+// worker-hosted e2e fixtures through project egress) must traverse Worker
+// routes instead of going to origin - same reason as the app worker.
+const nextEngineCompatibilityFlags = ["nodejs_compat", "global_fetch_strictly_public"];
 
 function nextEngineWorker(id: keyof typeof workerNames, entrypoint: string) {
   return osWorker(id, {

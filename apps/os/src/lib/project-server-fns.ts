@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { ProjectsCapability } from "~/domains/projects/project-directory.ts";
-import { authenticateCapnwebAdmin } from "~/itx/admin-auth-cookie.ts";
+import { authenticateCapnwebAdmin } from "~/auth/admin-auth-cookie.ts";
 import type { RequestContext } from "~/request-context.ts";
 
 /**

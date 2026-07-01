@@ -4,8 +4,7 @@
 // the fix is pinned by observable behaviour rather than by inspection.
 
 import { expect, test } from "vitest";
-import { TRUSTED_INTERNAL_ITX_TOKEN } from "../../src/next/auth.ts";
-import { withItxSession } from "./test-helpers.ts";
+import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const STREAM_EVENT_TYPE = "events.iterate.test/minimal-v4/security-e2e";
@@ -19,8 +18,8 @@ test("project.processor does not expose the host-only ingest method over RPC", a
   const marker = crypto.randomUUID();
   using session = withItxSession();
   using itx = session.authenticate({
-    type: "trusted-internal",
-    token: TRUSTED_INTERNAL_ITX_TOKEN,
+    type: "admin-secret",
+    secret: adminSecret(),
   });
   using project = itx.projects.create({ slug: `sec-ingest-${RUN_SUFFIX}-${marker}` });
 
@@ -57,8 +56,8 @@ test("append accepts an offset assertion on a rule-configured core event", async
 
   using session = withItxSession();
   using itx = session.authenticate({
-    type: "trusted-internal",
-    token: TRUSTED_INTERNAL_ITX_TOKEN,
+    type: "admin-secret",
+    secret: adminSecret(),
   });
   using project = itx.projects.create({ slug: `sec-offset-${RUN_SUFFIX}-${marker}` });
   using stream = project.streams.get(streamPath);
@@ -95,8 +94,8 @@ test("subscribe rejects a malformed subscriber descriptor instead of corrupting 
 
   using session = withItxSession();
   using itx = session.authenticate({
-    type: "trusted-internal",
-    token: TRUSTED_INTERNAL_ITX_TOKEN,
+    type: "admin-secret",
+    secret: adminSecret(),
   });
   using project = itx.projects.create({ slug: `sec-subscriber-${RUN_SUFFIX}-${marker}` });
   using stream = project.streams.get(streamPath);

@@ -1,14 +1,9 @@
 import { RpcTarget } from "cloudflare:workers";
 import { Client as McpSdkClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { AppConfig } from "../config.ts";
+import { resolveItxAuth } from "./auth.ts";
 import { nextEnv as env } from "./env.ts";
-import {
-  FakeAuthContext,
-  ITX_AUTH_COOKIE,
-  parseItxAuthToken,
-  readCookie,
-  TRUSTED_INTERNAL_ITX_TOKEN,
-} from "./auth.ts";
 import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
 import { normalizeAgentPath } from "./domains/agents/utils.ts";
@@ -609,7 +604,11 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
     super();
   }
 
-  get(projectId: string) {
+  async get(projectId: string) {
+    // Claims can lag right after a create; the auth context may consult the
+    // project directory and widen itself before the synchronous constructor
+    // assert runs. Cap'n Web pipelines through the returned promise.
+    await this.props.auth.ensureCanAccessProject?.(projectId);
     return new ItxRpcTarget({
       auth: this.props.auth,
       ctx: this.props.ctx,
@@ -921,31 +920,24 @@ class SessionRpcTarget extends RpcTarget implements Session {
 
 export class UnauthenticatedItxRpcTarget extends RpcTarget implements UnauthenticatedItx {
   constructor(
-    readonly requestHeaders: Headers,
-    readonly ctx: CfExecutionContext,
+    readonly props: {
+      config: AppConfig;
+      ctx: CfExecutionContext;
+      headers: Headers;
+      requestUrl: string;
+    },
   ) {
     super();
   }
 
-  authenticate(input: Parameters<UnauthenticatedItx["authenticate"]>[0]) {
-    let auth: ItxAuth | null = null;
-
-    if (input.type === "token") {
-      auth = new FakeAuthContext(input.token);
-    }
-
-    if (input.type === "from-server-cookie") {
-      const cookieToken = readCookie(this.requestHeaders.get("cookie"), ITX_AUTH_COOKIE);
-      if (cookieToken) auth = new FakeAuthContext(parseItxAuthToken(cookieToken));
-    }
-
-    if (input.type === "trusted-internal" && input.token === TRUSTED_INTERNAL_ITX_TOKEN) {
-      auth = new FakeAuthContext({ principal: "trusted-internal", type: "admin" });
-    }
-
-    if (!auth) throw new Error("missing or invalid auth");
-
-    return new SessionRpcTarget({ auth, ctx: this.ctx });
+  async authenticate(input: Parameters<UnauthenticatedItx["authenticate"]>[0]) {
+    const auth = await resolveItxAuth({
+      config: this.props.config,
+      credentials: input,
+      headers: this.props.headers,
+      requestUrl: this.props.requestUrl,
+    });
+    return new SessionRpcTarget({ auth, ctx: this.props.ctx });
   }
 }
 

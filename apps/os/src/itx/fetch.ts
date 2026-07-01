@@ -20,9 +20,12 @@ import { resolveItx } from "./entrypoint.ts";
 import { tagOutboundItxError } from "./errors.ts";
 import { runItxScript } from "./run.ts";
 import { GLOBAL_CONTEXT_ID, type ItxProps, type ProjectAccess } from "./refs.ts";
-import { authenticateCapnwebAdmin, handleCapnwebAdminCookieRequest } from "./admin-auth-cookie.ts";
 import { accessForPrincipal, requireWorkerExports, resolveAccessibleContextRef } from "./access.ts";
 import { parseContextRef } from "./coordinates.ts";
+import {
+  authenticateCapnwebAdmin,
+  handleCapnwebAdminCookieRequest,
+} from "~/auth/admin-auth-cookie.ts";
 import type { AppConfig } from "~/config.ts";
 import type { RequestContext } from "~/request-context.ts";
 import { createOsIterateAuth, resolveRequestAuth } from "~/auth/middleware.ts";

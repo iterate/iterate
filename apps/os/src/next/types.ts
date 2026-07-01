@@ -34,7 +34,7 @@
  * method that already checked you.
  */
 export interface UnauthenticatedItx {
-  authenticate(input: ItxAuthCredentials): Session;
+  authenticate(input: ItxAuthCredentials): Promise<Session>;
 }
 
 /**
@@ -54,7 +54,7 @@ export interface Session {
 
 /** Catalog of projects reachable from a {@link Session}. */
 export interface ProjectCollection {
-  get(projectId: string): Itx;
+  get(projectId: string): Promise<Itx>;
   create(args: { projectId?: string; slug: string }): Promise<Itx>;
   list(): string[];
 }
@@ -576,13 +576,23 @@ export type RevokeCapabilityInput = {
   providedAtOffset?: number;
 };
 
-/** Credentials accepted by `UnauthenticatedItx.authenticate`. */
+/**
+ * Credentials accepted by `UnauthenticatedItx.authenticate`.
+ *
+ * - `from-server-cookie` — the browser lane: the deployment's admin cookie or
+ *   the signed-in user's session cookie riding the WebSocket handshake.
+ * - `bearer` — an auth access token presented as RPC data.
+ * - `admin-secret` — the deployment admin API secret (CLI / tooling / e2e).
+ * - `impersonate` — admin-secret-gated fake principal, for test suites that
+ *   exercise per-project confinement without minting real users.
+ */
 export type ItxAuthCredentials =
   | { type: "from-server-cookie" }
-  | { type: "token"; token: ItxAuthToken }
-  | { type: "trusted-internal"; token: string };
+  | { type: "bearer"; token: string }
+  | { type: "admin-secret"; secret: string }
+  | { type: "impersonate"; secret: string; token: ItxAuthToken };
 
-/** Minimal fake token model used by the reference worker. */
+/** Principal shape for `impersonate` credentials. */
 export type ItxAuthToken =
   | { type: "admin"; principal?: string }
   | { type: "user"; principal: string; projectScopes: string[] };
@@ -594,6 +604,12 @@ export interface ItxAuth {
   canAccessProject(projectId: string): boolean;
   assertCanAccessProject(projectId: string | null): void;
   listAccessibleProjects(): string[];
+  /**
+   * Async access check that may consult the project directory (source of
+   * truth) when synchronous claims miss — see the auth adapter. Optional so
+   * in-process trusted contexts stay trivially constructible.
+   */
+  ensureCanAccessProject?(projectId: string): Promise<void>;
 }
 
 /**

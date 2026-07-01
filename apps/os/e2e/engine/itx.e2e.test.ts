@@ -4,7 +4,6 @@ import { describe, expect, test } from "vitest";
 import { newHttpBatchRpcSession, RpcTarget } from "capnweb";
 import { WebClient } from "@slack/web-api";
 import { z } from "zod";
-import { TRUSTED_INTERNAL_ITX_TOKEN } from "../../src/next/auth.ts";
 import { RepoArtifactNameCodec } from "../../src/next/domains/repos/utils.ts";
 import {
   defineProcessorContract,
@@ -13,7 +12,7 @@ import {
 } from "../../src/next/domains/streams/stream-processor.ts";
 import type { DynamicWorkerRef, UnauthenticatedItx } from "../../src/next/types.ts";
 import { startEgressEcho, startMockMcp, startMockOpenApi } from "./itx-capability-fixtures.ts";
-import { buildUrl, withItxSession } from "./test-helpers.ts";
+import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 import type { ItxWebSocketMessage } from "./test-helpers.ts";
 
 const PROJECT_WORKER_FORWARDED_EVENT_TYPE = "events.iterate.test/project-worker-forwarded";
@@ -199,7 +198,8 @@ describe("minimal itx v4", () => {
   test("Authenticated itx whoami returns principal", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "token",
+      type: "impersonate",
+      secret: adminSecret(),
       token: {
         principal: "alice",
         projectScopes: ["prj_alice", "prj_ref"],
@@ -221,8 +221,8 @@ describe("minimal itx v4", () => {
       },
     });
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
 
     // TODO project slug should be derived from tests etc as in apps/os
@@ -312,7 +312,8 @@ describe("minimal itx v4", () => {
 
     using newSession = withItxSession();
     using newItx = newSession.authenticate({
-      type: "token",
+      type: "impersonate",
+      secret: adminSecret(),
       token: {
         projectScopes: [description.projectId],
         type: "user",
@@ -341,8 +342,8 @@ describe("minimal itx v4", () => {
   test("Project describe exposes Workers AI as a builtin capability", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
 
     using project = itx.projects.create({ slug: "ai-builtin" });
@@ -354,8 +355,8 @@ describe("minimal itx v4", () => {
   test("Trusted internal root can access global streams and repos", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
 
     const path = `/global-${crypto.randomUUID()}`;
@@ -377,8 +378,8 @@ describe("minimal itx v4", () => {
     const echo = await startEgressEcho();
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
 
     try {
@@ -483,8 +484,8 @@ describe("minimal itx v4", () => {
     const echo = await startEgressEcho();
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
 
     try {
@@ -553,8 +554,8 @@ describe("minimal itx v4", () => {
     const api = await startMockOpenApi({ expectedAuthorization: `Bearer ${secretMaterial}` });
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
 
     try {
@@ -632,8 +633,8 @@ describe("minimal itx v4", () => {
     const mcp = await startMockMcp({ expectedAuthorization: `Bearer ${secretMaterial}` });
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
 
     try {
@@ -713,8 +714,8 @@ describe("minimal itx v4", () => {
     const mcp = await startMockMcp({ expectedAuthorization: `Bearer ${secretMaterial}` });
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
 
     try {
@@ -796,8 +797,8 @@ describe("minimal itx v4", () => {
     const marker = crypto.randomUUID();
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
     using project = itx.projects.create({ slug: `expr-project-${crypto.randomUUID()}` });
 
@@ -952,8 +953,8 @@ describe("minimal itx v4", () => {
   test("ITX expression capabilities resolve aliases against the current ITX host path", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
     using project = itx.projects.create({ slug: `expr-agent-${crypto.randomUUID()}` });
     const agentPath = `/agents/expr-agent-${crypto.randomUUID()}`;
@@ -991,8 +992,8 @@ describe("minimal itx v4", () => {
   test("ITX expression capabilities reject self-aliases at provide time", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
     using project = itx.projects.create({ slug: `expr-self-${crypto.randomUUID()}` });
 
@@ -1015,8 +1016,8 @@ describe("minimal itx v4", () => {
   test("Project repos, workers, runScript, and dynamic worker refs compose", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
 
     using project = itx.projects.create({ slug: "dynamic-worker-project" });
@@ -1246,8 +1247,8 @@ describe("minimal itx v4", () => {
   test("repo worker source projection is cleared when the main worker file is deleted", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
 
     using project = itx.projects.create({ slug: "deleted-worker-source-projection" });
@@ -1266,8 +1267,8 @@ describe("minimal itx v4", () => {
     const marker = crypto.randomUUID();
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
     using project = itx.projects.create({ slug: `worker-flatten-${marker}` });
 
@@ -1378,8 +1379,8 @@ describe("minimal itx v4", () => {
   test("Dynamic workers can return RpcTarget capabilities that keep chaining", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
     using project = itx.projects.create({ slug: `returned-rpc-target-${crypto.randomUUID()}` });
 
@@ -1509,8 +1510,8 @@ describe("minimal itx v4", () => {
   test("Worker capabilities cover project/agent, stateful/stateless, repo/inline refs and env.ITX cross-calls", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
 
     using project = itx.projects.create({ slug: "worker-capability-matrix" });
@@ -1729,8 +1730,8 @@ describe("minimal itx v4", () => {
   test("Agent scripts can send web-chat messages and call project tools", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
 
     using project = itx.projects.create({ slug: "agent-project-tool" });
@@ -1785,8 +1786,8 @@ describe("minimal itx v4", () => {
   test("New agent streams install processors and replay existing child events", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
 
     const marker = `agent-auto-bootstrap-${crypto.randomUUID()}`;
@@ -1859,8 +1860,8 @@ describe("minimal itx v4", () => {
   test("Agent-only dynamic worker and durable object capabilities run from LLM scripts", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
 
     using project = itx.projects.create({ slug: "agent-only-tools" });
@@ -1982,8 +1983,8 @@ describe("minimal itx v4", () => {
   test("Dynamic worker env.ITX.get() is scoped by project and agent host path", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
 
     using project = itx.projects.create({ slug: "dynamic-worker-scope-cache" });
@@ -2041,8 +2042,8 @@ describe("minimal itx v4", () => {
   test("Dynamic project worker processEvent can cross-post project events", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
 
     using project = itx.projects.create({ slug: "project-worker-process-event" });
@@ -2112,8 +2113,8 @@ describe("minimal itx v4", () => {
   test("Project stream subscribe can observe project worker processEvent forwarding", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
 
     const marker = crypto.randomUUID();
@@ -2224,8 +2225,8 @@ describe("minimal itx v4", () => {
 
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
     using project = itx.projects.create({ slug: `capnweb-subscribe-callback-${marker}` });
     using stream = project.streams.get(streamPath);
@@ -2295,8 +2296,8 @@ describe("minimal itx v4", () => {
 
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
     using project = itx.projects.create({ slug: `capnweb-subscribe-replaced-${marker}` });
     using stream = project.streams.get(streamPath);
@@ -2350,8 +2351,8 @@ describe("minimal itx v4", () => {
 
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
     using project = itx.projects.create({ slug: `capnweb-subscribe-nested-${marker}` });
     using stream = project.streams.get(streamPath);
@@ -2393,8 +2394,8 @@ describe("minimal itx v4", () => {
 
     using providerSession = withItxSession();
     using providerItx = providerSession.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
     using project = providerItx.projects.create({ slug: `nested-live-${marker}` });
     const { projectId } = await project.describe();
@@ -2413,7 +2414,8 @@ describe("minimal itx v4", () => {
 
     using callerSession = withItxSession();
     using callerItx = callerSession.authenticate({
-      type: "token",
+      type: "impersonate",
+      secret: adminSecret(),
       token: {
         principal: "alice",
         projectScopes: [projectId],
@@ -2429,8 +2431,8 @@ describe("minimal itx v4", () => {
   test("Live capabilities reject the removed target spelling", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
     using project = itx.projects.create({ slug: `removed-target-${crypto.randomUUID()}` });
 
@@ -2452,8 +2454,8 @@ describe("minimal itx v4", () => {
 
     using providerSession = withItxSession();
     using providerItx = providerSession.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
     using project = providerItx.projects.create({ slug: `capability-field-live-${marker}` });
     const { projectId } = await project.describe();
@@ -2475,7 +2477,8 @@ describe("minimal itx v4", () => {
 
     using callerSession = withItxSession();
     using callerItx = callerSession.authenticate({
-      type: "token",
+      type: "impersonate",
+      secret: adminSecret(),
       token: {
         principal: "alice",
         projectScopes: [projectId],
@@ -2499,8 +2502,8 @@ describe("minimal itx v4", () => {
 
     using providerSession = withItxSession();
     using providerItx = providerSession.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
     using project = providerItx.projects.create({ slug: `bare-function-live-${marker}` });
     const { projectId } = await project.describe();
@@ -2513,7 +2516,8 @@ describe("minimal itx v4", () => {
 
     using callerSession = withItxSession();
     using callerItx = callerSession.authenticate({
-      type: "token",
+      type: "impersonate",
+      secret: adminSecret(),
       token: {
         principal: "alice",
         projectScopes: [projectId],
@@ -2536,8 +2540,8 @@ describe("minimal itx v4", () => {
 
     using providerSession = withItxSession();
     using providerItx = providerSession.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
     using project = providerItx.projects.create({ slug: `rpc-target-live-${marker}` });
     const { projectId } = await project.describe();
@@ -2550,7 +2554,8 @@ describe("minimal itx v4", () => {
 
     using callerSession = withItxSession();
     using callerItx = callerSession.authenticate({
-      type: "token",
+      type: "impersonate",
+      secret: adminSecret(),
       token: {
         principal: "alice",
         projectScopes: [projectId],
@@ -2588,8 +2593,8 @@ describe("minimal itx v4", () => {
 
     using providerSession = withItxSession();
     using providerItx = providerSession.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
     using project = providerItx.projects.create({ slug: `nested-rpc-target-live-${marker}` });
     const { projectId } = await project.describe();
@@ -2602,7 +2607,8 @@ describe("minimal itx v4", () => {
 
     using callerSession = withItxSession();
     using callerItx = callerSession.authenticate({
-      type: "token",
+      type: "impersonate",
+      secret: adminSecret(),
       token: {
         principal: "alice",
         projectScopes: [projectId],
@@ -2630,8 +2636,8 @@ describe("minimal itx v4", () => {
 
     using providerSession = withItxSession();
     using providerItx = providerSession.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
     using project = providerItx.projects.create({ slug: `path-call-live-${marker}` });
     const { projectId } = await project.describe();
@@ -2645,7 +2651,8 @@ describe("minimal itx v4", () => {
 
     using callerSession = withItxSession();
     using callerItx = callerSession.authenticate({
-      type: "token",
+      type: "impersonate",
+      secret: adminSecret(),
       token: {
         principal: "alice",
         projectScopes: [projectId],
@@ -2667,8 +2674,8 @@ describe("minimal itx v4", () => {
 
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
     using project = itx.projects.create({ slug: `replace-live-${marker}` });
 
@@ -2703,8 +2710,8 @@ describe("minimal itx v4", () => {
 
     using session = withItxSession();
     using itx = session.authenticate({
-      type: "trusted-internal",
-      token: TRUSTED_INTERNAL_ITX_TOKEN,
+      type: "admin-secret",
+      secret: adminSecret(),
     });
     using project = itx.projects.create({ slug: `failed-replace-live-${marker}` });
 
@@ -2742,8 +2749,8 @@ describe("minimal itx v4", () => {
     try {
       using session = withItxSession();
       using itx = session.authenticate({
-        type: "trusted-internal",
-        token: TRUSTED_INTERNAL_ITX_TOKEN,
+        type: "admin-secret",
+        secret: adminSecret(),
       });
 
       using project = itx.projects.create({ slug: "slack-project" });
@@ -2763,7 +2770,8 @@ describe("minimal itx v4", () => {
 
       using callerSession = withItxSession();
       using callerItx = callerSession.authenticate({
-        type: "token",
+        type: "impersonate",
+        secret: adminSecret(),
         token: {
           projectScopes: [description.projectId],
           type: "user",
@@ -2812,7 +2820,8 @@ describe("minimal itx v4", () => {
     // oxlint-disable-next-line iterate/no-capnweb-http-batch -- if this cannot pipeline in one request, Cap'n Web rejects the batch.
     using session = newHttpBatchRpcSession<UnauthenticatedItx>(buildUrl({ path: "/api/itx" }));
     using itx = session.authenticate({
-      type: "token",
+      type: "impersonate",
+      secret: adminSecret(),
       token: {
         principal: "alice",
         projectScopes: ["prj_alice", "prj_ref"],
@@ -2859,7 +2868,8 @@ describe("minimal itx v4", () => {
     {
       using session = withItxSession({ onWebSocketMessage: (m) => pipelined.push(m) });
       using itx = session.authenticate({
-        type: "token",
+        type: "impersonate",
+        secret: adminSecret(),
         token: {
           principal: "alice",
           projectScopes: ["prj_alice", "prj_ref"],
@@ -2878,7 +2888,8 @@ describe("minimal itx v4", () => {
     {
       using session = withItxSession({ onWebSocketMessage: (m) => sequential.push(m) });
       using itx = session.authenticate({
-        type: "token",
+        type: "impersonate",
+        secret: adminSecret(),
         token: {
           principal: "alice",
           projectScopes: ["prj_alice", "prj_ref"],

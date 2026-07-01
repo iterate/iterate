@@ -22,11 +22,6 @@ export function nextEngineRequest(request: Request): Request | null {
     return new Request(url, request);
   }
 
-  if (url.pathname === "/api/login-next") {
-    url.pathname = "/api/login";
-    return new Request(url, request);
-  }
-
   if (url.pathname.startsWith("/__itx_e2e/")) return request;
   if (/^\/prj_[^/]/.test(url.pathname)) return request;
 
