@@ -187,6 +187,14 @@ export function createInvokeCapabilityPathProxy(
  * become dynamic capability paths, which lets the public API expose concrete
  * methods like `streams` while also supporting provided paths such as
  * `project.slack.chat.postMessage(...)`.
+ *
+ * KEY DESIGN IDEA: the RpcTarget with its known members sits *in front of* the ITX
+ * Durable Object. Built-ins resolve here in the isolate; only unknown roots fall
+ * through to `invokeCapability` (the ITX DO's dynamic table). So `itx.streams.get(...)`
+ * never makes a round trip to the DO just to check whether `streams` was shadowed.
+ * The deliberate trade-off: a dynamic capability can never shadow a built-in name —
+ * the built-in always wins. If we find we need shadowable built-ins a lot, we'd move
+ * resolution behind the DO and pay that round trip; for now this keeps the hot path free.
  */
 export function withInvokeCapabilityFallback<T extends object & InvokeCapabilityTarget>(
   target: T,

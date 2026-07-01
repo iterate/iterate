@@ -34,14 +34,13 @@ import type {
   Agent,
   AgentChat,
   AgentCollection,
-  AgentItx,
   Ai,
   CfExecutionContext,
   ItxAuth,
-  ItxRoot,
+  Itx,
+  Session,
   McpClientCollection,
   OpenApiCollection,
-  Project,
   ProjectCollection,
   ProjectRepoCollection,
   ProjectStreamCollection,
@@ -432,6 +431,14 @@ class AgentRpcTarget extends RpcTarget implements Agent {
     });
   }
 
+  get chat() {
+    return new AgentChatRpcTarget({
+      auth: this.props.auth,
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
+  }
+
   async sendMessage(message: string) {
     const [event] = await this.stream.append({
       type: "events.iterate.com/agents/user-message-received",
@@ -582,7 +589,7 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
   }
 
   get(projectId: string) {
-    return new ProjectRpcTarget({
+    return new ItxRpcTarget({
       auth: this.props.auth,
       ctx: this.props.ctx,
       projectId: projectId,
@@ -630,7 +637,7 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
       timeoutMs: 60_000,
     });
 
-    return new ProjectRpcTarget({
+    return new ItxRpcTarget({
       auth: this.props.auth,
       ctx: this.props.ctx,
       projectId: args.projectId,
@@ -642,9 +649,13 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
   }
 }
 
-type ProjectRpcTargetProps = {
+type ItxRpcTargetProps = {
   auth: ItxAuth;
   ctx: CfExecutionContext;
+  // Which scope's capability table backs runScript/provide/invoke and the dynamic
+  // dotted-path fallback. `"/"` (or omitted) is the project root; `/agents/bla` is
+  // an agent scope. The built-in members below are project-global regardless — only
+  // the dynamic capability table is scoped by this path.
   itxPath?: string;
   projectId: string;
 };
@@ -663,8 +674,23 @@ const PROJECT_BUILTIN_CAPABILITY_PATHS = [
   "workers",
 ] as const;
 
-export class ProjectRpcTarget extends RpcTarget implements Project {
-  constructor(readonly props: ProjectRpcTargetProps) {
+/**
+ * The server-side **itx** — the object an `async (itx) => { … }` script holds and
+ * what `env.ITX.get()` returns. One class serves the project root and every nested
+ * (agent) scope; `itxPath` selects which scope's dynamic capability table backs it.
+ *
+ * DESIGN NOTE — this RpcTarget sits *in front of* the ITX Durable Object. Its
+ * built-in members (`streams`, `agents`, `repo`, …) are resolved here in the
+ * isolate; only unknown roots fall through `withInvokeCapabilityFallback` to the
+ * ITX DO's dynamic table (which itself chains up to enclosing scopes). So the
+ * common `itx.streams.get(...)` path never makes a round trip just to check
+ * whether `streams` was shadowed. The deliberate cost: a dynamic capability can
+ * never shadow a built-in name — the built-in always wins (`rejectBuiltinCollision`
+ * enforces this at provide time). If we end up needing shadowable built-ins a lot,
+ * we'd move resolution behind the DO and pay the round trip; today we don't.
+ */
+export class ItxRpcTarget extends RpcTarget implements Itx {
+  constructor(readonly props: ItxRpcTargetProps) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
     return withInvokeCapabilityFallback(this);
@@ -705,6 +731,22 @@ export class ProjectRpcTarget extends RpcTarget implements Project {
     return new AiRpcTarget();
   }
 
+  // `agent` and `chat` exist only when this itx is scoped under `/agents/` — i.e.
+  // when it IS an agent context. They are derived from the scope path rather than
+  // mounted as capabilities: being an agent is a property of where the itx sits,
+  // not something a caller provided, so a getter keeps zero durable state, needs
+  // no bootstrap step, and means `env.ITX.get()` can return this one class at any
+  // path with no per-scope branching. On a project-root itx both are undefined.
+  get agent(): Agent | undefined {
+    return this.props.itxPath?.startsWith("/agents/")
+      ? this.agents.get(this.props.itxPath)
+      : undefined;
+  }
+
+  get chat(): AgentChat | undefined {
+    return this.agent?.chat;
+  }
+
   get #itx() {
     return env.ITX.getByName(
       DurableObjectNameCodec.stringify({
@@ -714,7 +756,7 @@ export class ProjectRpcTarget extends RpcTarget implements Project {
     );
   }
 
-  async provideCapability(input: Parameters<Project["provideCapability"]>[0]) {
+  async provideCapability(input: Parameters<Itx["provideCapability"]>[0]) {
     rejectBuiltinCollision(this, input.path);
     const provision = await this.#itx.provideCapability(input);
     // The ITX Durable Object returns the durable mount coordinates. The public
@@ -728,7 +770,7 @@ export class ProjectRpcTarget extends RpcTarget implements Project {
     });
   }
 
-  async revokeCapability(input: Parameters<Project["revokeCapability"]>[0]) {
+  async revokeCapability(input: Parameters<Itx["revokeCapability"]>[0]) {
     await this.#itx.revokeCapability(input);
   }
 
@@ -809,38 +851,6 @@ export class ProjectRpcTarget extends RpcTarget implements Project {
   }
 }
 
-/**
- * AgentItxRpcTarget is what `itx` is in the context of an agent. So when the LLM writes functions
- * async (itx) => {...}, itx is the same as ProjectRpcTarget, except it ALSO has this .agent getter,
- * which is an itx capability host itself and we can have things like
- * itx.agent.sendMessage({ message }) available to the agent
- *
- * But itx.streams.get("/some/stream") also works, because AgentItxRpcTarget extends ProjectRpcTarget
- *
- * This is a little bit messy but fine for now
- */
-export class AgentItxRpcTarget extends ProjectRpcTarget implements AgentItx {
-  constructor(props: ProjectRpcTargetProps & { agentPath: string }) {
-    super(props);
-  }
-
-  get agent() {
-    // Agent-scoped ITX is deliberately "project plus agent". Project-level
-    // capabilities stay at the root; agent-only capabilities and message APIs
-    // live behind this explicit property instead of relying on fallback magic.
-    return this.agents.get((this.props as ProjectRpcTargetProps & { agentPath: string }).agentPath);
-  }
-
-  get chat() {
-    const props = this.props as ProjectRpcTargetProps & { agentPath: string };
-    return new AgentChatRpcTarget({
-      auth: props.auth,
-      path: props.agentPath,
-      projectId: props.projectId,
-    });
-  }
-}
-
 function defaultProjectWorkerRef(): StatelessDynamicWorkerRef {
   return {
     path: "/",
@@ -860,7 +870,7 @@ async function projectProcessorState(projectId: string) {
   return state;
 }
 
-class ItxRootRpcTarget extends RpcTarget implements ItxRoot {
+class SessionRpcTarget extends RpcTarget implements Session {
   constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext }) {
     super();
   }
@@ -914,6 +924,6 @@ export class UnauthenticatedItxRpcTarget extends RpcTarget implements Unauthenti
 
     if (!auth) throw new Error("missing or invalid auth");
 
-    return new ItxRootRpcTarget({ auth, ctx: this.ctx });
+    return new SessionRpcTarget({ auth, ctx: this.ctx });
   }
 }

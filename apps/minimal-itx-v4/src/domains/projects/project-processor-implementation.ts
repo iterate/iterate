@@ -2,7 +2,7 @@ import { StreamProcessor } from "../streams/stream-processor.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { PROJECT_REPO_PATH } from "../repos/utils.ts";
 import type { StreamEvent, StreamListItem } from "../../types.ts";
-import type { ProjectRpcTarget } from "../../rpc-targets.ts";
+import type { ItxRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   AgentProcessorContract,
@@ -21,7 +21,7 @@ const PROJECT_WORKER_READY_URL = "https://minimal-itx-v4.localhost/__itx_project
 export class ProjectProcessor extends StreamProcessor<
   typeof ProjectProcessorContract,
   {
-    itx: ProjectRpcTarget;
+    itx: ItxRpcTarget;
   }
 > {
   readonly contract = ProjectProcessorContract;
@@ -199,7 +199,7 @@ function addStreamListItem(items: StreamListItem[], item: StreamListItem): Strea
   return [...items, item].sort((a, b) => a.path.localeCompare(b.path));
 }
 
-async function waitForDefaultProjectWorker(itx: ProjectRpcTarget): Promise<void> {
+async function waitForDefaultProjectWorker(itx: ItxRpcTarget): Promise<void> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= PROJECT_WORKER_READY_ATTEMPTS; attempt += 1) {
     try {

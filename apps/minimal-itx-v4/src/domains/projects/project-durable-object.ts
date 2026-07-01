@@ -5,7 +5,7 @@ import {
 } from "../streams/stream-processor-host.ts";
 import type { Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
-import { ProjectRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
+import { ItxRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type {
   CfExecutionContext,
@@ -32,7 +32,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     (deps) =>
       new ProjectProcessor({
         ...deps,
-        itx: new ProjectRpcTarget({
+        itx: new ItxRpcTarget({
           auth: trustedInternalAuthContext(),
           ctx: this.ctx,
           projectId: this.#name.projectId,

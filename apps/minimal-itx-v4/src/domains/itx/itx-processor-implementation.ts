@@ -9,7 +9,7 @@ import type {
   CapabilityRecord,
   ItxCapabilityHost,
   JsonValue,
-  Project,
+  Itx,
   RevokeCapabilityInput,
   StatelessDynamicWorkerRef,
   StreamEvent,
@@ -82,24 +82,43 @@ function resolveLongestPrefix(records: CapabilityRecord[], path: string[]) {
   return best;
 }
 
+/**
+ * The enclosing itx scope, as seen from a child scope's processor.
+ *
+ * Only the two read operations chain upward (see the class below); mounting is
+ * always local, so `provide`/`revoke` are deliberately absent here. In practice
+ * this is a `DurableObjectStub<ItxDurableObject>` for the parent scope, but the
+ * processor only depends on these two methods.
+ */
+export type ParentItxScope = {
+  invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
+  describeCapabilities(): Promise<CapabilityDescription[]>;
+};
+
 export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
   readonly contract = ItxProcessorContract;
-  #itx: Project;
+  #itx: Itx;
   #path: string;
   #workerRunner: DynamicWorkerRunner;
+  #parent: ParentItxScope | undefined;
   #liveCapabilities = new Map<string, LiveCapability>();
 
   constructor(
     args: StreamProcessorConstructorArgs<typeof ItxProcessorContract, object> & {
-      itx: Project;
+      itx: Itx;
       path: string;
       workerRunner: DynamicWorkerRunner;
+      // The enclosing scope, or undefined at the project root ("/"). Present for
+      // every nested scope (agents, sub-agents, agent namespaces) so capability
+      // lookups that miss locally can fall through to the surrounding scope.
+      parent?: ParentItxScope;
     },
   ) {
     super(args);
     this.#itx = args.itx;
     this.#path = normalizePath(args.path);
     this.#workerRunner = args.workerRunner;
+    this.#parent = args.parent;
   }
 
   protected override reduce({
@@ -261,7 +280,15 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
   async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
     assertCapabilityPath(path);
     const hit = resolveLongestPrefix(this.state.capabilities, path);
-    if (!hit) throw new Error(`no capability "${path.join(".")}"`);
+    if (!hit) {
+      // Not declared at THIS scope. Capability reads chain up the scope hierarchy,
+      // so ask the enclosing scope before giving up — this is how an agent sees
+      // capabilities mounted on its namespace or on the project. Resolution reads
+      // live `state.capabilities` every call, so a revoked child mount transparently
+      // re-exposes whatever the parent still has at that path.
+      if (this.#parent) return await this.#parent.invokeCapability({ args, path });
+      throw new Error(`no capability "${path.join(".")}"`);
+    }
     if (hit.record.type === "itx-expression") {
       const evaluated = await evaluateItxExpression(this.#itx, hit.record.expression);
       const provider = await normalizeCapabilityProvider(evaluated, hit.record);
@@ -274,14 +301,24 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     return await live.invoke(hit.rest, args);
   }
 
-  describeCapabilities(): CapabilityDescription[] {
-    return this.state.capabilities.map((record) => ({
+  // Reports everything reachable at this scope: this scope's own mounts plus every
+  // capability inherited from enclosing scopes, each tagged with the scope it was
+  // declared at. A nearer scope shadows a farther one at the same path (same rule
+  // as `resolveLongestPrefix` above), so the caller — usually an LLM deciding what
+  // it can invoke — sees exactly one entry per reachable path and where it lives.
+  async describeCapabilities(): Promise<CapabilityDescription[]> {
+    const local: CapabilityDescription[] = this.state.capabilities.map((record) => ({
       instructions: record.instructions,
       path: record.path,
       providedAtOffset: record.providedAtOffset,
+      scope: this.#path,
       type: record.type,
       types: record.types,
     }));
+    if (!this.#parent) return local;
+    const shadowed = new Set(local.map((c) => JSON.stringify(c.path)));
+    const inherited = await this.#parent.describeCapabilities();
+    return [...local, ...inherited.filter((c) => !shadowed.has(JSON.stringify(c.path)))];
   }
 
   async runScript(code: string): Promise<RunScriptResult> {
