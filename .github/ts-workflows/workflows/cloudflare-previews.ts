@@ -36,7 +36,7 @@ export default {
     preview: {
       if: "github.event.action != 'closed'",
       name: "Preview / deploy + e2e",
-      ...utils.runsOnDepotUbuntu64,
+      ...utils.runsOnDepotUbuntuPreview,
       concurrency: {
         group: `cloudflare-preview-lifecycle-\${{ github.event.pull_request.number }}`,
         "cancel-in-progress": false,
@@ -96,7 +96,7 @@ export default {
     cleanup: {
       if: "github.event.action == 'closed'",
       name: "Preview / cleanup",
-      ...utils.runsOnDepotUbuntu64,
+      ...utils.runsOnDepotUbuntuPreview,
       concurrency: {
         group: `cloudflare-preview-lifecycle-\${{ github.event.pull_request.number }}`,
         "cancel-in-progress": false,
