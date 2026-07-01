@@ -8,7 +8,6 @@ export type AiLike = {
   run(model: string, body: unknown): Promise<unknown>;
 };
 
-type CloudflareAiState = z.infer<typeof CloudflareAiProcessorContract.stateSchema>;
 type LlmRequestRequestedEvent = Extract<
   ReturnType<typeof CloudflareAiProcessorContract.parseEvent>,
   { type: "events.iterate.com/agent/llm-request-requested" }
@@ -65,7 +64,7 @@ export class CloudflareAiProcessor extends StreamProcessor<
 
   async #executeRequest(input: {
     event: LlmRequestRequestedEvent;
-    state: CloudflareAiState;
+    state: z.infer<typeof CloudflareAiProcessorContract.stateSchema>;
   }): Promise<void> {
     const llmRequestId = input.event.offset;
     const startedAt = Date.now();

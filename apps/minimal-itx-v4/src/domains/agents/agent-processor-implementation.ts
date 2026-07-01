@@ -32,7 +32,7 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
     state,
   }: Parameters<StreamProcessor<typeof AgentProcessorContract>["processEvent"]>[0]): undefined {
     switch (event.type) {
-      case "events.iterate.com/agent/config-updated":
+      case "events.iterate.com/agent/config-updated": {
         if (event.payload.systemPrompt === undefined) return;
         const { systemPrompt } = event.payload;
         blockProcessorWhile(() =>
@@ -43,6 +43,7 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
           }),
         );
         return;
+      }
       case "events.iterate.com/agents/user-message-received":
         blockProcessorWhile(() =>
           append({
