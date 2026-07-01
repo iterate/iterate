@@ -271,11 +271,6 @@ export interface ProjectEgress {
   intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;
 }
 
-export interface CapabilityDescriptionMetadata {
-  instructions: string;
-  types: string;
-}
-
 export type ProjectDescription = {
   capabilities: CapabilityDescription[];
   name: string;
@@ -300,9 +295,7 @@ export type OpenApiConnectInput = {
   specUrl: string;
 };
 
-export interface OpenApiRpc {
-  __describe(): Promise<CapabilityDescriptionMetadata>;
-}
+export type OpenApiRpc = object;
 
 export interface McpClientCollection {
   connect(input: McpClientConnectInput): Promise<McpClientRpc>;
@@ -314,9 +307,7 @@ export type McpClientConnectInput = {
   url: string;
 };
 
-export interface McpClientRpc {
-  __describe(): Promise<CapabilityDescriptionMetadata>;
-}
+export type McpClientRpc = object;
 
 /**
  * Shared host operations for objects that can own dynamic ITX capabilities.
@@ -466,14 +457,6 @@ export type FlattenedCapabilityInvocation = {
 /** Target shape for a live capability that wants to receive flattened paths. */
 export type FlattenedCapabilityTarget = {
   invokeCapability(input: FlattenedCapabilityInvocation): unknown;
-};
-
-/** Optional package shape returned by a provider method when metadata travels with a capability. */
-export type CapabilityPackage = {
-  capability: unknown;
-  flattenNestedPaths?: boolean;
-  instructions?: string;
-  types?: string;
 };
 
 /** Durable expression over the project ITX surface. */

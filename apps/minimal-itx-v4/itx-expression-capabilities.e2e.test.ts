@@ -7,55 +7,70 @@ import { describe, expect, test } from "vitest";
  * The implemented model is intentionally small:
  * - "live" keeps a concrete capability value in memory.
  * - "itx-expression" stores a durable recipe over project ITX.
+ * - instructions, types, and flattenNestedPaths are metadata on the
+ *   capability-provided event, never discovered from the returned capability.
  * - expression steps are either a getter segment or a method tuple:
  *     "streams"
  *     ["get", "/my/stream"]
- * - expression results may be plain capabilities or metadata-bearing provider packages:
+ * - expression results are plain capability values:
  *     function | RpcTarget | nested object
- *     { instructions, types?, capability, flattenNestedPaths? }
- *     { capability, flattenNestedPaths: true }
  *
- * MCP/OpenAPI are the only built-ins with a reserved metadata convention:
- * connect(input) returns a callable RpcTarget with __describe(), then the same
- * fallback proxy still makes connect(input).someTool(...) work immediately.
+ * MCP/OpenAPI connect(input) return callable RpcTargets. The fallback proxy
+ * still makes connect(input).someTool(...) work immediately, but any
+ * instructions/types for a durable mount are supplied by provideCapability.
  */
 describe.skip("ITX expression capability call-site inventory", () => {
-  test("MCP/OpenAPI connect targets describe themselves and still forward dynamic calls", async () => {
+  test("MCP/OpenAPI connect targets forward dynamic calls", async () => {
     using project = await root.projects.create({ slug: "expr-connect-builtins" });
 
-    using docs = await project.mcp.connect({ url: "https://docs.example.com/mcp" });
-    expect(await docs.__describe()).toEqual({
-      instructions: expect.stringContaining("Call tools directly"),
-      types: expect.stringContaining("search"),
-    });
+    const docsPromise = project.mcp.connect({ url: "https://docs.example.com/mcp" });
+    await docsPromise.search({ query: "Workers RPC" });
+    using docs = await docsPromise;
     await docs.search({ query: "Workers RPC" });
 
-    using pets = await project.openapi.connect({
+    const petsPromise = project.openapi.connect({
       specUrl: "https://pets.example.com/openapi.json",
     });
-    expect(await pets.__describe()).toEqual({
-      instructions: expect.stringContaining("operationId"),
-      types: expect.stringContaining("findPetsByStatus"),
-    });
+    await petsPromise.findPetsByStatus({ status: "available" });
+    using pets = await petsPromise;
     await pets.findPetsByStatus({ status: "available" });
   });
 
-  test("durable MCP/OpenAPI mounts are expressions over connect", async () => {
+  test("durable MCP/OpenAPI mounts are expressions over connect with caller metadata", async () => {
     using project = await root.projects.create({ slug: "expr-mounted-builtins" });
 
     using docs = await project.provideCapability({
       expression: ["mcp", ["connect", { url: "https://docs.example.com/mcp" }]],
+      instructions: "Search project documentation.",
       path: ["docs"],
       type: "itx-expression",
+      types: "export type Capability = { search(input: { query: string }): Promise<unknown> };",
     });
     using pets = await project.provideCapability({
       expression: ["openapi", ["connect", { specUrl: "https://pets.example.com/openapi.json" }]],
+      instructions: "Call petstore OpenAPI operations by operationId.",
       path: ["pets"],
       type: "itx-expression",
+      types:
+        "export type Capability = { findPetsByStatus(input: { status: string }): Promise<unknown> };",
     });
 
     await project.docs.search({ query: "Durable Objects RPC" });
     await project.pets.findPetsByStatus({ status: "available" });
+    expect(await project.describe()).toEqual(
+      expect.objectContaining({
+        capabilities: expect.arrayContaining([
+          expect.objectContaining({
+            instructions: "Search project documentation.",
+            path: ["docs"],
+          }),
+          expect.objectContaining({
+            instructions: "Call petstore OpenAPI operations by operationId.",
+            path: ["pets"],
+          }),
+        ]),
+      }),
+    );
     await docs.revoke();
     await pets.revoke();
   });
@@ -150,7 +165,7 @@ describe.skip("ITX expression capability call-site inventory", () => {
     await source.revoke();
   });
 
-  test("providers may return bare functions or capability packages", async () => {
+  test("providers may return bare functions, and capability fields are literal", async () => {
     using project = await root.projects.create({ slug: "expr-functions" });
     const ref = inlineWorkerRef(`
       import { WorkerEntrypoint } from "cloudflare:workers";
@@ -159,11 +174,14 @@ describe.skip("ITX expression capability call-site inventory", () => {
           return (a, b) => a + b;
         }
 
-        addPackage() {
+        objectWithCapabilityField() {
           return {
-            instructions: "Adds two numbers.",
-            types: "export type Capability = (a: number, b: number) => Promise<number>;",
-            capability: (a, b) => a + b,
+            capability: {
+              echo(input) {
+                return input;
+              },
+            },
+            instructions: "literal data, not metadata",
           };
         }
       }
@@ -174,16 +192,26 @@ describe.skip("ITX expression capability call-site inventory", () => {
       path: ["add"],
       type: "itx-expression",
     });
-    using addPackaged = await project.provideCapability({
-      expression: ["workers", ["get", ref], ["addPackage"]],
-      path: ["addPackaged"],
+    using literal = await project.provideCapability({
+      expression: ["workers", ["get", ref], ["objectWithCapabilityField"]],
+      path: ["literal"],
       type: "itx-expression",
     });
 
     expect(await project.add(20, 22)).toBe(42);
-    expect(await project.addPackaged(20, 22)).toBe(42);
+    expect(await project.literal.capability.echo("ok")).toBe("ok");
+    expect(await project.describe()).toEqual(
+      expect.objectContaining({
+        capabilities: expect.arrayContaining([
+          expect.objectContaining({
+            path: ["literal"],
+            type: "itx-expression",
+          }),
+        ]),
+      }),
+    );
     await add.revoke();
-    await addPackaged.revoke();
+    await literal.revoke();
   });
 });
 

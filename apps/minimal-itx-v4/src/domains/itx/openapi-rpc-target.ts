@@ -1,13 +1,7 @@
 import { RpcTarget } from "cloudflare:workers";
-import type {
-  CapabilityDescriptionMetadata,
-  OpenApiCollection,
-  OpenApiConnectInput,
-  OpenApiRpc,
-} from "../../types.ts";
+import type { OpenApiCollection, OpenApiConnectInput, OpenApiRpc } from "../../types.ts";
 import { withInvokeCapabilityFallback } from "./utils.ts";
 import {
-  deriveOpenApiCapabilityTypes,
   isObjectSchema,
   listOpenApiOperations,
   operationBodySchema,
@@ -17,7 +11,7 @@ import {
 // First-party OpenAPI is just an RpcTarget hosted by Project. The only special
 // power it receives is project egress, which is also the path a user-provided
 // dynamic worker would use through env.ITX. That keeps the built-in and dynamic
-// implementations aligned: fetch spec, derive describe(), then dispatch calls.
+// implementations aligned: fetch spec, derive operations, then dispatch calls.
 type OpenApiDeps = { egress: Fetcher };
 
 export class OpenApiCollectionRpcTarget extends RpcTarget implements OpenApiCollection {
@@ -30,7 +24,7 @@ export class OpenApiCollectionRpcTarget extends RpcTarget implements OpenApiColl
   }
 }
 
-class OpenApiRpcTarget extends RpcTarget implements OpenApiRpc {
+class OpenApiRpcTarget extends RpcTarget {
   static async connect(input: OpenApiConnectInput, deps: OpenApiDeps) {
     const spec = await fetchSpec(input, deps.egress);
     return new OpenApiRpcTarget({
@@ -51,18 +45,6 @@ class OpenApiRpcTarget extends RpcTarget implements OpenApiRpc {
   ) {
     super();
     return withInvokeCapabilityFallback(this);
-  }
-
-  async __describe(): Promise<CapabilityDescriptionMetadata> {
-    const info = (this.props.spec.info ?? {}) as { title?: string; version?: string };
-    const title = info.title ?? "OpenAPI API";
-    return {
-      instructions:
-        `${title}${info.version ? ` v${info.version}` : ""}: ` +
-        "call operations directly by operationId with one input object containing path params, " +
-        "query params, and body fields. Call __describe() for this capability's instructions and TypeScript declarations.",
-      types: deriveOpenApiCapabilityTypes(this.props.spec),
-    };
   }
 
   async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {

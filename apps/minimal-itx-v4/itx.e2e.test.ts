@@ -568,10 +568,6 @@ describe("minimal itx v4", () => {
         directPromise.findPetsByStatus({ status: "pipelined" }),
       ).resolves.toEqual([{ id: 1, name: "pipelined-pet", status: "pipelined" }]);
       const direct = await directPromise;
-      expect(await direct.__describe()).toMatchObject({
-        instructions: expect.stringContaining("Tiny Pets"),
-        types: expect.stringContaining("export type Capability"),
-      });
       await expect(
         // @ts-expect-error - OpenAPI operations are derived at runtime.
         direct.findPetsByStatus({ status: "available" }),
@@ -583,21 +579,26 @@ describe("minimal itx v4", () => {
         }),
       ).resolves.toEqual([{ id: 1, name: "sold-pet", status: "sold" }]);
 
-      // Mounted capabilities run the same connect path at provide time so
-      // project.describe() has the generated declarations without another API.
+      const instructions = "Tiny Pets: call operationIds directly through the mounted capability.";
+      const types =
+        "export type Capability = { findPetsByStatus(input: { status: string }): Promise<unknown> };";
+      // Metadata belongs to the capability-provided event. The connect target is
+      // only the callable capability value.
       using _provision = await project.provideCapability({
         expression: ["openapi", ["connect", { headers, specUrl }]],
+        instructions,
         path: ["pets"],
         type: "itx-expression",
+        types,
       });
       const described = await project.describe();
       expect(described.capabilities).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            instructions: expect.stringContaining("Tiny Pets"),
+            instructions,
             path: ["pets"],
             type: "itx-expression",
-            types: expect.stringContaining("findPetsByStatus"),
+            types,
           }),
         ]),
       );
@@ -645,10 +646,6 @@ describe("minimal itx v4", () => {
         directPromise.search_docs({ query: "Pipelined" }),
       ).resolves.toEqual({ answer: "docs:Pipelined" });
       const direct = await directPromise;
-      expect(await direct.__describe()).toMatchObject({
-        instructions: expect.stringContaining("Call tools directly"),
-        types: expect.stringContaining("search_docs"),
-      });
       await expect(
         // @ts-expect-error - MCP tools are derived at runtime.
         direct.search_docs({ query: "Workers" }),
@@ -660,18 +657,24 @@ describe("minimal itx v4", () => {
         }),
       ).resolves.toEqual({ answer: "docs:Pipelines" });
 
+      const instructions = "Call search_docs on the mounted MCP docs capability.";
+      const types =
+        "export type Capability = { search_docs(input: { query: string }): Promise<unknown> };";
       using _provision = await project.provideCapability({
         expression: ["mcp", ["connect", { headers, url: mcp.url }]],
+        instructions,
         path: ["docs"],
         type: "itx-expression",
+        types,
       });
       const described = await project.describe();
       expect(described.capabilities).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
+            instructions,
             path: ["docs"],
             type: "itx-expression",
-            types: expect.stringContaining("search_docs"),
+            types,
           }),
         ]),
       );
@@ -681,9 +684,8 @@ describe("minimal itx v4", () => {
       ).resolves.toEqual({ answer: "docs:Durable Objects" });
 
       if (mcp.methods.length > 0) {
-        expect(mcp.methods).toEqual(
-          expect.arrayContaining(["initialize", "tools/list", "tools/call"]),
-        );
+        expect(mcp.methods).toEqual(expect.arrayContaining(["initialize", "tools/call"]));
+        expect(mcp.methods).not.toContain("tools/list");
       }
       if (mcp.authHeaders.length > 0) {
         expect(mcp.authHeaders).toEqual(expect.arrayContaining([`Bearer ${secretMaterial}`]));
@@ -716,6 +718,12 @@ describe("minimal itx v4", () => {
       });
 
       const headers = { authorization: `Bearer getSecret({ path: "${secretPath}" })` };
+      const petsInstructions = "Tiny Pets expression mount: call findPetsByStatus with a status.";
+      const petsTypes =
+        "export type Capability = { findPetsByStatus(input: { status: string }): Promise<unknown> };";
+      const docsInstructions = "Docs expression mount: call search_docs with a query.";
+      const docsTypes =
+        "export type Capability = { search_docs(input: { query: string }): Promise<unknown> };";
       using _petsProvision = await project.provideCapability({
         expression: [
           "openapi",
@@ -727,29 +735,33 @@ describe("minimal itx v4", () => {
             },
           ],
         ],
+        instructions: petsInstructions,
         path: ["exprPets"],
         type: "itx-expression",
+        types: petsTypes,
       });
       using _docsProvision = await project.provideCapability({
         expression: ["mcp", ["connect", { headers, url: mcp.url }]],
+        instructions: docsInstructions,
         path: ["exprDocs"],
         type: "itx-expression",
+        types: docsTypes,
       });
 
       const described = await project.describe();
       expect(described.capabilities).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            instructions: expect.stringContaining("Tiny Pets"),
+            instructions: petsInstructions,
             path: ["exprPets"],
             type: "itx-expression",
-            types: expect.stringContaining("findPetsByStatus"),
+            types: petsTypes,
           }),
           expect.objectContaining({
-            instructions: expect.stringContaining("Call tools directly"),
+            instructions: docsInstructions,
             path: ["exprDocs"],
             type: "itx-expression",
-            types: expect.stringContaining("search_docs"),
+            types: docsTypes,
           }),
         ]),
       );
@@ -868,18 +880,11 @@ describe("minimal itx v4", () => {
                 return `domain:${input}`;
               },
             },
+            instructions: "literal data, not capability metadata",
             status() {
               return `status:${marker}`;
             },
-          };
-        },
-        makePackage() {
-          return {
-            capability(input: string) {
-              return `package:${input}:${marker}`;
-            },
-            instructions: "Calls the packaged function.",
-            types: "export type Capability = (input: string) => Promise<string>;",
+            types: "literal data, not capability metadata",
           };
         },
       },
@@ -891,11 +896,6 @@ describe("minimal itx v4", () => {
       path: ["exprDomainObject"],
       type: "itx-expression",
     });
-    using _packagedProvision = await project.provideCapability({
-      expression: ["exprFactory", ["makePackage"]],
-      path: ["exprPackaged"],
-      type: "itx-expression",
-    });
 
     await expect(
       // @ts-expect-error - mounted expression object root.
@@ -905,21 +905,17 @@ describe("minimal itx v4", () => {
       // @ts-expect-error - mounted expression object root.
       project.exprDomainObject.capability.echo("ok"),
     ).resolves.toBe("domain:ok");
-    await expect(
-      // @ts-expect-error - mounted expression packaged function root.
-      project.exprPackaged("ok"),
-    ).resolves.toBe(`package:ok:${marker}`);
 
     const description = await project.describe();
-    expect(description.capabilities).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          instructions: "Calls the packaged function.",
-          path: ["exprPackaged"],
-          types: "export type Capability = (input: string) => Promise<string>;",
-        }),
-      ]),
+    const domainObjectDescription = description.capabilities.find((capability) =>
+      capability.path.every((segment, index) => segment === ["exprDomainObject"][index]),
     );
+    expect(domainObjectDescription).toMatchObject({
+      path: ["exprDomainObject"],
+      type: "itx-expression",
+    });
+    expect(domainObjectDescription?.instructions).toBeUndefined();
+    expect(domainObjectDescription?.types).toBeUndefined();
   });
 
   test("ITX expression capabilities resolve aliases against the current ITX host path", async () => {
@@ -2674,7 +2670,7 @@ describe("minimal itx v4", () => {
     expect(await project.replaceProbe.value()).toBe(`new:${marker}`);
   });
 
-  test("Failed capability replacement keeps the previous live capability usable", async () => {
+  test("ITX expression replacement records the recipe without evaluating it", async () => {
     const marker = crypto.randomUUID();
 
     using session = withItxSession();
@@ -2694,16 +2690,23 @@ describe("minimal itx v4", () => {
       },
     });
 
-    await expect(
-      project.provideCapability({
-        expression: ["workers", ["get", { source: { type: "inline" }, type: "stateless" }]],
-        path: ["replaceProbe"],
-        type: "itx-expression",
-      }),
-    ).rejects.toThrow();
+    using _replacement = await project.provideCapability({
+      expression: ["workers", ["get", { source: { type: "inline" }, type: "stateless" }]],
+      path: ["replaceProbe"],
+      type: "itx-expression",
+    });
+    const description = await project.describe();
+    expect(description.capabilities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: ["replaceProbe"],
+          type: "itx-expression",
+        }),
+      ]),
+    );
 
     // @ts-expect-error - dynamic capability root
-    expect(await project.replaceProbe.value()).toBe(`old:${marker}`);
+    await expect(project.replaceProbe.value()).rejects.toThrow();
   });
 
   test("Authenticated project can provide the Slack SDK as nested dotted functions", async () => {

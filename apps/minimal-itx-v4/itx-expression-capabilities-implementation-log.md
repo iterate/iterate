@@ -19,28 +19,29 @@ ITX evaluates the expression against a project-like ITX surface whose dynamic
 fallback is scoped to the owning ITX host, normalizes the result as a provider
 value, then invokes the remaining path.
 
+Metadata is separate from the connected capability value. `instructions`,
+`types`, and `flattenNestedPaths` are only taken from the
+`provideCapability(...)` input and the resulting `capability-provided` event.
+ITX does not inspect the returned capability for metadata.
+
 ## Decisions
 
 - Removed separate durable `dynamic-worker`, `mcp`, and `openapi` capability
   record types. Durable built-ins now mount through `itx-expression` only, for
   example `["workers", ["get", ref]]` or `["mcp", ["connect", input]]`.
-- Added `__describe()` to MCP/OpenAPI connected targets. This is a reserved
-  built-in convention for derived `{ instructions, types }`; generic expression
-  targets are not required to implement it.
-- Reserved `__describe` in dynamic path fallback so missing metadata methods do
-  not accidentally become dynamic tool calls.
 - Passed a `ProjectRpcTarget` into `ItxProcessor` as a dependency. The
   processor does not reach for `env.ITX`.
 - Expression evaluation uses the current ITX host path for dynamic fallback
   routing. Built-ins such as `streams` and `workers` remain project-scoped, but
   expression aliases to other mounted capabilities resolve against the same
   project/agent capability host that owns the durable record.
-- Snapshot expression metadata at provide time when available. Invocation still
-  replays the expression every time, so durable records do not persist live RPC
-  stubs or connected targets.
+- Expression records do not evaluate at provide time. The stream event commits
+  the durable recipe plus caller-supplied metadata; invocation replays the
+  expression every time.
 - Live `provideCapability` accepts `capability` and `flattenNestedPaths`.
-  Expression results are where an own `capability` field is treated as a
-  provider package.
+  `itx-expression` accepts `expression` and optional `flattenNestedPaths`.
+  Expression results are literal capabilities: a returned object with a
+  `capability` property remains that object, not a package.
 - Added a tiny `/__itx_e2e/*` fixture surface to the minimal worker so deployed
   e2e can verify OpenAPI/MCP/egress behavior without asking Cloudflare to fetch
   a local `127.0.0.1` test server. The deployed OpenAPI and MCP fixtures enforce
@@ -50,16 +51,17 @@ value, then invokes the remaining path.
 ## Implemented Call Shapes
 
 ```ts
-await project.mcp.connect(input).__describe();
 await project.mcp.connect(input).search_docs({ query: "Workers" });
 
-await project.openapi.connect(input).__describe();
 await project.openapi.connect(input).findPetsByStatus({ status: "available" });
 
 await project.provideCapability({
   path: ["pets"],
   type: "itx-expression",
   expression: ["openapi", ["connect", input]],
+  instructions: "Call petstore operations by operationId.",
+  types:
+    "export type Capability = { findPetsByStatus(input: { status: string }): Promise<unknown> };",
 });
 await project.pets.findPetsByStatus({ status: "available" });
 
@@ -67,6 +69,8 @@ await project.provideCapability({
   path: ["workerTool"],
   type: "itx-expression",
   expression: ["workers", ["get", ref]],
+  instructions: "Echoes its input.",
+  types: "export type Capability = { echo(input: unknown): Promise<unknown> };",
 });
 await project.workerTool.echo({ ok: true });
 
@@ -92,27 +96,30 @@ await project.someMethod("ok");
   `project.some.method(...)`, not like a detached function. The e2e suite avoids
   relying on `this` inside remote plain-object function stubs, because those
   functions have already crossed an RPC boundary.
-- `__describe()` cannot be probed on arbitrary targets. A fallback proxy could
-  turn a missing method into a real dynamic capability call. Automatic metadata
-  extraction is therefore limited to known MCP/OpenAPI connect expressions.
-- Live function metadata through function own-properties is possible in Workers
-  RPC, but this implementation does not rely on it. Provider packages are more
-  explicit and less surprising.
+- Metadata discovery on arbitrary RPC targets is not reliable with dynamic
+  fallback proxies: asking for a missing metadata method can itself become a
+  remote dynamic call. This PR avoids that ambiguity by making metadata an
+  event field only.
+- Function own-properties are not part of the capability contract. A bare
+  function can be mounted as a live value or expression result, but its
+  `instructions`/`types` must still be supplied to `provideCapability(...)`.
 
 ## Documented Edge Cases
 
-- Stateful worker expressions that return nested packages are still the sharp
+- Stateful worker expressions that return nested RPC objects are still the sharp
   edge. The safe rule is to keep the final replay inside
   `StatefulWorkerDurableObject`. This PR does not add a special stateful
   expression runner; it keeps the simpler behavior and documents the caveat.
 - The old flattened `dynamic-worker` mount branch is gone. Worker expressions
-  dispatch normal RPC member paths through `workers.get(ref)`. A worker that
-  wants flattened-path behavior should return an explicit provider package with
-  `{ capability, flattenNestedPaths: true }`.
+  dispatch normal RPC member paths through `workers.get(ref)`. A durable mount
+  that wants flattened-path behavior must set `flattenNestedPaths: true` on
+  `provideCapability(...)`.
 - Durable expression arguments should stay durable/serializable. Passing live
   RPC stubs as expression arguments is not a restartable recipe.
-- `__describe` is reserved. A remote MCP tool or OpenAPI operation with that
-  exact name needs a flattened/escaped call path rather than dot syntax.
+- Expression provision can now succeed even when the expression would fail at
+  invocation time, because provision no longer connects to or validates the
+  target. That is intentional: append is the durable recipe commit point, not a
+  health check.
 - Stream cross-post e2e waits now replay from offset `0`. On deployed Workers
   the cross-post can commit before the live `waitForEvent()` subscription is
   fully open, while Miniflare often schedules the other way around. Replaying

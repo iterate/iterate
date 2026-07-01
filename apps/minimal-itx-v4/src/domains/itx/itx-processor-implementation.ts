@@ -19,7 +19,6 @@ import type { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
 import { ItxProcessorContract } from "./itx-processor-contract.ts";
 import {
-  describeKnownBuiltinExpression,
   evaluateItxExpression,
   invokeNormalizedCapability,
   normalizeCapabilityProvider,
@@ -41,7 +40,6 @@ const INVALID_PATH_SEGMENTS = new Set([
   "apply",
   "call",
   "bind",
-  "__describe",
   "dup",
   "onRpcBroken",
 ]);
@@ -196,14 +194,13 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
       };
     } else if (input.type === "itx-expression") {
       assertExpressionDoesNotReferenceOwnMount(input);
-      const provider = await this.#describeExpressionProvider(input);
       record = {
         expression: input.expression,
-        flattenNestedPaths: provider.flattenNestedPath === true ? true : undefined,
-        instructions: provider.instructions,
+        flattenNestedPaths: input.flattenNestedPaths === true ? true : undefined,
+        instructions: input.instructions,
         path,
         type: "itx-expression",
-        types: provider.types,
+        types: input.types,
       };
     } else {
       input satisfies never;
@@ -365,19 +362,6 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
       entrypoint: "ScriptEntrypoint",
       props: { scriptHash: await sha256Hex(code) },
       type: "stateless",
-    };
-  }
-
-  async #describeExpressionProvider(
-    input: Extract<ProvideCapabilityInput, { type: "itx-expression" }>,
-  ) {
-    const evaluated = await evaluateItxExpression(this.#itx, input.expression);
-    const provider = await normalizeCapabilityProvider(evaluated, input);
-    const description = await describeKnownBuiltinExpression(input.expression, provider);
-    return {
-      ...provider,
-      instructions: input.instructions ?? provider.instructions ?? description?.instructions,
-      types: input.types ?? provider.types ?? description?.types,
     };
   }
 }

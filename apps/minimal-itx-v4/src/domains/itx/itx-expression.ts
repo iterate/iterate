@@ -1,8 +1,4 @@
-import type {
-  CapabilityDescriptionMetadata,
-  CapabilityPackage,
-  ItxExpression,
-} from "../../types.ts";
+import type { ItxExpression } from "../../types.ts";
 import { invokeFlattenedPath } from "./live-capability.ts";
 
 type EvaluatedExpression = {
@@ -13,9 +9,7 @@ type EvaluatedExpression = {
 type NormalizedCapabilityProvider = {
   capability: unknown;
   flattenNestedPath: boolean;
-  instructions?: string;
   receiver: unknown;
-  types?: string;
 };
 
 export async function evaluateItxExpression(
@@ -53,32 +47,16 @@ export async function normalizeCapabilityProvider(
   evaluated: EvaluatedExpression,
   overrides: {
     flattenNestedPaths?: boolean;
-    instructions?: string;
-    types?: string;
   } = {},
 ): Promise<NormalizedCapabilityProvider> {
   const value = await evaluated.value;
-  const overrideFlattenNestedPath = ownValue(overrides, "flattenNestedPaths") === true;
-  const overrideInstructions = ownString(overrides, "instructions");
-  const overrideTypes = ownString(overrides, "types");
-
-  if (isCapabilityPackage(value)) {
-    const packageFlattenNestedPath = ownValue(value, "flattenNestedPaths") === true;
-    return {
-      capability: value.capability,
-      flattenNestedPath: overrideFlattenNestedPath || packageFlattenNestedPath,
-      instructions: overrideInstructions ?? ownString(value, "instructions"),
-      receiver: undefined,
-      types: overrideTypes ?? ownString(value, "types"),
-    };
-  }
+  const overrideFlattenNestedPath =
+    Object.hasOwn(overrides, "flattenNestedPaths") && overrides.flattenNestedPaths === true;
 
   return {
     capability: value,
     flattenNestedPath: overrideFlattenNestedPath,
-    instructions: overrideInstructions,
     receiver: evaluated.receiver,
-    types: overrideTypes,
   };
 }
 
@@ -97,29 +75,6 @@ export async function invokeNormalizedCapability(
     receiver: provider.receiver,
     target: provider.capability,
   });
-}
-
-export async function describeKnownBuiltinExpression(
-  expression: ItxExpression,
-  provider: NormalizedCapabilityProvider,
-): Promise<CapabilityDescriptionMetadata | undefined> {
-  if (!isKnownDescribedBuiltinExpression(expression)) return undefined;
-
-  const target = await provider.capability;
-  if (!isObjectLike(target)) return undefined;
-  if (!("__describe" in target)) return undefined;
-
-  const describe = Reflect.get(target, "__describe");
-  if (typeof describe !== "function") return undefined;
-  return (await Reflect.apply(describe, target, [])) as CapabilityDescriptionMetadata;
-}
-
-function isKnownDescribedBuiltinExpression(expression: ItxExpression): boolean {
-  if (expression.length !== 2) return false;
-  const [root, connect] = expression;
-  return (
-    (root === "mcp" || root === "openapi") && Array.isArray(connect) && connect[0] === "connect"
-  );
 }
 
 async function replayProviderPath({
@@ -163,26 +118,6 @@ function assertItxExpression(expression: ItxExpression): void {
     if (Array.isArray(step) && typeof step[0] === "string") continue;
     throw new Error(`invalid ITX expression step ${JSON.stringify(step)}`);
   }
-}
-
-function isCapabilityPackage(value: unknown): value is CapabilityPackage {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    Object.hasOwn(value, "capability") &&
-    (Object.hasOwn(value, "instructions") ||
-      Object.hasOwn(value, "types") ||
-      Object.hasOwn(value, "flattenNestedPaths"))
-  );
-}
-
-function ownValue<T extends object, K extends PropertyKey>(value: T, key: K): unknown {
-  return Object.hasOwn(value, key) ? Reflect.get(value, key) : undefined;
-}
-
-function ownString<T extends object, K extends PropertyKey>(value: T, key: K): string | undefined {
-  const result = ownValue(value, key);
-  return typeof result === "string" ? result : undefined;
 }
 
 function assertObjectLike(value: unknown, segment: string): asserts value is object | Function {
