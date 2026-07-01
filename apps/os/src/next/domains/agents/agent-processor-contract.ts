@@ -12,6 +12,9 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "Use project capabilities on itx when they are relevant.",
 ].join("\n");
 
+export const AgentLlmProvider = z.enum(["cloudflare-ai", "openai-ws"]);
+export type AgentLlmProvider = z.infer<typeof AgentLlmProvider>;
+
 const ChatMessage = z.object({
   role: z.enum(["user", "assistant"]),
   content: z.string(),
@@ -38,7 +41,7 @@ export const AgentProcessorContract = defineProcessorContract({
         model: z.string().min(1),
       })
       .default({ model: DEFAULT_AGENT_MODEL }),
-    llmProvider: z.literal("cloudflare-ai").default("cloudflare-ai"),
+    llmProvider: AgentLlmProvider.default("cloudflare-ai"),
     llmProviderConfigured: z.boolean().default(false),
     currentRequest: z
       .discriminatedUnion("phase", [
@@ -102,7 +105,7 @@ export const AgentProcessorContract = defineProcessorContract({
       payloadSchema: z.object({
         ifUnset: z.boolean().optional(),
         model: z.string().min(1),
-        provider: z.literal("cloudflare-ai"),
+        provider: AgentLlmProvider,
       }),
     },
     "events.iterate.com/agent/llm-request-scheduled": {
@@ -110,7 +113,7 @@ export const AgentProcessorContract = defineProcessorContract({
       payloadSchema: z.object({
         debounceMs: z.number().int().nonnegative(),
         model: z.string().min(1),
-        provider: z.literal("cloudflare-ai"),
+        provider: AgentLlmProvider,
         requestId: z.string(),
       }),
     },
@@ -119,7 +122,7 @@ export const AgentProcessorContract = defineProcessorContract({
         "The agent has prepared an LLM request. The event offset is the llmRequestId; providers rebuild the prompt from history.",
       payloadSchema: z.object({
         model: z.string().min(1),
-        provider: z.literal("cloudflare-ai"),
+        provider: AgentLlmProvider,
         requestId: z.string(),
       }),
     },
@@ -128,7 +131,7 @@ export const AgentProcessorContract = defineProcessorContract({
       payloadSchema: z.object({
         durationMs: z.number().int().nonnegative(),
         llmRequestId: z.number().int().positive(),
-        provider: z.literal("cloudflare-ai"),
+        provider: AgentLlmProvider,
         result: z.discriminatedUnion("status", [
           z.object({
             rawResponse: z.unknown().optional(),

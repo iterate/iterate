@@ -11,7 +11,9 @@ import { AgentProcessorContract } from "./agent-processor-contract.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
 import { CloudflareAiProcessorContract } from "./cloudflare-ai-processor-contract.ts";
 import { CloudflareAiProcessor } from "./cloudflare-ai-processor-implementation.ts";
-import { parseAgentDurableObjectName } from "./utils.ts";
+import { OpenAiWsProcessorContract } from "./openai-ws-processor-contract.ts";
+import { OpenAiWsProcessor } from "./openai-ws-processor-implementation.ts";
+import { parseAgentDurableObjectName, readOpenAiApiKeyFromAppConfig } from "./utils.ts";
 
 export class AgentDurableObject extends DurableObject<Env> {
   readonly #name = parseAgentDurableObjectName(this.ctx.id.name!);
@@ -33,6 +35,17 @@ export class AgentDurableObject extends DurableObject<Env> {
       new CloudflareAiProcessor({
         ...deps,
         ai: this.env.AI,
+        readStreamEvents: () => this.#stream.getEvents(),
+      }),
+  );
+  // Registered even without an OpenAI key: the processor then fails requests
+  // with a clear llm-request-completed error instead of crashing the host.
+  readonly openAiWsProcessor = this.#processorHost.add(
+    OpenAiWsProcessorContract.slug,
+    (deps) =>
+      new OpenAiWsProcessor({
+        ...deps,
+        apiKey: readOpenAiApiKeyFromAppConfig(this.env),
         readStreamEvents: () => this.#stream.getEvents(),
       }),
   );

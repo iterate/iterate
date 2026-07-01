@@ -14,6 +14,7 @@ import {
   type StreamSubscriberWakeRequest,
 } from "../streams/stream-processor-host.ts";
 import { deepRetainRpcStubs } from "../itx/live-capability.ts";
+import { readOpenAiApiKeyFromAppConfig } from "../agents/utils.ts";
 import { secretErrorResponse, secretReferencePathsFromHeaders } from "../secrets/utils.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
@@ -33,6 +34,10 @@ export class ProjectDurableObject extends DurableObject<Env> {
     (deps) =>
       new ProjectProcessor({
         ...deps,
+        // New agents default to openai-ws when the deployment has an OpenAI
+        // key configured; otherwise they fall back to Workers AI.
+        defaultLlmProvider:
+          readOpenAiApiKeyFromAppConfig(this.env) === null ? "cloudflare-ai" : "openai-ws",
         itx: new ItxRpcTarget({
           auth: trustedInternalAuthContext(),
           ctx: this.ctx,

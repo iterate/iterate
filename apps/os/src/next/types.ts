@@ -249,7 +249,7 @@ export type AgentProcessorState = {
     | null;
   history: Array<{ role: "user" | "assistant"; content: string }>;
   llmConfig: { model: string };
-  llmProvider: "cloudflare-ai";
+  llmProvider: "cloudflare-ai" | "openai-ws";
   pendingTriggerOffset: number | null;
   scriptExecutionsCompleted: string[];
   systemPrompt: string;

@@ -3,6 +3,10 @@ import type { Stream, StreamEvent, StreamEventInput } from "../../types.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
 import { AgentProcessorContract, DEFAULT_AGENT_SYSTEM_PROMPT } from "./agent-processor-contract.ts";
 import { CloudflareAiProcessor } from "./cloudflare-ai-processor-implementation.ts";
+import {
+  OpenAiWsProcessor,
+  type OpenAiResponsesWebSocket,
+} from "./openai-ws-processor-implementation.ts";
 
 class MemoryStream implements Stream {
   events: StreamEvent[] = [];
@@ -86,6 +90,67 @@ async function deliverNewEvents(input: {
   input.cursors.set(input.processor, input.stream.events.length);
   if (events.length === 0) return;
   await input.processor.ingest({ events, streamMaxOffset: input.stream.events.length });
+}
+
+type FakeResponsesWebSocket = OpenAiResponsesWebSocket & { sent: unknown[] };
+
+/**
+ * In-memory OpenAI Responses WebSocket: `sendResponseCreate` computes the
+ * response frames for the request and feeds them to the messages iterator.
+ */
+function fakeResponsesWebSocket(respond: (request: unknown) => unknown[]): FakeResponsesWebSocket {
+  const queue: unknown[] = [];
+  const waiters: Array<(result: IteratorResult<unknown>) => void> = [];
+  const push = (frame: unknown) => {
+    const waiter = waiters.shift();
+    if (waiter !== undefined) waiter({ value: frame, done: false });
+    else queue.push(frame);
+  };
+  const socket: FakeResponsesWebSocket & { readyState: number } = {
+    sent: [],
+    readyState: 1,
+    sendResponseCreate(event: unknown) {
+      socket.sent.push(event);
+      for (const frame of respond(event)) push(frame);
+    },
+    messages(): AsyncIterableIterator<unknown> {
+      return {
+        [Symbol.asyncIterator]() {
+          return this;
+        },
+        async next() {
+          if (queue.length > 0) return { value: queue.shift(), done: false };
+          return await new Promise<IteratorResult<unknown>>((resolve) => waiters.push(resolve));
+        },
+      };
+    },
+    close() {
+      socket.readyState = 3;
+    },
+  };
+  return socket;
+}
+
+function openAiWsRequestEvents(content: string): StreamEventInput[] {
+  return [
+    {
+      type: "events.iterate.com/agent/input-added",
+      payload: { content, llmRequestPolicy: { behaviour: "after-current-request" } },
+    },
+    {
+      type: "events.iterate.com/agent/llm-request-scheduled",
+      payload: {
+        debounceMs: 0,
+        model: "gpt-5.5",
+        provider: "openai-ws",
+        requestId: "llm-request:1",
+      },
+    },
+    {
+      type: "events.iterate.com/agent/llm-request-requested",
+      payload: { model: "gpt-5.5", provider: "openai-ws", requestId: "llm-request:1" },
+    },
+  ];
 }
 
 function sseStream(...chunks: unknown[]): ReadableStream<Uint8Array> {
@@ -353,5 +418,118 @@ describe("minimal web-chat agent processors", () => {
     expect(output.payload).toMatchObject({
       content: expect.stringContaining("real-ai-agent-ok"),
     });
+  });
+
+  it("executes openai-ws requests over the Responses WebSocket and records every frame", async () => {
+    const stream = new MemoryStream();
+    const sockets: FakeResponsesWebSocket[] = [];
+    const openAiWs = new OpenAiWsProcessor({
+      stream,
+      apiKey: "sk-test",
+      createResponsesWebSocketClient: async () => {
+        const socket = fakeResponsesWebSocket(() => [
+          { type: "response.output_text.delta", delta: "```js\nasync (itx) => {}" },
+          { type: "response.output_text.delta", delta: "\n```" },
+          {
+            type: "response.completed",
+            response: { id: "resp_1", usage: { total_tokens: 7 } },
+          },
+        ]);
+        sockets.push(socket);
+        return socket;
+      },
+      readStreamEvents: () => stream.getEvents(),
+    });
+
+    await stream.append(...openAiWsRequestEvents("hello over ws"));
+    await deliverNewEvents({ processor: openAiWs, stream, cursors: new Map() });
+    const completed = await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-completed"],
+      timeoutMs: 2_000,
+    });
+    const output = await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/output-added"],
+      timeoutMs: 2_000,
+    });
+
+    expect(sockets).toHaveLength(1);
+    expect(sockets[0]!.sent[0]).toMatchObject({ type: "response.create", model: "gpt-5.5" });
+    expect(stream.events.map((event) => event.type)).toEqual(
+      expect.arrayContaining([
+        "events.iterate.com/openai-ws/llm-request-started",
+        "events.iterate.com/openai-ws/llm-response-chunk",
+        "events.iterate.com/openai-ws/llm-request-completed",
+      ]),
+    );
+    expect(
+      stream.events.filter(
+        (event) => event.type === "events.iterate.com/openai-ws/llm-response-chunk",
+      ),
+    ).toHaveLength(3);
+    expect(completed.payload).toMatchObject({
+      provider: "openai-ws",
+      result: { status: "success", usage: { total_tokens: 7 } },
+    });
+    expect(output.payload).toMatchObject({ content: "```js\nasync (itx) => {}\n```" });
+  });
+
+  it("does not answer llm requests addressed to cloudflare-ai", async () => {
+    const stream = new MemoryStream();
+    let dialed = 0;
+    const openAiWs = new OpenAiWsProcessor({
+      stream,
+      apiKey: "sk-test",
+      createResponsesWebSocketClient: async () => {
+        dialed += 1;
+        throw new Error("should not dial");
+      },
+      readStreamEvents: () => stream.getEvents(),
+    });
+
+    await stream.append({
+      type: "events.iterate.com/agent/llm-request-requested",
+      payload: {
+        model: "@cf/moonshotai/kimi-k2.7-code",
+        provider: "cloudflare-ai",
+        requestId: "llm-request:1",
+      },
+    });
+    await deliverNewEvents({ processor: openAiWs, stream, cursors: new Map() });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(dialed).toBe(0);
+    expect(stream.events.map((event) => event.type)).not.toEqual(
+      expect.arrayContaining(["events.iterate.com/openai-ws/llm-request-started"]),
+    );
+  });
+
+  it("fails openai-ws requests politely when no API key is configured", async () => {
+    const stream = new MemoryStream();
+    const openAiWs = new OpenAiWsProcessor({
+      stream,
+      apiKey: null,
+      createResponsesWebSocketClient: async () => {
+        throw new Error("should not dial without a key");
+      },
+      readStreamEvents: () => stream.getEvents(),
+    });
+
+    await stream.append(...openAiWsRequestEvents("hello without a key"));
+    await deliverNewEvents({ processor: openAiWs, stream, cursors: new Map() });
+    const completed = await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-completed"],
+      timeoutMs: 2_000,
+    });
+
+    expect(completed.payload).toMatchObject({
+      provider: "openai-ws",
+      result: {
+        status: "failure",
+        error: { message: expect.stringContaining("OpenAI API key is not configured") },
+      },
+    });
+    expect(stream.events.map((event) => event.type)).not.toEqual(
+      expect.arrayContaining(["events.iterate.com/agent/output-added"]),
+    );
   });
 });

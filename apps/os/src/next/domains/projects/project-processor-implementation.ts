@@ -9,8 +9,13 @@ import {
   AgentProcessorContract,
   DEFAULT_AGENT_MODEL,
   DEFAULT_AGENT_SYSTEM_PROMPT,
+  type AgentLlmProvider,
 } from "../agents/agent-processor-contract.ts";
 import { CloudflareAiProcessorContract } from "../agents/cloudflare-ai-processor-contract.ts";
+import {
+  DEFAULT_OPENAI_WS_MODEL,
+  OpenAiWsProcessorContract,
+} from "../agents/openai-ws-processor-contract.ts";
 import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
 import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
@@ -36,6 +41,8 @@ const PROJECT_WORKER_READY_URL = "https://minimal-itx-v4.localhost/__itx_project
 export class ProjectProcessor extends StreamProcessor<
   typeof ProjectProcessorContract,
   {
+    /** Provider new agents are born with ("openai-ws" when the deployment has an OpenAI key). */
+    defaultLlmProvider: AgentLlmProvider;
     itx: ItxRpcTarget;
   }
 > {
@@ -123,6 +130,7 @@ export class ProjectProcessor extends StreamProcessor<
               // certificate, so whichever lane runs second dedupes cleanly.
               ...agentBirthCertificateEvents({
                 childPath,
+                llmProvider: this.deps.defaultLlmProvider,
                 projectId: this.deps.itx.projectId,
                 systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
               }),
@@ -163,6 +171,7 @@ export class ProjectProcessor extends StreamProcessor<
           await this.deps.itx.streams.get(ONBOARDING_AGENT_PATH).append(
             ...agentBirthCertificateEvents({
               childPath: ONBOARDING_AGENT_PATH,
+              llmProvider: this.deps.defaultLlmProvider,
               projectId: this.deps.itx.projectId,
               systemPrompt: ONBOARDING_AGENT_SYSTEM_PROMPT,
             }),
@@ -186,8 +195,14 @@ export class ProjectProcessor extends StreamProcessor<
   }
 }
 
+const DEFAULT_MODEL_BY_LLM_PROVIDER = {
+  "cloudflare-ai": DEFAULT_AGENT_MODEL,
+  "openai-ws": DEFAULT_OPENAI_WS_MODEL,
+} satisfies Record<AgentLlmProvider, string>;
+
 function agentBirthCertificateEvents(input: {
   childPath: string;
+  llmProvider: AgentLlmProvider;
   projectId: string;
   systemPrompt: string;
 }) {
@@ -204,7 +219,10 @@ function agentBirthCertificateEvents(input: {
     });
   return [
     subscription(AgentProcessorContract.slug, "agent"),
+    // Both provider processors subscribe; only the one matching the agent's
+    // selected llmProvider answers llm-request-requested events.
     subscription(CloudflareAiProcessorContract.slug, "agent"),
+    subscription(OpenAiWsProcessorContract.slug, "agent"),
     subscription(ItxProcessorContract.slug, "itx"),
     {
       type: "events.iterate.com/agent/config-updated" as const,
@@ -216,8 +234,8 @@ function agentBirthCertificateEvents(input: {
       idempotencyKey: `agent/llm-provider-selected:${input.projectId}:${input.childPath}`,
       payload: {
         ifUnset: true,
-        model: DEFAULT_AGENT_MODEL,
-        provider: "cloudflare-ai" as const,
+        model: DEFAULT_MODEL_BY_LLM_PROVIDER[input.llmProvider],
+        provider: input.llmProvider,
       },
     },
   ];
