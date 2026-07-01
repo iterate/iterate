@@ -2,6 +2,7 @@ import { z } from "zod";
 import { defineProcessorContract } from "../streams/stream-processor.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
+import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 
 const StreamListItem = z.object({
   createdAt: z.string(),
@@ -50,8 +51,10 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/created",
     "events.iterate.com/stream/child-stream-created",
   ],
-  processorDeps: [CoreProcessorContract, RepoProcessorContract],
+  processorDeps: [CoreProcessorContract, RepoProcessorContract, AgentProcessorContract],
   emits: [
+    "events.iterate.com/agent/config-updated",
+    "events.iterate.com/agent/llm-provider-selected",
     "events.iterate.com/project/created",
     "events.iterate.com/repo/create-requested",
     "events.iterate.com/stream/subscription-configured",

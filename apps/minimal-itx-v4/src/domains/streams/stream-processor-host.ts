@@ -155,10 +155,12 @@ export function createStreamProcessorHost(
     return entry;
   }
 
-  function resolveProcessorName(): string {
+  function resolveProcessorName(subscriptionKey: string): string {
     if (entries.size === 1) return [...entries.keys()][0]!;
+    const suffix = subscriptionKey.split("#").at(-1);
+    if (suffix !== undefined && entries.has(suffix)) return suffix;
     throw new Error(
-      `wakeStreamSubscriber requires exactly one processor on this host (registered: ${[...entries.keys()].join(", ")})`,
+      `wakeStreamSubscriber could not resolve processor for subscription "${subscriptionKey}" (registered: ${[...entries.keys()].join(", ")})`,
     );
   }
 
@@ -336,7 +338,7 @@ export function createStreamProcessorHost(
     },
 
     async wakeStreamSubscriber(args) {
-      const name = resolveProcessorName();
+      const name = resolveProcessorName(args.subscriptionKey);
       const entry = requireEntry(name);
 
       ctx.storage.kv.put(subscriptionKeyKey(name), args.subscriptionKey);

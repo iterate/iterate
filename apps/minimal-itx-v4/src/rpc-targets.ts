@@ -32,8 +32,10 @@ import { DynamicWorkerRef as WorkerRefSchema } from "./domains/workers/schemas.t
 import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
 import type {
   Agent,
+  AgentChat,
   AgentCollection,
   AgentItx,
+  Ai,
   CfExecutionContext,
   ItxAuth,
   ItxRoot,
@@ -347,6 +349,49 @@ class SecretRpcTarget extends RpcTarget implements Secret {
   }
 }
 
+type AiRunOptions = NonNullable<Parameters<Cloudflare.Env["AI"]["run"]>[2]>;
+
+class AiRpcTarget extends RpcTarget implements Ai {
+  constructor(readonly props: { gateway?: AiRunOptions["gateway"] } = {}) {
+    super();
+  }
+
+  models() {
+    return Promise.resolve(env.AI.models());
+  }
+
+  run(...[model, body]: Parameters<Ai["run"]>) {
+    const options: AiRunOptions | undefined =
+      this.props.gateway === undefined ? undefined : { gateway: this.props.gateway };
+    return env.AI.run(model, body as Record<string, unknown>, options);
+  }
+}
+
+class AgentChatRpcTarget extends RpcTarget implements AgentChat {
+  constructor(readonly props: { auth: ItxAuth; path: string; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  get stream() {
+    return new StreamRpcTarget({
+      auth: this.props.auth,
+      projectId: this.props.projectId,
+      path: this.props.path,
+    });
+  }
+
+  async sendMessage(input: Parameters<AgentChat["sendMessage"]>[0]) {
+    const message = input.message.trim();
+    if (message === "") throw new Error("itx.chat.sendMessage requires a non-empty message.");
+    const [event] = await this.stream.append({
+      type: "events.iterate.com/agents/web-message-sent",
+      payload: { message },
+    });
+    return event;
+  }
+}
+
 class AgentRpcTarget extends RpcTarget implements Agent {
   constructor(
     readonly props: { auth: ItxAuth; ctx: CfExecutionContext; path: string; projectId: string },
@@ -389,7 +434,7 @@ class AgentRpcTarget extends RpcTarget implements Agent {
 
   async sendMessage(message: string) {
     const [event] = await this.stream.append({
-      type: "events.iterate.com/agent/user-message-received",
+      type: "events.iterate.com/agents/user-message-received",
       payload: { content: message, origin: "web" },
     });
     return event;
@@ -399,7 +444,7 @@ class AgentRpcTarget extends RpcTarget implements Agent {
     const sent = await this.sendMessage(input.message);
     return await this.stream.waitForEvent({
       afterOffset: sent.offset,
-      eventTypes: ["events.iterate.com/agent/web-message-sent"],
+      eventTypes: ["events.iterate.com/agents/web-message-sent"],
       timeoutMs: 45_000,
     });
   }
@@ -590,6 +635,7 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
 
 type ProjectRpcTargetProps = { auth: ItxAuth; ctx: CfExecutionContext; projectId: string };
 const PROJECT_BUILTIN_CAPABILITY_PATHS = [
+  "ai",
   "agents",
   "egress",
   "mcp",
@@ -639,6 +685,10 @@ export class ProjectRpcTarget extends RpcTarget implements Project {
 
   get processor() {
     return this.durableObjectStub.processor;
+  }
+
+  get ai() {
+    return new AiRpcTarget();
   }
 
   get #itx() {
@@ -762,6 +812,15 @@ export class AgentItxRpcTarget extends ProjectRpcTarget implements AgentItx {
     // capabilities stay at the root; agent-only capabilities and message APIs
     // live behind this explicit property instead of relying on fallback magic.
     return this.agents.get((this.props as ProjectRpcTargetProps & { agentPath: string }).agentPath);
+  }
+
+  get chat() {
+    const props = this.props as ProjectRpcTargetProps & { agentPath: string };
+    return new AgentChatRpcTarget({
+      auth: props.auth,
+      path: props.agentPath,
+      projectId: props.projectId,
+    });
   }
 }
 

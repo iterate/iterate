@@ -12,6 +12,9 @@
       "enabled": true,
     },
   },
+  "ai": {
+    "binding": "AI",
+  },
   "durable_objects": {
     "bindings": [
       // Domain objects own their domain workflows. ITX owns the dynamic capability host.
