@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   update_dashboard:
-    runs-on: depot-ubuntu-24.04-32
+    runs-on: depot-ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

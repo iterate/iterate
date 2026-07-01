@@ -26,7 +26,7 @@ on:
         default: ""
 jobs:
   deploy:
-    runs-on: depot-ubuntu-24.04-32
+    runs-on: depot-ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -55,7 +55,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run -- pnpm alchemy:up
   deploy-dev-global:
-    runs-on: depot-ubuntu-24.04-32
+    runs-on: depot-ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
