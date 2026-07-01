@@ -52,6 +52,9 @@ function isAllowedRawDurableObjectBindingAccessFile(filename: string) {
   // src/itx is THE capability layer (apps/os/docs/itx-spec.md): the handle,
   // restorer, and egress entrypoint legitimately mint Project DO stubs.
   if (path.includes("/apps/os/src/itx/")) return true;
+  // src/next is the itx-v4 engine (coexistence): rpc-targets.ts is its
+  // capability layer and its domain files follow the same DO/entrypoint rules.
+  if (path.includes("/apps/os/src/next/")) return true;
   if (path.includes("/apps/os/src/durable-objects/")) return true;
   if (!path.includes("/apps/os/src/domains/")) return false;
 

@@ -32,6 +32,13 @@ import type { SlackAgentDurableObject } from "./src/domains/slack/durable-object
 import type { SlackIntegrationDurableObject } from "./src/domains/slack/durable-objects/slack-integration-durable-object.ts";
 import type { WorkspaceDurableObject } from "./src/domains/workspaces/durable-objects/workspace-durable-object.ts";
 import { eventDocsHostnameForAppBaseUrl } from "./src/lib/event-docs-host.ts";
+import type { AgentDurableObject as NextAgentDurableObject } from "./src/next/domains/agents/agent-durable-object.ts";
+import type { ItxDurableObject as NextItxDurableObject } from "./src/next/domains/itx/itx-durable-object.ts";
+import type { ProjectDurableObject as NextProjectDurableObject } from "./src/next/domains/projects/project-durable-object.ts";
+import type { RepoDurableObject as NextRepoDurableObject } from "./src/next/domains/repos/repo-durable-object.ts";
+import type { SecretDurableObject as NextSecretDurableObject } from "./src/next/domains/secrets/secret-durable-object.ts";
+import type { StreamDurableObject as NextStreamDurableObject } from "./src/next/domains/streams/stream-durable-object.ts";
+import type { StatefulWorkerDurableObject as NextStatefulWorkerDurableObject } from "./src/next/domains/workers/stateful-worker-durable-object.ts";
 import type { Stream } from "~/domains/streams/engine/workers/durable-objects/stream.ts";
 
 const resolvedAuthIssuer =
@@ -221,6 +228,17 @@ const workerNames = {
   slackIntegration: `${ctx.workerName}-slack-integration`,
   stream: `${ctx.workerName}-stream`,
   workspace: `${ctx.workerName}-workspace`,
+  // Next-engine workers (coexistence): the itx-v4 engine deploys alongside the
+  // legacy stack under -next-* names; at cutover the stage is destroyed and
+  // redeployed with the canonical roster.
+  nextAgent: `${ctx.workerName}-next-agent`,
+  nextApi: `${ctx.workerName}-next-api`,
+  nextItx: `${ctx.workerName}-next-itx`,
+  nextProject: `${ctx.workerName}-next-project`,
+  nextRepo: `${ctx.workerName}-next-repo`,
+  nextSecret: `${ctx.workerName}-next-secret`,
+  nextStream: `${ctx.workerName}-next-stream`,
+  nextWorker: `${ctx.workerName}-next-worker`,
 };
 
 const db = await D1Database("os-db", {
@@ -295,6 +313,46 @@ const slackAgent = DurableObjectNamespace<SlackAgentDurableObject>("slack-agent"
   sqlite: true,
 });
 
+// ---- Next-engine Durable Object namespaces (coexistence) ---------------------
+// Same declaration pattern as above; class names intentionally match the
+// legacy classes where they collide (StreamDurableObject etc.) — namespaces
+// are keyed by (scriptName, className), and the scripts differ.
+const nextStream = DurableObjectNamespace<NextStreamDurableObject>("next-stream", {
+  className: "StreamDurableObject",
+  scriptName: workerNames.nextStream,
+  sqlite: true,
+});
+const nextItx = DurableObjectNamespace<NextItxDurableObject>("next-itx", {
+  className: "ItxDurableObject",
+  scriptName: workerNames.nextItx,
+  sqlite: true,
+});
+const nextProject = DurableObjectNamespace<NextProjectDurableObject>("next-project", {
+  className: "ProjectDurableObject",
+  scriptName: workerNames.nextProject,
+  sqlite: true,
+});
+const nextAgent = DurableObjectNamespace<NextAgentDurableObject>("next-agent", {
+  className: "AgentDurableObject",
+  scriptName: workerNames.nextAgent,
+  sqlite: true,
+});
+const nextRepo = DurableObjectNamespace<NextRepoDurableObject>("next-repo", {
+  className: "RepoDurableObject",
+  scriptName: workerNames.nextRepo,
+  sqlite: true,
+});
+const nextSecret = DurableObjectNamespace<NextSecretDurableObject>("next-secret", {
+  className: "SecretDurableObject",
+  scriptName: workerNames.nextSecret,
+  sqlite: true,
+});
+const nextWorker = DurableObjectNamespace<NextStatefulWorkerDurableObject>("next-worker", {
+  className: "StatefulWorkerDurableObject",
+  scriptName: workerNames.nextWorker,
+  sqlite: true,
+});
+
 const artifactEventsQueue = await Queue("artifact-events", {
   name: `${ctx.workerName}-artifact-events`,
   adopt: true,
@@ -324,7 +382,10 @@ const missingScripts = ctx.app.local
       // debugSubscriber is local-only; counting any of them here makes a fresh
       // stage do app/route work in a throwaway first pass.
       Object.entries(workerNames)
-        .filter(([id]) => id !== "app" && id !== "debugSubscriber" && id !== "ingress")
+        .filter(
+          ([id]) =>
+            id !== "app" && id !== "debugSubscriber" && id !== "ingress" && id !== "nextApi",
+        )
         .map(([, name]) => name),
     );
 if (missingScripts.size > 0) {
@@ -416,6 +477,39 @@ const loopbackUnionBindings = {
   ...(slackBotToken == null ? {} : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
 };
 
+// Bindings every next-engine worker carries — mirrors the minimal-itx-v4
+// single-worker env (src/next/env.ts is the matching contract). All next
+// workers get the full set so any of them can host any next capability,
+// exactly like the single-worker original.
+const nextEngineBindings = {
+  AI: Ai(),
+  AGENT: nextAgent,
+  ARTIFACTS: Artifacts({ namespace: artifactsNamespace }),
+  ARTIFACTS_ACCOUNT_ID: artifactsAccountId,
+  ARTIFACTS_NAMESPACE: artifactsNamespace,
+  ITX: nextItx,
+  LOADER: WorkerLoader(),
+  PROJECT: nextProject,
+  REPO: nextRepo,
+  SECRET: nextSecret,
+  SECRET_ENCRYPTION_KEY: alchemy.secret(
+    process.env.SECRET_ENCRYPTION_KEY ?? "os-next-dev-secret-encryption-key",
+  ),
+  STREAM: nextStream,
+  WORKER: nextWorker,
+};
+// @cloudflare/shell (repo git) and the dynamic worker loader need Node APIs —
+// the minimal-itx-v4 original ran its whole worker with nodejs_compat.
+const nextEngineCompatibilityFlags = ["nodejs_compat"];
+
+function nextEngineWorker(id: keyof typeof workerNames, entrypoint: string) {
+  return osWorker(id, {
+    entrypoint,
+    compatibilityFlags: nextEngineCompatibilityFlags,
+    bindings: nextEngineBindings,
+  });
+}
+
 // The Durable Object workers deploy CONCURRENTLY: cross-script DO bindings
 // are name-strings (no resource ordering), and the bootstrap filter works
 // off the missing-set computed above, so ordering between them never
@@ -430,6 +524,14 @@ const [
   slackIntegrationWorker,
   projectWorker,
   streamWorker,
+  nextStreamWorker,
+  nextItxWorker,
+  nextProjectWorker,
+  nextAgentWorker,
+  nextRepoWorker,
+  nextSecretWorker,
+  nextWorkerWorker,
+  nextApiWorker,
 ] = await Promise.all([
   osWorker("workspace", {
     entrypoint: "./src/workers/workspace.ts",
@@ -515,7 +617,25 @@ const [
       STREAM: stream,
     },
   }),
+  nextEngineWorker("nextStream", "./src/next/workers/stream.ts"),
+  nextEngineWorker("nextItx", "./src/next/workers/itx.ts"),
+  nextEngineWorker("nextProject", "./src/next/workers/project.ts"),
+  nextEngineWorker("nextAgent", "./src/next/workers/agent.ts"),
+  nextEngineWorker("nextRepo", "./src/next/workers/repo.ts"),
+  nextEngineWorker("nextSecret", "./src/next/workers/secret.ts"),
+  nextEngineWorker("nextWorker", "./src/next/workers/worker.ts"),
+  nextEngineWorker("nextApi", "./src/next/workers/api.ts"),
 ]);
+// Referenced for completeness; only nextApiWorker is service-bound below.
+void [
+  nextStreamWorker,
+  nextItxWorker,
+  nextProjectWorker,
+  nextAgentWorker,
+  nextRepoWorker,
+  nextSecretWorker,
+  nextWorkerWorker,
+];
 
 const artifactEventsQueueConsumerReady = ctx.app.local
   ? Promise.resolve()
@@ -567,6 +687,7 @@ const appWorker = await IterateAppWorker(ctx, {
     ARTIFACTS_ACCOUNT_ID: artifactsAccountId,
     ARTIFACTS_NAMESPACE: artifactsNamespace,
     GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
+    NEXT_API: nextApiWorker,
     PROJECT_HOST: projectWorker,
     SLACK_AGENT: slackAgent,
     SLACK_INTEGRATION: slackIntegration,
@@ -592,6 +713,7 @@ const ingressWorker = await osWorker("ingress", {
   bindings: {
     APP: appWorker,
     DB: db,
+    NEXT_API: nextApiWorker,
     PROJECT_HOST: projectWorker,
   },
 });

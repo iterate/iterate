@@ -22,6 +22,7 @@ import type { RequestContext } from "~/request-context.ts";
 import { handleDebugRoutes, handleDurableObjectDebugFetch } from "~/debug-routes.ts";
 import { handleItxFetch } from "~/itx/fetch.ts";
 import { handleDocsMarkdownFetch } from "~/lib/docs-markdown.ts";
+import { nextEngineRequest } from "~/next/ingress.ts";
 
 export * from "./shared/loopback-exports.ts";
 
@@ -35,6 +36,11 @@ export default {
 
     const earlyResponse = await handleDebugRoutes({ request, env, config });
     if (earlyResponse) return earlyResponse;
+
+    // Next-engine coexistence lanes (local dev talks to this worker directly,
+    // so the forward lives here as well as in the ingress worker).
+    const nextRequest = nextEngineRequest(request);
+    if (nextRequest) return await env.NEXT_API.fetch(nextRequest);
 
     // Everything below emits one structured "wide event" log line per request.
     return withEvlog(

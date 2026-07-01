@@ -15,6 +15,7 @@ import { RESOLVED_INGRESS_HEADER, routeOsRequest } from "./shared/router.ts";
 import { parseConfig } from "~/config.ts";
 import { normalizeIngressHost } from "~/ingress/host-headers.ts";
 import { MCP_START_MOUNT_PATH } from "~/lib/mcp-base-url.ts";
+import { nextEngineRequest } from "~/next/ingress.ts";
 
 export default {
   async fetch(inbound: Request, env: Env) {
@@ -22,6 +23,9 @@ export default {
     // set HERE (and by the app worker's own re-route in dev). Strip whatever
     // the outside world sent so downstream workers can rely on them.
     const request = stripInternalHeaders(inbound);
+
+    const nextRequest = nextEngineRequest(request);
+    if (nextRequest) return await env.NEXT_API.fetch(nextRequest);
 
     const config = parseConfig(env);
     const mcpRequest = rewriteMcpHostRequest({ config, request });
