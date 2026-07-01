@@ -55,7 +55,7 @@ export interface Session {
 /** Catalog of projects reachable from a {@link Session}. */
 export interface ProjectCollection {
   get(projectId: string): Promise<Itx>;
-  create(args: { projectId?: string; slug: string }): Promise<Itx>;
+  create(args: { organizationSlug?: string; projectId?: string; slug: string }): Promise<Itx>;
   list(): string[];
 }
 

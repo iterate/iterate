@@ -2,7 +2,13 @@ import { RpcTarget } from "cloudflare:workers";
 import { Client as McpSdkClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { AppConfig } from "../config.ts";
-import { resolveItxAuth } from "./auth.ts";
+import { createAuthWorkerServiceClient } from "../auth/auth-worker-service.ts";
+import {
+  resolveItxAuth,
+  resolveOrganizationSlugForCreate,
+  userPrincipalOf,
+  widenProjectAccess,
+} from "./auth.ts";
 import { nextEnv as env } from "./env.ts";
 import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
@@ -600,7 +606,7 @@ class DynamicWorkerRpcTarget extends RpcTarget {
 }
 
 export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectCollection {
-  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext }) {
+  constructor(readonly props: { auth: ItxAuth; config?: AppConfig; ctx: CfExecutionContext }) {
     super();
   }
 
@@ -617,13 +623,12 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
   }
 
   async create(args: Parameters<ProjectCollection["create"]>[0]) {
-    if (!this.props.auth.isAdmin()) {
-      throw new Error(`principal "${this.props.auth.principal}" cannot create projects`);
-    }
-
-    if (args.projectId === undefined) {
-      args.projectId = "prj_" + crypto.randomUUID();
-    }
+    const registered = await this.#registerProject(args);
+    args.projectId = registered.projectId;
+    // The creating session can use the project immediately; a signed-in user's
+    // claims catch up on the next token refresh (directory fallback covers the
+    // gap for other connections).
+    widenProjectAccess(this.props.auth, registered.projectId);
 
     const stream = rootStream({
       auth: this.props.auth,
@@ -662,6 +667,57 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
       ctx: this.props.ctx,
       projectId: args.projectId,
     });
+  }
+
+  /**
+   * Register the project with the auth worker before any engine state exists.
+   *
+   * The auth worker is the project directory and the id authority. The user
+   * lane creates the org-owned directory row (which is what later puts the
+   * project into the user's claims); the admin lane only needs an id. Admin
+   * callers may bring their own id (test fixtures); we never mint prj_ ids
+   * locally when the directory is configured.
+   */
+  async #registerProject(
+    args: Parameters<ProjectCollection["create"]>[0],
+  ): Promise<{ projectId: string; slug: string }> {
+    const userPrincipal = userPrincipalOf(this.props.auth);
+
+    if (userPrincipal && !this.props.auth.isAdmin()) {
+      const config = this.props.config;
+      if (!config?.iterateAuth?.serviceToken) {
+        throw new Error("project creation requires the auth worker directory to be configured");
+      }
+      const organizationSlug = resolveOrganizationSlugForCreate(
+        userPrincipal,
+        args.organizationSlug,
+      );
+      const created = await createAuthWorkerServiceClient(
+        { config },
+        { asUserId: userPrincipal.userId },
+      ).internal.project.createForOrganization({
+        organizationSlug,
+        name: args.slug,
+        slug: args.slug,
+        ...(args.projectId === undefined ? {} : { id: args.projectId }),
+      });
+      return { projectId: created.id, slug: created.slug };
+    }
+
+    if (!this.props.auth.isAdmin()) {
+      throw new Error(`principal "${this.props.auth.principal}" cannot create projects`);
+    }
+    if (args.projectId !== undefined) {
+      return { projectId: args.projectId, slug: args.slug };
+    }
+    const serviceToken = this.props.config?.iterateAuth?.serviceToken;
+    if (this.props.config && serviceToken) {
+      const minted = await createAuthWorkerServiceClient({
+        config: this.props.config,
+      }).internal.project.mintProjectId();
+      return { projectId: minted.id, slug: args.slug };
+    }
+    return { projectId: "prj_" + crypto.randomUUID(), slug: args.slug };
   }
 
   list() {
@@ -891,7 +947,7 @@ async function projectProcessorState(projectId: string) {
 }
 
 class SessionRpcTarget extends RpcTarget implements Session {
-  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext }) {
+  constructor(readonly props: { auth: ItxAuth; config?: AppConfig; ctx: CfExecutionContext }) {
     super();
   }
 
@@ -910,7 +966,11 @@ class SessionRpcTarget extends RpcTarget implements Session {
   }
 
   get projects() {
-    return new ProjectCollectionRpcTarget({ auth: this.props.auth, ctx: this.props.ctx });
+    return new ProjectCollectionRpcTarget({
+      auth: this.props.auth,
+      config: this.props.config,
+      ctx: this.props.ctx,
+    });
   }
 
   whoami() {
@@ -937,7 +997,7 @@ export class UnauthenticatedItxRpcTarget extends RpcTarget implements Unauthenti
       headers: this.props.headers,
       requestUrl: this.props.requestUrl,
     });
-    return new SessionRpcTarget({ auth, ctx: this.props.ctx });
+    return new SessionRpcTarget({ auth, config: this.props.config, ctx: this.props.ctx });
   }
 }
 

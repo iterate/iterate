@@ -134,6 +134,37 @@ export function userPrincipalOf(auth: ItxAuth): UserPrincipal | undefined {
   return auth instanceof ItxAuthContext ? auth.userPrincipal : undefined;
 }
 
+/** Grant a live auth context access to a project it just created. */
+export function widenProjectAccess(auth: ItxAuth, projectId: string): void {
+  if (auth instanceof ItxAuthContext) auth.widenProjectAccess(projectId);
+}
+
+/**
+ * Pick the organization that should own a new project: an explicitly requested
+ * org the user belongs to, else their sole membership. Ported from the legacy
+ * project directory — the auth worker's org grant is what makes the project
+ * appear in the user's claims.
+ */
+export function resolveOrganizationSlugForCreate(
+  userPrincipal: UserPrincipal,
+  requestedSlug: string | undefined,
+): string {
+  const organizations = userPrincipal.organizations;
+  if (requestedSlug) {
+    const organization = organizations.find((candidate) => candidate.slug === requestedSlug);
+    if (!organization) {
+      throw new Error(`Organization ${requestedSlug} is not available to this user.`);
+    }
+    return organization.slug;
+  }
+  if (organizations.length === 1) return organizations[0]!.slug;
+  throw new Error(
+    organizations.length === 0
+      ? "Project creation requires organization membership."
+      : "Pass organizationSlug to choose which organization should own the project.",
+  );
+}
+
 export async function resolveItxAuth(input: {
   config: AppConfig;
   credentials: ItxAuthCredentials;

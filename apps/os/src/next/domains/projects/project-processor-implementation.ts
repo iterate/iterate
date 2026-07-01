@@ -1,6 +1,7 @@
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { PROJECT_REPO_PATH } from "../repos/utils.ts";
+import { PROJECT_REPO_ONBOARDING_MD } from "../repos/project-repo-template.ts";
 import type { StreamEvent, StreamListItem } from "../../types.ts";
 import type { ItxRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
@@ -13,6 +14,20 @@ import { CloudflareAiProcessorContract } from "../agents/cloudflare-ai-processor
 import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
 import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
+
+export const ONBOARDING_AGENT_PATH = "/agents/onboarding";
+
+/**
+ * The onboarding agent is a normal web-chat agent whose system prompt embeds
+ * the seeded ONBOARDING.md script. Same codemode contract as every agent.
+ */
+export const ONBOARDING_AGENT_SYSTEM_PROMPT = [
+  DEFAULT_AGENT_SYSTEM_PROMPT,
+  "",
+  "You are this project's onboarding agent. Follow the onboarding script below.",
+  "",
+  PROJECT_REPO_ONBOARDING_MD,
+].join("\n");
 
 const PROJECT_WORKER_READY_ATTEMPTS = 20;
 const PROJECT_WORKER_READY_RETRY_MS = 100;
@@ -104,35 +119,13 @@ export class ProjectProcessor extends StreamProcessor<
           });
           if (childPath.startsWith("/agents/")) {
             await this.deps.itx.streams.get(childPath).append(
-              buildDurableObjectProcessorSubscriptionConfiguredEvent({
-                durableObjectName,
-                processorSlug: AgentProcessorContract.slug,
-                subscriberType: "agent",
+              // Identical idempotency keys to the create-time onboarding birth
+              // certificate, so whichever lane runs second dedupes cleanly.
+              ...agentBirthCertificateEvents({
+                childPath,
+                projectId: this.deps.itx.projectId,
+                systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
               }),
-              buildDurableObjectProcessorSubscriptionConfiguredEvent({
-                durableObjectName,
-                processorSlug: CloudflareAiProcessorContract.slug,
-                subscriberType: "agent",
-              }),
-              buildDurableObjectProcessorSubscriptionConfiguredEvent({
-                durableObjectName,
-                processorSlug: ItxProcessorContract.slug,
-                subscriberType: "itx",
-              }),
-              {
-                type: "events.iterate.com/agent/config-updated",
-                idempotencyKey: `agent/config-updated:${this.deps.itx.projectId}:${childPath}`,
-                payload: { systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT },
-              },
-              {
-                type: "events.iterate.com/agent/llm-provider-selected",
-                idempotencyKey: `agent/llm-provider-selected:${this.deps.itx.projectId}:${childPath}`,
-                payload: {
-                  ifUnset: true,
-                  model: DEFAULT_AGENT_MODEL,
-                  provider: "cloudflare-ai",
-                },
-              },
             );
             return;
           }
@@ -163,6 +156,26 @@ export class ProjectProcessor extends StreamProcessor<
             idempotencyKey: `project-created:${this.deps.itx.projectId}`,
             payload: state.createRequest!,
           });
+          // Seed the onboarding agent: full birth certificate (the generic
+          // child-stream-created lane later double-appends with the same
+          // idempotency keys and dedupes) plus the kickoff input that makes the
+          // agent greet the user without waiting for a first message.
+          await this.deps.itx.streams.get(ONBOARDING_AGENT_PATH).append(
+            ...agentBirthCertificateEvents({
+              childPath: ONBOARDING_AGENT_PATH,
+              projectId: this.deps.itx.projectId,
+              systemPrompt: ONBOARDING_AGENT_SYSTEM_PROMPT,
+            }),
+            {
+              type: "events.iterate.com/agent/input-added",
+              idempotencyKey: `project-onboarding-start:${this.deps.itx.projectId}`,
+              payload: {
+                content:
+                  "Start onboarding now. The project owner just created this project and is looking at the chat.",
+                llmRequestPolicy: { behaviour: "after-current-request" as const },
+              },
+            },
+          );
         });
         return;
       }
@@ -171,6 +184,43 @@ export class ProjectProcessor extends StreamProcessor<
         return;
     }
   }
+}
+
+function agentBirthCertificateEvents(input: {
+  childPath: string;
+  projectId: string;
+  systemPrompt: string;
+}) {
+  const durableObjectName = DurableObjectNameCodec.stringify({
+    projectId: input.projectId,
+    path: input.childPath,
+  });
+  const subscription = (processorSlug: string, subscriberType: "agent" | "itx") =>
+    buildDurableObjectProcessorSubscriptionConfiguredEvent({
+      durableObjectName,
+      idempotencyKey: `stream/subscription-configured:${durableObjectName}#${processorSlug}`,
+      processorSlug,
+      subscriberType,
+    });
+  return [
+    subscription(AgentProcessorContract.slug, "agent"),
+    subscription(CloudflareAiProcessorContract.slug, "agent"),
+    subscription(ItxProcessorContract.slug, "itx"),
+    {
+      type: "events.iterate.com/agent/config-updated" as const,
+      idempotencyKey: `agent/config-updated:${input.projectId}:${input.childPath}`,
+      payload: { systemPrompt: input.systemPrompt },
+    },
+    {
+      type: "events.iterate.com/agent/llm-provider-selected" as const,
+      idempotencyKey: `agent/llm-provider-selected:${input.projectId}:${input.childPath}`,
+      payload: {
+        ifUnset: true,
+        model: DEFAULT_AGENT_MODEL,
+        provider: "cloudflare-ai" as const,
+      },
+    },
+  ];
 }
 
 function recordStream<

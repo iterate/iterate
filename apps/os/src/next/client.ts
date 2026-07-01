@@ -27,8 +27,12 @@ type ConnectAgentItxInput = ConnectItxAuthenticatedInput & {
 };
 
 function websocketUrl(pathname: string, input: { baseUrl?: string }) {
+  // Coexistence: an os deployment serves this engine's capnweb surface under
+  // /api/itx-next while the legacy stack still owns /api/itx. ITX_API_PATH
+  // relocates the endpoint; standalone next workers keep the default.
+  const apiPath = process.env.ITX_API_PATH ?? pathname;
   const url = new URL(
-    pathname,
+    pathname === "/api/itx" ? apiPath : pathname,
     (input.baseUrl ?? process.env.ITX_BASE ?? DEFAULT_ITX_BASE_URL).replace(/\/+$/, ""),
   );
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";

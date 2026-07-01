@@ -54,6 +54,7 @@ export const ProjectProcessorContract = defineProcessorContract({
   processorDeps: [CoreProcessorContract, RepoProcessorContract, AgentProcessorContract],
   emits: [
     "events.iterate.com/agent/config-updated",
+    "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/llm-provider-selected",
     "events.iterate.com/project/created",
     "events.iterate.com/repo/create-requested",
