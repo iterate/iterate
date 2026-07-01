@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Stream, StreamEvent, StreamEventInput } from "../../types.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
-import { DEFAULT_AGENT_SYSTEM_PROMPT } from "./agent-processor-contract.ts";
+import { AgentProcessorContract, DEFAULT_AGENT_SYSTEM_PROMPT } from "./agent-processor-contract.ts";
 import { CloudflareAiProcessor } from "./cloudflare-ai-processor-implementation.ts";
 
 class MemoryStream implements Stream {
@@ -235,6 +235,47 @@ describe("minimal web-chat agent processors", () => {
     expect(firstCall.messages.map((m) => m.content)).toEqual(
       expect.arrayContaining(["message one", "message two"]),
     );
+  });
+
+  it("recovers a stuck scheduled request after DO restart (lost debounce timer)", async () => {
+    const stream = new MemoryStream();
+    // Simulate events already committed before restart
+    await stream.append(
+      {
+        type: "events.iterate.com/agent/input-added",
+        payload: { content: "hello", llmRequestPolicy: { behaviour: "after-current-request" } },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-scheduled",
+        payload: {
+          debounceMs: 250,
+          model: "@cf/moonshotai/kimi-k2.7-code",
+          provider: "cloudflare-ai",
+          requestId: "llm-request:1",
+        },
+      },
+    );
+    // Simulate a checkpoint written after the scheduled event but before the timer fired
+    const stuckState = AgentProcessorContract.stateSchema.parse({
+      history: [{ role: "user", content: "hello" }],
+      currentRequest: { phase: "scheduled", requestId: "llm-request:1", scheduledOffset: 2 },
+      llmProviderConfigured: true,
+    });
+    const agent = new AgentProcessor({
+      stream,
+      readState: async () => ({ offset: 2, state: stuckState }),
+    });
+    // New event arrives after restart — triggers recovery
+    await stream.append({
+      type: "events.iterate.com/agents/user-message-received",
+      payload: { origin: "web", content: "second message" },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
+    // Recovery should fire llm-request-requested without waiting for a debounce
+    await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-requested"],
+      timeoutMs: 500,
+    });
   });
 
   it("treats Workers AI terminal stream chunks without choices as successful completion", async () => {

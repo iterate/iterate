@@ -15,6 +15,7 @@ type LlmRequestPolicy = Extract<
 
 export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContract> {
   readonly contract = AgentProcessorContract;
+  readonly #scheduledRequestsWithActiveTimers = new Set<string>();
 
   protected override reduce({
     event,
@@ -80,17 +81,22 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
         });
         return;
       case "events.iterate.com/agent/llm-request-scheduled":
+        this.#scheduledRequestsWithActiveTimers.add(event.payload.requestId);
         runInBackground(async () => {
           await new Promise<void>((resolve) => setTimeout(resolve, event.payload.debounceMs));
-          await append({
-            type: "events.iterate.com/agent/llm-request-requested",
-            idempotencyKey: `agent/llm-request-requested@${event.offset}`,
-            payload: {
-              model: event.payload.model,
-              provider: event.payload.provider,
-              requestId: event.payload.requestId,
-            },
-          });
+          try {
+            await append({
+              type: "events.iterate.com/agent/llm-request-requested",
+              idempotencyKey: `agent/llm-request-requested@${event.offset}`,
+              payload: {
+                model: event.payload.model,
+                provider: event.payload.provider,
+                requestId: event.payload.requestId,
+              },
+            });
+          } finally {
+            this.#scheduledRequestsWithActiveTimers.delete(event.payload.requestId);
+          }
         });
         return;
       case "events.iterate.com/agent/output-added":
@@ -121,6 +127,27 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
       default:
         return;
     }
+  }
+
+  protected override async processEventBatch(
+    args: Parameters<StreamProcessor<typeof AgentProcessorContract>["processEventBatch"]>[0],
+  ): Promise<void> {
+    await super.processEventBatch(args);
+    const scheduled = args.state.currentRequest;
+    if (scheduled?.phase !== "scheduled") return;
+    if (this.#scheduledRequestsWithActiveTimers.has(scheduled.requestId)) return;
+    // No active timer for this scheduled request: the DO restarted and lost the
+    // debounce. Fire llm-request-requested immediately. The idempotency key
+    // makes this safe if the timer also fires concurrently.
+    await args.append({
+      type: "events.iterate.com/agent/llm-request-requested",
+      idempotencyKey: `agent/llm-request-requested@${scheduled.scheduledOffset}`,
+      payload: {
+        model: args.state.llmConfig.model,
+        provider: args.state.llmProvider,
+        requestId: scheduled.requestId,
+      },
+    });
   }
 
   async #handleInputAdded(input: {
