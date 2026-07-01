@@ -5,6 +5,7 @@ import {
   createStreamProcessorHost,
   type StreamSubscriberWakeRequest,
 } from "../streams/stream-processor-host.ts";
+import { StreamProcessorRpcTarget } from "../streams/stream-processor.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
@@ -41,6 +42,6 @@ export class AgentDurableObject extends DurableObject<Env> {
   }
 
   get processor() {
-    return this.#agentProcessor;
+    return new StreamProcessorRpcTarget(this.#agentProcessor);
   }
 }

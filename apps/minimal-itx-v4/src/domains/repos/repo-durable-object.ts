@@ -5,6 +5,7 @@ import {
   createStreamProcessorHost,
   type StreamSubscriberWakeRequest,
 } from "../streams/stream-processor-host.ts";
+import { StreamProcessorRpcTarget } from "../streams/stream-processor.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import type { Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
@@ -54,7 +55,7 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   get processor() {
-    return this.#repoProcessor;
+    return new StreamProcessorRpcTarget(this.#repoProcessor);
   }
 
   async getWorkerSource(args: { path: string }): Promise<ResolvedWorkerSource> {

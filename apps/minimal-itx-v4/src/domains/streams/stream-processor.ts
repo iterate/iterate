@@ -1,11 +1,11 @@
 import { RpcTarget } from "capnweb";
 import { z } from "zod";
-import type { Stream, StreamEvent, StreamEventInput } from "../../types.ts";
+import type { Stream, StreamEvent, StreamEventInput, StreamProcessorRpc } from "../../types.ts";
 import {
   StreamEvent as StreamEventSchema,
   StreamEventInput as StreamEventInputSchema,
 } from "./schemas.ts";
-import { buildEvent as buildStreamEvent } from "./build-event.ts";
+import { disposeIgnoredRpcResult } from "./rpc-lifecycle.ts";
 
 type BaseStreamEvent = StreamEvent;
 type BaseStreamEventInput = StreamEventInput;
@@ -20,38 +20,12 @@ type BaseStreamEventInput = StreamEventInput;
 // `<Type, Payload>` generics the contract machinery needs.
 // =============================================================================
 
-export type EventExample<Payload = unknown> = {
-  description: string;
-  payload: Payload;
-};
-
-export type EventDefinition<
-  _Type extends string = string,
-  PayloadOutput = unknown,
-  PayloadInput = PayloadOutput,
-> = {
+export type EventDefinition<PayloadOutput = unknown, PayloadInput = PayloadOutput> = {
   description?: string;
-  examples?: readonly EventExample<PayloadInput>[];
   payloadSchema: z.ZodType<PayloadOutput, PayloadInput>;
 };
 
-export type EventCatalog = Record<string, EventDefinition<string, unknown, unknown>>;
-
-type NoInferValue<Value> = [Value][Value extends unknown ? 0 : never];
-
-type EventDefinitionWithPayloadExamples<Value> = Value extends {
-  payloadSchema: infer PayloadSchema extends z.ZodType;
-}
-  ? Value extends { examples: infer Examples }
-    ? Examples extends readonly EventExample<z.input<PayloadSchema>>[]
-      ? Value
-      : never
-    : Value
-  : never;
-
-type EventCatalogWithPayloadExamples<Events extends EventCatalog> = {
-  [Key in keyof Events]: EventDefinitionWithPayloadExamples<Events[Key]>;
-};
+export type EventCatalog = Record<string, EventDefinition<unknown, unknown>>;
 
 /**
  * Type-level event lookup for string-keyed processor contracts.
@@ -160,12 +134,12 @@ type TypedStreamEvent<Type extends string = string, Payload = Record<string, unk
   TypedStreamEventInput<Type, Payload>;
 
 type EventFromDefinitionForType<Definition, Type extends string> =
-  Definition extends EventDefinition<string, infer PayloadOutput, unknown>
+  Definition extends EventDefinition<infer PayloadOutput, unknown>
     ? TypedStreamEvent<Type, PayloadOutput> & { payload: PayloadOutput }
     : never;
 
 type InputFromDefinitionForType<Definition, Type extends string> =
-  Definition extends EventDefinition<string, infer PayloadOutput, infer PayloadInput>
+  Definition extends EventDefinition<infer PayloadOutput, infer PayloadInput>
     ? TypedStreamEventInput<Type, PayloadOutput | PayloadInput>
     : never;
 
@@ -196,7 +170,7 @@ type InputFromType<
   : never;
 
 type ParsedInputFromDefinitionForType<Definition, Type extends string> =
-  Definition extends EventDefinition<string, infer PayloadOutput, unknown>
+  Definition extends EventDefinition<infer PayloadOutput, unknown>
     ? TypedStreamEventInput<Type, PayloadOutput> & { payload: PayloadOutput }
     : never;
 
@@ -224,28 +198,11 @@ type InputFromTypes<
   Types extends readonly string[],
 > = InputFromType<Events, ProcessorDeps, Types[number]>;
 
-type ConsumedInputFromTypes<
-  Events extends EventCatalog,
-  ProcessorDeps extends readonly unknown[],
-  Types extends readonly string[],
-> = "*" extends Types[number]
-  ? [Exclude<Types[number], "*">] extends [never]
-    ? BaseStreamEventInput
-    : InputFromTypes<Events, ProcessorDeps, Exclude<Types[number], "*">[]>
-  : InputFromTypes<Events, ProcessorDeps, Types>;
-
 export type ConsumedEvent<Contract> = Contract extends {
   events: EventCatalog;
   consumes: infer Consumes extends readonly string[];
 }
   ? EventFromTypes<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>, Consumes>
-  : never;
-
-export type ConsumedInput<Contract> = Contract extends {
-  events: EventCatalog;
-  consumes: infer Consumes extends readonly string[];
-}
-  ? ConsumedInputFromTypes<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>, Consumes>
   : never;
 
 export type EmittedInput<Contract> = Contract extends {
@@ -278,43 +235,7 @@ type ProcessorContractShape<
   processorDeps?: ProcessorDeps;
   events: Events;
   consumes: Consumes;
-  /**
-   * Explicit runner escape hatch for processors that must observe every
-   * committed event on a stream and decide at runtime whether it matters.
-   *
-   * Most processors should leave this unset and declare concrete `consumes`.
-   */
-  consumesAllEvents?: true;
   emits: Emits;
-  /**
-   * Optional pure projection from current state + consumed event to next state.
-   *
-   * Omitted reduce means identity reduction. This keeps side-effect-only
-   * processors lightweight while preserving the same catch-up/checkpoint path.
-   */
-  reduce?(args: {
-    /**
-     * The current processor contract. This is passed by the runner so reusable
-     * reducer fragments can inspect processor identity and event metadata
-     * without each processor copying `slug` / `version` into helper calls.
-     */
-    contract: {
-      slug: string;
-      version: string;
-      description: string;
-      events: NoInferValue<Events>;
-      processorDeps?: NoInferValue<ProcessorDeps>;
-      consumes: NoInferValue<Consumes>;
-      emits: NoInferValue<Emits>;
-    };
-    state: z.output<NoInferValue<StateSchema>>;
-    event: ConsumedEvent<{
-      state: NoInferValue<StateSchema>;
-      events: NoInferValue<Events>;
-      processorDeps?: NoInferValue<ProcessorDeps>;
-      consumes: NoInferValue<Consumes>;
-    }>;
-  }): z.output<NoInferValue<StateSchema>> | null | undefined;
 };
 
 type ProcessorContractBuildEvent<
@@ -423,11 +344,9 @@ type ProcessorContractInput<
   description: string;
   stateSchema: DefaultableObjectStateSchema<StateSchema>;
   processorDeps: ProcessorDeps;
-  events: Events & EventCatalogWithPayloadExamples<Events>;
+  events: Events;
   consumes: Consumes & ResolvedConsumedEventTypesOnly<Events, ProcessorDeps, Consumes>;
-  consumesAllEvents?: true;
   emits: Emits & ResolvedEventTypesOnly<Events, ProcessorDeps, Emits>;
-  reduce?: ProcessorContractShape<StateSchema, Events, ProcessorDeps, Consumes, Emits>["reduce"];
 };
 
 type ProcessorContractInputWithoutDeps<
@@ -441,11 +360,9 @@ type ProcessorContractInputWithoutDeps<
   description: string;
   stateSchema: DefaultableObjectStateSchema<StateSchema>;
   processorDeps?: never;
-  events: Events & EventCatalogWithPayloadExamples<Events>;
+  events: Events;
   consumes: Consumes & ResolvedConsumedEventTypesOnly<Events, readonly [], Consumes>;
-  consumesAllEvents?: true;
   emits: Emits & ResolvedEventTypesOnly<Events, readonly [], Emits>;
-  reduce?: ProcessorContractShape<StateSchema, Events, readonly [], Consumes, Emits>["reduce"];
 };
 
 export type ProcessorDepsOf<Contract> = Contract extends {
@@ -531,6 +448,34 @@ function getEventInputSchema<
 // =============================================================================
 
 /**
+ * Validate an append input against the payload schema resolved from a contract's
+ * local `events` plus its `processorDeps`. This is the free-standing form used
+ * by call sites that hold a contract but not a processor instance; contracts
+ * expose it pre-bound as `contract.buildEvent(...)`.
+ */
+export function buildEvent<
+  const Contract extends {
+    slug?: string;
+    events: EventCatalog;
+    processorDeps?: readonly unknown[];
+  },
+  const Event extends ResolvedEventInput<Contract> & { type: string },
+>(args: { contract: Contract; event: Event }): Event {
+  const eventDefinition = getResolvedEventDefinition({
+    contract: args.contract,
+    eventType: args.event.type,
+  });
+  if (eventDefinition === undefined) {
+    const owner = args.contract.slug == null ? "contract" : `processor "${args.contract.slug}"`;
+    throw new Error(`${owner} cannot build unresolved event "${args.event.type}".`);
+  }
+  return getEventInputSchema({
+    type: args.event.type,
+    payloadSchema: eventDefinition.payloadSchema,
+  }).parse(args.event) as unknown as Event;
+}
+
+/**
  * Typed identity for processor contracts.
  *
  * This is a typed identity plus validation and one convenience method. It keeps
@@ -613,7 +558,7 @@ export function defineProcessorContract(contract: unknown) {
   };
   return Object.assign(typedContract, {
     buildEvent(event: { type: string }) {
-      return buildStreamEvent({
+      return buildEvent({
         contract: typedContract,
         event: event as ResolvedEventInput<typeof typedContract> & { type: string },
       });
@@ -713,15 +658,13 @@ function getConsumedEventDefinition(args: {
     events: EventCatalog;
     processorDeps?: readonly unknown[];
     consumes: readonly string[];
-    consumesAllEvents?: true;
   };
   eventType: string;
 }): EventDefinition | undefined {
   if (!args.contract.consumes.includes(args.eventType)) {
-    if (args.contract.consumes.includes("*") || args.contract.consumesAllEvents === true) {
-      return {
-        payloadSchema: z.unknown(),
-      };
+    // A `"*"` in consumes means "every event, validated permissively".
+    if (args.contract.consumes.includes("*")) {
+      return { payloadSchema: z.unknown() };
     }
     return undefined;
   }
@@ -1202,18 +1145,6 @@ export abstract class StreamProcessor<
     return this.contract.buildEvent(event) as ResolvedEventInput<Contract> & { type: string };
   }
 
-  /** Build and validate an append input for an event listed in `contract.consumes`. */
-  protected buildConsumedEvent(event: ConsumedInput<Contract>): ConsumedInput<Contract> {
-    return this.#parseEventInput({
-      event,
-      eventDefinition: getConsumedEventDefinition({
-        contract: this.contract,
-        eventType: event.type,
-      }),
-      kind: "consumed",
-    }) as ConsumedInput<Contract>;
-  }
-
   /** Build and validate an append input for an event listed in `contract.emits`. */
   protected buildEmittedEvent(event: EmittedInput<Contract>): EmittedInput<Contract> {
     return this.#parseEventInput({
@@ -1259,10 +1190,9 @@ export abstract class StreamProcessor<
   /**
    * Reduce one raw stream event against explicit state, without touching the
    * processor's own state or checkpoint. Returns `undefined` for events this
-   * processor does not consume. Used by the batch loop and by processors that
-   * are also run inline with externally-owned state (the stream core).
+   * processor does not consume. Private: only the batch loop calls it.
    */
-  protected reduceRawEvent(args: {
+  #reduceRawEvent(args: {
     event: StreamEvent;
     state: ProcessorState<Contract>;
   }): ReducedEvent<Contract> | undefined {
@@ -1306,7 +1236,7 @@ export abstract class StreamProcessor<
       events.push(event);
       checkpointOffset = event.offset;
 
-      const reduction = this.reduceRawEvent({ event, state });
+      const reduction = this.#reduceRawEvent({ event, state });
       if (reduction === undefined) continue;
       reducedEvents.push(reduction);
       state = reduction.state;
@@ -1475,12 +1405,42 @@ function retainStateChangeCallback<State>(
   });
 }
 
-function disposeIgnoredRpcResult(result: unknown): void {
-  if (
-    result !== null &&
-    (typeof result === "object" || typeof result === "function") &&
-    Symbol.dispose in result
-  ) {
-    (result as Disposable)[Symbol.dispose]();
+/**
+ * The read-only capability a host hands out for one of its processors.
+ *
+ * A `StreamProcessor` is itself an `RpcTarget`, so returning the instance
+ * directly over RPC would expose its host-only plumbing — most dangerously
+ * `ingest`, which drives the durable checkpoint. A caller could then call
+ * `ingest` with a fabricated high-offset event and fast-forward the checkpoint
+ * past every real event, permanently silencing the processor (and run its side
+ * effects for events that were never committed). This facade forwards only the
+ * four inspection methods of the public `StreamProcessorRpc` contract, so the
+ * dangerous surface never crosses the RPC boundary.
+ */
+export class StreamProcessorRpcTarget<Contract extends StreamProcessorContract>
+  extends RpcTarget
+  implements StreamProcessorRpc<ProcessorState<Contract>>
+{
+  readonly #processor: StreamProcessor<Contract, object>;
+
+  constructor(processor: StreamProcessor<Contract, object>) {
+    super();
+    this.#processor = processor;
+  }
+
+  snapshot() {
+    return this.#processor.snapshot();
+  }
+
+  getRuntimeState() {
+    return this.#processor.getRuntimeState();
+  }
+
+  onStateChange(cb: (state: ProcessorState<Contract>) => unknown) {
+    return this.#processor.onStateChange(cb);
+  }
+
+  waitUntilEvent(input: { offset: number; timeoutMs?: number }) {
+    return this.#processor.waitUntilEvent(input);
   }
 }

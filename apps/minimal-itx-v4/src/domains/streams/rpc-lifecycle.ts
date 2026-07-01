@@ -153,7 +153,13 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
   );
 }
 
-function disposeIgnoredRpcResult(result: unknown): void {
+/**
+ * Dispose an ignored RPC call result. Reading a Cap'n Web / Workers RPC method
+ * yields a disposable stub even when the caller ignores the value; dropping it
+ * without disposal leaks the remote reference. Exported so the processor runtime
+ * and the stream connection code share one implementation.
+ */
+export function disposeIgnoredRpcResult(result: unknown): void {
   if (
     result !== null &&
     (typeof result === "object" || typeof result === "function") &&
