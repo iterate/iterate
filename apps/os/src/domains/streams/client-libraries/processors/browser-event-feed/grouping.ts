@@ -192,17 +192,3 @@ export function planFeedOps(
 export function groupFeedData(eventType: string, events: readonly StreamEvent[]): GroupFeedData {
   return { eventType, events: [...events] };
 }
-
-function feedDataRecord(data: unknown): Record<string, unknown> | undefined {
-  if (data === null || typeof data !== "object") {
-    if (typeof data !== "string") return undefined;
-    try {
-      const parsed: unknown = JSON.parse(data);
-      if (parsed === null || typeof parsed !== "object") return undefined;
-      return parsed as Record<string, unknown>;
-    } catch {
-      return undefined;
-    }
-  }
-  return data as Record<string, unknown>;
-}

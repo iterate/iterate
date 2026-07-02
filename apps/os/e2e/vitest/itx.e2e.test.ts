@@ -11,8 +11,8 @@ import {
   type StreamProcessorSnapshot,
 } from "../../src/domains/streams/stream-processor.ts";
 import type { DynamicWorkerRef, UnauthenticatedItx } from "../../src/types.ts";
-import { startEgressEcho, startMockMcp, startMockOpenApi } from "./itx-capability-fixtures.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
+import { startEgressEcho, startMockMcp, startMockOpenApi } from "./itx-capability-fixtures.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 import type { ItxWebSocketMessage } from "./test-helpers.ts";
 

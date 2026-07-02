@@ -342,7 +342,7 @@ test("closing a Cap'n Web session without unsubscribe removes its stream subscri
       type: "events.iterate.test/lifecycle-session-close",
       payload: { marker },
     });
-    await delay(250);
+    await new Promise((resolve) => setTimeout(resolve, 250));
     expect(delivered).toEqual([]);
   } finally {
     disposeRpc(subscriberSession);
@@ -520,8 +520,4 @@ async function expectNoSubscriptionConfiguredEvent(
 
 function disposeRpc(value: unknown): void {
   (value as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

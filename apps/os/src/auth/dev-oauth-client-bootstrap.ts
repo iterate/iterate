@@ -6,15 +6,6 @@ const DEV_TARGET_PREFIX = "dev_";
 const DEV_STAGE_PATTERN = /^dev[-_](.+)$/;
 const DEV_AUTH_ORIGIN = "https://auth.iterate-dev.com";
 
-type LocalDevOAuthClientBootstrap = {
-  authOrigin: string;
-  existingClientId: string | undefined;
-  existingClientSecret: string | undefined;
-  redirectURI: string;
-  serviceToken: string;
-  target: string;
-};
-
 export function resolveDevAuthClientSyncTarget(env: Record<string, string | undefined>) {
   const stage = env.ALCHEMY_STAGE?.trim().toLowerCase();
   if (!stage) return null;
@@ -23,6 +14,15 @@ export function resolveDevAuthClientSyncTarget(env: Record<string, string | unde
   const user = match?.[1]?.replaceAll("-", "_");
   return user ? `${DEV_TARGET_PREFIX}${user}` : null;
 }
+
+type LocalDevOAuthClientBootstrap = {
+  authOrigin: string;
+  existingClientId: string | undefined;
+  existingClientSecret: string | undefined;
+  redirectURI: string;
+  serviceToken: string;
+  target: string;
+};
 
 export function resolveLocalDevOAuthClientBootstrap(
   env: Record<string, string | undefined>,
