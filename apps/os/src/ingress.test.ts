@@ -33,7 +33,7 @@ it("treats the bare localhost project-host base as an OS app-host alias", async 
   expect(route).toMatchObject({ lane: "os" });
 });
 
-it("sends engine paths on the OS host to the api lane", async () => {
+it("sends itx paths on the OS host to the api lane", async () => {
   for (const path of ["/api/itx", "/api/itx/admin-cookie", "/__itx_e2e/fixture"]) {
     const route = await decideIngressRoute({
       config: DEV_CONFIG,
@@ -230,7 +230,7 @@ it("honors x-forwarded-host for host classification", async () => {
   });
 });
 
-it("apiWorkerRequest forwards project hosts and engine paths, keeps the app lane", () => {
+it("apiWorkerRequest forwards project hosts and itx paths, keeps the app lane", () => {
   const forward = (url: string, headers?: HeadersInit) =>
     apiWorkerRequest({ config: DEV_CONFIG, request: new Request(url, { headers }) });
 

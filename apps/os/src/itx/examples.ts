@@ -218,7 +218,7 @@ return await itx.fakeSlack.chat.postMessage({ channel: "C123", text: "hi" });
     id: "provide-itx-expression",
     title: "Provide a durable capability as an itx expression",
     description:
-      "An itx-expression capability is a serializable recipe over the project's own surface — here an alias to a stream: ['streams', ['get', path]]. Unlike a live mount it survives this session; the engine evaluates the expression on demand. The same shape mounts dynamic workers (['workers', ['get', ref]]), MCP servers (['mcp', ['connect', { url }]]), and OpenAPI clients.",
+      "An itx-expression capability is a serializable recipe over the project's own surface — here an alias to a stream: ['streams', ['get', path]]. Unlike a live mount it survives this session; itx evaluates the expression on demand. The same shape mounts dynamic workers (['workers', ['get', ref]]), MCP servers (['mcp', ['connect', { url }]]), and OpenAPI clients.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `

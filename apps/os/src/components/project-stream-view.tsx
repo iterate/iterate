@@ -100,7 +100,7 @@ type StreamPathLinkRenderer = (input: {
 type ItxStreamSource = (streamPath: string) => Stream | Promise<Stream>;
 
 /**
- * Stream events reduced by the browser feed. The NEXT engine's event envelope
+ * Stream events reduced by the browser feed. The itx's event envelope
  * has no `streamPath` (the owning stream is clear from context); the feed
  * reducer still keys some renderers off it, so `normalizeEvent` backfills it.
  */

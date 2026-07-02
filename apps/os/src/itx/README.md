@@ -5,8 +5,8 @@
 > replacement (`apps/os/ITX_V4_MIGRATION_REPORT.md`) — most files it names
 > (`itx.ts`, `handle.ts`, `dial.ts`, `fetch.ts`, `platform-context.ts`, …)
 > no longer exist. It is kept because it explains the design lineage the
-> current engine inherits (describe(), instructions/types, capabilities as
-> stream events). **The current engine lives at `apps/os/src/`**
+> current implementation inherits (describe(), instructions/types, capabilities as
+> stream events). **The current implementation lives at `apps/os/src/`**
 > (`README.md` + `types.ts`). What actually remains in THIS folder is the
 > client-side surface: `itx-react.tsx` (browser hooks), `browser-repl.ts`
 > (REPL compiler), `path-proxy.ts`, `examples.ts` (the example catalogue),

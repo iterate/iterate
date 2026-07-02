@@ -5,23 +5,23 @@ project-scoped runtime APIs.
 
 It combines:
 
-- **The itx engine** (`src/`) — the capnweb surface at `/api/itx` plus
+- **itx** (`src/`) — the capnweb surface at `/api/itx` plus
   every project-scoped domain: streams, repos, agents, secrets, dynamic
   workers, egress, capabilities. [`src/README.md`](./src/README.md)
-  is the engine guide; [`src/types.ts`](./src/types.ts) is the
+  is itx guide; [`src/types.ts`](./src/types.ts) is the
   public contract.
 - **The dashboard** — TanStack Start, TanStack Router, and TanStack Query for
   the authenticated UI (`src/routes/`, `src/components/`), talking to the
-  engine through the itx React hooks (`src/itx/itx-react.tsx`).
+  itx through the React hooks (`src/itx/itx-react.tsx`).
 - **The Iterate Auth Worker** for sessions, organizations, and project claims
   — and as the **project directory**: OS has no database of its own; slug →
   project id resolution goes through the auth worker with a `PROJECT_DIRECTORY`
   KV cache in front. All other durable state lives in Durable Object SQLite.
-- **Ten deployed workers** — a tiny ingress router, the app, the engine API,
+- **Ten deployed workers** — a tiny ingress router, the app, itx API,
   and one worker per Durable Object class. See
   [docs/worker-topology.md](./docs/worker-topology.md).
 
-Slack and Google integrations are being rebuilt on the engine (in flight);
+Slack and Google integrations are being rebuilt on itx (in flight);
 their pre-migration source was held in a quarantine folder during the
 migration (deleted once the integrations landed; git history has it).
 
@@ -64,7 +64,7 @@ Run from `apps/os`.
 pnpm dev                 # local OS dev with Doppler-backed env (all workers in one workerd)
 pnpm typecheck           # TypeScript (includes route-tree freshness check)
 pnpm test                # unit tests
-pnpm e2e                 # real-worker e2e (engine suites + preview smoke) against a live deployment
+pnpm e2e                 # real-worker e2e (itx e2e suites + preview smoke) against a live deployment
 pnpm e2e:itx             # the itx example matrix across all execution runtimes
 pnpm cli itx run --eval 'return await itx.whoami()'
                          # run an itx script against the deployment in your Doppler config
@@ -80,8 +80,8 @@ Use `pnpm run deploy`, not `pnpm deploy`; `deploy` is also a pnpm built-in.
 ## Running Real-Worker Tests
 
 The e2e lanes run against a real OS deployment, not the Workers Vitest pool:
-`pnpm e2e` (config `e2e/vitest.config.ts`: `e2e/vitest/**` plus the engine
-suites in `e2e/engine/**`) and `pnpm e2e:itx` (config
+`pnpm e2e` (config `e2e/vitest.config.ts`: `e2e/vitest/**` plus itx
+suites in `e2e/itx/**`) and `pnpm e2e:itx` (config
 `src/itx/e2e/vitest.config.ts`: the example matrix, including a browser
 runtime). Start the worker in one terminal, then run tests from another
 through the matching Doppler config. For local dev configs, test helpers read
@@ -99,7 +99,7 @@ pnpm dev
 doppler run --project os --config dev -- pnpm e2e
 ```
 
-Known caveat: a few engine scenarios that load repo-sourced project workers
+Known caveat: a few itx e2e scenarios that load repo-sourced project workers
 fail against LOCAL vite dev only (capnweb/vite-dev RpcTarget identity);
 verify against a deployed preview before treating one as a regression.
 
@@ -170,15 +170,15 @@ The script pattern is documented in
 
 ## Important Files
 
-- `src/` — **the engine**: `types.ts` (public contract),
+- `src/` — **itx**: `types.ts` (public contract),
   `rpc-targets.ts` (all RpcTargets), `auth.ts`, `domains/*` (DOs + stream
-  processors), `workers/*` (engine worker entrypoints). See
+  processors), `workers/*` (itx worker entrypoints). See
   [src/README.md](./src/README.md).
-- `src/workers/` — the non-engine worker entrypoints: `ingress.ts` (the only
+- `src/workers/` — the non-itx worker entrypoints: `ingress.ts` (the only
   worker with routes) and `app.ts` (the TanStack dashboard).
 - `src/itx/` — the client-side itx surface: `itx-react.tsx` (browser hooks),
   `browser-repl.ts` (REPL compiler), `examples.ts` (the example catalogue),
-  `e2e/` (the example matrix). The engine itself lives in `src/`.
+  `e2e/` (the example matrix). itx itself lives in `src/`.
 - `src/config.ts` — the `AppConfig` runtime config schema.
 - `src/routes/_app` — authenticated app routes; `src/start.ts` installs the
   auth-worker request middleware.
@@ -187,7 +187,7 @@ The script pattern is documented in
 
 ## Read Next
 
-- [Engine README](./src/README.md)
+- [itx README](./src/README.md)
 - [Worker Topology](./docs/worker-topology.md)
 - [Architecture And Operations](./docs/architecture-and-operations.md)
 - [Debugging Deployed OS Workers](./docs/debugging-deployed-os-workers.md)

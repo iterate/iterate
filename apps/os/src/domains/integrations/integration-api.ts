@@ -2,7 +2,7 @@
 // route (src/routes/api.$.ts) in the app worker.
 //
 // Resurrected from the pre-migration integration-api.ts (git history). The app
-// worker has no engine bindings, so every engine effect goes through a
+// worker has no itx bindings, so every itx effect goes through a
 // one-shot pipelined capnweb HTTP batch against this deployment's own
 // /api/itx surface using the admin API secret — the same request-scoped
 // pattern the inbound MCP exec_js tool uses.
@@ -41,7 +41,7 @@ export async function handleIntegrationApiRequest(input: {
   return null;
 }
 
-/** One-shot pipelined capnweb batch against this deployment's own engine surface. */
+/** One-shot pipelined capnweb batch against this deployment's own itx surface. */
 function engineBatchSession(context: RequestContext) {
   const baseUrl = (context.config.baseUrl ?? "").replace(/\/+$/, "");
   if (!baseUrl) throw new Error("baseUrl is not configured");
@@ -78,7 +78,7 @@ async function handleOAuthCallback(input: {
   if (!code) return redirectWithError(callbackUrl, `${input.provider}_oauth_missing_code`);
 
   // The signed-state userId binding: the user completing the flow must be the
-  // user who started it. The state signature itself is verified engine-side;
+  // user who started it. The state signature itself is verified itx-side;
   // here we only need who the browser session is.
   const userId = input.auth?.type === "user" ? input.auth.userId : null;
   if (userId === null) return new Response("OAuth callback user mismatch.", { status: 403 });

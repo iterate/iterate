@@ -189,7 +189,7 @@ async function waitForCondition(
 }
 
 // These are hand written tests - they MUST pass
-describe("minimal itx v4", () => {
+describe("itx", () => {
   test("Unauthenticated itx can't do anything", async () => {
     using session = withItxSession();
     await expect((<any>session).projects).rejects.toThrow();
@@ -231,7 +231,7 @@ describe("minimal itx v4", () => {
     expect(description.projectId).toMatch(/prj_[0-9a-f-]+$/);
     expect(description.name).toMatch(/prj_[0-9a-f-]+\.iterate\/$/);
 
-    // projects.get namespaces engine state by the given string, so a slug (or
+    // projects.get namespaces itx state by the given string, so a slug (or
     // any non-prj_ id) must fail loudly instead of minting a phantom project.
     await expect(itx.projects.get("alice-project").describe()).rejects.toThrow(/not a project id/);
     expect(messages).toContainEqual([

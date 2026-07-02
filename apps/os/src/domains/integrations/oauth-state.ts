@@ -1,7 +1,7 @@
 // Stateless signed OAuth state for the integrations connect flows.
 //
 // The legacy stack persisted one-time oauth_states rows in D1; D1 is gone, so
-// the state is now a self-contained HMAC-signed token minted engine-side
+// the state is now a self-contained HMAC-signed token minted itx-side
 // (keyed off SECRET_ENCRYPTION_KEY) with a short expiry. "Consumption" is
 // signature + expiry validation: a replayed state carries an already-used
 // authorization code, which the provider rejects, so a one-time-use table
@@ -9,8 +9,8 @@
 //
 // The payload is base64url JSON and deliberately parseable WITHOUT the key
 // (`parseOAuthStateUnverified`) so the app-worker callback route can read the
-// projectId it needs to address the engine; all authority checks re-verify
-// the signature engine-side.
+// projectId it needs to address itx; all authority checks re-verify
+// the signature itx-side.
 
 import { z } from "zod";
 

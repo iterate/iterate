@@ -200,7 +200,7 @@ const ctx = await initAlchemy("os", AppConfig, env);
 // Durable Object isolate loads only the code it runs (apps/os/docs/
 // worker-topology.md). `${ctx.workerName}` (os-prd, os-preview-N,
 // os-dev-<user>) is the tiny ingress router that owns all routes; the
-// dashboard app, the engine API worker, and each Durable Object class get
+// dashboard app, itx API worker, and each Durable Object class get
 // their own worker. Durable Object classes exported from one worker are
 // bound as cross-script namespaces (`scriptName`) in every worker that
 // dials them.
@@ -282,7 +282,7 @@ const statefulWorker = DurableObjectNamespace<StatefulWorkerDurableObject>("work
 
 // ---- Fresh-stage bootstrap --------------------------------------------------
 // Cloudflare rejects a cross-script DO binding whose target script does not
-// exist yet (error 10061), and the engine workers reference each other — a
+// exist yet (error 10061), and the itx workers reference each other — a
 // legitimate cycle once everything is deployed, but unsatisfiable on the
 // FIRST deploy of a fresh stage. So: bindings whose target script is missing
 // are omitted this pass, and the run re-executes itself once at the end to
@@ -372,9 +372,9 @@ async function osWorker<B extends Bindings>(
   return worker;
 }
 
-// Bindings every engine worker carries — src/env.ts is the matching
-// contract. All engine workers get the full set so any of them can host any
-// capability, exactly like the single-worker original the engine came from.
+// Bindings every itx worker carries — src/env.ts is the matching
+// contract. All itx workers get the full set so any of them can host any
+// capability, exactly like the single-worker original itx came from.
 const itxBindings = {
   AI: Ai(),
   AGENT: agent,
@@ -394,7 +394,7 @@ const itxBindings = {
   WORKER: statefulWorker,
 };
 // @cloudflare/shell (repo git) and the dynamic worker loader need Node APIs —
-// the engine originally ran its whole worker with nodejs_compat.
+// itx originally ran its whole worker with nodejs_compat.
 // global_fetch_strictly_public: same-zone subrequests (auth worker on previews,
 // worker-hosted e2e fixtures through project egress) must traverse Worker
 // routes instead of going to origin — same reason as the app worker.

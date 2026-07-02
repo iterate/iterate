@@ -9,7 +9,7 @@
 //                   project itx. The matrix (and the Playwright REPL specs)
 //                   execute in a project scope where `itx.whoami` /
 //                   `itx.projects` do not exist. Session behavior is proven by
-//                   the engine suites (apps/os/e2e/engine/itx.e2e.test.ts).
+//                   the itx e2e suites (apps/os/e2e/itx/itx.e2e.test.ts).
 //   list-projects   global-context, same reason as whoami.
 //   ai-models       depends on the deployment's upstream Workers AI account
 //                   (catalog availability + latency); interactive reading

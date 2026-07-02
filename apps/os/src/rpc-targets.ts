@@ -471,7 +471,7 @@ class GmailRpcTarget extends RpcTarget implements GmailCapability {
  * and disconnect for slack/google. The complete* methods are called by the
  * app worker's OAuth callback routes (/api/integrations/<provider>/callback);
  * their authority is the HMAC-signed OAuth state minted by startOAuthFlow,
- * verified engine-side.
+ * verified itx-side.
  */
 class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
   constructor(readonly props: { auth: ItxAuth; projectId: string }) {
@@ -763,7 +763,7 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
   }
 
   async get(projectId: string) {
-    // Guard the id shape: engine state is namespaced by whatever string lands
+    // Guard the id shape: itx state is namespaced by whatever string lands
     // here, so an unvalidated slug (e.g. `cli itx run --context <slug>`) would
     // silently manufacture a phantom project namespace instead of failing.
     if (!projectId.startsWith("prj_")) {
@@ -841,7 +841,7 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
   }
 
   /**
-   * Register the project with the auth worker before any engine state exists.
+   * Register the project with the auth worker before any itx state exists.
    *
    * The auth worker is the project directory and the id authority. The user
    * lane creates the org-owned directory row (which is what later puts the

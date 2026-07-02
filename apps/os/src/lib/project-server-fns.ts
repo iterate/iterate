@@ -56,7 +56,7 @@ export const createMyProjectServerFn: (input: {
 
     // One pipelined HTTP batch into itx, authenticated with the
     // caller's own session cookie: create registers the project with the auth
-    // worker (org grant -> claims) and runs the engine bootstrap saga.
+    // worker (org grant -> claims) and runs the itx bootstrap saga.
     const session = engineBatchSession(context);
     const root = session.authenticate({ type: "from-server-cookie" });
     const project = root.projects.create({
@@ -83,7 +83,7 @@ export const deleteProjectServerFn: (input: {
   .validator((input: { id: string }) => input)
   .handler(({ data }) => {
     // TODO(task #13): project archival on itx (auth-worker archive
-    // + engine teardown). Everything resets during the migration, so deletion
+    // + itx teardown). Everything resets during the migration, so deletion
     // is deliberately absent rather than half-implemented.
     throw new Error(`Project deletion is not available yet (project ${data.id}).`);
   });

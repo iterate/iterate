@@ -135,7 +135,7 @@ async function runWorkspaceCodemodeProof(input: {
 function workspaceCodemodeScript() {
   // itx-v4 cutover: this used to drive the workspaces domain (gitClone /
   // writeFile / gitCommit / gitPush against a checkout). The workspaces
-  // domain is gone — the engine's repo capability commits directly to the
+  // domain is gone — the itx repo capability commits directly to the
   // project repo — so the proof is now: MCP exec_js -> repo.commitFiles,
   // then an identical second commit whose noChanges: true is the read-back
   // (commits are content-addressed and idempotent).

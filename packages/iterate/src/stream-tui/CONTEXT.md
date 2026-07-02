@@ -59,7 +59,7 @@ _Avoid_: tmux pane, shell session
 ## Rules
 
 - Keep OpenTUI imports in the Adapter; Modules stay renderer-agnostic.
-- Reuse os source and shared packages for engine types and reducers — no
+- Reuse os source and shared packages for itx types and reducers — no
   bespoke stream client, no local event-type switch statements beyond the
   shared reducer.
 - Prefer unit tests for Modules and Terminal Behavior Specs for workflows.

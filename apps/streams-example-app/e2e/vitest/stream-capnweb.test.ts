@@ -440,7 +440,7 @@ describe("stream capnweb protocol", () => {
     expect(callbackA.batches.length).toBe(callbackABatchesBeforeUnsubscribe);
   });
 
-  // The legacy engine's hosted circuit-breaker processor is gone; the pause
+  // The pre-itx-v4 hosted circuit-breaker processor is gone; the pause
   // door it drove is core stream behavior on itx, exercised here
   // directly through the public paused/resumed events.
   e2eIt("pauses and resumes ordinary appends through the core stream gate", async () => {
@@ -517,7 +517,7 @@ describe("stream capnweb protocol", () => {
       appended,
     ]);
     // Deliveries are server pushes: the subscriber never ORIGINATES a request
-    // for them. Unlike the legacy engine, the itx worker→DO bridge
+    // for them. Unlike the pre-itx-v4 implementation, the itx worker→DO bridge
     // observes each delivery's result, so the browser answers every push with
     // one `resolve` frame — allowed here; anything else outbound is not.
     const outbound = outboundFrames(frames, afterSubscribe);

@@ -1,6 +1,6 @@
-# The itx engine (`src`)
+# itx (`src`)
 
-This folder is the engine behind `/api/itx` and everything project-scoped in
+This folder is itx behind `/api/itx` and everything project-scoped in
 OS: streams, repos, agents, secrets, dynamic workers, egress, and the itx
 capability surface itself. It began life as `apps/minimal-itx-v4` and was
 transplanted here whole during the itx-v4 replacement
@@ -19,12 +19,12 @@ programs against. When this README and `types.ts` disagree, `types.ts` wins.
 | `rpc-targets.ts`       | ALL RpcTarget classes: the session/project/agent surfaces, MCP/OpenAPI clients, capability provision, stream subscriptions, egress |
 | `auth.ts`              | The auth adapter: credentials → `ItxAuth` (see below)                                                                              |
 | `itx-client.ts`        | `connectItx()` — the Node/CLI client over a Cap'n Web WebSocket                                                                    |
-| `ingress.ts`           | The shared routing decision (which requests belong to the engine)                                                                  |
+| `ingress.ts`           | The shared routing decision (which requests belong to itx)                                                                         |
 | `project-directory.ts` | Slug → project id resolution against the auth worker, cached in the `PROJECT_DIRECTORY` KV namespace                               |
-| `env.ts`               | The binding contract every engine worker deploys with (`nextEnv`)                                                                  |
-| `workers/`             | One entrypoint per deployed engine worker ([worker topology](../../docs/worker-topology.md))                                       |
+| `env.ts`               | The binding contract every itx worker deploys with (`nextEnv`)                                                                     |
+| `workers/`             | One entrypoint per deployed itx worker ([worker topology](../../docs/worker-topology.md))                                          |
 | `domains/`             | One folder per domain: `streams`, `projects`, `repos`, `agents`, `secrets`, `workers` (dynamic), `itx`, `inbound-mcp-server`       |
-| `e2e-fixtures.ts`      | Worker-hosted fixtures for the engine e2e suites (`/__itx_e2e/*`)                                                                  |
+| `e2e-fixtures.ts`      | Worker-hosted fixtures for itx e2e suites (`/__itx_e2e/*`)                                                                         |
 
 Each domain owns its Durable Object plus a stream-processor contract
 (`*-processor-contract.ts`, pure: event schemas + reducer) and implementation
@@ -38,7 +38,7 @@ live in domain files.
   itself an itx.
 - A **project** is the tenant / isolation boundary — a `prj_…` id, its Durable
   Objects, its streams. Per-project confinement is the one security invariant
-  the engine keeps.
+  itx keeps.
 - An **itx** is a capability context scoped into one project at one path. The
   same interface serves the project root (`/`) and every nested scope
   (`/agents/bla`); a nested scope sees its own mounted capabilities plus
@@ -93,7 +93,7 @@ setup RPC.
 ## Events
 
 Event types are past-tense facts under `events.iterate.com/...`; the repo-wide
-rules are in [`docs/events.md`](../../../docs/events.md). In this engine,
+rules are in [`docs/events.md`](../../../docs/events.md). In itx,
 contracts declare event schemas and reducers in `*-processor-contract.ts`, and
 implementations put side effects in `*-processor-implementation.ts`.
 
@@ -197,9 +197,9 @@ checkpoint is a disposable cache (the doctrine:
 
 ## Workers RPC types patch
 
-The engine relies on `patches/@cloudflare__workers-types@4.20260621.1.patch`:
+itx relies on `patches/@cloudflare__workers-types@4.20260621.1.patch`:
 upstream types collapse to `never` when an RPC method returns a
-non-serializable nested object, but the engine passes typed capability objects
+non-serializable nested object, but itx passes typed capability objects
 over Durable Object RPC (and needs `ctx.exports` loopback types). The patch
 changes the fallback to keep those returns usable. `pnpm-workspace.yaml`
 applies it via `patchedDependencies`; run `pnpm install` from the repo root
@@ -207,7 +207,7 @@ after touching the patch or the workers-types version.
 
 ## Testing
 
-- `apps/os/e2e/engine/` — the engine e2e suites (streams, itx, project
+- `apps/os/e2e/itx/` — itx e2e suites (streams, itx, project
   ingress, security), run through `pnpm e2e` against a live deployment.
 - `apps/os/src/itx/e2e/` — the example matrix: the REPL example catalogue
   executed across every runtime (browser REPL, Node, `runScript`, project

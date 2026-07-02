@@ -1,6 +1,6 @@
 // Slack Web API access for itx.
 //
-// The project's Slack bot token lives in an engine secret Durable Object
+// The project's Slack bot token lives in an itx secret Durable Object
 // (`/secrets/integrations/slack/bot-token`). Calls go through the project
 // egress door with a `getSecret({ path: ... })` placeholder in the
 // authorization header, so token material never leaves the secret DO's

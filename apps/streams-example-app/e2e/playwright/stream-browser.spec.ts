@@ -45,7 +45,7 @@ test("stream page appends through the shared browser mirror @preview", async ({ 
   await expect(eventMeta(page, type).first()).toBeVisible();
 });
 
-// The legacy engine's hosted circuit-breaker processor (via the removed
+// The pre-itx-v4 hosted circuit-breaker processor (via the removed
 // StreamProcessorRunner DO) is gone; on itx the pause door is core
 // stream behavior, driven directly through the sidebar's pause/resume gate.
 test("sidebar stream gate pauses and resumes ordinary appends", async ({ page }) => {

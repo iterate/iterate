@@ -2,7 +2,7 @@
 
 OS deploys as **many small Cloudflare Workers** instead of one big one. Every
 Durable Object class is its own worker, the dashboard app is its own worker,
-the engine API is its own worker, and a tiny ingress router owns all the
+itx API is its own worker, and a tiny ingress router owns all the
 routes. The point is cold-start speed: a cold Durable Object isolate loads
 only the code that object actually runs, not the whole product. (Before the
 split, one ~28MB script served everything, every DO cold start paid for it,
@@ -16,27 +16,27 @@ Everything is declared in one place: [`apps/os/alchemy.run.ts`](../alchemy.run.t
 ## The workers
 
 `<n>` is the stage worker name (`os-prd`, `os-preview-N`, `os-dev-<user>`).
-Ten workers: ingress, app, api, and seven engine Durable Object workers.
+Ten workers: ingress, app, api, and seven itx Durable Object workers.
 
-| Worker          | Entry                    | Owns                                                                                                   |
-| --------------- | ------------------------ | ------------------------------------------------------------------------------------------------------ |
-| `<n>` (ingress) | `src/workers/ingress.ts` | **All routes.** One config parse, then a service-binding forward                                       |
-| `<n>-app`       | `src/workers/app.ts`     | Dashboard: TanStack Start SSR + assets + server functions, inbound MCP `/api/mcp`                      |
-| `<n>-api`       | `src/workers/api.ts`     | The engine API: capnweb `/api/itx` (+ `/api/itx/admin-cookie`), `/__itx_e2e` fixtures, project ingress |
-| `<n>-stream`    | `src/workers/stream.ts`  | `StreamDurableObject` (journals, event streams)                                                        |
-| `<n>-itx`       | `src/workers/itx.ts`     | `ItxDurableObject` (capability scopes)                                                                 |
-| `<n>-project`   | `src/workers/project.ts` | `ProjectDurableObject` + `ProjectEgressEntrypoint`                                                     |
-| `<n>-agent`     | `src/workers/agent.ts`   | `AgentDurableObject` (agent + LLM provider processors)                                                 |
-| `<n>-repo`      | `src/workers/repo.ts`    | `RepoDurableObject` (git over Cloudflare Artifacts)                                                    |
-| `<n>-secret`    | `src/workers/secret.ts`  | `SecretDurableObject`                                                                                  |
-| `<n>-worker`    | `src/workers/worker.ts`  | `StatefulWorkerDurableObject` (stateful dynamic workers)                                               |
+| Worker          | Entry                    | Owns                                                                                            |
+| --------------- | ------------------------ | ----------------------------------------------------------------------------------------------- |
+| `<n>` (ingress) | `src/workers/ingress.ts` | **All routes.** One config parse, then a service-binding forward                                |
+| `<n>-app`       | `src/workers/app.ts`     | Dashboard: TanStack Start SSR + assets + server functions, inbound MCP `/api/mcp`               |
+| `<n>-api`       | `src/workers/api.ts`     | itx API: capnweb `/api/itx` (+ `/api/itx/admin-cookie`), `/__itx_e2e` fixtures, project ingress |
+| `<n>-stream`    | `src/workers/stream.ts`  | `StreamDurableObject` (journals, event streams)                                                 |
+| `<n>-itx`       | `src/workers/itx.ts`     | `ItxDurableObject` (capability scopes)                                                          |
+| `<n>-project`   | `src/workers/project.ts` | `ProjectDurableObject` + `ProjectEgressEntrypoint`                                              |
+| `<n>-agent`     | `src/workers/agent.ts`   | `AgentDurableObject` (agent + LLM provider processors)                                          |
+| `<n>-repo`      | `src/workers/repo.ts`    | `RepoDurableObject` (git over Cloudflare Artifacts)                                             |
+| `<n>-secret`    | `src/workers/secret.ts`  | `SecretDurableObject`                                                                           |
+| `<n>-worker`    | `src/workers/worker.ts`  | `StatefulWorkerDurableObject` (stateful dynamic workers)                                        |
 
-All engine workers (api + the seven DO workers) deploy with the **same
+All itx workers (api + the seven DO workers) deploy with the **same
 binding set** (`itxBindings` in `alchemy.run.ts`; the matching type is
 `src/env.ts`): every DO namespace, `AI`, `LOADER` (Worker Loader),
 `ARTIFACTS`, `PROJECT_DIRECTORY` (the slug→id KV cache), and the secret
-encryption key. Any engine worker can host any capability — exactly like the
-single-worker engine they came from — and each re-exports the shared loopback
+encryption key. Any itx worker can host any capability — exactly like the
+single-worker implementation they came from — and each re-exports the shared loopback
 entrypoints (`ItxEntrypoint`, `ProjectEgressEntrypoint`) so `ctx.exports`
 resolves identically in all of them. They all carry `nodejs_compat` (repo git
 and dynamic worker loading need Node APIs) and `global_fetch_strictly_public`.
@@ -64,7 +64,7 @@ runs the class migrations there) and to every consumer (alchemy emits a
 `script_name` binding). Stubs behave identically to same-script stubs —
 `env.STREAM.getByName(...)` works unchanged, RPC and WebSockets included.
 
-**Cycles are fine.** Every engine worker binds every DO namespace (streams
+**Cycles are fine.** Every itx worker binds every DO namespace (streams
 dial their subscriber DOs, subscribers dial streams back). Cloudflare accepts
 mutual cross-script bindings as long as both scripts exist.
 
@@ -77,7 +77,7 @@ then forwards whole requests over service bindings:
 
 ```
                     ┌────────────► <n>-app  (MCP hostname → /api/mcp)
-browser ──► <n> ────┼────────────► <n>-api  (engine lanes: /api/itx[...],
+browser ──► <n> ────┼────────────► <n>-api  (itx lanes: /api/itx[...],
  (routes)  ingress  │              /__itx_e2e/*, /prj_<id>/*, and project
                     │              platform hosts <slug>.<base>)
                     └────────────► <n>-app  (OS host → dashboard)
@@ -85,7 +85,7 @@ browser ──► <n> ────┼────────────► <n>
 
 The routing decision itself lives in `src/ingress.ts` and is shared with
 the app worker: in local dev the browser talks to vite (the app worker)
-directly, so the app worker runs the same decision first and forwards engine
+directly, so the app worker runs the same decision first and forwards itx
 traffic over the same `ITX_API` service binding. One code path, no dev/prod
 fork.
 
@@ -113,13 +113,13 @@ use case for the HTTP interface, and alchemy 0.83's local dev drops
    `auxiliaryWorkers`.
 3. The browser talks to vite directly (`http://localhost:<port>`, project
    hosts as `<slug>.localhost:<port>`); the app worker's embedded routing
-   decision handles the engine/project-host lanes over the same service
+   decision handles itx/project-host lanes over the same service
    bindings the ingress uses in production. The ingress worker isn't part of
    the dev loop (it would be a no-op hop in front of vite).
 
 Why one workerd instead of wrangler's cross-process dev registry: the
 registry proxy dials remote Durable Objects **by hex id**, which loses
-`ctx.id.name` — and every engine DO derives its identity from its name
+`ctx.id.name` — and every itx DO derives its identity from its name
 (`src/domains/durable-object-names.ts`). In one workerd, cross-script
 `getByName` keeps names intact, exactly like production.
 
@@ -127,7 +127,7 @@ registry proxy dials remote Durable Objects **by hex id**, which loses
 
 Cloudflare rejects a cross-script DO binding whose target script doesn't
 exist yet (error 10061). On the **first** deploy of a fresh stage the mutual
-engine-worker bindings are therefore unsatisfiable in one pass.
+itx-worker bindings are therefore unsatisfiable in one pass.
 `alchemy.run.ts` handles this automatically: it checks which worker scripts
 exist, omits cross-script bindings whose target is missing (with a loud
 warning), and re-executes itself once after finalize to wire them up.
@@ -146,8 +146,8 @@ fresh stage just works — it deploys twice under the hood.
   SSR under `os-prd-app`.
   `apps/os/docs/debugging-deployed-os-workers.md` has query patterns.
 - **The `workers` export** in `alchemy.run.ts` feeds the per-worker `Env`
-  types (`src/lib/worker-env.d.ts`). The engine does not use the ambient
-  `Env`: engine code imports `Env`/`nextEnv` from `src/env.ts`
+  types (`src/lib/worker-env.d.ts`). itx does not use the ambient
+  `Env`: the itx workers import `Env`/`nextEnv` from `src/env.ts`
   explicitly.
 - **streams-example-app** (`apps/streams-example-app`) binds the Stream DO
   cross-script; its `script_name` is `os-prd-stream`.

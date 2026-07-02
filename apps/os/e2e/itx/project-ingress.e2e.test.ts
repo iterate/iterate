@@ -87,7 +87,7 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
   const read = await fetchApp(`counter--${slug}`);
   expect(await read.text()).toMatch(/count:\s*2/i);
 
-  // The seeded repo is readable through the engine's repo capability.
+  // The seeded repo is readable through the itx repo capability.
   const workerSource = await project.repo.readFile({ path: "worker.js" });
   expect(workerSource?.content).toContain("const APPS");
   const tree = await project.repo.listFiles();

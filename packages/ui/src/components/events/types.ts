@@ -1,10 +1,10 @@
 /**
  * Structural stream/event types for the events components.
  *
- * These components render events produced by the OS stream engine, but
+ * These components render events produced by OS itx streams, but
  * `packages/ui` must stay standalone (it cannot import app source), so the
  * shapes are declared locally. They deliberately describe only what the
- * components actually consume; any engine event envelope that carries these
+ * components actually consume; any itx event envelope that carries these
  * fields is compatible.
  */
 import type { StreamEvent } from "./stream-processor-fold/stream-event.ts";

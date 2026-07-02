@@ -30,9 +30,9 @@ export default defineConfig({
     environment: "node",
     fileParallelism: false,
     hookTimeout: 120_000,
-    include: ["./e2e/vitest/**/*.test.ts", "./e2e/engine/**/*.e2e.test.ts"],
+    include: ["./e2e/vitest/**/*.test.ts", "./e2e/itx/**/*.e2e.test.ts"],
     passWithNoTests: true,
-    setupFiles: ["./e2e/engine/setup.ts"],
+    setupFiles: ["./e2e/itx/setup.ts"],
     provide: {
       [E2E_RUN_ROOT_KEY]: vitestRunRoot,
       [E2E_PROJECT_ROOT_KEY]: e2eRoot,

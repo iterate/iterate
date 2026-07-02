@@ -140,8 +140,8 @@ describe("agent-ui reducer", () => {
     });
   });
 
-  it("streams the engine's openai-ws llm-response-chunk frames into the live llm step", () => {
-    // The engine journals every raw Responses-WS frame as llm-response-chunk
+  it("streams the itx openai-ws llm-response-chunk frames into the live llm step", () => {
+    // itx journals every raw Responses-WS frame as llm-response-chunk
     // ({llmRequestId, sequence, chunk}) — the pre-migration processor used
     // websocket-message-received ({llmRequestId, message}). Regression: the
     // feed showed only a bare spinner because the reducer ignored the new

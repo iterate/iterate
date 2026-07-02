@@ -15,7 +15,7 @@ export const GOOGLE_INTEGRATION_STREAM_PATH = "/integrations/google";
  */
 export const SLACK_TEAM_DIRECTORY_STREAM_PATH = "/integrations/slack-team-directory";
 
-/** Engine secret Durable Object path holding the project's Slack bot token. */
+/** Itx secret Durable Object path holding the project's Slack bot token. */
 export const SLACK_BOT_TOKEN_SECRET_PATH = "/secrets/integrations/slack/bot-token";
 
 export const SLACK_CONNECTED_EVENT_TYPE = "events.iterate.com/slack/connected";

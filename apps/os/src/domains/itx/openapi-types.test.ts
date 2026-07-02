@@ -1,5 +1,5 @@
 // Unit tests for the OpenAPI operation table (ports the still-applicable cases
-// from the legacy src/itx/capabilities/openapi-types.test.ts). The next engine
+// from the legacy src/itx/capabilities/openapi-types.test.ts). itx
 // no longer derives TypeScript declaration strings from specs — capability
 // `types` are caller-provided — so the surviving subjects are the flattened
 // operation list, $ref resolution against the spec, and the object-vs-`body`

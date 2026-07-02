@@ -31,7 +31,7 @@ function ProjectLayout() {
   // One shared project socket for every route under this layout, keyed by the
   // project ID: context resolution is client-side on itx
   // (authenticate() then projects.get(id)), so the address must be the id the
-  // engine knows, not the slug. Routes that need the GLOBAL session instead
+  // itx knows, not the slug. Routes that need the GLOBAL session instead
   // call `useItx({})` to force it.
   return (
     <Suspense fallback={<ItxResourceLoading label="project" />}>

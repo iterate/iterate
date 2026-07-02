@@ -209,7 +209,7 @@ doppler run --project os --config preview_2 -- pnpm e2e -t "OS preview smoke"
 Engine e2e against a deployed preview:
 
 ```bash
-doppler run --project os --config preview_2 -- pnpm e2e e2e/engine/
+doppler run --project os --config preview_2 -- pnpm e2e e2e/itx/
 ```
 
 One-turn real agent smoke ([agent-smoke-testing.md](./agent-smoke-testing.md)):

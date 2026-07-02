@@ -1,13 +1,13 @@
 // itx catalogue matrix: proves the REPL examples (src/itx/examples.ts — the
 // same entries the Examples panel shows) against a REAL deployed worker
 // (local dev server, preview, or production — whatever APP_CONFIG_BASE_URL
-// points at), through every server-side runtime of the NEXT engine
+// points at), through every server-side runtime of the itx
 // (/api/itx). The browser runtime runs the same catalogue in
-// itx.browser.test.ts; engine behavior itself is proven by
-// apps/os/e2e/engine/*.
+// itx.browser.test.ts; itx behavior itself is proven by
+// apps/os/e2e/itx/*.
 //
 // KNOWN CAVEAT (local vite dev only): repo-sourced project worker dials can
-// fail with masked "internal error"s against a local dev server — the engine's
+// fail with masked "internal error"s against a local dev server — the itx
 // own e2e ("Authenticated internal auth itx can create project…",
 // project.worker.fetch) fails identically there. Verify project-worker
 // failures against a deployed preview before treating them as regressions.

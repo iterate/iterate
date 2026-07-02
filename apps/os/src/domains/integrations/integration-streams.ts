@@ -1,8 +1,8 @@
-// Engine-side stream access for the integrations domain.
+// Itx-side stream access for the integrations domain.
 //
 // These helpers dial the Stream Durable Objects directly (same shape as
 // StreamRpcTarget's stub minting) so the domain modules do not import the
-// RpcTarget layer. All callers are engine workers acting with internal
+// RpcTarget layer. All callers are itx workers acting with internal
 // authority; caller-facing confinement stays in rpc-targets.ts.
 
 import { itxEnv } from "../../env.ts";

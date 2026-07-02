@@ -39,7 +39,7 @@ import type { AppConfig } from "./config.ts";
 import type { ItxAuth, ItxAuthCredentials, ItxAuthToken } from "./types.ts";
 
 /**
- * Kept for the engine e2e suites, which express "run this as a fake user with
+ * Kept for itx e2e suites, which express "run this as a fake user with
  * these scopes" via test-helpers. On the wire those become `impersonate`
  * credentials gated on the admin API secret.
  */

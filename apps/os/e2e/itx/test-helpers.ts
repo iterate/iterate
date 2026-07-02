@@ -20,7 +20,7 @@ export function adminSecret(): string {
     process.env.OS_ADMIN_API_SECRET?.trim() || process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
   if (!secret) {
     throw new Error(
-      "Engine e2e needs OS_ADMIN_API_SECRET or APP_CONFIG_ADMIN_API_SECRET (run under doppler).",
+      "itx e2e needs OS_ADMIN_API_SECRET or APP_CONFIG_ADMIN_API_SECRET (run under doppler).",
     );
   }
   return secret;

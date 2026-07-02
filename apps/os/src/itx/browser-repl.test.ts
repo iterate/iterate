@@ -457,7 +457,7 @@ const persisted = answer();
     // Mirrors a PROJECT-scoped itx handle: provideCapability({ type: "live" })
     // mounts the caller's plain object, dotted access on the handle replays
     // onto its members, and the returned provision's revoke() unmounts it —
-    // after which calls fail like the engine's "no capability" rejection.
+    // after which calls fail like the itx "no capability" rejection.
     const providedTargets = new Map<string, Record<string, unknown>>();
     const itx = new Proxy(
       {

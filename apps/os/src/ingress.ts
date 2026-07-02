@@ -10,8 +10,8 @@
  *
  * Lanes:
  *
- *   "os"       — the dashboard/app pipeline (OS host, non-engine paths)
- *   "api"      — engine path lanes on the OS host: /api/itx[...] and
+ *   "os"       — the dashboard/app pipeline (OS host, non-itx paths)
+ *   "api"      — itx path lanes on the OS host: /api/itx[...] and
  *                /__itx_e2e/...
  *   "project"  — a project worker target, resolved from:
  *                  /prj_<id>/...                      (URL rewritten)
@@ -132,7 +132,7 @@ function projectRoute(input: {
   };
 }
 
-/** Engine path lanes served by the api worker on the OS host. */
+/** Itx path lanes served by the api worker on the OS host. */
 export function isItxApiPath(pathname: string): boolean {
   if (pathname === "/api/itx" || pathname.startsWith("/api/itx/")) return true;
   if (pathname.startsWith("/__itx_e2e/")) return true;
@@ -178,7 +178,7 @@ function isOsHost(input: {
 /**
  * Thin forwarding predicate for the ingress and app workers, which hold no
  * directory resolvers: anything that is not the OS host (project platform
- * hosts and custom-hostname candidates alike), plus the engine path lanes and
+ * hosts and custom-hostname candidates alike), plus the itx path lanes and
  * the /prj_ path lane on the OS host, forwards whole to the api worker — it
  * runs the full `decideIngressRoute` and owns the 404 for hosts that resolve
  * to nothing.

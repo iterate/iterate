@@ -1,7 +1,7 @@
 /**
  * Manual smoke: create a project as admin and watch the onboarding agent greet.
  *
- *   doppler run -- pnpm exec tsx e2e/engine/onboarding-smoke.ts [baseUrl]
+ *   doppler run -- pnpm exec tsx e2e/itx/onboarding-smoke.ts [baseUrl]
  */
 import { connectItx } from "../../src/itx-client.ts";
 

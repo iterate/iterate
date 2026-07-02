@@ -203,7 +203,7 @@ function IntegrationMetadata({
 }) {
   if (!connection?.connected) return null;
 
-  // The engine's connection status carries identity + provider metadata;
+  // The itx connection status carries identity + provider metadata;
   // token material never leaves the secret pipeline (it lives in a secret DO
   // with an egress allowlist), so unlike the pre-migration page there are no
   // token-expiry rows here.

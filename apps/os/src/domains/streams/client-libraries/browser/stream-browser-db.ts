@@ -440,7 +440,7 @@ export class StreamBrowserDatabase implements Disposable {
 // OPFS layout: one folder per projectId, one SQLite file per stream path inside it.
 // Bump this when the local mirror file itself can be wedged by browser OPFS state;
 // the mirror is a cache and will be replayed from the durable stream.
-// "v4" is the itx namespace: legacy-engine mirrors on the same origin
+// "v4" is the itx namespace: pre-itx-v4 mirrors on the same origin
 // live under "v3", so the two engines can never open (or clear) each other's files.
 const DATABASE_CACHE_VERSION = "v4";
 

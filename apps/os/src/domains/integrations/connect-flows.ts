@@ -1,9 +1,9 @@
-// Engine-side OAuth connect flows for Slack and Google, resurrected from the
+// Itx-side OAuth connect flows for Slack and Google, resurrected from the
 // legacy integration plumbing (pre-migration integration-api.ts, git history, +
 // the pre-purge secrets domain) and re-homed onto itx:
 //
 //   - OAuth state:    stateless HMAC-signed token (oauth-state.ts), no D1.
-//   - Slack token:    engine secret DO `/secrets/integrations/slack/bot-token`
+//   - Slack token:    itx secret DO `/secrets/integrations/slack/bot-token`
 //                     (egress-substituted; material never read back).
 //   - Slack facts:    `/integrations/slack` project stream (connected/
 //                     disconnected + the webhook router's events).
@@ -12,7 +12,7 @@
 //   - Google tokens:  AES-GCM ciphertext events on `/integrations/google`
 //                     (google-tokens.ts).
 //
-// These functions run in engine workers (they need SECRET_ENCRYPTION_KEY and
+// These functions run in itx workers (they need SECRET_ENCRYPTION_KEY and
 // the DO bindings). The app worker's /api/integrations/* routes reach them
 // through the itx surface (rpc-targets.ts).
 

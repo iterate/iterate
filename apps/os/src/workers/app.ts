@@ -6,7 +6,7 @@
  * routes and no Durable Objects: the ingress worker forwards app-host
  * traffic here. In local dev the browser talks to vite — i.e. to this worker
  * directly — so the shared itx routing decision runs here first and
- * forwards engine/project-host traffic over the same ITX_API service
+ * forwards itx/project-host traffic over the same ITX_API service
  * binding the ingress worker uses in production.
  *
  * Worker bindings are intentionally not threaded through request context —

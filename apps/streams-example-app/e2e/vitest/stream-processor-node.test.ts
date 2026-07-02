@@ -2,7 +2,7 @@
 // processor in-process against a running worker. Gated like the other e2e —
 // set STREAM_STAGING_E2E=true with `pnpm dev` running. Typecheck-verified always.
 //
-// The legacy engine shipped an echo example processor; itx does
+// The pre-itx-v4 streams implementation shipped an echo example processor; itx does
 // not, so this suite defines an equivalent inline with the itx
 // `defineProcessorContract` + `StreamProcessor` class — the SAME machinery the
 // Durable-Object-side processor hosts run.

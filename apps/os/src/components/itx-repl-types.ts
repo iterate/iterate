@@ -37,7 +37,7 @@ export const itxTypesDeclaration: string = itxTypesSource;
  * global/admin REPL holds the Session catalog, and a wrong call for the
  * context fails at runtime exactly like a missing capability would. Dynamic
  * capabilities (`itx.someMountedCap...`) are runtime-typed: the editor flags
- * them, the engine resolves them.
+ * them, itx resolves them.
  */
 export const itxReplDeclaration = `
 import type * as itxTypes from "./itx-types.ts";

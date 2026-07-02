@@ -8,7 +8,7 @@
 //
 // Auth: browser WebSockets cannot set Authorization headers, so the admin
 // cookie is installed through Playwright's context (vitest browser command);
-// the engine's from-server-cookie lane accepts the `iterate-admin-auth`
+// the itx from-server-cookie lane accepts the `iterate-admin-auth`
 // cookie riding the handshake.
 
 import { describe, expect, it } from "vitest";

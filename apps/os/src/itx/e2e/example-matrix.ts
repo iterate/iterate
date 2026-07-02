@@ -80,10 +80,10 @@ async function runInCli(input: {
 }
 
 const LOADER_CONTENTION_MESSAGE = "Too many concurrent dynamic workers";
-// The engine redacts server-side exceptions to "internal error; reference = …"
+// itx redacts server-side exceptions to "internal error; reference = …"
 // before they cross Cap'n Web. Mid-suite that shape is overwhelmingly loader
 // isolate saturation (each script execution and inline worker is its own
-// isolate), so treat it as the same retryable transient; a persistent engine
+// isolate), so treat it as the same retryable transient; a persistent itx
 // bug still fails after the backoff budget.
 const MASKED_INTERNAL_ERROR_MESSAGE = "internal error; reference =";
 const LOADER_CONTENTION_BACKOFF_MS = [2_000, 5_000, 10_000];
@@ -120,7 +120,7 @@ async function runInRunScript(input: {
   vars: Record<string, unknown>;
 }): Promise<unknown> {
   using project = connectProject(input.projectId);
-  // runScript takes an async arrow function source string (see the engine
+  // runScript takes an async arrow function source string (see itx
   // ItxCapabilityHost contract); the example body becomes its body, with the
   // case's vars serialized inline.
   const execution = await project.runScript(
