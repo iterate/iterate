@@ -594,7 +594,9 @@ const introspectAccessToken = os.internal.oauth.introspectAccessToken
     return {
       active: true as const,
       sub: token.userId,
-      sid: token.sessionId,
+      // sessionId is nullable (session FK is on-delete-set-null); the
+      // contract models absent sessions as undefined, not null.
+      sid: token.sessionId ?? undefined,
       clientId: token.clientId,
       iss: `${context.env.VITE_AUTH_APP_ORIGIN.replace(/\/+$/, "")}/api/auth`,
       aud: input.audiences,

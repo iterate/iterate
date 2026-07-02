@@ -834,6 +834,39 @@ Returned `200` with:
 11. Project selection remains suspicious, but it is not yet the active blocker
     for the failing verify endpoints.
 
+## 2026-07-02T17:05Z Update: Hypothesis B CONFIRMED — tokens are stored hashed
+
+Confirmed from installed `@better-auth/oauth-provider@1.6.9` source:
+
+- `dist/index.mjs:2735` — the plugin defaults to `storeTokens: "hashed"`.
+- `dist/utils-B9Pj9EPf.mjs:232` — `storeToken()` applies `defaultHasher` to
+  opaque tokens before insert; `getStoredToken()` hashes before lookup.
+- `defaultHasher` = `base64url(sha256(value))` with no padding (43 chars).
+
+So the `oauthAccessToken.token` column holds hashes, never raw tokens. Our
+internal introspection endpoint looked up the raw 32-char bearer value, which
+can never match. The 32-char opaque token Grok sends is almost certainly a
+genuine Better Auth access token; `not_found` was our lookup bug, not Grok.
+
+Fix (commit `706de08c4`): `apps/auth/src/server/orpc/routers/internal.ts`
+hashes the presented token with the same base64url-sha256 helper the file
+already used for client secrets (renamed `hashOAuthStoredValue`) before the
+`getOAuthAccessTokenForInternalIntrospection` lookup.
+
+Parallel workstream: a background agent is building
+`/Users/jonastemplestein/src/tries/2026-07-02-zero-trust-mcp-preview4-auth` —
+the known-good zero-trust MCP resource server, modified to advertise
+`https://auth.iterate-preview-4.com/api/auth` as its authorization server and
+validate bearers via the Better Auth userinfo endpoint. Testing that in Grok
+isolates Grok × Better Auth interop from our OS resource-server code.
+
+Likely next blocker once tokens verify: project grants. Grok's OAuth flow
+never showed project selection, so either Grok omits the `project` scope
+(introspection then returns ALL user projects, no `project:<id>` scope
+entries) or the selection reference is missing (empty projects). Watch the
+auth tail (`/tmp/auth-preview-4-grok-tail.log`) for the scopes Grok requests
+at `/authorize`.
+
 ## Current Best Hypotheses
 
 ### Hypothesis A: Grok Sends The Wrong Token In The Authorization Header
