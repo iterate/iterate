@@ -11,7 +11,7 @@
     "./components/ai-elements/*": "./src/components/ai-elements/*.tsx",
     "./components/events/feed-items": "./src/components/events/feed-items.ts",
     "./components/events/feed-processors": "./src/components/events/feed-processors.ts",
-    "./components/events/stream-view-processor/contract": "./src/components/events/stream-view-processor/contract.ts",
+    "./components/events/stream-view-reducer": "./src/components/events/stream-view-reducer.ts",
     "./components/events/agent-ui-reducer": "./src/components/events/agent-ui-reducer.ts",
     "./components/events/feed-element-renderers/*": "./src/components/events/feed-element-renderers/*.tsx",
     "./components/events/stream-composer": "./src/components/events/stream-composer.tsx",
