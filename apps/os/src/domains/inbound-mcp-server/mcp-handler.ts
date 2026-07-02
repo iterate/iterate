@@ -263,7 +263,7 @@ function engineBatchSession(context: RequestContext) {
   if (!baseUrl) throw new Error("baseUrl is not configured");
   // oxlint-disable-next-line iterate/no-capnweb-http-batch -- one-shot pipelined batch per exec_js call; no socket lifecycle to manage.
   return newHttpBatchRpcSession<UnauthenticatedItx>(
-    new Request(`${baseUrl}/api/itx-next`, { method: "POST" }),
+    new Request(`${baseUrl}/api/itx`, { method: "POST" }),
   );
 }
 

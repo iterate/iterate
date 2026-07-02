@@ -7,10 +7,6 @@ import type { Itx, Session } from "~/next/types.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 
-// Coexistence: the next engine's capnweb surface lives at /api/itx-next until
-// the legacy stack is removed (src/next/ingress.ts).
-process.env.ITX_API_PATH ??= "/api/itx-next";
-
 export function requireBaseUrl() {
   let baseUrl = process.env.APP_CONFIG_BASE_URL?.trim().replace(/\/+$/, "");
   baseUrl ||= localDevServerBaseUrl(appRoot);

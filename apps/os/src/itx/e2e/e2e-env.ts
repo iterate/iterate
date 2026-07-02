@@ -11,11 +11,6 @@ import { localDevServerBaseUrl } from "../../../e2e/test-support/dev-server.ts";
 
 const appRoot = fileURLToPath(new URL("../../..", import.meta.url));
 
-// Coexistence: the os deployment serves the next engine's capnweb surface at
-// /api/itx-next while the legacy app worker still owns /api/itx. The next
-// client reads ITX_API_PATH at dial time (same pattern as e2e/engine/setup.ts).
-process.env.ITX_API_PATH ??= "/api/itx-next";
-
 export function adminApiSecret() {
   const secret =
     process.env.OS_E2E_ADMIN_API_SECRET?.trim() ||

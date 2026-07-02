@@ -124,11 +124,9 @@ function socketFor(context: string | undefined): Promise<Itx> {
   const existing = sockets.get(context);
   if (existing) return existing;
 
-  // Coexistence: the next engine's capnweb surface is served at /api/itx-next
-  // until the legacy stack is removed, at which point this becomes /api/itx.
-  // Context resolution is client-side now: one endpoint, authenticate(), then
+  // Context resolution is client-side: one endpoint, authenticate(), then
   // projects.get(<project id>) — the context key is a project ID, not a slug.
-  const url = new URL("/api/itx-next", window.location.href);
+  const url = new URL("/api/itx", window.location.href);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(url);
   const { promise, resolve, reject } = Promise.withResolvers<Itx>();

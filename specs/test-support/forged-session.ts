@@ -11,10 +11,6 @@ import {
 import { doppler } from "../../apps/os/scripts/dev.ts";
 import { connectItx } from "../../apps/os/src/next/client.ts";
 
-// Coexistence: the next engine's capnweb surface lives at /api/itx-next until
-// the legacy stack is removed (apps/os/src/next/ingress.ts).
-process.env.ITX_API_PATH ??= "/api/itx-next";
-
 type ForgePrivateJwk = JsonWebKey & {
   alg?: string;
   kid?: string;

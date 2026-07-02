@@ -9,8 +9,6 @@ const baseUrl = (process.argv[2] ?? process.env.ITX_BASE_URL ?? "http://localhos
   /\/+$/,
   "",
 );
-process.env.ITX_API_PATH ??= "/api/itx-next";
-
 const secret =
   process.env.OS_ADMIN_API_SECRET?.trim() || process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
 if (!secret) throw new Error("need APP_CONFIG_ADMIN_API_SECRET (run under doppler)");

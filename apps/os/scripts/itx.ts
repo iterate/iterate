@@ -19,10 +19,6 @@ import { connectItx } from "../src/next/client.ts";
 
 const ASSISTANT_RESPONSE_TYPE = "events.iterate.com/agents/web-message-sent";
 
-// Coexistence: the next engine's capnweb surface lives at /api/itx-next until
-// the legacy stack is removed (src/next/ingress.ts).
-process.env.ITX_API_PATH ??= "/api/itx-next";
-
 const AsyncFunction = async function () {}.constructor as new (
   ...args: string[]
 ) => (itx: unknown, vars: Record<string, unknown>, rpcTarget: unknown) => Promise<unknown>;

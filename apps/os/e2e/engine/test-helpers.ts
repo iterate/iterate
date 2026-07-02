@@ -53,10 +53,8 @@ export function buildUrl({
   path: string;
   protocol?: "ws" | "http";
 }): string {
-  // Coexistence: the os deployment serves the next engine's capnweb surface
-  // under /api/itx-next while the legacy stack still owns /api/itx. Suites set
-  // ITX_API_PATH=/api/itx-next (see e2e vitest config); against a standalone
-  // next worker the default /api/itx applies unchanged.
+  // ITX_API_PATH relocates the capnweb surface when a deployment serves it
+  // somewhere other than /api/itx (unset everywhere since the cutover).
   const apiPath = process.env.ITX_API_PATH ?? "/api/itx";
   const mappedPath = path === "/api/itx" ? apiPath : path;
   const url = new URL(mappedPath, process.env.ITX_BASE_URL ?? DEFAULT_BASE_URL);

@@ -201,7 +201,7 @@ function engineBatchSession(context: RequestContext) {
   if (!cookie) throw new Error("Sign in to create projects.");
   // oxlint-disable-next-line iterate/no-capnweb-http-batch -- one-shot pipelined batch per request; no socket lifecycle to manage in a server function.
   return newHttpBatchRpcSession<UnauthenticatedItx>(
-    new Request(`${baseUrl}/api/itx-next`, {
+    new Request(`${baseUrl}/api/itx`, {
       method: "POST",
       headers: { cookie },
     }),

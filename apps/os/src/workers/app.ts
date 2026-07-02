@@ -16,11 +16,9 @@
 import handler from "@tanstack/react-start/server-entry";
 import { withEvlog } from "@iterate-com/shared/evlog";
 import { createD1Client } from "sqlfu";
-import { routeOsRequest } from "./shared/router.ts";
 import { AppConfig, parseConfig } from "~/config.ts";
 import type { RequestContext } from "~/request-context.ts";
 import { handleDebugRoutes, handleDurableObjectDebugFetch } from "~/debug-routes.ts";
-import { handleItxFetch } from "~/itx/fetch.ts";
 import { handleDocsMarkdownFetch } from "~/lib/docs-markdown.ts";
 import { nextEngineRequest } from "~/next/ingress.ts";
 
@@ -37,27 +35,16 @@ export default {
     const earlyResponse = await handleDebugRoutes({ request, env, config });
     if (earlyResponse) return earlyResponse;
 
-    // Next-engine coexistence lanes (local dev talks to this worker directly,
-    // so the forward lives here as well as in the ingress worker).
-    const nextRequest = nextEngineRequest(request);
+    // Next-engine lanes (local dev talks to this worker directly, so the
+    // forward lives here as well as in the ingress worker): the capnweb
+    // surface + fixtures + `/prj_` path lanes, and project platform hosts.
+    const nextRequest = nextEngineRequest({ config, request });
     if (nextRequest) return await env.NEXT_API.fetch(nextRequest);
 
     // Everything below emits one structured "wide event" log line per request.
     return withEvlog(
       { request, app: { name: "@iterate-com/os", slug: "os" }, config, executionCtx: ctx },
       async ({ log }) => {
-        // In local dev and workers.dev previews the browser can talk to this
-        // worker directly, so it runs the shared router to forward project-host
-        // traffic over the same service binding ingress uses in production. MCP
-        // stays in this app worker and falls through to the Start route.
-        const routed = await routeOsRequest({
-          config,
-          db: env.DB,
-          request,
-          targets: { PROJECT_HOST: env.PROJECT_HOST },
-        });
-        if (routed) return routed;
-
         // When baseUrl is not configured (for example workers.dev previews),
         // the request origin is the app's own URL. After this, baseUrl is always set.
         const requestConfig: AppConfig = config.baseUrl
@@ -79,9 +66,6 @@ export default {
           waitUntil: (promise) => ctx.waitUntil(promise),
           workerExports: ctx.exports,
         };
-
-        const itxResponse = await handleItxFetch({ config, context, env, request });
-        if (itxResponse) return itxResponse;
 
         const durableObjectDebugResponse = await handleDurableObjectDebugFetch({
           request,

@@ -57,7 +57,7 @@ describe("itx socket map", () => {
     expect(connectItx({ projectId: "acme" })).toBe(a);
     expect(FakeWebSocket.instances).toHaveLength(1);
     onlySocket().fire("open");
-    await expect(a).resolves.toMatchObject({ url: expect.stringContaining("/api/itx-next/acme") });
+    await expect(a).resolves.toMatchObject({ url: expect.stringContaining("/api/itx/acme") });
   });
 
   test("contexts are independent; the global context (no projectId) is its own socket", async () => {
@@ -67,8 +67,8 @@ describe("itx socket map", () => {
     expect(connectItx()).toBe(global);
     expect(FakeWebSocket.instances).toHaveLength(2);
     // One endpoint for every context now — the project narrows client-side.
-    expect(FakeWebSocket.instances[0]!.url).toContain("/api/itx-next");
-    expect(FakeWebSocket.instances[1]!.url).toContain("/api/itx-next");
+    expect(FakeWebSocket.instances[0]!.url).toContain("/api/itx");
+    expect(FakeWebSocket.instances[1]!.url).toContain("/api/itx");
   });
 
   test("a closed socket is dropped; the next connectItx dials a fresh one", async () => {
