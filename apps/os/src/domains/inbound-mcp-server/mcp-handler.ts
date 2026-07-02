@@ -101,7 +101,7 @@ function createServer(input: { auth: McpAuth; context: RequestContext; env: Env 
     },
     async (rawInput) => {
       const parsedInput = ExecJsInput.parse(rawInput);
-      const project = await resolveToolProject(input.context, projects, parsedInput.project, {
+      const project = await resolveToolProject(projects, parsedInput.project, {
         authType: input.auth.authType,
         requireProjectInput,
       });
@@ -225,7 +225,6 @@ function readAccessTokenScopes(accessToken: { scope?: string; scopes?: string[] 
 }
 
 async function resolveToolProject(
-  context: RequestContext,
   projects: ProjectGrant[],
   requestedProject: string | undefined,
   options: { authType: McpAuth["authType"]; requireProjectInput: boolean },
@@ -242,11 +241,7 @@ async function resolveToolProject(
     // KV directory cache in front of the auth worker (also resolves
     // admin-lane projects, which are primed at create but never registered
     // with the auth directory).
-    const record = await readProjectBySlug(
-      context.config,
-      env.PROJECT_DIRECTORY,
-      normalizedRequestedProject,
-    );
+    const record = await readProjectBySlug(env.PROJECT_DIRECTORY, normalizedRequestedProject);
     if (!record) throw new Error(`Project not found: ${normalizedRequestedProject}`);
     return { id: record.id, slug: record.slug };
   }

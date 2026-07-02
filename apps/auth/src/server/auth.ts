@@ -1,6 +1,5 @@
 import { betterAuth } from "better-auth";
 import { APIError } from "better-auth";
-import { signJWT, verifyJWT } from "better-auth/crypto";
 import { matchesSignupAllowlist, parseSignupAllowlist } from "@iterate-com/shared/signup-allowlist";
 import { generateDefaultAvatar } from "@iterate-com/shared/default-avatar";
 import { env } from "./env.ts";
@@ -19,25 +18,6 @@ export function getAllowedBrowserOrigins() {
 function isAllowedBrowserOrigin(origin: string | null | undefined) {
   if (!origin || !URL.canParse(origin)) return false;
   return getAllowedBrowserOrigins().includes(new URL(origin).origin);
-}
-
-export type ProjectIngressTokenPayload = {
-  type: "project-ingress";
-  userId: string;
-  email: string;
-  role: string | null;
-};
-
-export async function createProjectIngressToken(payload: ProjectIngressTokenPayload) {
-  return signJWT(payload, env.BETTER_AUTH_SECRET, 60 * 60);
-}
-
-export async function verifyProjectIngressToken(token: string) {
-  const payload = await verifyJWT<ProjectIngressTokenPayload>(token, env.BETTER_AUTH_SECRET);
-  if (!payload || payload.type !== "project-ingress" || !payload.userId || !payload.email) {
-    return null;
-  }
-  return payload;
 }
 
 export const auth = betterAuth({

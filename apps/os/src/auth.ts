@@ -26,7 +26,7 @@
 
 import { authenticateCapnwebAdmin } from "./auth/admin-auth-cookie.ts";
 import { authenticateAdminBearer } from "./auth/admin.ts";
-import { createAuthWorkerServiceClient } from "./auth/auth-worker-service.ts";
+import { maybeAuthWorker } from "./auth/auth-worker-service.ts";
 import { createOsIterateAuth } from "./auth/iterate-auth-client.ts";
 import {
   principalFromAccessToken,
@@ -190,7 +190,7 @@ export async function resolveItxAuth(input: {
       headers: new Headers({ authorization: `Bearer ${credentials.token}` }),
     });
     if (!accessToken) throw new Error("missing or invalid auth");
-    return contextFromPrincipal(config, principalFromAccessToken(accessToken));
+    return contextFromPrincipal(principalFromAccessToken(accessToken));
   }
 
   // from-server-cookie: the admin cookie wins (browser REPL admin + Playwright
@@ -205,7 +205,7 @@ export async function resolveItxAuth(input: {
   if (!auth) throw new Error("iterate auth is not configured");
   const result = await auth.authenticate({ headers: input.headers, includeUserInfo: false });
   if (!result.session) throw new Error("missing or invalid auth");
-  return contextFromPrincipal(config, principalFromSession(result.session));
+  return contextFromPrincipal(principalFromSession(result.session));
 }
 
 function assertAdminSecret(config: AppConfig, secret: string): void {
@@ -216,12 +216,12 @@ function assertAdminSecret(config: AppConfig, secret: string): void {
   if (!admin) throw new Error("missing or invalid auth");
 }
 
-function contextFromPrincipal(config: AppConfig, principal: Principal): ItxAuthContext {
+function contextFromPrincipal(principal: Principal): ItxAuthContext {
   if (principal.type === "admin") {
     return new ItxAuthContext({ isAdmin: true, principal: "admin" });
   }
   return new ItxAuthContext({
-    directory: authWorkerProjectDirectory(config),
+    directory: authWorkerProjectDirectory(),
     isAdmin: principalIsAdmin(principal),
     principal: principal.userId,
     projectIds: principal.projects.map((project) => project.id),
@@ -246,37 +246,25 @@ function contextFromImpersonatedToken(token: ItxAuthToken): ItxAuthContext {
 const DIRECTORY_CACHE_TTL_MS = 30_000;
 const directoryCache = new Map<string, { expiresAt: number; hasProject: boolean }>();
 
-function authWorkerProjectDirectory(config: AppConfig): ProjectDirectory | undefined {
-  if (!config.iterateAuth?.serviceToken) return undefined;
+function authWorkerProjectDirectory(): ProjectDirectory | undefined {
+  const authWorker = maybeAuthWorker();
+  if (!authWorker) return undefined;
   return {
     async userHasProject(userPrincipal, projectId) {
       const cacheKey = `${userPrincipal.userId}:${projectId}`;
       const cached = directoryCache.get(cacheKey);
       if (cached && cached.expiresAt > Date.now()) return cached.hasProject;
 
-      let hasProject = false;
-      let lookupFailed = false;
-      for (const organization of userPrincipal.organizations) {
-        const client = createAuthWorkerServiceClient(
-          { config },
-          { asUserId: userPrincipal.userId },
-        );
-        let projects;
-        try {
-          projects = await client.project.list({ organizationSlug: organization.slug });
-        } catch {
-          // Auth worker unreachable is NOT "no membership": deny THIS check
-          // without caching the denial, so the next request retries instead
-          // of locking the user out for the cache window.
-          lookupFailed = true;
-          continue;
-        }
-        if (projects.some((project) => project.id === projectId)) {
-          hasProject = true;
-          break;
-        }
+      let projects;
+      try {
+        projects = await authWorker.listProjectsForUser({ userId: userPrincipal.userId });
+      } catch {
+        // Auth worker unreachable is NOT "no membership": deny THIS check
+        // without caching the denial, so the next request retries instead
+        // of locking the user out for the cache window.
+        return false;
       }
-      if (!hasProject && lookupFailed) return false;
+      const hasProject = projects.some((project) => project.id === projectId);
       directoryCache.set(cacheKey, {
         expiresAt: Date.now() + DIRECTORY_CACHE_TTL_MS,
         hasProject,

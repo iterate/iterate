@@ -1,7 +1,7 @@
 import { ORPCError } from "@orpc/server";
 import { slugify } from "@iterate-com/shared/slug";
 import type { Client } from "sqlfu";
-import { getProjectById, getProjectBySlug } from "../../db/queries/index.ts";
+import { getProjectById, getProjectBySlug } from "./db/queries/index.ts";
 
 // Auth is the durable source for user-owned projects, while OS keeps its own
 // per-environment project row. In preview/dev we often delete the OS worker's

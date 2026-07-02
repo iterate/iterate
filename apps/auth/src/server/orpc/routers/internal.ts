@@ -1,36 +1,27 @@
 import { ORPCError } from "@orpc/server";
-import { resolveUniqueSlug } from "@iterate-com/shared/slug";
-import { os, protectedMiddleware, serviceMiddleware } from "../orpc.ts";
-import { auth, createProjectIngressToken as createSignedProjectIngressToken } from "../../auth.ts";
-import { parseProjectMetadata, parseStringArray } from "../../db/helpers.ts";
+import { os, serviceMiddleware } from "../orpc.ts";
+import { auth } from "../../auth.ts";
+import { parseStringArray } from "../../db/helpers.ts";
 import {
   disableOAuthClientById,
   getOAuthClientByClientId,
   getOAuthClientByReferenceId,
-  getOrganizationBySlug,
-  getProjectWithOrganizationBySlug,
-  getUserByEmail,
-  getUserById,
-  insertMembership,
-  insertOrganization,
-  insertProjectReturning,
-  insertUser,
-  listMembersByOrganizationId,
   overwriteOAuthClientByClientId,
-  updateOAuthClientById,
   updateOAuthClientReferenceByClientId,
-  updateVerifiedUserById,
 } from "../../db/queries/index.ts";
 import { BOOTSTRAP_ADMIN_EMAIL } from "../../bootstrap-admin.ts";
-import {
-  generateId,
-  toMembershipRole,
-  toOrganizationRecord,
-  toProjectRecord,
-  toProjectRecordFromReturnedRow,
-  toUserRecord,
-} from "./_shared.ts";
-import { resolveProjectCreateTarget } from "./project-slugs.ts";
+
+// Deploy-time OAuth client provisioning, called by Node processes that
+// authenticate with SERVICE_AUTH_TOKEN (serviceMiddleware):
+//  - ensureClient: apps/os alchemy dev bootstrap
+//    (apps/os/src/auth/dev-oauth-client-bootstrap.ts) and the Doppler sync
+//    script (apps/os/scripts/sync-auth-clients.ts). Server-generated secrets.
+//  - setClient: the post-deploy seed (apps/auth/scripts/seed-oauth-clients.ts).
+//    Caller-provided credentials, Doppler is the source of truth.
+//
+// Everything else that used to live in this router (project directory reads,
+// project creation, project-id minting) moved to Workers RPC on the worker
+// entrypoint — see ../../project-directory.ts and worker.ts.
 
 function extractCookieHeader(setCookieHeader: string | null): string | null {
   if (!setCookieHeader) return null;
@@ -39,6 +30,13 @@ function extractCookieHeader(setCookieHeader: string | null): string | null {
   return firstCookie.split(";")[0] ?? null;
 }
 
+// Client CREATION goes through better-auth's admin API (adminCreateOAuthClient)
+// so rows get the oauth-provider plugin's defaults (grant/response types, token
+// endpoint auth method, hashed secret storage). That API wants an admin
+// SESSION, so we sign in as the seeded bootstrap admin — whose password IS the
+// service token (scripts/render-admin-seed.ts writes that credential row at
+// deploy time). The caller already proved it holds the token via
+// serviceMiddleware, so this is a format conversion, not an extra trust step.
 async function getBootstrapAdminAuthHeaders(params: {
   serviceAuthToken: string;
 }): Promise<Headers> {
@@ -60,194 +58,61 @@ async function getBootstrapAdminAuthHeaders(params: {
   return new Headers({ cookie });
 }
 
-const upsertVerifiedEmail = os.internal.user.upsertVerifiedEmail
-  .use(serviceMiddleware)
-  .handler(async ({ context, input }) => {
-    const normalizedEmail = input.email.trim().toLowerCase();
-    const existing = await getUserByEmail(context.db, { email: normalizedEmail });
-
-    if (existing) {
-      await updateVerifiedUserById(
-        context.db,
-        {
-          name: input.name,
-          image: input.image ?? existing.image ?? null,
-          updatedAt: Date.now(),
-        },
-        {
-          id: existing.id,
-        },
-      );
-
-      return toUserRecord({
-        ...existing,
-        name: input.name,
-        image: input.image ?? existing.image ?? null,
-      });
-    }
-
-    const id = generateId("usr");
-    const now = Date.now();
-    await insertUser(context.db, {
-      id,
-      name: input.name,
-      email: normalizedEmail,
-      emailVerified: 1,
-      image: input.image ?? null,
-      role: "user",
-      createdAt: now,
-      updatedAt: now,
+function requireServiceAuthToken(env: { SERVICE_AUTH_TOKEN?: string }): string {
+  const serviceAuthToken = env.SERVICE_AUTH_TOKEN?.trim();
+  if (!serviceAuthToken) {
+    throw new ORPCError("INTERNAL_SERVER_ERROR", {
+      message: "SERVICE_AUTH_TOKEN is required for OAuth client provisioning",
     });
+  }
+  return serviceAuthToken;
+}
 
-    return toUserRecord({
-      id,
-      name: input.name,
-      email: normalizedEmail,
-      image: input.image ?? null,
-      role: "user",
-    });
+async function createOAuthClientViaAdminApi(params: {
+  serviceAuthToken: string;
+  clientName: string;
+  redirectURIs: string[];
+}) {
+  const headers = await getBootstrapAdminAuthHeaders({
+    serviceAuthToken: params.serviceAuthToken,
   });
-
-const createForUser = os.internal.organization.createForUser
-  .use(serviceMiddleware)
-  .handler(async ({ context, input }) => {
-    const user = await getUserById(context.db, { id: input.userId });
-    if (!user) {
-      throw new ORPCError("NOT_FOUND", { message: "User not found" });
-    }
-
-    const slug = await resolveUniqueSlug({
-      name: input.name,
-      slug: input.slug,
-      isTaken: async (candidate) =>
-        Boolean(await getOrganizationBySlug(context.db, { slug: candidate })),
-    });
-
-    const organizationId = generateId("org");
-    const now = Date.now();
-    await context.db.transaction(async (tx) => {
-      await insertOrganization(tx, {
-        id: organizationId,
-        name: input.name,
-        slug,
-        createdAt: now,
-        metadata: null,
-        logo: null,
-      });
-
-      await insertMembership(tx, {
-        id: generateId("member"),
-        organizationId,
-        userId: input.userId,
-        role: "owner",
-        createdAt: now,
-      });
-    });
-
-    return toOrganizationRecord({
-      id: organizationId,
-      name: input.name,
-      slug,
-    });
+  const created = await auth.api.adminCreateOAuthClient({
+    headers,
+    body: {
+      client_name: params.clientName,
+      redirect_uris: params.redirectURIs,
+    },
   });
-
-const members = os.internal.organization.members
-  .use(serviceMiddleware)
-  .handler(async ({ context, input }) => {
-    const organization = await getOrganizationBySlug(context.db, {
-      slug: input.organizationSlug,
+  if (!created.client_name || !created.client_secret) {
+    throw new ORPCError("INTERNAL_SERVER_ERROR", {
+      message: "Failed to create OAuth client, got unexpected response from auth API",
+      cause: { created },
     });
-    if (!organization) {
-      throw new ORPCError("NOT_FOUND", { message: "Organization not found" });
-    }
+  }
+  return {
+    client_id: created.client_id,
+    client_name: created.client_name,
+    client_secret: created.client_secret,
+    redirect_uris: created.redirect_uris,
+  };
+}
 
-    const members = await listMembersByOrganizationId(context.db, {
-      organizationId: organization.id,
-    });
-
-    return members.map((member) => ({
-      id: member.id,
-      userId: member.userId,
-      role: toMembershipRole(member.role),
-      user: toUserRecord({
-        id: member.userId,
-        name: member.userName,
-        email: member.userEmail,
-        image: member.userImage ?? null,
-        role: member.userRole ?? null,
-      }),
-    }));
-  });
-
-// Auth is the canonical minter of the prj_ id space. OS calls this for the
-// operator/recovery create path (no owning organization), so even org-less
-// projects get auth-minted ids and OS never mints locally.
-const mintProjectId = os.internal.project.mintProjectId
-  .use(serviceMiddleware)
-  .handler(async () => ({ id: generateId("prj") }));
-
-// Plain slug lookup for trusted service flows: OS ingress resolves project
-// platform hosts (<slug>.<base>) to project ids here, and OS server reads use
-// it for the stale-claims window right after a create. The service token is
-// fully trusted, so there is no user scoping — callers enforce their own
-// authorization (OS checks the reader's org membership; ingress only maps
-// slug -> id).
-const projectBySlug = os.internal.project.bySlug
-  .use(serviceMiddleware)
-  .handler(async ({ context, input }) => {
-    const projectRow = await getProjectWithOrganizationBySlug(context.db, {
-      slug: input.projectSlug,
-    });
-    if (!projectRow) return null;
-    return toProjectRecord({
-      id: projectRow.id,
-      organizationId: projectRow.organizationId,
-      name: projectRow.name,
-      slug: projectRow.slug,
-      metadata: parseProjectMetadata(projectRow.metadata),
-      archivedAt:
-        typeof projectRow.archivedAt === "number" ? new Date(projectRow.archivedAt) : null,
-    });
-  });
-
-const createForOrganization = os.internal.project.createForOrganization
-  .use(serviceMiddleware)
-  .handler(async ({ context, input }) => {
-    const organization = await getOrganizationBySlug(context.db, {
-      slug: input.organizationSlug,
-    });
-    if (!organization) {
-      throw new ORPCError("NOT_FOUND", { message: "Organization not found" });
-    }
-
-    const target = await resolveProjectCreateTarget({
-      db: context.db,
-      id: input.id,
-      name: input.name,
-      organizationId: organization.id,
-      slug: input.slug,
-    });
-    if (target.kind === "existing") {
-      return toProjectRecordFromReturnedRow(target.project);
-    }
-
-    const projectId = input.id ?? generateId("prj");
-
-    const now = Date.now();
-    const created = await insertProjectReturning(context.db, {
-      id: projectId,
-      organizationId: organization.id,
-      name: input.name,
-      slug: target.slug,
-      metadata: JSON.stringify(input.metadata ?? {}),
-      archivedAt: null,
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    return toProjectRecordFromReturnedRow(created);
-  });
-
+// ensureClient keeps a deploy-managed client in sync with what the deploy
+// wants, identified by a stable referenceId (e.g. "os:dev_jonas:web"):
+//  - Caller still holds the secret and nothing changed -> no-op / metadata
+//    update.
+//  - Caller lost the secret (fresh checkout) or asked for rotation -> disable
+//    the old row and create a fresh client. Secrets are stored hashed
+//    (see hashOAuthClientSecret below), so handing back an existing secret is
+//    impossible by design.
+//
+// The dev-referenceId special case: personal dev stages recreate their env
+// often, and a developer's stored (clientId, clientSecret) pair may have been
+// re-referenced under a different referenceId along the way. For those we
+// trust the caller's pair over the referenceId lookup and re-point the
+// referenceId at the caller's client instead of rotating — otherwise every
+// `pnpm dev` in a second worktree would invalidate the first worktree's
+// client.
 const ensureOAuthClient = os.internal.oauth.ensureClient
   .use(serviceMiddleware)
   .handler(async ({ context, input }) => {
@@ -260,95 +125,33 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
           clientId: input.existingClientId,
         })
       : null;
-    const shouldRotateDevClient =
+    const isDevStageClient =
       input.referenceId.startsWith("dev:") || input.referenceId.includes(":dev_");
 
-    const existing =
-      shouldRotateDevClient && existingByClientId?.clientSecret
-        ? existingByClientId
-        : existingByReferenceId;
+    const trustCallerClientId = isDevStageClient && Boolean(existingByClientId?.clientSecret);
+    const existing = trustCallerClientId ? existingByClientId : existingByReferenceId;
+    const callerHoldsSecret = Boolean(input.existingClientSecret) && !input.rotateClientSecret;
 
-    const shouldCreateFreshClient = input.rotateClientSecret || !input.existingClientSecret;
-
-    if (existing?.clientSecret && !shouldRotateDevClient && !shouldCreateFreshClient) {
-      const existingClientSecret = input.existingClientSecret;
-      if (!existingClientSecret) {
-        throw new ORPCError("INTERNAL_SERVER_ERROR", {
-          message: "Existing OAuth client secret is required.",
-        });
+    if (existing?.clientSecret && callerHoldsSecret && input.existingClientSecret) {
+      // Re-pointing a dev referenceId at the caller's client may leave the
+      // previously referenced row dangling — disable it.
+      if (
+        trustCallerClientId &&
+        existingByReferenceId &&
+        existingByReferenceId.id !== existing.id
+      ) {
+        await disableOAuthClientById(
+          context.db,
+          { updatedAt: Date.now() },
+          { id: existingByReferenceId.id },
+        );
       }
 
       const existingSorted = parseStringArray(existing.redirectUrisJson).sort();
       const needsUpdate =
         existing.name !== input.clientName ||
         existing.disabled !== 0 ||
-        JSON.stringify(existingSorted) !== JSON.stringify(redirectURIs);
-
-      if (needsUpdate) {
-        await updateOAuthClientById(
-          context.db,
-          {
-            name: input.clientName,
-            redirectUris: JSON.stringify(redirectURIs),
-            disabled: 0,
-            updatedAt: Date.now(),
-          },
-          {
-            id: existing.id,
-          },
-        );
-      }
-
-      return {
-        clientId: existing.clientId,
-        clientName: input.clientName,
-        clientSecret: existingClientSecret,
-        redirectURIs: redirectURIs,
-      };
-    }
-
-    if (existing?.clientSecret && !shouldRotateDevClient && shouldCreateFreshClient) {
-      await disableOAuthClientById(
-        context.db,
-        {
-          updatedAt: Date.now(),
-        },
-        {
-          id: existing.id,
-        },
-      );
-    }
-
-    if (
-      shouldRotateDevClient &&
-      existingByClientId?.clientSecret &&
-      existingByReferenceId &&
-      existingByReferenceId.id !== existingByClientId.id
-    ) {
-      await disableOAuthClientById(
-        context.db,
-        {
-          updatedAt: Date.now(),
-        },
-        {
-          id: existingByReferenceId.id,
-        },
-      );
-    }
-
-    if (shouldRotateDevClient && existingByClientId?.clientSecret && !shouldCreateFreshClient) {
-      const existingClientSecret = input.existingClientSecret;
-      if (!existingClientSecret) {
-        throw new ORPCError("INTERNAL_SERVER_ERROR", {
-          message: "Existing OAuth client secret is required.",
-        });
-      }
-
-      const existingSorted = parseStringArray(existingByClientId.redirectUrisJson).sort();
-      const needsUpdate =
-        existingByClientId.name !== input.clientName ||
-        existingByClientId.disabled !== 0 ||
-        existingByClientId.referenceId !== input.referenceId ||
+        existing.referenceId !== input.referenceId ||
         JSON.stringify(existingSorted) !== JSON.stringify(redirectURIs);
 
       if (needsUpdate) {
@@ -361,67 +164,35 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
             updatedAt: Date.now(),
           },
           {
-            clientId: existingByClientId.clientId,
+            clientId: existing.clientId,
           },
         );
       }
 
       return {
-        clientId: existingByClientId.clientId,
+        clientId: existing.clientId,
         clientName: input.clientName,
-        clientSecret: existingClientSecret,
+        clientSecret: input.existingClientSecret,
         redirectURIs,
       };
     }
 
-    if (existingByReferenceId && shouldRotateDevClient) {
-      await disableOAuthClientById(
-        context.db,
-        {
-          updatedAt: Date.now(),
-        },
-        {
-          id: existingByReferenceId.id,
-        },
-      );
+    // Fresh client needed: disable whatever rows currently answer to this
+    // referenceId or client id so exactly one active client remains.
+    const staleIds = new Set(
+      [existingByReferenceId, existingByClientId]
+        .filter((row) => row && row.disabled === 0)
+        .map((row) => row!.id),
+    );
+    for (const staleId of staleIds) {
+      await disableOAuthClientById(context.db, { updatedAt: Date.now() }, { id: staleId });
     }
 
-    if (existingByClientId && existingByClientId.id !== existingByReferenceId?.id) {
-      await disableOAuthClientById(
-        context.db,
-        {
-          updatedAt: Date.now(),
-        },
-        {
-          id: existingByClientId.id,
-        },
-      );
-    }
-
-    const serviceAuthToken = context.env.SERVICE_AUTH_TOKEN?.trim();
-    if (!serviceAuthToken) {
-      throw new ORPCError("INTERNAL_SERVER_ERROR", {
-        message: "SERVICE_AUTH_TOKEN is required for bootstrap OAuth client provisioning",
-      });
-    }
-
-    const headers = await getBootstrapAdminAuthHeaders({
-      serviceAuthToken,
+    const created = await createOAuthClientViaAdminApi({
+      serviceAuthToken: requireServiceAuthToken(context.env),
+      clientName: input.clientName,
+      redirectURIs,
     });
-    const created = await auth.api.adminCreateOAuthClient({
-      headers,
-      body: {
-        client_name: input.clientName,
-        redirect_uris: redirectURIs,
-      },
-    });
-
-    if (!created.client_name || !created.client_secret) {
-      throw new ORPCError("INTERNAL_SERVER_ERROR", {
-        message: "Failed to create OAuth client, got unexpected response from auth API",
-        cause: { created },
-      });
-    }
 
     await updateOAuthClientReferenceByClientId(
       context.db,
@@ -484,19 +255,10 @@ const setOAuthClient = os.internal.oauth.setClient
       // Create through the admin API so the row gets the plugin's defaults
       // (token endpoint auth method, grant/response types, …), then overwrite
       // the generated credentials with the caller-provided constants.
-      const serviceAuthToken = context.env.SERVICE_AUTH_TOKEN?.trim();
-      if (!serviceAuthToken) {
-        throw new ORPCError("INTERNAL_SERVER_ERROR", {
-          message: "SERVICE_AUTH_TOKEN is required for OAuth client provisioning",
-        });
-      }
-      const headers = await getBootstrapAdminAuthHeaders({ serviceAuthToken });
-      const created = await auth.api.adminCreateOAuthClient({
-        headers,
-        body: {
-          client_name: input.clientName,
-          redirect_uris: redirectURIs,
-        },
+      const created = await createOAuthClientViaAdminApi({
+        serviceAuthToken: requireServiceAuthToken(context.env),
+        clientName: input.clientName,
+        redirectURIs,
       });
       await overwriteOAuthClientByClientId(context.db, overwrite, {
         clientId: created.client_id,
@@ -511,60 +273,9 @@ const setOAuthClient = os.internal.oauth.setClient
     };
   });
 
-const createProjectIngressToken = os.internal.session.createProjectIngressToken
-  .use(protectedMiddleware)
-  .handler(async ({ context }) => {
-    const ott = await auth.api.generateOneTimeToken({
-      headers: context.reqHeaders,
-    });
-    return { token: ott.token };
-  });
-
-const exchangeProjectIngressToken = os.internal.session.exchangeProjectIngressToken
-  .use(serviceMiddleware)
-  .handler(async ({ input }) => {
-    const verified = await auth.api.verifyOneTimeToken({
-      body: {
-        token: input.token,
-      },
-    });
-
-    if (!verified) {
-      throw new ORPCError("BAD_REQUEST", { message: "Invalid one-time token" });
-    }
-
-    const token = await createSignedProjectIngressToken({
-      type: "project-ingress",
-      userId: verified.user.id,
-      email: verified.user.email,
-      role: verified.user.role ?? null,
-    });
-
-    return {
-      token,
-      user: toUserRecord(verified.user),
-    };
-  });
-
 export const internal = os.internal.router({
   oauth: {
     ensureClient: ensureOAuthClient,
     setClient: setOAuthClient,
-  },
-  user: {
-    upsertVerifiedEmail,
-  },
-  organization: {
-    createForUser,
-    members,
-  },
-  project: {
-    bySlug: projectBySlug,
-    createForOrganization,
-    mintProjectId,
-  },
-  session: {
-    createProjectIngressToken,
-    exchangeProjectIngressToken,
   },
 });

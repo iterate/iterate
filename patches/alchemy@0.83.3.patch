@@ -155,7 +155,7 @@ index 7912452941df70a2c9dc30299ca8bdc721403aea..da9bc9f78c0ac1906fb947f52ff5bed9
      }
      const assets = options.assets
 diff --git a/lib/cloudflare/wrangler.json.js b/lib/cloudflare/wrangler.json.js
-index 43dfd76f5968da5ee49ac4396c3c4d240de13024..ea4821bf3f5aef50ed93e594b5203e2c5274ae92 100644
+index 43dfd76..b038176 100644
 --- a/lib/cloudflare/wrangler.json.js
 +++ b/lib/cloudflare/wrangler.json.js
 @@ -138,6 +138,7 @@ async function processBindings(spec, bindings, eventSources, workerName, workerC
@@ -166,7 +166,24 @@ index 43dfd76f5968da5ee49ac4396c3c4d240de13024..ea4821bf3f5aef50ed93e594b5203e2c
      for (const eventSource of eventSources ?? []) {
          if (isQueueEventSource(eventSource)) {
              queues.consumers.push({
-@@ -321,6 +322,13 @@ async function processBindings(spec, bindings, eventSources, workerName, workerC
+@@ -193,11 +194,15 @@ async function processBindings(spec, bindings, eventSources, workerName, workerC
+                 `https://${workerName}.${subdomain}.workers.dev`;
+         }
+         else if (binding.type === "service") {
+-            // Service binding
++            // Service binding. `dev.remote` marks it as a remote binding for
++            // local dev: wrangler/vite proxy calls (fetch AND rpc) to the
++            // deployed worker instead of resolving the name in the local dev
++            // registry. https://developers.cloudflare.com/workers/local-development/#remote-bindings
+             services.push({
+                 binding: bindingName,
+                 service: "name" in binding ? binding.name : binding.service,
+                 entrypoint: "__entrypoint__" in binding ? binding.__entrypoint__ : undefined,
++                ...("dev" in binding && binding.dev?.remote ? { remote: true } : {}),
+             });
+         }
+         else if (binding.type === "kv_namespace") {
+@@ -321,6 +326,13 @@ async function processBindings(spec, bindings, eventSources, workerName, workerC
                  remote: true,
              };
          }
@@ -180,7 +197,7 @@ index 43dfd76f5968da5ee49ac4396c3c4d240de13024..ea4821bf3f5aef50ed93e594b5203e2c
          else if (binding.type === "analytics_engine") {
              analyticsEngineDatasets.push({
                  binding: bindingName,
-@@ -466,5 +474,8 @@ async function processBindings(spec, bindings, eventSources, workerName, workerC
+@@ -466,5 +478,8 @@ async function processBindings(spec, bindings, eventSources, workerName, workerC
      if (workerLoaders.length > 0) {
          spec.worker_loaders = workerLoaders;
      }
@@ -189,3 +206,4 @@ index 43dfd76f5968da5ee49ac4396c3c4d240de13024..ea4821bf3f5aef50ed93e594b5203e2c
 +    }
  }
  //# sourceMappingURL=wrangler.json.js.map
+\ No newline at end of file

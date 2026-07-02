@@ -8,12 +8,14 @@ import {
   KVNamespace,
   Worker,
   WorkerLoader,
+  WorkerRef,
   WranglerJson,
   createCloudflareApi,
 } from "alchemy/cloudflare";
 import type { Bindings, WorkerProps } from "alchemy/cloudflare";
 import { Artifacts } from "@iterate-com/shared/alchemy/artifacts";
 import { initAlchemy } from "@iterate-com/shared/alchemy/init";
+import { slugify } from "@iterate-com/shared/slugify";
 import {
   ITERATE_WORKER_OBSERVABILITY,
   IterateAppWorker,
@@ -22,6 +24,7 @@ import {
 import { prepareLocalDevServer } from "@iterate-com/shared/alchemy/local-dev-server";
 import { ensureLocalDevOAuthClient } from "./src/auth/dev-oauth-client-bootstrap.ts";
 import { AppConfig } from "./src/config.ts";
+import type { AuthWorkerEntrypoint } from "./src/env.ts";
 import type { AgentDurableObject } from "./src/domains/agents/agent-durable-object.ts";
 import type { ItxDurableObject } from "./src/domains/itx/itx-durable-object.ts";
 import type { ProjectDurableObject } from "./src/domains/projects/project-durable-object.ts";
@@ -168,8 +171,13 @@ const env: Record<string, string | undefined> = {
     process.env.VITE_ENABLE_EMAIL_OTP_SIGNIN ??
     (process.env.ALCHEMY_STAGE?.startsWith("dev") ? "true" : undefined),
   APP_CONFIG_ITERATE_AUTH__JWKS: await resolveStaticAuthJwks(resolvedAuthIssuer),
-  APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN:
-    process.env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN ?? process.env.ITERATE_AUTH_SERVICE_TOKEN,
+  // The auth service token is deploy-time-only (dev OAuth client bootstrap
+  // below). Runtime OS→auth calls authenticate by holding the AUTH service
+  // binding instead, so the token must NOT ship inside APP_CONFIG — strip the
+  // APP_CONFIG_-prefixed spelling and keep the plain one for the bootstrap.
+  ITERATE_AUTH_SERVICE_TOKEN:
+    process.env.ITERATE_AUTH_SERVICE_TOKEN ?? process.env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN,
+  APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN: undefined,
 };
 
 // Fully-local dev: no Cloudflare resources. Picks a free port and writes
@@ -280,6 +288,52 @@ const statefulWorker = DurableObjectNamespace<StatefulWorkerDurableObject>("work
   sqlite: true,
 });
 
+// ---- Auth worker service binding ---------------------------------------------
+// Runtime OS→auth calls (project directory lookups, project creation, prj_ id
+// minting) go over a service binding to the auth worker's RPC entrypoint
+// (apps/auth/src/server/worker.ts) instead of the public internet — holding
+// the binding is the credential, so no service token ships in worker config.
+// The auth app deploys per stage as `auth-<stage>` (apps/auth/alchemy.run.ts);
+// personal dev stages (dev_<user>) share the `dev` auth deployment, mirroring
+// the auth.iterate-dev.com issuer they use. Override with
+// ITERATE_AUTH_WORKER_NAME when an environment pairs with a nonstandard auth
+// stage.
+const authWorkerName =
+  process.env.ITERATE_AUTH_WORKER_NAME ??
+  slugify(`auth-${ctx.app.stage.startsWith("dev") ? "dev" : ctx.app.stage}`);
+const authIssuerIsLoopback = (() => {
+  try {
+    return ["localhost", "127.0.0.1", "::1", "[::1]"].includes(
+      new URL(resolvedAuthIssuer ?? "https://auth.iterate.com/api/auth").hostname,
+    );
+  } catch {
+    return false;
+  }
+})();
+// Fully-local dev has no auth worker inside vite's workerd, so the binding is
+// a REMOTE binding: code still calls `env.AUTH.method()`, but wrangler/vite
+// proxy fetch and RPC to the DEPLOYED auth worker for the stage
+// (https://developers.cloudflare.com/workers/local-development/#remote-bindings).
+// A loopback issuer means apps/auth itself is running locally (`pnpm --dir
+// apps/auth dev`) — then the local dev registry resolves the name instead.
+const authWorkerBinding = {
+  ...WorkerRef<AuthWorkerEntrypoint>({ service: authWorkerName }),
+  ...(ctx.app.local && !authIssuerIsLoopback ? { dev: { remote: true } } : {}),
+};
+// A service binding to a script that does not exist fails the deploy; probe
+// and degrade instead (OS deploys, directory lookups/creates fail with a
+// clear runtime error) so bootstrapping a brand-new environment stays
+// order-independent between the two apps.
+const authWorkerMissing = ctx.app.local
+  ? false
+  : (await findMissingWorkerScripts([authWorkerName])).size > 0;
+if (authWorkerMissing) {
+  console.warn(
+    `[alchemy.run] Auth worker ${authWorkerName} is not deployed — omitting the AUTH service ` +
+      `binding. Project directory lookups and project creation will fail until the auth worker ` +
+      `is deployed and OS is redeployed.`,
+  );
+}
 // ---- Fresh-stage bootstrap --------------------------------------------------
 // Cloudflare rejects a cross-script DO binding whose target script does not
 // exist yet (error 10061), and the itx workers reference each other — a
@@ -376,6 +430,7 @@ async function osWorker<B extends Bindings>(
 // contract. All itx workers get the full set so any of them can host any
 // capability, exactly like the single-worker original itx came from.
 const itxBindings = {
+  ...(authWorkerMissing ? {} : { AUTH: authWorkerBinding }),
   AI: Ai(),
   AGENT: agent,
   ARTIFACTS: Artifacts({ namespace: artifactsNamespace }),
@@ -463,6 +518,7 @@ const appWorker = await IterateAppWorker(ctx, {
   name: workerNames.app,
   main: "./src/workers/app.ts",
   bindings: {
+    ...(authWorkerMissing ? {} : { AUTH: authWorkerBinding }),
     ITX_API: apiWorker,
     // Server-side project reads share the ingress directory cache.
     PROJECT_DIRECTORY: projectDirectory,
@@ -485,6 +541,7 @@ const appWorker = await IterateAppWorker(ctx, {
 const ingressWorker = await osWorker("ingress", {
   entrypoint: "./src/workers/ingress.ts",
   bindings: {
+    ...(authWorkerMissing ? {} : { AUTH: authWorkerBinding }),
     APP: appWorker,
     ITX_API: apiWorker,
   },

@@ -13,10 +13,12 @@ import { Route as LoginRouteImport } from "./routes/login.tsx";
 import { Route as DeviceRouteImport } from "./routes/device.tsx";
 import { Route as AuthRouteImport } from "./routes/_auth.tsx";
 import { Route as AuthIndexRouteImport } from "./routes/_auth/index.tsx";
-import { Route as AuthProjectsRouteImport } from "./routes/_auth/projects.tsx";
 import { Route as AuthProjectAccessRouteImport } from "./routes/_auth/project-access.tsx";
 import { Route as AuthConsentRouteImport } from "./routes/_auth/consent.tsx";
 import { Route as AuthAdminRouteImport } from "./routes/_auth/admin.tsx";
+import { Route as AuthProjectsIndexRouteImport } from "./routes/_auth/projects.index.tsx";
+import { Route as AuthAdminIndexRouteImport } from "./routes/_auth/admin/index.tsx";
+import { Route as AuthProjectsOrganizationSlugRouteImport } from "./routes/_auth/projects.$organizationSlug.tsx";
 import { Route as AuthAdminClientsRouteImport } from "./routes/_auth/admin/clients.tsx";
 
 const LoginRoute = LoginRouteImport.update({
@@ -38,11 +40,6 @@ const AuthIndexRoute = AuthIndexRouteImport.update({
   path: "/",
   getParentRoute: () => AuthRoute,
 } as any);
-const AuthProjectsRoute = AuthProjectsRouteImport.update({
-  id: "/projects",
-  path: "/projects",
-  getParentRoute: () => AuthRoute,
-} as any);
 const AuthProjectAccessRoute = AuthProjectAccessRouteImport.update({
   id: "/project-access",
   path: "/project-access",
@@ -58,6 +55,22 @@ const AuthAdminRoute = AuthAdminRouteImport.update({
   path: "/admin",
   getParentRoute: () => AuthRoute,
 } as any);
+const AuthProjectsIndexRoute = AuthProjectsIndexRouteImport.update({
+  id: "/projects/",
+  path: "/projects/",
+  getParentRoute: () => AuthRoute,
+} as any);
+const AuthAdminIndexRoute = AuthAdminIndexRouteImport.update({
+  id: "/",
+  path: "/",
+  getParentRoute: () => AuthAdminRoute,
+} as any);
+const AuthProjectsOrganizationSlugRoute =
+  AuthProjectsOrganizationSlugRouteImport.update({
+    id: "/projects/$organizationSlug",
+    path: "/projects/$organizationSlug",
+    getParentRoute: () => AuthRoute,
+  } as any);
 const AuthAdminClientsRoute = AuthAdminClientsRouteImport.update({
   id: "/clients",
   path: "/clients",
@@ -71,18 +84,21 @@ export interface FileRoutesByFullPath {
   "/admin": typeof AuthAdminRouteWithChildren;
   "/consent": typeof AuthConsentRoute;
   "/project-access": typeof AuthProjectAccessRoute;
-  "/projects": typeof AuthProjectsRoute;
   "/admin/clients": typeof AuthAdminClientsRoute;
+  "/projects/$organizationSlug": typeof AuthProjectsOrganizationSlugRoute;
+  "/admin/": typeof AuthAdminIndexRoute;
+  "/projects/": typeof AuthProjectsIndexRoute;
 }
 export interface FileRoutesByTo {
   "/device": typeof DeviceRoute;
   "/login": typeof LoginRoute;
-  "/admin": typeof AuthAdminRouteWithChildren;
   "/consent": typeof AuthConsentRoute;
   "/project-access": typeof AuthProjectAccessRoute;
-  "/projects": typeof AuthProjectsRoute;
   "/": typeof AuthIndexRoute;
   "/admin/clients": typeof AuthAdminClientsRoute;
+  "/projects/$organizationSlug": typeof AuthProjectsOrganizationSlugRoute;
+  "/admin": typeof AuthAdminIndexRoute;
+  "/projects": typeof AuthProjectsIndexRoute;
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
@@ -92,9 +108,11 @@ export interface FileRoutesById {
   "/_auth/admin": typeof AuthAdminRouteWithChildren;
   "/_auth/consent": typeof AuthConsentRoute;
   "/_auth/project-access": typeof AuthProjectAccessRoute;
-  "/_auth/projects": typeof AuthProjectsRoute;
   "/_auth/": typeof AuthIndexRoute;
   "/_auth/admin/clients": typeof AuthAdminClientsRoute;
+  "/_auth/projects/$organizationSlug": typeof AuthProjectsOrganizationSlugRoute;
+  "/_auth/admin/": typeof AuthAdminIndexRoute;
+  "/_auth/projects/": typeof AuthProjectsIndexRoute;
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
@@ -105,18 +123,21 @@ export interface FileRouteTypes {
     | "/admin"
     | "/consent"
     | "/project-access"
-    | "/projects"
-    | "/admin/clients";
+    | "/admin/clients"
+    | "/projects/$organizationSlug"
+    | "/admin/"
+    | "/projects/";
   fileRoutesByTo: FileRoutesByTo;
   to:
     | "/device"
     | "/login"
-    | "/admin"
     | "/consent"
     | "/project-access"
-    | "/projects"
     | "/"
-    | "/admin/clients";
+    | "/admin/clients"
+    | "/projects/$organizationSlug"
+    | "/admin"
+    | "/projects";
   id:
     | "__root__"
     | "/_auth"
@@ -125,9 +146,11 @@ export interface FileRouteTypes {
     | "/_auth/admin"
     | "/_auth/consent"
     | "/_auth/project-access"
-    | "/_auth/projects"
     | "/_auth/"
-    | "/_auth/admin/clients";
+    | "/_auth/admin/clients"
+    | "/_auth/projects/$organizationSlug"
+    | "/_auth/admin/"
+    | "/_auth/projects/";
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
@@ -166,13 +189,6 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AuthIndexRouteImport;
       parentRoute: typeof AuthRoute;
     };
-    "/_auth/projects": {
-      id: "/_auth/projects";
-      path: "/projects";
-      fullPath: "/projects";
-      preLoaderRoute: typeof AuthProjectsRouteImport;
-      parentRoute: typeof AuthRoute;
-    };
     "/_auth/project-access": {
       id: "/_auth/project-access";
       path: "/project-access";
@@ -194,6 +210,27 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AuthAdminRouteImport;
       parentRoute: typeof AuthRoute;
     };
+    "/_auth/projects/": {
+      id: "/_auth/projects/";
+      path: "/projects";
+      fullPath: "/projects/";
+      preLoaderRoute: typeof AuthProjectsIndexRouteImport;
+      parentRoute: typeof AuthRoute;
+    };
+    "/_auth/admin/": {
+      id: "/_auth/admin/";
+      path: "/";
+      fullPath: "/admin/";
+      preLoaderRoute: typeof AuthAdminIndexRouteImport;
+      parentRoute: typeof AuthAdminRoute;
+    };
+    "/_auth/projects/$organizationSlug": {
+      id: "/_auth/projects/$organizationSlug";
+      path: "/projects/$organizationSlug";
+      fullPath: "/projects/$organizationSlug";
+      preLoaderRoute: typeof AuthProjectsOrganizationSlugRouteImport;
+      parentRoute: typeof AuthRoute;
+    };
     "/_auth/admin/clients": {
       id: "/_auth/admin/clients";
       path: "/clients";
@@ -206,10 +243,12 @@ declare module "@tanstack/react-router" {
 
 interface AuthAdminRouteChildren {
   AuthAdminClientsRoute: typeof AuthAdminClientsRoute;
+  AuthAdminIndexRoute: typeof AuthAdminIndexRoute;
 }
 
 const AuthAdminRouteChildren: AuthAdminRouteChildren = {
   AuthAdminClientsRoute: AuthAdminClientsRoute,
+  AuthAdminIndexRoute: AuthAdminIndexRoute,
 };
 
 const AuthAdminRouteWithChildren = AuthAdminRoute._addFileChildren(
@@ -220,16 +259,18 @@ interface AuthRouteChildren {
   AuthAdminRoute: typeof AuthAdminRouteWithChildren;
   AuthConsentRoute: typeof AuthConsentRoute;
   AuthProjectAccessRoute: typeof AuthProjectAccessRoute;
-  AuthProjectsRoute: typeof AuthProjectsRoute;
   AuthIndexRoute: typeof AuthIndexRoute;
+  AuthProjectsOrganizationSlugRoute: typeof AuthProjectsOrganizationSlugRoute;
+  AuthProjectsIndexRoute: typeof AuthProjectsIndexRoute;
 }
 
 const AuthRouteChildren: AuthRouteChildren = {
   AuthAdminRoute: AuthAdminRouteWithChildren,
   AuthConsentRoute: AuthConsentRoute,
   AuthProjectAccessRoute: AuthProjectAccessRoute,
-  AuthProjectsRoute: AuthProjectsRoute,
   AuthIndexRoute: AuthIndexRoute,
+  AuthProjectsOrganizationSlugRoute: AuthProjectsOrganizationSlugRoute,
+  AuthProjectsIndexRoute: AuthProjectsIndexRoute,
 };
 
 const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren);

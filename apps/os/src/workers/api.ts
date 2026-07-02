@@ -14,7 +14,7 @@ import { decideIngressRoute, type IngressResolvers } from "../ingress.ts";
 import { readProjectByHostname, resolveProjectIdBySlug } from "../project-directory.ts";
 import { ProjectCollectionRpcTarget, UnauthenticatedItxRpcTarget } from "../rpc-targets.ts";
 import { handleCapnwebAdminCookieRequest } from "~/auth/admin-auth-cookie.ts";
-import { parseConfig, type AppConfig } from "~/config.ts";
+import { parseConfig } from "~/config.ts";
 
 export { ItxEntrypoint } from "../domains/itx/itx-entrypoint.ts";
 export { ProjectEgressEntrypoint } from "../domains/projects/egress.ts";
@@ -34,7 +34,7 @@ export default {
       config,
       headers: request.headers,
       method: request.method,
-      resolvers: directoryResolvers(config, env),
+      resolvers: directoryResolvers(env),
       url: request.url,
     });
 
@@ -77,10 +77,10 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-function directoryResolvers(config: AppConfig, env: Env): IngressResolvers {
+function directoryResolvers(env: Env): IngressResolvers {
   return {
     projectIdBySlug: (identifier) =>
-      resolveProjectIdBySlug({ config, directory: env.PROJECT_DIRECTORY, identifier }),
+      resolveProjectIdBySlug({ directory: env.PROJECT_DIRECTORY, identifier }),
     projectByHostname: async (host) => {
       const found = await readProjectByHostname(env.PROJECT_DIRECTORY, host);
       return found ? { appSlug: found.appSlug, projectId: found.record.id } : null;

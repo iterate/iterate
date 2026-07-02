@@ -134,7 +134,7 @@ export const getProjectBySlugServerFn: (input: {
     // or admin-role user) may read any project; a signed-in user may read a
     // project whose owning organization they belong to (covers the
     // stale-claims window right after a create on another device).
-    const record = await readProjectBySlug(context.config, env.PROJECT_DIRECTORY, data.slug);
+    const record = await readProjectBySlug(env.PROJECT_DIRECTORY, data.slug);
     if (!record) throw new Error(`Project ${data.slug} not found`);
 
     const userPrincipal = getUserPrincipal(context.principal);

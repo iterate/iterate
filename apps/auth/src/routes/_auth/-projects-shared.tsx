@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { createFileRoute } from "@tanstack/react-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+// Shared pieces of the /projects organization-management pages. The `-`
+// filename prefix keeps this out of the generated route tree (TanStack
+// Router's convention for colocated non-route files).
+import { useEffect, useState, type ReactNode } from "react";
 import { z } from "zod/v4";
 import {
   AlertDialog,
@@ -27,202 +28,27 @@ import { Field, FieldError, FieldGroup, FieldLabel } from "@iterate-com/ui/compo
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { Input } from "@iterate-com/ui/components/input";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
-import { toast } from "@iterate-com/ui/components/sonner";
-import { organizationsQueryOptions } from "../../utils/auth-query-options.ts";
+import { queryOptions } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { orpcClient } from "../../utils/query.tsx";
 
-type Organization = Awaited<ReturnType<typeof orpcClient.user.myOrganizations>>[number];
-type Project = Awaited<ReturnType<typeof orpcClient.project.list>>[number];
-type InventoryOrganization = Organization & { projects: Project[] };
+export type Organization = Awaited<ReturnType<typeof orpcClient.user.myOrganizations>>[number];
+export type Project = Awaited<ReturnType<typeof orpcClient.project.list>>[number];
+export type InventoryOrganization = Organization & { projects: Project[] };
 
-const NameInput = z.object({
+export const NameInput = z.object({
   name: z.string().trim().min(1, "Name is required").max(100, "Keep it under 100 characters"),
 });
 
-const ProjectInput = NameInput.extend({
+export const ProjectInput = NameInput.extend({
   organizationSlug: z.string().trim().min(1, "Choose an organization"),
 });
 
-const inventoryQueryKey = ["auth", "workspace-inventory"] as const;
-
-export const Route = createFileRoute("/_auth/projects")({
-  component: WorkspaceInventoryPage,
-});
-
-function WorkspaceInventoryPage() {
-  const queryClient = useQueryClient();
-  const [selectedOrganizationSlug, setSelectedOrganizationSlug] = useState("");
-  const [organizationDialogOpen, setOrganizationDialogOpen] = useState(false);
-  const [projectDialog, setProjectDialog] = useState<{ organizationSlug: string } | null>(null);
-  const [deleteOrganization, setDeleteOrganization] = useState<InventoryOrganization | null>(null);
-  const [deleteProject, setDeleteProject] = useState<Project | null>(null);
-
-  const inventoryQuery = useQuery({
-    queryKey: inventoryQueryKey,
+export function inventoryQueryOptions() {
+  return queryOptions({
+    queryKey: ["auth", "workspace-inventory"] as const,
     queryFn: loadInventory,
   });
-
-  const organizations = useMemo(() => inventoryQuery.data ?? [], [inventoryQuery.data]);
-  const selectedOrganization =
-    organizations.find((organization) => organization.slug === selectedOrganizationSlug) ??
-    organizations[0] ??
-    null;
-  useEffect(() => {
-    if (!selectedOrganization && organizations[0]) {
-      setSelectedOrganizationSlug(organizations[0].slug);
-    }
-  }, [organizations, selectedOrganization]);
-
-  const refreshInventory = async () => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: inventoryQueryKey }),
-      queryClient.invalidateQueries({ queryKey: organizationsQueryOptions().queryKey }),
-    ]);
-  };
-
-  const createOrganization = useMutation({
-    mutationFn: (input: z.infer<typeof NameInput>) => orpcClient.organization.create(input),
-    onSuccess: async (organization) => {
-      toast.success("Organization created");
-      setOrganizationDialogOpen(false);
-      setSelectedOrganizationSlug(organization.slug);
-      await refreshInventory();
-    },
-    onError: (error) => toast.error(error.message),
-  });
-
-  const removeOrganization = useMutation({
-    mutationFn: (organizationSlug: string) => orpcClient.organization.delete({ organizationSlug }),
-    onSuccess: async () => {
-      toast.success("Organization deleted");
-      setDeleteOrganization(null);
-      await refreshInventory();
-    },
-    onError: (error) => toast.error(error.message),
-  });
-
-  const createProject = useMutation({
-    mutationFn: (input: z.infer<typeof ProjectInput>) => orpcClient.project.create(input),
-    onSuccess: async (project) => {
-      toast.success("Project created");
-      setProjectDialog(null);
-      setSelectedOrganizationSlug(
-        organizations.find((organization) => organization.id === project.organizationId)?.slug ??
-          selectedOrganizationSlug,
-      );
-      await refreshInventory();
-    },
-    onError: (error) => toast.error(error.message),
-  });
-
-  const removeProject = useMutation({
-    mutationFn: (projectSlug: string) => orpcClient.project.delete({ projectSlug }),
-    onSuccess: async () => {
-      toast.success("Project deleted");
-      setDeleteProject(null);
-      await refreshInventory();
-    },
-    onError: (error) => toast.error(error.message),
-  });
-
-  return (
-    <main className="min-h-screen bg-background">
-      <section className="mx-auto flex w-full max-w-6xl flex-col gap-5 px-4 py-5 sm:px-6 lg:px-8">
-        <header className="flex flex-col gap-4 border-b pb-5 sm:flex-row sm:items-end sm:justify-between">
-          <div className="space-y-2">
-            <h1 className="text-xl font-semibold tracking-tight">Organizations</h1>
-            <p className="max-w-2xl text-sm text-muted-foreground">
-              Manage organizations and their projects.
-            </p>
-          </div>
-          <Button onClick={() => setOrganizationDialogOpen(true)}>New organization</Button>
-        </header>
-
-        {inventoryQuery.isPending ? (
-          <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
-            <div className="h-96 rounded-lg border bg-muted/30" />
-            <div className="h-96 rounded-lg border bg-muted/30" />
-          </div>
-        ) : inventoryQuery.isError ? (
-          <Empty className="min-h-[420px] border">
-            <EmptyHeader>
-              <EmptyTitle>Could not load organizations</EmptyTitle>
-              <EmptyDescription>{inventoryQuery.error.message}</EmptyDescription>
-            </EmptyHeader>
-            <Button variant="outline" onClick={() => inventoryQuery.refetch()}>
-              Try again
-            </Button>
-          </Empty>
-        ) : organizations.length === 0 ? (
-          <Empty className="min-h-[460px] border">
-            <EmptyHeader>
-              <EmptyTitle>Create your first organization</EmptyTitle>
-              <EmptyDescription>
-                Start with the company or team name people expect to see.
-              </EmptyDescription>
-            </EmptyHeader>
-            <Button onClick={() => setOrganizationDialogOpen(true)}>Create organization</Button>
-          </Empty>
-        ) : (
-          <div className="grid min-h-[520px] gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
-            <OrganizationRail
-              organizations={organizations}
-              selectedOrganizationSlug={selectedOrganization?.slug ?? ""}
-              onSelect={setSelectedOrganizationSlug}
-            />
-            {selectedOrganization ? (
-              <OrganizationDetail
-                organization={selectedOrganization}
-                canManage={
-                  selectedOrganization.role === "owner" || selectedOrganization.role === "admin"
-                }
-                onCreateProject={() =>
-                  setProjectDialog({
-                    organizationSlug: selectedOrganization.slug,
-                  })
-                }
-                onDeleteOrganization={() => setDeleteOrganization(selectedOrganization)}
-                onDeleteProject={setDeleteProject}
-              />
-            ) : null}
-          </div>
-        )}
-      </section>
-
-      <OrganizationDialog
-        open={organizationDialogOpen}
-        isPending={createOrganization.isPending}
-        onOpenChange={setOrganizationDialogOpen}
-        onSubmit={(input) => createOrganization.mutate(input)}
-      />
-
-      <ProjectDialog
-        state={projectDialog}
-        organizations={organizations}
-        isPending={createProject.isPending}
-        onOpenChange={(open) => !open && setProjectDialog(null)}
-        onSubmit={(input) => createProject.mutate(input)}
-      />
-
-      <DeleteOrganizationDialog
-        organization={deleteOrganization}
-        isPending={removeOrganization.isPending}
-        onOpenChange={(open) => !open && setDeleteOrganization(null)}
-        onConfirm={() => {
-          if (deleteOrganization) removeOrganization.mutate(deleteOrganization.slug);
-        }}
-      />
-
-      <DeleteProjectDialog
-        project={deleteProject}
-        isPending={removeProject.isPending}
-        onOpenChange={(open) => !open && setDeleteProject(null)}
-        onConfirm={() => {
-          if (deleteProject) removeProject.mutate(deleteProject.slug);
-        }}
-      />
-    </main>
-  );
 }
 
 async function loadInventory(): Promise<InventoryOrganization[]> {
@@ -235,10 +61,9 @@ async function loadInventory(): Promise<InventoryOrganization[]> {
   );
 }
 
-function OrganizationRail(props: {
+export function OrganizationRail(props: {
   organizations: InventoryOrganization[];
   selectedOrganizationSlug: string;
-  onSelect: (organizationSlug: string) => void;
 }) {
   return (
     <aside className="overflow-hidden rounded-lg border bg-card">
@@ -250,14 +75,14 @@ function OrganizationRail(props: {
         {props.organizations.map((organization) => {
           const selected = organization.slug === props.selectedOrganizationSlug;
           return (
-            <button
+            <Link
               key={organization.id}
-              type="button"
+              to="/projects/$organizationSlug"
+              params={{ organizationSlug: organization.slug }}
               className={[
                 "flex w-full items-start gap-3 rounded-md px-3 py-3 text-left transition-colors",
                 selected ? "bg-primary text-primary-foreground" : "hover:bg-muted",
               ].join(" ")}
-              onClick={() => props.onSelect(organization.slug)}
             >
               <span
                 className={[
@@ -279,7 +104,7 @@ function OrganizationRail(props: {
                   {organization.projects.length === 1 ? "" : "s"} · {organization.role}
                 </span>
               </span>
-            </button>
+            </Link>
           );
         })}
       </div>
@@ -287,7 +112,7 @@ function OrganizationRail(props: {
   );
 }
 
-function OrganizationDetail(props: {
+export function OrganizationDetail(props: {
   organization: InventoryOrganization;
   canManage: boolean;
   onCreateProject: () => void;
@@ -384,7 +209,7 @@ function ProjectRow(props: { project: Project; canManage: boolean; onDelete: () 
   );
 }
 
-function OrganizationDialog(props: {
+export function OrganizationDialog(props: {
   open: boolean;
   isPending: boolean;
   onOpenChange: (open: boolean) => void;
@@ -404,7 +229,7 @@ function OrganizationDialog(props: {
   );
 }
 
-function ProjectDialog(props: {
+export function ProjectDialog(props: {
   state: { organizationSlug: string } | null;
   organizations: InventoryOrganization[];
   isPending: boolean;
@@ -452,7 +277,7 @@ function ProjectDialog(props: {
   );
 }
 
-function NameDialog(props: {
+export function NameDialog(props: {
   open: boolean;
   title: string;
   description: string;
@@ -512,7 +337,7 @@ function NameDialog(props: {
   );
 }
 
-function DeleteOrganizationDialog(props: {
+export function DeleteOrganizationDialog(props: {
   organization: InventoryOrganization | null;
   isPending: boolean;
   onOpenChange: (open: boolean) => void;
@@ -544,7 +369,7 @@ function DeleteOrganizationDialog(props: {
   );
 }
 
-function DeleteProjectDialog(props: {
+export function DeleteProjectDialog(props: {
   project: Project | null;
   isPending: boolean;
   onOpenChange: (open: boolean) => void;

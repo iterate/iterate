@@ -16,40 +16,59 @@ import { Input } from "@iterate-com/ui/components/input";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@iterate-com/ui/components/input-otp";
 import { Label } from "@iterate-com/ui/components/label";
 import { Separator } from "@iterate-com/ui/components/separator";
-import { toast } from "sonner";
+import { toast } from "@iterate-com/ui/components/sonner";
 import { authClient } from "../utils/auth-client.ts";
 import { getInitials } from "../utils/initials.ts";
 
-const getLoginState = createServerFn({ method: "GET" }).handler(({ context }) => ({
-  emailOtpEnabled: context.cloudflare.env.VITE_ENABLE_EMAIL_OTP_SIGNIN === "true",
-  session: context.variables.session,
-}));
+// Runs on the server for both SSR and client navigations; the session comes
+// from the request cookie (utils/hono.ts). Only display fields are returned —
+// never the raw better-auth session (its `token` would end up in the
+// dehydrated loader payload in the HTML).
+const getLoginState = createServerFn({ method: "GET" }).handler(({ context }) => {
+  const user = context.variables.session?.user;
+  return {
+    emailOtpEnabled: context.cloudflare.env.VITE_ENABLE_EMAIL_OTP_SIGNIN === "true",
+    user: user ? { name: user.name ?? null, email: user.email, image: user.image ?? null } : null,
+  };
+});
 
+// The login page serves two flows, distinguished by the `sig` search param
+// (better-auth's oauth-provider signs its login redirects):
+//  - plain sign-in to the auth app itself (`redirect` = in-app return path);
+//  - the OAuth provider flow, where after sign-in we re-enter
+//    /api/auth/oauth2/authorize with the original query so the authorization
+//    request continues (consent, project access, redirect back to the client).
 export const Route = createFileRoute("/login")({
   validateSearch: z.looseObject({
     redirect: z.string().optional(),
+    // `login_hint=email` doubles as the deep-linkable "email code" mode of
+    // this page; `login_hint=google` auto-starts the Google flow once.
     login_hint: z.enum(["email", "google"]).optional().catch(undefined),
     sig: z.string().optional(),
   }),
   beforeLoad: async ({ search }) => {
-    const session = await authClient.getSession().catch(() => null);
-    if (session && !isOAuthProviderFlowSearch(search)) {
-      throw redirect({ to: safeRedirectPath(search.redirect) });
+    const loginState = await getLoginState();
+    // Already signed in and not inside an OAuth authorization flow: nothing
+    // to do here, go where the caller wanted. (In the OAuth flow we stay and
+    // render "continue as this account" instead.)
+    if (loginState.user && !isOAuthProviderFlowSearch(search)) {
+      throw redirect({ href: safeRedirectPath(search.redirect) });
     }
+    return { loginState };
   },
-  loader: () => getLoginState(),
+  loader: ({ context }) => context.loginState,
   component: RouteComponent,
 });
 
 function RouteComponent() {
   const search = Route.useSearch();
   const redirectTo = safeRedirectPath(search.redirect);
-  const { emailOtpEnabled, session } = Route.useLoaderData();
-  const signedInSession = session && isOAuthProviderFlowSearch(search) ? session : null;
+  const { emailOtpEnabled, user } = Route.useLoaderData();
+  const signedInUser = user && isOAuthProviderFlowSearch(search) ? user : null;
   const loginHint =
-    !signedInSession && search.login_hint === "email" && emailOtpEnabled
+    !signedInUser && search.login_hint === "email" && emailOtpEnabled
       ? search.login_hint
-      : !signedInSession && search.login_hint === "google"
+      : !signedInUser && search.login_hint === "google"
         ? search.login_hint
         : undefined;
 
@@ -58,18 +77,18 @@ function RouteComponent() {
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
           <CardTitle className="text-xl">
-            {signedInSession ? "Continue as this account" : "Sign in"}
+            {signedInUser ? "Continue as this account" : "Sign in"}
           </CardTitle>
           <CardDescription>
-            {signedInSession
+            {signedInUser
               ? "You're already signed in. Continue with this account or switch before authorizing the app."
               : "Sign in to your Iterate account"}
           </CardDescription>
         </CardHeader>
         <Separator />
         <CardContent className="pt-6">
-          {signedInSession ? (
-            <SignedInAccountCard redirectTo={redirectTo} session={signedInSession} />
+          {signedInUser ? (
+            <SignedInAccountCard redirectTo={redirectTo} user={signedInUser} />
           ) : (
             <LoginActions
               redirectTo={redirectTo}
@@ -85,18 +104,11 @@ function RouteComponent() {
 
 function SignedInAccountCard({
   redirectTo,
-  session,
+  user,
 }: {
   redirectTo: string;
-  session: {
-    user: {
-      name: string | null;
-      email: string;
-      image?: string | null;
-    };
-  };
+  user: { name: string | null; email: string; image: string | null };
 }) {
-  const user = session.user;
   const initials = getInitials(user.name ?? user.email);
   const continueWithAccount = useMutation({
     mutationFn: () => getPostLoginRedirectUrl(redirectTo),
@@ -161,7 +173,11 @@ function LoginActions({
   emailOtpEnabled: boolean;
   loginHint?: "email" | "google";
 }) {
-  const [emailMode, setEmailMode] = useState(loginHint === "email" && emailOtpEnabled);
+  const navigate = Route.useNavigate();
+  // The email step is part of the URL (login_hint=email) so a refresh or a
+  // shared link lands back in the same mode; only the typed email/code stay
+  // in component state.
+  const emailMode = loginHint === "email" && emailOtpEnabled;
   const [isHydrated, setIsHydrated] = useState(false);
   const consumedGoogleHint = useRef(false);
   const { isPending: googleSignInPending, mutate: signInWithGoogle } = useMutation({
@@ -172,11 +188,23 @@ function LoginActions({
       }),
   });
 
+  const setEmailMode = (expanded: boolean) =>
+    navigate({
+      search: (previous) => ({
+        ...previous,
+        login_hint: expanded ? ("email" as const) : undefined,
+      }),
+      replace: true,
+    });
+
   useEffect(() => {
     setIsHydrated(true);
   }, []);
 
   useEffect(() => {
+    // login_hint=google auto-starts the Google redirect exactly once per URL:
+    // sessionStorage survives the round-trip back to this page (e.g. the user
+    // pressed Back on Google's screen), the ref guards same-mount re-renders.
     let googleHintAlreadyConsumed = false;
     try {
       googleHintAlreadyConsumed =
@@ -409,6 +437,9 @@ function EmailOtpSignIn({
   );
 }
 
+// In the OAuth provider flow, the post-login destination is the authorization
+// endpoint with the ORIGINAL query re-attached (minus the one-time exp/sig
+// signature params) so better-auth resumes the interrupted authorize request.
 async function getPostLoginRedirectUrl(fallbackRedirect: string) {
   if (!isOAuthProviderFlow()) {
     return safeRedirectPath(fallbackRedirect);
@@ -422,6 +453,7 @@ async function getPostLoginRedirectUrl(fallbackRedirect: string) {
   return redirectUrl.toString();
 }
 
+// Open-redirect guard: `redirect` must stay a same-origin absolute path.
 function safeRedirectPath(rawRedirect: string | null | undefined) {
   const fallback = "/";
   const trimmed = rawRedirect?.trim();
