@@ -97,39 +97,32 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
   .use(serviceMiddleware)
   .handler(async ({ context, input }) => {
     const redirectURIs = [...new Set(input.redirectURIs.map((uri) => uri.trim()))].sort();
-    const existingByReferenceId = await getOAuthClientByReferenceId(context.db, {
-      referenceId: input.referenceId,
-    });
-    const existingByClientId = input.existingClientId
-      ? await getOAuthClientByClientId(context.db, {
-          clientId: input.existingClientId,
-        })
-      : null;
+    const [existingByReferenceId, existingByClientId] = await Promise.all([
+      getOAuthClientByReferenceId(context.db, { referenceId: input.referenceId }),
+      input.existingClientId
+        ? getOAuthClientByClientId(context.db, { clientId: input.existingClientId })
+        : null,
+    ]);
     const isDevStageClient =
       input.referenceId.startsWith("dev:") || input.referenceId.includes(":dev_");
 
-    const trustCallerClientId = isDevStageClient && Boolean(existingByClientId?.clientSecret);
-    const existing = trustCallerClientId ? existingByClientId : existingByReferenceId;
-    const callerHoldsSecret = Boolean(input.existingClientSecret) && !input.rotateClientSecret;
-    // A dev client is only kept when it was matched by the CALLER's client id.
-    // If the caller's pair no longer exists in the db (auth-dev db reset,
-    // another worktree rotated it away), keeping the referenceId row would
-    // return that row's clientId with the caller's unrelated secret — a broken
-    // pair the server cannot detect (secrets are stored hashed) and the caller
-    // would persist. Rotate instead, like every `pnpm dev` did historically.
-    const keepExisting =
-      Boolean(existing?.clientSecret) &&
-      callerHoldsSecret &&
-      (trustCallerClientId || !isDevStageClient);
+    // Which row may be KEPT: for dev clients, only the caller's own
+    // (clientId, clientSecret) pair — if that pair is gone from the db
+    // (auth-dev db reset, another worktree rotated it away), keeping the
+    // referenceId row would return its clientId with the caller's unrelated
+    // secret, a broken pair the server cannot detect (secrets are stored
+    // hashed). Rotate instead, like every `pnpm dev` did historically.
+    const existing = isDevStageClient
+      ? existingByClientId?.clientSecret
+        ? existingByClientId
+        : null
+      : existingByReferenceId;
+    const callerSecret = input.rotateClientSecret ? undefined : input.existingClientSecret;
 
-    if (keepExisting && existing && input.existingClientSecret) {
+    if (existing?.clientSecret && callerSecret) {
       // Re-pointing a dev referenceId at the caller's client may leave the
       // previously referenced row dangling — disable it.
-      if (
-        trustCallerClientId &&
-        existingByReferenceId &&
-        existingByReferenceId.id !== existing.id
-      ) {
+      if (isDevStageClient && existingByReferenceId && existingByReferenceId.id !== existing.id) {
         await disableOAuthClientById(
           context.db,
           { updatedAt: Date.now() },
@@ -162,7 +155,7 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
       return {
         clientId: existing.clientId,
         clientName: input.clientName,
-        clientSecret: input.existingClientSecret,
+        clientSecret: callerSecret,
         redirectURIs,
       };
     }
@@ -170,13 +163,15 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
     // Fresh client needed: disable whatever rows currently answer to this
     // referenceId or client id so exactly one active client remains.
     const staleIds = new Set(
-      [existingByReferenceId, existingByClientId]
-        .filter((row) => row && row.disabled === 0)
-        .map((row) => row!.id),
+      [existingByReferenceId, existingByClientId].flatMap((row) =>
+        row?.disabled === 0 ? [row.id] : [],
+      ),
     );
-    for (const staleId of staleIds) {
-      await disableOAuthClientById(context.db, { updatedAt: Date.now() }, { id: staleId });
-    }
+    await Promise.all(
+      [...staleIds].map((id) =>
+        disableOAuthClientById(context.db, { updatedAt: Date.now() }, { id }),
+      ),
+    );
 
     const created = await createOAuthClientViaAdminApi({
       env: context.env,

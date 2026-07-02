@@ -27,11 +27,22 @@ export interface Env {
   ARTIFACTS: Artifacts;
   ARTIFACTS_ACCOUNT_ID: string;
   ARTIFACTS_NAMESPACE: string;
-  /** Service binding to the auth worker's RPC entrypoint — the project
-   * directory and prj_ id authority (see AuthWorkerRpc in
-   * @iterate-com/auth-contract). Bound in every deployed OS worker; go
-   * through src/auth/auth-worker-service.ts instead of reaching for it
-   * directly (its guard covers binding-less vitest environments). */
+  /**
+   * Service binding to the auth worker's RPC entrypoint (apps/auth) — the
+   * project directory and prj_ id authority (see AuthWorkerRpc in
+   * @iterate-com/auth-contract). Reach it via the `authWorker()` accessor
+   * below, not directly.
+   *
+   * Holding the binding IS the credential: a service binding can only be
+   * attached by a deploy into this Cloudflare account, so no service token
+   * ships in worker config (it replaced HTTP calls carrying
+   * x-iterate-service-token). alchemy.run.ts binds it in every deployed OS
+   * worker and makes it required; in fully-local dev it's a remote binding
+   * proxied to the deployed auth worker for the stage. Only the OIDC protocol
+   * stays on auth's public hostname (browsers can't hold bindings).
+   * https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/rpc/
+   * https://developers.cloudflare.com/workers/local-development/#remote-bindings
+   */
   AUTH: Service<AuthWorkerEntrypoint>;
   LOADER: WorkerLoader;
   /** Slug -> project id (+ metadata) cache in front of the auth worker's
@@ -59,3 +70,9 @@ export interface Env {
 }
 
 export const itxEnv = workerEnv as unknown as Env;
+
+/** The auth worker over the AUTH service binding (see the `AUTH` field
+ * docstring). A one-liner so app/ingress-side callers don't reach for the
+ * itx-named env accessor; `Env.AUTH` is non-optional, bound in every deployed
+ * worker. */
+export const authWorker = () => itxEnv.AUTH;

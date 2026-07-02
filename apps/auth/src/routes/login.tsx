@@ -114,15 +114,6 @@ function SignedInAccountCard({
   user: { name: string | null; email: string; image: string | null };
 }) {
   const initials = getInitials(user.name ?? user.email);
-  const continueWithAccount = useMutation({
-    mutationFn: () => getPostLoginRedirectUrl(redirectTo),
-    onSuccess: (nextUrl) => {
-      window.location.assign(nextUrl);
-    },
-    onError: (error: Error) => {
-      toast.error(error.message || "Failed to continue");
-    },
-  });
   const switchAccount = useMutation({
     mutationFn: () => authClient.signOut(),
     onSuccess: () => {
@@ -150,15 +141,15 @@ function SignedInAccountCard({
         <Button
           className="w-full"
           size="lg"
-          disabled={continueWithAccount.isPending || switchAccount.isPending}
-          onClick={() => continueWithAccount.mutate()}
+          disabled={switchAccount.isPending}
+          onClick={() => window.location.assign(getPostLoginRedirectUrl(redirectTo))}
         >
-          {continueWithAccount.isPending ? "Continuing..." : "Continue with this account"}
+          Continue with this account
         </Button>
         <Button
           className="w-full"
           variant="outline"
-          disabled={continueWithAccount.isPending || switchAccount.isPending}
+          disabled={switchAccount.isPending}
           onClick={() => switchAccount.mutate()}
         >
           {switchAccount.isPending ? "Switching..." : "Use another account"}
@@ -188,7 +179,7 @@ function LoginActions({
     mutationFn: async () =>
       authClient.signIn.social({
         provider: "google",
-        callbackURL: await getPostLoginRedirectUrl(redirectTo),
+        callbackURL: getPostLoginRedirectUrl(redirectTo),
       }),
   });
 
@@ -441,16 +432,18 @@ function EmailOtpSignIn({
   );
 }
 
-// In the OAuth provider flow, the post-login destination is the authorization
-// endpoint with the ORIGINAL query re-attached (minus the one-time exp/sig
-// signature params) so better-auth resumes the interrupted authorize request.
-async function getPostLoginRedirectUrl(fallbackRedirect: string) {
-  if (!isOAuthProviderFlow()) {
+// In the OAuth provider flow (marked by the `sig` param), the post-login
+// destination is the authorization endpoint with the ORIGINAL query
+// re-attached (minus the one-time exp/sig signature params) so better-auth
+// resumes the interrupted authorize request — verbatim off window.location so
+// the query survives without a round-trip through the router's parsed search.
+function getPostLoginRedirectUrl(fallbackRedirect: string) {
+  const searchParams = new URLSearchParams(window.location.search);
+  if (!searchParams.has("sig")) {
     return safeRedirectPath(fallbackRedirect);
   }
 
   const redirectUrl = new URL("/api/auth/oauth2/authorize", window.location.origin);
-  const searchParams = new URLSearchParams(window.location.search);
   searchParams.delete("exp");
   searchParams.delete("sig");
   redirectUrl.search = searchParams.toString();
@@ -472,11 +465,6 @@ function safeRedirectPath(rawRedirect: string | null | undefined) {
   } catch {
     return fallback;
   }
-}
-
-function isOAuthProviderFlow() {
-  const searchParams = new URLSearchParams(window.location.search);
-  return searchParams.has("sig");
 }
 
 function isOAuthProviderFlowSearch(search: { sig?: string }) {

@@ -54,7 +54,7 @@ function RouteComponent() {
               <Button
                 className="w-full"
                 variant="outline"
-                onClick={() => navigate({ to: "/projects" })}
+                onClick={() => navigate({ to: "/projects/{-$organizationSlug}", params: {} })}
               >
                 Manage organizations
               </Button>

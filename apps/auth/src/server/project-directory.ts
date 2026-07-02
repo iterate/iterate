@@ -7,7 +7,6 @@ import {
 import { ORPCError } from "@orpc/server";
 import { z } from "zod/v4";
 import { db } from "./db/index.ts";
-import { parseProjectMetadata } from "./db/helpers.ts";
 import {
   getOrganizationBySlug,
   getProjectWithOrganizationBySlug,
@@ -15,7 +14,7 @@ import {
   listProjectsForUser as listProjectsForUserQuery,
 } from "./db/queries/index.ts";
 import { resolveProjectCreateTarget } from "./project-slugs.ts";
-import { generateId, toProjectRecord, toProjectRecordFromReturnedRow } from "./records.ts";
+import { generateId, toProjectRecordFromReturnedRow } from "./records.ts";
 
 // The auth worker is the project DIRECTORY and the id AUTHORITY for the whole
 // platform: it owns the org/project tables users manage through OAuth-time
@@ -87,26 +86,16 @@ export async function getProjectBySlug(rawInput: ProjectInput): Promise<ProjectR
   const projectRow = await getProjectWithOrganizationBySlug(db, {
     slug: input.projectSlug,
   });
-  if (!projectRow) return null;
-  return toProjectRecord({
-    id: projectRow.id,
-    organizationId: projectRow.organizationId,
-    name: projectRow.name,
-    slug: projectRow.slug,
-    metadata: parseProjectMetadata(projectRow.metadata),
-    archivedAt: typeof projectRow.archivedAt === "number" ? new Date(projectRow.archivedAt) : null,
-  });
+  return projectRow && toProjectRecordFromReturnedRow(projectRow);
 }
-
-const ListProjectsForUserInput = z.object({ userId: z.string().min(1) });
 
 /** See AuthWorkerRpc.listProjectsForUser. Same query the OAuth project claims
  * are built from (auth-plugins.ts), so OS's stale-claims fallback and the
  * token claims can never disagree. */
-export async function listProjectsForUser(
-  rawInput: z.infer<typeof ListProjectsForUserInput>,
-): Promise<UserProjectRecord[]> {
-  const input = ListProjectsForUserInput.parse(rawInput);
+export async function listProjectsForUser(rawInput: {
+  userId: string;
+}): Promise<UserProjectRecord[]> {
+  const input = z.object({ userId: z.string().min(1) }).parse(rawInput);
   const projects = await listProjectsForUserQuery(db, { userId: input.userId });
   return projects.map((project) => ({
     id: project.id,

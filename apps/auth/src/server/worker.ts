@@ -125,7 +125,7 @@ app.get("/logout", async (c) => {
   return response;
 });
 
-export const orpcHandler = new RPCHandler(appRouter, {
+const orpcHandler = new RPCHandler(appRouter, {
   plugins: [new RequestHeadersPlugin()],
   interceptors: [
     onError((error) => {
@@ -174,7 +174,7 @@ app.all("*", (c) =>
   }),
 );
 
-export function preserveOAuthResourceRedirect(request: Request, response: Response) {
+function preserveOAuthResourceRedirect(request: Request, response: Response) {
   const requestUrl = new URL(request.url);
   const paramNames = [OAUTH_RESOURCE_PARAMETER];
   const loginHint = requestUrl.searchParams.get("login_hint");

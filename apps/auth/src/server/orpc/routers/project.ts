@@ -5,13 +5,12 @@ import {
   os,
   projectAdminMiddleware,
 } from "../orpc.ts";
-import { parseProjectMetadata, parseTimestampMs } from "../../db/helpers.ts";
 import {
   deleteProjectById,
   insertProjectReturning,
   listProjectsByOrganizationId,
 } from "../../db/queries/index.ts";
-import { generateId, toProjectRecord, toProjectRecordFromReturnedRow } from "../../records.ts";
+import { generateId, toProjectRecordFromReturnedRow } from "../../records.ts";
 import { resolveProjectCreateTarget } from "../../project-slugs.ts";
 
 const list = os.project.list.use(organizationScopedMiddleware).handler(async ({ context }) => {
@@ -19,16 +18,7 @@ const list = os.project.list.use(organizationScopedMiddleware).handler(async ({ 
     organizationId: context.organization.id,
   });
 
-  return projects.map((project) =>
-    toProjectRecord({
-      id: project.id,
-      organizationId: project.organizationId,
-      name: project.name,
-      slug: project.slug,
-      metadata: parseProjectMetadata(project.metadata),
-      archivedAt: parseTimestampMs(project.archivedAt),
-    }),
-  );
+  return projects.map(toProjectRecordFromReturnedRow);
 });
 
 const create = os.project.create

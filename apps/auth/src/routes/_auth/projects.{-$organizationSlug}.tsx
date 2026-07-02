@@ -5,26 +5,27 @@ import { Button } from "@iterate-com/ui/components/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { orpcClient } from "../../utils/query.tsx";
-import { organizationsQueryOptions } from "../../utils/auth-query-options.ts";
 import {
   DeleteOrganizationDialog,
   DeleteProjectDialog,
   inventoryQueryOptions,
+  NameDialog,
   OrganizationDetail,
-  OrganizationDialog,
   OrganizationRail,
   ProjectDialog,
   type InventoryOrganization,
   type Project,
 } from "./-projects-shared.tsx";
 
-// The deep-linkable organization management page: which organization is being
-// managed lives in the URL, not in component state.
-export const Route = createFileRoute("/_auth/projects/$organizationSlug")({
-  component: OrganizationInventoryPage,
+// Organization & project management. The organization being managed lives in
+// the URL as an OPTIONAL path param — `/projects` (none) and
+// `/projects/<slug>` share this one route/component:
+// https://tanstack.com/router/latest/docs/framework/react/guide/path-params
+export const Route = createFileRoute("/_auth/projects/{-$organizationSlug}")({
+  component: ProjectsPage,
 });
 
-function OrganizationInventoryPage() {
+function ProjectsPage() {
   const { organizationSlug } = Route.useParams();
   const navigate = Route.useNavigate();
   const queryClient = useQueryClient();
@@ -38,12 +39,11 @@ function OrganizationInventoryPage() {
   const selectedOrganization =
     organizations.find((organization) => organization.slug === organizationSlug) ?? null;
 
-  const refreshInventory = async () => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: inventoryQueryOptions().queryKey }),
-      queryClient.invalidateQueries({ queryKey: organizationsQueryOptions().queryKey }),
-    ]);
-  };
+  const refreshInventory = () =>
+    queryClient.invalidateQueries({ queryKey: inventoryQueryOptions().queryKey });
+
+  const goToOrganization = (slug: string) =>
+    navigate({ to: "/projects/{-$organizationSlug}", params: { organizationSlug: slug } });
 
   const createOrganization = useMutation({
     mutationFn: (input: { name: string }) => orpcClient.organization.create(input),
@@ -51,10 +51,7 @@ function OrganizationInventoryPage() {
       toast.success("Organization created");
       setOrganizationDialogOpen(false);
       await refreshInventory();
-      await navigate({
-        to: "/projects/$organizationSlug",
-        params: { organizationSlug: organization.slug },
-      });
+      await goToOrganization(organization.slug);
     },
     onError: (error) => toast.error(error.message),
   });
@@ -65,8 +62,9 @@ function OrganizationInventoryPage() {
       toast.success("Organization deleted");
       setDeleteOrganization(null);
       await refreshInventory();
-      // The organization in the URL may be gone — let the index pick again.
-      await navigate({ to: "/projects" });
+      // The organization in the URL may be gone — drop the param and let the
+      // canonicalization below pick the first remaining org (or empty state).
+      await navigate({ to: "/projects/{-$organizationSlug}", params: {} });
     },
     onError: (error) => toast.error(error.message),
   });
@@ -82,10 +80,7 @@ function OrganizationInventoryPage() {
         (organization) => organization.id === project.organizationId,
       );
       if (owningOrganization && owningOrganization.slug !== organizationSlug) {
-        await navigate({
-          to: "/projects/$organizationSlug",
-          params: { organizationSlug: owningOrganization.slug },
-        });
+        await goToOrganization(owningOrganization.slug);
       }
     },
     onError: (error) => toast.error(error.message),
@@ -101,12 +96,18 @@ function OrganizationInventoryPage() {
     onError: (error) => toast.error(error.message),
   });
 
-  // Unknown or no-longer-visible organization slug: fall back to the index,
-  // which redirects to the first organization or the empty state. Render-time
-  // <Navigate> because the check needs the client-authenticated inventory
-  // query (see the matching comment in projects.index.tsx).
-  if (inventoryQuery.isSuccess && !selectedOrganization) {
-    return <Navigate to="/projects" replace />;
+  // No/unknown slug but organizations exist: canonicalize onto the first one.
+  // Render-time <Navigate> (not a beforeLoad redirect) because the target needs
+  // the client-authenticated inventory query — the SSR oRPC link (utils/query)
+  // doesn't forward request cookies, so this can only be decided client-side.
+  if (inventoryQuery.isSuccess && !selectedOrganization && organizations[0]) {
+    return (
+      <Navigate
+        to="/projects/{-$organizationSlug}"
+        params={{ organizationSlug: organizations[0].slug }}
+        replace
+      />
+    );
   }
 
   return (
@@ -149,19 +150,31 @@ function OrganizationInventoryPage() {
                 selectedOrganization.role === "owner" || selectedOrganization.role === "admin"
               }
               onCreateProject={() =>
-                setProjectDialog({
-                  organizationSlug: selectedOrganization.slug,
-                })
+                setProjectDialog({ organizationSlug: selectedOrganization.slug })
               }
               onDeleteOrganization={() => setDeleteOrganization(selectedOrganization)}
               onDeleteProject={setDeleteProject}
             />
           </div>
-        ) : null}
+        ) : (
+          <Empty className="min-h-[460px] border">
+            <EmptyHeader>
+              <EmptyTitle>Create your first organization</EmptyTitle>
+              <EmptyDescription>
+                Start with the company or team name people expect to see.
+              </EmptyDescription>
+            </EmptyHeader>
+            <Button onClick={() => setOrganizationDialogOpen(true)}>Create organization</Button>
+          </Empty>
+        )}
       </section>
 
-      <OrganizationDialog
+      <NameDialog
         open={organizationDialogOpen}
+        title="Create organization"
+        description="Use the name people recognize."
+        label="Organization name"
+        submitLabel="Create organization"
         isPending={createOrganization.isPending}
         onOpenChange={setOrganizationDialogOpen}
         onSubmit={(input) => createOrganization.mutate(input)}
@@ -172,6 +185,7 @@ function OrganizationInventoryPage() {
         organizations={organizations}
         isPending={createProject.isPending}
         onOpenChange={(open) => !open && setProjectDialog(null)}
+        onStateChange={setProjectDialog}
         onSubmit={(input) => createProject.mutate(input)}
       />
 

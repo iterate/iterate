@@ -30,12 +30,11 @@ export const SERVICE_TOKEN_HEADER = "x-iterate-service-token";
 export const OrganizationRole = z.enum(["member", "admin", "owner"]);
 export type OrganizationRole = z.infer<typeof OrganizationRole>;
 
-export const OrganizationRecord = z.object({
+const OrganizationRecord = z.object({
   id: z.string(),
   name: z.string(),
   slug: z.string(),
 });
-export type OrganizationRecord = z.infer<typeof OrganizationRecord>;
 
 export const OrganizationSummary = OrganizationRecord.extend({
   role: OrganizationRole,
@@ -58,11 +57,10 @@ const CallerManagedProjectId = z
   .min(1)
   .describe("Opaque caller-managed project ID. If omitted, auth generates a prj_* ID.");
 
-export const CreateClientInput = z.object({
+const CreateClientInput = z.object({
   clientName: z.string().min(1),
   redirectURIs: z.array(z.url()).min(1),
 });
-export type CreateClientInput = z.infer<typeof CreateClientInput>;
 
 export const OAuthClientRecord = z.object({
   clientId: z.string(),
@@ -72,10 +70,9 @@ export const OAuthClientRecord = z.object({
 });
 export type OAuthClientRecord = z.infer<typeof OAuthClientRecord>;
 
-export const OrgInput = z.object({
+const OrgInput = z.object({
   organizationSlug: z.string().min(1),
 });
-export type OrgInput = z.infer<typeof OrgInput>;
 
 export const ProjectInput = z.object({
   projectSlug: z.string().min(1),
@@ -91,7 +88,7 @@ export const CreateProjectForOrganizationInput = z.object({
 });
 export type CreateProjectForOrganizationInput = z.infer<typeof CreateProjectForOrganizationInput>;
 
-export const InternalEnsureOAuthClientInput = z.object({
+const InternalEnsureOAuthClientInput = z.object({
   referenceId: z.string().min(1),
   clientName: z.string().min(1),
   redirectURIs: z.array(z.url()).min(1),
@@ -99,9 +96,8 @@ export const InternalEnsureOAuthClientInput = z.object({
   existingClientSecret: z.string().min(1).optional(),
   rotateClientSecret: z.boolean().optional(),
 });
-export type InternalEnsureOAuthClientInput = z.infer<typeof InternalEnsureOAuthClientInput>;
 
-export const InternalSetOAuthClientInput = z.object({
+const InternalSetOAuthClientInput = z.object({
   clientId: z.string().min(1),
   clientSecret: z.string().min(16),
   clientName: z.string().min(1),
@@ -109,13 +105,11 @@ export const InternalSetOAuthClientInput = z.object({
   referenceId: z.string().min(1).optional(),
   skipConsent: z.boolean().optional(),
 });
-export type InternalSetOAuthClientInput = z.infer<typeof InternalSetOAuthClientInput>;
 
-export const OAuthProjectSelectionInput = z.object({
+const OAuthProjectSelectionInput = z.object({
   clientId: z.string().min(1),
   projectIds: z.array(z.string().min(1)).min(1),
 });
-export type OAuthProjectSelectionInput = z.infer<typeof OAuthProjectSelectionInput>;
 
 // ---------------------------------------------------------------------------
 // Workers RPC surface (service binding)

@@ -69,7 +69,7 @@ export function OrganizationRail(props: {
           return (
             <Link
               key={organization.id}
-              to="/projects/$organizationSlug"
+              to="/projects/{-$organizationSlug}"
               params={{ organizationSlug: organization.slug }}
               className={[
                 "flex w-full items-start gap-3 rounded-md px-3 py-3 text-left transition-colors",
@@ -201,40 +201,17 @@ function ProjectRow(props: { project: Project; canManage: boolean; onDelete: () 
   );
 }
 
-export function OrganizationDialog(props: {
-  open: boolean;
-  isPending: boolean;
-  onOpenChange: (open: boolean) => void;
-  onSubmit: (input: { name: string }) => void;
-}) {
-  return (
-    <NameDialog
-      open={props.open}
-      title="Create organization"
-      description="Use the name people recognize."
-      label="Organization name"
-      submitLabel="Create organization"
-      isPending={props.isPending}
-      onOpenChange={props.onOpenChange}
-      onSubmit={props.onSubmit}
-    />
-  );
-}
-
+// The selected organization is the parent's `state`, not local state — the
+// select writes straight back through onStateChange, so there's nothing to
+// sync.
 export function ProjectDialog(props: {
   state: { organizationSlug: string } | null;
   organizations: InventoryOrganization[];
   isPending: boolean;
   onOpenChange: (open: boolean) => void;
+  onStateChange: (state: { organizationSlug: string }) => void;
   onSubmit: (input: { name: string; organizationSlug: string }) => void;
 }) {
-  const [organizationSlug, setOrganizationSlug] = useState("");
-  const defaultOrganizationSlug = props.state?.organizationSlug ?? props.organizations[0]?.slug;
-
-  useEffect(() => {
-    setOrganizationSlug(defaultOrganizationSlug ?? "");
-  }, [defaultOrganizationSlug, props.state]);
-
   return (
     <NameDialog
       open={Boolean(props.state)}
@@ -251,8 +228,8 @@ export function ProjectDialog(props: {
             <NativeSelect
               id="project-organization"
               className="w-full"
-              value={organizationSlug}
-              onChange={(event) => setOrganizationSlug(event.target.value)}
+              value={props.state.organizationSlug}
+              onChange={(event) => props.onStateChange({ organizationSlug: event.target.value })}
               disabled={props.isPending}
             >
               {props.organizations.map((organization) => (
@@ -264,7 +241,9 @@ export function ProjectDialog(props: {
           </Field>
         ) : null
       }
-      onSubmit={(input) => props.onSubmit({ ...input, organizationSlug })}
+      onSubmit={(input) =>
+        props.state && props.onSubmit({ ...input, organizationSlug: props.state.organizationSlug })
+      }
     />
   );
 }

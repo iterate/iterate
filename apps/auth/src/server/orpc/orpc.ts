@@ -2,7 +2,6 @@ import { ORPCError } from "@orpc/server";
 import { authContract } from "@iterate-com/auth-contract";
 import { implement } from "@orpc/server";
 import type { RequestHeadersPluginContext } from "@orpc/server/plugins";
-import { parseProjectMetadata } from "../db/helpers.ts";
 import {
   getMembershipByOrganizationAndUserId,
   getOrganizationBySlug,
@@ -11,6 +10,7 @@ import {
 import type { Variables } from "../utils/hono.ts";
 import type { CloudflareEnv } from "../env.ts";
 import { isPlatformAdminUser } from "../platform-admin.ts";
+import { toProjectRecordFromReturnedRow } from "../records.ts";
 
 // Two role namespaces appear below; don't mix them up:
 // - `session.user.role` is the system-wide better-auth admin-plugin role.
@@ -87,7 +87,7 @@ async function loadOrganization(params: {
     throw new ORPCError("FORBIDDEN", { message: "You do not have access to this organization" });
   }
 
-  return { organization, membership: membership ?? null };
+  return { organization, membership };
 }
 
 function assertOrganizationAdmin(params: {
@@ -125,29 +125,12 @@ export const organizationScopedMiddleware = os.middleware(
   },
 );
 
-export const organizationAdminMiddleware = os.middleware(
-  async ({ context, next }, input: { organizationSlug: string }) => {
-    const { session } = context;
-    if (!session) {
-      throw new ORPCError("UNAUTHORIZED", { message: "Not authorized" });
-    }
-
-    const { organization, membership } = await loadOrganization({
-      db: context.db,
-      organizationSlug: input.organizationSlug,
-      user: session.user,
-    });
-    assertOrganizationAdmin({ user: session.user, membership });
-
-    return next({
-      context: {
-        session,
-        user: session.user,
-        reqHeaders: context.reqHeaders,
-        organization,
-        membership,
-      },
-    });
+// Same context as organizationScopedMiddleware plus the admin-role assertion:
+// https://orpc.unnoq.com/docs/middleware#concatenation
+export const organizationAdminMiddleware = organizationScopedMiddleware.concat(
+  async ({ context, next }) => {
+    assertOrganizationAdmin({ user: context.user, membership: context.membership });
+    return next();
   },
 );
 
@@ -169,15 +152,6 @@ export const projectAdminMiddleware = os.middleware(
       name: projectRow.organizationName,
       slug: projectRow.organizationSlug,
     };
-    const project = {
-      id: projectRow.id,
-      organizationId: projectRow.organizationId,
-      name: projectRow.name,
-      slug: projectRow.slug,
-      metadata: parseProjectMetadata(projectRow.metadata),
-      archivedAt:
-        typeof projectRow.archivedAt === "number" ? new Date(projectRow.archivedAt) : null,
-    };
 
     const membership = await getMembershipByOrganizationAndUserId(context.db, {
       organizationId: organization.id,
@@ -186,16 +160,16 @@ export const projectAdminMiddleware = os.middleware(
     if (!membership && !isPlatformAdminUser(session.user)) {
       throw new ORPCError("FORBIDDEN", { message: "You do not have access to this project" });
     }
-    assertOrganizationAdmin({ user: session.user, membership: membership ?? null });
+    assertOrganizationAdmin({ user: session.user, membership });
 
     return next({
       context: {
         session,
         user: session.user,
         reqHeaders: context.reqHeaders,
-        project,
+        project: toProjectRecordFromReturnedRow(projectRow),
         organization,
-        membership: membership ?? null,
+        membership,
       },
     });
   },

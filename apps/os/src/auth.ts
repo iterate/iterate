@@ -26,7 +26,7 @@
 
 import { authenticateCapnwebAdmin } from "./auth/admin-auth-cookie.ts";
 import { authenticateAdminBearer } from "./auth/admin.ts";
-import { authWorker } from "./auth/auth-worker-service.ts";
+import { authWorker } from "./env.ts";
 import { createOsIterateAuth } from "./auth/iterate-auth-client.ts";
 import {
   principalFromAccessToken,
@@ -45,25 +45,18 @@ import type { ItxAuth, ItxAuthCredentials, ItxAuthToken } from "./types.ts";
  */
 export const TRUSTED_INTERNAL_ITX_TOKEN = "trusted-internal-itx-token";
 
-type ProjectDirectory = {
-  userHasProject(userPrincipal: UserPrincipal, projectId: string): Promise<boolean>;
-};
-
 export class ItxAuthContext implements ItxAuth {
-  readonly #directory: ProjectDirectory | undefined;
   readonly #isAdmin: boolean;
   readonly #principal: string;
   readonly #projectIds: Set<string>;
   readonly #userPrincipal: UserPrincipal | undefined;
 
   constructor(input: {
-    directory?: ProjectDirectory;
     isAdmin: boolean;
     principal: string;
     projectIds?: Iterable<string>;
     userPrincipal?: UserPrincipal;
   }) {
-    this.#directory = input.directory;
     this.#isAdmin = input.isAdmin;
     this.#principal = input.principal;
     this.#projectIds = new Set(input.projectIds ?? []);
@@ -111,11 +104,9 @@ export class ItxAuthContext implements ItxAuth {
    */
   async ensureCanAccessProject(projectId: string): Promise<void> {
     if (this.canAccessProject(projectId)) return;
-    if (this.#userPrincipal && this.#directory) {
-      if (await this.#directory.userHasProject(this.#userPrincipal, projectId)) {
-        this.widenProjectAccess(projectId);
-        return;
-      }
+    if (this.#userPrincipal && (await userHasProject(this.#userPrincipal, projectId))) {
+      this.widenProjectAccess(projectId);
+      return;
     }
     this.assertCanAccessProject(projectId);
   }
@@ -221,7 +212,6 @@ function contextFromPrincipal(principal: Principal): ItxAuthContext {
     return new ItxAuthContext({ isAdmin: true, principal: "admin" });
   }
   return new ItxAuthContext({
-    directory: authWorkerProjectDirectory(),
     isAdmin: principalIsAdmin(principal),
     principal: principal.userId,
     projectIds: principal.projects.map((project) => project.id),
@@ -246,38 +236,31 @@ function contextFromImpersonatedToken(token: ItxAuthToken): ItxAuthContext {
 const DIRECTORY_CACHE_TTL_MS = 30_000;
 const directoryCache = new Map<string, { expiresAt: number; hasProject: boolean }>();
 
-function authWorkerProjectDirectory(): ProjectDirectory {
-  return {
-    async userHasProject(userPrincipal, projectId) {
-      const cacheKey = `${userPrincipal.userId}:${projectId}`;
-      const cached = directoryCache.get(cacheKey);
-      if (cached && cached.expiresAt > Date.now()) return cached.hasProject;
+async function userHasProject(userPrincipal: UserPrincipal, projectId: string): Promise<boolean> {
+  const cacheKey = `${userPrincipal.userId}:${projectId}`;
+  const cached = directoryCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.hasProject;
 
-      let projects;
-      try {
-        projects = await authWorker().listProjectsForUser({ userId: userPrincipal.userId });
-      } catch {
-        // Auth worker unreachable is NOT "no membership": deny THIS check
-        // without caching the denial, so the next request retries instead
-        // of locking the user out for the cache window.
-        return false;
-      }
-      // Gate on the organizations already in the principal's claims — the same
-      // scope the pre-service-binding fallback used (it looked up projects
-      // per claims org). This keeps itx access in step with the dashboard's
-      // claims-gated directory reads (getProjectBySlugServerFn): the fallback
-      // recovers projects created in an org the user already holds, without
-      // silently widening access to brand-new org memberships the token has
-      // not caught up to yet.
-      const claimsOrganizationIds = new Set(userPrincipal.organizations.map((org) => org.id));
-      const hasProject = projects.some(
-        (project) => project.id === projectId && claimsOrganizationIds.has(project.organizationId),
-      );
-      directoryCache.set(cacheKey, {
-        expiresAt: Date.now() + DIRECTORY_CACHE_TTL_MS,
-        hasProject,
-      });
-      return hasProject;
-    },
-  };
+  let projects;
+  try {
+    projects = await authWorker().listProjectsForUser({ userId: userPrincipal.userId });
+  } catch {
+    // Auth worker unreachable is NOT "no membership": deny THIS check without
+    // caching the denial, so the next request retries instead of locking the
+    // user out for the cache window.
+    return false;
+  }
+  // Gate on the organizations already in the principal's claims — the same
+  // scope the pre-service-binding fallback used (it looked up projects per
+  // claims org). This keeps itx access in step with the dashboard's
+  // claims-gated directory reads (getProjectBySlugServerFn): the fallback
+  // recovers projects created in an org the user already holds, without
+  // silently widening access to brand-new org memberships the token has not
+  // caught up to yet.
+  const claimsOrganizationIds = new Set(userPrincipal.organizations.map((org) => org.id));
+  const hasProject = projects.some(
+    (project) => project.id === projectId && claimsOrganizationIds.has(project.organizationId),
+  );
+  directoryCache.set(cacheKey, { expiresAt: Date.now() + DIRECTORY_CACHE_TTL_MS, hasProject });
+  return hasProject;
 }

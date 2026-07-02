@@ -13,7 +13,7 @@
  * prime from another isolate). Hits are written back, and `projects.create`
  * primes the cache eagerly so the post-create navigation never misses.
  */
-import { authWorker } from "./auth/auth-worker-service.ts";
+import { authWorker } from "./env.ts";
 
 export type ProjectDirectoryRecord = {
   id: string;
@@ -60,15 +60,25 @@ export async function readProjectBySlug(
     return cached;
   }
 
-  const lookup = await lookupAuthWorker(slug);
-  if (!lookup.ok) {
+  let fetched;
+  try {
+    fetched = await authWorker().getProjectBySlug({ projectSlug: slug });
+  } catch {
     // Auth worker unreachable is NOT "no such project": don't memoize the
     // failure, so the next request retries instead of 404ing for 15s.
     return null;
   }
-  memoize(slug, lookup.record);
-  if (lookup.record) await writeThrough(directory, lookup.record);
-  return lookup.record;
+  const record: ProjectDirectoryRecord | null = fetched
+    ? {
+        id: fetched.id,
+        slug: fetched.slug,
+        organizationId: fetched.organizationId,
+        name: fetched.name,
+      }
+    : null;
+  memoize(slug, record);
+  if (record) await writeThrough(directory, record);
+  return record;
 }
 
 /** Fast existence/metadata check by project id (KV only — no auth fallback:
@@ -105,26 +115,6 @@ async function writeThrough(directory: KVNamespace, record: ProjectDirectoryReco
     directory.put(slugKey(record.slug), body),
     directory.put(projectKey(record.id), body),
   ]);
-}
-
-async function lookupAuthWorker(
-  slug: string,
-): Promise<{ ok: true; record: ProjectDirectoryRecord | null } | { ok: false }> {
-  try {
-    const record = await authWorker().getProjectBySlug({ projectSlug: slug });
-    if (!record) return { ok: true, record: null };
-    return {
-      ok: true,
-      record: {
-        id: record.id,
-        slug: record.slug,
-        organizationId: record.organizationId ?? null,
-        name: record.name,
-      },
-    };
-  } catch {
-    return { ok: false };
-  }
 }
 
 /**

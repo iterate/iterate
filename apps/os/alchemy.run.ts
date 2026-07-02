@@ -36,6 +36,13 @@ import type { StatefulWorkerDurableObject } from "./src/domains/workers/stateful
 const resolvedAuthIssuer =
   process.env.APP_CONFIG_ITERATE_AUTH__ISSUER ?? process.env.ITERATE_OAUTH_ISSUER;
 
+// A loopback issuer means apps/auth runs locally (`pnpm --dir apps/auth dev`).
+// WHATWG `URL.hostname` returns IPv6 with brackets, so the loopback set uses
+// `[::1]`, not `::1`.
+function isLoopbackHostname(hostname: string) {
+  return ["localhost", "127.0.0.1", "[::1]"].includes(hostname);
+}
+
 // A static JWKS lets the worker verify auth JWTs without any runtime
 // roundtrip to the auth worker, including on cold isolate starts. Fetch it
 // from the issuer at deploy time; an explicit env value overrides. A static
@@ -74,7 +81,7 @@ async function resolveStaticAuthJwks(issuer: string | undefined) {
   } catch {
     return undefined;
   }
-  const issuerIsLoopback = ["localhost", "127.0.0.1", "::1"].includes(issuerUrl.hostname);
+  const issuerIsLoopback = isLoopbackHostname(issuerUrl.hostname);
 
   const explicit = process.env.APP_CONFIG_ITERATE_AUTH__JWKS ?? process.env.ITERATE_AUTH_JWKS;
   if (explicit && !issuerIsLoopback) return withForgePublicKey(explicit);
@@ -304,7 +311,7 @@ const statefulWorker = DurableObjectNamespace<StatefulWorkerDurableObject>("work
 // auth app first.
 const authWorkerName = slugify(`auth-${ctx.app.stage.startsWith("dev") ? "dev" : ctx.app.stage}`);
 const authIssuerIsLoopback = resolvedAuthIssuer
-  ? ["localhost", "127.0.0.1", "::1", "[::1]"].includes(new URL(resolvedAuthIssuer).hostname)
+  ? isLoopbackHostname(new URL(resolvedAuthIssuer).hostname)
   : false;
 // Fully-local dev has no auth worker inside vite's workerd, so the binding is
 // a REMOTE binding: code still calls `env.AUTH.method()`, but wrangler/vite
@@ -314,7 +321,10 @@ const authIssuerIsLoopback = resolvedAuthIssuer
 // apps/auth dev`) — then the local dev registry resolves the name instead.
 const authWorkerBinding = {
   ...WorkerRef<AuthWorkerEntrypoint>({ service: authWorkerName }),
-  ...(ctx.app.local && !authIssuerIsLoopback ? { dev: { remote: true } } : {}),
+  // Remote binding in fully-local dev (proxied to the deployed auth worker);
+  // a loopback issuer means apps/auth runs locally and the dev registry
+  // resolves the name.
+  dev: { remote: ctx.app.local && !authIssuerIsLoopback },
 };
 
 // ---- Fresh-stage bootstrap --------------------------------------------------

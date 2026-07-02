@@ -18,9 +18,9 @@ import {
   deleteOAuthProjectSelectionsByUserId,
   getSessionActiveOrganizationIdById,
   listOrganizationsForUser,
-  listProjectsForUser,
 } from "./db/queries/.generated/index.ts";
 import { db } from "./db/index.ts";
+import { listProjectsForUser } from "./project-directory.ts";
 import {
   buildAugmentedScopeClaims,
   buildOAuthProjectSelectionReferenceId,
@@ -75,6 +75,9 @@ async function listOrganizationClaims(
   }));
 }
 
+// Shares project-directory's listProjectsForUser — the same function the OS
+// stale-claims fallback calls over the AUTH binding — so token claims and the
+// fallback can never disagree.
 async function listProjectClaims(
   user: Record<string, unknown> | null | undefined,
   selectedProjectIds: string[] | null,
@@ -83,14 +86,10 @@ async function listProjectClaims(
   if (!userId) return [];
 
   const selectedProjectIdSet = selectedProjectIds ? new Set(selectedProjectIds) : null;
-  const projects = await listProjectsForUser(db, { userId });
-  return projects
-    .filter((project) => !selectedProjectIdSet || selectedProjectIdSet.has(project.id))
-    .map((project) => ({
-      id: project.id,
-      slug: project.slug,
-      organizationId: project.organizationId,
-    }));
+  const projects = await listProjectsForUser({ userId });
+  return projects.filter(
+    (project) => !selectedProjectIdSet || selectedProjectIdSet.has(project.id),
+  );
 }
 
 // Structurally typed (not CloudflareEnv) because auth.schema-only.ts calls
