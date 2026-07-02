@@ -1,5 +1,5 @@
 import { admin } from "better-auth/plugins/admin";
-import { bearer, deviceAuthorization, emailOTP, jwt } from "better-auth/plugins";
+import { bearer, deviceAuthorization, emailOTP, jwt, oneTimeToken } from "better-auth/plugins";
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { organization } from "better-auth/plugins/organization";
 import {
@@ -10,20 +10,17 @@ import {
   ITERATE_IS_ADMIN_CLAIM,
   ITERATE_ORGANIZATIONS_CLAIM,
   ITERATE_ROLE_CLAIM,
-  type IterateAuthOrganizationClaim,
-  type IterateAuthProjectClaim,
 } from "@iterate-com/shared/auth-claims";
 import { betterAuth } from "better-auth";
 import {
-  deleteOAuthProjectSelectionsByUserId,
   getSessionActiveOrganizationIdById,
   listOrganizationsForUser,
 } from "./db/queries/.generated/index.ts";
 import { db } from "./db/index.ts";
-import { listProjectsForUser } from "./project-directory.ts";
 import {
-  buildAugmentedScopeClaims,
+  buildAccessTokenGrantClaims,
   buildOAuthProjectSelectionReferenceId,
+  listOrganizationClaimsForUser,
   parseOAuthProjectSelectionReferenceId,
   resolveStoredProjectSelection,
 } from "./oauth-project-selection.ts";
@@ -59,47 +56,12 @@ async function getSessionActiveOrganizationId(jwt: Record<string, unknown> | nul
   return authSession?.activeOrganizationId ?? null;
 }
 
-async function listOrganizationClaims(
-  user: Record<string, unknown> | null | undefined,
-): Promise<IterateAuthOrganizationClaim[]> {
-  const userId = typeof user?.id === "string" ? user.id : null;
-  if (!userId) return [];
-
-  const organizations = await listOrganizationsForUser(db, { userId });
-  return organizations.map((organization) => ({
-    id: organization.id,
-    name: organization.name,
-    slug: organization.slug,
-    role:
-      organization.role === "owner" || organization.role === "admin" ? organization.role : "member",
-  }));
+// better-auth hands its user object to plugin hooks as a loose record.
+function userIdOf(user: Record<string, unknown> | null | undefined): string | null {
+  return typeof user?.id === "string" ? user.id : null;
 }
 
-// Shares project-directory's listProjectsForUser — the same function the OS
-// stale-claims fallback calls over the AUTH binding — so token claims and the
-// fallback can never disagree.
-async function listProjectClaims(
-  user: Record<string, unknown> | null | undefined,
-  selectedProjectIds: string[] | null,
-): Promise<IterateAuthProjectClaim[]> {
-  const userId = typeof user?.id === "string" ? user.id : null;
-  if (!userId) return [];
-
-  const selectedProjectIdSet = selectedProjectIds ? new Set(selectedProjectIds) : null;
-  const projects = await listProjectsForUser({ userId });
-  return projects.filter(
-    (project) => !selectedProjectIdSet || selectedProjectIdSet.has(project.id),
-  );
-}
-
-// Structurally typed (not CloudflareEnv) because auth.schema-only.ts calls
-// this with `{}` from the better-auth schema-generation CLI, outside any
-// worker environment.
-export function getAuthPlugins(env: {
-  VITE_ENABLE_EMAIL_OTP_SIGNIN?: string;
-  RESEND_BOT_API_KEY?: string;
-  RESEND_BOT_DOMAIN?: string;
-}) {
+export function getAuthPlugins(env: Record<string, unknown>) {
   const osResourceBases = getOsResourceBases();
   const validAudiences = [...osResourceBases, ...getOsMcpResourceBases()];
 
@@ -115,6 +77,11 @@ export function getAuthPlugins(env: {
       userCodeLength: 8,
       deviceCodeLength: 40,
       validateClient: async (clientId) => clientId === "iterate-cli",
+    }),
+    oneTimeToken({
+      disableClientRequest: true,
+      storeToken: "plain",
+      disableSetSessionCookie: true,
     }),
     ...(env.VITE_ENABLE_EMAIL_OTP_SIGNIN === "true"
       ? [
@@ -166,16 +133,17 @@ export function getAuthPlugins(env: {
             }
           }
 
-          if (!scopes.includes(ITERATE_PROJECT_SELECTION_SCOPE)) {
-            return false;
-          }
-
-          const selection = await resolveStoredProjectSelection({ userId: session?.userId });
-
-          return !selection;
+          // Always collect a fresh selection: better-auth consults
+          // shouldRedirect only on a flow's initial /oauth2/authorize (the
+          // continue/consent re-entries skip it via the postLogin flag), so
+          // this shows /project-access exactly once per authorization — and
+          // guarantees the selection consentReferenceId consumes is the one
+          // THIS flow just collected, never a leftover from another client
+          // in the same browser session.
+          return scopes.includes(ITERATE_PROJECT_SELECTION_SCOPE);
         },
         consentReferenceId: async ({ session }) => {
-          const selection = await resolveStoredProjectSelection({ userId: session?.userId });
+          const selection = await resolveStoredProjectSelection({ sessionId: session?.id });
           if (!selection || !session?.userId) {
             return undefined;
           }
@@ -196,32 +164,23 @@ export function getAuthPlugins(env: {
       allowDynamicClientRegistration: true,
       allowUnauthenticatedClientRegistration: true,
       customAccessTokenClaims: async ({ user, referenceId, scopes }) => {
-        const selection = parseOAuthProjectSelectionReferenceId(referenceId);
-        if (selection?.userId) {
-          await deleteOAuthProjectSelectionsByUserId(db, { userId: selection.userId });
-        }
-
-        const isProjectScopedToken = scopes.includes(ITERATE_PROJECT_SELECTION_SCOPE);
-        const selectedProjectIds = isProjectScopedToken ? (selection?.projectIds ?? []) : null;
-        const [organizations, projects] = await Promise.all([
-          listOrganizationClaims(user),
-          listProjectClaims(user, selectedProjectIds),
-        ]);
+        const grants = await buildAccessTokenGrantClaims({
+          userId: userIdOf(user),
+          requestedScopes: scopes,
+          selection: parseOAuthProjectSelectionReferenceId(referenceId),
+        });
 
         return {
           ...buildIterateTokenClaims(user),
-          scopes: buildAugmentedScopeClaims({
-            requestedScopes: scopes,
-            projectIds: isProjectScopedToken ? projects.map((project) => project.id) : [],
-          }),
-          [ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM]: organizations,
-          [ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM]: projects,
+          scopes: grants.scopes,
+          [ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM]: grants.organizations,
+          [ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM]: grants.projects,
         };
       },
       customIdTokenClaims: ({ user }) => buildIterateTokenClaims(user),
       customUserInfoClaims: async ({ user, jwt }) => {
         const [organizationClaims, activeOrganizationId] = await Promise.all([
-          listOrganizationClaims(user),
+          listOrganizationClaimsForUser(userIdOf(user)),
           getSessionActiveOrganizationId(jwt as Record<string, unknown> | null | undefined),
         ]);
         return {

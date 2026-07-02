@@ -185,10 +185,10 @@ the local dev registry. This required a small extension to the repo's alchemy
 patch (`patches/alchemy@0.83.3.patch`) so generated wrangler configs emit
 `remote: true` for a service binding carrying `dev.remote`.
 
-The OS↔auth code lives in `apps/os/src/auth/auth-worker-service.ts` (the
-`authWorker()` binding accessor) and `apps/os/src/auth/iterate-auth-client.ts`
-(the OIDC relying-party wiring). OS's own README has more on how the auth worker
-sits in its architecture.
+The OS↔auth code lives in `apps/os/src/env.ts` (the `authWorker()` binding
+accessor, `() => env.AUTH`) and `apps/os/src/auth/iterate-auth-client.ts` (the
+OIDC relying-party wiring). OS's own README has more on how the auth worker sits
+in its architecture.
 
 ## Trust model
 

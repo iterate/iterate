@@ -15,7 +15,8 @@ import { onError, ORPCError } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/fetch";
 import type {
   AuthWorkerRpc,
-  CreateProjectForOrganizationInput,
+  InternalCreateProjectForOrganizationInput,
+  InternalIntrospectOAuthAccessTokenInput,
   ProjectInput,
 } from "@iterate-com/auth-contract";
 import { auth, getAllowedBrowserOrigins } from "./auth.ts";
@@ -26,6 +27,7 @@ import { appendSetCookieHeaders, resolveAuthLogoutReturnTo } from "./logout.ts";
 import {
   createProjectForOrganization,
   getProjectBySlug,
+  introspectAccessToken,
   listProjectsForUser,
   mintProjectId,
 } from "./project-directory.ts";
@@ -53,7 +55,7 @@ export default class AuthWorker extends WorkerEntrypoint<CloudflareEnv> implemen
     return app.fetch(request, this.env, this.ctx);
   }
 
-  createProjectForOrganization(input: CreateProjectForOrganizationInput) {
+  createProjectForOrganization(input: InternalCreateProjectForOrganizationInput) {
     return createProjectForOrganization(input);
   }
 
@@ -67,6 +69,10 @@ export default class AuthWorker extends WorkerEntrypoint<CloudflareEnv> implemen
 
   mintProjectId() {
     return mintProjectId();
+  }
+
+  introspectAccessToken(input: InternalIntrospectOAuthAccessTokenInput) {
+    return introspectAccessToken(input);
   }
 }
 

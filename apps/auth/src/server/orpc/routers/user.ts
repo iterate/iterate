@@ -1,11 +1,25 @@
 import { ORPCError } from "@orpc/server";
 import { os, protectedMiddleware } from "../orpc.ts";
 import {
+  deleteStaleOAuthProjectSelections,
   listOrganizationsForUser,
   listProjectsByOrganizationId,
   upsertOAuthProjectSelectionReturning,
 } from "../../db/queries/index.ts";
-import { toMembershipRole } from "../../records.ts";
+import { OAUTH_PROJECT_SELECTION_MAX_AGE_MS } from "../../oauth-project-selection.ts";
+import { toMembershipRole, toUserRecord } from "./_shared.ts";
+
+const me = os.user.me.handler(async ({ context }) => {
+  if (context.session) {
+    return toUserRecord(context.session.user);
+  }
+
+  if (context.projectIngressUser) {
+    return toUserRecord(context.projectIngressUser);
+  }
+
+  throw new ORPCError("UNAUTHORIZED", { message: "Not authorized" });
+});
 
 const myOrganizations = os.user.myOrganizations
   .use(protectedMiddleware)
@@ -22,10 +36,6 @@ const myOrganizations = os.user.myOrganizations
     }));
   });
 
-// Step 1 of the OAuth project-selection handoff — see the walkthrough in
-// ../../oauth-project-selection.ts. The /project-access page stores the
-// user's chosen project ids here; token minting later narrows the token to
-// them and deletes the row.
 const storeOAuthProjectSelection = os.user.storeOAuthProjectSelection
   .use(protectedMiddleware)
   .handler(async ({ context, input }) => {
@@ -53,6 +63,11 @@ const storeOAuthProjectSelection = os.user.storeOAuthProjectSelection
     }
 
     const now = Date.now();
+    // Selections outside the lookup freshness window are dead rows; sweep
+    // them opportunistically since nothing else consumes them.
+    await deleteStaleOAuthProjectSelections(context.db, {
+      maxUpdatedAt: now - OAUTH_PROJECT_SELECTION_MAX_AGE_MS,
+    });
     await upsertOAuthProjectSelectionReturning(context.db, {
       sessionId: context.session.session.id,
       clientId: input.clientId,
@@ -66,6 +81,7 @@ const storeOAuthProjectSelection = os.user.storeOAuthProjectSelection
   });
 
 export const user = os.user.router({
+  me,
   myOrganizations,
   storeOAuthProjectSelection,
 });
