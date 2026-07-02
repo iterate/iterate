@@ -1,7 +1,7 @@
 // The /api/integrations/* HTTP surface, mounted under the Start catch-all
 // route (src/routes/api.$.ts) in the app worker.
 //
-// Resurrected from legacy-quarantine/domains/integration-api.ts. The app
+// Resurrected from the pre-migration integration-api.ts (git history). The app
 // worker has no engine bindings, so every engine effect goes through a
 // one-shot pipelined capnweb HTTP batch against this deployment's own
 // /api/itx surface using the admin API secret — the same request-scoped

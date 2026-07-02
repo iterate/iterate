@@ -1,6 +1,6 @@
 // Contract for the "slack" webhook-router processor mounted on the per-project
 // `/integrations/slack` stream. Rewritten new-style for the next engine from
-// the legacy-quarantine reference (legacy-quarantine/domains/slack/).
+// the pre-migration slack domain (git history).
 
 import { z } from "zod";
 import { defineProcessorContract } from "../streams/stream-processor.ts";

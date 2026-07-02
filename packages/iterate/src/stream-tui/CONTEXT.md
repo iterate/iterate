@@ -66,4 +66,4 @@ _Avoid_: tmux pane, shell session
 - In `pilotty`, flags go before positionals: `pilotty spawn --name stream-tui
 node packages/iterate/bin/iterate.js chat ...`.
 - The legacy stream-browser TUI is parked in
-  `packages/iterate/test-quarantine/stream-tui-legacy/` — reference only.
+  git history (the pre-itx-v4 stream-browser TUI) — reference only.

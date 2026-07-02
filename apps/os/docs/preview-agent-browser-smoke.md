@@ -10,8 +10,8 @@ It verifies the preview worker, unauthenticated redirect behavior, admin-token p
 MCP and itx metadata wiring.
 
 The engine e2e suites (`apps/os/e2e/engine/`) run through the same `pnpm e2e`
-config. Slack coverage is parked in `apps/os/test-quarantine/` until the
-Slack integration returns (itx-v4 migration Phase 12, in flight).
+config. Slack coverage lives in `apps/os/e2e/engine/slack-agent.e2e.test.ts` (synthetic
+signed-webhook smoke through the integrations domain).
 
 ## Authenticated Browser Smoke
 

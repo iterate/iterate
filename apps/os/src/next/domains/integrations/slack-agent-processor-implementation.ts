@@ -1,6 +1,6 @@
 // Implements the "slack-agent" processor on the next engine.
 //
-// Behavioral reference: legacy-quarantine/domains/slack/stream-processors/slack-agent/.
+// Behavioral reference: the pre-migration slack-agent processor (git history).
 // Emitted event types, payloads, and idempotency keys are stable wire formats.
 //
 // Side-effect policy:

@@ -14,9 +14,6 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       // intentionally not `.test.ts`, never imported by active code). See
       // e2e/AGENTS.md.
       "e2e/**/*.orpc-legacy.ts",
-      // Pre-migration source held for Phase 12; excluded everywhere.
-      "legacy-quarantine/**",
-      "test-quarantine/**",
     ],
     entry: [
       ...(base.entry ?? []).filter(

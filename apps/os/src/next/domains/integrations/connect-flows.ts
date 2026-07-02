@@ -1,5 +1,5 @@
 // Engine-side OAuth connect flows for Slack and Google, resurrected from the
-// legacy integration plumbing (legacy-quarantine/domains/integration-api.ts +
+// legacy integration plumbing (pre-migration integration-api.ts, git history, +
 // the pre-purge secrets domain) and re-homed onto the next engine:
 //
 //   - OAuth state:    stateless HMAC-signed token (oauth-state.ts), no D1.

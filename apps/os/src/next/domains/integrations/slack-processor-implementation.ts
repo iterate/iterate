@@ -1,6 +1,6 @@
 // Implements the "slack" webhook-router processor on the next engine.
 //
-// Behavioral reference: legacy-quarantine/domains/slack/stream-processors/slack/.
+// Behavioral reference: the pre-migration slack processor (git history).
 // Emitted event types, payloads, and idempotency keys are stable wire formats.
 
 import { z } from "zod";

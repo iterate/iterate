@@ -1,6 +1,6 @@
 // Shared constants + tiny readers for the integrations domain (Phase 12
 // resurrection of the pre-migration slack/google plumbing). Cruft acceptable
-// here by design — behavior mirrors the legacy-quarantine reference.
+// here by design — behavior mirrors the pre-migration reference (git history).
 
 /** Per-project stream that receives raw Slack webhooks + connect/disconnect facts. */
 export const SLACK_INTEGRATION_STREAM_PATH = "/integrations/slack";

@@ -22,7 +22,8 @@ It combines:
   [docs/worker-topology.md](./docs/worker-topology.md).
 
 Slack and Google integrations are being rebuilt on the engine (in flight);
-their pre-migration source is parked in `legacy-quarantine/`.
+their pre-migration source was held in a quarantine folder during the
+migration (deleted once the integrations landed; git history has it).
 
 ## How To Use It
 
@@ -182,8 +183,6 @@ The script pattern is documented in
 - `src/routes/_app` — authenticated app routes; `src/start.ts` installs the
   auth-worker request middleware.
 - `alchemy.run.ts` — the deployment: all ten workers, DO namespaces, routes.
-- `legacy-quarantine/`, `test-quarantine/` — parked pre-migration source and
-  suites, excluded from builds/tests; each has a README cataloguing the way
   back. Do not import from them.
 
 ## Read Next

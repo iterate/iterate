@@ -1,4 +1,4 @@
-// Gmail REST proxy, ported from legacy-quarantine/domains/google/entrypoints/
+// Gmail REST proxy, ported from the pre-migration google entrypoints'
 // gmail-capability.ts. The access token comes from google-tokens.ts (fresh,
 // refreshed engine-side).
 

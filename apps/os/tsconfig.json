@@ -2,8 +2,6 @@
   "include": ["**/*.ts", "**/*.tsx", "**/*.d.ts"],
   "exclude": [
     "alchemy.run.ts",
-    "legacy-quarantine/**",
-    "test-quarantine/**",
     "tmp/**",
     "iterate-config-repo/**",
     "../../packages/shared/src/alchemy/**"
