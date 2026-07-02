@@ -242,22 +242,30 @@ function isBotMessage(slackEvent: Record<string, unknown>): boolean {
 // Returns true only when the message came from our own bot. Slack's
 // `authorizations` payload often carries the authorized bot `user_id` without a
 // `bot_id`, so fall back to comparing the message's bot user identity before
-// considering other bot messages safe to forward.
+// considering other bot messages safe to forward. If Slack gives us no
+// comparable identity, treat the bot message as our own to avoid self-wake.
 function isOwnBotMessage(
   slackEvent: Record<string, unknown>,
   identity: { botBotId: string | undefined; botUserId: string | undefined },
 ): boolean {
   if (!isBotMessage(slackEvent)) return false;
 
+  let comparedIdentity = false;
   const msgBotId = readStringField(slackEvent, "bot_id");
-  if (identity.botBotId != null && msgBotId != null) return msgBotId === identity.botBotId;
+  if (identity.botBotId != null && msgBotId != null) {
+    comparedIdentity = true;
+    if (msgBotId === identity.botBotId) return true;
+  }
 
   const msgUserId =
     readStringField(slackEvent, "user") ??
     readStringField(readRecordField(slackEvent, "bot_profile"), "user_id");
-  if (identity.botUserId != null && msgUserId != null) return msgUserId === identity.botUserId;
+  if (identity.botUserId != null && msgUserId != null) {
+    comparedIdentity = true;
+    if (msgUserId === identity.botUserId) return true;
+  }
 
-  return identity.botBotId == null && identity.botUserId == null;
+  return !comparedIdentity;
 }
 
 /**

@@ -775,6 +775,36 @@ describe("SlackAgentProcessor", () => {
     ).toHaveLength(0);
     expect(slackCalls).toHaveLength(0);
   });
+
+  it("ignores bot messages when Slack gives no comparable bot identity", async () => {
+    const { cursors, processor, slackCalls, stream } = setup();
+
+    const payload = humanMessageWebhookPayload({ text: "<@UBOT> !debug" });
+    delete (payload.body.authorizations[0] as Record<string, unknown>).bot_id;
+    const event = payload.body.event as Record<string, unknown>;
+    event.subtype = "bot_message";
+    event.bot_id = "BBOT";
+    delete event.user;
+    delete event.bot_profile;
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload,
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    expect(
+      stream.events.filter((streamEvent) => {
+        return streamEvent.type === "events.iterate.com/itx/script-execution-requested";
+      }),
+    ).toHaveLength(0);
+    expect(
+      stream.events.filter(
+        (streamEvent) => streamEvent.type === "events.iterate.com/agent/input-added",
+      ),
+    ).toHaveLength(0);
+    expect(slackCalls).toHaveLength(0);
+  });
 });
 
 describe("eyesReactionTargetFromWebhookPayload", () => {
