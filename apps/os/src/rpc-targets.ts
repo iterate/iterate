@@ -1686,9 +1686,13 @@ async function executeOperation(args: {
   if (!operation.requestBody) {
     const leftover = Object.keys(input);
     if (leftover.length > 0) {
+      const valid = operation.parameters
+        .filter((parameter) => parameter.in === "path" || parameter.in === "query")
+        .map((parameter) => parameter.name);
       throw new Error(
         `Operation "${operation.operationId}" has no request body and got unknown input ` +
-          `key${leftover.length > 1 ? "s" : ""} ${leftover.map((key) => JSON.stringify(key)).join(", ")}.`,
+          `key${leftover.length > 1 ? "s" : ""} ${leftover.map((key) => JSON.stringify(key)).join(", ")} — ` +
+          (valid.length > 0 ? `valid params: ${valid.join(", ")}.` : `it takes no parameters.`),
       );
     }
   }

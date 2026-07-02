@@ -609,6 +609,12 @@ describe("minimal itx v4", () => {
         }),
       ).resolves.toEqual([{ id: 1, name: "sold-pet", status: "sold" }]);
 
+      // Refusals are self-describing: an unknown input key names the valid params.
+      await expect(
+        // @ts-expect-error - OpenAPI operations are derived at runtime.
+        direct.findPetsByStatus({ status: "available", bogus: true }),
+      ).rejects.toThrow(/unknown input key "bogus" — valid params: status/);
+
       const instructions = "Tiny Pets: call operationIds directly through the mounted capability.";
       const types =
         "export type Capability = { findPetsByStatus(input: { status: string }): Promise<unknown> };";
