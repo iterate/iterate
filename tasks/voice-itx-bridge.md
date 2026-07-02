@@ -39,7 +39,7 @@ _These are assumptions made while fleshing out an underspecified task._
 3. **Forwarding is client-orchestrated, not model-initiated.** The bridge
    listens for the user-turn-transcription-completed realtime event and always
    forwards the transcript to the itx agent via `agent.sendMessage()`. An
-   `ask_assistant` function tool is *also* registered so that if the voice
+   `ask_assistant` function tool is _also_ registered so that if the voice
    model does call it, the call completes cleanly (deduped against the
    automatic forward — the tool call gets a `function_call_output` ack
    immediately; the real answer arrives later like any other worker reply).
@@ -83,7 +83,7 @@ _These are assumptions made while fleshing out an underspecified task._
 
 ## Open questions for Misha
 
-- Should the worker agent's *conversation memory* be the voice transcript
+- Should the worker agent's _conversation memory_ be the voice transcript
   verbatim, or only the forwarded turns? (Currently: only forwarded turns —
   the agent keeps its own history because it's a stream; the voice side keeps
   its own. "Full conversation history" forwarding can be added by prefixing

@@ -7,6 +7,7 @@ import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from
 
 export * as dev from "./dev.ts";
 export * as itx from "./itx.ts";
+export * as voice from "./voice/cli.ts";
 
 const DEFAULT_MCP_BASE_URL = "https://mcp.iterate.com";
 const LOCAL_DEVELOPMENT_MCP_PATH = "/api/mcp";
