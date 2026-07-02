@@ -73,7 +73,10 @@ export const AppConfig = z.object({
       clientId: publicValue(z.string().trim().min(1)),
       clientSecret: redacted(z.string().trim().min(1)),
       jwks: JSONWebKeySet.optional(),
-      serviceToken: redacted(z.string().trim().min(1)).optional(),
+      // NOTE: there is deliberately no serviceToken here anymore. Runtime
+      // OS→auth calls authenticate by holding the AUTH service binding
+      // (src/auth/auth-worker-service.ts); only deploy-time Node scripts
+      // still use the shared secret, and they read it from plain env vars.
       resource: publicValue(z.url()).optional(),
       emailOtpEnabled: publicValue(z.boolean().default(false)),
     })

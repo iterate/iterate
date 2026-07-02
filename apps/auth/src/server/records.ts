@@ -1,37 +1,14 @@
 import { OrganizationRole } from "@iterate-com/auth-contract";
-import { parseProjectMetadata, parseTimestampMs } from "../../db/helpers.ts";
-import type {
-  getProjectBySlug,
-  insertProjectReturning,
-  updateProjectReturning,
-} from "../../db/queries/index.ts";
+import { parseProjectMetadata, parseTimestampMs } from "./db/helpers.ts";
+import type { getProjectBySlug, insertProjectReturning } from "./db/queries/index.ts";
+
+// DB row -> wire record mappers shared by the oRPC routers and the Workers
+// RPC surface (project-directory.ts). Rows come back from sqlfu in snake_case
+// or camelCase depending on the query's SELECT aliases; records are always
+// the camelCase shapes declared in @iterate-com/auth-contract.
 
 export function generateId(prefix: string) {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "")}`;
-}
-
-export function toUserRecord(user: {
-  id: string;
-  name: string;
-  email: string;
-  image?: string | null;
-  role?: string | null;
-}) {
-  return {
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    image: user.image ?? null,
-    role: user.role ?? null,
-  };
-}
-
-export function toOrganizationRecord(organization: { id: string; name: string; slug: string }) {
-  return {
-    id: organization.id,
-    name: organization.name,
-    slug: organization.slug,
-  };
 }
 
 export function toProjectRecord(project: {
@@ -56,11 +33,7 @@ export function toMembershipRole(role: string | null | undefined): OrganizationR
   return OrganizationRole.parse(role ?? "member");
 }
 
-type ReturnedProjectRow = (
-  | getProjectBySlug.Result
-  | insertProjectReturning.Result
-  | updateProjectReturning.Result
-) &
+type ReturnedProjectRow = (getProjectBySlug.Result | insertProjectReturning.Result) &
   Partial<{ organizationId: string; archivedAt?: number }>;
 
 export function toProjectRecordFromReturnedRow(project: ReturnedProjectRow) {

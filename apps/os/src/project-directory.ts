@@ -1,7 +1,7 @@
 /**
  * Project directory reads: slug -> project id, and small metadata records by
- * id. The auth worker is the source of truth (internal.project.bySlug, a
- * trusted service-token lookup); a KV cache in front of it makes the positive
+ * id. The auth worker is the source of truth (`getProjectBySlug` over the
+ * AUTH service binding); a KV cache in front of it makes the positive
  * case fast — ingress resolves EVERY project-host request through this, and
  * server-side reads use it for the stale-claims window right after create.
  *
@@ -13,8 +13,7 @@
  * prime from another isolate). Hits are written back, and `projects.create`
  * primes the cache eagerly so the post-create navigation never misses.
  */
-import { createAuthWorkerServiceClient } from "./auth/auth-worker-service.ts";
-import type { AppConfig } from "./config.ts";
+import { authWorker } from "./auth/auth-worker-service.ts";
 
 export type ProjectDirectoryRecord = {
   id: string;
@@ -37,18 +36,16 @@ function projectKey(projectId: string) {
 
 /** Resolve a slug (or a `prj_` id, passed through) to a project id. */
 export async function resolveProjectIdBySlug(input: {
-  config: AppConfig;
   directory: KVNamespace;
   identifier: string;
 }): Promise<string | null> {
   if (input.identifier.startsWith("prj_")) return input.identifier;
-  const record = await readProjectBySlug(input.config, input.directory, input.identifier);
+  const record = await readProjectBySlug(input.directory, input.identifier);
   return record?.id ?? null;
 }
 
 /** Directory record for a slug, cache-through. Null when no project has it. */
 export async function readProjectBySlug(
-  config: AppConfig,
   directory: KVNamespace,
   slug: string,
 ): Promise<ProjectDirectoryRecord | null> {
@@ -63,7 +60,7 @@ export async function readProjectBySlug(
     return cached;
   }
 
-  const lookup = await lookupAuthWorker(config, slug);
+  const lookup = await lookupAuthWorker(slug);
   if (!lookup.ok) {
     // Auth worker unreachable is NOT "no such project": don't memoize the
     // failure, so the next request retries instead of 404ing for 15s.
@@ -111,13 +108,10 @@ async function writeThrough(directory: KVNamespace, record: ProjectDirectoryReco
 }
 
 async function lookupAuthWorker(
-  config: AppConfig,
   slug: string,
 ): Promise<{ ok: true; record: ProjectDirectoryRecord | null } | { ok: false }> {
   try {
-    const record = await createAuthWorkerServiceClient({ config }).internal.project.bySlug({
-      projectSlug: slug,
-    });
+    const record = await authWorker().getProjectBySlug({ projectSlug: slug });
     if (!record) return { ok: true, record: null };
     return {
       ok: true,

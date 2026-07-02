@@ -5,19 +5,7 @@ import {
   listProjectsByOrganizationId,
   upsertOAuthProjectSelectionReturning,
 } from "../../db/queries/index.ts";
-import { toMembershipRole, toUserRecord } from "./_shared.ts";
-
-const me = os.user.me.handler(async ({ context }) => {
-  if (context.session) {
-    return toUserRecord(context.session.user);
-  }
-
-  if (context.projectIngressUser) {
-    return toUserRecord(context.projectIngressUser);
-  }
-
-  throw new ORPCError("UNAUTHORIZED", { message: "Not authorized" });
-});
+import { toMembershipRole } from "../../records.ts";
 
 const myOrganizations = os.user.myOrganizations
   .use(protectedMiddleware)
@@ -34,6 +22,10 @@ const myOrganizations = os.user.myOrganizations
     }));
   });
 
+// Step 1 of the OAuth project-selection handoff — see the walkthrough in
+// ../../oauth-project-selection.ts. The /project-access page stores the
+// user's chosen project ids here; token minting later narrows the token to
+// them and deletes the row.
 const storeOAuthProjectSelection = os.user.storeOAuthProjectSelection
   .use(protectedMiddleware)
   .handler(async ({ context, input }) => {
@@ -74,7 +66,6 @@ const storeOAuthProjectSelection = os.user.storeOAuthProjectSelection
   });
 
 export const user = os.user.router({
-  me,
   myOrganizations,
   storeOAuthProjectSelection,
 });

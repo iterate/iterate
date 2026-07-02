@@ -3,7 +3,7 @@ import { z } from "zod/v4";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { useMutation } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { toast } from "@iterate-com/ui/components/sonner";
 import { authClient } from "../utils/auth-client.ts";
 
 const ensureAuthForDevice = createServerFn({ method: "GET" })

@@ -3,20 +3,32 @@ import { RPCLink } from "@orpc/client/fetch";
 import { oc, type ContractRouterClient } from "@orpc/contract";
 import { z } from "zod";
 
+// ---------------------------------------------------------------------------
+// The auth worker exposes THREE surfaces to other code; this package is the
+// shared contract for two of them:
+//
+//  1. `authContract` — the oRPC HTTP API at `/api/orpc/*` on the auth worker's
+//     public hostname. Callers are the auth app's own UI (session cookie), the
+//     `iterate` CLI (bearer token from the device/OAuth flow), and deploy-time
+//     Node scripts (service token) — things that can only speak HTTP.
+//  2. `AuthWorkerRpc` — the Workers RPC methods on the auth worker's default
+//     entrypoint (apps/auth/src/server/worker.ts). OS workers call these over
+//     a Cloudflare service binding instead of the public internet; the
+//     binding itself is the credential, so there is no token header.
+//     https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/rpc/
+//
+// (The third surface — the OIDC/OAuth2 protocol under `/api/auth/*` — is
+// standards-shaped and deliberately NOT modeled here; relying parties use
+// `@iterate-com/auth/server` or plain oauth4webapi against the public
+// hostname.)
+// ---------------------------------------------------------------------------
+
+/** Shared-secret header for deploy-time scripts calling `internal.*` HTTP
+ * procedures. Runtime OS→auth calls use the service binding instead. */
 export const SERVICE_TOKEN_HEADER = "x-iterate-service-token";
-export const AS_USER_HEADER = "x-iterate-as-user";
 
 export const OrganizationRole = z.enum(["member", "admin", "owner"]);
 export type OrganizationRole = z.infer<typeof OrganizationRole>;
-
-export const UserRecord = z.object({
-  id: z.string(),
-  name: z.string(),
-  email: z.string().email(),
-  image: z.string().nullable(),
-  role: z.string().nullable(),
-});
-export type UserRecord = z.infer<typeof UserRecord>;
 
 export const OrganizationRecord = z.object({
   id: z.string(),
@@ -29,27 +41,6 @@ export const OrganizationSummary = OrganizationRecord.extend({
   role: OrganizationRole,
 });
 export type OrganizationSummary = z.infer<typeof OrganizationSummary>;
-
-export const OrganizationMemberRecord = z.object({
-  id: z.string(),
-  userId: z.string(),
-  role: OrganizationRole,
-  user: UserRecord,
-});
-export type OrganizationMemberRecord = z.infer<typeof OrganizationMemberRecord>;
-
-export const OrganizationInviteRecord = z.object({
-  id: z.string(),
-  email: z.string().email(),
-  role: OrganizationRole,
-  organization: OrganizationRecord.optional(),
-  invitedBy: z.object({
-    id: z.string(),
-    name: z.string(),
-    email: z.string().email().optional(),
-  }),
-});
-export type OrganizationInviteRecord = z.infer<typeof OrganizationInviteRecord>;
 
 export const ProjectRecord = z.object({
   id: z.string(),
@@ -91,39 +82,14 @@ export const ProjectInput = z.object({
 });
 export type ProjectInput = z.infer<typeof ProjectInput>;
 
-export const InternalVerifiedUserInput = z.object({
-  email: z.string().email(),
-  name: z.string().min(1),
-  image: z.string().nullable().optional(),
-});
-export type InternalVerifiedUserInput = z.infer<typeof InternalVerifiedUserInput>;
-
-export const InternalCreateOrganizationForUserInput = z.object({
-  userId: z.string(),
-  name: z.string().min(1).max(100),
-  slug: z.string().min(1).max(50).optional(),
-});
-export type InternalCreateOrganizationForUserInput = z.infer<
-  typeof InternalCreateOrganizationForUserInput
->;
-
-export const InternalCreateProjectForOrganizationInput = z.object({
+export const CreateProjectForOrganizationInput = z.object({
   id: CallerManagedProjectId.optional(),
   organizationSlug: z.string().min(1),
   name: z.string().min(1).max(100),
   slug: z.string().min(1).max(50).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
-export type InternalCreateProjectForOrganizationInput = z.infer<
-  typeof InternalCreateProjectForOrganizationInput
->;
-
-export const InternalProjectIngressExchangeInput = z.object({
-  token: z.string().min(1),
-});
-export type InternalProjectIngressExchangeInput = z.infer<
-  typeof InternalProjectIngressExchangeInput
->;
+export type CreateProjectForOrganizationInput = z.infer<typeof CreateProjectForOrganizationInput>;
 
 export const InternalEnsureOAuthClientInput = z.object({
   referenceId: z.string().min(1),
@@ -151,16 +117,53 @@ export const OAuthProjectSelectionInput = z.object({
 });
 export type OAuthProjectSelectionInput = z.infer<typeof OAuthProjectSelectionInput>;
 
+// ---------------------------------------------------------------------------
+// Workers RPC surface (service binding)
+// ---------------------------------------------------------------------------
+
+/** One row of `listProjectsForUser` — the projects a user can reach through
+ * any organization membership. Slimmer than ProjectRecord on purpose: the OS
+ * stale-claims check only needs identity. */
+export const UserProjectRecord = z.object({
+  id: z.string(),
+  slug: z.string(),
+  organizationId: z.string(),
+});
+export type UserProjectRecord = z.infer<typeof UserProjectRecord>;
+
+/**
+ * The auth worker's Workers-RPC methods, implemented on the default
+ * entrypoint in apps/auth/src/server/worker.ts and consumed by OS workers
+ * through the `AUTH` service binding (apps/os/alchemy.run.ts).
+ *
+ * Trust model: a service binding can only be created by a deploy into the
+ * same Cloudflare account, so possession of the binding IS the
+ * authorization — these methods are as trusted as the old
+ * x-iterate-service-token HTTP calls they replace. Callers do their own
+ * user-level authorization (e.g. OS checks org membership from verified JWT
+ * claims before calling createProjectForOrganization).
+ */
+export interface AuthWorkerRpc {
+  /** Create (or re-adopt, see apps/auth project-slugs resolution) a project
+   * owned by an organization. Auth mints the canonical `prj_` id. */
+  createProjectForOrganization(input: CreateProjectForOrganizationInput): Promise<ProjectRecord>;
+  /** Slug -> project lookup for OS ingress and directory reads. Null when no
+   * project has the slug. */
+  getProjectBySlug(input: ProjectInput): Promise<ProjectRecord | null>;
+  /** Every project the user can reach via org membership — OS uses this for
+   * the stale-claims window right after a project is created. */
+  listProjectsForUser(input: { userId: string }): Promise<UserProjectRecord[]>;
+  /** Mint a canonical `prj_` id without creating an auth-side project — for
+   * OS operator/recovery creates with no owning organization. */
+  mintProjectId(): Promise<{ id: string }>;
+}
+
+// ---------------------------------------------------------------------------
+// HTTP oRPC contract (public hostname, /api/orpc/*)
+// ---------------------------------------------------------------------------
+
 export const authContract = oc.router({
   user: {
-    me: oc
-      .route({
-        method: "GET",
-        path: "/user/me",
-        summary: "Get the current authenticated user",
-        tags: ["user"],
-      })
-      .output(UserRecord),
     myOrganizations: oc
       .route({
         method: "GET",
@@ -189,145 +192,11 @@ export const authContract = oc.router({
       })
       .input(z.object({ name: z.string().min(1).max(100) }))
       .output(OrganizationRecord),
-    update: oc
-      .route({
-        method: "POST",
-        path: "/organization/update",
-        summary: "Update an organization",
-        tags: ["organization"],
-      })
-      .input(
-        z.object({
-          ...OrgInput.shape,
-          name: z.string().min(1).max(100),
-        }),
-      )
-      .output(OrganizationRecord),
     delete: oc
       .route({
         method: "POST",
         path: "/organization/delete",
         summary: "Delete an organization",
-        tags: ["organization"],
-      })
-      .input(OrgInput)
-      .output(z.object({ success: z.literal(true) })),
-    bySlug: oc
-      .route({
-        method: "GET",
-        path: "/organization/by-slug",
-        summary: "Get an organization by slug",
-        tags: ["organization"],
-      })
-      .input(OrgInput)
-      .output(OrganizationSummary),
-    members: oc
-      .route({
-        method: "GET",
-        path: "/organization/members",
-        summary: "List members for an organization",
-        tags: ["organization"],
-      })
-      .input(OrgInput)
-      .output(z.array(OrganizationMemberRecord)),
-    updateMemberRole: oc
-      .route({
-        method: "POST",
-        path: "/organization/update-member-role",
-        summary: "Update a member role in an organization",
-        tags: ["organization"],
-      })
-      .input(
-        z.object({
-          ...OrgInput.shape,
-          userId: z.string(),
-          role: OrganizationRole,
-        }),
-      )
-      .output(z.object({ success: z.literal(true) })),
-    removeMember: oc
-      .route({
-        method: "POST",
-        path: "/organization/remove-member",
-        summary: "Remove a member from an organization",
-        tags: ["organization"],
-      })
-      .input(
-        z.object({
-          ...OrgInput.shape,
-          userId: z.string(),
-        }),
-      )
-      .output(z.object({ success: z.literal(true) })),
-    createInvite: oc
-      .route({
-        method: "POST",
-        path: "/organization/create-invite",
-        summary: "Invite a user to an organization",
-        tags: ["organization"],
-      })
-      .input(
-        z.object({
-          ...OrgInput.shape,
-          email: z.string().email(),
-          role: OrganizationRole.optional(),
-        }),
-      )
-      .output(OrganizationInviteRecord),
-    listInvites: oc
-      .route({
-        method: "GET",
-        path: "/organization/list-invites",
-        summary: "List pending invites for an organization",
-        tags: ["organization"],
-      })
-      .input(OrgInput)
-      .output(z.array(OrganizationInviteRecord)),
-    cancelInvite: oc
-      .route({
-        method: "POST",
-        path: "/organization/cancel-invite",
-        summary: "Cancel a pending organization invite",
-        tags: ["organization"],
-      })
-      .input(
-        z.object({
-          ...OrgInput.shape,
-          inviteId: z.string(),
-        }),
-      )
-      .output(z.object({ success: z.literal(true) })),
-    myPendingInvites: oc
-      .route({
-        method: "GET",
-        path: "/organization/my-pending-invites",
-        summary: "List invites for the current authenticated user",
-        tags: ["organization"],
-      })
-      .output(z.array(OrganizationInviteRecord)),
-    acceptInvite: oc
-      .route({
-        method: "POST",
-        path: "/organization/accept-invite",
-        summary: "Accept an organization invite",
-        tags: ["organization"],
-      })
-      .input(z.object({ inviteId: z.string() }))
-      .output(OrganizationRecord),
-    declineInvite: oc
-      .route({
-        method: "POST",
-        path: "/organization/decline-invite",
-        summary: "Decline an organization invite",
-        tags: ["organization"],
-      })
-      .input(z.object({ inviteId: z.string() }))
-      .output(z.object({ success: z.literal(true) })),
-    leave: oc
-      .route({
-        method: "POST",
-        path: "/organization/leave",
-        summary: "Leave an organization",
         tags: ["organization"],
       })
       .input(OrgInput)
@@ -343,15 +212,6 @@ export const authContract = oc.router({
       })
       .input(OrgInput)
       .output(z.array(ProjectRecord)),
-    bySlug: oc
-      .route({
-        method: "GET",
-        path: "/project/by-slug",
-        summary: "Get a project container by slug",
-        tags: ["project"],
-      })
-      .input(ProjectInput)
-      .output(ProjectRecord),
     create: oc
       .route({
         method: "POST",
@@ -361,27 +221,9 @@ export const authContract = oc.router({
       })
       .input(
         z.object({
-          id: CallerManagedProjectId.optional(),
           ...OrgInput.shape,
           name: z.string().min(1).max(100),
           slug: z.string().min(1).max(50).optional(),
-          metadata: z.record(z.string(), z.unknown()).optional(),
-        }),
-      )
-      .output(ProjectRecord),
-    update: oc
-      .route({
-        method: "POST",
-        path: "/project/update",
-        summary: "Update a project container",
-        tags: ["project"],
-      })
-      .input(
-        z.object({
-          ...ProjectInput.shape,
-          name: z.string().min(1).max(100).optional(),
-          slug: z.string().min(1).max(50).optional(),
-          metadata: z.record(z.string(), z.unknown()).optional(),
         }),
       )
       .output(ProjectRecord),
@@ -416,6 +258,10 @@ export const authContract = oc.router({
         .output(z.array(OAuthClientRecord.omit({ clientSecret: true }))),
     },
   },
+  // Deploy-time-only procedures, authenticated by SERVICE_TOKEN_HEADER. These
+  // stay HTTP (not Workers RPC) because their callers are Node processes —
+  // alchemy deploys and Doppler sync scripts — which cannot hold a service
+  // binding.
   internal: {
     oauth: {
       ensureClient: oc
@@ -438,92 +284,6 @@ export const authContract = oc.router({
         .input(InternalSetOAuthClientInput)
         .output(OAuthClientRecord),
     },
-    user: {
-      upsertVerifiedEmail: oc
-        .route({
-          method: "POST",
-          path: "/internal/user/upsert-verified-email",
-          summary: "Create or update a verified user for internal service flows",
-          tags: ["internal", "user"],
-        })
-        .input(InternalVerifiedUserInput)
-        .output(UserRecord),
-    },
-    organization: {
-      createForUser: oc
-        .route({
-          method: "POST",
-          path: "/internal/organization/create-for-user",
-          summary: "Create an organization and owner membership for a specific user",
-          tags: ["internal", "organization"],
-        })
-        .input(InternalCreateOrganizationForUserInput)
-        .output(OrganizationRecord),
-      members: oc
-        .route({
-          method: "GET",
-          path: "/internal/organization/members",
-          summary: "List organization members for internal service flows",
-          tags: ["internal", "organization"],
-        })
-        .input(OrgInput)
-        .output(z.array(OrganizationMemberRecord)),
-    },
-    project: {
-      createForOrganization: oc
-        .route({
-          method: "POST",
-          path: "/internal/project/create-for-organization",
-          summary: "Create a project for an organization in internal service flows",
-          tags: ["internal", "project"],
-        })
-        .input(InternalCreateProjectForOrganizationInput)
-        .output(ProjectRecord),
-      mintProjectId: oc
-        .route({
-          method: "POST",
-          path: "/internal/project/mint-project-id",
-          summary:
-            "Mint a canonical project id (prj_) without creating an auth-side project — for OS operator/recovery creates with no owning organization",
-          tags: ["internal", "project"],
-        })
-        .output(z.object({ id: z.string() })),
-      bySlug: oc
-        .route({
-          method: "GET",
-          path: "/internal/project/by-slug",
-          summary:
-            "Look up a project by slug in internal service flows — OS ingress slug resolution and claims-miss directory reads. Null when no project has the slug.",
-          tags: ["internal", "project"],
-        })
-        .input(z.object({ projectSlug: z.string().trim().min(1) }))
-        .output(ProjectRecord.nullable()),
-    },
-    session: {
-      createProjectIngressToken: oc
-        .route({
-          method: "GET",
-          path: "/internal/session/create-project-ingress-token",
-          summary: "Create a one-time project ingress token for the current authenticated user",
-          tags: ["internal", "session"],
-        })
-        .output(z.object({ token: z.string() })),
-      exchangeProjectIngressToken: oc
-        .route({
-          method: "POST",
-          path: "/internal/session/exchange-project-ingress-token",
-          summary:
-            "Exchange a one-time project ingress token for a custom-domain ingress bearer token",
-          tags: ["internal", "session"],
-        })
-        .input(InternalProjectIngressExchangeInput)
-        .output(
-          z.object({
-            token: z.string(),
-            user: UserRecord,
-          }),
-        ),
-    },
   },
 });
 export type AuthContractClient = ContractRouterClient<typeof authContract>;
@@ -531,7 +291,6 @@ export type AuthContractClient = ContractRouterClient<typeof authContract>;
 export type AuthContractClientOptions = {
   baseUrl: string;
   serviceToken?: string;
-  asUserId?: string;
   fetch?: typeof fetch;
 };
 
@@ -546,9 +305,6 @@ export function createAuthContractClient(options: AuthContractClientOptions): Au
         const headers = mergeRequestHeaders(request, init?.headers);
         if (options.serviceToken) {
           headers.set(SERVICE_TOKEN_HEADER, options.serviceToken);
-        }
-        if (options.asUserId) {
-          headers.set(AS_USER_HEADER, options.asUserId);
         }
         return fetchImpl(request, { ...init, headers });
       },

@@ -51,6 +51,10 @@ export const platformAdminOnlyMiddleware = os.middleware(async ({ context, next 
   });
 });
 
+// Deploy-time scripts presenting SERVICE_AUTH_TOKEN (see hono.ts). Runtime
+// OS→auth calls do NOT come through here anymore — they use the Workers RPC
+// methods on the worker entrypoint, where the service binding is the
+// credential.
 export const serviceMiddleware = os.middleware(async ({ context, next }) => {
   if (!context.serviceAuthorized) {
     throw new ORPCError("UNAUTHORIZED", { message: "Not authorized" });
@@ -147,68 +151,6 @@ export const organizationAdminMiddleware = os.middleware(
   },
 );
 
-async function loadProject(params: {
-  db: ORPCContext["db"];
-  projectSlug: string;
-  user: { id: string; role?: string | null };
-}) {
-  const projectRow = await getProjectWithOrganizationBySlug(params.db, {
-    slug: params.projectSlug,
-  });
-  if (!projectRow) {
-    throw new ORPCError("NOT_FOUND", { message: "Project not found" });
-  }
-  const organization = {
-    id: projectRow.organizationRecordId,
-    name: projectRow.organizationName,
-    slug: projectRow.organizationSlug,
-  };
-  const project = {
-    id: projectRow.id,
-    organizationId: projectRow.organizationId,
-    name: projectRow.name,
-    slug: projectRow.slug,
-    metadata: parseProjectMetadata(projectRow.metadata),
-    archivedAt: typeof projectRow.archivedAt === "number" ? new Date(projectRow.archivedAt) : null,
-  };
-
-  const membership = await getMembershipByOrganizationAndUserId(params.db, {
-    organizationId: organization.id,
-    userId: params.user.id,
-  });
-  if (!membership && !isPlatformAdminUser(params.user)) {
-    throw new ORPCError("FORBIDDEN", { message: "You do not have access to this project" });
-  }
-
-  return { project, organization, membership: membership ?? null };
-}
-
-export const projectScopedMiddleware = os.middleware(
-  async ({ context, next }, input: { projectSlug: string }) => {
-    const { session } = context;
-    if (!session) {
-      throw new ORPCError("UNAUTHORIZED", { message: "Not authorized" });
-    }
-
-    const { project, organization, membership } = await loadProject({
-      db: context.db,
-      projectSlug: input.projectSlug,
-      user: session.user,
-    });
-
-    return next({
-      context: {
-        session,
-        user: session.user,
-        reqHeaders: context.reqHeaders,
-        project,
-        organization,
-        membership,
-      },
-    });
-  },
-);
-
 export const projectAdminMiddleware = os.middleware(
   async ({ context, next }, input: { projectSlug: string }) => {
     const { session } = context;
@@ -216,12 +158,35 @@ export const projectAdminMiddleware = os.middleware(
       throw new ORPCError("UNAUTHORIZED", { message: "Not authorized" });
     }
 
-    const { project, organization, membership } = await loadProject({
-      db: context.db,
-      projectSlug: input.projectSlug,
-      user: session.user,
+    const projectRow = await getProjectWithOrganizationBySlug(context.db, {
+      slug: input.projectSlug,
     });
-    assertOrganizationAdmin({ user: session.user, membership });
+    if (!projectRow) {
+      throw new ORPCError("NOT_FOUND", { message: "Project not found" });
+    }
+    const organization = {
+      id: projectRow.organizationRecordId,
+      name: projectRow.organizationName,
+      slug: projectRow.organizationSlug,
+    };
+    const project = {
+      id: projectRow.id,
+      organizationId: projectRow.organizationId,
+      name: projectRow.name,
+      slug: projectRow.slug,
+      metadata: parseProjectMetadata(projectRow.metadata),
+      archivedAt:
+        typeof projectRow.archivedAt === "number" ? new Date(projectRow.archivedAt) : null,
+    };
+
+    const membership = await getMembershipByOrganizationAndUserId(context.db, {
+      organizationId: organization.id,
+      userId: session.user.id,
+    });
+    if (!membership && !isPlatformAdminUser(session.user)) {
+      throw new ORPCError("FORBIDDEN", { message: "You do not have access to this project" });
+    }
+    assertOrganizationAdmin({ user: session.user, membership: membership ?? null });
 
     return next({
       context: {
@@ -230,7 +195,7 @@ export const projectAdminMiddleware = os.middleware(
         reqHeaders: context.reqHeaders,
         project,
         organization,
-        membership,
+        membership: membership ?? null,
       },
     });
   },

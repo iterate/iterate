@@ -1,4 +1,17 @@
 import { env as workerEnv } from "cloudflare:workers";
+import type { AuthWorkerRpc } from "@iterate-com/auth-contract";
+
+/**
+ * The auth worker's RPC entrypoint as seen through the `AUTH` service
+ * binding. The `Rpc.WorkerEntrypointBranded` marker is what `Service<T>`
+ * needs to surface the methods as callable stubs; the method shapes come
+ * from the shared contract. Same pattern as alchemy's own `WorkerRef<RPC>`
+ * docstring example, and the branded-interface variant of
+ * https://developers.cloudflare.com/workers/runtime-apis/rpc/typescript/ —
+ * importing the worker class type from apps/auth would drag its whole env
+ * type graph across the app boundary.
+ */
+export interface AuthWorkerEntrypoint extends Rpc.WorkerEntrypointBranded, AuthWorkerRpc {}
 
 /**
  * The binding contract every itx worker is deployed with (alchemy.run.ts
@@ -14,6 +27,12 @@ export interface Env {
   ARTIFACTS: Artifacts;
   ARTIFACTS_ACCOUNT_ID: string;
   ARTIFACTS_NAMESPACE: string;
+  /** Service binding to the auth worker's RPC entrypoint — the project
+   * directory and prj_ id authority (see AuthWorkerRpc in
+   * @iterate-com/auth-contract). Bound in every deployed OS worker; go
+   * through src/auth/auth-worker-service.ts instead of reaching for it
+   * directly (its guard covers binding-less vitest environments). */
+  AUTH: Service<AuthWorkerEntrypoint>;
   LOADER: WorkerLoader;
   /** Slug -> project id (+ metadata) cache in front of the auth worker's
    * project directory (project-directory.ts). */

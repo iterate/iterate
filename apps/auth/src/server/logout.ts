@@ -35,18 +35,12 @@ export function resolveAuthLogoutReturnTo(input: {
   return allowedOrigins.has(parsed.origin) ? parsed.toString() : fallback;
 }
 
+// Copy Set-Cookie headers individually — Headers.get("set-cookie") would
+// comma-join multiple cookies into one invalid header. getSetCookie() exists
+// in every runtime this code runs in (workerd and Node 20+).
+// https://developers.cloudflare.com/workers/runtime-apis/headers/
 export function appendSetCookieHeaders(target: Headers, source: Headers) {
-  const getSetCookie = (source as Headers & { getSetCookie?: () => string[] }).getSetCookie;
-  const cookies = getSetCookie?.call(source) ?? [];
-  if (cookies.length > 0) {
-    for (const cookie of cookies) {
-      target.append("set-cookie", cookie);
-    }
-    return;
-  }
-
-  const setCookie = source.get("set-cookie");
-  if (setCookie) {
-    target.append("set-cookie", setCookie);
+  for (const cookie of source.getSetCookie()) {
+    target.append("set-cookie", cookie);
   }
 }
