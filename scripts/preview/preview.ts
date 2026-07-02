@@ -64,6 +64,10 @@ export async function deploy(options: PullRequestCommandOptions = {}) {
 
   const environmentConfigLease = await claimEnvironmentConfigLease({
     createPreviewSemaphoreResourceClient: runtime.createPreviewSemaphoreResourceClient,
+    fetchPullRequestState: makePullRequestStateFetcher(
+      context.githubToken,
+      context.repositoryFullName,
+    ),
     holder: pullRequestHolder(context.pullRequestNumber),
     leaseMs: defaultPreviewLeaseMs,
     previousEnvironmentConfigLease: current.state.environmentConfigLease,
@@ -504,6 +508,90 @@ export async function release(options: ReleaseOptions) {
   }
 
   return { released: true, slug, evictedHolder: currentHolder };
+}
+
+/**
+ * Resolve slot contention: report which leased slots are active/idle/orphaned, and take a non-active one back with --slot.
+ */
+type ReclaimOptions = {
+  /** Preview slot to reclaim (number or slug). Omit for a report of every slot's verdict. */
+  slot?: string;
+  /** Hours without a deploy/test renewal before a hold counts as idle. */
+  minIdleHours?: number;
+  /** Also reclaim a slot whose holder is still active. Avoid: this clobbers live work. */
+  force?: boolean;
+  /** GitHub token used to check whether pr-N holders are closed. Defaults to GITHUB_TOKEN. */
+  githubToken?: string;
+};
+
+export async function reclaim(options: ReclaimOptions = {}) {
+  const runtime = createPreviewRuntime();
+  const semaphore = runtime.createPreviewSemaphoreResourceClient();
+  const githubToken =
+    options.githubToken?.trim() || runtime.commandEnvironment.GITHUB_TOKEN?.trim();
+  const fetchPullRequestState = githubToken
+    ? makePullRequestStateFetcher(
+        githubToken,
+        runtime.commandEnvironment.GITHUB_REPOSITORY?.trim() || defaultRepositoryFullName,
+      )
+    : null;
+  if (!fetchPullRequestState) {
+    logPreview(
+      "no GITHUB_TOKEN available — cannot check whether pr-* holders are closed, so verdicts are idle-time only (orphaned PRs show as idle/active)",
+    );
+  }
+
+  const minIdleMs = (options.minIdleHours ?? defaultReclaimMinIdleHours) * 3_600_000;
+  const report = await classifyEnvironmentConfigLeases({
+    fetchPullRequestState,
+    minIdleMs,
+    semaphore,
+  });
+
+  if (!options.slot) {
+    return {
+      checkedAt: new Date().toISOString(),
+      minIdleHours: options.minIdleHours ?? defaultReclaimMinIdleHours,
+      slots: report,
+      reclaimable: report
+        .filter((slot) => slot.verdict === "orphaned" || slot.verdict === "idle")
+        .map((slot) => `pnpm preview reclaim --slot ${slot.slug}`),
+      note: "orphaned = holder PR is closed, so its cleanup failed; idle = holder hasn't deployed/tested for a while; taking an active slot needs --force and clobbers live work",
+    };
+  }
+
+  const slug = normalizePreviewSlotSlug(options.slot);
+  const slot = report.find((candidate) => candidate.slug === slug);
+  if (!slot) {
+    throw new Error(`${slug} is not a known preview slot.`);
+  }
+  if (slot.verdict === "available") {
+    return { released: false, slug, message: `${slug} is already available.` };
+  }
+  if (slot.verdict === "active" && !options.force) {
+    throw new Error(
+      [
+        `${slug} is actively held by ${slot.holder ?? "unknown holder"}${slot.pullRequestUrl ? ` (${slot.pullRequestUrl})` : ""}:`,
+        `  last used ${slot.lastUsedAgo ?? "recently"}, lease expires ${slot.leasedUntil ?? "soon"}.`,
+        "Taking it would clobber live work. Re-run with --force only after checking with the holder.",
+      ].join("\n"),
+    );
+  }
+
+  logPreview(
+    `reclaiming ${slug} from ${slot.holder ?? "unknown holder"} (${slot.verdict}${slot.lastUsedAgo ? `, last used ${slot.lastUsedAgo}` : ""})`,
+  );
+  const result = await semaphore.release({
+    slug,
+    type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+    force: true,
+  });
+  return {
+    released: result.released,
+    slug,
+    reclaimedFrom: slot.holder,
+    verdict: slot.verdict,
+  };
 }
 
 /**
@@ -2240,19 +2328,162 @@ function resolveSlotWaitTotalMs(env: NodeJS.ProcessEnv) {
   return parsed;
 }
 
+// A hold with no deploy/test renewal for this long counts as idle in
+// `preview reclaim` verdicts. Renewals happen on every deploy/test run, so
+// idle means "that PR/person hasn't touched the slot in this window".
+const defaultReclaimMinIdleHours = 6;
+
+type PullRequestStateFetcher = (pullRequestNumber: number) => Promise<"open" | "closed" | null>;
+
+function makePullRequestStateFetcher(
+  githubToken: string,
+  repositoryFullName: string,
+): PullRequestStateFetcher {
+  const octokit = new Octokit({ auth: githubToken });
+  const [owner, repo] = splitRepositoryFullName(repositoryFullName);
+  return async (pullRequestNumber) => {
+    try {
+      const pullRequest = await octokit.rest.pulls.get({
+        owner,
+        repo,
+        pull_number: pullRequestNumber,
+      });
+      return pullRequest.data.state === "open" ? "open" : "closed";
+    } catch {
+      return null;
+    }
+  };
+}
+
+/** Pure verdict for one slot; `orphaned` beats `idle` beats `active`. */
+function classifyLeaseForReclaim(input: {
+  holderPullRequestState: "open" | "closed" | null;
+  lastAcquiredAt: number | null;
+  leaseState: "available" | "leased";
+  minIdleMs: number;
+  now: number;
+}): "available" | "active" | "idle" | "orphaned" {
+  if (input.leaseState !== "leased") {
+    return "available";
+  }
+  if (input.holderPullRequestState === "closed") {
+    // The holder PR is closed, so its cleanup should have released the slot;
+    // the lease only survives when that cleanup failed.
+    return "orphaned";
+  }
+  if (input.lastAcquiredAt !== null && input.now - input.lastAcquiredAt >= input.minIdleMs) {
+    return "idle";
+  }
+
+  return "active";
+}
+
+async function classifyEnvironmentConfigLeases(input: {
+  fetchPullRequestState: PullRequestStateFetcher | null;
+  minIdleMs: number;
+  semaphore: PreviewSemaphoreResourceClient;
+}) {
+  const now = Date.now();
+  const resources = await input.semaphore.list({ type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE });
+  return await Promise.all(
+    resources.map(async (resource) => {
+      const holder = resource.holder ?? null;
+      const holderPullRequestNumber = parsePullRequestHolder(holder);
+      const holderPullRequestState =
+        resource.leaseState === "leased" && holderPullRequestNumber && input.fetchPullRequestState
+          ? await input.fetchPullRequestState(holderPullRequestNumber)
+          : null;
+      const verdict = classifyLeaseForReclaim({
+        holderPullRequestState,
+        lastAcquiredAt: resource.lastAcquiredAt,
+        leaseState: resource.leaseState,
+        minIdleMs: input.minIdleMs,
+        now,
+      });
+
+      return {
+        slug: resource.slug,
+        verdict,
+        holder,
+        pullRequestUrl: holderPullRequestUrl(holder),
+        pullRequestState: holderPullRequestState,
+        leasedUntil:
+          resource.leasedUntil === null ? null : new Date(resource.leasedUntil).toISOString(),
+        lastUsedAt:
+          resource.lastAcquiredAt === null ? null : new Date(resource.lastAcquiredAt).toISOString(),
+        lastUsedAgo:
+          resource.lastAcquiredAt === null
+            ? null
+            : `${formatDurationMs(now - resource.lastAcquiredAt)} ago`,
+      };
+    }),
+  );
+}
+
+function parsePullRequestHolder(holder: string | null | undefined) {
+  const match = /^pr-(\d+)$/.exec(holder ?? "");
+  return match ? Number.parseInt(match[1] as string, 10) : null;
+}
+
+/**
+ * Garbage-collect one orphaned lease: a slot held by a pr-N holder whose PR
+ * is closed (its cleanup failed, or the lease would be gone). This is the one
+ * case automation may take a live lease — the holder can never come back for
+ * it, and GitHub confirms that before we touch anything.
+ */
+async function tryReclaimOrphanedEnvironmentConfigLease(input: {
+  fetchPullRequestState: PullRequestStateFetcher | null;
+  holder: string;
+  leaseMs: number;
+  semaphore: PreviewSemaphoreResourceClient;
+}) {
+  if (!input.fetchPullRequestState) {
+    return null;
+  }
+
+  const report = await classifyEnvironmentConfigLeases({
+    fetchPullRequestState: input.fetchPullRequestState,
+    minIdleMs: Number.POSITIVE_INFINITY,
+    semaphore: input.semaphore,
+  });
+  const orphans = report
+    .filter((slot) => slot.verdict === "orphaned")
+    .sort((left, right) => (left.lastUsedAt ?? "").localeCompare(right.lastUsedAt ?? ""));
+  for (const orphan of orphans) {
+    const lease = await input.semaphore.acquireSpecific({
+      type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+      slug: orphan.slug,
+      leaseMs: input.leaseMs,
+      holder: input.holder,
+      force: true,
+    });
+    if (lease) {
+      logPreview(
+        `reclaimed orphaned slot ${orphan.slug}: it was leased by ${orphan.holder ?? "unknown holder"} whose PR is closed (${orphan.pullRequestUrl ?? "no PR url"}) — their cleanup must have failed`,
+      );
+      return lease;
+    }
+  }
+
+  return null;
+}
+
 /**
  * Acquire any free slot, queueing (via semaphore long-poll) while all slots
- * are leased. Fails with the full holder table and remediation steps once
- * `waitTotalMs` elapses.
+ * are leased. Orphaned leases (holder PR closed but cleanup failed) are
+ * garbage-collected before waiting. Fails with the full holder table and
+ * remediation steps once `waitTotalMs` elapses.
  */
 async function acquireAnyEnvironmentConfigLease(input: {
   semaphore: PreviewSemaphoreResourceClient;
+  fetchPullRequestState?: PullRequestStateFetcher | null;
   holder: string;
   leaseMs: number;
   waitTotalMs: number;
 }) {
   const deadline = Date.now() + input.waitTotalMs;
   let attempt = 0;
+  let triedOrphanReclaim = false;
 
   for (;;) {
     attempt += 1;
@@ -2270,6 +2501,22 @@ async function acquireAnyEnvironmentConfigLease(input: {
         throw error;
       }
 
+      if (!triedOrphanReclaim) {
+        triedOrphanReclaim = true;
+        const reclaimed = await tryReclaimOrphanedEnvironmentConfigLease({
+          fetchPullRequestState: input.fetchPullRequestState ?? null,
+          holder: input.holder,
+          leaseMs: input.leaseMs,
+          semaphore: input.semaphore,
+        });
+        if (reclaimed) {
+          return reclaimed;
+        }
+        logPreview(
+          "all slots leased and none are orphaned (every holder's PR is still open or the hold is manual)",
+        );
+      }
+
       const holderTable = await describeEnvironmentConfigLeases(input.semaphore);
       if (Date.now() >= deadline) {
         throw new Error(
@@ -2279,8 +2526,9 @@ async function acquireAnyEnvironmentConfigLease(input: {
             holderTable,
             "Every slot is leased by an open PR or a manual hold. Options:",
             "  - re-run once a slot frees up (leases release when their PR closes)",
+            "  - see which holds are idle or orphaned: doppler run --project _shared --config prd -- pnpm preview reclaim",
+            "  - take an idle/orphaned slot back: doppler run --project _shared --config prd -- pnpm preview reclaim --slot N",
             "  - close or merge stale PRs holding slots",
-            "  - free an abandoned slot: doppler run --project _shared --config prd -- pnpm preview release --slot N --force",
           ].join("\n"),
         );
       }
@@ -2300,6 +2548,7 @@ async function acquireAnyEnvironmentConfigLease(input: {
  */
 async function claimEnvironmentConfigLease(input: {
   createPreviewSemaphoreResourceClient: () => PreviewSemaphoreResourceClient;
+  fetchPullRequestState?: PullRequestStateFetcher | null;
   holder: string;
   leaseMs: number;
   previousEnvironmentConfigLease: EnvironmentConfigLease | null;
@@ -2343,6 +2592,7 @@ async function claimEnvironmentConfigLease(input: {
 
   const lease = await acquireAnyEnvironmentConfigLease({
     semaphore,
+    fetchPullRequestState: input.fetchPullRequestState,
     holder: input.holder,
     leaseMs: input.leaseMs,
     waitTotalMs: input.waitTotalMs,
@@ -2729,6 +2979,8 @@ export const previewInternals = {
   ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
   acquireAnyEnvironmentConfigLease,
   claimEnvironmentConfigLease,
+  classifyEnvironmentConfigLeases,
+  classifyLeaseForReclaim,
   describeEnvironmentConfigLeases,
   evaluateCloudflareZoneCheck,
   holderPullRequestUrl,

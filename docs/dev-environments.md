@@ -379,19 +379,37 @@ Deploying to `preview_N` **without** holding the lease bypasses the whole
 protection model — the slot's rightful holder will deploy over you, and their
 cleanup may destroy your worker.
 
-### Story 4: something is stuck / who owns what
+### Story 4: all slots are taken / something is stuck
+
+`pnpm preview reclaim` is the conflict-resolution tool. It classifies every
+leased slot by how its holder is actually behaving:
+
+- **orphaned** — the holder is `pr-N` and that PR is closed, so its cleanup
+  failed; the holder can never come back for the slot. Safe to take.
+- **idle** — the holder hasn't deployed or tested for a while (default 6h;
+  `--min-idle-hours N` tunes it). Leases renew on every deploy/test run, so
+  idle really means "untouched". Probably safe; the report shows the holder
+  and PR link so you can check.
+- **active** — recently used. Taking it clobbers live work; `reclaim` refuses
+  without `--force`.
 
 ```bash
 doppler run --project _shared --config prd -- pnpm preview status     # holders, PR links, expiries
+doppler run --project _shared --config prd -- pnpm preview reclaim    # verdict per slot + what's safe to take
+doppler run --project _shared --config prd -- pnpm preview reclaim --slot 4   # take back an orphaned/idle slot
 doppler run --project _shared --config prd -- pnpm preview reconcile  # leases vs Doppler configs vs Cloudflare zones
-
-# free a slot whose holder is gone (abandoned manual hold, deleted PR, ...):
-doppler run --project _shared --config prd -- pnpm preview release --slot 4 --force
 ```
 
-`--force` (on `acquire` and `release`) is the only way to take a live lease
-from its holder. It logs an `evicted`/`force-released` event with both
-identities, so the audit trail survives.
+Orphaned leases are also garbage-collected automatically: when `preview
+deploy` finds every slot taken, it checks each `pr-N` holder against GitHub
+and reclaims a slot whose PR is closed before queueing. That is the **only**
+case automation takes a live lease — idle-but-open and manual holds always
+need a human running `reclaim --slot` / `--force`.
+
+`--force` (on `acquire`, `release`, and `reclaim`) is the only way to take an
+actively-used lease from its holder. Every eviction logs an
+`evicted`/`force-released` event with both identities, so the audit trail
+survives.
 
 ### Slot plumbing (OAuth constants)
 

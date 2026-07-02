@@ -806,7 +806,7 @@ describe("acquireAnyEnvironmentConfigLease", () => {
         leaseMs: 1000,
         waitTotalMs: 0,
       }),
-    ).rejects.toThrow(/pr-1601[\s\S]*preview release --slot N --force/);
+    ).rejects.toThrow(/pr-1601[\s\S]*preview reclaim --slot N/);
   });
 
   it("propagates non-contention errors immediately", async () => {
@@ -872,5 +872,146 @@ describe("reassertEnvironmentConfigLease", () => {
       expect(result.message).toContain("pr-1601");
       expect(result.message).toContain("https://github.com/iterate/iterate/pull/1601");
     }
+  });
+});
+
+describe("lease reclaim verdicts", () => {
+  const { classifyLeaseForReclaim } = previewInternals;
+  const hourMs = 3_600_000;
+  const now = 1_700_000_000_000;
+
+  it("classifies unleased slots as available", () => {
+    expect(
+      classifyLeaseForReclaim({
+        holderPullRequestState: null,
+        lastAcquiredAt: null,
+        leaseState: "available",
+        minIdleMs: 6 * hourMs,
+        now,
+      }),
+    ).toBe("available");
+  });
+
+  it("classifies closed-PR holders as orphaned regardless of recency", () => {
+    expect(
+      classifyLeaseForReclaim({
+        holderPullRequestState: "closed",
+        lastAcquiredAt: now - 1_000,
+        leaseState: "leased",
+        minIdleMs: 6 * hourMs,
+        now,
+      }),
+    ).toBe("orphaned");
+  });
+
+  it("classifies stale open holds as idle and fresh ones as active", () => {
+    expect(
+      classifyLeaseForReclaim({
+        holderPullRequestState: "open",
+        lastAcquiredAt: now - 7 * hourMs,
+        leaseState: "leased",
+        minIdleMs: 6 * hourMs,
+        now,
+      }),
+    ).toBe("idle");
+    expect(
+      classifyLeaseForReclaim({
+        holderPullRequestState: "open",
+        lastAcquiredAt: now - hourMs,
+        leaseState: "leased",
+        minIdleMs: 6 * hourMs,
+        now,
+      }),
+    ).toBe("active");
+  });
+});
+
+describe("orphaned lease garbage collection during acquire", () => {
+  function conflictError() {
+    const error = new Error("No resource is currently available for this type.");
+    (error as Error & { code: string }).code = "CONFLICT";
+    return error;
+  }
+
+  const leasedResource = (slug: string, holder: string) => ({
+    data: { dopplerConfig: slug.replace("-", "_") },
+    holder,
+    lastAcquiredAt: Date.now() - 3_600_000,
+    lastReleasedAt: null,
+    leaseState: "leased" as const,
+    leasedUntil: Date.now() + 3_600_000,
+    slug,
+  });
+
+  it("force-takes a slot whose holder PR is closed", async () => {
+    const acquireSpecific = vi.fn(async (input: { slug: string }) =>
+      fakeLease({ slug: input.slug, holder: "pr-1600" }),
+    );
+    const semaphore = fakeSemaphore({
+      acquire: vi.fn(async () => {
+        throw conflictError();
+      }),
+      acquireSpecific,
+      list: vi.fn(async () => [leasedResource("preview-2", "pr-1580")]),
+    });
+
+    const lease = await acquireAnyEnvironmentConfigLease({
+      semaphore,
+      fetchPullRequestState: async () => "closed",
+      holder: "pr-1600",
+      leaseMs: 1000,
+      waitTotalMs: 0,
+    });
+
+    expect(lease.slug).toBe("preview-2");
+    expect(acquireSpecific).toHaveBeenCalledWith(
+      expect.objectContaining({ slug: "preview-2", holder: "pr-1600", force: true }),
+    );
+  });
+
+  it("never touches slots whose holder PR is open or manual", async () => {
+    const acquireSpecific = vi.fn();
+    const semaphore = fakeSemaphore({
+      acquire: vi.fn(async () => {
+        throw conflictError();
+      }),
+      acquireSpecific,
+      list: vi.fn(async () => [
+        leasedResource("preview-2", "pr-1580"),
+        leasedResource("preview-3", "manual-jonas"),
+      ]),
+    });
+
+    await expect(
+      acquireAnyEnvironmentConfigLease({
+        semaphore,
+        fetchPullRequestState: async () => "open",
+        holder: "pr-1600",
+        leaseMs: 1000,
+        waitTotalMs: 0,
+      }),
+    ).rejects.toThrow(/preview reclaim/);
+    expect(acquireSpecific).not.toHaveBeenCalled();
+  });
+
+  it("skips reclamation entirely without a PR-state fetcher", async () => {
+    const acquireSpecific = vi.fn();
+    const semaphore = fakeSemaphore({
+      acquire: vi.fn(async () => {
+        throw conflictError();
+      }),
+      acquireSpecific,
+      list: vi.fn(async () => [leasedResource("preview-2", "pr-1580")]),
+    });
+
+    await expect(
+      acquireAnyEnvironmentConfigLease({
+        semaphore,
+        holder: "pr-1600",
+        leaseMs: 1000,
+        waitTotalMs: 0,
+      }),
+    ).rejects.toThrow(/No preview slot became available/);
+    expect(acquireSpecific).not.toHaveBeenCalled();
   });
 });

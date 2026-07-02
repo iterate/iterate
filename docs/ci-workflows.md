@@ -35,10 +35,20 @@ Useful entry points:
 
 The preview workflow is deliberately simple:
 
+- claim the PR's preview slot: renew the slot it already holds, or queue for
+  a free one when all slots are leased — garbage-collecting slots whose
+  holder PR is already closed (see
+  [dev-environments.md](dev-environments.md#preview-environments) for the
+  lease model and `pnpm preview reclaim`);
 - select the apps affected by the PR diff;
 - include declared preview dependencies, currently OS -> auth;
 - deploy the selected apps in dependency batches;
-- after deployment has finished, run tests for deployed apps one at a time.
+- after deployment has finished, re-assert the slot lease and run tests for
+  deployed apps one at a time.
+
+Every step narrates its decisions to the workflow log (`[preview] ...` lines):
+which files selected which apps, every lease transition, and who holds which
+slot whenever the deploy has to wait.
 
 The preview script does not try to prove dependency freshness or start each app's
 tests as soon as it is individually ready. That lost little in the measured case
