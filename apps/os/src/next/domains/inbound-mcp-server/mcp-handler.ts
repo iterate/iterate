@@ -9,11 +9,12 @@ import { createMcpHandler } from "agents/mcp";
 import { z } from "zod";
 // oxlint-disable-next-line iterate/no-capnweb-http-batch -- exec_js is a one-shot request-scoped call: a single pipelined batch (authenticate -> runScript) with no socket lifecycle to manage.
 import { newHttpBatchRpcSession } from "capnweb";
+import { env } from "cloudflare:workers";
 import packageJson from "../../../../package.json" with { type: "json" };
 import { authenticateAdminApiSecret } from "~/auth/admin.ts";
-import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import { principalFromAccessToken } from "~/auth/principal.ts";
 import { MCP_START_MOUNT_PATH, resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
+import { readProjectBySlug } from "~/next/project-directory.ts";
 import type { UnauthenticatedItx } from "~/next/types.ts";
 import type { RequestContext } from "~/request-context.ts";
 
@@ -238,9 +239,14 @@ async function resolveToolProject(
   if (!normalizedRequestedProject) throw new Error("Pass a project slug.");
 
   if (options.authType === "admin_api_secret") {
-    const record = await createAuthWorkerServiceClient({ config: context.config })
-      .project.bySlug({ projectSlug: normalizedRequestedProject })
-      .catch(() => null);
+    // KV directory cache in front of the auth worker (also resolves
+    // admin-lane projects, which are primed at create but never registered
+    // with the auth directory).
+    const record = await readProjectBySlug(
+      context.config,
+      env.PROJECT_DIRECTORY,
+      normalizedRequestedProject,
+    );
     if (!record) throw new Error(`Project not found: ${normalizedRequestedProject}`);
     return { id: record.id, slug: record.slug };
   }

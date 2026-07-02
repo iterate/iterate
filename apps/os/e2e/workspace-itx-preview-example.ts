@@ -15,6 +15,7 @@ async function main() {
   const result = await runWorkspaceCodemodeProof({
     bearerToken: adminApiSecret,
     mcpUrl,
+    projectSlug: slug,
   });
 
   console.info(
@@ -86,7 +87,11 @@ function projectMcpUrlFor(input: { baseUrl: URL }) {
   );
 }
 
-async function runWorkspaceCodemodeProof(input: { bearerToken: string; mcpUrl: URL }) {
+async function runWorkspaceCodemodeProof(input: {
+  bearerToken: string;
+  mcpUrl: URL;
+  projectSlug: string;
+}) {
   const transport = new StreamableHTTPClientTransport(input.mcpUrl, {
     requestInit: {
       headers: {
@@ -111,6 +116,9 @@ async function runWorkspaceCodemodeProof(input: { bearerToken: string; mcpUrl: U
       name: "exec_js",
       arguments: {
         code: workspaceCodemodeScript(),
+        // The admin lane serves every project, so exec_js requires an explicit
+        // project slug (resolved through the KV project directory).
+        project: input.projectSlug,
       },
     });
     const text = extractTextContent(result.content).join("\n");
