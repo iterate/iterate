@@ -843,6 +843,39 @@ describe("reassertEnvironmentConfigLease", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("repairs its own lease when only the recorded leaseId is stale", async () => {
+    const acquireSpecific = vi.fn(async (input: { force?: boolean }) =>
+      input.force ? fakeLease({ leaseId: "1197a5b3-a705-4380-9958-6a0dbead16b7" }) : null,
+    );
+    const semaphore = fakeSemaphore({
+      acquireSpecific,
+      list: vi.fn(async () => [
+        {
+          data: { dopplerConfig: "preview_2" },
+          holder: "pr-1600",
+          lastAcquiredAt: null,
+          lastReleasedAt: null,
+          leaseState: "leased" as const,
+          leasedUntil: Date.now() + 60_000,
+          slug: "preview-2",
+        },
+      ]),
+    });
+
+    const result = await reassertEnvironmentConfigLease({
+      holder: "pr-1600",
+      lease: previousLease,
+      leaseMs: 1000,
+      semaphore,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.lease.leaseId).toBe("1197a5b3-a705-4380-9958-6a0dbead16b7");
+    }
+    expect(acquireSpecific).toHaveBeenCalledWith(expect.objectContaining({ force: true }));
+  });
+
   it("refuses when the slot now belongs to another PR", async () => {
     const semaphore = fakeSemaphore({
       list: vi.fn(async () => [

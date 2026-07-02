@@ -319,6 +319,36 @@ describe.sequential("live semaphore E2E", () => {
     expect(releasedList[0]).toMatchObject({ leaseState: "available", holder: null });
   }, 120_000);
 
+  test("hands out the least recently released resource first", async () => {
+    const type = uniqueType();
+    for (const slug of ["alpha", "beta"]) {
+      await semaphore.resources.add({ type, slug, data: { token: `secret-${slug}` } });
+      createdResources.push({ type, slug });
+    }
+
+    // alpha goes out first (never-released tie broken by creation order)...
+    const first = await semaphore.resources.acquire({ type, leaseMs: 60_000 });
+    expect(first.slug).toBe("alpha");
+    await semaphore.resources.release({ type, slug: first.slug, leaseId: first.leaseId });
+
+    // ...but once alpha has been released, never-used beta is preferred over
+    // immediately re-issuing alpha.
+    const second = await semaphore.resources.acquire({ type, leaseMs: 60_000 });
+    expect(second.slug).toBe("beta");
+
+    const third = await semaphore.resources.acquire({ type, leaseMs: 60_000 });
+    expect(third.slug).toBe("alpha");
+
+    // Release beta before alpha: beta is now the least recently released.
+    await semaphore.resources.release({ type, slug: "beta", leaseId: second.leaseId });
+    await sleep(5);
+    await semaphore.resources.release({ type, slug: "alpha", leaseId: third.leaseId });
+
+    const fourth = await semaphore.resources.acquire({ type, leaseMs: 60_000 });
+    leasedResources.push({ type, slug: fourth.slug, leaseId: fourth.leaseId });
+    expect(fourth.slug).toBe("beta");
+  }, 120_000);
+
   test("supports the contract client against the live worker", async () => {
     const type = uniqueType();
     const created = await semaphore.resources.add({

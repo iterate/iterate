@@ -169,11 +169,16 @@ export class ResourceCoordinator extends DurableObject<Env> {
 
     const inventory = await selectInventoryByType(this.env.DB, parsed.type);
     const candidate = inventory.find((resource) => resource.slug === parsed.slug);
-    if (!candidate) {
-      return null;
+    const lease = candidate
+      ? await this.createLease(candidate, parsed.leaseMs, parsed.holder ?? null)
+      : null;
+    if (activeLease && !lease) {
+      // The eviction freed capacity but no new lease took it; wake waiters
+      // like the public release path does.
+      await this.dispatchWaiters();
     }
 
-    return this.createLease(candidate, parsed.leaseMs, parsed.holder ?? null);
+    return lease;
   }
 
   async renew(params: { type: string; slug: string; leaseId: string; leaseMs: number }) {
@@ -347,7 +352,13 @@ export class ResourceCoordinator extends DurableObject<Env> {
         .map((row) => row.slug),
     );
 
-    const candidates = inventory.filter((resource) => !activeLeases.has(resource.slug));
+    // Hand out the least-recently-released slot (never-released first). A
+    // freed slot often still carries its previous holder's deployment; resting
+    // it as long as possible maximizes the chance that holder retakes its own
+    // slot before anyone else lands on it.
+    const candidates = inventory
+      .filter((resource) => !activeLeases.has(resource.slug))
+      .sort((left, right) => (left.lastReleasedAt ?? 0) - (right.lastReleasedAt ?? 0));
     if (candidates.length === 0) {
       return null;
     }

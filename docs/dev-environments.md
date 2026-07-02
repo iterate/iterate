@@ -316,6 +316,11 @@ invariants:
   `preview deploy` waits in line (logging who holds what every few minutes)
   for up to 20 minutes before failing with the full holder table and
   remediation steps. `PREVIEW_SLOT_WAIT_MS=0` makes it fail fast.
+- **Freed slots rest as long as possible.** Acquiring "any slot" hands out
+  the least-recently-released one (never-used slots first). A freed slot
+  often still carries its previous holder's deployment, so resting it
+  maximizes the chance a lapsed PR retakes its own slot instead of finding
+  someone else on it.
 - **Everything is attributable.** `pnpm preview status` shows each slot's
   holder, PR link, and expiry; the semaphore UI at semaphore.iterate.com
   shows the same; every lease transition (acquired/renewed/evicted/expired/

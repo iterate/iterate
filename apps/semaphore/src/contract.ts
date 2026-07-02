@@ -26,7 +26,7 @@ export const semaphoreKeySchema = z
  * `manual-jonas`. Stored with the lease and shown by list/status tooling so
  * collisions are attributable.
  */
-export const semaphoreHolderSchema = z.string().trim().min(1).max(200);
+const semaphoreHolderSchema = z.string().trim().min(1).max(200);
 
 export type SemaphoreJsonObject = Record<string, unknown>;
 

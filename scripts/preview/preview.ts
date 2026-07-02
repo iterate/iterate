@@ -213,12 +213,16 @@ export async function test(options: PullRequestCommandOptions = {}) {
       apps: Object.fromEntries(
         Object.entries(state.apps).map(([appSlug, entry]) => [
           appSlug,
-          {
-            ...entry,
-            status: "claim-failed" as const,
-            message: reasserted.message,
-            updatedAt: new Date().toISOString(),
-          },
+          // Older-head entries are already superseded; only current-head
+          // entries are marked so deploy's retry selection picks them up.
+          entry.headSha === context.pullRequestHeadSha
+            ? {
+                ...entry,
+                status: "claim-failed" as const,
+                message: reasserted.message,
+                updatedAt: new Date().toISOString(),
+              }
+            : entry,
         ]),
       ),
     }));
@@ -2368,7 +2372,8 @@ function pullRequestHolder(pullRequestNumber: number) {
 
 function holderPullRequestUrl(holder: string | null | undefined) {
   const match = /^pr-(\d+)$/.exec(holder ?? "");
-  return match ? `https://github.com/${defaultRepositoryFullName}/pull/${match[1]}` : null;
+  const repositoryFullName = process.env.GITHUB_REPOSITORY?.trim() || defaultRepositoryFullName;
+  return match ? `https://github.com/${repositoryFullName}/pull/${match[1]}` : null;
 }
 
 function formatUntil(epochMs: number) {
@@ -2451,7 +2456,13 @@ function makePullRequestStateFetcher(
         pull_number: pullRequestNumber,
       });
       return pullRequest.data.state === "open" ? "open" : "closed";
-    } catch {
+    } catch (error) {
+      // Unknown beats wrong: a failed check must never trigger a force
+      // reclaim, so the slot is treated as active — but say so, since it
+      // also suppresses orphan detection.
+      logPreview(
+        `could not check the state of PR #${pullRequestNumber} (${formatPreviewErrorMessage(error)}) — treating its lease as active`,
+      );
       return null;
     }
   };
@@ -2585,12 +2596,14 @@ async function acquireAnyEnvironmentConfigLease(input: {
 }) {
   const deadline = Date.now() + input.waitTotalMs;
   let attempt = 0;
-  let triedOrphanReclaim = false;
 
   for (;;) {
     attempt += 1;
     const remainingMs = deadline - Date.now();
-    const waitMs = Math.max(0, Math.min(slotWaitPerAttemptMs, remainingMs));
+    // The first attempt returns immediately so orphan garbage collection runs
+    // before any long-poll; later attempts queue on the semaphore in 5-minute
+    // polls, re-checking for freshly orphaned slots between polls.
+    const waitMs = attempt === 1 ? 0 : Math.max(0, Math.min(slotWaitPerAttemptMs, remainingMs));
     try {
       return await input.semaphore.acquire({
         type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
@@ -2603,17 +2616,16 @@ async function acquireAnyEnvironmentConfigLease(input: {
         throw error;
       }
 
-      if (!triedOrphanReclaim) {
-        triedOrphanReclaim = true;
-        const reclaimed = await tryReclaimOrphanedEnvironmentConfigLease({
-          fetchPullRequestState: input.fetchPullRequestState ?? null,
-          holder: input.holder,
-          leaseMs: input.leaseMs,
-          semaphore: input.semaphore,
-        });
-        if (reclaimed) {
-          return reclaimed;
-        }
+      const reclaimed = await tryReclaimOrphanedEnvironmentConfigLease({
+        fetchPullRequestState: input.fetchPullRequestState ?? null,
+        holder: input.holder,
+        leaseMs: input.leaseMs,
+        semaphore: input.semaphore,
+      });
+      if (reclaimed) {
+        return reclaimed;
+      }
+      if (attempt === 1 && input.fetchPullRequestState) {
         logPreview(
           "all slots leased and none are orphaned (every holder's PR is still open or the hold is manual)",
         );
@@ -2660,36 +2672,17 @@ async function claimEnvironmentConfigLease(input: {
   const previousLease = input.previousEnvironmentConfigLease;
 
   if (previousLease) {
-    const renewed = await semaphore.renew({
-      type: previousLease.type,
-      slug: previousLease.slug,
-      leaseId: previousLease.leaseId,
-      leaseMs: input.leaseMs,
-    });
-    if (renewed) {
-      logPreview(
-        `lease renewed: ${renewed.slug} held by ${input.holder} until ${formatUntil(renewed.expiresAt)}`,
-      );
-      return toEnvironmentConfigLease(renewed);
-    }
-
-    const retaken = await semaphore.acquireSpecific({
-      type: previousLease.type,
-      slug: previousLease.slug,
-      leaseMs: input.leaseMs,
+    const reasserted = await reassertEnvironmentConfigLease({
       holder: input.holder,
+      lease: previousLease,
+      leaseMs: input.leaseMs,
+      semaphore,
     });
-    if (retaken) {
-      logPreview(
-        `lease re-acquired: ${retaken.slug} had expired but was still free; ${input.holder} holds it again until ${formatUntil(retaken.expiresAt)}`,
-      );
-      return toEnvironmentConfigLease(retaken);
+    if (reasserted.ok) {
+      return reasserted.lease;
     }
 
-    const currentHolder = await findEnvironmentConfigLeaseHolder(semaphore, previousLease.slug);
-    logPreview(
-      `slot lost: ${previousLease.slug} is now leased by ${currentHolder ?? "someone else"} — this PR's old deployment there has been superseded; acquiring a different slot`,
-    );
+    logPreview(`slot lost: ${reasserted.message} Acquiring a different slot.`);
   }
 
   const lease = await acquireAnyEnvironmentConfigLease({
@@ -2902,6 +2895,25 @@ async function reassertEnvironmentConfigLease(input: {
   }
 
   const currentHolder = await findEnvironmentConfigLeaseHolder(input.semaphore, input.lease.slug);
+  if (currentHolder === input.holder) {
+    // The slot is still ours — only the recorded leaseId is stale (a renewal's
+    // leaseId never made it into the PR body). Re-issuing our own lease is not
+    // stealing, so force is safe here.
+    const repaired = await input.semaphore.acquireSpecific({
+      type: input.lease.type,
+      slug: input.lease.slug,
+      leaseMs: input.leaseMs,
+      holder: input.holder,
+      force: true,
+    });
+    if (repaired) {
+      logPreview(
+        `lease repaired: ${repaired.slug} was already held by ${input.holder} under a different leaseId (stale PR body state); re-issued until ${formatUntil(repaired.expiresAt)}`,
+      );
+      return { ok: true, lease: toEnvironmentConfigLease(repaired) };
+    }
+  }
+
   const prUrl = holderPullRequestUrl(currentHolder);
   return {
     ok: false,
