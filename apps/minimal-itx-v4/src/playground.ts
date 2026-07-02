@@ -1419,31 +1419,29 @@ function playgroundExamples(origin: string) {
       title: "Fetch Postman GET",
       description: "GET request to Postman Echo without a secret.",
       code: `async (itx) => {
-  return await itx.egress.fetch(
-    new Request("${POSTMAN_ECHO_GET_URL}", {
-      headers: {
-        "${BLIND_RELAY_SKIP_TLS_VERIFY_HEADER}": "1",
-        "x-itx-demo": "postman-get",
-      },
-    }),
-  );
+  // A dynamic worker's bare fetch() already goes through project egress,
+  // so you never call itx.egress.fetch — just fetch.
+  return await fetch("${POSTMAN_ECHO_GET_URL}", {
+    headers: {
+      "${BLIND_RELAY_SKIP_TLS_VERIFY_HEADER}": "1",
+      "x-itx-demo": "postman-get",
+    },
+  });
 }`,
     },
     {
       title: "Fetch Postman POST",
       description: "POST JSON to Postman Echo without a secret.",
       code: `async (itx) => {
-  return await itx.egress.fetch(
-    new Request("${POSTMAN_ECHO_POST_URL}", {
-      method: "POST",
-      headers: {
-        "${BLIND_RELAY_SKIP_TLS_VERIFY_HEADER}": "1",
-        "content-type": "application/json",
-        "x-itx-demo": "postman-post-json",
-      },
-      body: JSON.stringify({ hello: "from ITX playground" }),
-    }),
-  );
+  return await fetch("${POSTMAN_ECHO_POST_URL}", {
+    method: "POST",
+    headers: {
+      "${BLIND_RELAY_SKIP_TLS_VERIFY_HEADER}": "1",
+      "content-type": "application/json",
+      "x-itx-demo": "postman-post-json",
+    },
+    body: JSON.stringify({ hello: "from ITX playground" }),
+  });
 }`,
     },
     {
@@ -1456,15 +1454,13 @@ function playgroundExamples(origin: string) {
     egress: { urls: ["${POSTMAN_ECHO_HEADERS_URL}"] },
   });
 
-  return await itx.egress.fetch(
-    new Request("${POSTMAN_ECHO_HEADERS_URL}", {
-      headers: {
-        authorization: 'Bearer getSecret({ path: "${PLAYGROUND_DEMO_SECRET_PATH}" })',
-        "${BLIND_RELAY_SKIP_TLS_VERIFY_HEADER}": "1",
-        "x-itx-demo": "postman-secret-headers",
-      },
-    }),
-  );
+  return await fetch("${POSTMAN_ECHO_HEADERS_URL}", {
+    headers: {
+      authorization: 'Bearer getSecret({ path: "${PLAYGROUND_DEMO_SECRET_PATH}" })',
+      "${BLIND_RELAY_SKIP_TLS_VERIFY_HEADER}": "1",
+      "x-itx-demo": "postman-secret-headers",
+    },
+  });
 }`,
     },
     {
@@ -1477,18 +1473,16 @@ function playgroundExamples(origin: string) {
     egress: { urls: ["${POSTMAN_ECHO_POST_URL}"] },
   });
 
-  return await itx.egress.fetch(
-    new Request("${POSTMAN_ECHO_POST_URL}", {
-      method: "POST",
-      headers: {
-        authorization: 'Bearer getSecret({ path: "${PLAYGROUND_DEMO_SECRET_PATH}" })',
-        "${BLIND_RELAY_SKIP_TLS_VERIFY_HEADER}": "1",
-        "content-type": "text/plain",
-        "x-itx-demo": "postman-secret-post",
-      },
-      body: "body sent with a substituted secret header",
-    }),
-  );
+  return await fetch("${POSTMAN_ECHO_POST_URL}", {
+    method: "POST",
+    headers: {
+      authorization: 'Bearer getSecret({ path: "${PLAYGROUND_DEMO_SECRET_PATH}" })',
+      "${BLIND_RELAY_SKIP_TLS_VERIFY_HEADER}": "1",
+      "content-type": "text/plain",
+      "x-itx-demo": "postman-secret-post",
+    },
+    body: "body sent with a substituted secret header",
+  });
 }`,
     },
     {
@@ -1501,17 +1495,15 @@ function playgroundExamples(origin: string) {
     egress: { urls: ["${origin}/playground/target"] },
   });
 
-  return await itx.egress.fetch(
-    new Request("${origin}/playground/target?demo=default", {
-      method: "POST",
-      headers: {
-        authorization: 'Bearer getSecret({ path: "${PLAYGROUND_DEMO_SECRET_PATH}" })',
-        "content-type": "text/plain",
-        "x-itx-demo": "hosted-secret-target",
-      },
-      body: "hosted target request with substituted secret",
-    }),
-  );
+  return await fetch("${origin}/playground/target?demo=default", {
+    method: "POST",
+    headers: {
+      authorization: 'Bearer getSecret({ path: "${PLAYGROUND_DEMO_SECRET_PATH}" })',
+      "content-type": "text/plain",
+      "x-itx-demo": "hosted-secret-target",
+    },
+    body: "hosted target request with substituted secret",
+  });
 }`,
     },
   ].map((example) => ({
