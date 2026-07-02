@@ -207,7 +207,7 @@ after touching the patch or the workers-types version.
 
 ## Testing
 
-- `apps/os/e2e/itx/` — itx e2e suites (streams, itx, project
+- `apps/os/e2e/vitest/` — itx e2e suites (streams, itx, project
   ingress, security), run through `pnpm e2e` against a live deployment.
 - `apps/os/e2e/examples/` — the example matrix: the REPL example catalogue
   executed across every runtime (browser REPL, Node, `runScript`, project

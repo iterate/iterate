@@ -530,7 +530,7 @@ await slack.chat.postMessage({ channel, text });
 | project worker     | Project DO loads it with a project-scoped `env.ITERATE`     |
 | source / facet cap | the dial loads it with an ORIGIN-scoped `env.ITERATE`       |
 
-The e2e suite (`e2e/itx/`, runnable against any deployment) covers the
+The e2e suite (`e2e/vitest/`, runnable against any deployment) covers the
 five-step live→durable capability flow, the stream as the record, egress
 through both doors with real secret substitution, the two locked acceptance
 tests (middleware via a bare-function `fetch` shadow + `itx.super`;

@@ -143,7 +143,7 @@ const AGENT_OUTPUT_ADDED = "events.iterate.com/agent/output-added";
 const AGENT_STATUS_UPDATED = "events.iterate.com/agent/status-updated";
 const OPENAI_WS_REQUEST_STARTED = "events.iterate.com/openai-ws/llm-request-started";
 const OPENAI_WS_MESSAGE_RECEIVED = "events.iterate.com/openai-ws/websocket-message-received";
-// The engine's openai-ws processor journals every raw Responses-WS frame as
+// The itx openai-ws processor journals every raw Responses-WS frame as
 // llm-response-chunk ({llmRequestId, sequence, chunk}); the pre-migration
 // processor journaled the same frames as websocket-message-received
 // ({llmRequestId, message}). Both stream into the live activity.

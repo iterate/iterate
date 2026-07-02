@@ -81,7 +81,7 @@ Use `pnpm run deploy`, not `pnpm deploy`; `deploy` is also a pnpm built-in.
 
 The e2e lanes run against a real OS deployment, not the Workers Vitest pool:
 `pnpm e2e` (config `e2e/vitest.config.ts`: `e2e/vitest/**` plus itx
-suites in `e2e/itx/**`) and `pnpm e2e:examples` (config
+suites in `e2e/vitest/**`) and `pnpm e2e:examples` (config
 `e2e/examples/vitest.config.ts`: the example matrix, including a browser
 runtime). Start the worker in one terminal, then run tests from another
 through the matching Doppler config. For local dev configs, test helpers read

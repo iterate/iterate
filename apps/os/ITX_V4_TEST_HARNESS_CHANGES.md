@@ -42,12 +42,12 @@ elements; a 240s budget for two LLM turns).
 
 ## OS vitest e2e (`apps/os/e2e/`)
 
-- **New `e2e/itx/` suites** (ported from minimal-itx-v4's black-box e2e):
+- **New `e2e/vitest/` suites** (ported from minimal-itx-v4's black-box e2e):
   streams, stream-security, project-ingress, itx, stream-lifecycle +
   `test-helpers.ts`/`setup.ts`/`itx-capability-fixtures.ts` and the
   `onboarding-smoke.ts` operational smoke. They run inside the existing
   `e2e/vitest.config.ts` project (its `include` gained
-  `./e2e/itx/**/*.e2e.test.ts` + a setup file that resolves
+  `./e2e/vitest/**/*.e2e.test.ts` + a setup file that resolves
   `ITX_BASE_URL` from the dev-server discovery file). URL-driven, admin-secret
   authenticated; worker-hosted fixtures are served by the deployed api worker
   (`/__itx_e2e/…`), replacing minimal's `verify-miniflare` lane per the plan.
@@ -98,7 +98,7 @@ that commit; the coverage disposition is catalogued in the sections below.
   `codemode-session`, `project-ingress`) died with their subjects. itx
   deliberately has **no in-workerd unit lane** — the plan locked "URL-driven
   e2e only, no separate wrangler-dev lane". Equivalent _behavioral_ coverage
-  lives in `e2e/itx/` (stream lifecycle/security/ingress against real
+  lives in `e2e/vitest/` (stream lifecycle/security/ingress against real
   deployments), but in-process DO-internals testing (fake timers around
   alarms, forced socket drops) has no direct replacement. If that class of
   test is missed, the recoverable reference is in git history at the purge

@@ -28,7 +28,7 @@ changes), `../ITX_V4_MIGRATION_REPORT.md` (the migration itself).
   `CLOUDFLARE_API_TOKEN`. Included a journal negative-control: the full event
   journal never contains the substituted token, only the placeholder.
 - **Now:** MCP auth-substitution mechanics are e2e-tested against in-repo
-  fixtures only (`e2e/itx/itx.e2e.test.ts` + `src/e2e-fixtures.ts`). Protocol
+  fixtures only (`e2e/vitest/itx.e2e.test.ts` + `src/e2e-fixtures.ts`). Protocol
   interop with a real third-party server and the journal-scan negative
   control are untested.
 - **Why removed:** the suite was written against the legacy `itx.mcp`
@@ -46,7 +46,7 @@ changes), `../ITX_V4_MIGRATION_REPORT.md` (the migration itself).
   forced socket drops (`apps/os/src/domains/streams/engine/workers/
 durable-objects/*.workers.test.ts`).
 - **Now:** behavioral analogues run against real deployments in
-  `e2e/itx/stream-lifecycle.e2e.test.ts` / `stream-security.e2e.test.ts`, but
+  `e2e/vitest/stream-lifecycle.e2e.test.ts` / `stream-security.e2e.test.ts`, but
   in-process DO-internals testing (deterministic timers, forced transport
   failures) has no equivalent — the plan deliberately locked "URL-driven e2e
   only, no separate wrangler-dev lane".
@@ -109,7 +109,7 @@ durable-objects/*.workers.test.ts`).
 ## Removed WITH replacement (summary — details in the harness doc)
 
 - Old itx scenario suites (`itx-egress`, `itx-subscribe`, `itx-openapi`,
-  `itx-mcp-auth` fixture parts, old `itx.e2e.test.ts`) → `e2e/itx/**` suites.
+  `itx-mcp-auth` fixture parts, old `itx.e2e.test.ts`) → `e2e/vitest/**` suites.
 - Legacy Slack unit suites (9 + 18 tests on main under
   `src/domains/slack/stream-processors/`) → `src/domains/integrations/
 slack-processors.test.ts`. A case-by-case audit (2026-07-02) mapped all 27
@@ -121,7 +121,7 @@ slack-processors.test.ts`. A case-by-case audit (2026-07-02) mapped all 27
   `state.connection.connectionId` and the `agent/status-updated` status
   trigger (assistant status now keys off the LLM-request lifecycle — the
   replacement behavior is tested). The full chain is e2e-tested by
-  `e2e/itx/slack-agent.e2e.test.ts` (synthetic signed webhook → router →
+  `e2e/vitest/slack-agent.e2e.test.ts` (synthetic signed webhook → router →
   agent → LLM → egress audit), which runs in preview CI.
 - Google OAuth token refresh (`src/domains/secrets/oauth.test.ts`) →
   `src/domains/integrations/google-tokens.test.ts` (restored 2026-07-02 after

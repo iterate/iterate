@@ -156,3 +156,82 @@ log event, then use its `traceId` to fetch the trace and all span events.
 
 With the general Cloudflare API MCP server, use `search` to find endpoint
 shapes, then `execute` with a Workers Observability telemetry query.
+
+For production OS request traces, use the `otel` dataset. The `workers`
+dataset may expose metadata keys but can return no request rows for the app
+traffic you are trying to inspect. The useful production service names are
+`os-prd` for ingress and `os-prd-app` for the app worker; do not filter on
+`$metadata.service == "os"`.
+
+Start with recent `events`, then use the returned `traceId` to inspect the
+whole trace. Keep the response compact by mapping the Cloudflare result before
+returning it:
+
+```ts
+async () => {
+  const from = Date.parse("2026-07-02T12:15:00.000Z");
+  const to = Date.parse("2026-07-02T12:45:00.000Z");
+  const resp = await cloudflare.request({
+    method: "POST",
+    path: `/accounts/${accountId}/workers/observability/telemetry/query`,
+    body: {
+      queryId: "prod-os-mcp-events",
+      timeframe: { from, to },
+      view: "events",
+      limit: 200,
+      parameters: {
+        datasets: ["otel"],
+        filters: [
+          {
+            key: "$metadata.service",
+            operation: "in",
+            type: "string",
+            value: "os-prd,os-prd-app",
+          },
+        ],
+        needle: { value: "mcp", matchCase: false },
+      },
+    },
+  });
+  return (resp.result?.events?.events ?? []).map((event) => ({
+    iso: new Date(event.timestamp).toISOString(),
+    service: event.$metadata?.service,
+    level: event.$metadata?.level,
+    error: event.$metadata?.error,
+    requestId: event.$metadata?.requestId,
+    traceId: event.$metadata?.traceId,
+    tx: event.$metadata?.transactionName,
+    url: event.source?.url?.full,
+    method: event.source?.http?.request?.method,
+    status: event.source?.http?.response?.status_code,
+    ua: event.source?.user_agent?.original,
+    ray: event.source?.cloudflare?.ray_id,
+  }));
+};
+```
+
+To discover current keys or values, use `keys` and `values`. The `values`
+endpoint requires `timeframe` and `type`:
+
+```ts
+async () => {
+  const timeframe = {
+    from: Date.parse("2026-07-02T12:15:00.000Z"),
+    to: Date.parse("2026-07-02T12:45:00.000Z"),
+  };
+  return cloudflare.request({
+    method: "POST",
+    path: `/accounts/${accountId}/workers/observability/telemetry/values`,
+    body: {
+      datasets: ["otel"],
+      timeframe,
+      key: "$metadata.service",
+      type: "string",
+      limit: 100,
+    },
+  });
+};
+```
+
+For status-code breakdowns, the current key is
+`http.response.status_code`, not `$metadata.statusCode`.
