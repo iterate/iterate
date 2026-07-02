@@ -2,8 +2,8 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
-import type { TunnelingProxy, SecretDescription, SecretUpdateInput } from "../../types.ts";
-import { fetchThroughTunnelingProxy } from "../projects/blind-relay.ts";
+import type { EgressHttpsProxy, SecretDescription, SecretUpdateInput } from "../../types.ts";
+import { runHttpsThroughProxy } from "../projects/egress-https-proxy.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   createStreamProcessorHost,
@@ -81,6 +81,10 @@ export class SecretDurableObject extends DurableObject<Env> {
     };
   }
 
+  // Two egress dispatches sharing one substitution path (#fetchWithMaterializedSecret);
+  // they differ only in how the materialized request leaves.
+
+  /** Substitute the secret, then send the request over the platform's own network. */
   async fetch(request: Request): Promise<Response> {
     // TODO: support websocket upgrade requests here once egress substitution
     // needs non-HTTP fetches. Keeping this on fetch() preserves that path.
@@ -89,9 +93,10 @@ export class SecretDurableObject extends DurableObject<Env> {
     );
   }
 
-  async fetchThroughProxy(request: Request, relay: TunnelingProxy): Promise<Response> {
+  /** Substitute the secret, then send it as TLS through the client's egress proxy. */
+  async fetchThroughProxy(request: Request, proxy: EgressHttpsProxy): Promise<Response> {
     return this.#fetchWithMaterializedSecret(request, (materializedRequest) =>
-      fetchThroughTunnelingProxy(materializedRequest, relay),
+      runHttpsThroughProxy(materializedRequest, proxy),
     );
   }
 

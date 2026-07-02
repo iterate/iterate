@@ -297,49 +297,67 @@ export interface DynamicWorkerCollection {
   ): DynamicWorkerCapability<T>;
 }
 
-/** Live replacement for project egress. It sees getSecret(...) placeholders, never material. */
+/*
+ * A project can make outbound HTTPS calls, substituting its real secrets into
+ * them at the last moment. A client can install ONE of two live egress modes,
+ * and they differ in exactly one thing — how much of the traffic it may see:
+ *
+ *   intercept()           MITM. The client is handed the outbound Request
+ *                         *before* substitution, so it sees getSecret(...)
+ *                         placeholders (never real material) and may inspect,
+ *                         rewrite, or answer it.
+ *
+ *   useEgressHttpsProxy() non-MITM. The client only dials TCP and shuttles
+ *                         opaque TLS records. The worker substitutes the secret
+ *                         and terminates TLS itself, so the proxy sees the target
+ *                         host/port but never the request, body, or secret — the
+ *                         real token leaves from the proxy's IP as ciphertext.
+ */
+
+/** intercept() callback. Runs pre-substitution, so it only ever sees getSecret(...) placeholders. */
 export type ProjectEgressInterceptor = (req: Request) => Promise<Response>;
 
-export interface TunnelingProxyDial {
+/** Where the proxy should open a TCP connection. */
+export interface EgressHttpsProxyDial {
   host: string;
   port: number;
 }
 
-export interface TunnelingProxyConnection {
-  close(): Promise<void>;
+/** A raw, bidirectional TCP byte stream the worker runs its TLS client over. */
+export interface EgressHttpsProxyConnection {
   read(): Promise<Uint8Array | null>;
   write(chunk: Uint8Array): Promise<void>;
+  close(): Promise<void>;
 }
 
 /**
- * Experimental secret-backed HTTPS egress relay. The relay is allowed to see
- * target host/port and opaque TLS bytes, but must not receive a materialized
- * Request or Response.
+ * A client-provided, non-MITM egress proxy: it only opens TCP sockets and moves
+ * opaque TLS records. It must never receive a materialized Request or Response.
  */
-export interface TunnelingProxy {
-  dial(input: TunnelingProxyDial): Promise<TunnelingProxyConnection>;
+export interface EgressHttpsProxy {
+  dial(input: EgressHttpsProxyDial): Promise<EgressHttpsProxyConnection>;
 }
 
-/** Disposable handle for one live project egress interception. */
-export interface ProjectEgressIntercept extends Disposable {
+/** Disposable handle for one installed egress mode (intercept or proxy). */
+export interface ProjectEgressHandle extends Disposable {
   release(): Promise<void>;
 }
 
 /**
  * Project-owned egress facet.
  *
- * `fetch` is the explicit outbound door. Dynamic workers' bare `fetch()` uses
- * the same project egress path through the WorkerEntrypoint gateway.
+ * `fetch` is the one outbound door: explicit RPC egress and a dynamic worker's
+ * bare `fetch()` both flow through it (via the WorkerEntrypoint gateway), so a
+ * single decision point in the Project Durable Object governs all egress.
  *
- * `intercept` and `useEgressHttpsProxy` install one live runtime
- * egress mode on the Project Durable Object. Last writer wins; disposing or
- * releasing the handle clears only the mode it installed if it is still
- * current.
+ * `intercept` / `useEgressHttpsProxy` install one live mode (last writer wins);
+ * releasing or disposing the returned handle clears only the mode it installed,
+ * and only if it is still current.
  */
 export interface ProjectEgress {
   fetch(req: Request): Promise<Response>;
-  intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;
-  useEgressHttpsProxy(relay: TunnelingProxy): Promise<ProjectEgressIntercept>;
+  intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressHandle>;
+  useEgressHttpsProxy(proxy: EgressHttpsProxy): Promise<ProjectEgressHandle>;
 }
 
 export type ProjectDescription = {

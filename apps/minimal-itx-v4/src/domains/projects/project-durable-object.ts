@@ -9,21 +9,24 @@ import { trustedInternalAuthContext } from "../../auth.ts";
 import { ItxRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type {
-  TunnelingProxy,
+  EgressHttpsProxy,
   CfExecutionContext,
-  ProjectEgressIntercept,
+  ProjectEgressHandle,
   ProjectEgressInterceptor,
 } from "../../types.ts";
 import { deepRetainRpcStubs } from "../itx/live-capability.ts";
 import { secretErrorResponse, secretReferencePathsFromHeaders } from "../secrets/utils.ts";
-import { fetchThroughTunnelingProxy } from "./blind-relay.ts";
+import { runHttpsThroughProxy } from "./egress-https-proxy.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 
+// The one live egress mode the client installed. `retained` holds the client's
+// RPC stubs alive across turns (a bare stub would be collected after the
+// installing call returns); it is disposed when the mode is replaced or released.
 type ProjectEgressMode =
   | {
-      kind: "tunneling-proxy";
-      retained: ReturnType<typeof deepRetainRpcStubs<TunnelingProxy>>;
+      kind: "https-proxy";
+      retained: ReturnType<typeof deepRetainRpcStubs<EgressHttpsProxy>>;
     }
   | {
       kind: "interceptor";
@@ -68,10 +71,20 @@ export class ProjectDurableObject extends DurableObject<Env> {
     return new StreamProcessorRpcTarget(this.#projectProcessor);
   }
 
+  /**
+   * The single decision point for all project egress. Routing, once an
+   * interceptor has been ruled out:
+   *
+   *                      no proxy installed      proxy installed
+   *   no secret header   direct fetch()          proxy (already materialized)
+   *   one secret header  Secret DO substitutes   Secret DO substitutes, then proxy
+   *
+   * An interceptor short-circuits the whole table: it runs first, before any
+   * secret substitution (so it only sees getSecret(...) placeholders), and owns
+   * the response.
+   */
   async fetch(request: Request): Promise<Response> {
     if (this.#egressMode?.kind === "interceptor") {
-      // Egress interceptors run before secret substitution. They must never
-      // receive raw secret material, only getSecret(...) placeholders.
       return await this.#egressMode.retained.value(request);
     }
 
@@ -85,65 +98,48 @@ export class ProjectDurableObject extends DurableObject<Env> {
       return secretErrorResponse("multiple_secret_paths_not_supported", 400);
     }
 
-    // A blind relay carries every outbound request through the client-owned
-    // socket, so the listener sees each egress (secret or not) as encrypted
-    // bytes — symmetric with an interceptor seeing every request.
-    const relay: TunnelingProxy | undefined =
-      this.#egressMode?.kind === "tunneling-proxy" ? this.#egressMode.retained.value : undefined;
+    // An installed proxy carries *every* outbound request (secret or not), so a
+    // listener sees all egress as encrypted bytes — symmetric with an
+    // interceptor seeing every request.
+    const proxy: EgressHttpsProxy | undefined =
+      this.#egressMode?.kind === "https-proxy" ? this.#egressMode.retained.value : undefined;
 
-    // No secret to substitute: the request is already materialized.
+    // No secret to substitute: the request is already fully materialized.
     if (secretPaths.length === 0) {
-      if (relay !== undefined) return fetchThroughTunnelingProxy(request, relay);
+      if (proxy !== undefined) return runHttpsThroughProxy(request, proxy);
       return fetch(request);
     }
 
+    // One secret: the Secret DO substitutes the real material, then dispatches —
+    // directly, or through the proxy (which only ever sees the resulting TLS).
     const secret = this.env.SECRET.getByName(
       DurableObjectNameCodec.stringify({
         projectId: this.#name.projectId,
         path: secretPaths[0]!,
       }),
     );
-    if (relay !== undefined) return secret.fetchThroughProxy(request, relay);
+    if (proxy !== undefined) return secret.fetchThroughProxy(request, proxy);
     return secret.fetch(request);
   }
 
-  interceptEgress(handler: ProjectEgressInterceptor): ProjectEgressIntercept {
-    if (typeof handler !== "function")
+  interceptEgress(handler: ProjectEgressInterceptor): ProjectEgressHandle {
+    if (typeof handler !== "function") {
       throw new Error("project egress interceptor must be a function");
-    const mode: ProjectEgressMode = {
-      kind: "interceptor",
-      retained: deepRetainRpcStubs(handler),
-    };
-    this.#setEgressMode(mode);
-
-    return new ProjectEgressInterceptRpcTarget({
-      ctx: this.ctx,
-      release: () => {
-        if (this.#egressMode !== mode) return;
-        mode.retained[Symbol.dispose]();
-        this.#egressMode = undefined;
-      },
-    });
+    }
+    return this.#installEgressMode({ kind: "interceptor", retained: deepRetainRpcStubs(handler) });
   }
 
-  useEgressHttpsProxy(relay: TunnelingProxy): ProjectEgressIntercept {
-    const mode: ProjectEgressMode = {
-      kind: "tunneling-proxy",
-      retained: deepRetainRpcStubs(relay),
-    };
-    this.#setEgressMode(mode);
-
-    return new ProjectEgressInterceptRpcTarget({
-      ctx: this.ctx,
-      release: () => {
-        if (this.#egressMode !== mode) return;
-        mode.retained[Symbol.dispose]();
-        this.#egressMode = undefined;
-      },
-    });
+  useEgressHttpsProxy(proxy: EgressHttpsProxy): ProjectEgressHandle {
+    return this.#installEgressMode({ kind: "https-proxy", retained: deepRetainRpcStubs(proxy) });
   }
 
-  #setEgressMode(mode: ProjectEgressMode) {
+  /**
+   * Install one live egress mode and return the handle that owns it. Last writer
+   * wins — any previous mode's retained RPC stubs are disposed. The handle's
+   * release clears this exact mode only if it is still current, so a stale
+   * handle can never tear down a newer mode.
+   */
+  #installEgressMode(mode: ProjectEgressMode): ProjectEgressHandle {
     if (this.#egressMode !== undefined) {
       console.warn("project egress mode overwritten", {
         nextKind: mode.kind,
@@ -153,16 +149,26 @@ export class ProjectDurableObject extends DurableObject<Env> {
       this.#egressMode.retained[Symbol.dispose]();
     }
     this.#egressMode = mode;
+
+    return new ProjectEgressHandleRpcTarget({
+      ctx: this.ctx,
+      release: () => {
+        if (this.#egressMode !== mode) return;
+        mode.retained[Symbol.dispose]();
+        this.#egressMode = undefined;
+      },
+    });
   }
 }
 
 /**
- * Disposable ownership handle returned by `project.egress.intercept(...)`.
- *
- * The Project Durable Object owns the retained live callback. This handle only
- * releases that exact retained callback if it is still the current interceptor.
+ * Disposable handle returned by `intercept()` / `useEgressHttpsProxy()`. The
+ * Project Durable Object owns the installed mode; `release()` is idempotent and
+ * runs `#release` (which no-ops if a newer mode has since replaced this one).
+ * Disposing schedules the same release on `ctx.waitUntil` so it can't be
+ * dropped when the RPC session ends.
  */
-class ProjectEgressInterceptRpcTarget extends RpcTarget implements ProjectEgressIntercept {
+class ProjectEgressHandleRpcTarget extends RpcTarget implements ProjectEgressHandle {
   readonly #ctx: Pick<CfExecutionContext, "waitUntil"> | undefined;
   readonly #release: () => void | Promise<void>;
   #releasePromise: Promise<void> | undefined;

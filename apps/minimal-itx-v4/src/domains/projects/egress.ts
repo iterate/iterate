@@ -4,11 +4,9 @@ import type { ProjectEgress } from "../../types.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 
 /**
- * Public project egress facet.
- *
- * The Project Durable Object is the single egress decision point: it owns the
- * live runtime interceptor slot and, when there is no interceptor, performs the
- * terminal secret-substitution fetch path.
+ * Public project egress facet. Every method is a thin forward to the Project
+ * Durable Object, which is the single decision point for all egress (see
+ * ProjectDurableObject.fetch).
  */
 export class ProjectEgressRpcTarget extends RpcTarget implements ProjectEgress {
   constructor(readonly props: { projectId: string }) {
@@ -23,8 +21,8 @@ export class ProjectEgressRpcTarget extends RpcTarget implements ProjectEgress {
     return projectStub(env.PROJECT, this.props.projectId).interceptEgress(handler);
   }
 
-  useEgressHttpsProxy(relay: Parameters<ProjectEgress["useEgressHttpsProxy"]>[0]) {
-    return projectStub(env.PROJECT, this.props.projectId).useEgressHttpsProxy(relay);
+  useEgressHttpsProxy(proxy: Parameters<ProjectEgress["useEgressHttpsProxy"]>[0]) {
+    return projectStub(env.PROJECT, this.props.projectId).useEgressHttpsProxy(proxy);
   }
 }
 

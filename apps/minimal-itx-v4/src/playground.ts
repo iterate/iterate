@@ -15,7 +15,7 @@ const PLAYGROUND_DEMO_SECRET_MATERIAL = "demo-secret-material";
 const POSTMAN_ECHO_GET_URL = "https://postman-echo.com/get?source=itx-playground";
 const POSTMAN_ECHO_HEADERS_URL = "https://postman-echo.com/headers";
 const POSTMAN_ECHO_POST_URL = "https://postman-echo.com/post";
-const BLIND_RELAY_SKIP_TLS_VERIFY_HEADER = "x-itx-blind-relay-insecure-skip-tls-verify";
+const EGRESS_PROXY_SKIP_TLS_VERIFY_HEADER = "x-itx-egress-proxy-insecure-skip-tls-verify";
 const ITX_EGRESS_CLI_DEPENDENCIES =
   "tsx@4.21.0 trpc-cli@0.15.1 @orpc/server@1.14.6 zod@4.4.3 capnweb@0.8.0 ws@8.19.0";
 
@@ -1423,7 +1423,7 @@ function playgroundExamples(origin: string) {
   // so you never call itx.egress.fetch — just fetch.
   return await fetch("${POSTMAN_ECHO_GET_URL}", {
     headers: {
-      "${BLIND_RELAY_SKIP_TLS_VERIFY_HEADER}": "1",
+      "${EGRESS_PROXY_SKIP_TLS_VERIFY_HEADER}": "1",
       "x-itx-demo": "postman-get",
     },
   });
@@ -1436,7 +1436,7 @@ function playgroundExamples(origin: string) {
   return await fetch("${POSTMAN_ECHO_POST_URL}", {
     method: "POST",
     headers: {
-      "${BLIND_RELAY_SKIP_TLS_VERIFY_HEADER}": "1",
+      "${EGRESS_PROXY_SKIP_TLS_VERIFY_HEADER}": "1",
       "content-type": "application/json",
       "x-itx-demo": "postman-post-json",
     },
@@ -1457,7 +1457,7 @@ function playgroundExamples(origin: string) {
   return await fetch("${POSTMAN_ECHO_HEADERS_URL}", {
     headers: {
       authorization: 'Bearer getSecret({ path: "${PLAYGROUND_DEMO_SECRET_PATH}" })',
-      "${BLIND_RELAY_SKIP_TLS_VERIFY_HEADER}": "1",
+      "${EGRESS_PROXY_SKIP_TLS_VERIFY_HEADER}": "1",
       "x-itx-demo": "postman-secret-headers",
     },
   });
@@ -1477,7 +1477,7 @@ function playgroundExamples(origin: string) {
     method: "POST",
     headers: {
       authorization: 'Bearer getSecret({ path: "${PLAYGROUND_DEMO_SECRET_PATH}" })',
-      "${BLIND_RELAY_SKIP_TLS_VERIFY_HEADER}": "1",
+      "${EGRESS_PROXY_SKIP_TLS_VERIFY_HEADER}": "1",
       "content-type": "text/plain",
       "x-itx-demo": "postman-secret-post",
     },

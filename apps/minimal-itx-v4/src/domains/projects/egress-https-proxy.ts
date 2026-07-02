@@ -1,13 +1,26 @@
+// Send one HTTPS request through a client-provided, non-MITM egress proxy.
+//
+// The Worker is the TLS client here: it substitutes the secret, then runs the
+// full TLS handshake + HTTP write/read itself, in pure JS, over a raw byte
+// stream the proxy opened. The proxy only ever dials TCP and shuttles ciphertext
+// (`dial` -> read/write), so it sees the target host/port but never the request,
+// body, or substituted secret. Running TLS in-worker (rather than terminating at
+// the proxy) is what makes it non-MITM.
+//
+// Scope is deliberately narrow for a POC: HTTPS only, and an HTTP/1.1 response
+// parser that handles content-length, chunked, and close-delimited bodies up to
+// MAX_PROXY_RESPONSE_BYTES. The connection is method-based RPC (read/write/close)
+// because deployed Cap'n Web did not reliably stream Web Stream chunks here.
 import { makeTLSClient, setCryptoImplementation, type X509Certificate } from "@reclaimprotocol/tls";
 import { pureJsCrypto } from "@reclaimprotocol/tls/purejs-crypto";
-import type { TunnelingProxy, TunnelingProxyConnection } from "../../types.ts";
+import type { EgressHttpsProxy, EgressHttpsProxyConnection } from "../../types.ts";
 
-export const BLIND_RELAY_PINNED_CERT_SHA256_HEADER = "x-itx-blind-relay-cert-sha256";
-const INSECURE_BLIND_RELAY_SKIP_TLS_VERIFY_HEADER = "x-itx-blind-relay-insecure-skip-tls-verify";
+export const EGRESS_PROXY_PINNED_CERT_SHA256_HEADER = "x-itx-egress-proxy-cert-sha256";
+const EGRESS_PROXY_SKIP_TLS_VERIFY_HEADER = "x-itx-egress-proxy-insecure-skip-tls-verify";
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
-const MAX_BLIND_RELAY_RESPONSE_BYTES = 8 * 1024 * 1024;
+const MAX_PROXY_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 setCryptoImplementation({
   ...pureJsCrypto,
@@ -18,39 +31,44 @@ setCryptoImplementation({
   },
 });
 
-export async function fetchThroughTunnelingProxy(
+export async function runHttpsThroughProxy(
   request: Request,
-  relay: TunnelingProxy,
+  proxy: EgressHttpsProxy,
 ): Promise<Response> {
-  // POC shape: the Worker materializes secret placeholders, then runs TLS
-  // locally. The relay only dials TCP and shuttles encrypted TLS records, so it
-  // sees the target host/port but not HTTP headers, body, or the substituted
-  // secret. The connection is method-based RPC because deployed Cap'n Web did
-  // not reliably return Web Stream chunks for this path. HTTP parsing is
-  // intentionally narrow: HTTP/1.1 content-length, chunked, or close-delimited
-  // responses up to MAX_BLIND_RELAY_RESPONSE_BYTES.
   const url = new URL(request.url);
   if (url.protocol !== "https:") {
-    return Response.json({ error: "blind relay egress only supports https" }, { status: 400 });
+    return Response.json({ error: "egress proxy only supports https" }, { status: 400 });
   }
 
   const port = url.port === "" ? 443 : Number(url.port);
   if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
-    return Response.json({ error: "invalid blind relay port" }, { status: 400 });
+    return Response.json({ error: "invalid egress proxy port" }, { status: 400 });
   }
 
   const requestBytes = await serializeHttpRequest(request, url);
-  const connection = await relay.dial({ host: url.hostname, port });
+  const connection = await proxy.dial({ host: url.hostname, port });
   const responseBytes = await runTlsHttpRequest({
     connection,
     hostname: url.hostname,
-    pinnedCertSha256: request.headers.get(BLIND_RELAY_PINNED_CERT_SHA256_HEADER),
+    pinnedCertSha256: request.headers.get(EGRESS_PROXY_PINNED_CERT_SHA256_HEADER),
     requestBytes,
-    skipTlsVerify: request.headers.get(INSECURE_BLIND_RELAY_SKIP_TLS_VERIFY_HEADER) === "1",
+    skipTlsVerify: request.headers.get(EGRESS_PROXY_SKIP_TLS_VERIFY_HEADER) === "1",
   });
   return parseHttpResponse(responseBytes);
 }
 
+/**
+ * Drive one HTTPS request/response over the proxy's raw byte stream.
+ *
+ * The TLS client is callback-driven, so this wraps it in a Promise:
+ *  - `write` callback  -> push ciphertext to the proxy (connection.write)
+ *  - `pumpEncryptedInput` -> read ciphertext from the proxy back into the client
+ *  - `onHandshake` -> (optionally pin the cert, then) send the HTTP request
+ *  - `onApplicationData` -> accumulate plaintext until a full HTTP response is framed
+ *  - `onTlsEnd` -> resolve close-delimited responses, or fail
+ * `complete`/`fail` settle exactly once (guarded by `settled`) and always close
+ * the connection. `progress` is diagnostic only — it decorates the timeout error.
+ */
 async function runTlsHttpRequest({
   connection,
   hostname,
@@ -58,7 +76,7 @@ async function runTlsHttpRequest({
   requestBytes,
   skipTlsVerify,
 }: {
-  connection: TunnelingProxyConnection;
+  connection: EgressHttpsProxyConnection;
   hostname: string;
   pinnedCertSha256: string | null;
   requestBytes: Uint8Array;
@@ -73,7 +91,7 @@ async function runTlsHttpRequest({
     const timeout = setTimeout(() => {
       fail(
         new Error(
-          `timed out waiting for blind relay HTTP response (${concatBytes(responseChunks).byteLength} bytes received, progress=${JSON.stringify(progress)})`,
+          `timed out waiting for egress proxy HTTP response (${concatBytes(responseChunks).byteLength} bytes received, progress=${JSON.stringify(progress)})`,
         ),
       );
     }, 15_000);
@@ -98,8 +116,8 @@ async function runTlsHttpRequest({
 
         try {
           const responseBytes = concatBytes(responseChunks);
-          if (responseBytes.byteLength > MAX_BLIND_RELAY_RESPONSE_BYTES) {
-            fail(new Error("blind relay response exceeded maximum POC response size"));
+          if (responseBytes.byteLength > MAX_PROXY_RESPONSE_BYTES) {
+            fail(new Error("egress proxy response exceeded maximum POC response size"));
             return;
           }
           const completeLength = completedHttpResponseLength(responseBytes);
@@ -114,7 +132,7 @@ async function runTlsHttpRequest({
           return;
         }
         if (responseChunks.length === 0) {
-          fail(new Error("blind relay TLS connection closed before response"));
+          fail(new Error("egress proxy TLS connection closed before response"));
           return;
         }
 
@@ -129,7 +147,7 @@ async function runTlsHttpRequest({
             complete(responseBytes);
             return;
           }
-          fail(new Error("blind relay TLS connection closed before complete HTTP response"));
+          fail(new Error("egress proxy TLS connection closed before complete HTTP response"));
         } catch (parseError) {
           fail(parseError);
         }
@@ -143,7 +161,7 @@ async function runTlsHttpRequest({
       try {
         if (pinnedCertSha256 !== null) {
           if (leafCertificate === undefined) {
-            throw new Error("blind relay TLS connection did not receive a certificate");
+            throw new Error("egress proxy TLS connection did not receive a certificate");
           }
           const leafSha256 = await certificateSha256(leafCertificate);
           if (leafSha256 !== pinnedCertSha256.toLowerCase().replaceAll(/[^a-f0-9]/g, "")) {
@@ -205,8 +223,8 @@ async function serializeHttpRequest(request: Request, url: URL): Promise<Uint8Ar
   const body =
     request.body === null ? new Uint8Array() : new Uint8Array(await request.arrayBuffer());
   const headers = new Headers(request.headers);
-  headers.delete(BLIND_RELAY_PINNED_CERT_SHA256_HEADER);
-  headers.delete(INSECURE_BLIND_RELAY_SKIP_TLS_VERIFY_HEADER);
+  headers.delete(EGRESS_PROXY_PINNED_CERT_SHA256_HEADER);
+  headers.delete(EGRESS_PROXY_SKIP_TLS_VERIFY_HEADER);
   headers.delete("connection");
   headers.delete("content-length");
   headers.delete("host");
@@ -232,13 +250,13 @@ async function serializeHttpRequest(request: Request, url: URL): Promise<Uint8Ar
 
 export function parseHttpResponse(bytes: Uint8Array): Response {
   const headerEnd = indexOfHeaderEnd(bytes);
-  if (headerEnd === -1) throw new Error("blind relay response did not contain HTTP headers");
+  if (headerEnd === -1) throw new Error("egress proxy response did not contain HTTP headers");
 
   const headerText = textDecoder.decode(bytes.slice(0, headerEnd));
   const [statusLine, ...headerLines] = headerText.split("\r\n");
   const statusMatch = /^HTTP\/1\.[01] ([0-9]{3})(?: (.*))?$/.exec(statusLine ?? "");
   if (statusMatch === null) {
-    throw new Error(`blind relay response had invalid status line: ${statusLine ?? ""}`);
+    throw new Error(`egress proxy response had invalid status line: ${statusLine ?? ""}`);
   }
 
   const headers = new Headers();
@@ -266,7 +284,7 @@ export function parseHttpResponse(bytes: Uint8Array): Response {
 
 function decodeChunkedBody(bytes: Uint8Array): Uint8Array {
   const result = parseChunkedBody(bytes);
-  if (result === undefined) throw new Error("blind relay chunked response was truncated");
+  if (result === undefined) throw new Error("egress proxy chunked response was truncated");
   return result.body;
 }
 
@@ -330,7 +348,7 @@ function parseChunkedBody(
     chunks.push(bytes.slice(offset, offset + size));
     offset += size + 2;
     if (bytes[offset - 2] !== 13 || bytes[offset - 1] !== 10) {
-      throw new Error("blind relay chunked response chunk missing CRLF terminator");
+      throw new Error("egress proxy chunked response chunk missing CRLF terminator");
     }
   }
   return undefined;

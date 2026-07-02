@@ -18,13 +18,17 @@ import type { ItxWebSocketMessage } from "./test-helpers.ts";
 import type { UnauthenticatedItx } from "./src/types.ts";
 import { TRUSTED_INTERNAL_ITX_TOKEN } from "./src/auth.ts";
 import {
-  BLIND_RELAY_PINNED_CERT_SHA256_HEADER,
+  EGRESS_PROXY_PINNED_CERT_SHA256_HEADER,
   completedHttpResponseLength,
   parseHttpResponse,
-  fetchThroughTunnelingProxy,
-} from "./src/domains/projects/blind-relay.ts";
+  runHttpsThroughProxy,
+} from "./src/domains/projects/egress-https-proxy.ts";
 import { RepoArtifactNameCodec } from "./src/domains/repos/utils.ts";
-import type { TunnelingProxy, TunnelingProxyConnection, DynamicWorkerRef } from "./src/types.ts";
+import type {
+  EgressHttpsProxy,
+  EgressHttpsProxyConnection,
+  DynamicWorkerRef,
+} from "./src/types.ts";
 import {
   StreamProcessor,
   type StreamProcessorSnapshot,
@@ -168,7 +172,7 @@ type BlindRelayObservation = {
   workerToTargetChunks: Uint8Array[];
 };
 
-class BlindRelayConnectionTarget extends RpcTarget implements TunnelingProxyConnection {
+class BlindRelayConnectionTarget extends RpcTarget implements EgressHttpsProxyConnection {
   readonly #observation: BlindRelayObservation;
   readonly #readQueue: Uint8Array[] = [];
   readonly #readWaiters: Array<{
@@ -241,11 +245,11 @@ class BlindRelayConnectionTarget extends RpcTarget implements TunnelingProxyConn
   }
 }
 
-class BlindRelayTarget extends RpcTarget implements TunnelingProxy, Disposable {
+class BlindRelayTarget extends RpcTarget implements EgressHttpsProxy, Disposable {
   readonly observations: BlindRelayObservation[] = [];
   readonly #sockets = new Set<net.Socket>();
 
-  async dial({ host, port }: { host: string; port: number }): Promise<TunnelingProxyConnection> {
+  async dial({ host, port }: { host: string; port: number }): Promise<EgressHttpsProxyConnection> {
     const socket = net.connect({ host, port });
     this.#sockets.add(socket);
     socket.once("close", () => this.#sockets.delete(socket));
@@ -855,11 +859,11 @@ describe("minimal itx v4", () => {
     using relay = new BlindRelayTarget();
 
     try {
-      const response = await fetchThroughTunnelingProxy(
+      const response = await runHttpsThroughProxy(
         new Request(`${target.url}/secret-path?token=worker-only`, {
           body: "payload hidden from relay",
           headers: {
-            [BLIND_RELAY_PINNED_CERT_SHA256_HEADER]: target.certSha256,
+            [EGRESS_PROXY_PINNED_CERT_SHA256_HEADER]: target.certSha256,
             [EGRESS_PROOF_HEADER]: "Bearer blind-secret-material",
           },
           method: "POST",
@@ -924,7 +928,7 @@ describe("minimal itx v4", () => {
       const request = new Request(`${target.url}/secret-path?token=worker-only`, {
         body: "payload hidden from relay",
         headers: {
-          [BLIND_RELAY_PINNED_CERT_SHA256_HEADER]: target.certSha256,
+          [EGRESS_PROXY_PINNED_CERT_SHA256_HEADER]: target.certSha256,
           [EGRESS_PROOF_HEADER]: `Bearer getSecret({ path: "${secretPath}" })`,
         },
         method: "POST",
