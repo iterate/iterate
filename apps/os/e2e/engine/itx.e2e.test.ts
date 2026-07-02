@@ -1911,12 +1911,14 @@ describe("minimal itx v4", () => {
         [
           "get",
           {
-            className: "CounterDurableObject",
+            // The seeded stateful app (the multi-app seed moved the counter
+            // class out of the root router into its own repo-backed module).
+            className: "CounterApp",
             durableWorkerKey,
             path: agentPath,
             source: {
               repoPath: "/",
-              sourcePath: "worker.js",
+              sourcePath: "apps/counter/worker.js",
               type: "repo",
             },
             type: "stateful",
