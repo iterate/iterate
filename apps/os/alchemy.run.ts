@@ -50,7 +50,7 @@ async function fetchJwksWithRetry(url: string): Promise<{ keys: unknown[] }> {
   while (true) {
     attempt += 1;
     try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+      const response = await fetch(url, { signal: AbortSignal.timeout(4_000) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const jwks = (await response.json()) as { keys?: unknown[] };
       if (!Array.isArray(jwks.keys) || jwks.keys.length === 0) {
@@ -61,7 +61,7 @@ async function fetchJwksWithRetry(url: string): Promise<{ keys: unknown[] }> {
       lastError = error;
       if (Date.now() >= deadline) throw lastError;
       console.warn(`[alchemy.run] JWKS fetch attempt ${attempt} failed, retrying:`, error);
-      await new Promise((resolve) => setTimeout(resolve, 3_000));
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
     }
   }
 }

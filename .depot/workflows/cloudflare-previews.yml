@@ -1,0 +1,82 @@
+# Depot CI variant of .github/workflows/cloudflare-previews.yml.
+#
+# Depot CI runners pick up jobs in ~5-10s where GitHub Actions + Depot GHA
+# runners spend 20s-3min in queue/assignment (measured 2026-07-02), which is
+# the largest fixed cost left in the preview deploy+e2e pipeline. Keep the
+# steps in sync with the generated GitHub workflow.
+#
+# Test from a checkout without pushing:
+#   depot ci run --workflow .depot/workflows/cloudflare-previews.yml \
+#     --org 0p91s0lz49 --repo iterate/iterate
+
+name: Cloudflare Previews (Depot CI)
+
+on:
+  workflow_dispatch:
+    inputs:
+      pull-request-number:
+        description: PR number to deploy + test
+        required: true
+
+concurrency:
+  group: cloudflare-previews-${{ github.event.pull_request.number || inputs.pull-request-number }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    if: github.event.action != 'closed'
+    name: Preview / deploy + e2e
+    runs-on: depot-ubuntu-24.04-16
+    concurrency:
+      group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number || inputs.pull-request-number }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
+      - name: Install Doppler CLI
+        run: |-
+          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
+          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
+      - name: Preview / deploy
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
+          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |-
+          set -euo pipefail
+          doppler run --project _shared --config prd -- pnpm preview deploy \
+            --github-token "$GITHUB_TOKEN" \
+            --pull-request-number "${{ github.event.pull_request.number || inputs.pull-request-number }}"
+      - name: Preview / e2e
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
+          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |-
+          set -euo pipefail
+          doppler run --project _shared --config prd -- pnpm preview test \
+            --github-token "$GITHUB_TOKEN" \
+            --pull-request-number "${{ github.event.pull_request.number || inputs.pull-request-number }}"
+      - name: Upload OS preview test artifacts
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-os-test-artifacts
+          path: |-
+            test-results
+            apps/os/test-results
+            /tmp/os-e2e-*
+            /tmp/os-itx-e2e-*
+          if-no-files-found: ignore
