@@ -239,9 +239,9 @@ async function requestRepoCreate(input: {
     eventTypes: ["events.iterate.com/repo/created"],
     predicate: (event) =>
       event.payload?.projectId === input.projectId && event.payload?.path === path,
-    // Generous: repo create clones/seeds a CF Artifacts repo; cold slots under
-    // parallel e2e load have been seen to straggle past 60s.
-    timeoutMs: 240_000,
+    // Tight on purpose: creates should be fast (see tasks/os-cold-create-latency.md
+    // for the cold-slot outliers). Preview CI warms slots before the suites.
+    timeoutMs: 60_000,
   });
 
   return new RepoRpcTarget({ auth: input.auth, path, projectId: input.projectId });
@@ -838,10 +838,10 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
       afterOffset: createRequested.offset - 1,
       eventTypes: ["events.iterate.com/project/created"],
       predicate: (event) => event.payload?.projectId === args.projectId,
-      // Generous: the create saga seeds the repo, probes the project worker,
-      // and births the onboarding agent; cold slots under parallel e2e load
-      // have been seen to straggle past 60s.
-      timeoutMs: 240_000,
+      // Tight on purpose: the saga should complete in seconds (see
+      // tasks/os-cold-create-latency.md for the cold-slot outliers that must
+      // be fixed, not waited out). Preview CI warms slots before the suites.
+      timeoutMs: 60_000,
     });
 
     return new ItxRpcTarget({
