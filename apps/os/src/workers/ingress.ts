@@ -73,5 +73,9 @@ export function rewriteMcpHostRequest(input: {
   requestUrl.host = appUrl.host;
   requestUrl.pathname = `${MCP_START_MOUNT_PATH}${pathSuffix}`;
 
-  return new Request(requestUrl, input.request);
+  const headers = new Headers(input.request.headers);
+  headers.set("x-forwarded-host", new URL(input.request.url).host);
+  headers.set("x-forwarded-proto", new URL(input.request.url).protocol.replace(/:$/, ""));
+
+  return new Request(new Request(requestUrl, input.request), { headers });
 }

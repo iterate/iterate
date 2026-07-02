@@ -1,20 +1,35 @@
-import { createIterateAuth } from "@iterate-com/auth/server";
+import { createIterateAuth, type AccessTokenClaims } from "@iterate-com/auth/server";
 import {
-  ITERATE_PROJECT_SELECTION_SCOPE,
+  ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM,
+  ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM,
+  ITERATE_IS_ADMIN_CLAIM,
+  ITERATE_ROLE_CLAIM,
   listProjectScopeIds,
 } from "@iterate-com/shared/auth-claims";
-import { oauthResourceAudienceVariants } from "@iterate-com/shared/oauth-resource";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpHandler } from "agents/mcp";
 import { z } from "zod";
 import packageJson from "../../../package.json" with { type: "json" };
-import { authenticateAdminApiSecret } from "~/auth/admin.ts";
+import { authenticateAdminApiSecret, readBearerToken } from "~/auth/admin.ts";
+import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import { principalFromAccessToken } from "~/auth/principal.ts";
 import { listAllProjects } from "~/db/queries/.generated/index.ts";
+import {
+  acceptedMcpResourceAudiences,
+  isMcpProtectedResourceMetadataPath,
+  mcpChallengeHeader,
+  mcpOAuthScopes,
+  publicMcpResourceUrl,
+  publicRequestUrl,
+} from "~/domains/inbound-mcp-server/mcp-auth-metadata.ts";
+import {
+  handleMcpDebugRequest,
+  matchMcpDebugRequest,
+} from "~/domains/inbound-mcp-server/mcp-debug-handler.ts";
 import { projectContextRef } from "~/itx/coordinates.ts";
 import type { ItxRuntime } from "~/itx/handle.ts";
 import { runItxScript } from "~/itx/run.ts";
-import { MCP_START_MOUNT_PATH, resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
+import { MCP_START_MOUNT_PATH } from "~/lib/mcp-base-url.ts";
 import type { RequestContext } from "~/request-context.ts";
 
 type ProjectGrant = {
@@ -29,6 +44,7 @@ type McpAuth = {
 };
 
 const requiredToolScope = "profile";
+
 const ExecJsInput = z.object({
   code: z
     .string()
@@ -55,7 +71,11 @@ export async function handleInboundMcpRequest(input: {
   if (input.request.method === "OPTIONS") {
     return new Response(null, { headers: mcpCorsHeaders });
   }
-  if (pathname === `${MCP_START_MOUNT_PATH}/.well-known/oauth-protected-resource`) {
+  const debugRoute = matchMcpDebugRequest(pathname);
+  if (debugRoute) {
+    return await handleMcpDebugRequest({ ...input, route: debugRoute });
+  }
+  if (isMcpProtectedResourceMetadataPath(pathname)) {
     return Response.json(protectedResourceMetadata(input), { headers: mcpCorsHeaders });
   }
   if (pathname !== MCP_START_MOUNT_PATH && pathname !== `${MCP_START_MOUNT_PATH}/`) {
@@ -155,19 +175,46 @@ async function resolveMcpAuth(input: {
     };
   }
 
-  const mcpAudiences = oauthResourceAudienceVariants(canonicalMcpResourceUrl(input));
+  const mcpAudiences = acceptedMcpResourceAudiences(input);
   const auth = createMcpIterateAuth(input, mcpAudiences);
   if (!auth) {
+    logGrokMcpAuthFailure(input, {
+      branch: "iterate_auth_not_configured",
+      authHeaderPresent: Boolean(input.request.headers.get("authorization")),
+    });
     return new Response("Iterate auth is not configured.", {
       status: 503,
       headers: mcpCorsHeaders,
     });
   }
 
-  const accessToken = await auth.authenticateBearer({ headers: input.request.headers });
-  if (!accessToken) return unauthorizedMcpResponse(input, "Missing or invalid bearer token");
+  const bearerToken = readBearerToken(input.request.headers.get("authorization"));
+  const resolvedToken = await resolveOAuthAccessToken({
+    ...input,
+    auth,
+    bearerToken,
+    audiences: mcpAudiences,
+  });
+  if (!resolvedToken) {
+    logGrokMcpAuthFailure(input, {
+      branch: bearerToken ? "token_decode_or_verify_failed" : "no_bearer_token",
+      authHeaderPresent: Boolean(input.request.headers.get("authorization")),
+      bearerTokenPresent: Boolean(bearerToken),
+      jwt: bearerToken ? safelyReadJwtMetadata(bearerToken) : null,
+    });
+    return unauthorizedMcpResponse(input, "Missing or invalid bearer token");
+  }
+  const { accessToken, verificationMode } = resolvedToken;
   const audiences = Array.isArray(accessToken.aud) ? accessToken.aud : [accessToken.aud];
   if (!audiences.some((audience) => mcpAudiences.includes(audience))) {
+    logGrokMcpAuthFailure(input, {
+      branch: "audience_mismatch",
+      verificationMode,
+      authHeaderPresent: true,
+      bearerTokenPresent: true,
+      acceptedAudiences: mcpAudiences,
+      jwt: safeAccessTokenMetadata(accessToken),
+    });
     return unauthorizedMcpResponse(input, "Bearer token is not scoped to this MCP resource");
   }
 
@@ -186,17 +233,85 @@ async function resolveMcpAuth(input: {
   });
 
   if (projects.length === 0) {
-    return new Response("MCP token does not grant access to any projects.", {
-      status: 403,
-      headers: mcpCorsHeaders,
+    logGrokMcpAuthFailure(input, {
+      branch: "no_project_grants",
+      verificationMode,
+      authHeaderPresent: true,
+      bearerTokenPresent: true,
+      jwt: safeAccessTokenMetadata(accessToken),
+      scopes,
+      projectCount: principal.projects.length,
     });
+    return forbiddenMcpResponse(input, "MCP token does not grant access to any projects.");
   }
+
+  logGrokMcpAuthSuccess(input, {
+    verificationMode,
+    scopes,
+    projectCount: projects.length,
+    jwt: safeAccessTokenMetadata(accessToken),
+  });
 
   return {
     authType: "oauth_access_token",
     projects,
     scopes,
   };
+}
+
+async function resolveOAuthAccessToken(input: {
+  auth: ReturnType<typeof createIterateAuth>;
+  bearerToken: string | null;
+  context: RequestContext;
+  request: Request;
+  audiences: readonly string[];
+}): Promise<{
+  accessToken: AccessTokenClaims;
+  verificationMode: "jwt" | "opaque-internal";
+} | null> {
+  const accessToken = await input.auth.authenticateBearer({ headers: input.request.headers });
+  if (accessToken) return { accessToken, verificationMode: "jwt" };
+  if (!input.bearerToken) return null;
+
+  try {
+    const result = await createAuthWorkerServiceClient(
+      input.context,
+    ).internal.oauth.introspectAccessToken({
+      token: input.bearerToken,
+      audiences: [...input.audiences],
+    });
+    if (!result.active) {
+      logGrokMcpAuthFailure(input, {
+        branch: "opaque_internal_introspection_inactive",
+        introspectionReason: result.reason,
+      });
+      return null;
+    }
+
+    return {
+      verificationMode: "opaque-internal",
+      accessToken: {
+        sub: result.sub,
+        sid: result.sid,
+        iss: result.iss,
+        aud: result.aud,
+        iat: result.iat,
+        exp: result.exp,
+        scope: result.scope,
+        scopes: result.scopes,
+        [ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM]: result.organizations,
+        [ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM]: result.projects,
+        [ITERATE_IS_ADMIN_CLAIM]: result.isAdmin,
+        [ITERATE_ROLE_CLAIM]: result.role,
+      },
+    };
+  } catch (error) {
+    logGrokMcpAuthFailure(input, {
+      branch: "opaque_internal_introspection_error",
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
 }
 
 function createMcpIterateAuth(
@@ -249,29 +364,13 @@ function requireScope(auth: McpAuth, scope: string) {
 
 function protectedResourceMetadata(input: { context: RequestContext; request: Request }) {
   return {
-    resource: canonicalMcpResourceUrl(input),
+    resource: publicMcpResourceUrl(input),
     authorization_servers: [
       input.context.config.iterateAuth?.issuer ?? "https://auth.iterate.com/api/auth",
     ],
-    scopes_supported: [
-      "openid",
-      "profile",
-      "email",
-      "offline_access",
-      ITERATE_PROJECT_SELECTION_SCOPE,
-    ],
+    scopes_supported: mcpOAuthScopes,
     bearer_methods_supported: ["header"],
   };
-}
-
-function canonicalMcpResourceUrl(input: { context: RequestContext; request: Request }) {
-  const rawUrl = resolveMcpBaseUrl({
-    appBaseUrl: input.context.config.baseUrl,
-    mcpBaseUrl: input.context.config.mcp?.baseUrl,
-    requestUrl: input.request.url,
-  });
-  if (!rawUrl) throw new Error("APP_CONFIG_MCP__BASE_URL is required for MCP requests.");
-  return rawUrl;
 }
 
 function unauthorizedMcpResponse(
@@ -280,15 +379,142 @@ function unauthorizedMcpResponse(
 ) {
   const metadataUrl = new URL(
     ".well-known/oauth-protected-resource",
-    `${canonicalMcpResourceUrl(input)}/`,
+    `${publicMcpResourceUrl(input)}/`,
   ).toString();
   return new Response(message, {
     status: 401,
     headers: {
       ...mcpCorsHeaders,
-      "WWW-Authenticate": `Bearer resource_metadata="${metadataUrl}"`,
+      "WWW-Authenticate": mcpChallengeHeader({
+        error: "invalid_token",
+        errorDescription: message,
+        metadataUrl,
+      }),
     },
   });
+}
+
+function forbiddenMcpResponse(
+  input: { context: RequestContext; request: Request },
+  message: string,
+) {
+  const metadataUrl = new URL(
+    ".well-known/oauth-protected-resource",
+    `${publicMcpResourceUrl(input)}/`,
+  ).toString();
+  return new Response(message, {
+    status: 403,
+    headers: {
+      ...mcpCorsHeaders,
+      "WWW-Authenticate": mcpChallengeHeader({
+        error: "insufficient_scope",
+        errorDescription: message,
+        metadataUrl,
+      }),
+    },
+  });
+}
+
+function logGrokMcpAuthFailure(
+  input: { context: RequestContext; request: Request },
+  fields: Record<string, unknown>,
+) {
+  const userAgent = input.request.headers.get("user-agent") ?? "";
+  if (!/\bgrok\b/i.test(userAgent)) return;
+
+  input.context.log.info("os.mcp.grok_auth_failure");
+  input.context.log.set({
+    mcpAuth: {
+      method: input.request.method,
+      url: publicRequestUrl(input.request).toString(),
+      userAgent,
+      ...fields,
+    },
+  });
+  console.info(
+    "[DEBUG-GROK-MCP]",
+    JSON.stringify({
+      event: "real_os_auth_failure",
+      method: input.request.method,
+      url: publicRequestUrl(input.request).toString(),
+      userAgent,
+      ...fields,
+    }),
+  );
+}
+
+function logGrokMcpAuthSuccess(
+  input: { context: RequestContext; request: Request },
+  fields: Record<string, unknown>,
+) {
+  const userAgent = input.request.headers.get("user-agent") ?? "";
+  if (!/\bgrok\b/i.test(userAgent)) return;
+
+  input.context.log.info("os.mcp.grok_auth_success");
+  input.context.log.set({
+    mcpAuth: {
+      method: input.request.method,
+      url: publicRequestUrl(input.request).toString(),
+      userAgent,
+      ...fields,
+    },
+  });
+  console.info(
+    "[DEBUG-GROK-MCP]",
+    JSON.stringify({
+      event: "real_os_auth_success",
+      method: input.request.method,
+      url: publicRequestUrl(input.request).toString(),
+      userAgent,
+      ...fields,
+    }),
+  );
+}
+
+type JwtMetadata = {
+  iss?: string;
+  aud?: string | string[];
+  scope?: string;
+  scopes?: string[];
+  exp?: number;
+};
+
+function safeAccessTokenMetadata(accessToken: JwtMetadata): JwtMetadata {
+  return {
+    iss: typeof accessToken.iss === "string" ? accessToken.iss : undefined,
+    aud: safeJwtAudience(accessToken.aud),
+    scope: typeof accessToken.scope === "string" ? accessToken.scope : undefined,
+    scopes: Array.isArray(accessToken.scopes)
+      ? accessToken.scopes.filter((scope) => typeof scope === "string")
+      : undefined,
+    exp: typeof accessToken.exp === "number" ? accessToken.exp : undefined,
+  };
+}
+
+function safelyReadJwtMetadata(token: string): JwtMetadata | null {
+  const payload = token.split(".")[1];
+  if (!payload) return null;
+
+  try {
+    const json = atob(toBase64(payload));
+    const parsed: unknown = JSON.parse(json);
+    if (!parsed || typeof parsed !== "object") return null;
+    const claims = parsed as JwtMetadata;
+    return safeAccessTokenMetadata(claims);
+  } catch {
+    return null;
+  }
+}
+
+function safeJwtAudience(aud: unknown) {
+  if (typeof aud === "string") return aud;
+  if (Array.isArray(aud)) return aud.filter((value) => typeof value === "string");
+  return undefined;
+}
+
+function toBase64(base64Url: string) {
+  const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
+  return base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), "=");
 }
 
 function mcpExecutionContext(context: RequestContext): ExecutionContext {

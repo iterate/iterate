@@ -30,6 +30,16 @@ export const OrganizationSummary = OrganizationRecord.extend({
 });
 export type OrganizationSummary = z.infer<typeof OrganizationSummary>;
 
+const AccessTokenOrganizationClaim = OrganizationSummary.extend({
+  name: z.string().optional(),
+});
+
+const AccessTokenProjectClaim = z.object({
+  id: z.string(),
+  slug: z.string(),
+  organizationId: z.string(),
+});
+
 export const OrganizationMemberRecord = z.object({
   id: z.string(),
   userId: z.string(),
@@ -144,6 +154,40 @@ export const InternalSetOAuthClientInput = z.object({
   skipConsent: z.boolean().optional(),
 });
 export type InternalSetOAuthClientInput = z.infer<typeof InternalSetOAuthClientInput>;
+
+export const InternalIntrospectOAuthAccessTokenInput = z.object({
+  token: z.string().min(1),
+  audiences: z.array(z.string().min(1)).min(1),
+});
+export type InternalIntrospectOAuthAccessTokenInput = z.infer<
+  typeof InternalIntrospectOAuthAccessTokenInput
+>;
+
+export const InternalIntrospectOAuthAccessTokenOutput = z.discriminatedUnion("active", [
+  z.object({
+    active: z.literal(false),
+    reason: z.string().optional(),
+  }),
+  z.object({
+    active: z.literal(true),
+    sub: z.string(),
+    sid: z.string().optional(),
+    clientId: z.string(),
+    iss: z.string(),
+    aud: z.union([z.string(), z.array(z.string())]),
+    iat: z.number(),
+    exp: z.number(),
+    scope: z.string(),
+    scopes: z.array(z.string()),
+    organizations: z.array(AccessTokenOrganizationClaim),
+    projects: z.array(AccessTokenProjectClaim),
+    isAdmin: z.boolean(),
+    role: z.string().nullable(),
+  }),
+]);
+export type InternalIntrospectOAuthAccessTokenOutput = z.infer<
+  typeof InternalIntrospectOAuthAccessTokenOutput
+>;
 
 export const OAuthProjectSelectionInput = z.object({
   clientId: z.string().min(1),
@@ -437,6 +481,15 @@ export const authContract = oc.router({
         })
         .input(InternalSetOAuthClientInput)
         .output(OAuthClientRecord),
+      introspectAccessToken: oc
+        .route({
+          method: "POST",
+          path: "/internal/oauth/introspect-access-token",
+          summary: "Introspect an OAuth access token for internal resource servers",
+          tags: ["internal", "oauth"],
+        })
+        .input(InternalIntrospectOAuthAccessTokenInput)
+        .output(InternalIntrospectOAuthAccessTokenOutput),
     },
     user: {
       upsertVerifiedEmail: oc

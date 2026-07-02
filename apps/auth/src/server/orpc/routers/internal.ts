@@ -1,10 +1,16 @@
 import { ORPCError } from "@orpc/server";
 import { resolveUniqueSlug } from "@iterate-com/shared/slug";
+import {
+  ITERATE_PROJECT_SELECTION_SCOPE,
+  type IterateAuthAccessTokenOrganizationClaim,
+  type IterateAuthProjectClaim,
+} from "@iterate-com/shared/auth-claims";
 import { os, protectedMiddleware, serviceMiddleware } from "../orpc.ts";
 import { auth, createProjectIngressToken as createSignedProjectIngressToken } from "../../auth.ts";
 import { parseStringArray } from "../../db/helpers.ts";
 import {
   disableOAuthClientById,
+  getOAuthAccessTokenForInternalIntrospection,
   getOAuthClientByClientId,
   getOAuthClientByReferenceId,
   getOrganizationBySlug,
@@ -15,12 +21,19 @@ import {
   insertProjectReturning,
   insertUser,
   listMembersByOrganizationId,
+  listOrganizationsForUser,
+  listProjectsForUser,
   overwriteOAuthClientByClientId,
   updateOAuthClientById,
   updateOAuthClientReferenceByClientId,
   updateVerifiedUserById,
 } from "../../db/queries/index.ts";
 import { BOOTSTRAP_ADMIN_EMAIL } from "../../bootstrap-admin.ts";
+import {
+  buildAugmentedScopeClaims,
+  parseOAuthProjectSelectionReferenceId,
+} from "../../oauth-project-selection.ts";
+import { isPlatformAdminUser } from "../../platform-admin.ts";
 import {
   generateId,
   toMembershipRole,
@@ -485,6 +498,114 @@ const setOAuthClient = os.internal.oauth.setClient
     };
   });
 
+function parseOAuthScopes(value: string | null | undefined) {
+  try {
+    const parsed = parseStringArray(value);
+    if (parsed.length > 0) return parsed;
+  } catch {
+    // Older/debug rows may not be JSON-encoded; fall through to space splitting.
+  }
+
+  return value?.split(/\s+/).filter(Boolean) ?? [];
+}
+
+function toMillis(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value !== "string") return null;
+
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) return numeric;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+const introspectAccessToken = os.internal.oauth.introspectAccessToken
+  .use(serviceMiddleware)
+  .handler(async ({ context, input }) => {
+    const token = await getOAuthAccessTokenForInternalIntrospection(context.db, {
+      token: input.token,
+    });
+    if (!token) {
+      return { active: false as const, reason: "not_found" };
+    }
+
+    const expiresAtMs = toMillis(token.expiresAt);
+    if (!expiresAtMs || expiresAtMs <= Date.now()) {
+      return { active: false as const, reason: "expired" };
+    }
+
+    if (token.clientDisabled === 1) {
+      return { active: false as const, reason: "client_disabled" };
+    }
+
+    if (!token.userId) {
+      return { active: false as const, reason: "missing_user" };
+    }
+
+    if (token.sessionId) {
+      const sessionExpiresAtMs = toMillis(token.sessionExpiresAt);
+      if (!sessionExpiresAtMs || sessionExpiresAtMs <= Date.now()) {
+        return { active: false as const, reason: "session_expired" };
+      }
+    }
+
+    const requestedScopes = parseOAuthScopes(token.scopes);
+    const selection = parseOAuthProjectSelectionReferenceId(token.referenceId);
+    const isProjectScopedToken = requestedScopes.includes(ITERATE_PROJECT_SELECTION_SCOPE);
+    const selectedProjectIds = isProjectScopedToken
+      ? selection?.userId === token.userId
+        ? selection.projectIds
+        : []
+      : null;
+    const [organizations, allProjects] = await Promise.all([
+      listOrganizationsForUser(context.db, { userId: token.userId }),
+      listProjectsForUser(context.db, { userId: token.userId }),
+    ]);
+
+    const selectedProjectIdSet = selectedProjectIds ? new Set(selectedProjectIds) : null;
+    const projects: IterateAuthProjectClaim[] = allProjects
+      .filter((project) => !selectedProjectIdSet || selectedProjectIdSet.has(project.id))
+      .map((project) => ({
+        id: project.id,
+        slug: project.slug,
+        organizationId: project.organizationId,
+      }));
+    const organizationClaims: IterateAuthAccessTokenOrganizationClaim[] = organizations.map(
+      (organization) => ({
+        id: organization.id,
+        name: organization.name,
+        slug: organization.slug,
+        role:
+          organization.role === "owner" || organization.role === "admin"
+            ? organization.role
+            : "member",
+      }),
+    );
+    const scopes = buildAugmentedScopeClaims({
+      requestedScopes,
+      projectIds: isProjectScopedToken ? projects.map((project) => project.id) : [],
+    });
+    const role = token.userRole ?? null;
+
+    return {
+      active: true as const,
+      sub: token.userId,
+      sid: token.sessionId,
+      clientId: token.clientId,
+      iss: `${context.env.VITE_AUTH_APP_ORIGIN.replace(/\/+$/, "")}/api/auth`,
+      aud: input.audiences,
+      iat: Math.floor((toMillis(token.createdAt) ?? Date.now()) / 1000),
+      exp: Math.floor(expiresAtMs / 1000),
+      scope: scopes.join(" "),
+      scopes,
+      organizations: organizationClaims,
+      projects,
+      isAdmin: isPlatformAdminUser({ role }),
+      role,
+    };
+  });
+
 const createProjectIngressToken = os.internal.session.createProjectIngressToken
   .use(protectedMiddleware)
   .handler(async ({ context }) => {
@@ -524,6 +645,7 @@ export const internal = os.internal.router({
   oauth: {
     ensureClient: ensureOAuthClient,
     setClient: setOAuthClient,
+    introspectAccessToken,
   },
   user: {
     upsertVerifiedEmail,

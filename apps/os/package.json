@@ -45,6 +45,7 @@
     "@iterate-com/ui": "workspace:*",
     "@journeyapps/wa-sqlite": "^1.7.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/server": "2.0.0-beta.1",
     "@opentui/core": "0.1.102",
     "@opentui/react": "0.1.102",
     "@orpc/server": "1.13.14",

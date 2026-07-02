@@ -20,6 +20,8 @@ import { routeOsRequest } from "./shared/router.ts";
 import { AppConfig, parseConfig } from "~/config.ts";
 import type { RequestContext } from "~/request-context.ts";
 import { handleDebugRoutes, handleDurableObjectDebugFetch } from "~/debug-routes.ts";
+import { isMcpProtectedResourceMetadataPath } from "~/domains/inbound-mcp-server/mcp-auth-metadata.ts";
+import { handleInboundMcpRequest } from "~/domains/inbound-mcp-server/mcp-handler.ts";
 import { handleItxFetch } from "~/itx/fetch.ts";
 import { handleDocsMarkdownFetch } from "~/lib/docs-markdown.ts";
 
@@ -73,6 +75,10 @@ export default {
           waitUntil: (promise) => ctx.waitUntil(promise),
           workerExports: ctx.exports,
         };
+
+        if (isMcpProtectedResourceMetadataPath(new URL(request.url).pathname)) {
+          return await handleInboundMcpRequest({ context, env, request });
+        }
 
         const itxResponse = await handleItxFetch({ config, context, env, request });
         if (itxResponse) return itxResponse;
