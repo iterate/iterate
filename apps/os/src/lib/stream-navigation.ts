@@ -68,3 +68,9 @@ export function readStreamStateOnce(
       });
   });
 }
+
+/**
+ * URL sentinel for streams that live outside any project (platform streams):
+ * the admin stream browser addresses them as `/admin/streams/__null__/...`.
+ */
+export const NULL_DURABLE_OBJECT_PROJECT_ID = "__null__";

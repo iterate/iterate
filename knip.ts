@@ -7,8 +7,6 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   return {
     ...base,
     ignore: [
-      // Handwritten design-of-record types for the itx protocol; intentionally unreferenced.
-      "src/itx/types.ts",
       // Reached only through the vitest.config.ts `cloudflare:workers` alias,
       // which knip does not traverse.
       "src/test/cloudflare-workers-shim.ts",
@@ -16,6 +14,9 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       // intentionally not `.test.ts`, never imported by active code). See
       // e2e/AGENTS.md.
       "e2e/**/*.orpc-legacy.ts",
+      // Pre-migration source held for Phase 12; excluded everywhere.
+      "legacy-quarantine/**",
+      "test-quarantine/**",
     ],
     entry: [
       ...(base.entry ?? []).filter(
@@ -23,24 +24,17 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       ),
       // One entry module per deployed worker (docs/worker-topology.md).
       "src/workers/*.ts!",
+      "src/next/workers/*.ts!",
       "e2e/vitest.config.ts",
       "e2e/tui-test/tui-test.config.ts",
       "e2e/tui-test/run.ts",
       // Local operational commands mounted by scripts/cli.ts.
-      "scripts/artifacts.ts",
       "scripts/cli.ts",
       "scripts/dev.ts",
       "scripts/itx.ts",
-      "sqlfu.config.ts",
-      "src/durable-objects/codemode-session.vitest.config.ts",
-      "src/durable-objects/codemode-session-test-entry.ts",
-      "src/durable-objects/project-ingress.vitest.config.ts",
-      "src/durable-objects/project-ingress-test-entry.ts",
-      "src/durable-objects/itx-stream-subscribe.vitest.config.ts",
-      "src/durable-objects/itx-stream-subscribe-test-entry.ts",
-      "src/domains/streams/engine/vitest.workers.config.ts",
-      "src/domains/streams/engine/vitest.config.ts",
-      "src/domains/streams/engine/workers/test-entry.ts",
+      "src/itx/e2e/vitest.config.ts",
+      // Operational smoke for the create-project -> onboarding-greeting path.
+      "e2e/engine/onboarding-smoke.ts",
     ],
     ignoreDependencies: [
       ...(base.ignoreDependencies ?? []),
@@ -83,6 +77,9 @@ function makeStreamsExampleAppWorkspace(): WorkspaceConfig {
       // Kept as the Worker/DO counterpart to the browser and Node stream
       // Cap'n Web helpers in the example app.
       "src/lib/workers-stream-connection.ts",
+      // Type-only RequestContext slice reached via an exact-match tsconfig
+      // path, which knip does not traverse.
+      "src/os-shims/request-context.ts",
     ],
     vite: false,
     paths: {
@@ -174,9 +171,6 @@ const config: KnipConfig = {
     "!packages/shared",
   ],
   ignoreIssues: {
-    "apps/os/src/db/migrations/.generated/migrations.ts": ["files", "exports", "types"],
-    "apps/os/src/db/queries/.generated/index.ts": ["files", "exports", "types"],
-    "apps/os/src/db/queries/.generated/tables.ts": ["files", "types"],
     "apps/os/e2e/test-support/app-config-env.ts": ["files", "exports"],
     "apps/os/src/**": ["exports", "types"],
     "apps/os/e2e/test-support/**": ["exports", "types"],

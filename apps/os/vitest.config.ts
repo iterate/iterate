@@ -19,6 +19,7 @@ export default defineConfig({
     exclude: [
       ...defaultExclude,
       "e2e/**",
+      "legacy-quarantine/**",
       "test-quarantine/**",
       "**/src/routes/**/*.test.ts",
       "**/*.workerd.test.ts",

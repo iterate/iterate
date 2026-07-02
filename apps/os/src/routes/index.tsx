@@ -1,12 +1,9 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { requireAuthenticatedRootRedirectTargetFromSession } from "../lib/auth.ts";
-import { DocsHomePage } from "~/components/docs-portal.tsx";
 import { listMyProjectsServerFn } from "~/lib/project-server-fns.ts";
 
 export const Route = createFileRoute("/")({
   loader: async ({ context, location }) => {
-    if (context.isEventDocsHost) return;
-
     const target = requireAuthenticatedRootRedirectTargetFromSession(
       context.authSession,
       location,
@@ -46,5 +43,5 @@ export const Route = createFileRoute("/")({
       replace: true,
     });
   },
-  component: DocsHomePage,
+  component: () => null,
 });

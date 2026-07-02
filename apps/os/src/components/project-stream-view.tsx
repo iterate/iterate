@@ -74,7 +74,7 @@ import { AgentPillComposer, type AgentComposerMode } from "~/components/agent-pi
 import { ExampleEventsPanel } from "~/components/example-events-panel.tsx";
 import { openGlobalCommandPalette } from "~/components/global-command-palette-events.ts";
 import { PresenceAvatar, StreamProcessorsPanel } from "~/components/stream-processors-panel.tsx";
-import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/domains/durable-object-names.ts";
+import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { useItx } from "~/itx/itx-react.tsx";
 import { presenceLabel, sparklinePoints, useSimulatedRttMetrics } from "~/lib/stream-presence.ts";
 import { useStreamViewSearch } from "~/lib/stream-view-search.ts";

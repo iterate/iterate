@@ -24,7 +24,7 @@ import {
   TableRow,
 } from "@iterate-com/ui/components/table";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { repoArtifactName } from "~/domains/repos/repo-artifact-name.ts";
+import { RepoArtifactNameCodec } from "~/next/domains/repos/utils.ts";
 import { buildArtifactViewerUrl } from "~/lib/artifact-viewer-url.ts";
 import { formatRelativeTime } from "~/lib/format-relative-time.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
@@ -235,7 +235,7 @@ function ProjectReposIndexContent() {
                 visibleRepos.map((repo) => {
                   const artifactViewerUrl = buildArtifactViewerUrl({
                     appBaseUrl: routeConfig.baseUrl,
-                    artifactName: repoArtifactName({
+                    artifactName: RepoArtifactNameCodec.stringify({
                       projectId: project.id,
                       path: repo.path,
                     }),

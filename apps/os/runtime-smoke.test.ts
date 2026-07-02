@@ -4,8 +4,7 @@
  * (`RUNTIME_SMOKE_FULL=1`).
  */
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { x, type Result } from "tinyexec";
@@ -219,13 +218,6 @@ async function withServer(
     await stopService(child);
   }
 }
-
-describe("sqlfu assets", () => {
-  test("generated query and migration bundles exist", () => {
-    expect(existsSync(join(appRoot, "src/db/queries/.generated/index.ts"))).toBe(true);
-    expect(existsSync(join(appRoot, "src/db/migrations/.generated/migrations.ts"))).toBe(true);
-  });
-});
 
 describeRuntimeSmoke("runtime smoke", () => {
   test.skipIf(!runFullSmoke)("OS local dev server", async () => {

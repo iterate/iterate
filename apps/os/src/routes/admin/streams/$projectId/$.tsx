@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { StreamExplorerDetail } from "~/components/stream-explorer.tsx";
-import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/domains/durable-object-names.ts";
+import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { useItx } from "~/itx/itx-react.tsx";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 

@@ -3,7 +3,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { ArrowLeftIcon, RadioTowerIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { StreamExplorerTreePage } from "~/components/stream-explorer.tsx";
-import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/domains/durable-object-names.ts";
+import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { useItx } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/admin/streams/$projectId/")({

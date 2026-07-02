@@ -2,13 +2,10 @@
   "include": ["**/*.ts", "**/*.tsx", "**/*.d.ts"],
   "exclude": [
     "alchemy.run.ts",
+    "legacy-quarantine/**",
     "test-quarantine/**",
     "tmp/**",
     "iterate-config-repo/**",
-    "**/*.workerd.test.ts",
-    "**/*.workers.test.ts",
-    "src/domains/streams/engine/vitest.workers.config.ts",
-    "src/durable-objects/*.test.ts",
     "../../packages/shared/src/alchemy/**"
   ],
   "compilerOptions": {
