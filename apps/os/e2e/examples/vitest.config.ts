@@ -15,7 +15,7 @@ import { resolveBaseUrl } from "../test-support/dev-server.ts";
 const e2eRoot = fileURLToPath(new URL("..", import.meta.url));
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 const repoRoot = fileURLToPath(new URL("../../../..", import.meta.url));
-const vitestRunSlug = process.env.OS_E2E_RUN_SLUG?.trim() || createVitestRunSlug();
+const vitestRunSlug = createVitestRunSlug();
 const vitestRunRoot = createVitestRunRoot("os-itx-e2e-");
 const ITX_ADMIN_AUTH_COOKIE = "iterate-admin-auth";
 const baseUrl = resolveBaseUrl(appRoot) ?? "";
@@ -41,7 +41,9 @@ export default defineConfig({
     // share the deployed worker and can run in parallel. Preview CI opts in
     // (see scripts/preview/preview.ts); local runs default to sequential so a
     // single dev server isn't hammered and output stays readable.
-    fileParallelism: process.env.OS_E2E_EXAMPLES_PARALLEL === "true",
+    // Parallel in CI (files are independent projects); sequential locally so a
+    // dev-server target is not hammered.
+    fileParallelism: process.env.CI === "true",
     hookTimeout: 45_000,
     passWithNoTests: true,
     projects: [

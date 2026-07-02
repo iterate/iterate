@@ -85,21 +85,16 @@ describe("preview test commands", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs[2];
     const playwrightInstall = "pnpm --dir ../.. exec playwright install chromium";
     const fullOsSuite = "pnpm e2e;";
-    const broadItx =
-      "OS_E2E_EXAMPLES_PARALLEL=true OS_E2E_EXAMPLES_SKIP_MATRIX=true pnpm e2e:examples --project node";
-    const matrix =
-      "pnpm e2e:examples --project node e2e/examples/examples-matrix.e2e.test.ts -t 'catalogue example'";
+    const examples = "pnpm e2e:examples --project node";
     const playwrightSpec = "pnpm --dir ../.. spec";
 
     expect(script).toContain(playwrightInstall);
     expect(script).toContain(fullOsSuite);
-    expect(script).toContain(broadItx);
-    expect(script).toContain(matrix);
+    expect(script).toContain(examples);
     expect(script).toContain(playwrightSpec);
     expect(script.indexOf(playwrightInstall)).toBeLessThan(script.indexOf(fullOsSuite));
-    expect(script.indexOf(fullOsSuite)).toBeLessThan(script.indexOf(broadItx));
-    expect(script.indexOf(broadItx)).toBeLessThan(script.indexOf(matrix));
-    expect(script.indexOf(matrix)).toBeLessThan(script.indexOf(playwrightSpec));
+    expect(script.indexOf(fullOsSuite)).toBeLessThan(script.indexOf(examples));
+    expect(script.indexOf(examples)).toBeLessThan(script.indexOf(playwrightSpec));
   });
 });
 

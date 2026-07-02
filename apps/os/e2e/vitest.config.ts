@@ -14,7 +14,7 @@ const e2eRoot = fileURLToPath(new URL(".", import.meta.url));
 const appRoot = fileURLToPath(new URL("..", import.meta.url));
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 
-const vitestRunSlug = process.env.OS_E2E_RUN_SLUG?.trim() || createVitestRunSlug();
+const vitestRunSlug = createVitestRunSlug();
 const vitestRunRoot = createVitestRunRoot("os-e2e-");
 
 console.log(`[vitest-artifacts] run root: ${vitestRunRoot}`);

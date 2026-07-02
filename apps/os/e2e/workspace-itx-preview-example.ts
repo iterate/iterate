@@ -41,9 +41,6 @@ function requireAdminApiSecret() {
 }
 
 function readProjectSlug() {
-  const explicit = process.env.OS_E2E_CODEMODE_PROJECT_SLUG?.trim();
-  if (explicit) return explicit;
-
   return `workspace-itx-example-${Date.now()}`;
 }
 

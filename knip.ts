@@ -33,6 +33,10 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "e2e/examples/vitest.config.ts",
       // Operational smoke for the create-project -> onboarding-greeting path.
       "e2e/vitest/onboarding-smoke.ts",
+      // Used by apps/streams-example-app through its `~` alias into apps/os
+      // src; knip does not resolve that cross-workspace alias.
+      "src/domains/streams/client-libraries/processors/browser-event-feed/contract.ts",
+      "src/domains/streams/client-libraries/processors/browser-event-feed/implementation.ts",
     ],
     ignoreDependencies: [
       ...(base.ignoreDependencies ?? []),

@@ -1,11 +1,6 @@
 import { test } from "vitest";
 import { createAdminOsItx, requireBaseUrl as requireOsBaseUrl } from "../test-support/os-client.ts";
 
-function readProjectMcpUrlOverride() {
-  const url = process.env.OS_E2E_MCP_URL?.trim();
-  return url ? new URL(url) : null;
-}
-
 /**
  * Seeding goes through the admin itx handle, authenticated with
  * `APP_CONFIG_ADMIN_API_SECRET` (the Doppler-provided deployment secret).
@@ -16,9 +11,6 @@ function hasAdminApiSecret() {
 }
 
 function previewSmokeProjectSlug() {
-  const explicitSlug = process.env.OS_E2E_SMOKE_PROJECT_SLUG?.trim();
-  if (explicitSlug) return explicitSlug;
-
   const commit = process.env.GITHUB_SHA?.trim().slice(0, 8) || "manual";
   return `preview-mcp-smoke-${commit}`;
 }
@@ -96,9 +88,7 @@ function projectMcpUrlFor(input: { baseUrl: URL }) {
     return new URL("https://mcp.iterate.com");
   }
 
-  throw new Error(
-    `Cannot derive the MCP URL from OS base ${input.baseUrl}. Set OS_E2E_MCP_URL explicitly.`,
-  );
+  throw new Error(`Cannot derive the MCP URL from OS base ${input.baseUrl}.`);
 }
 
 function canDeriveProjectMcpUrl(input: { baseUrl: URL }) {
@@ -118,7 +108,6 @@ async function seedProjectMcpUrl(input: { baseUrl: URL }) {
 
 test("OS preview smoke", async () => {
   const baseUrl = new URL(requireOsBaseUrl());
-  const projectMcpUrlOverride = readProjectMcpUrlOverride();
 
   // Keep the dashboard checks unauthenticated, then use the admin preview hook to
   // seed one deterministic project before checking the canonical MCP endpoint.
@@ -139,10 +128,9 @@ test("OS preview smoke", async () => {
   }
 
   const projectMcpUrl =
-    projectMcpUrlOverride ??
-    (hasAdminApiSecret() && canDeriveProjectMcpUrl({ baseUrl })
+    hasAdminApiSecret() && canDeriveProjectMcpUrl({ baseUrl })
       ? await seedProjectMcpUrl({ baseUrl })
-      : null);
+      : null;
 
   if (!projectMcpUrl) {
     console.log(`OS preview smoke passed for ${baseUrl.toString()} (MCP project seed skipped)`);

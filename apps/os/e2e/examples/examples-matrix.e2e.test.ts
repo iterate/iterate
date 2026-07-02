@@ -30,7 +30,7 @@ const MATRIX_EXAMPLES = ITX_EXAMPLES.filter(
     example.runtimes.some((runtime) => (MATRIX_RUNTIMES as readonly string[]).includes(runtime)) &&
     EXAMPLE_CASES[example.id] !== undefined,
 );
-const matrixTest = process.env.OS_E2E_EXAMPLES_SKIP_MATRIX === "true" ? baseTest.skip : baseTest;
+const matrixTest = baseTest;
 
 baseTest("every catalogue example is either matrix-tested or explicitly excluded", () => {
   for (const example of ITX_EXAMPLES) {
