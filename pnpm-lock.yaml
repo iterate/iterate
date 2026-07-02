@@ -564,9 +564,6 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6)
-      '@modelcontextprotocol/server':
-        specifier: 2.0.0-beta.1
-        version: 2.0.0-beta.1
       '@opentui/core':
         specifier: 0.1.102
         version: 0.1.102(stage-js@1.0.2)(typescript@5.9.3)(web-tree-sitter@0.25.10)
@@ -3916,10 +3913,6 @@ packages:
     peerDependenciesMeta:
       '@cfworker/json-schema':
         optional: true
-
-  '@modelcontextprotocol/server@2.0.0-beta.1':
-    resolution: {integrity: sha512-83scKauajX9fWbSIC4NBYdnvXajH+cqvX8QqsrPH0XNgqtMmym1kWucMO7YyNkrBD9C7/R+FRCmkjC9kgEKXlQ==}
-    engines: {node: '>=20'}
 
   '@mrleebo/prisma-ast@0.13.1':
     resolution: {integrity: sha512-XyroGQXcHrZdvmrGJvsA9KNeOOgGMg1Vg9OlheUsBOSKznLMDl+YChxbkboRHvtFYJEMRYmlV3uoo/njCw05iw==}
@@ -17105,10 +17098,6 @@ snapshots:
       '@cfworker/json-schema': 4.1.1
     transitivePeerDependencies:
       - supports-color
-
-  '@modelcontextprotocol/server@2.0.0-beta.1':
-    dependencies:
-      zod: 4.3.6
 
   '@mrleebo/prisma-ast@0.13.1':
     dependencies:

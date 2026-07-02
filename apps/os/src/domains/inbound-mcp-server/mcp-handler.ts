@@ -22,10 +22,6 @@ import {
   publicMcpResourceUrl,
   publicRequestUrl,
 } from "~/domains/inbound-mcp-server/mcp-auth-metadata.ts";
-import {
-  handleMcpDebugRequest,
-  matchMcpDebugRequest,
-} from "~/domains/inbound-mcp-server/mcp-debug-handler.ts";
 import { projectContextRef } from "~/itx/coordinates.ts";
 import type { ItxRuntime } from "~/itx/handle.ts";
 import { runItxScript } from "~/itx/run.ts";
@@ -70,10 +66,6 @@ export async function handleInboundMcpRequest(input: {
   const pathname = new URL(input.request.url).pathname;
   if (input.request.method === "OPTIONS") {
     return new Response(null, { headers: mcpCorsHeaders });
-  }
-  const debugRoute = matchMcpDebugRequest(pathname);
-  if (debugRoute) {
-    return await handleMcpDebugRequest({ ...input, route: debugRoute });
   }
   if (isMcpProtectedResourceMetadataPath(pathname)) {
     return Response.json(protectedResourceMetadata(input), { headers: mcpCorsHeaders });
@@ -178,10 +170,7 @@ async function resolveMcpAuth(input: {
   const mcpAudiences = acceptedMcpResourceAudiences(input);
   const auth = createMcpIterateAuth(input, mcpAudiences);
   if (!auth) {
-    logGrokMcpAuthFailure(input, {
-      branch: "iterate_auth_not_configured",
-      authHeaderPresent: Boolean(input.request.headers.get("authorization")),
-    });
+    logMcpAuthFailure(input, { branch: "iterate_auth_not_configured" });
     return new Response("Iterate auth is not configured.", {
       status: 503,
       headers: mcpCorsHeaders,
@@ -196,24 +185,18 @@ async function resolveMcpAuth(input: {
     audiences: mcpAudiences,
   });
   if (!resolvedToken) {
-    logGrokMcpAuthFailure(input, {
+    logMcpAuthFailure(input, {
       branch: bearerToken ? "token_decode_or_verify_failed" : "no_bearer_token",
-      authHeaderPresent: Boolean(input.request.headers.get("authorization")),
-      bearerTokenPresent: Boolean(bearerToken),
-      jwt: bearerToken ? safelyReadJwtMetadata(bearerToken) : null,
     });
     return unauthorizedMcpResponse(input, "Missing or invalid bearer token");
   }
   const { accessToken, verificationMode } = resolvedToken;
   const audiences = Array.isArray(accessToken.aud) ? accessToken.aud : [accessToken.aud];
   if (!audiences.some((audience) => mcpAudiences.includes(audience))) {
-    logGrokMcpAuthFailure(input, {
+    logMcpAuthFailure(input, {
       branch: "audience_mismatch",
       verificationMode,
-      authHeaderPresent: true,
-      bearerTokenPresent: true,
       acceptedAudiences: mcpAudiences,
-      jwt: safeAccessTokenMetadata(accessToken),
     });
     return unauthorizedMcpResponse(input, "Bearer token is not scoped to this MCP resource");
   }
@@ -233,24 +216,14 @@ async function resolveMcpAuth(input: {
   });
 
   if (projects.length === 0) {
-    logGrokMcpAuthFailure(input, {
+    logMcpAuthFailure(input, {
       branch: "no_project_grants",
       verificationMode,
-      authHeaderPresent: true,
-      bearerTokenPresent: true,
-      jwt: safeAccessTokenMetadata(accessToken),
       scopes,
       projectCount: principal.projects.length,
     });
     return forbiddenMcpResponse(input, "MCP token does not grant access to any projects.");
   }
-
-  logGrokMcpAuthSuccess(input, {
-    verificationMode,
-    scopes,
-    projectCount: projects.length,
-    jwt: safeAccessTokenMetadata(accessToken),
-  });
 
   return {
     authType: "oauth_access_token",
@@ -281,7 +254,7 @@ async function resolveOAuthAccessToken(input: {
       audiences: [...input.audiences],
     });
     if (!result.active) {
-      logGrokMcpAuthFailure(input, {
+      logMcpAuthFailure(input, {
         branch: "opaque_internal_introspection_inactive",
         introspectionReason: result.reason,
       });
@@ -306,7 +279,7 @@ async function resolveOAuthAccessToken(input: {
       },
     };
   } catch (error) {
-    logGrokMcpAuthFailure(input, {
+    logMcpAuthFailure(input, {
       branch: "opaque_internal_introspection_error",
       error: error instanceof Error ? error.message : String(error),
     });
@@ -415,106 +388,19 @@ function forbiddenMcpResponse(
   });
 }
 
-function logGrokMcpAuthFailure(
+function logMcpAuthFailure(
   input: { context: RequestContext; request: Request },
-  fields: Record<string, unknown>,
+  fields: { branch: string } & Record<string, unknown>,
 ) {
-  const userAgent = input.request.headers.get("user-agent") ?? "";
-  if (!/\bgrok\b/i.test(userAgent)) return;
-
-  input.context.log.info("os.mcp.grok_auth_failure");
+  input.context.log.info("os.mcp.auth_failure");
   input.context.log.set({
     mcpAuth: {
       method: input.request.method,
       url: publicRequestUrl(input.request).toString(),
-      userAgent,
+      userAgent: input.request.headers.get("user-agent"),
       ...fields,
     },
   });
-  console.info(
-    "[DEBUG-GROK-MCP]",
-    JSON.stringify({
-      event: "real_os_auth_failure",
-      method: input.request.method,
-      url: publicRequestUrl(input.request).toString(),
-      userAgent,
-      ...fields,
-    }),
-  );
-}
-
-function logGrokMcpAuthSuccess(
-  input: { context: RequestContext; request: Request },
-  fields: Record<string, unknown>,
-) {
-  const userAgent = input.request.headers.get("user-agent") ?? "";
-  if (!/\bgrok\b/i.test(userAgent)) return;
-
-  input.context.log.info("os.mcp.grok_auth_success");
-  input.context.log.set({
-    mcpAuth: {
-      method: input.request.method,
-      url: publicRequestUrl(input.request).toString(),
-      userAgent,
-      ...fields,
-    },
-  });
-  console.info(
-    "[DEBUG-GROK-MCP]",
-    JSON.stringify({
-      event: "real_os_auth_success",
-      method: input.request.method,
-      url: publicRequestUrl(input.request).toString(),
-      userAgent,
-      ...fields,
-    }),
-  );
-}
-
-type JwtMetadata = {
-  iss?: string;
-  aud?: string | string[];
-  scope?: string;
-  scopes?: string[];
-  exp?: number;
-};
-
-function safeAccessTokenMetadata(accessToken: JwtMetadata): JwtMetadata {
-  return {
-    iss: typeof accessToken.iss === "string" ? accessToken.iss : undefined,
-    aud: safeJwtAudience(accessToken.aud),
-    scope: typeof accessToken.scope === "string" ? accessToken.scope : undefined,
-    scopes: Array.isArray(accessToken.scopes)
-      ? accessToken.scopes.filter((scope) => typeof scope === "string")
-      : undefined,
-    exp: typeof accessToken.exp === "number" ? accessToken.exp : undefined,
-  };
-}
-
-function safelyReadJwtMetadata(token: string): JwtMetadata | null {
-  const payload = token.split(".")[1];
-  if (!payload) return null;
-
-  try {
-    const json = atob(toBase64(payload));
-    const parsed: unknown = JSON.parse(json);
-    if (!parsed || typeof parsed !== "object") return null;
-    const claims = parsed as JwtMetadata;
-    return safeAccessTokenMetadata(claims);
-  } catch {
-    return null;
-  }
-}
-
-function safeJwtAudience(aud: unknown) {
-  if (typeof aud === "string") return aud;
-  if (Array.isArray(aud)) return aud.filter((value) => typeof value === "string");
-  return undefined;
-}
-
-function toBase64(base64Url: string) {
-  const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
-  return base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), "=");
 }
 
 function mcpExecutionContext(context: RequestContext): ExecutionContext {
