@@ -29,8 +29,7 @@ Use the JSON under the preview heading first, then save the full manifest after
 the deployed worker can verify the request URL.
 
 `preview_2` already has a Slack app. The repo's preview deployment docs
-currently describe active preview slots `preview_1` through `preview_9`; create
-`preview_10` only after that platform slot exists.
+currently describe active preview slots `preview_1` through `preview_9`.
 
 ## preview_1
 
@@ -520,70 +519,6 @@ preview_8:
 
 ```text
 preview_9:
-  app_id:
-  client_id:
-  client_secret:
-  signing_secret:
-  team_id:
-  app_dashboard_url:
-```
-
-## preview_10
-
-Only create this app after `preview_10` exists as a real platform slot.
-
-```json
-{
-  "display_information": {
-    "name": "iterate (preview-10)",
-    "description": "iterate Slack agent for preview-10 testing only",
-    "background_color": "#111827"
-  },
-  "features": {
-    "bot_user": {
-      "display_name": "iterate-preview-10",
-      "always_online": true
-    }
-  },
-  "oauth_config": {
-    "redirect_urls": ["https://os.iterate-preview-10.com/api/integrations/slack/callback"],
-    "scopes": {
-      "bot": [
-        "channels:history",
-        "channels:join",
-        "channels:manage",
-        "channels:read",
-        "chat:write",
-        "chat:write.public",
-        "files:read",
-        "files:write",
-        "groups:history",
-        "groups:read",
-        "im:history",
-        "im:read",
-        "im:write",
-        "mpim:history",
-        "mpim:read",
-        "reactions:read",
-        "reactions:write",
-        "users.profile:read",
-        "users:read",
-        "users:read.email",
-        "assistant:write",
-        "conversations.connect:write"
-      ]
-    }
-  },
-  "settings": {
-    "org_deploy_enabled": false,
-    "socket_mode_enabled": false,
-    "token_rotation_enabled": false
-  }
-}
-```
-
-```text
-preview_10:
   app_id:
   client_id:
   client_secret:

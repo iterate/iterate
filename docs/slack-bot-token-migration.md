@@ -40,6 +40,7 @@ prd
 preview_1
 preview_2
 preview_3
+preview_4
 preview_5
 preview_6
 preview_7
@@ -47,52 +48,42 @@ preview_8
 preview_9
 ```
 
-Known gaps:
-
-- `preview_4` has a Slack app, but the paste-back form did not include a bot
-  token.
-- `preview_10` has a Slack app ID, but `os/preview_10` does not currently
-  exist in Doppler.
-- Affected workers still need to be redeployed before they can use newly
-  uploaded Doppler values.
+Affected workers still need to be redeployed before they can use newly
+uploaded Doppler values.
 
 ## OAuth pages
 
 Open the app's **OAuth & Permissions** page, then copy **Bot User OAuth
 Token**. It should start with `xoxb-`.
 
-| Config       | Slack app              | OAuth page                                     |
-| ------------ | ---------------------- | ---------------------------------------------- |
-| `prd`        | `iterate`              | <https://api.slack.com/apps/A08NDMDC2JV/oauth> |
-| `dev`        | shared dev app         | <https://api.slack.com/apps/A0BELTE7H6X/oauth> |
-| `dev_jonas`  | `iterate (dev-jonas)`  | <https://api.slack.com/apps/A08T45SFJF3/oauth> |
-| `dev_misha`  | `iterate (dev-misha)`  | <https://api.slack.com/apps/A09A308RAT0/oauth> |
-| `dev_rahul`  | `iterate (dev-rahul)`  | <https://api.slack.com/apps/A0A9CMH5DU4/oauth> |
-| `preview_1`  | `iterate (preview-1)`  | <https://api.slack.com/apps/A0BESK0LJ7L/oauth> |
-| `preview_2`  | `iterate (preview-2)`  | <https://api.slack.com/apps/A0BETEYFPCZ/oauth> |
-| `preview_3`  | `iterate (preview-3)`  | <https://api.slack.com/apps/A0BFM413EMN/oauth> |
-| `preview_4`  | `iterate (preview-4)`  | <https://api.slack.com/apps/A0BESQ2278S/oauth> |
-| `preview_5`  | `iterate (preview-5)`  | <https://api.slack.com/apps/A0BEBDGA1TR/oauth> |
-| `preview_6`  | `iterate (preview-6)`  | <https://api.slack.com/apps/A0BEPFZ8THT/oauth> |
-| `preview_7`  | `iterate (preview-7)`  | <https://api.slack.com/apps/A0BELK8UL3V/oauth> |
-| `preview_8`  | `iterate (preview-8)`  | <https://api.slack.com/apps/A0BEURK2AAV/oauth> |
-| `preview_9`  | `iterate (preview-9)`  | <https://api.slack.com/apps/A0BEQUQ51F0/oauth> |
-| `preview_10` | `iterate (preview-10)` | <https://api.slack.com/apps/A0BER06737Y/oauth> |
+| Config      | Slack app             | OAuth page                                     |
+| ----------- | --------------------- | ---------------------------------------------- |
+| `prd`       | `iterate`             | <https://api.slack.com/apps/A08NDMDC2JV/oauth> |
+| `dev`       | shared dev app        | <https://api.slack.com/apps/A0BELTE7H6X/oauth> |
+| `dev_jonas` | `iterate (dev-jonas)` | <https://api.slack.com/apps/A08T45SFJF3/oauth> |
+| `dev_misha` | `iterate (dev-misha)` | <https://api.slack.com/apps/A09A308RAT0/oauth> |
+| `dev_rahul` | `iterate (dev-rahul)` | <https://api.slack.com/apps/A0A9CMH5DU4/oauth> |
+| `preview_1` | `iterate (preview-1)` | <https://api.slack.com/apps/A0BESK0LJ7L/oauth> |
+| `preview_2` | `iterate (preview-2)` | <https://api.slack.com/apps/A0BETEYFPCZ/oauth> |
+| `preview_3` | `iterate (preview-3)` | <https://api.slack.com/apps/A0BFM413EMN/oauth> |
+| `preview_4` | `iterate (preview-4)` | <https://api.slack.com/apps/A0BESQ2278S/oauth> |
+| `preview_5` | `iterate (preview-5)` | <https://api.slack.com/apps/A0BEBDGA1TR/oauth> |
+| `preview_6` | `iterate (preview-6)` | <https://api.slack.com/apps/A0BEPFZ8THT/oauth> |
+| `preview_7` | `iterate (preview-7)` | <https://api.slack.com/apps/A0BELK8UL3V/oauth> |
+| `preview_8` | `iterate (preview-8)` | <https://api.slack.com/apps/A0BEURK2AAV/oauth> |
+| `preview_9` | `iterate (preview-9)` | <https://api.slack.com/apps/A0BEQUQ51F0/oauth> |
 
 ## Paste-back form
 
-Do not commit a filled copy of this file. Paste filled values back to the
-agent, or use a private temporary file outside the repo.
+Do not commit a filled copy of this file. Use this only for future rotations;
+paste filled values back to the agent, or use a private temporary file outside
+the repo.
 
 ```text
 SLACK_APP_BOT_TOKENS
 
-preview_4:
-  app_id: A0BESQ2278S
-  bot_token:
-
-preview_10:
-  app_id: A0BER06737Y
+config_name:
+  app_id:
   bot_token:
 ```
 
