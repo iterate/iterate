@@ -3,8 +3,7 @@ import { pureJsCrypto } from "@reclaimprotocol/tls/purejs-crypto";
 import type { BlindEgressRelay, BlindEgressRelayConnection } from "../../types.ts";
 
 export const BLIND_RELAY_PINNED_CERT_SHA256_HEADER = "x-itx-blind-relay-cert-sha256";
-export const INSECURE_BLIND_RELAY_SKIP_TLS_VERIFY_HEADER =
-  "x-itx-blind-relay-insecure-skip-tls-verify";
+const INSECURE_BLIND_RELAY_SKIP_TLS_VERIFY_HEADER = "x-itx-blind-relay-insecure-skip-tls-verify";
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
