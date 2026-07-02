@@ -1,3 +1,12 @@
+// QUARANTINED (itx-v4 cutover) — origin: apps/os/src/itx/e2e/itx-extend.e2e.test.ts
+// Covered: itx.extend() child contexts — capability shadowing, parent-chain
+// delegation, itx.super middleware (including the locked fetch-middleware
+// acceptance test), and child-context describe() provenance.
+// Why quarantined: legacy itx surface removed in the itx-v4 cutover; superseded by
+// apps/os/e2e/engine/* engine suites. NOTE: extend() has no next-engine
+// equivalent yet — the nearest analog is agent-scoped capability scopes
+// (child scope shadows project scope), covered by the engine suite.
+
 // Child contexts: itx.extend() creates a cheap, disposable context
 // under a project — same anatomy, own capability table, parent chain for misses.
 // This is the container an agent session or REPL scratchpad lives in.

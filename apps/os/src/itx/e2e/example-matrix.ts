@@ -3,24 +3,21 @@
 // runs through every server-side runtime. The browser runtime lives in
 // itx.browser.test.ts (vitest's browser project); everything else is here.
 //
-//   node            AsyncFunction over a Cap'n Web stub in this process
-//   cli             `tsx ./scripts/cli.ts itx run --eval …` (a real spawned CLI)
-//   dynamic-worker  POST /api/itx/run with the body wrapped as a function
-//   project-worker  the body baked into the project's repo
-//                   worker.ts, invoked via itx.worker (this.itx.context)
-
-import { execFile } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
+//   node            AsyncFunction over a next-engine Cap'n Web stub in this process
+//   run-script      project.runScript(`async (itx) => { const vars = …; <body> }`)
+//                   — the server-side script isolate agents use
+//   project-worker  the body baked into the project's repo worker.js, invoked
+//                   via project.worker.runItxExample (env.ITX inside)
+//
+// TODO(cli port): the `iterate` CLI still speaks the legacy /api/itx surface.
+// Re-add a `cli` dispatcher (spawned `pnpm cli itx run --eval …`) once the CLI
+// is ported to the next engine.
 
 import { RpcTarget } from "capnweb";
 import type { ItxExample, ItxExampleRuntime } from "../examples.ts";
-import { adminApiSecret, baseUrl, connectGlobal } from "./e2e-env.ts";
+import { connectProject } from "./e2e-env.ts";
 
-const execFileAsync = promisify(execFile);
-const OS_APP_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
-
-export const MATRIX_RUNTIMES = ["node", "cli", "dynamic-worker", "project-worker"] as const;
+export const MATRIX_RUNTIMES = ["node", "run-script", "project-worker"] as const;
 export type MatrixRuntime = (typeof MATRIX_RUNTIMES)[number] & ItxExampleRuntime;
 
 const AsyncFunction = async function () {}.constructor as new (
@@ -31,18 +28,16 @@ export async function runExampleCode(
   runtime: MatrixRuntime,
   input: { code: string; id?: string; projectId: string; vars: Record<string, unknown> },
 ): Promise<unknown> {
-  // Worker-heavy examples (worker-to-worker, facets) running while the other
-  // e2e files load their own dynamic workers can trip the deployment's loader
-  // or RPC startup path. That's shared-load contention, not a behavior bug —
-  // back off and retry those exact transients; anything else fails immediately.
-  return await retryOnWorkerStartupContention(runtime, async () => {
+  // Worker-heavy examples running while other suites load their own dynamic
+  // workers can trip the deployment's loader isolate cap. That's shared-load
+  // contention, not a behavior bug — back off and retry that exact transient;
+  // anything else fails immediately.
+  return await retryOnWorkerStartupContention(async () => {
     switch (runtime) {
       case "node":
         return await runInNode(input);
-      case "cli":
-        return await runInCli(input);
-      case "dynamic-worker":
-        return await runInDynamicWorker(input);
+      case "run-script":
+        return await runInRunScript(input);
       case "project-worker":
         return await runInProjectWorker(input);
     }
@@ -50,28 +45,15 @@ export async function runExampleCode(
 }
 
 const LOADER_CONTENTION_MESSAGE = "Too many concurrent dynamic workers";
-const PROJECT_WORKER_RPC_DISCONNECT_MESSAGE = "Network connection lost.";
 const LOADER_CONTENTION_BACKOFF_MS = [2_000, 5_000, 10_000];
-const PROJECT_WORKER_LATEST_PROBE_WINDOW_MS = 10_000;
 
-async function retryOnWorkerStartupContention<T>(
-  runtime: MatrixRuntime,
-  run: () => Promise<T>,
-): Promise<T> {
+async function retryOnWorkerStartupContention<T>(run: () => Promise<T>): Promise<T> {
   for (const backoffMs of LOADER_CONTENTION_BACKOFF_MS) {
     try {
       return await run();
     } catch (error) {
-      // The cli runtime surfaces script errors on the spawned process's
-      // stderr (execFile attaches it to the error), so check both.
-      const message = [
-        error instanceof Error ? error.message : String(error),
-        String((error as { stderr?: unknown }).stderr ?? ""),
-      ].join("\n");
-      const isLoaderContention = message.includes(LOADER_CONTENTION_MESSAGE);
-      const isProjectWorkerRpcDisconnect =
-        runtime === "project-worker" && message.includes(PROJECT_WORKER_RPC_DISCONNECT_MESSAGE);
-      if (!isLoaderContention && !isProjectWorkerRpcDisconnect) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes(LOADER_CONTENTION_MESSAGE)) throw error;
       await new Promise((resolve) => setTimeout(resolve, backoffMs));
     }
   }
@@ -84,63 +66,23 @@ async function runInNode(input: {
   vars: Record<string, unknown>;
 }): Promise<unknown> {
   const script = new AsyncFunction("itx", "vars", "RpcTarget", input.code);
-  using itx = connectGlobal();
-  using projectItx = await itx.projects.get(input.projectId);
-  return await script(projectItx, input.vars, RpcTarget);
+  using project = connectProject(input.projectId);
+  return await script(project, input.vars, RpcTarget);
 }
 
-async function runInCli(input: {
+async function runInRunScript(input: {
   code: string;
   projectId: string;
   vars: Record<string, unknown>;
 }): Promise<unknown> {
-  const { stdout } = await execFileAsync(
-    "pnpm",
-    [
-      "exec",
-      "tsx",
-      "./scripts/cli.ts",
-      "itx",
-      "run",
-      "--eval",
-      input.code,
-      "--vars",
-      JSON.stringify(input.vars),
-      "--context",
-      input.projectId,
-    ],
-    {
-      cwd: OS_APP_ROOT,
-      env: {
-        ...process.env,
-        APP_CONFIG_ADMIN_API_SECRET: adminApiSecret(),
-        APP_CONFIG_BASE_URL: baseUrl(),
-      },
-      maxBuffer: 20 * 1024 * 1024,
-    },
+  using project = connectProject(input.projectId);
+  // runScript takes an async arrow function source string (see the engine
+  // ItxCapabilityHost contract); the example body becomes its body, with the
+  // case's vars serialized inline.
+  const execution = await project.runScript(
+    `async (itx) => {\nconst vars = ${JSON.stringify(input.vars)};\n${input.code}\n}`,
   );
-  return JSON.parse(stdout.trim());
-}
-
-async function runInDynamicWorker(input: {
-  code: string;
-  projectId: string;
-  vars: Record<string, unknown>;
-}): Promise<unknown> {
-  const response = await fetch(new URL("/api/itx/run", baseUrl()), {
-    body: JSON.stringify({
-      context: input.projectId,
-      functionSource: `async ({ itx, vars }) => {\n${input.code}\n}`,
-      vars: input.vars,
-    }),
-    headers: matrixAuthHeaders(),
-    method: "POST",
-  });
-  const body = (await response.json()) as { error?: string; result?: unknown };
-  if (!response.ok) {
-    throw new Error(`/api/itx/run failed: ${body.error ?? JSON.stringify(body)}`);
-  }
-  return body.result;
+  return execution.result;
 }
 
 async function runInProjectWorker(input: {
@@ -150,147 +92,72 @@ async function runInProjectWorker(input: {
   vars: Record<string, unknown>;
 }): Promise<unknown> {
   if (!input.id) throw new Error("project-worker runs are invoked by example id.");
-  using itx = connectGlobal();
-  using projectItx = await itx.projects.get(input.projectId);
-  const worker = (projectItx as never as Record<string, any>).worker;
+  using project = connectProject(input.projectId);
+  const worker = project.worker as unknown as {
+    runItxExample(input: { id: string; vars: Record<string, unknown> }): Promise<unknown>;
+  };
   return await worker.runItxExample({ id: input.id, vars: input.vars });
 }
 
 /**
- * The project-repo worker.ts for the matrix project: every project-worker
- * example baked in as `async ({ itx, vars }) => { <body> }`, dispatched by id
- * through ONE exported method. `itx.worker.runItxExample(...)` reaches it via
- * the Project DO's path replay, and the script's handle is the project
- * worker's own this.itx.context — the same project-scoped itx every other
- * runtime connects to from outside.
+ * The project-repo worker.js for the matrix project: every project-worker
+ * example baked in as `async (itx, vars) => { <body> }`, dispatched by id
+ * through ONE exported method. `project.worker.runItxExample(...)` reaches the
+ * repo-sourced default worker, and the script's handle is the worker's own
+ * `await this.env.ITX.get()` — the same project-scoped itx every other runtime
+ * connects to from outside. Plain JavaScript: dynamic workers may import
+ * "cloudflare:workers" and nothing else.
  */
 export function projectWorkerRunnerSource(examples: ItxExample[]): string {
   const scripts = examples
     .map(
-      (example) =>
-        `  ${JSON.stringify(example.id)}: async ({ itx, vars }) => {\n${example.code}\n  },`,
+      (example) => `  ${JSON.stringify(example.id)}: async (itx, vars) => {\n${example.code}\n},`,
     )
     .join("\n");
-  return `import { IterateProjectEntrypoint } from "iterate/worker";
+  return `import { WorkerEntrypoint } from "cloudflare:workers";
 
 const scripts = {
 ${scripts}
 };
 
-export default class ItxExampleRunner extends IterateProjectEntrypoint {
-  async fetch() {
+export default class ItxExampleRunner extends WorkerEntrypoint {
+  fetch() {
     return new Response("itx example runner");
+  }
+
+  processEvent(input) {
+    // The default project worker receives every committed project event; the
+    // example runner has nothing to do with them.
+    void input;
   }
 
   async runItxExample({ id, vars }) {
     const script = scripts[id];
     if (!script) throw new Error("unknown example: " + id);
-    const itx = await this.itx.context;
-    return await script({ itx, vars: vars || {} });
+    const itx = await this.env.ITX.get();
+    return await script(itx, vars || {});
   }
 }
 `;
 }
 
 /**
- * Commit files into a project's repo. The push itself runs
- * as an itx script via /api/itx/run (the in-isolate path agents use); the
- * file contents travel via the endpoint's vars.
+ * Overwrite the matrix project's worker.js with the example runner. This
+ * replaces the seeded counter worker — fine inside the matrix's dedicated
+ * test project. Repo-sourced workers are late-bound: the next
+ * `project.worker.*` call loads the committed source.
  */
-export async function pushProjectRepoFiles(input: {
-  commitMessage: string;
-  files: Record<string, string>;
+export async function bakeProjectWorkerRunner(input: {
+  examples: ItxExample[];
   projectId: string;
-  projectSlug: string;
 }): Promise<void> {
-  using itx = connectGlobal();
-  using projectItx = await itx.projects.get(input.projectId);
-  await waitForProjectReady(projectItx);
-
-  const pushScript = async ({
-    itx,
-    vars,
-  }: {
-    itx: Record<string, any>;
-    vars: { dir: string; files: Record<string, string>; message: string; projectSlug: string };
-  }) => {
-    const repo = await itx.repos.ensureProjectRepoInfo();
-    const url = new URL(repo.remote);
-    url.username = "x";
-    url.password = repo.token.split("?")[0];
-    await itx.workspace.gitClone({
-      branch: repo.defaultBranch,
-      depth: 1,
-      dir: vars.dir,
-      url: url.toString(),
-    });
-    for (const [path, content] of Object.entries(vars.files)) {
-      await itx.workspace.writeFile(`${vars.dir}/${path}`, content);
-      await itx.workspace.gitAdd({ dir: vars.dir, filepath: path });
-    }
-    await itx.workspace.gitCommit({
-      author: { email: "e2e@iterate.com", name: "itx e2e" },
-      dir: vars.dir,
-      message: vars.message,
-    });
-    await itx.workspace.gitPush({ dir: vars.dir, ref: repo.defaultBranch, remote: "origin" });
-    return { pushed: true };
-  };
-
-  const response = await fetch(new URL("/api/itx/run", baseUrl()), {
-    body: JSON.stringify({
-      context: input.projectId,
-      functionSource: pushScript.toString(),
-      vars: {
-        dir: `/e2e-config-${crypto.randomUUID().slice(0, 8)}`,
-        files: input.files,
-        message: input.commitMessage,
-        projectSlug: input.projectSlug,
-      },
-    }),
-    headers: matrixAuthHeaders(),
-    method: "POST",
+  using project = connectProject(input.projectId);
+  const commit = await project.repo.commitFiles({
+    changes: [{ content: projectWorkerRunnerSource(input.examples), path: "worker.js" }],
+    message: "Bake catalogue examples into the project worker",
   });
-  const body = (await response.json()) as { error?: string; result?: unknown };
-  if (!response.ok) throw new Error(`project worker push failed: ${body.error}`);
-  const repo = await (
-    projectItx as never as { repos: { get(input: { path: string }): unknown } }
-  ).repos.get({ path: "/repos/project" });
-  const readResult = await (
-    repo as { readFiles(input: { paths: string[] }): Promise<unknown> }
-  ).readFiles({
-    paths: Object.keys(input.files),
-  });
-  const files = (readResult as { files?: Array<{ content?: unknown; path: string }> }).files ?? [];
-  for (const path of Object.keys(input.files)) {
-    const file = (files as Array<{ content?: unknown; path: string }>).find(
-      (item) => item.path === path,
-    );
-    if (file?.content !== input.files[path]) {
-      throw new Error(`project worker push did not persist ${path}: ${JSON.stringify(files)}`);
-    }
+  if (commit.noChanges) return;
+  if (!commit.changedPaths.includes("worker.js")) {
+    throw new Error(`worker.js runner commit did not land: ${JSON.stringify(commit)}`);
   }
-  // Source dials intentionally use a short "latest" probe window. The matrix
-  // immediately calls the just-pushed worker, so wait once here rather than
-  // making every project-worker example race the stale key.
-  await new Promise((resolve) => setTimeout(resolve, PROJECT_WORKER_LATEST_PROBE_WINDOW_MS + 250));
-}
-
-async function waitForProjectReady(projectItx: unknown) {
-  let snapshot: unknown;
-  for (let attempt = 0; attempt < 90; attempt += 1) {
-    const project = (projectItx as { project: { processor: { snapshot(): Promise<unknown> } } })
-      .project;
-    snapshot = await project.processor.snapshot();
-    if ((snapshot as { state?: { phase?: unknown } }).state?.phase === "ready") return;
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
-  }
-  throw new Error(`Timed out waiting for create-completed: ${JSON.stringify(snapshot)}`);
-}
-
-function matrixAuthHeaders() {
-  return {
-    authorization: `Bearer ${adminApiSecret()}`,
-    "content-type": "application/json",
-  };
 }

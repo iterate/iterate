@@ -1,3 +1,10 @@
+// QUARANTINED (itx-v4 cutover) — origin: apps/os/src/itx/e2e/itx-subscribe.e2e.test.ts
+// Covered: legacy itx stream subscriptions over Cap'n Web — replay, live tail,
+// unsubscribe teardown through the stateless worker.
+// Why quarantined: legacy itx surface removed in the itx-v4 cutover; superseded by
+// apps/os/e2e/engine/* engine suites (the Cap'n Web subscribe callback tests in
+// e2e/engine/itx.e2e.test.ts and the streams engine suites).
+
 // itx stream subscriptions over Cap'n Web: the browser/Node reactivity seam.
 // A callback crosses the session, the Stream DO pushes batches through the
 // stateless worker, and the disposer tears the subscription down. This is

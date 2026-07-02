@@ -1,3 +1,10 @@
+// QUARANTINED (itx-v4 cutover) — origin: apps/os/src/itx/e2e/itx-scripts.ts
+// Covered: shared worker-cap module sources for the legacy scenario suites
+// (slack-shaped member caps, todo caps writing through env.ITERATE.context).
+// Why quarantined: legacy itx surface removed in the itx-v4 cutover; superseded by
+// apps/os/e2e/engine/* engine suites (inline dynamic-worker sources live in the
+// engine tests themselves).
+
 // Worker-cap sources shared by the itx e2e scenarios. The cross-runtime
 // script catalogue itself lives in src/itx/examples.ts (it doubles as the
 // REPL's Examples panel); these are the remaining test-only dynamic-worker

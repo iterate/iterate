@@ -1,3 +1,14 @@
+// QUARANTINED (itx-v4 cutover) — origin: apps/os/e2e/vitest/agents.itx.e2e.test.ts
+//
+// Covered: agent conversations over the LEGACY itx surface (openai-ws +
+// cloudflare-ai providers, Slack-gated agent threads, legacy stream engine
+// imports). Cannot run: the legacy itx surface and stream engine are removed;
+// the Slack domain returns in the final migration phase (Phase 12).
+//
+// Path back: web-chat agent coverage is superseded by
+// apps/os/e2e/engine/itx.e2e.test.ts (agent loop) and
+// apps/os/e2e/vitest/agent-tools.itx.e2e.test.ts (tool use + provider toggle).
+// The Slack-thread cases return with the Phase 12 slack processors.
 /**
  * Deployment-targeted tests for OS project agents, driven through itx (the same
  * handle the browser/REPL/CLI use).

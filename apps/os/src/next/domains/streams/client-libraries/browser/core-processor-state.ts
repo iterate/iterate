@@ -30,3 +30,21 @@ export type BrowserCoreProcessorState = z.infer<typeof BrowserCoreProcessorState
 export function parseBrowserCoreProcessorState(value: unknown): BrowserCoreProcessorState {
   return BrowserCoreProcessorState.parse(value);
 }
+
+/**
+ * The wider slice stream NAVIGATION views (tree browser, breadcrumb child
+ * pickers) render: the reconcile fields plus the immediate child paths and
+ * event count from the server's core reduced state. Kept separate from
+ * `BrowserCoreProcessorState` so the mirror runtime's reconcile contract stays
+ * exactly the two fields it depends on.
+ */
+export const BrowserCoreStreamTreeState = BrowserCoreProcessorState.extend({
+  childPaths: z.array(z.string().trim().min(1)).default([]),
+  eventCount: z.number().int().min(0).default(0),
+});
+
+export type BrowserCoreStreamTreeState = z.infer<typeof BrowserCoreStreamTreeState>;
+
+export function parseBrowserCoreStreamTreeState(value: unknown): BrowserCoreStreamTreeState {
+  return BrowserCoreStreamTreeState.parse(value);
+}

@@ -2,6 +2,7 @@
   "include": ["**/*.ts", "**/*.tsx", "**/*.d.ts"],
   "exclude": [
     "alchemy.run.ts",
+    "test-quarantine/**",
     "tmp/**",
     "iterate-config-repo/**",
     "**/*.workerd.test.ts",

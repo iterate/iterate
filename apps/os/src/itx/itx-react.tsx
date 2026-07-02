@@ -73,15 +73,21 @@ import {
 } from "react";
 import { useSuspenseQuery, type QueryKey } from "@tanstack/react-query";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
-import type { ItxHandle } from "./handle.ts";
+import type { Itx as ProjectItx, Session, UnauthenticatedItx } from "../next/types.ts";
 
-type Itx = RpcStub<ItxHandle>;
+/**
+ * The handle type is context-dependent: a project connection holds the project
+ * itx, the global connection holds the Session catalog. One pragmatic
+ * intersection keeps the four primitives monomorphic — a wrong call for the
+ * context fails at runtime exactly like a missing capability would.
+ */
+type Itx = RpcStub<Session & ProjectItx>;
+export type { Itx as ItxReactHandle };
 
 /**
  * How you address an itx connection — a plain, comparable value (that's what lets
  * the provider hold it in context and `useItx` resolve it with `??`). The empty
- * address `{}` is the global context. `projectId` is the stream owner key (a
- * project slug); `path`/`baseUrl` are reserved (not yet used to key the socket).
+ * address `{}` is the global context. `projectId` is a project id (`prj_…`); `path`/`baseUrl` are reserved (not yet used to key the socket).
  */
 export type ItxAddress = { projectId?: string; path?: string; baseUrl?: string };
 
@@ -118,10 +124,11 @@ function socketFor(context: string | undefined): Promise<Itx> {
   const existing = sockets.get(context);
   if (existing) return existing;
 
-  const url = new URL(
-    context ? `/api/itx/${encodeURIComponent(context)}` : "/api/itx",
-    window.location.href,
-  );
+  // Coexistence: the next engine's capnweb surface is served at /api/itx-next
+  // until the legacy stack is removed, at which point this becomes /api/itx.
+  // Context resolution is client-side now: one endpoint, authenticate(), then
+  // projects.get(<project id>) — the context key is a project ID, not a slug.
+  const url = new URL("/api/itx-next", window.location.href);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(url);
   const { promise, resolve, reject } = Promise.withResolvers<Itx>();
@@ -134,7 +141,13 @@ function socketFor(context: string | undefined): Promise<Itx> {
   const timeout = setTimeout(() => ws.close(), DIAL_TIMEOUT_MS);
   ws.addEventListener("open", () => {
     clearTimeout(timeout);
-    resolve(newWebSocketRpcSession<ItxHandle>(ws));
+    // Pipelined, no extra round trips: authenticate() rides the session cookie
+    // on the WebSocket handshake, projects.get narrows to the project context.
+    // The session/root stubs live as long as the socket; they are never
+    // disposed individually.
+    const unauthenticated = newWebSocketRpcSession<UnauthenticatedItx>(ws);
+    const root = unauthenticated.authenticate({ type: "from-server-cookie" });
+    resolve((context ? root.projects.get(context) : root) as unknown as Itx);
   });
   // `close` fires for a failed dial AND for a later death — either way the socket
   // is gone: drop the entry and wake readers so the next render re-dials.

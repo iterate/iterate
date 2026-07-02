@@ -28,13 +28,14 @@ export const Route = createFileRoute("/_app/projects/$projectSlug")({
 
 function ProjectLayout() {
   const { project } = Route.useRouteContext();
-  // One shared project socket for every route under this layout. We key the
-  // address on the project SLUG (the server resolves slug or id at /api/itx);
-  // any route that must talk to the GLOBAL handle instead (e.g. settings'
-  // hostname ops) calls `useItx({})` to force it.
+  // One shared project socket for every route under this layout, keyed by the
+  // project ID: context resolution is client-side on the next engine
+  // (authenticate() then projects.get(id)), so the address must be the id the
+  // engine knows, not the slug. Routes that need the GLOBAL session instead
+  // call `useItx({})` to force it.
   return (
     <Suspense fallback={<ItxResourceLoading label="project" />}>
-      <ItxProvider projectId={project.slug}>
+      <ItxProvider projectId={project.id}>
         <Outlet />
       </ItxProvider>
     </Suspense>

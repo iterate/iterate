@@ -11,8 +11,6 @@ import {
   GitBranch,
   KeyRound,
   LogOut,
-  Network,
-  Plug,
   Plus,
   Radio,
   ScrollText,
@@ -608,11 +606,9 @@ type ProjectStreamNavItemConfig = {
   streamPath: StreamPathType;
   to:
     | "/projects/$projectSlug/agents"
-    | "/projects/$projectSlug/integrations"
     | "/projects/$projectSlug/secrets"
     | "/projects/$projectSlug/repos"
-    | "/projects/$projectSlug/streams"
-    | "/projects/$projectSlug/mcp";
+    | "/projects/$projectSlug/streams";
 };
 
 const PROJECT_STREAM_NAV_ITEMS: readonly ProjectStreamNavItemConfig[] = [
@@ -623,13 +619,7 @@ const PROJECT_STREAM_NAV_ITEMS: readonly ProjectStreamNavItemConfig[] = [
     streamPath: StreamPath.parse("/agents"),
     to: "/projects/$projectSlug/agents",
   },
-  {
-    fuzzy: false,
-    icon: Plug,
-    label: "/integrations",
-    streamPath: StreamPath.parse("/integrations"),
-    to: "/projects/$projectSlug/integrations",
-  },
+  // TODO(itx-v4 cutover): /integrations (slack/google) returns in a later phase.
   {
     fuzzy: true,
     icon: KeyRound,
@@ -651,13 +641,7 @@ const PROJECT_STREAM_NAV_ITEMS: readonly ProjectStreamNavItemConfig[] = [
     streamPath: StreamPath.parse("/streams"),
     to: "/projects/$projectSlug/streams",
   },
-  {
-    fuzzy: false,
-    icon: Network,
-    label: "/mcp",
-    streamPath: StreamPath.parse("/mcp"),
-    to: "/projects/$projectSlug/mcp",
-  },
+  // TODO(itx-v4 cutover): the /mcp page returns when the inbound MCP surface does.
 ];
 
 function ProjectStreamNavItem({

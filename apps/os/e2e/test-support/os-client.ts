@@ -1,9 +1,15 @@
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import type { RpcStub } from "capnweb";
 import { localDevServerBaseUrl } from "./dev-server.ts";
-import { withItx, type ItxClient } from "~/itx/client.ts";
+import { connectItx } from "~/next/client.ts";
+import type { Itx, Session } from "~/next/types.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
+
+// Coexistence: the next engine's capnweb surface lives at /api/itx-next until
+// the legacy stack is removed (src/next/ingress.ts).
+process.env.ITX_API_PATH ??= "/api/itx-next";
 
 export function requireBaseUrl() {
   let baseUrl = process.env.APP_CONFIG_BASE_URL?.trim().replace(/\/+$/, "");
@@ -41,16 +47,18 @@ export function requireRootAccessToken() {
 }
 
 /**
- * An admin (access "all") itx handle against the deployment under test. The
- * oRPC product surface is gone; e2e tests reach project + stream capabilities
- * through itx (the same handle the browser/REPL/CLI use).
+ * An admin itx handle against the deployment under test: the Session catalog
+ * (no context) or a project itx (with context) — the same surfaces the
+ * browser, REPL, and CLI use.
  */
-export function createAdminOsItx(input?: { baseUrl?: string; context?: string }): ItxClient {
-  return withItx({
-    baseUrl: input?.baseUrl ?? requireBaseUrl(),
-    context: input?.context,
-    token: requireAdminBearerToken(),
-  });
+export function createAdminOsItx(input?: { baseUrl?: string }): RpcStub<Session>;
+export function createAdminOsItx(input: { baseUrl?: string; context: string }): RpcStub<Itx>;
+export function createAdminOsItx(input?: { baseUrl?: string; context?: string }) {
+  const baseUrl = input?.baseUrl ?? requireBaseUrl();
+  const auth = { type: "admin-secret" as const, secret: requireAdminBearerToken() };
+  return input?.context
+    ? connectItx({ auth, baseUrl, projectId: input.context })
+    : connectItx({ auth, baseUrl });
 }
 
 export function uniqueSuffix() {

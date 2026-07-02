@@ -1,3 +1,10 @@
+// QUARANTINED (itx-v4 cutover) — origin: apps/os/src/itx/e2e/itx-openapi.e2e.test.ts
+// Covered: the legacy OpenApiClient loopback capability — flat operationId
+// dispatch, listOperations(), self-describing refusals, deterministic fixture.
+// Why quarantined: legacy itx surface removed in the itx-v4 cutover; superseded by
+// apps/os/e2e/engine/* engine suites ("OpenAPI built-in connects directly and
+// mounts as a described capability").
+
 // OpenApiClient e2e: any OpenAPI API as an ergonomic capability, proven
 // against the deployment's OWN deterministic fixture (debug-routes.ts) — a
 // spec document plus the API it describes, admin-gated, so nothing here

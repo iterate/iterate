@@ -1,57 +1,58 @@
-import {
-  createAdminOsItx,
-  requireBaseUrl,
-  requireAdminBearerToken,
-  uniqueSuffix,
-} from "./os-client.ts";
-import { withItx } from "~/itx/client.ts";
+import type { RpcStub } from "capnweb";
+import { createAdminOsItx, requireBaseUrl, uniqueSuffix } from "./os-client.ts";
+import type { Agent, Itx } from "~/next/types.ts";
+import { connectItx } from "~/next/client.ts";
 
 /**
  * Create a disposable project against the deployment under test via itx (the
- * admin handle has access "all"). Returns the project plus a base URL and an
- * async disposer that removes it. Project create/remove run on a short-lived
- * global itx session; per-project work narrows with `itx.projects.get(id)`.
+ * admin handle may create projects). Returns the project plus a base URL and
+ * an async disposer.
+ *
+ * NOTE: the next engine has no `projects.remove` yet (TODO task #13), so
+ * disposal is a no-op — dev/preview stages accumulate throwaway projects and
+ * are periodically reset. The `await using` shape is kept so tests don't churn
+ * when removal lands.
  */
 export async function createTestProject(opts: { slugPrefix: string }) {
   const baseUrl = requireBaseUrl();
   const slugPrefix = opts.slugPrefix;
-  using itx = createAdminOsItx({ baseUrl });
+  // you get invalid DNS name errors if the slug is too long
+  const slug = `${slugPrefix.slice(0, 20)}-${uniqueSuffix()}`.replace("--", "-");
 
-  let project = await itx.projects.create({
-    // you get invalid DNS name errors if the slug is too long
-    slug: `${slugPrefix.slice(0, 20)}-${uniqueSuffix()}`.replace("--", "-"),
-  });
+  using session = createAdminOsItx({ baseUrl });
+  using created = session.projects.create({ slug });
+  const description = await created.describe();
+  const project = { id: description.projectId, slug };
 
-  let disposed = false;
   return {
     baseUrl,
-    /** A fresh admin itx handle narrowed to this project. */
-    itx(context?: string) {
-      return withItx({
+    /** A fresh admin itx handle narrowed to this project (or an agent in it). */
+    itx(): RpcStub<Itx> {
+      return createAdminOsItx({ baseUrl, context: project.id });
+    },
+    agent(agentPath: string): RpcStub<Agent> {
+      return connectItx({
+        agentPath,
+        auth: adminAuth(),
         baseUrl,
-        context: context ?? project.id,
-        token: requireAdminBearerToken(),
+        projectId: project.id,
       });
     },
     get project() {
       return project;
     },
-    async updateConfig(input: { customHostname?: string | null }) {
-      using session = createAdminOsItx({ baseUrl });
-      project = {
-        ...project,
-        ...(await session.projects.updateConfig({
-          id: project.id,
-          customHostname: input.customHostname,
-        })),
-      };
-      return project;
-    },
-    async [Symbol.asyncDispose]() {
-      if (disposed) return;
-      disposed = true;
-      using session = createAdminOsItx({ baseUrl });
-      await session.projects.remove({ id: project.id }).catch(() => undefined);
+    [Symbol.asyncDispose]() {
+      // TODO(task #13): project removal on the next engine.
+      return Promise.resolve();
     },
   };
+}
+
+function adminAuth() {
+  const secret =
+    process.env.OS_E2E_ADMIN_API_SECRET?.trim() ||
+    process.env.OS_ADMIN_API_SECRET?.trim() ||
+    process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
+  if (!secret) throw new Error("Admin API secret is required for e2e tests.");
+  return { type: "admin-secret" as const, secret };
 }

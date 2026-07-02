@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { KeyRound, Trash2 } from "lucide-react";
+import { KeyRound } from "lucide-react";
 import { z } from "zod";
 import { Button } from "@iterate-com/ui/components/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
@@ -15,22 +15,27 @@ import {
 } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { Textarea } from "@iterate-com/ui/components/textarea";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { parseMetadataJson } from "~/domains/secrets/metadata-json.ts";
 import { formatRelativeTime } from "~/lib/format-relative-time.ts";
 import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
 
+/** Secrets live at `/secrets/<name>`; the route param is the bare name. */
+const secretPathFromName = (name: string) => `/secrets/${name}`;
+const secretNameFromPath = (path: string) =>
+  path.startsWith("/secrets/") ? path.slice("/secrets/".length) : path;
+
 const SecretForm = z.object({
-  key: z.string().trim().min(1, "Secret key is required"),
+  name: z
+    .string()
+    .trim()
+    .min(1, "Secret name is required")
+    .regex(/^[^/]+$/, "Secret names cannot contain slashes"),
   material: z.string().min(1, "Secret material is required"),
-  metadataJson: z.string().trim().min(1, "Metadata JSON is required"),
 });
 
 const DEFAULT_SECRET_FORM_VALUES = {
-  key: "",
+  name: "",
   material: "",
-  metadataJson: "{}",
 };
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/secrets/")({
@@ -60,39 +65,29 @@ function ProjectSecretsIndexContent() {
   const secretsKey = ["secrets", project.slug];
   const secretsList = useItxQuery({
     key: secretsKey,
-    query: (itx) => itx.secrets.listSecrets(),
+    query: (itx) => itx.secrets.list(),
   });
 
   const upsertSecret = useMutation({
-    mutationFn: async (input: {
-      key: string;
-      material: string;
-      metadata: Record<string, unknown>;
-    }) => {
-      return await itx.secrets.setSecret(input);
+    mutationFn: async (input: { name: string; material: string }) => {
+      await itx.secrets.get(secretPathFromName(input.name)).update({ material: input.material });
+      return input.name;
     },
-    onSuccess: async (secret) => {
+    onSuccess: async (name) => {
       await queryClient.invalidateQueries({ queryKey: ["itx", ...secretsKey] });
       form.reset();
       void navigate({
         to: "/projects/$projectSlug/secrets/$secretId",
         params: {
           projectSlug: params.projectSlug,
-          secretId: secret.id,
+          secretId: name,
         },
       });
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });
-  const removeSecret = useMutation({
-    mutationFn: async (input: { key: string }) => {
-      return await itx.secrets.deleteSecret(input);
-    },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["itx", ...secretsKey] });
-    },
-    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
-  });
+  // TODO(itx-v4 cutover): the next-engine secret surface has no delete verb yet;
+  // the per-row delete button returns when it does.
   const form = useForm({
     defaultValues: DEFAULT_SECRET_FORM_VALUES,
     validators: {
@@ -101,28 +96,18 @@ function ProjectSecretsIndexContent() {
     },
     onSubmit: async ({ value }) => {
       const parsed = SecretForm.parse(value);
-      const metadata = parseMetadataJson(parsed.metadataJson);
-      if ("message" in metadata) {
-        toast.error(metadata.message);
-        return;
-      }
-
-      await upsertSecret.mutateAsync({
-        key: parsed.key,
-        material: parsed.material,
-        metadata: metadata.metadata,
-      });
+      await upsertSecret.mutateAsync(parsed);
     },
   });
 
   const visibleSecrets = useMemo(() => {
     const query = filter.trim().toLowerCase();
-    return (secretsList ?? [])
+    return secretsList
       .filter((secret) => {
         if (!query) return true;
-        return secret.key.toLowerCase().includes(query) || secret.id.toLowerCase().includes(query);
+        return secret.path.toLowerCase().includes(query);
       })
-      .toSorted((left, right) => left.key.localeCompare(right.key));
+      .toSorted((left, right) => left.path.localeCompare(right.path));
   }, [filter, secretsList]);
 
   return (
@@ -138,13 +123,13 @@ function ProjectSecretsIndexContent() {
         >
           <FieldGroup>
             <div className="grid gap-4 md:grid-cols-2">
-              <form.Field name="key">
+              <form.Field name="name">
                 {(field) => {
                   const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid;
 
                   return (
                     <Field data-invalid={isInvalid}>
-                      <FieldLabel htmlFor={field.name}>Key</FieldLabel>
+                      <FieldLabel htmlFor={field.name}>Name</FieldLabel>
                       <Input
                         id={field.name}
                         name={field.name}
@@ -154,7 +139,9 @@ function ProjectSecretsIndexContent() {
                         onChange={(event) => field.handleChange(event.target.value)}
                         aria-invalid={isInvalid}
                       />
-                      <FieldDescription>Arbitrary project-unique lookup key.</FieldDescription>
+                      <FieldDescription>
+                        Stored at <code className="text-xs">/secrets/&lt;name&gt;</code>.
+                      </FieldDescription>
                       {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
                     </Field>
                   );
@@ -187,31 +174,6 @@ function ProjectSecretsIndexContent() {
                 }}
               </form.Field>
             </div>
-
-            <form.Field name="metadataJson">
-              {(field) => {
-                const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid;
-
-                return (
-                  <Field data-invalid={isInvalid}>
-                    <FieldLabel htmlFor={field.name}>Metadata</FieldLabel>
-                    <Textarea
-                      id={field.name}
-                      name={field.name}
-                      className="min-h-24 font-mono text-xs"
-                      value={field.state.value}
-                      onBlur={field.handleBlur}
-                      onChange={(event) => field.handleChange(event.target.value)}
-                      aria-invalid={isInvalid}
-                    />
-                    <FieldDescription>
-                      JSON object stored alongside the redacted Secret.
-                    </FieldDescription>
-                    {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
-                  </Field>
-                );
-              }}
-            </form.Field>
           </FieldGroup>
 
           <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting] as const}>
@@ -264,7 +226,7 @@ function ProjectSecretsIndexContent() {
           ) : (
             visibleSecrets.map((secret) => (
               <div
-                key={secret.id}
+                key={secret.path}
                 className="flex items-start justify-between gap-4 rounded-lg border bg-card p-4"
               >
                 <div className="min-w-0 flex-1 space-y-1">
@@ -273,27 +235,16 @@ function ProjectSecretsIndexContent() {
                     to="/projects/$projectSlug/secrets/$secretId"
                     params={{
                       projectSlug: params.projectSlug,
-                      secretId: secret.id,
+                      secretId: secretNameFromPath(secret.path),
                     }}
                   >
                     <KeyRound className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <span className="truncate">{secret.key}</span>
+                    <span className="truncate">{secretNameFromPath(secret.path)}</span>
                   </Link>
                   <div className="truncate text-xs text-muted-foreground">
-                    {secret.id} · Updated {formatRelativeTime(secret.updatedAt)}
+                    {secret.path} · Created {formatRelativeTime(secret.createdAt)}
                   </div>
                 </div>
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="outline"
-                  className="h-8 w-8 shrink-0"
-                  aria-label={`Delete ${secret.key}`}
-                  onClick={() => removeSecret.mutate({ key: secret.key })}
-                  disabled={removeSecret.isPending && removeSecret.variables?.key === secret.key}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
               </div>
             ))
           )}

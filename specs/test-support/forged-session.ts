@@ -9,7 +9,11 @@ import {
   type IterateAuthProjectClaim,
 } from "@iterate-com/shared/auth-claims";
 import { doppler } from "../../apps/os/scripts/dev.ts";
-import { withItx } from "../../apps/os/src/itx/client.ts";
+import { connectItx } from "../../apps/os/src/next/client.ts";
+
+// Coexistence: the next engine's capnweb surface lives at /api/itx-next until
+// the legacy stack is removed (apps/os/src/next/ingress.ts).
+process.env.ITX_API_PATH ??= "/api/itx-next";
 
 type ForgePrivateJwk = JsonWebKey & {
   alg?: string;
@@ -127,68 +131,25 @@ export async function createProjectFixture(
 
 export async function createAdminProject(input: { baseUrl: string; slug: string }) {
   const config = await resolveOsPlaywrightAuthConfig();
-  using itx = withItx({ baseUrl: input.baseUrl, token: config.adminApiSecret });
-  const project = (await itx.projects.create({ slug: input.slug })) as {
-    id: string;
-    slug: string;
-  };
-  using projectItx = await itx.projects.get(project.id);
-  await waitForProjectReady(projectItx, project);
-  let disposed = false;
+  // The next engine's create resolves only after the bootstrap saga committed
+  // project/created (repo seeded, project worker probed, onboarding agent
+  // born), so there is no separate readiness wait.
+  using session = connectItx({
+    auth: { type: "admin-secret", secret: config.adminApiSecret },
+    baseUrl: input.baseUrl,
+  });
+  using created = session.projects.create({ slug: input.slug });
+  const description = await created.describe();
+  const project = { id: description.projectId, slug: input.slug };
 
   return {
     project,
-    async [Symbol.asyncDispose]() {
-      if (disposed) return;
-      disposed = true;
-      using cleanupItx = withItx({ baseUrl: input.baseUrl, token: config.adminApiSecret });
-      await cleanupItx.projects.remove({ id: project.id }).catch(() => undefined);
+    [Symbol.asyncDispose]() {
+      // TODO(task #13): project removal on the next engine — disposable
+      // Playwright projects are leaked until then (stages reset periodically).
+      return Promise.resolve();
     },
   };
-}
-
-async function waitForProjectReady(projectItx: unknown, project: { id: string; slug: string }) {
-  const processor = (
-    projectItx as {
-      project: {
-        processor: {
-          onStateChange(callback: (state: any) => unknown): Promise<(() => void) & Disposable>;
-        };
-      };
-    }
-  ).project.processor;
-
-  let lastState: any;
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-
-  try {
-    let resolveReady: () => void;
-    let rejectReady: (error: unknown) => void;
-    const ready = new Promise<void>((resolve, reject) => {
-      resolveReady = resolve;
-      rejectReady = reject;
-    });
-
-    timeout = setTimeout(() => {
-      rejectReady(
-        new Error(
-          `Timed out waiting for project ${project.id} (${project.slug}) to become ready: ${JSON.stringify(lastState)}`,
-        ),
-      );
-    }, 60_000);
-
-    const unsubscribe = await processor.onStateChange((state) => {
-      lastState = state;
-      if (state?.phase === "ready") resolveReady();
-    });
-    try {
-      await ready;
-    } finally {
-      unsubscribe();
-    }
-  } finally {
-    if (timeout) clearTimeout(timeout);
-  }
 }
 
 export async function mintIterateSession(input: {

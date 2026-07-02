@@ -1,8 +1,6 @@
-import { useMemo } from "react";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Trash2 } from "lucide-react";
 import { z } from "zod";
 import { Button } from "@iterate-com/ui/components/button";
 import {
@@ -16,12 +14,11 @@ import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { parseMetadataJson } from "~/domains/secrets/metadata-json.ts";
 import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
 
 const UpdateSecretForm = z.object({
-  material: z.string().min(1, "Secret material is required"),
-  metadataJson: z.string().trim().min(1, "Metadata JSON is required"),
+  material: z.string(),
+  egressUrls: z.string(),
 });
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/secrets/$secretId")({
@@ -43,96 +40,65 @@ function ProjectSecretDetailPage() {
 
 function ProjectSecretDetailContent() {
   const params = Route.useParams();
-  const navigate = useNavigate();
   const { project } = Route.useLoaderData();
   const itx = useItx();
   const queryClient = useQueryClient();
-  const secretsKey = ["secrets", project.slug];
-  const secrets = useItxQuery({
-    key: secretsKey,
-    query: (itx) => itx.secrets.listSecrets(),
+  const secretPath = `/secrets/${params.secretId}`;
+  const secretKey = ["secret", project.slug, secretPath];
+  const secret = useItxQuery({
+    key: secretKey,
+    query: (itx) => itx.secrets.get(secretPath).describe(),
   });
-  const secret = useMemo(
-    () => secrets.find((row) => row.id === params.secretId) ?? null,
-    [secrets, params.secretId],
-  );
 
-  const defaultValues = useMemo(
-    () => ({
-      material: "",
-      metadataJson: JSON.stringify(secret?.metadata ?? {}, null, 2),
-    }),
-    [secret?.metadata],
-  );
-  const upsertSecret = useMutation({
-    mutationFn: async (input: {
-      key: string;
-      material: string;
-      metadata: Record<string, unknown>;
-    }) => {
-      return await itx.secrets.setSecret(input);
+  const updateSecret = useMutation({
+    mutationFn: async (input: { material?: string; egress?: { urls: string[] } }) => {
+      return await itx.secrets.get(secretPath).update(input);
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["itx", ...secretsKey] });
+      await queryClient.invalidateQueries({ queryKey: ["itx", ...secretKey] });
+      await queryClient.invalidateQueries({ queryKey: ["itx", "secrets", project.slug] });
       form.reset();
       toast.success("Secret updated");
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });
-  const removeSecret = useMutation({
-    mutationFn: async (input: { key: string }) => {
-      return await itx.secrets.deleteSecret(input);
-    },
-    onSuccess: () => {
-      void navigate({
-        to: "/projects/$projectSlug/secrets",
-        params: {
-          projectSlug: params.projectSlug,
-        },
-      });
-    },
-    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
-  });
+  // TODO(itx-v4 cutover): the next-engine secret surface has no delete verb yet;
+  // the delete button returns when it does.
   const form = useForm({
-    defaultValues,
+    defaultValues: {
+      material: "",
+      egressUrls: secret.egress.urls.join("\n"),
+    },
     validators: {
       onChange: UpdateSecretForm,
       onSubmit: UpdateSecretForm,
     },
     onSubmit: async ({ value }) => {
-      if (!secret) return;
       const parsed = UpdateSecretForm.parse(value);
-      const metadata = parseMetadataJson(parsed.metadataJson);
-      if ("message" in metadata) {
-        toast.error(metadata.message);
-        return;
-      }
-
-      await upsertSecret.mutateAsync({
-        key: secret.key,
-        material: parsed.material,
-        metadata: metadata.metadata,
+      const urls = parsed.egressUrls
+        .split("\n")
+        .map((url) => url.trim())
+        .filter((url) => url !== "");
+      await updateSecret.mutateAsync({
+        ...(parsed.material === "" ? {} : { material: parsed.material }),
+        egress: { urls },
       });
     },
   });
 
-  if (!secret) {
-    return (
-      <div className="p-4 text-sm text-muted-foreground">
-        Secret {params.secretId} was not found for this project.
-      </div>
-    );
-  }
-
   return (
     <section className="w-full space-y-4 p-4">
       <div className="rounded-lg border bg-card">
-        <InfoRow label="ID" value={secret.id} />
-        <InfoRow label="Key" value={secret.key} />
+        <InfoRow label="Path" value={secretPath} />
         <InfoRow label="Material" value={secret.hasMaterial ? "Stored" : "Missing"} />
-        <InfoRow label="Created" value={secret.createdAt} />
-        <InfoRow label="Updated" value={secret.updatedAt} />
-        <InfoRow label="Metadata" value={JSON.stringify(secret.metadata)} />
+        <InfoRow
+          label="Egress URLs"
+          value={secret.egress.urls.length > 0 ? secret.egress.urls.join(", ") : "(none)"}
+        />
+        <InfoRow label="Used" value={`${secret.audit.usedCount} time(s)`} />
+        <InfoRow label="Last used" value={secret.audit.lastUsedAt ?? "never"} />
+        <InfoRow label="Last used by" value={secret.audit.lastUsedBy ?? "(unknown)"} />
+        <InfoRow label="Last used URL" value={secret.audit.lastUsedUrl ?? "(unknown)"} />
       </div>
 
       <div className="space-y-3 rounded-lg border bg-card p-4">
@@ -163,7 +129,7 @@ function ProjectSecretDetailContent() {
                       aria-invalid={isInvalid}
                     />
                     <FieldDescription>
-                      Updating rotates the material for the existing key.
+                      Leave blank to keep the current material; filling it rotates the material.
                     </FieldDescription>
                     {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
                   </Field>
@@ -171,24 +137,25 @@ function ProjectSecretDetailContent() {
               }}
             </form.Field>
 
-            <form.Field name="metadataJson">
+            <form.Field name="egressUrls">
               {(field) => {
                 const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid;
 
                 return (
                   <Field data-invalid={isInvalid}>
-                    <FieldLabel htmlFor={field.name}>Metadata</FieldLabel>
+                    <FieldLabel htmlFor={field.name}>Egress URLs</FieldLabel>
                     <Textarea
                       id={field.name}
                       name={field.name}
                       className="min-h-24 font-mono text-xs"
+                      placeholder={"https://api.example.com/*"}
                       value={field.state.value}
                       onBlur={field.handleBlur}
                       onChange={(event) => field.handleChange(event.target.value)}
                       aria-invalid={isInvalid}
                     />
                     <FieldDescription>
-                      JSON object stored alongside the redacted Secret.
+                      One URL pattern per line. The secret can only be sent to matching egress URLs.
                     </FieldDescription>
                     {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
                   </Field>
@@ -197,31 +164,18 @@ function ProjectSecretDetailContent() {
             </form.Field>
           </FieldGroup>
 
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting] as const}>
-              {([canSubmit, isSubmitting]) => (
-                <Button
-                  className="self-start"
-                  type="submit"
-                  size="sm"
-                  disabled={!canSubmit || isSubmitting || upsertSecret.isPending}
-                >
-                  {isSubmitting || upsertSecret.isPending ? "Updating..." : "Update Secret"}
-                </Button>
-              )}
-            </form.Subscribe>
-            <Button
-              type="button"
-              variant="destructive"
-              size="sm"
-              className="self-start"
-              onClick={() => removeSecret.mutate({ key: secret.key })}
-              disabled={removeSecret.isPending}
-            >
-              <Trash2 className="h-4 w-4" />
-              {removeSecret.isPending ? "Deleting..." : "Delete"}
-            </Button>
-          </div>
+          <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting] as const}>
+            {([canSubmit, isSubmitting]) => (
+              <Button
+                className="self-start"
+                type="submit"
+                size="sm"
+                disabled={!canSubmit || isSubmitting || updateSecret.isPending}
+              >
+                {isSubmitting || updateSecret.isPending ? "Updating..." : "Update Secret"}
+              </Button>
+            )}
+          </form.Subscribe>
         </form>
       </div>
     </section>

@@ -1,22 +1,27 @@
 // `pnpm cli itx run --eval "<script body>"` — the CLI execution runtime for itx
 // scripts. The script body is the SAME shape every other runtime accepts
-// (browser REPL, /api/itx/run, project workers, the e2e suite): it runs with
+// (browser REPL, runScript, project workers, the e2e suite): it runs with
 // `itx` and `vars` in scope and ends with an explicit `return`.
 //
-// Evaluation happens HERE, in this Node process, over a Cap'n Web WebSocket —
-// not via /api/itx/run. That makes the CLI a genuinely distinct runtime (like
-// `node -e`): it can hold live capabilities and long-lived subscriptions for
-// as long as the process runs.
+// Evaluation happens HERE, in this Node process, over a Cap'n Web WebSocket.
+// That makes the CLI a genuinely distinct runtime (like `node -e`): it can
+// hold live capabilities and long-lived subscriptions for as long as the
+// process runs.
 
 import { readFile } from "node:fs/promises";
 import process from "node:process";
+import repl from "node:repl";
 
 import { RpcTarget } from "capnweb";
+import { readLocalDevServerInfo } from "@iterate-com/shared/alchemy/local-dev-server";
 
-import { withItx } from "../src/itx/client.ts";
+import { connectItx } from "../src/next/client.ts";
 
 const ASSISTANT_RESPONSE_TYPE = "events.iterate.com/agents/web-message-sent";
-const USER_MESSAGE_TYPE = "events.iterate.com/agents/user-message-received";
+
+// Coexistence: the next engine's capnweb surface lives at /api/itx-next until
+// the legacy stack is removed (src/next/ingress.ts).
+process.env.ITX_API_PATH ??= "/api/itx-next";
 
 const AsyncFunction = async function () {}.constructor as new (
   ...args: string[]
@@ -30,7 +35,7 @@ type RunOptions = {
   eval?: string;
   /** Path to a script file with the same body shape as `eval`. */
   file?: string;
-  /** Project id or slug to connect into. Omit for the global admin context. */
+  /** Project id to connect into. Omit for the global admin session. */
   context?: string;
   /** JSON object passed to the script as `vars`, e.g. '{"note":"hi"}'. */
   vars?: string;
@@ -46,19 +51,15 @@ export async function run(options: RunOptions) {
   }
 
   const vars = parseVars(options.vars);
-  const baseUrl = options.baseUrl ?? process.env.APP_CONFIG_BASE_URL?.trim();
-  if (!baseUrl) throw new Error("No base URL: pass --base-url or set APP_CONFIG_BASE_URL.");
-  const token =
-    process.env.OS_ADMIN_API_SECRET?.trim() ||
-    process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ||
-    "";
-  if (!token) throw new Error("APP_CONFIG_ADMIN_API_SECRET (or OS_ADMIN_API_SECRET) is required.");
+  const connection = adminConnection(options);
 
   // The script body becomes an async function body, so `return` works and
-  // `await` is available throughout — same wrapping as /api/itx/run.
+  // `await` is available throughout — same wrapping as every other runtime.
   const script = new AsyncFunction("itx", "vars", "RpcTarget", code);
 
-  using itx = withItx({ baseUrl, context: options.context, token });
+  using itx = options.context
+    ? connectItx({ ...connection, projectId: options.context })
+    : connectItx(connection);
   const result = await script(itx, vars, RpcTarget);
 
   // Exactly one JSON document on stdout — scripts and the e2e suite parse it.
@@ -68,14 +69,44 @@ export async function run(options: RunOptions) {
   process.exit(0);
 }
 
+type ReplOptions = {
+  /** Project id to connect into. Omit for the global admin session. */
+  context?: string;
+  /** OS base URL. Defaults to APP_CONFIG_BASE_URL. */
+  baseUrl?: string;
+};
+
+/** Open a Node REPL with a live itx handle (`itx`, plus `RpcTarget`). */
+export async function startRepl(options: ReplOptions) {
+  const connection = adminConnection(options);
+  const itx = options.context
+    ? connectItx({ ...connection, projectId: options.context })
+    : connectItx(connection);
+
+  process.stdout.write(
+    [
+      `Connected to ${connection.baseUrl}`,
+      options.context
+        ? `Context: project ${options.context} — try: await itx.describe()`
+        : "Context: session — try: await itx.projects.list()",
+      "",
+    ].join("\n"),
+  );
+
+  const server = repl.start({ prompt: "itx> " });
+  server.context.itx = itx;
+  server.context.RpcTarget = RpcTarget;
+  server.on("exit", () => process.exit(0));
+}
+
 type AgentSmokeOptions = {
-  /** Agent stream path, e.g. /agents/smoke. */
+  /** Agent stream path, e.g. /agents/onboarding. */
   agentPath: string;
   /** OS base URL. Defaults to APP_CONFIG_BASE_URL. */
   baseUrl?: string;
   /** Single user message to send to the agent. */
   message: string;
-  /** Project id or slug to connect into over ITX. */
+  /** Project id to connect into over ITX. */
   project: string;
   /** Maximum time to wait for an assistant response. */
   timeoutMs?: number;
@@ -96,40 +127,24 @@ export async function agentSmoke(options: AgentSmokeOptions) {
     throw new Error("--timeout-ms must be a positive integer.");
   }
 
-  const baseUrl = options.baseUrl ?? process.env.APP_CONFIG_BASE_URL?.trim();
-  if (!baseUrl) throw new Error("No base URL: pass --base-url or set APP_CONFIG_BASE_URL.");
-  const token =
-    process.env.OS_ADMIN_API_SECRET?.trim() ||
-    process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ||
-    "";
-  if (!token) {
-    throw new Error("APP_CONFIG_ADMIN_API_SECRET (or OS_ADMIN_API_SECRET) is required.");
-  }
-
   const startedAt = Date.now();
-  using itx = withItx({ baseUrl, context: project, token });
-
-  const stream = await itx.streams.get(agentPath);
-  const userEvent = await stream.append({
-    event: {
-      type: USER_MESSAGE_TYPE,
-      payload: {
-        content: message,
-        origin: "web",
-      },
-    },
+  using agent = connectItx({
+    ...adminConnection(options),
+    agentPath,
+    projectId: project,
   });
 
-  const responseEvent = await stream.waitForEvent({
-    afterOffset: userEvent.offset,
-    timeoutMs,
-    predicate: (event) => {
-      if (event.type.endsWith("error-occurred")) {
-        throw new Error(`Agent stream reported an error: ${JSON.stringify(event)}`);
-      }
-      return event.type === ASSISTANT_RESPONSE_TYPE;
-    },
-  });
+  // `ask` is the server-side send-and-wait: append the user message, resolve
+  // on the agent's web reply. Waiting is bounded client-side as well.
+  const responseEvent = await Promise.race([
+    agent.ask({ message }),
+    new Promise<never>((_resolve, reject) =>
+      setTimeout(() => reject(new Error(`No assistant response within ${timeoutMs}ms`)), timeoutMs),
+    ),
+  ]);
+  if (responseEvent.type !== ASSISTANT_RESPONSE_TYPE) {
+    throw new Error(`Unexpected response event: ${JSON.stringify(responseEvent)}`);
+  }
   const assistantMessage = (responseEvent.payload as { message?: unknown }).message;
 
   process.stdout.write(
@@ -140,7 +155,6 @@ export async function agentSmoke(options: AgentSmokeOptions) {
         elapsedMs: Date.now() - startedAt,
         project,
         responseEvent,
-        userEvent,
       },
       null,
       2,
@@ -149,6 +163,26 @@ export async function agentSmoke(options: AgentSmokeOptions) {
 
   // The Cap'n Web WebSocket would otherwise keep the process alive.
   process.exit(0);
+}
+
+function adminConnection(options: { baseUrl?: string }) {
+  const baseUrl =
+    options.baseUrl ??
+    process.env.APP_CONFIG_BASE_URL?.trim() ??
+    readLocalDevServerInfo(new URL("..", import.meta.url).pathname, {
+      requireLive: true,
+    })?.baseUrl.replace(/\/+$/, "");
+  if (!baseUrl) {
+    throw new Error(
+      "No base URL: pass --base-url, set APP_CONFIG_BASE_URL, or start the local dev server.",
+    );
+  }
+  const secret =
+    process.env.OS_ADMIN_API_SECRET?.trim() ||
+    process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ||
+    "";
+  if (!secret) throw new Error("APP_CONFIG_ADMIN_API_SECRET (or OS_ADMIN_API_SECRET) is required.");
+  return { auth: { type: "admin-secret" as const, secret }, baseUrl };
 }
 
 function parseVars(raw: string | undefined): Record<string, unknown> {

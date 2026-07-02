@@ -4,11 +4,17 @@
 // there via `define` (__ITX_BROWSER_E2E__) instead of importing this file.
 
 import { fileURLToPath } from "node:url";
-import { afterAll } from "vitest";
-import { withItx, type ItxClient } from "../client.ts";
+import type { RpcStub } from "capnweb";
+import { connectItx } from "../../next/client.ts";
+import type { Itx, Session } from "../../next/types.ts";
 import { localDevServerBaseUrl } from "../../../e2e/test-support/dev-server.ts";
 
 const appRoot = fileURLToPath(new URL("../../..", import.meta.url));
+
+// Coexistence: the os deployment serves the next engine's capnweb surface at
+// /api/itx-next while the legacy app worker still owns /api/itx. The next
+// client reads ITX_API_PATH at dial time (same pattern as e2e/engine/setup.ts).
+process.env.ITX_API_PATH ??= "/api/itx-next";
 
 export function adminApiSecret() {
   const secret =
@@ -34,27 +40,19 @@ export function baseUrl() {
   return url;
 }
 
-/** A global (admin-access) handle on the deployment under test. */
-export function connectGlobal(): ItxClient {
-  return withItx({ baseUrl: baseUrl(), token: adminApiSecret() });
+/** An admin Session on the deployment under test (the catalog that vends itxs). */
+export function connectGlobal(): RpcStub<Session> {
+  return connectItx({
+    auth: { secret: adminApiSecret(), type: "admin-secret" },
+    baseUrl: baseUrl(),
+  });
 }
 
-/**
- * Best-effort cleanup for projects a suite creates: push every created
- * project id onto the returned array and an afterAll hook removes them via
- * itx.projects.remove. Cleanup failures must never fail the suite.
- */
-export function registerCreatedProjectCleanup(): string[] {
-  const createdProjectIds: string[] = [];
-  afterAll(async () => {
-    try {
-      using itx = connectGlobal();
-      for (const id of createdProjectIds.toReversed()) {
-        await itx.projects.remove({ id }).catch(() => {});
-      }
-    } catch {
-      // Best-effort only.
-    }
+/** A project-scoped itx on the deployment under test, via admin auth. */
+export function connectProject(projectId: string): RpcStub<Itx> {
+  return connectItx({
+    auth: { secret: adminApiSecret(), type: "admin-secret" },
+    baseUrl: baseUrl(),
+    projectId,
   });
-  return createdProjectIds;
 }

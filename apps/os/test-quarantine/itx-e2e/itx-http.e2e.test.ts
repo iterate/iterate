@@ -1,3 +1,10 @@
+// QUARANTINED (itx-v4 cutover) — origin: apps/os/src/itx/e2e/itx-http.e2e.test.ts
+// Covered: legacy facet caps (durable-object capability sources with private
+// SQLite) and {cap}--{project} HTTP hostname routing for exposed caps.
+// Why quarantined: legacy itx surface removed in the itx-v4 cutover; superseded by
+// apps/os/e2e/engine/* engine suites (stateful dynamic workers) and the
+// project-ingress engine e2e for HTTP routing.
+
 // Facet caps + HTTP routing (itx/http.ts):
 //
 //   facet caps   stored source exporting `extends DurableObject`, instantiated

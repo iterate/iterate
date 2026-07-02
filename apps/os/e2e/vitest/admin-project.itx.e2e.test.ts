@@ -1,13 +1,12 @@
 /**
- * Deployment-targeted test for disposable admin projects driven through itx.
- * Replaces the oRPC original preserved as admin-project.orpc-legacy.ts: the
- * admin handle has access "all", so it creates a throwaway project and exercises
- * project streams (create/append/getEvents/subscribe) the same way the dashboard,
- * REPL, and CLI reach them.
+ * Deployment-targeted test for disposable admin projects driven through itx:
+ * the admin handle creates a throwaway project and exercises project streams
+ * (append/getEvents/subscribe) the same way the dashboard, REPL, and CLI reach
+ * them on the next engine.
  */
 import { expect, test } from "vitest";
-import type { Event } from "@iterate-com/shared/streams/types";
 import { createTestProject } from "../test-support/create-test-project.ts";
+import type { StreamEvent } from "~/next/types.ts";
 
 test("creates a disposable project and uses project streams through itx", async () => {
   await using handle = await createTestProject({ slugPrefix: "admin-fixture" });
@@ -18,68 +17,41 @@ test("creates a disposable project and uses project streams through itx", async 
   const marker = crypto.randomUUID();
   const stream = itx.streams.get(streamPath);
 
-  // Creating the stream proves the disposable project exists and is reachable
-  // on this admin handle; the project id is the stream owner.
-  const created = (await itx.streams.create({ streamPath })) as {
-    projectId: string | null;
-    path: string;
-  };
-  expect(created).toMatchObject({
-    projectId: handle.project.id,
-    path: streamPath,
-  });
-
   // The one subscription primitive replays history and tails live appends.
-  const seen: Event[] = [];
+  const seen: StreamEvent[] = [];
   const subscription = await stream.subscribe({
     replayAfterOffset: 0,
-    processEventBatch: (batch) => seen.push(...(batch.events as never as Event[])),
+    processEventBatch: (batch) => {
+      seen.push(...batch.events);
+    },
   });
 
-  // append returns the bare appended Event (offset, createdAt, …) — the Stream
-  // DO's append result, unwrapped (oRPC added an { event } envelope; itx does
-  // not). The cast is only needed because capnweb's stub-type mapper projects
-  // the branded Event type down to a lossy record at the callsite.
-  const appended = (await stream.append({
-    event: {
-      type: eventType,
-      payload: { marker },
-    },
-  })) as unknown as Event;
+  // append creates the stream on first write and returns the committed events.
+  const [appended] = await stream.append({
+    type: eventType,
+    payload: { marker },
+  });
   expect(appended).toMatchObject({
     offset: expect.any(Number),
-    payload: { marker },
     type: eventType,
+    payload: { marker },
   });
 
-  // getEvents() likewise returns the Event[] directly (no { events } wrapper).
-  const read = (await stream.getEvents({ afterOffset: 0 })) as unknown as Event[];
-  expect(read).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        offset: appended.offset,
-        payload: { marker },
-        type: eventType,
-      }),
-    ]),
-  );
+  const events = await stream.getEvents({});
+  expect(events.map((event) => event.type)).toContain(eventType);
+  expect(events.find((event) => event.type === eventType)?.payload).toMatchObject({ marker });
 
-  await waitFor(
-    () =>
-      seen.some(
-        (event) =>
-          event.type === eventType && (event.payload as { marker?: unknown }).marker === marker,
-      ),
-    () => `stream subscription marker; saw ${JSON.stringify(seen)}`,
-  );
-  await subscription.unsubscribe();
+  await expect
+    .poll(() => seen.some((event) => event.type === eventType && event.payload?.marker === marker))
+    .toBe(true);
+
+  subscription.unsubscribe();
+
+  // The project processor folds the new stream into its reduced state.
+  await expect
+    .poll(async () => {
+      const snapshot = await itx.processor.snapshot();
+      return snapshot.state.streams.some((item) => item.path === streamPath);
+    })
+    .toBe(true);
 });
-
-async function waitFor(predicate: () => boolean, describe: () => string, timeoutMs = 10_000) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`Timed out waiting for ${describe()}`);
-}

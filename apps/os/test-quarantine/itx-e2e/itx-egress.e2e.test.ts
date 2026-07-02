@@ -1,3 +1,12 @@
+// QUARANTINED (itx-v4 cutover) — origin: apps/os/src/itx/e2e/itx-egress.e2e.test.ts
+// Covered: legacy itx egress — the explicit itx.fetch(...) door and the implicit
+// bare-fetch door inside platform-loaded isolates, with getSecret(...) placeholder
+// substitution proven against a public echo endpoint, plus the itx.secrets
+// setSecret → placeholder-fetch lifecycle.
+// Why quarantined: legacy itx surface removed in the itx-v4 cutover; superseded by
+// apps/os/e2e/engine/* engine suites (project egress + secret substitution are
+// covered by the "Project egress substitutes path-addressed secrets" tests).
+
 // Egress: one pipe, two doors (Law 5), proven against a real deployment.
 //
 //   explicit door  itx.fetch(...) — available to every handle holder,

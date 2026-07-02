@@ -1,3 +1,11 @@
+// QUARANTINED (itx-v4 cutover) — origin: apps/os/src/itx/e2e/itx.e2e.test.ts
+// Covered: the legacy cross-runtime catalogue matrix runner plus the live-cap
+// scenario suite (live/rpc/binding provides, promote-to-durable, shadowing of
+// defaults, fetch interception, absolute stream refs, ItxError codes).
+// Why quarantined: legacy itx surface removed in the itx-v4 cutover; superseded by
+// apps/os/e2e/engine/* engine suites and the rewritten matrix runner at
+// apps/os/src/itx/e2e/itx.e2e.test.ts.
+
 // itx e2e: proves the spec against a REAL deployed worker (local dev server,
 // preview, or production — whatever APP_CONFIG_BASE_URL points at).
 //

@@ -1,3 +1,11 @@
+// QUARANTINED (itx-v4 cutover) — origin: apps/os/src/itx/e2e/itx-mcp-auth.e2e.test.ts
+// Covered: authenticated remote MCP via secret-substituted egress against
+// Cloudflare's real MCP server, including placeholder-never-material negative
+// controls.
+// Why quarantined: legacy itx surface removed in the itx-v4 cutover; superseded by
+// apps/os/e2e/engine/* engine suites ("MCP built-in connects directly and mounts
+// as a described capability" with a mock authenticated MCP fixture).
+
 // Authenticated MCP via secret-substituted egress, proven against a REAL
 // third-party server: Cloudflare's remote MCP server at
 // https://bindings.mcp.cloudflare.com/mcp (streamable HTTP; 401 without
