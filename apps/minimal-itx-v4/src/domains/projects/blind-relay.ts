@@ -105,13 +105,18 @@ async function runTlsHttpRequest({
       onApplicationData: (data) => {
         if (data.byteLength === 0) return;
         responseChunks.push(data);
-        const responseBytes = concatBytes(responseChunks);
-        if (responseBytes.byteLength > MAX_BLIND_RELAY_RESPONSE_BYTES) {
-          fail(new Error("blind relay response exceeded maximum POC response size"));
-          return;
+
+        try {
+          const responseBytes = concatBytes(responseChunks);
+          if (responseBytes.byteLength > MAX_BLIND_RELAY_RESPONSE_BYTES) {
+            fail(new Error("blind relay response exceeded maximum POC response size"));
+            return;
+          }
+          const completeLength = completedHttpResponseLength(responseBytes);
+          if (completeLength !== undefined) complete(responseBytes.slice(0, completeLength));
+        } catch (error) {
+          fail(error);
         }
-        const completeLength = completedHttpResponseLength(responseBytes);
-        if (completeLength !== undefined) complete(responseBytes.slice(0, completeLength));
       },
       onTlsEnd: (error) => {
         if (error !== undefined) {
