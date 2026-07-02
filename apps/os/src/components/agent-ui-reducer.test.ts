@@ -140,6 +140,56 @@ describe("agent-ui reducer", () => {
     });
   });
 
+  it("streams the engine's openai-ws llm-response-chunk frames into the live llm step", () => {
+    // The engine journals every raw Responses-WS frame as llm-response-chunk
+    // ({llmRequestId, sequence, chunk}) — the pre-migration processor used
+    // websocket-message-received ({llmRequestId, message}). Regression: the
+    // feed showed only a bare spinner because the reducer ignored the new
+    // event type.
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agents/user-message-received",
+        payload: { content: "count the inputs", origin: "web" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 10,
+        payload: { model: "gpt-test" },
+      },
+      {
+        type: "events.iterate.com/openai-ws/llm-response-chunk",
+        payload: {
+          llmRequestId: 10,
+          sequence: 0,
+          chunk: { type: "response.reasoning_summary_text.delta", delta: "Reading the stream" },
+        },
+      },
+      {
+        type: "events.iterate.com/openai-ws/llm-response-chunk",
+        payload: {
+          llmRequestId: 10,
+          sequence: 1,
+          chunk: { type: "response.output_text.delta", delta: "const n = await " },
+        },
+      },
+      {
+        type: "events.iterate.com/openai-ws/llm-response-chunk",
+        payload: {
+          llmRequestId: 10,
+          sequence: 2,
+          chunk: { type: "response.output_text.delta", delta: "stream.count();" },
+        },
+      },
+    ]);
+
+    expect(state.live?.steps.at(-1)).toMatchObject({
+      kind: "llm",
+      status: "running",
+      thinkingText: "Reading the stream",
+      responseText: "const n = await stream.count();",
+    });
+  });
+
   it("accumulates cloudflare-ai chunk deltas", () => {
     const state = reduceAll([
       {

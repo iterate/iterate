@@ -33,7 +33,7 @@ type AgentUiReducerEvents = Parameters<typeof planAgentUiOps>[1];
 
 export const AgentUiProcessorContract = defineProcessorContract({
   slug: "agent-ui",
-  version: "0.1.0",
+  version: "0.1.1",
   description:
     "Browser-side processor that folds agent streams (including partial LLM chunks) into settled chat rows in SQLite plus a live in-flight activity in reduced state.",
   // The next engine derives a processor's empty fold from `stateSchema.parse({})`
