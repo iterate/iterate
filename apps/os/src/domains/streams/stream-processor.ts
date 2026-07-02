@@ -34,7 +34,7 @@ export type EventCatalog = Record<string, EventDefinition<unknown, unknown>>;
  * the key of the event catalog object. These helper types recover "event type
  * string -> payload schema" from those keys.
  */
-export type EventCatalogFromObject<Value> = {
+type EventCatalogFromObject<Value> = {
   [Key in keyof Value as string extends Key
     ? never
     : number extends Key
@@ -49,7 +49,7 @@ export type EventCatalogFromObject<Value> = {
  * event catalog. `processorDeps` deliberately supports both so a processor can
  * depend on another processor's full contract or on a small shared catalog.
  */
-export type ContractEventCatalog<ContractOrCatalog> = ContractOrCatalog extends {
+type ContractEventCatalog<ContractOrCatalog> = ContractOrCatalog extends {
   events: infer Events;
 }
   ? EventCatalogFromObject<Events>
@@ -62,7 +62,7 @@ export type ContractEventCatalog<ContractOrCatalog> = ContractOrCatalog extends 
  * `emits` fail at the contract definition site. Runtime validation still does
  * the same check for dynamically assembled contracts.
  */
-export type ResolvedEventType<
+type ResolvedEventType<
   Events extends EventCatalog,
   ProcessorDeps extends readonly unknown[],
 > = Extract<
@@ -73,7 +73,7 @@ export type ResolvedEventType<
 /**
  * Distributes over each item in `processorDeps` and collects its event keys.
  */
-export type EventTypeFromProcessorDeps<ProcessorDeps extends readonly unknown[]> =
+type EventTypeFromProcessorDeps<ProcessorDeps extends readonly unknown[]> =
   ProcessorDeps[number] extends infer ProcessorDep
     ? ProcessorDep extends unknown
       ? keyof ContractEventCatalog<ProcessorDep>
@@ -182,7 +182,7 @@ type ParsedInputFromType<
   ? ParsedInputFromDefinitionForType<EventDefinitionForType<Events, ProcessorDeps, Type>, Type>
   : never;
 
-export type ResolvedEventInput<Contract> = Contract extends {
+type ResolvedEventInput<Contract> = Contract extends {
   events: EventCatalog;
 }
   ? InputFromType<
@@ -198,14 +198,14 @@ type InputFromTypes<
   Types extends readonly string[],
 > = InputFromType<Events, ProcessorDeps, Types[number]>;
 
-export type ConsumedEvent<Contract> = Contract extends {
+type ConsumedEvent<Contract> = Contract extends {
   events: EventCatalog;
   consumes: infer Consumes extends readonly string[];
 }
   ? EventFromTypes<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>, Consumes>
   : never;
 
-export type EmittedInput<Contract> = Contract extends {
+type EmittedInput<Contract> = Contract extends {
   events: EventCatalog;
   emits: infer Emits extends readonly string[];
 }
@@ -365,7 +365,7 @@ type ProcessorContractInputWithoutDeps<
   emits: Emits & ResolvedEventTypesOnly<Events, readonly [], Emits>;
 };
 
-export type ProcessorDepsOf<Contract> = Contract extends {
+type ProcessorDepsOf<Contract> = Contract extends {
   processorDeps?: infer ProcessorDeps;
 }
   ? ProcessorDeps extends readonly unknown[]

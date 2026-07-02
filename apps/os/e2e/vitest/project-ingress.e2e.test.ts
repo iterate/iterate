@@ -50,10 +50,21 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
       headers.set("x-forwarded-host", `${appHostPrefix}.localhost`);
       return fetch(base, { ...init, headers });
     }
-    // os.iterate-preview-N.com serves projects at *.iterate-preview-N.app —
-    // same derivation the preview smoke uses for the MCP host.
+    // The deployment's project hosts live on APP_CONFIG_PROJECT_HOSTNAME_BASES
+    // (e.g. iterate.app for prd, iterate-preview-N.app for previews) — fall
+    // back to the preview-derivation only when the env var is absent.
+    const configuredBase = (() => {
+      const raw = process.env.APP_CONFIG_PROJECT_HOSTNAME_BASES?.trim();
+      if (!raw) return undefined;
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        return Array.isArray(parsed) ? String(parsed[0]) : String(parsed);
+      } catch {
+        return raw.split(",")[0]?.trim();
+      }
+    })();
     const previewMatch = /^os\.(iterate-preview-\d+)\.com$/.exec(base.hostname);
-    const projectBase = previewMatch ? `${previewMatch[1]}.app` : base.hostname;
+    const projectBase = configuredBase || (previewMatch ? `${previewMatch[1]}.app` : base.hostname);
     return fetch(`${base.protocol}//${appHostPrefix}.${projectBase}${path}`, init);
   };
 

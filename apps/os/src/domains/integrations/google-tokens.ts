@@ -26,7 +26,7 @@ const GOOGLE_ACCESS_TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000;
 
 type EncryptedMaterial = { algorithm: "AES-GCM-SHA256"; ciphertext: string; iv: string };
 
-export type GoogleTokenState = {
+type GoogleTokenState = {
   connected: boolean;
   email?: string;
   encryptedAccessToken?: EncryptedMaterial;
@@ -38,7 +38,7 @@ export type GoogleTokenState = {
   scopes?: string[];
 };
 
-export function foldGoogleTokenState(events: readonly StreamEvent[]): GoogleTokenState {
+function foldGoogleTokenState(events: readonly StreamEvent[]): GoogleTokenState {
   let state: GoogleTokenState = { connected: false };
   for (const event of events) {
     const payload = readRecord(event.payload) ?? {};

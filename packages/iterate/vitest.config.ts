@@ -6,7 +6,6 @@ export default defineConfig({
     alias: {
       // Mirror tsconfig.json paths — vitest does not read tsconfig paths.
       "@iterate-com/ui": fileURLToPath(new URL("../ui/src", import.meta.url)),
-      "@iterate-com/shared": fileURLToPath(new URL("../shared/src", import.meta.url)),
     },
   },
   test: {

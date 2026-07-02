@@ -5,6 +5,7 @@ import { auth, createProjectIngressToken as createSignedProjectIngressToken } fr
 import { parseProjectMetadata, parseStringArray } from "../../db/helpers.ts";
 import {
   disableOAuthClientById,
+  getOAuthAccessTokenForInternalIntrospection,
   getOAuthClientByClientId,
   getOAuthClientByReferenceId,
   getOrganizationBySlug,
@@ -22,6 +23,11 @@ import {
   updateVerifiedUserById,
 } from "../../db/queries/index.ts";
 import { BOOTSTRAP_ADMIN_EMAIL } from "../../bootstrap-admin.ts";
+import {
+  buildAccessTokenGrantClaims,
+  parseOAuthProjectSelectionReferenceId,
+} from "../../oauth-project-selection.ts";
+import { isPlatformAdminUser } from "../../platform-admin.ts";
 import {
   generateId,
   toMembershipRole,
@@ -444,11 +450,12 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
     };
   });
 
-// The oauth-provider plugin stores client secrets as unsalted SHA-256
-// base64url (its `defaultHasher` with storeClientSecret: "hashed") and
-// compares hashes at the token endpoint — seeded secrets must be stored in
-// the same format.
-async function hashOAuthClientSecret(value: string) {
+// The oauth-provider plugin stores client secrets AND opaque tokens as
+// unsalted SHA-256 base64url (its `defaultHasher`, the default for both
+// storeClientSecret: "hashed" and storeTokens: "hashed") and compares hashes
+// at the token endpoint — seeded secrets and token lookups must use the same
+// format.
+async function hashOAuthStoredValue(value: string) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   const bytes = new Uint8Array(digest);
   let binary = "";
@@ -469,7 +476,7 @@ const setOAuthClient = os.internal.oauth.setClient
     const redirectURIs = [...new Set(input.redirectURIs.map((uri) => uri.trim()))].sort();
     const overwrite = {
       newClientId: input.clientId,
-      clientSecret: await hashOAuthClientSecret(input.clientSecret),
+      clientSecret: await hashOAuthStoredValue(input.clientSecret),
       name: input.clientName,
       redirectUris: JSON.stringify(redirectURIs),
       referenceId: input.referenceId ?? null,
@@ -508,6 +515,84 @@ const setOAuthClient = os.internal.oauth.setClient
       clientName: input.clientName,
       clientSecret: input.clientSecret,
       redirectURIs,
+    };
+  });
+
+// The generated row types declare these `date` columns as number, but D1
+// returns Better Auth's date columns as ISO-8601 strings at runtime — accept
+// both shapes rather than trust the declared type.
+function toMillis(value: number | string | null | undefined): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value !== "string") return null;
+
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+const introspectAccessToken = os.internal.oauth.introspectAccessToken
+  .use(serviceMiddleware)
+  .handler(async ({ context, input }) => {
+    // Opaque tokens are stored hashed (storeTokens: "hashed" default) — the
+    // raw bearer value presented by the client never appears in the DB.
+    const token = await getOAuthAccessTokenForInternalIntrospection(context.db, {
+      token: await hashOAuthStoredValue(input.token),
+    });
+    if (!token) {
+      return { active: false as const, reason: "not_found" };
+    }
+
+    const expiresAtMs = toMillis(token.expiresAt);
+    if (!expiresAtMs || expiresAtMs <= Date.now()) {
+      return { active: false as const, reason: "expired" };
+    }
+
+    if (token.clientDisabled === 1) {
+      return { active: false as const, reason: "client_disabled" };
+    }
+
+    if (!token.userId) {
+      return { active: false as const, reason: "missing_user" };
+    }
+
+    // A token whose session row was deleted (the FK nulls sessionId) stays
+    // active until its own expiry — deliberately matching both stock
+    // better-auth introspection (which keeps such tokens active and merely
+    // drops `sid`) and JWT access tokens, which outlive their session until
+    // `exp` regardless. Where we DO see a live session reference, we are
+    // stricter than upstream and reject tokens whose session has expired.
+    if (token.sessionId) {
+      const sessionExpiresAtMs = toMillis(token.sessionExpiresAt);
+      if (!sessionExpiresAtMs || sessionExpiresAtMs <= Date.now()) {
+        return { active: false as const, reason: "session_expired" };
+      }
+    }
+
+    // Same builder as JWT minting (customAccessTokenClaims) — opaque and JWT
+    // tokens must reconstruct identical grants.
+    const grants = await buildAccessTokenGrantClaims({
+      userId: token.userId,
+      requestedScopes: parseStringArray(token.scopes),
+      selection: parseOAuthProjectSelectionReferenceId(token.referenceId),
+    });
+    const role = token.userRole ?? null;
+
+    return {
+      active: true as const,
+      sub: token.userId,
+      // sessionId is nullable (session FK is on-delete-set-null); the
+      // contract models absent sessions as undefined, not null.
+      sid: token.sessionId ?? undefined,
+      clientId: token.clientId,
+      iss: `${context.env.VITE_AUTH_APP_ORIGIN.replace(/\/+$/, "")}/api/auth`,
+      aud: input.audiences,
+      iat: Math.floor((toMillis(token.createdAt) ?? Date.now()) / 1000),
+      exp: Math.floor(expiresAtMs / 1000),
+      scope: grants.scopes.join(" "),
+      scopes: grants.scopes,
+      organizations: grants.organizations,
+      projects: grants.projects,
+      isAdmin: isPlatformAdminUser({ role }),
+      role,
     };
   });
 
@@ -550,6 +635,7 @@ export const internal = os.internal.router({
   oauth: {
     ensureClient: ensureOAuthClient,
     setClient: setOAuthClient,
+    introspectAccessToken,
   },
   user: {
     upsertVerifiedEmail,

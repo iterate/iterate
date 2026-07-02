@@ -2,10 +2,9 @@ import type { AppConfig } from "~/config.ts";
 import { authenticateAdminApiSecret } from "~/auth/admin.ts";
 import { adminPrincipal } from "~/auth/principal.ts";
 
-export const CAPNWEB_ADMIN_AUTH_COOKIE = "iterate-admin-auth";
+const CAPNWEB_ADMIN_AUTH_COOKIE = "iterate-admin-auth";
 
 type CookiePayload = {
-  scopes?: unknown;
   secret: string;
 };
 
@@ -40,7 +39,6 @@ export async function handleCapnwebAdminCookieRequest(input: {
   // base64url-encode (no padding) so the payload survives cookie syntax.
   const payload = btoa(
     JSON.stringify({
-      scopes: { projects: "all" },
       secret: input.config.adminApiSecret!.exposeSecret(),
     } satisfies CookiePayload),
   )
