@@ -19,17 +19,19 @@ const BLIND_RELAY_SKIP_TLS_VERIFY_HEADER = "x-itx-blind-relay-insecure-skip-tls-
 const ITX_EGRESS_CLI_DEPENDENCIES =
   "tsx@4.21.0 trpc-cli@0.15.1 @orpc/server@1.14.6 zod@4.4.3 capnweb@0.8.0 ws@8.19.0";
 
-type PlaygroundDemoPhase =
-  | "idle"
-  | "cli_listening"
-  | "waiting_for_node_relay"
-  | "plain_intercept_saw_plaintext"
-  | "relay_connected"
-  | "encrypted_relay_observed"
-  | "secret_egress_relayed"
-  | "target_received_request"
-  | "relay_saw_ciphertext_only"
-  | "failed";
+const PLAYGROUND_DEMO_PHASES = [
+  "idle",
+  "cli_listening",
+  "waiting_for_node_relay",
+  "plain_intercept_saw_plaintext",
+  "relay_connected",
+  "encrypted_relay_observed",
+  "secret_egress_relayed",
+  "target_received_request",
+  "relay_saw_ciphertext_only",
+  "failed",
+] as const;
+type PlaygroundDemoPhase = (typeof PLAYGROUND_DEMO_PHASES)[number];
 
 type PlaygroundDemoLogEntry = {
   at: string;
@@ -1139,16 +1141,8 @@ function playgroundDemoPath(url: URL): string {
 }
 
 function demoPhase(input: unknown): PlaygroundDemoPhase {
-  return input === "cli_listening" ||
-    input === "waiting_for_node_relay" ||
-    input === "plain_intercept_saw_plaintext" ||
-    input === "relay_connected" ||
-    input === "encrypted_relay_observed" ||
-    input === "secret_egress_relayed" ||
-    input === "target_received_request" ||
-    input === "relay_saw_ciphertext_only" ||
-    input === "failed"
-    ? input
+  return PLAYGROUND_DEMO_PHASES.includes(input as PlaygroundDemoPhase)
+    ? (input as PlaygroundDemoPhase)
     : "idle";
 }
 

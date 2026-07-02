@@ -67,15 +67,7 @@ async function runTlsHttpRequest({
   let settled = false;
   let leafCertificate: X509Certificate | undefined;
   const responseChunks: Uint8Array[] = [];
-  const progress = {
-    encryptedWrites: 0,
-    handshakeDone: false,
-    receivedCertificates: 0,
-    receivedEncryptedChunks: 0,
-    requestWritten: false,
-    startHandshakeResolved: false,
-    startHandshakeStarted: false,
-  };
+  const progress = { handshakeDone: false, requestWritten: false };
 
   return await new Promise<Uint8Array>((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -91,11 +83,9 @@ async function runTlsHttpRequest({
       logger: silentTlsLogger,
       verifyServerCertificate: pinnedCertSha256 === null && !skipTlsVerify,
       write: async ({ header, content }) => {
-        progress.encryptedWrites += 1;
         await connection.write(concatBytes([header, content]));
       },
       onRecvCertificates: ({ certificates }) => {
-        progress.receivedCertificates = certificates.length;
         leafCertificate = certificates[0];
       },
       onHandshake: () => {
@@ -146,13 +136,7 @@ async function runTlsHttpRequest({
       },
     });
 
-    progress.startHandshakeStarted = true;
-    client
-      .startHandshake()
-      .then(() => {
-        progress.startHandshakeResolved = true;
-      })
-      .catch(fail);
+    client.startHandshake().catch(fail);
     void pumpEncryptedInput(client);
 
     async function sendRequest() {
@@ -184,7 +168,6 @@ async function runTlsHttpRequest({
             await tlsClient.end();
             return;
           }
-          progress.receivedEncryptedChunks += 1;
           await tlsClient.handleReceivedBytes(result);
         }
       } catch (error) {
