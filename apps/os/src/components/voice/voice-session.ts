@@ -1,18 +1,18 @@
-// Browser port of the voice ↔ itx multiplexer (reference implementation:
-// apps/os/scripts/voice/bridge.ts — the Node CLI variant). One VoiceSession
-// holds two connections:
+// Browser I/O pump for the voice ↔ itx bridge. One VoiceSession holds two
+// connections:
 //
 //   - a realtime voice WebSocket (OpenAI Realtime; Grok is wire-compatible)
 //     authenticated with a server-minted ephemeral client secret, and
-//   - the project's itx socket, through which a worker agent does the work.
+//   - the project's itx socket, over which conversation facts flow to and
+//     from the worker agent's stream.
 //
-// Realtime voice models are unreliable tool callers, so the session does not
-// depend on one: every completed user turn is forwarded to the worker agent
-// (`agent.sendMessage`), and the agent's reply is injected back into the
-// voice conversation as a `[worker report] …` item plus `response.create`,
-// so the voice agent relays results out loud. An `ask_assistant` function
-// tool is registered too — when the voice model does call it, the call is
-// acked immediately.
+// The multiplexing brain lives server-side in the `voice` stream processor
+// (apps/os/src/domains/voice/): this client only appends raw facts
+// (`voice/user-turn-transcribed`, plus audit events) and relays
+// `voice/say-requested` projections into the realtime conversation. An
+// `ask_assistant` function tool is registered for when the voice model
+// spontaneously calls one (acked, not depended on), and `no_comment` gives it
+// a structurally silent out for redundant reports.
 //
 // Plain class + subscribe/getSnapshot so React renders it with
 // useSyncExternalStore; all lifecycle is imperative and owned here.
@@ -20,9 +20,12 @@
 import { connectItx } from "~/itx/itx-react.tsx";
 import type { VoiceRealtimeConnection } from "~/lib/voice-server-fns.ts";
 
+const USER_TURN_EVENT = "events.iterate.com/voice/user-turn-transcribed";
+const ASSISTANT_UTTERANCE_EVENT = "events.iterate.com/voice/assistant-utterance-completed";
+const SAY_REQUESTED_EVENT = "events.iterate.com/voice/say-requested";
+const REPORT_SUPPRESSED_EVENT = "events.iterate.com/voice/report-suppressed";
 const WORKER_REPLY_EVENT = "events.iterate.com/agents/web-message-sent";
 const WORKER_IDLE_REPLY = "(idle)";
-const WORKER_REPLY_TIMEOUT_MS = 120_000;
 const AUDIO_SAMPLE_RATE = 24_000;
 
 const VOICE_AGENT_INSTRUCTIONS = `
@@ -104,10 +107,6 @@ export class VoiceSession {
   #turnTranscripts = new Map<string, string>();
   #forwardedItems = new Set<string>();
   #openAssistantEntryId: number | null = null;
-  // Two quick turns can debounce into ONE worker reply that satisfies both
-  // waiters — dedupe by the reply event's stream offset so it injects once.
-  #seenWorkerReplyOffsets = new Set<number>();
-  #workerInstructed = false;
 
   #micContext: AudioContext | null = null;
   #micStream: MediaStream | null = null;
@@ -146,6 +145,7 @@ export class VoiceSession {
       ["realtime", `openai-insecure-api-key.${connection.clientSecret}`],
     );
     this.#socket = socket;
+    void this.#listenToWorker();
 
     socket.addEventListener("open", () => {
       this.#send({
@@ -210,7 +210,7 @@ export class VoiceSession {
       this.#send(userTextItem(trimmed));
       this.#sendResponseCreate();
     });
-    this.#forwardTurn(trimmed);
+    this.#forwardTurn(trimmed, "text");
   }
 
   #onServerEvent(event: Record<string, unknown>) {
@@ -224,6 +224,17 @@ export class VoiceSession {
         return;
       }
       case "response.done": {
+        const openEntryId = this.#openAssistantEntryId;
+        const utterance = this.#snapshot.entries.find((entry) => entry.id === openEntryId);
+        if (utterance?.text.trim()) {
+          // Audit fact only — nothing consumes it; it makes the voice side of
+          // the conversation visible in the journal alongside the worker side.
+          void this.#agentStream()
+            .then((stream) =>
+              stream.append({ type: ASSISTANT_UTTERANCE_EVENT, payload: { text: utterance.text } }),
+            )
+            .catch(() => {});
+        }
         this.#openAssistantEntryId = null;
         this.#responseActive = false;
         const inject = this.#injectionQueue.shift();
@@ -252,6 +263,9 @@ export class VoiceSession {
             item: { type: "function_call_output", call_id: event.call_id, output: "{}" },
           });
           this.#addEntry("status", "(worker report noted silently)");
+          void this.#agentStream()
+            .then((stream) => stream.append({ type: REPORT_SUPPRESSED_EVENT, payload: {} }))
+            .catch(() => {});
           return;
         }
         this.#addEntry("status", `voice model called ${String(event.name)} (acked)`);
@@ -300,55 +314,71 @@ export class VoiceSession {
     // actually happened.
     const beforeId = this.#openAssistantEntryId;
     this.#addEntry("you", transcript.trim(), beforeId);
-    this.#forwardTurn(transcript.trim(), beforeId);
+    this.#forwardTurn(transcript.trim(), "speech", beforeId);
   }
 
-  #forwardTurn(text: string, beforeEntryId?: number | null) {
-    this.#addEntry("worker-request", text, beforeEntryId);
-    void this.#askWorker(text)
-      .then((reply) => {
-        if (reply === null) return; // duplicate — another forward already handled it
-        if (reply === WORKER_IDLE_REPLY) {
-          this.#addEntry("worker-reply", "(idle — nothing to report)");
-          return;
-        }
-        this.#addEntry("worker-reply", reply);
-        this.#whenResponseIdle(() => {
-          this.#send(userTextItem(`[worker report] ${reply}`));
-          this.#sendResponseCreate();
-        });
-      })
+  /**
+   * The worker lane is stream-native: forwarding a turn is appending a
+   * `voice/user-turn-transcribed` fact. The `voice` stream processor (see
+   * apps/os/src/domains/voice/) renders it into agent input; this client
+   * never talks to the agent directly.
+   */
+  #forwardTurn(text: string, origin: "speech" | "text", beforeEntryId?: number | null) {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    this.#addEntry("worker-request", trimmed, beforeEntryId);
+    void this.#agentStream()
+      .then((stream) =>
+        stream.append({ type: USER_TURN_EVENT, payload: { transcript: trimmed, origin } }),
+      )
       .catch((error: Error) => {
-        this.#addEntry("error", `worker error: ${error.message}`);
-        this.#whenResponseIdle(() => {
-          this.#send(userTextItem(`[worker report] The worker hit an error: ${error.message}`));
-          this.#sendResponseCreate();
-        });
+        this.#addEntry("error", `failed to reach the worker stream: ${error.message}`);
       });
   }
 
-  async #askWorker(text: string) {
-    // The instruction envelope rides the FIRST message only — the agent's
-    // history is durable, repeating it every turn is noise.
-    const message = this.#workerInstructed
-      ? text
-      : [
-          text,
-          '(You are the worker agent behind a live voice assistant; messages like the one above are transcribed voice turns. Reply concisely — your replies are read aloud. Reply exactly "(idle)" unless the request needs access to the project: repos, files, scripts, integrations, project state. Never answer general-knowledge or conversational questions — the voice assistant handles those itself. When in doubt, prefer "(idle)"; the user will follow up if they wanted you.)',
-        ].join("\n\n");
-    this.#workerInstructed = true;
+  /**
+   * The other half of the stream-native lane: the voice processor projects
+   * agent replies into `voice/say-requested` events; this loop relays them
+   * into the realtime conversation. Raw `web-message-sent` events (including
+   * the "(idle)" sentinel the processor swallows) are shown in the transcript
+   * for visibility but never injected — injection follows say-requests only.
+   */
+  async #listenToWorker() {
+    let cursor = 0;
+    while (this.#snapshot.status === "connecting" || this.#snapshot.status === "live") {
+      let event;
+      try {
+        const stream = await this.#agentStream();
+        event = await stream.waitForEvent({
+          afterOffset: cursor,
+          eventTypes: [SAY_REQUESTED_EVENT, WORKER_REPLY_EVENT],
+          timeoutMs: 60_000,
+        });
+      } catch {
+        // timeout (no worker activity) or transient disconnect — keep
+        // listening while the session lives, gently on failure
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        continue;
+      }
+      cursor = event.offset;
+      const message = String((event.payload as { message?: unknown }).message || "").trim();
+      if (event.type === WORKER_REPLY_EVENT) {
+        this.#addEntry(
+          "worker-reply",
+          message === WORKER_IDLE_REPLY ? "(idle — nothing to report)" : message,
+        );
+        continue;
+      }
+      this.#whenResponseIdle(() => {
+        this.#send(userTextItem(`[worker report] ${message}`));
+        this.#sendResponseCreate();
+      });
+    }
+  }
+
+  async #agentStream() {
     const itx = await connectItx({ projectId: this.#projectId });
-    const agent = itx.agents.get(this.#agentPath);
-    const sent = await agent.sendMessage(message);
-    const reply = await agent.stream.waitForEvent({
-      afterOffset: sent.offset,
-      eventTypes: [WORKER_REPLY_EVENT],
-      timeoutMs: WORKER_REPLY_TIMEOUT_MS,
-    });
-    if (this.#seenWorkerReplyOffsets.has(reply.offset)) return null;
-    this.#seenWorkerReplyOffsets.add(reply.offset);
-    const payload = reply.payload as { message?: unknown };
-    return typeof payload.message === "string" ? payload.message.trim() : JSON.stringify(payload);
+    return itx.agents.get(this.#agentPath).stream;
   }
 
   // ---------------------------------------------------------------------------

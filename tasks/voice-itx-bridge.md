@@ -142,3 +142,25 @@ _These are assumptions made while fleshing out an underspecified task._
   Verified end-to-end via Claude-in-Chrome: minted session → voice page →
   text-mode conversation → worker listed real repo files → stream view shows
   the worker journal. Mic path needs a human (same as CLI).
+- Idleness pass after live testing: voice-scoped worker prompt (idle unless
+  the turn needs project access; never general knowledge), don't-re-announce
+  instruction, and a `no_comment` tool (a function-call response produces no
+  audio — structurally guaranteed silence for redundant reports).
+- **Refactored to the stream-processor pattern** (Misha: "make it conformant").
+  New domain `apps/os/src/domains/voice/` — contract + implementation, slug
+  `voice`, registered on every agent host (like slack-agent) and subscribed at
+  birth for `/agents/voice/**` paths via the project processor, which also
+  gives those agents a dedicated `VOICE_AGENT_SYSTEM_PROMPT` (replacing the
+  first-message instruction envelope). Clients are now dumb pumps: they append
+  `voice/user-turn-transcribed` (+ `voice/assistant-utterance-completed` and
+  `voice/report-suppressed` audit facts) and relay `voice/say-requested`
+  projections. The processor renders turns into `agent/input-added` and
+  projects non-"(idle)" `agents/web-message-sent` replies into say-requests —
+  so forwarding survives client death, reply dedup is structural (the fold
+  visits each event once), and the whole conversation (both sides) is in the
+  journal. Verified: CLI text mode (file listing via codemode), the journal
+  shows the full conformant chain (user-turn-transcribed → input-added →
+  llm-request → web-message-sent → say-requested → assistant-utterance), and
+  the web page end-to-end in Chrome. Neat proof of the pattern: the first
+  turn landed at offset 4 before the subscriptions (offsets 5–9) and was
+  still processed, because state is a fold from offset 0.

@@ -17,8 +17,9 @@ type ChatOptions = {
   /** Create a throwaway project instead of passing --project. */
   createProject?: boolean;
   /**
-   * Agent stream path for the worker.
-   * @default "/agents/voice-assistant"
+   * Agent stream path for the worker. Must be under /agents/voice/ — that
+   * prefix is what subscribes the voice stream processor at agent birth.
+   * @default "/agents/voice/cli-<timestamp>"
    */
   agentPath?: string;
   /** Text REPL mode: type instead of speaking, read instead of listening. */
@@ -66,7 +67,7 @@ export async function chat(options: ChatOptions = {}) {
     voice: options.voice,
     project: options.project,
     createProject: options.createProject,
-    agentPath: options.agentPath || "/agents/voice-assistant",
+    agentPath: options.agentPath || `/agents/voice/cli-${Date.now().toString(36)}`,
     text: options.text,
     forward,
     baseUrl,

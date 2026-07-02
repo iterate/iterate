@@ -21,6 +21,7 @@ import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts
 import { SlackAgentProcessorContract } from "../integrations/slack-agent-processor-contract.ts";
 import { SlackProcessorContract } from "../integrations/slack-processor-contract.ts";
 import { isSlackAgentPath, SLACK_INTEGRATION_STREAM_PATH } from "../integrations/utils.ts";
+import { isVoiceAgentPath, VoiceProcessorContract } from "../voice/voice-processor-contract.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 
 export const ONBOARDING_AGENT_PATH = "/agents/onboarding";
@@ -38,6 +39,20 @@ export const SLACK_AGENT_SYSTEM_PROMPT = [
   "Incoming Slack webhook events arrive as your inputs. Reply only when mentioned, directly asked, or clearly needed.",
   "To reply in the thread, use await itx.slack.chat.postMessage({ channel, thread_ts, text }) with the channel and thread_ts from the incoming webhook payloads. Never use itx.chat.sendMessage for Slack replies. Do not return side-effect-only call results unless you need to inspect them on your next turn.",
   "Use project capabilities on itx when they are relevant.",
+].join("\n");
+
+/**
+ * Agents under `/agents/voice/**` are the worker half of a realtime voice
+ * conversation: the `voice` processor forwards transcribed user turns into
+ * their input and projects their web-chat replies into say-requests that a
+ * voice client relays out loud. The prompt scopes them to project work — the
+ * voice assistant on the other side handles conversation itself.
+ */
+export const VOICE_AGENT_SYSTEM_PROMPT = [
+  DEFAULT_AGENT_SYSTEM_PROMPT,
+  "",
+  "You are the worker agent behind a live voice assistant. Your inputs are transcribed voice turns from the user, and your replies are read aloud by the voice assistant — keep them short and speakable.",
+  'Reply exactly "(idle)" unless the turn needs access to the project: repos, files, scripts, integrations, project state. Never answer general-knowledge or conversational questions — the voice assistant handles those itself. When in doubt, prefer "(idle)"; the user will follow up if they wanted you.',
 ].join("\n");
 
 /**
@@ -161,6 +176,7 @@ export class ProjectProcessor extends StreamProcessor<
             // processor subscription and the Slack reply prompt — this is THE
             // place the "slack thread streams are slack agents" rule lives.
             const isSlack = isSlackAgentPath(childPath);
+            const isVoice = isVoiceAgentPath(childPath);
             await this.deps.itx.streams.get(childPath).append(
               // Identical idempotency keys to the create-time onboarding birth
               // certificate, so whichever lane runs second dedupes cleanly.
@@ -169,7 +185,12 @@ export class ProjectProcessor extends StreamProcessor<
                 llmProvider: this.deps.defaultLlmProvider,
                 projectId: this.deps.itx.projectId,
                 slack: isSlack,
-                systemPrompt: isSlack ? SLACK_AGENT_SYSTEM_PROMPT : DEFAULT_AGENT_SYSTEM_PROMPT,
+                voice: isVoice,
+                systemPrompt: isSlack
+                  ? SLACK_AGENT_SYSTEM_PROMPT
+                  : isVoice
+                    ? VOICE_AGENT_SYSTEM_PROMPT
+                    : DEFAULT_AGENT_SYSTEM_PROMPT,
               }),
             );
             return;
@@ -242,6 +263,7 @@ function agentBirthCertificateEvents(input: {
   llmProvider: AgentLlmProvider;
   projectId: string;
   slack?: boolean;
+  voice?: boolean;
   systemPrompt: string;
 }) {
   const durableObjectName = DurableObjectNameCodec.stringify({
@@ -263,6 +285,7 @@ function agentBirthCertificateEvents(input: {
     subscription(OpenAiWsProcessorContract.slug, "agent"),
     subscription(ItxProcessorContract.slug, "itx"),
     ...(input.slack ? [subscription(SlackAgentProcessorContract.slug, "agent")] : []),
+    ...(input.voice ? [subscription(VoiceProcessorContract.slug, "agent")] : []),
     {
       type: "events.iterate.com/agent/config-updated" as const,
       idempotencyKey: `agent/config-updated:${input.projectId}:${input.childPath}`,

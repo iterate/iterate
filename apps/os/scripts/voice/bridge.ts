@@ -1,22 +1,23 @@
-// The voice ↔ itx multiplexer. One Node process holds two connections:
+// CLI I/O pump for the voice ↔ itx bridge. One Node process holds two
+// connections:
 //
 //   - a realtime voice session (Grok Voice Agent API / OpenAI Realtime) that
 //     does the *talking*, and
-//   - an itx agent (`/agents/voice-assistant` by default) that does the *work*.
+//   - an itx agent stream (`/agents/voice/**`) whose `voice` stream processor
+//     (apps/os/src/domains/voice/) does the multiplexing: it renders appended
+//     `voice/user-turn-transcribed` facts into agent input and projects agent
+//     replies into `voice/say-requested` events, which this process relays
+//     into the realtime conversation as `[worker report] …` items.
 //
-// Realtime voice models are unreliable tool callers, so by default the bridge
-// does not wait for one: every completed user turn is forwarded to the itx
-// agent client-side (`agent.sendMessage`), and the agent's reply is injected
-// back into the voice conversation as a `[worker report] …` user item plus
-// `response.create`, so the voice agent relays results out loud. An
-// `ask_assistant` function tool is still registered — when the voice model
-// does call it, the call is acked immediately and treated as a forward.
+// Realtime voice models are unreliable tool callers, so nothing depends on
+// them calling tools: every completed user turn is appended to the stream.
+// The `ask_assistant` tool is still registered (acked when called), and
+// `no_comment` gives the voice model a structurally silent out for redundant
+// reports.
 
 import process from "node:process";
 import readline from "node:readline";
-import type { RpcStub } from "capnweb";
 import { connectItx } from "../../src/itx-client.ts";
-import type { Agent } from "../../src/types.ts";
 import { createSpeaker, startMicCapture } from "./audio.ts";
 import {
   connectRealtime,
@@ -25,9 +26,12 @@ import {
   type RealtimeServerEvent,
 } from "./realtime.ts";
 
+const USER_TURN_EVENT = "events.iterate.com/voice/user-turn-transcribed";
+const ASSISTANT_UTTERANCE_EVENT = "events.iterate.com/voice/assistant-utterance-completed";
+const SAY_REQUESTED_EVENT = "events.iterate.com/voice/say-requested";
+const REPORT_SUPPRESSED_EVENT = "events.iterate.com/voice/report-suppressed";
 const WORKER_REPLY_EVENT = "events.iterate.com/agents/web-message-sent";
 const WORKER_IDLE_REPLY = "(idle)";
-const WORKER_REPLY_TIMEOUT_MS = 120_000;
 
 const VOICE_AGENT_INSTRUCTIONS = `
 You are Iterate's voice assistant — the spoken front-end of a two-agent team.
@@ -111,6 +115,7 @@ export async function runVoiceBridge(options: BridgeOptions) {
   // Assistant deltas stream onto an open line; any other output must close
   // that line first or the two interleave mid-word.
   let assistantLineOpen = false;
+  let assistantUtterance = "";
   const endAssistantLine = () => {
     if (assistantLineOpen) process.stdout.write("\n");
     assistantLineOpen = false;
@@ -146,54 +151,63 @@ export async function runVoiceBridge(options: BridgeOptions) {
   // response — whichever comes first wins, the other is deduped.
   const turnTranscripts = new Map<string, string>();
   const forwardedItems = new Set<string>();
-  // Two quick turns can debounce into ONE worker reply that satisfies both
-  // waiters — dedupe by the reply event's stream offset so it injects once.
-  const seenWorkerReplyOffsets = new Set<number>();
-  let workerInstructed = false;
-
-  const forwardTurn = (text: string, origin: string) => {
+  // The worker lane is stream-native: forwarding a turn is appending a
+  // `voice/user-turn-transcribed` fact. The `voice` stream processor
+  // (apps/os/src/domains/voice/) renders it into agent input; this client
+  // never talks to the agent directly.
+  const forwardTurn = (text: string, origin: "speech" | "text" | "tool-call") => {
     const trimmed = text.trim();
     if (!trimmed) return;
-    say(`  → worker (${origin}): ${trimmed}`);
-    // The instruction envelope rides the FIRST message only — the agent's
-    // history is durable, repeating it every turn is noise.
-    const message = workerInstructed
-      ? trimmed
-      : [
-          trimmed,
-          '(You are the worker agent behind a live voice assistant; messages like the one above are transcribed voice turns. Reply concisely — your replies are read aloud. Reply exactly "(idle)" unless the request needs access to the project: repos, files, scripts, integrations, project state. Never answer general-knowledge or conversational questions — the voice assistant handles those itself. When in doubt, prefer "(idle)"; the user will follow up if they wanted you.)',
-        ].join("\n\n");
-    workerInstructed = true;
-    void askWorker(agent, message)
-      .then(({ offset, reply }) => {
-        if (seenWorkerReplyOffsets.has(offset)) return;
-        seenWorkerReplyOffsets.add(offset);
-        if (reply === WORKER_IDLE_REPLY) {
-          say(`  ← worker: (idle — nothing to report)`);
-          return;
-        }
-        say(`  ← worker: ${reply}`);
-        whenResponseIdle(() => {
-          session.send(userTextItem(`[worker report] ${reply}`));
-          sendResponseCreate();
-        });
-      })
-      .catch((error: Error) => {
-        say(`  ← worker error: ${error.message}`);
-        whenResponseIdle(() => {
-          session.send(userTextItem(`[worker report] The worker hit an error: ${error.message}`));
-          sendResponseCreate();
-        });
-      });
+    say(`  \u2192 worker (${origin}): ${trimmed}`);
+    void agent.stream
+      .append({ type: USER_TURN_EVENT, payload: { transcript: trimmed, origin } })
+      .catch((error: Error) => say(`  \u26a0 failed to reach the worker stream: ${error.message}`));
   };
 
-  const forwardTurnFromItem = (itemId: string, origin: string) => {
+  // The other half of the lane: the voice processor projects agent replies
+  // into `voice/say-requested` events; this loop relays them into the
+  // realtime conversation. Raw `web-message-sent` events (including the
+  // "(idle)" sentinel the processor swallows) are printed for visibility but
+  // never injected — injection follows say-requests only.
+  const listenToWorker = async () => {
+    let cursor = 0;
+    while (!closingIntentionally) {
+      let workerEvent;
+      try {
+        workerEvent = await agent.stream.waitForEvent({
+          afterOffset: cursor,
+          eventTypes: [SAY_REQUESTED_EVENT, WORKER_REPLY_EVENT],
+          timeoutMs: 60_000,
+        });
+      } catch {
+        // timeout (no worker activity) or transient disconnect — keep going
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        continue;
+      }
+      cursor = workerEvent.offset;
+      const message = String((workerEvent.payload as { message?: unknown }).message || "").trim();
+      if (workerEvent.type === WORKER_REPLY_EVENT) {
+        say(
+          message === WORKER_IDLE_REPLY
+            ? `  \u2190 worker: (idle \u2014 nothing to report)`
+            : `  \u2190 worker: ${message}`,
+        );
+        continue;
+      }
+      whenResponseIdle(() => {
+        session.send(userTextItem(`[worker report] ${message}`));
+        sendResponseCreate();
+      });
+    }
+  };
+
+  const forwardTurnFromItem = (itemId: string) => {
     if (forwardedItems.has(itemId)) return;
     const transcript = turnTranscripts.get(itemId);
     if (!transcript?.trim()) return;
     forwardedItems.add(itemId);
     say(`you (heard): ${transcript.trim()}`);
-    if (options.forward === "auto") forwardTurn(transcript, origin);
+    if (options.forward === "auto") forwardTurn(transcript, "speech");
   };
 
   const printDelta = (delta: string) => {
@@ -201,6 +215,7 @@ export async function runVoiceBridge(options: BridgeOptions) {
       process.stdout.write("assistant: ");
       assistantLineOpen = true;
     }
+    assistantUtterance += delta;
     process.stdout.write(delta);
   };
 
@@ -213,10 +228,17 @@ export async function runVoiceBridge(options: BridgeOptions) {
         responseActive = true;
         // The VAD starting a response means the user's turn ended — forward
         // whatever transcript we have even if `.completed` never arrives.
-        for (const itemId of turnTranscripts.keys()) forwardTurnFromItem(itemId, "vad");
+        for (const itemId of turnTranscripts.keys()) forwardTurnFromItem(itemId);
         return;
       case "response.done": {
         endAssistantLine();
+        if (assistantUtterance.trim()) {
+          // Audit fact only — makes the voice side visible in the journal.
+          void agent.stream
+            .append({ type: ASSISTANT_UTTERANCE_EVENT, payload: { text: assistantUtterance } })
+            .catch(() => {});
+        }
+        assistantUtterance = "";
         responseActive = false;
         const inject = injectionQueue.shift();
         inject?.();
@@ -232,7 +254,7 @@ export async function runVoiceBridge(options: BridgeOptions) {
       case "conversation.item.input_audio_transcription.completed": {
         const itemId = String(event.item_id);
         turnTranscripts.set(itemId, String(event.transcript || ""));
-        forwardTurnFromItem(itemId, "transcription");
+        forwardTurnFromItem(itemId);
         return;
       }
       case "response.function_call_arguments.done": {
@@ -244,6 +266,7 @@ export async function runVoiceBridge(options: BridgeOptions) {
             item: { type: "function_call_output", call_id: event.call_id, output: "{}" },
           });
           say(`  (worker report noted silently)`);
+          void agent.stream.append({ type: REPORT_SUPPRESSED_EVENT, payload: {} }).catch(() => {});
           return;
         }
         const args = JSON.parse(String(event.arguments || "{}")) as { request?: string };
@@ -308,6 +331,7 @@ export async function runVoiceBridge(options: BridgeOptions) {
     },
   });
   await session.ready;
+  void listenToWorker();
 
   if (options.text) {
     const rl = readline.createInterface({ input: process.stdin });
@@ -345,24 +369,6 @@ export async function runVoiceBridge(options: BridgeOptions) {
     session.close();
   });
   await conversationEnded;
-}
-
-/**
- * Send one message to the worker agent and wait for its reply. Same shape as
- * `Agent.ask`, but with a client-side wait so codemode work gets more than the
- * server-side 45s.
- */
-async function askWorker(agent: RpcStub<Agent>, message: string) {
-  const sent = await agent.sendMessage(message);
-  const replyEvent = await agent.stream.waitForEvent({
-    afterOffset: sent.offset,
-    eventTypes: [WORKER_REPLY_EVENT],
-    timeoutMs: WORKER_REPLY_TIMEOUT_MS,
-  });
-  const payload = replyEvent.payload as { message?: unknown };
-  const reply =
-    typeof payload.message === "string" ? payload.message.trim() : JSON.stringify(payload);
-  return { offset: replyEvent.offset, reply };
 }
 
 async function createThrowawayProject(connection: {

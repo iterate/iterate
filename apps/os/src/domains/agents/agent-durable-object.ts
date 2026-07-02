@@ -10,6 +10,8 @@ import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { SlackAgentProcessorContract } from "../integrations/slack-agent-processor-contract.ts";
 import { SlackAgentProcessor } from "../integrations/slack-agent-processor-implementation.ts";
 import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
+import { VoiceProcessorContract } from "../voice/voice-processor-contract.ts";
+import { VoiceProcessor } from "../voice/voice-processor-implementation.ts";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
 import { CloudflareAiProcessorContract } from "./cloudflare-ai-processor-contract.ts";
@@ -78,6 +80,14 @@ export class AgentDurableObject extends DurableObject<Env> {
           }
         },
       }),
+  );
+
+  // Registered on every agent host like slack-agent; it only wakes on voice
+  // agent streams (`/agents/voice/**`) where the project processor configured
+  // its subscription.
+  readonly voiceProcessor = this.#processorHost.add(
+    VoiceProcessorContract.slug,
+    (deps) => new VoiceProcessor(deps),
   );
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
