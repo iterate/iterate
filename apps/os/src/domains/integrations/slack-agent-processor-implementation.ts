@@ -27,7 +27,7 @@ import {
   type SlackAgentProcessorState,
 } from "./slack-agent-processor-contract.ts";
 
-export type SlackAgentProcessorDeps = {
+type SlackAgentProcessorDeps = {
   callSlackApi?(method: string, body: Record<string, unknown>): Promise<void>;
 };
 

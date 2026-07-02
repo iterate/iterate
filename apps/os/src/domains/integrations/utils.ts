@@ -21,8 +21,6 @@ export const SLACK_BOT_TOKEN_SECRET_PATH = "/secrets/integrations/slack/bot-toke
 export const SLACK_CONNECTED_EVENT_TYPE = "events.iterate.com/slack/connected";
 export const SLACK_DISCONNECTED_EVENT_TYPE = "events.iterate.com/slack/disconnected";
 export const SLACK_WEBHOOK_RECEIVED_EVENT_TYPE = "events.iterate.com/slack/webhook-received";
-export const SLACK_THREAD_ROUTE_CONFIGURED_EVENT_TYPE =
-  "events.iterate.com/slack/thread-route-configured";
 export const SLACK_TEAM_CLAIMED_EVENT_TYPE = "events.iterate.com/slack/team-claimed";
 export const SLACK_TEAM_UNCLAIMED_EVENT_TYPE = "events.iterate.com/slack/team-unclaimed";
 
@@ -40,7 +38,7 @@ export function readString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-export function sanitizePathPart(value: string): string {
+function sanitizePathPart(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
 }
 

@@ -1335,7 +1335,7 @@ type RevokeCapability = (input: RevokeCapabilityInput) => Promise<void>;
  * by the stream offset that mounted the capability, so disposing an older
  * provision after a replacement cannot revoke the newer mount at the same path.
  */
-export class CapabilityProvisionRpcTarget extends RpcTarget implements CapabilityProvision {
+class CapabilityProvisionRpcTarget extends RpcTarget implements CapabilityProvision {
   readonly #ctx: Pick<CfExecutionContext, "waitUntil"> | undefined;
   readonly #path: string[];
   readonly #providedAtOffset: number;
@@ -1446,7 +1446,7 @@ export class StreamSubscriptionRpcTarget extends RpcTarget implements StreamSubs
  * live runtime interceptor slot and, when there is no interceptor, performs the
  * terminal secret-substitution fetch path.
  */
-export class ProjectEgressRpcTarget extends RpcTarget implements ProjectEgress {
+class ProjectEgressRpcTarget extends RpcTarget implements ProjectEgress {
   constructor(readonly props: { projectId: string }) {
     super();
   }
@@ -1545,7 +1545,7 @@ type McpClientDeps = { egress: Fetcher };
 
 type McpRequestOptions = { timeout?: number };
 
-export class McpClientCollectionRpcTarget extends RpcTarget implements McpClientCollection {
+class McpClientCollectionRpcTarget extends RpcTarget implements McpClientCollection {
   constructor(readonly props: McpClientDeps) {
     super();
   }
@@ -1681,7 +1681,7 @@ function extractTextContent(content: unknown) {
 // implementations aligned: fetch spec, derive operations, then dispatch calls.
 type OpenApiDeps = { egress: Fetcher };
 
-export class OpenApiCollectionRpcTarget extends RpcTarget implements OpenApiCollection {
+class OpenApiCollectionRpcTarget extends RpcTarget implements OpenApiCollection {
   constructor(readonly props: OpenApiDeps) {
     super();
   }

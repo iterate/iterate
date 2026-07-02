@@ -21,14 +21,14 @@ import { cn } from "@iterate-com/ui/lib/utils";
 
 export type AgentComposerMode = "message" | "raw" | "examples";
 
-export type AgentComposerMessageConfig = {
+type AgentComposerMessageConfig = {
   value: string;
   onValueChange: (value: string) => void;
   onSubmit: () => Promise<void> | void;
   placeholder?: string;
 };
 
-export type AgentComposerRawConfig = {
+type AgentComposerRawConfig = {
   value: string;
   onValueChange: (value: string) => void;
   onSubmit: () => Promise<void> | void;

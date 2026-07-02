@@ -6,7 +6,7 @@ const DEV_TARGET_PREFIX = "dev_";
 const DEV_STAGE_PATTERN = /^dev[-_](.+)$/;
 const DEV_AUTH_ORIGIN = "https://auth.iterate-dev.com";
 
-export type LocalDevOAuthClientBootstrap = {
+type LocalDevOAuthClientBootstrap = {
   authOrigin: string;
   existingClientId: string | undefined;
   existingClientSecret: string | undefined;

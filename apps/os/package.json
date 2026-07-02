@@ -41,7 +41,6 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@opentui/core": "0.1.102",
     "@opentui/react": "0.1.102",
-    "@orpc/server": "1.13.14",
     "@tanstack/react-devtools": "0.10.0",
     "@tanstack/react-form": "^1.28.4",
     "@tanstack/react-form-devtools": "^0.2.19",

@@ -56,23 +56,23 @@ import {
 } from "./utils.ts";
 import type { AppConfig } from "~/config.ts";
 
-export function requireSlackConfig(config: AppConfig) {
+function requireSlackConfig(config: AppConfig) {
   const slack = config.integrations.slack;
   if (!slack) throw new Error("Slack integration runtime config is not configured.");
   return slack;
 }
 
-export function requireGoogleConfig(config: AppConfig) {
+function requireGoogleConfig(config: AppConfig) {
   const google = config.integrations.google;
   if (!google) throw new Error("Google integration runtime config is not configured.");
   return google;
 }
 
-export function oauthRedirectUri(input: { baseUrl: string; provider: IntegrationProvider }) {
+function oauthRedirectUri(input: { baseUrl: string; provider: IntegrationProvider }) {
   return `${input.baseUrl.replace(/\/$/, "")}/api/integrations/${input.provider}/callback`;
 }
 
-export function requestBaseUrl(input: { config: AppConfig }) {
+function requestBaseUrl(input: { config: AppConfig }) {
   if (input.config.baseUrl) return input.config.baseUrl;
   throw new Error("config.baseUrl is required for OAuth flows.");
 }
@@ -216,7 +216,7 @@ export async function completeSlackConnect(input: {
  * token as an egress-substituted secret, arm the webhook router subscription,
  * record the connected fact, and claim the team in the global directory.
  */
-export async function recordSlackConnection(input: {
+async function recordSlackConnection(input: {
   accessToken: string;
   projectId: string;
   scopes: readonly string[];

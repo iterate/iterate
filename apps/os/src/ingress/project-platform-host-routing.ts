@@ -6,13 +6,6 @@ type ParsedProjectPlatformHost = {
   projectIdentifier: string;
 };
 
-export function parseProjectPlatformHost(input: {
-  bases: readonly string[];
-  host: string;
-}): ParsedProjectPlatformHost | null {
-  return parseProjectPlatformHosts(input)[0] ?? null;
-}
-
 export function parseProjectPlatformHosts(input: {
   bases: readonly string[];
   host: string;

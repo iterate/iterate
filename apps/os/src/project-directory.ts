@@ -16,7 +16,7 @@
 import { createAuthWorkerServiceClient } from "./auth/auth-worker-service.ts";
 import type { AppConfig } from "./config.ts";
 
-export type ProjectDirectoryRecord = {
+type ProjectDirectoryRecord = {
   id: string;
   slug: string;
   organizationId: string | null;

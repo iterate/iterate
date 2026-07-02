@@ -2,7 +2,7 @@ import { normalizePath } from "../durable-object-names.ts";
 
 const SECRET_REFERENCE = /getSecret\(\s*\{\s*path\s*:\s*"([^"]+)"\s*\}\s*\)/g;
 
-export type SecretErrorCode =
+type SecretErrorCode =
   | "multiple_secret_paths_not_supported"
   | "secret_not_allowed_for_origin"
   | "secret_not_found"

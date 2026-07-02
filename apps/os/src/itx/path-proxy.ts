@@ -20,8 +20,7 @@
 // segments.
 
 // The ONE calling convention's shapes.
-export type PathCall = { path: string[]; args: unknown[] };
-export type PathCallable = { call(input: PathCall): unknown };
+type PathCall = { path: string[]; args: unknown[] };
 
 /**
  * The optional self-description method the core probes at provide time
@@ -30,7 +29,7 @@ export type PathCallable = { call(input: PathCall): unknown };
  * itself into the journaled meta. Reserved below so user capability paths
  * can never collide with the protocol name.
  */
-export const SELF_DESCRIPTION_METHOD = "describeItx";
+const SELF_DESCRIPTION_METHOD = "describeItx";
 
 /**
  * Names that must never traverse a dynamic surface — prototype-pollution
@@ -39,7 +38,7 @@ export const SELF_DESCRIPTION_METHOD = "describeItx";
  * server-side path replay (`replayPathCall`), so a hand-built `path` reaching
  * `invoke` directly is filtered identically.
  */
-export const RESERVED_PATH_SEGMENTS: ReadonlySet<string> = new Set([
+const RESERVED_PATH_SEGMENTS: ReadonlySet<string> = new Set([
   SELF_DESCRIPTION_METHOD,
   "__defineGetter__",
   "__defineSetter__",
@@ -65,7 +64,7 @@ export const RESERVED_PATH_SEGMENTS: ReadonlySet<string> = new Set([
   "valueOf",
 ]);
 
-export type PathProxyCall = (input: PathCall) => unknown;
+type PathProxyCall = (input: PathCall) => unknown;
 
 /**
  * Class-shaped constructor that actually returns a callable Proxy: real

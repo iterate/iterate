@@ -89,7 +89,7 @@ export type { Itx as ItxReactHandle };
  * the provider hold it in context and `useItx` resolve it with `??`). The empty
  * address `{}` is the global context. `projectId` is a project id (`prj_…`); `path`/`baseUrl` are reserved (not yet used to key the socket).
  */
-export type ItxAddress = { projectId?: string; path?: string; baseUrl?: string };
+type ItxAddress = { projectId?: string; path?: string; baseUrl?: string };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The socket: one live WebSocket per context, kept outside React.

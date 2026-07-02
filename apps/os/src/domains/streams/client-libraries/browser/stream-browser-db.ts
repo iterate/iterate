@@ -17,7 +17,7 @@ export type StreamDatabaseInfo = {
   crossOriginIsolated: boolean;
 };
 
-export type StreamDatabaseEventSummary = {
+type StreamDatabaseEventSummary = {
   count: number;
   minOffset: number | null;
   maxOffset: number | null;
@@ -32,7 +32,7 @@ export type SqliteQuerySnapshot<T> = {
   error: Error | undefined;
 };
 
-export type SqliteQueryHandle = {
+type SqliteQueryHandle = {
   getSnapshot(): SqliteQuerySnapshot<Record<string, SqlValue>>;
   subscribe(listener: () => void): () => void;
 };

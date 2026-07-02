@@ -17,7 +17,7 @@ import { z } from "zod";
 const OAUTH_STATE_VERSION = "v1";
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
-export const OAuthStateData = z.object({
+const OAuthStateData = z.object({
   callbackUrl: z.string().optional(),
   codeVerifier: z.string().optional(),
   expiresAt: z.number(),
@@ -27,7 +27,7 @@ export const OAuthStateData = z.object({
   userId: z.string(),
 });
 
-export type OAuthStateData = z.infer<typeof OAuthStateData>;
+type OAuthStateData = z.infer<typeof OAuthStateData>;
 
 export async function createOAuthState(
   input: Omit<OAuthStateData, "expiresAt" | "nonce">,

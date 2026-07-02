@@ -39,7 +39,7 @@ const ExecJsInput = z.object({
   project: z.string().optional().describe("Project slug to run this code against."),
 });
 
-export const mcpCorsHeaders = {
+const mcpCorsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
     "Authorization, Content-Type, Mcp-Session-Id, Mcp-Protocol-Version, Last-Event-ID, Accept",

@@ -42,7 +42,7 @@ export type Project = {
   deploymentStatus: ProjectDeploymentStatus;
 };
 
-export type ProjectWithIngressUrl = Project & { ingressUrl: string };
+type ProjectWithIngressUrl = Project & { ingressUrl: string };
 
 /**
  * The session's projects that actually exist in THIS deployment — the root

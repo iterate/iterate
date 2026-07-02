@@ -19,7 +19,7 @@ export type AgentConnectionStatus =
   | { kind: "live" }
   | { kind: "reconnecting"; detail: string };
 
-export type AgentConnection = {
+type AgentConnection = {
   /** Append one user message to the agent stream (triggers the agent loop). */
   sendMessage(text: string): Promise<void>;
   dispose(): void;

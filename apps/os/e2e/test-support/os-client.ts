@@ -31,10 +31,6 @@ export function requireAdminBearerToken() {
   return token;
 }
 
-export function requireRootAccessToken() {
-  return requireAdminBearerToken();
-}
-
 /**
  * An admin itx handle against the deployment under test: the Session catalog
  * (no context) or a project itx (with context) — the same surfaces the

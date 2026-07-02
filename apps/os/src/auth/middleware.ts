@@ -44,7 +44,7 @@ export const iterateAuthMiddleware = createMiddleware({ type: "request" }).serve
   },
 );
 
-export async function resolveRequestAuth(input: {
+async function resolveRequestAuth(input: {
   auth: OsIterateAuth | null;
   context: Pick<RequestContext, "config">;
   request: Request;
@@ -118,6 +118,6 @@ async function authenticateBearerPrincipal(input: {
   return accessToken ? principalFromAccessToken(accessToken) : null;
 }
 
-export function createOsIterateAuth(context: RequestContext, request: Request) {
+function createOsIterateAuth(context: RequestContext, request: Request) {
   return createOsIterateAuthClient(context.config, request.url);
 }

@@ -9,7 +9,7 @@ const JSONWebKeySet = z.object({
 const SlackScope = z.string().trim().min(1);
 const GoogleScope = z.string().trim().min(1);
 
-export const DEFAULT_SLACK_BOT_SCOPES = [
+const DEFAULT_SLACK_BOT_SCOPES = [
   "channels:history",
   "channels:join",
   "channels:manage",
@@ -34,7 +34,7 @@ export const DEFAULT_SLACK_BOT_SCOPES = [
   "conversations.connect:write",
 ];
 
-export const DEFAULT_GOOGLE_OAUTH_SCOPES = [
+const DEFAULT_GOOGLE_OAUTH_SCOPES = [
   "openid",
   "https://www.googleapis.com/auth/userinfo.email",
   "https://www.googleapis.com/auth/userinfo.profile",
