@@ -59,9 +59,6 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
-  SidebarMenuSub,
-  SidebarMenuSubButton,
-  SidebarMenuSubItem,
   SidebarSeparator,
   useSidebar,
 } from "@iterate-com/ui/components/sidebar";
@@ -69,24 +66,28 @@ import { StreamPath, type StreamPath as StreamPathType } from "~/lib/stream-link
 import type { AppConfig } from "~/config.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import {
-  listMyProjectsServerFn,
-  myProjectsListInput,
-  myProjectsQueryKey,
-  myProjectsStaleTime,
-  type Project,
-} from "~/lib/project-server-fns.ts";
+  fetchProjectsList,
+  projectsListQueryKey,
+  projectsListStaleTime,
+} from "~/lib/projects-query.ts";
+import type { ProjectListEntry } from "~/types.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
 
 type PublicConfig = PublicAppConfig<AppConfig>;
 
 export function AppSidebar({ routeConfig }: { routeConfig: PublicRouteConfig }) {
+  // Client-only read through the itx session (itx never SSRs): the sidebar
+  // renders empty during SSR and populates after hydration. Plain useQuery —
+  // not the suspending useItxQuery — so the always-mounted shell never
+  // suspends on the socket.
   const { data } = useQuery({
-    queryKey: myProjectsQueryKey,
-    queryFn: () => listMyProjectsServerFn({ data: myProjectsListInput }),
-    staleTime: myProjectsStaleTime,
+    queryKey: projectsListQueryKey,
+    queryFn: fetchProjectsList,
+    staleTime: projectsListStaleTime,
   });
-  const projects =
-    data?.projects.filter((project) => !project.isOrphanedProjectFromAuthService) ?? [];
+  // Missing projects (auth knows them, this deployment's engine does not) are
+  // not navigable — the /projects page owns setting them up.
+  const projects = data?.filter((project) => project.deploymentStatus !== "missing") ?? [];
 
   // Sidebar composition follows shadcn sidebar blocks 07/08:
   // https://ui.shadcn.com/blocks/sidebar
@@ -101,7 +102,7 @@ export function AppSidebar({ routeConfig }: { routeConfig: PublicRouteConfig }) 
         <AppSidebarHeader projects={projects} />
       </SidebarHeader>
       <SidebarContent>
-        <AppSidebarNav routeConfig={routeConfig} projects={projects} />
+        <AppSidebarNav routeConfig={routeConfig} />
       </SidebarContent>
       <SidebarFooter>
         <AppSidebarCollapseButton />
@@ -112,7 +113,7 @@ export function AppSidebar({ routeConfig }: { routeConfig: PublicRouteConfig }) 
   );
 }
 
-function AppSidebarHeader({ projects }: { projects: Project[] }) {
+function AppSidebarHeader({ projects }: { projects: ProjectListEntry[] }) {
   const matches = useMatches();
   const { isMobile } = useSidebar();
   const activeProjectSlug = getActiveProjectSlug(matches);
@@ -379,24 +380,18 @@ function authWorkerOrigin(config: PublicConfig) {
   return "https://auth.iterate.com";
 }
 
-function AppSidebarNav({
-  projects,
-  routeConfig,
-}: {
-  projects: Project[];
-  routeConfig: PublicRouteConfig;
-}) {
+function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
   const matchRoute = useMatchRoute();
   const matches = useMatches();
   const activeProjectSlug = getActiveProjectSlug(matches);
-  const activeProject = projects.find((project) => project.slug === activeProjectSlug);
 
   // Drive the project nav from the active route slug, not list membership, so a valid
-  // project that isn't in the cached list (e.g. beyond the first page) still shows its nav.
+  // project that isn't in the cached list still shows its nav.
   if (activeProjectSlug) {
     return (
       <ProjectSidebarGroup
-        customHostname={activeProject?.customHostname ?? null}
+        // Custom hostnames don't exist yet (task #13): the list carries none.
+        customHostname={null}
         projectSlug={activeProjectSlug}
         projectHostnameBases={routeConfig.projectHostnameBases}
         appBaseUrl={routeConfig.baseUrl}
@@ -423,29 +418,9 @@ function AppSidebarNav({
                 <ScrollText />
                 <span>Projects</span>
               </SidebarMenuButton>
-              <SidebarMenuSub>
-                {projects.map((project) => (
-                  <SidebarMenuSubItem key={project.id}>
-                    <SidebarMenuSubButton
-                      isActive={Boolean(
-                        matchRoute({
-                          to: "/projects/$projectSlug",
-                          params: { projectSlug: project.slug },
-                          fuzzy: true,
-                        }),
-                      )}
-                      render={
-                        <Link
-                          to="/projects/$projectSlug/agents/new"
-                          params={{ projectSlug: project.slug }}
-                        />
-                      }
-                    >
-                      <span>{project.slug}</span>
-                    </SidebarMenuSubButton>
-                  </SidebarMenuSubItem>
-                ))}
-              </SidebarMenuSub>
+              {/* No per-project sub-list here: the switcher and the /projects
+                  page own project navigation, and duplicate slug-named links
+                  break the Playwright specs' strict-mode locators. */}
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarGroupContent>

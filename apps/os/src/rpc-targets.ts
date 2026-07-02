@@ -11,7 +11,12 @@ import {
   widenProjectAccess,
 } from "./auth.ts";
 import { itxEnv as env } from "./env.ts";
-import { primeProjectDirectory } from "./project-directory.ts";
+import {
+  listProjectDirectory,
+  primeProjectDirectory,
+  readProjectById,
+} from "./project-directory.ts";
+import { deploymentStatusesFromProbes } from "./project-deployment-status.ts";
 import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
 import { normalizeAgentPath } from "./domains/agents/utils.ts";
@@ -71,6 +76,7 @@ import type {
   OpenApiCollection,
   OpenApiConnectInput,
   ProjectCollection,
+  ProjectListEntry,
   ProjectRepoCollection,
   ProjectStreamCollection,
   ProjectEgress,
@@ -233,9 +239,9 @@ async function requestRepoCreate(input: {
     eventTypes: ["events.iterate.com/repo/created"],
     predicate: (event) =>
       event.payload?.projectId === input.projectId && event.payload?.path === path,
-    // Generous: repo create clones/seeds a CF Artifacts repo; cold slots under
-    // parallel e2e load have been seen to straggle past 60s.
-    timeoutMs: 120_000,
+    // Tight on purpose: creates should be fast (see tasks/os-cold-create-latency.md
+    // for the cold-slot outliers). Preview CI warms slots before the suites.
+    timeoutMs: 60_000,
   });
 
   return new RepoRpcTarget({ auth: input.auth, path, projectId: input.projectId });
@@ -832,10 +838,10 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
       afterOffset: createRequested.offset - 1,
       eventTypes: ["events.iterate.com/project/created"],
       predicate: (event) => event.payload?.projectId === args.projectId,
-      // Generous: the create saga seeds the repo, probes the project worker,
-      // and births the onboarding agent; cold slots under parallel e2e load
-      // have been seen to straggle past 60s.
-      timeoutMs: 120_000,
+      // Tight on purpose: the saga should complete in seconds (see
+      // tasks/os-cold-create-latency.md for the cold-slot outliers that must
+      // be fixed, not waited out). Preview CI warms slots before the suites.
+      timeoutMs: 60_000,
     });
 
     return new ItxRpcTarget({
@@ -896,8 +902,109 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
     return { organizationId: null, projectId: "prj_" + crypto.randomUUID(), slug: args.slug };
   }
 
-  list() {
-    return this.props.auth.listAccessibleProjects();
+  /**
+   * The session's projects, enriched: identity (id/slug/org) from the auth
+   * claims or the project directory, deployment status from a concurrent
+   * engine probe (`state.created` on each project's processor snapshot). A
+   * probe failure degrades THAT entry to "unknown" — the list always renders.
+   */
+  async list(input?: Parameters<ProjectCollection["list"]>[0]) {
+    const bases = await this.#listEntryBases(input?.scope);
+    const outcomes = await Promise.allSettled(
+      bases.map(async (base) => {
+        const state = await projectProcessorState(base.id);
+        return state.created === true;
+      }),
+    );
+    const statuses = deploymentStatusesFromProbes(
+      bases.map((base) => base.id),
+      outcomes,
+    );
+    return bases.map((base) => ({
+      ...base,
+      deploymentStatus: statuses.get(base.id) ?? "unknown",
+    }));
+  }
+
+  /**
+   * Which projects the list covers, and what we know about each before the
+   * engine probe. The scope is explicit (see the contract): "mine" reads the
+   * caller's claims even when admin credentials ride the same socket; the
+   * "deployment" scope (PROJECT_DIRECTORY KV, every known project — record
+   * `name` is the PROJECT name, so no organization name) requires an admin
+   * principal. Non-user admin principals have no claims, so they default to
+   * "deployment"; impersonated users (test lane) list their scopes,
+   * directory-read.
+   */
+  async #listEntryBases(
+    requestedScope?: "mine" | "deployment",
+  ): Promise<Omit<ProjectListEntry, "deploymentStatus">[]> {
+    const userPrincipal = userPrincipalOf(this.props.auth);
+    // Default to the caller's own projects for EVERY principal shape (user,
+    // impersonated, admin) — only pure admin principals, which have no
+    // projects of their own, default to the deployment listing.
+    const scope =
+      requestedScope ?? (userPrincipal || !this.props.auth.isAdmin() ? "mine" : "deployment");
+    if (scope === "deployment") {
+      if (!this.props.auth.isAdmin()) {
+        throw new Error('projects.list({ scope: "deployment" }) requires an admin principal');
+      }
+      const records = await listProjectDirectory(env.PROJECT_DIRECTORY);
+      return records.map((record) => ({
+        id: record.id,
+        slug: record.slug,
+        organizationId: record.organizationId,
+        organizationName: null,
+      }));
+    }
+
+    if (userPrincipal) {
+      const organizationNames = new Map(
+        userPrincipal.organizations.map((organization) => [
+          organization.id,
+          organization.name ?? null,
+        ]),
+      );
+      const projectIds = new Set([
+        ...userPrincipal.projects.map((project) => project.id),
+        ...this.props.auth.listAccessibleProjects(),
+      ]);
+      const claims = new Map(userPrincipal.projects.map((project) => [project.id, project]));
+      return await Promise.all(
+        [...projectIds].map(async (projectId) => {
+          const claim = claims.get(projectId);
+          if (claim) {
+            return {
+              id: claim.id,
+              slug: claim.slug,
+              organizationId: claim.organizationId,
+              organizationName: organizationNames.get(claim.organizationId) ?? null,
+            };
+          }
+          return await this.#directoryEntryBase(projectId);
+        }),
+      );
+    }
+
+    return await Promise.all(
+      this.props.auth
+        .listAccessibleProjects()
+        .map((projectId) => this.#directoryEntryBase(projectId)),
+    );
+  }
+
+  async #directoryEntryBase(
+    projectId: string,
+  ): Promise<Omit<ProjectListEntry, "deploymentStatus">> {
+    const record = await readProjectById(env.PROJECT_DIRECTORY, projectId);
+    return {
+      id: projectId,
+      // A scope the directory has never seen (impersonated test principals)
+      // still lists — the id doubles as the slug.
+      slug: record?.slug ?? projectId,
+      organizationId: record?.organizationId ?? null,
+      organizationName: null,
+    };
   }
 }
 

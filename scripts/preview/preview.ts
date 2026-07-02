@@ -461,6 +461,10 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       [
         "set -euo pipefail",
         "pnpm --dir ../.. exec playwright install chromium",
+        // Warm the freshly deployed slot before the concurrent suites hit it:
+        // one sequential create pays the cold-start costs (DO chains, repo
+        // seeding) that otherwise surface as rotating timeout flakes.
+        "pnpm exec tsx e2e/vitest/onboarding-smoke.ts",
         // The vitest lanes and the Playwright specs hit the same deployed slot
         // but provision independent projects, so they run concurrently; the
         // vitest log is replayed once the specs finish.
