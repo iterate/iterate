@@ -11,8 +11,8 @@ import { e2eFixtureResponse } from "../e2e-fixtures.ts";
 import type { Env } from "../env.ts";
 import { requestIngressHost } from "../ingress.ts";
 import { ProjectCollectionRpcTarget, UnauthenticatedItxRpcTarget } from "../rpc-targets.ts";
+import { resolveProjectIdBySlug } from "../project-directory.ts";
 import { handleCapnwebAdminCookieRequest } from "~/auth/admin-auth-cookie.ts";
-import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import { parseConfig, type AppConfig } from "~/config.ts";
 import { parseProjectPlatformHosts } from "~/ingress/project-platform-host-routing.ts";
 
@@ -30,7 +30,7 @@ export default {
     const fixtureResponse = await e2eFixtureResponse(request);
     if (fixtureResponse !== null) return fixtureResponse;
 
-    const projectIngress = await projectIngressRequest({ config, request, url });
+    const projectIngress = await projectIngressRequest({ config, env, request, url });
     if (projectIngress !== null) {
       const project = await new ProjectCollectionRpcTarget({
         auth: trustedInternalAuthContext(),
@@ -64,6 +64,7 @@ export default {
  */
 async function projectIngressRequest(input: {
   config: AppConfig;
+  env: Env;
   request: Request;
   url: URL;
 }): Promise<{ projectId: string; request: Request } | null> {
@@ -82,7 +83,11 @@ async function projectIngressRequest(input: {
     host,
   });
   for (const candidate of candidates) {
-    const projectId = await resolveProjectId(input.config, candidate.projectIdentifier);
+    const projectId = await resolveProjectIdBySlug({
+      config: input.config,
+      directory: input.env.PROJECT_DIRECTORY,
+      identifier: candidate.projectIdentifier,
+    });
     if (!projectId) continue;
     return { projectId, request: projectWorkerRequest(new URL(request.url), request, projectId) };
   }
@@ -103,27 +108,4 @@ function projectWorkerRequest(workerUrl: URL, request: Request, projectId: strin
     (init as RequestInit & { duplex: "half" }).duplex = "half";
   }
   return new Request(workerUrl, init);
-}
-
-// Slug → project id through the auth worker's directory. Ingress lookups are
-// hot (every project-host request), so hits and misses are both cached
-// briefly per isolate.
-const PROJECT_ID_CACHE_TTL_MS = 30_000;
-const projectIdCache = new Map<string, { expiresAt: number; projectId: string | null }>();
-
-async function resolveProjectId(config: AppConfig, identifier: string): Promise<string | null> {
-  if (identifier.startsWith("prj_")) return identifier;
-
-  const cached = projectIdCache.get(identifier);
-  if (cached && cached.expiresAt > Date.now()) return cached.projectId;
-
-  const record = await createAuthWorkerServiceClient({ config })
-    .project.bySlug({ projectSlug: identifier })
-    .catch(() => null);
-  const projectId = record?.id ?? null;
-  projectIdCache.set(identifier, {
-    expiresAt: Date.now() + PROJECT_ID_CACHE_TTL_MS,
-    projectId,
-  });
-  return projectId;
 }

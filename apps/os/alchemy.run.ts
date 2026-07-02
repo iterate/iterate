@@ -5,6 +5,7 @@ import alchemy from "alchemy";
 import {
   Ai,
   DurableObjectNamespace,
+  KVNamespace,
   Worker,
   WorkerLoader,
   WranglerJson,
@@ -228,6 +229,15 @@ const mcpRouteHostname = routeHostnameForUrl(ctx.runtimeConfig.mcp?.baseUrl);
 const artifactsAccountId = requireEnv("CLOUDFLARE_ACCOUNT_ID");
 const artifactsNamespace = `${ctx.workerName}-repos`;
 
+// Slug -> project id (+ small metadata records) cache in front of the auth
+// worker's project directory: ingress resolves every project-host request
+// through it, so positive lookups must not pay an auth-worker roundtrip
+// (src/next/project-directory.ts).
+const projectDirectory = await KVNamespace("project-directory", {
+  title: `${ctx.workerName}-project-directory`,
+  adopt: true,
+});
+
 // ---- Durable Object namespaces ---------------------------------------------
 // One declaration per class, `scriptName` = the OWNING worker. Alchemy strips
 // `script_name` (and runs class migrations) when the namespace is bound on its
@@ -374,6 +384,7 @@ const engineBindings = {
   ITX: itx,
   LOADER: WorkerLoader(),
   PROJECT: project,
+  PROJECT_DIRECTORY: projectDirectory,
   REPO: repo,
   SECRET: secret,
   SECRET_ENCRYPTION_KEY: alchemy.secret(
@@ -453,6 +464,8 @@ const appWorker = await IterateAppWorker(ctx, {
   main: "./src/workers/app.ts",
   bindings: {
     NEXT_API: apiWorker,
+    // Server-side project reads share the ingress directory cache.
+    PROJECT_DIRECTORY: projectDirectory,
   },
   // OAuth login/refresh/logout, and JWT verification when static JWKS is not
   // configured, can still talk to auth.iterate.com from inside the Worker.

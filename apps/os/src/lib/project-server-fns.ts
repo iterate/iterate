@@ -1,10 +1,11 @@
 import { createServerFn } from "@tanstack/react-start";
 // oxlint-disable-next-line iterate/no-capnweb-http-batch -- server functions are one-shot request-scoped calls: a single pipelined batch (authenticate -> create -> describe) with no socket lifecycle to manage.
 import { newHttpBatchRpcSession } from "capnweb";
+import { env } from "cloudflare:workers";
 import { authenticateCapnwebAdmin } from "~/auth/admin-auth-cookie.ts";
-import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import { getUserPrincipal, type UserPrincipal } from "~/auth/principal.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
+import { readProjectBySlug } from "~/next/project-directory.ts";
 import type { UnauthenticatedItx } from "~/next/types.ts";
 import type { RequestContext } from "~/request-context.ts";
 
@@ -123,13 +124,12 @@ export const getProjectBySlugServerFn: (input: {
     const claimed = claimedProjects(context).find((project) => project.slug === data.slug);
     if (claimed) return withIngressUrl(context, toProject(claimed));
 
-    // Claims miss: consult the directory. Admin sessions (admin cookie or
-    // admin-role user) may read any project; a signed-in user may read a
+    // Claims miss: consult the directory (KV cache in front of the auth
+    // worker — src/next/project-directory.ts). Admin sessions (admin cookie
+    // or admin-role user) may read any project; a signed-in user may read a
     // project whose owning organization they belong to (covers the
     // stale-claims window right after a create on another device).
-    const record = await createAuthWorkerServiceClient({ config: context.config })
-      .project.bySlug({ projectSlug: data.slug })
-      .catch(() => null);
+    const record = await readProjectBySlug(context.config, env.PROJECT_DIRECTORY, data.slug);
     if (!record) throw new Error(`Project ${data.slug} not found`);
 
     const userPrincipal = getUserPrincipal(context.principal);

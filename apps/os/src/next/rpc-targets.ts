@@ -10,6 +10,7 @@ import {
   widenProjectAccess,
 } from "./auth.ts";
 import { nextEnv as env } from "./env.ts";
+import { primeProjectDirectory } from "./project-directory.ts";
 import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
 import { normalizeAgentPath } from "./domains/agents/utils.ts";
@@ -629,6 +630,14 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
     // claims catch up on the next token refresh (directory fallback covers the
     // gap for other connections).
     widenProjectAccess(this.props.auth, registered.projectId);
+    // Prime the slug->id directory cache so the post-create navigation (and
+    // the first project-host request) never miss into the auth worker.
+    await primeProjectDirectory(env.PROJECT_DIRECTORY, {
+      id: registered.projectId,
+      slug: registered.slug,
+      organizationId: registered.organizationId,
+      name: registered.slug,
+    });
 
     const stream = rootStream({
       auth: this.props.auth,
@@ -680,7 +689,7 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
    */
   async #registerProject(
     args: Parameters<ProjectCollection["create"]>[0],
-  ): Promise<{ projectId: string; slug: string }> {
+  ): Promise<{ organizationId: string | null; projectId: string; slug: string }> {
     const userPrincipal = userPrincipalOf(this.props.auth);
 
     if (userPrincipal && !this.props.auth.isAdmin()) {
@@ -701,23 +710,23 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
         slug: args.slug,
         ...(args.projectId === undefined ? {} : { id: args.projectId }),
       });
-      return { projectId: created.id, slug: created.slug };
+      return { organizationId: created.organizationId, projectId: created.id, slug: created.slug };
     }
 
     if (!this.props.auth.isAdmin()) {
       throw new Error(`principal "${this.props.auth.principal}" cannot create projects`);
     }
     if (args.projectId !== undefined) {
-      return { projectId: args.projectId, slug: args.slug };
+      return { organizationId: null, projectId: args.projectId, slug: args.slug };
     }
     const serviceToken = this.props.config?.iterateAuth?.serviceToken;
     if (this.props.config && serviceToken) {
       const minted = await createAuthWorkerServiceClient({
         config: this.props.config,
       }).internal.project.mintProjectId();
-      return { projectId: minted.id, slug: args.slug };
+      return { organizationId: null, projectId: minted.id, slug: args.slug };
     }
-    return { projectId: "prj_" + crypto.randomUUID(), slug: args.slug };
+    return { organizationId: null, projectId: "prj_" + crypto.randomUUID(), slug: args.slug };
   }
 
   list() {

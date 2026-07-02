@@ -127,9 +127,12 @@ export async function createProjectFixture(
 
 export async function createAdminProject(input: { baseUrl: string; slug: string }) {
   const config = await resolveOsPlaywrightAuthConfig();
-  // The next engine's create resolves only after the bootstrap saga committed
-  // project/created (repo seeded, project worker probed, onboarding agent
-  // born), so there is no separate readiness wait.
+  // itx-v4 cutover: this used to dial the legacy client (`withItx({baseUrl,
+  // token})`) and then poll `project.processor.onStateChange` until the
+  // project reached phase "ready". The next engine's create resolves only
+  // after the bootstrap saga committed project/created (repo seeded, project
+  // worker probed, onboarding agent born), so the readiness wait is gone and
+  // auth is an explicit admin-secret credential on connect.
   using session = connectItx({
     auth: { type: "admin-secret", secret: config.adminApiSecret },
     baseUrl: input.baseUrl,
@@ -141,8 +144,9 @@ export async function createAdminProject(input: { baseUrl: string; slug: string 
   return {
     project,
     [Symbol.asyncDispose]() {
-      // TODO(task #13): project removal on the next engine — disposable
-      // Playwright projects are leaked until then (stages reset periodically).
+      // itx-v4 cutover: this used to `projects.remove({id})`. TODO(task #13):
+      // project removal on the next engine — disposable Playwright projects
+      // are leaked until then (stages reset periodically).
       return Promise.resolve();
     },
   };

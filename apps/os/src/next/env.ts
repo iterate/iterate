@@ -15,6 +15,9 @@ export interface Env {
   ARTIFACTS_ACCOUNT_ID: string;
   ARTIFACTS_NAMESPACE: string;
   LOADER: WorkerLoader;
+  /** Slug -> project id (+ metadata) cache in front of the auth worker's
+   * project directory (project-directory.ts). */
+  PROJECT_DIRECTORY: KVNamespace;
   SECRET_ENCRYPTION_KEY: string;
 
   AGENT: DurableObjectNamespace<
