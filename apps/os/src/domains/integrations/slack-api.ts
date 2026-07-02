@@ -5,8 +5,9 @@
 // egress door with a `getSecret({ path: ... })` placeholder in the
 // authorization header, so token material never leaves the secret DO's
 // substitution pipeline and every outbound attempt lands on the secret's
-// audit trail. When the project has no connected workspace, the deployment
-// `slackBotToken` config (if set) is the fallback, matching legacy behavior.
+// audit trail. When the project has no connected workspace, the deployment's
+// Slack integration `botToken` config is the fallback. The legacy top-level
+// `slackBotToken` is still accepted during the migration.
 
 import { itxEnv } from "../../env.ts";
 import { projectStub } from "../projects/egress.ts";
@@ -36,8 +37,8 @@ export async function callSlackWebApi(input: {
  * Slack Web API call authorized by the project's stored bot token, without
  * ever reading the token material: the request carries a secret reference
  * placeholder and traverses the project egress door, which substitutes it in
- * the secret Durable Object. Falls back to the deployment `slackBotToken`
- * config when the project has no stored token.
+ * the secret Durable Object. Falls back to the Slack integration bot token
+ * when the project has no stored token.
  */
 export async function callProjectSlackWebApi(input: {
   body: Record<string, unknown>;
@@ -65,7 +66,7 @@ export async function callProjectSlackWebApi(input: {
       const fallbackToken = readFallbackSlackBotToken();
       if (fallbackToken === null) {
         throw new Error(
-          `Slack Web API ${input.method} failed: no project Slack bot token secret and no slackBotToken config fallback (${errorBody.error}).`,
+          `Slack Web API ${input.method} failed: no project Slack bot token secret and no Slack integration botToken config fallback (${errorBody.error}).`,
         );
       }
       return await callSlackWebApi({
@@ -80,7 +81,9 @@ export async function callProjectSlackWebApi(input: {
 
 function readFallbackSlackBotToken(): string | null {
   try {
-    const token = parseConfig(itxEnv).slackBotToken?.exposeSecret();
+    const config = parseConfig(itxEnv);
+    const token =
+      config.integrations.slack?.botToken?.exposeSecret() ?? config.slackBotToken?.exposeSecret();
     return token && token.trim() !== "" ? token : null;
   } catch {
     return null;
