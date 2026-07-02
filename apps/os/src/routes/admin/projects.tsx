@@ -1,7 +1,6 @@
-import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { ArrowLeftIcon, ArrowRightIcon, ExternalLinkIcon, WaypointsIcon } from "lucide-react";
+import { ExternalLinkIcon, WaypointsIcon } from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
@@ -14,25 +13,26 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
-import { listAdminProjectsServerFn } from "~/lib/project-server-fns.ts";
-
-const PAGE_SIZE = 100;
+import { useItx } from "~/itx/itx-react.tsx";
+import type { ProjectListEntry } from "~/types.ts";
 
 export const Route = createFileRoute("/admin/projects")({
   component: AdminProjectsPage,
 });
 
 function AdminProjectsPage() {
-  const [pageIndex, setPageIndex] = useState(0);
-  const offset = pageIndex * PAGE_SIZE;
+  // This renders under the admin layout's AdminGate, so the global itx handle
+  // carries admin authority: `projects.list({ scope: "deployment" })` returns
+  // every deployment-known project (from the project directory), each with its engine status.
+  const itx = useItx();
   const projectsQuery = useQuery({
-    queryKey: ["admin", "projects", { limit: PAGE_SIZE, offset }],
-    queryFn: async () => await listAdminProjectsServerFn({ data: { limit: PAGE_SIZE, offset } }),
+    // NOT the shared ["itx", "projects"] entry: the admin list is the
+    // deployment-wide view, the user list is claims-scoped — same socket,
+    // different results.
+    queryKey: ["itx", "admin-projects"],
+    queryFn: async () => await itx.projects.list({ scope: "deployment" }),
   });
-  const projects = projectsQuery.data?.projects ?? [];
-  const total = projectsQuery.data?.total ?? 0;
-  const hasPrevious = pageIndex > 0;
-  const hasNext = offset + projects.length < total;
+  const projects = projectsQuery.data ?? [];
 
   return (
     <section className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -40,30 +40,10 @@ function AdminProjectsPage() {
         <div className="min-w-0">
           <h1 className="text-base font-semibold">Projects</h1>
           <p className="text-sm text-muted-foreground">
-            {projectsQuery.isPending ? "Loading projects..." : `${total.toLocaleString()} total`}
+            {projectsQuery.isPending
+              ? "Loading projects..."
+              : `${projects.length.toLocaleString()} total`}
           </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={!hasPrevious || projectsQuery.isFetching}
-            onClick={() => setPageIndex((current) => Math.max(0, current - 1))}
-          >
-            <ArrowLeftIcon data-icon="inline-start" aria-hidden="true" />
-            Previous
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={!hasNext || projectsQuery.isFetching}
-            onClick={() => setPageIndex((current) => current + 1)}
-          >
-            Next
-            <ArrowRightIcon data-icon="inline-end" aria-hidden="true" />
-          </Button>
         </div>
       </header>
       <div className="min-h-0 flex-1 overflow-auto p-4">
@@ -93,9 +73,8 @@ function AdminProjectsPage() {
               <TableRow>
                 <TableHead>Slug</TableHead>
                 <TableHead>ID</TableHead>
-                <TableHead>Custom hostname</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead>Updated</TableHead>
+                <TableHead>Organization</TableHead>
+                <TableHead>Status</TableHead>
                 <TableHead className="text-right">Links</TableHead>
               </TableRow>
             </TableHeader>
@@ -115,14 +94,15 @@ function AdminProjectsPage() {
                     {project.id}
                   </TableCell>
                   <TableCell>
-                    {project.customHostname ? (
-                      <Badge variant="secondary">{project.customHostname}</Badge>
-                    ) : (
-                      <span className="text-muted-foreground">None</span>
+                    {project.organizationName ?? (
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {project.organizationId ?? "-"}
+                      </span>
                     )}
                   </TableCell>
-                  <TableCell>{formatDate(project.createdAt)}</TableCell>
-                  <TableCell>{formatDate(project.updatedAt)}</TableCell>
+                  <TableCell>
+                    <ProjectStatusBadge project={project} />
+                  </TableCell>
                   <TableCell>
                     <div className="flex justify-end gap-2">
                       <Button
@@ -164,6 +144,17 @@ function AdminProjectsPage() {
   );
 }
 
+function ProjectStatusBadge({ project }: { project: ProjectListEntry }) {
+  switch (project.deploymentStatus) {
+    case "ready":
+      return <Badge>Ready</Badge>;
+    case "missing":
+      return <Badge variant="secondary">Not set up in this deployment</Badge>;
+    case "unknown":
+      return <Badge variant="outline">Unknown</Badge>;
+  }
+}
+
 function ProjectsSkeleton() {
   return (
     <div className="flex flex-col gap-2">
@@ -172,9 +163,4 @@ function ProjectsSkeleton() {
       ))}
     </div>
   );
-}
-
-function formatDate(value: string | null) {
-  if (!value) return <span className="text-muted-foreground">-</span>;
-  return <span className="text-muted-foreground">{new Date(value).toLocaleString()}</span>;
 }

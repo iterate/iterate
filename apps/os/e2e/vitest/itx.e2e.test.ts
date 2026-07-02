@@ -210,7 +210,17 @@ describe("itx", () => {
     const projects = itx.projects;
 
     expect(await itx.whoami()).toBe("alice");
-    expect(await projects.list()).toEqual(["prj_alice", "prj_ref"]);
+    // list() enriches each scope: an impersonated principal's scopes have no
+    // directory record, so the id doubles as the slug and the org is unknown.
+    const list = await projects.list();
+    expect(list.map((project) => project.id)).toEqual(["prj_alice", "prj_ref"]);
+    expect(list[0]).toMatchObject({
+      id: "prj_alice",
+      slug: "prj_alice",
+      organizationId: null,
+      organizationName: null,
+    });
+    expect(["ready", "missing", "unknown"]).toContain(list[0]?.deploymentStatus);
   });
 
   test("Authenticated internal auth itx can create project and append to stream", async () => {
@@ -483,8 +493,15 @@ describe("itx", () => {
       );
       // Birth now seeds one boot-context input item (platform context: project
       // id, agent path, repo layout) with dont-trigger-request — so history has
-      // exactly that item and no LLM turn ran.
-      expect((await project.agents.get(agentPath).processor.snapshot()).state.history).toEqual([
+      // exactly that item and no LLM turn ran. Ingest is async: wait for the
+      // processor to fold the birth events before asserting (cold slots under
+      // CI load have been seen to lag).
+      const agentProcessor = project.agents.get(agentPath).processor;
+      await waitForCondition(
+        async () => (await agentProcessor.snapshot()).state.history.length > 0,
+        { description: "agent boot-context input to fold into history", timeoutMs: 30_000 },
+      );
+      expect((await agentProcessor.snapshot()).state.history).toEqual([
         expect.objectContaining({
           role: "user",
           content: expect.stringContaining(`Your agent stream path: ${agentPath}`),
@@ -585,6 +602,9 @@ describe("itx", () => {
       });
       await waitForCondition(async () => (await secret.describe()).hasMaterial, {
         description: "OpenAPI secret to be available",
+        // Secret DO folds the update asynchronously; the 5s default flaked on
+        // cold slots under full-suite CI load.
+        timeoutMs: 30_000,
       });
 
       const headers = { authorization: `Bearer getSecret({ path: "${secretPath}" })` };
@@ -2863,7 +2883,7 @@ describe("itx", () => {
     // If we didn't do Promise.all, this wouldn't work - wouldn't be sent as part of the same batch
     const [principal, projects] = await Promise.all([itx.whoami(), itx.projects.list()]);
     expect(principal).toBe("alice");
-    expect(projects).toEqual(["prj_alice", "prj_ref"]);
+    expect(projects.map((project) => project.id)).toEqual(["prj_alice", "prj_ref"]);
 
     // session is now finished - cannot be used again in batch http mode
     await expect(session.authenticate).rejects.toThrow();

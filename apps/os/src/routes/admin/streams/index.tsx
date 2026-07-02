@@ -42,7 +42,7 @@ function AdminStreamsProjectPicker() {
       <div className="flex flex-col gap-1">
         <h1 className="text-base font-semibold">Streams explorer</h1>
         <p className="text-sm text-muted-foreground">
-          Open streams by project id. Use __null__ for deployment-wide streams.
+          Open streams by project id. Use __null__ for Global (deployment) streams.
         </p>
       </div>
       <form

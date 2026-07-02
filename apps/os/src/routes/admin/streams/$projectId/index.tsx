@@ -3,7 +3,10 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { ArrowLeftIcon, RadioTowerIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { StreamExplorerTreePage } from "~/components/stream-explorer.tsx";
-import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
+import {
+  NULL_DURABLE_OBJECT_PROJECT_ID,
+  streamProjectDisplayLabel,
+} from "~/lib/stream-navigation.ts";
 import { useItx } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/admin/streams/$projectId/")({
@@ -39,7 +42,9 @@ function AdminStreamProjectPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
             <h1 className="truncate text-base font-semibold">Streams explorer</h1>
-            <p className="truncate font-mono text-sm text-muted-foreground">{projectId}</p>
+            <p className="truncate font-mono text-sm text-muted-foreground">
+              {streamProjectDisplayLabel(projectId)}
+            </p>
           </div>
           <div className="flex items-center gap-2">
             <Button

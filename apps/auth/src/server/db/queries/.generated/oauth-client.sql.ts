@@ -254,10 +254,7 @@ export const overwriteOAuthClientByClientId = Object.assign(
   ) {
     return client.run(overwriteOAuthClientByClientIdQuery(data, params));
   },
-  {
-    sql: overwriteOAuthClientByClientIdSql,
-    query: overwriteOAuthClientByClientIdQuery,
-  },
+  { sql: overwriteOAuthClientByClientIdSql, query: overwriteOAuthClientByClientIdQuery },
 );
 
 export namespace overwriteOAuthClientByClientId {

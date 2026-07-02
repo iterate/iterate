@@ -1,26 +1,26 @@
 import { createServerFn } from "@tanstack/react-start";
-// oxlint-disable-next-line iterate/no-capnweb-http-batch -- server functions are one-shot request-scoped calls: a single pipelined batch (authenticate -> create -> describe) with no socket lifecycle to manage.
+// oxlint-disable-next-line iterate/no-capnweb-http-batch -- server functions are one-shot request-scoped calls: a single pipelined batch (authenticate -> list) with no socket lifecycle to manage.
 import { newHttpBatchRpcSession } from "capnweb";
 import { env } from "cloudflare:workers";
 import { authenticateCapnwebAdmin } from "~/auth/admin-auth-cookie.ts";
-import { getUserPrincipal, type UserPrincipal } from "~/auth/principal.ts";
+import { getUserPrincipal } from "~/auth/principal.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
-import { readProjectById, readProjectBySlug } from "~/project-directory.ts";
-import type { UnauthenticatedItx } from "~/types.ts";
+import { readProjectBySlug } from "~/project-directory.ts";
+import type { ProjectDeploymentStatus, UnauthenticatedItx } from "~/types.ts";
 import type { RequestContext } from "~/request-context.ts";
 
 /**
  * SSR-safe project reads as TanStack server functions. itx is client-only (it
- * throws during SSR), so the always-mounted app shell and SSR loaders read
- * projects through these instead.
+ * throws during SSR), so SSR loaders read projects through these instead.
  *
- * The auth worker is the source of truth for which projects exist; the session
- * principal's project claims are the fast path for reads. Creation goes
- * through the itx `projects.create` over an HTTP-batch capnweb call
- * that forwards the caller's session cookie — the same user-lane door the
- * browser uses. (Future direction: the form calls itx directly and these
- * server functions dissolve; they stay for now so SSR loaders and the app
- * shell keep one entry point.)
+ * These are deliberately minimal: the browser talks to the itx session
+ * directly (`session.projects.list()` / `session.projects.create()` — see
+ * ~/itx/itx-react.tsx consumers). What remains here is only what MUST run
+ * server-side:
+ * - `getProjectBySlugServerFn` — the project layout's `beforeLoad` (SSR).
+ * - `listReadyProjectsServerFn` — the root `/` redirect decision (SSR); a thin
+ *   proxy over the engine's `session.projects.list()`.
+ * - `deleteProjectServerFn` — a stub until project archival lands (task #13).
  *
  * Return types are annotated explicitly for the same reason as
  * fetchRootAuthSnapshot/getSidebarDefaultOpen: server functions consumed by
@@ -32,55 +32,14 @@ export type Project = {
   id: string;
   slug: string;
   organizationId: string | null;
+  organizationName: string | null;
   customHostname: string | null;
   createdAt: string | null;
   updatedAt: string | null;
-  isOrphanedProjectFromAuthService: boolean;
+  deploymentStatus: ProjectDeploymentStatus;
 };
 
 export type ProjectWithIngressUrl = Project & { ingressUrl: string };
-
-export type ProjectListResult = { projects: Project[]; total: number };
-
-export const myProjectsQueryKey = ["my-projects"] as const;
-export const myProjectsListInput = { limit: 100, offset: 0 } as const;
-export const myProjectsStaleTime = 30_000;
-
-export const createMyProjectServerFn: (input: {
-  data: { id?: string; slug: string; organizationSlug?: string };
-}) => Promise<ProjectWithIngressUrl> = createServerFn({ method: "POST" })
-  .validator((input: { id?: string; slug: string; organizationSlug?: string }) => input)
-  .handler(async ({ context, data }) => {
-    const userPrincipal = getUserPrincipal(context.principal);
-    if (!userPrincipal) throw new Error("Sign in to create projects.");
-
-    // One pipelined HTTP batch into itx, authenticated with the
-    // caller's own session cookie: create registers the project with the auth
-    // worker (org grant -> claims) and runs the itx bootstrap saga.
-    const session = engineBatchSession(context);
-    const root = session.authenticate({ type: "from-server-cookie" });
-    const project = root.projects.create({
-      slug: data.slug,
-      ...(data.organizationSlug === undefined ? {} : { organizationSlug: data.organizationSlug }),
-      ...(data.id === undefined ? {} : { projectId: data.id }),
-    });
-    const description = await project.describe();
-
-    // The auth worker may normalize (slugify) the requested slug; create
-    // primes the directory with the canonical record before resolving, so
-    // read it back rather than echoing the submitted slug into ingress URLs.
-    const record = await readProjectById(env.PROJECT_DIRECTORY, description.projectId);
-
-    return withIngressUrl(context, {
-      id: description.projectId,
-      slug: record?.slug ?? data.slug,
-      organizationId: organizationIdForCreate(userPrincipal, data.organizationSlug),
-      customHostname: null,
-      createdAt: null,
-      updatedAt: null,
-      isOrphanedProjectFromAuthService: false,
-    });
-  });
 
 export const deleteProjectServerFn: (input: {
   data: { id: string };
@@ -93,32 +52,32 @@ export const deleteProjectServerFn: (input: {
     throw new Error(`Project deletion is not available yet (project ${data.id}).`);
   });
 
-/** The session principal's accessible projects (from claims — the fast path). */
-export const listMyProjectsServerFn: (input: {
-  data: { limit?: number; offset?: number };
-}) => Promise<ProjectListResult> = createServerFn({ method: "GET" })
-  .validator((input: { limit?: number; offset?: number }) => input)
-  .handler(({ context, data }) => {
-    const projects = claimedProjects(context).map((claim) =>
-      withIngressUrl(context, toProject(claim)),
-    );
-    const offset = data.offset ?? 0;
-    const limit = data.limit ?? projects.length;
-    return Promise.resolve({
-      projects: projects.slice(offset, offset + limit),
-      total: projects.length,
-    });
-  });
-
-/** All OS projects, guarded for the admin page. */
-export const listAdminProjectsServerFn: (input: {
-  data: { limit?: number; offset?: number };
-}) => Promise<ProjectListResult> = createServerFn({ method: "GET" })
-  .validator((input: { limit?: number; offset?: number }) => input)
-  .handler(() => {
-    // TODO(task #13): auth worker internal.project.listAll powers this.
-    return Promise.resolve({ projects: [], total: 0 });
-  });
+/**
+ * The session's projects that actually exist in THIS deployment — the root
+ * `/` redirect's input. It runs during SSR (itx is client-only), so it proxies
+ * the engine's `session.projects.list()` through one pipelined capnweb HTTP
+ * batch that forwards the caller's cookie. Failures degrade to an empty list:
+ * the redirect then lands on `/projects`, which renders the real list.
+ */
+export const listReadyProjectsServerFn: (input?: {
+  data?: undefined;
+}) => Promise<{ id: string; slug: string }[]> = createServerFn({ method: "GET" }).handler(
+  async ({ context }) => {
+    try {
+      const session = engineBatchSession(context);
+      const root = session.authenticate({ type: "from-server-cookie" });
+      // Explicit "mine": the admin cookie may ride the same request, and the
+      // root redirect must follow the signed-in user's claims, never the
+      // deployment listing.
+      const projects = await root.projects.list({ scope: "mine" });
+      return projects
+        .filter((project) => project.deploymentStatus === "ready")
+        .map((project) => ({ id: project.id, slug: project.slug }));
+    } catch {
+      return [];
+    }
+  },
+);
 
 /** A single project the session principal can read, by slug. */
 export const getProjectBySlugServerFn: (input: {
@@ -126,8 +85,24 @@ export const getProjectBySlugServerFn: (input: {
 }) => Promise<ProjectWithIngressUrl> = createServerFn({ method: "GET" })
   .validator((input: { slug: string }) => input)
   .handler(async ({ context, data }) => {
-    const claimed = claimedProjects(context).find((project) => project.slug === data.slug);
-    if (claimed) return withIngressUrl(context, toProject(claimed));
+    const claimed = (getUserPrincipal(context.principal)?.projects ?? []).find(
+      (project) => project.slug === data.slug,
+    );
+    // Single-project reads skip the engine probe (loaders only need slug and
+    // ingress URL); `session.projects.list()` carries the real deployment
+    // status.
+    if (claimed) {
+      return withIngressUrl(context, {
+        id: claimed.id,
+        slug: claimed.slug,
+        organizationId: claimed.organizationId ?? null,
+        organizationName: null,
+        customHostname: null,
+        createdAt: null,
+        updatedAt: null,
+        deploymentStatus: "unknown",
+      });
+    }
 
     // Claims miss: consult the directory (KV cache in front of the auth
     // worker — src/project-directory.ts). Admin sessions (admin cookie
@@ -138,51 +113,33 @@ export const getProjectBySlugServerFn: (input: {
     if (!record) throw new Error(`Project ${data.slug} not found`);
 
     const userPrincipal = getUserPrincipal(context.principal);
-    const isAdmin =
-      context.principal?.type === "admin" ||
-      userPrincipal?.isAdmin === true ||
-      (context.rawRequest != null &&
-        authenticateCapnwebAdmin({ config: context.config, request: context.rawRequest }) !== null);
     const memberOfOwningOrg = userPrincipal?.organizations.some(
       (organization) => organization.id === record.organizationId,
     );
-    if (!isAdmin && !memberOfOwningOrg) throw new Error(`Project ${data.slug} not found`);
+    if (!isAdminContext(context) && !memberOfOwningOrg) {
+      throw new Error(`Project ${data.slug} not found`);
+    }
 
     return withIngressUrl(context, {
       id: record.id,
       slug: record.slug,
       organizationId: record.organizationId ?? null,
+      organizationName: null,
       customHostname: null,
       createdAt: null,
       updatedAt: null,
-      isOrphanedProjectFromAuthService: false,
+      deploymentStatus: "unknown",
     });
   });
 
-function claimedProjects(context: { principal?: RequestContext["principal"] }) {
-  return getUserPrincipal(context.principal)?.projects ?? [];
-}
-
-function toProject(claim: { id: string; slug: string; organizationId?: string | null }): Project {
-  return {
-    id: claim.id,
-    slug: claim.slug,
-    organizationId: claim.organizationId ?? null,
-    customHostname: null,
-    createdAt: null,
-    updatedAt: null,
-    isOrphanedProjectFromAuthService: false,
-  };
-}
-
-function organizationIdForCreate(
-  userPrincipal: UserPrincipal,
-  organizationSlug: string | undefined,
-): string | null {
-  const organization = organizationSlug
-    ? userPrincipal.organizations.find((candidate) => candidate.slug === organizationSlug)
-    : userPrincipal.organizations[0];
-  return organization?.id ?? null;
+/** Admin cookie, admin-role user, or the capnweb admin header. */
+function isAdminContext(context: RequestContext): boolean {
+  return (
+    context.principal?.type === "admin" ||
+    getUserPrincipal(context.principal)?.isAdmin === true ||
+    (context.rawRequest != null &&
+      authenticateCapnwebAdmin({ config: context.config, request: context.rawRequest }) !== null)
+  );
 }
 
 function withIngressUrl(
@@ -203,7 +160,7 @@ function engineBatchSession(context: RequestContext) {
   const baseUrl = (context.config.baseUrl ?? "").replace(/\/+$/, "");
   if (!baseUrl) throw new Error("baseUrl is not configured");
   const cookie = context.rawRequest?.headers.get("cookie");
-  if (!cookie) throw new Error("Sign in to create projects.");
+  if (!cookie) throw new Error("Sign in to reach the project engine.");
   // oxlint-disable-next-line iterate/no-capnweb-http-batch -- one-shot pipelined batch per request; no socket lifecycle to manage in a server function.
   return newHttpBatchRpcSession<UnauthenticatedItx>(
     new Request(`${baseUrl}/api/itx`, {
