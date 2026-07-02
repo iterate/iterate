@@ -9,6 +9,7 @@ import { trustedInternalAuthContext } from "../../auth.ts";
 import { ItxRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type {
+  BlindEgressRelay,
   CfExecutionContext,
   ProjectEgressIntercept,
   ProjectEgressInterceptor,
@@ -18,9 +19,19 @@ import { secretErrorResponse, secretReferencePathsFromHeaders } from "../secrets
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 
+type ProjectEgressMode =
+  | {
+      kind: "blind-relay";
+      retained: ReturnType<typeof deepRetainRpcStubs<BlindEgressRelay>>;
+    }
+  | {
+      kind: "interceptor";
+      retained: ReturnType<typeof deepRetainRpcStubs<ProjectEgressInterceptor>>;
+    };
+
 export class ProjectDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
-  #egressInterceptor?: ReturnType<typeof deepRetainRpcStubs<ProjectEgressInterceptor>>;
+  #egressMode?: ProjectEgressMode;
   readonly #processorHost = createStreamProcessorHost(this.ctx, {
     stream: new StreamRpcTarget({
       auth: trustedInternalAuthContext(),
@@ -57,10 +68,10 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   async fetch(request: Request): Promise<Response> {
-    if (this.#egressInterceptor !== undefined) {
+    if (this.#egressMode?.kind === "interceptor") {
       // Egress interceptors run before secret substitution. They must never
       // receive raw secret material, only getSecret(...) placeholders.
-      return await this.#egressInterceptor.value(request);
+      return await this.#egressMode.retained.value(request);
     }
 
     let secretPaths: string[];
@@ -74,32 +85,64 @@ export class ProjectDurableObject extends DurableObject<Env> {
       return secretErrorResponse("multiple_secret_paths_not_supported", 400);
     }
 
-    return this.env.SECRET.getByName(
+    const secret = this.env.SECRET.getByName(
       DurableObjectNameCodec.stringify({
         projectId: this.#name.projectId,
         path: secretPaths[0]!,
       }),
-    ).fetch(request);
+    );
+    if (this.#egressMode?.kind === "blind-relay") {
+      return secret.fetchWithBlindRelay(request, this.#egressMode.retained.value);
+    }
+    return secret.fetch(request);
   }
 
   interceptEgress(handler: ProjectEgressInterceptor): ProjectEgressIntercept {
     if (typeof handler !== "function")
       throw new Error("project egress interceptor must be a function");
-    const retained = deepRetainRpcStubs(handler);
-    if (this.#egressInterceptor !== undefined) {
-      console.warn("project egress interceptor overwritten", { projectId: this.#name.projectId });
-      this.#egressInterceptor[Symbol.dispose]();
-    }
-    this.#egressInterceptor = retained;
+    const mode: ProjectEgressMode = {
+      kind: "interceptor",
+      retained: deepRetainRpcStubs(handler),
+    };
+    this.#setEgressMode(mode);
 
     return new ProjectEgressInterceptRpcTarget({
       ctx: this.ctx,
       release: () => {
-        if (this.#egressInterceptor !== retained) return;
-        retained[Symbol.dispose]();
-        this.#egressInterceptor = undefined;
+        if (this.#egressMode !== mode) return;
+        mode.retained[Symbol.dispose]();
+        this.#egressMode = undefined;
       },
     });
+  }
+
+  useBlindRelay(relay: BlindEgressRelay): ProjectEgressIntercept {
+    const mode: ProjectEgressMode = {
+      kind: "blind-relay",
+      retained: deepRetainRpcStubs(relay),
+    };
+    this.#setEgressMode(mode);
+
+    return new ProjectEgressInterceptRpcTarget({
+      ctx: this.ctx,
+      release: () => {
+        if (this.#egressMode !== mode) return;
+        mode.retained[Symbol.dispose]();
+        this.#egressMode = undefined;
+      },
+    });
+  }
+
+  #setEgressMode(mode: ProjectEgressMode) {
+    if (this.#egressMode !== undefined) {
+      console.warn("project egress mode overwritten", {
+        nextKind: mode.kind,
+        previousKind: this.#egressMode.kind,
+        projectId: this.#name.projectId,
+      });
+      this.#egressMode.retained[Symbol.dispose]();
+    }
+    this.#egressMode = mode;
   }
 }
 

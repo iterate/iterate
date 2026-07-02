@@ -5,6 +5,7 @@ import { AgentDurableObject } from "./domains/agents/agent-durable-object.ts";
 import { ItxDurableObject } from "./domains/itx/itx-durable-object.ts";
 import { ItxEntrypoint } from "./domains/itx/itx-entrypoint.ts";
 import { ProjectCollectionRpcTarget, UnauthenticatedItxRpcTarget } from "./rpc-targets.ts";
+import { playgroundResponse } from "./playground.ts";
 import { ProjectDurableObject } from "./domains/projects/project-durable-object.ts";
 import { ProjectEgressEntrypoint } from "./domains/projects/egress.ts";
 import { RepoDurableObject } from "./domains/repos/repo-durable-object.ts";
@@ -32,6 +33,9 @@ export default {
       ].join("; ");
       return Response.json({ ok: true }, { headers: { "set-cookie": cookie } });
     }
+
+    const playground = await playgroundResponse(request, ctx);
+    if (playground !== null) return playground;
 
     const fixtureResponse = await e2eFixtureResponse(request);
     if (fixtureResponse !== null) return fixtureResponse;

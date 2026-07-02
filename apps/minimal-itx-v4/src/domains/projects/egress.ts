@@ -22,6 +22,10 @@ export class ProjectEgressRpcTarget extends RpcTarget implements ProjectEgress {
   intercept(handler: Parameters<ProjectEgress["intercept"]>[0]) {
     return projectStub(env.PROJECT, this.props.projectId).interceptEgress(handler);
   }
+
+  useBlindRelay(relay: Parameters<ProjectEgress["useBlindRelay"]>[0]) {
+    return projectStub(env.PROJECT, this.props.projectId).useBlindRelay(relay);
+  }
 }
 
 /**

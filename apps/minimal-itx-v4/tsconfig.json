@@ -9,7 +9,7 @@
     "noEmit": true,
     "esModuleInterop": true,
     "allowImportingTsExtensions": true,
-    "types": ["@cloudflare/workers-types"],
+    "types": ["node", "@cloudflare/workers-types"],
     "verbatimModuleSyntax": false
   },
   // Worker program only. Node-side client/test/script files are checked by

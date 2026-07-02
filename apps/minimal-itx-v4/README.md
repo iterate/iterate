@@ -95,6 +95,9 @@ Run the same suite against a deployed worker:
 ITX_BASE=https://your-worker.workers.dev pnpm verify:deployed
 ```
 
+The blind egress relay POC has a separate deployed Worker, playground, and test
+recipe in [BLIND_RELAY_POC.md](./BLIND_RELAY_POC.md).
+
 Open a Node REPL against a running local or deployed worker:
 
 ```bash

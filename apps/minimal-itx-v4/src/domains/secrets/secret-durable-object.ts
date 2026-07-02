@@ -2,7 +2,8 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
-import type { SecretDescription, SecretUpdateInput } from "../../types.ts";
+import type { BlindEgressRelay, SecretDescription, SecretUpdateInput } from "../../types.ts";
+import { relayedFetchWithBlindRelay } from "../projects/blind-relay.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   createStreamProcessorHost,
@@ -83,6 +84,21 @@ export class SecretDurableObject extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
     // TODO: support websocket upgrade requests here once egress substitution
     // needs non-HTTP fetches. Keeping this on fetch() preserves that path.
+    return this.#fetchWithMaterializedSecret(request, (materializedRequest) =>
+      fetch(materializedRequest),
+    );
+  }
+
+  async fetchWithBlindRelay(request: Request, relay: BlindEgressRelay): Promise<Response> {
+    return this.#fetchWithMaterializedSecret(request, (materializedRequest) =>
+      relayedFetchWithBlindRelay(materializedRequest, relay),
+    );
+  }
+
+  async #fetchWithMaterializedSecret(
+    request: Request,
+    dispatch: (request: Request) => Promise<Response>,
+  ): Promise<Response> {
     const requestedPaths = secretReferencePathsFromHeaders(request.headers);
     if (requestedPaths.length > 1) {
       return secretErrorResponse("multiple_secret_paths_not_supported", 400);
@@ -113,7 +129,7 @@ export class SecretDurableObject extends DurableObject<Env> {
         url: request.url,
       },
     });
-    return fetch(
+    return dispatch(
       requestWithSecretHeaders({
         material,
         path: this.#name.path,

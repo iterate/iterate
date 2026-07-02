@@ -1,4 +1,11 @@
 import http from "node:http";
+import https from "node:https";
+import net from "node:net";
+import { execFileSync } from "node:child_process";
+import { X509Certificate } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 // oxlint-disable-next-line iterate/no-capnweb-http-batch -- this regression test intentionally proves the one-shot HTTP batch shape.
 import { newHttpBatchRpcSession, RpcTarget } from "capnweb";
@@ -10,8 +17,16 @@ import { buildUrl, withItxSession } from "./test-helpers.ts";
 import type { ItxWebSocketMessage } from "./test-helpers.ts";
 import type { UnauthenticatedItx } from "./src/types.ts";
 import { TRUSTED_INTERNAL_ITX_TOKEN } from "./src/auth.ts";
+import {
+  BLIND_RELAY_PINNED_CERT_SHA256_HEADER,
+  relayedFetchWithBlindRelay,
+} from "./src/domains/projects/blind-relay.ts";
 import { RepoArtifactNameCodec } from "./src/domains/repos/utils.ts";
-import type { DynamicWorkerRef } from "./src/types.ts";
+import type {
+  BlindEgressRelay,
+  BlindEgressRelayConnection,
+  DynamicWorkerRef,
+} from "./src/types.ts";
 import {
   StreamProcessor,
   type StreamProcessorSnapshot,
@@ -142,6 +157,235 @@ function startMockSlack(): Promise<{
       });
     });
   });
+}
+
+type BlindRelayObservation = {
+  bytesTargetToWorker: number;
+  bytesWorkerToTarget: number;
+  firstTargetToWorker: Uint8Array;
+  firstWorkerToTarget: Uint8Array;
+  host: string;
+  port: number;
+  workerToTargetChunks: Uint8Array[];
+};
+
+class BlindRelayConnectionTarget extends RpcTarget implements BlindEgressRelayConnection {
+  readonly #observation: BlindRelayObservation;
+  readonly #readQueue: Uint8Array[] = [];
+  readonly #readWaiters: Array<{
+    reject(error: unknown): void;
+    resolve(chunk: Uint8Array | null): void;
+  }> = [];
+  readonly #socket: net.Socket;
+  #closed = false;
+  #error: unknown;
+
+  constructor({ observation, socket }: { observation: BlindRelayObservation; socket: net.Socket }) {
+    super();
+    this.#observation = observation;
+    this.#socket = socket;
+
+    socket.on("data", (chunk: Buffer) => {
+      const bytes = new Uint8Array(chunk);
+      observation.bytesTargetToWorker += bytes.byteLength;
+      if (observation.firstTargetToWorker.byteLength === 0) {
+        observation.firstTargetToWorker = bytes.slice(0, 96);
+      }
+      const waiter = this.#readWaiters.shift();
+      if (waiter === undefined) this.#readQueue.push(bytes);
+      else waiter.resolve(bytes);
+    });
+    socket.once("close", () => this.#finishReads(null));
+    socket.once("end", () => this.#finishReads(null));
+    socket.once("error", (error) => {
+      this.#error = error;
+      this.#finishReads(error);
+    });
+  }
+
+  async read(): Promise<Uint8Array | null> {
+    if (this.#readQueue.length > 0) return this.#readQueue.shift()!;
+    if (this.#error !== undefined) throw this.#error;
+    if (this.#closed) return null;
+    return await new Promise<Uint8Array | null>((resolve, reject) => {
+      this.#readWaiters.push({ reject, resolve });
+    });
+  }
+
+  async write(chunk: Uint8Array): Promise<void> {
+    this.#observation.bytesWorkerToTarget += chunk.byteLength;
+    this.#observation.workerToTargetChunks.push(chunk.slice());
+    if (this.#observation.firstWorkerToTarget.byteLength === 0) {
+      this.#observation.firstWorkerToTarget = chunk.slice(0, 96);
+    }
+    await new Promise<void>((resolve, reject) => {
+      this.#socket.write(chunk, (error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+  }
+
+  async close(): Promise<void> {
+    this.#socket.destroy();
+    this.#finishReads(null);
+  }
+
+  #finishReads(error: unknown) {
+    if (this.#closed) return;
+    this.#closed = true;
+    for (const waiter of this.#readWaiters.splice(0)) {
+      if (error === null) waiter.resolve(null);
+      else waiter.reject(error);
+    }
+  }
+}
+
+class BlindRelayTarget extends RpcTarget implements BlindEgressRelay, Disposable {
+  readonly observations: BlindRelayObservation[] = [];
+  readonly #sockets = new Set<net.Socket>();
+
+  async dial({ host, port }: { host: string; port: number }): Promise<BlindEgressRelayConnection> {
+    const socket = net.connect({ host, port });
+    this.#sockets.add(socket);
+    socket.once("close", () => this.#sockets.delete(socket));
+
+    const observation: BlindRelayObservation = {
+      bytesTargetToWorker: 0,
+      bytesWorkerToTarget: 0,
+      firstTargetToWorker: new Uint8Array(),
+      firstWorkerToTarget: new Uint8Array(),
+      host,
+      port,
+      workerToTargetChunks: [],
+    };
+    this.observations.push(observation);
+
+    return new BlindRelayConnectionTarget({ observation, socket });
+  }
+
+  [Symbol.dispose](): void {
+    for (const socket of this.#sockets) socket.destroy();
+    this.#sockets.clear();
+  }
+}
+
+function startBlindRelayHttpsTarget(): Promise<{
+  certSha256: string;
+  clientErrors: string[];
+  close(): Promise<void>;
+  requests: Array<{ body: string; proof: string | undefined; url: string | undefined }>;
+  url: string;
+}> {
+  const dir = mkdtempSync(join(tmpdir(), "itx-blind-relay-"));
+  const keyPath = join(dir, "key.pem");
+  const certPath = join(dir, "cert.pem");
+  execFileSync(
+    "openssl",
+    [
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-nodes",
+      "-keyout",
+      keyPath,
+      "-out",
+      certPath,
+      "-days",
+      "1",
+      "-subj",
+      "/CN=localhost",
+      "-addext",
+      "subjectAltName=IP:127.0.0.1,DNS:localhost",
+    ],
+    { stdio: "ignore" },
+  );
+
+  const certSha256 = new X509Certificate(readFileSync(certPath)).fingerprint256
+    .toLowerCase()
+    .replaceAll(":", "");
+  const requests: Array<{ body: string; proof: string | undefined; url: string | undefined }> = [];
+  const clientErrors: string[] = [];
+  const server = https.createServer(
+    {
+      cert: readFileSync(certPath),
+      key: readFileSync(keyPath),
+    },
+    (req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        const proof = req.headers[EGRESS_PROOF_HEADER];
+        requests.push({
+          body,
+          proof: Array.isArray(proof) ? proof.join(", ") : proof,
+          url: req.url,
+        });
+        res.setHeader("content-type", "application/json");
+        res.setHeader("connection", "close");
+        const payload = JSON.stringify({
+          body,
+          proof: Array.isArray(proof) ? proof.join(", ") : proof,
+          url: req.url,
+        });
+        res.setHeader("content-length", String(Buffer.byteLength(payload)));
+        res.end(payload);
+      });
+    },
+  );
+  server.on("clientError", (error, socket) => {
+    clientErrors.push(error.message);
+    socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+  });
+
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      const port = (server.address() as { port: number }).port;
+      resolve({
+        certSha256,
+        clientErrors,
+        close: () =>
+          new Promise((closeResolve, closeReject) => {
+            server.close((error) => {
+              rmSync(dir, { force: true, recursive: true });
+              error ? closeReject(error) : closeResolve();
+            });
+          }),
+        requests,
+        url: `https://localhost:${port}`,
+      });
+    });
+  });
+}
+
+function asciiPreview(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString("latin1");
+}
+
+function expectBlindRelayTranscriptToHidePlaintext(
+  observation: BlindRelayObservation,
+  hiddenStrings: string[],
+) {
+  const transcript = concatenateBytes(observation.workerToTargetChunks);
+  expect(transcript[0]).toBe(0x16);
+  const relayText = asciiPreview(transcript);
+  for (const hiddenString of hiddenStrings) {
+    expect(relayText).not.toContain(hiddenString);
+  }
+}
+
+function concatenateBytes(chunks: Uint8Array[]): Uint8Array {
+  const length = chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
+  const result = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
 }
 
 class PathFunctionTarget extends RpcTarget {
@@ -546,6 +790,142 @@ describe("minimal itx v4", () => {
       );
     } finally {
       await echo.close();
+    }
+  });
+
+  test("Blind relayed fetch encrypts plaintext before it reaches a Node relay", async () => {
+    const target = await startBlindRelayHttpsTarget();
+    using relay = new BlindRelayTarget();
+
+    try {
+      const response = await relayedFetchWithBlindRelay(
+        new Request(`${target.url}/secret-path?token=worker-only`, {
+          body: "payload hidden from relay",
+          headers: {
+            [BLIND_RELAY_PINNED_CERT_SHA256_HEADER]: target.certSha256,
+            [EGRESS_PROOF_HEADER]: "Bearer blind-secret-material",
+          },
+          method: "POST",
+        }),
+        relay,
+      );
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({
+        body: "payload hidden from relay",
+        proof: "Bearer blind-secret-material",
+        url: "/secret-path?token=worker-only",
+      });
+      expect(target.requests).toEqual([
+        {
+          body: "payload hidden from relay",
+          proof: "Bearer blind-secret-material",
+          url: "/secret-path?token=worker-only",
+        },
+      ]);
+
+      const [observation] = relay.observations;
+      expect(observation).toMatchObject({
+        host: "localhost",
+        port: Number(new URL(target.url).port),
+      });
+      expectBlindRelayTranscriptToHidePlaintext(observation!, [
+        "blind-secret-material",
+        "payload hidden from relay",
+        "/secret-path",
+        "worker-only",
+      ]);
+    } finally {
+      await target.close();
+    }
+  });
+
+  test("Project egress relays secret-backed HTTPS without exposing plaintext to the interceptor", async () => {
+    const target = await startBlindRelayHttpsTarget();
+    using relay = new BlindRelayTarget();
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+
+    try {
+      using project = itx.projects.create({
+        slug: `project-blind-egress-${crypto.randomUUID()}`,
+      });
+      const secretPath = `/secrets/blind-egress/${crypto.randomUUID()}`;
+      using secret = project.secrets.get(secretPath);
+      await secret.update({
+        egress: { urls: [target.url] },
+        material: "blind-secret-material",
+      });
+      await waitForCondition(async () => (await secret.describe()).hasMaterial, {
+        description: "blind egress proof secret to be available",
+      });
+
+      using intercept = await project.egress.useBlindRelay(relay);
+      const request = new Request(`${target.url}/secret-path?token=worker-only`, {
+        body: "payload hidden from relay",
+        headers: {
+          [BLIND_RELAY_PINNED_CERT_SHA256_HEADER]: target.certSha256,
+          [EGRESS_PROOF_HEADER]: `Bearer getSecret({ path: "${secretPath}" })`,
+        },
+        method: "POST",
+      });
+      let response: Response;
+      try {
+        response = await project.egress.fetch(request);
+      } catch (error) {
+        throw new Error(
+          `blind relayed egress threw ${error instanceof Error ? error.message : String(error)} observations=${JSON.stringify(
+            relay.observations.map((observation) => ({
+              bytesTargetToWorker: observation.bytesTargetToWorker,
+              bytesWorkerToTarget: observation.bytesWorkerToTarget,
+              firstTargetToWorker: asciiPreview(observation.firstTargetToWorker),
+              firstWorkerToTarget: asciiPreview(observation.firstWorkerToTarget),
+              host: observation.host,
+              port: observation.port,
+            })),
+          )} targetRequests=${JSON.stringify(target.requests)} clientErrors=${JSON.stringify(target.clientErrors)}`,
+        );
+      }
+      if (response.status !== 200) {
+        throw new Error(
+          `expected blind relayed egress status 200, got ${response.status}: ${await response.text()} clientErrors=${JSON.stringify(target.clientErrors)}`,
+        );
+      }
+      await expect(response.json()).resolves.toEqual({
+        body: "payload hidden from relay",
+        proof: "Bearer blind-secret-material",
+        url: "/secret-path?token=worker-only",
+      });
+      expect(target.requests).toEqual([
+        {
+          body: "payload hidden from relay",
+          proof: "Bearer blind-secret-material",
+          url: "/secret-path?token=worker-only",
+        },
+      ]);
+
+      const [observation] = relay.observations;
+      expect(observation).toMatchObject({
+        host: "localhost",
+        port: Number(new URL(target.url).port),
+      });
+      expectBlindRelayTranscriptToHidePlaintext(observation!, [
+        "blind-secret-material",
+        "payload hidden from relay",
+        "/secret-path",
+        "worker-only",
+      ]);
+
+      await waitForCondition(async () => (await secret.describe()).audit.usedCount === 1, {
+        description: "blind egress secret usage audit to fold",
+      });
+
+      await intercept.release();
+    } finally {
+      await target.close();
     }
   });
 
