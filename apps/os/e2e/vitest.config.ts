@@ -46,29 +46,20 @@ const sharedResolve = {
 export default defineConfig({
   test: {
     // Run-scheduler options live at the ROOT test level — this is where vitest
-    // reads them, even with `projects`. (Setting them only inside a project is
-    // silently ignored and the suite falls back to sequential.) Parallel in
-    // CI: each test provisions its own project against a deployed slot, so
-    // files — and tests within a file — are independent. Sequential locally so
-    // a single dev server isn't hammered and output stays readable.
+    // reads them, even with `projects`. Parallel in CI: each test provisions
+    // its own project against a deployed slot, so FILES are independent.
+    // Sequential locally so a single dev server isn't hammered.
     fileParallelism: ci,
-    // Cap the stampede: all files first-touching a freshly deployed slot at
-    // once is what pushes cold creates past the (deliberately tight) saga
-    // timeout. Preview CI also warms the slot with one sequential
-    // onboarding-smoke create before the suites. See
-    // tasks/os-cold-create-latency.md.
+    // File-level parallelism only (this matches main): the deployed preview
+    // slot — not the runner — is the bottleneck. Every e2e test creates a
+    // project (a whole cold DO chain), so ~4 concurrent creates is the ceiling
+    // the slot tolerates. Adding intra-file concurrency (`sequence.concurrent`
+    // + maxConcurrency) on top pushed it over — "Durable Object storage
+    // operation exceeded timeout" and rotating timing-teardown flakes at peak
+    // 8-24. The real speedup for the itx monolith is splitting it into files
+    // so THIS knob parallelizes it safely — see
+    // tasks/raise-e2e-maxconcurrency.md.
     maxWorkers: 4,
-    sequence: { concurrent: ci },
-    // Bounds concurrent tests per file. Each test creates a project (a whole
-    // DO chain), so with maxWorkers:4 the slot sees ~4×this many concurrent
-    // creates, and the slot is the bottleneck, not the runner. main runs
-    // reliably at ~4 concurrent (maxWorkers only, no intra-file concurrency);
-    // pushing higher overloaded it ("Durable Object storage operation
-    // exceeded timeout" at ~24; a timing-sensitive teardown test failed at
-    // ~12). 2 keeps peak ~8 — still ~2.5× faster than sequential — and
-    // retry:1 mops up the occasional slow-slot flake. The real fix is
-    // splitting the itx monolith into files (tasks/os-cold-create-latency.md).
-    maxConcurrency: 2,
     // One retry in CI: tests are self-contained (fresh project per test), so a
     // rare load-induced flake re-runs in seconds instead of failing the suite.
     retry: ci ? 1 : 0,

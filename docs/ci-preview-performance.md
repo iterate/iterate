@@ -36,11 +36,14 @@ seconds and run alongside OS.
   but instead of waiting for auth to finish first, the OS deploy _polls_ the
   slot's auth worker for JWKS (`apps/os/alchemy.run.ts`, 120s deadline). All
   apps deploy at once.
-- **Test-level concurrency.** Every e2e test provisions its own project against
-  the deployed slot, so tests within a file are independent. In CI the vitest
-  config sets `sequence.concurrent` with `maxConcurrency: 6` and `retry: 1`
-  (`apps/os/e2e/vitest.config.ts`). This alone took the itx suite from 287s to
-  ~50s.
+- **File-level parallelism.** Every e2e test provisions its own project, so
+  files are independent; CI runs them in parallel (`fileParallelism`,
+  `maxWorkers: 4`, `retry: 1` in `apps/os/e2e/vitest.config.ts`). Intra-file
+  concurrency (`sequence.concurrent`) would go faster still, but the deployed
+  slot — not the runner — is the bottleneck: ~4 concurrent project creates is
+  the ceiling before "Durable Object storage operation exceeded timeout". The
+  real speedup for the slow itx suite is splitting its monolith file so
+  file-level parallelism covers it (`tasks/raise-e2e-maxconcurrency.md`).
 - **All test lanes run concurrently.** The `pnpm e2e` vitest suite (its `node`
   project — engine e2e + itx catalogue matrix in one config) and the root
   Playwright specs run at the same time against the slot, and the four apps'
