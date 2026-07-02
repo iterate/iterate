@@ -59,13 +59,18 @@ export interface ProjectCollection {
   get(projectId: string): Promise<Itx>;
   create(args: { organizationSlug?: string; projectId?: string; slug: string }): Promise<Itx>;
   /**
-   * The projects this session's principal can reach, enriched engine-side:
-   * user principals list their claims (plus anything the live context was
-   * widened to after a create); admin principals list every deployment-known
-   * project from the project directory. Each entry carries the project's
-   * {@link ProjectDeploymentStatus} so callers never probe per project.
+   * The session's projects, enriched engine-side. Scope is explicit:
+   * - "mine" (default for user principals): the caller's own claims (plus
+   *   anything the live context was widened to after a create) — even when
+   *   the socket also carries admin credentials.
+   * - "deployment": every deployment-known project from the project
+   *   directory; requires an admin principal (admin secret/cookie or an
+   *   admin-role user). Default for non-user admin principals, which have
+   *   no claims of their own.
+   * Each entry carries the project's {@link ProjectDeploymentStatus} so
+   * callers never probe per project.
    */
-  list(): Promise<ProjectListEntry[]>;
+  list(input?: { scope?: "mine" | "deployment" }): Promise<ProjectListEntry[]>;
 }
 
 /**

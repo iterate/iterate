@@ -908,8 +908,8 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
    * engine probe (`state.created` on each project's processor snapshot). A
    * probe failure degrades THAT entry to "unknown" — the list always renders.
    */
-  async list() {
-    const bases = await this.#listEntryBases();
+  async list(input?: Parameters<ProjectCollection["list"]>[0]) {
+    const bases = await this.#listEntryBases(input?.scope);
     const outcomes = await Promise.allSettled(
       bases.map(async (base) => {
         const state = await projectProcessorState(base.id);
@@ -928,18 +928,32 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
 
   /**
    * Which projects the list covers, and what we know about each before the
-   * engine probe:
-   * - a signed-in user (including admin-role users): the access token's
-   *   project claims — org name joined from the organization claims — plus any
-   *   project the live context was widened to after a create (directory-read,
-   *   since claims lag until the next token refresh).
-   * - admin-secret / admin-cookie principals: every deployment-known project
-   *   from the PROJECT_DIRECTORY KV. The directory record's `name` is the
-   *   PROJECT name, so these entries carry no organization name.
-   * - impersonated users (test lane): their project scopes, directory-read.
+   * engine probe. The scope is explicit (see the contract): "mine" reads the
+   * caller's claims even when admin credentials ride the same socket; the
+   * "deployment" scope (PROJECT_DIRECTORY KV, every known project — record
+   * `name` is the PROJECT name, so no organization name) requires an admin
+   * principal. Non-user admin principals have no claims, so they default to
+   * "deployment"; impersonated users (test lane) list their scopes,
+   * directory-read.
    */
-  async #listEntryBases(): Promise<Omit<ProjectListEntry, "deploymentStatus">[]> {
+  async #listEntryBases(
+    requestedScope?: "mine" | "deployment",
+  ): Promise<Omit<ProjectListEntry, "deploymentStatus">[]> {
     const userPrincipal = userPrincipalOf(this.props.auth);
+    const scope = requestedScope ?? (userPrincipal ? "mine" : "deployment");
+    if (scope === "deployment") {
+      if (!this.props.auth.isAdmin()) {
+        throw new Error('projects.list({ scope: "deployment" }) requires an admin principal');
+      }
+      const records = await listProjectDirectory(env.PROJECT_DIRECTORY);
+      return records.map((record) => ({
+        id: record.id,
+        slug: record.slug,
+        organizationId: record.organizationId,
+        organizationName: null,
+      }));
+    }
+
     if (userPrincipal) {
       const organizationNames = new Map(
         userPrincipal.organizations.map((organization) => [
@@ -966,16 +980,6 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
           return await this.#directoryEntryBase(projectId);
         }),
       );
-    }
-
-    if (this.props.auth.isAdmin()) {
-      const records = await listProjectDirectory(env.PROJECT_DIRECTORY);
-      return records.map((record) => ({
-        id: record.id,
-        slug: record.slug,
-        organizationId: record.organizationId,
-        organizationName: null,
-      }));
     }
 
     return await Promise.all(

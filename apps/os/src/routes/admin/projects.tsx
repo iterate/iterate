@@ -22,15 +22,15 @@ export const Route = createFileRoute("/admin/projects")({
 
 function AdminProjectsPage() {
   // This renders under the admin layout's AdminGate, so the global itx handle
-  // carries admin authority: `projects.list()` returns every deployment-known
-  // project (from the project directory), each with its engine status.
+  // carries admin authority: `projects.list({ scope: "deployment" })` returns
+  // every deployment-known project (from the project directory), each with its engine status.
   const itx = useItx();
   const projectsQuery = useQuery({
     // NOT the shared ["itx", "projects"] entry: the admin list is the
     // deployment-wide view, the user list is claims-scoped — same socket,
     // different results.
     queryKey: ["itx", "admin-projects"],
-    queryFn: async () => await itx.projects.list(),
+    queryFn: async () => await itx.projects.list({ scope: "deployment" }),
   });
   const projects = projectsQuery.data ?? [];
 
