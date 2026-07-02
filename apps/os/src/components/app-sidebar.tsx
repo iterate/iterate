@@ -85,8 +85,9 @@ export function AppSidebar({ routeConfig }: { routeConfig: PublicRouteConfig }) 
     queryFn: () => listMyProjectsServerFn({ data: myProjectsListInput }),
     staleTime: myProjectsStaleTime,
   });
-  const projects =
-    data?.projects.filter((project) => !project.isOrphanedProjectFromAuthService) ?? [];
+  // Missing projects (auth knows them, this deployment's engine does not) are
+  // not navigable — the /projects page owns setting them up.
+  const projects = data?.projects.filter((project) => project.deploymentStatus !== "missing") ?? [];
 
   // Sidebar composition follows shadcn sidebar blocks 07/08:
   // https://ui.shadcn.com/blocks/sidebar

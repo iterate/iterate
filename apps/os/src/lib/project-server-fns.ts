@@ -3,6 +3,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { newHttpBatchRpcSession } from "capnweb";
 import { env } from "cloudflare:workers";
 import { authenticateCapnwebAdmin } from "~/auth/admin-auth-cookie.ts";
+import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import { getUserPrincipal, type UserPrincipal } from "~/auth/principal.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import { readProjectById, readProjectBySlug } from "~/project-directory.ts";
@@ -28,14 +29,26 @@ import type { RequestContext } from "~/request-context.ts";
  * footer otherwise collapses the inferred type to `undefined`).
  */
 
+/**
+ * Whether a project the auth worker knows about actually exists in THIS
+ * deployment's engine:
+ * - `ready` — the project stream's bootstrap saga ran (`state.created`).
+ * - `missing` — the engine has no state for it (e.g. the deployment was
+ *   reset while the auth worker kept its rows); it can be set up again.
+ * - `unknown` — the probe failed (engine hiccup / access); don't block the
+ *   list on it.
+ */
+export type ProjectDeploymentStatus = "ready" | "missing" | "unknown";
+
 export type Project = {
   id: string;
   slug: string;
   organizationId: string | null;
+  organizationName: string | null;
   customHostname: string | null;
   createdAt: string | null;
   updatedAt: string | null;
-  isOrphanedProjectFromAuthService: boolean;
+  deploymentStatus: ProjectDeploymentStatus;
 };
 
 export type ProjectWithIngressUrl = Project & { ingressUrl: string };
@@ -75,10 +88,11 @@ export const createMyProjectServerFn: (input: {
       id: description.projectId,
       slug: record?.slug ?? data.slug,
       organizationId: organizationIdForCreate(userPrincipal, data.organizationSlug),
+      organizationName: null,
       customHostname: null,
       createdAt: null,
       updatedAt: null,
-      isOrphanedProjectFromAuthService: false,
+      deploymentStatus: "ready",
     });
   });
 
@@ -93,31 +107,65 @@ export const deleteProjectServerFn: (input: {
     throw new Error(`Project deletion is not available yet (project ${data.id}).`);
   });
 
-/** The session principal's accessible projects (from claims — the fast path). */
+/**
+ * The session principal's accessible projects: claims are the fast path for
+ * WHICH projects the caller may reach; a per-project engine probe (one
+ * pipelined capnweb batch) says whether each one exists in THIS deployment.
+ */
 export const listMyProjectsServerFn: (input: {
   data: { limit?: number; offset?: number };
 }) => Promise<ProjectListResult> = createServerFn({ method: "GET" })
   .validator((input: { limit?: number; offset?: number }) => input)
-  .handler(({ context, data }) => {
-    const projects = claimedProjects(context).map((claim) =>
-      withIngressUrl(context, toProject(claim)),
-    );
+  .handler(async ({ context, data }) => {
+    const claims = claimedProjects(context);
     const offset = data.offset ?? 0;
-    const limit = data.limit ?? projects.length;
-    return Promise.resolve({
-      projects: projects.slice(offset, offset + limit),
-      total: projects.length,
-    });
+    const limit = data.limit ?? claims.length;
+    const page = claims.slice(offset, offset + limit);
+    const statuses = await probeDeploymentStatuses(
+      context,
+      page.map((claim) => claim.id),
+    );
+    return {
+      projects: page.map((claim) =>
+        withIngressUrl(context, toProject(claim, statuses.get(claim.id) ?? "unknown")),
+      ),
+      total: claims.length,
+    };
   });
 
-/** All OS projects, guarded for the admin page. */
+/** All auth-side projects (auth worker internal.project.listAll), guarded for the admin page. */
 export const listAdminProjectsServerFn: (input: {
   data: { limit?: number; offset?: number };
 }) => Promise<ProjectListResult> = createServerFn({ method: "GET" })
   .validator((input: { limit?: number; offset?: number }) => input)
-  .handler(() => {
-    // TODO(task #13): auth worker internal.project.listAll powers this.
-    return Promise.resolve({ projects: [], total: 0 });
+  .handler(async ({ context, data }) => {
+    if (!isAdminContext(context)) throw new Error("Admin access required.");
+
+    const result = await createAuthWorkerServiceClient(context).internal.project.listAll({
+      ...(data.limit === undefined ? {} : { limit: data.limit }),
+      ...(data.offset === undefined ? {} : { offset: data.offset }),
+    });
+    // Same engine-existence probe as the my-projects list, capped at the page
+    // the auth worker returned.
+    const statuses = await probeDeploymentStatuses(
+      context,
+      result.projects.map((project) => project.id),
+    );
+    return {
+      projects: result.projects.map((project) =>
+        withIngressUrl(context, {
+          id: project.id,
+          slug: project.slug,
+          organizationId: project.organizationId,
+          organizationName: project.organizationName,
+          customHostname: null,
+          createdAt: project.createdAt,
+          updatedAt: project.updatedAt,
+          deploymentStatus: statuses.get(project.id) ?? "unknown",
+        }),
+      ),
+      total: result.total,
+    };
   });
 
 /** A single project the session principal can read, by slug. */
@@ -127,7 +175,9 @@ export const getProjectBySlugServerFn: (input: {
   .validator((input: { slug: string }) => input)
   .handler(async ({ context, data }) => {
     const claimed = claimedProjects(context).find((project) => project.slug === data.slug);
-    if (claimed) return withIngressUrl(context, toProject(claimed));
+    // Single-project reads skip the engine probe (loaders only need slug and
+    // ingress URL); the list endpoints carry the real deployment status.
+    if (claimed) return withIngressUrl(context, toProject(claimed, "unknown"));
 
     // Claims miss: consult the directory (KV cache in front of the auth
     // worker — src/project-directory.ts). Admin sessions (admin cookie
@@ -138,24 +188,22 @@ export const getProjectBySlugServerFn: (input: {
     if (!record) throw new Error(`Project ${data.slug} not found`);
 
     const userPrincipal = getUserPrincipal(context.principal);
-    const isAdmin =
-      context.principal?.type === "admin" ||
-      userPrincipal?.isAdmin === true ||
-      (context.rawRequest != null &&
-        authenticateCapnwebAdmin({ config: context.config, request: context.rawRequest }) !== null);
     const memberOfOwningOrg = userPrincipal?.organizations.some(
       (organization) => organization.id === record.organizationId,
     );
-    if (!isAdmin && !memberOfOwningOrg) throw new Error(`Project ${data.slug} not found`);
+    if (!isAdminContext(context) && !memberOfOwningOrg) {
+      throw new Error(`Project ${data.slug} not found`);
+    }
 
     return withIngressUrl(context, {
       id: record.id,
       slug: record.slug,
       organizationId: record.organizationId ?? null,
+      organizationName: null,
       customHostname: null,
       createdAt: null,
       updatedAt: null,
-      isOrphanedProjectFromAuthService: false,
+      deploymentStatus: "unknown",
     });
   });
 
@@ -163,16 +211,77 @@ function claimedProjects(context: { principal?: RequestContext["principal"] }) {
   return getUserPrincipal(context.principal)?.projects ?? [];
 }
 
-function toProject(claim: { id: string; slug: string; organizationId?: string | null }): Project {
+/** Admin cookie, admin-role user, or the capnweb admin header. */
+function isAdminContext(context: RequestContext): boolean {
+  return (
+    context.principal?.type === "admin" ||
+    getUserPrincipal(context.principal)?.isAdmin === true ||
+    (context.rawRequest != null &&
+      authenticateCapnwebAdmin({ config: context.config, request: context.rawRequest }) !== null)
+  );
+}
+
+function toProject(
+  claim: { id: string; slug: string; organizationId?: string | null },
+  deploymentStatus: ProjectDeploymentStatus,
+): Project {
   return {
     id: claim.id,
     slug: claim.slug,
     organizationId: claim.organizationId ?? null,
+    organizationName: null,
     customHostname: null,
     createdAt: null,
     updatedAt: null,
-    isOrphanedProjectFromAuthService: false,
+    deploymentStatus,
   };
+}
+
+/**
+ * Pure seam for the engine-existence probe: per-project outcomes (`created`
+ * from the project processor snapshot, or a rejection) → deployment statuses.
+ * A rejected probe means "we could not tell", never "it does not exist".
+ */
+export function deploymentStatusesFromProbes(
+  projectIds: readonly string[],
+  outcomes: readonly PromiseSettledResult<boolean>[],
+): Map<string, ProjectDeploymentStatus> {
+  return new Map(
+    projectIds.map((projectId, index) => {
+      const outcome = outcomes[index];
+      if (!outcome || outcome.status === "rejected") return [projectId, "unknown"];
+      return [projectId, outcome.value ? "ready" : "missing"];
+    }),
+  );
+}
+
+/**
+ * Probes engine existence for each project in ONE pipelined capnweb HTTP
+ * batch: `projects.get(id).processor.snapshot()` → `state.created`. A project
+ * stream that was never bootstrapped snapshots to its default state
+ * (`created: false`) — that is a "missing" project, not an error. Failures
+ * degrade to "unknown" so the caller's list always renders.
+ */
+async function probeDeploymentStatuses(
+  context: RequestContext,
+  projectIds: readonly string[],
+): Promise<Map<string, ProjectDeploymentStatus>> {
+  if (projectIds.length === 0) return new Map();
+  try {
+    const session = engineBatchSession(context);
+    const root = session.authenticate({ type: "from-server-cookie" });
+    const outcomes = await Promise.allSettled(
+      projectIds.map(async (projectId) => {
+        const { state } = await root.projects.get(projectId).processor.snapshot();
+        return state.created === true;
+      }),
+    );
+    return deploymentStatusesFromProbes(projectIds, outcomes);
+  } catch {
+    // No cookie / batch setup failure: statuses are unknowable, but the list
+    // must still render.
+    return new Map(projectIds.map((projectId) => [projectId, "unknown"]));
+  }
 }
 
 function organizationIdForCreate(
@@ -203,7 +312,7 @@ function engineBatchSession(context: RequestContext) {
   const baseUrl = (context.config.baseUrl ?? "").replace(/\/+$/, "");
   if (!baseUrl) throw new Error("baseUrl is not configured");
   const cookie = context.rawRequest?.headers.get("cookie");
-  if (!cookie) throw new Error("Sign in to create projects.");
+  if (!cookie) throw new Error("Sign in to reach the project engine.");
   // oxlint-disable-next-line iterate/no-capnweb-http-batch -- one-shot pipelined batch per request; no socket lifecycle to manage in a server function.
   return newHttpBatchRpcSession<UnauthenticatedItx>(
     new Request(`${baseUrl}/api/itx`, {

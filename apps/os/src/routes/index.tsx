@@ -11,19 +11,20 @@ export const Route = createFileRoute("/")({
       context.currentProjectHostSlug,
     );
 
-    // `projects.list` is intentionally a merge of auth-session projects and
-    // OS D1 rows. During preview/dev testing we often reset only the OS worker
-    // database, leaving auth's database intact. Those auth-only projects are
-    // returned as `isOrphanedProjectFromAuthService` so the `/projects` page can
-    // offer a one-click OS re-adoption form.
+    // The my-projects list is claims-sourced (the auth worker knows which
+    // projects the caller may access) with a per-project engine-existence
+    // probe. During preview/dev testing we often reset only the engine,
+    // leaving auth's database intact — those projects come back as
+    // `deploymentStatus: "missing"` and the `/projects` page offers a
+    // one-click set-up.
     //
-    // Root redirect must make a different decision: only projects that already
-    // exist in OS are valid redirect targets. If auth knows about ten projects
-    // but OS has recreated only one of them, `/` should go to that one OS
-    // project, not stay on the project picker because of auth-only claims.
+    // Root redirect must make a different decision: only projects that
+    // actually exist in this deployment are valid redirect targets. If auth
+    // knows about ten projects but this engine has only one of them, `/`
+    // should go to that one project, not stay on the picker.
     const projectsData = await listMyProjectsServerFn({ data: { limit: 100, offset: 0 } });
     const projects = projectsData.projects.filter(
-      (project) => !project.isOrphanedProjectFromAuthService,
+      (project) => project.deploymentStatus === "ready",
     );
 
     const project =
