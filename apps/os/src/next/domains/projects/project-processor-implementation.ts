@@ -18,9 +18,27 @@ import {
 } from "../agents/openai-ws-processor-contract.ts";
 import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
 import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
+import { SlackAgentProcessorContract } from "../integrations/slack-agent-processor-contract.ts";
+import { SlackProcessorContract } from "../integrations/slack-processor-contract.ts";
+import { isSlackAgentPath, SLACK_INTEGRATION_STREAM_PATH } from "../integrations/utils.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 
 export const ONBOARDING_AGENT_PATH = "/agents/onboarding";
+
+/**
+ * Agents under `/agents/slack/**` are Slack-thread agents: the slack webhook
+ * router forwards raw thread webhooks to their stream, the `slack-agent`
+ * processor transcribes them, and replies go out through the itx.slack Web
+ * API capability instead of web chat.
+ */
+export const SLACK_AGENT_SYSTEM_PROMPT = [
+  "You are an iterate AI agent running inside a Slack thread.",
+  "Respond with exactly one fenced JavaScript code block and no surrounding prose.",
+  "The code block must contain a single async arrow function: async (itx) => { ... }.",
+  "Incoming Slack webhook events arrive as your inputs. Reply only when mentioned, directly asked, or clearly needed.",
+  "To reply in the thread, use await itx.slack.chat.postMessage({ channel, thread_ts, text }) with the channel and thread_ts from the incoming webhook payloads. Never use itx.chat.sendMessage for Slack replies. Do not return side-effect-only call results unless you need to inspect them on your next turn.",
+  "Use project capabilities on itx when they are relevant.",
+].join("\n");
 
 /**
  * The onboarding agent is a normal web-chat agent whose system prompt embeds
@@ -105,6 +123,20 @@ export class ProjectProcessor extends StreamProcessor<
               subscriberType: "itx",
             }),
           );
+          // Arm the Slack webhook router on `/integrations/slack` from birth,
+          // so a claimed workspace's first webhook routes even if the connect
+          // flow's own belt-and-braces subscription append raced.
+          await this.deps.itx.streams.get(SLACK_INTEGRATION_STREAM_PATH).append(
+            buildDurableObjectProcessorSubscriptionConfiguredEvent({
+              durableObjectName: DurableObjectNameCodec.stringify({
+                projectId: this.deps.itx.projectId,
+                path: SLACK_INTEGRATION_STREAM_PATH,
+              }),
+              idempotencyKey: `slack-router-subscription:${this.deps.itx.projectId}`,
+              processorSlug: SlackProcessorContract.slug,
+              subscriberType: "project",
+            }),
+          );
           await append({
             type: "events.iterate.com/repo/create-requested",
             idempotencyKey: `repo-create-requested:${this.deps.itx.projectId}:${PROJECT_REPO_PATH}`,
@@ -125,6 +157,10 @@ export class ProjectProcessor extends StreamProcessor<
             path: childPath,
           });
           if (childPath.startsWith("/agents/")) {
+            // Agents under /agents/slack/** additionally get the slack-agent
+            // processor subscription and the Slack reply prompt — this is THE
+            // place the "slack thread streams are slack agents" rule lives.
+            const isSlack = isSlackAgentPath(childPath);
             await this.deps.itx.streams.get(childPath).append(
               // Identical idempotency keys to the create-time onboarding birth
               // certificate, so whichever lane runs second dedupes cleanly.
@@ -132,7 +168,8 @@ export class ProjectProcessor extends StreamProcessor<
                 childPath,
                 llmProvider: this.deps.defaultLlmProvider,
                 projectId: this.deps.itx.projectId,
-                systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
+                slack: isSlack,
+                systemPrompt: isSlack ? SLACK_AGENT_SYSTEM_PROMPT : DEFAULT_AGENT_SYSTEM_PROMPT,
               }),
             );
             return;
@@ -204,6 +241,7 @@ function agentBirthCertificateEvents(input: {
   childPath: string;
   llmProvider: AgentLlmProvider;
   projectId: string;
+  slack?: boolean;
   systemPrompt: string;
 }) {
   const durableObjectName = DurableObjectNameCodec.stringify({
@@ -224,6 +262,7 @@ function agentBirthCertificateEvents(input: {
     subscription(CloudflareAiProcessorContract.slug, "agent"),
     subscription(OpenAiWsProcessorContract.slug, "agent"),
     subscription(ItxProcessorContract.slug, "itx"),
+    ...(input.slack ? [subscription(SlackAgentProcessorContract.slug, "agent")] : []),
     {
       type: "events.iterate.com/agent/config-updated" as const,
       idempotencyKey: `agent/config-updated:${input.projectId}:${input.childPath}`,

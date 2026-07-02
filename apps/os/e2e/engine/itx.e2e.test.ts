@@ -2600,7 +2600,7 @@ describe("minimal itx v4", () => {
     const { projectId } = await project.describe();
 
     await project.provideCapability({
-      path: ["slack"],
+      path: ["slackSdk"],
       type: "live",
       capability: new SlackSdk(),
     });
@@ -2618,7 +2618,7 @@ describe("minimal itx v4", () => {
     using callerProject = callerItx.projects.get(projectId);
 
     // @ts-expect-error - dynamic capability root
-    expect(await callerProject.slack.chat.postMessage({ channel: "C123", text: "hi" })).toEqual({
+    expect(await callerProject.slackSdk.chat.postMessage({ channel: "C123", text: "hi" })).toEqual({
       input: { channel: "C123", text: "hi" },
       marker,
       via: "nested-rpc-target-getter",
@@ -2762,7 +2762,7 @@ describe("minimal itx v4", () => {
       });
 
       using provision = await project.provideCapability({
-        path: ["slack"],
+        path: ["slackSdk"],
         flattenNestedPaths: true,
         type: "live",
         capability: new PathFunctionTarget(slack),
@@ -2781,7 +2781,7 @@ describe("minimal itx v4", () => {
       using callerProject = callerItx.projects.get(description.projectId);
 
       // @ts-expect-error - dynamic capability root
-      const posted = await callerProject.slack.chat.postMessage({
+      const posted = await callerProject.slackSdk.chat.postMessage({
         channel: "C123",
         text: "hi from itx",
       });
@@ -2793,7 +2793,7 @@ describe("minimal itx v4", () => {
       });
 
       // @ts-expect-error - dynamic capability root
-      const users = await callerProject.slack.users.list();
+      const users = await callerProject.slackSdk.users.list();
       expect(users).toMatchObject({
         members: [
           { id: "U1", name: "ada" },
@@ -2807,8 +2807,8 @@ describe("minimal itx v4", () => {
       await provision.revoke();
       await expect(
         // @ts-expect-error - dynamic capability root
-        callerProject.slack.chat.postMessage({ channel: "C123", text: "after revoke" }),
-      ).rejects.toThrow(/no capability "slack.chat.postMessage"/);
+        callerProject.slackSdk.chat.postMessage({ channel: "C123", text: "after revoke" }),
+      ).rejects.toThrow(/no capability "slackSdk.chat.postMessage"/);
     } finally {
       await mock.close();
     }

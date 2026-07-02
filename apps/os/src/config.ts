@@ -6,6 +6,46 @@ const JSONWebKeySet = z.object({
   keys: z.array(z.looseObject({ kty: z.string().trim().min(1) })),
 });
 
+const SlackScope = z.string().trim().min(1);
+const GoogleScope = z.string().trim().min(1);
+
+export const DEFAULT_SLACK_BOT_SCOPES = [
+  "channels:history",
+  "channels:join",
+  "channels:manage",
+  "channels:read",
+  "chat:write",
+  "chat:write.public",
+  "files:read",
+  "files:write",
+  "groups:history",
+  "groups:read",
+  "im:history",
+  "im:read",
+  "im:write",
+  "mpim:history",
+  "mpim:read",
+  "reactions:read",
+  "reactions:write",
+  "users.profile:read",
+  "users:read",
+  "users:read.email",
+  "assistant:write",
+  "conversations.connect:write",
+];
+
+export const DEFAULT_GOOGLE_OAUTH_SCOPES = [
+  "openid",
+  "https://www.googleapis.com/auth/userinfo.email",
+  "https://www.googleapis.com/auth/userinfo.profile",
+  "https://www.googleapis.com/auth/gmail.modify",
+  "https://www.googleapis.com/auth/gmail.send",
+  "https://www.googleapis.com/auth/gmail.labels",
+  "https://www.googleapis.com/auth/calendar",
+  "https://www.googleapis.com/auth/documents",
+  "https://www.googleapis.com/auth/drive",
+];
+
 /**
  * OS runtime config, parsed from the `APP_CONFIG` JSON blob plus `APP_CONFIG_*`
  * env overrides that Doppler/alchemy bake into the worker at deploy time
@@ -45,8 +85,28 @@ export const AppConfig = z.object({
     })
     .default({}),
   projectHostnameBases: publicValue(z.array(z.string().trim().min(1)).default([])),
-  // Slack/Google integration config returns with the integrations domain
-  // (itx-v4 migration Phase 12); the legacy branches were removed with it.
+  integrations: z
+    .object({
+      slack: z
+        .object({
+          oauthClientId: publicValue(z.string().trim().min(1)),
+          oauthClientSecret: redacted(z.string().trim().min(1)),
+          webhookSigningSecret: redacted(z.string().trim().min(1)),
+          scopes: publicValue(z.array(SlackScope).default(DEFAULT_SLACK_BOT_SCOPES)),
+        })
+        .optional(),
+      google: z
+        .object({
+          oauthClientId: publicValue(z.string().trim().min(1)),
+          oauthClientSecret: redacted(z.string().trim().min(1)),
+          scopes: publicValue(z.array(GoogleScope).default(DEFAULT_GOOGLE_OAUTH_SCOPES)),
+        })
+        .optional(),
+    })
+    .default({}),
+  /** Deployment-wide Slack bot token fallback used when a project has no
+   * connected Slack workspace secret (codemode Slack examples, dev smokes). */
+  slackBotToken: redacted(z.string().trim().min(1)).optional(),
   typeIdPrefix: z
     .string()
     .trim()

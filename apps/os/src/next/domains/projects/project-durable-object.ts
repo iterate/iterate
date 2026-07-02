@@ -16,6 +16,10 @@ import {
 import { deepRetainRpcStubs } from "../itx/live-capability.ts";
 import { readOpenAiApiKeyFromAppConfig } from "../agents/utils.ts";
 import { secretErrorResponse, secretReferencePathsFromHeaders } from "../secrets/utils.ts";
+import { SlackProcessorContract } from "../integrations/slack-processor-contract.ts";
+import { SlackProcessor } from "../integrations/slack-processor-implementation.ts";
+import { eyesReactionTargetFromWebhookPayload } from "../integrations/slack-agent-processor-implementation.ts";
+import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 
@@ -46,8 +50,42 @@ export class ProjectDurableObject extends DurableObject<Env> {
       }),
   );
 
+  // The Slack webhook router. It only ever WAKES on the Durable Object
+  // instance addressed at `/integrations/slack` (the host stream is this DO's
+  // own path stream), where the OAuth connect / project bootstrap configured
+  // its subscription; registering it on every instance is harmless.
+  readonly #slackProcessor = this.#processorHost.add(SlackProcessorContract.slug, (deps) => {
+    return new SlackProcessor({
+      ...deps,
+      acknowledgeRoutedWebhook: async ({ payload }) => {
+        const ack = eyesReactionTargetFromWebhookPayload(payload);
+        if (ack == null) return;
+        try {
+          await callProjectSlackWebApi({
+            body: { channel: ack.channel, name: "eyes", timestamp: ack.timestamp },
+            method: "reactions.add",
+            projectId: this.#name.projectId,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          // The slack-agent processor adds the same reaction once the routed
+          // stream catches up; whichever lands second dedups here.
+          if (message.includes("already_reacted") || message.includes("not_reactable")) return;
+          console.error("[slack] routed-webhook acknowledgement failed", {
+            error,
+            projectId: this.#name.projectId,
+          });
+        }
+      },
+    });
+  });
+
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
     return this.#processorHost.wakeStreamSubscriber(args);
+  }
+
+  get slackProcessor() {
+    return new StreamProcessorRpcTarget(this.#slackProcessor);
   }
 
   describe() {

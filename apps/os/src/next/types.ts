@@ -46,6 +46,8 @@ export interface UnauthenticatedItx {
  * auth can reach them.
  */
 export interface Session {
+  /** Deployment-wide integration ingress (admin/internal only). */
+  integrations: SessionIntegrations;
   projects: ProjectCollection;
   repos: RepoCollection;
   streams: StreamCollection;
@@ -83,12 +85,18 @@ export interface Itx extends ItxCapabilityHost {
   agents: AgentCollection;
   describe(): Promise<ProjectDescription>;
   egress: ProjectEgress;
+  /** Gmail REST proxy for the project's connected Google account. */
+  gmail: GmailCapability;
+  /** Slack/Google connection status, OAuth start/complete, disconnect. */
+  integrations: ProjectIntegrations;
   mcp: McpClientCollection;
   openapi: OpenApiCollection;
   processor: StreamProcessorRpc<ProjectProcessorState>;
   repo: Repo;
   repos: ProjectRepoCollection;
   secrets: SecretCollection;
+  /** Slack Web API proxy for the project's connected workspace (itx.slack.chat.postMessage(...)). */
+  slack: SlackCapability;
   streams: ProjectStreamCollection;
   worker: ProjectWorker;
   workers: DynamicWorkerCollection;
@@ -108,6 +116,90 @@ export interface AgentChat {
 export interface Ai {
   models(): Promise<unknown>;
   run(model: string, body: unknown): Promise<unknown>;
+}
+
+// -----------------------------------------------------------------------------
+// Integrations (Slack + Google) — the Phase 12 surface.
+// -----------------------------------------------------------------------------
+
+export type IntegrationProvider = "google" | "slack";
+
+/**
+ * Slack Web API proxy. `request` is the explicit form; dotted Web API method
+ * paths (`itx.slack.chat.postMessage({...})`) resolve through the dynamic
+ * path-call fallback onto `invokeCapability`.
+ */
+export interface SlackCapability {
+  invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
+  request(input: {
+    body?: Record<string, unknown>;
+    method: string;
+  }): Promise<Record<string, unknown>>;
+}
+
+export type GmailRequestInput = {
+  body?: unknown;
+  headers?: Record<string, string>;
+  method?: string;
+  path: string;
+  query?: Record<string, boolean | number | string | null | undefined>;
+};
+
+/** Gmail REST proxy (`itx.gmail.request({ path: "/users/me/messages" })`). */
+export interface GmailCapability {
+  request(input: GmailRequestInput): Promise<{
+    data: unknown;
+    headers: Record<string, string>;
+    status: number;
+    statusText: string;
+  }>;
+}
+
+export type IntegrationConnectionStatus = {
+  connected: boolean;
+  displayName: string | null;
+  externalId: string | null;
+  metadata: Record<string, unknown>;
+};
+
+export type CompleteConnectResult =
+  | { callbackUrl: string | null; ok: true }
+  | { callbackUrl: string | null; error: string; ok: false };
+
+/** Project-scoped integration management (connection status, OAuth, disconnect). */
+export interface ProjectIntegrations {
+  completeGoogleConnect(input: {
+    code: string;
+    state: string;
+    userId: string | null;
+  }): Promise<CompleteConnectResult>;
+  completeSlackConnect(input: {
+    code: string;
+    state: string;
+    userId: string | null;
+  }): Promise<CompleteConnectResult>;
+  disconnect(input: { provider: IntegrationProvider }): Promise<{ success: true }>;
+  getConnection(input: { provider: IntegrationProvider }): Promise<IntegrationConnectionStatus>;
+  startOAuthFlow(input: {
+    callbackUrl?: string;
+    provider: IntegrationProvider;
+    /** The user to bind the OAuth state to. Browser-supplied, not authority;
+     * the callback's check against the signed state is the backstop. */
+    userId: string;
+  }): Promise<{ authorizationUrl: string }>;
+}
+
+export type RouteSlackWebhookResult =
+  | { ok: true; projectId: string }
+  | { ignored: "team-not-claimed"; ok: true };
+
+/** Deployment-wide integration ingress: webhook routing across projects. */
+export interface SessionIntegrations {
+  routeSlackWebhook(input: {
+    headers: { slackEventId: string | null; slackRequestTimestamp: string | null };
+    payload: Record<string, unknown>;
+    teamId: string;
+  }): Promise<RouteSlackWebhookResult>;
 }
 
 /** Agent catalog within one project. */

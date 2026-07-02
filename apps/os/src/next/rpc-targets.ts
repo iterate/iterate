@@ -3,6 +3,7 @@ import { Client as McpSdkClient } from "@modelcontextprotocol/sdk/client/index.j
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { AppConfig } from "../config.ts";
 import { createAuthWorkerServiceClient } from "../auth/auth-worker-service.ts";
+import { parseConfig } from "../config.ts";
 import {
   resolveItxAuth,
   resolveOrganizationSlugForCreate,
@@ -27,6 +28,17 @@ import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
 import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "./domains/repos/utils.ts";
 import { normalizeSecretPath } from "./domains/secrets/utils.ts";
+import {
+  completeGoogleConnect,
+  completeSlackConnect,
+  disconnectProvider,
+  getConnectionStatus,
+  routeSlackWebhook,
+  startOAuthFlow,
+} from "./domains/integrations/connect-flows.ts";
+import { callGmailApi } from "./domains/integrations/gmail-api.ts";
+import { getFreshGoogleAccessToken } from "./domains/integrations/google-tokens.ts";
+import { callProjectSlackWebApi } from "./domains/integrations/slack-api.ts";
 import {
   buildDurableObjectProcessorSubscriptionConfiguredEvent,
   resolveStreamPath,
@@ -78,6 +90,10 @@ import type {
   DynamicWorkerCapability,
   DynamicWorkerCollection,
   DynamicWorkerRef,
+  GmailCapability,
+  ProjectIntegrations,
+  SessionIntegrations,
+  SlackCapability,
 } from "./types.ts";
 
 export class StreamRpcTarget extends RpcTarget implements Stream {
@@ -387,6 +403,135 @@ class AiRpcTarget extends RpcTarget implements Ai {
   }
 }
 
+/**
+ * The `itx.slack` built-in: a Slack Web API proxy for the project's connected
+ * workspace. Dotted Web API method paths (`itx.slack.chat.postMessage({...})`)
+ * resolve through the dynamic path-call fallback onto `invokeCapability`;
+ * authorization uses the project's stored bot token through the secret
+ * substitution egress pipeline (domains/integrations/slack-api.ts).
+ */
+class SlackRpcTarget extends RpcTarget implements SlackCapability {
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+    return withInvokeCapabilityFallback(this);
+  }
+
+  /** itx path-call surface: itx.slack.<Slack Web API method path>(body). */
+  async invokeCapability(call: Parameters<SlackCapability["invokeCapability"]>[0]) {
+    const { args = [], path } = call;
+    const method = path.join(".");
+    if (!method) {
+      throw new Error("itx.slack expected a Slack Web API method path.");
+    }
+    if (args.length > 1) {
+      throw new Error(`Slack calls are unary; ${method} received ${args.length} args.`);
+    }
+    return await this.request({
+      body: args[0] as Record<string, unknown> | undefined,
+      method,
+    });
+  }
+
+  async request(input: Parameters<SlackCapability["request"]>[0]) {
+    return await callProjectSlackWebApi({
+      body: input.body ?? {},
+      method: input.method,
+      projectId: this.props.projectId,
+    });
+  }
+}
+
+/** The `itx.gmail` built-in: Gmail REST proxy for the project's Google account. */
+class GmailRpcTarget extends RpcTarget implements GmailCapability {
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  async request(request: Parameters<GmailCapability["request"]>[0]) {
+    const token = await getFreshGoogleAccessToken({
+      config: parseConfig(env),
+      projectId: this.props.projectId,
+    });
+    return await callGmailApi({ request, token });
+  }
+}
+
+/**
+ * The `itx.integrations` built-in: connection status, OAuth start/complete,
+ * and disconnect for slack/google. The complete* methods are called by the
+ * app worker's OAuth callback routes (/api/integrations/<provider>/callback);
+ * their authority is the HMAC-signed OAuth state minted by startOAuthFlow,
+ * verified engine-side.
+ */
+class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  getConnection(input: Parameters<ProjectIntegrations["getConnection"]>[0]) {
+    return getConnectionStatus({ projectId: this.props.projectId, provider: input.provider });
+  }
+
+  startOAuthFlow(input: Parameters<ProjectIntegrations["startOAuthFlow"]>[0]) {
+    return startOAuthFlow({
+      callbackUrl: input.callbackUrl,
+      config: parseConfig(env),
+      projectId: this.props.projectId,
+      provider: input.provider,
+      userId: input.userId,
+    });
+  }
+
+  completeSlackConnect(input: Parameters<ProjectIntegrations["completeSlackConnect"]>[0]) {
+    return completeSlackConnect({
+      code: input.code,
+      config: parseConfig(env),
+      projectId: this.props.projectId,
+      state: input.state,
+      userId: input.userId,
+    });
+  }
+
+  completeGoogleConnect(input: Parameters<ProjectIntegrations["completeGoogleConnect"]>[0]) {
+    return completeGoogleConnect({
+      code: input.code,
+      config: parseConfig(env),
+      projectId: this.props.projectId,
+      state: input.state,
+      userId: input.userId,
+    });
+  }
+
+  disconnect(input: Parameters<ProjectIntegrations["disconnect"]>[0]) {
+    return disconnectProvider({
+      config: parseConfig(env),
+      projectId: this.props.projectId,
+      provider: input.provider,
+    });
+  }
+}
+
+/**
+ * Deployment-wide integration ingress: routes validly-signed Slack webhooks to
+ * the project that claimed the team. Admin/internal only — this is the door
+ * the app worker's webhook route calls with the admin API secret.
+ */
+class SessionIntegrationsRpcTarget extends RpcTarget implements SessionIntegrations {
+  constructor(readonly props: { auth: ItxAuth }) {
+    super();
+    if (!props.auth.isAdmin()) {
+      throw new Error(`principal "${props.auth.principal}" cannot access deployment integrations`);
+    }
+  }
+
+  routeSlackWebhook(input: Parameters<SessionIntegrations["routeSlackWebhook"]>[0]) {
+    return routeSlackWebhook(input);
+  }
+}
+
 class AgentChatRpcTarget extends RpcTarget implements AgentChat {
   constructor(readonly props: { auth: ItxAuth; path: string; projectId: string }) {
     super();
@@ -504,7 +649,7 @@ class AgentRpcTarget extends RpcTarget implements Agent {
     return await this.#itx.runScript(code);
   }
 
-  async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
+  async invokeCapability({ args = [], path }: Parameters<SlackCapability["invokeCapability"]>[0]) {
     return await this.#itx.invokeCapability({ args, path });
   }
 }
@@ -746,12 +891,15 @@ const PROJECT_BUILTIN_CAPABILITY_PATHS = [
   "ai",
   "agents",
   "egress",
+  "gmail",
+  "integrations",
   "mcp",
   "openapi",
   "processor",
   "repo",
   "repos",
   "secrets",
+  "slack",
   "streams",
   "worker",
   "workers",
@@ -884,6 +1032,27 @@ export class ItxRpcTarget extends RpcTarget implements Itx {
     return new ProjectEgressRpcTarget({ projectId: this.props.projectId });
   }
 
+  get gmail(): GmailCapability {
+    return new GmailRpcTarget({
+      auth: this.props.auth,
+      projectId: this.props.projectId,
+    });
+  }
+
+  get integrations(): ProjectIntegrations {
+    return new IntegrationsRpcTarget({
+      auth: this.props.auth,
+      projectId: this.props.projectId,
+    });
+  }
+
+  get slack(): SlackCapability {
+    return new SlackRpcTarget({
+      auth: this.props.auth,
+      projectId: this.props.projectId,
+    });
+  }
+
   get mcp(): McpClientCollection {
     return new McpClientCollectionRpcTarget({
       egress: projectEgressFetcher(this.props.ctx.exports, this.props.projectId),
@@ -956,6 +1125,10 @@ async function projectProcessorState(projectId: string) {
 class SessionRpcTarget extends RpcTarget implements Session {
   constructor(readonly props: { auth: ItxAuth; config?: AppConfig; ctx: CfExecutionContext }) {
     super();
+  }
+
+  get integrations() {
+    return new SessionIntegrationsRpcTarget({ auth: this.props.auth });
   }
 
   get streams() {
@@ -1266,7 +1439,7 @@ class McpClientRpcTarget extends RpcTarget {
     return withInvokeCapabilityFallback(this);
   }
 
-  async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
+  async invokeCapability({ args = [], path }: Parameters<SlackCapability["invokeCapability"]>[0]) {
     const options = this.props.config.timeoutMs
       ? { timeout: this.props.config.timeoutMs }
       : undefined;
@@ -1410,7 +1583,7 @@ class OpenApiRpcTarget extends RpcTarget {
     return withInvokeCapabilityFallback(this);
   }
 
-  async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
+  async invokeCapability({ args = [], path }: Parameters<SlackCapability["invokeCapability"]>[0]) {
     const operationId = path[0];
     if (!operationId) throw new Error("OpenAPI operation calls need an operationId path.");
     if (path.length > 1) {

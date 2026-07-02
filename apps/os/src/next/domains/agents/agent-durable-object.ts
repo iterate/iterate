@@ -7,6 +7,9 @@ import {
 } from "../streams/stream-processor-host.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
+import { SlackAgentProcessorContract } from "../integrations/slack-agent-processor-contract.ts";
+import { SlackAgentProcessor } from "../integrations/slack-agent-processor-implementation.ts";
+import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
 import { CloudflareAiProcessorContract } from "./cloudflare-ai-processor-contract.ts";
@@ -47,6 +50,33 @@ export class AgentDurableObject extends DurableObject<Env> {
         ...deps,
         apiKey: readOpenAiApiKeyFromAppConfig(this.env),
         readStreamEvents: () => this.#stream.getEvents(),
+      }),
+  );
+
+  // Registered on every agent host; it only wakes on routed Slack agent
+  // streams (`/agents/slack/**`) where the project processor configured its
+  // subscription. Slack-facing side effects are best effort: a failed status
+  // update or reaction must not wedge the processor checkpoint.
+  readonly slackAgentProcessor = this.#processorHost.add(
+    SlackAgentProcessorContract.slug,
+    (deps) =>
+      new SlackAgentProcessor({
+        ...deps,
+        callSlackApi: async (method, body) => {
+          try {
+            await callProjectSlackWebApi({
+              body,
+              method,
+              projectId: this.#name.projectId,
+            });
+          } catch (error) {
+            console.error("[slack-agent] Slack side effect failed", {
+              error,
+              method,
+              path: this.#name.path,
+            });
+          }
+        },
       }),
   );
 
