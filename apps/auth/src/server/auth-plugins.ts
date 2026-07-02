@@ -133,13 +133,14 @@ export function getAuthPlugins(env: Record<string, unknown>) {
             }
           }
 
-          if (!scopes.includes(ITERATE_PROJECT_SELECTION_SCOPE)) {
-            return false;
-          }
-
-          const selection = await resolveStoredProjectSelection({ sessionId: session?.id });
-
-          return !selection;
+          // Always collect a fresh selection: better-auth consults
+          // shouldRedirect only on a flow's initial /oauth2/authorize (the
+          // continue/consent re-entries skip it via the postLogin flag), so
+          // this shows /project-access exactly once per authorization — and
+          // guarantees the selection consentReferenceId consumes is the one
+          // THIS flow just collected, never a leftover from another client
+          // in the same browser session.
+          return scopes.includes(ITERATE_PROJECT_SELECTION_SCOPE);
         },
         consentReferenceId: async ({ session }) => {
           const selection = await resolveStoredProjectSelection({ sessionId: session?.id });

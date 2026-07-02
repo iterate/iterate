@@ -34,10 +34,20 @@ import { db } from "./db/index.ts";
 // oauth-provider does not run customAccessTokenClaims when minting opaque
 // tokens (claims are reconstructed at introspection), so there is no reliable
 // mint-time hook to consume the row, and consentReferenceId is invoked up to
-// three times per flow so delete-on-read would break the flow. Instead
-// lookups are scoped to the auth browser session and ignore rows older than
-// the authorization flow could plausibly last — a later connection from a new
-// client goes back through /project-access.
+// three times per flow so delete-on-read would break the flow. Two things
+// bound the row's blast radius instead:
+//
+//   - postLogin.shouldRedirect sends every project-scoped authorize through
+//     /project-access (better-auth only consults it on the flow's initial
+//     authorize; continue/consent re-entries skip it), so the freshest row
+//     for the session is always the one THIS flow just stored.
+//   - Lookups are scoped to the auth browser session and ignore rows older
+//     than a flow could plausibly last (the freshness window below).
+//
+// The postLogin hooks never receive a client id, so the lookup cannot be
+// scoped to the table's full (session_id, client_id) key. The residual gap is
+// two authorize flows interleaving their /project-access→consent hops inside
+// one browser session within the window — the later store wins for both.
 const OAUTH_PROJECT_SELECTION_REFERENCE_PREFIX = "iterate-project-selection-v1";
 export const OAUTH_PROJECT_SELECTION_MAX_AGE_MS = 10 * 60 * 1000;
 

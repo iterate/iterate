@@ -554,6 +554,12 @@ const introspectAccessToken = os.internal.oauth.introspectAccessToken
       return { active: false as const, reason: "missing_user" };
     }
 
+    // A token whose session row was deleted (the FK nulls sessionId) stays
+    // active until its own expiry — deliberately matching both stock
+    // better-auth introspection (which keeps such tokens active and merely
+    // drops `sid`) and JWT access tokens, which outlive their session until
+    // `exp` regardless. Where we DO see a live session reference, we are
+    // stricter than upstream and reject tokens whose session has expired.
     if (token.sessionId) {
       const sessionExpiresAtMs = toMillis(token.sessionExpiresAt);
       if (!sessionExpiresAtMs || sessionExpiresAtMs <= Date.now()) {
