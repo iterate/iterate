@@ -310,9 +310,12 @@ const statefulWorker = DurableObjectNamespace<StatefulWorkerDurableObject>("work
 // Cloudflare rejecting this binding is the correct loud failure — deploy the
 // auth app first.
 const authWorkerName = slugify(`auth-${ctx.app.stage.startsWith("dev") ? "dev" : ctx.app.stage}`);
-const authIssuerIsLoopback = resolvedAuthIssuer
-  ? isLoopbackHostname(new URL(resolvedAuthIssuer).hostname)
-  : false;
+// A malformed issuer is tolerated the same way resolveStaticAuthJwks tolerates
+// it (treat as not-loopback) rather than crashing this one check.
+const authIssuerIsLoopback =
+  resolvedAuthIssuer && URL.canParse(resolvedAuthIssuer)
+    ? isLoopbackHostname(new URL(resolvedAuthIssuer).hostname)
+    : false;
 // Fully-local dev has no auth worker inside vite's workerd, so the binding is
 // a REMOTE binding: code still calls `env.AUTH.method()`, but wrangler/vite
 // proxy fetch and RPC to the DEPLOYED auth worker for the stage
