@@ -1,3 +1,5 @@
+import { DurableObject } from "cloudflare:workers";
+import type { Env } from "./env.ts";
 import type { CfExecutionContext, Secret, Session } from "./types.ts";
 import { TRUSTED_INTERNAL_ITX_TOKEN } from "./auth.ts";
 import { UnauthenticatedItxRpcTarget } from "./rpc-targets.ts";
@@ -16,9 +18,95 @@ const PLAYGROUND_ACTIONS = [
   "secret-egress",
   "blind-relay-proof-command",
 ] as const;
+const BLIND_RELAY_CLIENT_DEPENDENCIES = "tsx@4.21.0 capnweb@0.8.0 ws@8.19.0";
+
+type PlaygroundDemoPhase =
+  | "idle"
+  | "waiting_for_node_relay"
+  | "relay_connected"
+  | "secret_egress_relayed"
+  | "target_received_request"
+  | "relay_saw_ciphertext_only"
+  | "failed";
+
+type PlaygroundDemoLogEntry = {
+  at: string;
+  detail?: unknown;
+  message: string;
+  phase: PlaygroundDemoPhase;
+};
+
+type PlaygroundDemoState = {
+  demoId: string;
+  logs: PlaygroundDemoLogEntry[];
+  phase: PlaygroundDemoPhase;
+  updatedAt: string;
+};
+
+export class PlaygroundDemoDurableObject extends DurableObject<Env> {
+  #state: PlaygroundDemoState | undefined;
+
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const path = playgroundDemoPath(url);
+
+    if (path === "/status" && request.method === "GET") {
+      return Response.json(await this.#readState());
+    }
+
+    if (path === "/reset" && request.method === "POST") {
+      const state = this.#initialState();
+      await this.#writeState(state);
+      return Response.json(state);
+    }
+
+    if (path === "/events" && request.method === "POST") {
+      const input = await request.json().catch(() => ({}));
+      const entry: PlaygroundDemoLogEntry = {
+        at: new Date().toISOString(),
+        detail: isRecord(input) ? input.detail : undefined,
+        message:
+          isRecord(input) && typeof input.message === "string" ? input.message : "demo event",
+        phase: demoPhase(isRecord(input) ? input.phase : undefined),
+      };
+      const current = await this.#readState();
+      const state: PlaygroundDemoState = {
+        demoId: current.demoId,
+        logs: [entry, ...current.logs].slice(0, 80),
+        phase: entry.phase,
+        updatedAt: entry.at,
+      };
+      await this.#writeState(state);
+      return Response.json(state);
+    }
+
+    return Response.json({ error: "not found" }, { status: 404 });
+  }
+
+  async #readState(): Promise<PlaygroundDemoState> {
+    this.#state ??=
+      (await this.ctx.storage.get<PlaygroundDemoState>("state")) ?? this.#initialState();
+    return this.#state;
+  }
+
+  #initialState(): PlaygroundDemoState {
+    return {
+      demoId: this.ctx.id.name ?? "default",
+      logs: [],
+      phase: "idle",
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  async #writeState(state: PlaygroundDemoState): Promise<void> {
+    this.#state = state;
+    await this.ctx.storage.put("state", state);
+  }
+}
 
 export async function playgroundResponse(
   request: Request,
+  env: Env,
   ctx: CfExecutionContext,
 ): Promise<Response | null> {
   const url = new URL(request.url);
@@ -35,8 +123,21 @@ export async function playgroundResponse(
     });
   }
 
+  if (url.pathname === "/playground/blind-relay-proof.ts") {
+    return new Response(blindRelayProofScript(), {
+      headers: {
+        "cache-control": "no-store",
+        "content-type": "text/plain; charset=utf-8",
+      },
+    });
+  }
+
+  if (url.pathname.startsWith("/playground/demo/")) {
+    return env.PLAYGROUND_DEMO.getByName(playgroundDemoId(url)).fetch(request);
+  }
+
   if (url.pathname === "/playground/target") {
-    return playgroundTargetResponse(request);
+    return playgroundTargetResponse(request, env);
   }
 
   if (url.pathname === "/playground/run") {
@@ -276,7 +377,7 @@ async function runPlaygroundAction(
       return {
         command: helpers.deployedBlindRelayCommand(),
         whyThisIsACommand:
-          "The deployed Worker creates TLS ciphertext, but the relay side still needs a real TCP socket. This command runs the local relay/test harness against the deployed Worker.",
+          "The deployed Worker creates TLS ciphertext, but the relay side still needs a real TCP socket. This command downloads and runs a standalone Node relay against the deployed Worker.",
       };
   }
   throw new Error(`unknown playground action: ${action}`);
@@ -296,29 +397,369 @@ function playgroundHelpers(origin: string) {
     },
     deployedBlindRelayCommand() {
       return [
-        `ITX_BASE_URL=${origin}`,
-        "pnpm --dir apps/minimal-itx-v4 exec vitest run itx.e2e.test.ts",
-        '-t "Project egress relays secret-backed HTTPS"',
+        'tmp="$(mktemp -d)"',
+        '&& cd "$tmp"',
+        "&& npm init -y >/dev/null",
+        `&& npm install ${BLIND_RELAY_CLIENT_DEPENDENCIES} >/dev/null`,
+        `&& curl -fsS ${origin}/playground/blind-relay-proof.ts -o blind-relay-proof.ts`,
+        `&& npx tsx blind-relay-proof.ts ${origin} default`,
       ].join(" ");
     },
   };
 }
 
-async function playgroundTargetResponse(request: Request): Promise<Response> {
-  return Response.json(
-    {
-      body: await request.text(),
-      headers: headersToObject(request.headers),
-      method: request.method,
-      note: "This is a simple HTTPS target hosted by the same deployed Worker for ITX playground egress calls.",
-      url: request.url,
-    },
-    {
-      headers: {
-        "cache-control": "no-store",
+function blindRelayProofScript(): string {
+  return String.raw`import net from "node:net";
+import tls from "node:tls";
+import { createHash } from "node:crypto";
+import { RpcTarget, newWebSocketRpcSession } from "capnweb";
+import WebSocket from "ws";
+
+const DEFAULT_BASE_URL = "https://minimal-itx-v4-blind-relay-poc.iterate-dev-preview.workers.dev";
+const BLIND_RELAY_PINNED_CERT_SHA256_HEADER = "x-itx-blind-relay-cert-sha256";
+const TRUSTED_INTERNAL_ITX_TOKEN = "trusted-internal-itx-token";
+const EGRESS_PROOF_HEADER = "x-itx-egress-proof";
+const SECRET_MATERIAL = "blind-secret-material";
+const HIDDEN_BODY = "payload hidden from relay";
+const HIDDEN_PATH = "/playground/target";
+const HIDDEN_QUERY = "worker-only";
+
+class BlindRelayConnectionTarget extends RpcTarget {
+  #observation;
+  #readQueue = [];
+  #readWaiters = [];
+  #socket;
+  #closed = false;
+  #error;
+
+  constructor({ observation, socket }) {
+    super();
+    this.#observation = observation;
+    this.#socket = socket;
+
+    socket.on("data", (chunk) => {
+      const bytes = new Uint8Array(chunk);
+      observation.bytesTargetToWorker += bytes.byteLength;
+      observation.targetToWorkerChunks.push(bytes.slice());
+      if (observation.firstTargetToWorker.byteLength === 0) {
+        observation.firstTargetToWorker = bytes.slice(0, 96);
+      }
+      const waiter = this.#readWaiters.shift();
+      if (waiter === undefined) this.#readQueue.push(bytes);
+      else waiter.resolve(bytes);
+    });
+    socket.once("close", () => this.#finishReads(null));
+    socket.once("end", () => this.#finishReads(null));
+    socket.once("error", (error) => {
+      this.#error = error;
+      this.#finishReads(error);
+    });
+  }
+
+  async read() {
+    if (this.#readQueue.length > 0) return this.#readQueue.shift();
+    if (this.#error !== undefined) throw this.#error;
+    if (this.#closed) return null;
+    return await new Promise((resolve, reject) => {
+      this.#readWaiters.push({ reject, resolve });
+    });
+  }
+
+  async write(chunk) {
+    this.#observation.bytesWorkerToTarget += chunk.byteLength;
+    this.#observation.workerToTargetChunks.push(chunk.slice());
+    if (this.#observation.firstWorkerToTarget.byteLength === 0) {
+      this.#observation.firstWorkerToTarget = chunk.slice(0, 96);
+    }
+    await new Promise((resolve, reject) => {
+      this.#socket.write(chunk, (error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+  }
+
+  async close() {
+    this.#socket.destroy();
+    this.#finishReads(null);
+  }
+
+  #finishReads(error) {
+    if (this.#closed) return;
+    this.#closed = true;
+    for (const waiter of this.#readWaiters.splice(0)) {
+      if (error === null) waiter.resolve(null);
+      else waiter.reject(error);
+    }
+  }
+}
+
+class BlindRelayTarget extends RpcTarget {
+  observations = [];
+  #sockets = new Set();
+
+  async dial({ host, port }) {
+    const socket = net.connect({ host, port });
+    this.#sockets.add(socket);
+    socket.once("close", () => this.#sockets.delete(socket));
+
+    const observation = {
+      bytesTargetToWorker: 0,
+      bytesWorkerToTarget: 0,
+      firstTargetToWorker: new Uint8Array(),
+      firstWorkerToTarget: new Uint8Array(),
+      host,
+      port,
+      targetToWorkerChunks: [],
+      workerToTargetChunks: [],
+    };
+    this.observations.push(observation);
+
+    return new BlindRelayConnectionTarget({ observation, socket });
+  }
+
+  dispose() {
+    for (const socket of this.#sockets) socket.destroy();
+    this.#sockets.clear();
+  }
+}
+
+async function main() {
+  const baseUrl = normalizeBaseUrl(process.argv[2] || process.env.ITX_BASE_URL || DEFAULT_BASE_URL);
+  const demoId = process.argv[3] || process.env.ITX_DEMO_ID || "default";
+  const relay = new BlindRelayTarget();
+  const session = connectItx(baseUrl);
+  let relayHandle;
+
+  try {
+    await postEvent(baseUrl, demoId, {
+      phase: "waiting_for_node_relay",
+      message: "Node process started and is connecting to the Worker ITX API.",
+      detail: { baseUrl, demoId },
+    });
+
+    const root = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+    const project = root.projects.create({
+      slug: "blind-relay-demo-" + crypto.randomUUID().slice(0, 8),
+    });
+    const targetUrl = new URL("/playground/target", baseUrl);
+    targetUrl.searchParams.set("demo", demoId);
+    targetUrl.searchParams.set("token", HIDDEN_QUERY);
+    const targetCertSha256 = await readLeafCertSha256(targetUrl);
+    const secretPath = "/secrets/blind-relay-demo/" + crypto.randomUUID();
+    const secret = project.secrets.get(secretPath);
+    await secret.update({
+      egress: { urls: [targetUrl.toString()] },
+      material: SECRET_MATERIAL,
+    });
+    await waitForCondition(async () => (await secret.describe()).hasMaterial, {
+      description: "secret material to become available",
+    });
+
+    relayHandle = await project.egress.useBlindRelayForSecretEgress(relay);
+    await postEvent(baseUrl, demoId, {
+      phase: "relay_connected",
+      message: "Node relay registered with project.egress.useBlindRelayForSecretEgress(...).",
+      detail: { project: await project.describe(), targetCertSha256, targetUrl: targetUrl.toString() },
+    });
+
+    const response = await project.egress.fetch(
+      new Request(targetUrl.toString(), {
+        body: HIDDEN_BODY,
+        headers: {
+          [BLIND_RELAY_PINNED_CERT_SHA256_HEADER]: targetCertSha256,
+          [EGRESS_PROOF_HEADER]: 'Bearer getSecret({ path: "' + secretPath + '" })',
+          "content-type": "text/plain",
+        },
+        method: "POST",
+      }),
+    );
+    const responseBody = await response.json();
+    if (response.status !== 200) {
+      throw new Error("expected 200 from relayed egress, got " + response.status);
+    }
+
+    await postEvent(baseUrl, demoId, {
+      phase: "secret_egress_relayed",
+      message: "Worker substituted the secret, then sent HTTPS through the Node relay.",
+      detail: responseBody,
+    });
+
+    const observation = relay.observations[0];
+    if (observation === undefined) throw new Error("relay was not called");
+    const transcript = concatenateBytes([
+      ...observation.workerToTargetChunks,
+      ...observation.targetToWorkerChunks,
+    ]);
+    const transcriptText = Buffer.from(transcript).toString("latin1");
+    const hiddenStrings = [SECRET_MATERIAL, HIDDEN_BODY, HIDDEN_PATH, HIDDEN_QUERY];
+    const leakedStrings = hiddenStrings.filter((hiddenString) => transcriptText.includes(hiddenString));
+    if (leakedStrings.length > 0) {
+      throw new Error("relay transcript leaked plaintext: " + leakedStrings.join(", "));
+    }
+
+    await waitForCondition(async () => (await secret.describe()).audit.usedCount === 1, {
+      description: "secret audit count to increment",
+    });
+
+    const proof = {
+      bytesTargetToWorker: observation.bytesTargetToWorker,
+      bytesWorkerToTarget: observation.bytesWorkerToTarget,
+      firstTargetToWorkerByte: observation.firstTargetToWorker[0],
+      firstWorkerToTargetByte: observation.firstWorkerToTarget[0],
+      hiddenStringsCheckedAbsent: hiddenStrings,
+      relayDialed: observation.host + ":" + observation.port,
+      targetClientIp: responseBody.clientIp,
+    };
+    await postEvent(baseUrl, demoId, {
+      phase: "relay_saw_ciphertext_only",
+      message: "Relay transcript contained TLS records and did not contain the secret, body, path, or query token.",
+      detail: proof,
+    });
+
+    console.log("Blind relay proof passed.");
+    console.log("Worker: " + baseUrl);
+    console.log("Demo status: " + new URL("/playground", baseUrl).toString());
+    console.log("Target saw client IP: " + (responseBody.clientIp || "(not exposed by local dev)"));
+    console.log("Target received auth: " + responseBody.headers[EGRESS_PROOF_HEADER]);
+    console.log("Relay dialed: " + proof.relayDialed);
+    console.log("Relay bytes worker->target: " + proof.bytesWorkerToTarget);
+    console.log("Relay bytes target->worker: " + proof.bytesTargetToWorker);
+    console.log("Plaintext checked absent from relay transcript: " + hiddenStrings.join(", "));
+  } catch (error) {
+    await postEvent(baseUrl, demoId, {
+      phase: "failed",
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  } finally {
+    if (relayHandle !== undefined) await relayHandle.release().catch(() => {});
+    relay.dispose();
+    session[Symbol.dispose]?.();
+  }
+}
+
+function connectItx(baseUrl) {
+  const url = new URL("/api/itx", baseUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  const socket = new WebSocket(url, { handshakeTimeout: 10_000 });
+  return newWebSocketRpcSession(socket);
+}
+
+async function readLeafCertSha256(url) {
+  if (url.protocol !== "https:") return "";
+  const port = url.port === "" ? 443 : Number(url.port);
+  return await new Promise((resolve, reject) => {
+    const socket = tls.connect(
+      { host: url.hostname, port, servername: url.hostname, timeout: 10_000 },
+      () => {
+        const cert = socket.getPeerCertificate();
+        socket.end();
+        if (!cert.raw) {
+          reject(new Error("target did not expose a leaf certificate"));
+          return;
+        }
+        resolve(createHash("sha256").update(cert.raw).digest("hex"));
       },
+    );
+    socket.once("error", reject);
+    socket.once("timeout", () => {
+      socket.destroy();
+      reject(new Error("timed out reading target leaf certificate"));
+    });
+  });
+}
+
+async function postEvent(baseUrl, demoId, event) {
+  const url = new URL("/playground/demo/" + encodeURIComponent(demoId) + "/events", baseUrl);
+  const response = await fetch(url, {
+    body: JSON.stringify(event),
+    headers: { "content-type": "application/json" },
+    method: "POST",
+  });
+  if (!response.ok) {
+    console.warn("failed to update playground demo status:", response.status, await response.text());
+  }
+}
+
+async function waitForCondition(predicate, opts) {
+  const timeoutMs = opts.timeoutMs ?? 10_000;
+  const intervalMs = opts.intervalMs ?? 100;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error("timed out waiting for " + opts.description);
+}
+
+function concatenateBytes(chunks) {
+  const length = chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
+  const result = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
+}
+
+function normalizeBaseUrl(input) {
+  const url = new URL(input);
+  url.pathname = "/";
+  url.search = "";
+  url.hash = "";
+  return url.toString().replace(/\/$/, "");
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+`;
+}
+
+async function playgroundTargetResponse(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const body = await request.text();
+  const clientIp = request.headers.get("cf-connecting-ip") ?? request.headers.get("x-real-ip");
+  const payload = {
+    body,
+    clientIp,
+    headers: headersToObject(request.headers),
+    method: request.method,
+    note: "This is a simple HTTPS target hosted by the same deployed Worker for ITX playground egress calls.",
+    url: request.url,
+  };
+  const demoId = url.searchParams.get("demo");
+  if (demoId !== null && demoId.trim() !== "") {
+    await env.PLAYGROUND_DEMO.getByName(demoId).fetch(
+      new Request(new URL(`/playground/demo/${demoId}/events`, url.origin), {
+        body: JSON.stringify({
+          detail: {
+            authorization: payload.headers.authorization,
+            body,
+            clientIp,
+            proofHeader: payload.headers["x-itx-egress-proof"],
+            url: request.url,
+          },
+          message: `Target received relayed HTTPS request${clientIp === null ? "" : ` from ${clientIp}`}.`,
+          phase: "target_received_request",
+        }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      }),
+    );
+  }
+
+  return Response.json(payload, {
+    headers: {
+      "cache-control": "no-store",
     },
-  );
+  });
 }
 
 async function toJsonable(value: unknown): Promise<unknown> {
@@ -378,6 +819,27 @@ function booleanParam(input: Record<string, unknown>, key: string, fallback: boo
   return typeof value === "boolean" ? value : fallback;
 }
 
+function playgroundDemoId(url: URL): string {
+  const [, , , demoId] = url.pathname.split("/");
+  return demoId === undefined || demoId.trim() === "" ? "default" : demoId;
+}
+
+function playgroundDemoPath(url: URL): string {
+  const [, , , _demoId, ...rest] = url.pathname.split("/");
+  return `/${rest.join("/")}`;
+}
+
+function demoPhase(input: unknown): PlaygroundDemoPhase {
+  return input === "waiting_for_node_relay" ||
+    input === "relay_connected" ||
+    input === "secret_egress_relayed" ||
+    input === "target_received_request" ||
+    input === "relay_saw_ciphertext_only" ||
+    input === "failed"
+    ? input
+    : "idle";
+}
+
 async function waitForSecretMaterial(secret: Secret): Promise<void> {
   const deadline = Date.now() + 5_000;
   let lastDescription = await secret.describe();
@@ -408,6 +870,10 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
 
 function playgroundHtml(origin: string): string {
   const examples = JSON.stringify(playgroundExamples(origin));
+  const blindRelayCommand = escapeHtml(playgroundHelpers(origin).deployedBlindRelayCommand());
+  const blindRelayScriptUrl = escapeHtml(
+    new URL("/playground/blind-relay-proof.ts", origin).toString(),
+  );
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -535,6 +1001,83 @@ function playgroundHtml(origin: string): string {
       margin: 18px 0;
       color: #4c3700;
     }
+    .demo-box {
+      display: grid;
+      gap: 10px;
+      margin: 18px 0;
+      padding: 12px;
+    }
+    .demo-box h2,
+    .demo-status h2 {
+      margin: 0;
+      font-size: 18px;
+    }
+    .command {
+      display: block;
+      max-height: 150px;
+      border-radius: 6px;
+      padding: 12px;
+      background: #0f1720;
+      color: #e8edf5;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+    .command-row {
+      display: grid;
+      gap: 8px;
+    }
+    .demo-status {
+      display: grid;
+      gap: 8px;
+      margin: 18px 0;
+      padding: 12px;
+    }
+    .status-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+    }
+    .phase {
+      font-weight: 700;
+    }
+    .proof-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .proof-item {
+      border: 1px solid #d8dde6;
+      border-radius: 6px;
+      padding: 8px;
+      background: #fbfcfe;
+      min-width: 0;
+    }
+    .proof-item small {
+      display: block;
+      color: #647084;
+      margin-bottom: 4px;
+    }
+    .proof-item code {
+      word-break: break-word;
+    }
+    .logs {
+      display: grid;
+      gap: 8px;
+      max-height: 240px;
+      overflow: auto;
+    }
+    .log {
+      border-top: 1px solid #d8dde6;
+      padding-top: 8px;
+      font-size: 13px;
+    }
+    .log small {
+      color: #647084;
+    }
     .summary {
       border-top: 1px solid #d8dde6;
       padding: 10px 12px;
@@ -551,6 +1094,7 @@ function playgroundHtml(origin: string): string {
       main { padding: 18px; }
       .layout { grid-template-columns: 1fr; }
       .editor { grid-template-rows: auto 360px auto auto 280px; }
+      .proof-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -559,6 +1103,30 @@ function playgroundHtml(origin: string): string {
     <h1>Blind Relay POC Playground</h1>
     <p>Run ITX presets against this deployed Worker. Plain intercept sees <code>getSecret(...)</code> placeholders; blind relay receives only encrypted TLS bytes after the Worker substitutes the secret.</p>
     <div class="warning">Demo-only: anyone with this URL can create throwaway projects on this dev Worker. Do not enter real secrets.</div>
+    <section class="panel demo-box">
+      <h2>Run the local Node relay</h2>
+      <p>This downloads a self-contained TypeScript relay client into a temp directory, installs pinned copies of <code>tsx</code>, <code>capnweb</code>, and <code>ws</code>, then connects your machine to this Worker. Requires Node.js 20+ and npm.</p>
+      <ol>
+        <li>You run Node locally.</li>
+        <li>The Worker substitutes <code>getSecret(...)</code> before egress.</li>
+        <li>Node opens the TCP connection, so the target sees your local relay IP while the relay only sees encrypted TLS bytes.</li>
+      </ol>
+      <div class="command-row">
+        <button class="preset" id="copy-command" type="button">Copy command</button>
+        <code class="command" id="relay-command">${blindRelayCommand}</code>
+      </div>
+      <p class="meta">Raw script: <a href="${blindRelayScriptUrl}">${blindRelayScriptUrl}</a></p>
+    </section>
+    <section class="panel demo-status">
+      <h2>Live relay demo state</h2>
+      <div class="status-row">
+        <div>Demo state: <span class="phase" id="demo-phase">loading</span></div>
+        <button class="preset" id="reset-demo" type="button">Reset log</button>
+      </div>
+      <div class="meta" id="demo-updated">Waiting for status...</div>
+      <div class="proof-grid" id="demo-proof"></div>
+      <div class="logs" id="demo-logs"></div>
+    </section>
     <div class="layout">
       <aside class="panel presets" id="presets"></aside>
       <section class="panel editor">
@@ -585,6 +1153,13 @@ function playgroundHtml(origin: string): string {
     const statusEl = document.querySelector("#status");
     const title = document.querySelector("#title");
     const run = document.querySelector("#run");
+    const demoPhase = document.querySelector("#demo-phase");
+    const demoUpdated = document.querySelector("#demo-updated");
+    const demoProof = document.querySelector("#demo-proof");
+    const demoLogs = document.querySelector("#demo-logs");
+    const resetDemo = document.querySelector("#reset-demo");
+    const copyCommand = document.querySelector("#copy-command");
+    const relayCommand = document.querySelector("#relay-command");
     let selected = 0;
 
     function select(index) {
@@ -633,6 +1208,19 @@ function playgroundHtml(origin: string): string {
       }
     });
 
+    resetDemo.addEventListener("click", async () => {
+      await fetch("/playground/demo/default/reset", { method: "POST" });
+      await refreshDemoStatus();
+    });
+
+    copyCommand.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(relayCommand.textContent || "");
+      copyCommand.textContent = "Copied";
+      setTimeout(() => {
+        copyCommand.textContent = "Copy command";
+      }, 1200);
+    });
+
     function summarizeResult(body) {
       if (!body || !body.ok) return escapeHtml(body && body.error ? body.error : "Command failed.");
       const result = body.result || {};
@@ -648,7 +1236,7 @@ function playgroundHtml(origin: string): string {
           return "Interceptor saw placeholder auth <code>" + escapeHtml(String(auth || "missing")) + "</code>; audit usedCount is <code>" + escapeHtml(String(used ?? "pending")) + "</code>.";
         }
         case "blind-relay-proof-command":
-          return "Run the command below from the repo root to prove the relay transcript hides the secret, body, path, and query token.";
+          return "Run the command below in any terminal with Node.js 20+ and npm. It creates a temp directory, downloads the relay script, and proves the relay transcript hides the secret, body, path, and query token.";
         case "project-egress":
           return "Hosted target received a normal project egress request.";
         case "create-project":
@@ -668,7 +1256,68 @@ function playgroundHtml(origin: string): string {
         .replaceAll('"', "&quot;");
     }
 
+    async function refreshDemoStatus() {
+      try {
+        const response = await fetch("/playground/demo/default/status", { cache: "no-store" });
+        const state = await response.json();
+        demoPhase.textContent = phaseLabel(state.phase);
+        demoUpdated.textContent = "Updated " + new Date(state.updatedAt).toLocaleTimeString();
+        renderProofSummary(state.logs || []);
+        demoLogs.innerHTML = "";
+        for (const entry of state.logs || []) {
+          const item = document.createElement("div");
+          item.className = "log";
+          const detail = entry.detail === undefined ? "" : "<pre>" + escapeHtml(JSON.stringify(entry.detail, null, 2)) + "</pre>";
+          item.innerHTML = "<small>" + escapeHtml(new Date(entry.at).toLocaleTimeString()) + " · " + escapeHtml(phaseLabel(entry.phase)) + "</small><div>" + escapeHtml(entry.message) + "</div>" + detail;
+          demoLogs.append(item);
+        }
+        if ((state.logs || []).length === 0) {
+          demoLogs.textContent = "No relay script has reported status yet.";
+        }
+      } catch (error) {
+        demoPhase.textContent = "unreachable";
+        demoUpdated.textContent = String(error && error.message ? error.message : error);
+      }
+    }
+
+    function phaseLabel(phase) {
+      const labels = {
+        idle: "Idle",
+        waiting_for_node_relay: "Waiting for local Node relay",
+        relay_connected: "Node relay connected",
+        secret_egress_relayed: "Secret egress relayed",
+        target_received_request: "Target received request",
+        relay_saw_ciphertext_only: "Done: relay only saw encrypted TLS bytes",
+        failed: "Failed",
+      };
+      return labels[phase] || String(phase || "unknown");
+    }
+
+    function renderProofSummary(logs) {
+      const target = logs.find((entry) => entry.phase === "target_received_request" && entry.detail);
+      const secret = logs.find((entry) => entry.phase === "secret_egress_relayed" && entry.detail);
+      const proof = logs.find((entry) => entry.phase === "relay_saw_ciphertext_only" && entry.detail);
+      const targetIp = proof && proof.detail.targetClientIp || target && target.detail.clientIp || "pending";
+      const receivedAuth = secret && secret.detail.headers && secret.detail.headers["x-itx-egress-proof"] || "pending";
+      const relayDialed = proof && proof.detail.relayDialed || "pending";
+      const absent = proof && proof.detail.hiddenStringsCheckedAbsent
+        ? proof.detail.hiddenStringsCheckedAbsent.join(", ")
+        : "pending";
+      demoProof.innerHTML = [
+        proofItem("Target saw client IP", targetIp),
+        proofItem("Target received auth", receivedAuth),
+        proofItem("Relay dialed", relayDialed),
+        proofItem("Plaintext absent from relay", absent),
+      ].join("");
+    }
+
+    function proofItem(label, value) {
+      return '<div class="proof-item"><small>' + escapeHtml(label) + '</small><code>' + escapeHtml(String(value)) + '</code></div>';
+    }
+
     select(selected);
+    void refreshDemoStatus();
+    setInterval(refreshDemoStatus, 1000);
   </script>
 </body>
 </html>`;
@@ -730,7 +1379,7 @@ function playgroundExamples(origin: string) {
     {
       id: "blind-relay-proof-command",
       title: "Blind Relay Proof Command",
-      description: "Prints the repo command for the TLS relay proof.",
+      description: "Prints the standalone Node relay command for the TLS relay proof.",
       code: `{
   "action": "blind-relay-proof-command"
 }`,
