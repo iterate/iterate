@@ -13,10 +13,20 @@ import { SecretDurableObject } from "./domains/secrets/secret-durable-object.ts"
 import { StreamDurableObject } from "./domains/streams/stream-durable-object.ts";
 import { StatefulWorkerDurableObject } from "./domains/workers/stateful-worker-durable-object.ts";
 import { e2eFixtureResponse } from "./e2e-fixtures.ts";
+import {
+  handlePageDebuggingDemoRequest,
+  PageDebuggingDemoDurableObject,
+} from "./page-debugging-demo.ts";
 
 export default {
-  async fetch(request: Request, _env: Env, ctx: ExecutionContext) {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
+
+    const pageDebuggingDemoResponse = await handlePageDebuggingDemoRequest({
+      env,
+      request,
+    });
+    if (pageDebuggingDemoResponse !== null) return pageDebuggingDemoResponse;
 
     // To test cookie auth, callers can post the JWT they'd like to have written as a cookie to /api/login
     // In this demo implementation of itx, we just trust the caller to pick their own jwt.
@@ -34,7 +44,7 @@ export default {
       return Response.json({ ok: true }, { headers: { "set-cookie": cookie } });
     }
 
-    const playground = await playgroundResponse(request, _env, ctx);
+    const playground = await playgroundResponse(request, env, ctx);
     if (playground !== null) return playground;
 
     const fixtureResponse = await e2eFixtureResponse(request);
@@ -98,4 +108,5 @@ export {
   SecretDurableObject,
   StreamDurableObject,
   PlaygroundDemoDurableObject,
+  PageDebuggingDemoDurableObject,
 };

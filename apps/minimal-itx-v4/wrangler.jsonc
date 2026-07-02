@@ -25,6 +25,7 @@
       { "name": "SECRET", "class_name": "SecretDurableObject" },
       { "name": "WORKER", "class_name": "StatefulWorkerDurableObject" },
       { "name": "PLAYGROUND_DEMO", "class_name": "PlaygroundDemoDurableObject" },
+      { "name": "PAGE_DEBUGGING_DEMO", "class_name": "PageDebuggingDemoDurableObject" },
       // The real durable event log from apps/os — a context's capability table
       // is the fold of one of these streams.
       { "name": "STREAM", "class_name": "StreamDurableObject" },
@@ -58,6 +59,10 @@
     {
       "tag": "v7",
       "new_sqlite_classes": ["PlaygroundDemoDurableObject"],
+    },
+    {
+      "tag": "v8",
+      "new_sqlite_classes": ["PageDebuggingDemoDurableObject"],
     },
   ],
   "artifacts": [

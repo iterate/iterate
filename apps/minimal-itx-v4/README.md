@@ -109,6 +109,64 @@ The REPL exposes `itx`, `root`, `RpcTarget`, `baseUrl`, `projectId`, and `token`
 Defaults are `http://127.0.0.1:8791`, project `prj_ref`, and the demo tokens
 from `src/auth.ts`.
 
+## Page Debugging Demo
+
+This app includes a self-contained proof of concept for the in-page debugging
+idea. The worker routes `/page-debugging/*` to `PageDebuggingDemoDurableObject`.
+That Durable Object hosts the demo page, mints short-lived HMAC tokens, stores
+the token claims in its own storage, and serves a tiny browser ESM client.
+
+Run it locally:
+
+```bash
+pnpm --dir apps/minimal-itx-v4 dev
+```
+
+Open the local or deployed demo:
+
+```text
+http://127.0.0.1:8791/page-debugging
+https://minimal-itx-v4.iterate-dev-preview.workers.dev/page-debugging
+```
+
+Live demo flow:
+
+1. Open the demo page and copy the generated snippet.
+2. Open any target page in the same browser and paste the snippet into that
+   page's DevTools console. Paste into the host page, not a cross-origin iframe,
+   if you want host-page screenshots.
+3. The target page gets a small **ITERATE** widget in the bottom-right corner.
+   Its menu says **Sharing with ITERATE** and includes **Share a screenshot**,
+   **Enable screen capture**, **Copy page URL**, and **Stop sharing**. Stop
+   sharing removes the widget and revokes that demo session's short-lived tokens.
+4. Return to the demo page and click **Take Screenshot**. The screenshot is
+   rendered back into the demo page.
+5. Click **Snapshot**, **Click counter**, or **Fill message** to show that those
+   calls also cross the worker and invoke the mounted `debugPage` capability in
+   the target page.
+6. For a no-DevTools demo, click **Run in this tab** instead; that mounts the
+   same capability on the demo page itself.
+
+The generated snippet imports only the worker-hosted client module:
+
+```js
+const { connectPageTools } = await import("http://127.0.0.1:8791/page-debugging/client.mjs");
+```
+
+That client module imports `capnweb`, Testing Library DOM queries, and
+`user-event` from esm.sh. It also exposes `screenshot()`: by default it silently
+falls back to a host-DOM render, and if the user clicks the injected
+**Enable Host Capture** button in the target page it uses the Screen Capture API
+for true host-tab pixels. The WebSocket auth token rides in
+`Sec-WebSocket-Protocol` as `itx-page-debugging.<token>` because browsers cannot
+set `Authorization` headers on WebSocket upgrades. The server verifies the HMAC
+and checks that the token id still exists in the Durable Object's storage before
+vending the project ITX.
+
+Each generated session creates a throwaway demo project and short-lived provider
+and agent tokens, so concurrent demos do not fight over the same mounted
+`debugPage` capability.
+
 ## Web Chat LLM Agent
 
 The minimal LLM agent should mirror the real `apps/os` agent shape, but keep
