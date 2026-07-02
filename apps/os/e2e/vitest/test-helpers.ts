@@ -90,7 +90,9 @@ export function withItxSession(
     | ProjectItxSessionInput = {},
 ): RpcStub<Agent> | RpcStub<Session> | RpcStub<Itx> | RpcStub<UnauthenticatedItx> {
   const socket = new WebSocket(buildUrl({ path: "/api/itx", protocol: "ws" }), {
-    handshakeTimeout: 10_000,
+    // Matches itx-client.ts: cold slots under the concurrent e2e burst need
+    // more than 10s to answer the first upgrades.
+    handshakeTimeout: 30_000,
   });
 
   const start = Date.now();

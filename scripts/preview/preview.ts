@@ -461,6 +461,15 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "-c",
       [
         "set -euo pipefail",
+        // Warm the freshly-deployed slot before the concurrent burst: a cold
+        // deployment answers its first requests only after loading each
+        // worker, and a 40-connection stampede against zero warm isolates
+        // ends in edge 499/522s. One round boots each worker, a parallel
+        // round fans isolates out.
+        // -L: /api/iterate-auth/login redirects to the slot's auth worker,
+        // warming it for the login-flow specs.
+        'for path in /api/health / /api/itx /sign-in /api/iterate-auth/login; do curl -sL -o /dev/null --max-time 20 "$OS_BASE_URL$path" || true; done',
+        'for i in 1 2 3 4 5 6 7 8; do (curl -s -o /dev/null --max-time 20 "$OS_BASE_URL/api/health" && curl -s -o /dev/null --max-time 20 "$OS_BASE_URL/") & done; wait',
         // All lanes hit the same deployed slot but provision independent
         // projects, so everything runs concurrently: the two vitest lanes and
         // the chromium install start together, the Playwright specs as soon
