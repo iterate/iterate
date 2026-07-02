@@ -64,7 +64,10 @@ export async function decideIngressRoute(input: {
   if (isOsHost({ baseUrl: input.config.baseUrl, bases, host, requestUrl: url })) {
     const [head, ...pathSegments] = url.pathname.split("/").filter(Boolean);
     if (head !== undefined && head.startsWith("prj_")) {
-      // The /prj_<id>/... path lane: the project worker sees the sub-path.
+      // The /prj_<id>/... path lane: the project worker sees the sub-path,
+      // and the stripped prefix rides along so workers can render URLs the
+      // BROWSER can use (e.g. form actions) — on host lanes there is no
+      // prefix and the header is absent.
       const workerUrl = new URL(input.url);
       workerUrl.pathname = pathSegments.length === 0 ? "/" : `/${pathSegments.join("/")}`;
       return projectRoute({
@@ -73,6 +76,7 @@ export async function decideIngressRoute(input: {
         method: input.method,
         projectId: head,
         url: workerUrl.toString(),
+        urlPrefix: `/${head}`,
       });
     }
     if (isEngineApiPath(url.pathname)) return { lane: "api" };
@@ -111,13 +115,16 @@ function projectRoute(input: {
   method: string;
   projectId: string;
   url: string;
+  urlPrefix?: string;
 }): IngressRoute {
   const headers = new Headers(input.headers);
   headers.set("x-itx-project-id", input.projectId);
-  // Trusted header: always overwritten, never pass-through — the outside
-  // world cannot pick an app the host didn't select.
+  // Trusted headers: always overwritten, never pass-through — the outside
+  // world cannot pick an app or fake a path prefix the lane didn't produce.
   headers.delete("x-iterate-app");
   if (input.appSlug) headers.set("x-iterate-app", input.appSlug);
+  headers.delete("x-iterate-url-prefix");
+  if (input.urlPrefix) headers.set("x-iterate-url-prefix", input.urlPrefix);
   return {
     lane: "project",
     fetch: { headers, method: input.method, url: input.url },

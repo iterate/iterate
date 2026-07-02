@@ -43,6 +43,7 @@ export function stripInternalHeaders(request: Request) {
   headers.delete("x-iterate-resolved-ingress");
   headers.delete("x-iterate-app");
   headers.delete("x-itx-project-id");
+  headers.delete("x-iterate-url-prefix");
   headers.delete("x-forwarded-host");
   headers.delete("x-forwarded-proto");
   headers.delete("x-iterate-ingress-hostname");

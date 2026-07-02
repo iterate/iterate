@@ -22,6 +22,8 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/")({
 function ProjectHomePage() {
   const params = Route.useParams();
   const { project, routeConfig } = Route.useLoaderData();
+  const { authSession } = Route.useRouteContext();
+  const userId = authSession?.authenticated === true ? authSession.user.id : null;
   // The project lifecycle snapshot lives on the project's reduced-state
   // processor, reachable as `itx.processor.snapshot()`. A plain useQuery +
   // refetchInterval polls it until `created` flips true.
@@ -58,7 +60,7 @@ function ProjectHomePage() {
               {JSON.stringify(lifecycleStateQuery.data ?? null, null, 2)}
             </pre>
           </div>
-          <ProjectSettingsPanel project={project} routeConfig={routeConfig} />
+          <ProjectSettingsPanel project={project} routeConfig={routeConfig} userId={userId} />
         </div>
       </aside>
       <ProjectStreamView

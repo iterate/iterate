@@ -51,8 +51,12 @@ const DEFAULT_PROJECT_WORKER_SOURCE = `
     }
 
     renderCounterPage(req, count) {
-      const projectId = req.headers.get("x-itx-project-id");
-      const action = projectId === null ? "/increment" : \`/\${projectId}/increment\`;
+      // The path lane (/prj_<id>/...) strips its prefix before the worker
+      // sees the URL, but the BROWSER still lives at the prefixed URL — the
+      // lane advertises the prefix so rendered links/actions resolve. Host
+      // lanes (<slug>.<base>) have no prefix.
+      const prefix = req.headers.get("x-iterate-url-prefix") ?? "";
+      const action = \`\${prefix}/increment\`;
       return new Response(
         \`<!doctype html>
           <html>

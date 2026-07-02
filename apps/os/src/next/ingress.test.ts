@@ -60,6 +60,21 @@ it("rewrites the /prj_<id> path lane to the project sub-path", async () => {
   const fetch = (route as { fetch: { headers: Headers; url: string } }).fetch;
   expect(fetch.url).toBe("http://localhost:56455/increment");
   expect(fetch.headers.get("x-itx-project-id")).toBe("prj_123");
+  // The stripped prefix rides along so workers can render browser-usable URLs.
+  expect(fetch.headers.get("x-iterate-url-prefix")).toBe("/prj_123");
+});
+
+it("host lanes carry no url prefix (and spoofed ones are stripped)", async () => {
+  const route = await decideIngressRoute({
+    config: DEV_CONFIG,
+    headers: { "x-iterate-url-prefix": "/prj_spoof" },
+    method: "GET",
+    resolvers: slugResolvers({ demo: "prj_1" }),
+    url: "http://demo.localhost:56455/",
+  });
+
+  const headers = (route as { fetch: { headers: Headers } }).fetch.headers;
+  expect(headers.get("x-iterate-url-prefix")).toBeNull();
 });
 
 it("keeps localhost subdomains on the project lane without rewriting the URL", async () => {

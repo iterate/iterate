@@ -64,8 +64,10 @@ Playwright green at phase boundaries.
    `internal.project.createForOrganization` (auth mints `prj_` ids);
    `internal.project.bySlug` is the trusted service-token lookup. In front of
    it, the `PROJECT_DIRECTORY` KV namespace caches `slug:<slug>` → id and
-   `project:<id>` → metadata (1h TTL, primed at create, negatives only
-   memoized in-isolate — KV's 60s floor would break create-then-navigate).
+   `project:<id>` → metadata (no expiry — slugs are immutable and create
+   overwrites its keys; admin-lane projects have no auth row, so the cache
+   is their directory). Negatives are only memoized in-isolate for seconds,
+   the memo never shields the KV read, and auth outages are never cached.
 6. **Browser mirror = second host of the same engine** (event table + derived
    tables, real `StreamProcessor` contracts in the browser host, announcements
    preserved).
