@@ -1,11 +1,12 @@
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { ActivityIcon, PlusIcon, RefreshCwIcon, RadioIcon } from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import type { ProjectProcessorState, StreamEvent } from "~/types.ts";
-import { useItx, useItxEffect } from "~/itx/itx-react.tsx";
+import { useProjectProcessorState } from "~/lib/project-processor-state.ts";
+import type { StreamEvent } from "~/types.ts";
+import { useItx, useItxSubscription, type ItxSubscriptionStatus } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/reactivity")({
   ssr: false,
@@ -17,24 +18,6 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/reactivity")({
   },
   component: ProjectReactivityPage,
 });
-
-type ProjectProcessorSnapshot = {
-  offset: number;
-  state: ProjectProcessorState;
-};
-
-type LiveStatus = "connecting" | "live" | "error";
-
-type LiveProjectProcessorState = {
-  error?: string;
-  lastSnapshotAt?: number;
-  lastStateAt?: number;
-  snapshot?: ProjectProcessorSnapshot;
-  snapshotCount: number;
-  state?: ProjectProcessorState;
-  statePushCount: number;
-  status: LiveStatus;
-};
 
 const REACTIVITY_TEST_STREAM_PATH = "/reactivity-test";
 const REACTIVITY_TEST_EVENT_TYPE = "events.iterate.com/reactivity-test/appended";
@@ -57,143 +40,41 @@ type ReactivityTestStreamState = {
   error?: string;
   events: ReactivityTestEvent[];
   lastBatchAt?: number;
-  status: LiveStatus;
+  status: ItxSubscriptionStatus;
 };
 
-type LiveProjectProcessorSnapshot = LiveProjectProcessorState & {
-  refreshSnapshot: () => Promise<void>;
-};
-
-function useLiveProjectProcessorSnapshot(): LiveProjectProcessorSnapshot {
-  const itx = useItx();
-  const [state, setState] = useState<LiveProjectProcessorState>({
-    snapshotCount: 0,
-    status: "connecting",
-    statePushCount: 0,
-  });
-
-  const commitSnapshot = useCallback((snapshot: ProjectProcessorSnapshot) => {
-    setState((current) => ({
-      ...current,
-      lastSnapshotAt: Date.now(),
-      snapshot,
-      snapshotCount: current.snapshotCount + 1,
-      status: "live",
-    }));
-  }, []);
-
-  const refreshSnapshot = useCallback(async () => {
-    const snapshot = (await itx.processor.snapshot()) as ProjectProcessorSnapshot;
-    commitSnapshot(snapshot);
-  }, [commitSnapshot, itx]);
-
-  useItxEffect(
-    async (effectItx) => {
-      let disposed = false;
-      let latestSnapshotRequest = 0;
-
-      setState((current) => ({
-        ...current,
-        error: undefined,
-        status: "connecting",
-      }));
-
-      const readSnapshot = async () => {
-        const requestId = ++latestSnapshotRequest;
-        const snapshot = (await effectItx.processor.snapshot()) as ProjectProcessorSnapshot;
-        if (disposed || requestId !== latestSnapshotRequest) return;
-        commitSnapshot(snapshot);
-      };
-
-      try {
-        const unsubscribe = await effectItx.processor.onStateChange(
-          (projectProcessorState: ProjectProcessorState) => {
-            if (disposed) return;
-            const parsedState = projectProcessorState as ProjectProcessorState;
-            setState((current) => ({
-              ...current,
-              lastStateAt: Date.now(),
-              state: parsedState,
-              statePushCount: current.statePushCount + 1,
-              status: "live",
-            }));
-            void readSnapshot().catch((error: unknown) => {
-              if (disposed) return;
-              setState((current) => ({
-                ...current,
-                error: error instanceof Error ? error.message : String(error),
-                status: "error",
-              }));
-            });
-          },
-        );
-
-        return () => {
-          disposed = true;
-          unsubscribe();
-        };
-      } catch (error: unknown) {
-        if (disposed) return;
-        setState((current) => ({
-          ...current,
-          error: error instanceof Error ? error.message : String(error),
-          status: "error",
-        }));
-      }
-    },
-    [commitSnapshot],
-  );
-
-  return { ...state, refreshSnapshot };
-}
-
+/**
+ * Live raw-stream subscription. All recovery (reconnect, silent-death
+ * watchdog, re-subscribe, retry) is useItxSubscription's; this hook only
+ * accumulates delivered events. Re-subscription replays from offset 0 and
+ * `mergeReactivityTestEvents` dedupes by offset, so recovery is idempotent.
+ */
 function useReactivityTestStream(): ReactivityTestStreamState {
-  const [state, setState] = useState<ReactivityTestStreamState>({
+  const [feed, setFeed] = useState({
     batchCount: 0,
-    events: [],
-    status: "connecting",
+    events: [] as ReactivityTestEvent[],
+    lastBatchAt: undefined as number | undefined,
   });
 
-  useItxEffect(async (effectItx) => {
-    let disposed = false;
-    setState((current) => ({ ...current, error: undefined, status: "connecting" }));
-
-    try {
-      const subscription = await effectItx.streams.get(REACTIVITY_TEST_STREAM_PATH).subscribe({
+  const subscription = useItxSubscription(
+    (itx) =>
+      itx.streams.get(REACTIVITY_TEST_STREAM_PATH).subscribe({
         replayAfterOffset: 0,
         processEventBatch: (batch: { events: StreamEvent[] }) => {
-          if (disposed) return;
           const events = (batch.events || [])
             .filter(isReactivityTestEvent)
             .map(toReactivityTestEvent);
-          setState((current) => ({
-            ...current,
+          setFeed((current) => ({
             batchCount: current.batchCount + 1,
             events: mergeReactivityTestEvents(current.events, events),
             lastBatchAt: Date.now(),
-            status: "live",
           }));
         },
-      });
-      if (!disposed) {
-        setState((current) => ({ ...current, status: "live" }));
-      }
+      }),
+    [],
+  );
 
-      return () => {
-        disposed = true;
-        void subscription.unsubscribe();
-      };
-    } catch (error: unknown) {
-      if (disposed) return;
-      setState((current) => ({
-        ...current,
-        error: stringifyError(error),
-        status: "error",
-      }));
-    }
-  }, []);
-
-  return state;
+  return { ...feed, error: subscription.error, status: subscription.status };
 }
 
 function ProjectReactivityPage() {
@@ -207,43 +88,33 @@ function ProjectReactivityPage() {
 function ProjectReactivityContent() {
   const { project } = Route.useLoaderData();
   const itx = useItx();
-  const live = useLiveProjectProcessorSnapshot();
+  const live = useProjectProcessorState(project.id);
   const testStream = useReactivityTestStream();
-  const [manualRefreshPending, setManualRefreshPending] = useState(false);
   // Only ever read inside the append handlers — a ref avoids a render per click.
   const nextActionIdRef = useRef(1);
   const [action, setAction] = useState<ReactivityActionState>({ status: "idle" });
 
-  const projectState = live.state ?? live.snapshot?.state;
-  // The next project processor state has no phase/onboarding machine; `created`
-  // is the lifecycle fact, and the create request carries the project identity.
-  const phase = projectState == null ? "unknown" : projectState.created ? "ready" : "pending";
-  const projectId = projectState?.createRequest?.projectId ?? project.id;
+  // Count checkpoint advances observed by this component — how the page makes
+  // pushes visible without owning its own subscription.
+  const [pushLog, setPushLog] = useState({ count: 0, lastAt: undefined as number | undefined });
+  useEffect(() => {
+    setPushLog((current) => ({ count: current.count + 1, lastAt: Date.now() }));
+  }, [live.offset]);
+
+  const projectState = live.state;
+  // The project processor state has no phase/onboarding machine; `created` is
+  // the lifecycle fact, and the create request carries the project identity.
+  const phase = projectState.created ? "ready" : "pending";
+  const projectId = projectState.createRequest?.projectId ?? project.id;
   const actionObserved = isActionObserved(action, testStream.events);
   const actionSyncing = action.status === "done" && !actionObserved;
   const actionPending = action.status === "running" || actionSyncing;
   const actionStatus = actionSyncing ? "syncing..." : action.status;
-  const liveApi = useMemo(
-    () =>
-      [
-        "useItxEffect(async (itx) => {",
-        '  const subscription = await itx.streams.get("/reactivity-test").subscribe({',
-        "    processEventBatch: appendDeliveredEvents,",
-        "  })",
-        "  return () => void subscription.unsubscribe()",
-        "}, [])",
-      ].join("\n"),
-    [],
-  );
-
-  async function refreshSnapshot() {
-    setManualRefreshPending(true);
-    try {
-      await live.refreshSnapshot();
-    } finally {
-      setManualRefreshPending(false);
-    }
-  }
+  const liveApi = [
+    "const { state, offset, status } = useProjectProcessorState(project.id)",
+    "// server pushes every state change; a liveness watchdog",
+    "// re-subscribes after silent DO restarts and half-open sockets",
+  ].join("\n");
 
   async function appendTestEvent() {
     const actionId = nextActionIdRef.current;
@@ -291,9 +162,17 @@ function ProjectReactivityContent() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            {/* THE one loading indicator on this page. The per-panel status
+                badges deliberately carry no data-spinner: both panels connect
+                at once on first paint, and two spinner-matching elements trip
+                middlewright's strict-mode spinner-waiter. */}
+            {live.status === "connecting" || testStream.status === "connecting" ? (
+              <Badge variant="secondary" data-spinner="true">
+                connecting…
+              </Badge>
+            ) : null}
             <Badge
               data-testid="reactivity-status"
-              data-spinner={live.status === "connecting" ? "true" : undefined}
               variant={live.status === "live" ? "default" : "secondary"}
             >
               {live.status}
@@ -302,8 +181,7 @@ function ProjectReactivityContent() {
               type="button"
               variant="outline"
               size="sm"
-              onClick={refreshSnapshot}
-              disabled={manualRefreshPending}
+              onClick={live.refresh}
               data-testid="reactivity-refresh"
             >
               <RefreshCwIcon aria-hidden="true" data-icon="icon" />
@@ -333,14 +211,14 @@ function ProjectReactivityContent() {
             testId="reactivity-stream-event-count"
           />
           <MetricPanel
-            label="Project pushes"
-            value={String(live.statePushCount)}
-            detail={formatTime(live.lastStateAt)}
+            label="State updates"
+            value={String(pushLog.count)}
+            detail={formatTime(pushLog.lastAt)}
             testId="reactivity-state-push-count"
           />
           <MetricPanel
             label="Processor offset"
-            value={String(live.snapshot?.offset ?? "-")}
+            value={String(live.offset)}
             testId="reactivity-processor-offset"
           />
         </div>
@@ -360,16 +238,14 @@ function ProjectReactivityContent() {
                   </Badge>
                 </dd>
                 <dt className="text-muted-foreground">Created</dt>
-                <dd data-testid="reactivity-onboarding">
-                  {projectState == null ? "unknown" : String(projectState.created)}
-                </dd>
+                <dd data-testid="reactivity-onboarding">{String(projectState.created)}</dd>
                 <dt className="text-muted-foreground">Project ID</dt>
                 <dd className="truncate font-mono text-xs" data-testid="reactivity-project-id">
                   {projectId}
                 </dd>
                 <dt className="text-muted-foreground">Streams</dt>
                 <dd className="truncate font-mono text-xs">
-                  {projectState == null ? "-" : String(projectState.streams.length)}
+                  {String(projectState.streams.length)}
                 </dd>
               </dl>
             </section>
@@ -379,7 +255,6 @@ function ProjectReactivityContent() {
                 <h2 className="text-sm font-semibold">Stream subscription</h2>
                 <Badge
                   data-testid="reactivity-stream-status"
-                  data-spinner={testStream.status === "connecting" ? "true" : undefined}
                   variant={testStream.status === "live" ? "default" : "secondary"}
                 >
                   {testStream.status}
@@ -441,8 +316,11 @@ function ProjectReactivityContent() {
 
           <div className="grid min-h-0 gap-4 xl:grid-cols-2">
             <JsonPanel title="Subscribed stream events" value={testStream.events} />
-            <JsonPanel title="Live processor state" value={live.state ?? null} />
-            <JsonPanel title="Processor snapshot" value={live.snapshot ?? null} />
+            <JsonPanel title="Live processor state" value={projectState} />
+            <JsonPanel
+              title="Processor snapshot"
+              value={{ offset: live.offset, state: projectState }}
+            />
             <CodePanel title="React hook shape" code={liveApi} />
           </div>
         </div>

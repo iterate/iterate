@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { KeyRound } from "lucide-react";
 import { z } from "zod";
 import { Button } from "@iterate-com/ui/components/button";
@@ -17,7 +17,8 @@ import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { formatRelativeTime } from "~/lib/format-relative-time.ts";
-import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
+import { useProjectProcessorState } from "~/lib/project-processor-state.ts";
+import { useItx } from "~/itx/itx-react.tsx";
 
 /** Secrets live at `/secrets/<name>`; the route param is the bare name. */
 const secretPathFromName = (name: string) => `/secrets/${name}`;
@@ -60,21 +61,18 @@ function ProjectSecretsIndexContent() {
   const navigate = useNavigate();
   const { project } = Route.useLoaderData();
   const itx = useItx();
-  const queryClient = useQueryClient();
   const [filter, setFilter] = useState("");
-  const secretsKey = ["secrets", project.slug];
-  const secretsList = useItxQuery({
-    key: secretsKey,
-    query: (itx) => itx.secrets.list(),
-  });
+  // The secrets list is a slice of the project processor's reduced state; the
+  // processor pushes state changes, so a new secret appears here without any
+  // invalidation.
+  const secretsList = useProjectProcessorState(project.id).state.secrets;
 
   const upsertSecret = useMutation({
     mutationFn: async (input: { name: string; material: string }) => {
       await itx.secrets.get(secretPathFromName(input.name)).update({ material: input.material });
       return input.name;
     },
-    onSuccess: async (name) => {
-      await queryClient.invalidateQueries({ queryKey: ["itx", ...secretsKey] });
+    onSuccess: (name) => {
       form.reset();
       void navigate({
         to: "/projects/$projectSlug/secrets/$secretId",

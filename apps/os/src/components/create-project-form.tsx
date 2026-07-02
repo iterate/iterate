@@ -45,8 +45,12 @@ export function CreateProjectForm() {
       // the auth worker (org grant -> claims) and runs the engine bootstrap
       // saga, then widens THIS socket's access to the new project.
       const itx = await connectItxBrowser();
+      // Fast path: resolve as soon as the project EXISTS — the bootstrap saga
+      // keeps running behind the handle, and the project home page plays its
+      // progress live from processor pushes until `state.created` flips.
       const project = itx.projects.create({
         slug: input.slug,
+        waitUntilCreated: false,
         ...(input.organizationSlug ? { organizationSlug: input.organizationSlug } : {}),
       });
       const description = await project.describe();
@@ -67,13 +71,12 @@ export function CreateProjectForm() {
       reconnectItx();
       await queryClient.invalidateQueries({ queryKey: projectsListQueryKey });
       await router.invalidate({ sync: true });
-      // New projects land in the agent onboarding flow (origin/main UX).
+      // Straight into the project: the home page shows the live creation
+      // checklist until the bootstrap saga commits `project/created`, then
+      // hands over to the settings view.
       await router.navigate({
-        to: "/projects/$projectSlug/agents/streams/$",
-        params: {
-          _splat: "/agents/onboarding",
-          projectSlug: project.slug,
-        },
+        to: "/projects/$projectSlug",
+        params: { projectSlug: project.slug },
       });
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),

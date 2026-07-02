@@ -122,3 +122,79 @@ describe("itx socket map", () => {
     expect(FakeWebSocket.instances).toHaveLength(2);
   });
 });
+
+describe("watchItxSubscription", () => {
+  // The watchdog's cadence (see the constants in itx-react.tsx).
+  const INTERVAL = 45_000;
+  const PING_TIMEOUT = 10_000;
+
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  test("a subscription that keeps answering true is left alone", async () => {
+    const { watchItxSubscription } = await import("./itx-react.tsx");
+    let pings = 0;
+    const onDead = vi.fn();
+    const stop = watchItxSubscription(() => {
+      pings += 1;
+      return true;
+    }, onDead);
+
+    await vi.advanceTimersByTimeAsync(INTERVAL * 3);
+    expect(pings).toBe(3);
+    expect(onDead).not.toHaveBeenCalled();
+    stop();
+    await vi.advanceTimersByTimeAsync(INTERVAL * 2);
+    expect(pings).toBe(3); // stopped: no further checks
+  });
+
+  test("ping answering false reports dead exactly once and stops", async () => {
+    const { watchItxSubscription } = await import("./itx-react.tsx");
+    const onDead = vi.fn();
+    watchItxSubscription(() => false, onDead);
+
+    await vi.advanceTimersByTimeAsync(INTERVAL * 3);
+    expect(onDead).toHaveBeenCalledTimes(1);
+    expect(onDead).toHaveBeenCalledWith("dead");
+  });
+
+  test("a rejecting ping (dead DO incarnation) reports dead", async () => {
+    const { watchItxSubscription } = await import("./itx-react.tsx");
+    const onDead = vi.fn();
+    watchItxSubscription(() => Promise.reject(new Error("Durable Object reset")), onDead);
+
+    await vi.advanceTimersByTimeAsync(INTERVAL);
+    expect(onDead).toHaveBeenCalledTimes(1);
+    expect(onDead).toHaveBeenCalledWith("dead");
+  });
+
+  test("a hanging ping (half-open socket) reports timed-out AND drops every socket", async () => {
+    const { connectItxBrowser, watchItxSubscription } = await import("./itx-react.tsx");
+    // A live socket that the recovery must drop.
+    const first = connectItxBrowser({ projectId: "acme" });
+    onlySocket().fire("open");
+    await first;
+
+    const onDead = vi.fn();
+    watchItxSubscription(() => new Promise<boolean>(() => {}), onDead);
+
+    await vi.advanceTimersByTimeAsync(INTERVAL + PING_TIMEOUT);
+    expect(onDead).toHaveBeenCalledTimes(1);
+    expect(onDead).toHaveBeenCalledWith("timed-out");
+    // reconnectAllItx ran: the cached socket promise was dropped, so the next
+    // read dials fresh.
+    expect(connectItxBrowser({ projectId: "acme" })).not.toBe(first);
+  });
+
+  test("the tab becoming visible triggers an immediate check", async () => {
+    const { watchItxSubscription } = await import("./itx-react.tsx");
+    const onDead = vi.fn();
+    watchItxSubscription(() => false, onDead);
+
+    // No interval has elapsed — visibility alone must trigger the check
+    // (waking from sleep is exactly when the socket is most likely dead).
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onDead).toHaveBeenCalledWith("dead");
+  });
+});

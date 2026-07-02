@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { ExternalLink } from "lucide-react";
 import { z } from "zod";
 import { Button } from "@iterate-com/ui/components/button";
@@ -28,7 +28,8 @@ import { RepoArtifactNameCodec } from "~/domains/repos/utils.ts";
 import { buildArtifactViewerUrl } from "~/lib/artifact-viewer-url.ts";
 import { formatRelativeTime } from "~/lib/format-relative-time.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
-import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
+import { useProjectProcessorState } from "~/lib/project-processor-state.ts";
+import { useItx } from "~/itx/itx-react.tsx";
 
 const CreateRepoForm = z.object({
   path: z
@@ -73,21 +74,20 @@ function ProjectReposIndexContent() {
   const navigate = useNavigate();
   const { project, routeConfig } = Route.useLoaderData();
   const itx = useItx();
-  const queryClient = useQueryClient();
   const [filter, setFilter] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; direction: SortDirection }>({
     key: "createdAt",
     direction: "desc",
   });
-  const reposKey = ["repos", project.slug];
-  const reposList = useItxQuery({ key: reposKey, query: (itx) => itx.repos.list() });
+  // The repos list is a slice of the project processor's reduced state; new
+  // repos land here via the processor's state push, no invalidation needed.
+  const reposList = useProjectProcessorState(project.id).state.repos;
   const createRepo = useMutation({
     mutationFn: async (input: { path: string }) => {
       await itx.repos.create({ path: input.path });
       return input.path;
     },
-    onSuccess: async (path) => {
-      await queryClient.invalidateQueries({ queryKey: ["itx", ...reposKey] });
+    onSuccess: (path) => {
       form.reset();
       void navigate({
         to: "/projects/$projectSlug/repos/$",
