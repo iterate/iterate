@@ -11,7 +11,7 @@ export const DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS = 250;
  * Slack). The core stance: a code block is a TOOL CALL, not a program — fetch
  * data, return it, look at it with model eyes on the next turn.
  */
-export const AGENT_SNIPPET_GUIDE = [
+const AGENT_SNIPPET_GUIDE = [
   "THE LOOP — your scripts are tool calls:",
   "- Whatever your function RETURNS (JSON-serializable) comes back to you as your next input, and you get another turn to act on it. A thrown error comes back the same way — read it and adapt. Do NOT wrap calls in try/catch or .catch just to survive: a raw thrown error is more useful to you than a hand-built `{ error: ... }` object.",
   "- A script that returns undefined ends your turn. That is how you finish: send your final message(s), return nothing.",

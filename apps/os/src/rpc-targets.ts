@@ -1549,7 +1549,7 @@ export class StreamProcessorRpcTarget<Contract extends StreamProcessorContract>
 // REPL "Examples" panel and the e2e matrix. Exposing it as a built-in lets
 // agents and scripts browse known-good snippets instead of guessing at the
 // surface; list() omits the code bodies so it stays cheap to skim.
-export class ItxExampleCatalogRpcTarget extends RpcTarget implements ItxExampleCatalog {
+class ItxExampleCatalogRpcTarget extends RpcTarget implements ItxExampleCatalog {
   async list() {
     return ITX_EXAMPLES.map(exampleSummary);
   }
