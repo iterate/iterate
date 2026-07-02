@@ -1,6 +1,6 @@
 # Secrets management
 
-> **Status: historical design proposal.** Kept for context; details below may not match the implementation. The secret-substitution mechanism it sketches now exists: egress secret substitution in `apps/os` (`apps/os/src/domains/projects/egress-secret-substitution.ts`, resolving `getSecret(...)` references in outbound request headers) and `getIterateSecret({...})` HAR sanitization in `packages/mock-http-proxy` (`src/har/har-sanitizer.ts`).
+> **Status: historical design proposal.** Kept for context; details below may not match the implementation. The secret-substitution mechanism it sketches now exists in the itx engine: project egress substitutes `getSecret({ path: ... })` references in outbound request headers, gated by per-secret egress URL allowlists (`apps/os/src/next/domains/projects/egress.ts` + `apps/os/src/next/domains/secrets/`); `getIterateSecret({...})` HAR sanitization lives in `packages/mock-http-proxy` (`src/har/har-sanitizer.ts`).
 
 ## How agents access secrets
 

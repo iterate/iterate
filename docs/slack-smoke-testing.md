@@ -1,5 +1,11 @@
 # Slack Smoke Testing
 
+> **Status: pre-migration procedure.** The Slack integration described here
+> was removed in the itx-v4 replacement and is being rebuilt on the new
+> engine (migration Phase 12, in flight; the old source is parked in
+> `apps/os/legacy-quarantine/`). Durable Object names and event routes below
+> describe the pre-migration stack; revise this doc when Slack lands again.
+
 This note describes the manual production smoke test for proving that a Slack
 thread can wake a routed Slack agent and produce a real Slack reply.
 

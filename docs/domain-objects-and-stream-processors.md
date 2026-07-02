@@ -66,7 +66,9 @@ What this doctrine buys, every time:
   moment it exists. The acceptance test: an agent with no prior
   knowledge, handed a stub, acts competently from describe() alone.
 
-The itx capability layer is the reference implementation of all of this
-(see `apps/os/docs/itx-next.md`, "The address unification"); a context is
-a domain object whose state is its capability table and whose creation
-event is `context-created`.
+The itx engine (`apps/os/src/next/`) is the reference implementation of all
+of this: every domain (projects, repos, agents, secrets, itx scopes) is a
+processor contract folding its own stream, and a capability context is a
+domain object whose state is its capability table, rebuilt from
+`capability-provided` events. (Design lineage: `apps/os/docs/itx-next.md`,
+"The address unification" — a pre-migration record.)

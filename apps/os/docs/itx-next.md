@@ -1,5 +1,14 @@
 # itx: what's next (working notes)
 
+> **Status: historical design record (pre-migration).** These are the working
+> notes of the itx design arc that shaped the PRE-itx-v4 engine, which was
+> deleted in the itx-v4 replacement (`apps/os/ITX_V4_MIGRATION_REPORT.md`).
+> File paths and mechanics below refer to that deleted implementation. Kept
+> because it still explains WHY things are shaped the way they are (the
+> address unification, streams-as-authority, self-description) and is
+> referenced as design-of-record from other docs. The current engine and its
+> contract live at `apps/os/src/next/` (`README.md`, `types.ts`).
+
 Status: NOODLING. This is the running list of things we want to fix or build in
 the itx layer, with positions and open questions. Nothing here is committed;
 when an item graduates it gets its own task/PR. Companion docs: `apps/os/src/itx/README.md`

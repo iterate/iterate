@@ -55,7 +55,7 @@ The ownership boundary for a persisted OS record: Project, Organization, User, o
 _Avoid_: Tenant type, resource kind
 
 **ID**:
-A stable TypeID-prefixed identifier minted by OS for a durable domain object.
+A stable TypeID-prefixed identifier for a durable domain object (project ids are minted by the auth worker; everything else by the engine).
 _Avoid_: slug, key, database rowid
 
 **Slug**:

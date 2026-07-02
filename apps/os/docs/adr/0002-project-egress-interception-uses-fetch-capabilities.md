@@ -14,3 +14,9 @@ plumbing in e2e tests, and lets OS withhold Secret Material while still showing
 the original `getSecret(...)` incantation to the intercepting test.
 
 Captun PR stack: https://github.com/iterate/captun/pull/1
+
+Amendment (itx-v4 replacement): the decision carried over; the current
+mechanism is `itx.egress.intercept(handler)` (`ProjectEgress.intercept` in
+`apps/os/src/next/types.ts`) — a live, last-writer-wins replacement installed
+on the Project Durable Object with the same session-bound semantics and the
+same secret-withholding property.

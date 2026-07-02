@@ -37,24 +37,26 @@ avoids hand-assembling URLs.
 
 ```bash
 doppler run --config prd -- pnpm cli itx run \
-  --context iterate \
-  -e 'const stream = await itx.streams.get("/debugging-docs/example"); return await stream.getEvents({ beforeOffset: "end", limit: 100 })'
+  --context <prj_id> \
+  -e 'return await itx.streams.get("/debugging-docs/example").getEvents({ limit: 100 })'
 ```
 
 Append and read in one script:
 
 ```bash
 doppler run --config prd -- pnpm cli itx run \
-  --context iterate \
-  -e 'const stream = await itx.streams.get("/debugging-docs/example"); const appended = await stream.append({ event: { type: "events.iterate.com/debugging-docs/example", payload: { source: "itx" } } }); const history = await stream.getEvents({ afterOffset: appended.offset - 1, beforeOffset: "end" }); return { appended, history }'
+  --context <prj_id> \
+  -e 'const stream = itx.streams.get("/debugging-docs/example"); const [appended] = await stream.append({ type: "events.iterate.com/debugging-docs/example", payload: { source: "itx" } }); const history = await stream.getEvents({ afterOffset: appended.offset - 1 }); return { appended, history }'
 ```
 
-List projects from the global admin handle:
+List project ids from the global admin session:
 
 ```bash
 doppler run --config prd -- pnpm cli itx run \
-  --eval 'return await itx.projects.list({ limit: 20 })'
+  --eval 'return await itx.projects.list()'
 ```
+
+`--context` takes the project ID (`prj_…`).
 
 ### Project MCP
 
@@ -80,7 +82,7 @@ doppler run --config prd -- pnpm cli claude-mcp
 For previews, run under the preview Doppler config:
 
 ```bash
-doppler run --config preview_3 -- pnpm cli itx run --eval 'return await itx.projects.list({ limit: 20 })'
+doppler run --config preview_3 -- pnpm cli itx run --eval 'return await itx.projects.list()'
 doppler run --config preview_3 -- pnpm cli claude-mcp
 ```
 
@@ -103,47 +105,48 @@ hard-coding disposable preview projects.
 
 ```bash
 doppler run --config preview_3 -- pnpm cli itx run \
-  --eval 'return await itx.projects.list({ limit: 20 })'
+  --eval 'return await itx.projects.list()'
 ```
 
 ## Useful itx Snippets
 
 ```bash
-# Confirm the project resolves.
+# Confirm the project resolves and list its capabilities.
 doppler run --config prd -- pnpm cli itx run \
-  --eval 'return await itx.projects.get("iterate")'
+  --eval 'const project = await itx.projects.get("<prj_id>"); return await project.describe()'
 
-# List initialized child streams under root.
+# List the project's streams.
 doppler run --config prd -- pnpm cli itx run \
-  --context iterate \
-  --eval 'return await itx.streams.get("/").runtimeState()'
+  --context <prj_id> \
+  --eval 'return await itx.streams.list()'
 
 # Read a stream.
 doppler run --config prd -- pnpm cli itx run \
-  --context iterate \
-  --eval 'return await itx.streams.get("/debugging-docs/example").getEvents({ beforeOffset: "end", limit: 100 })'
+  --context <prj_id> \
+  --eval 'return await itx.streams.get("/debugging-docs/example").getEvents({ limit: 100 })'
 
-# Inspect an agent runtime state.
+# Inspect an agent's processor runtime state.
 doppler run --config prd -- pnpm cli itx run \
-  --context iterate \
-  --eval 'return await itx.agents.create().getRuntimeState({ agentPath: "/agents/default" })'
+  --context <prj_id> \
+  --eval 'return await itx.agents.get("/agents/default").processor.getRuntimeState()'
 ```
 
 ## Cloudflare Debugging
 
 ### Cloudflare MCP Server
 
-Use the Cloudflare API MCP server for Workers traces, routes, bindings, D1,
+Use the Cloudflare API MCP server for Workers traces, routes, bindings,
 Durable Objects, and other Cloudflare state. Docs:
 [Cloudflare MCP servers](https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/).
 
 The deployed worker name is derived in `packages/shared/src/alchemy/init.ts` as
 `${manifest.slug}-${app.stage}` and then used by `apps/os/alchemy.run.ts` as
 `ctx.workerName`. For production OS, `os-prd` is the ingress router; the app
-worker is `os-prd-app` and each Durable Object class has its own worker
-(`os-prd-stream`, `os-prd-agent`, `os-prd-project`,
-`os-prd-slack-integration`, ...). See [worker-topology.md](./worker-topology.md).
-Pick the worker that owns the code you are debugging.
+worker is `os-prd-app`, the engine API is `os-prd-api`, and each Durable
+Object class has its own worker (`os-prd-stream`, `os-prd-itx`,
+`os-prd-project`, `os-prd-agent`, `os-prd-repo`, `os-prd-secret`,
+`os-prd-worker`). See [worker-topology.md](./worker-topology.md). Pick the
+worker that owns the code you are debugging.
 
 OS workers have persistent Workers Logs and traces enabled in
 `packages/shared/src/alchemy/iterate-app.ts`.

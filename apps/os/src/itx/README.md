@@ -1,5 +1,17 @@
 # itx — the iterate context
 
+> **Status: historical design record (pre-migration).** This document
+> describes the PRE-itx-v4 itx kernel, which was deleted in the itx-v4
+> replacement (`apps/os/ITX_V4_MIGRATION_REPORT.md`) — most files it names
+> (`itx.ts`, `handle.ts`, `dial.ts`, `fetch.ts`, `platform-context.ts`, …)
+> no longer exist. It is kept because it explains the design lineage the
+> current engine inherits (describe(), instructions/types, capabilities as
+> stream events). **The current engine lives at `apps/os/src/next/`**
+> (`README.md` + `types.ts`). What actually remains in THIS folder is the
+> client-side surface: `itx-react.tsx` (browser hooks), `browser-repl.ts`
+> (REPL compiler), `path-proxy.ts`, `examples.ts` (the example catalogue),
+> and `e2e/` (the cross-runtime example matrix).
+
 You are handed an `itx`. In the REPL, inside an agent, in a project worker,
 from `withItx()` on your laptop — it is always the same object: a handle on a
 **context**, a node that holds named capabilities. Three scenes cover almost

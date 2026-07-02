@@ -134,7 +134,7 @@ This is not a priority right now. For now, use the full `events.iterate.com/...`
 
 ## Consumers
 
-In OS, events are handled by **stream processors**: contracts declared with `defineProcessorContract` (event schemas + reducer) and implementations hosted inside domain Durable Objects via `createStreamProcessorHost` (see `apps/os/src/domains/*/stream-processors/` and `apps/os/src/domains/streams`). Other contexts (SSE listeners, webhook subscribers, unit tests polling an event bus) may consume events too.
+In OS, events are handled by **stream processors**: contracts declared with `defineProcessorContract` (event schemas + reducer) and implementations hosted inside domain Durable Objects via `createStreamProcessorHost` (see `apps/os/src/next/domains/*/` — each domain has a `*-processor-contract.ts` and `*-processor-implementation.ts` — and `apps/os/src/next/domains/streams/`). Other contexts (browser stream mirrors, webhook subscribers, unit tests polling an event bus) may consume events too.
 
 ### Consumer naming
 

@@ -1,5 +1,10 @@
 # itx implementation decisions & learnings
 
+> **Status: historical decision log (pre-migration).** These decisions were
+> made while implementing the PRE-itx-v4 itx layer, deleted in the itx-v4
+> replacement. Kept as the record of what changed on contact with reality;
+> the current engine and its contract live at `apps/os/src/next/`.
+
 Running log of choices made while implementing the itx layer (design of
 record: `src/itx/types.ts`; roadmap: `apps/os/docs/itx-next.md`),
 especially where reality diverged from the plan or where it left room.
