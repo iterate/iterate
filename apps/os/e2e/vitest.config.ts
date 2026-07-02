@@ -35,7 +35,7 @@ export default defineConfig({
     sequence: { concurrent: process.env.CI === "true" },
     // Bounds concurrent tests per file; the deployed slot handles the fan-out
     // (every test is its own project DO), the runner just holds sockets.
-    maxConcurrency: 10,
+    maxConcurrency: 6,
     // One retry in CI: tests are self-contained (fresh project per test), so
     // a rare load-induced flake re-runs in seconds instead of failing the
     // whole suite. Playwright specs get the same treatment via `retries`.
