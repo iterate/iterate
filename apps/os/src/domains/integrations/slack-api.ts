@@ -14,10 +14,10 @@ import { projectStub } from "../projects/egress.ts";
 import { SLACK_BOT_TOKEN_SECRET_PATH } from "./utils.ts";
 import { parseConfig } from "~/config.ts";
 
-export type SlackWebApiResult = { error?: string; ok?: boolean } & Record<string, unknown>;
+type SlackWebApiResult = { error?: string; ok?: boolean } & Record<string, unknown>;
 
 /** Direct Slack Web API call with a literal token (OAuth exchange, fallback token). */
-export async function callSlackWebApi(input: {
+async function callSlackWebApi(input: {
   body: Record<string, unknown>;
   method: string;
   token: string;

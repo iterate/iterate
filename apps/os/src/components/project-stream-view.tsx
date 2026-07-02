@@ -11,11 +11,6 @@ import {
 import { Link } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronDownIcon, FilterIcon, SearchIcon } from "lucide-react";
-import {
-  getInitialProcessorState,
-  runProcessorReduce,
-  type StreamEvent as StreamViewReducerEvent,
-} from "@iterate-com/ui/components/events/stream-processor-fold/stream-processors";
 import { Button } from "@iterate-com/ui/components/button";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import {
@@ -33,7 +28,11 @@ import {
   type EventsStreamElementType,
   type EventsStreamRendererMode,
 } from "@iterate-com/ui/components/events/stream-feed";
-import { StreamViewProcessorContract } from "@iterate-com/ui/components/events/stream-view-processor/contract";
+import {
+  createInitialStreamViewState,
+  reduceStreamViewEvent,
+  STREAM_VIEW_REDUCER_SLUG,
+} from "@iterate-com/ui/components/events/stream-view-reducer";
 import type {
   AgentUiLlmStep,
   AgentUiState,
@@ -724,21 +723,6 @@ function useAgentUiReducedState(database: StreamBrowserDatabase): AgentUiState |
   }, [result.data]);
 }
 
-function reduceStreamViewEvent(
-  state: EventsStreamViewState,
-  event: FeedEvent,
-): EventsStreamViewState {
-  // The itx event envelope is structurally a superset of the shared
-  // reducer's StreamEvent ({type, payload?, metadata?, offset, createdAt}), so
-  // the cast the legacy view already relied on keeps holding.
-  const reduction = runProcessorReduce({
-    processor: { contract: StreamViewProcessorContract },
-    event: event as unknown as StreamViewReducerEvent,
-    state,
-  });
-  return reduction?.state ?? state;
-}
-
 // ---------------------------------------------------------------------------
 // Feed view: semantic chat-style elements reduced from raw events
 // ---------------------------------------------------------------------------
@@ -763,8 +747,8 @@ function ProjectStreamFeedView({
   const feed = useReducedStreamState<EventsStreamViewState>({
     database,
     reductionKey,
-    cacheScope: StreamViewProcessorContract.slug,
-    initialState: () => getInitialProcessorState(StreamViewProcessorContract),
+    cacheScope: STREAM_VIEW_REDUCER_SLUG,
+    initialState: createInitialStreamViewState,
     normalizeEvent,
     reduceEvent: reduceStreamViewEvent,
   });

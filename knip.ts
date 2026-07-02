@@ -10,17 +10,12 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       // Reached only through the vitest.config.ts `cloudflare:workers` alias,
       // which knip does not traverse.
       "src/test/cloudflare-workers-shim.ts",
-      // Preserved oRPC e2e reference (imports the removed oRPC stack;
-      // intentionally not `.test.ts`, never imported by active code). See
-      // e2e/AGENTS.md.
-      "e2e/**/*.orpc-legacy.ts",
     ],
     entry: [
       ...(base.entry ?? []).filter(
         (entry) => entry !== "scripts/router.ts" && entry !== "src/worker.ts!",
       ),
       // One entry module per deployed worker (docs/worker-topology.md).
-      "src/workers/*.ts!",
       "src/workers/*.ts!",
       "e2e/vitest.config.ts",
       "e2e/tui-test/tui-test.config.ts",
@@ -79,9 +74,6 @@ function makeStreamsExampleAppWorkspace(): WorkspaceConfig {
       // Kept as the Worker/DO counterpart to the browser and Node stream
       // Cap'n Web helpers in the example app.
       "src/lib/workers-stream-connection.ts",
-      // Type-only RequestContext slice reached via an exact-match tsconfig
-      // path, which knip does not traverse.
-      "src/os-shims/request-context.ts",
     ],
     vite: false,
     paths: {
@@ -117,6 +109,33 @@ function makeCloudflareTanStackAppWorkspace(workerEnvShim: string): WorkspaceCon
     },
     ignoreBinaries: ["doppler", "read", "sqlite3"],
     ignoreDependencies: ["cloudflare", "tailwindcss"],
+  };
+}
+
+function makeUiWorkspace(): WorkspaceConfig {
+  return {
+    // The package.json export map is the public entry surface (many subpath
+    // exports, no src/index.ts) — same posture as packages/shared.
+    entry: ["src/**/*.test.{ts,tsx}"],
+    project: ["src/**/*.{ts,tsx}"],
+  };
+}
+
+function makeIterateCliWorkspace(): WorkspaceConfig {
+  return {
+    entry: [
+      "src/index.ts",
+      "src/worker.ts",
+      "src/cli.ts",
+      "bin/iterate.js",
+      "tsdown.config.ts",
+      "vitest.config.ts",
+      "src/**/*.test.{ts,tsx}",
+    ],
+    project: ["src/**/*.{ts,tsx}", "bin/**/*.js"],
+    // `cloudflare:workers` (typed by src/cloudflare-workers.d.ts) parses as
+    // the "cloudflare" package — same posture as the app workspaces.
+    ignoreDependencies: ["cloudflare"],
   };
 }
 
@@ -160,10 +179,11 @@ const config: KnipConfig = {
     "!apps/streams-example-app",
     "packages/*",
     "!packages/shared",
+    "!packages/ui",
+    "!packages/iterate",
   ],
   ignoreIssues: {
     "apps/os/e2e/test-support/app-config-env.ts": ["files", "exports"],
-    "apps/os/src/**": ["exports", "types"],
     "apps/os/e2e/test-support/**": ["exports", "types"],
     // Example-matrix harness modules export helpers consumed across the
     // matrix/browser suites and root Playwright specs; keep the same policy
@@ -179,6 +199,8 @@ const config: KnipConfig = {
     "apps/os": makeOsCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/streams-example-app": makeStreamsExampleAppWorkspace(),
     "packages/shared": makeSharedWorkspace(),
+    "packages/ui": makeUiWorkspace(),
+    "packages/iterate": makeIterateCliWorkspace(),
   },
 };
 

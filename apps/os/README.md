@@ -186,6 +186,14 @@ The script pattern is documented in
 - `alchemy.run.ts` — the deployment: all ten workers, DO namespaces, routes.
   back. Do not import from them.
 
+## History
+
+The itx engine and every project-scoped domain were rebuilt in the itx-v4
+migration (PR #1585, landed 2026-07); the detailed migration and test-harness
+reports are recoverable from git history at that PR. The durable record of
+test coverage removed without replacement is
+[docs/removed-test-coverage-itx-v4.md](./docs/removed-test-coverage-itx-v4.md).
+
 ## Read Next
 
 - [itx README](./src/README.md)

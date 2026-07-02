@@ -32,6 +32,10 @@ export default defineConfig({
     // slot, so files are independent. Sequential locally to not hammer a
     // single dev server.
     fileParallelism: process.env.CI === "true",
+    // Cap the stampede: 9 files all first-touching a freshly deployed slot
+    // at once is what pushes cold creates past the (deliberately tight)
+    // saga timeout. See tasks/os-cold-create-latency.md.
+    maxWorkers: 4,
     // Generous: e2e runs against live deployments, concurrently with the
     // Playwright specs in preview CI — cold slots under combined load need
     // headroom, and slow-but-passing beats flaky.

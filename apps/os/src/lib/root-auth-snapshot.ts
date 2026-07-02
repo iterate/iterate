@@ -6,7 +6,7 @@ import {
   resolveProjectSlugFromHostname,
 } from "~/lib/project-host-routing.ts";
 
-export type RootAuthSnapshot = {
+type RootAuthSnapshot = {
   authSession: PublicSessionResponse;
   iterateAuthIssuer: string | undefined;
   currentProjectHostSlug: string | null;

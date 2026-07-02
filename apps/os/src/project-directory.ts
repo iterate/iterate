@@ -16,7 +16,7 @@
 import { createAuthWorkerServiceClient } from "./auth/auth-worker-service.ts";
 import type { AppConfig } from "./config.ts";
 
-export type ProjectDirectoryRecord = {
+type ProjectDirectoryRecord = {
   id: string;
   slug: string;
   organizationId: string | null;
@@ -85,6 +85,34 @@ export async function readProjectById(
     .catch(() => null);
 }
 
+/**
+ * Every deployment-known project record (`project:` keys), for admin listings.
+ * KV `list` pages through cursors; values are fetched per page in parallel.
+ * Capped — a deployment with more projects than the cap gets a truncated
+ * admin list, not an unbounded KV scan.
+ */
+export async function listProjectDirectory(
+  directory: KVNamespace,
+  { limit = 1000 }: { limit?: number } = {},
+): Promise<ProjectDirectoryRecord[]> {
+  const records: ProjectDirectoryRecord[] = [];
+  let cursor: string | undefined;
+  while (records.length < limit) {
+    const page = await directory.list({ prefix: "project:", cursor });
+    const values = await Promise.all(
+      page.keys
+        .slice(0, limit - records.length)
+        .map((key) => directory.get<ProjectDirectoryRecord>(key.name, "json").catch(() => null)),
+    );
+    for (const record of values) {
+      if (record) records.push(record);
+    }
+    if (page.list_complete) break;
+    cursor = page.cursor;
+  }
+  return records;
+}
+
 /** Eagerly cache a project the caller just created or resolved. */
 export async function primeProjectDirectory(
   directory: KVNamespace,
@@ -137,9 +165,9 @@ async function lookupAuthWorker(
  * Custom-hostname resolution: `bla.com` set as a project's custom hostname
  * serves the project worker; `someapp.bla.com` serves it with that app
  * selected. Registrations live under `hostname:<host>` KV keys — written by
- * custom-hostname provisioning (task #13; until it lands the lane is wired
+ * custom-hostname provisioning (tasks/os-project-archival.md; until it lands the lane is wired
  * but nothing populates it). No auth-worker fallback yet: the directory has
- * no byHostname endpoint (also task #13).
+ * no byHostname endpoint (also tasks/os-project-archival.md).
  */
 export async function readProjectByHostname(
   directory: KVNamespace,

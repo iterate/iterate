@@ -34,14 +34,14 @@ export const Config = z.object({
 export type Config = z.infer<typeof Config>;
 
 /** The config file on disk (~/.config/iterate/config.json) */
-export const ConfigFile = z.object({
+const ConfigFile = z.object({
   configs: z.record(z.string(), Config).optional(),
   default: z.string().optional(),
   /** Maps absolute directory path to a config name */
   workspaces: z.record(z.string(), z.string()).optional(),
 });
 
-export type ConfigFile = z.infer<typeof ConfigFile>;
+type ConfigFile = z.infer<typeof ConfigFile>;
 
 export const readConfigFile = (): ConfigFile => {
   if (!existsSync(CONFIG_PATH)) return {};

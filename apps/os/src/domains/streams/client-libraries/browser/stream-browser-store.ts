@@ -31,7 +31,7 @@ import {
 } from "./stream-browser-db.ts";
 
 const LIVE_PROGRESS_NOTIFICATION_MS = 16;
-export const DEFAULT_STREAM_PROJECT_ID = "default";
+const DEFAULT_STREAM_PROJECT_ID = "default";
 export type StreamBrowserConnectionStatus = "connecting" | "connected" | "closed" | "error";
 
 /**
@@ -73,7 +73,7 @@ export type BrowserProcessorConfig = {
   }): BrowserHostedProcessor;
 };
 
-export type BrowserStreamConnectionConfig = {
+type BrowserStreamConnectionConfig = {
   projectId?: string;
   createStreamClient?: BrowserStreamClientFactory;
   streamUrl?: string | URL | ((args: { projectId: string; streamPath: string }) => string | URL);

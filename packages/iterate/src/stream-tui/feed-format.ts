@@ -41,7 +41,7 @@ export function formatStepLine(step: AgentUiStep): string {
   return parts.join(" · ");
 }
 
-export function formatSeconds(ms: number): string {
+function formatSeconds(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
