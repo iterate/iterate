@@ -9,7 +9,7 @@ const DEFAULT_BASE_URL = "https://os.iterate-preview-2.com";
 async function main() {
   const baseUrl = new URL(process.env.APP_CONFIG_BASE_URL?.trim() || DEFAULT_BASE_URL);
   const adminApiSecret = requireAdminApiSecret();
-  const slug = readProjectSlug();
+  const slug = `workspace-itx-example-${Date.now()}`;
   await ensureProject({ baseUrl, slug });
   const mcpUrl = projectMcpUrlFor({ baseUrl });
   const result = await runWorkspaceCodemodeProof({
@@ -38,10 +38,6 @@ function requireAdminApiSecret() {
     throw new Error("APP_CONFIG_ADMIN_API_SECRET is required.");
   }
   return token;
-}
-
-function readProjectSlug() {
-  return `workspace-itx-example-${Date.now()}`;
 }
 
 /**
