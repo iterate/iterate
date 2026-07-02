@@ -205,26 +205,24 @@ export async function IterateRoutes(
     });
 
     const routeZoneIds = new Map<string, string>();
-    await Promise.all(
-      routeHosts.map(async (hostname) => {
-        const { zoneId } = findActiveZoneForHostname({
-          accountId: cloudflareApi.accountId,
-          hostname,
-          zones,
-        });
-        routeZoneIds.set(hostname, zoneId);
+    for (const hostname of routeHosts) {
+      const { zoneId } = findActiveZoneForHostname({
+        accountId: cloudflareApi.accountId,
+        hostname,
+        zones,
+      });
+      routeZoneIds.set(hostname, zoneId);
+    }
 
-        await retryCloudflareWorkerRouteCreation(() =>
-          Route(routeResourceIdForHostname(hostname), {
-            pattern: `${hostname}/*`,
-            script: worker.name,
-            adopt: true,
-            zoneId,
-          }),
-        );
-      }),
-    );
-
+    // DNS records BEFORE routes. A Worker route only fires for hostnames with
+    // a proxied DNS record on the zone. Creating the route while the record
+    // does not exist yet has produced zombie routes on fresh preview slots:
+    // the route is visible in the API but never fires at the edge, so every
+    // request falls through to the (originless) placeholder record and dies
+    // with a 522 after ~20s — the "fresh slot" 522/parked-browser failure
+    // family (tasks/os-cold-create-latency.md). Deleting and recreating the
+    // identical route heals it instantly, which is what the verification pass
+    // below automates for any zombie that slips through regardless of order.
     const dnsRouteHosts = routeHosts.filter(shouldCreateDnsRecordForRouteHostname);
     await Promise.all(
       dnsRouteHosts.flatMap((hostname) =>
@@ -246,6 +244,143 @@ export async function IterateRoutes(
           });
         }),
       ),
+    );
+
+    await Promise.all(
+      routeHosts.map((hostname) =>
+        retryCloudflareWorkerRouteCreation(() =>
+          Route(routeResourceIdForHostname(hostname), {
+            pattern: `${hostname}/*`,
+            script: worker.name,
+            adopt: true,
+            zoneId: routeZoneIds.get(hostname)!,
+          }),
+        ),
+      ),
+    );
+
+    // Verify each exact hostname actually fires at the edge and heal zombies.
+    // Wildcard patterns are skipped: they have no single probeable hostname.
+    await Promise.all(
+      routeHosts
+        .filter((hostname) => !hostname.startsWith("*"))
+        .map((hostname) =>
+          verifyWorkerRouteFires({
+            cloudflareApi,
+            hostname,
+            script: worker.name,
+            zoneId: routeZoneIds.get(hostname)!,
+          }),
+        ),
+    );
+  }
+}
+
+/**
+ * HTTP statuses the Cloudflare edge returns when a request to a proxied
+ * hostname falls through to the origin instead of a Worker route. Our route
+ * hostnames sit on originless placeholder records (192.0.2.1 / 100::), so any
+ * of these means the route exists in the API but is NOT firing at the edge.
+ */
+const ORIGIN_FALLTHROUGH_STATUSES = new Set([521, 522, 523, 530]);
+
+/**
+ * Probe a route hostname and, when the edge answers with an origin-error
+ * status (route not firing — the zombie-route failure mode), heal it by
+ * deleting and recreating the identical route via the raw API. Recreation has
+ * been observed to activate a zombie route instantly; `Route(adopt: true)`
+ * re-adopts the pattern on the next deploy, so the id drift is harmless.
+ */
+async function verifyWorkerRouteFires(input: {
+  cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>;
+  hostname: string;
+  script: string;
+  zoneId: string;
+}) {
+  const maxAttempts = 3;
+  let healed = false;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let status = await probeEdgeStatus(input.hostname);
+    // Any worker/app response (including app-level 4xx/5xx) proves the route
+    // fires. A network-level probe failure is inconclusive (local DNS lag,
+    // egress hiccup) — do not fail the deploy over it.
+    if (status === null || !ORIGIN_FALLTHROUGH_STATUSES.has(status)) {
+      if (!healed) return;
+      // A heal propagates across the edge over a few seconds; one good probe
+      // can race it. Require a second good probe so the deploy only reports
+      // success once the hostname is consistently served.
+      await sleep(5_000);
+      status = await probeEdgeStatus(input.hostname);
+      if (status === null || !ORIGIN_FALLTHROUGH_STATUSES.has(status)) return;
+      // Fell back to origin again — keep healing.
+    }
+
+    console.warn(
+      `[iterate-routes] ${input.hostname} answered ${status} — route exists but is not firing at the edge; recreating it (attempt ${attempt}/${maxAttempts})`,
+    );
+    await recreateWorkerRoute(input);
+    healed = true;
+    await sleep(2_000);
+  }
+
+  const status = await probeEdgeStatus(input.hostname);
+  if (status !== null && ORIGIN_FALLTHROUGH_STATUSES.has(status)) {
+    throw new Error(
+      `Worker route for ${input.hostname} never became active: the edge keeps answering ${status} (origin fallthrough) after ${maxAttempts} recreations.`,
+    );
+  }
+}
+
+/** GET the hostname root; returns the HTTP status, or null when the probe itself failed. */
+async function probeEdgeStatus(hostname: string): Promise<number | null> {
+  try {
+    const response = await fetch(`https://${hostname}/`, {
+      redirect: "manual",
+      // A non-firing route 522s after ~20s of origin connect timeout; give the
+      // probe enough headroom to observe that instead of aborting into null.
+      signal: AbortSignal.timeout(30_000),
+    });
+    await response.body?.cancel();
+    return response.status;
+  } catch {
+    return null;
+  }
+}
+
+async function recreateWorkerRoute(input: {
+  cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>;
+  hostname: string;
+  script: string;
+  zoneId: string;
+}) {
+  const pattern = `${input.hostname}/*`;
+  const listResponse = await input.cloudflareApi.get(`/zones/${input.zoneId}/workers/routes`);
+  if (!listResponse.ok) {
+    throw new Error(
+      `Failed to list worker routes while healing ${pattern}: ${listResponse.status} ${await listResponse.text()}`,
+    );
+  }
+  const listResult = (await listResponse.json()) as {
+    result?: Array<{ id: string; pattern?: string }>;
+  };
+  const existing = (listResult.result ?? []).find((route) => route.pattern === pattern);
+  if (existing) {
+    const deleteResponse = await input.cloudflareApi.delete(
+      `/zones/${input.zoneId}/workers/routes/${existing.id}`,
+    );
+    if (!deleteResponse.ok) {
+      throw new Error(
+        `Failed to delete zombie route ${pattern}: ${deleteResponse.status} ${await deleteResponse.text()}`,
+      );
+    }
+  }
+  const createResponse = await input.cloudflareApi.post(`/zones/${input.zoneId}/workers/routes`, {
+    pattern,
+    script: input.script,
+  });
+  if (!createResponse.ok) {
+    throw new Error(
+      `Failed to recreate route ${pattern}: ${createResponse.status} ${await createResponse.text()}`,
     );
   }
 }

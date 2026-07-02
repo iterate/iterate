@@ -1,4 +1,5 @@
 import { StreamProcessor } from "../streams/stream-processor.ts";
+import { timedStep } from "../../lib/step-timing.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { PROJECT_REPO_PATH } from "../repos/utils.ts";
 import { PROJECT_REPO_ONBOARDING_MD } from "../repos/project-repo-template.ts";
@@ -113,38 +114,51 @@ export class ProjectProcessor extends StreamProcessor<
           );
         }
         blockProcessorWhile(async () => {
-          await append(
-            buildDurableObjectProcessorSubscriptionConfiguredEvent({
-              durableObjectName: DurableObjectNameCodec.stringify({
-                projectId: this.deps.itx.projectId,
-                path: "/",
-              }),
-              processorSlug: ItxProcessorContract.slug,
-              subscriberType: "itx",
-            }),
-          );
-          // Arm the Slack webhook router on `/integrations/slack` from birth,
-          // so a claimed workspace's first webhook routes even if the connect
-          // flow's own belt-and-braces subscription append raced.
-          await this.deps.itx.streams.get(SLACK_INTEGRATION_STREAM_PATH).append(
-            buildDurableObjectProcessorSubscriptionConfiguredEvent({
-              durableObjectName: DurableObjectNameCodec.stringify({
-                projectId: this.deps.itx.projectId,
-                path: SLACK_INTEGRATION_STREAM_PATH,
-              }),
-              idempotencyKey: `slack-router-subscription:${this.deps.itx.projectId}`,
-              processorSlug: SlackProcessorContract.slug,
-              subscriberType: "project",
-            }),
-          );
-          await append({
-            type: "events.iterate.com/repo/create-requested",
-            idempotencyKey: `repo-create-requested:${this.deps.itx.projectId}:${PROJECT_REPO_PATH}`,
-            payload: {
-              path: PROJECT_REPO_PATH,
-              projectId: this.deps.itx.projectId,
-            },
-          });
+          const timing = { projectId: this.deps.itx.projectId };
+          // One atomic root append (itx subscription + repo kickoff, original
+          // relative order preserved) in parallel with the independent Slack
+          // stream append. The previous three sequential awaits were the
+          // slowest lane of the create saga (~1.2-2.6s measured on preview-7;
+          // tasks/os-cold-create-latency.md) — batching cuts it to one
+          // round-trip apiece.
+          await Promise.all([
+            timedStep("create-timing", timing, "root-saga-append", () =>
+              append(
+                buildDurableObjectProcessorSubscriptionConfiguredEvent({
+                  durableObjectName: DurableObjectNameCodec.stringify({
+                    projectId: this.deps.itx.projectId,
+                    path: "/",
+                  }),
+                  processorSlug: ItxProcessorContract.slug,
+                  subscriberType: "itx",
+                }),
+                {
+                  type: "events.iterate.com/repo/create-requested",
+                  idempotencyKey: `repo-create-requested:${this.deps.itx.projectId}:${PROJECT_REPO_PATH}`,
+                  payload: {
+                    path: PROJECT_REPO_PATH,
+                    projectId: this.deps.itx.projectId,
+                  },
+                },
+              ),
+            ),
+            // Arm the Slack webhook router on `/integrations/slack` from birth,
+            // so a claimed workspace's first webhook routes even if the connect
+            // flow's own belt-and-braces subscription append raced.
+            timedStep("create-timing", timing, "slack-router-append", () =>
+              this.deps.itx.streams.get(SLACK_INTEGRATION_STREAM_PATH).append(
+                buildDurableObjectProcessorSubscriptionConfiguredEvent({
+                  durableObjectName: DurableObjectNameCodec.stringify({
+                    projectId: this.deps.itx.projectId,
+                    path: SLACK_INTEGRATION_STREAM_PATH,
+                  }),
+                  idempotencyKey: `slack-router-subscription:${this.deps.itx.projectId}`,
+                  processorSlug: SlackProcessorContract.slug,
+                  subscriberType: "project",
+                }),
+              ),
+            ),
+          ]);
         });
         break;
       }
@@ -195,32 +209,39 @@ export class ProjectProcessor extends StreamProcessor<
           return;
         }
         blockProcessorWhile(async () => {
-          await waitForDefaultProjectWorker(this.deps.itx);
-          await append({
-            type: "events.iterate.com/project/created",
-            idempotencyKey: `project-created:${this.deps.itx.projectId}`,
-            payload: state.createRequest!,
-          });
+          const timing = { projectId: this.deps.itx.projectId };
+          await timedStep("create-timing", timing, "worker-probe", () =>
+            waitForDefaultProjectWorker(this.deps.itx),
+          );
+          await timedStep("create-timing", timing, "project-created-append", () =>
+            append({
+              type: "events.iterate.com/project/created",
+              idempotencyKey: `project-created:${this.deps.itx.projectId}`,
+              payload: state.createRequest!,
+            }),
+          );
           // Seed the onboarding agent: full birth certificate (the generic
           // child-stream-created lane later double-appends with the same
           // idempotency keys and dedupes) plus the kickoff input that makes the
           // agent greet the user without waiting for a first message.
-          await this.deps.itx.streams.get(ONBOARDING_AGENT_PATH).append(
-            ...agentBirthCertificateEvents({
-              childPath: ONBOARDING_AGENT_PATH,
-              llmProvider: this.deps.defaultLlmProvider,
-              projectId: this.deps.itx.projectId,
-              systemPrompt: ONBOARDING_AGENT_SYSTEM_PROMPT,
-            }),
-            {
-              type: "events.iterate.com/agent/input-added",
-              idempotencyKey: `project-onboarding-start:${this.deps.itx.projectId}`,
-              payload: {
-                content:
-                  "Start onboarding now. The project owner just created this project and is looking at the chat.",
-                llmRequestPolicy: { behaviour: "after-current-request" as const },
+          await timedStep("create-timing", timing, "onboarding-agent-birth", () =>
+            this.deps.itx.streams.get(ONBOARDING_AGENT_PATH).append(
+              ...agentBirthCertificateEvents({
+                childPath: ONBOARDING_AGENT_PATH,
+                llmProvider: this.deps.defaultLlmProvider,
+                projectId: this.deps.itx.projectId,
+                systemPrompt: ONBOARDING_AGENT_SYSTEM_PROMPT,
+              }),
+              {
+                type: "events.iterate.com/agent/input-added",
+                idempotencyKey: `project-onboarding-start:${this.deps.itx.projectId}`,
+                payload: {
+                  content:
+                    "Start onboarding now. The project owner just created this project and is looking at the chat.",
+                  llmRequestPolicy: { behaviour: "after-current-request" as const },
+                },
               },
-            },
+            ),
           );
         });
         return;

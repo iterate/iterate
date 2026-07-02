@@ -75,11 +75,11 @@ export default defineConfig({
           include: ["./e2e/vitest/**/*.test.ts", "./e2e/examples/*.e2e.test.ts"],
           setupFiles: ["./e2e/vitest/setup.ts"],
           provide: sharedProvide,
-          // Generous: e2e runs against live deployments, concurrently with the
-          // Playwright specs in preview CI — cold slots under combined load
-          // need headroom, and slow-but-passing beats flaky.
-          hookTimeout: 240_000,
-          testTimeout: 240_000,
+          // #1601 fixed cold-slot creates to ~3-5s per saga under 4-way load
+          // (tasks/os-cold-create-latency.md), so 120s is ample headroom
+          // without letting a wedged saga eat the whole job.
+          hookTimeout: 120_000,
+          testTimeout: 120_000,
         },
       },
       {
