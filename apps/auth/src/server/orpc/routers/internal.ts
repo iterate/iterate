@@ -431,11 +431,12 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
     };
   });
 
-// The oauth-provider plugin stores client secrets as unsalted SHA-256
-// base64url (its `defaultHasher` with storeClientSecret: "hashed") and
-// compares hashes at the token endpoint — seeded secrets must be stored in
-// the same format.
-async function hashOAuthClientSecret(value: string) {
+// The oauth-provider plugin stores client secrets AND opaque tokens as
+// unsalted SHA-256 base64url (its `defaultHasher`, the default for both
+// storeClientSecret: "hashed" and storeTokens: "hashed") and compares hashes
+// at the token endpoint — seeded secrets and token lookups must use the same
+// format.
+async function hashOAuthStoredValue(value: string) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   const bytes = new Uint8Array(digest);
   let binary = "";
@@ -456,7 +457,7 @@ const setOAuthClient = os.internal.oauth.setClient
     const redirectURIs = [...new Set(input.redirectURIs.map((uri) => uri.trim()))].sort();
     const overwrite = {
       newClientId: input.clientId,
-      clientSecret: await hashOAuthClientSecret(input.clientSecret),
+      clientSecret: await hashOAuthStoredValue(input.clientSecret),
       name: input.clientName,
       redirectUris: JSON.stringify(redirectURIs),
       referenceId: input.referenceId ?? null,
@@ -523,8 +524,10 @@ function toMillis(value: unknown): number | null {
 const introspectAccessToken = os.internal.oauth.introspectAccessToken
   .use(serviceMiddleware)
   .handler(async ({ context, input }) => {
+    // Opaque tokens are stored hashed (storeTokens: "hashed" default) — the
+    // raw bearer value presented by the client never appears in the DB.
     const token = await getOAuthAccessTokenForInternalIntrospection(context.db, {
-      token: input.token,
+      token: await hashOAuthStoredValue(input.token),
     });
     if (!token) {
       return { active: false as const, reason: "not_found" };
