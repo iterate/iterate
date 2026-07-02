@@ -10,7 +10,7 @@ import { ORPCError } from "@orpc/server";
 import { z } from "zod/v4";
 import { db } from "./db/index.ts";
 import { env } from "./env.ts";
-import { parseStringArray } from "./db/helpers.ts";
+import { hashOAuthStoredValue, parseStringArray } from "./db/helpers.ts";
 import {
   getOAuthAccessTokenForInternalIntrospection,
   getOrganizationBySlug,
@@ -122,18 +122,6 @@ function toMillis(value: number | string | null | undefined): number | null {
   if (typeof value !== "string") return null;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : null;
-}
-
-// Opaque tokens are stored hashed (better-auth storeTokens: "hashed"); look
-// them up by the same digest.
-async function hashOAuthStoredValue(value: string) {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  const bytes = new Uint8Array(digest);
-  let binary = "";
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 }
 
 /**

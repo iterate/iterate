@@ -2,7 +2,7 @@ import { ORPCError } from "@orpc/server";
 import { resolveUniqueSlug } from "@iterate-com/shared/slug";
 import { os, protectedMiddleware, serviceMiddleware } from "../orpc.ts";
 import { auth, createProjectIngressToken as createSignedProjectIngressToken } from "../../auth.ts";
-import { parseStringArray } from "../../db/helpers.ts";
+import { hashOAuthStoredValue, parseStringArray } from "../../db/helpers.ts";
 import {
   disableOAuthClientById,
   getOAuthClientByClientId,
@@ -369,21 +369,6 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
       redirectURIs: created.redirect_uris,
     };
   });
-
-// The oauth-provider plugin stores client secrets AND opaque tokens as
-// unsalted SHA-256 base64url (its `defaultHasher`, the default for both
-// storeClientSecret: "hashed" and storeTokens: "hashed") and compares hashes
-// at the token endpoint — seeded secrets and token lookups must use the same
-// format.
-async function hashOAuthStoredValue(value: string) {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  const bytes = new Uint8Array(digest);
-  let binary = "";
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
-}
 
 // Declarative upsert with caller-provided credentials. Unlike ensureClient
 // (which generates/rotates secrets server-side), the caller's Doppler config is

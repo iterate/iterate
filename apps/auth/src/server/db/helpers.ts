@@ -27,3 +27,18 @@ export function parseBoolean(value: number | boolean | null | undefined): boolea
   if (typeof value === "boolean") return value;
   return value === 1;
 }
+
+// The oauth-provider plugin stores client secrets AND opaque tokens as
+// unsalted SHA-256 base64url (its `defaultHasher`, the default for both
+// storeClientSecret: "hashed" and storeTokens: "hashed") and compares hashes
+// at the token endpoint. Seeded secrets and token lookups must hash the raw
+// value the same way to match the stored row.
+export async function hashOAuthStoredValue(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  const bytes = new Uint8Array(digest);
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
