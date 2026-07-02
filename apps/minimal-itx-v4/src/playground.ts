@@ -960,6 +960,7 @@ function playgroundDemoPath(url: URL): string {
 
 function demoPhase(input: unknown): PlaygroundDemoPhase {
   return input === "waiting_for_node_relay" ||
+    input === "plain_intercept_saw_plaintext" ||
     input === "relay_connected" ||
     input === "secret_egress_relayed" ||
     input === "target_received_request" ||
