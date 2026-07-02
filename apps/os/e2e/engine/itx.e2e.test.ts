@@ -275,8 +275,13 @@ describe("minimal itx v4", () => {
     expect(await project.repo.whoami()).toBe(`repo ${description.projectId}:/`);
     expect(await project.repos.get("/").whoami()).toBe(`repo ${description.projectId}:/`);
 
-    const workerResponse = await project.worker.fetch(new Request("https://example.com/probe"));
-    expect(await workerResponse.text()).toBe("project worker fetched /probe");
+    // The seeded root worker serves a static homepage for un-routed requests;
+    // the hello app (selected via the trusted x-iterate-app header) echoes the
+    // path, which is what this probe is really asserting.
+    const workerResponse = await project.worker.fetch(
+      new Request("https://example.com/probe", { headers: { "x-iterate-app": "hello" } }),
+    );
+    expect(await workerResponse.json()).toMatchObject({ app: "hello", path: "/probe" });
 
     const [committedEvent] = await project.streams.get("/some/path").append({
       type: "hello-world",
@@ -472,7 +477,15 @@ describe("minimal itx v4", () => {
       expect((await project.repos.list()).some((item) => item.path.startsWith("/repos/"))).toBe(
         true,
       );
-      expect((await project.agents.get(agentPath).processor.snapshot()).state.history).toEqual([]);
+      // Birth now seeds one boot-context input item (platform context: project
+      // id, agent path, repo layout) with dont-trigger-request — so history has
+      // exactly that item and no LLM turn ran.
+      expect((await project.agents.get(agentPath).processor.snapshot()).state.history).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: expect.stringContaining(`Your agent stream path: ${agentPath}`),
+        }),
+      ]);
       expect((await project.repo.processor.snapshot()).state.created).toBe(true);
       expect((await secret.processor.snapshot()).state.egress).toEqual({ urls: [echo.url] });
     } finally {
@@ -1023,16 +1036,21 @@ describe("minimal itx v4", () => {
     using project = itx.projects.create({ slug: "dynamic-worker-project" });
     const description = await project.describe();
 
+    // The seeded root worker now routes via x-iterate-app (static homepage
+    // otherwise); the hello app keeps the path-echo this assertion relies on.
     const scriptResult = await project.runScript(`async (itx) => {
-      const response = await itx.worker.fetch(new Request("https://example.com/script"));
+      const response = await itx.worker.fetch(
+        new Request("https://example.com/script", { headers: { "x-iterate-app": "hello" } }),
+      );
+      const body = await response.json();
       return {
         repo: await itx.repo.whoami(),
-        worker: await response.text(),
+        worker: \`\${body.app} fetched \${body.path}\`,
       };
     }`);
     expect(scriptResult.result).toEqual({
       repo: `repo ${description.projectId}:/`,
-      worker: "project worker fetched /script",
+      worker: "hello fetched /script",
     });
 
     const commit = await project.repo.commitFiles({
@@ -1252,8 +1270,10 @@ describe("minimal itx v4", () => {
     });
 
     using project = itx.projects.create({ slug: "deleted-worker-source-projection" });
+    // The seeded root worker serves a static homepage; this warm-up only needs
+    // proof the seeded worker.js is live before we delete it.
     const warmResponse = await project.worker.fetch(new Request("https://example.com/warm"));
-    expect(await warmResponse.text()).toBe("project worker fetched /warm");
+    expect(await warmResponse.text()).toContain("Hello from your Iterate project worker");
 
     await project.repo.commitFiles({
       changes: [{ delete: true, path: "worker.js" }],
