@@ -148,8 +148,9 @@ async function createDemoSession(
   request: Request,
 ): Promise<DemoSession> {
   // Each session mounts at its own path on the shared demo project, so two
-  // people running the demo at once don't clobber each other's `debugPage`.
-  const path = ["debug", randomTokenId().slice(0, 12)];
+  // people running the demo at once don't clobber each other's handle. Capability
+  // path segments must be JS identifiers, so the per-session id starts with "s".
+  const path = ["debug", `s${randomTokenId().slice(0, 12)}`];
   const origin = new URL(request.url).origin;
   const providerClaims = newTokenClaims({ path, projectId, role: "provider" });
   const agentClaims = newTokenClaims({ path, projectId, role: "agent" });
