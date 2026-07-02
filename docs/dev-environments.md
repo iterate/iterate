@@ -375,6 +375,8 @@ that URL working.
 
 ## Slack end-to-end testing
 
-See [slack-smoke-testing.md](slack-smoke-testing.md). Slack requires public
-HTTPS webhooks, so this runs against deployed environments or a local dev
-server exposed through captun, not plain-localhost dev.
+See [slack-testing.md](slack-testing.md). Slack requires public HTTPS webhooks,
+so this runs against deployed environments or a local dev server exposed
+through captun, not plain-localhost dev. The older
+[slack-smoke-testing.md](slack-smoke-testing.md) note is retained for the
+historical manual production smoke path.
