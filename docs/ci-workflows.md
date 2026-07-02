@@ -182,6 +182,25 @@ durable Depot cache disk was tested for the bake, but it made `pnpm install`
 much slower while materializing `node_modules`. Keep the bake on the local
 store unless new measurements show otherwise.
 
+## Depot CI Preview Twin
+
+`.depot/workflows/cloudflare-previews.yml` is a dispatch-only Depot CI twin of
+the preview workflow. Measured 2026-07-02: GitHub Actions runner assignment on
+`depot-ubuntu-24.04-16` took 20s-3m39s across runs, while a Depot CI dispatch
+was executing code in ~7s with `pnpm install` at ~8s. Run it against a PR:
+
+```bash
+depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
+  --workflow cloudflare-previews.yml --ref <branch> \
+  --input pull-request-number=<pr>
+```
+
+It needs `DOPPLER_TOKEN` and `ITERATE_BOT_GITHUB_TOKEN` in `depot ci secrets`
+(not currently populated). Moving the PR triggers over is a deliberate swap:
+both workflows live at once would race deploys against the same preview slot
+lease, so the Depot workflow must gain `pull_request` triggers in the same
+commit that removes them from the GitHub one.
+
 ## Current Decision
 
 The main preview workflow stays on GitHub Actions with Depot runners.
