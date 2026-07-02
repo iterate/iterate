@@ -265,6 +265,114 @@ describe("SlackProcessor (webhook router)", () => {
     await deliverNewEvents({ cursors, processor, stream });
     expect(processor.state.connection.status).toBe("disconnected");
   });
+
+  it("acknowledges webhooks forwarded through existing routes", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get("/integrations/slack");
+    const acked: unknown[] = [];
+    const processor = new SlackProcessor({
+      stream,
+      acknowledgeRoutedWebhook: ({ payload }) => {
+        acked.push(payload);
+      },
+    });
+    const cursors = new Map<object, number>();
+
+    await stream.append({
+      type: "events.iterate.com/slack/thread-route-configured",
+      payload: {
+        channel: "C123",
+        threadTs: "111.222",
+        streamPath: "/agents/slack/custom-route",
+      },
+    });
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: humanMessageWebhookPayload({ threadTs: "111.222", ts: "333.444" }),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    // The fast ack fires on the known-route path too, not just route creation.
+    expect(acked).toHaveLength(1);
+    expect(network.eventsAt("/agents/slack/custom-route")).toHaveLength(1);
+  });
+
+  it("ignores and never acknowledges webhooks that cannot be keyed as channel:thread_ts", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get("/integrations/slack");
+    const acked: unknown[] = [];
+    const processor = new SlackProcessor({
+      stream,
+      acknowledgeRoutedWebhook: ({ payload }) => {
+        acked.push(payload);
+      },
+    });
+    const cursors = new Map<object, number>();
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: { body: { type: "url_verification", challenge: "x" } },
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    expect(network.streams.size).toBe(1); // nothing forwarded anywhere
+    expect(
+      stream.events.filter(
+        (event) => event.type === "events.iterate.com/slack/thread-route-configured",
+      ),
+    ).toHaveLength(0);
+    expect(acked).toEqual([]);
+  });
+
+  it("replays the webhook when the forward append fails instead of dropping it", async () => {
+    // Regression for the 2026-06-15 prd loss: the first message on a fresh
+    // project reached the project stream but the agent never saw it — the
+    // fire-and-forget forward threw once and the only copy was dropped. The
+    // forward is a durable obligation under `blockProcessorWhile`: a failed
+    // cross-stream append rejects the batch and HOLDS the checkpoint so the
+    // host replays the webhook until it lands.
+    const network = new MemoryStreamNetwork();
+    const stream = network.get("/integrations/slack");
+    const routed = network.get("/agents/slack/c123/ts-111-222");
+    const originalRoutedAppend = routed.append.bind(routed);
+    let failNextForward = true;
+    routed.append = async (...inputs: StreamEventInput[]) => {
+      if (failNextForward) {
+        failNextForward = false;
+        throw new Error("cold StreamsCapability RPC failed");
+      }
+      return originalRoutedAppend(...inputs);
+    };
+    const processor = new SlackProcessor({ stream });
+    const [webhook] = await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+
+    // First delivery: the forward throws. ingest MUST reject and the
+    // checkpoint MUST stay at 0 — otherwise the webhook is gone for good.
+    await expect(processor.ingest({ events: [webhook!], streamMaxOffset: 1 })).rejects.toThrow(
+      /StreamsCapability/,
+    );
+    expect(processor.checkpointOffset).toBe(0);
+    expect(routed.events).toHaveLength(0);
+
+    // The host replays the same webhook from the un-advanced checkpoint; the
+    // forward now succeeds and the checkpoint advances.
+    await processor.ingest({ events: [webhook!], streamMaxOffset: 1 });
+    expect(processor.checkpointOffset).toBe(1);
+    expect(routed.events.map((event) => event.type)).toEqual([
+      "events.iterate.com/slack/thread-route-configured",
+      "events.iterate.com/slack/webhook-received",
+    ]);
+    // The route fact on the router's own stream deduped via its idempotency
+    // key instead of double-appending across the replay.
+    expect(
+      stream.events.filter(
+        (event) => event.type === "events.iterate.com/slack/thread-route-configured",
+      ),
+    ).toHaveLength(1);
+  });
 });
 
 describe("SlackAgentProcessor", () => {
@@ -441,6 +549,175 @@ describe("SlackAgentProcessor", () => {
       },
     ]);
   });
+
+  it("captures route context (including streamPath) in state without announcing anything", async () => {
+    const { cursors, processor, slackCalls, stream } = setup();
+
+    await stream.append({
+      type: "events.iterate.com/slack/thread-route-configured",
+      payload: {
+        channel: "C123",
+        threadTs: "111.222",
+        streamPath: "/agents/slack/c123/ts-111-222",
+      },
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    expect(processor.state).toMatchObject({
+      channel: "C123",
+      streamPath: "/agents/slack/c123/ts-111-222",
+      threadTs: "111.222",
+    });
+    // The `slack` capability is provided on the agent's own itx context
+    // (provideCapability), not announced from here — the route event only
+    // folds into state, with no appends and no Slack API calls.
+    expect(stream.events).toHaveLength(1);
+    expect(slackCalls).toHaveLength(0);
+  });
+
+  it("compiles the !debug bang command into a Slack-posting describe script", async () => {
+    const { cursors, processor, slackCalls, stream } = setup();
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: humanMessageWebhookPayload({ text: "!debug" }),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    const scripts = stream.events.filter(
+      (event) => event.type === "events.iterate.com/itx/script-execution-requested",
+    );
+    expect(scripts).toHaveLength(1);
+    expect(scripts[0]).toMatchObject({
+      idempotencyKey: "slack-agent:bang-command:1",
+      payload: { executionId: "slack-bang-command-1" },
+    });
+    // Legacy called `itx.debug()` and carried an `enqueued` payload flag; on
+    // itx the debug dump is `itx.describe()` and the payload is just
+    // { code, executionId }.
+    const code = (scripts[0]!.payload as { code: string }).code;
+    expect(code).toContain("const debug = await itx.describe();");
+    expect(code).toContain("await itx.slack.chat.postMessage({");
+    expect(code).toContain('channel: "C123"');
+    expect(code).toContain('thread_ts: "111.222"');
+    expect(code).toContain("text: `Debug info:");
+    expect(
+      stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
+    ).toHaveLength(0);
+    expect(slackCalls).toContainEqual({
+      method: "reactions.add",
+      body: { channel: "C123", name: "eyes", timestamp: "111.222" },
+    });
+  });
+
+  it("commits the agent input before adding the Slack eyes reaction", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get("/agents/slack/c123/ts-111-222");
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+
+    // Record appends and Slack API calls into one list to pin their order:
+    // the agent input must be durable before the eyes reaction signals
+    // receipt to the user.
+    const calls: string[] = [];
+    const originalAppend = stream.append.bind(stream);
+    stream.append = async (...inputs: StreamEventInput[]) => {
+      calls.push(...inputs.map((input) => `append:${input.type}`));
+      return originalAppend(...inputs);
+    };
+    const processor = new SlackAgentProcessor({
+      stream,
+      callSlackApi: async (method) => {
+        calls.push(`slack:${method}`);
+      },
+    });
+    const cursors = new Map<object, number>();
+    await deliverNewEvents({ cursors, processor, stream });
+
+    expect(calls).toEqual(["append:events.iterate.com/agent/input-added", "slack:reactions.add"]);
+  });
+
+  it("turns raw Slack interactivity payloads into triggering agent input", async () => {
+    const { cursors, processor, stream } = setup();
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: {
+        slackTeamId: TEAM_ID,
+        body: {
+          type: "block_actions",
+          team: { id: TEAM_ID },
+          channel: { id: "C123" },
+          message: { ts: "111.333", thread_ts: "111.222", text: "Choose one" },
+          actions: [{ action_id: "approve", type: "button", value: "yes" }],
+        },
+      },
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    const inputs = stream.events.filter(
+      (event) => event.type === "events.iterate.com/agent/input-added",
+    );
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]).toMatchObject({ idempotencyKey: "slack-agent:webhook-to-agent-input:1" });
+    const payload = inputs[0]!.payload as { content: string; llmRequestPolicy?: unknown };
+    expect(payload.content).toContain("type: block_actions");
+    expect(payload.content).toContain("action_id: approve");
+    expect(payload.llmRequestPolicy).toEqual({ behaviour: "after-current-request" });
+  });
+
+  it("ignores webhook events performed by our own bot user (e.g. our bot adding a reaction)", async () => {
+    const { cursors, processor, slackCalls, stream } = setup();
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: {
+        slackTeamId: TEAM_ID,
+        body: {
+          type: "event_callback",
+          authorizations: [{ is_bot: true, user_id: "UBOT", bot_id: "BBOT" }],
+          event: {
+            type: "reaction_added",
+            user: "UBOT",
+            reaction: "eyes",
+            item: { channel: "C123", ts: "111.222" },
+            item_user: "UHUMAN",
+          },
+        },
+      },
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    expect(
+      stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
+    ).toHaveLength(0);
+    expect(slackCalls).toHaveLength(0);
+  });
+
+  it("forwards messages posted by other bots to the agent", async () => {
+    const { cursors, processor, slackCalls, stream } = setup();
+
+    const payload = humanMessageWebhookPayload({ text: "I am another bot mentioning @iterate" });
+    const event = payload.body.event as Record<string, unknown>;
+    event.subtype = "bot_message";
+    event.bot_id = "BOTHERBOT"; // not our authorized bot (BBOT)
+    delete event.user;
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload,
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    expect(
+      stream.events.filter((streamEvent) => {
+        return streamEvent.type === "events.iterate.com/agent/input-added";
+      }),
+    ).toHaveLength(1);
+    // Bot-authored messages never get the eyes reaction, even when forwarded.
+    expect(slackCalls.filter((call) => call.method === "reactions.add")).toHaveLength(0);
+  });
 });
 
 describe("eyesReactionTargetFromWebhookPayload", () => {
@@ -461,6 +738,22 @@ describe("eyesReactionTargetFromWebhookPayload", () => {
         },
       }),
     ).toBeNull();
+  });
+
+  it("skips messages whose only bot marker is the bot_message subtype", () => {
+    const payload = humanMessageWebhookPayload({});
+    (payload.body.event as Record<string, unknown>).subtype = "bot_message";
+    expect(eyesReactionTargetFromWebhookPayload(payload)).toBeNull();
+  });
+
+  it("skips actions performed by the authorized bot user", () => {
+    const payload = humanMessageWebhookPayload({});
+    (payload.body.event as Record<string, unknown>).user = "UBOT";
+    expect(eyesReactionTargetFromWebhookPayload(payload)).toBeNull();
+  });
+
+  it("skips payloads without a message timestamp", () => {
+    expect(eyesReactionTargetFromWebhookPayload({ body: { event: {} } })).toBeNull();
   });
 });
 
