@@ -56,10 +56,8 @@ import type {
   Session,
   McpClientCollection,
   McpClientConnectInput,
-  McpClientRpc,
   OpenApiCollection,
   OpenApiConnectInput,
-  OpenApiRpc,
   ProjectCollection,
   ProjectRepoCollection,
   ProjectStreamCollection,
@@ -1061,7 +1059,7 @@ export class CapabilityProvisionRpcTarget extends RpcTarget implements Capabilit
     return this.#providedAtOffset;
   }
 
-  async revoke(): Promise<void> {
+  async revoke() {
     await this.#startRevoke();
   }
 
@@ -1122,7 +1120,7 @@ export class StreamSubscriptionRpcTarget extends RpcTarget implements StreamSubs
     return this.#streamMaxOffset;
   }
 
-  unsubscribe(): void {
+  unsubscribe() {
     this.#closeOnce();
   }
 
@@ -1149,7 +1147,7 @@ export class ProjectEgressRpcTarget extends RpcTarget implements ProjectEgress {
     super();
   }
 
-  fetch(request: Request): Promise<Response> {
+  fetch(request: Parameters<ProjectEgress["fetch"]>[0]) {
     return projectStub(env.PROJECT, this.props.projectId).fetch(request);
   }
 
@@ -1178,7 +1176,7 @@ export class ProjectEgressInterceptRpcTarget extends RpcTarget implements Projec
     this.#release = args.release;
   }
 
-  async release(): Promise<void> {
+  async release() {
     await this.#startRelease();
   }
 
@@ -1248,7 +1246,7 @@ export class McpClientCollectionRpcTarget extends RpcTarget implements McpClient
     super();
   }
 
-  connect(input: McpClientConnectInput): Promise<McpClientRpc> {
+  connect(input: Parameters<McpClientCollection["connect"]>[0]) {
     return McpClientRpcTarget.connect(input, this.props);
   }
 }
@@ -1384,7 +1382,7 @@ export class OpenApiCollectionRpcTarget extends RpcTarget implements OpenApiColl
     super();
   }
 
-  connect(input: OpenApiConnectInput): Promise<OpenApiRpc> {
+  connect(input: Parameters<OpenApiCollection["connect"]>[0]) {
     return OpenApiRpcTarget.connect(input, this.props);
   }
 }

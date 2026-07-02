@@ -97,29 +97,6 @@ function makeStreamsExampleAppWorkspace(): WorkspaceConfig {
   };
 }
 
-function makeMinimalItxV4Workspace(): WorkspaceConfig {
-  return {
-    entry: [
-      "src/worker.ts!",
-      "vitest.config.ts",
-      "*.test.ts",
-      "*.e2e.test.ts",
-      "scripts/**/*.ts",
-      "tsconfig.wrangler-proof.json",
-    ],
-    project: [
-      "*.test.ts",
-      "*.e2e.test.ts",
-      "scripts/**/*.ts",
-      "src/**/*.ts!",
-      "test-helpers.ts",
-      "worker-configuration.d.ts",
-    ],
-    ignoreDependencies: ["cloudflare"],
-    ignoreBinaries: ["wrangler"],
-  };
-}
-
 function makeCloudflareTanStackAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   return {
     entry: ["alchemy.run.ts", "vite.config.ts", "scripts/router.ts", "src/worker.ts!"],
@@ -147,7 +124,7 @@ function makeSharedWorkspace(): WorkspaceConfig {
     // This package exposes many subpath exports from package.json rather than a
     // single `src/index.ts`, so keep the workspace config minimal and let Knip
     // use the declared export map as the public entry surface.
-    entry: ["src/durable-object-utils/e2e/alchemy.run.ts", "src/**/*.test.ts"],
+    entry: ["src/**/*.test.ts"],
     project: ["src/**/*.ts"],
     ignoreDependencies: ["alchemy", "cloudflare", "wrangler"],
   };
@@ -167,7 +144,6 @@ const config: KnipConfig = {
     "!apps/os",
     "!apps/semaphore",
     "!apps/streams-example-app",
-    "!apps/minimal-itx-v4",
     "packages/*",
     "!packages/shared",
   ],
@@ -176,24 +152,14 @@ const config: KnipConfig = {
     "apps/os/src/**": ["exports", "types"],
     "apps/os/e2e/test-support/**": ["exports", "types"],
     "apps/streams-example-app/src/lib/use-initial-tail-scroll.ts": ["types"],
-    "apps/minimal-itx-v4/src/domains/secrets/utils.ts": ["types"],
-    "apps/minimal-itx-v4/src/domains/streams/build-event.ts": ["types"],
-    "apps/minimal-itx-v4/src/domains/streams/stream-processor.ts": ["types"],
     // TanStack Start resolves the router factory by convention from the
     // entrypoint, so there is no direct import Knip can follow.
     "apps/semaphore/src/router.tsx": ["exports"],
-    "packages/shared/src/callable/entry.workerd.vitest.ts": ["exports"],
-    "packages/shared/src/durable-object-utils/test-harness/initialize-fronting-worker.ts": [
-      "exports",
-      "types",
-    ],
-    "packages/shared/src/durable-object-utils/mixins/fetch-mixin-utils.ts": ["types"],
   },
   workspaces: {
     "apps/semaphore": makeSemaphoreCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/os": makeOsCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/streams-example-app": makeStreamsExampleAppWorkspace(),
-    "apps/minimal-itx-v4": makeMinimalItxV4Workspace(),
     "packages/shared": makeSharedWorkspace(),
   },
 };
