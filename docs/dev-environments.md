@@ -321,10 +321,13 @@ invariants:
   often still carries its previous holder's deployment, so resting it
   maximizes the chance a lapsed PR retakes its own slot instead of finding
   someone else on it.
-- **Everything is attributable.** `pnpm preview status` shows each slot's
-  holder, PR link, and expiry; the semaphore UI at semaphore.iterate.com
-  shows the same; every lease transition (acquired/renewed/evicted/expired/
-  force-released) is logged as an event in the coordinator.
+- **Everything is attributable and visible.** `pnpm preview status` shows
+  each slot's holder, PR link, and expiry; the semaphore UI at
+  semaphore.iterate.com shows the same; every lease transition
+  (acquired/renewed/evicted/expired/force-released) is logged as an event in
+  the coordinator. Exceptional states — waiting for a slot, no slot
+  available, slot taken over, slot moved — are additionally bannered as a
+  caution alert at the top of the PR body's managed preview section.
 
 CI and local machines run the **same commands against the same semaphore** —
 there is no CI-only path.

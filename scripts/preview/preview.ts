@@ -62,20 +62,67 @@ export async function deploy(options: PullRequestCommandOptions = {}) {
       )}${selectedApps.some((app) => app.slug === "os") ? " (os deploys last: it bakes the slot's auth JWKS at deploy time)" : ""}`,
   );
 
-  const environmentConfigLease = await claimEnvironmentConfigLease({
-    createPreviewSemaphoreResourceClient: runtime.createPreviewSemaphoreResourceClient,
-    fetchPullRequestState: makePullRequestStateFetcher(
-      context.githubToken,
-      context.repositoryFullName,
-    ),
-    holder: pullRequestHolder(context.pullRequestNumber),
-    leaseMs: defaultPreviewLeaseMs,
-    previousEnvironmentConfigLease: current.state.environmentConfigLease,
-    waitTotalMs: resolveSlotWaitTotalMs(runtime.commandEnvironment),
-  });
+  let environmentConfigLease: EnvironmentConfigLease;
+  try {
+    environmentConfigLease = await claimEnvironmentConfigLease({
+      createPreviewSemaphoreResourceClient: runtime.createPreviewSemaphoreResourceClient,
+      fetchPullRequestState: makePullRequestStateFetcher(
+        context.githubToken,
+        context.repositoryFullName,
+      ),
+      holder: pullRequestHolder(context.pullRequestNumber),
+      leaseMs: defaultPreviewLeaseMs,
+      // Surface the wait in the PR body the moment every slot is busy, not
+      // only in workflow logs nobody has open.
+      onFirstWait: async (holderTable) => {
+        await updatePreviewState(context, (state) => ({
+          ...state,
+          notice: [
+            `All preview slots are leased — this PR is waiting in line for one (since ${new Date().toISOString()}).`,
+            holderTable,
+          ].join("\n"),
+        }));
+      },
+      previousEnvironmentConfigLease: current.state.environmentConfigLease,
+      waitTotalMs: resolveSlotWaitTotalMs(runtime.commandEnvironment),
+    });
+  } catch (error) {
+    await updatePreviewState(context, (state) => ({
+      ...state,
+      notice: `No preview slot could be claimed at ${new Date().toISOString()}. ${formatPreviewErrorMessage(error)}`,
+    }));
+    throw error;
+  }
+  // A slot move invalidates every previously recorded deployment, not just
+  // the diff-selected apps: anything left undeployed would keep old-slot URLs
+  // and e2e would run against another slot's deployment.
+  const previousSlug = current.state.environmentConfigLease?.slug ?? null;
+  const appsToDeploy =
+    previousSlug && previousSlug !== environmentConfigLease.slug
+      ? expandPreviewDependencies([
+          ...new Set([
+            ...selectedApps.map((app) => app.slug),
+            ...Object.keys(current.state.apps).filter(
+              (appSlug): appSlug is CloudflarePreviewAppSlugType =>
+                cloudflarePreviewApps[appSlug as CloudflarePreviewAppSlugType] != null,
+            ),
+          ]),
+        ]).map((appSlug) => cloudflarePreviewApps[appSlug])
+      : selectedApps;
+  if (appsToDeploy.length > selectedApps.length) {
+    logPreview(
+      `slot changed from ${previousSlug} to ${environmentConfigLease.slug}: redeploying every previously recorded app (${appsToDeploy.map((app) => app.slug).join(", ")}) so nothing keeps pointing at the old slot`,
+    );
+  }
   const leaseUpdate = await updatePreviewState(context, (state) => ({
     ...state,
     environmentConfigLease,
+    // A successful claim clears exhaustion/takeover banners; a slot move
+    // leaves its own so the change is impossible to miss.
+    notice:
+      previousSlug && previousSlug !== environmentConfigLease.slug
+        ? `This PR's slot changed from ${previousSlug} to ${environmentConfigLease.slug} at ${new Date().toISOString()} (the old lease lapsed and someone else took the slot). Everything below refers to the new slot.`
+        : null,
   }));
 
   let ok = true;
@@ -85,7 +132,7 @@ export async function deploy(options: PullRequestCommandOptions = {}) {
   // that only merged the current batch would silently drop the previous
   // batch's results from the PR body.
   const accumulatedEntries: Record<string, CloudflarePreviewAppEntry> = {};
-  for (const batch of orderPreviewDeployBatches(selectedApps)) {
+  for (const batch of orderPreviewDeployBatches(appsToDeploy)) {
     const entries = await mapWithConcurrency(
       batch,
       defaultPreviewDeployConcurrency,
@@ -210,6 +257,7 @@ export async function test(options: PullRequestCommandOptions = {}) {
     await updatePreviewState(context, (state) => ({
       ...state,
       environmentConfigLease: null,
+      notice: `${reasserted.message} E2e was NOT run. Re-run preview deploy to claim a slot and redeploy.`,
       apps: Object.fromEntries(
         Object.entries(state.apps).map(([appSlug, entry]) => [
           appSlug,
@@ -401,6 +449,9 @@ export async function assign(options: AssignOptions = {}) {
   const update = await updatePreviewState(context, (state) => ({
     ...state,
     environmentConfigLease: result.lease,
+    notice: result.changedFromSlug
+      ? `This PR was reassigned from ${result.changedFromSlug} to ${result.lease.slug} by preview assign at ${new Date().toISOString()}; run preview deploy to redeploy here.`
+      : null,
     apps: result.changedFromSlug
       ? Object.fromEntries(
           Object.entries(state.apps).map(([appSlug, entry]) => [
@@ -936,6 +987,12 @@ export type CloudflarePreviewAppEntry = z.infer<typeof CloudflarePreviewAppEntry
 const CloudflarePreviewState = z.object({
   apps: z.record(z.string().trim().min(1), CloudflarePreviewAppEntry).default({}),
   environmentConfigLease: EnvironmentConfigLease.nullable().default(null),
+  /**
+   * Prominent banner rendered at the top of the managed PR-body section —
+   * slot exhaustion, slot takeovers, and moves land here so they are
+   * impossible to miss. Cleared by the next successful deploy claim.
+   */
+  notice: z.string().trim().min(1).nullable().default(null),
 });
 
 const CloudflareZonesResponse = z
@@ -1255,8 +1312,13 @@ function renderCloudflarePreviewSection(state: CloudflarePreviewState) {
   const table = entries.length > 0 ? renderPreviewAppTable(entries) : null;
   const failureDetails = entries.map(renderPreviewAppFailureDetails).filter(Boolean).join("\n\n");
 
+  const notice = state.notice
+    ? ["> [!CAUTION]", ...state.notice.split("\n").map((line) => `> ${line}`)].join("\n")
+    : null;
+
   return [
     "## Environment Config Lease",
+    notice,
     markdownAnnotator("", cloudflarePreviewStateLabel).update(wrapHiddenStateBlock(state)),
     renderPreviewAppTableDetails({
       summary: state.environmentConfigLease
@@ -2059,6 +2121,7 @@ async function cleanupPreviewForPullRequest(
     const update = await updatePreviewState(params.context, (state) => ({
       ...state,
       environmentConfigLease: null,
+      notice: `Teardown skipped: ${reasserted.message}`,
       apps: Object.fromEntries(
         Object.entries(state.apps).map(([appSlug, entry]) => [
           appSlug,
@@ -2600,6 +2663,7 @@ async function acquireAnyEnvironmentConfigLease(input: {
   fetchPullRequestState?: PullRequestStateFetcher | null;
   holder: string;
   leaseMs: number;
+  onFirstWait?: (holderTable: string) => Promise<void>;
   waitTotalMs: number;
 }) {
   const deadline = Date.now() + input.waitTotalMs;
@@ -2640,6 +2704,13 @@ async function acquireAnyEnvironmentConfigLease(input: {
       }
 
       const holderTable = await describeEnvironmentConfigLeases(input.semaphore);
+      if (attempt === 1 && input.onFirstWait) {
+        try {
+          await input.onFirstWait(holderTable);
+        } catch (noticeError) {
+          logPreview(`could not surface the wait: ${formatPreviewErrorMessage(noticeError)}`);
+        }
+      }
       if (Date.now() >= deadline) {
         throw new Error(
           [
@@ -2673,6 +2744,7 @@ async function claimEnvironmentConfigLease(input: {
   fetchPullRequestState?: PullRequestStateFetcher | null;
   holder: string;
   leaseMs: number;
+  onFirstWait?: (holderTable: string) => Promise<void>;
   previousEnvironmentConfigLease: EnvironmentConfigLease | null;
   waitTotalMs: number;
 }) {
@@ -2698,6 +2770,7 @@ async function claimEnvironmentConfigLease(input: {
     fetchPullRequestState: input.fetchPullRequestState,
     holder: input.holder,
     leaseMs: input.leaseMs,
+    onFirstWait: input.onFirstWait,
     waitTotalMs: input.waitTotalMs,
   });
   logPreview(

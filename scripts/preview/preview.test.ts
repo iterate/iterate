@@ -239,6 +239,7 @@ describe("cloudflare preview state helpers", () => {
         os: entry,
       },
       environmentConfigLease,
+      notice: null,
     };
     const body = renderCloudflarePreviewPullRequestBody(
       "## Summary\n\nExisting user-authored description.",
@@ -304,6 +305,7 @@ describe("cloudflare preview state helpers", () => {
     expect(parseCloudflarePreviewState("## Summary\n\nNo preview block here.")).toEqual({
       apps: {},
       environmentConfigLease: null,
+      notice: null,
     });
   });
 
@@ -321,6 +323,7 @@ describe("cloudflare preview state helpers", () => {
     expect(parseCloudflarePreviewState(body)).toEqual({
       apps: {},
       environmentConfigLease: null,
+      notice: null,
     });
   });
 });
@@ -597,6 +600,32 @@ describe("splitRepositoryFullName", () => {
     expect(() => splitRepositoryFullName("iterate/iterate/extra")).toThrow(
       "Expected repository full name to look like owner/repo.",
     );
+  });
+});
+
+describe("preview section notice banner", () => {
+  it("renders the notice as a GitHub caution alert above the lease details", () => {
+    const body = renderCloudflarePreviewPullRequestBody(
+      "",
+      // oxlint-disable-next-line no-explicit-any
+      {
+        apps: {},
+        environmentConfigLease: null,
+        notice: "All preview slots are leased.\n  preview-1  leased by pr-1601",
+      } as any,
+    );
+    expect(body).toContain("> [!CAUTION]");
+    expect(body).toContain("> All preview slots are leased.");
+    expect(body).toContain("> " + "  preview-1  leased by pr-1601");
+  });
+
+  it("renders no alert when there is no notice", () => {
+    const body = renderCloudflarePreviewPullRequestBody(
+      "",
+      // oxlint-disable-next-line no-explicit-any
+      { apps: {}, environmentConfigLease: null, notice: null } as any,
+    );
+    expect(body).not.toContain("[!CAUTION]");
   });
 });
 
