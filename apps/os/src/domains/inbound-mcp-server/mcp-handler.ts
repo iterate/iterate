@@ -3,29 +3,24 @@ import {
   ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM,
   ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM,
   ITERATE_IS_ADMIN_CLAIM,
+  ITERATE_PROJECT_SELECTION_SCOPE,
   ITERATE_ROLE_CLAIM,
   listProjectScopeIds,
 } from "@iterate-com/shared/auth-claims";
+import { oauthResourceAudienceVariants } from "@iterate-com/shared/oauth-resource";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpHandler } from "agents/mcp";
 import { z } from "zod";
+// oxlint-disable-next-line iterate/no-capnweb-http-batch -- exec_js is a one-shot request-scoped call: a single pipelined batch (authenticate -> runScript) with no socket lifecycle to manage.
+import { newHttpBatchRpcSession } from "capnweb";
+import { env } from "cloudflare:workers";
 import packageJson from "../../../package.json" with { type: "json" };
 import { authenticateAdminApiSecret, readBearerToken } from "~/auth/admin.ts";
 import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import { principalFromAccessToken } from "~/auth/principal.ts";
-import { listAllProjects } from "~/db/queries/.generated/index.ts";
-import {
-  acceptedMcpResourceAudiences,
-  isMcpProtectedResourceMetadataPath,
-  mcpChallengeHeader,
-  mcpOAuthScopes,
-  publicMcpResourceUrl,
-  publicRequestUrl,
-} from "~/domains/inbound-mcp-server/mcp-auth-metadata.ts";
-import { projectContextRef } from "~/itx/coordinates.ts";
-import type { ItxRuntime } from "~/itx/handle.ts";
-import { runItxScript } from "~/itx/run.ts";
-import { MCP_START_MOUNT_PATH } from "~/lib/mcp-base-url.ts";
+import { MCP_START_MOUNT_PATH, resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
+import { readProjectBySlug } from "~/project-directory.ts";
+import type { UnauthenticatedItx } from "~/types.ts";
 import type { RequestContext } from "~/request-context.ts";
 
 type ProjectGrant = {
@@ -40,7 +35,6 @@ type McpAuth = {
 };
 
 const requiredToolScope = "profile";
-
 const ExecJsInput = z.object({
   code: z
     .string()
@@ -67,7 +61,7 @@ export async function handleInboundMcpRequest(input: {
   if (input.request.method === "OPTIONS") {
     return new Response(null, { headers: mcpCorsHeaders });
   }
-  if (isMcpProtectedResourceMetadataPath(pathname)) {
+  if (pathname === `${MCP_START_MOUNT_PATH}/.well-known/oauth-protected-resource`) {
     return Response.json(protectedResourceMetadata(input), { headers: mcpCorsHeaders });
   }
   if (pathname !== MCP_START_MOUNT_PATH && pathname !== `${MCP_START_MOUNT_PATH}/`) {
@@ -112,32 +106,40 @@ function createServer(input: { auth: McpAuth; context: RequestContext; env: Env 
     },
     async (rawInput) => {
       const parsedInput = ExecJsInput.parse(rawInput);
-      const project = resolveToolProject(projects, parsedInput.project, { requireProjectInput });
+      const project = await resolveToolProject(input.context, projects, parsedInput.project, {
+        authType: input.auth.authType,
+        requireProjectInput,
+      });
       requireScope(input.auth, requiredToolScope);
 
-      const workerExports = input.context.workerExports;
-      if (!workerExports) throw new Error("MCP exec_js needs workerExports in request context.");
-
-      const outcome = await runItxScript({
-        env: input.env,
-        exports: workerExports as unknown as ItxRuntime["exports"],
-        functionSource: parsedInput.code,
-        projectId: project.id,
-        props: { context: projectContextRef(project.id) },
-      });
-
-      const parts: string[] = [];
-      if (outcome.logs.length > 0) parts.push(`Console:\n${outcome.logs.join("\n")}`);
-      parts.push(
-        outcome.ok
-          ? `Result: ${JSON.stringify(outcome.result, null, 2)}`
-          : `Error: ${outcome.error}`,
-      );
-
-      return {
-        content: [{ type: "text" as const, text: parts.join("\n\n") }],
-        isError: !outcome.ok,
-      };
+      // Access was verified above (OAuth project grants / admin secret), so the
+      // script runs through the itx admin lane over one pipelined
+      // HTTP batch. runScript executes the async arrow function in a fresh
+      // dynamic-worker isolate scoped to the project.
+      try {
+        const session = engineBatchSession(input.context);
+        const root = session.authenticate({
+          type: "admin-secret",
+          secret: requireAdminSecret(input.context),
+        });
+        const projectItx = root.projects.get(project.id);
+        const execution = await projectItx.runScript(parsedInput.code);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Result: ${JSON.stringify(execution.result, null, 2)}`,
+            },
+          ],
+          isError: false,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          content: [{ type: "text" as const, text: `Error: ${message}` }],
+          isError: true,
+        };
+      }
     },
   );
 
@@ -150,54 +152,28 @@ async function resolveMcpAuth(input: {
   request: Request;
 }): Promise<McpAuth | Response> {
   if (authenticateAdminApiSecret(input.context, input.request)) {
-    const projects = await listAllProjects(input.context.db, { limit: 10_000, offset: 0 });
-    if (projects.length === 0) {
-      return new Response("No projects are available to this admin MCP token.", {
-        status: 403,
-        headers: mcpCorsHeaders,
-      });
-    }
+    // Admin tokens may target any project by slug; the auth worker directory
+    // resolves it at call time (there is no local project table anymore).
     return {
       authType: "admin_api_secret",
-      projects: projects.map((project) => ({
-        id: project.id,
-        slug: project.slug,
-      })),
+      projects: [],
       scopes: [],
     };
   }
 
-  const mcpAudiences = acceptedMcpResourceAudiences(input);
+  const mcpAudiences = oauthResourceAudienceVariants(canonicalMcpResourceUrl(input));
   const auth = createMcpIterateAuth(input, mcpAudiences);
   if (!auth) {
-    logMcpAuthFailure(input, { branch: "iterate_auth_not_configured" });
     return new Response("Iterate auth is not configured.", {
       status: 503,
       headers: mcpCorsHeaders,
     });
   }
 
-  const bearerToken = readBearerToken(input.request.headers.get("authorization"));
-  const resolvedToken = await resolveOAuthAccessToken({
-    ...input,
-    auth,
-    bearerToken,
-    audiences: mcpAudiences,
-  });
-  if (!resolvedToken) {
-    logMcpAuthFailure(input, {
-      branch: bearerToken ? "token_decode_or_verify_failed" : "no_bearer_token",
-    });
-    return unauthorizedMcpResponse(input, "Missing or invalid bearer token");
-  }
-  const { accessToken, verificationMode } = resolvedToken;
+  const accessToken = await resolveOAuthAccessToken({ ...input, auth, audiences: mcpAudiences });
+  if (!accessToken) return unauthorizedMcpResponse(input, "Missing or invalid bearer token");
   const audiences = Array.isArray(accessToken.aud) ? accessToken.aud : [accessToken.aud];
   if (!audiences.some((audience) => mcpAudiences.includes(audience))) {
-    logMcpAuthFailure(input, {
-      branch: "audience_mismatch",
-      verificationMode,
-      acceptedAudiences: mcpAudiences,
-    });
     return unauthorizedMcpResponse(input, "Bearer token is not scoped to this MCP resource");
   }
 
@@ -216,13 +192,10 @@ async function resolveMcpAuth(input: {
   });
 
   if (projects.length === 0) {
-    logMcpAuthFailure(input, {
-      branch: "no_project_grants",
-      verificationMode,
-      scopes,
-      projectCount: principal.projects.length,
+    return new Response("MCP token does not grant access to any projects.", {
+      status: 403,
+      headers: mcpCorsHeaders,
     });
-    return forbiddenMcpResponse(input, "MCP token does not grant access to any projects.");
   }
 
   return {
@@ -232,57 +205,47 @@ async function resolveMcpAuth(input: {
   };
 }
 
+// Iterate Auth issues a JWT access token only when the client requests an RFC
+// 8707 `resource` (audience); clients that omit it — Grok's connector, generic
+// MCP clients — get an OPAQUE token instead. The JWT verifier can't read those,
+// so fall back to the auth worker's introspection endpoint, which validates the
+// opaque token against its (hashed) store and reconstructs the same claims.
 async function resolveOAuthAccessToken(input: {
   auth: ReturnType<typeof createIterateAuth>;
-  bearerToken: string | null;
   context: RequestContext;
   request: Request;
   audiences: readonly string[];
-}): Promise<{
-  accessToken: AccessTokenClaims;
-  verificationMode: "jwt" | "opaque-internal";
-} | null> {
-  const accessToken = await input.auth.authenticateBearer({ headers: input.request.headers });
-  if (accessToken) return { accessToken, verificationMode: "jwt" };
-  if (!input.bearerToken) return null;
+}): Promise<AccessTokenClaims | null> {
+  const jwtAccessToken = await input.auth.authenticateBearer({ headers: input.request.headers });
+  if (jwtAccessToken) return jwtAccessToken;
+
+  const bearerToken = readBearerToken(input.request.headers.get("authorization"));
+  if (!bearerToken) return null;
 
   try {
     const result = await createAuthWorkerServiceClient(
       input.context,
     ).internal.oauth.introspectAccessToken({
-      token: input.bearerToken,
+      token: bearerToken,
       audiences: [...input.audiences],
     });
-    if (!result.active) {
-      logMcpAuthFailure(input, {
-        branch: "opaque_internal_introspection_inactive",
-        introspectionReason: result.reason,
-      });
-      return null;
-    }
+    if (!result.active) return null;
 
     return {
-      verificationMode: "opaque-internal",
-      accessToken: {
-        sub: result.sub,
-        sid: result.sid,
-        iss: result.iss,
-        aud: result.aud,
-        iat: result.iat,
-        exp: result.exp,
-        scope: result.scope,
-        scopes: result.scopes,
-        [ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM]: result.organizations,
-        [ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM]: result.projects,
-        [ITERATE_IS_ADMIN_CLAIM]: result.isAdmin,
-        [ITERATE_ROLE_CLAIM]: result.role,
-      },
+      sub: result.sub,
+      sid: result.sid,
+      iss: result.iss,
+      aud: result.aud,
+      iat: result.iat,
+      exp: result.exp,
+      scope: result.scope,
+      scopes: result.scopes,
+      [ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM]: result.organizations,
+      [ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM]: result.projects,
+      [ITERATE_IS_ADMIN_CLAIM]: result.isAdmin,
+      [ITERATE_ROLE_CLAIM]: result.role,
     };
-  } catch (error) {
-    logMcpAuthFailure(input, {
-      branch: "opaque_internal_introspection_error",
-      error: error instanceof Error ? error.message : String(error),
-    });
+  } catch {
     return null;
   }
 }
@@ -311,21 +274,53 @@ function readAccessTokenScopes(accessToken: { scope?: string; scopes?: string[] 
   return accessToken.scope?.split(" ").filter(Boolean) ?? [];
 }
 
-function resolveToolProject(
+async function resolveToolProject(
+  context: RequestContext,
   projects: ProjectGrant[],
   requestedProject: string | undefined,
-  options: { requireProjectInput: boolean },
-) {
-  if (!options.requireProjectInput && !requestedProject) return projects[0];
+  options: { authType: McpAuth["authType"]; requireProjectInput: boolean },
+): Promise<ProjectGrant> {
+  if (!options.requireProjectInput && !requestedProject) {
+    const project = projects[0];
+    if (project) return project;
+  }
 
   const normalizedRequestedProject = requestedProject?.trim();
   if (!normalizedRequestedProject) throw new Error("Pass a project slug.");
+
+  if (options.authType === "admin_api_secret") {
+    // KV directory cache in front of the auth worker (also resolves
+    // admin-lane projects, which are primed at create but never registered
+    // with the auth directory).
+    const record = await readProjectBySlug(
+      context.config,
+      env.PROJECT_DIRECTORY,
+      normalizedRequestedProject,
+    );
+    if (!record) throw new Error(`Project not found: ${normalizedRequestedProject}`);
+    return { id: record.id, slug: record.slug };
+  }
 
   const project = projects.find((candidate) => candidate.slug === normalizedRequestedProject);
   if (!project) {
     throw new Error(`MCP token does not grant access to project: ${normalizedRequestedProject}`);
   }
   return project;
+}
+
+function requireAdminSecret(context: RequestContext): string {
+  const secret = context.config.adminApiSecret?.exposeSecret();
+  if (!secret) throw new Error("Admin API secret is not configured.");
+  return secret;
+}
+
+function engineBatchSession(context: RequestContext) {
+  const baseUrl = (context.config.baseUrl ?? "").replace(/\/+$/, "");
+  if (!baseUrl) throw new Error("baseUrl is not configured");
+  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- one-shot pipelined batch per exec_js call; no socket lifecycle to manage.
+  return newHttpBatchRpcSession<UnauthenticatedItx>(
+    new Request(`${baseUrl}/api/itx`, { method: "POST" }),
+  );
 }
 
 function requireScope(auth: McpAuth, scope: string) {
@@ -337,13 +332,29 @@ function requireScope(auth: McpAuth, scope: string) {
 
 function protectedResourceMetadata(input: { context: RequestContext; request: Request }) {
   return {
-    resource: publicMcpResourceUrl(input),
+    resource: canonicalMcpResourceUrl(input),
     authorization_servers: [
       input.context.config.iterateAuth?.issuer ?? "https://auth.iterate.com/api/auth",
     ],
-    scopes_supported: mcpOAuthScopes,
+    scopes_supported: [
+      "openid",
+      "profile",
+      "email",
+      "offline_access",
+      ITERATE_PROJECT_SELECTION_SCOPE,
+    ],
     bearer_methods_supported: ["header"],
   };
+}
+
+function canonicalMcpResourceUrl(input: { context: RequestContext; request: Request }) {
+  const rawUrl = resolveMcpBaseUrl({
+    appBaseUrl: input.context.config.baseUrl,
+    mcpBaseUrl: input.context.config.mcp?.baseUrl,
+    requestUrl: input.request.url,
+  });
+  if (!rawUrl) throw new Error("APP_CONFIG_MCP__BASE_URL is required for MCP requests.");
+  return rawUrl;
 }
 
 function unauthorizedMcpResponse(
@@ -352,60 +363,20 @@ function unauthorizedMcpResponse(
 ) {
   const metadataUrl = new URL(
     ".well-known/oauth-protected-resource",
-    `${publicMcpResourceUrl(input)}/`,
+    `${canonicalMcpResourceUrl(input)}/`,
   ).toString();
   return new Response(message, {
     status: 401,
     headers: {
       ...mcpCorsHeaders,
-      "WWW-Authenticate": mcpChallengeHeader({
-        error: "invalid_token",
-        errorDescription: message,
-        metadataUrl,
-      }),
-    },
-  });
-}
-
-function forbiddenMcpResponse(
-  input: { context: RequestContext; request: Request },
-  message: string,
-) {
-  const metadataUrl = new URL(
-    ".well-known/oauth-protected-resource",
-    `${publicMcpResourceUrl(input)}/`,
-  ).toString();
-  return new Response(message, {
-    status: 403,
-    headers: {
-      ...mcpCorsHeaders,
-      "WWW-Authenticate": mcpChallengeHeader({
-        error: "insufficient_scope",
-        errorDescription: message,
-        metadataUrl,
-      }),
-    },
-  });
-}
-
-function logMcpAuthFailure(
-  input: { context: RequestContext; request: Request },
-  fields: { branch: string } & Record<string, unknown>,
-) {
-  input.context.log.info("os.mcp.auth_failure");
-  input.context.log.set({
-    mcpAuth: {
-      method: input.request.method,
-      url: publicRequestUrl(input.request).toString(),
-      userAgent: input.request.headers.get("user-agent"),
-      ...fields,
+      "WWW-Authenticate": `Bearer resource_metadata="${metadataUrl}"`,
     },
   });
 }
 
 function mcpExecutionContext(context: RequestContext): ExecutionContext {
   return {
-    exports: context.workerExports ?? ({} as Cloudflare.Exports),
+    exports: {} as Cloudflare.Exports,
     passThroughOnException() {},
     props: {},
     waitUntil: (promise: Promise<unknown>) => context.waitUntil?.(promise),

@@ -1,7 +1,12 @@
 # itx implementation decisions & learnings
 
+> **Status: historical decision log (pre-migration).** These decisions were
+> made while implementing the PRE-itx-v4 itx layer, deleted in the itx-v4
+> replacement. Kept as the record of what changed on contact with reality;
+> the current implementation and its contract live at `apps/os/src/`.
+
 Running log of choices made while implementing the itx layer (design of
-record: `src/itx/types.ts`; roadmap: `apps/os/docs/itx-next.md`),
+record: `src/itx/types.ts`; roadmap: `apps/os/docs/itx-design.md`),
 especially where reality diverged from the plan or where it left room.
 Newest entries at the bottom. See also `README.md` (the architecture document)
 once it exists.

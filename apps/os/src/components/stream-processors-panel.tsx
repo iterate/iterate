@@ -4,7 +4,7 @@ import { Button } from "@iterate-com/ui/components/button";
 import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import { cn } from "@iterate-com/ui/lib/utils";
-import type { ProcessorRuntimeState } from "~/domains/streams/engine/types.ts";
+import type { ProcessorRuntimeState } from "~/types.ts";
 import {
   hashString,
   presenceColorClasses,

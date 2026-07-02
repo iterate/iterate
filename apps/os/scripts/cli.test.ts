@@ -12,7 +12,6 @@ const APP_ROOT = fileURLToPath(new URL("..", import.meta.url));
 it("exposes OS script modules as CLI subcommands", async () => {
   const { stdout } = await runCli(["--help"]);
 
-  expect(stdout).toContain("artifacts");
   expect(stdout).toContain("dev");
   expect(stdout).toContain("itx");
 });

@@ -18,9 +18,9 @@ import { AlertCircle, Circle, Mail, MessageSquare } from "lucide-react";
 import { z } from "zod";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
-import type { ItxHandle } from "~/itx/types.ts";
+import type { Itx } from "~/types.ts";
 
-type Connection = Awaited<ReturnType<ItxHandle["integrations"]["getConnection"]>>;
+type Connection = Awaited<ReturnType<Itx["integrations"]["getConnection"]>>;
 
 const Search = z.object({
   error: z.string().optional(),
@@ -203,40 +203,25 @@ function IntegrationMetadata({
 }) {
   if (!connection?.connected) return null;
 
-  const token = connection.token;
-  const scopeCount = countScopes(connection.scopes, provider === "slack" ? "," : " ");
-  const expiry = token?.expiresAt ? formatExpiry(token.expiresAt) : null;
+  // The itx connection status carries identity + provider metadata;
+  // token material never leaves the secret pipeline (it lives in a secret DO
+  // with an egress allowlist), so unlike the pre-migration page there are no
+  // token-expiry rows here.
+  const scopes = typeof connection.metadata.scopes === "string" ? connection.metadata.scopes : null;
+  const scopeCount = scopes ? countScopes(scopes, provider === "slack" ? "," : " ") : null;
 
   return (
     <div className="mt-2 grid gap-1.5 text-xs text-muted-foreground">
-      {expiry ? (
-        <IntegrationMetadataRow label="Token expiry" value={expiry.label} tone={expiry.tone} />
-      ) : (
-        <IntegrationMetadataRow label="Token expiry" value="Not provided" />
-      )}
-      <IntegrationMetadataRow
-        label="Access token"
-        value={token?.hasMaterial ? "Stored" : "Missing"}
-        tone={token?.hasMaterial ? "ok" : "danger"}
-      />
-      {provider === "google" || token?.refreshTokenStored ? (
-        <IntegrationMetadataRow
-          label="Refresh token"
-          value={token?.refreshTokenStored ? "Stored" : "Not stored"}
-          tone={provider === "google" && token?.refreshTokenStored ? "ok" : undefined}
-        />
-      ) : null}
-      {token?.createdAt ? (
-        <IntegrationMetadataRow label="Secret created" value={formatTimestamp(token.createdAt)} />
-      ) : null}
-      {token?.updatedAt ? (
-        <IntegrationMetadataRow label="Secret updated" value={formatTimestamp(token.updatedAt)} />
-      ) : null}
       <IntegrationMetadataRow label="External ID" value={connection.externalId ?? "Unknown"} />
-      <IntegrationMetadataRow
-        label="Scopes"
-        value={scopeCount === 1 ? "1 scope" : `${scopeCount} scopes`}
-      />
+      {connection.displayName ? (
+        <IntegrationMetadataRow label="Account" value={connection.displayName} />
+      ) : null}
+      {scopeCount === null ? null : (
+        <IntegrationMetadataRow
+          label="Scopes"
+          value={scopeCount === 1 ? "1 scope" : `${scopeCount} scopes`}
+        />
+      )}
     </div>
   );
 }
@@ -264,31 +249,6 @@ function toneClassName(tone: "danger" | "ok" | "warning" | undefined) {
   if (tone === "ok") return "text-emerald-600";
   if (tone === "warning") return "text-amber-600";
   return "text-muted-foreground/50";
-}
-
-function formatExpiry(value: string) {
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) {
-    return { label: value, tone: undefined };
-  }
-
-  const now = Date.now();
-  const prefix = timestamp <= now ? "Expired" : "Expires";
-  const tone: "danger" | "ok" | "warning" =
-    timestamp <= now ? "danger" : timestamp - now < 10 * 60 * 1000 ? "warning" : "ok";
-  return {
-    label: `${prefix} ${formatTimestamp(value)}`,
-    tone,
-  };
-}
-
-function formatTimestamp(value: string) {
-  const timestamp = Date.parse(value.endsWith("Z") || value.includes("T") ? value : `${value}Z`);
-  if (!Number.isFinite(timestamp)) return value;
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(timestamp));
 }
 
 function countScopes(scopes: string | null, separator: "," | " ") {

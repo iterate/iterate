@@ -7,13 +7,14 @@ import {
 } from "@iterate-com/shared/auth-claims";
 import { os, protectedMiddleware, serviceMiddleware } from "../orpc.ts";
 import { auth, createProjectIngressToken as createSignedProjectIngressToken } from "../../auth.ts";
-import { parseStringArray } from "../../db/helpers.ts";
+import { parseProjectMetadata, parseStringArray } from "../../db/helpers.ts";
 import {
   disableOAuthClientById,
   getOAuthAccessTokenForInternalIntrospection,
   getOAuthClientByClientId,
   getOAuthClientByReferenceId,
   getOrganizationBySlug,
+  getProjectWithOrganizationBySlug,
   getUserByEmail,
   getUserById,
   insertMembership,
@@ -38,6 +39,7 @@ import {
   generateId,
   toMembershipRole,
   toOrganizationRecord,
+  toProjectRecord,
   toProjectRecordFromReturnedRow,
   toUserRecord,
 } from "./_shared.ts";
@@ -196,6 +198,30 @@ const members = os.internal.organization.members
 const mintProjectId = os.internal.project.mintProjectId
   .use(serviceMiddleware)
   .handler(async () => ({ id: generateId("prj") }));
+
+// Plain slug lookup for trusted service flows: OS ingress resolves project
+// platform hosts (<slug>.<base>) to project ids here, and OS server reads use
+// it for the stale-claims window right after a create. The service token is
+// fully trusted, so there is no user scoping — callers enforce their own
+// authorization (OS checks the reader's org membership; ingress only maps
+// slug -> id).
+const projectBySlug = os.internal.project.bySlug
+  .use(serviceMiddleware)
+  .handler(async ({ context, input }) => {
+    const projectRow = await getProjectWithOrganizationBySlug(context.db, {
+      slug: input.projectSlug,
+    });
+    if (!projectRow) return null;
+    return toProjectRecord({
+      id: projectRow.id,
+      organizationId: projectRow.organizationId,
+      name: projectRow.name,
+      slug: projectRow.slug,
+      metadata: parseProjectMetadata(projectRow.metadata),
+      archivedAt:
+        typeof projectRow.archivedAt === "number" ? new Date(projectRow.archivedAt) : null,
+    });
+  });
 
 const createForOrganization = os.internal.project.createForOrganization
   .use(serviceMiddleware)
@@ -660,6 +686,7 @@ export const internal = os.internal.router({
     members,
   },
   project: {
+    bySlug: projectBySlug,
     createForOrganization,
     mintProjectId,
   },

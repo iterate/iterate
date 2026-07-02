@@ -8,8 +8,8 @@ itx handles.
 
 ```bash
 doppler run --project os --config preview_2 -- pnpm --dir apps/os cli itx run \
-  --context <project-slug-or-id> \
-  -e 'const stream = await itx.streams.get("/agents/local-debug"); return await stream.getEvents({ beforeOffset: "end", limit: 100 })'
+  --context <prj_id> \
+  -e 'return await itx.streams.get("/agents/local-debug").getEvents({ limit: 100 })'
 ```
 
 ## Append Controlled Events
@@ -18,26 +18,26 @@ Append one event at a time so you can control offsets and timing:
 
 ```bash
 doppler run --project os --config preview_2 -- pnpm --dir apps/os cli itx run \
-  --context <project-slug-or-id> \
-  -e 'const stream = await itx.streams.get("/agents/local-debug"); return await stream.append({ event: { type: "events.iterate.com/agents/user-message-received", payload: { content: "Say hello via itx.chat.sendMessage.", origin: "web" } } })'
+  --context <prj_id> \
+  -e 'return await itx.streams.get("/agents/local-debug").append({ type: "events.iterate.com/agents/user-message-received", payload: { content: "Say hello via itx.chat.sendMessage.", origin: "web" } })'
 ```
 
 Then wait for the agent response:
 
 ```bash
 doppler run --project os --config preview_2 -- pnpm --dir apps/os cli itx run \
-  --context <project-slug-or-id> \
-  -e 'const stream = await itx.streams.get("/agents/local-debug"); return await stream.waitForEvent({ afterOffset: 0, timeoutMs: 180000, eventTypes: ["events.iterate.com/agents/web-message-sent"] })'
+  --context <prj_id> \
+  -e 'return await itx.streams.get("/agents/local-debug").waitForEvent({ afterOffset: 0, timeoutMs: 180000, eventTypes: ["events.iterate.com/agents/web-message-sent"] })'
 ```
 
 ## Inspect Runtime State
 
-For agent streams, use the project-scoped agents capability:
+For agent streams, use the agent's processor surface:
 
 ```bash
 doppler run --project os --config preview_2 -- pnpm --dir apps/os cli itx run \
-  --context <project-slug-or-id> \
-  --eval 'return await itx.agents.create().getRuntimeState({ agentPath: "/agents/local-debug" })'
+  --context <prj_id> \
+  --eval 'return await itx.agents.get("/agents/local-debug").processor.getRuntimeState()'
 ```
 
 This is useful for confirming whether a failure is in stream append ordering,
@@ -47,8 +47,8 @@ script that sends the user-visible response.
 ## Provider Comparison
 
 Use two fresh sibling agent streams under the same project and send the same
-message through `pnpm cli itx agent-smoke` or `itx.agents.sendMessage`. Compare
-the stream events around:
+message through `pnpm cli itx agent-smoke` or
+`itx.agents.get(path).sendMessage(message)`. Compare the stream events around:
 
 - `events.iterate.com/openai-ws/llm-request-started`
 - `events.iterate.com/openai-ws/llm-request-completed`

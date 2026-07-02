@@ -24,7 +24,7 @@ import {
   TableRow,
 } from "@iterate-com/ui/components/table";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { repoArtifactName } from "~/domains/repos/repo-artifact-name.ts";
+import { RepoArtifactNameCodec } from "~/domains/repos/utils.ts";
 import { buildArtifactViewerUrl } from "~/lib/artifact-viewer-url.ts";
 import { formatRelativeTime } from "~/lib/format-relative-time.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
@@ -42,7 +42,7 @@ const DEFAULT_CREATE_REPO_FORM_VALUES = {
   path: "/repos/",
 };
 
-type SortKey = "path" | "createdAt" | "lastWokenAt";
+type SortKey = "path" | "createdAt";
 type SortDirection = "asc" | "desc";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/repos/")({
@@ -76,7 +76,7 @@ function ProjectReposIndexContent() {
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; direction: SortDirection }>({
-    key: "lastWokenAt",
+    key: "createdAt",
     direction: "desc",
   });
   const reposKey = ["repos", project.slug];
@@ -221,19 +221,13 @@ function ProjectReposIndexContent() {
                   label="Created"
                   onClick={() => setSort(nextSort(sort, "createdAt"))}
                 />
-                <SortableHead
-                  active={sort.key === "lastWokenAt"}
-                  direction={sort.direction}
-                  label="Woke"
-                  onClick={() => setSort(nextSort(sort, "lastWokenAt"))}
-                />
                 <TableHead>Artifact</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {visibleRepos.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
+                  <TableCell colSpan={3} className="h-24 text-center text-muted-foreground">
                     No Repos match.
                   </TableCell>
                 </TableRow>
@@ -241,8 +235,8 @@ function ProjectReposIndexContent() {
                 visibleRepos.map((repo) => {
                   const artifactViewerUrl = buildArtifactViewerUrl({
                     appBaseUrl: routeConfig.baseUrl,
-                    artifactName: repoArtifactName({
-                      projectId: repo.projectId,
+                    artifactName: RepoArtifactNameCodec.stringify({
+                      projectId: project.id,
                       path: repo.path,
                     }),
                   });
@@ -264,9 +258,6 @@ function ProjectReposIndexContent() {
                       </TableCell>
                       <TableCell className="w-40 text-muted-foreground">
                         {formatRelativeTime(repo.createdAt)}
-                      </TableCell>
-                      <TableCell className="w-40 text-muted-foreground">
-                        {formatRelativeTime(repo.lastWokenAt)}
                       </TableCell>
                       <TableCell className="w-32">
                         <a
@@ -321,8 +312,8 @@ function nextSort(current: { key: SortKey; direction: SortDirection }, key: Sort
 }
 
 function compareRepoRows(
-  left: { path: string; createdAt: string; lastWokenAt: string },
-  right: { path: string; createdAt: string; lastWokenAt: string },
+  left: { path: string; createdAt: string },
+  right: { path: string; createdAt: string },
   key: SortKey,
 ) {
   if (key === "path") return left.path.localeCompare(right.path);

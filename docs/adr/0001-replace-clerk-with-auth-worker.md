@@ -74,7 +74,7 @@ not just MCP.
 
 Decision 2 above did not survive contact with the implementation. The auth worker is the
 canonical minter of project ids, in the format `prj_<uuid>` (`generateId("prj")` in
-`apps/auth/src/server/orpc/routers/_shared.ts`). OS mints only in operator/recovery paths
-where no auth organization owns the project, using the same `prj_` prefix
-(`apps/os/src/domains/projects/project-id.ts`). `proj_` is a legacy OS-typeid prefix that is
-no longer minted; `isProjectId` still recognises it on old rows.
+`apps/auth/src/server/orpc/routers/_shared.ts`). OS no longer mints project ids at all —
+its operator/recovery minting path (`src/domains/projects/project-id.ts`) was deleted with
+the legacy stack in the itx-v4 replacement; project creation always registers through the
+auth worker. `proj_` was a legacy OS-typeid prefix that is no longer minted anywhere.

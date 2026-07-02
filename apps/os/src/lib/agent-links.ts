@@ -1,4 +1,4 @@
-import { StreamPath } from "@iterate-com/shared/streams/types";
+import { StreamPath } from "~/lib/stream-links.ts";
 
 export function agentPathFromInput(value: string) {
   const path = StreamPath.parse(value.trim());

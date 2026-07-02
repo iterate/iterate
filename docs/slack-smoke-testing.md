@@ -1,5 +1,12 @@
 # Slack Smoke Testing
 
+> **Status: historical (pre-itx-v4 procedure).** The Slack integration was
+> rebuilt on itx in the itx-v4 replacement (PR #1585) — Durable Object names
+> and event routes below describe the pre-migration stack and no longer
+> exist. For current real Slack testing, preview app setup, and internal
+> duplicate-bot caveats, start with [slack-testing.md](slack-testing.md).
+> Recover the old implementation from git history if ever needed.
+
 This note describes the manual production smoke test for proving that a Slack
 thread can wake a routed Slack agent and produce a real Slack reply.
 
@@ -25,9 +32,11 @@ latency.
 
 ## Important Self-Wake Rule
 
-The OS Slack bot must not wake itself. A message sent with
-`APP_CONFIG_SLACK_BOT_TOKEN` is useful for creating a real Slack thread, but it
-should not be treated as the inbound trigger.
+The OS Slack bot must not wake itself. A message sent with the environment's
+Slack fallback token is useful for creating a real Slack thread, but it should
+not be treated as the inbound trigger. Current configs keep that fallback at
+`APP_CONFIG_INTEGRATIONS__SLACK.botToken`; `APP_CONFIG_SLACK_BOT_TOKEN` is only
+the legacy top-level fallback during migration.
 
 To test bot-originated wakeups, use either:
 
@@ -43,7 +52,8 @@ Run commands from `apps/os`.
 
 - `doppler` access to the target OS config.
 - `APP_CONFIG_ADMIN_API_SECRET` in that config.
-- `APP_CONFIG_SLACK_BOT_TOKEN` in that config.
+- `APP_CONFIG_INTEGRATIONS__SLACK.botToken` in that config, or the legacy
+  `APP_CONFIG_SLACK_BOT_TOKEN` during migration.
 - The OS Slack bot is a member of `#slack-agent-e2e-test`.
 - The target app is deployed and reachable through `APP_CONFIG_BASE_URL`.
 

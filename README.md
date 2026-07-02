@@ -118,6 +118,10 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 - [CI workflows](docs/ci-workflows.md) — generated GitHub Actions, Depot runners, and the one Depot CI image-bake workflow
 - [TypeScript conventions](docs/typescript-conventions.md)
 - [Design system & React](docs/design-system.md)
+- [Slack testing](docs/slack-testing.md) — real Slack flows, preview app setup, and internal duplicate-bot caveats
+- [Slack preview OAuth clients](docs/slack-preview-oauth-clients.md) — bulk-create preview Slack apps and collect Doppler secrets
+- [Slack bot token migration](docs/slack-bot-token-migration.md) — per-app bot token fallback links and Doppler shape
+- [Testing](docs/testing.md) — test lanes, how to run them against any environment, and the canonical env vars
 - [Vitest patterns](docs/vitest-patterns.md)
 - [Domain objects & stream processors](docs/domain-objects-and-stream-processors.md)
 
@@ -130,6 +134,8 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 ### App-specific
 
 - [OS app](apps/os/AGENTS.md)
+- [itx](apps/os/src/README.md) — the `/api/itx` surface and its public contract (`types.ts`)
+- [OS worker topology](apps/os/docs/worker-topology.md)
 - [OS architecture & operations](apps/os/docs/architecture-and-operations.md)
 - [Debugging deployed OS workers](apps/os/docs/debugging-deployed-os-workers.md)
 - [Doppler-backed scripts](apps/os/docs/doppler-backed-scripts.md)

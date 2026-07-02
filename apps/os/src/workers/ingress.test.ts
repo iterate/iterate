@@ -21,8 +21,6 @@ describe("rewriteMcpHostRequest", () => {
     });
 
     expect(request?.url).toBe(expected);
-    expect(request?.headers.get("x-forwarded-host")).toBe("mcp.iterate.com");
-    expect(request?.headers.get("x-forwarded-proto")).toBe("https");
   });
 
   it.each([

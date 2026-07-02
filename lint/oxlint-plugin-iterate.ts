@@ -52,15 +52,27 @@ function isAllowedRawDurableObjectBindingAccessFile(filename: string) {
   // src/itx is THE capability layer (apps/os/docs/itx-spec.md): the handle,
   // restorer, and egress entrypoint legitimately mint Project DO stubs.
   if (path.includes("/apps/os/src/itx/")) return true;
-  if (path.includes("/apps/os/src/durable-objects/")) return true;
+  // rpc-targets.ts is the engine's capability layer; project-directory.ts is
+  // its KV/auth directory adapter. Both legitimately mint DO/KV handles.
+  if (path.endsWith("/apps/os/src/rpc-targets.ts")) return true;
+  if (path.endsWith("/apps/os/src/project-directory.ts")) return true;
   if (!path.includes("/apps/os/src/domains/")) return false;
 
   return (
     path.includes("/durable-objects/") ||
     path.includes("/entrypoints/") ||
     path.endsWith("/durable-object.ts") ||
+    path.endsWith("-durable-object.ts") ||
     path.endsWith("/capability.ts") ||
-    path.endsWith("-capability.ts")
+    path.endsWith("-capability.ts") ||
+    // The engine's worker-loading layer legitimately dials REPO (source
+    // projections) and WORKER (stateful facets) namespaces.
+    path.endsWith("/domains/workers/worker-loader.ts") ||
+    path.endsWith("/domains/workers/worker-runner.ts") ||
+    // Engine loopback/egress seams that mint project/stream stubs.
+    path.endsWith("/domains/itx/itx-entrypoint.ts") ||
+    path.endsWith("/domains/itx/utils.ts") ||
+    path.endsWith("/domains/projects/egress.ts")
   );
 }
 function getRawEnvBindingName(node: any) {

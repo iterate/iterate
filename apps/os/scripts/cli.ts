@@ -5,7 +5,6 @@ import { fileURLToPath } from "node:url";
 
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 
-export * as artifacts from "./artifacts.ts";
 export * as dev from "./dev.ts";
 export * as itx from "./itx.ts";
 
