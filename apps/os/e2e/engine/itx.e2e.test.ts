@@ -230,6 +230,10 @@ describe("minimal itx v4", () => {
     const description = await project.describe();
     expect(description.projectId).toMatch(/prj_[0-9a-f-]+$/);
     expect(description.name).toMatch(/prj_[0-9a-f-]+\.iterate\/$/);
+
+    // projects.get namespaces engine state by the given string, so a slug (or
+    // any non-prj_ id) must fail loudly instead of minting a phantom project.
+    await expect(itx.projects.get("alice-project").describe()).rejects.toThrow(/not a project id/);
     expect(messages).toContainEqual([
       expect.any(Number),
       "out",

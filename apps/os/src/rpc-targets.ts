@@ -763,6 +763,14 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
   }
 
   async get(projectId: string) {
+    // Guard the id shape: engine state is namespaced by whatever string lands
+    // here, so an unvalidated slug (e.g. `cli itx run --context <slug>`) would
+    // silently manufacture a phantom project namespace instead of failing.
+    if (!projectId.startsWith("prj_")) {
+      throw new Error(
+        `"${projectId}" is not a project id (expected "prj_..."). Resolve slugs to ids first.`,
+      );
+    }
     // Claims can lag right after a create; the auth context may consult the
     // project directory and widen itself before the synchronous constructor
     // assert runs. Cap'n Web pipelines through the returned promise.
