@@ -9,6 +9,7 @@ import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import type { Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
+import { timedStep } from "../../lib/step-timing.ts";
 import { stableSha256 } from "../workers/utils.ts";
 import type { ResolvedWorkerSource } from "../workers/worker-loader.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
@@ -235,18 +236,25 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   private async createArtifactRepo(_input: { path: string; projectId: string | null }) {
+    const timing = { projectId: this.#name.projectId, path: this.#name.path };
     const artifactName = this.artifactName();
-    await this.getOrCreateArtifact(artifactName);
+    await timedStep("create-timing", timing, "artifact-get-or-create", () =>
+      this.getOrCreateArtifact(artifactName),
+    );
     const defaultBranch = REPO_DEFAULT_BRANCH;
     const remote = this.artifactRemote(artifactName);
-    const token = await artifactToken(this.requireArtifacts(), artifactName);
+    const token = await timedStep("create-timing", timing, "artifact-token", () =>
+      artifactToken(this.requireArtifacts(), artifactName),
+    );
 
-    await seedArtifactRepo({
-      branch: defaultBranch,
-      files: PROJECT_REPO_INITIAL_FILES,
-      remote,
-      token,
-    });
+    await timedStep("create-timing", timing, "artifact-seed", () =>
+      seedArtifactRepo({
+        branch: defaultBranch,
+        files: PROJECT_REPO_INITIAL_FILES,
+        remote,
+        token,
+      }),
+    );
 
     return {
       artifactName,
