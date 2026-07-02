@@ -33,6 +33,9 @@ Useful entry points:
 
 ### Preview Deploy And Test Model
 
+For how this pipeline is kept fast (and cheap) and how not to regress it, see
+[Preview CI performance](ci-preview-performance.md).
+
 The preview workflow is deliberately simple:
 
 - select the apps affected by the PR diff;
