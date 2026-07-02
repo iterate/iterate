@@ -80,6 +80,11 @@ export async function deploy(options: PullRequestCommandOptions = {}) {
 
   let ok = true;
   let latestState = leaseUpdate.state;
+  // Carry every batch's entries into each write: the GitHub read inside
+  // updatePreviewState can be stale (read-after-write lag), and a stale read
+  // that only merged the current batch would silently drop the previous
+  // batch's results from the PR body.
+  const accumulatedEntries: Record<string, CloudflarePreviewAppEntry> = {};
   for (const batch of orderPreviewDeployBatches(selectedApps)) {
     const entries = await mapWithConcurrency(
       batch,
@@ -100,12 +105,15 @@ export async function deploy(options: PullRequestCommandOptions = {}) {
       ok = false;
     }
 
+    for (const entry of entries) {
+      accumulatedEntries[entry.appSlug] = entry;
+    }
     const update = await updatePreviewState(context, (state) => ({
       ...state,
       environmentConfigLease,
       apps: {
         ...state.apps,
-        ...Object.fromEntries(entries.map((entry) => [entry.appSlug, entry])),
+        ...accumulatedEntries,
       },
     }));
     latestState = update.state;
@@ -2074,6 +2082,8 @@ async function cleanupPreviewForPullRequest(
     .map((appSlug) => cloudflarePreviewApps[appSlug])
     .filter((app): app is PreviewAppRuntime => app != null);
   const cleanupBatches = [...orderPreviewDeployBatches(appsToCleanUp)].reverse();
+  // Same stale-read guard as deploy: keep every batch's entries in each write.
+  const accumulatedEntries: Record<string, CloudflarePreviewAppEntry> = {};
   for (const batch of cleanupBatches) {
     const entries = await mapWithConcurrency(
       batch,
@@ -2114,11 +2124,14 @@ async function cleanupPreviewForPullRequest(
       ok = false;
     }
 
+    for (const entry of entries) {
+      accumulatedEntries[entry.appSlug] = entry;
+    }
     const update = await updatePreviewState(params.context, (state) => ({
       ...state,
       apps: {
         ...state.apps,
-        ...Object.fromEntries(entries.map((entry) => [entry.appSlug, entry])),
+        ...accumulatedEntries,
       },
     }));
     latestState = update.state;
