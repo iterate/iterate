@@ -21,10 +21,16 @@
 // `runtimes` records where a snippet genuinely works unattended. Live
 // capabilities (provideCapability with a `capability` value) are session-bound
 // — the provider object lives in the calling process — so those entries stay
-// browser/node only. Everything else must stay runtime-agnostic: no
+// browser/node/cli only. Everything else must stay runtime-agnostic: no
 // pipelining tricks, plain serializable return values.
 
-export const ITX_EXAMPLE_RUNTIMES = ["browser", "node", "run-script", "project-worker"] as const;
+export const ITX_EXAMPLE_RUNTIMES = [
+  "browser",
+  "node",
+  "cli",
+  "run-script",
+  "project-worker",
+] as const;
 
 export type ItxExampleRuntime = (typeof ITX_EXAMPLE_RUNTIMES)[number];
 
@@ -44,7 +50,7 @@ export type ItxExample = {
 const ALL_RUNTIMES: ItxExampleRuntime[] = [...ITX_EXAMPLE_RUNTIMES];
 
 /** Live providers must outlive the calls, so these stay in caller-owned sessions. */
-const LIVE_SESSION_RUNTIMES: ItxExampleRuntime[] = ["browser", "node"];
+const LIVE_SESSION_RUNTIMES: ItxExampleRuntime[] = ["browser", "node", "cli"];
 
 export const ITX_EXAMPLES: ItxExample[] = [
   {
@@ -53,7 +59,7 @@ export const ITX_EXAMPLES: ItxExample[] = [
     description:
       "The global REPL holds a Session — the catalog authenticate() returned. whoami() reports the principal the socket carries; everything else you do is scoped by it.",
     context: "global",
-    runtimes: ["browser", "node"],
+    runtimes: ["browser", "node", "cli"],
     code: `
 return await itx.whoami();
 `.trim(),
@@ -64,7 +70,7 @@ return await itx.whoami();
     description:
       "A Session vends itxs: projects.list() shows the project ids you can reach, and projects.get(id) returns the project-scoped itx — the same handle a project REPL holds. Every project-context example starts there.",
     context: "global",
-    runtimes: ["browser", "node"],
+    runtimes: ["browser", "node", "cli"],
     code: `
 // Every project id you have access to (admins see all; users see their own).
 const projectIds = await itx.projects.list();
@@ -130,7 +136,7 @@ return { appended, count: events.length };
     // Not "run-script": that runtime already wraps the body in runScript, and
     // a script starting another script execution mid-flight is recursion the
     // matrix should not depend on.
-    runtimes: ["browser", "node", "project-worker"],
+    runtimes: ["browser", "node", "cli", "project-worker"],
     code: `
 const execution = await itx.runScript(\`async (itx) => {
   const description = await itx.describe();
@@ -423,7 +429,7 @@ return { offset: sent.offset, payload: sent.payload, type: sent.type };
     description:
       "itx.ai proxies the platform's Workers AI binding: models() lists the catalog, run(model, body) executes one. Model availability and latency depend on the deployment's upstream account, so this entry is reading material for the matrix — run it interactively.",
     context: "project",
-    runtimes: ["browser", "node"],
+    runtimes: ["browser", "node", "cli"],
     code: `
 const models = await itx.ai.models();
 const list = Array.isArray(models) ? models : [];

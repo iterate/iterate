@@ -4,20 +4,21 @@
 // itx.browser.test.ts (vitest's browser project); everything else is here.
 //
 //   node            AsyncFunction over a next-engine Cap'n Web stub in this process
+//   cli             spawned `tsx scripts/cli.ts itx run --eval … --context …`
+//                   (a genuinely separate process; parses the CLI's one JSON doc)
 //   run-script      project.runScript(`async (itx) => { const vars = …; <body> }`)
 //                   — the server-side script isolate agents use
 //   project-worker  the body baked into the project's repo worker.js, invoked
 //                   via project.worker.runItxExample (env.ITX inside)
-//
-// TODO(cli port): the `iterate` CLI still speaks the legacy /api/itx surface.
-// Re-add a `cli` dispatcher (spawned `pnpm cli itx run --eval …`) once the CLI
-// is ported to the next engine.
 
+import { execFile } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { RpcTarget } from "capnweb";
 import type { ItxExample, ItxExampleRuntime } from "../examples.ts";
-import { connectProject } from "./e2e-env.ts";
+import { baseUrl, connectProject } from "./e2e-env.ts";
 
-export const MATRIX_RUNTIMES = ["node", "run-script", "project-worker"] as const;
+export const MATRIX_RUNTIMES = ["node", "cli", "run-script", "project-worker"] as const;
 export type MatrixRuntime = (typeof MATRIX_RUNTIMES)[number] & ItxExampleRuntime;
 
 const AsyncFunction = async function () {}.constructor as new (
@@ -36,12 +37,46 @@ export async function runExampleCode(
     switch (runtime) {
       case "node":
         return await runInNode(input);
+      case "cli":
+        return await runInCli(input);
       case "run-script":
         return await runInRunScript(input);
       case "project-worker":
         return await runInProjectWorker(input);
     }
   });
+}
+
+const execFileAsync = promisify(execFile);
+const APP_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
+
+async function runInCli(input: {
+  code: string;
+  projectId: string;
+  vars: Record<string, unknown>;
+}): Promise<unknown> {
+  // tsx directly (not `pnpm cli`) so stdout is exactly the run command's one
+  // JSON document, with no package-runner banner in front of it.
+  const { stdout } = await execFileAsync(
+    "pnpm",
+    [
+      "exec",
+      "tsx",
+      "./scripts/cli.ts",
+      "itx",
+      "run",
+      "--eval",
+      input.code,
+      "--context",
+      input.projectId,
+      "--vars",
+      JSON.stringify(input.vars),
+      "--base-url",
+      baseUrl(),
+    ],
+    { cwd: APP_ROOT, env: process.env, maxBuffer: 10 * 1024 * 1024 },
+  );
+  return JSON.parse(stdout);
 }
 
 const LOADER_CONTENTION_MESSAGE = "Too many concurrent dynamic workers";
