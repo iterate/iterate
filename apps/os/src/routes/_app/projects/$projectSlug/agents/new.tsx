@@ -5,7 +5,7 @@ import { ArrowUpIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { connectItx } from "~/itx/itx-react.tsx";
+import { connectItxBrowser } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/new")({
   staticData: { hideAppHeader: true },
@@ -32,11 +32,11 @@ function NewAgentPage() {
   const createAgent = useMutation({
     mutationFn: async (content: string) => {
       const agentPath = `/agents/web/${slugifyCreationTime(new Date())}`;
-      // connectItx (imperative, not the suspending hook) lands on the project
+      // connectItxBrowser (imperative, not the suspending hook) lands on the project
       // provider's socket (keyed by project ID). Agents are lazily seeded by
       // the project processor on the first stream append, so sending the first
       // message IS the creation.
-      const itx = await connectItx({ projectId: project.id });
+      const itx = await connectItxBrowser({ projectId: project.id });
       await itx.agents.get(agentPath).sendMessage(content);
       return agentPath;
     },

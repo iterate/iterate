@@ -14,7 +14,7 @@ import type { SqlClient } from "./stream-browser-db.ts";
 
 const DEFAULT_SUBSCRIPTION_KEY = "";
 
-export const ensureBrowserProcessorStateSchema = createSchemaEnsurer({
+const ensureBrowserProcessorStateSchema = createSchemaEnsurer({
   run: (sql) =>
     sql.batch(
       [

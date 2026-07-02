@@ -2,12 +2,6 @@ import { normalizePath } from "../durable-object-names.ts";
 
 const SECRET_REFERENCE = /getSecret\(\s*\{\s*path\s*:\s*"([^"]+)"\s*\}\s*\)/g;
 
-export type SecretErrorCode =
-  | "multiple_secret_paths_not_supported"
-  | "secret_not_allowed_for_origin"
-  | "secret_not_found"
-  | "secret_reference_required";
-
 export function normalizeSecretPath(path: string): string {
   const normalized = normalizePath(path);
   if (!normalized.startsWith("/secrets/")) {
@@ -42,6 +36,12 @@ export function requestWithSecretHeaders(input: {
   });
   return new Request(input.request, { headers });
 }
+
+type SecretErrorCode =
+  | "multiple_secret_paths_not_supported"
+  | "secret_not_allowed_for_origin"
+  | "secret_not_found"
+  | "secret_reference_required";
 
 export function secretErrorResponse(code: SecretErrorCode, status: number): Response {
   return Response.json({ error: code }, { status });

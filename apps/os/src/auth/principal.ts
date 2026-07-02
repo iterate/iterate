@@ -8,11 +8,6 @@ import {
   type IterateAuthProjectClaim,
 } from "@iterate-com/shared/auth-claims";
 
-export type PrincipalResource = {
-  projectId?: string;
-  orgId?: string;
-};
-
 export type UserPrincipal = {
   type: "user";
   userId: string;
@@ -20,19 +15,16 @@ export type UserPrincipal = {
   isAdmin: boolean;
   organizations: IterateAuthAccessTokenOrganizationClaim[];
   projects: IterateAuthProjectClaim[];
-  can(action: string, resource?: PrincipalResource): boolean;
 };
 
 export type AdminPrincipal = {
   type: "admin";
-  can(): true;
 };
 
 export type Principal = UserPrincipal | AdminPrincipal;
 
 export const adminPrincipal: AdminPrincipal = {
   type: "admin",
-  can: () => true,
 };
 
 export function getUserPrincipal(principal: Principal | null | undefined): UserPrincipal | null {
@@ -53,7 +45,6 @@ export function createUserPrincipal(input: {
     isAdmin: input.isAdmin ?? false,
     organizations: input.organizations,
     projects: input.projects,
-    can: (_action, resource) => canAccessResource(input, resource),
   };
 }
 
@@ -91,24 +82,4 @@ export function principalIsAdmin(principal: Principal): boolean {
 
 function isAdminRole(input: { isAdmin?: unknown; role?: unknown } | null | undefined): boolean {
   return input?.isAdmin === true || input?.role === "admin";
-}
-
-function canAccessResource(
-  principal: Pick<UserPrincipal, "organizations" | "projects">,
-  resource: PrincipalResource | undefined,
-) {
-  if (!resource?.orgId && !resource?.projectId) return true;
-
-  if (resource.orgId && principal.organizations.some((org) => org.id === resource.orgId)) {
-    return true;
-  }
-
-  if (
-    resource.projectId &&
-    principal.projects.some((project) => project.id === resource.projectId)
-  ) {
-    return true;
-  }
-
-  return false;
 }

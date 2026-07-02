@@ -2,7 +2,7 @@ import { isAuthHandlerRequest, type AuthenticatedSession } from "@iterate-com/au
 import { createMiddleware } from "@tanstack/react-start";
 import type { RequestContext } from "~/request-context.ts";
 import { authenticateAdminApiSecret } from "~/auth/admin.ts";
-import { createOsIterateAuth as createOsIterateAuthClient } from "~/auth/iterate-auth-client.ts";
+import { createOsIterateAuth } from "~/auth/iterate-auth-client.ts";
 import type { OsIterateAuth } from "~/auth/iterate-auth-client.ts";
 import {
   principalFromAccessToken,
@@ -12,11 +12,11 @@ import {
 
 // Registered as requestMiddleware in src/start.ts — `type: "request"` makes
 // early `Response` returns part of the contract (and the context it passes to
-// `next` flow into every server route, server function, and oRPC procedure):
+// `next` flow into every server route and server function):
 // https://tanstack.com/start/latest/docs/framework/react/guide/middleware
 export const iterateAuthMiddleware = createMiddleware({ type: "request" }).server(
   async ({ request, context, next }) => {
-    const auth = createOsIterateAuth(context, request);
+    const auth = createOsIterateAuth(context.config, request.url);
     const authHandlerResponse = auth?.handleRequest(request) ?? null;
     if (authHandlerResponse) {
       return authHandlerResponse;
@@ -44,7 +44,7 @@ export const iterateAuthMiddleware = createMiddleware({ type: "request" }).serve
   },
 );
 
-export async function resolveRequestAuth(input: {
+async function resolveRequestAuth(input: {
   auth: OsIterateAuth | null;
   context: Pick<RequestContext, "config">;
   request: Request;
@@ -116,8 +116,4 @@ async function authenticateBearerPrincipal(input: {
 
   const accessToken = await input.auth.authenticateBearer({ headers: input.headers });
   return accessToken ? principalFromAccessToken(accessToken) : null;
-}
-
-export function createOsIterateAuth(context: RequestContext, request: Request) {
-  return createOsIterateAuthClient(context.config, request.url);
 }

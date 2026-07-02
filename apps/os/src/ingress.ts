@@ -39,7 +39,7 @@ export type IngressResolvers = {
   projectByHostname(host: string): Promise<{ projectId: string; appSlug: string | null } | null>;
 };
 
-export type IngressRoute =
+type IngressRoute =
   | { lane: "os" }
   | { lane: "api" }
   | {
@@ -133,7 +133,7 @@ function projectRoute(input: {
 }
 
 /** Itx path lanes served by the api worker on the OS host. */
-export function isItxApiPath(pathname: string): boolean {
+function isItxApiPath(pathname: string): boolean {
   if (pathname === "/api/itx" || pathname.startsWith("/api/itx/")) return true;
   if (pathname.startsWith("/__itx_e2e/")) return true;
   return false;
@@ -144,7 +144,7 @@ export function isItxApiPath(pathname: string): boolean {
  * worker present the original host via forwarding headers; otherwise the
  * request URL is already the truth.
  */
-export function requestIngressHost(request: Request): string {
+function requestIngressHost(request: Request): string {
   return requestIngressHostFrom(request.headers, new URL(request.url));
 }
 

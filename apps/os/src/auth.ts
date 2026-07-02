@@ -38,18 +38,11 @@ import {
 import type { AppConfig } from "./config.ts";
 import type { ItxAuth, ItxAuthCredentials, ItxAuthToken } from "./types.ts";
 
-/**
- * Kept for itx e2e suites, which express "run this as a fake user with
- * these scopes" via test-helpers. On the wire those become `impersonate`
- * credentials gated on the admin API secret.
- */
-export const TRUSTED_INTERNAL_ITX_TOKEN = "trusted-internal-itx-token";
-
 type ProjectDirectory = {
   userHasProject(userPrincipal: UserPrincipal, projectId: string): Promise<boolean>;
 };
 
-export class ItxAuthContext implements ItxAuth {
+class ItxAuthContext implements ItxAuth {
   readonly #directory: ProjectDirectory | undefined;
   readonly #isAdmin: boolean;
   readonly #principal: string;

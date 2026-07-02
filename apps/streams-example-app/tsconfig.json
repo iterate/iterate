@@ -14,10 +14,6 @@
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "types": ["@cloudflare/workers-types", "node", "vite/client", "vitest"],
     "paths": {
-      // Exact-match shim: see src/os-shims/request-context.ts for why apps/os's
-      // request-context module (and its TanStack Register augmentations) must
-      // stay out of this app's program.
-      "~/request-context.ts": ["./src/os-shims/request-context.ts"],
       "~/*": ["../os/src/*"],
       "@iterate-com/shared/*": ["../../packages/shared/src/*"]
     }

@@ -1,4 +1,4 @@
-import { connectItx } from "~/itx/itx-react.tsx";
+import { connectItxBrowser } from "~/itx/itx-react.tsx";
 import type { ProjectListEntry } from "~/types.ts";
 
 /**
@@ -13,6 +13,6 @@ export const projectsListStaleTime = 30_000;
 
 /** Fetch the session's project list — browser-only (dials the itx socket). */
 export async function fetchProjectsList(): Promise<ProjectListEntry[]> {
-  const itx = await connectItx();
+  const itx = await connectItxBrowser();
   return await itx.projects.list();
 }

@@ -1,11 +1,6 @@
 import { z } from "zod";
-import {
-  defineProcessorContract,
-  getInitialProcessorState,
-  runProcessorReduce,
-  type StreamEvent,
-} from "../stream-processor-fold/stream-processors.ts";
-import type { Event, StreamPath } from "../types.ts";
+import type { StreamEvent } from "./stream-event.ts";
+import type { Event, StreamPath } from "./types.ts";
 import type {
   EventsStreamActivityState,
   EventsStreamBuiltInElement,
@@ -13,11 +8,15 @@ import type {
   EventsStreamRawEventSummary,
   EventsStreamRegisteredProcessor,
   EventsStreamViewState,
-} from "../feed-items.ts";
+} from "./feed-items.ts";
 
 const MAX_SAME_TYPE_RAW_GROUP = 50_000;
 
-type StreamViewEvent = StreamEvent & Partial<Pick<Event, "streamPath">>;
+/** Events reduced by the stream view. `streamPath` is backfilled by callers. */
+export type StreamViewEvent = StreamEvent & Partial<Pick<Event, "streamPath">>;
+
+/** Cache scope for persisted stream-view reductions. */
+export const STREAM_VIEW_REDUCER_SLUG = "stream-view";
 
 const STREAM_PROCESSOR_REGISTERED_TYPE = "events.iterate.com/core/stream-processor-registered";
 const AGENT_SYSTEM_PROMPT_UPDATED_TYPE = "events.iterate.com/agent/system-prompt-updated";
@@ -41,7 +40,7 @@ const HIDDEN_FEED_EVENT_TYPES = new Set<string>([AGENT_OUTPUT_ADDED_TYPE]);
 
 const StreamPathSchema = z.string().trim().min(1);
 
-function createInitialStreamViewState(): EventsStreamViewState {
+export function createInitialStreamViewState(): EventsStreamViewState {
   return {
     slots: { header: [], feed: [], input: [] },
     activity: {
@@ -54,75 +53,43 @@ function createInitialStreamViewState(): EventsStreamViewState {
 }
 
 /**
- * Zod schema for the stream view processor state.
+ * Stream view reducer.
  *
- * Uses `z.custom` because the state contains discriminated union element types
- * that are only meaningful to TypeScript. The processor state is produced
- * exclusively by the reducer — it is never deserialized from external storage.
+ * A plain fold over ALL events on a stream, accumulating a mode-agnostic view
+ * state. It always produces both raw summary elements and semantic elements
+ * for every event, so renderer modes (raw-pretty, pretty, raw-single-json)
+ * become pure view-time filters.
  */
-const StreamViewStateSchema = z
-  .custom<EventsStreamViewState>((val) => val != null && typeof val === "object")
-  .default(createInitialStreamViewState);
+export function reduceStreamViewEvent(
+  state: EventsStreamViewState,
+  event: StreamViewEvent,
+): EventsStreamViewState {
+  const activity = reduceActivityState({ event, state });
 
-/**
- * Stream view processor contract.
- *
- * This processor consumes ALL events on a stream (via `consumesAllEvents`)
- * and accumulates a mode-agnostic view state. It always produces both raw
- * summary elements and semantic elements for every event, so renderer modes
- * (raw-pretty, pretty, raw-single-json) become pure view-time filters.
- */
-export const StreamViewProcessorContract = defineProcessorContract({
-  slug: "stream-view",
-  version: "0.1.0",
-  description:
-    "Browser-side processor that projects raw stream events into a mode-agnostic renderable view state with feed elements, activity indicators, and slot derivation.",
-  stateSchema: StreamViewStateSchema,
-  events: {},
-  consumes: [],
-  consumesAllEvents: true,
-  emits: [],
-  reduce({ state, event }: { state: EventsStreamViewState; event: StreamEvent }) {
-    const viewEvent = event as StreamViewEvent;
-    const activity = reduceActivityState({ event: viewEvent, state });
+  if (HIDDEN_FEED_EVENT_TYPES.has(event.type)) {
+    return deriveSlots({ feed: state.slots.feed, activity });
+  }
 
-    if (HIDDEN_FEED_EVENT_TYPES.has(viewEvent.type)) {
-      return deriveSlots({ feed: state.slots.feed, activity });
-    }
+  const feedItems = appendFeedItems({
+    feedItems: state.slots.feed,
+    nextItems: [
+      createRawEventGroup([toRawEventSummary(event)]),
+      ...reduceEventToSemanticFeedItems(event),
+    ],
+  });
 
-    const feedItems = appendFeedItems({
-      feedItems: state.slots.feed,
-      nextItems: [
-        createRawEventGroup([toRawEventSummary(viewEvent)]),
-        ...reduceEventToSemanticFeedItems(viewEvent),
-      ],
-    });
-
-    return deriveSlots({ feed: feedItems, activity });
-  },
-});
-
-export type StreamViewState = EventsStreamViewState;
+  return deriveSlots({ feed: feedItems, activity });
+}
 
 /**
  * Batch-reduce a list of events into stream view state.
  *
  * This is the simple all-at-once entry point for consumers that already have a
  * full event list (e.g. from a query). For incremental SSE-driven processing,
- * use `runProcessorReduce` directly with a ref as `apps/os` does.
+ * fold `reduceStreamViewEvent` with a ref as `apps/os` does.
  */
 export function reduceStreamViewEvents(events: readonly Event[]): EventsStreamViewState {
-  const processor = { contract: StreamViewProcessorContract };
-  let state = getInitialProcessorState(StreamViewProcessorContract);
-  for (const event of events) {
-    const reduction = runProcessorReduce({
-      processor,
-      event: event as unknown as StreamEvent,
-      state,
-    });
-    state = reduction?.state ?? state;
-  }
-  return state;
+  return events.reduce(reduceStreamViewEvent, createInitialStreamViewState());
 }
 
 // ---------------------------------------------------------------------------

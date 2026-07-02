@@ -27,7 +27,7 @@ export type AgentFeedSnapshot = {
   lastOffset: number;
 };
 
-export type AgentFeedModel = {
+type AgentFeedModel = {
   snapshot(): AgentFeedSnapshot;
   /**
    * Fold a batch of stream events. Events at or below `lastOffset` are

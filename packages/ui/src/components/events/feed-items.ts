@@ -1,4 +1,4 @@
-import type { StreamEvent } from "./stream-processor-fold/stream-event.ts";
+import type { StreamEvent } from "./stream-event.ts";
 import type { Event, StreamPath } from "./types.ts";
 
 export type EventsStreamSourceEvent = Event | StreamEvent;

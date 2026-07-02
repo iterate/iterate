@@ -1,6 +1,6 @@
 import type { CompletionContext, CompletionResult } from "@codemirror/autocomplete";
 import type { WorkerShape } from "@valtown/codemirror-ts/worker";
-import itxTypesSource from "~/types.ts?raw";
+import { ITX_TYPES_SOURCE } from "~/types-source.generated.ts";
 
 export type ItxReplTypeScriptWorker = WorkerShape & {
   getAutocompletionWithDocs(input: {
@@ -20,9 +20,10 @@ export const ITX_TYPES_PATH = "/itx-types.ts";
  * The design-of-record itx surface (`~/types.ts`), verbatim. That file is
  * handwritten and import-free, so its raw source is a valid standalone module
  * for the editor's virtual filesystem — completions and hover docs in the
- * browser REPL come from THE type file, and cannot drift from it.
+ * browser REPL come from THE type file, via the same generated embed worker
+ * code ships to agents (freshness enforced by types-source.generated.test.ts).
  */
-export const itxTypesDeclaration: string = itxTypesSource;
+export const itxTypesDeclaration: string = ITX_TYPES_SOURCE;
 
 /**
  * REPL prelude for the editor's virtual filesystem. Only what

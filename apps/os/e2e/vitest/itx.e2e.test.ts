@@ -11,6 +11,7 @@ import {
   type StreamProcessorSnapshot,
 } from "../../src/domains/streams/stream-processor.ts";
 import type { DynamicWorkerRef, UnauthenticatedItx } from "../../src/types.ts";
+import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { startEgressEcho, startMockMcp, startMockOpenApi } from "./itx-capability-fixtures.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 import type { ItxWebSocketMessage } from "./test-helpers.ts";
@@ -172,20 +173,6 @@ class PathFunctionTarget extends RpcTarget {
 
 function fencedAgentScript(code: string): string {
   return ["The faux LLM produced this codemode block.", "```js", code.trim(), "```"].join("\n");
-}
-
-async function waitForCondition(
-  predicate: () => boolean | Promise<boolean>,
-  opts: { description: string; intervalMs?: number; timeoutMs?: number },
-): Promise<void> {
-  const timeoutMs = opts.timeoutMs ?? 5_000;
-  const intervalMs = opts.intervalMs ?? 50;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
-  }
-  throw new Error(`Timed out waiting for ${opts.description}`);
 }
 
 // These are hand written tests - they MUST pass

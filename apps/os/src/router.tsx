@@ -4,8 +4,6 @@ import { setupRouterSsrQueryIntegration } from "@tanstack/react-router-ssr-query
 import { DefaultNotFoundComponent } from "@iterate-com/ui/components/route-defaults";
 import { routeTree } from "./routeTree.gen.ts";
 
-export type { RouterContext } from "./router-context.ts";
-
 const makeQueryClient = () =>
   new QueryClient({
     defaultOptions: {

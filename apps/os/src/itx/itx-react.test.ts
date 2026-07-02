@@ -51,66 +51,66 @@ const onlySocket = () => {
 };
 
 describe("itx socket map", () => {
-  test("connectItx returns the SAME promise per context — one dial, the stable promise use() needs", async () => {
-    const { connectItx } = await import("./itx-react.tsx");
-    const a = connectItx({ projectId: "acme" });
-    expect(connectItx({ projectId: "acme" })).toBe(a);
+  test("connectItxBrowser returns the SAME promise per context — one dial, the stable promise use() needs", async () => {
+    const { connectItxBrowser } = await import("./itx-react.tsx");
+    const a = connectItxBrowser({ projectId: "acme" });
+    expect(connectItxBrowser({ projectId: "acme" })).toBe(a);
     expect(FakeWebSocket.instances).toHaveLength(1);
     onlySocket().fire("open");
     await expect(a).resolves.toMatchObject({ url: expect.stringContaining("/api/itx/acme") });
   });
 
   test("contexts are independent; the global context (no projectId) is its own socket", async () => {
-    const { connectItx } = await import("./itx-react.tsx");
-    const global = connectItx();
-    expect(connectItx({ projectId: "acme" })).not.toBe(global);
-    expect(connectItx()).toBe(global);
+    const { connectItxBrowser } = await import("./itx-react.tsx");
+    const global = connectItxBrowser();
+    expect(connectItxBrowser({ projectId: "acme" })).not.toBe(global);
+    expect(connectItxBrowser()).toBe(global);
     expect(FakeWebSocket.instances).toHaveLength(2);
     // One endpoint for every context now — the project narrows client-side.
     expect(FakeWebSocket.instances[0]!.url).toContain("/api/itx");
     expect(FakeWebSocket.instances[1]!.url).toContain("/api/itx");
   });
 
-  test("a closed socket is dropped; the next connectItx dials a fresh one", async () => {
-    const { connectItx } = await import("./itx-react.tsx");
-    const first = connectItx({ projectId: "acme" });
+  test("a closed socket is dropped; the next connectItxBrowser dials a fresh one", async () => {
+    const { connectItxBrowser } = await import("./itx-react.tsx");
+    const first = connectItxBrowser({ projectId: "acme" });
     onlySocket().fire("open");
     await first;
 
     FakeWebSocket.instances[0]!.fire("close"); // socket dies
-    const second = connectItx({ projectId: "acme" });
+    const second = connectItxBrowser({ projectId: "acme" });
     expect(second).not.toBe(first);
     expect(FakeWebSocket.instances).toHaveLength(2);
   });
 
   test("a dial that closes before opening rejects awaiters instead of hanging", async () => {
     // Regression: a failed/timed-out dial used to leave the cached connecting
-    // promise forever-pending, so `await connectItx()` (event handlers,
+    // promise forever-pending, so `await connectItxBrowser()` (event handlers,
     // mutationFns) hung. It must reject so imperative callers fail fast.
-    const { connectItx } = await import("./itx-react.tsx");
-    const first = connectItx({ projectId: "acme" });
+    const { connectItxBrowser } = await import("./itx-react.tsx");
+    const first = connectItxBrowser({ projectId: "acme" });
     onlySocket().fire("close"); // closed before it ever opened
     await expect(first).rejects.toThrow(/closed before connecting/);
 
     // The entry was still dropped, so the next connect dials a fresh socket.
-    const second = connectItx({ projectId: "acme" });
+    const second = connectItxBrowser({ projectId: "acme" });
     expect(second).not.toBe(first);
     expect(FakeWebSocket.instances).toHaveLength(2);
   });
 
   test("a stale socket's death never drops its successor", async () => {
-    const { connectItx } = await import("./itx-react.tsx");
-    connectItx({ projectId: "acme" });
+    const { connectItxBrowser } = await import("./itx-react.tsx");
+    connectItxBrowser({ projectId: "acme" });
     FakeWebSocket.instances[0]!.fire("close"); // first dies → dropped
-    const second = connectItx({ projectId: "acme" }); // re-dials
+    const second = connectItxBrowser({ projectId: "acme" }); // re-dials
     FakeWebSocket.instances[0]!.fire("close"); // stale repeat — must NOT drop the second
-    expect(connectItx({ projectId: "acme" })).toBe(second);
+    expect(connectItxBrowser({ projectId: "acme" })).toBe(second);
     expect(FakeWebSocket.instances).toHaveLength(2);
   });
 
   test("reconnectItx disposes the live socket and forces a fresh dial", async () => {
-    const { connectItx, reconnectItx } = await import("./itx-react.tsx");
-    const first = connectItx({ projectId: "acme" });
+    const { connectItxBrowser, reconnectItx } = await import("./itx-react.tsx");
+    const first = connectItxBrowser({ projectId: "acme" });
     onlySocket().fire("open");
     const session = await first;
 
@@ -118,7 +118,7 @@ describe("itx socket map", () => {
     await Promise.resolve(); // let the dispose .then() run
     expect(session[Symbol.dispose]).toHaveBeenCalledTimes(1);
 
-    expect(connectItx({ projectId: "acme" })).not.toBe(first);
+    expect(connectItxBrowser({ projectId: "acme" })).not.toBe(first);
     expect(FakeWebSocket.instances).toHaveLength(2);
   });
 });

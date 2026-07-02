@@ -20,7 +20,10 @@ import type { RequestContext } from "~/request-context.ts";
  * - `getProjectBySlugServerFn` — the project layout's `beforeLoad` (SSR).
  * - `listReadyProjectsServerFn` — the root `/` redirect decision (SSR); a thin
  *   proxy over the engine's `session.projects.list()`.
- * - `deleteProjectServerFn` — a stub until project archival lands (task #13).
+ *
+ * Project deletion is deliberately absent rather than half-implemented:
+ * the archival verb (auth-worker archive + engine teardown + UI) has not
+ * landed yet — see tasks/os-project-archival.md.
  *
  * Return types are annotated explicitly for the same reason as
  * fetchRootAuthSnapshot/getSidebarDefaultOpen: server functions consumed by
@@ -39,18 +42,7 @@ export type Project = {
   deploymentStatus: ProjectDeploymentStatus;
 };
 
-export type ProjectWithIngressUrl = Project & { ingressUrl: string };
-
-export const deleteProjectServerFn: (input: {
-  data: { id: string };
-}) => Promise<{ ok: true; id: string; deleted: boolean }> = createServerFn({ method: "POST" })
-  .validator((input: { id: string }) => input)
-  .handler(({ data }) => {
-    // TODO(task #13): project archival on itx (auth-worker archive
-    // + itx teardown). Everything resets during the migration, so deletion
-    // is deliberately absent rather than half-implemented.
-    throw new Error(`Project deletion is not available yet (project ${data.id}).`);
-  });
+type ProjectWithIngressUrl = Project & { ingressUrl: string };
 
 /**
  * The session's projects that actually exist in THIS deployment — the root

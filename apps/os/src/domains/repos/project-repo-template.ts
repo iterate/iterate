@@ -136,7 +136,7 @@ const COUNTER_APP_WORKER_SOURCE = `
     }
   }`;
 
-export const PROJECT_REPO_AGENTS_MD = `# Project Agent Notes
+const PROJECT_REPO_AGENTS_MD = `# Project Agent Notes
 
 This private repo is the durable brain for the project's agents.
 

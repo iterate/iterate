@@ -9,7 +9,7 @@ import type { StreamEventInput } from "../../types.ts";
 import { readRecord, readString, slackThreadStreamPath } from "./utils.ts";
 import { SlackProcessorContract, type SlackProcessorState } from "./slack-processor-contract.ts";
 
-export type SlackProcessorDeps = {
+type SlackProcessorDeps = {
   /**
    * Acknowledge a routed webhook to the source platform (the 👀 reaction) as
    * soon as the router has decided where it goes, instead of waiting for the
@@ -152,7 +152,7 @@ type SlackRoute = {
   threadTs: string;
 };
 
-export function slackRouteFromWebhookBody(body: unknown): SlackRoute | null {
+function slackRouteFromWebhookBody(body: unknown): SlackRoute | null {
   const parsed = z
     .object({
       type: z.literal("event_callback"),

@@ -16,7 +16,7 @@
 import { createAuthWorkerServiceClient } from "./auth/auth-worker-service.ts";
 import type { AppConfig } from "./config.ts";
 
-export type ProjectDirectoryRecord = {
+type ProjectDirectoryRecord = {
   id: string;
   slug: string;
   organizationId: string | null;
@@ -165,9 +165,9 @@ async function lookupAuthWorker(
  * Custom-hostname resolution: `bla.com` set as a project's custom hostname
  * serves the project worker; `someapp.bla.com` serves it with that app
  * selected. Registrations live under `hostname:<host>` KV keys — written by
- * custom-hostname provisioning (task #13; until it lands the lane is wired
+ * custom-hostname provisioning (tasks/os-project-archival.md; until it lands the lane is wired
  * but nothing populates it). No auth-worker fallback yet: the directory has
- * no byHostname endpoint (also task #13).
+ * no byHostname endpoint (also tasks/os-project-archival.md).
  */
 export async function readProjectByHostname(
   directory: KVNamespace,
