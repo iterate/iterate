@@ -1,4 +1,4 @@
-import type { StreamPath } from "@iterate-com/shared/streams/types";
+import type { StreamPath } from "~/lib/stream-links.ts";
 
 export type RouteBreadcrumbStaticData = {
   breadcrumb?: string;

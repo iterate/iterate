@@ -21,7 +21,6 @@ import {
   UserCircle,
   type LucideIcon,
 } from "lucide-react";
-import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
 import type { PublicAppConfig } from "@iterate-com/shared/config";
 import { useAuthClient } from "@iterate-com/auth/client";
@@ -65,6 +64,7 @@ import {
   SidebarSeparator,
   useSidebar,
 } from "@iterate-com/ui/components/sidebar";
+import { StreamPath, type StreamPath as StreamPathType } from "~/lib/stream-links.ts";
 import type { AppConfig } from "~/config.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import {

@@ -1,4 +1,4 @@
-import type { Event } from "@iterate-com/shared/streams/types";
+import type { Event } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Reduced state model + pure batch planner

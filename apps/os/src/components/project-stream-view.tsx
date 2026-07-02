@@ -15,7 +15,7 @@ import {
   getInitialProcessorState,
   runProcessorReduce,
   type StreamEvent as StreamViewReducerEvent,
-} from "@iterate-com/shared/streams/stream-processors";
+} from "@iterate-com/ui/components/events/stream-processor-fold/stream-processors";
 import { Button } from "@iterate-com/ui/components/button";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import {

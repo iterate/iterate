@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { StreamPath } from "@iterate-com/shared/streams/types";
 import { Alert, AlertDescription, AlertTitle } from "@iterate-com/ui/components/alert";
+import { StreamPath } from "~/lib/stream-links.ts";
 import { ProjectSettingsPanel } from "~/components/project-settings-panel.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";

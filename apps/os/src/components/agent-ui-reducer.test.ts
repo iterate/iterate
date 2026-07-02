@@ -4,7 +4,7 @@
 // chat shape the agent feed renders (items + live tail).
 
 import { describe, expect, it } from "vitest";
-import type { Event } from "@iterate-com/shared/streams/types";
+import type { Event } from "@iterate-com/ui/components/events/types";
 import {
   initialAgentUiState,
   planAgentUiOps,
