@@ -41,30 +41,30 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/openai-ws/websocket-message-received",
+        type: "events.iterate.com/openai-ws/llm-response-chunk",
         payload: {
           connectionId: "c1",
           llmRequestId: 10,
           sequence: 0,
-          message: { type: "response.reasoning_summary_text.delta", delta: "Reading the stream" },
+          chunk: { type: "response.reasoning_summary_text.delta", delta: "Reading the stream" },
         },
       },
       {
-        type: "events.iterate.com/openai-ws/websocket-message-received",
+        type: "events.iterate.com/openai-ws/llm-response-chunk",
         payload: {
           connectionId: "c1",
           llmRequestId: 10,
           sequence: 1,
-          message: { type: "response.output_text.delta", delta: "const n = await " },
+          chunk: { type: "response.output_text.delta", delta: "const n = await " },
         },
       },
       {
-        type: "events.iterate.com/openai-ws/websocket-message-received",
+        type: "events.iterate.com/openai-ws/llm-response-chunk",
         payload: {
           connectionId: "c1",
           llmRequestId: 10,
           sequence: 2,
-          message: { type: "response.output_text.delta", delta: "stream.count();" },
+          chunk: { type: "response.output_text.delta", delta: "stream.count();" },
         },
       },
     ]);
@@ -142,10 +142,8 @@ describe("agent-ui reducer", () => {
 
   it("streams the itx openai-ws llm-response-chunk frames into the live llm step", () => {
     // itx journals every raw Responses-WS frame as llm-response-chunk
-    // ({llmRequestId, sequence, chunk}) — the pre-migration processor used
-    // websocket-message-received ({llmRequestId, message}). Regression: the
-    // feed showed only a bare spinner because the reducer ignored the new
-    // event type.
+    // ({llmRequestId, sequence, chunk}). Regression guard: the feed once
+    // showed only a bare spinner because the reducer ignored these frames.
     const state = reduceAll([
       {
         type: "events.iterate.com/agents/user-message-received",
@@ -392,12 +390,12 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/openai-ws/websocket-message-received",
+        type: "events.iterate.com/openai-ws/llm-response-chunk",
         payload: {
           connectionId: "c1",
           llmRequestId: 7,
           sequence: 0,
-          message: { type: "response.output_text.delta", delta: "old partial" },
+          chunk: { type: "response.output_text.delta", delta: "old partial" },
         },
       },
       {
@@ -413,12 +411,12 @@ describe("agent-ui reducer", () => {
         },
       },
       {
-        type: "events.iterate.com/openai-ws/websocket-message-received",
+        type: "events.iterate.com/openai-ws/llm-response-chunk",
         payload: {
           connectionId: "c1",
           llmRequestId: 7,
           sequence: 1,
-          message: { type: "response.output_text.delta", delta: " stale chunk" },
+          chunk: { type: "response.output_text.delta", delta: " stale chunk" },
         },
       },
       {

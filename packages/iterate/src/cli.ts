@@ -753,12 +753,9 @@ const launcherProcedures = {
       // launcher owns the OAuth refresh machinery — and hand the TUI a plain
       // bearer token; the capnweb WebSocket authenticates once at connect.
       const env: Record<string, string | undefined> = { ITERATE_CONFIG_NAME: resolved.name };
-      const hasEnvCredentials = [
-        "OS_E2E_ADMIN_API_SECRET",
-        "OS_ADMIN_API_SECRET",
-        "APP_CONFIG_ADMIN_API_SECRET",
-        "OS_E2E_BEARER_TOKEN",
-      ].some((name) => process.env[name]?.trim());
+      const hasEnvCredentials = ["APP_CONFIG_ADMIN_API_SECRET", "ITERATE_BEARER_TOKEN"].some(
+        (name) => process.env[name]?.trim(),
+      );
       if (!hasEnvCredentials) {
         const headers = await getOsAuthHeaders(resolved.config, resolved.name);
         const token = headers.authorization?.replace(/^Bearer /, "");

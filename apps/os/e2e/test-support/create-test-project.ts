@@ -49,10 +49,7 @@ export async function createTestProject(opts: { slugPrefix: string }) {
 }
 
 function adminAuth() {
-  const secret =
-    process.env.OS_E2E_ADMIN_API_SECRET?.trim() ||
-    process.env.OS_ADMIN_API_SECRET?.trim() ||
-    process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
-  if (!secret) throw new Error("Admin API secret is required for e2e tests.");
+  const secret = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
+  if (!secret) throw new Error("APP_CONFIG_ADMIN_API_SECRET is required for e2e tests.");
   return { type: "admin-secret" as const, secret };
 }

@@ -63,11 +63,7 @@ export default defineConfig({
       {
         define: {
           __ITX_BROWSER_E2E__: JSON.stringify({
-            adminApiSecret:
-              process.env.OS_E2E_ADMIN_API_SECRET?.trim() ||
-              process.env.OS_ADMIN_API_SECRET?.trim() ||
-              process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ||
-              "",
+            adminApiSecret: process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ?? "",
             baseUrl,
           }),
         },

@@ -21,9 +21,8 @@ REPL, and CLI use. The oRPC product surface is gone; nothing here talks to oRPC 
 
 ## Lanes
 
-All Vitest lanes require a base URL plus an admin credential (one of
-`OS_E2E_ADMIN_API_SECRET`, `OS_ADMIN_API_SECRET`, `APP_CONFIG_ADMIN_API_SECRET`; some helpers also
-accept `OS_E2E_BEARER_TOKEN` or `OS_E2E_COOKIE`). The usual invocation is
+All Vitest lanes require a base URL plus the deployment admin credential
+(`APP_CONFIG_ADMIN_API_SECRET`, supplied by the Doppler config). The usual invocation is
 `doppler run --config <config> -- pnpm e2e [-t <filter>]` from `apps/os`. Deployed configs supply
 the base URL: `prd` → `os.iterate.com`, `preview_N` → `os.iterate-preview-N.com`. Local configs
 (`dev` and `dev_<you>`) read `.alchemy/dev-server.json` from the running CLI-managed dev server

@@ -7,19 +7,12 @@ function readProjectMcpUrlOverride() {
 }
 
 /**
- * Seeding goes through the admin itx handle, which resolves its bearer token
- * from `OS_E2E_ADMIN_API_SECRET` / `OS_ADMIN_API_SECRET` /
- * `APP_CONFIG_ADMIN_API_SECRET` (see `requireAdminBearerToken`). Mirror that set
- * here so the seed is attempted whenever the itx handle could actually
- * authenticate — otherwise we skip the project seed and only check the public
- * surface.
+ * Seeding goes through the admin itx handle, authenticated with
+ * `APP_CONFIG_ADMIN_API_SECRET` (the Doppler-provided deployment secret).
+ * Without it we skip the project seed and only check the public surface.
  */
 function hasAdminApiSecret() {
-  return Boolean(
-    process.env.OS_E2E_ADMIN_API_SECRET?.trim() ||
-    process.env.OS_ADMIN_API_SECRET?.trim() ||
-    process.env.APP_CONFIG_ADMIN_API_SECRET?.trim(),
-  );
+  return Boolean(process.env.APP_CONFIG_ADMIN_API_SECRET?.trim());
 }
 
 function previewSmokeProjectSlug() {

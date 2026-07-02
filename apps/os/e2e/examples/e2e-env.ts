@@ -12,11 +12,7 @@ import { localDevServerBaseUrl } from "../test-support/dev-server.ts";
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 export function adminApiSecret() {
-  const secret =
-    process.env.OS_E2E_ADMIN_API_SECRET?.trim() ||
-    process.env.OS_ADMIN_API_SECRET?.trim() ||
-    process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ||
-    "";
+  const secret = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ?? "";
   if (!secret) throw new Error("APP_CONFIG_ADMIN_API_SECRET is required for itx e2e tests.");
   return secret;
 }

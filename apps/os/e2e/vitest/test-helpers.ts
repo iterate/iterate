@@ -16,12 +16,9 @@ const DEFAULT_BASE_URL = "http://localhost:8791";
  * credential lanes. Provided by the Doppler config the suite runs under.
  */
 export function adminSecret(): string {
-  const secret =
-    process.env.OS_ADMIN_API_SECRET?.trim() || process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
+  const secret = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
   if (!secret) {
-    throw new Error(
-      "itx e2e needs OS_ADMIN_API_SECRET or APP_CONFIG_ADMIN_API_SECRET (run under doppler).",
-    );
+    throw new Error("itx e2e needs APP_CONFIG_ADMIN_API_SECRET (run under doppler).");
   }
   return secret;
 }

@@ -26,14 +26,9 @@ export function requireBaseUrl() {
 }
 
 export function requireAdminBearerToken() {
-  const token =
-    process.env.OS_E2E_ADMIN_API_SECRET?.trim() ||
-    process.env.OS_ADMIN_API_SECRET?.trim() ||
-    process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
+  const token = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
   if (!token) {
-    throw new Error(
-      "OS_E2E_ADMIN_API_SECRET, OS_ADMIN_API_SECRET, or APP_CONFIG_ADMIN_API_SECRET is required for admin os e2e tests.",
-    );
+    throw new Error("APP_CONFIG_ADMIN_API_SECRET is required for admin os e2e tests.");
   }
   return token;
 }

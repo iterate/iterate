@@ -173,11 +173,8 @@ function adminConnection(options: { baseUrl?: string }) {
       "No base URL: pass --base-url, set APP_CONFIG_BASE_URL, or start the local dev server.",
     );
   }
-  const secret =
-    process.env.OS_ADMIN_API_SECRET?.trim() ||
-    process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ||
-    "";
-  if (!secret) throw new Error("APP_CONFIG_ADMIN_API_SECRET (or OS_ADMIN_API_SECRET) is required.");
+  const secret = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ?? "";
+  if (!secret) throw new Error("APP_CONFIG_ADMIN_API_SECRET is required.");
   return { auth: { type: "admin-secret" as const, secret }, baseUrl };
 }
 

@@ -49,13 +49,13 @@ describe("createAgentFeedModel", () => {
     const llmRequestId = requested.offset;
     model.applyEvents([
       requested,
-      event("events.iterate.com/openai-ws/websocket-message-received", {
+      event("events.iterate.com/openai-ws/llm-response-chunk", {
         llmRequestId,
-        message: { type: "response.output_text.delta", delta: "par" },
+        chunk: { type: "response.output_text.delta", delta: "par" },
       }),
-      event("events.iterate.com/openai-ws/websocket-message-received", {
+      event("events.iterate.com/openai-ws/llm-response-chunk", {
         llmRequestId,
-        message: { type: "response.output_text.delta", delta: "tial" },
+        chunk: { type: "response.output_text.delta", delta: "tial" },
       }),
     ]);
 

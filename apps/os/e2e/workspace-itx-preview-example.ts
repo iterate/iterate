@@ -33,15 +33,9 @@ async function main() {
 }
 
 function requireAdminApiSecret() {
-  const token =
-    process.env.OS_E2E_MCP_BEARER_TOKEN?.trim() ||
-    process.env.OS_E2E_ADMIN_API_SECRET?.trim() ||
-    process.env.OS_ADMIN_API_SECRET?.trim() ||
-    process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
+  const token = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
   if (!token) {
-    throw new Error(
-      "APP_CONFIG_ADMIN_API_SECRET, OS_ADMIN_API_SECRET, OS_E2E_ADMIN_API_SECRET, or OS_E2E_MCP_BEARER_TOKEN is required.",
-    );
+    throw new Error("APP_CONFIG_ADMIN_API_SECRET is required.");
   }
   return token;
 }

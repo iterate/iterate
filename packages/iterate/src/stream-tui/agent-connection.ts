@@ -33,13 +33,10 @@ export type AgentConnection = {
  * plain bearer read is enough here.
  */
 export function resolveItxAuth(input: { configName: string | undefined }): ItxAuthCredentials {
-  const adminSecret =
-    readEnv("OS_E2E_ADMIN_API_SECRET") ||
-    readEnv("OS_ADMIN_API_SECRET") ||
-    readEnv("APP_CONFIG_ADMIN_API_SECRET");
+  const adminSecret = readEnv("APP_CONFIG_ADMIN_API_SECRET");
   if (adminSecret) return { type: "admin-secret", secret: adminSecret };
 
-  const bearerToken = readEnv("OS_E2E_BEARER_TOKEN") || readEnv("ITERATE_BEARER_TOKEN");
+  const bearerToken = readEnv("ITERATE_BEARER_TOKEN");
   if (bearerToken) return { type: "bearer", token: bearerToken };
 
   if (input.configName) {
@@ -49,8 +46,7 @@ export function resolveItxAuth(input: { configName: string | undefined }): ItxAu
 
   throw new Error(
     "No credentials: run `iterate login`, or set an admin API secret " +
-      "(OS_E2E_ADMIN_API_SECRET, OS_ADMIN_API_SECRET, APP_CONFIG_ADMIN_API_SECRET) " +
-      "or a bearer token (OS_E2E_BEARER_TOKEN, ITERATE_BEARER_TOKEN).",
+      "(APP_CONFIG_ADMIN_API_SECRET) or a bearer token (ITERATE_BEARER_TOKEN).",
   );
 }
 

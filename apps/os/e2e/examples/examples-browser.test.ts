@@ -123,8 +123,7 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
  */
 async function connectFromBrowser(): Promise<RpcStub<Session & Itx>> {
   await installAdminCookie();
-  // The itx capnweb surface is served at /api/itx
-  // until the legacy stack is removed (mirrors ~/itx/itx-react.tsx).
+  // The itx capnweb surface is served at /api/itx (mirrors ~/itx/itx-react.tsx).
   const wsUrl = new URL("/api/itx", baseUrl());
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
   const unauthenticated = newWebSocketRpcSession<UnauthenticatedItx>(new WebSocket(wsUrl));
