@@ -896,8 +896,8 @@ const PAGE_DEBUGGING_HOST_SNIPPET_BODY = String.raw`
     if (op === "snapshot") return snapshot();
     if (op === "title") return document.title;
     if (op === "url") return location.href;
-    if (op === "screenshot") return renderScreenshot(payload);
-    if (op === "enableScreenCapture") return { error: "screen-capture-unavailable", hint: "Screen capture is not wired in the CSP-safe bridge demo." };
+    if (op === "screenshot") return screenshot(payload);
+    if (op === "enableScreenCapture") return enableScreenCapture();
     if (op === "locator") return locatorAction(payload);
     throw new Error("unknown op: " + op);
   }
@@ -988,6 +988,48 @@ const PAGE_DEBUGGING_HOST_SNIPPET_BODY = String.raw`
     const elements = Array.from(document.querySelectorAll("body *")).map(describeElement).filter(function (entry) { return entry.role || entry.name || entry.text; }).slice(0, 100);
     return { title: document.title, url: location.href, text: (document.body ? document.body.innerText : "").slice(0, 4000), elements: elements };
   }
+  // Screen capture: getDisplayMedia needs a user gesture, so the agent can't
+  // enable it — the user clicks "Enable screen capture" in the widget. Once a
+  // stream exists, screenshots grab real host-tab pixels; otherwise they fall
+  // back to the dependency-free SVG render.
+  var captureVideo = null;
+  async function enableScreenCapture() {
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+        return { error: "screen-capture-unavailable", hint: "This browser has no navigator.mediaDevices.getDisplayMedia()." };
+      }
+      const stream = await navigator.mediaDevices.getDisplayMedia({ audio: false, preferCurrentTab: true, video: { frameRate: 4 } });
+      const video = document.createElement("video");
+      video.muted = true;
+      video.playsInline = true;
+      video.srcObject = stream;
+      await video.play();
+      captureVideo = video;
+      const track = stream.getVideoTracks()[0];
+      if (track) track.addEventListener("ended", function () { captureVideo = null; });
+      return { ok: true };
+    } catch (error) {
+      return { error: "screen-capture-denied", message: String((error && error.message) || error) };
+    }
+  }
+  async function screenshot(payload) {
+    const mode = (payload && payload.mode) || "auto";
+    const useCapture = mode === "capture" || (mode === "auto" && captureVideo);
+    if (useCapture) {
+      if (!captureVideo) {
+        return { error: "screen-capture-not-enabled", hint: "Click Enable screen capture in the target page's ITERATE widget first." };
+      }
+      const maxWidth = (payload && payload.maxWidth) || 1280;
+      const scale = Math.min(1, maxWidth / Math.max(captureVideo.videoWidth, 1));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(captureVideo.videoWidth * scale));
+      canvas.height = Math.max(1, Math.round(captureVideo.videoHeight * scale));
+      canvas.getContext("2d").drawImage(captureVideo, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL("image/jpeg", (payload && payload.quality) || 0.7);
+      return { base64: dataUrl.split(",")[1], height: canvas.height, mime: "image/jpeg", mode: "capture", width: canvas.width };
+    }
+    return renderScreenshot(payload);
+  }
   async function renderScreenshot(payload) {
     try {
       const maxWidth = (payload && payload.maxWidth) || 960;
@@ -1069,13 +1111,19 @@ const PAGE_DEBUGGING_HOST_SNIPPET_BODY = String.raw`
     shareScreenshot.addEventListener("click", async function () {
       shareScreenshot.disabled = true;
       status.textContent = "Preparing screenshot...";
-      const image = await renderScreenshot({ maxWidth: 960 });
+      const image = await screenshot({ maxWidth: 960 });
       if (image.error) { status.textContent = image.hint || image.message || image.error; }
       else { preview.src = "data:" + image.mime + ";base64," + image.base64; preview.style.display = "block"; status.textContent = "Screenshot shared: " + image.width + "x" + image.height + " via " + image.mode + "."; }
       shareScreenshot.disabled = false;
     });
     const enableCapture = menuButton("Enable screen capture");
-    enableCapture.addEventListener("click", function () { status.textContent = "Screen capture is not wired in the CSP-safe bridge demo."; });
+    enableCapture.addEventListener("click", async function () {
+      enableCapture.disabled = true;
+      status.textContent = "Choose this tab in the picker...";
+      const result = await enableScreenCapture();
+      if (result.ok) { status.textContent = "Screen capture enabled — screenshots now use real host-tab pixels."; enableCapture.textContent = "Screen capture enabled"; }
+      else { enableCapture.disabled = false; status.textContent = result.message || result.hint || result.error; }
+    });
     const copyUrl = menuButton("Copy page URL");
     copyUrl.addEventListener("click", async function () { try { await navigator.clipboard.writeText(location.href); status.textContent = "Page URL copied."; } catch (error) { status.textContent = "Copy blocked: " + location.href; } });
     const stopSharing = menuButton("Stop sharing");

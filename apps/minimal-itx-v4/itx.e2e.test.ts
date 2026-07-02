@@ -21,14 +21,10 @@ import {
   BLIND_RELAY_PINNED_CERT_SHA256_HEADER,
   completedHttpResponseLength,
   parseHttpResponse,
-  relayedFetchWithBlindRelay,
+  fetchThroughTunnelingProxy,
 } from "./src/domains/projects/blind-relay.ts";
 import { RepoArtifactNameCodec } from "./src/domains/repos/utils.ts";
-import type {
-  BlindEgressRelay,
-  BlindEgressRelayConnection,
-  DynamicWorkerRef,
-} from "./src/types.ts";
+import type { TunnelingProxy, TunnelingProxyConnection, DynamicWorkerRef } from "./src/types.ts";
 import {
   StreamProcessor,
   type StreamProcessorSnapshot,
@@ -172,7 +168,7 @@ type BlindRelayObservation = {
   workerToTargetChunks: Uint8Array[];
 };
 
-class BlindRelayConnectionTarget extends RpcTarget implements BlindEgressRelayConnection {
+class BlindRelayConnectionTarget extends RpcTarget implements TunnelingProxyConnection {
   readonly #observation: BlindRelayObservation;
   readonly #readQueue: Uint8Array[] = [];
   readonly #readWaiters: Array<{
@@ -245,11 +241,11 @@ class BlindRelayConnectionTarget extends RpcTarget implements BlindEgressRelayCo
   }
 }
 
-class BlindRelayTarget extends RpcTarget implements BlindEgressRelay, Disposable {
+class BlindRelayTarget extends RpcTarget implements TunnelingProxy, Disposable {
   readonly observations: BlindRelayObservation[] = [];
   readonly #sockets = new Set<net.Socket>();
 
-  async dial({ host, port }: { host: string; port: number }): Promise<BlindEgressRelayConnection> {
+  async dial({ host, port }: { host: string; port: number }): Promise<TunnelingProxyConnection> {
     const socket = net.connect({ host, port });
     this.#sockets.add(socket);
     socket.once("close", () => this.#sockets.delete(socket));
@@ -859,7 +855,7 @@ describe("minimal itx v4", () => {
     using relay = new BlindRelayTarget();
 
     try {
-      const response = await relayedFetchWithBlindRelay(
+      const response = await fetchThroughTunnelingProxy(
         new Request(`${target.url}/secret-path?token=worker-only`, {
           body: "payload hidden from relay",
           headers: {
@@ -924,7 +920,7 @@ describe("minimal itx v4", () => {
         description: "blind egress proof secret to be available",
       });
 
-      using intercept = await project.egress.useBlindRelayForSecretEgress(relay);
+      using intercept = await project.egress.useTunnelingProxy(relay);
       const request = new Request(`${target.url}/secret-path?token=worker-only`, {
         body: "payload hidden from relay",
         headers: {

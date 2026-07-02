@@ -14,7 +14,7 @@ were local.
   capability. The worker, or the demo page acting as an agent, drives that tab
   remotely: snapshot the DOM, click, fill, screenshot.
 
-In both cases the shape is identical: `project.egress.useBlindRelayForSecretEgress(relay)`
+In both cases the shape is identical: `project.egress.useTunnelingProxy(relay)`
 and `connectPageTools(...)` each hand the project a `RpcTarget` that outlives the
 call, and the project invokes it later. That symmetry is the point — ITX lets an
 untrusted-to-the-worker client lend a narrow, live capability without the worker
@@ -142,8 +142,11 @@ vending project ITX.
 
 Every `PageTools` method forwards the actual DOM work to the host page over
 `postMessage`, where the dependency-free snippet runs it with plain DOM APIs
-(role/label/text/testid/css queries, click/fill/read, snapshot, an SVG
-screenshot render). The one hard limit: no pasted snippet can escape a total
+(role/label/text/testid/css queries, click/fill/read, snapshot). Screenshots use
+an SVG-render fallback by default; if the user clicks **Enable screen capture**
+in the widget (which supplies the required user gesture for `getDisplayMedia`),
+they switch to real host-tab pixels. The one hard limit: no pasted snippet can
+escape a total
 `default-src 'self'` — the host must allow the worker origin in `frame-src`
 (the common strict case that locks down script/connect but permits framing).
 

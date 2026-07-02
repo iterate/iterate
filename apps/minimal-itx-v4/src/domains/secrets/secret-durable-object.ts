@@ -2,8 +2,8 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
-import type { BlindEgressRelay, SecretDescription, SecretUpdateInput } from "../../types.ts";
-import { relayedFetchWithBlindRelay } from "../projects/blind-relay.ts";
+import type { TunnelingProxy, SecretDescription, SecretUpdateInput } from "../../types.ts";
+import { fetchThroughTunnelingProxy } from "../projects/blind-relay.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   createStreamProcessorHost,
@@ -89,9 +89,9 @@ export class SecretDurableObject extends DurableObject<Env> {
     );
   }
 
-  async fetchWithBlindRelay(request: Request, relay: BlindEgressRelay): Promise<Response> {
+  async fetchThroughProxy(request: Request, relay: TunnelingProxy): Promise<Response> {
     return this.#fetchWithMaterializedSecret(request, (materializedRequest) =>
-      relayedFetchWithBlindRelay(materializedRequest, relay),
+      fetchThroughTunnelingProxy(materializedRequest, relay),
     );
   }
 

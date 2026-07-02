@@ -23,10 +23,8 @@ export class ProjectEgressRpcTarget extends RpcTarget implements ProjectEgress {
     return projectStub(env.PROJECT, this.props.projectId).interceptEgress(handler);
   }
 
-  useBlindRelayForSecretEgress(
-    relay: Parameters<ProjectEgress["useBlindRelayForSecretEgress"]>[0],
-  ) {
-    return projectStub(env.PROJECT, this.props.projectId).useBlindRelayForSecretEgress(relay);
+  useTunnelingProxy(relay: Parameters<ProjectEgress["useTunnelingProxy"]>[0]) {
+    return projectStub(env.PROJECT, this.props.projectId).useTunnelingProxy(relay);
   }
 }
 

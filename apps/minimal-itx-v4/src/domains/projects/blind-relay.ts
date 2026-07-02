@@ -1,6 +1,6 @@
 import { makeTLSClient, setCryptoImplementation, type X509Certificate } from "@reclaimprotocol/tls";
 import { pureJsCrypto } from "@reclaimprotocol/tls/purejs-crypto";
-import type { BlindEgressRelay, BlindEgressRelayConnection } from "../../types.ts";
+import type { TunnelingProxy, TunnelingProxyConnection } from "../../types.ts";
 
 export const BLIND_RELAY_PINNED_CERT_SHA256_HEADER = "x-itx-blind-relay-cert-sha256";
 const INSECURE_BLIND_RELAY_SKIP_TLS_VERIFY_HEADER = "x-itx-blind-relay-insecure-skip-tls-verify";
@@ -18,9 +18,9 @@ setCryptoImplementation({
   },
 });
 
-export async function relayedFetchWithBlindRelay(
+export async function fetchThroughTunnelingProxy(
   request: Request,
-  relay: BlindEgressRelay,
+  relay: TunnelingProxy,
 ): Promise<Response> {
   // POC shape: the Worker materializes secret placeholders, then runs TLS
   // locally. The relay only dials TCP and shuttles encrypted TLS records, so it
@@ -58,7 +58,7 @@ async function runTlsHttpRequest({
   requestBytes,
   skipTlsVerify,
 }: {
-  connection: BlindEgressRelayConnection;
+  connection: TunnelingProxyConnection;
   hostname: string;
   pinnedCertSha256: string | null;
   requestBytes: Uint8Array;

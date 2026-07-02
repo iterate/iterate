@@ -300,12 +300,12 @@ export interface DynamicWorkerCollection {
 /** Live replacement for project egress. It sees getSecret(...) placeholders, never material. */
 export type ProjectEgressInterceptor = (req: Request) => Promise<Response>;
 
-export interface BlindEgressRelayDial {
+export interface TunnelingProxyDial {
   host: string;
   port: number;
 }
 
-export interface BlindEgressRelayConnection {
+export interface TunnelingProxyConnection {
   close(): Promise<void>;
   read(): Promise<Uint8Array | null>;
   write(chunk: Uint8Array): Promise<void>;
@@ -316,8 +316,8 @@ export interface BlindEgressRelayConnection {
  * target host/port and opaque TLS bytes, but must not receive a materialized
  * Request or Response.
  */
-export interface BlindEgressRelay {
-  dial(input: BlindEgressRelayDial): Promise<BlindEgressRelayConnection>;
+export interface TunnelingProxy {
+  dial(input: TunnelingProxyDial): Promise<TunnelingProxyConnection>;
 }
 
 /** Disposable handle for one live project egress interception. */
@@ -331,7 +331,7 @@ export interface ProjectEgressIntercept extends Disposable {
  * `fetch` is the explicit outbound door. Dynamic workers' bare `fetch()` uses
  * the same project egress path through the WorkerEntrypoint gateway.
  *
- * `intercept` and `useBlindRelayForSecretEgress` install one live runtime
+ * `intercept` and `useTunnelingProxy` install one live runtime
  * egress mode on the Project Durable Object. Last writer wins; disposing or
  * releasing the handle clears only the mode it installed if it is still
  * current.
@@ -339,7 +339,7 @@ export interface ProjectEgressIntercept extends Disposable {
 export interface ProjectEgress {
   fetch(req: Request): Promise<Response>;
   intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;
-  useBlindRelayForSecretEgress(relay: BlindEgressRelay): Promise<ProjectEgressIntercept>;
+  useTunnelingProxy(relay: TunnelingProxy): Promise<ProjectEgressIntercept>;
 }
 
 export type ProjectDescription = {

@@ -9,21 +9,21 @@ import { trustedInternalAuthContext } from "../../auth.ts";
 import { ItxRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type {
-  BlindEgressRelay,
+  TunnelingProxy,
   CfExecutionContext,
   ProjectEgressIntercept,
   ProjectEgressInterceptor,
 } from "../../types.ts";
 import { deepRetainRpcStubs } from "../itx/live-capability.ts";
 import { secretErrorResponse, secretReferencePathsFromHeaders } from "../secrets/utils.ts";
-import { relayedFetchWithBlindRelay } from "./blind-relay.ts";
+import { fetchThroughTunnelingProxy } from "./blind-relay.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 
 type ProjectEgressMode =
   | {
-      kind: "blind-relay";
-      retained: ReturnType<typeof deepRetainRpcStubs<BlindEgressRelay>>;
+      kind: "tunneling-proxy";
+      retained: ReturnType<typeof deepRetainRpcStubs<TunnelingProxy>>;
     }
   | {
       kind: "interceptor";
@@ -88,12 +88,12 @@ export class ProjectDurableObject extends DurableObject<Env> {
     // A blind relay carries every outbound request through the client-owned
     // socket, so the listener sees each egress (secret or not) as encrypted
     // bytes — symmetric with an interceptor seeing every request.
-    const relay: BlindEgressRelay | undefined =
-      this.#egressMode?.kind === "blind-relay" ? this.#egressMode.retained.value : undefined;
+    const relay: TunnelingProxy | undefined =
+      this.#egressMode?.kind === "tunneling-proxy" ? this.#egressMode.retained.value : undefined;
 
     // No secret to substitute: the request is already materialized.
     if (secretPaths.length === 0) {
-      if (relay !== undefined) return relayedFetchWithBlindRelay(request, relay);
+      if (relay !== undefined) return fetchThroughTunnelingProxy(request, relay);
       return fetch(request);
     }
 
@@ -103,7 +103,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
         path: secretPaths[0]!,
       }),
     );
-    if (relay !== undefined) return secret.fetchWithBlindRelay(request, relay);
+    if (relay !== undefined) return secret.fetchThroughProxy(request, relay);
     return secret.fetch(request);
   }
 
@@ -126,9 +126,9 @@ export class ProjectDurableObject extends DurableObject<Env> {
     });
   }
 
-  useBlindRelayForSecretEgress(relay: BlindEgressRelay): ProjectEgressIntercept {
+  useTunnelingProxy(relay: TunnelingProxy): ProjectEgressIntercept {
     const mode: ProjectEgressMode = {
-      kind: "blind-relay",
+      kind: "tunneling-proxy",
       retained: deepRetainRpcStubs(relay),
     };
     this.#setEgressMode(mode);
