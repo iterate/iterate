@@ -1,4 +1,8 @@
 #!/usr/bin/env bun
+// QUARANTINED (itx-v4 cutover, Phase 10): origin packages/iterate/src/stream-tui/event-stream-terminal.tsx.
+// Part of the legacy stream-browser TUI built on the old engine's /api/itx/run
+// client; superseded by the agent chat TUI in src/stream-tui/. See ../README.md.
+
 /** @jsxImportSource @opentui/react */
 // oxlint-disable react/only-export-components -- CLI entrypoint, not a Vite Fast Refresh module.
 /**
@@ -17,7 +21,7 @@ import { getInitialProcessorState } from "@iterate-com/shared/streams/stream-pro
 import { createCliRenderer, type KeyEvent } from "@opentui/core";
 import { createRoot, useKeyboard, useRenderer } from "@opentui/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { readConfig, updateConfigSession } from "../config.ts";
+import { readConfig, updateConfigSession } from "../../src/config.ts";
 import {
   acceptedSlashInput,
   findSlashCommand as findDiscoveredSlashCommand,

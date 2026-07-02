@@ -35,7 +35,7 @@ try {
     env: {
       ...process.env,
       APP_CONFIG_BASE_URL: project.baseUrl,
-      OS_TUI_TEST_PROJECT_SLUG_OR_ID: project.project.id,
+      OS_TUI_TEST_PROJECT_ID: project.project.id,
       XDG_CONFIG_HOME: xdgConfigHome,
     },
   });

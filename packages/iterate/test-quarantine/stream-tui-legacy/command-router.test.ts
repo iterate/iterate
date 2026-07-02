@@ -1,3 +1,7 @@
+// QUARANTINED (itx-v4 cutover, Phase 10): origin packages/iterate/src/stream-tui/command-router.test.ts.
+// Part of the legacy stream-browser TUI built on the old engine's /api/itx/run
+// client; superseded by the agent chat TUI in src/stream-tui/. See ../README.md.
+
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import { getInitialProcessorState } from "@iterate-com/shared/streams/stream-processors";
 import { StreamViewProcessorContract } from "@iterate-com/ui/components/events/stream-view-processor/contract";

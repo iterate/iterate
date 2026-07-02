@@ -1,3 +1,7 @@
+// QUARANTINED (itx-v4 cutover, Phase 10): origin packages/iterate/src/stream-tui/command-router.ts.
+// Part of the legacy stream-browser TUI built on the old engine's /api/itx/run
+// client; superseded by the agent chat TUI in src/stream-tui/. See ../README.md.
+
 import type { Event, EventInput, StreamPath } from "@iterate-com/shared/streams/types";
 import type { EventsStreamViewState } from "@iterate-com/ui/components/events/feed-items";
 import { call, isProcedure, os, type AnyProcedure } from "@orpc/server";

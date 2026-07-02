@@ -1,3 +1,7 @@
+// QUARANTINED (itx-v4 cutover, Phase 10): origin packages/iterate/src/stream-tui/react-stream-renderers.tsx.
+// Part of the legacy stream-browser TUI built on the old engine's /api/itx/run
+// client; superseded by the agent chat TUI in src/stream-tui/. See ../README.md.
+
 /** @jsxImportSource @opentui/react */
 import type { StreamPath } from "@iterate-com/shared/streams/types";
 import { StyledText, TextAttributes, bg, fg, type ScrollBoxRenderable } from "@opentui/core";

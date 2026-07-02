@@ -4,7 +4,7 @@ These specs use Microsoft TUI Test as the checked-in black-box terminal runner. 
 PTY. The app still starts through the real user-facing CLI:
 
 ```bash
-pnpm iterate chat --project public --stream-path ...
+pnpm iterate chat --project prj_... --agent-path /agents/onboarding
 ```
 
 Run the stable workflow/layout assertions with:
@@ -22,4 +22,11 @@ OS_TUI_SNAPSHOT=1 pnpm --dir apps/os exec tsx ./e2e/tui-test/run.ts -u
 ```
 
 The TUI runner creates a disposable project for each run and passes its ID to the spec as
-`OS_TUI_TEST_PROJECT_SLUG_OR_ID`.
+`OS_TUI_TEST_PROJECT_ID`.
+
+There is also a headless smoke of the TUI's data layer (shared itx client + shared agent-ui
+reducer, no PTY) that drives a full assistant round trip against a disposable project:
+
+```bash
+cd apps/os && doppler run -- pnpm exec tsx e2e/tui-test/data-layer-smoke.ts
+```
