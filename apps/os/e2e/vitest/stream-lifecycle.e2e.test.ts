@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import type { Stream, StreamEvent, StreamEventInput } from "../../src/types.ts";
+import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 type RuntimeConnection = {
@@ -519,20 +520,6 @@ async function expectNoSubscriptionConfiguredEvent(
 
 function disposeRpc(value: unknown): void {
   (value as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
-}
-
-async function waitForCondition(
-  predicate: () => boolean | Promise<boolean>,
-  opts: { description: string; intervalMs?: number; timeoutMs?: number },
-): Promise<void> {
-  const timeoutMs = opts.timeoutMs ?? 5_000;
-  const intervalMs = opts.intervalMs ?? 50;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await predicate()) return;
-    await delay(intervalMs);
-  }
-  throw new Error(`Timed out waiting for ${opts.description}`);
 }
 
 function delay(ms: number): Promise<void> {

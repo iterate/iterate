@@ -7,6 +7,7 @@
 
 import { expect, test } from "vitest";
 import type { StreamEvent, StreamEventBatch } from "../../src/types.ts";
+import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
@@ -351,11 +352,6 @@ function coreState(value: unknown): CoreStreamState {
   return state as CoreStreamState;
 }
 
-async function waitFor(predicate: () => boolean, describe: () => string, timeoutMs = 10_000) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`Timed out waiting for ${describe()}`);
+function waitFor(predicate: () => boolean, describe: () => string, timeoutMs = 10_000) {
+  return waitForCondition(predicate, { description: describe, intervalMs: 100, timeoutMs });
 }
