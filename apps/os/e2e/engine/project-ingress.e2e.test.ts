@@ -14,7 +14,13 @@ test("project ingress serves the static seeded homepage at the root", async () =
 
   const pageResponse = await fetch(buildUrl({ path: `/${projectId}` }));
   expect(pageResponse.status).toBe(200);
-  expect(await pageResponse.text()).toContain("Hello from your Iterate project worker");
+  const homepage = await pageResponse.text();
+  expect(homepage).toContain("Hello from your Iterate project worker");
+  // The homepage links to each seeded app on its own host: the current host
+  // prefixed with "<app>--".
+  const requestHost = new URL(buildUrl({ path: "/" })).host;
+  expect(homepage).toContain(`hello--${requestHost}`);
+  expect(homepage).toContain(`counter--${requestHost}`);
 });
 
 // Multi-app routing: the seeded root worker.js is a router over the project's

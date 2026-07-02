@@ -34,11 +34,28 @@ const DEFAULT_PROJECT_WORKER_SOURCE = `
         return await app.fetch(req);
       }
 
-      // The seeded homepage is a plain static string; apps live on their own
-      // hosts (e.g. counter--<slug>.<base>).
+      // The seeded homepage is a static page linking to the apps. Apps live
+      // on their own hosts: the current host prefixed with "<app>--" (e.g.
+      // counter--<slug>.<base>), so the links derive from the request URL.
+      const url = new URL(req.url);
+      const appLinks = Object.entries(APPS)
+        .map(([slug, ref]) => {
+          const href = \`\${url.protocol}//\${slug}--\${url.host}/\`;
+          return \`<li><a href="\${href}">\${slug}</a> (\${ref.type})</li>\`;
+        })
+        .join("\\n");
       return new Response(
-        "Hello from your Iterate project worker. Apps: hello--<slug> (stateless), counter--<slug> (stateful). Edit worker.js in the project repo to change this.",
-        { headers: { "content-type": "text/plain; charset=utf-8" } },
+        \`<!doctype html>
+          <html>
+            <body>
+              <main>
+                <p>Hello from your Iterate project worker.</p>
+                <ul>\${appLinks}</ul>
+                <p>Edit worker.js in the project repo to change this.</p>
+              </main>
+            </body>
+          </html>\`,
+        { headers: { "content-type": "text/html; charset=utf-8" } },
       );
     }
 
