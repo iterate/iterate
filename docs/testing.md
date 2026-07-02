@@ -6,13 +6,12 @@ snapshots, `test.for` tables), see [Vitest patterns](vitest-patterns.md).
 
 ## Lanes
 
-| Lane             | Command (from `apps/os` unless noted) | Lives in                                       | Proves                                                                                                                                                                       |
-| ---------------- | ------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Unit             | `pnpm test`                           | `apps/os/src/**/*.test.ts` (colocated)         | In-process logic; no deployment needed.                                                                                                                                      |
-| OS e2e           | `pnpm e2e`                            | `apps/os/e2e/vitest/` (`e2e/vitest.config.ts`) | URL-driven black box against a live deployment through the itx surface: streams, stream security, project ingress, agents, admin, preview smoke.                             |
-| Examples matrix  | `pnpm e2e:examples`                   | `apps/os/e2e/examples/`                        | Every itx catalogue example runs identically across five runtimes (browser, node, cli, run-script, project-worker). The browser project needs a Playwright chromium install. |
-| TUI              | `pnpm exec tsx e2e/tui-test/run.ts`   | `apps/os/e2e/tui-test/`                        | The `iterate chat` TUI through a real PTY (Microsoft TUI Test) against a disposable project.                                                                                 |
-| Playwright specs | `pnpm spec` (repo root)               | `specs/` (`playwright.config.ts`)              | Browser-level product flows: signup, project create, dashboard, REPL, agent chat, reactivity.                                                                                |
+| Lane             | Command (from `apps/os` unless noted) | Lives in                                | Proves                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ---------------- | ------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unit             | `pnpm test`                           | `apps/os/src/**/*.test.ts` (colocated)  | In-process logic; no deployment needed.                                                                                                                                                                                                                                                                                                                                                                                   |
+| OS e2e           | `pnpm e2e`                            | `apps/os/e2e/` (`e2e/vitest.config.ts`) | One config, two projects against a live deployment through the itx surface. `--project node`: engine e2e (`e2e/vitest/` — streams, security, ingress, agents, admin, preview smoke) plus the itx catalogue matrix (`e2e/examples/` — every example across five runtimes: browser, node, cli, run-script, project-worker). `--project browser` runs the catalogue in a real browser (needs a Playwright chromium install). |
+| TUI              | `pnpm exec tsx e2e/tui-test/run.ts`   | `apps/os/e2e/tui-test/`                 | The `iterate chat` TUI through a real PTY (Microsoft TUI Test) against a disposable project.                                                                                                                                                                                                                                                                                                                              |
+| Playwright specs | `pnpm spec` (repo root)               | `specs/` (`playwright.config.ts`)       | Browser-level product flows: signup, project create, dashboard, REPL, agent chat, reactivity.                                                                                                                                                                                                                                                                                                                             |
 
 ## Running a lane against an environment
 
@@ -68,14 +67,12 @@ and `VIDEO_MODE`).
 
 ## Artifacts
 
-- **Vitest e2e lanes** write per-run artifact roots under the OS temp dir —
-  `os-e2e-*` (`pnpm e2e`) and `os-itx-e2e-*` (`pnpm e2e:examples`); that is
-  `/tmp/os-e2e-*` and `/tmp/os-itx-e2e-*` on Linux/CI — containing per-test
-  console logs. The active root is printed at startup
+- **The Vitest e2e suite** writes a per-run artifact root under the OS temp dir
+  — `os-e2e-*` (`/tmp/os-e2e-*` on Linux/CI) — containing per-test console
+  logs. The active root is printed at startup
 - **Playwright** writes `test-results/` at the repo root: traces, videos, and
   screenshots under `test-results/playwright-output`, plus HTML and JSON
   reports.
 - **Preview CI** uploads all of the above (`test-results`,
-  `apps/os/test-results`, `/tmp/os-e2e-*`, `/tmp/os-itx-e2e-*`) as a GitHub
-  Actions artifact — see `previewTestArtifacts` in
-  `scripts/preview/preview.ts`.
+  `apps/os/test-results`, `/tmp/os-e2e-*`) as a CI artifact — see
+  `previewTestArtifacts` in `scripts/preview/preview.ts`.

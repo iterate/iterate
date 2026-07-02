@@ -10,9 +10,14 @@ export const runsOnDepotUbuntu = {
   "runs-on": "depot-ubuntu-24.04",
 };
 
-/** Use this for preview lifecycle jobs that need more headroom than ordinary CI. */
-export const runsOnDepotUbuntuPreview = {
-  "runs-on": "depot-ubuntu-24.04-16",
+/**
+ * Larger Depot runner for jobs that need more headroom than ordinary CI.
+ * (The preview deploy + e2e job runs on Depot CI — see
+ * .depot/workflows/cloudflare-previews.yml — so this is currently unused, but
+ * kept for the next heavy GitHub Actions job.)
+ */
+export const runsOnDepotUbuntuLarge = {
+  "runs-on": "depot-ubuntu-24.04-8",
 };
 
 /** checkout, setup pnpm, setup node, install dependencies. Accepts an optional ref override (e.g. for workflow_dispatch inputs). */

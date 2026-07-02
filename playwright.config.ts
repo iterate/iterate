@@ -11,10 +11,13 @@ const osBaseUrl = configuredOsBaseUrl || localOsTarget?.baseUrl;
 export default defineConfig({
   testDir: "specs",
   testMatch: "**/*.spec.ts",
-  fullyParallel: false,
+  // Every spec provisions its own fixture project, so specs are independent.
+  // Parallel in CI against a deployed slot; sequential locally so a single
+  // dev server isn't hammered.
+  fullyParallel: !!process.env.CI,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  workers: 1,
+  workers: process.env.CI ? 6 : 1,
   outputDir: "test-results/playwright-output",
   reporter: [
     ["list"],

@@ -33,17 +33,21 @@ Useful entry points:
 
 ### Preview Deploy And Test Model
 
+For how this pipeline is kept fast (and cheap) and how not to regress it, see
+[Preview CI performance](ci-preview-performance.md).
+
 The preview workflow is deliberately simple:
 
 - select the apps affected by the PR diff;
 - include declared preview dependencies, currently OS -> auth;
-- deploy the selected apps in dependency batches;
-- after deployment has finished, run tests for deployed apps one at a time.
+- deploy the selected apps in one parallel batch;
+- after deployment has finished, run tests for deployed apps concurrently.
 
 The preview script does not try to prove dependency freshness or start each app's
 tests as soon as it is individually ready. That lost little in the measured case
-and keeps the behavior easy to reason about. OS deploys only after the slot's
-auth deployment is ready because OS bakes auth JWKS during deployment.
+and keeps the behavior easy to reason about. OS bakes auth JWKS during
+deployment; its deploy-time JWKS fetch polls the slot's auth worker until it
+responds, so the OS deploy no longer waits for the auth deploy to finish first.
 
 To run the same deploy-then-test lifecycle from your machine:
 
@@ -181,9 +185,35 @@ durable Depot cache disk was tested for the bake, but it made `pnpm install`
 much slower while materializing `node_modules`. Keep the bake on the local
 store unless new measurements show otherwise.
 
+## Depot CI Preview Workflow
+
+`.depot/workflows/cloudflare-previews.yml` is the PRIMARY preview deploy+e2e
+workflow. Measured 2026-07-02: GitHub Actions runner assignment on
+`depot-ubuntu-24.04-16` took 20s-3m39s across runs (and one push waited ~40min
+for GitHub to create the run at all), while Depot CI picked up a push in ~6s
+with `pnpm install` at ~8s.
+
+- `pull_request` open/reopen/synchronize triggers live in the Depot CI
+  workflow. Depot registers automatic triggers when the file lands on the
+  default branch — branch-only changes to the `on:` block do not take effect
+  until merged.
+- The generated GitHub workflow keeps only the PR-close cleanup job, so the
+  two systems never race a deploy against the same preview slot lease.
+- Secrets come from `depot ci secrets --org 0p91s0lz49`: `DOPPLER_TOKEN` and
+  `ITERATE_BOT_GITHUB_TOKEN`.
+
+Run it manually against a PR (works from any branch, no merge needed):
+
+```bash
+depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
+  --workflow cloudflare-previews.yml --ref <branch> \
+  --input pull-request-number=<pr>
+```
+
 ## Current Decision
 
-The main preview workflow stays on GitHub Actions with Depot runners.
+Preview deploy+e2e runs on Depot CI; everything else stays on GitHub Actions
+with Depot runners.
 
 Measurements from this PR:
 

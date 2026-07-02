@@ -133,13 +133,13 @@ export async function test(options: PullRequestCommandOptions = {}) {
     };
   }
 
-  const entries: CloudflarePreviewAppEntry[] = [];
-  // Preview e2e commands are full app-level suites. Run them one at a time so
-  // unrelated app checks do not multiply load against the same preview slot.
-  for (const app of testableApps) {
+  // Preview e2e commands are full app-level suites. They run concurrently:
+  // each app deploys its own workers, and the non-OS suites are seconds-long
+  // smokes whose load is negligible next to the OS lanes.
+  const maybeEntries = await mapWithConcurrency(testableApps, testableApps.length, async (app) => {
     const existingEntry = current.state.apps[app.slug];
     if (!existingEntry?.publicUrl) {
-      continue;
+      return null;
     }
 
     const startedAt = Date.now();
@@ -167,23 +167,25 @@ export async function test(options: PullRequestCommandOptions = {}) {
     console.error(
       `[preview] test ${testResult.exitCode === 0 ? "passed" : "failed"}: ${app.slug} (${formatDurationMs(testDurationMs)})`,
     );
+    if (testResult.exitCode === 0) {
+      warnIfOverBudget("e2e", app.slug, testDurationMs, app.previewTestBudgetMs);
+    }
 
-    entries.push(
-      CloudflarePreviewAppEntry.parse({
-        ...existingEntry,
-        appDisplayName: app.displayName,
-        appSlug: app.slug,
-        message:
-          testResult.exitCode === 0
-            ? null
-            : commandFailureMessage(testResult, "Preview tests failed after deploy."),
-        runUrl: context.workflowRunUrl ?? existingEntry.runUrl ?? null,
-        status: testResult.exitCode === 0 ? "deployed" : "tests-failed",
-        testDurationMs,
-        updatedAt: new Date().toISOString(),
-      } satisfies CloudflarePreviewAppEntry),
-    );
-  }
+    return CloudflarePreviewAppEntry.parse({
+      ...existingEntry,
+      appDisplayName: app.displayName,
+      appSlug: app.slug,
+      message:
+        testResult.exitCode === 0
+          ? null
+          : commandFailureMessage(testResult, "Preview tests failed after deploy."),
+      runUrl: context.workflowRunUrl ?? existingEntry.runUrl ?? null,
+      status: testResult.exitCode === 0 ? "deployed" : "tests-failed",
+      testDurationMs,
+      updatedAt: new Date().toISOString(),
+    } satisfies CloudflarePreviewAppEntry);
+  });
+  const entries = maybeEntries.filter((entry): entry is CloudflarePreviewAppEntry => entry != null);
 
   const ok = !entries.some((entry) => entry.status === "tests-failed");
   if (entries.length > 0) {
@@ -396,6 +398,15 @@ export type CloudflarePreviewApp = {
   previewTestBaseUrlEnvVar: string;
   previewTestArtifacts?: readonly [string, ...string[]];
   previewTestCommandArgs: readonly [string, ...string[]];
+  /**
+   * Soft wall-clock budgets. When a phase runs slower than its budget we emit
+   * a GitHub/Depot `::warning::` annotation (never fail) so preview CI creep
+   * is visible on the PR — see docs/ci-preview-performance.md. Tune these when
+   * a change legitimately shifts the floor; don't just bump them to silence a
+   * regression.
+   */
+  previewDeployBudgetMs?: number;
+  previewTestBudgetMs?: number;
 };
 
 // Deployed apps compile in @iterate-com/shared via many subpath exports (streams,
@@ -439,36 +450,52 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "apps/auth-contract/**",
       "apps/os/src/domains/streams/**",
     ],
-    // OS bakes auth JWKS during deployment, so the slot's auth deployment must
-    // finish before OS deploy starts.
+    // OS bakes auth JWKS during deployment, so the slot's auth must deploy
+    // whenever OS does. Deploys run in parallel: the OS deploy polls the
+    // slot's auth worker for JWKS until it responds.
     previewDependencies: ["auth"],
-    previewTestArtifacts: [
-      "test-results",
-      "apps/os/test-results",
-      "/tmp/os-e2e-*",
-      "/tmp/os-itx-e2e-*",
-    ],
+    // Budgets sit ~25% above the observed green floor (deploy ~40s, e2e lane
+    // ~60s as of 2026-07-02). Crossing them warns, never fails.
+    previewDeployBudgetMs: 55_000,
+    previewTestBudgetMs: 80_000,
+    previewTestArtifacts: ["test-results", "apps/os/test-results", "/tmp/os-e2e-*"],
     previewTestBaseUrlEnvVar: "OS_BASE_URL",
-    // The full apps/os e2e Vitest suite (preview smoke + engine + itx lanes)
-    // and the itx e2e (node project only — the browser project needs a
-    // Playwright chromium install the preview e2e job doesn't have) read
+    // The apps/os e2e Vitest suite runs its `node` project (engine + itx
+    // catalogue matrix; the `browser` project is skipped here — the root
+    // Playwright REPL specs cover the catalogue in-browser). It reads
     // APP_CONFIG_BASE_URL + APP_CONFIG_ADMIN_API_SECRET from the leased
-    // preview Doppler config. Root Playwright specs run after those Vitest
-    // lanes, using the same preview Doppler config.
+    // preview Doppler config. Root Playwright specs run alongside it, using
+    // the same preview Doppler config.
     previewTestCommandArgs: [
       "bash",
       "-c",
       [
         "set -euo pipefail",
-        "pnpm --dir ../.. exec playwright install chromium",
-        // The vitest lanes and the Playwright specs hit the same deployed slot
-        // but provision independent projects, so they run concurrently; the
-        // vitest log is replayed once the specs finish.
-        "(pnpm e2e && pnpm e2e:examples --project node) > /tmp/os-preview-vitest.log 2>&1 & VITEST_PID=$!",
+        // The chromium download hits no deployed slot, so start it first and
+        // let it overlap the warmup and the vitest lane; it's ready by the
+        // time we reach the specs instead of adding ~4s in front of them.
+        "pnpm --dir ../.. exec playwright install chromium > /tmp/os-preview-pw-install.log 2>&1 & PW_INSTALL_PID=$!",
+        // Warm the freshly-deployed slot before the concurrent burst: a cold
+        // deployment answers its first requests only after loading each
+        // worker, and a 40-connection stampede against zero warm isolates
+        // ends in edge 499/522s. One round boots each worker, a parallel
+        // round fans isolates out.
+        // -L: /api/iterate-auth/login redirects to the slot's auth worker,
+        // warming it for the login-flow specs.
+        'for path in /api/health / /api/itx /sign-in /api/iterate-auth/login; do curl -sL -o /dev/null --max-time 20 "$OS_BASE_URL$path" || true; done',
+        // Subshell so the bare `wait` reaps only these curls, not the
+        // background chromium install started above.
+        '( for i in 1 2 3 4 5 6 7 8; do (curl -s -o /dev/null --max-time 20 "$OS_BASE_URL/api/health" && curl -s -o /dev/null --max-time 20 "$OS_BASE_URL/") & done; wait )',
+        // The e2e vitest lane and the Playwright specs hit the same slot but
+        // provision independent projects, so they run concurrently: the vitest
+        // lane in the background, the specs in the foreground. The vitest log
+        // is replayed once the specs finish.
+        "pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 & E2E_PID=$!",
+        'wait "$PW_INSTALL_PID" || { cat /tmp/os-preview-pw-install.log; exit 1; }',
         "pnpm --dir ../.. spec",
-        'VITEST_OK=0; wait "$VITEST_PID" || VITEST_OK=$?',
+        'E2E_OK=0; wait "$E2E_PID" || E2E_OK=$?',
         "cat /tmp/os-preview-vitest.log",
-        'exit "$VITEST_OK"',
+        '[ "$E2E_OK" -eq 0 ]',
       ].join("; "),
     ],
   },
@@ -1000,6 +1027,28 @@ function formatDurationMs(durationMs: number) {
   return `${(durationMs / 1_000).toFixed(1)}s`;
 }
 
+/**
+ * Soft performance guardrail: when a phase runs slower than its budget, emit a
+ * GitHub/Depot `::warning::` workflow-command annotation so preview CI creep
+ * surfaces on the PR without failing the run. No-op when no budget is set or
+ * the phase is within budget. See docs/ci-preview-performance.md.
+ */
+function warnIfOverBudget(
+  phase: "deploy" | "e2e",
+  slug: string,
+  actualMs: number,
+  budgetMs: number | undefined,
+) {
+  if (budgetMs == null || actualMs <= budgetMs) return;
+  const over = formatDurationMs(actualMs - budgetMs);
+  console.log(
+    `::warning title=Preview ${phase} over budget::${slug} ${phase} took ${formatDurationMs(actualMs)}, ` +
+      `${over} over the ${formatDurationMs(budgetMs)} budget. If this is the new floor, update ` +
+      `preview${phase === "deploy" ? "Deploy" : "Test"}BudgetMs in scripts/preview/preview.ts; ` +
+      `otherwise see docs/ci-preview-performance.md before landing.`,
+  );
+}
+
 function readPreviewMessage(message: string | null | undefined) {
   return message?.trim() || null;
 }
@@ -1077,11 +1126,13 @@ async function readPullRequestBody(params: {
     auth: params.githubToken,
   });
   const [owner, repo] = splitRepositoryFullName(params.repositoryFullName);
-  const pullRequest = await octokit.rest.pulls.get({
-    owner,
-    repo,
-    pull_number: params.pullRequestNumber,
-  });
+  const pullRequest = await withGithubRetry("pulls.get (body)", () =>
+    octokit.rest.pulls.get({
+      owner,
+      repo,
+      pull_number: params.pullRequestNumber,
+    }),
+  );
 
   return pullRequest.data.body || "";
 }
@@ -1096,12 +1147,14 @@ async function writePullRequestBody(params: {
     auth: params.githubToken,
   });
   const [owner, repo] = splitRepositoryFullName(params.repositoryFullName);
-  await octokit.rest.pulls.update({
-    body: params.body,
-    owner,
-    repo,
-    pull_number: params.pullRequestNumber,
-  });
+  await withGithubRetry("pulls.update", () =>
+    octokit.rest.pulls.update({
+      body: params.body,
+      owner,
+      repo,
+      pull_number: params.pullRequestNumber,
+    }),
+  );
 }
 
 type EnvironmentConfigLeaseReconcileResult = {
@@ -1763,6 +1816,9 @@ async function deployPreviewAppWithStatus(input: {
     console.error(
       `[preview] deploy ${entry.status === "awaiting-tests" ? "passed" : "failed"}: ${input.app.slug} (${formatDurationMs(deployDurationMs)})`,
     );
+    if (entry.status === "awaiting-tests") {
+      warnIfOverBudget("deploy", input.app.slug, deployDurationMs, input.app.previewDeployBudgetMs);
+    }
     return CloudflarePreviewAppEntry.parse({
       ...entry,
       deployDurationMs,
@@ -2006,11 +2062,13 @@ async function selectPreviewAppsForPullRequest(input: {
 
   const octokit = new Octokit({ auth: input.githubToken });
   const [owner, repo] = splitRepositoryFullName(input.repositoryFullName);
-  const comparison = await octokit.rest.repos.compareCommitsWithBasehead({
-    owner,
-    repo,
-    basehead: `${compareBaseSha}...${input.pullRequestHeadSha}`,
-  });
+  const comparison = await withGithubRetry("compareCommits", () =>
+    octokit.rest.repos.compareCommitsWithBasehead({
+      owner,
+      repo,
+      basehead: `${compareBaseSha}...${input.pullRequestHeadSha}`,
+    }),
+  );
   const changedFiles =
     comparison.data.files?.flatMap((file) => (file.filename ? [file.filename] : [])) ?? [];
 
@@ -2064,13 +2122,11 @@ function expandPreviewDependencies(appSlugs: readonly CloudflarePreviewAppSlugTy
 }
 
 function orderPreviewDeployBatches(apps: readonly PreviewAppRuntime[]) {
-  const os = apps.find((app) => app.slug === "os");
-  const auth = apps.find((app) => app.slug === "auth");
-  if (!os || !auth) {
-    return apps.length > 0 ? [[...apps]] : [];
-  }
-
-  return [apps.filter((app) => app.slug !== "os"), [os]];
+  // One parallel batch. OS bakes auth JWKS during deployment, but its
+  // deploy-time JWKS fetch polls the slot's auth worker until it responds
+  // (apps/os/alchemy.run.ts fetchJwksWithRetry), so it no longer needs the
+  // auth deploy sequenced before it.
+  return apps.length > 0 ? [[...apps]] : [];
 }
 
 async function mapWithConcurrency<T, Result>(
@@ -2225,11 +2281,13 @@ async function resolvePullRequestPreviewContext(params: {
     params.commandEnvironment.GITHUB_REPOSITORY?.trim() || defaultRepositoryFullName;
   const octokit = new Octokit({ auth: params.githubToken });
   const [owner, repo] = splitRepositoryFullName(repositoryFullName);
-  const pullRequest = await octokit.rest.pulls.get({
-    owner,
-    repo,
-    pull_number: params.pullRequestNumber,
-  });
+  const pullRequest = await withGithubRetry("pulls.get (context)", () =>
+    octokit.rest.pulls.get({
+      owner,
+      repo,
+      pull_number: params.pullRequestNumber,
+    }),
+  );
 
   return {
     githubToken: params.githubToken,
@@ -2334,6 +2392,40 @@ async function sleep(ms: number, signal?: AbortSignal) {
 
     signal.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+/**
+ * Retry a GitHub REST call through transient failures. GitHub's API
+ * intermittently returns 5xx/429/408 — its "Unicorn!" 503 page failed a
+ * preview `test` step mid-flight fetching the PR (2026-07-02) — and without a
+ * retry a single blip fails the whole deploy+e2e and costs a full re-run.
+ * Only transient statuses retry with exponential backoff; deterministic 4xx
+ * (404, 422, …) throw immediately.
+ */
+async function withGithubRetry<T>(
+  label: string,
+  call: () => Promise<T>,
+  opts: { attempts?: number; baseDelayMs?: number; signal?: AbortSignal } = {},
+): Promise<T> {
+  const attempts = opts.attempts ?? 4;
+  const baseDelayMs = opts.baseDelayMs ?? 1_000;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await call();
+    } catch (error) {
+      const status = (error as { status?: number } | null)?.status;
+      const transient = status != null && (status >= 500 || status === 429 || status === 408);
+      lastError = error;
+      if (!transient || attempt === attempts) throw error;
+      const delayMs = baseDelayMs * 2 ** (attempt - 1);
+      console.error(
+        `[preview] GitHub ${label} failed with ${status} (attempt ${attempt}/${attempts}); retrying in ${delayMs}ms...`,
+      );
+      await sleep(delayMs, opts.signal);
+    }
+  }
+  throw lastError;
 }
 
 function commandFailureMessage(
