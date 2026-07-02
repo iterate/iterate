@@ -9,8 +9,6 @@ import type {
   UnauthenticatedItx,
 } from "../../src/types.ts";
 
-const DEFAULT_BASE_URL = "http://localhost:8791";
-
 /**
  * The deployment admin API secret gating the `admin-secret` and `impersonate`
  * credential lanes. Provided by the Doppler config the suite runs under.
@@ -52,7 +50,11 @@ export function buildUrl({
 }): string {
   // setup.ts resolves APP_CONFIG_BASE_URL (Doppler value or the local
   // dev-server discovery file) before any suite runs.
-  const url = new URL(path, process.env.APP_CONFIG_BASE_URL ?? DEFAULT_BASE_URL);
+  const baseUrl = process.env.APP_CONFIG_BASE_URL?.trim();
+  if (!baseUrl) {
+    throw new Error("itx e2e needs APP_CONFIG_BASE_URL (run under doppler or the e2e setup).");
+  }
+  const url = new URL(path, baseUrl);
   if (protocol === "ws") {
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   }

@@ -7,10 +7,9 @@ import {
 import { withOwnedRpcSession } from "./domains/itx/utils.ts";
 import type { Agent, ItxAuthCredentials, Itx, Session, UnauthenticatedItx } from "./types.ts";
 
-export const DEFAULT_ITX_BASE_URL = "http://127.0.0.1:8791";
-
 type ConnectItxBaseInput = {
-  baseUrl?: string;
+  /** OS deployment base URL, e.g. the config's APP_CONFIG_BASE_URL. */
+  baseUrl: string;
 };
 
 type ConnectItxAuthenticatedInput = ConnectItxBaseInput & {
@@ -26,8 +25,12 @@ type ConnectAgentItxInput = ConnectItxAuthenticatedInput & {
   projectId: string;
 };
 
-function websocketUrl(pathname: string, input: { baseUrl?: string }) {
-  const url = new URL(pathname, (input.baseUrl ?? DEFAULT_ITX_BASE_URL).replace(/\/+$/, ""));
+function websocketUrl(pathname: string, input: { baseUrl: string }) {
+  const baseUrl = input.baseUrl?.trim();
+  if (!baseUrl) {
+    throw new Error("connectItx requires a baseUrl (the deployment's APP_CONFIG_BASE_URL).");
+  }
+  const url = new URL(pathname, baseUrl.replace(/\/+$/, ""));
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   return url.toString();
 }
@@ -47,13 +50,13 @@ type RpcSessionStub<T extends object> = CapnRpcStub<T> & {
 export function connectItx(input: ConnectAgentItxInput): CapnRpcStub<Agent>;
 export function connectItx(input: ConnectProjectItxInput): CapnRpcStub<Itx>;
 export function connectItx(input: ConnectItxAuthenticatedInput): CapnRpcStub<Session>;
-export function connectItx(input?: ConnectItxBaseInput): CapnRpcStub<UnauthenticatedItx>;
+export function connectItx(input: ConnectItxBaseInput): CapnRpcStub<UnauthenticatedItx>;
 export function connectItx(
   input:
     | ConnectAgentItxInput
     | ConnectItxAuthenticatedInput
     | ConnectItxBaseInput
-    | ConnectProjectItxInput = {},
+    | ConnectProjectItxInput,
 ): CapnRpcStub<Agent> | CapnRpcStub<Itx> | CapnRpcStub<Session> | CapnRpcStub<UnauthenticatedItx> {
   const session = connect<UnauthenticatedItx>(websocketUrl("/api/itx", input));
   if (!("auth" in input)) return session;
