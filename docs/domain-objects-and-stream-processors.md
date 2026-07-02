@@ -80,7 +80,7 @@ third-party ingress should preserve the vendor payload as a
 `.../webhook-received` event before a processor projects it into the normalized
 domain facts that other processors consume.
 
-The itx engine (`apps/os/src/`) is the reference implementation of all
+itx (`apps/os/src/`) is the reference implementation of all
 of this: every domain (projects, repos, agents, secrets, itx scopes) is a
 processor contract folding its own stream, and a capability context is a
 domain object whose state is its capability table, rebuilt from

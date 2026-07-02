@@ -2,7 +2,7 @@
 
 This file used to be a proposal. It is now current implementation
 documentation for project-scoped secrets, egress substitution, and integration
-credential storage in the OS itx engine.
+credential storage in OS itx.
 
 ## Current shape
 
@@ -45,7 +45,7 @@ const request = new Request("https://api.openai.com/v1/responses", {
 const response = await itx.egress.fetch(request);
 ```
 
-`getSecret({ path: "/secrets/..." })` is the current engine placeholder.
+`getSecret({ path: "/secrets/..." })` is the current itx placeholder.
 Substitution happens only inside the project egress path. Interceptors installed
 with `itx.egress.intercept(handler)` run before substitution and see the
 placeholder, never raw material.
@@ -87,7 +87,7 @@ per-user secret ACL inside a project today.
 Slack and Google use different storage paths because their runtime needs are
 different.
 
-Slack stores the project's bot token in the engine secret system at:
+Slack stores the project's bot token in the itx secret system at:
 
 ```text
 /secrets/integrations/slack/bot-token
@@ -117,7 +117,7 @@ egress uses `getSecret({ path: "/secrets/..." })` in request headers.
 
 ## Current limits
 
-These are not implemented in the current engine:
+These are not implemented in the current itx surface:
 
 - Secret hierarchy across global, org, project, and user scopes.
 - Per-user secret authorization within a project.

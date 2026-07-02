@@ -62,6 +62,7 @@ and `VIDEO_MODE`).
 | `APP_CONFIG_INTEGRATIONS__SLACK` | Doppler                                              | Gates the slack-agent e2e suite (provides the Slack signing secret)                           | Unset → suite skips             |
 | `OS_E2E_TUI_PROJECT_ID`          | `e2e/tui-test/run.ts` (internal; passed to the spec) | The disposable project the TUI spec chats against                                             | Unset → TUI spec skips          |
 | `OS_E2E_TUI_SNAPSHOT`            | You                                                  | `"1"` opts into the manual aesthetic TUI snapshot test                                        | Skipped                         |
+| `GITHUB_SHA`                     | GitHub Actions (ambient)                             | Labels the preview-smoke seed project slug in CI                                              | `"manual"`                      |
 | `CI`                             | GitHub Actions                                       | Playwright: `forbidOnly`, 2 retries, trace on first retry, never reuse an existing dev server | Unset locally                   |
 | `VIDEO_MODE`                     | You                                                  | `"1"` makes Playwright record video with relaxed timeouts                                     | Video only retained on failure  |
 

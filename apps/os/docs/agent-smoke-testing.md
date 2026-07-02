@@ -77,7 +77,7 @@ await itx.chat.sendMessage({ message: "PONG" });
 
 ### 4. Clean up
 
-There is no project-delete API on the engine; throwaway smoke projects are
+There is no project-delete API on itx; throwaway smoke projects are
 cheap and simply accumulate. Use an obviously-disposable slug.
 
 ## Gotchas

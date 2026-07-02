@@ -6,11 +6,11 @@ short README.
 ## Runtime Shape
 
 OS deploys as ten small Workers (see [worker-topology.md](./worker-topology.md)):
-a tiny ingress router owns all routes, the dashboard app and the engine API
+a tiny ingress router owns all routes, the dashboard app and the itx api
 are their own workers, and every Durable Object class is its own worker.
 Traffic is dispatched on hostname and path:
 
-1. Engine lanes: `/api/itx[...]`, `/__itx_e2e/*`, `/prj_<id>/...`, and project
+1. Itx lanes: `/api/itx[...]`, `/__itx_e2e/*`, `/prj_<id>/...`, and project
    platform hosts (`<slug>.iterate.app`, `<slug>.localhost:<port>`) forward to
    the api worker (`src/workers/api.ts`). Project-host requests route to
    the project's seeded worker, never the dashboard.
@@ -40,7 +40,7 @@ resolves the caller into a `principal`: the admin API secret, an OAuth bearer
 token, or a session cookie. Users without an organization are redirected to
 the auth worker's project-access flow.
 
-The engine has its own auth adapter (`src/auth.ts`) behind
+itx has its own auth adapter (`src/auth.ts`) behind
 `authenticate()` on `/api/itx` — credential lanes and the project-directory
 claims fallback are described in [src/README.md](../src/README.md).
 
@@ -75,7 +75,7 @@ The main app routes (`src/routes/`):
 There are no organization routes; organization membership and selection live
 in the auth worker.
 
-The browser talks to the engine over `/api/itx`: one Cap'n Web WebSocket per
+The browser talks to itx over `/api/itx`: one Cap'n Web WebSocket per
 context, managed by `src/itx/itx-react.tsx` (`useItx`/`useItxQuery`/
 `useItxEffect`). `POST /api/itx` serves one-shot HTTP batch sessions (used by
 the project-create server function and MCP `exec_js`).
@@ -107,7 +107,7 @@ OS has two MCP flows:
   hostname (for example `https://mcp.iterate.com`), which ingress rewrites to
   the same route. The OS app-host `/api/mcp` route is also valid. The handler
   authenticates each request, creates a fresh in-memory MCP server, and
-  exposes `exec_js`, which runs the code through the engine over a one-shot
+  exposes `exec_js`, which runs the code through itx over a one-shot
   capnweb batch.
 - Outbound MCP: `itx.mcp.connect(...)` connects to an external MCP server and
   exposes that remote server's tools as capability methods.
@@ -129,7 +129,7 @@ the authorization server.
 
 ## itx Scripts
 
-The engine executes JavaScript in isolated dynamic Worker sandboxes through
+itx executes JavaScript in isolated dynamic Worker sandboxes through
 `itx.runScript(...)` — reached from the browser REPL, agents, the CLI
 (`pnpm cli itx run`), and MCP `exec_js`. Every runtime accepts the same
 script shape: a body that runs with `itx` (and `vars`) in scope and ends with
@@ -206,7 +206,7 @@ Preview worker smoke:
 doppler run --project os --config preview_2 -- pnpm e2e -t "OS preview smoke"
 ```
 
-Engine e2e against a deployed preview:
+itx e2e against a deployed preview:
 
 ```bash
 doppler run --project os --config preview_2 -- pnpm e2e e2e/vitest/

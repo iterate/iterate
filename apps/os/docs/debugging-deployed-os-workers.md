@@ -142,7 +142,7 @@ Durable Objects, and other Cloudflare state. Docs:
 The deployed worker name is derived in `packages/shared/src/alchemy/init.ts` as
 `${manifest.slug}-${app.stage}` and then used by `apps/os/alchemy.run.ts` as
 `ctx.workerName`. For production OS, `os-prd` is the ingress router; the app
-worker is `os-prd-app`, the engine API is `os-prd-api`, and each Durable
+worker is `os-prd-app`, the itx api worker is `os-prd-api`, and each Durable
 Object class has its own worker (`os-prd-stream`, `os-prd-itx`,
 `os-prd-project`, `os-prd-agent`, `os-prd-repo`, `os-prd-secret`,
 `os-prd-worker`). See [worker-topology.md](./worker-topology.md). Pick the
