@@ -78,15 +78,18 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
   expect(hello.status).toBe(200);
   expect(await hello.json()).toMatchObject({ app: "hello", projectId });
 
-  // Stateful app via the dotted form: state survives across requests.
-  const first = await fetchApp(`counter.${slug}`, { method: "POST" });
+  // Stateful app: state survives across requests. (The single-label `--`
+  // form is the one platform wildcard certs can serve — dotted
+  // `<app>.<slug>.<base>` needs a second wildcard level and is exercised in
+  // the unit tests + reserved for custom hostnames.)
+  const first = await fetchApp(`counter--${slug}`, { method: "POST" });
   expect(first.status).toBe(200);
   expect(await first.json()).toMatchObject({ app: "counter", count: 1 });
 
-  const second = await fetchApp(`counter.${slug}`, { method: "POST" });
+  const second = await fetchApp(`counter--${slug}`, { method: "POST" });
   expect(await second.json()).toMatchObject({ app: "counter", count: 2 });
 
-  const read = await fetchApp(`counter.${slug}`);
+  const read = await fetchApp(`counter--${slug}`);
   expect(await read.json()).toMatchObject({ app: "counter", count: 2 });
 
   // Unknown apps 404 in the router itself.
