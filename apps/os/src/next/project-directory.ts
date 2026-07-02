@@ -22,7 +22,6 @@ export type ProjectDirectoryRecord = {
   name: string;
 };
 
-const KV_POSITIVE_TTL_SECONDS = 3_600;
 const MEMO_TTL_MS = 15_000;
 
 const slugMemo = new Map<string, { expiresAt: number; record: ProjectDirectoryRecord | null }>();
@@ -63,10 +62,15 @@ export async function readProjectBySlug(
     return cached;
   }
 
-  const record = await lookupAuthWorker(config, slug);
-  memoize(slug, record);
-  if (record) await writeThrough(directory, record);
-  return record;
+  const lookup = await lookupAuthWorker(config, slug);
+  if (!lookup.ok) {
+    // Auth worker unreachable is NOT "no such project": don't memoize the
+    // failure, so the next request retries instead of 404ing for 15s.
+    return null;
+  }
+  memoize(slug, lookup.record);
+  if (lookup.record) await writeThrough(directory, lookup.record);
+  return lookup.record;
 }
 
 /** Fast existence/metadata check by project id (KV only — no auth fallback:
@@ -94,27 +98,38 @@ function memoize(slug: string, record: ProjectDirectoryRecord | null) {
 }
 
 async function writeThrough(directory: KVNamespace, record: ProjectDirectoryRecord) {
+  // No expiration: slugs are immutable and `projects.create` overwrites the
+  // keys it primes, so entries never go stale — and admin-lane projects
+  // (auth mints only an id, no directory row) have NO auth fallback, so an
+  // expiring cache would break their slug ingress after the TTL.
   const body = JSON.stringify(record);
   await Promise.all([
-    directory.put(slugKey(record.slug), body, { expirationTtl: KV_POSITIVE_TTL_SECONDS }),
-    directory.put(projectKey(record.id), body, { expirationTtl: KV_POSITIVE_TTL_SECONDS }),
+    directory.put(slugKey(record.slug), body),
+    directory.put(projectKey(record.id), body),
   ]);
 }
 
 async function lookupAuthWorker(
   config: AppConfig,
   slug: string,
-): Promise<ProjectDirectoryRecord | null> {
-  const record = await createAuthWorkerServiceClient({ config })
-    .internal.project.bySlug({ projectSlug: slug })
-    .catch(() => null);
-  if (!record) return null;
-  return {
-    id: record.id,
-    slug: record.slug,
-    organizationId: record.organizationId ?? null,
-    name: record.name,
-  };
+): Promise<{ ok: true; record: ProjectDirectoryRecord | null } | { ok: false }> {
+  try {
+    const record = await createAuthWorkerServiceClient({ config }).internal.project.bySlug({
+      projectSlug: slug,
+    });
+    if (!record) return { ok: true, record: null };
+    return {
+      ok: true,
+      record: {
+        id: record.id,
+        slug: record.slug,
+        organizationId: record.organizationId ?? null,
+        name: record.name,
+      },
+    };
+  } catch {
+    return { ok: false };
+  }
 }
 
 /**
