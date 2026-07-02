@@ -233,7 +233,9 @@ async function requestRepoCreate(input: {
     eventTypes: ["events.iterate.com/repo/created"],
     predicate: (event) =>
       event.payload?.projectId === input.projectId && event.payload?.path === path,
-    timeoutMs: 60_000,
+    // Generous: repo create clones/seeds a CF Artifacts repo; cold slots under
+    // parallel e2e load have been seen to straggle past 60s.
+    timeoutMs: 120_000,
   });
 
   return new RepoRpcTarget({ auth: input.auth, path, projectId: input.projectId });
@@ -830,7 +832,10 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
       afterOffset: createRequested.offset - 1,
       eventTypes: ["events.iterate.com/project/created"],
       predicate: (event) => event.payload?.projectId === args.projectId,
-      timeoutMs: 60_000,
+      // Generous: the create saga seeds the repo, probes the project worker,
+      // and births the onboarding agent; cold slots under parallel e2e load
+      // have been seen to straggle past 60s.
+      timeoutMs: 120_000,
     });
 
     return new ItxRpcTarget({
