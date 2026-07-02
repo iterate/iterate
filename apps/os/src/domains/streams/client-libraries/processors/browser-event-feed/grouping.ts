@@ -13,7 +13,7 @@
 import type { StreamEvent } from "../../../../../types.ts";
 
 /** Maps an event type to its specific renderer component, or null to fall into the group. */
-export function componentForEventType(type: string): string | null {
+function componentForEventType(type: string): string | null {
   switch (type) {
     case "events.iterate.com/stream/created":
       return "stream.created";
@@ -191,53 +191,4 @@ export function planFeedOps(
 
 export function groupFeedData(eventType: string, events: readonly StreamEvent[]): GroupFeedData {
   return { eventType, events: [...events] };
-}
-
-/** Read grouping metadata back out of a feed_items.data blob. */
-export function parseGroupFeedData(data: unknown): GroupFeedData | undefined {
-  const record = feedDataRecord(data);
-  if (record === undefined || typeof record.eventType !== "string") return undefined;
-  if (!Array.isArray(record.events)) return { eventType: record.eventType, events: [] };
-  const events = record.events.flatMap((entry) => {
-    if (entry === null || typeof entry !== "object") return [];
-    const row = entry as Record<string, unknown>;
-    if (
-      typeof row.offset !== "number" ||
-      typeof row.type !== "string" ||
-      typeof row.createdAt !== "string"
-    ) {
-      return [];
-    }
-    return [
-      {
-        offset: row.offset,
-        type: row.type,
-        createdAt: row.createdAt,
-        // The itx event model types payload as an object record.
-        ...(row.payload !== null && typeof row.payload === "object" && !Array.isArray(row.payload)
-          ? { payload: row.payload as Record<string, unknown> }
-          : {}),
-        ...(row.metadata !== undefined && row.metadata !== null && typeof row.metadata === "object"
-          ? { metadata: row.metadata as Record<string, unknown> }
-          : {}),
-        ...(row.source !== undefined ? { source: row.source as StreamEvent["source"] } : {}),
-        ...(typeof row.idempotencyKey === "string" ? { idempotencyKey: row.idempotencyKey } : {}),
-      },
-    ];
-  });
-  return { eventType: record.eventType, events };
-}
-
-function feedDataRecord(data: unknown): Record<string, unknown> | undefined {
-  if (data === null || typeof data !== "object") {
-    if (typeof data !== "string") return undefined;
-    try {
-      const parsed: unknown = JSON.parse(data);
-      if (parsed === null || typeof parsed !== "object") return undefined;
-      return parsed as Record<string, unknown>;
-    } catch {
-      return undefined;
-    }
-  }
-  return data as Record<string, unknown>;
 }

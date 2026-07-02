@@ -10,6 +10,7 @@
     "typecheck": "tsgo --noEmit"
   },
   "dependencies": {
+    "@iterate-com/shared": "workspace:*",
     "@orpc/client": "^1.13.4",
     "@orpc/contract": "^1.13.5",
     "zod": "^4.1.12"

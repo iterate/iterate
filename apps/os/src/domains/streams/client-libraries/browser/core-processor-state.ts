@@ -20,12 +20,12 @@
 
 import { z } from "zod";
 
-export const BrowserCoreProcessorState = z.object({
+const BrowserCoreProcessorState = z.object({
   createdAt: z.string().optional(),
   maxOffset: z.number().int().min(0).default(0),
 });
 
-export type BrowserCoreProcessorState = z.infer<typeof BrowserCoreProcessorState>;
+type BrowserCoreProcessorState = z.infer<typeof BrowserCoreProcessorState>;
 
 export function parseBrowserCoreProcessorState(value: unknown): BrowserCoreProcessorState {
   return BrowserCoreProcessorState.parse(value);

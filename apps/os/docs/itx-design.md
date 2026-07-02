@@ -2,7 +2,7 @@
 
 > **Status: historical design record (pre-migration).** These are the working
 > notes of the itx design arc that shaped the PRE-itx-v4 engine, which was
-> deleted in the itx-v4 replacement (`apps/os/ITX_V4_MIGRATION_REPORT.md`).
+> deleted in the itx-v4 replacement (PR #1585).
 > File paths and mechanics below refer to that deleted implementation. Kept
 > because it still explains WHY things are shaped the way they are (the
 > address unification, streams-as-authority, self-description) and is

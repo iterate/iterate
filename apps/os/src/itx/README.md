@@ -2,7 +2,7 @@
 
 > **Status: historical design record (pre-migration).** This document
 > describes the PRE-itx-v4 itx kernel, which was deleted in the itx-v4
-> replacement (`apps/os/ITX_V4_MIGRATION_REPORT.md`) — most files it names
+> replacement (PR #1585) — most files it names
 > (`itx.ts`, `handle.ts`, `dial.ts`, `fetch.ts`, `platform-context.ts`, …)
 > no longer exist. It is kept because it explains the design lineage the
 > current implementation inherits (describe(), instructions/types, capabilities as

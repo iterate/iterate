@@ -32,7 +32,7 @@ export const Route = createFileRoute("/_app/itx-repl")({
 });
 
 /** The shared "connecting to itx" fallback both repls suspend behind. */
-export function ItxReplConnecting() {
+function ItxReplConnecting() {
   return (
     <div className="p-4 text-sm text-muted-foreground" data-spinner="true">
       Connecting to itx...

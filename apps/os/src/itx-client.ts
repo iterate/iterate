@@ -7,10 +7,13 @@ import {
 import { withOwnedRpcSession } from "./domains/itx/utils.ts";
 import type { Agent, ItxAuthCredentials, Itx, Session, UnauthenticatedItx } from "./types.ts";
 
-export const DEFAULT_ITX_BASE_URL = "http://127.0.0.1:8791";
+export type ItxWebSocketMessage = [timestamp: number, direction: "in" | "out", data: unknown];
 
 type ConnectItxBaseInput = {
-  baseUrl?: string;
+  /** OS deployment base URL, e.g. the config's APP_CONFIG_BASE_URL. */
+  baseUrl: string;
+  /** Observe every decoded ws frame (e.g. the e2e suite's frame recorder). */
+  onWebSocketMessage?: (message: ItxWebSocketMessage) => void;
 };
 
 type ConnectItxAuthenticatedInput = ConnectItxBaseInput & {
@@ -26,14 +29,50 @@ type ConnectAgentItxInput = ConnectItxAuthenticatedInput & {
   projectId: string;
 };
 
-function websocketUrl(pathname: string, input: { baseUrl?: string }) {
-  const url = new URL(pathname, (input.baseUrl ?? DEFAULT_ITX_BASE_URL).replace(/\/+$/, ""));
+function websocketUrl(pathname: string, input: { baseUrl: string }) {
+  const baseUrl = input.baseUrl?.trim();
+  if (!baseUrl) {
+    throw new Error("connectItx requires a baseUrl (the deployment's APP_CONFIG_BASE_URL).");
+  }
+  const url = new URL(pathname, baseUrl.replace(/\/+$/, ""));
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   return url.toString();
 }
 
-function connect<T extends CapnRpcCompatible<T>>(url: string): CapnRpcStub<T> {
+/** Decode a raw ws frame (outbound string, inbound Buffer/ArrayBuffer) into its parsed JSON value. */
+function parseFrame(data: unknown): unknown {
+  const text =
+    typeof data === "string"
+      ? data
+      : Buffer.isBuffer(data)
+        ? data.toString("utf8")
+        : ArrayBuffer.isView(data)
+          ? Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("utf8")
+          : data instanceof ArrayBuffer
+            ? Buffer.from(data).toString("utf8")
+            : undefined;
+  return text === undefined ? data : JSON.parse(text);
+}
+
+function connect<T extends CapnRpcCompatible<T>>(
+  url: string,
+  onWebSocketMessage?: (message: ItxWebSocketMessage) => void,
+): CapnRpcStub<T> {
   const socket = new WebSocket(url, { handshakeTimeout: 10_000 });
+
+  if (onWebSocketMessage) {
+    const start = Date.now();
+    const record = (direction: "in" | "out", data: unknown) => {
+      onWebSocketMessage([Date.now() - start, direction, parseFrame(data)]);
+    };
+    const send = socket.send.bind(socket);
+    socket.send = ((data: Parameters<WebSocket["send"]>[0], ...args: unknown[]) => {
+      record("out", data);
+      return send(data, ...(args as []));
+    }) as WebSocket["send"];
+    socket.on("message", (data) => record("in", data));
+  }
+
   return newWebSocketRpcSession<T>(
     socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
   );
@@ -47,15 +86,18 @@ type RpcSessionStub<T extends object> = CapnRpcStub<T> & {
 export function connectItx(input: ConnectAgentItxInput): CapnRpcStub<Agent>;
 export function connectItx(input: ConnectProjectItxInput): CapnRpcStub<Itx>;
 export function connectItx(input: ConnectItxAuthenticatedInput): CapnRpcStub<Session>;
-export function connectItx(input?: ConnectItxBaseInput): CapnRpcStub<UnauthenticatedItx>;
+export function connectItx(input: ConnectItxBaseInput): CapnRpcStub<UnauthenticatedItx>;
 export function connectItx(
   input:
     | ConnectAgentItxInput
     | ConnectItxAuthenticatedInput
     | ConnectItxBaseInput
-    | ConnectProjectItxInput = {},
+    | ConnectProjectItxInput,
 ): CapnRpcStub<Agent> | CapnRpcStub<Itx> | CapnRpcStub<Session> | CapnRpcStub<UnauthenticatedItx> {
-  const session = connect<UnauthenticatedItx>(websocketUrl("/api/itx", input));
+  const session = connect<UnauthenticatedItx>(
+    websocketUrl("/api/itx", input),
+    input.onWebSocketMessage,
+  );
   if (!("auth" in input)) return session;
 
   const root = session.authenticate(input.auth) as CapnRpcStub<Session>;

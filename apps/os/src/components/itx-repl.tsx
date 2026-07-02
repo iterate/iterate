@@ -37,7 +37,7 @@ const loadTypeScriptExtensionModules = import.meta.env.SSR
         import("@valtown/codemirror-ts"),
       ]);
 
-export interface ItxReplProps {
+interface ItxReplProps {
   canRun: boolean;
   code: string;
   /** The context this REPL session is connected to. Project-context examples

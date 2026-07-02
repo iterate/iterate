@@ -32,10 +32,15 @@ export default defineConfig({
     // slot, so files are independent. Sequential locally to not hammer a
     // single dev server.
     fileParallelism: process.env.CI === "true",
-    // Generous: e2e runs against live deployments, concurrently with the
-    // Playwright specs in preview CI — cold slots under combined load need
-    // headroom, and slow-but-passing beats flaky.
-    hookTimeout: 240_000,
+    // Cap the stampede: 9 files all first-touching a freshly deployed slot
+    // at once is what pushes cold creates past the (deliberately tight)
+    // saga timeout. See tasks/os-cold-create-latency.md.
+    maxWorkers: 4,
+    // e2e runs against live deployments, concurrently with the Playwright
+    // specs in preview CI. Cold-slot creates measure 3-5s per saga on a fresh
+    // stage under 4-way suite load (tasks/os-cold-create-latency.md); 120s is
+    // ample headroom without letting a wedged saga eat the whole job.
+    hookTimeout: 120_000,
     include: ["./e2e/vitest/**/*.test.ts"],
     passWithNoTests: true,
     setupFiles: ["./e2e/vitest/setup.ts"],
@@ -45,7 +50,7 @@ export default defineConfig({
       [E2E_RUN_SLUG_KEY]: vitestRunSlug,
       [E2E_REPO_ROOT_KEY]: repoRoot,
     },
-    testTimeout: 240_000,
+    testTimeout: 120_000,
     onConsoleLog(log, type, entity) {
       if (entity?.type !== "test") return;
 

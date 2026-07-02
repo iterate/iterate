@@ -15,6 +15,7 @@ import {
   resolveItxAuth,
 } from "../../../../packages/iterate/src/stream-tui/agent-connection.ts";
 import { createTestProject } from "../test-support/create-test-project.ts";
+import { waitForCondition } from "../test-support/wait-for-condition.ts";
 
 const AGENT_PATH = "/agents/onboarding";
 const REPLY_TIMEOUT_MS = 120_000;
@@ -93,19 +94,19 @@ function log(message: string) {
 }
 
 async function waitFor(label: string, timeoutMs: number, check: () => boolean): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (check()) {
-      log(`ok: ${label}`);
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 250);
-      notifyChange = () => {
-        clearTimeout(timer);
-        resolve();
-      };
-    });
-  }
-  throw new Error(`timed out after ${timeoutMs}ms waiting for: ${label}`);
+  await waitForCondition(check, {
+    description: label,
+    intervalMs: 250,
+    timeoutMs,
+    // Event-driven wake: appendEvent notifications short-circuit the interval.
+    sleep: (intervalMs) =>
+      new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, intervalMs);
+        notifyChange = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+      }),
+  });
+  log(`ok: ${label}`);
 }

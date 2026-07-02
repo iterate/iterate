@@ -22,6 +22,9 @@ test("a new user can create a project through the UI form", async ({ page }) => 
   // the agent page's loading state both render two spinner-matching elements
   // at once, tripping its strict-mode isVisible.
   await spinnerWaiter.settings.run({ disabled: true }, async () => {
+    // The cold-slot 30-90s OAuth-callback parks traced back to zombie worker
+    // routes (deploy now verifies + heals them; tasks/os-cold-create-latency.md).
+    // On a healthy slot this renders in ~1s.
     await page.getByRole("button", { name: "Create new project" }).click({ timeout: 30_000 });
 
     await page.getByLabel("Slug").fill(slug, { timeout: 15_000 });

@@ -17,15 +17,19 @@ agent instead. After that, the agent can upload
 and redeploy the slots.
 
 These are bootstrap manifests. They intentionally omit Events API and
-interactivity request URLs so Slack does not need to verify the webhook before
-the preview worker has the app's signing secret. After Doppler upload and
-deploy, save the full manifest from
+interactivity request URLs, App Home, and Agent View so Slack does not need to
+verify the webhook before the preview worker has the app's signing secret.
+After Doppler upload and deploy, save the full manifest from
 [apps/os/docs/slack-preview-app-manifest.md](../apps/os/docs/slack-preview-app-manifest.md)
 to enable event subscriptions and interactivity.
 
+If Slack validation mentions Agent View requiring `message.im` or
+`app_home_opened`, the manifest being pasted is not the bootstrap manifest.
+Use the JSON under the preview heading first, then save the full manifest after
+the deployed worker can verify the request URL.
+
 `preview_2` already has a Slack app. The repo's preview deployment docs
-currently describe active preview slots `preview_1` through `preview_9`; create
-`preview_10` only after that platform slot exists.
+currently describe active preview slots `preview_1` through `preview_9`.
 
 ## preview_1
 
@@ -37,20 +41,6 @@ currently describe active preview slots `preview_1` through `preview_9`; create
     "background_color": "#111827"
   },
   "features": {
-    "app_home": {
-      "home_tab_enabled": false,
-      "messages_tab_enabled": true,
-      "messages_tab_read_only_enabled": false
-    },
-    "agent_view": {
-      "agent_description": "Test iterate's preview-1 Slack agent against the preview OS deployment.",
-      "suggested_prompts": [
-        {
-          "title": "Debug this thread",
-          "message": "!debug"
-        }
-      ]
-    },
     "bot_user": {
       "display_name": "iterate-preview-1",
       "always_online": true
@@ -113,20 +103,6 @@ preview_1:
     "background_color": "#111827"
   },
   "features": {
-    "app_home": {
-      "home_tab_enabled": false,
-      "messages_tab_enabled": true,
-      "messages_tab_read_only_enabled": false
-    },
-    "agent_view": {
-      "agent_description": "Test iterate's preview-3 Slack agent against the preview OS deployment.",
-      "suggested_prompts": [
-        {
-          "title": "Debug this thread",
-          "message": "!debug"
-        }
-      ]
-    },
     "bot_user": {
       "display_name": "iterate-preview-3",
       "always_online": true
@@ -189,20 +165,6 @@ preview_3:
     "background_color": "#111827"
   },
   "features": {
-    "app_home": {
-      "home_tab_enabled": false,
-      "messages_tab_enabled": true,
-      "messages_tab_read_only_enabled": false
-    },
-    "agent_view": {
-      "agent_description": "Test iterate's preview-4 Slack agent against the preview OS deployment.",
-      "suggested_prompts": [
-        {
-          "title": "Debug this thread",
-          "message": "!debug"
-        }
-      ]
-    },
     "bot_user": {
       "display_name": "iterate-preview-4",
       "always_online": true
@@ -265,20 +227,6 @@ preview_4:
     "background_color": "#111827"
   },
   "features": {
-    "app_home": {
-      "home_tab_enabled": false,
-      "messages_tab_enabled": true,
-      "messages_tab_read_only_enabled": false
-    },
-    "agent_view": {
-      "agent_description": "Test iterate's preview-5 Slack agent against the preview OS deployment.",
-      "suggested_prompts": [
-        {
-          "title": "Debug this thread",
-          "message": "!debug"
-        }
-      ]
-    },
     "bot_user": {
       "display_name": "iterate-preview-5",
       "always_online": true
@@ -341,20 +289,6 @@ preview_5:
     "background_color": "#111827"
   },
   "features": {
-    "app_home": {
-      "home_tab_enabled": false,
-      "messages_tab_enabled": true,
-      "messages_tab_read_only_enabled": false
-    },
-    "agent_view": {
-      "agent_description": "Test iterate's preview-6 Slack agent against the preview OS deployment.",
-      "suggested_prompts": [
-        {
-          "title": "Debug this thread",
-          "message": "!debug"
-        }
-      ]
-    },
     "bot_user": {
       "display_name": "iterate-preview-6",
       "always_online": true
@@ -417,20 +351,6 @@ preview_6:
     "background_color": "#111827"
   },
   "features": {
-    "app_home": {
-      "home_tab_enabled": false,
-      "messages_tab_enabled": true,
-      "messages_tab_read_only_enabled": false
-    },
-    "agent_view": {
-      "agent_description": "Test iterate's preview-7 Slack agent against the preview OS deployment.",
-      "suggested_prompts": [
-        {
-          "title": "Debug this thread",
-          "message": "!debug"
-        }
-      ]
-    },
     "bot_user": {
       "display_name": "iterate-preview-7",
       "always_online": true
@@ -493,20 +413,6 @@ preview_7:
     "background_color": "#111827"
   },
   "features": {
-    "app_home": {
-      "home_tab_enabled": false,
-      "messages_tab_enabled": true,
-      "messages_tab_read_only_enabled": false
-    },
-    "agent_view": {
-      "agent_description": "Test iterate's preview-8 Slack agent against the preview OS deployment.",
-      "suggested_prompts": [
-        {
-          "title": "Debug this thread",
-          "message": "!debug"
-        }
-      ]
-    },
     "bot_user": {
       "display_name": "iterate-preview-8",
       "always_online": true
@@ -569,20 +475,6 @@ preview_8:
     "background_color": "#111827"
   },
   "features": {
-    "app_home": {
-      "home_tab_enabled": false,
-      "messages_tab_enabled": true,
-      "messages_tab_read_only_enabled": false
-    },
-    "agent_view": {
-      "agent_description": "Test iterate's preview-9 Slack agent against the preview OS deployment.",
-      "suggested_prompts": [
-        {
-          "title": "Debug this thread",
-          "message": "!debug"
-        }
-      ]
-    },
     "bot_user": {
       "display_name": "iterate-preview-9",
       "always_online": true
@@ -627,84 +519,6 @@ preview_8:
 
 ```text
 preview_9:
-  app_id:
-  client_id:
-  client_secret:
-  signing_secret:
-  team_id:
-  app_dashboard_url:
-```
-
-## preview_10
-
-Only create this app after `preview_10` exists as a real platform slot.
-
-```json
-{
-  "display_information": {
-    "name": "iterate (preview-10)",
-    "description": "iterate Slack agent for preview-10 testing only",
-    "background_color": "#111827"
-  },
-  "features": {
-    "app_home": {
-      "home_tab_enabled": false,
-      "messages_tab_enabled": true,
-      "messages_tab_read_only_enabled": false
-    },
-    "agent_view": {
-      "agent_description": "Test iterate's preview-10 Slack agent against the preview OS deployment.",
-      "suggested_prompts": [
-        {
-          "title": "Debug this thread",
-          "message": "!debug"
-        }
-      ]
-    },
-    "bot_user": {
-      "display_name": "iterate-preview-10",
-      "always_online": true
-    }
-  },
-  "oauth_config": {
-    "redirect_urls": ["https://os.iterate-preview-10.com/api/integrations/slack/callback"],
-    "scopes": {
-      "bot": [
-        "channels:history",
-        "channels:join",
-        "channels:manage",
-        "channels:read",
-        "chat:write",
-        "chat:write.public",
-        "files:read",
-        "files:write",
-        "groups:history",
-        "groups:read",
-        "im:history",
-        "im:read",
-        "im:write",
-        "mpim:history",
-        "mpim:read",
-        "reactions:read",
-        "reactions:write",
-        "users.profile:read",
-        "users:read",
-        "users:read.email",
-        "assistant:write",
-        "conversations.connect:write"
-      ]
-    }
-  },
-  "settings": {
-    "org_deploy_enabled": false,
-    "socket_mode_enabled": false,
-    "token_rotation_enabled": false
-  }
-}
-```
-
-```text
-preview_10:
   app_id:
   client_id:
   client_secret:
