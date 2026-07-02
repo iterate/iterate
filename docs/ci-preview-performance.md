@@ -53,6 +53,11 @@ seconds and run alongside OS.
 - **The chromium install overlaps the warmup.** `playwright install chromium`
   hits no slot, so it runs in the background while the slot warms and the
   vitest lanes start, instead of blocking the specs.
+- **GitHub API calls retry transient 5xx.** The preview script fetches PR
+  context from GitHub's REST API at the start of each step; that API
+  intermittently 5xxs (its "Unicorn!" 503 page failed a run mid-flight). The
+  calls retry with backoff (`withGithubRetry` in `scripts/preview/preview.ts`)
+  so a blip doesn't fail the whole run and force a re-run.
 - **Right-sized runner.** The job is network-bound; Depot metrics showed peak
   CPU ~30% / memory ~10% of a 16-core box, so it runs on 8 cores.
 

@@ -1133,11 +1133,13 @@ async function readPullRequestBody(params: {
     auth: params.githubToken,
   });
   const [owner, repo] = splitRepositoryFullName(params.repositoryFullName);
-  const pullRequest = await octokit.rest.pulls.get({
-    owner,
-    repo,
-    pull_number: params.pullRequestNumber,
-  });
+  const pullRequest = await withGithubRetry("pulls.get (body)", () =>
+    octokit.rest.pulls.get({
+      owner,
+      repo,
+      pull_number: params.pullRequestNumber,
+    }),
+  );
 
   return pullRequest.data.body || "";
 }
@@ -1152,12 +1154,14 @@ async function writePullRequestBody(params: {
     auth: params.githubToken,
   });
   const [owner, repo] = splitRepositoryFullName(params.repositoryFullName);
-  await octokit.rest.pulls.update({
-    body: params.body,
-    owner,
-    repo,
-    pull_number: params.pullRequestNumber,
-  });
+  await withGithubRetry("pulls.update", () =>
+    octokit.rest.pulls.update({
+      body: params.body,
+      owner,
+      repo,
+      pull_number: params.pullRequestNumber,
+    }),
+  );
 }
 
 type EnvironmentConfigLeaseReconcileResult = {
@@ -2065,11 +2069,13 @@ async function selectPreviewAppsForPullRequest(input: {
 
   const octokit = new Octokit({ auth: input.githubToken });
   const [owner, repo] = splitRepositoryFullName(input.repositoryFullName);
-  const comparison = await octokit.rest.repos.compareCommitsWithBasehead({
-    owner,
-    repo,
-    basehead: `${compareBaseSha}...${input.pullRequestHeadSha}`,
-  });
+  const comparison = await withGithubRetry("compareCommits", () =>
+    octokit.rest.repos.compareCommitsWithBasehead({
+      owner,
+      repo,
+      basehead: `${compareBaseSha}...${input.pullRequestHeadSha}`,
+    }),
+  );
   const changedFiles =
     comparison.data.files?.flatMap((file) => (file.filename ? [file.filename] : [])) ?? [];
 
@@ -2282,11 +2288,13 @@ async function resolvePullRequestPreviewContext(params: {
     params.commandEnvironment.GITHUB_REPOSITORY?.trim() || defaultRepositoryFullName;
   const octokit = new Octokit({ auth: params.githubToken });
   const [owner, repo] = splitRepositoryFullName(repositoryFullName);
-  const pullRequest = await octokit.rest.pulls.get({
-    owner,
-    repo,
-    pull_number: params.pullRequestNumber,
-  });
+  const pullRequest = await withGithubRetry("pulls.get (context)", () =>
+    octokit.rest.pulls.get({
+      owner,
+      repo,
+      pull_number: params.pullRequestNumber,
+    }),
+  );
 
   return {
     githubToken: params.githubToken,
@@ -2391,6 +2399,40 @@ async function sleep(ms: number, signal?: AbortSignal) {
 
     signal.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+/**
+ * Retry a GitHub REST call through transient failures. GitHub's API
+ * intermittently returns 5xx/429/408 — its "Unicorn!" 503 page failed a
+ * preview `test` step mid-flight fetching the PR (2026-07-02) — and without a
+ * retry a single blip fails the whole deploy+e2e and costs a full re-run.
+ * Only transient statuses retry with exponential backoff; deterministic 4xx
+ * (404, 422, …) throw immediately.
+ */
+async function withGithubRetry<T>(
+  label: string,
+  call: () => Promise<T>,
+  opts: { attempts?: number; baseDelayMs?: number; signal?: AbortSignal } = {},
+): Promise<T> {
+  const attempts = opts.attempts ?? 4;
+  const baseDelayMs = opts.baseDelayMs ?? 1_000;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await call();
+    } catch (error) {
+      const status = (error as { status?: number } | null)?.status;
+      const transient = status != null && (status >= 500 || status === 429 || status === 408);
+      lastError = error;
+      if (!transient || attempt === attempts) throw error;
+      const delayMs = baseDelayMs * 2 ** (attempt - 1);
+      console.error(
+        `[preview] GitHub ${label} failed with ${status} (attempt ${attempt}/${attempts}); retrying in ${delayMs}ms...`,
+      );
+      await sleep(delayMs, opts.signal);
+    }
+  }
+  throw lastError;
 }
 
 function commandFailureMessage(
