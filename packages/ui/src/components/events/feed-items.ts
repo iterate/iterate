@@ -1,5 +1,5 @@
-import type { StreamEvent } from "@iterate-com/shared/streams/stream-processors";
-import type { Event, StreamPath } from "@iterate-com/shared/streams/types";
+import type { StreamEvent } from "./stream-processor-fold/stream-event.ts";
+import type { Event, StreamPath } from "./types.ts";
 
 export type EventsStreamSourceEvent = Event | StreamEvent;
 

@@ -1,5 +1,4 @@
 import { useMemo } from "react";
-import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { StreamExplorerTreePage } from "~/components/stream-explorer.tsx";
@@ -28,9 +27,9 @@ function ProjectStreamsIndexContent() {
   const params = Route.useParams();
   const navigate = useNavigate();
   const itx = useItx();
-  const source = useMemo(() => (streamPath: StreamPathType) => itx.streams.get(streamPath), [itx]);
+  const source = useMemo(() => (streamPath: string) => itx.streams.get(streamPath), [itx]);
 
-  function openStream(streamPath: StreamPathType) {
+  function openStream(streamPath: string) {
     void navigate({
       to: "/projects/$projectSlug/streams/$",
       params: {

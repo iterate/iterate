@@ -92,9 +92,9 @@ overrides:
   "wrangler": "4.102.0"
 
 patchedDependencies:
-  # minimal-itx-v4 needs ctx.exports loopback RPC types and a non-never RPC
-  # return fallback for opaque stream event payloads. See the app README and
-  # apps/minimal-itx-v4/itx.types.test.ts for the regression proofs.
+  # The itx engine (apps/os/src/next) needs ctx.exports loopback RPC types and
+  # a non-never RPC return fallback for opaque stream event payloads (the
+  # patch originated in minimal-itx-v4, now transplanted into apps/os).
   "@cloudflare/workers-types@4.20260621.1": "patches/@cloudflare__workers-types@4.20260621.1.patch"
   "alchemy@0.83.3": "patches/alchemy@0.83.3.patch"
   "@better-auth/oauth-provider@1.6.9": "patches/@better-auth__oauth-provider@1.6.9.patch"

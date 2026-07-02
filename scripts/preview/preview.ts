@@ -449,21 +449,26 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "/tmp/os-itx-e2e-*",
     ],
     previewTestBaseUrlEnvVar: "OS_BASE_URL",
-    // The itx e2e (node project only — the browser project needs a Playwright
-    // chromium install the preview e2e job doesn't have) reads
+    // The full apps/os e2e Vitest suite (preview smoke + engine + itx lanes)
+    // and the itx e2e (node project only — the browser project needs a
+    // Playwright chromium install the preview e2e job doesn't have) read
     // APP_CONFIG_BASE_URL + APP_CONFIG_ADMIN_API_SECRET from the leased
-    // preview Doppler config, same as the preview smoke. Root Playwright specs
-    // run after those Vitest lanes, using the same preview Doppler config.
+    // preview Doppler config. Root Playwright specs run after those Vitest
+    // lanes, using the same preview Doppler config.
     previewTestCommandArgs: [
       "bash",
       "-c",
       [
         "set -euo pipefail",
         "pnpm --dir ../.. exec playwright install chromium",
-        'pnpm e2e -t "OS preview smoke"',
-        "OS_ITX_E2E_FILE_PARALLELISM=true OS_ITX_E2E_EGRESS_CONCURRENT=true OS_ITX_E2E_LIVE_CONCURRENT=true OS_ITX_E2E_SKIP_MATRIX=true pnpm e2e:itx --project node",
-        "pnpm e2e:itx --project node src/itx/e2e/itx.e2e.test.ts -t 'catalogue example'",
+        // The vitest lanes and the Playwright specs hit the same deployed slot
+        // but provision independent projects, so they run concurrently; the
+        // vitest log is replayed once the specs finish.
+        "(pnpm e2e && pnpm e2e:examples --project node) > /tmp/os-preview-vitest.log 2>&1 & VITEST_PID=$!",
         "pnpm --dir ../.. spec",
+        'VITEST_OK=0; wait "$VITEST_PID" || VITEST_OK=$?',
+        "cat /tmp/os-preview-vitest.log",
+        'exit "$VITEST_OK"',
       ].join("; "),
     ],
   },

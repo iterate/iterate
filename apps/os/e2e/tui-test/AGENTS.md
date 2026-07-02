@@ -15,7 +15,7 @@ still launch the real app CLI:
 ```ts
 program: {
   file: "pnpm",
-  args: ["-w", "iterate", "chat", "..."],
+  args: ["-w", "iterate", "chat", "--project", "prj_...", "--agent-path", "/agents/..."],
 }
 ```
 

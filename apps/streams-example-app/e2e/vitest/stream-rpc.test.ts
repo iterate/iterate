@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_STREAM_PROJECT_ID,
   parseStreamRpcRequest,
-  streamDurableObjectName,
   streamRpcPath,
 } from "../../src/lib/stream-rpc.ts";
 
@@ -32,9 +31,5 @@ describe("stream RPC URL helpers", () => {
       projectId: DEFAULT_STREAM_PROJECT_ID,
       path: "/",
     });
-  });
-
-  it("builds durable object names from projectId and path", () => {
-    expect(streamDurableObjectName({ projectId: "proj_123", path: "/foo" })).toBe("proj_123:/foo");
   });
 });

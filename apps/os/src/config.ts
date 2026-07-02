@@ -2,11 +2,12 @@ import { parseAppConfigFromEnv, publicValue, redacted } from "@iterate-com/share
 import { AppLogsConfig } from "@iterate-com/shared/evlog/types";
 import { z } from "zod";
 
-const SlackScope = z.string().trim().min(1);
-const GoogleScope = z.string().trim().min(1);
 const JSONWebKeySet = z.object({
   keys: z.array(z.looseObject({ kty: z.string().trim().min(1) })),
 });
+
+const SlackScope = z.string().trim().min(1);
+const GoogleScope = z.string().trim().min(1);
 
 export const DEFAULT_SLACK_BOT_SCOPES = [
   "channels:history",
@@ -103,16 +104,8 @@ export const AppConfig = z.object({
         .optional(),
     })
     .default({}),
-  // Extra itx dial allowlist entries for this deployment, merged with the
-  // hardcoded DIALABLE_BINDINGS / DIALABLE_LOOPBACKS defaults (itx-next.md
-  // §2). Config can only WIDEN the lists — the defaults always apply.
-  itx: z
-    .object({
-      dialableBindings: publicValue(z.array(z.string().trim().min(1)).default([])),
-      dialableDurableObjects: publicValue(z.array(z.string().trim().min(1)).default([])),
-      dialableLoopbacks: publicValue(z.array(z.string().trim().min(1)).default([])),
-    })
-    .optional(),
+  /** Deployment-wide Slack bot token fallback used when a project has no
+   * connected Slack workspace secret (codemode Slack examples, dev smokes). */
   slackBotToken: redacted(z.string().trim().min(1)).optional(),
   typeIdPrefix: z
     .string()

@@ -1,33 +1,30 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDownIcon, ChevronRightIcon, RefreshCwIcon } from "lucide-react";
-import {
-  StreamPath,
-  StreamState,
-  type StreamPath as StreamPathType,
-  type StreamState as StreamStateType,
-} from "@iterate-com/shared/streams/types";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { cn } from "@iterate-com/ui/lib/utils";
-import { coreStateToStreamState } from "~/domains/streams/stream-runtime.ts";
-import type { StreamCoreProcessorState } from "~/domains/streams/engine/types.ts";
+import {
+  parseBrowserCoreStreamTreeState,
+  type BrowserCoreStreamTreeState,
+} from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
 
 /**
  * Where tree nodes get their state: path → stream handle. Project pages pass
  * `(path) => itx.streams.get(path)`, the admin explorer
- * `(path) => itx.streams.project(projectId).get(path)`. Each loaded node holds one
- * live `onStateChange` subscription (DECISIONS D20: the first push carries
- * current state, later pushes follow every append), so the tree is LIVE — no
- * query cache, plain component state.
+ * `(path) => itx.projects.get(projectId).streams.get(path)`. Each loaded node
+ * holds one live subscription (the first push carries current state, later
+ * pushes follow every append), so the tree is LIVE — no query cache, plain
+ * component state. The batch's `state` is the server core reduced state, typed
+ * `unknown` on the wire and parsed here.
  */
 type StreamSubscription = { unsubscribe(): unknown };
 
-export type StreamTreeSource = (streamPath: StreamPathType) => {
+export type StreamTreeSource = (streamPath: string) => {
   subscribe(args: {
     events?: boolean;
-    processEventBatch(batch: { state: StreamCoreProcessorState }): unknown;
+    processEventBatch(batch: { state: unknown }): unknown;
   }): Promise<StreamSubscription>;
 };
 
@@ -40,7 +37,7 @@ function disposeStreamSubscription(subscription: StreamSubscription): void {
 type NodeState =
   | { status: "loading" }
   | { status: "error"; message: string }
-  | { status: "live"; state: StreamStateType };
+  | { status: "live"; state: BrowserCoreStreamTreeState };
 
 /**
  * Live state of one stream path. The subscription's initial push paints the
@@ -50,7 +47,7 @@ type NodeState =
 function useLiveStreamState(input: {
   enabled: boolean;
   source: StreamTreeSource;
-  streamPath: StreamPathType;
+  streamPath: string;
 }): { node: NodeState; refresh: () => void } {
   const { enabled, source, streamPath } = input;
   const [node, setNode] = useState<NodeState>({ status: "loading" });
@@ -71,7 +68,7 @@ function useLiveStreamState(input: {
           if (disposed) return;
           setNode({
             status: "live",
-            state: StreamState.parse(coreStateToStreamState(batch.state)),
+            state: parseBrowserCoreStreamTreeState(batch.state),
           });
         },
       })
@@ -98,22 +95,22 @@ function useLiveStreamState(input: {
 export function StreamTreeBrowser({
   currentPath,
   onOpenPath,
-  rootPath = StreamPath.parse("/"),
+  rootPath = "/",
   source,
 }: {
-  currentPath?: StreamPathType;
-  onOpenPath: (streamPath: StreamPathType) => void;
+  currentPath?: string;
+  onOpenPath: (streamPath: string) => void;
   /** The stream the tree is rooted at — defaults to the project root. Pass a
    * subtree (e.g. `/agents`) to scope the browser to it. */
-  rootPath?: StreamPathType;
+  rootPath?: string;
   source: StreamTreeSource;
 }) {
-  const [expandedPaths, setExpandedPaths] = useState<ReadonlySet<StreamPathType>>(
-    () => new Set<StreamPathType>([rootPath]),
+  const [expandedPaths, setExpandedPaths] = useState<ReadonlySet<string>>(
+    () => new Set<string>([rootPath]),
   );
   const root = useLiveStreamState({ enabled: true, source, streamPath: rootPath });
 
-  function toggleExpanded(path: StreamPathType) {
+  function toggleExpanded(path: string) {
     setExpandedPaths((previous) => {
       const next = new Set(previous);
       if (next.has(path)) {
@@ -185,16 +182,16 @@ function StreamTreeNode({
   state,
   streamPath,
 }: {
-  currentPath?: StreamPathType;
+  currentPath?: string;
   depth: number;
-  expandedPaths: ReadonlySet<StreamPathType>;
-  onOpenPath: (streamPath: StreamPathType) => void;
+  expandedPaths: ReadonlySet<string>;
+  onOpenPath: (streamPath: string) => void;
   /** Re-subscribes THIS node's live state. */
   onRefresh: () => void;
-  onToggleExpanded: (streamPath: StreamPathType) => void;
+  onToggleExpanded: (streamPath: string) => void;
   source: StreamTreeSource;
-  state: StreamStateType;
-  streamPath: StreamPathType;
+  state: BrowserCoreStreamTreeState;
+  streamPath: string;
 }) {
   const childPaths = useMemo(
     () => [...state.childPaths].sort((left, right) => left.localeCompare(right)),
@@ -278,13 +275,13 @@ function StreamTreeNode({
 }
 
 function StreamTreeChild(props: {
-  currentPath?: StreamPathType;
+  currentPath?: string;
   depth: number;
-  expandedPaths: ReadonlySet<StreamPathType>;
-  onOpenPath: (streamPath: StreamPathType) => void;
-  onToggleExpanded: (streamPath: StreamPathType) => void;
+  expandedPaths: ReadonlySet<string>;
+  onOpenPath: (streamPath: string) => void;
+  onToggleExpanded: (streamPath: string) => void;
   source: StreamTreeSource;
-  streamPath: StreamPathType;
+  streamPath: string;
 }) {
   const shouldLoad =
     props.expandedPaths.has(props.streamPath) || props.currentPath === props.streamPath;
@@ -343,6 +340,6 @@ function StreamTreeChild(props: {
   return <StreamTreeNode {...props} onRefresh={refresh} state={node.state} />;
 }
 
-function streamPathSegment(path: StreamPathType) {
+function streamPathSegment(path: string) {
   return path === "/" ? "/" : (path.split("/").at(-1) ?? path);
 }

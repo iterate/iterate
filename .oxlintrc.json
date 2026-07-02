@@ -271,7 +271,7 @@
       }
     },
     {
-      "files": ["apps/minimal-itx-v4/src/rpc-targets.ts"],
+      "files": ["apps/os/src/rpc-targets.ts"],
       "rules": {
         "iterate/mechanical-class-impl": "error"
       }

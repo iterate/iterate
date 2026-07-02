@@ -1,11 +1,10 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import type { Event } from "@iterate-com/shared/streams/types";
 import { ActivityIcon, PlusIcon, RefreshCwIcon, RadioIcon } from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import type { ProjectProcessorState } from "~/domains/projects/stream-processors/project/contract.ts";
+import type { ProjectProcessorState, StreamEvent } from "~/types.ts";
 import { useItx, useItxEffect } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/reactivity")({
@@ -84,7 +83,7 @@ function useLiveProjectProcessorSnapshot(): LiveProjectProcessorSnapshot {
   }, []);
 
   const refreshSnapshot = useCallback(async () => {
-    const snapshot = (await itx.project.processor.snapshot()) as ProjectProcessorSnapshot;
+    const snapshot = (await itx.processor.snapshot()) as ProjectProcessorSnapshot;
     commitSnapshot(snapshot);
   }, [commitSnapshot, itx]);
 
@@ -101,14 +100,14 @@ function useLiveProjectProcessorSnapshot(): LiveProjectProcessorSnapshot {
 
       const readSnapshot = async () => {
         const requestId = ++latestSnapshotRequest;
-        const snapshot = (await effectItx.project.processor.snapshot()) as ProjectProcessorSnapshot;
+        const snapshot = (await effectItx.processor.snapshot()) as ProjectProcessorSnapshot;
         if (disposed || requestId !== latestSnapshotRequest) return;
         commitSnapshot(snapshot);
       };
 
       try {
-        const unsubscribe = await effectItx.project.processor.onStateChange(
-          (projectProcessorState) => {
+        const unsubscribe = await effectItx.processor.onStateChange(
+          (projectProcessorState: ProjectProcessorState) => {
             if (disposed) return;
             const parsedState = projectProcessorState as ProjectProcessorState;
             setState((current) => ({
@@ -162,9 +161,9 @@ function useReactivityTestStream(): ReactivityTestStreamState {
     try {
       const subscription = await effectItx.streams.get(REACTIVITY_TEST_STREAM_PATH).subscribe({
         replayAfterOffset: 0,
-        processEventBatch: (batch) => {
+        processEventBatch: (batch: { events: StreamEvent[] }) => {
           if (disposed) return;
-          const events = ((batch.events || []) as unknown as Event[])
+          const events = (batch.events || [])
             .filter(isReactivityTestEvent)
             .map(toReactivityTestEvent);
           setState((current) => ({
@@ -215,9 +214,10 @@ function ProjectReactivityContent() {
   const [action, setAction] = useState<ReactivityActionState>({ status: "idle" });
 
   const projectState = live.state ?? live.snapshot?.state;
-  const phase = projectState?.phase ?? "unknown";
-  const onboarding = projectState?.onboarding ?? "unknown";
-  const projectFacts = projectState?.project;
+  // The next project processor state has no phase/onboarding machine; `created`
+  // is the lifecycle fact, and the create request carries the project identity.
+  const phase = projectState == null ? "unknown" : projectState.created ? "ready" : "pending";
+  const projectId = projectState?.createRequest?.projectId ?? project.id;
   const actionObserved = isActionObserved(action, testStream.events);
   const actionSyncing = action.status === "done" && !actionObserved;
   const actionPending = action.status === "running" || actionSyncing;
@@ -251,10 +251,8 @@ function ProjectReactivityContent() {
     setAction({ kind: "single", marker, status: "running" });
     try {
       await itx.streams.get(REACTIVITY_TEST_STREAM_PATH).append({
-        event: {
-          type: REACTIVITY_TEST_EVENT_TYPE,
-          payload: { marker },
-        },
+        type: REACTIVITY_TEST_EVENT_TYPE,
+        payload: { marker },
       });
       setAction({ kind: "single", marker, status: "done" });
     } catch (error: unknown) {
@@ -269,12 +267,12 @@ function ProjectReactivityContent() {
     setNextActionId(actionId + 1);
     setAction({ kind: "batch", marker, status: "running" });
     try {
-      await itx.streams.get(REACTIVITY_TEST_STREAM_PATH).appendBatch({
-        events: markers.map((eventMarker) => ({
+      await itx.streams.get(REACTIVITY_TEST_STREAM_PATH).append(
+        ...markers.map((eventMarker) => ({
           type: REACTIVITY_TEST_EVENT_TYPE,
           payload: { marker: eventMarker },
         })),
-      });
+      );
       setAction({ kind: "batch", marker, status: "done" });
     } catch (error: unknown) {
       setAction({ error: stringifyError(error), kind: "batch", marker, status: "error" });
@@ -360,14 +358,18 @@ function ProjectReactivityContent() {
                     {phase}
                   </Badge>
                 </dd>
-                <dt className="text-muted-foreground">Onboarding</dt>
-                <dd data-testid="reactivity-onboarding">{onboarding}</dd>
+                <dt className="text-muted-foreground">Created</dt>
+                <dd data-testid="reactivity-onboarding">
+                  {projectState == null ? "unknown" : String(projectState.created)}
+                </dd>
                 <dt className="text-muted-foreground">Project ID</dt>
                 <dd className="truncate font-mono text-xs" data-testid="reactivity-project-id">
-                  {projectFacts?.projectId ?? project.id}
+                  {projectId}
                 </dd>
-                <dt className="text-muted-foreground">Default host</dt>
-                <dd className="truncate font-mono text-xs">{projectFacts?.defaultHost ?? "-"}</dd>
+                <dt className="text-muted-foreground">Streams</dt>
+                <dd className="truncate font-mono text-xs">
+                  {projectState == null ? "-" : String(projectState.streams.length)}
+                </dd>
               </dl>
             </section>
 
@@ -528,12 +530,12 @@ function stringifyError(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-function isReactivityTestEvent(event: Event) {
-  const payload = event.payload as { marker?: unknown };
+function isReactivityTestEvent(event: StreamEvent) {
+  const payload = (event.payload ?? {}) as { marker?: unknown };
   return event.type === REACTIVITY_TEST_EVENT_TYPE && typeof payload.marker === "string";
 }
 
-function toReactivityTestEvent(event: Event): ReactivityTestEvent {
+function toReactivityTestEvent(event: StreamEvent): ReactivityTestEvent {
   const payload = event.payload as { marker: string };
   return {
     createdAt: event.createdAt,

@@ -19,12 +19,9 @@
 // the proxy only needs to protect protocol-level names on intermediate path
 // segments.
 
-import type { PathCall } from "./types.ts";
-
-// The ONE calling convention's shapes (PathCall, PathCallable) are declared
-// in types.ts — the design of record — and re-exported here for runtime
-// importers.
-export type { PathCall, PathCallable } from "./types.ts";
+// The ONE calling convention's shapes.
+export type PathCall = { path: string[]; args: unknown[] };
+export type PathCallable = { call(input: PathCall): unknown };
 
 /**
  * The optional self-description method the core probes at provide time

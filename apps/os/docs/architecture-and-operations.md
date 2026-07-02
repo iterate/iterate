@@ -5,28 +5,32 @@ short README.
 
 ## Runtime Shape
 
-OS deploys as many small Workers (see [worker-topology.md](./worker-topology.md)):
-a tiny ingress router owns all routes, the dashboard app is its own worker,
-and every Durable Object class is its own worker. Two kinds of traffic are
-dispatched on hostname and path:
+OS deploys as ten small Workers (see [worker-topology.md](./worker-topology.md)):
+a tiny ingress router owns all routes, the dashboard app and the itx api
+are their own workers, and every Durable Object class is its own worker.
+Traffic is dispatched on hostname and path:
 
-1. Project ingress: requests to project hosts (`<slug>.iterate.app`, custom
-   hostnames) route to the project's callable, never the dashboard.
-2. The OS dashboard: a TanStack Start app, itx endpoint, integration
-   callbacks, debug routes, and inbound MCP.
+1. Itx lanes: `/api/itx[...]`, `/__itx_e2e/*`, `/prj_<id>/...`, and project
+   platform hosts (`<slug>.iterate.app`, `<slug>.localhost:<port>`) forward to
+   the api worker (`src/workers/api.ts`). Project-host requests route to
+   the project's seeded worker, never the dashboard.
+2. The MCP hostname (`mcp.iterate.com`) rewrites to the app worker's
+   `/api/mcp` route.
+3. Everything else on the OS host lands on the app worker
+   (`src/workers/app.ts`): the TanStack Start dashboard (SSR, server
+   functions, assets) wrapped in one evlog "wide event" per request.
 
-The ingress worker (`src/workers/ingress.ts`) rewrites the MCP hostname to the
-app worker's `/api/mcp` route and forwards ingress-rule matches to the
-project worker; everything else lands on the app worker (`src/workers/app.ts`),
-whose evlog-wrapped pipeline tries handlers in order before falling through to
-TanStack Start: docs markdown, `/api/itx`, and the `/__durable-objects` debug proxy. Runtime
-config is parsed from `env` per request (never at module scope — isolates can
-outlive binding-only deploys).
+The routing decision is one shared function (`src/ingress.ts`), run by
+the ingress worker in production and by the app worker in local dev (where the
+browser talks to vite directly). Runtime config is parsed from `env` per
+request, never at module scope — isolates can outlive binding-only deploys.
 
 The TanStack handler receives a `RequestContext` (`src/request-context.ts`)
-with request-scoped state only: `config`, `db` (sqlfu over D1), `log`,
-`rawRequest`, `waitUntil`, `workerExports`. Worker bindings are NOT threaded
-through context — server code imports `env` from `cloudflare:workers`.
+with request-scoped state only: `config`, `log`, `rawRequest`, `waitUntil`.
+Worker bindings are NOT threaded through context — server code imports `env`
+from `cloudflare:workers`.
+
+## Authentication
 
 Authentication uses the Iterate Auth Worker (no Clerk; see
 [ADR 0001](../../../docs/adr/0001-replace-clerk-with-auth-worker.md)).
@@ -36,12 +40,19 @@ resolves the caller into a `principal`: the admin API secret, an OAuth bearer
 token, or a session cookie. Users without an organization are redirected to
 the auth worker's project-access flow.
 
-Project-scoped browser surfaces use itx handles. `/api/itx/:projectIdOrSlug`
-authenticates the caller, resolves project slug or ID to the stable Project ID,
-checks project access (signed Auth project claims; admin API callers bypass
-for operator work), and returns a project-scoped capability handle. D1 tables
-such as `projects` and ingress rules are queryable projections, not the
-lifecycle authority.
+itx has its own auth adapter (`src/auth.ts`) behind
+`authenticate()` on `/api/itx` — credential lanes and the project-directory
+claims fallback are described in [src/README.md](../src/README.md).
+
+## The Project Directory
+
+OS has no database. The auth worker is the source of truth for which projects
+exist, their slugs, and who can access them; OS fronts it with the
+`PROJECT_DIRECTORY` KV namespace (`src/project-directory.ts`) so hot
+paths — project-host ingress, dashboard slug resolution — never pay an
+auth-worker roundtrip on a cache hit. Project creation registers with the auth
+worker and primes the cache. Everything else durable lives in Durable Object
+SQLite, as event streams.
 
 ## API And Routing
 
@@ -52,10 +63,9 @@ The main app routes (`src/routes/`):
                                    project -> /projects/:projectSlug,
                                    otherwise -> /projects
 /projects
-/projects/:projectSlug             ProjectHomePage (lifecycle state + stream view)
-/projects/:projectSlug/streams[/*]
-/projects/:projectSlug/agents, /integrations, /mcp, /reactivity, /repl,
-                                   /repos, /settings
+/projects/:projectSlug             ProjectHomePage (lifecycle state + agent chat)
+/projects/:projectSlug/agents[/streams/*], /reactivity, /repl, /repos,
+                                   /secrets, /settings, /streams[/*]
 /itx-repl
 /new-project
 /admin[/projects, /repl, /streams]
@@ -65,79 +75,42 @@ The main app routes (`src/routes/`):
 There are no organization routes; organization membership and selection live
 in the auth worker.
 
-The browser talks to itx over `/api/itx`: `/api/itx` is the global handle,
-`/api/itx/:projectIdOrSlug` is a project handle over Cap'n Web/WebSocket, and
-`POST /api/itx/run` runs an itx script in a loader isolate. The catch-all
-TanStack API route `src/routes/api.$.ts` handles integration callbacks under
-`/api/*`; otherwise it returns 404. Public browser config is loaded through the
-TanStack server function in `src/lib/public-route-config.ts`.
-
-See [`../src/itx/README.md`](../src/itx/README.md) and
-[itx-next.md](./itx-next.md).
-
-## Project Ingress
-
-OS classifies hostnames before TanStack Start and dashboard authentication:
-
-```text
-request hostname
-  -> D1 exact-host ingress lookup (src/ingress/lookup.ts, scoped by
-     APP_CONFIG_PROJECT_HOSTNAME_BASES)
-    -> project-host itx handling (src/itx/fetch.ts)
-    -> dispatch the rule's Fetch Callable (src/ingress/host-routing.ts)
-  -> OS app fallback
-```
-
-Project-owned ingress mutations go through the Project Durable Object: it
-records desired state locally and writes global D1 projection rows for the hot
-Worker path. Durable Object SQLite and D1 are not one atomic transaction, so
-repair/reconciliation is explicit follow-up work.
+The browser talks to itx over `/api/itx`: one Cap'n Web WebSocket per
+context, managed by `src/itx/itx-react.tsx` (`useItx`/`useItxQuery`/
+`useItxEffect`). `POST /api/itx` serves one-shot HTTP batch sessions (used by
+the project-create server function and MCP `exec_js`).
+`/api/itx/admin-cookie` is the browser admin-auth bridge (WebSockets cannot
+set headers). The app worker keeps only `/api/mcp` and `/api/health`; the
+catch-all `src/routes/api.$.ts` returns 404 (integration callbacks return
+with the integrations domain).
 
 ## Streams
 
-`StreamDurableObject` is supplied by the OS streams domain. It is addressed by
-`{ projectId, path }`, which means OS stream paths are project-local, such as
-`/agents/default` or `/integrations/slack`.
+`StreamDurableObject` (`src/domains/streams/`) is addressed by
+`{ projectId, path }`; stream paths are project-local, such as
+`/agents/default`. `projectId: null` (encoded as the reserved `global.iterate`
+DO-name host) is for deployment-wide streams.
 
 The stream explorer lives at `/projects/:projectSlug/streams`. Detail pages
 are splat routes: `/streams/foo/bar` opens stream path `/foo/bar` inside the
-resolved Project ID.
-
-OS deploys the stream Durable Object from the stream worker script and binds
-`STREAM` cross-script where callers need stream access.
-
-## Durable Object Utilities
-
-Durable Objects should use the shared Iterate Durable Object base from
-`@iterate-com/shared/durable-object-utils/iterate-durable-object` unless there
-is a specific reason not to. That base composes the runtime core adapters,
-lifecycle hooks, D1 object catalog projection, local SQLite inspector, and
-local KV inspector.
-
-The worker exposes an admin-token-gated debug proxy that forwards into a
-Durable Object's fetch handler:
-
-```text
-/__durable-objects/<kind>/<name>/<path>
-```
-
-where `<kind>` is one of the Durable Object kinds handled by
-`src/debug-routes.ts` (for example `project` and `stream`). Other debug routes
-there: `/__debug/append-chain`,
-`/__debug/seed-iterate-config-base`, and `/api/itx/openapi-fixture`.
+resolved Project ID. The browser keeps a local mirror of subscribed streams
+(OPFS-backed; `src/domains/streams/client-libraries/browser/`) running
+the same `StreamProcessor` contracts as the server.
 
 ## MCP Directionality
 
 OS has two MCP flows:
 
 - Inbound MCP: the app worker's TanStack Start route at `/api/mcp` is the MCP
-  server. `APP_CONFIG_MCP__BASE_URL` is the canonical OAuth resource URL and
-  can point at a dedicated MCP hostname (for example `https://mcp.iterate.com`),
-  which ingress rewrites to the same Start route. The OS app-host `/api/mcp`
-  route is also valid. The handler authenticates each request, creates a fresh
-  in-memory MCP server, and exposes `exec_js`.
-- Outbound MCP: an itx capability can connect to an external MCP server and
-  expose that remote server's tools through the same path-call surface.
+  server (`src/domains/inbound-mcp-server/`). `APP_CONFIG_MCP__BASE_URL`
+  is the canonical OAuth resource URL and can point at a dedicated MCP
+  hostname (for example `https://mcp.iterate.com`), which ingress rewrites to
+  the same route. The OS app-host `/api/mcp` route is also valid. The handler
+  authenticates each request, creates a fresh in-memory MCP server, and
+  exposes `exec_js`, which runs the code through itx over a one-shot
+  capnweb batch.
+- Outbound MCP: `itx.mcp.connect(...)` connects to an external MCP server and
+  exposes that remote server's tools as capability methods.
 
 Keep these separate in naming and code. Inbound MCP may execute itx scripts
 through `exec_js`, but it is not itself an outbound MCP capability.
@@ -157,33 +130,17 @@ the authorization server.
 ## itx Scripts
 
 itx executes JavaScript in isolated dynamic Worker sandboxes through
-`POST /api/itx/run`, the browser REPL, agents, and MCP `exec_js`. The runner
-accepts one script shape, `async (itx) => { ... }`; the MCP and HTTP surfaces
-wrap their own variables into that shape before execution.
+`itx.runScript(...)` — reached from the browser REPL, agents, the CLI
+(`pnpm cli itx run`), and MCP `exec_js`. Every runtime accepts the same
+script shape: a body that runs with `itx` (and `vars`) in scope and ends with
+an explicit `return` (see `src/itx/examples.ts`, the catalogue that doubles
+as the REPL Examples panel and the cross-runtime e2e matrix).
 
-Capabilities are visible through `itx.describe()`. Project contexts inherit
-the platform project capabilities from `src/itx/platform-context.ts`, including
-`itx.fetch`, `itx.streams`, `itx.secrets`, `itx.integrations`, `itx.repos`,
-`itx.agents`, `itx.workspace`, `itx.worker`, and `itx.ai`. Agent and MCP
-contexts add their own capabilities, such as `itx.slack`, `itx.chat`,
-`itx.debug`, and `itx.gmail`.
-
-## Database
-
-sqlfu is the database source of truth:
-
-- `src/db/definitions.sql` declares the desired schema.
-- `src/db/migrations/*.sql` is the migration history.
-- `src/db/queries/*.sql` contains checked-in application queries.
-- `src/db/queries/.generated` and `src/db/migrations/.generated` are generated
-  by `pnpm sqlfu:generate`.
-
-Use sqlfu for schema changes and migrations. Do not hand-write migration
-history outside the sqlfu workflow.
-
-Persisted records should make scope explicit with first-class columns (for
-example a project ID column), not hide ownership or routing scope inside JSON
-metadata or callable props.
+Capabilities are visible through `itx.describe()`. The built-ins
+(`itx.streams`, `itx.repos`, `itx.secrets`, `itx.agents`, `itx.workers`,
+`itx.worker`, `itx.egress`, `itx.mcp`, `itx.openapi`, `itx.ai`; `itx.agent` /
+`itx.chat` on agent scopes) plus mounted capabilities are catalogued in
+[`src/types.ts`](../src/types.ts).
 
 ## Runtime Config
 
@@ -200,11 +157,9 @@ APP_CONFIG_ITERATE_AUTH__ISSUER=https://auth.iterate.com/api/auth
 APP_CONFIG_ITERATE_AUTH__CLIENT_ID=...
 APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET=...
 APP_CONFIG_ADMIN_API_SECRET=...
+APP_CONFIG_OPEN_AI_API_KEY=...
 APP_CONFIG_PROJECT_HOSTNAME_BASES=["iterate.app"]
 APP_CONFIG_LOGS__STDOUT_FORMAT=pretty
-APP_CONFIG_SLACK_BOT_TOKEN=xoxb-...
-APP_CONFIG_INTEGRATIONS__SLACK='{"oauthClientId":"123.456","oauthClientSecret":"...","webhookSigningSecret":"..."}'
-APP_CONFIG_INTEGRATIONS__GOOGLE='{"oauthClientId":"...","oauthClientSecret":"..."}'
 ```
 
 Fields marked `redacted(...)` in the schema parse into `Redacted` wrappers
@@ -212,10 +167,8 @@ that must be unwrapped with `.exposeSecret()` and never serialize. Fields
 marked `publicValue(...)` are the only ones exposed to the browser, through
 the TanStack server function in `src/lib/public-route-config.ts`.
 
-`integrations.slack` and `integrations.google` are grouped JSON values in
-Doppler so each provider's OAuth client values update atomically. Slack uses
-one OAuth client for OS; the Slack team ID claimed during OAuth decides which
-project receives signed Slack webhooks.
+Slack/Google integration config returns with the integrations domain
+(itx-v4 migration Phase 12).
 
 ## Auth Client Sync
 
@@ -234,14 +187,15 @@ It requires `SERVICE_AUTH_TOKEN` (run through Doppler for the auth project).
 ## Deployment
 
 `alchemy.run.ts` defines the deployment: the full worker topology
-([worker-topology.md](./worker-topology.md)) sharing one D1 (`os-db`), the
-Durable Object namespaces (each owned by its worker, bound cross-script
-everywhere else), a `WorkerLoader`, the Workers AI binding, and routes on the
-ingress worker for the app base URL, the MCP base URL, the event-docs host,
-and each project hostname base. Fresh stages bootstrap with an automatic
-two-pass deploy (cross-script bindings to not-yet-existing scripts are wired
-by the second pass). Deploys must name the Doppler config explicitly, for
-example `doppler run --project os --config preview_9 -- pnpm run deploy` or
+([worker-topology.md](./worker-topology.md)), the Durable Object namespaces
+(each owned by its worker, bound cross-script everywhere else), the
+`PROJECT_DIRECTORY` KV namespace, a `WorkerLoader`, the Workers AI binding,
+Cloudflare Artifacts for repos, and routes on the ingress worker for the app
+base URL, the MCP base URL, and each project hostname base. Fresh stages
+bootstrap with an automatic two-pass deploy (cross-script bindings to
+not-yet-existing scripts are wired by the second pass). Deploys must name the
+Doppler config explicitly, for example
+`doppler run --project os --config preview_2 -- pnpm run deploy` or
 `doppler run --project os --config prd -- pnpm run deploy`.
 
 ## Smoke Tests
@@ -252,25 +206,19 @@ Preview worker smoke:
 doppler run --project os --config preview_2 -- pnpm e2e -t "OS preview smoke"
 ```
 
+itx e2e against a deployed preview:
+
+```bash
+doppler run --project os --config preview_2 -- pnpm e2e e2e/vitest/
+```
+
+One-turn real agent smoke ([agent-smoke-testing.md](./agent-smoke-testing.md)):
+
+```bash
+doppler run --project os --config preview_2 -- pnpm cli itx agent-smoke \
+  --project <prj_id> --agent-path /agents/onboarding --message "Reply with exactly: pong"
+```
+
 Browser smoke with `agent-browser`:
 
 - [Preview Agent Browser Smoke](./preview-agent-browser-smoke.md)
-
-MCP `exec_js` smoke:
-
-```bash
-OS_E2E_MCP_URL=https://mcp.iterate-preview-2.com \
-doppler run --project os --config preview_2 -- pnpm e2e -t "project MCP exec_js"
-```
-
-The MCP smoke accepts either:
-
-- `OS_E2E_MCP_BEARER_TOKEN`: an Iterate Auth OAuth access token for a user
-  with access to the project.
-- `OS_E2E_ADMIN_API_SECRET`, `OS_ADMIN_API_SECRET`, or
-  `APP_CONFIG_ADMIN_API_SECRET`: an OS admin token for deployment-level smoke
-  tests that do not need user/project membership setup.
-
-When `APP_CONFIG_SLACK_BOT_TOKEN` is present in the test process, the MCP
-script test discovers `#slack-agent-e2e-test` and includes a real
-`itx.slack.chat.postMessage(...)` call.

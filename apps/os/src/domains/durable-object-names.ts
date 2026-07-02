@@ -1,66 +1,199 @@
-import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
+// durable-object-names.ts — the ONE place a Durable Object name is formatted and
+// parsed. Every domain Durable Object name is `{projectId}.iterate{path}` with
+// optional query props, parsed as a URL:
+//
+//   prj_123.iterate/repos/repo_123
+//   prj_123.iterate/repos/repo_123?branch=main
+//   global.iterate/repos/iterate-config-base
+//
+// Because the projectId is always the hostname prefix, a name alone tells you
+// which project the object belongs to — that is the whole basis of the access
+// model.
+//
+// By default, parsed and stringified names must be project-scoped. Pass
+// `allowNullProjectId: true` only for deployment-wide/shared resources. In that
+// mode, `projectId: null` encodes as the reserved `global.iterate` host and
+// parses back to null. This is used most importantly for streams that are shared
+// across projects.
 
-export const NULL_DURABLE_OBJECT_PROJECT_ID = "__null__";
+const MAX_DURABLE_OBJECT_NAME_BYTES = 256;
+const GLOBAL_DURABLE_OBJECT_HOST = "global";
+const DURABLE_OBJECT_HOST_SUFFIX = ".iterate";
 
-export type DurableObjectNameParts = {
-  projectId: string | null;
-  path: StreamPathType | string;
+type DurableObjectName = string;
+
+type ProjectDurableObjectAddressInput = {
+  projectId: string;
+  path: string;
+  props?: Record<string, string>;
 };
 
-export type ParsedDurableObjectName = {
+type DurableObjectAddressInput = {
   projectId: string | null;
-  path: StreamPathType;
+  path: string;
+  props?: Record<string, string>;
 };
 
-/**
- * Normalizes the null project sentinel used in encoded Durable Object names.
- *
- * Examples:
- * - `null` -> `null`
- * - `"__null__"` -> `null`
- * - `"proj_123"` -> `"proj_123"`
- */
-export function normalizeDurableObjectProjectId(projectId: string | null): string | null {
-  return projectId === NULL_DURABLE_OBJECT_PROJECT_ID ? null : projectId;
+export type DurableObjectAddress = {
+  projectId: string | null;
+  path: string;
+  props: Record<string, string>;
+};
+
+type ProjectDurableObjectAddress = {
+  projectId: string;
+  path: string;
+  props: Record<string, string>;
+};
+
+type AllowNullProjectIdOptions = {
+  /**
+   * Allows deployment-wide/shared Durable Object names.
+   *
+   * When stringifying, `projectId: null` becomes `global.iterate`. When parsing,
+   * `global.iterate` becomes `projectId: null`. Use this only for resources that
+   * intentionally span projects, especially shared streams.
+   */
+  allowNullProjectId: true;
+};
+
+type DurableObjectNameCodecType = {
+  /** Formats the project-scoped Durable Object name `{projectId}.iterate{path}`. */
+  stringify(input: ProjectDurableObjectAddressInput): DurableObjectName;
+  /** Formats a name that may be shared across projects via `global.iterate`. */
+  stringify(
+    input: DurableObjectAddressInput,
+    options: AllowNullProjectIdOptions,
+  ): DurableObjectName;
+  /** Parses a project-scoped Durable Object name. `global.iterate` is rejected by default. */
+  parse(name: DurableObjectName): ProjectDurableObjectAddress;
+  /** Parses a name that may be shared across projects via `global.iterate`. */
+  parse(name: DurableObjectName, options: AllowNullProjectIdOptions): DurableObjectAddress;
+};
+
+/** Normalizes a path to a leading-slash form (`""` → `"/"`, `"x"` → `"/x"`). */
+export function normalizePath(path: string): string {
+  return path === "" ? "/" : path.startsWith("/") ? path : `/${path}`;
 }
 
 /**
- * Encodes an OS Durable Object name from the canonical object form.
+ * The immediate parent scope path, or `null` at the root.
  *
- * Examples:
- * - `{ projectId: "proj_123", path: "/repos/project" }` -> `proj_123:/repos/project`
- * - `{ projectId: null, path: "/repos/iterate-config-base" }` -> `__null__:/repos/iterate-config-base`
- * - `{ projectId: "__null__", path: "/repos/iterate-config-base" }` -> `__null__:/repos/iterate-config-base`
+ * Itx capability scopes form a hierarchy along the path (`/agents/slack/ts-124`
+ * is enclosed by `/agents/slack`, then `/agents`, then `/`). Capability
+ * resolution chains up this hierarchy, so each ITX Durable Object needs to know
+ * only its immediate parent; the recursion up to `/` (which has no parent, and
+ * therefore terminates the chain) emerges from each scope forwarding one hop.
  */
-export function formatDurableObjectName(input: DurableObjectNameParts): string {
-  const projectId =
-    normalizeDurableObjectProjectId(input.projectId) ?? NULL_DURABLE_OBJECT_PROJECT_ID;
-  if (projectId.includes(":")) {
-    throw new Error(
-      `Durable Object projectId must not contain ":", got ${JSON.stringify(projectId)}.`,
-    );
-  }
-  return `${projectId}:${StreamPath.parse(input.path)}`;
+export function parentScopePath(path: string): string | null {
+  const normalized = normalizePath(path);
+  if (normalized === "/") return null;
+  const parent = normalized.slice(0, normalized.lastIndexOf("/"));
+  return parent === "" ? "/" : parent;
 }
 
-/**
- * Parses an OS Durable Object name encoded by {@link formatDurableObjectName}.
- *
- * Examples:
- * - `proj_123:/agents/onboarding` -> `{ projectId: "proj_123", path: "/agents/onboarding" }`
- * - `__null__:/repos/iterate-config-base` -> `{ projectId: null, path: "/repos/iterate-config-base" }`
- */
-export function parseDurableObjectName(name: string): ParsedDurableObjectName {
-  const colon = name.indexOf(":");
-  if (colon <= 0 || name[colon + 1] !== "/") {
+function assertLegalDurableObjectName(name: string): void {
+  if (name.length === 0) {
+    throw new Error("Durable Object name must be non-empty.");
+  }
+  const byteLength = new TextEncoder().encode(name).byteLength;
+  if (byteLength > MAX_DURABLE_OBJECT_NAME_BYTES) {
     throw new Error(
-      `Durable Object name must be "{projectId}:{path}", got ${JSON.stringify(name)}.`,
+      `Durable Object name must be at most ${MAX_DURABLE_OBJECT_NAME_BYTES} bytes, got ${byteLength}.`,
+    );
+  }
+}
+
+function assertProjectId(projectId: string): void {
+  if (projectId === "") {
+    throw new Error(`Durable Object projectId must be non-empty, got "${projectId}".`);
+  }
+  if (projectId === GLOBAL_DURABLE_OBJECT_HOST) {
+    throw new Error(
+      `"${GLOBAL_DURABLE_OBJECT_HOST}" is reserved for deployment-wide Durable Objects; use projectId null instead.`,
+    );
+  }
+  if (/[/:?#]/.test(projectId) || projectId.includes(".")) {
+    throw new Error(
+      `Durable Object projectId must not contain URL delimiter characters, got "${projectId}".`,
+    );
+  }
+}
+
+function parseAsDurableObjectUrl(name: string): URL {
+  try {
+    return new URL(name.includes("://") ? name : `https://${name}`);
+  } catch {
+    throw new Error(`Durable Object name must be a valid URL-shaped name, got "${name}".`);
+  }
+}
+
+function stringifyDurableObjectName(input: ProjectDurableObjectAddressInput): DurableObjectName;
+function stringifyDurableObjectName(
+  input: DurableObjectAddressInput,
+  options: AllowNullProjectIdOptions,
+): DurableObjectName;
+function stringifyDurableObjectName(
+  { projectId, path, props = {} }: DurableObjectAddressInput,
+  options?: Partial<AllowNullProjectIdOptions>,
+) {
+  if (projectId === null && !options?.allowNullProjectId) {
+    throw new Error(
+      "Durable Object name must have a projectId; pass allowNullProjectId for shared resources.",
     );
   }
 
-  const encodedProjectId = name.slice(0, colon);
+  const hostPrefix = projectId ?? GLOBAL_DURABLE_OBJECT_HOST;
+  if (projectId !== null) assertProjectId(projectId);
+
+  const base = `${hostPrefix}${DURABLE_OBJECT_HOST_SUFFIX}${normalizePath(path)}`;
+  const query = new URLSearchParams(props).toString();
+  const name = query ? `${base}?${query}` : base;
+  assertLegalDurableObjectName(name);
+  return name;
+}
+
+function parseDurableObjectName(name: DurableObjectName): ProjectDurableObjectAddress;
+function parseDurableObjectName(
+  name: DurableObjectName,
+  options: AllowNullProjectIdOptions,
+): DurableObjectAddress;
+function parseDurableObjectName(
+  name: DurableObjectName,
+  options?: Partial<AllowNullProjectIdOptions>,
+): DurableObjectAddress {
+  assertLegalDurableObjectName(name);
+
+  const url = parseAsDurableObjectUrl(name);
+  const host = url.hostname;
+  if (!host.endsWith(DURABLE_OBJECT_HOST_SUFFIX) || host === DURABLE_OBJECT_HOST_SUFFIX.slice(1)) {
+    throw new Error(
+      `Durable Object name host must be "{projectId}${DURABLE_OBJECT_HOST_SUFFIX}", got "${host}".`,
+    );
+  }
+
+  const hostPrefix = host.slice(0, -DURABLE_OBJECT_HOST_SUFFIX.length);
+  const projectId = hostPrefix === GLOBAL_DURABLE_OBJECT_HOST ? null : hostPrefix;
+  if (projectId !== null) assertProjectId(projectId);
+  if (projectId === null && !options?.allowNullProjectId) {
+    throw new Error(
+      `Durable Object name must have a projectId; pass allowNullProjectId for shared resources. Got global name "${name}".`,
+    );
+  }
+
+  const props: Record<string, string> = {};
+  url.searchParams.forEach((value, key) => {
+    props[key] = value;
+  });
+
   return {
-    projectId: normalizeDurableObjectProjectId(encodedProjectId),
-    path: StreamPath.parse(name.slice(colon + 1)),
+    projectId,
+    path: normalizePath(url.pathname),
+    props,
   };
 }
+
+export const DurableObjectNameCodec: DurableObjectNameCodecType = {
+  stringify: stringifyDurableObjectName,
+  parse: parseDurableObjectName,
+};
