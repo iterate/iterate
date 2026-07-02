@@ -19,6 +19,7 @@ import { secretErrorResponse, secretReferencePathsFromHeaders } from "../secrets
 import { SlackProcessor } from "../integrations/slack-processor-implementation.ts";
 import { eyesReactionTargetFromWebhookPayload } from "../integrations/slack-agent-processor-implementation.ts";
 import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
+import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 
 export class ProjectDurableObject extends DurableObject<Env> {

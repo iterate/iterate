@@ -43,7 +43,7 @@ export type ConnectionRuntimeState = {
  * persisted; the callback and pump state live in the `open()` closure, so this
  * is just metrics counters plus two control verbs.
  */
-export type Connection = {
+type Connection = {
   readonly subscriptionType: StreamSubscriptionType;
   readonly startedAt: string;
   /** Highest offset delivered to the callback; also the pump's resume cursor. */
@@ -59,7 +59,7 @@ export type Connection = {
 };
 
 /** Everything `StreamConnections.open` needs to start one delivery connection. */
-export type OpenConnectionArgs = {
+type OpenConnectionArgs = {
   subscriptionKey: string;
   subscriptionType: StreamSubscriptionType;
   processEventBatch: ProcessEventBatch;

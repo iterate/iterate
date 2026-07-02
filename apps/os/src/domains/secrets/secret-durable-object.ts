@@ -10,6 +10,7 @@ import {
 } from "../streams/stream-processor-host.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "./crypto.ts";
+import { SecretProcessorContract } from "./secret-processor-contract.ts";
 import { SecretProcessor } from "./secret-processor-implementation.ts";
 import {
   requestWithSecretHeaders,
