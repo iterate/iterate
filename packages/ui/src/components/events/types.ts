@@ -7,7 +7,7 @@
  * components actually consume; any itx event envelope that carries these
  * fields is compatible.
  */
-import type { StreamEvent } from "./stream-processor-fold/stream-event.ts";
+import type { StreamEvent } from "./stream-event.ts";
 
 /** Stream identifier in leading-slash form (`"/"`, `"/agents/foo"`). */
 export type StreamPath = string;
