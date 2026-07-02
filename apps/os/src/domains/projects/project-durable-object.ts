@@ -7,7 +7,11 @@ import {
   StreamProcessorRpcTarget,
   StreamRpcTarget,
 } from "../../rpc-targets.ts";
-import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "../../types.ts";
+import type {
+  EgressHttpsProxy,
+  ProjectEgressIntercept,
+  ProjectEgressInterceptor,
+} from "../../types.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   createStreamProcessorHost,
@@ -20,12 +24,26 @@ import { SlackProcessorContract } from "../integrations/slack-processor-contract
 import { SlackProcessor } from "../integrations/slack-processor-implementation.ts";
 import { eyesReactionTargetFromWebhookPayload } from "../integrations/slack-agent-processor-implementation.ts";
 import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
+import { runHttpsThroughProxy } from "./egress-https-proxy.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 
+// The one live egress mode the client installed. `retained` holds the client's
+// RPC stubs alive across turns (a bare stub would be collected after the
+// installing call returns); it is disposed when the mode is replaced or released.
+type ProjectEgressMode =
+  | {
+      kind: "https-proxy";
+      retained: ReturnType<typeof deepRetainRpcStubs<EgressHttpsProxy>>;
+    }
+  | {
+      kind: "interceptor";
+      retained: ReturnType<typeof deepRetainRpcStubs<ProjectEgressInterceptor>>;
+    };
+
 export class ProjectDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
-  #egressInterceptor?: ReturnType<typeof deepRetainRpcStubs<ProjectEgressInterceptor>>;
+  #egressMode?: ProjectEgressMode;
   readonly #processorHost = createStreamProcessorHost(this.ctx, {
     stream: new StreamRpcTarget({
       auth: trustedInternalAuthContext(),
@@ -99,11 +117,21 @@ export class ProjectDurableObject extends DurableObject<Env> {
     return new StreamProcessorRpcTarget(this.#projectProcessor);
   }
 
+  /**
+   * The single decision point for all project egress. Routing, once an
+   * interceptor has been ruled out:
+   *
+   *                      no proxy installed      proxy installed
+   *   no secret header   direct fetch()          proxy (already materialized)
+   *   one secret header  Secret DO substitutes   Secret DO substitutes, then proxy
+   *
+   * An interceptor short-circuits the whole table: it runs first, before any
+   * secret substitution (so it only sees getSecret(...) placeholders), and owns
+   * the response.
+   */
   async fetch(request: Request): Promise<Response> {
-    if (this.#egressInterceptor !== undefined) {
-      // Egress interceptors run before secret substitution. They must never
-      // receive raw secret material, only getSecret(...) placeholders.
-      return await this.#egressInterceptor.value(request);
+    if (this.#egressMode?.kind === "interceptor") {
+      return await this.#egressMode.retained.value(request);
     }
 
     let secretPaths: string[];
@@ -112,35 +140,68 @@ export class ProjectDurableObject extends DurableObject<Env> {
     } catch {
       return secretErrorResponse("secret_reference_required", 400);
     }
-    if (secretPaths.length === 0) return fetch(request);
     if (secretPaths.length > 1) {
       return secretErrorResponse("multiple_secret_paths_not_supported", 400);
     }
 
-    return this.env.SECRET.getByName(
+    // An installed proxy carries *every* outbound request (secret or not), so a
+    // listener sees all egress as encrypted bytes — symmetric with an
+    // interceptor seeing every request.
+    const proxy: EgressHttpsProxy | undefined =
+      this.#egressMode?.kind === "https-proxy" ? this.#egressMode.retained.value : undefined;
+
+    // No secret to substitute: the request is already fully materialized.
+    if (secretPaths.length === 0) {
+      if (proxy !== undefined) return runHttpsThroughProxy(request, proxy);
+      return fetch(request);
+    }
+
+    // One secret: the Secret DO substitutes the real material, then dispatches —
+    // directly, or through the proxy (which only ever sees the resulting TLS).
+    const secret = this.env.SECRET.getByName(
       DurableObjectNameCodec.stringify({
         projectId: this.#name.projectId,
         path: secretPaths[0]!,
       }),
-    ).fetch(request);
+    );
+    if (proxy !== undefined) return secret.fetchThroughProxy(request, proxy);
+    return secret.fetch(request);
   }
 
   interceptEgress(handler: ProjectEgressInterceptor): ProjectEgressIntercept {
-    if (typeof handler !== "function")
+    if (typeof handler !== "function") {
       throw new Error("project egress interceptor must be a function");
-    const retained = deepRetainRpcStubs(handler);
-    if (this.#egressInterceptor !== undefined) {
-      console.warn("project egress interceptor overwritten", { projectId: this.#name.projectId });
-      this.#egressInterceptor[Symbol.dispose]();
     }
-    this.#egressInterceptor = retained;
+    return this.#installEgressMode({ kind: "interceptor", retained: deepRetainRpcStubs(handler) });
+  }
+
+  useEgressHttpsProxy(proxy: EgressHttpsProxy): ProjectEgressIntercept {
+    return this.#installEgressMode({ kind: "https-proxy", retained: deepRetainRpcStubs(proxy) });
+  }
+
+  /**
+   * Install one live egress mode and return the handle that owns it. Last writer
+   * wins — any previous mode's retained RPC stubs are disposed. The handle's
+   * release clears this exact mode only if it is still current, so a stale
+   * handle can never tear down a newer mode.
+   */
+  #installEgressMode(mode: ProjectEgressMode): ProjectEgressIntercept {
+    if (this.#egressMode !== undefined) {
+      console.warn("project egress mode overwritten", {
+        nextKind: mode.kind,
+        previousKind: this.#egressMode.kind,
+        projectId: this.#name.projectId,
+      });
+      this.#egressMode.retained[Symbol.dispose]();
+    }
+    this.#egressMode = mode;
 
     return new ProjectEgressInterceptRpcTarget({
       ctx: this.ctx,
       release: () => {
-        if (this.#egressInterceptor !== retained) return;
-        retained[Symbol.dispose]();
-        this.#egressInterceptor = undefined;
+        if (this.#egressMode !== mode) return;
+        mode.retained[Symbol.dispose]();
+        this.#egressMode = undefined;
       },
     });
   }

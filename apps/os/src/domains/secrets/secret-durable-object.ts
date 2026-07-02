@@ -2,7 +2,8 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
-import type { SecretDescription, SecretUpdateInput } from "../../types.ts";
+import type { EgressHttpsProxy, SecretDescription, SecretUpdateInput } from "../../types.ts";
+import { runHttpsThroughProxy } from "../projects/egress-https-proxy.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   createStreamProcessorHost,
@@ -80,9 +81,29 @@ export class SecretDurableObject extends DurableObject<Env> {
     };
   }
 
+  // Two egress dispatches sharing one substitution path (#fetchWithMaterializedSecret);
+  // they differ only in how the materialized request leaves.
+
+  /** Substitute the secret, then send the request over the platform's own network. */
   async fetch(request: Request): Promise<Response> {
     // TODO: support websocket upgrade requests here once egress substitution
     // needs non-HTTP fetches. Keeping this on fetch() preserves that path.
+    return this.#fetchWithMaterializedSecret(request, (materializedRequest) =>
+      fetch(materializedRequest),
+    );
+  }
+
+  /** Substitute the secret, then send it as TLS through the client's egress proxy. */
+  async fetchThroughProxy(request: Request, proxy: EgressHttpsProxy): Promise<Response> {
+    return this.#fetchWithMaterializedSecret(request, (materializedRequest) =>
+      runHttpsThroughProxy(materializedRequest, proxy),
+    );
+  }
+
+  async #fetchWithMaterializedSecret(
+    request: Request,
+    dispatch: (request: Request) => Promise<Response>,
+  ): Promise<Response> {
     const requestedPaths = secretReferencePathsFromHeaders(request.headers);
     if (requestedPaths.length > 1) {
       return secretErrorResponse("multiple_secret_paths_not_supported", 400);
@@ -113,7 +134,7 @@ export class SecretDurableObject extends DurableObject<Env> {
         url: request.url,
       },
     });
-    return fetch(
+    return dispatch(
       requestWithSecretHeaders({
         material,
         path: this.#name.path,

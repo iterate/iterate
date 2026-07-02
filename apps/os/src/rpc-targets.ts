@@ -1458,6 +1458,10 @@ export class ProjectEgressRpcTarget extends RpcTarget implements ProjectEgress {
   intercept(handler: Parameters<ProjectEgress["intercept"]>[0]) {
     return projectStub(env.PROJECT, this.props.projectId).interceptEgress(handler);
   }
+
+  useEgressHttpsProxy(proxy: Parameters<ProjectEgress["useEgressHttpsProxy"]>[0]) {
+    return projectStub(env.PROJECT, this.props.projectId).useEgressHttpsProxy(proxy);
+  }
 }
 
 /**
