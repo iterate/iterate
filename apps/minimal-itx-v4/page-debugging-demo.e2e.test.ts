@@ -98,7 +98,14 @@ describe("page debugging demo", () => {
       await expectText(targetPage.locator("#__itx_page_debugging_widget"), "Share a screenshot");
       await expectText(targetPage.locator("#__itx_page_debugging_widget"), "Stop sharing");
 
-      await demoPage.locator("#agentClick").click();
+      // Agent controls are script buttons: pick one (by index), then Run.
+      // 0=Snapshot, 1=Screenshot, 2=Click counter, 3=Fill message.
+      const runAgentScript = async (index: number) => {
+        await demoPage.locator("#agentExamples button").nth(index).click();
+        await demoPage.locator("#agentRun").click();
+      };
+
+      await runAgentScript(2);
       await targetPage.waitForFunction(
         () => document.querySelector("#counter")?.textContent === "1",
       );
@@ -108,7 +115,7 @@ describe("page debugging demo", () => {
       );
       expect(await demoPage.locator("#agentOutput").textContent()).toContain('"counter": "1"');
 
-      await demoPage.locator("#agentFill").click();
+      await runAgentScript(3);
       await targetPage.waitForFunction(
         () => document.querySelector<HTMLInputElement>("#message")?.value === "hello from ITX",
       );
@@ -122,13 +129,13 @@ describe("page debugging demo", () => {
         '"message": "hello from ITX"',
       );
 
-      await demoPage.locator("#agentSnapshot").click();
+      await runAgentScript(0);
       await demoPage.waitForFunction(() =>
         document.querySelector("#agentOutput")?.textContent?.includes("Increment counter"),
       );
       expect(await demoPage.locator("#agentOutput").textContent()).toContain("Increment counter");
 
-      await demoPage.locator("#agentScreenshot").click();
+      await runAgentScript(1);
       await demoPage.waitForFunction(() =>
         document
           .querySelector<HTMLImageElement>("#screenshotPreview")
@@ -152,7 +159,7 @@ describe("page debugging demo", () => {
         document.querySelector("#targetStatus")?.textContent?.includes("Snippet connected"),
       );
 
-      await demoPage.locator("#agentClick").click();
+      await runAgentScript(2);
       await demoPage.waitForFunction(() => document.querySelector("#counter")?.textContent === "1");
       expect(await demoPage.locator("#counter").textContent()).toBe("1");
 

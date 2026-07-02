@@ -808,33 +808,42 @@ function htmlResponse(body: string): Response {
 function landingHtml(origin: string): string {
   const playgroundUrl = escapeHtml(new URL("/playground", origin).toString());
   const pageDebuggingUrl = escapeHtml(new URL("/page-debugging", origin).toString());
-  const clientModuleUrl = escapeHtml(new URL("/page-debugging/client.mjs", origin).toString());
-  const blindRelayCode = escapeHtml(
+  const interceptCode = escapeHtml(
     [
-      "// A client process lends the project a TCP dialer capability:",
-      "using handle = await project.egress.useBlindRelayForSecretEgress(relay);",
-      "",
-      "// From then on the worker sends every outbound request through that",
-      "// socket as raw TLS. It substitutes secrets first, so the relay only",
-      "// ever moves ciphertext — never the request, body, or secret:",
-      'await itx.egress.fetch(new Request("https://api.example.com/me", {',
-      "  headers: {",
-      "    authorization: 'Bearer getSecret({ path: \"/secrets/api-token\" })',",
+      "// Intercept: you receive each outbound request BEFORE the worker",
+      "// substitutes secrets. Headers still hold getSecret(...) placeholders,",
+      "// not real values. You can read it, change it, or answer it yourself.",
+      "using handle = await project.egress.intercept(async (request) => {",
+      "  console.log(request.method, request.url);",
+      "  console.log([...request.headers]); // authorization: Bearer getSecret({ path })",
+      "  return await fetch(request);        // or return your own Response",
+      "});",
+    ].join("\n"),
+  );
+  const relayCode = escapeHtml(
+    [
+      "// TCP relay: you can't see the traffic at all. You only dial sockets",
+      "// and shuttle encrypted TLS bytes. The worker substitutes the REAL",
+      "// secret and terminates TLS itself — so the real token flows out",
+      "// through YOUR machine and the remote server sees YOUR IP address,",
+      "// but you only ever move ciphertext.",
+      "using handle = await project.egress.useBlindRelayForSecretEgress({",
+      "  async dial({ host, port }) {",
+      "    const socket = net.connect({ host, port });",
+      "    return { read(), write(bytes), close() }; // move raw TLS records",
       "  },",
-      "}));",
-      "",
-      "// `relay` is any object shaped like:",
-      "//   { dial({ host, port }) => { read(), write(bytes), close() } }",
+      "});",
     ].join("\n"),
   );
   const pageDebuggingCode = escapeHtml(
     [
-      "// A browser tab lends the project a live DOM handle by mounting PageTools:",
+      "// A browser tab lends the project a live DOM handle by mounting PageTools",
+      "// at a capability path (here: debugPage):",
       `const { connectPageTools } = await import("${new URL("/page-debugging/client.mjs", origin).toString()}");`,
-      "await connectPageTools({ connectUrl, token });",
+      'await connectPageTools({ connectUrl, token, path: ["debugPage"] });',
       "",
-      "// The worker (or an agent) resolves the debugPage capability and drives",
-      "// the tab remotely, using Testing-Library-style queries:",
+      "// The worker (or an agent) resolves that path and drives the tab",
+      "// remotely, using Testing-Library-style queries:",
       "const page = agentProject.debugPage;",
       'await page.getByRole("button", { name: "Increment counter" }).click();',
       'await page.getByLabelText("Message").fill("hello from ITX");',
@@ -865,7 +874,10 @@ function landingHtml(origin: string): string {
       margin: 0 0 20px;
     }
     .card h2 { margin: 0 0 4px; font-size: 20px; }
-    .card p { margin: 0 0 14px; color: #4f5a68; }
+    .card > p { margin: 0 0 14px; color: #4f5a68; }
+    .mode { margin: 18px 0 0; }
+    .mode h3 { margin: 0 0 6px; font-size: 15px; }
+    .mode p { margin: 0 0 8px; color: #4f5a68; font-size: 14px; }
     .card a.open {
       display: inline-block;
       background: #1463ff;
@@ -874,7 +886,7 @@ function landingHtml(origin: string): string {
       padding: 8px 14px;
       border-radius: 6px;
       font-size: 14px;
-      margin-bottom: 14px;
+      margin-bottom: 6px;
     }
     pre {
       margin: 0;
@@ -885,36 +897,55 @@ function landingHtml(origin: string): string {
       overflow: auto;
       font: 12.5px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
     }
-    .url { color: #647084; font-size: 13px; word-break: break-all; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .url { color: #647084; font-size: 13px; word-break: break-all; margin: 6px 0 14px; }
   </style>
 </head>
 <body>
   <main>
     <h1>ITX capability demos</h1>
-    <p class="lede">Two proofs of concept for one idea: a client process lends the project a
-      <strong>live capability</strong>, and the worker (or an agent running inside it) calls that
-      capability back over RPC as if it were local. One demo lends a TCP socket; the other lends a
-      browser tab.</p>
+    <p class="lede">A project runs on the worker and makes outbound HTTPS calls on your behalf,
+      substituting your real secrets into them at the last moment (an
+      <code>authorization: Bearer getSecret({ path })</code> header becomes the real token just before
+      it leaves). These demos show ways a client process on your own machine can plug into that
+      project — lending it a live capability the worker calls back over RPC.</p>
 
     <section class="card">
-      <h2>Blind relay egress</h2>
-      <p>The client provides a <code>dial()</code> TCP capability. The worker materializes secrets and
-        runs TLS itself, pushing only encrypted records through the client's socket — so the relay
-        moves bytes but never sees the request, body, or substituted secret.</p>
-      <a class="open" href="${playgroundUrl}">Open the playground →</a>
+      <h2>Hooking a project's egress</h2>
+      <p>There are two ways to sit in front of a project's outbound requests. They differ in exactly
+        one thing: how much you get to see.</p>
+
+      <div class="mode">
+        <h3>1. Intercept egress — you see everything, before substitution</h3>
+        <p>You receive each outbound request as a normal HTTP request, <em>before</em> secrets are
+          substituted. You see the URL, method, body, and headers — but the secret headers still hold
+          <code>getSecret(...)</code> placeholders, never the real values. You can inspect it, rewrite
+          it, or return a response yourself.</p>
+        <pre>${interceptCode}</pre>
+      </div>
+
+      <div class="mode">
+        <h3>2. Offer a TCP relay — you see nothing but run the proxy</h3>
+        <p>You hand the project a socket dialer and become a plain HTTPS forward proxy. You cannot see
+          any egress traffic: the worker substitutes the real secret and runs TLS itself, so only
+          encrypted bytes pass through you. The upshot is that the real secret leaves from
+          <strong>your</strong> computer's IP — the remote server sees the proxy, not the worker —
+          while the relay only ever moves ciphertext.</p>
+        <pre>${relayCode}</pre>
+      </div>
+
+      <p style="margin:18px 0 0"><a class="open" href="${playgroundUrl}">Open the egress playground →</a></p>
       <div class="url">${playgroundUrl}</div>
-      <pre>${blindRelayCode}</pre>
     </section>
 
     <section class="card">
       <h2>Page debugging</h2>
-      <p>A browser tab provides a <code>debugPage()</code> DOM capability by mounting PageTools over
-        Cap'n Web. The worker, or the demo page acting as an agent, drives that tab remotely: snapshot
-        the DOM, click, fill, screenshot.</p>
-      <a class="open" href="${pageDebuggingUrl}">Open the page debugging demo →</a>
-      <div class="url">${pageDebuggingUrl}</div>
+      <p>A browser tab lends the project a live DOM handle by mounting PageTools at a capability path.
+        The worker, or the demo page acting as an agent, then drives that tab remotely — snapshot the
+        DOM, click, fill, screenshot — by resolving that path.</p>
       <pre>${pageDebuggingCode}</pre>
-      <p class="url" style="margin-top:12px">Client module: ${clientModuleUrl}</p>
+      <p style="margin:18px 0 0"><a class="open" href="${pageDebuggingUrl}">Open the page debugging demo →</a></p>
+      <div class="url">${pageDebuggingUrl}</div>
     </section>
   </main>
 </body>

@@ -199,13 +199,14 @@ function generateSnippet(input: {
 }) {
   return [
     "(async () => {",
+    `  // Mounts PageTools on this tab as the project capability at path: ${input.path.join(".")}`,
     `  const { connectPageTools } = await import(${JSON.stringify(input.clientModuleUrl)});`,
     "  window.__itxPageDebugging = await connectPageTools({",
     `    connectUrl: ${JSON.stringify(input.connectUrl)},`,
     `    projectId: ${JSON.stringify(input.projectId)},`,
     `    revokeUrl: ${JSON.stringify(input.revokeUrl)},`,
     `    token: ${JSON.stringify(input.token)},`,
-    `    path: ${JSON.stringify(input.path)},`,
+    `    path: ${JSON.stringify(input.path)}, // capability mount path`,
     "  });",
     `  console.log("[itx] PageTools provided at ${input.path.join(".")}. Keep window.__itxPageDebugging while debugging.");`,
     "})();",
@@ -348,6 +349,43 @@ function htmlResponse(body: string) {
   });
 }
 
+function pageDebuggingExamples() {
+  return [
+    {
+      title: "Snapshot the page",
+      description:
+        "Returns a JSON accessibility tree: every role, name, and value the page exposes.",
+      code: `async (page) => {\n  return await page.snapshot();\n}`,
+    },
+    {
+      title: "Take a screenshot",
+      description: "Renders the target page to an image and returns it as base64.",
+      code: `async (page) => {\n  return await page.screenshot({ mode: "auto", maxWidth: 960 });\n}`,
+    },
+    {
+      title: "Click the counter button",
+      description:
+        "Finds the button by its accessible name, clicks it, then reads the counter back.",
+      code: `async (page) => {\n  await page.getByRole("button", { name: "Increment counter" }).click();\n  return { counter: await page.getByTestId("counter").textContent() };\n}`,
+    },
+    {
+      title: "Fill the message field",
+      description: "Types into the Message input, then reads the value back.",
+      code: `async (page) => {\n  await page.getByLabelText("Message").fill("hello from ITX");\n  return { message: await page.getByLabelText("Message").inputValue() };\n}`,
+    },
+    {
+      title: "Read the title and URL",
+      description: "Reads the target document's title and location.",
+      code: `async (page) => {\n  return { title: await page.title(), url: await page.url() };\n}`,
+    },
+    {
+      title: "Describe the message input",
+      description: "Returns a structured description of one matched element.",
+      code: `async (page) => {\n  return await page.getByLabelText("Message").describe();\n}`,
+    },
+  ];
+}
+
 function pageDebuggingDemoHtml() {
   return `<!doctype html>
 <html lang="en">
@@ -472,7 +510,32 @@ function pageDebuggingDemoHtml() {
         font-size: 24px;
         font-weight: 750;
       }
+      .agent-grid {
+        display: grid;
+        grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+        gap: 16px;
+        align-items: start;
+        margin-top: 12px;
+      }
+      .agent-examples {
+        display: grid;
+        gap: 8px;
+        align-content: start;
+      }
+      button.agent-example {
+        display: grid;
+        gap: 3px;
+        text-align: left;
+        font-weight: 500;
+        padding: 9px 11px;
+        min-height: 0;
+      }
+      button.agent-example strong { font-weight: 650; }
+      button.agent-example span { color: #627d98; font-size: 12px; }
+      button.agent-example.active { border-color: #0f766e; background: #effcfa; }
+      .agent-editor { display: grid; gap: 10px; min-width: 0; }
       @media (max-width: 860px) {
+        .agent-grid { grid-template-columns: 1fr; }
         .grid { grid-template-columns: 1fr; }
         main { width: min(100vw - 24px, 680px); padding-top: 20px; }
       }
@@ -509,7 +572,7 @@ function pageDebuggingDemoHtml() {
           <h2>Live Demo Script</h2>
           <ol>
             <li>Copy the snippet, open any page in this browser, and paste it into that page's DevTools console.</li>
-            <li>Click <strong>Take Screenshot</strong>, <strong>Snapshot</strong>, <strong>Click counter</strong>, or <strong>Fill message</strong>.</li>
+            <li>Run one of the ITX scripts below. Each shows the exact code it runs against the page.</li>
             <li>Show that the calls crossed the worker and came back into the target page.</li>
             <li>Use <strong>Run in this tab</strong> only for the no-DevTools shortcut.</li>
           </ol>
@@ -524,22 +587,26 @@ function pageDebuggingDemoHtml() {
       </div>
 
       <section style="margin-top: 20px">
-        <h2>Agent-Side Controls</h2>
+        <h2>Drive the page with ITX scripts</h2>
         <p>
-          These buttons open a separate capnweb socket to <code>${CONNECT_PATH}</code> with the same HMAC token.
-          They call the mounted <code>debugPage</code> capability from this control page, even when the snippet
-          was pasted into a different tab.
+          Each script receives <code>page</code> — the <code>PageTools</code> capability mounted at path
+          <code id="mountPath">debugPage</code> — over a capnweb socket to <code>${CONNECT_PATH}</code>, and calls
+          it from here even if the snippet was pasted into another tab. Pick one to see exactly what it runs, edit
+          if you like, then <strong>Run</strong>.
         </p>
-        <div class="target-row">
-          <button id="agentSnapshot" type="button">Snapshot</button>
-          <button id="agentScreenshot" type="button">Take Screenshot</button>
-          <button id="agentClick" type="button">Click counter</button>
-          <button id="agentFill" type="button">Fill message</button>
-          <button id="agentDescribe" type="button">Describe input</button>
+        <div class="agent-grid">
+          <div class="agent-examples" id="agentExamples"></div>
+          <div class="agent-editor">
+            <div class="target-row" style="justify-content: space-between">
+              <strong id="agentTitle">Snapshot the page</strong>
+              <button id="agentRun" class="primary" type="button">Run</button>
+            </div>
+            <textarea id="agentCode" spellcheck="false" aria-label="ITX script"></textarea>
+            <img id="screenshotPreview" class="screenshot-preview" alt="Latest target page screenshot" />
+            <p id="screenshotMeta" class="status"></p>
+            <pre id="agentOutput" aria-live="polite">Generate and run the snippet first, then run a script.</pre>
+          </div>
         </div>
-        <img id="screenshotPreview" class="screenshot-preview" alt="Latest target page screenshot" />
-        <p id="screenshotMeta" class="status"></p>
-        <pre id="agentOutput" aria-live="polite">Generate and run the snippet first.</pre>
       </section>
     </main>
     <script type="module">
@@ -566,6 +633,7 @@ function pageDebuggingDemoHtml() {
         session = await response.json();
         snippetEl.value = session.snippet;
         snippetStatus.textContent = "Snippet ready. Copy it into a target page, or run it here for the shortcut.";
+        document.querySelector("#mountPath").textContent = session.path.join(".");
         agentOutput.textContent = JSON.stringify({
           connectUrl: session.connectUrl,
           path: session.path,
@@ -603,12 +671,64 @@ function pageDebuggingDemoHtml() {
         return capability;
       }
 
-      async function runAgentAction(label, action) {
+      const agentExamples = ${JSON.stringify(pageDebuggingExamples())};
+
+      const agentCode = document.querySelector("#agentCode");
+      const agentTitle = document.querySelector("#agentTitle");
+      const agentExamplesEl = document.querySelector("#agentExamples");
+
+      function escapeHtml(value) {
+        return String(value)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;");
+      }
+
+      // Long base64 blobs (screenshots) would swamp the output, so truncate them.
+      function truncateLong(key, value) {
+        if (typeof value === "string" && value.length > 200) {
+          return value.slice(0, 120) + "…(" + value.length + " chars)";
+        }
+        return value;
+      }
+
+      function selectAgentExample(index) {
+        agentCode.value = agentExamples[index].code;
+        agentTitle.textContent = agentExamples[index].title;
+        for (const [buttonIndex, button] of [...agentExamplesEl.querySelectorAll("button")].entries()) {
+          button.classList.toggle("active", buttonIndex === index);
+        }
+      }
+
+      agentExamples.forEach((example, index) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "agent-example";
+        button.innerHTML =
+          "<strong>" + escapeHtml(example.title) + "</strong><span>" + escapeHtml(example.description) + "</span>";
+        button.addEventListener("click", () => selectAgentExample(index));
+        agentExamplesEl.append(button);
+      });
+
+      async function runAgentScript() {
+        screenshotPreview.style.display = "none";
+        screenshotMeta.textContent = "";
         try {
-          agentOutput.textContent = label + "...";
+          agentOutput.textContent = "Running against the live page capability...";
           const page = await pageCapability();
-          const result = await action(page);
-          agentOutput.textContent = JSON.stringify(result, null, 2);
+          const script = (0, eval)("(" + agentCode.value + ")");
+          if (typeof script !== "function") {
+            throw new Error("Script must be an async function, e.g. async (page) => { ... }");
+          }
+          const result = await script(page);
+          if (result && result.base64 && result.mime) {
+            screenshotPreview.src = "data:" + result.mime + ";base64," + result.base64;
+            screenshotPreview.style.display = "block";
+            screenshotMeta.textContent =
+              "Screenshot " + (result.width || "?") + "x" + (result.height || "?") + " via " + (result.mode || "?") + ".";
+          }
+          agentOutput.textContent = JSON.stringify(result, truncateLong, 2);
         } catch (error) {
           agentOutput.textContent = String(error && error.stack ? error.stack : error);
         }
@@ -617,38 +737,9 @@ function pageDebuggingDemoHtml() {
       document.querySelector("#generateSnippet").addEventListener("click", generateSession);
       document.querySelector("#copySnippet").addEventListener("click", copySnippet);
       document.querySelector("#runHere").addEventListener("click", runSnippetHere);
-      document.querySelector("#agentSnapshot").addEventListener("click", () =>
-        runAgentAction("Snapshot", (page) => page.snapshot()));
-      document.querySelector("#agentScreenshot").addEventListener("click", () =>
-        runAgentAction("Screenshot", async (page) => {
-          const image = await page.screenshot({ mode: "auto", maxWidth: 960, quality: 0.65 });
-          if (image.error) return image;
-          screenshotPreview.src = "data:" + image.mime + ";base64," + image.base64;
-          screenshotPreview.style.display = "block";
-          screenshotMeta.textContent =
-            "Latest screenshot: " + image.width + "x" + image.height + " via " + image.mode + ".";
-          return {
-            height: image.height,
-            mime: image.mime,
-            mode: image.mode,
-            width: image.width,
-            base64: image.base64 ? image.base64.slice(0, 80) + "..." : undefined,
-            base64Length: image.base64?.length ?? 0,
-          };
-        }));
-      document.querySelector("#agentClick").addEventListener("click", () =>
-        runAgentAction("Clicking", async (page) => {
-          await page.getByRole("button", { name: "Increment counter" }).click();
-          return { counter: await page.getByTestId("counter").textContent() };
-        }));
-      document.querySelector("#agentFill").addEventListener("click", () =>
-        runAgentAction("Filling", async (page) => {
-          await page.getByLabelText("Message").fill("hello from ITX");
-          return { message: await page.getByLabelText("Message").inputValue() };
-        }));
-      document.querySelector("#agentDescribe").addEventListener("click", () =>
-        runAgentAction("Describing", (page) => page.getByLabelText("Message").describe()));
+      document.querySelector("#agentRun").addEventListener("click", runAgentScript);
 
+      selectAgentExample(0);
       await generateSession();
     </script>
   </body>
