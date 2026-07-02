@@ -4,6 +4,7 @@ import { os, protectedMiddleware, serviceMiddleware } from "../orpc.ts";
 import { auth, createProjectIngressToken as createSignedProjectIngressToken } from "../../auth.ts";
 import { parseProjectMetadata, parseStringArray } from "../../db/helpers.ts";
 import {
+  countProjects,
   disableOAuthClientById,
   getOAuthClientByClientId,
   getOAuthClientByReferenceId,
@@ -15,6 +16,7 @@ import {
   insertOrganization,
   insertProjectReturning,
   insertUser,
+  listAllProjectsWithOrganization,
   listMembersByOrganizationId,
   overwriteOAuthClientByClientId,
   updateOAuthClientById,
@@ -208,6 +210,35 @@ const projectBySlug = os.internal.project.bySlug
       archivedAt:
         typeof projectRow.archivedAt === "number" ? new Date(projectRow.archivedAt) : null,
     });
+  });
+
+// Deployment-wide project inventory for the OS admin page. Auth is the source
+// of truth for which projects exist; OS overlays per-deployment engine state on
+// top of this list. The service token is fully trusted — OS guards its own
+// admin surface before calling.
+const listAllProjects = os.internal.project.listAll
+  .use(serviceMiddleware)
+  .handler(async ({ context, input }) => {
+    const limit = input.limit ?? 100;
+    const offset = input.offset ?? 0;
+    const [rows, count] = await Promise.all([
+      listAllProjectsWithOrganization(context.db, { limit, offset }),
+      countProjects(context.db),
+    ]);
+    return {
+      projects: rows.map((row) => ({
+        id: row.id,
+        slug: row.slug,
+        name: row.name,
+        organizationId: row.organizationId,
+        organizationName: row.organizationName,
+        archivedAt:
+          typeof row.archivedAt === "number" ? new Date(row.archivedAt).toISOString() : null,
+        createdAt: new Date(row.createdAt).toISOString(),
+        updatedAt: new Date(row.updatedAt).toISOString(),
+      })),
+      total: count?.total ?? 0,
+    };
   });
 
 const createForOrganization = os.internal.project.createForOrganization
@@ -561,6 +592,7 @@ export const internal = os.internal.router({
   project: {
     bySlug: projectBySlug,
     createForOrganization,
+    listAll: listAllProjects,
     mintProjectId,
   },
   session: {
