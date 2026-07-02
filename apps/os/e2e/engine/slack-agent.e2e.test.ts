@@ -11,7 +11,7 @@
 // message (see incident_agent_anchor_skips_first_input).
 
 import { expect, test } from "vitest";
-import type { StreamEvent } from "../../src/next/types.ts";
+import type { StreamEvent } from "../../src/types.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);

@@ -10,12 +10,12 @@ import { z } from "zod";
 // oxlint-disable-next-line iterate/no-capnweb-http-batch -- exec_js is a one-shot request-scoped call: a single pipelined batch (authenticate -> runScript) with no socket lifecycle to manage.
 import { newHttpBatchRpcSession } from "capnweb";
 import { env } from "cloudflare:workers";
-import packageJson from "../../../../package.json" with { type: "json" };
+import packageJson from "../../../package.json" with { type: "json" };
 import { authenticateAdminApiSecret } from "~/auth/admin.ts";
 import { principalFromAccessToken } from "~/auth/principal.ts";
 import { MCP_START_MOUNT_PATH, resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
-import { readProjectBySlug } from "~/next/project-directory.ts";
-import type { UnauthenticatedItx } from "~/next/types.ts";
+import { readProjectBySlug } from "~/project-directory.ts";
+import type { UnauthenticatedItx } from "~/types.ts";
 import type { RequestContext } from "~/request-context.ts";
 
 type ProjectGrant = {

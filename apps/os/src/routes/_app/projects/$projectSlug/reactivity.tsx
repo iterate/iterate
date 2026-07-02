@@ -4,7 +4,7 @@ import { ActivityIcon, PlusIcon, RefreshCwIcon, RadioIcon } from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import type { ProjectProcessorState, StreamEvent } from "~/next/types.ts";
+import type { ProjectProcessorState, StreamEvent } from "~/types.ts";
 import { useItx, useItxEffect } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/reactivity")({

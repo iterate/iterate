@@ -5,10 +5,10 @@ project-scoped runtime APIs.
 
 It combines:
 
-- **The itx engine** (`src/next/`) — the capnweb surface at `/api/itx` plus
+- **The itx engine** (`src/`) — the capnweb surface at `/api/itx` plus
   every project-scoped domain: streams, repos, agents, secrets, dynamic
-  workers, egress, capabilities. [`src/next/README.md`](./src/next/README.md)
-  is the engine guide; [`src/next/types.ts`](./src/next/types.ts) is the
+  workers, egress, capabilities. [`src/README.md`](./src/README.md)
+  is the engine guide; [`src/types.ts`](./src/types.ts) is the
   public contract.
 - **The dashboard** — TanStack Start, TanStack Router, and TanStack Query for
   the authenticated UI (`src/routes/`, `src/components/`), talking to the
@@ -170,15 +170,15 @@ The script pattern is documented in
 
 ## Important Files
 
-- `src/next/` — **the engine**: `types.ts` (public contract),
+- `src/` — **the engine**: `types.ts` (public contract),
   `rpc-targets.ts` (all RpcTargets), `auth.ts`, `domains/*` (DOs + stream
   processors), `workers/*` (engine worker entrypoints). See
-  [src/next/README.md](./src/next/README.md).
+  [src/README.md](./src/README.md).
 - `src/workers/` — the non-engine worker entrypoints: `ingress.ts` (the only
   worker with routes) and `app.ts` (the TanStack dashboard).
 - `src/itx/` — the client-side itx surface: `itx-react.tsx` (browser hooks),
   `browser-repl.ts` (REPL compiler), `examples.ts` (the example catalogue),
-  `e2e/` (the example matrix). The engine itself lives in `src/next/`.
+  `e2e/` (the example matrix). The engine itself lives in `src/`.
 - `src/config.ts` — the `AppConfig` runtime config schema.
 - `src/routes/_app` — authenticated app routes; `src/start.ts` installs the
   auth-worker request middleware.
@@ -187,7 +187,7 @@ The script pattern is documented in
 
 ## Read Next
 
-- [Engine README](./src/next/README.md)
+- [Engine README](./src/README.md)
 - [Worker Topology](./docs/worker-topology.md)
 - [Architecture And Operations](./docs/architecture-and-operations.md)
 - [Debugging Deployed OS Workers](./docs/debugging-deployed-os-workers.md)

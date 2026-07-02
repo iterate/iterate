@@ -2,7 +2,7 @@ import { DurableObjectNamespace } from "alchemy/cloudflare";
 import { initAlchemy } from "@iterate-com/shared/alchemy/init";
 import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
 import { AppConfig } from "./src/config.ts";
-import type { StreamDurableObject } from "~/next/domains/streams/stream-durable-object.ts";
+import type { StreamDurableObject } from "~/domains/streams/stream-durable-object.ts";
 
 const ctx = await initAlchemy("streams-example-app", AppConfig, process.env);
 

@@ -15,7 +15,7 @@ import repl from "node:repl";
 import { RpcTarget } from "capnweb";
 import { readLocalDevServerInfo } from "@iterate-com/shared/alchemy/local-dev-server";
 
-import { connectItx } from "../src/next/client.ts";
+import { connectItx } from "../src/itx-client.ts";
 
 const ASSISTANT_RESPONSE_TYPE = "events.iterate.com/agents/web-message-sent";
 

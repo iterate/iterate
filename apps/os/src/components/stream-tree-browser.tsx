@@ -8,7 +8,7 @@ import { cn } from "@iterate-com/ui/lib/utils";
 import {
   parseBrowserCoreStreamTreeState,
   type BrowserCoreStreamTreeState,
-} from "~/next/domains/streams/client-libraries/browser/core-processor-state.ts";
+} from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
 
 /**
  * Where tree nodes get their state: path → stream handle. Project pages pass

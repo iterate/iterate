@@ -2,7 +2,7 @@
  * In-memory agent conversation feed for the chat TUI.
  *
  * This is the node-side sibling of the browser mirror's agent-ui processor
- * (apps/os/src/next/domains/streams/client-libraries/processors/agent-ui-processor.ts):
+ * (apps/os/src/domains/streams/client-libraries/processors/agent-ui-processor.ts):
  * both fold the SAME shared reducer (`planAgentUiOps` from @iterate-com/ui)
  * over agent stream events. The browser persists settled items into SQLite for
  * a virtual list; a terminal session is ephemeral and small, so this model
@@ -15,7 +15,7 @@ import {
   type AgentUiItem,
   type AgentUiState,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import type { StreamEvent } from "../../../../apps/os/src/next/types.ts";
+import type { StreamEvent } from "../../../../apps/os/src/types.ts";
 
 export type AgentFeedSnapshot = {
   /** Settled conversation items in list order (user, assistant, activity). */

@@ -1,4 +1,4 @@
-# The itx engine (`src/next`)
+# The itx engine (`src`)
 
 This folder is the engine behind `/api/itx` and everything project-scoped in
 OS: streams, repos, agents, secrets, dynamic workers, egress, and the itx
@@ -18,7 +18,7 @@ programs against. When this README and `types.ts` disagree, `types.ts` wins.
 | `types.ts`             | The public ITX contract (the design of record)                                                                                     |
 | `rpc-targets.ts`       | ALL RpcTarget classes: the session/project/agent surfaces, MCP/OpenAPI clients, capability provision, stream subscriptions, egress |
 | `auth.ts`              | The auth adapter: credentials → `ItxAuth` (see below)                                                                              |
-| `client.ts`            | `connectItx()` — the Node/CLI client over a Cap'n Web WebSocket                                                                    |
+| `itx-client.ts`        | `connectItx()` — the Node/CLI client over a Cap'n Web WebSocket                                                                    |
 | `ingress.ts`           | The shared routing decision (which requests belong to the engine)                                                                  |
 | `project-directory.ts` | Slug → project id resolution against the auth worker, cached in the `PROJECT_DIRECTORY` KV namespace                               |
 | `env.ts`               | The binding contract every engine worker deploys with (`nextEnv`)                                                                  |

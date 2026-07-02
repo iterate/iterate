@@ -1,14 +1,14 @@
 /**
  * The chat TUI's connection to one project agent over the shared itx client
- * (apps/os/src/next/client.ts): a capnweb WebSocket carrying the same `Agent`
+ * (apps/os/src/itx-client.ts): a capnweb WebSocket carrying the same `Agent`
  * capability the web app and CLI use. One live subscription pumps stream
  * events into the caller; sends go through `agent.sendMessage`. On a broken
  * session the connection re-dials and re-subscribes from the caller's resume
  * cursor (feed folds are offset-deduped, so replay overlap is harmless).
  */
 import type { RpcStub } from "capnweb";
-import { connectItx } from "../../../../apps/os/src/next/client.ts";
-import type { Agent, ItxAuthCredentials, StreamEvent } from "../../../../apps/os/src/next/types.ts";
+import { connectItx } from "../../../../apps/os/src/itx-client.ts";
+import type { Agent, ItxAuthCredentials, StreamEvent } from "../../../../apps/os/src/types.ts";
 import { readConfig } from "../config.ts";
 
 const RECONNECT_DELAY_MS = 1_000;

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import type { Stream, StreamEvent, StreamEventInput } from "../../src/next/types.ts";
+import type { Stream, StreamEvent, StreamEventInput } from "../../src/types.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 type RuntimeConnection = {

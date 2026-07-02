@@ -24,18 +24,18 @@
 // auth worker's directory as the source of truth — one cached membership
 // lookup widens the live context instead of forcing a token refresh.
 
-import { authenticateCapnwebAdmin } from "../auth/admin-auth-cookie.ts";
-import { authenticateAdminBearer } from "../auth/admin.ts";
-import { createAuthWorkerServiceClient } from "../auth/auth-worker-service.ts";
-import { createOsIterateAuth } from "../auth/iterate-auth-client.ts";
+import { authenticateCapnwebAdmin } from "./auth/admin-auth-cookie.ts";
+import { authenticateAdminBearer } from "./auth/admin.ts";
+import { createAuthWorkerServiceClient } from "./auth/auth-worker-service.ts";
+import { createOsIterateAuth } from "./auth/iterate-auth-client.ts";
 import {
   principalFromAccessToken,
   principalFromSession,
   principalIsAdmin,
   type Principal,
   type UserPrincipal,
-} from "../auth/principal.ts";
-import type { AppConfig } from "../config.ts";
+} from "./auth/principal.ts";
+import type { AppConfig } from "./config.ts";
 import type { ItxAuth, ItxAuthCredentials, ItxAuthToken } from "./types.ts";
 
 /**

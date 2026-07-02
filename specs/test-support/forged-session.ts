@@ -9,7 +9,7 @@ import {
   type IterateAuthProjectClaim,
 } from "@iterate-com/shared/auth-claims";
 import { doppler } from "../../apps/os/scripts/dev.ts";
-import { connectItx } from "../../apps/os/src/next/client.ts";
+import { connectItx } from "../../apps/os/src/itx-client.ts";
 
 type ForgePrivateJwk = JsonWebKey & {
   alg?: string;

@@ -56,7 +56,7 @@ describe("itx REPL TypeScript declarations", () => {
   });
 
   test("the editor's type surface is the raw next-engine contract, verbatim", () => {
-    // itx-repl-types.ts re-exports ~/next/types.ts?raw as the virtual
+    // itx-repl-types.ts re-exports ~/types.ts?raw as the virtual
     // filesystem's /itx-types.ts, so completions can never drift from the
     // design of record. Sentinels prove it's the real file, not a copy of the
     // removed legacy surface.

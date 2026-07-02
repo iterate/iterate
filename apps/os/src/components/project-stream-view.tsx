@@ -46,29 +46,29 @@ import {
   AGENT_UI_SCHEMA_VERSION,
   AgentUiProcessor,
   AgentUiProcessorContract,
-} from "~/next/domains/streams/client-libraries/processors/agent-ui-processor.ts";
-import { parseBrowserCoreProcessorState } from "~/next/domains/streams/client-libraries/browser/core-processor-state.ts";
-import { useStreamQuery } from "~/next/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
-import { browserProcessorStateStorage } from "~/next/domains/streams/client-libraries/browser/processor-state-storage.ts";
+} from "~/domains/streams/client-libraries/processors/agent-ui-processor.ts";
+import { parseBrowserCoreProcessorState } from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
+import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
+import { browserProcessorStateStorage } from "~/domains/streams/client-libraries/browser/processor-state-storage.ts";
 import type {
   SqliteQueryStatus,
   StreamBrowserDatabase,
   StreamEventRow,
-} from "~/next/domains/streams/client-libraries/browser/stream-browser-db.ts";
+} from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import {
   acquireStreamRuntime,
   asBrowserStreamClient,
   type StreamBrowserStore,
   type StreamRuntimeState,
-} from "~/next/domains/streams/client-libraries/browser/stream-browser-store.ts";
+} from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
 import {
   BROWSER_RAW_EVENTS_SCHEMA_VERSION,
   BrowserRawEventsContract,
   BrowserRawEventsProcessor,
   type BrowserRawEventsState,
-} from "~/next/domains/streams/client-libraries/processors/browser-raw-events/implementation.ts";
-import { StreamEventInput } from "~/next/domains/streams/schemas.ts";
-import type { Stream, StreamEvent } from "~/next/types.ts";
+} from "~/domains/streams/client-libraries/processors/browser-raw-events/implementation.ts";
+import { StreamEventInput } from "~/domains/streams/schemas.ts";
+import type { Stream, StreamEvent } from "~/types.ts";
 import { AgentFeedView } from "~/components/agent-feed.tsx";
 import { AgentPillComposer, type AgentComposerMode } from "~/components/agent-pill-composer.tsx";
 import { ExampleEventsPanel } from "~/components/example-events-panel.tsx";

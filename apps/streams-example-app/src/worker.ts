@@ -1,12 +1,12 @@
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
 import { newWorkersRpcResponse } from "capnweb";
 import { parseStreamRpcRequest } from "./lib/stream-rpc.ts";
-import { trustedInternalAuthContext } from "~/next/auth.ts";
-import { StreamRpcTarget } from "~/next/rpc-targets.ts";
-import { resolveStreamPath } from "~/next/domains/streams/utils.ts";
-import type { Stream } from "~/next/types.ts";
+import { trustedInternalAuthContext } from "~/auth.ts";
+import { StreamRpcTarget } from "~/rpc-targets.ts";
+import { resolveStreamPath } from "~/domains/streams/utils.ts";
+import type { Stream } from "~/types.ts";
 
-export { StreamDurableObject } from "~/next/domains/streams/stream-durable-object.ts";
+export { StreamDurableObject } from "~/domains/streams/stream-durable-object.ts";
 
 /**
  * The capnweb surface this playground serves at `/api/streams`.

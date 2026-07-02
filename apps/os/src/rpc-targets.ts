@@ -1,9 +1,9 @@
 import { RpcTarget } from "cloudflare:workers";
 import { Client as McpSdkClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { AppConfig } from "../config.ts";
-import { createAuthWorkerServiceClient } from "../auth/auth-worker-service.ts";
-import { parseConfig } from "../config.ts";
+import type { AppConfig } from "./config.ts";
+import { createAuthWorkerServiceClient } from "./auth/auth-worker-service.ts";
+import { parseConfig } from "./config.ts";
 import {
   resolveItxAuth,
   resolveOrganizationSlugForCreate,

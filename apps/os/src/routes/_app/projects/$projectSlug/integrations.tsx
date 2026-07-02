@@ -18,7 +18,7 @@ import { AlertCircle, Circle, Mail, MessageSquare } from "lucide-react";
 import { z } from "zod";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
-import type { Itx } from "~/next/types.ts";
+import type { Itx } from "~/types.ts";
 
 type Connection = Awaited<ReturnType<Itx["integrations"]["getConnection"]>>;
 

@@ -12,7 +12,7 @@ Traffic is dispatched on hostname and path:
 
 1. Engine lanes: `/api/itx[...]`, `/__itx_e2e/*`, `/prj_<id>/...`, and project
    platform hosts (`<slug>.iterate.app`, `<slug>.localhost:<port>`) forward to
-   the api worker (`src/next/workers/api.ts`). Project-host requests route to
+   the api worker (`src/workers/api.ts`). Project-host requests route to
    the project's seeded worker, never the dashboard.
 2. The MCP hostname (`mcp.iterate.com`) rewrites to the app worker's
    `/api/mcp` route.
@@ -20,7 +20,7 @@ Traffic is dispatched on hostname and path:
    (`src/workers/app.ts`): the TanStack Start dashboard (SSR, server
    functions, assets) wrapped in one evlog "wide event" per request.
 
-The routing decision is one shared function (`src/next/ingress.ts`), run by
+The routing decision is one shared function (`src/ingress.ts`), run by
 the ingress worker in production and by the app worker in local dev (where the
 browser talks to vite directly). Runtime config is parsed from `env` per
 request, never at module scope — isolates can outlive binding-only deploys.
@@ -40,15 +40,15 @@ resolves the caller into a `principal`: the admin API secret, an OAuth bearer
 token, or a session cookie. Users without an organization are redirected to
 the auth worker's project-access flow.
 
-The engine has its own auth adapter (`src/next/auth.ts`) behind
+The engine has its own auth adapter (`src/auth.ts`) behind
 `authenticate()` on `/api/itx` — credential lanes and the project-directory
-claims fallback are described in [src/next/README.md](../src/next/README.md).
+claims fallback are described in [src/README.md](../src/README.md).
 
 ## The Project Directory
 
 OS has no database. The auth worker is the source of truth for which projects
 exist, their slugs, and who can access them; OS fronts it with the
-`PROJECT_DIRECTORY` KV namespace (`src/next/project-directory.ts`) so hot
+`PROJECT_DIRECTORY` KV namespace (`src/project-directory.ts`) so hot
 paths — project-host ingress, dashboard slug resolution — never pay an
 auth-worker roundtrip on a cache hit. Project creation registers with the auth
 worker and primes the cache. Everything else durable lives in Durable Object
@@ -86,7 +86,7 @@ with the integrations domain).
 
 ## Streams
 
-`StreamDurableObject` (`src/next/domains/streams/`) is addressed by
+`StreamDurableObject` (`src/domains/streams/`) is addressed by
 `{ projectId, path }`; stream paths are project-local, such as
 `/agents/default`. `projectId: null` (encoded as the reserved `global.iterate`
 DO-name host) is for deployment-wide streams.
@@ -94,7 +94,7 @@ DO-name host) is for deployment-wide streams.
 The stream explorer lives at `/projects/:projectSlug/streams`. Detail pages
 are splat routes: `/streams/foo/bar` opens stream path `/foo/bar` inside the
 resolved Project ID. The browser keeps a local mirror of subscribed streams
-(OPFS-backed; `src/next/domains/streams/client-libraries/browser/`) running
+(OPFS-backed; `src/domains/streams/client-libraries/browser/`) running
 the same `StreamProcessor` contracts as the server.
 
 ## MCP Directionality
@@ -102,7 +102,7 @@ the same `StreamProcessor` contracts as the server.
 OS has two MCP flows:
 
 - Inbound MCP: the app worker's TanStack Start route at `/api/mcp` is the MCP
-  server (`src/next/domains/inbound-mcp-server/`). `APP_CONFIG_MCP__BASE_URL`
+  server (`src/domains/inbound-mcp-server/`). `APP_CONFIG_MCP__BASE_URL`
   is the canonical OAuth resource URL and can point at a dedicated MCP
   hostname (for example `https://mcp.iterate.com`), which ingress rewrites to
   the same route. The OS app-host `/api/mcp` route is also valid. The handler
@@ -140,7 +140,7 @@ Capabilities are visible through `itx.describe()`. The built-ins
 (`itx.streams`, `itx.repos`, `itx.secrets`, `itx.agents`, `itx.workers`,
 `itx.worker`, `itx.egress`, `itx.mcp`, `itx.openapi`, `itx.ai`; `itx.agent` /
 `itx.chat` on agent scopes) plus mounted capabilities are catalogued in
-[`src/next/types.ts`](../src/next/types.ts).
+[`src/types.ts`](../src/types.ts).
 
 ## Runtime Config
 

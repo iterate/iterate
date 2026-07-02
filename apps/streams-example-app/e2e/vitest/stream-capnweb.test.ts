@@ -4,7 +4,7 @@ import { e2eStreamPath, e2eStreamPathLabel, toStreamWebSocketUrl } from "../help
 import { withStreamConnectionFromBrowser } from "../../src/lib/stream-rpc.ts";
 import { withStreamConnectionFromNode } from "../../src/lib/node-stream-connection.ts";
 import type { WebSocketFrame } from "../../src/lib/stream-connection.ts";
-import type { StreamEvent, StreamEventInput } from "~/next/types.ts";
+import type { StreamEvent, StreamEventInput } from "~/types.ts";
 
 const e2eIt = process.env.STREAM_STAGING_E2E === "true" ? it : it.skip;
 const e2eItFails = process.env.STREAM_STAGING_E2E === "true" ? it.fails : it.skip;

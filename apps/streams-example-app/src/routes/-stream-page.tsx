@@ -27,19 +27,19 @@ import {
   type StreamBrowserSnapshot,
   type StreamBrowserStore,
   type StreamRuntimeState,
-} from "~/next/domains/streams/client-libraries/browser/stream-browser-store.ts";
+} from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
 import {
   type StreamBrowserDatabase,
   type StreamEventRow,
-} from "~/next/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import { browserProcessorStateStorage } from "~/next/domains/streams/client-libraries/browser/processor-state-storage.ts";
+} from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
+import { browserProcessorStateStorage } from "~/domains/streams/client-libraries/browser/processor-state-storage.ts";
 import {
   BROWSER_RAW_EVENTS_SCHEMA_VERSION,
   BrowserRawEventsContract,
   BrowserRawEventsProcessor,
   type BrowserRawEventsState,
-} from "~/next/domains/streams/client-libraries/processors/browser-raw-events/implementation.ts";
-import { useStreamQuery } from "~/next/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
+} from "~/domains/streams/client-libraries/processors/browser-raw-events/implementation.ts";
+import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 
 export function StreamPage({ streamView }: { streamView: StreamViewSearch }) {
   return (

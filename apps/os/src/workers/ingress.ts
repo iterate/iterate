@@ -9,14 +9,14 @@
  *   OS host                      → the app worker (TanStack dashboard / API)
  *   everything else              → 404
  *
- * Routing logic lives in src/next/ingress.ts and is shared with the app
+ * Routing logic lives in src/ingress.ts and is shared with the app
  * worker's local-dev path. Keep this file free of heavyweight imports — its
  * entire job is one config parse and a forward.
  */
 import { parseConfig } from "~/config.ts";
 import { normalizeIngressHost } from "~/ingress/host-headers.ts";
 import { MCP_START_MOUNT_PATH } from "~/lib/mcp-base-url.ts";
-import { nextEngineRequest } from "~/next/ingress.ts";
+import { nextEngineRequest } from "~/ingress.ts";
 
 export default {
   async fetch(inbound: Request, env: Env) {

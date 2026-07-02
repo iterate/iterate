@@ -5,7 +5,7 @@
  * React/OpenTUI terminal chat with one project agent.
  *
  * The data layer is the shared client stack, not a bespoke stream client:
- * `connectItx` (apps/os/src/next/client.ts) hands us the same `Agent`
+ * `connectItx` (apps/os/src/itx-client.ts) hands us the same `Agent`
  * capability the web app uses, a live `stream.subscribe` pumps events into
  * the shared agent-ui reducer (@iterate-com/ui), and sends go through
  * `agent.sendMessage`. This file owns only terminal runtime state and

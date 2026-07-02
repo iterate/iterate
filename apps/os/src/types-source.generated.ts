@@ -2,7 +2,7 @@
 // Regenerate with: pnpm generate:itx-types-source
 // Freshness is enforced by types-source.generated.test.ts.
 
-/** src/next/types.ts, verbatim — the public itx contract as a string. */
+/** src/types.ts, verbatim — the public itx contract as a string. */
 export const ITX_TYPES_SOURCE = `/**
  * Public ITX capability contract.
  *

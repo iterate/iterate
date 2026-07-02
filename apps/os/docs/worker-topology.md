@@ -18,22 +18,22 @@ Everything is declared in one place: [`apps/os/alchemy.run.ts`](../alchemy.run.t
 `<n>` is the stage worker name (`os-prd`, `os-preview-N`, `os-dev-<user>`).
 Ten workers: ingress, app, api, and seven engine Durable Object workers.
 
-| Worker          | Entry                         | Owns                                                                                                   |
-| --------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `<n>` (ingress) | `src/workers/ingress.ts`      | **All routes.** One config parse, then a service-binding forward                                       |
-| `<n>-app`       | `src/workers/app.ts`          | Dashboard: TanStack Start SSR + assets + server functions, inbound MCP `/api/mcp`                      |
-| `<n>-api`       | `src/next/workers/api.ts`     | The engine API: capnweb `/api/itx` (+ `/api/itx/admin-cookie`), `/__itx_e2e` fixtures, project ingress |
-| `<n>-stream`    | `src/next/workers/stream.ts`  | `StreamDurableObject` (journals, event streams)                                                        |
-| `<n>-itx`       | `src/next/workers/itx.ts`     | `ItxDurableObject` (capability scopes)                                                                 |
-| `<n>-project`   | `src/next/workers/project.ts` | `ProjectDurableObject` + `ProjectEgressEntrypoint`                                                     |
-| `<n>-agent`     | `src/next/workers/agent.ts`   | `AgentDurableObject` (agent + LLM provider processors)                                                 |
-| `<n>-repo`      | `src/next/workers/repo.ts`    | `RepoDurableObject` (git over Cloudflare Artifacts)                                                    |
-| `<n>-secret`    | `src/next/workers/secret.ts`  | `SecretDurableObject`                                                                                  |
-| `<n>-worker`    | `src/next/workers/worker.ts`  | `StatefulWorkerDurableObject` (stateful dynamic workers)                                               |
+| Worker          | Entry                    | Owns                                                                                                   |
+| --------------- | ------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `<n>` (ingress) | `src/workers/ingress.ts` | **All routes.** One config parse, then a service-binding forward                                       |
+| `<n>-app`       | `src/workers/app.ts`     | Dashboard: TanStack Start SSR + assets + server functions, inbound MCP `/api/mcp`                      |
+| `<n>-api`       | `src/workers/api.ts`     | The engine API: capnweb `/api/itx` (+ `/api/itx/admin-cookie`), `/__itx_e2e` fixtures, project ingress |
+| `<n>-stream`    | `src/workers/stream.ts`  | `StreamDurableObject` (journals, event streams)                                                        |
+| `<n>-itx`       | `src/workers/itx.ts`     | `ItxDurableObject` (capability scopes)                                                                 |
+| `<n>-project`   | `src/workers/project.ts` | `ProjectDurableObject` + `ProjectEgressEntrypoint`                                                     |
+| `<n>-agent`     | `src/workers/agent.ts`   | `AgentDurableObject` (agent + LLM provider processors)                                                 |
+| `<n>-repo`      | `src/workers/repo.ts`    | `RepoDurableObject` (git over Cloudflare Artifacts)                                                    |
+| `<n>-secret`    | `src/workers/secret.ts`  | `SecretDurableObject`                                                                                  |
+| `<n>-worker`    | `src/workers/worker.ts`  | `StatefulWorkerDurableObject` (stateful dynamic workers)                                               |
 
 All engine workers (api + the seven DO workers) deploy with the **same
 binding set** (`engineBindings` in `alchemy.run.ts`; the matching type is
-`src/next/env.ts`): every DO namespace, `AI`, `LOADER` (Worker Loader),
+`src/env.ts`): every DO namespace, `AI`, `LOADER` (Worker Loader),
 `ARTIFACTS`, `PROJECT_DIRECTORY` (the slug→id KV cache), and the secret
 encryption key. Any engine worker can host any capability — exactly like the
 single-worker engine they came from — and each re-exports the shared loopback
@@ -83,7 +83,7 @@ browser ──► <n> ────┼────────────► <n>
                     └────────────► <n>-app  (OS host → dashboard)
 ```
 
-The routing decision itself lives in `src/next/ingress.ts` and is shared with
+The routing decision itself lives in `src/ingress.ts` and is shared with
 the app worker: in local dev the browser talks to vite (the app worker)
 directly, so the app worker runs the same decision first and forwards engine
 traffic over the same `NEXT_API` service binding. One code path, no dev/prod
@@ -120,7 +120,7 @@ use case for the HTTP interface, and alchemy 0.83's local dev drops
 Why one workerd instead of wrangler's cross-process dev registry: the
 registry proxy dials remote Durable Objects **by hex id**, which loses
 `ctx.id.name` — and every engine DO derives its identity from its name
-(`src/next/domains/durable-object-names.ts`). In one workerd, cross-script
+(`src/domains/durable-object-names.ts`). In one workerd, cross-script
 `getByName` keeps names intact, exactly like production.
 
 ## Fresh-stage bootstrap (two-pass deploy)
@@ -147,7 +147,7 @@ fresh stage just works — it deploys twice under the hood.
   `apps/os/docs/debugging-deployed-os-workers.md` has query patterns.
 - **The `workers` export** in `alchemy.run.ts` feeds the per-worker `Env`
   types (`src/lib/worker-env.d.ts`). The engine does not use the ambient
-  `Env`: engine code imports `Env`/`nextEnv` from `src/next/env.ts`
+  `Env`: engine code imports `Env`/`nextEnv` from `src/env.ts`
   explicitly.
 - **streams-example-app** (`apps/streams-example-app`) binds the Stream DO
   cross-script; its `script_name` is `os-prd-stream`.

@@ -21,7 +21,7 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       ),
       // One entry module per deployed worker (docs/worker-topology.md).
       "src/workers/*.ts!",
-      "src/next/workers/*.ts!",
+      "src/workers/*.ts!",
       "e2e/vitest.config.ts",
       "e2e/tui-test/tui-test.config.ts",
       "e2e/tui-test/run.ts",

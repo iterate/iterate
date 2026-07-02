@@ -6,7 +6,7 @@
 > (`itx.ts`, `handle.ts`, `dial.ts`, `fetch.ts`, `platform-context.ts`, …)
 > no longer exist. It is kept because it explains the design lineage the
 > current engine inherits (describe(), instructions/types, capabilities as
-> stream events). **The current engine lives at `apps/os/src/next/`**
+> stream events). **The current engine lives at `apps/os/src/`**
 > (`README.md` + `types.ts`). What actually remains in THIS folder is the
 > client-side surface: `itx-react.tsx` (browser hooks), `browser-repl.ts`
 > (REPL compiler), `path-proxy.ts`, `examples.ts` (the example catalogue),
@@ -43,7 +43,7 @@ one call away — for you, and for any agent handed the same `itx`.
 ## Scene 2: offer a capability from your laptop
 
 ```ts
-import { withItx } from "~/itx/client.ts";
+import { withItx } from "~/itx/itx-client.ts";
 
 using itx = withItx({ baseUrl, token, context: "my-project" });
 
@@ -425,7 +425,7 @@ object that implements `call({ path, args })` itself owns its whole method
 tree (the SDK shape: the public SDK docs become the tool docs):
 
 ```ts
-import { withItx } from "~/itx/client.ts";
+import { withItx } from "~/itx/itx-client.ts";
 
 using itx = withItx({ baseUrl, token, context: "my-project" });
 const provision = await itx.provideCapability({

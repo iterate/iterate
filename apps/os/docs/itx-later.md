@@ -3,7 +3,7 @@
 > **Status: historical design record (pre-migration).** Written against the
 > PRE-itx-v4 itx layer, deleted in the itx-v4 replacement. The horizon ideas
 > (self-description as a load-bearing requirement, durable capabilities)
-> still inform the current engine (`apps/os/src/next/`), but mechanics and
+> still inform the current engine (`apps/os/src/`), but mechanics and
 > paths below refer to the deleted implementation.
 
 Horizon design — eventualities we are deliberately shaping the data

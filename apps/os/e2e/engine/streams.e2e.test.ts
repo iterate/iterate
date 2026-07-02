@@ -6,7 +6,7 @@
 // stay out of this file.
 
 import { expect, test } from "vitest";
-import type { StreamEvent, StreamEventBatch } from "../../src/next/types.ts";
+import type { StreamEvent, StreamEventBatch } from "../../src/types.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);

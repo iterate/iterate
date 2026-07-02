@@ -1,15 +1,15 @@
-// Embeds src/next/types.ts verbatim into a generated module so WORKER code
+// Embeds src/types.ts verbatim into a generated module so WORKER code
 // (agent system prompts) can ship the itx type surface as a string. The
 // browser already gets it via vite's `?raw` (itx-repl-types.ts); workers
 // bundle with esbuild, which has no raw-import, hence this tiny codegen.
-// Freshness is enforced by src/next/types-source.generated.test.ts.
+// Freshness is enforced by src/types-source.generated.test.ts.
 //
 // Regenerate: pnpm generate:itx-types-source
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-const typesPath = fileURLToPath(new URL("../src/next/types.ts", import.meta.url));
-const outPath = fileURLToPath(new URL("../src/next/types-source.generated.ts", import.meta.url));
+const typesPath = fileURLToPath(new URL("../src/types.ts", import.meta.url));
+const outPath = fileURLToPath(new URL("../src/types-source.generated.ts", import.meta.url));
 
 const source = readFileSync(typesPath, "utf8");
 const escaped = source.replaceAll("\\", "\\\\").replaceAll("`", "\\`").replaceAll("${", "\\${");
@@ -20,7 +20,7 @@ writeFileSync(
 // Regenerate with: pnpm generate:itx-types-source
 // Freshness is enforced by types-source.generated.test.ts.
 
-/** src/next/types.ts, verbatim — the public itx contract as a string. */
+/** src/types.ts, verbatim — the public itx contract as a string. */
 export const ITX_TYPES_SOURCE = \`${escaped}\`;
 `,
 );

@@ -22,13 +22,13 @@ import {
 import { prepareLocalDevServer } from "@iterate-com/shared/alchemy/local-dev-server";
 import { ensureLocalDevOAuthClient } from "./src/auth/dev-oauth-client-bootstrap.ts";
 import { AppConfig } from "./src/config.ts";
-import type { AgentDurableObject } from "./src/next/domains/agents/agent-durable-object.ts";
-import type { ItxDurableObject } from "./src/next/domains/itx/itx-durable-object.ts";
-import type { ProjectDurableObject } from "./src/next/domains/projects/project-durable-object.ts";
-import type { RepoDurableObject } from "./src/next/domains/repos/repo-durable-object.ts";
-import type { SecretDurableObject } from "./src/next/domains/secrets/secret-durable-object.ts";
-import type { StreamDurableObject } from "./src/next/domains/streams/stream-durable-object.ts";
-import type { StatefulWorkerDurableObject } from "./src/next/domains/workers/stateful-worker-durable-object.ts";
+import type { AgentDurableObject } from "./src/domains/agents/agent-durable-object.ts";
+import type { ItxDurableObject } from "./src/domains/itx/itx-durable-object.ts";
+import type { ProjectDurableObject } from "./src/domains/projects/project-durable-object.ts";
+import type { RepoDurableObject } from "./src/domains/repos/repo-durable-object.ts";
+import type { SecretDurableObject } from "./src/domains/secrets/secret-durable-object.ts";
+import type { StreamDurableObject } from "./src/domains/streams/stream-durable-object.ts";
+import type { StatefulWorkerDurableObject } from "./src/domains/workers/stateful-worker-durable-object.ts";
 
 const resolvedAuthIssuer =
   process.env.APP_CONFIG_ITERATE_AUTH__ISSUER ?? process.env.ITERATE_OAUTH_ISSUER;
@@ -232,7 +232,7 @@ const artifactsNamespace = `${ctx.workerName}-repos`;
 // Slug -> project id (+ small metadata records) cache in front of the auth
 // worker's project directory: ingress resolves every project-host request
 // through it, so positive lookups must not pay an auth-worker roundtrip
-// (src/next/project-directory.ts).
+// (src/project-directory.ts).
 const projectDirectory = await KVNamespace("project-directory", {
   title: `${ctx.workerName}-project-directory`,
   adopt: true,
@@ -372,7 +372,7 @@ async function osWorker<B extends Bindings>(
   return worker;
 }
 
-// Bindings every engine worker carries — src/next/env.ts is the matching
+// Bindings every engine worker carries — src/env.ts is the matching
 // contract. All engine workers get the full set so any of them can host any
 // capability, exactly like the single-worker original the engine came from.
 const engineBindings = {
@@ -423,14 +423,14 @@ const [
   workerWorker,
   apiWorker,
 ] = await Promise.all([
-  engineWorker("stream", "./src/next/workers/stream.ts"),
-  engineWorker("itx", "./src/next/workers/itx.ts"),
-  engineWorker("project", "./src/next/workers/project.ts"),
-  engineWorker("agent", "./src/next/workers/agent.ts"),
-  engineWorker("repo", "./src/next/workers/repo.ts"),
-  engineWorker("secret", "./src/next/workers/secret.ts"),
-  engineWorker("worker", "./src/next/workers/worker.ts"),
-  engineWorker("api", "./src/next/workers/api.ts"),
+  engineWorker("stream", "./src/workers/stream.ts"),
+  engineWorker("itx", "./src/workers/itx.ts"),
+  engineWorker("project", "./src/workers/project.ts"),
+  engineWorker("agent", "./src/workers/agent.ts"),
+  engineWorker("repo", "./src/workers/repo.ts"),
+  engineWorker("secret", "./src/workers/secret.ts"),
+  engineWorker("worker", "./src/workers/worker.ts"),
+  engineWorker("api", "./src/workers/api.ts"),
 ]);
 
 // Second bootstrap pass (fresh stages only): the cross-script Durable Object

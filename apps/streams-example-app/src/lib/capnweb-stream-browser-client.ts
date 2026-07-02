@@ -7,8 +7,8 @@ import {
   asBrowserStreamClient,
   type BrowserStreamClient,
   type BrowserStreamClientFactory,
-} from "~/next/domains/streams/client-libraries/browser/stream-browser-store.ts";
-import type { Stream } from "~/next/types.ts";
+} from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
+import type { Stream } from "~/types.ts";
 
 export const createCapnwebStreamClient: BrowserStreamClientFactory = async (
   args,

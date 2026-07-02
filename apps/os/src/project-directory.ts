@@ -13,8 +13,8 @@
  * prime from another isolate). Hits are written back, and `projects.create`
  * primes the cache eagerly so the post-create navigation never misses.
  */
-import { createAuthWorkerServiceClient } from "../auth/auth-worker-service.ts";
-import type { AppConfig } from "../config.ts";
+import { createAuthWorkerServiceClient } from "./auth/auth-worker-service.ts";
+import type { AppConfig } from "./config.ts";
 
 export type ProjectDirectoryRecord = {
   id: string;

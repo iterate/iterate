@@ -2,8 +2,8 @@ import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { RpcStub } from "capnweb";
 import { localDevServerBaseUrl } from "./dev-server.ts";
-import { connectItx } from "~/next/client.ts";
-import type { Itx, Session } from "~/next/types.ts";
+import { connectItx } from "~/itx-client.ts";
+import type { Itx, Session } from "~/types.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 

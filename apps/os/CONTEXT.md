@@ -8,11 +8,11 @@ OS is an authenticated app where users manage organization-owned projects and ru
 > the legacy stack — the Ingress Route Table machinery, `__null__` Durable
 > Object name encoding, `/api/itx/:projectIdOrSlug` handles, Workspace Durable
 > Objects, `ProjectIngressEntrypoint`, Fetch Callables — refer to DELETED
-> code. The engine (`apps/os/src/next/`) addresses Durable Objects via
+> code. The engine (`apps/os/src/`) addresses Durable Objects via
 > `DurableObjectNameCodec` (`{projectId: string | null, path}`), serves one
 > capnweb surface at `/api/itx` (context selection happens via
 > `projects.get(id)` after `authenticate()`), and routes project hosts through
-> `src/next/ingress.ts` + the api worker. See `apps/os/src/next/README.md`
+> `src/ingress.ts` + the api worker. See `apps/os/src/README.md`
 > for current language.
 
 ### Product Ownership

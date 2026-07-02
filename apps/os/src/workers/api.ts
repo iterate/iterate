@@ -2,7 +2,7 @@
  * Next-engine API worker: the capnweb surface at `/api/itx`, the
  * `/api/itx/admin-cookie` browser auth bridge, the worker-hosted e2e
  * fixtures, and project ingress — every lane `decideIngressRoute`
- * (src/next/ingress.ts) can resolve: the `/prj_<id>/...` path lane, project
+ * (src/ingress.ts) can resolve: the `/prj_<id>/...` path lane, project
  * platform hosts (with optional app selection), and directory-registered
  * custom hostnames.
  */

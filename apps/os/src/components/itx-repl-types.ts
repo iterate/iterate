@@ -1,6 +1,6 @@
 import type { CompletionContext, CompletionResult } from "@codemirror/autocomplete";
 import type { WorkerShape } from "@valtown/codemirror-ts/worker";
-import itxTypesSource from "~/next/types.ts?raw";
+import itxTypesSource from "~/types.ts?raw";
 
 export type ItxReplTypeScriptWorker = WorkerShape & {
   getAutocompletionWithDocs(input: {
@@ -17,7 +17,7 @@ export type ItxReplTypeScriptWorker = WorkerShape & {
 export const ITX_TYPES_PATH = "/itx-types.ts";
 
 /**
- * The design-of-record itx surface (`~/next/types.ts`), verbatim. That file is
+ * The design-of-record itx surface (`~/types.ts`), verbatim. That file is
  * handwritten and import-free, so its raw source is a valid standalone module
  * for the editor's virtual filesystem — completions and hover docs in the
  * browser REPL come from THE type file, and cannot drift from it.
@@ -26,7 +26,7 @@ export const itxTypesDeclaration: string = itxTypesSource;
 
 /**
  * REPL prelude for the editor's virtual filesystem. Only what
- * `~/next/types.ts` does not cover lives here: the session globals the REPL
+ * `~/types.ts` does not cover lives here: the session globals the REPL
  * runtime actually injects (see `~/itx/browser-repl.ts`), ambient shims for
  * the workers-runtime globals the raw type file references (`Disposable`,
  * `ExecutionContext` — the editor's lib is es2022 + dom), and global aliases

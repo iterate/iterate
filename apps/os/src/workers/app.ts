@@ -17,7 +17,7 @@ import handler from "@tanstack/react-start/server-entry";
 import { withEvlog } from "@iterate-com/shared/evlog";
 import { AppConfig, parseConfig } from "~/config.ts";
 import type { RequestContext } from "~/request-context.ts";
-import { nextEngineRequest } from "~/next/ingress.ts";
+import { nextEngineRequest } from "~/ingress.ts";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {

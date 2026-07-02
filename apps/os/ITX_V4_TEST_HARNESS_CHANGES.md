@@ -104,7 +104,7 @@ elements; a 240s budget for two LLM turns).
   commit.
 - **Legacy engine unit tests deleted with their subject** (~285 tests:
   stream-processor machinery, review-regression suites, slack/agent processor
-  units). The engine brought its own unit tests (in `src/next/**`) and the
+  units). The engine brought its own unit tests (in `src/**`) and the
   e2e suites above; `pnpm test` in apps/os is now 154 unit tests + the e2e
   lanes.
 - **`packages/shared` test lanes** for callable/durable-object-utils deleted

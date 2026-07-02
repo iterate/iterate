@@ -4,7 +4,7 @@
 > the PRE-itx-v4 itx layer, deleted in the itx-v4 replacement; code paths
 > below refer to that implementation. The conclusions (authority at connect,
 > narrowing as construction) carried into the current engine's auth adapter
-> (`apps/os/src/next/auth.ts`).
+> (`apps/os/src/auth.ts`).
 
 Status: RESEARCH REPORT, 2026-06-11. Commissioned question, in spirit: "You
 come to the edge with a cookie that resolves into scopes. The context is a

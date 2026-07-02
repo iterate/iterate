@@ -7,7 +7,7 @@
 > because it still explains WHY things are shaped the way they are (the
 > address unification, streams-as-authority, self-description) and is
 > referenced as design-of-record from other docs. The current engine and its
-> contract live at `apps/os/src/next/` (`README.md`, `types.ts`).
+> contract live at `apps/os/src/` (`README.md`, `types.ts`).
 
 Status: NOODLING. This is the running list of things we want to fix or build in
 the itx layer, with positions and open questions. Nothing here is committed;

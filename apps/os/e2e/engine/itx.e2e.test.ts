@@ -4,13 +4,13 @@ import { describe, expect, test } from "vitest";
 import { newHttpBatchRpcSession, RpcTarget } from "capnweb";
 import { WebClient } from "@slack/web-api";
 import { z } from "zod";
-import { RepoArtifactNameCodec } from "../../src/next/domains/repos/utils.ts";
+import { RepoArtifactNameCodec } from "../../src/domains/repos/utils.ts";
 import {
   defineProcessorContract,
   StreamProcessor,
   type StreamProcessorSnapshot,
-} from "../../src/next/domains/streams/stream-processor.ts";
-import type { DynamicWorkerRef, UnauthenticatedItx } from "../../src/next/types.ts";
+} from "../../src/domains/streams/stream-processor.ts";
+import type { DynamicWorkerRef, UnauthenticatedItx } from "../../src/types.ts";
 import { startEgressEcho, startMockMcp, startMockOpenApi } from "./itx-capability-fixtures.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 import type { ItxWebSocketMessage } from "./test-helpers.ts";

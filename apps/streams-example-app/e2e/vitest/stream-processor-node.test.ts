@@ -15,8 +15,8 @@ import {
   defineProcessorContract,
   StreamProcessor,
   type StreamProcessorSnapshot,
-} from "~/next/domains/streams/stream-processor.ts";
-import type { Stream } from "~/next/types.ts";
+} from "~/domains/streams/stream-processor.ts";
+import type { Stream } from "~/types.ts";
 
 const e2eIt = process.env.STREAM_STAGING_E2E === "true" ? it : it.skip;
 

@@ -12,7 +12,7 @@ import {
 import { Field, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
 import { cn } from "@iterate-com/ui/lib/utils";
-import { normalizePath } from "~/next/domains/durable-object-names.ts";
+import { normalizePath } from "~/domains/durable-object-names.ts";
 import { readStreamStateOnce, type StreamNavigator } from "~/lib/stream-navigation.ts";
 import { streamPathAncestors, streamPathParent } from "~/lib/stream-links.ts";
 

@@ -5,8 +5,8 @@ import { env } from "cloudflare:workers";
 import { authenticateCapnwebAdmin } from "~/auth/admin-auth-cookie.ts";
 import { getUserPrincipal, type UserPrincipal } from "~/auth/principal.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
-import { readProjectBySlug } from "~/next/project-directory.ts";
-import type { UnauthenticatedItx } from "~/next/types.ts";
+import { readProjectBySlug } from "~/project-directory.ts";
+import type { UnauthenticatedItx } from "~/types.ts";
 import type { RequestContext } from "~/request-context.ts";
 
 /**
@@ -125,7 +125,7 @@ export const getProjectBySlugServerFn: (input: {
     if (claimed) return withIngressUrl(context, toProject(claimed));
 
     // Claims miss: consult the directory (KV cache in front of the auth
-    // worker — src/next/project-directory.ts). Admin sessions (admin cookie
+    // worker — src/project-directory.ts). Admin sessions (admin cookie
     // or admin-role user) may read any project; a signed-in user may read a
     // project whose owning organization they belong to (covers the
     // stale-claims window right after a create on another device).

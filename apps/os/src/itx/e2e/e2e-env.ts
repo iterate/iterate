@@ -5,8 +5,8 @@
 
 import { fileURLToPath } from "node:url";
 import type { RpcStub } from "capnweb";
-import { connectItx } from "../../next/client.ts";
-import type { Itx, Session } from "../../next/types.ts";
+import { connectItx } from "../../itx-client.ts";
+import type { Itx, Session } from "../../types.ts";
 import { localDevServerBaseUrl } from "../../../e2e/test-support/dev-server.ts";
 
 const appRoot = fileURLToPath(new URL("../../..", import.meta.url));

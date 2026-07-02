@@ -3,7 +3,7 @@
  *
  *   doppler run -- pnpm exec tsx e2e/engine/onboarding-smoke.ts [baseUrl]
  */
-import { connectItx } from "../../src/next/client.ts";
+import { connectItx } from "../../src/itx-client.ts";
 
 const baseUrl = (process.argv[2] ?? process.env.ITX_BASE_URL ?? "http://localhost:56455").replace(
   /\/+$/,

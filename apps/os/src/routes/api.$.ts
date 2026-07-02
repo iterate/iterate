@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { handleMcpStartRoute } from "./api.mcp.ts";
 import { MCP_START_MOUNT_PATH } from "~/lib/mcp-base-url.ts";
-import { handleIntegrationApiRequest } from "~/next/domains/integrations/integration-api.ts";
+import { handleIntegrationApiRequest } from "~/domains/integrations/integration-api.ts";
 
 export const Route = createFileRoute("/api/$")({
   server: {

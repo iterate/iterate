@@ -4,7 +4,7 @@ import type { workers } from "../../alchemy.run.ts";
  * OS deploys as many small workers (alchemy.run.ts `workers`), each with its
  * own binding set. The ambient global `Env` covers the two dashboard-side
  * workers (app + ingress); the engine workers deliberately do not participate
- * in it — engine code imports its own binding contract from src/next/env.ts,
+ * in it — engine code imports its own binding contract from src/env.ts,
  * so neither side's types leak into the other.
  */
 type W = typeof workers;
@@ -20,11 +20,11 @@ export interface CloudflareEnv extends AppWorkerEnv, IngressWorkerEnv {}
 
 /**
  * The `ctx.exports` surface every engine worker shares: the loopback
- * entrypoints re-exported by each engine worker entry (src/next/workers/*).
+ * entrypoints re-exported by each engine worker entry (src/workers/*).
  */
 type WorkerMainModule = {
-  ItxEntrypoint: (typeof import("../next/domains/itx/itx-entrypoint.ts"))["ItxEntrypoint"];
-  ProjectEgressEntrypoint: (typeof import("../next/domains/projects/egress.ts"))["ProjectEgressEntrypoint"];
+  ItxEntrypoint: (typeof import("../domains/itx/itx-entrypoint.ts"))["ItxEntrypoint"];
+  ProjectEgressEntrypoint: (typeof import("../domains/projects/egress.ts"))["ProjectEgressEntrypoint"];
 };
 
 declare global {

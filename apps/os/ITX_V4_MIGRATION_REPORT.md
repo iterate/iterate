@@ -6,7 +6,7 @@ _Branch: `itx-v4-os-replacement` · PR #1585 · preview slot: preview-2 · as of
 
 Replace the itx system and all domain implementations in `apps/os` with the
 itx-v4 engine (developed as `apps/minimal-itx-v4`, transplanted to
-`apps/os/src/next/`), keeping product features (project hosts, admin pages,
+`apps/os/src/`), keeping product features (project hosts, admin pages,
 REPL, examples, chat TUI, streams example app, inbound MCP). Slack/Google were
 temporarily removed and return in the final phase. Approved plan:
 `~/.claude/plans/nifty-juggling-candy.md`.
@@ -53,9 +53,9 @@ Playwright green at phase boundaries.
 1. **`/api/itx` is the only engine door** (`authenticate(credentials) → ItxRoot`);
    the dedicated api worker also serves the admin-cookie bridge, worker-hosted
    e2e fixtures, the `/prj_<id>` path lane, and project platform hosts.
-2. **All RpcTarget classes live in `src/next/rpc-targets.ts`**; domains keep
+2. **All RpcTarget classes live in `src/rpc-targets.ts`**; domains keep
    only DO + entrypoint classes.
-3. **`src/next` has its own `Env`** (`src/next/env.ts`); the ambient global
+3. **`src` has its own `Env`** (`src/env.ts`); the ambient global
    `Env` covers only app + ingress workers.
 4. **Auth adapter lanes:** `from-server-cookie`, `bearer`, `admin-secret`,
    admin-gated `impersonate`. Stale claims solved in the adapter (cached

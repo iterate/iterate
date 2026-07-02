@@ -5,7 +5,7 @@ import type { StreamTreeSource } from "~/components/stream-tree-browser.tsx";
 import {
   parseBrowserCoreStreamTreeState,
   type BrowserCoreStreamTreeState,
-} from "~/next/domains/streams/client-libraries/browser/core-processor-state.ts";
+} from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
 
 /**
  * Everything the ⌘K stream switcher needs from its host: a live state source

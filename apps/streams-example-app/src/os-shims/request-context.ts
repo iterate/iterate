@@ -1,6 +1,6 @@
 // TYPECHECK-ONLY SHIM for `~/request-context.ts`.
 //
-// The next engine's auth import graph (`~/next/auth.ts` →
+// The next engine's auth import graph (`~/auth.ts` →
 // `~/auth/auth-worker-service.ts`) type-imports `RequestContext` from
 // apps/os's request-context module. That module also carries TanStack Start
 // `Register` module augmentations that are wrong for this standalone app's

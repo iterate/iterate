@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { createFileRoute } from "@tanstack/react-router";
-import { handleInboundMcpRequest } from "~/next/domains/inbound-mcp-server/mcp-handler.ts";
+import { handleInboundMcpRequest } from "~/domains/inbound-mcp-server/mcp-handler.ts";
 import type { RequestContext } from "~/request-context.ts";
 
 export const Route = createFileRoute("/api/mcp")({

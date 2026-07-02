@@ -6,7 +6,7 @@
  */
 import { expect, test } from "vitest";
 import { createTestProject } from "../test-support/create-test-project.ts";
-import type { StreamEvent } from "~/next/types.ts";
+import type { StreamEvent } from "~/types.ts";
 
 test("creates a disposable project and uses project streams through itx", async () => {
   await using handle = await createTestProject({ slugPrefix: "admin-fixture" });

@@ -66,7 +66,7 @@ What this doctrine buys, every time:
   moment it exists. The acceptance test: an agent with no prior
   knowledge, handed a stub, acts competently from describe() alone.
 
-The itx engine (`apps/os/src/next/`) is the reference implementation of all
+The itx engine (`apps/os/src/`) is the reference implementation of all
 of this: every domain (projects, repos, agents, secrets, itx scopes) is a
 processor contract folding its own stream, and a capability context is a
 domain object whose state is its capability table, rebuilt from

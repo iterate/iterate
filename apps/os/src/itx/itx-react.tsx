@@ -73,7 +73,7 @@ import {
 } from "react";
 import { useSuspenseQuery, type QueryKey } from "@tanstack/react-query";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
-import type { Itx as ProjectItx, Session, UnauthenticatedItx } from "../next/types.ts";
+import type { Itx as ProjectItx, Session, UnauthenticatedItx } from "../types.ts";
 
 /**
  * The handle type is context-dependent: a project connection holds the project

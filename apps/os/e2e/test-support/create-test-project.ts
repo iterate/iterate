@@ -1,7 +1,7 @@
 import type { RpcStub } from "capnweb";
 import { createAdminOsItx, requireBaseUrl, uniqueSuffix } from "./os-client.ts";
-import type { Agent, Itx } from "~/next/types.ts";
-import { connectItx } from "~/next/client.ts";
+import type { Agent, Itx } from "~/types.ts";
+import { connectItx } from "~/itx-client.ts";
 
 /**
  * Create a disposable project against the deployment under test via itx (the

@@ -14,7 +14,7 @@ import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-
 import { Input } from "@iterate-com/ui/components/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@iterate-com/ui/components/popover";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { parseBrowserCoreStreamTreeState } from "~/next/domains/streams/client-libraries/browser/core-processor-state.ts";
+import { parseBrowserCoreStreamTreeState } from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
 import { connectItx } from "~/itx/itx-react.tsx";
 import type {
   RouteBreadcrumbLoaderData,

@@ -1,5 +1,5 @@
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
-import type { Stream } from "~/next/types.ts";
+import type { Stream } from "~/types.ts";
 
 /**
  * What the playground worker serves at `/api/streams`: the next engine's
