@@ -1,8 +1,39 @@
 const DEFAULT_PROJECT_WORKER_SOURCE = `
-  import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
+  import { WorkerEntrypoint } from "cloudflare:workers";
+
+  // The root project worker is a small ROUTER over the project's apps. Each
+  // app is its own repo-backed dynamic worker (a self-contained JS module —
+  // repo-backed workers are single-file for now); ingress selects one via the
+  // trusted x-iterate-app header (hosts like hello--<slug>.<base> or
+  // <app>.<custom-hostname>). Requests with no app selected serve the demo
+  // counter page below.
+  const APPS = {
+    hello: {
+      type: "stateless",
+      path: "/",
+      source: { type: "repo", repoPath: "/", sourcePath: "apps/hello/worker.js" },
+    },
+    counter: {
+      type: "stateful",
+      path: "/",
+      className: "CounterApp",
+      durableWorkerKey: "app-counter",
+      source: { type: "repo", repoPath: "/", sourcePath: "apps/counter/worker.js" },
+    },
+  };
 
   export default class ProjectWorker extends WorkerEntrypoint {
     async fetch(req) {
+      const appSlug = req.headers.get("x-iterate-app");
+      if (appSlug) {
+        const ref = APPS[appSlug];
+        if (!ref) return new Response(\`unknown app: \${appSlug}\`, { status: 404 });
+        const project = await this.env.ITX.get();
+        // Workers RPC: await the capability before calling through it.
+        const app = await project.workers.get(ref);
+        return await app.fetch(req);
+      }
+
       const url = new URL(req.url);
       if (url.pathname === "/" && req.method === "GET") {
         const counter = await this.counter();
@@ -16,19 +47,7 @@ const DEFAULT_PROJECT_WORKER_SOURCE = `
     }
 
     counter() {
-      return this.env.ITX.get().then((project) =>
-        project.workers.get({
-          className: "CounterDurableObject",
-          durableWorkerKey: "project-ingress-counter",
-          path: "/",
-          source: {
-            repoPath: "/",
-            sourcePath: "worker.js",
-            type: "repo",
-          },
-          type: "stateful",
-        })
-      );
+      return this.env.ITX.get().then((project) => project.workers.get(APPS.counter));
     }
 
     renderCounterPage(req, count) {
@@ -61,8 +80,40 @@ const DEFAULT_PROJECT_WORKER_SOURCE = `
       return await response.json();
     }
   }
+`;
 
-  export class CounterDurableObject extends DurableObject {
+const HELLO_APP_WORKER_SOURCE = `
+  import { WorkerEntrypoint } from "cloudflare:workers";
+
+  // A stateless app: a plain WorkerEntrypoint the root project worker routes
+  // to when ingress selects the "hello" app. It still gets the full project
+  // itx through env.ITX.
+  export default class HelloApp extends WorkerEntrypoint {
+    async fetch(req) {
+      const project = await this.env.ITX.get();
+      const description = await project.describe();
+      return Response.json({
+        app: "hello",
+        path: new URL(req.url).pathname,
+        projectId: description.projectId,
+      });
+    }
+  }
+`;
+
+const COUNTER_APP_WORKER_SOURCE = `
+  import { DurableObject } from "cloudflare:workers";
+
+  // A stateful app: a Durable Object class hosted as a repo-backed stateful
+  // dynamic worker. State survives across requests under its durableWorkerKey.
+  export class CounterApp extends DurableObject {
+    async fetch(req) {
+      if (req.method === "POST") {
+        return Response.json({ app: "counter", count: await this.increment() });
+      }
+      return Response.json({ app: "counter", count: await this.current() });
+    }
+
     async increment() {
       const n = ((this.ctx.storage.kv.get("n")) ?? 0) + 1;
       this.ctx.storage.kv.put("n", n);
@@ -127,6 +178,14 @@ export const PROJECT_REPO_INITIAL_FILES = [
   {
     content: DEFAULT_PROJECT_WORKER_SOURCE,
     path: "worker.js",
+  },
+  {
+    content: HELLO_APP_WORKER_SOURCE,
+    path: "apps/hello/worker.js",
+  },
+  {
+    content: COUNTER_APP_WORKER_SOURCE,
+    path: "apps/counter/worker.js",
   },
   {
     content:

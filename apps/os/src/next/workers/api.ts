@@ -1,20 +1,20 @@
 /**
  * Next-engine API worker: the capnweb surface at `/api/itx`, the
  * `/api/itx/admin-cookie` browser auth bridge, the worker-hosted e2e
- * fixtures, and project ingress — both the `/prj_<id>/...` path lane and
- * project platform hosts (`<slug>.<base>`), whose slugs resolve to project
- * ids through the auth worker's directory.
+ * fixtures, and project ingress — every lane `decideIngressRoute`
+ * (src/next/ingress.ts) can resolve: the `/prj_<id>/...` path lane, project
+ * platform hosts (with optional app selection), and directory-registered
+ * custom hostnames.
  */
 import { newHttpBatchRpcResponse, newWorkersWebSocketRpcResponse } from "capnweb";
 import { trustedInternalAuthContext } from "../auth.ts";
 import { e2eFixtureResponse } from "../e2e-fixtures.ts";
 import type { Env } from "../env.ts";
-import { requestIngressHost } from "../ingress.ts";
+import { decideIngressRoute, type IngressResolvers } from "../ingress.ts";
+import { readProjectByHostname, resolveProjectIdBySlug } from "../project-directory.ts";
 import { ProjectCollectionRpcTarget, UnauthenticatedItxRpcTarget } from "../rpc-targets.ts";
-import { resolveProjectIdBySlug } from "../project-directory.ts";
 import { handleCapnwebAdminCookieRequest } from "~/auth/admin-auth-cookie.ts";
 import { parseConfig, type AppConfig } from "~/config.ts";
-import { parseProjectPlatformHosts } from "~/ingress/project-platform-host-routing.ts";
 
 export { ItxEntrypoint } from "../domains/itx/itx-entrypoint.ts";
 export { ProjectEgressEntrypoint } from "../domains/projects/egress.ts";
@@ -30,13 +30,33 @@ export default {
     const fixtureResponse = await e2eFixtureResponse(request);
     if (fixtureResponse !== null) return fixtureResponse;
 
-    const projectIngress = await projectIngressRequest({ config, env, request, url });
-    if (projectIngress !== null) {
+    const route = await decideIngressRoute({
+      config,
+      headers: request.headers,
+      method: request.method,
+      resolvers: directoryResolvers(config, env),
+      url: request.url,
+    });
+
+    if (route.lane === "project") {
       const project = await new ProjectCollectionRpcTarget({
         auth: trustedInternalAuthContext(),
         ctx,
-      }).get(projectIngress.projectId);
-      return await project.worker.fetch(projectIngress.request);
+      }).get(route.resolved.projectId);
+      const init: RequestInit = {
+        body: request.body,
+        headers: route.fetch.headers,
+        method: route.fetch.method,
+        redirect: request.redirect,
+      };
+      if (request.body !== null) {
+        (init as RequestInit & { duplex: "half" }).duplex = "half";
+      }
+      return await project.worker.fetch(new Request(route.fetch.url, init));
+    }
+
+    if (route.lane === "notFound") {
+      return Response.json({ error: "not found" }, { status: 404 });
     }
 
     if (url.pathname === "/api/itx/admin-cookie") {
@@ -57,55 +77,13 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-/**
- * Project ingress: the `/prj_<id>/...` path lane (any host), else a project
- * platform host (`<slug>.<base>`) whose slug resolves through the auth
- * worker's directory. Returns the request to hand the project worker.
- */
-async function projectIngressRequest(input: {
-  config: AppConfig;
-  env: Env;
-  request: Request;
-  url: URL;
-}): Promise<{ projectId: string; request: Request } | null> {
-  const { request, url } = input;
-
-  const [head, ...pathSegments] = url.pathname.split("/").filter(Boolean);
-  if (head !== undefined && head.startsWith("prj_")) {
-    const workerUrl = new URL(request.url);
-    workerUrl.pathname = pathSegments.length === 0 ? "/" : `/${pathSegments.join("/")}`;
-    return { projectId: head, request: projectWorkerRequest(workerUrl, request, head) };
-  }
-
-  const host = requestIngressHost(request);
-  const candidates = parseProjectPlatformHosts({
-    bases: input.config.projectHostnameBases ?? [],
-    host,
-  });
-  for (const candidate of candidates) {
-    const projectId = await resolveProjectIdBySlug({
-      config: input.config,
-      directory: input.env.PROJECT_DIRECTORY,
-      identifier: candidate.projectIdentifier,
-    });
-    if (!projectId) continue;
-    return { projectId, request: projectWorkerRequest(new URL(request.url), request, projectId) };
-  }
-
-  return null;
-}
-
-function projectWorkerRequest(workerUrl: URL, request: Request, projectId: string): Request {
-  const headers = new Headers(request.headers);
-  headers.set("x-itx-project-id", projectId);
-  const init: RequestInit = {
-    body: request.body,
-    headers,
-    method: request.method,
-    redirect: request.redirect,
+function directoryResolvers(config: AppConfig, env: Env): IngressResolvers {
+  return {
+    projectIdBySlug: (identifier) =>
+      resolveProjectIdBySlug({ config, directory: env.PROJECT_DIRECTORY, identifier }),
+    projectByHostname: async (host) => {
+      const found = await readProjectByHostname(env.PROJECT_DIRECTORY, host);
+      return found ? { appSlug: found.appSlug, projectId: found.record.id } : null;
+    },
   };
-  if (request.body !== null) {
-    (init as RequestInit & { duplex: "half" }).duplex = "half";
-  }
-  return new Request(workerUrl, init);
 }

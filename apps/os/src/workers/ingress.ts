@@ -16,7 +16,7 @@
 import { parseConfig } from "~/config.ts";
 import { normalizeIngressHost } from "~/ingress/host-headers.ts";
 import { MCP_START_MOUNT_PATH } from "~/lib/mcp-base-url.ts";
-import { classifyIngressHost, nextEngineRequest } from "~/next/ingress.ts";
+import { nextEngineRequest } from "~/next/ingress.ts";
 
 export default {
   async fetch(inbound: Request, env: Env) {
@@ -32,15 +32,17 @@ export default {
     const nextRequest = nextEngineRequest({ config, request });
     if (nextRequest) return await env.NEXT_API.fetch(nextRequest);
 
-    if (classifyIngressHost({ config, request }) === "os") return await env.APP.fetch(request);
-
-    return new Response("Not Found", { status: 404 });
+    // Everything else is the OS host (project + custom hostnames all went to
+    // NEXT_API above, which owns the 404 for hosts that resolve to nothing).
+    return await env.APP.fetch(request);
   },
 };
 
 export function stripInternalHeaders(request: Request) {
   const headers = new Headers(request.headers);
   headers.delete("x-iterate-resolved-ingress");
+  headers.delete("x-iterate-app");
+  headers.delete("x-itx-project-id");
   headers.delete("x-forwarded-host");
   headers.delete("x-forwarded-proto");
   headers.delete("x-iterate-ingress-hostname");
