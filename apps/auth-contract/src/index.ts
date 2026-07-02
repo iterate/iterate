@@ -118,30 +118,6 @@ export type InternalCreateProjectForOrganizationInput = z.infer<
   typeof InternalCreateProjectForOrganizationInput
 >;
 
-export const InternalListAllProjectsInput = z.object({
-  limit: z.number().int().min(1).max(500).optional(),
-  offset: z.number().int().min(0).optional(),
-});
-export type InternalListAllProjectsInput = z.infer<typeof InternalListAllProjectsInput>;
-
-export const InternalProjectListItem = z.object({
-  id: z.string(),
-  slug: z.string(),
-  name: z.string(),
-  organizationId: z.string(),
-  organizationName: z.string(),
-  archivedAt: z.string().nullable(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-});
-export type InternalProjectListItem = z.infer<typeof InternalProjectListItem>;
-
-export const InternalListAllProjectsOutput = z.object({
-  projects: z.array(InternalProjectListItem),
-  total: z.number().int().min(0),
-});
-export type InternalListAllProjectsOutput = z.infer<typeof InternalListAllProjectsOutput>;
-
 export const InternalProjectIngressExchangeInput = z.object({
   token: z.string().min(1),
 });
@@ -512,16 +488,6 @@ export const authContract = oc.router({
           tags: ["internal", "project"],
         })
         .output(z.object({ id: z.string() })),
-      listAll: oc
-        .route({
-          method: "GET",
-          path: "/internal/project/list-all",
-          summary:
-            "List every auth-side project with its owning organization name — powers the OS admin project list",
-          tags: ["internal", "project"],
-        })
-        .input(InternalListAllProjectsInput)
-        .output(InternalListAllProjectsOutput),
       bySlug: oc
         .route({
           method: "GET",

@@ -35,26 +35,6 @@ JOIN organization o ON o.id = p.organization_id
 WHERE p.slug = :slug
 LIMIT 1;
 
-/** @name listAllProjectsWithOrganization */
-SELECT p.id,
-  p.organization_id AS organizationId,
-  p.name,
-  p.slug,
-  p.metadata,
-  p.archived_at AS archivedAt,
-  p.created_at AS createdAt,
-  p.updated_at AS updatedAt,
-  o.name AS organizationName
-FROM project p
-JOIN organization o ON o.id = p.organization_id
-ORDER BY p.created_at DESC,
-  p.slug ASC
-LIMIT :limit OFFSET :offset;
-
-/** @name countProjects */
-SELECT COUNT(*) AS total
-FROM project;
-
 /** @name listProjectsByOrganizationId */
 SELECT id,
   organization_id AS organizationId,
