@@ -9,12 +9,13 @@ const DEFAULT_BASE_URL = "https://os.iterate-preview-2.com";
 async function main() {
   const baseUrl = new URL(process.env.APP_CONFIG_BASE_URL?.trim() || DEFAULT_BASE_URL);
   const adminApiSecret = requireAdminApiSecret();
-  const slug = readProjectSlug();
+  const slug = `workspace-itx-example-${Date.now()}`;
   await ensureProject({ baseUrl, slug });
   const mcpUrl = projectMcpUrlFor({ baseUrl });
   const result = await runWorkspaceCodemodeProof({
     bearerToken: adminApiSecret,
     mcpUrl,
+    projectSlug: slug,
   });
 
   console.info(
@@ -32,24 +33,11 @@ async function main() {
 }
 
 function requireAdminApiSecret() {
-  const token =
-    process.env.OS_E2E_MCP_BEARER_TOKEN?.trim() ||
-    process.env.OS_E2E_ADMIN_API_SECRET?.trim() ||
-    process.env.OS_ADMIN_API_SECRET?.trim() ||
-    process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
+  const token = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
   if (!token) {
-    throw new Error(
-      "APP_CONFIG_ADMIN_API_SECRET, OS_ADMIN_API_SECRET, OS_E2E_ADMIN_API_SECRET, or OS_E2E_MCP_BEARER_TOKEN is required.",
-    );
+    throw new Error("APP_CONFIG_ADMIN_API_SECRET is required.");
   }
   return token;
-}
-
-function readProjectSlug() {
-  const explicit = process.env.OS_WORKSPACE_CODEMODE_PROJECT_SLUG?.trim();
-  if (explicit) return explicit;
-
-  return `workspace-itx-example-${Date.now()}`;
 }
 
 /**
@@ -86,7 +74,11 @@ function projectMcpUrlFor(input: { baseUrl: URL }) {
   );
 }
 
-async function runWorkspaceCodemodeProof(input: { bearerToken: string; mcpUrl: URL }) {
+async function runWorkspaceCodemodeProof(input: {
+  bearerToken: string;
+  mcpUrl: URL;
+  projectSlug: string;
+}) {
   const transport = new StreamableHTTPClientTransport(input.mcpUrl, {
     requestInit: {
       headers: {
@@ -111,6 +103,9 @@ async function runWorkspaceCodemodeProof(input: { bearerToken: string; mcpUrl: U
       name: "exec_js",
       arguments: {
         code: workspaceCodemodeScript(),
+        // The admin lane serves every project, so exec_js requires an explicit
+        // project slug (resolved through the KV project directory).
+        project: input.projectSlug,
       },
     });
     const text = extractTextContent(result.content).join("\n");
@@ -125,53 +120,34 @@ async function runWorkspaceCodemodeProof(input: { bearerToken: string; mcpUrl: U
 }
 
 function workspaceCodemodeScript() {
+  // itx-v4 cutover: this used to drive the workspaces domain (gitClone /
+  // writeFile / gitCommit / gitPush against a checkout). The workspaces
+  // domain is gone — the itx repo capability commits directly to the
+  // project repo — so the proof is now: MCP exec_js -> repo.commitFiles,
+  // then an identical second commit whose noChanges: true is the read-back
+  // (commits are content-addressed and idempotent).
   return `async (itx) => {
-  const repo = await itx.repos.get({ path: "/repos/project" }).getInfo();
-  const dir = \`/workspace-preview-example-\${Date.now()}\`;
-  const fileName = \`workspace-preview-example-\${Date.now()}.md\`;
-  const password = repo.token.includes("?expires=")
-    ? repo.token.split("?expires=")[0]
-    : repo.token;
-  const auth = { username: "x", password };
+  const fileName = "workspace-preview-example-" + Date.now() + ".md";
+  const content = "# Workspace itx preview example\\n\\nCreated: " + new Date().toISOString() + "\\n";
 
-  await itx.workspace.gitClone({
-    url: repo.remote,
-    dir,
-    branch: repo.defaultBranch,
-    depth: 1,
-    ...auth,
-  });
-
-  const filePath = \`\${dir}/\${fileName}\`;
-  await itx.workspace.writeFile(
-    filePath,
-    \`# Workspace itx preview example\\n\\nCreated: \${new Date().toISOString()}\\n\`,
-  );
-  const readBack = await itx.workspace.readFile(filePath);
-  await itx.workspace.gitAdd({ dir, filepath: fileName });
-  const commit = await itx.workspace.gitCommit({
-    dir,
+  const commit = await itx.repo.commitFiles({
     message: "Verify workspace codemode preview example",
-    author: { name: "Codemode", email: "codemode@iterate.com" },
+    changes: [{ path: fileName, content }],
   });
-  const pushed = await itx.workspace.gitPush({
-    dir,
-    remote: "origin",
-    ref: repo.defaultBranch,
-    ...auth,
+
+  const readBack = await itx.repo.commitFiles({
+    message: "Read-back probe (identical tree must be a no-op)",
+    changes: [{ path: fileName, content }],
   });
 
   return {
-    commit,
-    fileName,
-    pushed,
-    readBack,
-    repo: {
-      slug: repo.slug,
-      remote: repo.remote,
-      defaultBranch: repo.defaultBranch,
+    commit: {
+      branch: commit.branch,
+      changedPaths: commit.changedPaths,
+      noChanges: commit.noChanges,
     },
-    status: await itx.workspace.gitStatus({ dir }),
+    fileName,
+    readBackNoChanges: readBack.noChanges,
   };
 }`;
 }

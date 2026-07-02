@@ -11,7 +11,6 @@ import {
   GitBranch,
   KeyRound,
   LogOut,
-  Network,
   Plug,
   Plus,
   Radio,
@@ -23,7 +22,6 @@ import {
   UserCircle,
   type LucideIcon,
 } from "lucide-react";
-import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
 import type { PublicAppConfig } from "@iterate-com/shared/config";
 import { useAuthClient } from "@iterate-com/auth/client";
@@ -67,6 +65,7 @@ import {
   SidebarSeparator,
   useSidebar,
 } from "@iterate-com/ui/components/sidebar";
+import { StreamPath, type StreamPath as StreamPathType } from "~/lib/stream-links.ts";
 import type { AppConfig } from "~/config.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import {
@@ -611,8 +610,7 @@ type ProjectStreamNavItemConfig = {
     | "/projects/$projectSlug/integrations"
     | "/projects/$projectSlug/secrets"
     | "/projects/$projectSlug/repos"
-    | "/projects/$projectSlug/streams"
-    | "/projects/$projectSlug/mcp";
+    | "/projects/$projectSlug/streams";
 };
 
 const PROJECT_STREAM_NAV_ITEMS: readonly ProjectStreamNavItemConfig[] = [
@@ -651,13 +649,7 @@ const PROJECT_STREAM_NAV_ITEMS: readonly ProjectStreamNavItemConfig[] = [
     streamPath: StreamPath.parse("/streams"),
     to: "/projects/$projectSlug/streams",
   },
-  {
-    fuzzy: false,
-    icon: Network,
-    label: "/mcp",
-    streamPath: StreamPath.parse("/mcp"),
-    to: "/projects/$projectSlug/mcp",
-  },
+  // TODO(itx-v4 cutover): the /mcp page returns when the inbound MCP surface does.
 ];
 
 function ProjectStreamNavItem({

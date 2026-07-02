@@ -488,6 +488,16 @@ export const authContract = oc.router({
           tags: ["internal", "project"],
         })
         .output(z.object({ id: z.string() })),
+      bySlug: oc
+        .route({
+          method: "GET",
+          path: "/internal/project/by-slug",
+          summary:
+            "Look up a project by slug in internal service flows — OS ingress slug resolution and claims-miss directory reads. Null when no project has the slug.",
+          tags: ["internal", "project"],
+        })
+        .input(z.object({ projectSlug: z.string().trim().min(1) }))
+        .output(ProjectRecord.nullable()),
     },
     session: {
       createProjectIngressToken: oc

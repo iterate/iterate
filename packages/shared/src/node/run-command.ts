@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 
-export type RunCommandResult = {
+type RunCommandResult = {
   exitCode: number | null;
   stderr: string;
   stdout: string;

@@ -40,12 +40,12 @@ doppler run --config preview_3 -- pnpm cli itx --help
 ```
 
 Local operational commands should also live under `pnpm cli`, not as
-environment-pinning package scripts. For example, the Iterate config base
-Artifact repair command runs through the local script router:
+environment-pinning package scripts. For example, running an itx script goes
+through the local script router:
 
 ```bash
-pnpm cli artifacts seed-config-base
-doppler run --project os --config dev -- pnpm cli artifacts seed-config-base
+pnpm cli itx run --eval 'return await itx.whoami()'
+doppler run --project os --config prd -- pnpm cli itx run --eval 'return await itx.whoami()'
 ```
 
 Do not put `--project os` or `--config prd` in the default script. That makes

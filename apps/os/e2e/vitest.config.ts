@@ -14,7 +14,7 @@ const e2eRoot = fileURLToPath(new URL(".", import.meta.url));
 const appRoot = fileURLToPath(new URL("..", import.meta.url));
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 
-const vitestRunSlug = process.env.OS_E2E_RUN_SLUG?.trim() || createVitestRunSlug();
+const vitestRunSlug = createVitestRunSlug();
 const vitestRunRoot = createVitestRunRoot("os-e2e-");
 
 console.log(`[vitest-artifacts] run root: ${vitestRunRoot}`);
@@ -28,17 +28,24 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    fileParallelism: false,
-    hookTimeout: 120_000,
+    // Parallel in CI: each file creates its own projects against a deployed
+    // slot, so files are independent. Sequential locally to not hammer a
+    // single dev server.
+    fileParallelism: process.env.CI === "true",
+    // Generous: e2e runs against live deployments, concurrently with the
+    // Playwright specs in preview CI — cold slots under combined load need
+    // headroom, and slow-but-passing beats flaky.
+    hookTimeout: 240_000,
     include: ["./e2e/vitest/**/*.test.ts"],
     passWithNoTests: true,
+    setupFiles: ["./e2e/vitest/setup.ts"],
     provide: {
       [E2E_RUN_ROOT_KEY]: vitestRunRoot,
       [E2E_PROJECT_ROOT_KEY]: e2eRoot,
       [E2E_RUN_SLUG_KEY]: vitestRunSlug,
       [E2E_REPO_ROOT_KEY]: repoRoot,
     },
-    testTimeout: 120_000,
+    testTimeout: 240_000,
     onConsoleLog(log, type, entity) {
       if (entity?.type !== "test") return;
 

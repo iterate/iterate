@@ -9,11 +9,9 @@ real browser, Iterate Auth Worker, TanStack Start routing, and the app UI.
 It verifies the preview worker, unauthenticated redirect behavior, admin-token project setup, and
 MCP and itx metadata wiring.
 
-Slack is covered by
-`apps/os/e2e/vitest/agents.itx.e2e.test.ts`. When
-`APP_CONFIG_SLACK_BOT_TOKEN` is present in the test process, the test discovers
-`#slack-agent-e2e-test` and sends a real Slack message through the deployed
-itx Slack capability.
+The itx e2e suites (`apps/os/e2e/vitest/`) run through the same `pnpm e2e`
+config. Slack coverage lives in `apps/os/e2e/vitest/slack-agent.e2e.test.ts` (synthetic
+signed-webhook smoke through the integrations domain).
 
 ## Authenticated Browser Smoke
 
@@ -129,8 +127,8 @@ Verify the agent actually answered (the live UI may not update — see gotchas):
 
 ```bash
 doppler run --config preview_N -- pnpm cli itx run \
-  --context my-smoke \
-  --eval 'return await itx.agents.create().getRuntimeState({ agentPath: "/agents/my-agent" })'
+  --context <prj_id> \
+  --eval 'return await itx.agents.get("/agents/my-agent").processor.getRuntimeState()'
 ```
 
 ### Gotchas (hit and confirmed 2026-06-10)

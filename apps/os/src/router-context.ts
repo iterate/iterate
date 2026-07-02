@@ -14,6 +14,5 @@ export type RouterContext = {
   queryClient: QueryClient;
   authSession?: PublicSessionResponse;
   currentProjectHostSlug?: string | null;
-  isEventDocsHost?: boolean;
   iterateAuthIssuer?: string;
 };

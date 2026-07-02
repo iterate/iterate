@@ -1,6 +1,8 @@
 # Vitest Testing Patterns
 
-This document covers detailed testing patterns used in this codebase.
+This document covers detailed testing patterns used in this codebase. For the
+test lanes themselves — what exists, how to run each against local dev /
+previews / prd, and the canonical env vars — see [Testing](testing.md).
 
 ## Core Principles
 

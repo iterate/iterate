@@ -52,13 +52,9 @@ function ProjectStreamDetailContent() {
   const itx = useItx();
 
   async function submitMessage(message: string) {
-    await itx.streams.get(streamPath).appendBatch({
-      events: [
-        {
-          type: "events.iterate.com/agents/user-message-received",
-          payload: { content: message, origin: "web" },
-        },
-      ],
+    await itx.streams.get(streamPath).append({
+      type: "events.iterate.com/agents/user-message-received",
+      payload: { content: message, origin: "web" },
     });
   }
 

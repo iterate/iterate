@@ -1,8 +1,8 @@
 export type StreamTuiPilottySpawnArgs = {
   sessionName: string;
   cwd: string;
-  projectSlugOrId: string;
-  streamPath: string;
+  projectId: string;
+  agentPath: string;
 };
 
 export function buildStreamTuiPilottySpawnArgs(args: StreamTuiPilottySpawnArgs) {
@@ -16,8 +16,8 @@ export function buildStreamTuiPilottySpawnArgs(args: StreamTuiPilottySpawnArgs) 
     "packages/iterate/bin/iterate.js",
     "chat",
     "--project",
-    args.projectSlugOrId,
-    "--stream-path",
-    args.streamPath,
+    args.projectId,
+    "--agent-path",
+    args.agentPath,
   ];
 }

@@ -1,12 +1,12 @@
 /**
- * Stream worker: hosts every Stream Durable Object (journals, project event
- * streams, the global capture stream). Subscribers are dialed by env binding
- * name + DO name embedded in the subscription, so this worker carries
- * cross-script namespaces for every subscriber worker — including the ones
- * that bind STREAM back. Cyclic cross-script DO bindings are fine once both
- * scripts exist; see docs/worker-topology.md (bootstrap).
+ * The stream worker: hosts StreamDurableObject (per-DO worker topology — see
+ * docs/worker-topology.md). Every itx worker re-exports the
+ * shared loopback entrypoints so `ctx.exports` resolves identically in all
+ * of them.
  */
-export { Stream as StreamDurableObject } from "~/domains/streams/engine/workers/durable-objects/stream.ts";
+export { StreamDurableObject } from "../domains/streams/stream-durable-object.ts";
+export { ItxEntrypoint } from "../domains/itx/itx-entrypoint.ts";
+export { ProjectEgressEntrypoint } from "../domains/projects/egress.ts";
 
 export default {
   fetch: () => Response.json({ worker: "os-stream" }, { status: 404 }),

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
-import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Dialog,
@@ -13,6 +12,7 @@ import {
 import { Field, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
 import { cn } from "@iterate-com/ui/lib/utils";
+import { normalizePath } from "~/domains/durable-object-names.ts";
 import { readStreamStateOnce, type StreamNavigator } from "~/lib/stream-navigation.ts";
 import { streamPathAncestors, streamPathParent } from "~/lib/stream-links.ts";
 
@@ -23,7 +23,7 @@ const STREAM_PATH_PATTERN = /^(?:\/[a-z0-9_-]+)+$/;
 // The destination input prefills with the parent of the current stream, so the
 // default action creates a *sibling* (type a leaf, hit Create). Keep typing
 // past another "/" to go deeper, or edit the prefix to land anywhere.
-function destinationPrefill(currentPath: StreamPathType) {
+function destinationPrefill(currentPath: string) {
   const parent = streamPathParent(currentPath);
   return parent === "/" ? "/" : `${parent}/`;
 }
@@ -50,14 +50,14 @@ export function StreamSwitcherDialog({
   onOpenChange,
   currentPath,
   navigator,
-  rootPath = StreamPath.parse("/"),
+  rootPath = normalizePath("/"),
   scope,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  currentPath: StreamPathType;
+  currentPath: string;
   navigator: StreamNavigator;
-  rootPath?: StreamPathType;
+  rootPath?: string;
   scope: string;
 }) {
   const [expandedPaths, setExpandedPaths] = useState<ReadonlySet<string>>(new Set(["/"]));
@@ -81,7 +81,7 @@ export function StreamSwitcherDialog({
 
   function openStream(path: string) {
     onOpenChange(false);
-    navigator.onOpenPath(StreamPath.parse(path));
+    navigator.onOpenPath(normalizePath(path));
   }
 
   const normalizedDestination = normalizeDestination(destination);
@@ -174,7 +174,7 @@ function StreamTreeItem({
   const state = useQuery({
     queryKey: ["stream-switcher-children", tree.scope, path],
     queryFn: async () => {
-      const streamState = await readStreamStateOnce(tree.navigator.source, StreamPath.parse(path));
+      const streamState = await readStreamStateOnce(tree.navigator.source, normalizePath(path));
       return { eventCount: streamState.eventCount, childPaths: [...streamState.childPaths].sort() };
     },
   });

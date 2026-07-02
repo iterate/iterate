@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 
 import { useMutation } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { ArrowUpIcon } from "lucide-react";
-import { StreamPath } from "@iterate-com/shared/streams/types";
 import { Button } from "@iterate-com/ui/components/button";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { toast } from "@iterate-com/ui/components/sonner";
@@ -20,6 +19,7 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/agents/new")({
 
 function NewAgentPage() {
   const params = Route.useParams();
+  const { project } = Route.useLoaderData();
   const navigate = useNavigate();
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const [message, setMessage] = useState("");
@@ -31,15 +31,13 @@ function NewAgentPage() {
 
   const createAgent = useMutation({
     mutationFn: async (content: string) => {
-      const agentPath = StreamPath.parse(`/agents/web/${slugifyCreationTime(new Date())}`);
+      const agentPath = `/agents/web/${slugifyCreationTime(new Date())}`;
       // connectItx (imperative, not the suspending hook) lands on the project
-      // provider's socket. Agent setup is seeded server-side: create the
-      // stream, wait for the project processor to write the agent config fact,
-      // then append the user's first input.
-      const itx = await connectItx({ projectId: params.projectSlug });
-      await itx.streams.create({ streamPath: agentPath });
-      await waitForProjectAgentSetup(itx, agentPath);
-      await itx.agents.sendMessage({ agentPath, message: content, channel: "web" });
+      // provider's socket (keyed by project ID). Agents are lazily seeded by
+      // the project processor on the first stream append, so sending the first
+      // message IS the creation.
+      const itx = await connectItx({ projectId: project.id });
+      await itx.agents.get(agentPath).sendMessage(content);
       return agentPath;
     },
     onSuccess: (agentPath) => {
@@ -110,26 +108,6 @@ function NewAgentPage() {
       </form>
     </main>
   );
-}
-
-async function waitForProjectAgentSetup(
-  itx: Awaited<ReturnType<typeof connectItx>>,
-  streamPath: string,
-) {
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    const events = await itx.streams.get(streamPath).getEvents();
-    if (
-      events.some(
-        (event) =>
-          (event as { idempotencyKey?: string }).idempotencyKey === "project-agent-setup:config",
-      )
-    ) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error("Timed out waiting for agent setup.");
 }
 
 function slugifyCreationTime(date: Date) {

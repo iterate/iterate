@@ -1,20 +1,14 @@
-import {
-  createIterateAuth,
-  isAuthHandlerRequest,
-  type AuthenticatedSession,
-} from "@iterate-com/auth/server";
+import { isAuthHandlerRequest, type AuthenticatedSession } from "@iterate-com/auth/server";
 import { createMiddleware } from "@tanstack/react-start";
 import type { RequestContext } from "~/request-context.ts";
 import { authenticateAdminApiSecret } from "~/auth/admin.ts";
+import { createOsIterateAuth as createOsIterateAuthClient } from "~/auth/iterate-auth-client.ts";
+import type { OsIterateAuth } from "~/auth/iterate-auth-client.ts";
 import {
   principalFromAccessToken,
   principalFromSession,
   type Principal,
 } from "~/auth/principal.ts";
-
-type OsIterateAuth = ReturnType<typeof createIterateAuth>;
-
-const authClients = new Map<string, OsIterateAuth>();
 
 // Registered as requestMiddleware in src/start.ts — `type: "request"` makes
 // early `Response` returns part of the contract (and the context it passes to
@@ -125,25 +119,5 @@ async function authenticateBearerPrincipal(input: {
 }
 
 export function createOsIterateAuth(context: RequestContext, request: Request) {
-  const config = context.config.iterateAuth;
-  if (!config) return null;
-
-  const requestOrigin = new URL(request.url).origin;
-  const resource = (config.resource ?? context.config.baseUrl ?? requestOrigin).replace(/\/+$/, "");
-  const authConfig = {
-    issuer: config.issuer,
-    clientId: config.clientId,
-    clientSecret: config.clientSecret.exposeSecret(),
-    jwks: config.jwks,
-    redirectURI: `${(context.config.baseUrl ?? requestOrigin).replace(/\/+$/, "")}/api/iterate-auth/callback`,
-    resource: [resource],
-    logoutReturnToOrigins: context.config.baseUrl ? [context.config.baseUrl] : undefined,
-  };
-  const cacheKey = JSON.stringify(authConfig);
-  const cached = authClients.get(cacheKey);
-  if (cached) return cached;
-
-  const auth = createIterateAuth(authConfig);
-  authClients.set(cacheKey, auth);
-  return auth;
+  return createOsIterateAuthClient(context.config, request.url);
 }

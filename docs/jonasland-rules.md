@@ -88,7 +88,7 @@ Canonical service stack:
 - itx capability handles for OS project runtime surfaces
 - oRPC only where the service still has an oRPC API
 - TanStack Form + shadcn field components from `packages/ui`
-- DB: sqlfu + D1 (`apps/os`, `apps/auth`), raw SQL migrations on D1 (`apps/semaphore`), or DO-local SQLite
+- DB: sqlfu + D1 (`apps/auth`), raw SQL migrations on D1 (`apps/semaphore`), or DO-local SQLite (`apps/os` — OS has no D1)
 
 Service patterns that should stay true:
 

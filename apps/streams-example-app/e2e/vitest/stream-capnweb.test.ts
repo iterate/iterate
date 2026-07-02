@@ -1,19 +1,11 @@
 import { RpcTarget } from "capnweb";
 import { describe, expect, it } from "vitest";
-import {
-  e2eStreamPath,
-  e2eStreamPathLabel,
-  streamProcessorRunnerName,
-  toStreamWebSocketUrl,
-} from "../helpers.ts";
-import {
-  DEFAULT_STREAM_PROJECT_ID,
-  withStreamConnectionFromBrowser,
-} from "../../src/lib/stream-rpc.ts";
+import { e2eStreamPath, e2eStreamPathLabel, toStreamWebSocketUrl } from "../helpers.ts";
+import { withStreamConnectionFromBrowser } from "../../src/lib/stream-rpc.ts";
 import { withStreamConnectionFromNode } from "../../src/lib/node-stream-connection.ts";
 import type { WebSocketFrame } from "../../src/lib/stream-connection.ts";
-import type { StreamEvent, StreamEventInput } from "~/domains/streams/engine/shared/event.ts";
-import { durableObjectProcessorSubscriber } from "~/domains/streams/engine/shared/callable-subscriber.ts";
+import type { StreamEvent, StreamEventInput } from "~/types.ts";
+
 const e2eIt = process.env.STREAM_STAGING_E2E === "true" ? it : it.skip;
 const e2eItFails = process.env.STREAM_STAGING_E2E === "true" ? it.fails : it.skip;
 
@@ -37,11 +29,9 @@ describe("stream capnweb protocol", () => {
       url: toStreamWebSocketUrl({ path }),
     });
 
-    const appended = await stream.stream.append({
-      event: {
-        type: "test.stream.browser-client",
-        payload: { path },
-      },
+    const [appended] = await stream.stream.append({
+      type: "test.stream.browser-client",
+      payload: { path },
     });
 
     expect(appended).toMatchObject({
@@ -56,11 +46,9 @@ describe("stream capnweb protocol", () => {
     const path = e2eStreamPathLabel("stream-capnweb-append");
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
 
-    const appended = await stream.stream.append({
-      event: {
-        type: "test.stream.capnweb-append",
-        payload: { path },
-      },
+    const [appended] = await stream.stream.append({
+      type: "test.stream.capnweb-append",
+      payload: { path },
     });
 
     expect(appended).toMatchObject({
@@ -86,7 +74,8 @@ describe("stream capnweb protocol", () => {
 
     expect(Buffer.byteLength(JSON.stringify(event), "utf8")).toBeGreaterThan(2 * 1024 * 1024);
 
-    const appended = await stream.stream.append({ event });
+    const [appended] = await stream.stream.append(event);
+    if (appended === undefined) throw new Error("append returned no event");
     expect(appended).toMatchObject({
       type: "test.stream.capnweb-large-row",
       offset: 3,
@@ -104,11 +93,9 @@ describe("stream capnweb protocol", () => {
     expect(events[0]?.offset).toBe(appended.offset);
     expectLargePayload(events[0], body.length);
 
-    const afterLargeRow = await stream.stream.append({
-      event: {
-        type: "test.stream.capnweb-after-large-row",
-        payload: { path },
-      },
+    const [afterLargeRow] = await stream.stream.append({
+      type: "test.stream.capnweb-after-large-row",
+      payload: { path },
     });
     expect(afterLargeRow).toMatchObject({
       type: "test.stream.capnweb-after-large-row",
@@ -132,26 +119,23 @@ describe("stream capnweb protocol", () => {
       // This is expected to fail before stream storage sees the event: Cloudflare
       // accepts inbound WebSocket messages up to 32 MiB, and capnweb serializes
       // a single append call into one WebSocket message.
-      await stream.stream.append({ event });
+      await stream.stream.append(event);
     },
   );
 
-  // Cross-stream append must land on the same leading-slash DO name the rest of the
-  // system uses. The regressed `#resolveStream` stripped the leading slash, so an event
-  // appended via `streamPath` went to `default:e2e/.../child` while a reader connects to
-  // `default:/e2e/.../child` — a different, empty stream. These prove path resolution.
-  e2eIt('append resolves relative child paths ("child" and "./child")', async () => {
+  // Cross-stream appends now go through the public `Stream.at(relativePath)`
+  // capability. These prove path resolution lands on the same leading-slash DO
+  // coordinates a direct reader connects to.
+  e2eIt('at() resolves relative child paths ("child" and "./child")', async () => {
     const base = e2eStreamPathLabel("e2e/resolve-child");
     using parent = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path: base }) });
 
-    const viaBare = await parent.stream.append({
-      streamPath: "child",
-      event: { type: "test.stream.resolve", payload: { kind: "bare" } },
-    });
-    const viaDot = await parent.stream.append({
-      streamPath: "./child",
-      event: { type: "test.stream.resolve", payload: { kind: "dot" } },
-    });
+    const [viaBare] = await parent.stream
+      .at("child")
+      .append({ type: "test.stream.resolve", payload: { kind: "bare" } });
+    const [viaDot] = await parent.stream
+      .at("./child")
+      .append({ type: "test.stream.resolve", payload: { kind: "dot" } });
 
     // Both forms resolve to the same `${base}/child` stream the reader connects to.
     using child = withStreamConnectionFromNode({
@@ -160,23 +144,23 @@ describe("stream capnweb protocol", () => {
     const events = await child.stream.getEvents({ afterOffset: 0 });
     expect(events).toContainEqual(viaBare);
     expect(events).toContainEqual(viaDot);
-    expect(viaBare.offset).not.toBe(viaDot.offset);
+    expect(viaBare?.offset).not.toBe(viaDot?.offset);
 
-    // Nothing leaked into the parent.
+    // Nothing leaked into the parent (the child's created announcement is the
+    // only parent-side trace, and it is a stream/child-stream-created fact).
     const parentEvents = await parent.stream.getEvents({ afterOffset: 0 });
     expect(parentEvents.some((event) => event.type === "test.stream.resolve")).toBe(false);
   });
 
-  e2eIt("append resolves an absolute /root/path", async () => {
+  e2eIt("at() resolves an absolute /root/path", async () => {
     const unique = crypto.randomUUID();
     const base = e2eStreamPath(`/e2e/resolve-abs-${unique}`);
     const target = e2eStreamPath(`/e2e/resolve-abs-target-${unique}`);
     using parent = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path: base }) });
 
-    const appended = await parent.stream.append({
-      streamPath: target,
-      event: { type: "test.stream.resolve", payload: { kind: "absolute" } },
-    });
+    const [appended] = await parent.stream
+      .at(target)
+      .append({ type: "test.stream.resolve", payload: { kind: "absolute" } });
 
     using targetStream = withStreamConnectionFromNode({
       url: toStreamWebSocketUrl({ path: target }),
@@ -188,17 +172,16 @@ describe("stream capnweb protocol", () => {
     expect(parentEvents.some((event) => event.type === "test.stream.resolve")).toBe(false);
   });
 
-  e2eIt("append resolves ..-relative parent, grandparent and mixed paths", async () => {
+  e2eIt("at() resolves ..-relative parent, grandparent and mixed paths", async () => {
     const root = e2eStreamPathLabel("e2e/resolve-up");
     using current = withStreamConnectionFromNode({
       url: toStreamWebSocketUrl({ path: `${root}/a/b/c` }),
     });
 
     // ../parent -> {root}/a/b/parent
-    const toParent = await current.stream.append({
-      streamPath: "../parent",
-      event: { type: "test.stream.resolve", payload: { kind: "parent" } },
-    });
+    const [toParent] = await current.stream
+      .at("../parent")
+      .append({ type: "test.stream.resolve", payload: { kind: "parent" } });
     using parentStream = withStreamConnectionFromNode({
       url: toStreamWebSocketUrl({ path: `${root}/a/b/parent` }),
     });
@@ -207,70 +190,63 @@ describe("stream capnweb protocol", () => {
     );
 
     // ../../grandparent -> {root}/a/grandparent
-    const toGrand = await current.stream.append({
-      streamPath: "../../grandparent",
-      event: { type: "test.stream.resolve", payload: { kind: "grandparent" } },
-    });
+    const [toGrand] = await current.stream
+      .at("../../grandparent")
+      .append({ type: "test.stream.resolve", payload: { kind: "grandparent" } });
     using grandStream = withStreamConnectionFromNode({
       url: toStreamWebSocketUrl({ path: `${root}/a/grandparent` }),
     });
     await expect(grandStream.stream.getEvents({ afterOffset: 0 })).resolves.toContainEqual(toGrand);
 
     // ../../grandparent/.././bla normalizes to {root}/a/bla
-    const toMixed = await current.stream.append({
-      streamPath: "../../grandparent/.././bla",
-      event: { type: "test.stream.resolve", payload: { kind: "mixed" } },
-    });
+    const [toMixed] = await current.stream
+      .at("../../grandparent/.././bla")
+      .append({ type: "test.stream.resolve", payload: { kind: "mixed" } });
     using blaStream = withStreamConnectionFromNode({
       url: toStreamWebSocketUrl({ path: `${root}/a/bla` }),
     });
     await expect(blaStream.stream.getEvents({ afterOffset: 0 })).resolves.toContainEqual(toMixed);
   });
 
-  e2eIt("append rejects a streamPath that escapes the stream root", async () => {
+  e2eIt("at() rejects a path that escapes the stream root", async () => {
     // base has depth 2 ([e2e, resolve-escape-...]); three `..` pops past the root.
     const base = e2eStreamPathLabel("e2e/resolve-escape");
     using parent = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path: base }) });
 
     await expect(
-      parent.stream.append({
-        streamPath: "../../../too-far",
-        event: { type: "test.stream.resolve", payload: { kind: "escape" } },
-      }),
+      parent.stream
+        .at("../../../too-far")
+        .append({ type: "test.stream.resolve", payload: { kind: "escape" } }),
     ).rejects.toThrow();
   });
 
-  e2eIt("appendBatch returns events in input order including idempotency hits", async () => {
+  e2eIt("append returns events in input order including idempotency hits", async () => {
     const path = e2eStreamPathLabel("stream-capnweb-batch");
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
 
-    const existing = await stream.stream.append({
-      event: {
-        type: "test.stream.capnweb-batch-existing",
-        idempotencyKey: "batch-existing",
-        payload: { path },
-      },
+    const [existing] = await stream.stream.append({
+      type: "test.stream.capnweb-batch-existing",
+      idempotencyKey: "batch-existing",
+      payload: { path },
     });
     await expect(stream.stream.getEvent({ idempotencyKey: "batch-existing" })).resolves.toEqual(
       existing,
     );
-    const batch = await stream.stream.appendBatch({
-      events: [
-        {
-          type: "test.stream.capnweb-batch-new",
-          payload: { n: 1 },
-        },
-        {
-          type: "test.stream.capnweb-batch-existing",
-          idempotencyKey: "batch-existing",
-          payload: { path },
-        },
-        {
-          type: "test.stream.capnweb-batch-new",
-          payload: { n: 2 },
-        },
-      ],
-    });
+    const batch = await stream.stream.append(
+      {
+        type: "test.stream.capnweb-batch-new",
+        payload: { n: 1 },
+      },
+      {
+        type: "test.stream.capnweb-batch-existing",
+        idempotencyKey: "batch-existing",
+        payload: { path },
+      },
+      {
+        type: "test.stream.capnweb-batch-new",
+        payload: { n: 2 },
+      },
+    );
 
     expect(batch).toMatchObject([
       {
@@ -291,20 +267,18 @@ describe("stream capnweb protocol", () => {
     const path = e2eStreamPathLabel("stream-capnweb-same-batch-idempotency");
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
 
-    const batch = await stream.stream.appendBatch({
-      events: [
-        {
-          type: "test.stream.capnweb-same-batch-idempotency",
-          idempotencyKey: "same-batch",
-          payload: { n: 1 },
-        },
-        {
-          type: "test.stream.capnweb-same-batch-idempotency",
-          idempotencyKey: "same-batch",
-          payload: { n: 2 },
-        },
-      ],
-    });
+    const batch = await stream.stream.append(
+      {
+        type: "test.stream.capnweb-same-batch-idempotency",
+        idempotencyKey: "same-batch",
+        payload: { n: 1 },
+      },
+      {
+        type: "test.stream.capnweb-same-batch-idempotency",
+        idempotencyKey: "same-batch",
+        payload: { n: 2 },
+      },
+    );
 
     expect(batch[1]).toEqual(batch[0]);
     await expect(
@@ -322,18 +296,16 @@ describe("stream capnweb protocol", () => {
     const path = e2eStreamPathLabel("stream-capnweb-cursors");
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
 
-    await stream.stream.appendBatch({
-      events: [
-        {
-          type: "test.stream.capnweb-cursor",
-          payload: { n: 1 },
-        },
-        {
-          type: "test.stream.capnweb-cursor",
-          payload: { n: 2 },
-        },
-      ],
-    });
+    await stream.stream.append(
+      {
+        type: "test.stream.capnweb-cursor",
+        payload: { n: 1 },
+      },
+      {
+        type: "test.stream.capnweb-cursor",
+        payload: { n: 2 },
+      },
+    );
 
     await expect(stream.stream.getEvents({ afterOffset: 0 })).resolves.toMatchObject([
       { offset: 1 },
@@ -350,53 +322,33 @@ describe("stream capnweb protocol", () => {
     ]);
   });
 
-  e2eIt("exposes the stream reducer as an RPC method", async () => {
-    const path = e2eStreamPathLabel("stream-capnweb-reduce");
-    using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
-
-    const state = await stream.stream.reduce({
-      event: {
-        type: "events.iterate.com/stream/configured",
-        offset: 3,
-        createdAt: new Date().toISOString(),
-        payload: {
-          config: {
-            simulatedStorageSyncDelayMs: 25,
-          },
-        },
-      },
-    });
-
-    expect(state.config.simulatedStorageSyncDelayMs).toBe(25);
-  });
-
-  e2eIt("replays history and then delivers live batches to inbound subscribers", async () => {
+  e2eIt("replays history and then delivers live batches to subscribers", async () => {
     const path = e2eStreamPathLabel("stream-capnweb-replay");
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
 
-    const first = await stream.stream.append({
-      event: {
-        type: "test.stream.capnweb-replay",
-        payload: { n: 1 },
-      },
+    const [first] = await stream.stream.append({
+      type: "test.stream.capnweb-replay",
+      payload: { n: 1 },
     });
 
     const callback = new TestSubscriptionCallback();
-    await stream.stream.subscribe({
+    using subscription = await stream.stream.subscribe({
       subscriptionKey: "replay",
       processEventBatch: (batch) => callback.processEventBatch(batch),
       replayAfterOffset: 0,
     });
     await waitFor(() => callback.batches.length === 1, 1_000);
 
-    const second = await stream.stream.append({
-      event: {
-        type: "test.stream.capnweb-replay",
-        payload: { n: 2 },
-      },
+    const [second] = await stream.stream.append({
+      type: "test.stream.capnweb-replay",
+      payload: { n: 2 },
     });
     await waitFor(() => callback.batches.length === 2, 1_000);
     const runtime = await stream.stream.runtimeState();
+    const coreProcessorState = runtime.coreProcessorState as {
+      projectId: string | null;
+      path: string;
+    };
 
     expect(callback.batches).toEqual([
       [
@@ -404,7 +356,7 @@ describe("stream capnweb protocol", () => {
           type: "events.iterate.com/stream/created",
           offset: 1,
           payload: {
-            projectId: runtime.coreProcessorState.projectId,
+            projectId: coreProcessorState.projectId,
             path,
           },
         }),
@@ -423,13 +375,14 @@ describe("stream capnweb protocol", () => {
           type: "events.iterate.com/stream/subscriber-connected",
           offset: 4,
           payload: {
-            direction: "inbound",
             subscriptionKey: "replay",
+            subscriptionType: "ephemeral",
           },
         }),
       ],
       [second],
     ]);
+    await subscription.unsubscribe();
   });
 
   e2eIt("assigns a subscription key when subscribe omits one", async () => {
@@ -438,35 +391,32 @@ describe("stream capnweb protocol", () => {
 
     const callbackA = new TestSubscriptionCallback();
     const callbackB = new TestSubscriptionCallback();
-    const first = await stream.stream.subscribe({
+    using first = await stream.stream.subscribe({
       processEventBatch: (batch) => callbackA.processEventBatch(batch),
     });
-    const second = await stream.stream.subscribe({
+    using second = await stream.stream.subscribe({
       processEventBatch: (batch) => callbackB.processEventBatch(batch),
     });
 
-    expect(first.subscriptionKey).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
-    );
-    expect(second.subscriptionKey).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
-    );
-    expect(first.subscriptionKey).not.toBe(second.subscriptionKey);
+    const firstKey = await first.subscriptionKey;
+    const secondKey = await second.subscriptionKey;
+    expect(firstKey).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    expect(secondKey).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    expect(firstKey).not.toBe(secondKey);
 
     const runtime = await stream.stream.runtimeState();
-    expect(runtime.runtime.connections[first.subscriptionKey]).toMatchObject({
-      direction: "inbound",
+    expect(runtime.runtime.connections[firstKey]).toMatchObject({
+      subscriptionType: "ephemeral",
     });
-    expect(runtime.runtime.connections[second.subscriptionKey]).toMatchObject({
-      direction: "inbound",
+    expect(runtime.runtime.connections[secondKey]).toMatchObject({
+      subscriptionType: "ephemeral",
     });
 
-    const appended = await stream.stream.append({
-      event: {
-        type: "test.stream.capnweb-anon-sub",
-        payload: { path },
-      },
+    const [appended] = await stream.stream.append({
+      type: "test.stream.capnweb-anon-sub",
+      payload: { path },
     });
+    if (appended === undefined) throw new Error("append returned no event");
     // Each subscribe also appends a subscriber-connected presence fact, and
     // every subscription gets an initial state push — batch counts are not
     // stable here, so wait for the content instead.
@@ -480,104 +430,47 @@ describe("stream capnweb protocol", () => {
     expect(callbackB.batches.at(-1)).toEqual([appended]);
     const callbackABatchesBeforeUnsubscribe = callbackA.batches.length;
 
-    first.unsubscribe();
-    const afterUnsubscribe = await stream.stream.append({
-      event: {
-        type: "test.stream.capnweb-anon-sub-after-unsub",
-        payload: { path },
-      },
+    await first.unsubscribe();
+    const [afterUnsubscribe] = await stream.stream.append({
+      type: "test.stream.capnweb-anon-sub-after-unsub",
+      payload: { path },
     });
+    if (afterUnsubscribe === undefined) throw new Error("append returned no event");
     await waitFor(() => delivered(callbackB, afterUnsubscribe.offset), 1_000);
     expect(callbackA.batches.length).toBe(callbackABatchesBeforeUnsubscribe);
   });
 
-  e2eIt("runs a hosted outbound processor from subscription-configured @preview", async () => {
-    const path = e2eStreamPathLabel("stream-capnweb-processor");
-    const subscriptionKey = `hosted-echo-${crypto.randomUUID()}`;
+  // The pre-itx-v4 hosted circuit-breaker processor is gone; the pause
+  // door it drove is core stream behavior on itx, exercised here
+  // directly through the public paused/resumed events.
+  e2eIt("pauses and resumes ordinary appends through the core stream gate", async () => {
+    const path = e2eStreamPathLabel("stream-capnweb-pause-gate");
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
 
     await stream.stream.append({
-      event: {
-        type: "events.iterate.com/stream/subscription-configured",
-        idempotencyKey: `subscription:${subscriptionKey}`,
-        payload: {
-          subscriptionKey,
-          subscriber: durableObjectProcessorSubscriber({
-            bindingName: "STREAM_PROCESSOR_RUNNER",
-            durableObjectName: streamProcessorRunnerName({
-              projectId: DEFAULT_STREAM_PROJECT_ID,
-              path,
-              subscriptionKey,
-            }),
-            processorName: "echo-example",
-          }),
-        },
-      },
+      type: "events.iterate.com/stream/paused",
+      payload: { reason: "e2e pause" },
     });
-
-    await stream.stream.append({
-      event: {
-        type: "events.iterate.com/echo-example/input-received",
-        payload: { path },
-      },
-    });
-
-    await waitFor(async () => {
-      const events = await stream.stream.getEvents({});
-      return events.some((event) => event.type === "events.iterate.com/echo-example/output-echoed");
-    }, 4_000);
-  });
-
-  e2eIt("runs the hosted circuit breaker processor from a built-in subscription", async () => {
-    const path = e2eStreamPathLabel("stream-capnweb-hosted-circuit-breaker");
-    const subscriptionKey = `hosted-breaker-${crypto.randomUUID()}`;
-    using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
-
-    await stream.stream.append({
-      event: {
-        type: "events.iterate.com/stream/subscription-configured",
-        idempotencyKey: `subscription:${subscriptionKey}`,
-        payload: {
-          subscriptionKey,
-          subscriber: durableObjectProcessorSubscriber({
-            bindingName: "STREAM_PROCESSOR_RUNNER",
-            durableObjectName: streamProcessorRunnerName({
-              projectId: DEFAULT_STREAM_PROJECT_ID,
-              path,
-              subscriptionKey,
-            }),
-            processorName: "circuit-breaker",
-          }),
-        },
-      },
-    });
-
-    await stream.stream.append({
-      event: {
-        type: "events.iterate.com/circuit-breaker/configured",
-        payload: { burstCapacity: 1, refillRatePerMinute: 1 },
-      },
-    });
-    await stream.stream.append({
-      event: { type: "test.hosted-circuit-breaker.input", payload: { n: 1 } },
-    });
-    await stream.stream.append({
-      event: { type: "test.hosted-circuit-breaker.input", payload: { n: 2 } },
-    });
-
-    await waitFor(async () => {
-      const streamRuntime = await stream.stream.runtimeState();
-      return streamRuntime.coreProcessorState.paused;
-    }, 10_000);
 
     await expect(
       stream.stream.append({
-        event: { type: "test.hosted-circuit-breaker.rejected", payload: { path } },
+        type: "test.stream.pause-gate.rejected",
+        payload: { path },
       }),
     ).rejects.toThrow("stream paused");
+
+    await stream.stream.append({
+      type: "events.iterate.com/stream/resumed",
+      payload: { reason: "e2e resume" },
+    });
+    const [afterResume] = await stream.stream.append({
+      type: "test.stream.pause-gate.accepted",
+      payload: { path },
+    });
+    expect(afterResume).toMatchObject({ type: "test.stream.pause-gate.accepted" });
   });
 
-  e2eIt("delivers event batches without subscriber-originated return traffic", async () => {
+  e2eIt("delivers event batches without subscriber-originated requests", async () => {
     const path = e2eStreamPathLabel("stream-capnweb-wire");
     const callback = new TestSubscriptionCallback();
 
@@ -596,7 +489,8 @@ describe("stream capnweb protocol", () => {
       type: "test.stream.capnweb-wire",
       payload: { path },
     };
-    const appended = await publisher.stream.append({ event: input });
+    const [appended] = await publisher.stream.append(input);
+    if (appended === undefined) throw new Error("append returned no event");
     // Deliveries before the published event: the subscription's initial state
     // push (events: []) and/or the subscriber's own subscriber-connected
     // presence fact (offset 3, appended during subscribe) — wait for content.
@@ -622,12 +516,17 @@ describe("stream capnweb protocol", () => {
       }),
       appended,
     ]);
-    expect(outboundFrames(frames, afterSubscribe)).toEqual([]);
+    // Deliveries are server pushes: the subscriber never ORIGINATES a request
+    // for them. Unlike the pre-itx-v4 implementation, the itx worker→DO bridge
+    // observes each delivery's result, so the browser answers every push with
+    // one `resolve` frame — allowed here; anything else outbound is not.
+    const outbound = outboundFrames(frames, afterSubscribe);
+    expect(outbound.every((frame) => Array.isArray(frame) && frame[0] === "resolve")).toBe(true);
 
     const inbound = parsedFrames(frames)
       .slice(afterSubscribe)
       .filter((frame) => frame.direction === "in");
-    expect(inbound.every((frame) => isPushOrReleaseFrame(frame.data))).toBe(true);
+    expect(inbound.every((frame) => isDeliveryProtocolFrame(frame.data))).toBe(true);
     // Earlier push frames race the `afterSubscribe` snapshot and each other:
     // the subscription's initial state push (events: []) and the
     // subscriber-connected fact's delivery. Assert the last frame (the
@@ -677,9 +576,16 @@ function outboundFrames(messages: WebSocketFrame[], afterFrameIndex: number) {
     .map((frame) => frame.data);
 }
 
-/** Protocol predicate for inbound frames that are allowed during subscribe teardown. */
-function isPushOrReleaseFrame(value: unknown) {
-  return isPushFrame(value) || (Array.isArray(value) && value[0] === "release");
+/**
+ * Protocol predicate for inbound frames that batch delivery may produce: the
+ * push itself, the server's pull of the delivery result (itx
+ * observes it — see the resolve-frame note in the wire test), and releases
+ * during subscribe teardown.
+ */
+function isDeliveryProtocolFrame(value: unknown) {
+  return (
+    isPushFrame(value) || (Array.isArray(value) && (value[0] === "release" || value[0] === "pull"))
+  );
 }
 
 function isPushFrame(value: unknown) {

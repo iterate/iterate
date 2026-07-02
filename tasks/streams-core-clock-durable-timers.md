@@ -19,7 +19,7 @@ homogenization task), there is a residual hole: if a host crashes and _nothing_
 ever pokes the stream or the host again, in-flight work stays dangling and
 scheduled work never fires. Time-based behavior today is warm-instance
 `setTimeout` only (the agent debounce timer in
-`apps/os/src/domains/agents/stream-processors/agent/implementation.ts`).
+`apps/os/src/domains/agents/agent-processor-implementation.ts`).
 
 ## Idea
 

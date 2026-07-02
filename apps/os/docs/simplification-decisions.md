@@ -1,5 +1,10 @@
 # OS simplification: decisions & learnings
 
+> **Status: historical working log (2026-06, pre-itx-v4-migration).** Several
+> file paths below (`src/debug-routes.ts`, `src/domains/...`, oRPC surfaces)
+> were deleted in the itx-v4 replacement. The route-tree/Register learnings
+> and the `__internal/debug` security incident remain relevant.
+
 Working log for the golden-path refactor of `apps/os` (TanStack Start + oRPC +
 Cloudflare Workers, no "apps" framework). Newest entries at the bottom.
 

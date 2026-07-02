@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { handleMcpStartRoute } from "./api.mcp.ts";
-import { handleIntegrationApiRequest } from "~/domains/secrets/integration-api.ts";
 import { MCP_START_MOUNT_PATH } from "~/lib/mcp-base-url.ts";
+import { handleIntegrationApiRequest } from "~/domains/integrations/integration-api.ts";
 
 export const Route = createFileRoute("/api/$")({
   server: {
@@ -14,11 +14,11 @@ export const Route = createFileRoute("/api/$")({
         }
 
         const integrationResponse = await handleIntegrationApiRequest({
-          auth: requestContext.principal,
+          auth: context.principal,
           context: requestContext,
           request,
         });
-        if (integrationResponse) return integrationResponse;
+        if (integrationResponse !== null) return integrationResponse;
 
         return Response.json({ error: "not_found" }, { status: 404 });
       },

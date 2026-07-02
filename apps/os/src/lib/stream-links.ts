@@ -1,4 +1,26 @@
-import { StreamPath } from "@iterate-com/shared/streams/types";
+import { z } from "zod";
+
+// Canonical stream path (leading slash, lowercase kebab segments), formerly
+// the shared streams package's StreamPath. This module owns stream-path URL
+// plumbing, so the schema lives here; other UI modules import it from here.
+const CanonicalStreamPath = z
+  .string()
+  .max(1023)
+  .regex(/^\/(?:[a-z0-9_-]+(?:\/[a-z0-9_-]+)*)?$/);
+
+export const StreamPath = z.preprocess<string, typeof CanonicalStreamPath, string>((value) => {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  try {
+    const decoded = decodeURIComponent(value);
+    return decoded.startsWith("/") ? decoded : `/${decoded}`;
+  } catch {
+    return value;
+  }
+}, CanonicalStreamPath);
+export type StreamPath = z.infer<typeof StreamPath>;
 
 const ROOT_SPLAT = "%2F";
 

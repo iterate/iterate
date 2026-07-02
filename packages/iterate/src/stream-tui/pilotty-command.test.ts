@@ -7,8 +7,8 @@ describe("buildStreamTuiPilottySpawnArgs", () => {
       buildStreamTuiPilottySpawnArgs({
         sessionName: "stream-tui",
         cwd: "/repo",
-        projectSlugOrId: "public",
-        streamPath: "/demo",
+        projectId: "prj_demo",
+        agentPath: "/agents/onboarding",
       }),
     ).toEqual([
       "spawn",
@@ -20,9 +20,9 @@ describe("buildStreamTuiPilottySpawnArgs", () => {
       "packages/iterate/bin/iterate.js",
       "chat",
       "--project",
-      "public",
-      "--stream-path",
-      "/demo",
+      "prj_demo",
+      "--agent-path",
+      "/agents/onboarding",
     ]);
   });
 });

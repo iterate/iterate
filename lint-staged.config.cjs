@@ -20,7 +20,7 @@ const baseConfig = {
     () => "pnpm -C apps/semaphore sqlfu:generate",
     "git add apps/semaphore/migrations/.generated apps/semaphore/sql/.generated",
   ],
-  ".opencode/skills/**": [
+  ".agents/skills/**": [
     () => "pnpm -C apps/iterate-com skills:generate",
     "git add apps/iterate-com/backend/generated/skills-registry.ts",
   ],

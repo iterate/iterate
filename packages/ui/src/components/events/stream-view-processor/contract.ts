@@ -4,8 +4,8 @@ import {
   getInitialProcessorState,
   runProcessorReduce,
   type StreamEvent,
-} from "@iterate-com/shared/streams/stream-processors";
-import type { Event, StreamPath } from "@iterate-com/shared/streams/types";
+} from "../stream-processor-fold/stream-processors.ts";
+import type { Event, StreamPath } from "../types.ts";
 import type {
   EventsStreamActivityState,
   EventsStreamBuiltInElement,

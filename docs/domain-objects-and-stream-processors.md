@@ -66,7 +66,23 @@ What this doctrine buys, every time:
   moment it exists. The acceptance test: an agent with no prior
   knowledge, handed a stub, acts competently from describe() alone.
 
-The itx capability layer is the reference implementation of all of this
-(see `apps/os/docs/itx-next.md`, "The address unification"); a context is
-a domain object whose state is its capability table and whose creation
-event is `context-created`.
+## Events
+
+Use the event naming rules in [Event naming](events.md). The short version:
+events are past-tense facts, event types are `events.iterate.com/...` URI
+strings, and request events use `-requested` only when the fact being recorded
+is that someone asked for an asynchronous side effect.
+
+Every stream processor contract should make its event vocabulary explicit:
+event schemas and reducers live in the `*-processor-contract.ts` file, while
+side effects live in the matching `*-processor-implementation.ts` file. Raw
+third-party ingress should preserve the vendor payload as a
+`.../webhook-received` event before a processor projects it into the normalized
+domain facts that other processors consume.
+
+itx (`apps/os/src/`) is the reference implementation of all
+of this: every domain (projects, repos, agents, secrets, itx scopes) is a
+processor contract folding its own stream, and a capability context is a
+domain object whose state is its capability table, rebuilt from
+`capability-provided` events. (Design lineage: `apps/os/docs/itx-design.md`,
+"The address unification" — a pre-migration record.)

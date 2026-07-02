@@ -13,8 +13,9 @@ reconciler/request-by-reference work (PRs #1460, #1483).
 ## Problem
 
 LLM request processors guard agent-visible appends with a still-current check
-(`isAgentLlmRequestStillCurrent` in
-`apps/os/src/domains/agents/stream-processors/llm-request-helpers.ts`): they
+(`#isRequestStillCurrent` in
+`apps/os/src/domains/agents/cloudflare-ai-processor-implementation.ts` and
+`apps/os/src/domains/agents/openai-ws-processor-implementation.ts`): they
 re-read committed history and only append `agent/output-added` if the agent is
 still waiting on this request. That is check-then-act — if an
 `agent/llm-request-cancelled` commits between the check and the append, the

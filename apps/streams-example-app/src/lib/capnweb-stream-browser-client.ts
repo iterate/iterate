@@ -7,7 +7,8 @@ import {
   asBrowserStreamClient,
   type BrowserStreamClient,
   type BrowserStreamClientFactory,
-} from "~/domains/streams/engine/browser/stream-browser-store.ts";
+} from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
+import type { Stream } from "~/types.ts";
 
 export const createCapnwebStreamClient: BrowserStreamClientFactory = async (
   args,
@@ -22,5 +23,9 @@ export const createCapnwebStreamClient: BrowserStreamClientFactory = async (
     onConnectionStatusChange: args.onConnectionStatusChange,
   });
 
-  return asBrowserStreamClient(connection.stream, () => connection[Symbol.dispose]());
+  // The capnweb stub satisfies the next `Stream` capability structurally; the
+  // stub's pipelined return types just need collapsing back to plain promises.
+  return asBrowserStreamClient(connection.stream as unknown as Stream, () =>
+    connection[Symbol.dispose](),
+  );
 };

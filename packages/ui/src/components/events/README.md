@@ -24,10 +24,6 @@ items" versus "feed items" inside the feed slot.
 
 - `CONTEXT.md` defines the shared language: Rendered Element, Slot, Feed Item,
   and Stream View Reducer.
-- `DESIGN-EXPLORATION.md` sketches the slot model, prototype shapes, risks, and
-  open questions for the next refactor pass.
-- `SLOT-PROTOTYPES.md` sketches concrete event-to-slot snapshots that can later
-  become tests.
 - `feed-items.ts` defines `EventsStreamRenderedElement`, built-in element prop
   types, `EventsStreamSlots`, and the reduced stream view state.
 - `stream-view-processor/contract.ts` defines `StreamViewProcessorContract`,

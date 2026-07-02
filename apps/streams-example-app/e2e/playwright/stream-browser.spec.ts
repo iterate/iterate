@@ -45,35 +45,39 @@ test("stream page appends through the shared browser mirror @preview", async ({ 
   await expect(eventMeta(page, type).first()).toBeVisible();
 });
 
-test("sidebar circuit breaker config runs the hosted built-in processor", async ({ page }) => {
+// The pre-itx-v4 hosted circuit-breaker processor (via the removed
+// StreamProcessorRunner DO) is gone; on itx the pause door is core
+// stream behavior, driven directly through the sidebar's pause/resume gate.
+test("sidebar stream gate pauses and resumes ordinary appends", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
   await page.goto(streamRoute({ path: streamPath }));
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
 
-  await page.getByTestId("circuit-breaker-burst-capacity").fill("1");
-  await page.getByTestId("circuit-breaker-refill-rate").fill("1");
-  await page.getByTestId("circuit-breaker-apply").click();
+  await expect(page.getByTestId("stream-gate-status")).toHaveText("Active", { timeout: 10_000 });
+  await page.getByTestId("stream-pause-button").click();
   await expect(page.getByTestId("stream-control-action")).toHaveText("done");
-  await expect(
-    eventMeta(page, "events.iterate.com/stream/subscription-configured").first(),
-  ).toBeVisible();
-  await expect(
-    eventMeta(page, "events.iterate.com/circuit-breaker/configured").first(),
-  ).toBeVisible();
+  await expect(page.getByTestId("stream-gate-status")).toHaveText("Paused", { timeout: 10_000 });
+  await expect(page.getByTestId("stream-pause-reason")).toContainText("operator pause");
+  await expect(eventMeta(page, "events.iterate.com/stream/paused").first()).toBeVisible();
 
+  // Ordinary appends are rejected while the gate is paused.
   await appendComposerEvent(page, {
-    type: "events.iterate.com/debug/playwright-circuit-breaker-first",
+    type: "events.iterate.com/debug/playwright-paused-rejected",
     payload: { streamPath, value: crypto.randomUUID() },
   });
+  await expect(page.getByTestId("composer-state").first()).toHaveText("error");
+  await expect(eventMeta(page, "events.iterate.com/debug/playwright-paused-rejected")).toHaveCount(
+    0,
+  );
+
+  await page.getByTestId("stream-resume-button").click();
+  await expect(page.getByTestId("stream-gate-status")).toHaveText("Active", { timeout: 10_000 });
+  const afterResume = "events.iterate.com/debug/playwright-after-resume";
   await appendComposerEvent(page, {
-    type: "events.iterate.com/debug/playwright-circuit-breaker-second",
+    type: afterResume,
     payload: { streamPath, value: crypto.randomUUID() },
   });
-
-  await expect(page.getByTestId("stream-pause-reason")).toContainText("circuit breaker", {
-    timeout: 10_000,
-  });
-  await expect(page.getByTestId("stream-resume-button")).toBeVisible();
+  await expect(eventMeta(page, afterResume).first()).toBeVisible();
 });
 
 // Event type filtering should stay as simple as the stream page SQL: COUNT(*) over the
@@ -939,7 +943,7 @@ async function holdCurrentWriterLock(page: Page, streamPath: string) {
   await page.evaluate(async (path) => {
     await new Promise<void>((resolve) => {
       void navigator.locks.request(
-        `stream-writer:default:${path}:browser-raw-events:v4`,
+        `next-stream-writer:default:${path}:browser-raw-events:v4`,
         async () => {
           resolve();
           await new Promise(() => {});

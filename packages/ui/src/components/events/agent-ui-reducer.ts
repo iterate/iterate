@@ -1,4 +1,4 @@
-import type { Event } from "@iterate-com/shared/streams/types";
+import type { Event } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Reduced state model + pure batch planner
@@ -142,7 +142,10 @@ const AGENT_LLM_REQUEST_CANCELLED = "events.iterate.com/agent/llm-request-cancel
 const AGENT_OUTPUT_ADDED = "events.iterate.com/agent/output-added";
 const AGENT_STATUS_UPDATED = "events.iterate.com/agent/status-updated";
 const OPENAI_WS_REQUEST_STARTED = "events.iterate.com/openai-ws/llm-request-started";
-const OPENAI_WS_MESSAGE_RECEIVED = "events.iterate.com/openai-ws/websocket-message-received";
+// The openai-ws processor journals every raw Responses-WS frame as
+// llm-response-chunk ({llmRequestId, sequence, chunk}); the frames stream
+// into the live activity below.
+const OPENAI_WS_RESPONSE_CHUNK = "events.iterate.com/openai-ws/llm-response-chunk";
 const CLOUDFLARE_AI_REQUEST_STARTED = "events.iterate.com/cloudflare-ai/llm-request-started";
 const CLOUDFLARE_AI_RESPONSE_CHUNK = "events.iterate.com/cloudflare-ai/llm-response-chunk";
 const ITX_SCRIPT_EXECUTION_REQUESTED = "events.iterate.com/itx/script-execution-requested";
@@ -230,9 +233,9 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       return updateLlmStep(state, llmRequestId, (step) => ({ ...step, model }));
     }
 
-    case OPENAI_WS_MESSAGE_RECEIVED: {
+    case OPENAI_WS_RESPONSE_CHUNK: {
       const llmRequestId = readNumber(event, "llmRequestId");
-      const message = readRecord(event, "message");
+      const message = readRecord(event, "chunk");
       if (llmRequestId == null || message == null) return state;
       const frameType = typeof message.type === "string" ? message.type : "";
       const delta = typeof message.delta === "string" ? message.delta : "";

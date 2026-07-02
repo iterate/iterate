@@ -67,9 +67,9 @@ const firstNonFlagArgument = (args: string[]): string | undefined => {
 const resolveStreamTuiEntrypointPath = () => {
   const moduleDir = import.meta.dirname;
   const candidates = [
-    join(moduleDir, "stream-tui/event-stream-terminal.tsx"),
-    join(moduleDir, "stream-tui/event-stream-terminal.mjs"),
-    join(moduleDir, "stream-tui/event-stream-terminal.js"),
+    join(moduleDir, "stream-tui/agent-chat-terminal.tsx"),
+    join(moduleDir, "stream-tui/agent-chat-terminal.mjs"),
+    join(moduleDir, "stream-tui/agent-chat-terminal.js"),
   ];
 
   for (const candidate of candidates) {
@@ -81,8 +81,8 @@ const resolveStreamTuiEntrypointPath = () => {
 
 export const buildChatCommand = (input: {
   osBaseUrl: string;
-  projectSlugOrId: string;
-  streamPath: string;
+  projectId: string;
+  agentPath: string;
   entrypointPath: string;
 }) => ({
   command: "bun",
@@ -90,10 +90,10 @@ export const buildChatCommand = (input: {
     input.entrypointPath,
     "--base-url",
     input.osBaseUrl,
-    "--project-slug-or-id",
-    input.projectSlugOrId,
-    "--stream-path",
-    input.streamPath,
+    "--project-id",
+    input.projectId,
+    "--agent-path",
+    input.agentPath,
   ],
 });
 
@@ -718,17 +718,19 @@ const launcherProcedures = {
           .trim()
           .min(1)
           .optional()
-          .describe("OS project slug or ID. Defaults to the active config's defaultProject."),
-        streamPath: z
+          .describe("OS project id (prj_…). Defaults to the active config's defaultProject."),
+        agentPath: z
           .string()
           .trim()
           .min(1)
-          .startsWith("/")
-          .describe("Project stream path to open"),
+          .startsWith("/agents/")
+          .optional()
+          .default("/agents/onboarding")
+          .describe("Agent stream path to chat with (default: /agents/onboarding)"),
       }),
     )
     .meta({
-      description: "Open the Iterate chat terminal UI",
+      description: "Open the Iterate agent chat terminal UI",
     })
     .handler(async ({ input }) => {
       // Resolved here, not in the input schema: the schema is built at module
@@ -742,17 +744,29 @@ const launcherProcedures = {
       }
       const command = buildChatCommand({
         osBaseUrl: resolved.config.osBaseUrl,
-        projectSlugOrId: project,
-        streamPath: input.streamPath,
+        projectId: project,
+        agentPath: input.agentPath,
         entrypointPath: resolveStreamTuiEntrypointPath(),
       });
-      // Auth is the TUI's job: it reads admin/bearer secrets from the inherited
-      // environment when present (doppler, e2e), and otherwise loads the named
-      // config's stored session from the shared config file.
-      await runInheritedProcess({
-        ...command,
-        env: { ITERATE_CONFIG_NAME: resolved.name },
-      });
+      // Auth: admin/bearer secrets from the inherited environment win (doppler,
+      // e2e). Otherwise refresh the stored `iterate login` session here — the
+      // launcher owns the OAuth refresh machinery — and hand the TUI a plain
+      // bearer token; the capnweb WebSocket authenticates once at connect.
+      const env: Record<string, string | undefined> = { ITERATE_CONFIG_NAME: resolved.name };
+      const hasEnvCredentials = ["APP_CONFIG_ADMIN_API_SECRET", "ITERATE_BEARER_TOKEN"].some(
+        (name) => process.env[name]?.trim(),
+      );
+      if (!hasEnvCredentials) {
+        const headers = await getOsAuthHeaders(resolved.config, resolved.name);
+        const token = headers.authorization?.replace(/^Bearer /, "");
+        if (!token) {
+          throw new Error(
+            `Stored session for ${resolved.config.osBaseUrl} has no bearer token. Run \`iterate login\` again.`,
+          );
+        }
+        env.ITERATE_BEARER_TOKEN = token;
+      }
+      await runInheritedProcess({ ...command, env });
     }),
 
   orgs: {

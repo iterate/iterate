@@ -11,13 +11,11 @@ import {
 import { Link } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronDownIcon, FilterIcon, SearchIcon } from "lucide-react";
-import { StreamEventInput } from "@iterate-com/shared/streams/stream-event";
 import {
   getInitialProcessorState,
   runProcessorReduce,
-  type StreamEvent,
-} from "@iterate-com/shared/streams/stream-processors";
-import { StreamPath, type Event } from "@iterate-com/shared/streams/types";
+  type StreamEvent as StreamViewReducerEvent,
+} from "@iterate-com/ui/components/events/stream-processor-fold/stream-processors";
 import { Button } from "@iterate-com/ui/components/button";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import {
@@ -48,33 +46,35 @@ import {
   AGENT_UI_SCHEMA_VERSION,
   AgentUiProcessor,
   AgentUiProcessorContract,
-} from "~/domains/streams/browser-processors/agent-ui-processor.ts";
-import { useStreamQuery } from "~/domains/streams/engine/browser/hooks/use-stream-query.ts";
-import { browserProcessorStateStorage } from "~/domains/streams/engine/browser/processor-state-storage.ts";
+} from "~/domains/streams/client-libraries/processors/agent-ui-processor.ts";
+import { parseBrowserCoreProcessorState } from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
+import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
+import { browserProcessorStateStorage } from "~/domains/streams/client-libraries/browser/processor-state-storage.ts";
 import type {
   SqliteQueryStatus,
   StreamBrowserDatabase,
   StreamEventRow,
-} from "~/domains/streams/engine/browser/stream-browser-db.ts";
+} from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import {
   acquireStreamRuntime,
   asBrowserStreamClient,
   type StreamBrowserStore,
   type StreamRuntimeState,
-} from "~/domains/streams/engine/browser/stream-browser-store.ts";
+} from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
 import {
   BROWSER_RAW_EVENTS_SCHEMA_VERSION,
   BrowserRawEventsContract,
   BrowserRawEventsProcessor,
   type BrowserRawEventsState,
-} from "~/domains/streams/engine/processors/browser-raw-events/implementation.ts";
-import type { StreamRpc } from "~/domains/streams/engine/types.ts";
+} from "~/domains/streams/client-libraries/processors/browser-raw-events/implementation.ts";
+import { StreamEventInput } from "~/domains/streams/schemas.ts";
+import type { Stream, StreamEvent } from "~/types.ts";
 import { AgentFeedView } from "~/components/agent-feed.tsx";
 import { AgentPillComposer, type AgentComposerMode } from "~/components/agent-pill-composer.tsx";
 import { ExampleEventsPanel } from "~/components/example-events-panel.tsx";
 import { openGlobalCommandPalette } from "~/components/global-command-palette-events.ts";
 import { PresenceAvatar, StreamProcessorsPanel } from "~/components/stream-processors-panel.tsx";
-import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/domains/durable-object-names.ts";
+import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { useItx } from "~/itx/itx-react.tsx";
 import { presenceLabel, sparklinePoints, useSimulatedRttMetrics } from "~/lib/stream-presence.ts";
 import { useStreamViewSearch } from "~/lib/stream-view-search.ts";
@@ -95,9 +95,16 @@ type ProjectStreamViewTab = "agent" | "feed" | "raw" | "state";
 type StreamPathLinkRenderer = (input: {
   children: ReactNode;
   className?: string;
-  path: StreamPath;
+  path: string;
 }) => ReactNode;
-type ItxStreamSource = (streamPath: StreamPath) => StreamRpc | Promise<StreamRpc>;
+type ItxStreamSource = (streamPath: string) => Stream | Promise<Stream>;
+
+/**
+ * Stream events reduced by the browser feed. The itx's event envelope
+ * has no `streamPath` (the owning stream is clear from context); the feed
+ * reducer still keys some renderers off it, so `normalizeEvent` backfills it.
+ */
+type FeedEvent = StreamEvent & { streamPath?: string };
 
 export function ProjectStreamView({
   autoFocusMessageComposer = false,
@@ -122,10 +129,10 @@ export function ProjectStreamView({
   renderStreamPathLink?: StreamPathLinkRenderer;
   showCommandPaletteTrigger?: boolean;
   streamSource?: ItxStreamSource;
-  streamPath: StreamPath;
+  streamPath: string;
 }) {
   const itx = useItx();
-  const streamPathText = streamPath.toString();
+  const streamPathText = streamPath;
   const streamRuntimeProjectKey = projectId ?? NULL_DURABLE_OBJECT_PROJECT_ID;
   // The agent-ui processor (presence, live state) runs on every stream; the
   // chat-shaped Agent view only makes sense for streams under /agents — those
@@ -137,10 +144,7 @@ export function ProjectStreamView({
   );
   const streamClientFactory = useMemo(
     () => async (input: { streamPath: string }) =>
-      asBrowserStreamClient(
-        await resolvedStreamSource(StreamPath.parse(input.streamPath)),
-        () => {},
-      ),
+      asBrowserStreamClient(await resolvedStreamSource(input.streamPath), () => {}),
     [resolvedStreamSource],
   );
   const store = useMemo(
@@ -312,7 +316,10 @@ export function ProjectStreamView({
       ]);
       return {
         runtimeState,
-        streamMaxOffset: streamRuntimeState.coreProcessorState.maxOffset,
+        // The itx Stream.runtimeState() types coreProcessorState as
+        // unknown; parse out the slice this panel needs.
+        streamMaxOffset: parseBrowserCoreProcessorState(streamRuntimeState.coreProcessorState)
+          .maxOffset,
       };
     },
     [store],
@@ -607,7 +614,7 @@ type ReducedStreamState<TState> = {
   status: SqliteQueryStatus;
   error?: string;
   state: TState;
-  events: Event[];
+  events: FeedEvent[];
 };
 
 type ReductionCache<TState> = {
@@ -615,7 +622,7 @@ type ReductionCache<TState> = {
   rowCount: number;
   lastOffset: number;
   state: TState;
-  events: Event[];
+  events: FeedEvent[];
 };
 
 /**
@@ -632,8 +639,8 @@ function useReducedStreamState<TState>(args: {
   /** Distinguishes caches when several reductions share one reductionKey. */
   cacheScope: string;
   initialState: () => TState;
-  normalizeEvent?: (event: Event) => Event;
-  reduceEvent: (state: TState, event: Event) => TState;
+  normalizeEvent?: (event: FeedEvent) => FeedEvent;
+  reduceEvent: (state: TState, event: FeedEvent) => TState;
 }): ReducedStreamState<TState> {
   const rowsResult = useStreamQuery(
     args.database,
@@ -668,9 +675,9 @@ function useReducedStreamState<TState>(args: {
     for (let index = startIndex; index < rows.length; index++) {
       const rawJson = rows[index]?.raw_json;
       if (typeof rawJson !== "string") continue;
-      let event: Event;
+      let event: FeedEvent;
       try {
-        event = JSON.parse(rawJson) as Event;
+        event = JSON.parse(rawJson) as FeedEvent;
       } catch {
         continue;
       }
@@ -717,10 +724,16 @@ function useAgentUiReducedState(database: StreamBrowserDatabase): AgentUiState |
   }, [result.data]);
 }
 
-function reduceStreamViewEvent(state: EventsStreamViewState, event: Event): EventsStreamViewState {
+function reduceStreamViewEvent(
+  state: EventsStreamViewState,
+  event: FeedEvent,
+): EventsStreamViewState {
+  // The itx event envelope is structurally a superset of the shared
+  // reducer's StreamEvent ({type, payload?, metadata?, offset, createdAt}), so
+  // the cast the legacy view already relied on keeps holding.
   const reduction = runProcessorReduce({
     processor: { contract: StreamViewProcessorContract },
-    event: event as unknown as StreamEvent,
+    event: event as unknown as StreamViewReducerEvent,
     state,
   });
   return reduction?.state ?? state;
@@ -741,11 +754,10 @@ function ProjectStreamFeedView({
   emptyLabel: string;
   renderStreamPathLink: StreamPathLinkRenderer;
   reductionKey: string;
-  streamPath: StreamPath;
+  streamPath: string;
 }) {
   const normalizeEvent = useCallback(
-    (event: Event): Event =>
-      event.streamPath == null ? ({ ...event, streamPath: streamPath.toString() } as Event) : event,
+    (event: FeedEvent): FeedEvent => (event.streamPath == null ? { ...event, streamPath } : event),
     [streamPath],
   );
   const feed = useReducedStreamState<EventsStreamViewState>({
@@ -790,7 +802,7 @@ function ProjectStreamFeedView({
  */
 function applyRendererMode(args: {
   viewState: EventsStreamViewState;
-  events: readonly Event[];
+  events: readonly FeedEvent[];
   rendererMode: EventsStreamRendererMode;
 }): EventsStreamViewState {
   if (args.rendererMode === "pretty") {

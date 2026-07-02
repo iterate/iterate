@@ -11,7 +11,7 @@ on:
   workflow_dispatch: {}
 jobs:
   variables:
-    runs-on: depot-ubuntu-24.04-32
+    runs-on: depot-ubuntu-24.04
     steps:
       - name: Document rollout strategy
         run: |-
@@ -30,7 +30,7 @@ jobs:
       - variables
       - deploy
     if: always() && contains(needs.*.result, 'failure')
-    runs-on: depot-ubuntu-24.04-32
+    runs-on: depot-ubuntu-24.04
     env:
       NEEDS: ${{ toJson(needs) }}
     steps:

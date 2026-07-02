@@ -14,18 +14,16 @@
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "types": ["@cloudflare/workers-types", "node", "vite/client", "vitest"],
     "paths": {
+      // Exact-match shim: see src/os-shims/request-context.ts for why apps/os's
+      // request-context module (and its TanStack Register augmentations) must
+      // stay out of this app's program.
+      "~/request-context.ts": ["./src/os-shims/request-context.ts"],
       "~/*": ["../os/src/*"],
       "@iterate-com/shared/*": ["../../packages/shared/src/*"]
     }
   },
-  "include": [
-    "src/**/*.ts",
-    "src/**/*.tsx",
-    "e2e/**/*.ts",
-    "../os/src/domains/streams/engine/**/*.ts"
-  ],
-  "exclude": [
-    "../os/src/domains/streams/engine/**/*.workers.test.ts",
-    "../os/src/domains/streams/engine/vitest.workers.config.ts"
-  ]
+  // The apps/os sources under ../os/src are pulled in transitively via
+  // the `~` alias imports, so they do not need explicit include entries.
+  "include": ["src/**/*.ts", "src/**/*.tsx", "e2e/**/*.ts"],
+  "exclude": []
 }

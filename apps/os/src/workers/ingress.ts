@@ -3,18 +3,20 @@
  * its cold start is negligible. Every request to an OS hostname lands here
  * and is forwarded whole over a service binding:
  *
- *   MCP hostname        → app worker `/api/mcp`
- *   ingress-rule match  → project worker (rule rides an internal header)
- *   everything else     → the app worker (TanStack dashboard / API)
+ *   MCP hostname                 → app worker `/api/mcp`
+ *   itx lane             → next API worker (capnweb, e2e fixtures,
+ *                                  `/prj_<id>` path lane, project hosts)
+ *   OS host                      → the app worker (TanStack dashboard / API)
+ *   everything else              → 404
  *
- * Routing logic lives in workers/shared/router.ts and is shared with the
- * app worker's local-dev path. Keep this file free of heavyweight imports —
- * its entire job is one config parse, at most one D1 lookup, and a forward.
+ * Routing logic lives in src/ingress.ts and is shared with the app
+ * worker's local-dev path. Keep this file free of heavyweight imports — its
+ * entire job is one config parse and a forward.
  */
-import { RESOLVED_INGRESS_HEADER, routeOsRequest } from "./shared/router.ts";
 import { parseConfig } from "~/config.ts";
 import { normalizeIngressHost } from "~/ingress/host-headers.ts";
 import { MCP_START_MOUNT_PATH } from "~/lib/mcp-base-url.ts";
+import { apiWorkerRequest } from "~/ingress.ts";
 
 export default {
   async fetch(inbound: Request, env: Env) {
@@ -22,26 +24,26 @@ export default {
     // set HERE (and by the app worker's own re-route in dev). Strip whatever
     // the outside world sent so downstream workers can rely on them.
     const request = stripInternalHeaders(inbound);
-
     const config = parseConfig(env);
+
     const mcpRequest = rewriteMcpHostRequest({ config, request });
     if (mcpRequest) return await env.APP.fetch(mcpRequest);
 
-    const routed = await routeOsRequest({
-      config,
-      db: env.DB,
-      request,
-      targets: { PROJECT_HOST: env.PROJECT_HOST },
-    });
-    if (routed) return routed;
+    const nextRequest = apiWorkerRequest({ config, request });
+    if (nextRequest) return await env.ITX_API.fetch(nextRequest);
 
+    // Everything else is the OS host (project + custom hostnames all went to
+    // ITX_API above, which owns the 404 for hosts that resolve to nothing).
     return await env.APP.fetch(request);
   },
 };
 
 export function stripInternalHeaders(request: Request) {
   const headers = new Headers(request.headers);
-  headers.delete(RESOLVED_INGRESS_HEADER);
+  headers.delete("x-iterate-resolved-ingress");
+  headers.delete("x-iterate-app");
+  headers.delete("x-itx-project-id");
+  headers.delete("x-iterate-url-prefix");
   headers.delete("x-forwarded-host");
   headers.delete("x-forwarded-proto");
   headers.delete("x-iterate-ingress-hostname");

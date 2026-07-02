@@ -132,13 +132,13 @@ reloads or WebSocket-backed project routes.
 
 ## Read local server state directly
 
-Local D1 lives as miniflare SQLite files. There is one file per database; grep
-the tables to tell auth from OS:
+The AUTH worker's local D1 lives as miniflare SQLite files (OS itself has no
+D1 — OS state is Durable Object SQLite; read it through itx instead:
+`pnpm cli itx run`):
 
 ```bash
 ls .alchemy/miniflare/v3/d1/miniflare-D1DatabaseObject/*.sqlite
 # auth DB has: user, account, organization, member, oauthClient, oauthRefreshToken, verification
-# OS DB has:   projects, ingress_routes, project_connections, ...
 
 DB=.alchemy/miniflare/v3/d1/miniflare-D1DatabaseObject/<hash>.sqlite
 sqlite3 "$DB" "SELECT identifier, value FROM verification ORDER BY rowid DESC LIMIT 3"   # pending OTPs (value is 'otp:attempts')

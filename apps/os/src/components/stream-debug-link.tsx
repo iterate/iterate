@@ -1,8 +1,8 @@
 import { ExternalLink } from "lucide-react";
 import { Link } from "@tanstack/react-router";
-import type { StreamPath } from "@iterate-com/shared/streams/types";
 import { buttonVariants } from "@iterate-com/ui/components/button";
 import { cn } from "@iterate-com/ui/lib/utils";
+import type { StreamPath } from "~/lib/stream-links.ts";
 
 export function StreamDebugLink({
   className,

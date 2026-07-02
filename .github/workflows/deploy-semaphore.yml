@@ -27,7 +27,7 @@ on:
         default: ""
 jobs:
   variables:
-    runs-on: depot-ubuntu-24.04-32
+    runs-on: depot-ubuntu-24.04
     outputs:
       run_url: ${{ steps.vars.outputs.run_url }}
       short_sha: ${{ steps.vars.outputs.short_sha }}
@@ -43,7 +43,7 @@ jobs:
     needs:
       - variables
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    runs-on: depot-ubuntu-24.04-32
+    runs-on: depot-ubuntu-24.04
     outputs:
       public_url: ${{ steps.metadata.outputs.public_url }}
     steps:
@@ -88,7 +88,7 @@ jobs:
       - variables
       - deploy
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.deploy.result == 'success'
-    runs-on: depot-ubuntu-24.04-32
+    runs-on: depot-ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -143,7 +143,7 @@ jobs:
       - variables
       - deploy
     if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.deploy.result == 'failure'
-    runs-on: depot-ubuntu-24.04-32
+    runs-on: depot-ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

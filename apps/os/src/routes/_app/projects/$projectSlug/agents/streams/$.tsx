@@ -1,13 +1,12 @@
 import { Suspense } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { StreamPath } from "@iterate-com/shared/streams/types";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { connectItx } from "~/itx/itx-react.tsx";
 import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 
-const AGENTS_ROOT = StreamPath.parse("/agents");
+const AGENTS_ROOT = "/agents";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams/$")({
   staticData: {
@@ -59,21 +58,21 @@ function ProjectAgentDetailContent() {
   // The stream view subscribes live, so a send needs no cache invalidation —
   // the new events arrive over the socket. Agent setup is owned by project and
   // agent processor facts; sendMessage only appends the user-facing input fact.
+  // The socket is keyed by project ID (the provider pre-warmed it), and agents
+  // are addressed by their stream path (e.g. "/agents/onboarding").
   async function submitAgentMessage(message: string) {
-    const itx = await connectItx({ projectId: params.projectSlug });
-    await itx.agents.sendMessage({ agentPath: streamPath, message, channel: "web" });
+    const itx = await connectItx({ projectId: project.id });
+    await itx.agents.get(streamPath).sendMessage(message);
   }
 
   async function interruptAgentMessage(llmRequestId: number) {
-    const itx = await connectItx({ projectId: params.projectSlug });
+    const itx = await connectItx({ projectId: project.id });
     await itx.streams.get(streamPath).append({
-      event: {
-        type: "events.iterate.com/agent/llm-request-cancelled",
-        payload: {
-          phase: "requested",
-          llmRequestId,
-          reason: "interrupted-by-user-input",
-        },
+      type: "events.iterate.com/agent/llm-request-cancelled",
+      payload: {
+        phase: "requested",
+        llmRequestId,
+        reason: "interrupted-by-user-input",
       },
     });
   }

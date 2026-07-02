@@ -1,33 +1,34 @@
 // The itx example catalogue: one data structure that is BOTH the "Examples"
 // panel in the REPL UI and the script set the e2e suite runs across every
-// execution runtime (apps/os/src/itx/e2e/*). Each entry is a self-contained
+// execution runtime (apps/os/e2e/examples/*). Each entry is a self-contained
 // script body that runs with `itx` and `vars` in scope and uses an explicit
 // `return` — exactly the shape every runtime accepts:
 //
 //   browser         the REPL (compileBrowserReplFunction wraps the body)
 //   node            AsyncFunction("itx", "vars", code) on a Cap'n Web stub
-//   cli             `pnpm cli itx run --eval <code>` (same Node eval, spawned)
-//   dynamic-worker  POST /api/itx/run with `async ({ itx, vars }) => { code }`
-//   project-worker  the body baked into the project repo's worker.ts,
-//                   executed against this.itx.context
+//   run-script      itx.runScript(`async (itx) => { const vars = …; <body> }`)
+//                   — the server-side script isolate agents use
+//   project-worker  the body baked into the project repo's worker.js,
+//                   executed against `await this.env.ITX.get()`
 //
-// Almost every example is written against a PROJECT-scoped handle (context:
-// "project"): the harness — a project REPL, withItx({ context }), a
-// /api/itx/run body with `context`, or a worker's env.ITERATE.context —
-// connects into the project, and the script gets straight to work:
-// itx.streams.get("/some/path").append(...). Only narrowing itself is a
-// global-context example.
+// Almost every example is written against a PROJECT itx (context: "project"):
+// the harness — a project REPL, connectItx({ projectId }), runScript, or a
+// dynamic worker's env.ITX — is already scoped into the project, and the
+// script gets straight to work: itx.streams.get("/some/path").append(...).
+// Global-context examples run against the Session catalog (the global/admin
+// REPL) instead — that handle vends projects; it is not itself an itx.
 //
-// `runtimes` records where a snippet genuinely works unattended. Browser-only
-// entries lean on session-bound powers (live RpcTargets, alert, esm.sh
-// imports); everything else must stay runtime-agnostic: no pipelining tricks,
-// plain serializable return values.
+// `runtimes` records where a snippet genuinely works unattended. Live
+// capabilities (provideCapability with a `capability` value) are session-bound
+// — the provider object lives in the calling process — so those entries stay
+// browser/node/cli only. Everything else must stay runtime-agnostic: no
+// pipelining tricks, plain serializable return values.
 
 export const ITX_EXAMPLE_RUNTIMES = [
   "browser",
   "node",
   "cli",
-  "dynamic-worker",
+  "run-script",
   "project-worker",
 ] as const;
 
@@ -36,8 +37,8 @@ export type ItxExampleRuntime = (typeof ITX_EXAMPLE_RUNTIMES)[number];
 export type ItxExample = {
   /** Script body: `itx` and `vars` in scope, explicit `return`. */
   code: string;
-  /** The handle the snippet expects: a project context (the normal case) or
-   * the global one (narrowing is the only global move worth showing). */
+  /** The handle the snippet expects: a project itx (the normal case) or the
+   * global Session catalog (whoami / projects.list only). */
   context: "global" | "project";
   description: string;
   id: string;
@@ -48,689 +49,394 @@ export type ItxExample = {
 
 const ALL_RUNTIMES: ItxExampleRuntime[] = [...ITX_EXAMPLE_RUNTIMES];
 
+/** Live providers must outlive the calls, so these stay in caller-owned sessions. */
+const LIVE_SESSION_RUNTIMES: ItxExampleRuntime[] = ["browser", "node", "cli"];
+
 export const ITX_EXAMPLES: ItxExample[] = [
   {
-    id: "list-and-describe-project",
-    title: "List projects, then narrow and describe one",
+    id: "whoami",
+    title: "Who am I? (global session)",
     description:
-      "The one global-context move: itx.projects.list() shows what you can reach, and itx.projects.get(id) NARROWS to a project context (Law 4 — narrowing is construction). The returned handle is the same shape as a project REPL's itx — every other example starts there.",
+      "The global REPL holds a Session — the catalog authenticate() returned. whoami() reports the principal the socket carries; everything else you do is scoped by it.",
     context: "global",
-    runtimes: ALL_RUNTIMES,
+    runtimes: ["browser", "node", "cli"],
     code: `
-// Every project you have access to (admins see all; users see their own).
-const page = await itx.projects.list({ limit: 10 });
+return await itx.whoami();
+`.trim(),
+  },
+  {
+    id: "list-projects",
+    title: "List projects, then open one",
+    description:
+      "A Session vends itxs: projects.list() shows the project ids you can reach, and projects.get(id) returns the project-scoped itx — the same handle a project REPL holds. Every project-context example starts there.",
+    context: "global",
+    runtimes: ["browser", "node", "cli"],
+    code: `
+// Every project id you have access to (admins see all; users see their own).
+const projectIds = await itx.projects.list();
 
-// Narrow to one project. The result is a fresh itx handle scoped to it —
-// itx.projects.get(id).streams === a project REPL's itx.streams.
-const pid =
-  (typeof vars === "object" && vars !== null && vars.projectId) ||
-  (typeof projectId === "string" && projectId) ||
-  page.projects[0]?.id;
+// Open one. The result is an itx scoped to that project — the same shape a
+// project REPL's \`itx\` has (streams, repo, workers, runScript, ...).
+const pid = vars.projectId ?? projectIds[0];
 if (!pid) throw new Error("Create a project first: await itx.projects.create({ slug: 'demo' })");
 const project = await itx.projects.get(pid);
 
-// describe() reports the context, its access, and its registered caps.
+// describe() reports the project and its capability table.
 return await project.describe();
+`.trim(),
+  },
+  {
+    id: "describe-project",
+    title: "Describe the project's capability table",
+    description:
+      "describe() is the project's self-report: its id, name, and every capability reachable at this scope — built-ins (streams, repo, workers, ai, ...) plus anything mounted with provideCapability. Agents read this to learn what they can call.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const description = await itx.describe();
+
+// Built-ins are always there; dynamic mounts carry type "live" or
+// "itx-expression" plus the offset of the event that mounted them.
+return {
+  builtins: description.capabilities
+    .filter((capability) => capability.type === "builtin")
+    .map((capability) => capability.path.join(".")),
+  projectId: description.projectId,
+};
 `.trim(),
   },
   {
     id: "append-and-read-stream",
     title: "Append to a project stream and read it back",
     description:
-      "itx.streams is the project's event store. Append an event to a path, then read the path back — the same streams agents, caps, and every other holder of a handle on this project share.",
+      "itx.streams is the project's durable event store. Append an event to a path, then read the path back — the same streams that agents, processors, and every other holder of this project's itx share.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-// A stream is addressed by a path within the project. Appending returns the
-// stored event (with its assigned offset).
-const stream = itx.streams.get("/repl/demo");
-const appended = await stream.append({
-  event: {
-    type: "events.iterate.repl/demo",
-    payload: { note: vars.note ?? "hello from the REPL", at: Date.now() },
-  },
+// A stream is addressed by a path within the project. append() commits the
+// events and returns them with their assigned offsets.
+const stream = itx.streams.get(vars.path ?? "/repl/demo");
+const [appended] = await stream.append({
+  type: "events.iterate.repl/demo",
+  payload: { note: vars.note ?? "hello from the REPL" },
 });
 
-// Read the whole path back. Streams also carry platform events, so in real
-// code you'd filter by type.
+// Read the whole path back. Streams also carry platform lifecycle events
+// (stream/created, stream/woken, ...), so real code filters by type.
 const events = await stream.getEvents();
 return { appended, count: events.length };
 `.trim(),
   },
   {
-    id: "provide-plain-object",
-    title: "Provide a plain object — it IS the capability",
+    id: "run-script",
+    title: "Run a script server-side with itx.runScript",
     description:
-      "You pass your object; there is no client library between you and the capability table. A plain object of functions (nested at any depth) is a live capability: dotted calls replay onto its members, back in the provider's process — your browser tab or Node session. Live caps are session-bound: gone when the session disconnects, back when you reconnect and provide again.",
+      "runScript ships an `async (itx) => { … }` source string into the project's script isolate — the exact mechanism agent codemode uses. The execution leaves a two-event record (script-execution-requested/-completed) on the scope's stream.",
     context: "project",
-    runtimes: ["browser", "node", "cli"],
+    // Not "run-script": that runtime already wraps the body in runScript, and
+    // a script starting another script execution mid-flight is recursion the
+    // matrix should not depend on.
+    runtimes: ["browser", "node", "cli", "project-worker"],
     code: `
-// No wrapper, no base class, no registration ceremony — the object you
-// already have is the capability. Its methods run HERE, in your process;
-// the project calls back to you over the open session.
-const answer = {
-  ultimate: () => 42,
-  deep: {
-    thought: async (question) => ({ answer: 42, question }),
-  },
-};
+const execution = await itx.runScript(\`async (itx) => {
+  const description = await itx.describe();
+  return { projectId: description.projectId, sum: 6 * 7 };
+}\`);
 
-await itx.provideCapability({
-  name: "answer",
-  instructions:
-    "The answer to everything: itx.answer.ultimate(), or itx.answer.deep.thought(question).",
-  capability: answer,
-});
-
-// Unknown names on the handle fall through to the capability table, so the
-// cap is callable as if it were built in — at any depth; each call runs
-// back here, where the object lives. (A live cap disappears when this
-// session disconnects; reconnect and provideCapability() again to restore it.)
+// runScript returns the result plus the completed journal event.
 return {
-  ultimate: await itx.answer.ultimate(),
-  deep: await itx.answer.deep.thought("life, the universe, everything"),
+  completedEventType: execution.completedEvent.type,
+  result: execution.result,
 };
 `.trim(),
   },
   {
-    id: "provide-path-call-sdk",
-    title: "Provide a live SDK-shaped capability (path-call)",
+    id: "provide-live-capability",
+    title: "Provide a live capability — your object IS the capability",
     description:
-      "A path-call capability implements ONE method, call({ path, args }), and receives the whole dotted path as data. This is how 'use itx.slack exactly like @slack/web-api' works — the public SDK docs become the tool docs, with a ~10-line forwarder.",
+      "provideCapability({ type: 'live', … }) mounts a plain object of functions (nested at any depth) on the project. Dotted calls replay onto its members, back in the provider's process — your browser tab or Node session. The returned provision owns the mount: provision.revoke() removes it. Live caps are session-bound: gone when this session disconnects.",
     context: "project",
-    runtimes: ["browser", "node", "cli"],
+    runtimes: LIVE_SESSION_RUNTIMES,
     code: `
-// One method handles the entire method tree. itx.fakeSlack.chat.postMessage(x)
-// arrives here as { path: ["chat","postMessage"], args: [x] } — call({ path,
-// args }) IS the calling convention, so a provider that implements it owns
-// its whole method-tree semantics.
-class FakeSlackSdk extends RpcTarget {
-  async call({ path, args }) {
-    return { method: path.join("."), args, provider: "live-session" };
-  }
-}
-
-await itx.provideCapability({
-  name: "fakeSlack",
-  capability: new FakeSlackSdk(),
+// No wrapper, no registration ceremony — the object you already have is the
+// capability. Its methods run HERE, in your process; the project calls back
+// to you over the open session.
+const provision = await itx.provideCapability({
+  path: ["answer"],
+  type: "live",
+  instructions:
+    "The answer to everything: itx.answer.ultimate(), or itx.answer.deep.thought(question).",
+  capability: {
+    ultimate: () => 42,
+    deep: {
+      thought: async (question) => ({ answer: 42, question }),
+    },
+  },
 });
 
-// Call any depth — the path is accumulated locally and sent once.
+// Mounted names resolve on the same handle, at any depth.
+const ultimate = await itx.answer.ultimate();
+const deep = await itx.answer.deep.thought("life, the universe, everything");
+
+// The provision is the ownership handle: revoke removes exactly this mount.
+await provision.revoke();
+const revoked = await itx.answer.ultimate().then(
+  () => false,
+  () => true,
+);
+
+return { deep, revoked, ultimate };
+`.trim(),
+  },
+  {
+    id: "provide-live-flattened",
+    title: "Provide an SDK-shaped capability (flattened paths)",
+    description:
+      "flattenNestedPaths: true delivers the whole dotted path as data to ONE method, invokeCapability({ path, args }). This is how 'use itx.fakeSlack exactly like the Slack SDK' works — the public SDK docs become the tool docs, with a tiny forwarder.",
+    context: "project",
+    runtimes: LIVE_SESSION_RUNTIMES,
+    code: `
+// One method handles the entire method tree. itx.fakeSlack.chat.postMessage(x)
+// arrives here as { path: ["chat","postMessage"], args: [x] } — the provider
+// owns its whole method-tree semantics.
+await itx.provideCapability({
+  path: ["fakeSlack"],
+  type: "live",
+  flattenNestedPaths: true,
+  capability: {
+    invokeCapability({ args, path }) {
+      return { args, method: path.join("."), provider: "live-session" };
+    },
+  },
+});
+
+// Call any depth — the path travels with the call.
 return await itx.fakeSlack.chat.postMessage({ channel: "C123", text: "hi" });
 `.trim(),
   },
   {
-    id: "provide-durable-worker-cap",
-    title: "Provide a durable worker capability from source",
+    id: "provide-itx-expression",
+    title: "Provide a durable capability as an itx expression",
     description:
-      "A serializable address stores source code as a DURABLE capability (a stateless dynamic worker), loaded on demand. Unlike a live provider stub, it survives this session. Every public method on the WorkerEntrypoint is auto-proxied — add a method, call it instantly.",
+      "An itx-expression capability is a serializable recipe over the project's own surface — here an alias to a stream: ['streams', ['get', path]]. Unlike a live mount it survives this session; itx evaluates the expression on demand. The same shape mounts dynamic workers (['workers', ['get', ref]]), MCP servers (['mcp', ['connect', { url }]]), and OpenAPI clients.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-// The source exports a WorkerEntrypoint. Its env.ITERATE is a project-scoped
-// itx, so the cap can use streams/fetch/other caps — but never reach beyond
-// its project. The loader caches the built worker by cacheKey, so treat it as
-// a content version: keep it stable while the source is unchanged (re-running
-// this snippet reuses the loaded worker) and bump it whenever you edit the
-// module text.
+// Mount itx.demoStream as an alias for a project stream. The recipe is data —
+// it is recorded on the project's stream and needs no live provider.
 await itx.provideCapability({
-  name: "greeter",
-  capability: {
-    type: "rpc",
-    worker: {
-      type: "source",
-      source: {
-        type: "inline",
-        cacheKey: "itx-example-greeter-v1",
-        mainModule: "cap.js",
-        modules: {
-          "cap.js": \`
-            import { WorkerEntrypoint } from "cloudflare:workers";
-            export default class extends WorkerEntrypoint {
-              hello({ name }) { return "hello, " + name; }
-              add({ a, b }) { return a + b; }
-            }
-          \`,
-        },
-      },
+  expression: ["streams", ["get", vars.path ?? "/repl/expression-demo"]],
+  instructions: "A demo stream alias: itx.demoStream.append({ type, payload }).",
+  path: ["demoStream"],
+  type: "itx-expression",
+});
+
+// The alias IS the stream capability.
+const [event] = await itx.demoStream.append({
+  type: "events.iterate.repl/expression-demo",
+  payload: { note: vars.note ?? "hello through an expression" },
+});
+const described = await itx.describe();
+const mount = described.capabilities.find(
+  (capability) => capability.path.join(".") === "demoStream",
+);
+return { mountType: mount?.type, note: event.payload.note, offset: event.offset };
+`.trim(),
+  },
+  {
+    id: "dynamic-worker-stateless",
+    title: "Load a stateless dynamic worker from inline source",
+    description:
+      "itx.workers.get() turns a declarative ref — module text plus an entrypoint — into a live RPC stub. Every public method on the WorkerEntrypoint is callable with zero extra wiring, and the worker's env.ITX is scoped to this project.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+// Await the ref before calling: script isolates reach itx over Workers RPC,
+// which does not pipeline calls through an unresolved return value.
+const greeter = await itx.workers.get({
+  type: "stateless",
+  entrypoint: "Greeter",
+  path: "/",
+  source: {
+    type: "inline",
+    mainModule: "greeter.js",
+    modules: {
+      "greeter.js": \`
+        import { WorkerEntrypoint } from "cloudflare:workers";
+
+        export class Greeter extends WorkerEntrypoint {
+          hello({ name }) {
+            return "hello, " + name;
+          }
+
+          add(a, b) {
+            return a + b;
+          }
+        }
+      \`,
     },
   },
 });
 
-// Both methods are callable with zero extra wiring.
 return {
-  greeting: await itx.greeter.hello({ name: "world" }),
-  sum: await itx.greeter.add({ a: 2, b: 3 }),
+  greeting: await greeter.hello({ name: "world" }),
+  sum: await greeter.add(2, 3),
 };
 `.trim(),
   },
   {
-    id: "repo-sourced-capability",
-    title: "Code in your repo as a capability, built per commit",
+    id: "dynamic-worker-stateful",
+    title: "A stateful dynamic worker with its own storage",
     description:
-      "The project's own git repo is a capability source: commit a module, then provide a { type: 'repo' } address pointing at the file. The platform builds it per COMMIT (memoized), never per call — 'latest' tracks pushes; a pinned sha makes the provided address fully determine behavior. The `worker` default is exactly this pattern.",
+      "A stateful ref names a Durable Object class; durableWorkerKey is its durable identity under { project, path } — same key, same storage, across sessions and code changes. Its private storage needs zero provisioning.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-// (1) Commit a capability module into the project's own repo (the shared
-// workspace speaks git; repo.token authenticates the push).
-const { project } = await itx.describe();
-const repo = await itx.repos.ensureProjectRepoInfo();
-const url = new URL(repo.remote);
-url.username = "x";
-url.password = repo.token.split("?")[0];
-const dir = "/repo-cap-demo";
-await itx.workspace.gitClone({ branch: repo.defaultBranch, depth: 1, dir, url: url.toString() });
-await itx.workspace.writeFile(dir + "/caps/greeter.js", \`
-import { WorkerEntrypoint } from "cloudflare:workers";
-export class Greeter extends WorkerEntrypoint {
-  hello({ name }) { return "hello from the repo, " + name; }
+const counter = await itx.workers.get({
+  type: "stateful",
+  className: "CounterDurableObject",
+  // The durable identity: reuse the key to come back to the same state.
+  durableWorkerKey: vars.counterKey ?? "repl-counter",
+  path: "/",
+  source: {
+    type: "inline",
+    mainModule: "counter.js",
+    modules: {
+      "counter.js": \`
+        import { DurableObject } from "cloudflare:workers";
+
+        export class CounterDurableObject extends DurableObject {
+          async increment() {
+            const n = (this.ctx.storage.kv.get("n") ?? 0) + 1;
+            this.ctx.storage.kv.put("n", n);
+            return n;
+          }
+
+          async current() {
+            return this.ctx.storage.kv.get("n") ?? 0;
+          }
+        }
+      \`,
+    },
+  },
+});
+
+await counter.increment();
+await counter.increment();
+return { current: await counter.current() }; // 2, and it persists under the key
+`.trim(),
+  },
+  {
+    id: "repo-commit-files",
+    title: "Commit files into the project repo",
+    description:
+      "Every project has a git-backed repo (itx.repo is the one at path '/'). commitFiles writes a batch of changes as one commit — this is how agents keep durable notes, and how the project worker at worker.js gets updated (repo-sourced workers are late-bound: the next call sees the new commit).",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const commit = await itx.repo.commitFiles({
+  message: "Add a note from the examples catalogue",
+  changes: [
+    {
+      path: "notes/example.md",
+      content: "# Example note\\n\\n" + (vars.note ?? "hello from the catalogue") + "\\n",
+    },
+  ],
+});
+
+// noChanges is true when the tree already matched — commits are idempotent.
+return {
+  branch: commit.branch,
+  changedPaths: commit.changedPaths,
+  noChanges: commit.noChanges,
+};
+`.trim(),
+  },
+  {
+    id: "secrets-lifecycle",
+    title: "Store a secret; describe() never shows the material",
+    description:
+      "Secrets are path-addressed write-only capabilities: update() stores material plus the egress URLs it may be substituted into, and describe() reports metadata only (hasMaterial, egress allowlist, usage audit). Egress requests carry getSecret({ path }) placeholders; substitution happens server-side.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const secret = itx.secrets.get(vars.secretPath ?? "/secrets/example");
+
+// Store the material once, with the URLs it may be substituted into. From
+// here on, egress headers reference it as: getSecret({ path: "..." }).
+await secret.update({
+  egress: { urls: ["https://postman-echo.com/"] },
+  material: "demo-" + (vars.note ?? "material"),
+});
+
+// The secret processor folds the update asynchronously — poll describe().
+let described = await secret.describe();
+for (let attempt = 0; attempt < 50 && !described.hasMaterial; attempt += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  described = await secret.describe();
 }
-\`);
-await itx.workspace.gitAdd({ dir, filepath: "caps/greeter.js" });
-await itx.workspace.gitCommit({
-  author: { email: "examples@iterate.com", name: "itx example" },
-  dir,
-  message: "add greeter capability",
-});
-await itx.workspace.gitPush({ dir, ref: repo.defaultBranch, remote: "origin" });
 
-// (2) The address points at the FILE; "latest" tracks pushes. (A fresh
-// push can take ~10s to be picked up by the "latest" probe.)
-await itx.provideCapability({
-  name: "repoGreeter",
-  instructions:
-    "Greeter built from caps/greeter.js in the project repo: itx.repoGreeter.hello({ name }).",
-  capability: {
-    type: "rpc",
-    worker: {
-      type: "source",
-      source: {
-        type: "repo",
-        repoPath: "/repos/project",
-        commit: "latest",
-        path: "caps/greeter.js",
-        entrypoint: "Greeter",
-        bundle: {},
-      },
-    },
-  },
-});
-
-// (3) Call it like any other capability.
-return await itx.repoGreeter.hello({ name: "world" });
-`.trim(),
-  },
-  {
-    id: "worker-cap-uses-its-own-itx",
-    title: "A worker capability using its own scoped itx",
-    description:
-      "A durable cap gets env.ITERATE.context — its OWN itx, scoped to the project it lives in. Here a tiny todo tool writes to and reads from a project stream, proving caps compose with the rest of the platform (and can never escape their project).",
-    context: "project",
-    runtimes: ALL_RUNTIMES,
-    code: `
-await itx.provideCapability({
-  name: "todo",
-  capability: {
-    type: "rpc",
-    worker: {
-      type: "source",
-      source: {
-        type: "inline",
-        cacheKey: "itx-example-todo-v1",
-        mainModule: "cap.js",
-        modules: {
-          "cap.js": \`
-            import { WorkerEntrypoint } from "cloudflare:workers";
-            const STREAM = "/repl/todos";
-            const TYPE = "events.iterate.repl/todo";
-            export default class extends WorkerEntrypoint {
-              async add({ text }) {
-                const itx = await this.env.ITERATE.context;     // the cap's own handle
-                const e = await itx.streams.get(STREAM).append({
-                  event: { type: TYPE, payload: { text } },
-                });
-                return { offset: e.offset, text };
-              }
-              async list() {
-                const itx = await this.env.ITERATE.context;
-                const events = await itx.streams.get(STREAM).getEvents();
-                return events.filter((e) => e.type === TYPE).map((e) => e.payload.text);
-              }
-            }
-          \`,
-        },
-      },
-    },
-  },
-});
-
-await itx.todo.add({ text: "ship the capability layer" });
-await itx.todo.add({ text: "delete the mounts" });
-return await itx.todo.list();
-`.trim(),
-  },
-  {
-    id: "deep-auto-proxy",
-    title: "Auto-proxying: any public method/getter, any depth",
-    description:
-      "There is no method list anywhere. A members cap exposes a method AND a getter returning a nested RpcTarget; itx proxies the whole surface — itx.kit.echo(...) and itx.kit.math.add(...) — with no declarations.",
-    context: "project",
-    runtimes: ALL_RUNTIMES,
-    code: `
-await itx.provideCapability({
-  name: "kit",
-  capability: {
-    type: "rpc",
-    worker: {
-      type: "source",
-      source: {
-        type: "inline",
-        cacheKey: "itx-example-kit-v1",
-        mainModule: "cap.js",
-        modules: {
-          "cap.js": \`
-            import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
-            class Math extends RpcTarget { add({ a, b }) { return a + b; } }
-            export default class extends WorkerEntrypoint {
-              echo(input) { return { echoed: input }; }
-              get math() { return new Math(); }   // nested surface, also proxied
-            }
-          \`,
-        },
-      },
-    },
-  },
-});
-
-return {
-  echo: await itx.kit.echo({ hi: 1 }),
-  // getter -> nested RpcTarget -> method, all proxied with zero wiring:
-  sum: await itx.kit.math.add({ a: 2, b: 3 }),
-};
-`.trim(),
-  },
-  {
-    id: "worker-to-worker",
-    title: "One worker capability calling another",
-    description:
-      "Capabilities compose: a 'report' worker reaches an 'inventory' worker purely through its own env.ITERATE.context (itx.inventory.count(), itx.inventory.skus.priceOf(...)). Worker→worker proxying, no wiring between them.",
-    context: "project",
-    runtimes: ALL_RUNTIMES,
-    code: `
-// Provider cap.
-await itx.provideCapability({
-  name: "inventory",
-  capability: {
-    type: "rpc",
-    worker: {
-      type: "source",
-      source: {
-        type: "inline",
-        cacheKey: "itx-example-inventory-v1",
-        mainModule: "cap.js",
-        modules: {
-          "cap.js": \`
-            import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
-            class Skus extends RpcTarget { priceOf({ sku }) { return sku === "ABC" ? 42 : 0; } }
-            export default class extends WorkerEntrypoint {
-              count() { return 7; }
-              get skus() { return new Skus(); }
-            }
-          \`,
-        },
-      },
-    },
-  },
-});
-
-// Consumer cap — a different dynamic worker that calls the first via itx.
-await itx.provideCapability({
-  name: "report",
-  capability: {
-    type: "rpc",
-    worker: {
-      type: "source",
-      source: {
-        type: "inline",
-        cacheKey: "itx-example-report-v1",
-        mainModule: "cap.js",
-        modules: {
-          "cap.js": \`
-            import { WorkerEntrypoint } from "cloudflare:workers";
-            export default class extends WorkerEntrypoint {
-              async build({ sku }) {
-                const itx = await this.env.ITERATE.context;
-                const count = await itx.inventory.count();
-                const price = await itx.inventory.skus.priceOf({ sku });
-                return { count, price, total: count * price };
-              }
-            }
-          \`,
-        },
-      },
-    },
-  },
-});
-
-return await itx.report.build({ sku: "ABC" });
-`.trim(),
-  },
-  {
-    id: "stateful-facet-cap",
-    title: "A stateful capability with its own database (facet)",
-    description:
-      "exportType: 'durable-object' instantiates a Durable Object as a child of the project — its own private SQLite, zero provisioning. State persists across calls and survives code upgrades. The class MUST be a named export.",
-    context: "project",
-    runtimes: ALL_RUNTIMES,
-    code: `
-await itx.provideCapability({
-  name: "counter",
-  capability: {
-    type: "rpc",
-    worker: {
-      type: "source",
-      source: {
-        type: "inline",
-        cacheKey: "itx-example-counter-v1",
-        entrypoint: "Counter",   // named export required for facets
-        exportType: "durable-object",
-        mainModule: "cap.js",
-        modules: {
-          "cap.js": \`
-            import { DurableObject } from "cloudflare:workers";
-            export class Counter extends DurableObject {
-              async increment() {
-                const n = ((await this.ctx.storage.get("n")) ?? 0) + 1;
-                await this.ctx.storage.put("n", n);   // this.ctx.storage is YOURS alone
-                return n;
-              }
-              async current() { return (await this.ctx.storage.get("n")) ?? 0; }
-            }
-          \`,
-        },
-      },
-    },
-  },
-});
-
-await itx.counter.increment();
-await itx.counter.increment();
-return { current: await itx.counter.current() };   // 2, and it persists
-`.trim(),
-  },
-  {
-    id: "extend-child-context",
-    title: "Extend the context with its own caps",
-    description:
-      "itx.extend() makes a cheap, disposable child context under the project — an agent session or scratchpad. Its caps SHADOW the parent's; names it doesn't provide delegate up the chain. describe() shows the merged view: own entries plain, inherited ones labeled from: <context>.",
-    context: "project",
-    runtimes: ["browser", "node", "cli"],
-    code: `
-// A cap on the project — visible to every child through the chain. A plain
-// object is all a live capability takes.
-await itx.provideCapability({
-  name: "shared",
-  capability: { whoami: () => "project" },
-});
-
-// Extend a child. It's a full itx handle on a new itx_… context.
-const child = await itx.extend({ name: "repl-scratch" });
-
-// The child can shadow 'shared' with its own object...
-await child.provideCapability({
-  name: "shared",
-  capability: { whoami: () => "child" },
-});
-
-// ...so the child sees its own, while the project still sees its own.
-// In the merged describe(), the child's entries carry no provenance field;
-// inherited ones say from: <context> ("defaults" for the defaults).
-return {
-  fromChild: await child.shared.whoami(),
-  capabilities: (await child.describe()).capabilities, // merged chain, child entries first
-};
-`.trim(),
-  },
-  {
-    id: "fetch-middleware",
-    title: "Middleware: shadow fetch, delegate via itx.super",
-    description:
-      "The middleware story in five lines: shadow `fetch` on an extended child with a plain function that stamps a header, then delegates to the parent chain's unshadowed pipe via itx.super.fetch. Bare fetch() inside the child's isolates flows through the same shadow; the parent is untouched.",
-    context: "project",
-    runtimes: ["browser", "node", "cli"],
-    code: `
-const session = await itx.extend({ name: "traced" });
-
-// The shadow is a PLAIN FUNCTION; itx.super is "call next()" — the parent
-// chain, where fetch is still the real egress pipe.
-await session.provideCapability({
-  name: "fetch",
-  instructions: "Project egress with an x-trace-id header stamped on every request.",
-  capability: async (request) => {
-    const traced = new Request(request.url ?? String(request), request);
-    traced.headers.set("x-trace-id", "itx-example-trace");
-    return await session.super.fetch(traced);
-  },
-});
-
-// Every egress on the session now carries the header. Revoke the shadow
-// and the real pipe resurfaces — middleware is just shadowing plus super.
-const echoed = await (await session.fetch("https://postman-echo.com/get")).json();
-return { traceHeaderSeen: echoed.headers["x-trace-id"] };
+// Metadata only: hasMaterial, the egress allowlist, and the usage audit.
+// The material itself has no read API.
+return described;
 `.trim(),
   },
   {
     id: "journal-is-the-record",
     title: "The stream IS the record: provide, revoke, read it back",
     description:
-      "A context IS a stream coordinate — the project context lives on the project's root stream. provideCapability and revokeCapability are appends; read the stream back and watch the record happen. There is no hidden registry to drift from it.",
+      "provideCapability and revokeCapability are appends to the scope's stream (the project root, '/'). Read the stream back and watch the record happen — there is no hidden registry to drift from it.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-// Use a unique name so the record slice below is unambiguous.
-const name = vars.capName ?? "ephemeral";
+// Use a unique mount path so the record slice below is unambiguous.
+const capPath = vars.capPath ?? "journalDemo";
 
-await itx.provideCapability({
-  name,
-  capability: { type: "rpc", worker: { type: "binding", binding: "AI" } },
+const provision = await itx.provideCapability({
+  expression: ["streams", ["get", "/repl/journal-demo"]],
+  path: [capPath],
+  type: "itx-expression",
 });
-await itx.revokeCapability({ name });
+await provision.revoke();
 
-// The context's stream is an ordinary stream — same getEvents API as anything.
+// The scope's stream is an ordinary stream — same getEvents API as anything.
 const events = await itx.streams.get("/").getEvents();
 const record = events
-  .filter((e) => Array.isArray(e.payload?.path) && e.payload.path.join(".") === name)
-  .map((e) => e.type.split("/").pop());
+  .filter((event) => Array.isArray(event.payload?.path) && event.payload.path.join(".") === capPath)
+  .map((event) => event.type.split("/").pop());
 return { record }; // ["capability-provided", "capability-revoked"]
 `.trim(),
   },
   {
-    id: "mcp-client",
-    title: "Connect a public MCP server",
+    id: "agent-send-message",
+    title: "Send a message to an agent",
     description:
-      "Any remote MCP server (streamable HTTP) becomes a capability via the first-party McpClient: listTools() discovers the surface, and every tool is a dotted call. Cloudflare's docs server is public — no credentials needed. All transport HTTP rides the project egress pipe.",
+      "Agents live at /agents/<name> and are addressed through itx.agents.get(path). sendMessage appends the user-message event to the agent's stream and returns it; the agent's processors take it from there (use agent.ask({ message }) to wait for the reply when an LLM provider is configured).",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-await itx.provideCapability({
-  name: "cfdocs",
-  instructions: "Cloudflare's documentation MCP server. Call listTools() first.",
-  capability: {
-    type: "rpc",
-    worker: { type: "loopback" },
-    entrypoint: "McpClient",
-    props: { serverUrl: "https://docs.mcp.cloudflare.com/mcp" },
-  },
-});
+const agent = await itx.agents.get(vars.agentPath ?? "/agents/repl-demo");
 
-// Tools are dotted calls; listTools() is the discovery door.
-const { tools } = await itx.cfdocs.listTools();
-const answer = await itx.cfdocs.search_cloudflare_documentation({
-  query: "durable objects",
-});
-return { tools: tools.map((tool) => tool.name), snippet: String(answer).slice(0, 200) };
+// The returned value is the committed stream event — the durable record the
+// agent loop reduces into its history.
+const sent = await agent.sendMessage(vars.message ?? "Hello from the examples catalogue");
+return { offset: sent.offset, payload: sent.payload, type: sent.type };
 `.trim(),
   },
   {
-    id: "mcp-authenticated",
-    title: "An authenticated MCP server via a project secret",
+    id: "ai-models",
+    title: "Workers AI is a built-in capability",
     description:
-      "Connect a remote MCP server that needs an Authorization header — without the credential ever leaving the platform. The token lives as a PROJECT SECRET; the capability address carries only a getSecret(...) placeholder; substitution happens server-side on the egress path. This session, describe(), and the record never see the material.",
+      "itx.ai proxies the platform's Workers AI binding: models() lists the catalog, run(model, body) executes one. Model availability and latency depend on the deployment's upstream account, so this entry is reading material for the matrix — run it interactively.",
     context: "project",
-    runtimes: ALL_RUNTIMES,
+    runtimes: ["browser", "node", "cli"],
     code: `
-// Store the credential ONCE as a project secret (Settings → Secrets), e.g.
-// key "CLOUDFLARE_API_TOKEN". From here on, only the key travels.
-await itx.provideCapability({
-  path: ["mcp", "cloudflare"],
-  instructions: "Cloudflare's MCP server, authenticated via a project secret.",
-  capability: {
-    type: "rpc",
-    worker: { type: "loopback" },
-    entrypoint: "McpClient",
-    props: {
-      serverUrl: "https://bindings.mcp.cloudflare.com/mcp",
-      headers: { authorization: 'Bearer getSecret({ key: "CLOUDFLARE_API_TOKEN" })' },
-    },
-  },
-});
-
-// Every MCP request rides the project egress pipe, where the placeholder
-// becomes the real token — the connected agent/isolate never sees it.
-const { tools } = await itx.mcp.cloudflare.listTools();
-return tools.map((tool) => tool.name);
-`.trim(),
-  },
-  {
-    id: "openapi-client",
-    title: "Any OpenAPI API as an ergonomic capability",
-    description:
-      "Point OpenApiClient at an OpenAPI 3.x spec and every operation becomes a dotted call: itx.petstore.findPetsByStatus({ status }). One input object merges path params, query params, and body. The provider self-describes at provide time — describe() carries TypeScript declarations derived from the spec, with zero callsite ceremony. Auth headers take getSecret(...) placeholders, substituted on egress like everything else.",
-    context: "project",
-    runtimes: ALL_RUNTIMES,
-    code: `
-await itx.provideCapability({
-  name: "petstore",
-  capability: {
-    type: "rpc",
-    worker: { type: "loopback" },
-    entrypoint: "OpenApiClient",
-    props: {
-      specUrl: "https://petstore3.swagger.io/api/v3/openapi.json",
-      // For authenticated APIs, add headers with a secret placeholder:
-      // headers: { authorization: 'Bearer getSecret({ key: "API_TOKEN" })' },
-    },
-  },
-});
-
-// Flat operationIds, one merged input object, through project egress.
-const pets = await itx.petstore.findPetsByStatus({ status: "available" });
-
-// listOperations() enumerates the surface the spec describes.
-const operations = await itx.petstore.listOperations();
-return { count: pets.length, operations: operations.slice(0, 3) };
-`.trim(),
-  },
-  {
-    id: "egress-with-secret-substitution",
-    title: "Egress with server-side secret substitution",
-    description:
-      "itx.fetch() routes outbound HTTP through the project's egress path. A getSecret(...) placeholder in a header is replaced with the real secret INSIDE the worker — the secret never reaches the browser. Every project ships with an example secret.",
-    context: "project",
-    runtimes: ALL_RUNTIMES,
-    code: `
-// The placeholder is substituted server-side; this tab never sees the value.
-const response = await itx.fetch("https://postman-echo.com/get", {
-  headers: {
-    authorization: 'Bearer getSecret({ key: "example.egress_api_key" })',
-  },
-});
-const body = await response.json();
-return { status: response.status, sawSubstitutedHeader: body.headers };
-`.trim(),
-  },
-  {
-    id: "secrets-and-egress",
-    title: "Store a secret, then fetch with it",
-    description:
-      "The full credential lifecycle in one script: itx.secrets.setSecret() stores material in the project's secret store, and from then on a getSecret(...) placeholder in any egress header becomes the real value server-side — the script itself never round-trips the material again. This is how authenticated MCP/OpenAPI capability addresses stay credential-free.",
-    context: "project",
-    runtimes: ALL_RUNTIMES,
-    code: `
-// (1) Store the credential once. listSecrets() shows redacted summaries.
-await itx.secrets.setSecret({ key: "demo.api_key", material: "demo-" + crypto.randomUUID() });
-
-// (2) Use it by KEY: the placeholder substitutes inside the egress pipe.
-const response = await itx.fetch("https://postman-echo.com/get", {
-  headers: { "x-api-key": 'getSecret({ key: "demo.api_key" })' },
-});
-const echoed = await response.json();
-
-// (3) Clean up. The echo saw the real material; this script only saw the key.
-await itx.secrets.deleteSecret({ key: "demo.api_key" });
-return { status: response.status, echoedKeyHeader: echoed.headers["x-api-key"] };
-`.trim(),
-  },
-  {
-    id: "http-cap",
-    title: "Serve a capability over HTTP",
-    description:
-      "A cap whose fetch() is exposed (meta.http.expose) gets its own hostname: {cap}--{project}.<base>. Exposed means public — anyone can open the URL; unexposed caps don't exist as hostnames.",
-    context: "project",
-    runtimes: ALL_RUNTIMES,
-    code: `
-await itx.provideCapability({
-  name: "hello",
-  meta: { http: { expose: true } },   // routable at its own hostname, public
-  capability: {
-    type: "rpc",
-    worker: {
-      type: "source",
-      source: {
-        type: "inline",
-        cacheKey: "itx-example-hello-http-v1",
-        mainModule: "cap.js",
-        modules: {
-          "cap.js": \`
-            import { WorkerEntrypoint } from "cloudflare:workers";
-            export default class extends WorkerEntrypoint {
-              async fetch(request) {
-                const url = new URL(request.url);
-                return new Response("hello from a routable cap at " + url.pathname);
-              }
-            }
-          \`,
-        },
-      },
-    },
-  },
-});
-
-// The cap's own hostname: {cap}-- prefixed onto the project's ingress host.
-const url = new URL(await itx.project.ingressUrl());
-url.hostname = "hello--" + url.hostname;
-url.pathname = "/demo";
-return { url: url.toString() };
-`.trim(),
-  },
-  {
-    id: "import-npm-via-esm-sh",
-    title: "Import an npm package (via esm.sh)",
-    description:
-      "Top-level import statements work in the REPL: bare specifiers are rewritten to dynamic imports from https://esm.sh, so any npm package loads straight into this browser session. (Server-side runtimes don't rewrite imports — this trick is REPL-only.)",
-    context: "project",
-    runtimes: ["browser"],
-    code: `
-import { z } from "zod";
-
-// Validate live platform data with a real npm package, loaded on the fly.
-const Description = z.object({
-  context: z.string(),
-  project: z.object({ id: z.string(), slug: z.string() }).nullable(),
-});
-
-return Description.parse(await itx.describe());
+const models = await itx.ai.models();
+const list = Array.isArray(models) ? models : [];
+return {
+  count: list.length,
+  sample: list.slice(0, 5).map((model) => model?.name ?? model),
+};
 `.trim(),
   },
 ];

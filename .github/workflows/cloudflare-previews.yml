@@ -33,7 +33,7 @@ jobs:
   preview:
     if: github.event.action != 'closed'
     name: Preview / deploy + e2e
-    runs-on: depot-ubuntu-24.04-64
+    runs-on: depot-ubuntu-24.04-16
     concurrency:
       group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
       cancel-in-progress: false
@@ -89,7 +89,7 @@ jobs:
   cleanup:
     if: github.event.action == 'closed'
     name: Preview / cleanup
-    runs-on: depot-ubuntu-24.04-64
+    runs-on: depot-ubuntu-24.04-16
     concurrency:
       group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
       cancel-in-progress: false

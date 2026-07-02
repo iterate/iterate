@@ -2,7 +2,7 @@ import { defineConfig } from "@microsoft/tui-test";
 
 export default defineConfig({
   expect: {
-    timeout: 10_000,
+    timeout: 15_000,
   },
   testMatch: "*.spec.ts",
   timeout: 45_000,

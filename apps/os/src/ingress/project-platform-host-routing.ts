@@ -41,15 +41,22 @@ export function parseProjectPlatformHosts(input: {
 function parseSingleLabelPlatformPrefix(prefix: string): ParsedProjectPlatformHost[] {
   if (!prefix) return [];
 
-  const separatorIndex = prefix.indexOf("__");
-  if (separatorIndex === -1) return [{ appSlug: null, projectIdentifier: prefix }];
-  if (separatorIndex === 0) return [];
+  // `<app>--<project>` (canonical) and the older `<app>__<project>` both
+  // select an app inside a project from a single hostname label. The bare
+  // label stays a candidate too: a project slug may legitimately contain
+  // the separator.
+  for (const separator of ["--", "__"]) {
+    const separatorIndex = prefix.indexOf(separator);
+    if (separatorIndex <= 0) continue;
 
-  const appSlug = prefix.slice(0, separatorIndex);
-  const projectIdentifier = prefix.slice(separatorIndex + 2);
-  if (!appSlug || !projectIdentifier) return [];
-  return [
-    { appSlug: null, projectIdentifier: prefix },
-    { appSlug, projectIdentifier },
-  ];
+    const appSlug = prefix.slice(0, separatorIndex);
+    const projectIdentifier = prefix.slice(separatorIndex + separator.length);
+    if (!appSlug || !projectIdentifier) continue;
+    return [
+      { appSlug: null, projectIdentifier: prefix },
+      { appSlug, projectIdentifier },
+    ];
+  }
+
+  return [{ appSlug: null, projectIdentifier: prefix }];
 }

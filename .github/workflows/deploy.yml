@@ -18,7 +18,7 @@ permissions:
   deployments: write
 jobs:
   deploy-iterate-com:
-    runs-on: depot-ubuntu-24.04-32
+    runs-on: depot-ubuntu-24.04
     if: inputs.deploy_iterate_com
     steps:
       - name: Checkout code

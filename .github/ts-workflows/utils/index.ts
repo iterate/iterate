@@ -5,14 +5,14 @@ export * from "./github-script.ts";
 export const prTriggerable = {
   on: {} satisfies Workflow["on"],
 };
-/** Use this for GitHub Actions jobs that should run on Depot's larger Linux runner. */
+/** Use this for ordinary GitHub Actions jobs that should run on Depot's small Linux runner. */
 export const runsOnDepotUbuntu = {
-  "runs-on": "depot-ubuntu-24.04-32",
+  "runs-on": "depot-ubuntu-24.04",
 };
 
-/** Use this for high-parallelism preview lifecycle jobs. */
-export const runsOnDepotUbuntu64 = {
-  "runs-on": "depot-ubuntu-24.04-64",
+/** Use this for preview lifecycle jobs that need more headroom than ordinary CI. */
+export const runsOnDepotUbuntuPreview = {
+  "runs-on": "depot-ubuntu-24.04-16",
 };
 
 /** checkout, setup pnpm, setup node, install dependencies. Accepts an optional ref override (e.g. for workflow_dispatch inputs). */
