@@ -937,6 +937,18 @@ describe("lease reclaim verdicts", () => {
     ).toBe("orphaned");
   });
 
+  it("treats failed PR-state checks as active regardless of idleness", () => {
+    expect(
+      classifyLeaseForReclaim({
+        holderPullRequestState: "unknown",
+        lastAcquiredAt: now - 100 * hourMs,
+        leaseState: "leased",
+        minIdleMs: 6 * hourMs,
+        now,
+      }),
+    ).toBe("active");
+  });
+
   it("classifies stale open holds as idle and fresh ones as active", () => {
     expect(
       classifyLeaseForReclaim({

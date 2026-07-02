@@ -2440,7 +2440,10 @@ function resolveSlotWaitTotalMs(env: NodeJS.ProcessEnv) {
 // idle means "that PR/person hasn't touched the slot in this window".
 const defaultReclaimMinIdleHours = 6;
 
-type PullRequestStateFetcher = (pullRequestNumber: number) => Promise<"open" | "closed" | null>;
+/** `unknown` = the check itself failed; distinct from "not checked" (null downstream). */
+type PullRequestStateFetcher = (
+  pullRequestNumber: number,
+) => Promise<"open" | "closed" | "unknown">;
 
 function makePullRequestStateFetcher(
   githubToken: string,
@@ -2463,14 +2466,14 @@ function makePullRequestStateFetcher(
       logPreview(
         `could not check the state of PR #${pullRequestNumber} (${formatPreviewErrorMessage(error)}) — treating its lease as active`,
       );
-      return null;
+      return "unknown";
     }
   };
 }
 
 /** Pure verdict for one slot; `orphaned` beats `idle` beats `active`. */
 function classifyLeaseForReclaim(input: {
-  holderPullRequestState: "open" | "closed" | null;
+  holderPullRequestState: "open" | "closed" | "unknown" | null;
   lastAcquiredAt: number | null;
   leaseState: "available" | "leased";
   minIdleMs: number;
@@ -2483,6 +2486,11 @@ function classifyLeaseForReclaim(input: {
     // The holder PR is closed, so its cleanup should have released the slot;
     // the lease only survives when that cleanup failed.
     return "orphaned";
+  }
+  if (input.holderPullRequestState === "unknown") {
+    // The GitHub check failed, so we cannot rule out an open PR — never let a
+    // transient API error downgrade a hold to reclaimable-without---force.
+    return "active";
   }
   if (input.lastAcquiredAt !== null && input.now - input.lastAcquiredAt >= input.minIdleMs) {
     return "idle";
