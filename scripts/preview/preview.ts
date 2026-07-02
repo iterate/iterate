@@ -112,23 +112,24 @@ export async function deploy(options: PullRequestCommandOptions = {}) {
       `slot changed from ${previousSlug} to ${environmentConfigLease.slug}: redeploying every previously recorded app (${appsToDeploy.map((app) => app.slug).join(", ")}) so nothing keeps pointing at the old slot`,
     );
   }
+  // A successful claim clears exhaustion/takeover banners; a slot move
+  // leaves its own so the change is impossible to miss.
+  const claimNotice =
+    previousSlug && previousSlug !== environmentConfigLease.slug
+      ? `This PR's slot changed from ${previousSlug} to ${environmentConfigLease.slug} at ${new Date().toISOString()} (the old lease lapsed and someone else took the slot). Everything below refers to the new slot.`
+      : null;
   const leaseUpdate = await updatePreviewState(context, (state) => ({
     ...state,
     environmentConfigLease,
-    // A successful claim clears exhaustion/takeover banners; a slot move
-    // leaves its own so the change is impossible to miss.
-    notice:
-      previousSlug && previousSlug !== environmentConfigLease.slug
-        ? `This PR's slot changed from ${previousSlug} to ${environmentConfigLease.slug} at ${new Date().toISOString()} (the old lease lapsed and someone else took the slot). Everything below refers to the new slot.`
-        : null,
+    notice: claimNotice,
   }));
 
   let ok = true;
   let latestState = leaseUpdate.state;
-  // Carry every batch's entries into each write: the GitHub read inside
-  // updatePreviewState can be stale (read-after-write lag), and a stale read
-  // that only merged the current batch would silently drop the previous
-  // batch's results from the PR body.
+  // Pin the lease, notice, and every batch's entries in each write: the
+  // GitHub read inside updatePreviewState can be stale (read-after-write
+  // lag), and a stale read would otherwise drop earlier batch results or
+  // resurrect a pre-claim "waiting for a slot" banner.
   const accumulatedEntries: Record<string, CloudflarePreviewAppEntry> = {};
   for (const batch of orderPreviewDeployBatches(appsToDeploy)) {
     const entries = await mapWithConcurrency(
@@ -156,6 +157,7 @@ export async function deploy(options: PullRequestCommandOptions = {}) {
     const update = await updatePreviewState(context, (state) => ({
       ...state,
       environmentConfigLease,
+      notice: claimNotice,
       apps: {
         ...state.apps,
         ...accumulatedEntries,
