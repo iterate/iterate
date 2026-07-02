@@ -106,6 +106,54 @@ The REPL exposes `itx`, `root`, `RpcTarget`, `baseUrl`, `projectId`, and `token`
 Defaults are `http://127.0.0.1:8791`, project `prj_ref`, and the demo tokens
 from `src/auth.ts`.
 
+## Page Debugging Demo
+
+This app includes a self-contained proof of concept for the in-page debugging
+idea. The worker routes `/page-debugging/*` to `PageDebuggingDemoDurableObject`.
+That Durable Object hosts the demo page, mints short-lived HMAC tokens, stores
+the token claims in its own storage, and serves a tiny browser ESM client.
+
+Run it locally:
+
+```bash
+pnpm --dir apps/minimal-itx-v4 dev
+```
+
+Open the local or deployed demo:
+
+```text
+http://127.0.0.1:8791/page-debugging
+https://minimal-itx-v4.iterate-dev-preview.workers.dev/page-debugging
+```
+
+Live demo flow:
+
+1. Click **Run in this tab**.
+2. Click **Snapshot**, **Click counter**, and **Fill message** in the
+   agent-side controls.
+3. Show that those buttons open a separate Cap'n Web connection through the
+   worker and call the mounted `debugPage` capability back inside the browser
+   tab.
+4. For the real console-paste flow, copy the generated snippet and paste it into
+   DevTools instead of clicking **Run in this tab**.
+
+The generated snippet imports only the worker-hosted client module:
+
+```js
+const { connectPageTools } = await import("http://127.0.0.1:8791/page-debugging/client.mjs");
+```
+
+That client module imports `capnweb`, Testing Library DOM queries, and
+`user-event` from esm.sh. The WebSocket auth token rides in
+`Sec-WebSocket-Protocol` as `itx-page-debugging.<token>` because browsers cannot
+set `Authorization` headers on WebSocket upgrades. The server verifies the HMAC
+and checks that the token id still exists in the Durable Object's storage before
+vending the project ITX.
+
+Each generated session creates a throwaway demo project and short-lived provider
+and agent tokens, so concurrent demos do not fight over the same mounted
+`debugPage` capability.
+
 ## Web Chat LLM Agent
 
 The minimal LLM agent should mirror the real `apps/os` agent shape, but keep
