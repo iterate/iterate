@@ -93,6 +93,25 @@ Playwright green at phase boundaries.
 - `newHttpBatchRpcSession` is lint-banned; the legitimate one-shot uses
   (project-create server fn, MCP exec_js) carry justified inline disables.
 
+## prd cutover checklist (post-merge)
+
+Everything resets — prd is destroyed and redeployed onto the new topology:
+
+1. `cd apps/os && doppler run --config prd -- pnpm destroy` (legacy stage state).
+2. Delete the two orphaned Cloudflare event subscriptions on the prd account
+   (`os-prd-artifact-account-events`, `os-prd-artifact-repo-events` — their
+   destination queue dies with the destroy; the verbatim artifact-events
+   capture from PR #1356 was deliberately dropped with the legacy repos
+   domain).
+3. Deploy: `doppler run --config prd -- pnpm deploy` (fresh-stage two-pass
+   bootstrap wires the cross-script DO cycle automatically).
+4. Auth prd already serves `internal.project.bySlug` (deployed 2026-07-02);
+   `SECRET_ENCRYPTION_KEY` is already set in os/prd Doppler.
+5. Wipe auth D1 project rows if a clean directory is wanted (optional — per
+   plan, "auth D1 wiped where needed").
+6. Smoke: preview-smoke against os.iterate.com, `pnpm cli itx agent-smoke`,
+   slug host, MCP example.
+
 ## How to run things
 
 ```bash

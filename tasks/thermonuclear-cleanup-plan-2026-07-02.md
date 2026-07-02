@@ -384,8 +384,9 @@ Cleanup direction:
 4. Only after that, prune unused integration scripts/files and deps that are
    confirmed not part of the kept operator workflow.
 
-Recommended aggressive stance: give it one cleanup sprint to become active test
-infrastructure. If that does not happen, delete it.
+Recommended aggressive stance: give it one cleanup sprint to become owned,
+documented test infrastructure, then prune only the integration experiments
+that are not part of that kept workflow.
 
 ### 7. Clean `apps/iterate-com` Local UI And Content Drift
 
