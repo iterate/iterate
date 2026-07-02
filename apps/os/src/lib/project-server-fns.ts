@@ -66,7 +66,10 @@ export const listReadyProjectsServerFn: (input?: {
     try {
       const session = engineBatchSession(context);
       const root = session.authenticate({ type: "from-server-cookie" });
-      const projects = await root.projects.list();
+      // Explicit "mine": the admin cookie may ride the same request, and the
+      // root redirect must follow the signed-in user's claims, never the
+      // deployment listing.
+      const projects = await root.projects.list({ scope: "mine" });
       return projects
         .filter((project) => project.deploymentStatus === "ready")
         .map((project) => ({ id: project.id, slug: project.slug }));

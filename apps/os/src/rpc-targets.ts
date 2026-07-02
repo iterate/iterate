@@ -241,7 +241,7 @@ async function requestRepoCreate(input: {
       event.payload?.projectId === input.projectId && event.payload?.path === path,
     // Generous: repo create clones/seeds a CF Artifacts repo; cold slots under
     // parallel e2e load have been seen to straggle past 60s.
-    timeoutMs: 120_000,
+    timeoutMs: 240_000,
   });
 
   return new RepoRpcTarget({ auth: input.auth, path, projectId: input.projectId });
@@ -841,7 +841,7 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
       // Generous: the create saga seeds the repo, probes the project worker,
       // and births the onboarding agent; cold slots under parallel e2e load
       // have been seen to straggle past 60s.
-      timeoutMs: 120_000,
+      timeoutMs: 240_000,
     });
 
     return new ItxRpcTarget({
