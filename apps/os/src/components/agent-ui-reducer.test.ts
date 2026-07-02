@@ -4,7 +4,7 @@
 // chat shape the agent feed renders (items + live tail).
 
 import { describe, expect, it } from "vitest";
-import type { Event } from "@iterate-com/shared/streams/types";
+import type { Event } from "@iterate-com/ui/components/events/types";
 import {
   initialAgentUiState,
   planAgentUiOps,
@@ -41,30 +41,30 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/openai-ws/websocket-message-received",
+        type: "events.iterate.com/openai-ws/llm-response-chunk",
         payload: {
           connectionId: "c1",
           llmRequestId: 10,
           sequence: 0,
-          message: { type: "response.reasoning_summary_text.delta", delta: "Reading the stream" },
+          chunk: { type: "response.reasoning_summary_text.delta", delta: "Reading the stream" },
         },
       },
       {
-        type: "events.iterate.com/openai-ws/websocket-message-received",
+        type: "events.iterate.com/openai-ws/llm-response-chunk",
         payload: {
           connectionId: "c1",
           llmRequestId: 10,
           sequence: 1,
-          message: { type: "response.output_text.delta", delta: "const n = await " },
+          chunk: { type: "response.output_text.delta", delta: "const n = await " },
         },
       },
       {
-        type: "events.iterate.com/openai-ws/websocket-message-received",
+        type: "events.iterate.com/openai-ws/llm-response-chunk",
         payload: {
           connectionId: "c1",
           llmRequestId: 10,
           sequence: 2,
-          message: { type: "response.output_text.delta", delta: "stream.count();" },
+          chunk: { type: "response.output_text.delta", delta: "stream.count();" },
         },
       },
     ]);
@@ -137,6 +137,54 @@ describe("agent-ui reducer", () => {
       result: 12,
       success: true,
       durationMs: 400,
+    });
+  });
+
+  it("streams the itx openai-ws llm-response-chunk frames into the live llm step", () => {
+    // itx journals every raw Responses-WS frame as llm-response-chunk
+    // ({llmRequestId, sequence, chunk}). Regression guard: the feed once
+    // showed only a bare spinner because the reducer ignored these frames.
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agents/user-message-received",
+        payload: { content: "count the inputs", origin: "web" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 10,
+        payload: { model: "gpt-test" },
+      },
+      {
+        type: "events.iterate.com/openai-ws/llm-response-chunk",
+        payload: {
+          llmRequestId: 10,
+          sequence: 0,
+          chunk: { type: "response.reasoning_summary_text.delta", delta: "Reading the stream" },
+        },
+      },
+      {
+        type: "events.iterate.com/openai-ws/llm-response-chunk",
+        payload: {
+          llmRequestId: 10,
+          sequence: 1,
+          chunk: { type: "response.output_text.delta", delta: "const n = await " },
+        },
+      },
+      {
+        type: "events.iterate.com/openai-ws/llm-response-chunk",
+        payload: {
+          llmRequestId: 10,
+          sequence: 2,
+          chunk: { type: "response.output_text.delta", delta: "stream.count();" },
+        },
+      },
+    ]);
+
+    expect(state.live?.steps.at(-1)).toMatchObject({
+      kind: "llm",
+      status: "running",
+      thinkingText: "Reading the stream",
+      responseText: "const n = await stream.count();",
     });
   });
 
@@ -342,12 +390,12 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/openai-ws/websocket-message-received",
+        type: "events.iterate.com/openai-ws/llm-response-chunk",
         payload: {
           connectionId: "c1",
           llmRequestId: 7,
           sequence: 0,
-          message: { type: "response.output_text.delta", delta: "old partial" },
+          chunk: { type: "response.output_text.delta", delta: "old partial" },
         },
       },
       {
@@ -363,12 +411,12 @@ describe("agent-ui reducer", () => {
         },
       },
       {
-        type: "events.iterate.com/openai-ws/websocket-message-received",
+        type: "events.iterate.com/openai-ws/llm-response-chunk",
         payload: {
           connectionId: "c1",
           llmRequestId: 7,
           sequence: 1,
-          message: { type: "response.output_text.delta", delta: " stale chunk" },
+          chunk: { type: "response.output_text.delta", delta: " stale chunk" },
         },
       },
       {

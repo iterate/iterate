@@ -1,13 +1,13 @@
 /**
- * The app worker: the OS dashboard — TanStack Start (SSR + server functions),
- * static assets, debug routes, and app-host itx.
+ * The app worker: the OS dashboard — TanStack Start (SSR + server functions)
+ * and static assets.
  *
- * In the per-DO worker topology (docs/worker-topology.md) this worker has no
+ * In the per-worker topology (docs/worker-topology.md) this worker has no
  * routes and no Durable Objects: the ingress worker forwards app-host
- * traffic here, and every DO namespace binding is cross-script. In local
- * dev the browser talks to vite — i.e. to this worker directly — so the
- * shared router runs here first and forwards project-host/MCP traffic over
- * the same service bindings the ingress worker uses in production.
+ * traffic here. In local dev the browser talks to vite — i.e. to this worker
+ * directly — so the shared itx routing decision runs here first and
+ * forwards itx/project-host traffic over the same ITX_API service
+ * binding the ingress worker uses in production.
  *
  * Worker bindings are intentionally not threaded through request context —
  * modules import `env` from "cloudflare:workers" directly:
@@ -15,15 +15,9 @@
  */
 import handler from "@tanstack/react-start/server-entry";
 import { withEvlog } from "@iterate-com/shared/evlog";
-import { createD1Client } from "sqlfu";
-import { routeOsRequest } from "./shared/router.ts";
 import { AppConfig, parseConfig } from "~/config.ts";
 import type { RequestContext } from "~/request-context.ts";
-import { handleDebugRoutes, handleDurableObjectDebugFetch } from "~/debug-routes.ts";
-import { handleItxFetch } from "~/itx/fetch.ts";
-import { handleDocsMarkdownFetch } from "~/lib/docs-markdown.ts";
-
-export * from "./shared/loopback-exports.ts";
+import { apiWorkerRequest } from "~/ingress.ts";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
@@ -33,61 +27,33 @@ export default {
     // https://developers.cloudflare.com/workers/runtime-apis/bindings/#how-bindings-work
     const config = parseConfig(env);
 
-    const earlyResponse = await handleDebugRoutes({ request, env, config });
-    if (earlyResponse) return earlyResponse;
+    // Itx lanes (local dev talks to this worker directly, so the
+    // forward lives here as well as in the ingress worker): the capnweb
+    // surface + fixtures + `/prj_` path lanes, and project platform hosts.
+    const nextRequest = apiWorkerRequest({ config, request });
+    if (nextRequest) return await env.ITX_API.fetch(nextRequest);
 
     // Everything below emits one structured "wide event" log line per request.
     return withEvlog(
       { request, app: { name: "@iterate-com/os", slug: "os" }, config, executionCtx: ctx },
       async ({ log }) => {
-        // In local dev and workers.dev previews the browser can talk to this
-        // worker directly, so it runs the shared router to forward project-host
-        // traffic over the same service binding ingress uses in production. MCP
-        // stays in this app worker and falls through to the Start route.
-        const routed = await routeOsRequest({
-          config,
-          db: env.DB,
-          request,
-          targets: { PROJECT_HOST: env.PROJECT_HOST },
-        });
-        if (routed) return routed;
-
         // When baseUrl is not configured (for example workers.dev previews),
         // the request origin is the app's own URL. After this, baseUrl is always set.
         const requestConfig: AppConfig = config.baseUrl
           ? config
           : { ...config, baseUrl: new URL(request.url).origin as AppConfig["baseUrl"] };
 
-        const docsMarkdownResponse = handleDocsMarkdownFetch({
-          appBaseUrl: requestConfig.baseUrl,
-          request,
-        });
-        if (docsMarkdownResponse) return docsMarkdownResponse;
-
-        const db = createD1Client(env.DB);
         const context: RequestContext = {
           config: requestConfig,
-          db,
           log,
           rawRequest: request,
           waitUntil: (promise) => ctx.waitUntil(promise),
-          workerExports: ctx.exports,
         };
 
-        const itxResponse = await handleItxFetch({ config, context, env, request });
-        if (itxResponse) return itxResponse;
-
-        const durableObjectDebugResponse = await handleDurableObjectDebugFetch({
-          request,
-          env,
-          config,
-        });
-        if (durableObjectDebugResponse) return durableObjectDebugResponse;
-
         // The TanStack Start app: SSR routes and server functions, plus the
-        // remaining /api routes (integration callbacks, health). `context`
-        // becomes the Start request context (see src/request-context.ts for the
-        // Register augmentation).
+        // remaining /api routes (inbound MCP, health). `context` becomes the
+        // Start request context (see src/request-context.ts for the Register
+        // augmentation).
         return await handler.fetch(request, { context });
       },
     );

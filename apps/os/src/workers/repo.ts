@@ -1,23 +1,13 @@
 /**
- * Repo worker: artifact-backed git repos. Also consumes the artifact-events
- * queue (verbatim Cloudflare Artifacts event capture onto repo streams) —
- * the queue is repo-domain, so its consumer lives here, not in the app.
+ * The repo worker: hosts RepoDurableObject (per-DO worker topology — see
+ * docs/worker-topology.md). Every itx worker re-exports the
+ * shared loopback entrypoints so `ctx.exports` resolves identically in all
+ * of them.
  */
-import { handleArtifactEventsBatch } from "~/domains/repos/artifact-events-queue-handler.ts";
-
-export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
+export { RepoDurableObject } from "../domains/repos/repo-durable-object.ts";
+export { ItxEntrypoint } from "../domains/itx/itx-entrypoint.ts";
+export { ProjectEgressEntrypoint } from "../domains/projects/egress.ts";
 
 export default {
   fetch: () => Response.json({ worker: "os-repo" }, { status: 404 }),
-
-  async queue(batch: MessageBatch, env: Env) {
-    if (batch.queue.endsWith("-artifact-events")) {
-      await handleArtifactEventsBatch(batch, env);
-      return;
-    }
-    console.warn("[os-repo] received unhandled queue batch", {
-      messageCount: batch.messages.length,
-      queue: batch.queue,
-    });
-  },
 };

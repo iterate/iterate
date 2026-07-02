@@ -1,6 +1,6 @@
 import { RpcTarget } from "capnweb";
 
-export const DEFAULT_BROWSER_REPL_CODE = "await itx.projects.list({ limit: 5 })";
+export const DEFAULT_BROWSER_REPL_CODE = "await itx.projects.list()";
 
 export type BrowserReplEntry = {
   code: string;

@@ -1,13 +1,11 @@
 // Stream navigation helpers backing the ⌘K stream switcher: one-shot state
 // reads for lazy tree-node loading.
 
-import {
-  StreamState,
-  type StreamPath as StreamPathType,
-  type StreamState as StreamStateType,
-} from "@iterate-com/shared/streams/types";
 import type { StreamTreeSource } from "~/components/stream-tree-browser.tsx";
-import { coreStateToStreamState } from "~/domains/streams/stream-runtime.ts";
+import {
+  parseBrowserCoreStreamTreeState,
+  type BrowserCoreStreamTreeState,
+} from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
 
 /**
  * Everything the ⌘K stream switcher needs from its host: a live state source
@@ -16,7 +14,7 @@ import { coreStateToStreamState } from "~/domains/streams/stream-runtime.ts";
  */
 export type StreamNavigator = {
   source: StreamTreeSource;
-  onOpenPath: (streamPath: StreamPathType) => void;
+  onOpenPath: (streamPath: string) => void;
 };
 
 /**
@@ -26,8 +24,8 @@ export type StreamNavigator = {
  */
 export function readStreamStateOnce(
   source: StreamTreeSource,
-  streamPath: StreamPathType,
-): Promise<StreamStateType> {
+  streamPath: string,
+): Promise<BrowserCoreStreamTreeState> {
   const READ_STATE_TIMEOUT_MS = 10_000;
   return new Promise((resolve, reject) => {
     let done = false;
@@ -51,7 +49,7 @@ export function readStreamStateOnce(
           if (done) return;
           done = true;
           try {
-            resolve(StreamState.parse(coreStateToStreamState(batch.state)));
+            resolve(parseBrowserCoreStreamTreeState(batch.state));
           } catch (error) {
             reject(error instanceof Error ? error : new Error(String(error)));
           }
@@ -70,3 +68,9 @@ export function readStreamStateOnce(
       });
   });
 }
+
+/**
+ * URL sentinel for streams that live outside any project (platform streams):
+ * the admin stream browser addresses them as `/admin/streams/__null__/...`.
+ */
+export const NULL_DURABLE_OBJECT_PROJECT_ID = "__null__";

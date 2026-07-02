@@ -96,7 +96,7 @@ export function ItxRepl({
                 <p>
                   Try{" "}
                   <code className="font-mono text-xs">
-                    await itx.projects.list({"{"} limit: 5 {"}"})
+                    {context === "project" ? "await itx.describe()" : "await itx.projects.list()"}
                   </code>
                   , then edit the selected input and run again.
                 </p>

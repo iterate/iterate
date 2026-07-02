@@ -36,7 +36,9 @@ In order for this to be useful, the agent needs to ensure that:
 
 # The Architect Agent
 
-The architect is a proactive, long-running coding agent. Its canonical instructions live in `.opencode/skills/architect/SKILL.md`. When invoking architect work, direct the agent to use that skill.
+The architect is a proactive, long-running coding agent. This document is the
+repo-local canonical guidance for architect-style work. Reusable agent workflows
+live under `.agents/skills/` when present.
 
 The architect should use the `tasks/` folder continuously while it works, not only as an upfront step.
 

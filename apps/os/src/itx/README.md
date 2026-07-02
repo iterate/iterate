@@ -1,5 +1,17 @@
 # itx — the iterate context
 
+> **Status: historical design record (pre-migration).** This document
+> describes the PRE-itx-v4 itx kernel, which was deleted in the itx-v4
+> replacement (`apps/os/ITX_V4_MIGRATION_REPORT.md`) — most files it names
+> (`itx.ts`, `handle.ts`, `dial.ts`, `fetch.ts`, `platform-context.ts`, …)
+> no longer exist. It is kept because it explains the design lineage the
+> current implementation inherits (describe(), instructions/types, capabilities as
+> stream events). **The current implementation lives at `apps/os/src/`**
+> (`README.md` + `types.ts`). What actually remains in THIS folder is the
+> client-side surface: `itx-react.tsx` (browser hooks), `browser-repl.ts`
+> (REPL compiler), `path-proxy.ts`, `examples.ts` (the example catalogue),
+> and `e2e/` (the cross-runtime example matrix).
+
 You are handed an `itx`. In the REPL, inside an agent, in a project worker,
 from `withItx()` on your laptop — it is always the same object: a handle on a
 **context**, a node that holds named capabilities. Three scenes cover almost
@@ -31,7 +43,7 @@ one call away — for you, and for any agent handed the same `itx`.
 ## Scene 2: offer a capability from your laptop
 
 ```ts
-import { withItx } from "~/itx/client.ts";
+import { withItx } from "~/itx/itx-client.ts";
 
 using itx = withItx({ baseUrl, token, context: "my-project" });
 
@@ -79,7 +91,7 @@ The review question for any of this is always the same: **what does
 ---
 
 Everything below is the appendix: how the above actually works, in build
-order. Design history: `apps/os/docs/itx-next.md` (the arc) and `DECISIONS.md`
+order. Design history: `apps/os/docs/itx-design.md` (the arc) and `DECISIONS.md`
 (what changed on contact with reality). The agent-facing surface is
 `types.ts` — handwritten, import-free, the design of record the
 implementation conforms to.
@@ -413,7 +425,7 @@ object that implements `call({ path, args })` itself owns its whole method
 tree (the SDK shape: the public SDK docs become the tool docs):
 
 ```ts
-import { withItx } from "~/itx/client.ts";
+import { withItx } from "~/itx/itx-client.ts";
 
 using itx = withItx({ baseUrl, token, context: "my-project" });
 const provision = await itx.provideCapability({
@@ -452,7 +464,7 @@ await itx.provideCapability({
           // project secrets and is substituted server-side (Law 5)
           return await (await fetch("https://slack.com/api/chat.postMessage", {
             body: JSON.stringify({ channel, text }),
-            headers: { authorization: 'Bearer getSecret({ key: "SLACK_TOKEN" })',
+            headers: { authorization: 'Bearer getSecret({ path: "/secrets/slack-token" })',
                        "content-type": "application/json" },
             method: "POST",
           })).json();
@@ -518,7 +530,7 @@ await slack.chat.postMessage({ channel, text });
 | project worker     | Project DO loads it with a project-scoped `env.ITERATE`     |
 | source / facet cap | the dial loads it with an ORIGIN-scoped `env.ITERATE`       |
 
-The e2e suite (`src/itx/e2e/`, runnable against any deployment) covers the
+The e2e suite (`e2e/vitest/`, runnable against any deployment) covers the
 five-step live→durable capability flow, the stream as the record, egress
 through both doors with real secret substitution, the two locked acceptance
 tests (middleware via a bare-function `fetch` shadow + `itx.super`;

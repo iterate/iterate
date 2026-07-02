@@ -7,8 +7,6 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   return {
     ...base,
     ignore: [
-      // Handwritten design-of-record types for the itx protocol; intentionally unreferenced.
-      "src/itx/types.ts",
       // Reached only through the vitest.config.ts `cloudflare:workers` alias,
       // which knip does not traverse.
       "src/test/cloudflare-workers-shim.ts",
@@ -23,24 +21,22 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       ),
       // One entry module per deployed worker (docs/worker-topology.md).
       "src/workers/*.ts!",
+      "src/workers/*.ts!",
       "e2e/vitest.config.ts",
       "e2e/tui-test/tui-test.config.ts",
       "e2e/tui-test/run.ts",
+      "e2e/tui-test/data-layer-smoke.ts",
       // Local operational commands mounted by scripts/cli.ts.
-      "scripts/artifacts.ts",
       "scripts/cli.ts",
       "scripts/dev.ts",
       "scripts/itx.ts",
-      "sqlfu.config.ts",
-      "src/durable-objects/codemode-session.vitest.config.ts",
-      "src/durable-objects/codemode-session-test-entry.ts",
-      "src/durable-objects/project-ingress.vitest.config.ts",
-      "src/durable-objects/project-ingress-test-entry.ts",
-      "src/durable-objects/itx-stream-subscribe.vitest.config.ts",
-      "src/durable-objects/itx-stream-subscribe-test-entry.ts",
-      "src/domains/streams/engine/vitest.workers.config.ts",
-      "src/domains/streams/engine/vitest.config.ts",
-      "src/domains/streams/engine/workers/test-entry.ts",
+      "e2e/examples/vitest.config.ts",
+      // Operational smoke for the create-project -> onboarding-greeting path.
+      "e2e/vitest/onboarding-smoke.ts",
+      // Used by apps/streams-example-app through its `~` alias into apps/os
+      // src; knip does not resolve that cross-workspace alias.
+      "src/domains/streams/client-libraries/processors/browser-event-feed/contract.ts",
+      "src/domains/streams/client-libraries/processors/browser-event-feed/implementation.ts",
     ],
     ignoreDependencies: [
       ...(base.ignoreDependencies ?? []),
@@ -83,6 +79,9 @@ function makeStreamsExampleAppWorkspace(): WorkspaceConfig {
       // Kept as the Worker/DO counterpart to the browser and Node stream
       // Cap'n Web helpers in the example app.
       "src/lib/workers-stream-connection.ts",
+      // Type-only RequestContext slice reached via an exact-match tsconfig
+      // path, which knip does not traverse.
+      "src/os-shims/request-context.ts",
     ],
     vite: false,
     paths: {
@@ -96,29 +95,6 @@ function makeStreamsExampleAppWorkspace(): WorkspaceConfig {
       "@journeyapps/wa-sqlite",
     ],
     ignoreBinaries: ["playwright"],
-  };
-}
-
-function makeMinimalItxV4Workspace(): WorkspaceConfig {
-  return {
-    entry: [
-      "src/worker.ts!",
-      "vitest.config.ts",
-      "*.test.ts",
-      "*.e2e.test.ts",
-      "scripts/**/*.ts",
-      "tsconfig.wrangler-proof.json",
-    ],
-    project: [
-      "*.test.ts",
-      "*.e2e.test.ts",
-      "scripts/**/*.ts",
-      "src/**/*.ts!",
-      "test-helpers.ts",
-      "worker-configuration.d.ts",
-    ],
-    ignoreDependencies: ["cloudflare"],
-    ignoreBinaries: ["wrangler"],
   };
 }
 
@@ -149,7 +125,7 @@ function makeSharedWorkspace(): WorkspaceConfig {
     // This package exposes many subpath exports from package.json rather than a
     // single `src/index.ts`, so keep the workspace config minimal and let Knip
     // use the declared export map as the public entry surface.
-    entry: ["src/durable-object-utils/e2e/alchemy.run.ts", "src/**/*.test.ts"],
+    entry: ["src/**/*.test.ts"],
     project: ["src/**/*.ts"],
     ignoreDependencies: ["alchemy", "cloudflare", "wrangler"],
   };
@@ -159,6 +135,19 @@ const config: KnipConfig = {
   // Keep the config honest in CI/local runs: if Knip thinks our patterns or
   // workspace setup drifted, fail instead of silently warning.
   treatConfigHintsAsErrors: true,
+  include: [
+    "files",
+    "dependencies",
+    "unlisted",
+    "unresolved",
+    "exports",
+    "nsExports",
+    "types",
+    "nsTypes",
+    "enumMembers",
+    "namespaceMembers",
+    "duplicates",
+  ],
   entry: ["playwright.config.ts", "specs/**/*.spec.ts"],
   project: ["playwright.config.ts", "specs/**/*.ts"],
   // Keep this root command intentionally scoped. When Knip includes dependent
@@ -169,36 +158,26 @@ const config: KnipConfig = {
     "!apps/os",
     "!apps/semaphore",
     "!apps/streams-example-app",
-    "!apps/minimal-itx-v4",
     "packages/*",
     "!packages/shared",
   ],
   ignoreIssues: {
-    "apps/os/src/db/migrations/.generated/migrations.ts": ["files", "exports", "types"],
-    "apps/os/src/db/queries/.generated/index.ts": ["files", "exports", "types"],
-    "apps/os/src/db/queries/.generated/tables.ts": ["files", "types"],
     "apps/os/e2e/test-support/app-config-env.ts": ["files", "exports"],
     "apps/os/src/**": ["exports", "types"],
     "apps/os/e2e/test-support/**": ["exports", "types"],
+    // Example-matrix harness modules export helpers consumed across the
+    // matrix/browser suites and root Playwright specs; keep the same policy
+    // they had under src/**.
+    "apps/os/e2e/examples/**": ["exports", "types"],
     "apps/streams-example-app/src/lib/use-initial-tail-scroll.ts": ["types"],
-    "apps/minimal-itx-v4/src/domains/secrets/utils.ts": ["types"],
-    "apps/minimal-itx-v4/src/domains/streams/build-event.ts": ["types"],
-    "apps/minimal-itx-v4/src/domains/streams/stream-processor.ts": ["types"],
     // TanStack Start resolves the router factory by convention from the
     // entrypoint, so there is no direct import Knip can follow.
     "apps/semaphore/src/router.tsx": ["exports"],
-    "packages/shared/src/callable/entry.workerd.vitest.ts": ["exports"],
-    "packages/shared/src/durable-object-utils/test-harness/initialize-fronting-worker.ts": [
-      "exports",
-      "types",
-    ],
-    "packages/shared/src/durable-object-utils/mixins/fetch-mixin-utils.ts": ["types"],
   },
   workspaces: {
     "apps/semaphore": makeSemaphoreCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/os": makeOsCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/streams-example-app": makeStreamsExampleAppWorkspace(),
-    "apps/minimal-itx-v4": makeMinimalItxV4Workspace(),
     "packages/shared": makeSharedWorkspace(),
   },
 };

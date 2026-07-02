@@ -1,5 +1,16 @@
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
-import type { StreamRpc } from "~/domains/streams/engine/types.ts";
+import type { Stream } from "~/types.ts";
+
+/**
+ * What the playground worker serves at `/api/streams`: the itx
+ * public `Stream` capability plus two playground-only operator verbs
+ * (`kill`/`reset`) used by the sidebar's restart/reset experiments.
+ */
+export type PlaygroundStream = Omit<Stream, "at"> & {
+  at(path: string): PlaygroundStream;
+  kill(): Promise<void>;
+  reset(): Promise<void>;
+};
 
 export type WebSocketFrame = {
   direction: "in" | "out";
@@ -9,7 +20,7 @@ export type WebSocketFrame = {
 };
 
 export type StreamConnection = Disposable & {
-  stream: RpcStub<StreamRpc>;
+  stream: RpcStub<PlaygroundStream>;
   onWebSocketFrame(listener: (frame: WebSocketFrame) => void): Disposable;
 };
 
@@ -22,7 +33,7 @@ export function streamConnectionFromWebSocket(webSocket: WebSocket): StreamConne
   }) as WebSocket["send"];
   webSocket.addEventListener("message", (event) => emitFrame(frameListeners, "in", event.data));
 
-  const stream = newWebSocketRpcSession<StreamRpc>(webSocket);
+  const stream = newWebSocketRpcSession<PlaygroundStream>(webSocket);
   return {
     stream,
     onWebSocketFrame(listener) {

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMatches, useNavigate } from "@tanstack/react-router";
-import { StreamPath } from "@iterate-com/shared/streams/types";
 import { StreamSwitcherDialog } from "./stream-switcher-dialog.tsx";
 import { connectItx } from "~/itx/itx-react.tsx";
 import { OPEN_GLOBAL_COMMAND_PALETTE_EVENT } from "~/components/global-command-palette-events.ts";
@@ -11,7 +10,7 @@ import type {
 } from "~/lib/route-breadcrumbs.ts";
 import type { StreamNavigator } from "~/lib/stream-navigation.ts";
 
-const AGENTS_ROOT = StreamPath.parse("/agents");
+const AGENTS_ROOT = "/agents";
 
 export function GlobalCommandPalette() {
   const [open, setOpen] = useState(false);
@@ -50,8 +49,8 @@ export function GlobalCommandPalette() {
     return {
       source: (path) => ({
         async subscribe(args) {
-          // Key by slug so we share the project provider's pooled socket.
-          const itx = await connectItx({ projectId: activeStream.projectSlug });
+          // Key by project ID so we share the project provider's pooled socket.
+          const itx = await connectItx({ projectId: activeStream.projectId });
           return itx.streams.get(path).subscribe(args);
         },
       }),
@@ -122,6 +121,6 @@ function getActiveStreamCommandContext(
   return {
     ...streamBreadcrumb,
     ...streamCommand,
-    rootPath: streamCommand.rootPath ?? StreamPath.parse("/"),
+    rootPath: streamCommand.rootPath ?? "/",
   };
 }

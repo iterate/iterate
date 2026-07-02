@@ -1,5 +1,4 @@
 import { useMemo, type ReactNode } from "react";
-import { type StreamPath } from "@iterate-com/shared/streams/types";
 import {
   AlertTriangleIcon,
   BotIcon,
@@ -72,6 +71,7 @@ import {
   type EventsStreamRendererMode,
 } from "@iterate-com/ui/components/events/feed-processors";
 import { cn } from "@iterate-com/ui/lib/utils";
+import { type StreamPath } from "./types.ts";
 
 export type { EventsStreamRendererMode } from "@iterate-com/ui/components/events/feed-processors";
 

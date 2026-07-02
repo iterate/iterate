@@ -11,7 +11,7 @@ import {
 } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/domains/durable-object-names.ts";
+import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 
 export const Route = createFileRoute("/admin/streams/")({
   component: AdminStreamsProjectPicker,

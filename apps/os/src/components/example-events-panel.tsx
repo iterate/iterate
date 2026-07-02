@@ -2,7 +2,6 @@ import { useMemo } from "react";
 import { stringify as stringifyYaml } from "yaml";
 import { cn } from "@iterate-com/ui/lib/utils";
 import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import { getProcessorDocByPath, type EventDoc } from "~/lib/event-docs.ts";
 import { hashString } from "~/lib/stream-presence.ts";
 
 // Solid dot colours, hashed by processor slug so each connected processor keeps
@@ -16,14 +15,14 @@ const DOT_PALETTE = [
   "bg-indigo-500",
 ];
 
-type ExampleGroup = { slug: string; events: EventDoc[] };
+type ExampleGroup = { slug: string; events: Array<{ type: string; description?: string }> };
 
 /**
  * The composer's "Examples" body: every processor currently subscribed to the
- * stream contributes its contract's events, and clicking one loads a ready
- * example (or a typed skeleton) into the raw editor. The catalog comes straight
- * from the processor contracts via `event-docs`, so it stays in sync with what
- * the processors actually announce.
+ * stream contributes its announced owned events, and clicking one loads a
+ * typed skeleton into the raw editor. The catalog comes straight from the
+ * contract announcements the processors made on connect, so it stays in sync
+ * with what is actually subscribed — no static registry.
  */
 export function ExampleEventsPanel({
   presence,
@@ -61,7 +60,7 @@ export function ExampleEventsPanel({
                   <button
                     key={event.type}
                     type="button"
-                    onClick={() => onLoadExample(exampleYaml(event))}
+                    onClick={() => onLoadExample(stringifyYaml({ type: event.type, payload: {} }))}
                     className="min-w-0 rounded-xl border bg-background px-4 py-3 text-left transition-colors hover:border-foreground/20 hover:bg-muted/40"
                   >
                     <div className="truncate font-mono text-sm">
@@ -87,17 +86,12 @@ function buildGroups(presence: readonly AgentUiPresenceEntry[]): ExampleGroup[] 
   const seen = new Set<string>();
   const groups: ExampleGroup[] = [];
   for (const entry of presence) {
-    const slug = entry.processor?.slug;
-    if (slug == null || seen.has(slug)) continue;
+    const announcement = entry.processor;
+    const slug = announcement?.slug;
+    if (announcement == null || slug == null || seen.has(slug)) continue;
     seen.add(slug);
-    const doc = getProcessorDocByPath(slug);
-    if (doc == null || doc.events.length === 0) continue;
-    groups.push({ slug, events: doc.events });
+    if (announcement.ownedEvents.length === 0) continue;
+    groups.push({ slug, events: announcement.ownedEvents });
   }
   return groups;
-}
-
-function exampleYaml(event: EventDoc): string {
-  const payload = event.examples[0]?.payload ?? {};
-  return stringifyYaml({ type: event.type, payload });
 }

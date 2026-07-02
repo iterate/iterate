@@ -14,10 +14,10 @@ import { PathProxy, replayPathCall } from "./path-proxy.ts";
 
 describe("browser Cap'n Web REPL", () => {
   test("default snippet uses Cap'n Web promise pipelining", async () => {
-    const list = vi.fn().mockResolvedValue({ items: [{ id: "proj_123" }] });
+    const list = vi.fn().mockResolvedValue(["prj_123"]);
     class Projects extends RpcTarget {
-      list(input: { limit: number }) {
-        return list(input);
+      list() {
+        return list();
       }
     }
 
@@ -29,18 +29,18 @@ describe("browser Cap'n Web REPL", () => {
 
     const itx = new RpcStub(new Context());
 
-    await expect(evalBrowserReplCode({ code: DEFAULT_BROWSER_REPL_CODE, itx })).resolves.toEqual({
-      items: [{ id: "proj_123" }],
-    });
-    expect(list).toHaveBeenCalledWith({ limit: 5 });
+    await expect(evalBrowserReplCode({ code: DEFAULT_BROWSER_REPL_CODE, itx })).resolves.toEqual([
+      "prj_123",
+    ]);
+    expect(list).toHaveBeenCalledTimes(1);
   });
 
   test("default snippet does not probe a callable RPC root then member", async () => {
     let thenReads = 0;
     const rpcRoot = Object.assign(() => undefined, {
       projects: {
-        list(input: { limit: number }) {
-          return { projects: [], total: 0, limit: input.limit };
+        list() {
+          return ["prj_a", "prj_b"];
         },
       },
     });
@@ -57,15 +57,15 @@ describe("browser Cap'n Web REPL", () => {
         code: DEFAULT_BROWSER_REPL_CODE,
         itx: rpcRoot,
       }),
-    ).resolves.toEqual({ projects: [], total: 0, limit: 5 });
+    ).resolves.toEqual(["prj_a", "prj_b"]);
     expect(thenReads).toBe(0);
   });
 
   test("route entry runner succeeds for the default project list snippet", async () => {
     const itx = {
       projects: {
-        list(input: { limit: number }) {
-          return { projects: [{ id: "proj_123" }], total: 1, limit: input.limit };
+        list() {
+          return ["prj_123"];
         },
       },
     };
@@ -80,9 +80,9 @@ describe("browser Cap'n Web REPL", () => {
       consoleOutput: "",
       code: DEFAULT_BROWSER_REPL_CODE,
       id: expect.any(String),
-      output: JSON.stringify({ projects: [{ id: "proj_123" }], total: 1, limit: 5 }, null, 2),
+      output: JSON.stringify(["prj_123"], null, 2),
       outputLanguage: "json",
-      result: { projects: [{ id: "proj_123" }], total: 1, limit: 5 },
+      result: ["prj_123"],
       status: "success",
     });
   });
@@ -453,38 +453,44 @@ const persisted = answer();
     }
   });
 
-  test("plain-object example registers and calls a session-owned target", async () => {
-    // Mirrors a PROJECT-scoped itx handle: provideCapability() with a live
-    // capability registers it, and unknown names on the handle fall through
-    // to a path proxy whose terminal call dispatches exactly like the core:
-    // a call-implementing target receives the path as data; a plain object
-    // (no `call`) has the path replayed onto its members.
+  test("live-capability example registers, calls, and revokes a session-owned target", async () => {
+    // Mirrors a PROJECT-scoped itx handle: provideCapability({ type: "live" })
+    // mounts the caller's plain object, dotted access on the handle replays
+    // onto its members, and the returned provision's revoke() unmounts it —
+    // after which calls fail like the itx "no capability" rejection.
     const providedTargets = new Map<string, Record<string, unknown>>();
     const itx = new Proxy(
       {
-        provideCapability(input: { name: string; capability: Record<string, unknown> }) {
-          providedTargets.set(input.name, input.capability);
+        provideCapability(input: { capability: Record<string, unknown>; path: string[] }) {
+          const key = input.path.join(".");
+          providedTargets.set(key, input.capability);
+          return {
+            path: input.path,
+            providedAtOffset: 1,
+            revoke: async () => void providedTargets.delete(key),
+          };
         },
       },
       {
         get(target, prop: string | symbol) {
-          if (typeof prop === "string" && providedTargets.has(prop)) {
-            const provided = providedTargets.get(prop)!;
-            return new PathProxy((call) =>
-              typeof provided.call === "function"
-                ? provided.call(call)
-                : replayPathCall(provided, call),
-            );
+          if (typeof prop !== "string" || prop in target || prop === "then") {
+            return Reflect.get(target, prop);
           }
-          return Reflect.get(target, prop);
+          const provided = providedTargets.get(prop);
+          if (provided) {
+            return new PathProxy((call) => replayPathCall(provided, call));
+          }
+          return new PathProxy((call) =>
+            Promise.reject(new Error(`no capability "${[prop, ...call.path].join(".")}"`)),
+          );
         },
       },
     );
 
     const example = ITX_EXAMPLES.find((candidate) => {
-      return candidate.id === "provide-plain-object";
+      return candidate.id === "provide-live-capability";
     });
-    if (!example) throw new Error("Missing provide-plain-object example.");
+    if (!example) throw new Error("Missing provide-live-capability example.");
 
     await expect(
       evalBrowserReplSessionCode({
@@ -494,6 +500,7 @@ const persisted = answer();
       }),
     ).resolves.toEqual({
       deep: { answer: 42, question: "life, the universe, everything" },
+      revoked: true,
       ultimate: 42,
     });
   });
