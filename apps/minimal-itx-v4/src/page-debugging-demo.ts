@@ -396,6 +396,16 @@ function pageDebuggingDemoHtml() {
         font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
         font-size: 12px;
       }
+      .screenshot-preview {
+        display: none;
+        border: 1px solid #bcccdc;
+        border-radius: 6px;
+        margin-top: 14px;
+        max-height: 420px;
+        max-width: 100%;
+        object-fit: contain;
+        background: #f8fafc;
+      }
       pre {
         border: 1px solid #d9e2ec;
         border-radius: 6px;
@@ -464,15 +474,15 @@ function pageDebuggingDemoHtml() {
         <aside>
           <h2>Live Demo Script</h2>
           <ol>
-            <li>Click <strong>Run in this tab</strong> for the no-DevTools demo.</li>
-            <li>Click <strong>Snapshot</strong>, <strong>Click counter</strong>, and <strong>Fill message</strong>.</li>
-            <li>Show that the counter and input changed because calls crossed the worker and came back into the page.</li>
-            <li>For the real console-paste flow, copy the snippet and paste it into DevTools instead.</li>
+            <li>Copy the snippet, open any page in this browser, and paste it into that page's DevTools console.</li>
+            <li>Click <strong>Take Screenshot</strong>, <strong>Snapshot</strong>, <strong>Click counter</strong>, or <strong>Fill message</strong>.</li>
+            <li>Show that the calls crossed the worker and came back into the target page.</li>
+            <li>Use <strong>Run in this tab</strong> only for the no-DevTools shortcut.</li>
           </ol>
           <div class="target-row">
-            <button id="runHere" class="primary" type="button">Run in this tab</button>
+            <button id="copySnippet" class="primary" type="button">Copy snippet</button>
+            <button id="runHere" type="button">Run in this tab</button>
             <button id="generateSnippet" type="button">Refresh snippet</button>
-            <button id="copySnippet" type="button">Copy</button>
           </div>
           <p id="snippetStatus" class="status"></p>
           <textarea id="snippet" aria-label="Console snippet" spellcheck="false"></textarea>
@@ -483,14 +493,18 @@ function pageDebuggingDemoHtml() {
         <h2>Agent-Side Controls</h2>
         <p>
           These buttons open a separate capnweb socket to <code>${CONNECT_PATH}</code> with the same HMAC token.
-          They call the mounted <code>debugPage</code> capability as a stand-in for an agent loop.
+          They call the mounted <code>debugPage</code> capability from this control page, even when the snippet
+          was pasted into a different tab.
         </p>
         <div class="target-row">
           <button id="agentSnapshot" type="button">Snapshot</button>
+          <button id="agentScreenshot" type="button">Take Screenshot</button>
           <button id="agentClick" type="button">Click counter</button>
           <button id="agentFill" type="button">Fill message</button>
           <button id="agentDescribe" type="button">Describe input</button>
         </div>
+        <img id="screenshotPreview" class="screenshot-preview" alt="Latest target page screenshot" />
+        <p id="screenshotMeta" class="status"></p>
         <pre id="agentOutput" aria-live="polite">Generate and run the snippet first.</pre>
       </section>
     </main>
@@ -499,6 +513,8 @@ function pageDebuggingDemoHtml() {
       const snippetStatus = document.querySelector("#snippetStatus");
       const agentOutput = document.querySelector("#agentOutput");
       const targetStatus = document.querySelector("#targetStatus");
+      const screenshotMeta = document.querySelector("#screenshotMeta");
+      const screenshotPreview = document.querySelector("#screenshotPreview");
       let session;
       let agentProject;
       let agentProjectId;
@@ -517,7 +533,7 @@ function pageDebuggingDemoHtml() {
         const response = await fetch("${SESSION_PATH}", { method: "POST" });
         session = await response.json();
         snippetEl.value = session.snippet;
-        snippetStatus.textContent = "Snippet ready. Run it here or copy it for the console-paste flow.";
+        snippetStatus.textContent = "Snippet ready. Copy it into a target page, or run it here for the shortcut.";
         agentOutput.textContent = JSON.stringify({
           connectUrl: session.connectUrl,
           path: session.path,
@@ -576,15 +592,32 @@ function pageDebuggingDemoHtml() {
       document.querySelector("#runHere").addEventListener("click", runSnippetHere);
       document.querySelector("#agentSnapshot").addEventListener("click", () =>
         runAgentAction("Snapshot", (page) => page.snapshot()));
+      document.querySelector("#agentScreenshot").addEventListener("click", () =>
+        runAgentAction("Screenshot", async (page) => {
+          const image = await page.screenshot({ mode: "auto", maxWidth: 960, quality: 0.65 });
+          if (image.error) return image;
+          screenshotPreview.src = "data:" + image.mime + ";base64," + image.base64;
+          screenshotPreview.style.display = "block";
+          screenshotMeta.textContent =
+            "Latest screenshot: " + image.width + "x" + image.height + " via " + image.mode + ".";
+          return {
+            height: image.height,
+            mime: image.mime,
+            mode: image.mode,
+            width: image.width,
+            base64: image.base64 ? image.base64.slice(0, 80) + "..." : undefined,
+            base64Length: image.base64?.length ?? 0,
+          };
+        }));
       document.querySelector("#agentClick").addEventListener("click", () =>
         runAgentAction("Clicking", async (page) => {
           await page.getByRole("button", { name: "Increment counter" }).click();
-          return { counter: document.querySelector("#counter").textContent };
+          return { counter: await page.getByTestId("counter").textContent() };
         }));
       document.querySelector("#agentFill").addEventListener("click", () =>
         runAgentAction("Filling", async (page) => {
           await page.getByLabelText("Message").fill("hello from ITX");
-          return { message: document.querySelector("#message").value };
+          return { message: await page.getByLabelText("Message").inputValue() };
         }));
       document.querySelector("#agentDescribe").addEventListener("click", () =>
         runAgentAction("Describing", (page) => page.getByLabelText("Message").describe()));
@@ -601,14 +634,16 @@ import { queryAllByLabelText, queryAllByPlaceholderText, queryAllByRole, queryAl
 import userEvent from "https://esm.sh/@testing-library/user-event@14.6.1?bundle";
 
 const PROTOCOL_PREFIX = ${JSON.stringify(PROTOCOL_PREFIX)};
+const CAPTURE_BUTTON_ID = "__itx_page_debugging_enable_capture";
 
 export function connectPageItx({ connectUrl, token }) {
   return newWebSocketRpcSession(new WebSocket(connectUrl, [PROTOCOL_PREFIX + token]));
 }
 
-export async function connectPageTools({ connectUrl, path = ["debugPage"], token }) {
+export async function connectPageTools({ connectUrl, installCaptureButton = true, path = ["debugPage"], token }) {
   const project = connectPageItx({ connectUrl, token });
   const tools = new PageTools();
+  if (installCaptureButton) installHostCaptureButton(tools);
   const provision = await project.provideCapability({
     capability: tools,
     flattenNestedPaths: false,
@@ -620,11 +655,71 @@ export async function connectPageTools({ connectUrl, path = ["debugPage"], token
   return { project, provision, tools };
 }
 
+function installHostCaptureButton(tools) {
+  let host;
+  try {
+    host = hostDocument();
+  } catch {
+    return;
+  }
+  if (host.getElementById(CAPTURE_BUTTON_ID)) return;
+  const button = host.createElement("button");
+  button.id = CAPTURE_BUTTON_ID;
+  button.type = "button";
+  button.textContent = "Enable Host Capture";
+  button.style.cssText = [
+    "position:fixed",
+    "right:16px",
+    "bottom:16px",
+    "z-index:2147483647",
+    "border:0",
+    "border-radius:8px",
+    "background:#111827",
+    "color:#fff",
+    "cursor:pointer",
+    "font:600 14px system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
+    "padding:9px 12px",
+    "box-shadow:0 8px 24px rgba(15,23,42,.25)",
+  ].join(";");
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    button.textContent = "Choose this tab...";
+    const result = await tools.enableScreenCapture();
+    if (result.ok) {
+      button.textContent = "Host Capture Enabled";
+      setTimeout(() => button.remove(), 900);
+    } else {
+      button.disabled = false;
+      button.textContent = "Enable Host Capture";
+      console.error("[itx] screen capture setup failed", result);
+    }
+  });
+  host.body.appendChild(button);
+}
+
+function hostDocument() {
+  if (!window.top || window.top === window) return document;
+  try {
+    const topDocument = window.top.document;
+    if (!topDocument?.body) throw new Error("missing top document body");
+    return topDocument;
+  } catch {
+    throw new Error("top-document-not-accessible: paste the snippet into the host page, not a cross-origin iframe");
+  }
+}
+
+function errorMessage(error) {
+  return error && typeof error === "object" && "message" in error ? String(error.message) : String(error);
+}
+
 export class PageTools extends RpcTarget {
-  constructor({ root = document.body } = {}) {
+  constructor({ root } = {}) {
     super();
-    this.root = root;
-    this.user = userEvent.setup({ document, pointerEventsCheck: 0 });
+    const host = hostDocument();
+    this.document = host;
+    this.window = host.defaultView || window;
+    this.root = root || host.body;
+    this.user = userEvent.setup({ document: host, pointerEventsCheck: 0 });
   }
 
   snapshot() {
@@ -633,29 +728,112 @@ export class PageTools extends RpcTarget {
       .filter((element) => element.role || element.name || element.text)
       .slice(0, 100);
     return {
-      title: document.title,
-      url: location.href,
+      title: this.document.title,
+      url: this.window.location.href,
       text: this.root.innerText,
       elements,
     };
   }
 
+  async enableScreenCapture() {
+    try {
+      if (!this.window.navigator.mediaDevices?.getDisplayMedia) {
+        return {
+          error: "screen-capture-unavailable",
+          hint: "This browser does not expose navigator.mediaDevices.getDisplayMedia().",
+        };
+      }
+      const stream = await this.window.navigator.mediaDevices.getDisplayMedia({
+        audio: false,
+        preferCurrentTab: true,
+        video: { frameRate: 4 },
+      });
+      const video = this.document.createElement("video");
+      video.muted = true;
+      video.playsInline = true;
+      video.srcObject = stream;
+      await video.play();
+      this.captureVideo = video;
+      const [track] = stream.getVideoTracks();
+      track?.addEventListener("ended", () => {
+        this.captureVideo = undefined;
+      });
+      return { ok: true };
+    } catch (error) {
+      return {
+        error: "screen-capture-denied",
+        message: errorMessage(error),
+      };
+    }
+  }
+
+  async screenshot(options = {}) {
+    const mode = options.mode || "auto";
+    const maxWidth = options.maxWidth || 1280;
+    const quality = options.quality || 0.7;
+    const useCapture = mode === "capture" || (mode === "auto" && this.captureVideo);
+
+    try {
+      let canvas;
+      let sourceMode;
+      if (useCapture) {
+        const video = this.captureVideo;
+        if (!video) {
+          return {
+            error: "screen-capture-not-enabled",
+            hint: "Paste the snippet into the target host page, click its Enable Host Capture button, then retry.",
+          };
+        }
+        sourceMode = "capture";
+        const scale = Math.min(1, maxWidth / Math.max(video.videoWidth, 1));
+        canvas = this.document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+        canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+        canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+      } else {
+        sourceMode = "render";
+        const { toCanvas } = await import("https://esm.sh/html-to-image@1.11.13?bundle");
+        const node = options.selector
+          ? this.document.querySelector(options.selector)
+          : this.document.documentElement;
+        if (!node) return { error: "selector-not-found", selector: options.selector };
+        const width = Math.max(node.scrollWidth || 0, node.getBoundingClientRect().width || 0, 1);
+        const pixelRatio = Math.min(1, maxWidth / width);
+        canvas = await toCanvas(node, { cacheBust: true, pixelRatio });
+      }
+
+      const dataUrl = canvas.toDataURL("image/jpeg", quality);
+      return {
+        base64: dataUrl.split(",")[1],
+        height: canvas.height,
+        mime: "image/jpeg",
+        mode: sourceMode,
+        width: canvas.width,
+      };
+    } catch (error) {
+      return {
+        error: "screenshot-failed",
+        message: errorMessage(error),
+      };
+    }
+  }
+
   html(selector) {
-    const element = selector ? document.querySelector(selector) : document.documentElement;
+    const element = selector ? this.document.querySelector(selector) : this.document.documentElement;
     return element ? element.outerHTML : null;
   }
 
   text(selector) {
-    const element = selector ? document.querySelector(selector) : this.root;
+    const element = selector ? this.document.querySelector(selector) : this.root;
     return element ? element.innerText : null;
   }
 
   url() {
-    return location.href;
+    return this.window.location.href;
   }
 
   title() {
-    return document.title;
+    return this.document.title;
   }
 
   async keyboard(text) {
@@ -773,6 +951,11 @@ export class Locator extends RpcTarget {
     return this.one().textContent;
   }
 
+  inputValue() {
+    const element = this.one();
+    return "value" in element ? element.value : null;
+  }
+
   getAttribute(name) {
     return this.one().getAttribute(name);
   }
@@ -824,7 +1007,7 @@ function accessibleName(element) {
   if (labelledBy) {
     return labelledBy
       .split(/\\s+/)
-      .map((id) => document.getElementById(id)?.innerText || "")
+      .map((id) => element.ownerDocument.getElementById(id)?.innerText || "")
       .join(" ")
       .trim();
   }
@@ -858,11 +1041,11 @@ function roleOf(element) {
 }
 
 function isVisible(element) {
-  const style = getComputedStyle(element);
+  const style = (element.ownerDocument.defaultView || window).getComputedStyle(element);
   const rect = element.getBoundingClientRect();
   return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
 }
 
-const PAGE_TOOLS_INSTRUCTIONS = "In-page PageTools. Use snapshot first, locate by role/name or label, act with user-event methods, then snapshot again.";
-const PAGE_TOOLS_TYPES = "export type Capability = PageTools; interface PageTools { snapshot(): Promise<unknown>; getByRole(role: string, options?: { name?: string }): Locator; getByLabelText(text: string): Locator; getByText(text: string): Locator; locator(selector: string): Locator; } interface Locator { click(): Promise<boolean>; fill(value: string): Promise<boolean>; textContent(): Promise<string | null>; describe(): Promise<unknown>; }";
+const PAGE_TOOLS_INSTRUCTIONS = "In-page PageTools. Use snapshot first for semantic structure. Use screenshot when visual layout, canvas, iframe, or styling matters. Screen capture is host-tab pixels after the user enables capture in the target page; render mode is a silent host-DOM fallback.";
+const PAGE_TOOLS_TYPES = "export type Capability = PageTools; interface ScreenshotResult { mime?: string; base64?: string; width?: number; height?: number; mode?: 'capture' | 'render'; error?: string; hint?: string; message?: string; } interface PageTools { snapshot(): Promise<unknown>; enableScreenCapture(): Promise<unknown>; screenshot(options?: { mode?: 'auto' | 'capture' | 'render'; maxWidth?: number; quality?: number; selector?: string }): Promise<ScreenshotResult>; getByRole(role: string, options?: { name?: string }): Locator; getByLabelText(text: string): Locator; getByText(text: string): Locator; locator(selector: string): Locator; } interface Locator { click(): Promise<boolean>; fill(value: string): Promise<boolean>; textContent(): Promise<string | null>; inputValue(): Promise<string | null>; describe(): Promise<unknown>; }";
 `;

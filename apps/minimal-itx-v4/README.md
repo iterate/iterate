@@ -128,14 +128,17 @@ https://minimal-itx-v4.iterate-dev-preview.workers.dev/page-debugging
 
 Live demo flow:
 
-1. Click **Run in this tab**.
-2. Click **Snapshot**, **Click counter**, and **Fill message** in the
-   agent-side controls.
-3. Show that those buttons open a separate Cap'n Web connection through the
-   worker and call the mounted `debugPage` capability back inside the browser
-   tab.
-4. For the real console-paste flow, copy the generated snippet and paste it into
-   DevTools instead of clicking **Run in this tab**.
+1. Open the demo page and copy the generated snippet.
+2. Open any target page in the same browser and paste the snippet into that
+   page's DevTools console. Paste into the host page, not a cross-origin iframe,
+   if you want host-page screenshots.
+3. Return to the demo page and click **Take Screenshot**. The screenshot is
+   rendered back into the demo page.
+4. Click **Snapshot**, **Click counter**, or **Fill message** to show that those
+   calls also cross the worker and invoke the mounted `debugPage` capability in
+   the target page.
+5. For a no-DevTools demo, click **Run in this tab** instead; that mounts the
+   same capability on the demo page itself.
 
 The generated snippet imports only the worker-hosted client module:
 
@@ -144,7 +147,10 @@ const { connectPageTools } = await import("http://127.0.0.1:8791/page-debugging/
 ```
 
 That client module imports `capnweb`, Testing Library DOM queries, and
-`user-event` from esm.sh. The WebSocket auth token rides in
+`user-event` from esm.sh. It also exposes `screenshot()`: by default it silently
+falls back to a host-DOM render, and if the user clicks the injected
+**Enable Host Capture** button in the target page it uses the Screen Capture API
+for true host-tab pixels. The WebSocket auth token rides in
 `Sec-WebSocket-Protocol` as `itx-page-debugging.<token>` because browsers cannot
 set `Authorization` headers on WebSocket upgrades. The server verifies the HMAC
 and checks that the token id still exists in the Durable Object's storage before

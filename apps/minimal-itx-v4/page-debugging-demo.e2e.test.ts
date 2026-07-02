@@ -47,44 +47,99 @@ describe("page debugging demo", () => {
     });
   });
 
-  test("turns the hosted console snippet into a browser-backed PageTools capability", async () => {
+  test("turns a snippet pasted into another page into a screenshot-capable PageTools capability", async () => {
     const browser = await chromium.launch({ headless: true });
-    const page = await browser.newPage();
+    const demoPage = await browser.newPage();
+    const targetPage = await browser.newPage();
 
     try {
-      await page.goto(buildUrl({ path: "/page-debugging" }));
-      await page.waitForFunction(() =>
+      await demoPage.goto(buildUrl({ path: "/page-debugging" }));
+      await demoPage.waitForFunction(() =>
         document.querySelector<HTMLTextAreaElement>("#snippet")?.value.includes("connectPageTools"),
       );
 
-      const snippet = await page.locator("#snippet").inputValue();
+      const snippet = await demoPage.locator("#snippet").inputValue();
       expect(snippet).toContain("/page-debugging/client.mjs");
       expect(snippet).toContain("window.__itxPageDebugging");
-      const initialSession = JSON.parse((await page.locator("#agentOutput").textContent()) ?? "{}");
+      const initialSession = JSON.parse(
+        (await demoPage.locator("#agentOutput").textContent()) ?? "{}",
+      );
       expect(initialSession.projectId).toMatch(/^prj_page_debug_/);
 
-      await page.evaluate(async (code) => {
+      await targetPage.goto(buildUrl({ path: "/page-debugging" }));
+      await targetPage.setContent(`
+        <!doctype html>
+        <html>
+          <head><title>External Target Page</title></head>
+          <body>
+            <main style="font-family: system-ui; padding: 24px">
+              <h1>External Target Page</h1>
+              <button id="increment" type="button">Increment counter</button>
+              <span id="counter" data-testid="counter">0</span>
+              <label>Message <input id="message" aria-label="Message" placeholder="agent will fill this" /></label>
+              <script>
+                document.querySelector("#increment").addEventListener("click", () => {
+                  const counter = document.querySelector("#counter");
+                  counter.textContent = String(Number(counter.textContent || "0") + 1);
+                });
+              </script>
+            </main>
+          </body>
+        </html>
+      `);
+      await targetPage.evaluate(async (code) => {
         await (0, eval)(code);
       }, snippet);
+      expect(await targetPage.locator("#__itx_page_debugging_enable_capture").textContent()).toBe(
+        "Enable Host Capture",
+      );
 
-      await page.locator("#agentClick").click();
-      await page.waitForFunction(() => document.querySelector("#counter")?.textContent === "1");
-      expect(await page.locator("#counter").textContent()).toBe("1");
+      await demoPage.locator("#agentClick").click();
+      await targetPage.waitForFunction(
+        () => document.querySelector("#counter")?.textContent === "1",
+      );
+      expect(await targetPage.locator("#counter").textContent()).toBe("1");
+      await demoPage.waitForFunction(() =>
+        document.querySelector("#agentOutput")?.textContent?.includes('"counter": "1"'),
+      );
+      expect(await demoPage.locator("#agentOutput").textContent()).toContain('"counter": "1"');
 
-      await page.locator("#agentFill").click();
-      await page.waitForFunction(
+      await demoPage.locator("#agentFill").click();
+      await targetPage.waitForFunction(
         () => document.querySelector<HTMLInputElement>("#message")?.value === "hello from ITX",
       );
-      expect(await page.locator("#message").inputValue()).toBe("hello from ITX");
+      expect(await targetPage.locator("#message").inputValue()).toBe("hello from ITX");
+      await demoPage.waitForFunction(() =>
+        document
+          .querySelector("#agentOutput")
+          ?.textContent?.includes('"message": "hello from ITX"'),
+      );
+      expect(await demoPage.locator("#agentOutput").textContent()).toContain(
+        '"message": "hello from ITX"',
+      );
 
-      await page.locator("#agentSnapshot").click();
-      await page.waitForFunction(() =>
+      await demoPage.locator("#agentSnapshot").click();
+      await demoPage.waitForFunction(() =>
         document.querySelector("#agentOutput")?.textContent?.includes("Increment counter"),
       );
-      expect(await page.locator("#agentOutput").textContent()).toContain("Increment counter");
+      expect(await demoPage.locator("#agentOutput").textContent()).toContain("Increment counter");
 
-      await page.locator("#generateSnippet").click();
-      await page.waitForFunction((previousProjectId) => {
+      await demoPage.locator("#agentScreenshot").click();
+      await demoPage.waitForFunction(() =>
+        document
+          .querySelector<HTMLImageElement>("#screenshotPreview")
+          ?.src.startsWith("data:image/jpeg;base64,"),
+      );
+      expect(await demoPage.locator("#screenshotMeta").textContent()).toContain("via render");
+      expect(await demoPage.locator("#agentOutput").textContent()).toContain('"mode": "render"');
+
+      await demoPage.locator("#runHere").click();
+      await demoPage.waitForFunction(() =>
+        document.querySelector("#targetStatus")?.textContent?.includes("Snippet connected"),
+      );
+
+      await demoPage.locator("#generateSnippet").click();
+      await demoPage.waitForFunction((previousProjectId) => {
         const output = JSON.parse(document.querySelector("#agentOutput")?.textContent ?? "{}");
         return (
           output.projectId !== previousProjectId &&
@@ -92,9 +147,9 @@ describe("page debugging demo", () => {
         );
       }, initialSession.projectId);
 
-      await page.locator("#agentClick").click();
-      await page.waitForFunction(() => document.querySelector("#counter")?.textContent === "2");
-      expect(await page.locator("#counter").textContent()).toBe("2");
+      await demoPage.locator("#agentClick").click();
+      await demoPage.waitForFunction(() => document.querySelector("#counter")?.textContent === "1");
+      expect(await demoPage.locator("#counter").textContent()).toBe("1");
     } finally {
       await browser.close();
     }
