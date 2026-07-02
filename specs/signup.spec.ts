@@ -20,11 +20,9 @@ test("can sign up with an email one-time passcode", async ({ page }) => {
   // Back on OS, signed in: a fresh user has no projects yet. The /projects
   // pending state renders its data-spinner section twice during the redirect,
   // which trips spinner-waiter's strict-mode isVisible — sit it out. The
-  // OAuth callback straggles on cold slots, so give this test extra budget
-  // (the waitFor must stay under the test timeout or Playwright kills the
-  // test before the locator resolves).
-  test.setTimeout(180_000);
+  // cold-slot OAuth-callback straggle traced back to zombie worker routes,
+  // which the deploy now verifies + heals (tasks/os-cold-create-latency.md).
   await spinnerWaiter.settings.run({ disabled: true }, () =>
-    page.getByText("No projects yet").waitFor({ timeout: 90_000 }),
+    page.getByText("No projects yet").waitFor({ timeout: 30_000 }),
   );
 });
