@@ -16,7 +16,7 @@ test("bootstraps Captun redirect URIs against the shared dev auth service", () =
       ALCHEMY_STAGE: "dev_misha",
       APP_CONFIG_BASE_URL: "https://misha.tunnels.iterate.com",
       APP_CONFIG_ITERATE_AUTH__ISSUER: "https://auth.iterate-dev.com/api/auth",
-      APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN: "service-token",
+      ITERATE_AUTH_SERVICE_TOKEN: "service-token",
       APP_CONFIG_ITERATE_AUTH__CLIENT_ID: "os-local-dev",
       APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET: "existing-secret",
     }),
@@ -36,7 +36,7 @@ test("does not bootstrap local dev clients against production auth", () => {
       ALCHEMY_STAGE: "dev_misha",
       APP_CONFIG_BASE_URL: "https://misha.tunnels.iterate.com",
       APP_CONFIG_ITERATE_AUTH__ISSUER: "https://auth.iterate.com/api/auth",
-      APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN: "service-token",
+      ITERATE_AUTH_SERVICE_TOKEN: "service-token",
     }),
   ).toBeNull();
 });

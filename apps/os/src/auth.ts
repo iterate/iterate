@@ -26,7 +26,7 @@
 
 import { authenticateCapnwebAdmin } from "./auth/admin-auth-cookie.ts";
 import { authenticateAdminBearer } from "./auth/admin.ts";
-import { createAuthWorkerServiceClient } from "./auth/auth-worker-service.ts";
+import { authWorker } from "./env.ts";
 import { createOsIterateAuth } from "./auth/iterate-auth-client.ts";
 import {
   principalFromAccessToken,
@@ -38,25 +38,18 @@ import {
 import type { AppConfig } from "./config.ts";
 import type { ItxAuth, ItxAuthCredentials, ItxAuthToken } from "./types.ts";
 
-type ProjectDirectory = {
-  userHasProject(userPrincipal: UserPrincipal, projectId: string): Promise<boolean>;
-};
-
 class ItxAuthContext implements ItxAuth {
-  readonly #directory: ProjectDirectory | undefined;
   readonly #isAdmin: boolean;
   readonly #principal: string;
   readonly #projectIds: Set<string>;
   readonly #userPrincipal: UserPrincipal | undefined;
 
   constructor(input: {
-    directory?: ProjectDirectory;
     isAdmin: boolean;
     principal: string;
     projectIds?: Iterable<string>;
     userPrincipal?: UserPrincipal;
   }) {
-    this.#directory = input.directory;
     this.#isAdmin = input.isAdmin;
     this.#principal = input.principal;
     this.#projectIds = new Set(input.projectIds ?? []);
@@ -104,11 +97,9 @@ class ItxAuthContext implements ItxAuth {
    */
   async ensureCanAccessProject(projectId: string): Promise<void> {
     if (this.canAccessProject(projectId)) return;
-    if (this.#userPrincipal && this.#directory) {
-      if (await this.#directory.userHasProject(this.#userPrincipal, projectId)) {
-        this.widenProjectAccess(projectId);
-        return;
-      }
+    if (this.#userPrincipal && (await userHasProject(this.#userPrincipal, projectId))) {
+      this.widenProjectAccess(projectId);
+      return;
     }
     this.assertCanAccessProject(projectId);
   }
@@ -183,7 +174,7 @@ export async function resolveItxAuth(input: {
       headers: new Headers({ authorization: `Bearer ${credentials.token}` }),
     });
     if (!accessToken) throw new Error("missing or invalid auth");
-    return contextFromPrincipal(config, principalFromAccessToken(accessToken));
+    return contextFromPrincipal(principalFromAccessToken(accessToken));
   }
 
   // from-server-cookie: the admin cookie wins (browser REPL admin + Playwright
@@ -198,7 +189,7 @@ export async function resolveItxAuth(input: {
   if (!auth) throw new Error("iterate auth is not configured");
   const result = await auth.authenticate({ headers: input.headers, includeUserInfo: false });
   if (!result.session) throw new Error("missing or invalid auth");
-  return contextFromPrincipal(config, principalFromSession(result.session));
+  return contextFromPrincipal(principalFromSession(result.session));
 }
 
 function assertAdminSecret(config: AppConfig, secret: string): void {
@@ -209,12 +200,11 @@ function assertAdminSecret(config: AppConfig, secret: string): void {
   if (!admin) throw new Error("missing or invalid auth");
 }
 
-function contextFromPrincipal(config: AppConfig, principal: Principal): ItxAuthContext {
+function contextFromPrincipal(principal: Principal): ItxAuthContext {
   if (principal.type === "admin") {
     return new ItxAuthContext({ isAdmin: true, principal: "admin" });
   }
   return new ItxAuthContext({
-    directory: authWorkerProjectDirectory(config),
     isAdmin: principalIsAdmin(principal),
     principal: principal.userId,
     projectIds: principal.projects.map((project) => project.id),
@@ -239,42 +229,31 @@ function contextFromImpersonatedToken(token: ItxAuthToken): ItxAuthContext {
 const DIRECTORY_CACHE_TTL_MS = 30_000;
 const directoryCache = new Map<string, { expiresAt: number; hasProject: boolean }>();
 
-function authWorkerProjectDirectory(config: AppConfig): ProjectDirectory | undefined {
-  if (!config.iterateAuth?.serviceToken) return undefined;
-  return {
-    async userHasProject(userPrincipal, projectId) {
-      const cacheKey = `${userPrincipal.userId}:${projectId}`;
-      const cached = directoryCache.get(cacheKey);
-      if (cached && cached.expiresAt > Date.now()) return cached.hasProject;
+async function userHasProject(userPrincipal: UserPrincipal, projectId: string): Promise<boolean> {
+  const cacheKey = `${userPrincipal.userId}:${projectId}`;
+  const cached = directoryCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.hasProject;
 
-      let hasProject = false;
-      let lookupFailed = false;
-      for (const organization of userPrincipal.organizations) {
-        const client = createAuthWorkerServiceClient(
-          { config },
-          { asUserId: userPrincipal.userId },
-        );
-        let projects;
-        try {
-          projects = await client.project.list({ organizationSlug: organization.slug });
-        } catch {
-          // Auth worker unreachable is NOT "no membership": deny THIS check
-          // without caching the denial, so the next request retries instead
-          // of locking the user out for the cache window.
-          lookupFailed = true;
-          continue;
-        }
-        if (projects.some((project) => project.id === projectId)) {
-          hasProject = true;
-          break;
-        }
-      }
-      if (!hasProject && lookupFailed) return false;
-      directoryCache.set(cacheKey, {
-        expiresAt: Date.now() + DIRECTORY_CACHE_TTL_MS,
-        hasProject,
-      });
-      return hasProject;
-    },
-  };
+  let projects;
+  try {
+    projects = await authWorker().listProjectsForUser({ userId: userPrincipal.userId });
+  } catch {
+    // Auth worker unreachable is NOT "no membership": deny THIS check without
+    // caching the denial, so the next request retries instead of locking the
+    // user out for the cache window.
+    return false;
+  }
+  // Gate on the organizations already in the principal's claims — the same
+  // scope the pre-service-binding fallback used (it looked up projects per
+  // claims org). This keeps itx access in step with the dashboard's
+  // claims-gated directory reads (getProjectBySlugServerFn): the fallback
+  // recovers projects created in an org the user already holds, without
+  // silently widening access to brand-new org memberships the token has not
+  // caught up to yet.
+  const claimsOrganizationIds = new Set(userPrincipal.organizations.map((org) => org.id));
+  const hasProject = projects.some(
+    (project) => project.id === projectId && claimsOrganizationIds.has(project.organizationId),
+  );
+  directoryCache.set(cacheKey, { expiresAt: Date.now() + DIRECTORY_CACHE_TTL_MS, hasProject });
+  return hasProject;
 }

@@ -1,5 +1,5 @@
 import { admin } from "better-auth/plugins/admin";
-import { bearer, deviceAuthorization, emailOTP, jwt, oneTimeToken } from "better-auth/plugins";
+import { bearer, deviceAuthorization, emailOTP, jwt } from "better-auth/plugins";
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { organization } from "better-auth/plugins/organization";
 import {
@@ -18,9 +18,9 @@ import {
   deleteOAuthProjectSelectionsByUserId,
   getSessionActiveOrganizationIdById,
   listOrganizationsForUser,
-  listProjectsForUser,
 } from "./db/queries/.generated/index.ts";
 import { db } from "./db/index.ts";
+import { listProjectsForUser } from "./project-directory.ts";
 import {
   buildAugmentedScopeClaims,
   buildOAuthProjectSelectionReferenceId,
@@ -75,6 +75,9 @@ async function listOrganizationClaims(
   }));
 }
 
+// Shares project-directory's listProjectsForUser — the same function the OS
+// stale-claims fallback calls over the AUTH binding — so token claims and the
+// fallback can never disagree.
 async function listProjectClaims(
   user: Record<string, unknown> | null | undefined,
   selectedProjectIds: string[] | null,
@@ -83,17 +86,20 @@ async function listProjectClaims(
   if (!userId) return [];
 
   const selectedProjectIdSet = selectedProjectIds ? new Set(selectedProjectIds) : null;
-  const projects = await listProjectsForUser(db, { userId });
-  return projects
-    .filter((project) => !selectedProjectIdSet || selectedProjectIdSet.has(project.id))
-    .map((project) => ({
-      id: project.id,
-      slug: project.slug,
-      organizationId: project.organizationId,
-    }));
+  const projects = await listProjectsForUser({ userId });
+  return projects.filter(
+    (project) => !selectedProjectIdSet || selectedProjectIdSet.has(project.id),
+  );
 }
 
-export function getAuthPlugins(env: Record<string, unknown>) {
+// Structurally typed (not CloudflareEnv) because auth.schema-only.ts calls
+// this with `{}` from the better-auth schema-generation CLI, outside any
+// worker environment.
+export function getAuthPlugins(env: {
+  VITE_ENABLE_EMAIL_OTP_SIGNIN?: string;
+  RESEND_BOT_API_KEY?: string;
+  RESEND_BOT_DOMAIN?: string;
+}) {
   const osResourceBases = getOsResourceBases();
   const validAudiences = [...osResourceBases, ...getOsMcpResourceBases()];
 
@@ -109,11 +115,6 @@ export function getAuthPlugins(env: Record<string, unknown>) {
       userCodeLength: 8,
       deviceCodeLength: 40,
       validateClient: async (clientId) => clientId === "iterate-cli",
-    }),
-    oneTimeToken({
-      disableClientRequest: true,
-      storeToken: "plain",
-      disableSetSessionCookie: true,
     }),
     ...(env.VITE_ENABLE_EMAIL_OTP_SIGNIN === "true"
       ? [
