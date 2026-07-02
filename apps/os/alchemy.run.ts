@@ -24,6 +24,7 @@ import { ensureLocalDevOAuthClient } from "./src/auth/dev-oauth-client-bootstrap
 import { AppConfig } from "./src/config.ts";
 import type { AgentDurableObject } from "./src/domains/agents/agent-durable-object.ts";
 import type { ItxDurableObject } from "./src/domains/itx/itx-durable-object.ts";
+import type { PageDebuggingDemoDurableObject } from "./src/page-debugging-demo.ts";
 import type { ProjectDurableObject } from "./src/domains/projects/project-durable-object.ts";
 import type { RepoDurableObject } from "./src/domains/repos/repo-durable-object.ts";
 import type { SecretDurableObject } from "./src/domains/secrets/secret-durable-object.ts";
@@ -280,6 +281,14 @@ const statefulWorker = DurableObjectNamespace<StatefulWorkerDurableObject>("work
   sqlite: true,
 });
 
+// POC page-debugging demo. Lives on the api worker (it already has every itx
+// binding the demo needs to create a project and mount a capability). Holds its
+// short-lived tokens in memory, so no SQLite backing is needed.
+const pageDebuggingDemo = DurableObjectNamespace<PageDebuggingDemoDurableObject>(
+  "page-debugging-demo",
+  { className: "PageDebuggingDemoDurableObject", scriptName: workerNames.api, sqlite: true },
+);
+
 // ---- Fresh-stage bootstrap --------------------------------------------------
 // Cloudflare rejects a cross-script DO binding whose target script does not
 // exist yet (error 10061), and the itx workers reference each other — a
@@ -383,6 +392,7 @@ const itxBindings = {
   ARTIFACTS_NAMESPACE: artifactsNamespace,
   ITX: itx,
   LOADER: WorkerLoader(),
+  PAGE_DEBUGGING_DEMO: pageDebuggingDemo,
   PROJECT: project,
   PROJECT_DIRECTORY: projectDirectory,
   REPO: repo,

@@ -42,7 +42,7 @@ type ProjectDirectory = {
   userHasProject(userPrincipal: UserPrincipal, projectId: string): Promise<boolean>;
 };
 
-class ItxAuthContext implements ItxAuth {
+export class ItxAuthContext implements ItxAuth {
   readonly #directory: ProjectDirectory | undefined;
   readonly #isAdmin: boolean;
   readonly #principal: string;

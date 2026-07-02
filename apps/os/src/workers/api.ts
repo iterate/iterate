@@ -13,11 +13,13 @@ import type { Env } from "../env.ts";
 import { decideIngressRoute, type IngressResolvers } from "../ingress.ts";
 import { readProjectByHostname, resolveProjectIdBySlug } from "../project-directory.ts";
 import { ProjectCollectionRpcTarget, UnauthenticatedItxRpcTarget } from "../rpc-targets.ts";
+import { handlePageDebuggingDemoRequest } from "../page-debugging-demo.ts";
 import { handleCapnwebAdminCookieRequest } from "~/auth/admin-auth-cookie.ts";
 import { parseConfig, type AppConfig } from "~/config.ts";
 
 export { ItxEntrypoint } from "../domains/itx/itx-entrypoint.ts";
 export { ProjectEgressEntrypoint } from "../domains/projects/egress.ts";
+export { PageDebuggingDemoDurableObject } from "../page-debugging-demo.ts";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
@@ -29,6 +31,10 @@ export default {
 
     const fixtureResponse = await e2eFixtureResponse(request);
     if (fixtureResponse !== null) return fixtureResponse;
+
+    // POC page-debugging demo (served here because this worker has the itx bindings).
+    const pageDebugging = await handlePageDebuggingDemoRequest({ env, request });
+    if (pageDebugging !== null) return pageDebugging;
 
     const route = await decideIngressRoute({
       config,

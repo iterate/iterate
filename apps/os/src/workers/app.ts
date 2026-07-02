@@ -33,6 +33,16 @@ export default {
     const nextRequest = apiWorkerRequest({ config, request });
     if (nextRequest) return await env.ITX_API.fetch(nextRequest);
 
+    // POC page-debugging demo lives on the api worker (which has the itx
+    // bindings); forward its routes there. In dev the browser hits this worker.
+    const pageDebuggingPath = new URL(request.url).pathname;
+    if (
+      pageDebuggingPath === "/page-debugging" ||
+      pageDebuggingPath.startsWith("/page-debugging/")
+    ) {
+      return await env.ITX_API.fetch(request);
+    }
+
     // Everything below emits one structured "wide event" log line per request.
     return withEvlog(
       { request, app: { name: "@iterate-com/os", slug: "os" }, config, executionCtx: ctx },
