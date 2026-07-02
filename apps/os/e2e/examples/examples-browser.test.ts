@@ -14,13 +14,13 @@
 import { describe, expect, it } from "vitest";
 import { commands } from "vitest/browser";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
-import type { Itx, Session, UnauthenticatedItx } from "../../types.ts";
+import type { Itx, Session, UnauthenticatedItx } from "../../src/types.ts";
 import {
   createBrowserReplScope,
   DEFAULT_BROWSER_REPL_CODE,
   evalBrowserReplSessionCode,
-} from "../browser-repl.ts";
-import { ITX_EXAMPLES } from "../examples.ts";
+} from "../../src/itx/browser-repl.ts";
+import { ITX_EXAMPLES } from "../../src/itx/examples.ts";
 import { EXAMPLE_CASES } from "./example-cases.ts";
 
 declare const __ITX_BROWSER_E2E__: {

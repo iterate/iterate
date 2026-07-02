@@ -14,18 +14,18 @@
     "probe:do-duration": "tsx ./scripts/do-duration-probe.ts",
     "deploy": "doppler run -- tsx ./alchemy.run.ts",
     "destroy": "doppler run -- tsx ./alchemy.run.ts --destroy",
-    "e2e:itx": "vitest run --config src/itx/e2e/vitest.config.ts",
+    "e2e:examples": "vitest run --config e2e/examples/vitest.config.ts",
     "routes:generate": "tsx ./scripts/generate-route-tree.ts",
     "generate:itx-types-source": "tsx ./scripts/generate-itx-types-source.ts",
     "routes:check": "tsx ./scripts/generate-route-tree.ts --check",
     "typecheck": "pnpm routes:check && tsc --noEmit",
     "test": "pnpm test:unit",
-    "test:unit": "vitest run --exclude 'src/itx/e2e/**'",
+    "test:unit": "vitest run",
     "e2e": "vitest --config e2e/vitest.config.ts",
     "example:workspace-itx-preview": "tsx ./e2e/workspace-itx-preview-example.ts",
     "auth:sync-clients": "tsx ./scripts/sync-auth-clients.ts",
-    "test:smoke": "RUNTIME_SMOKE_FULL=1 vitest run --exclude 'src/itx/e2e/**'",
-    "test:watch": "vitest --exclude 'src/itx/e2e/**'"
+    "test:smoke": "RUNTIME_SMOKE_FULL=1 vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@cloudflare/shell": "^0.3.4",

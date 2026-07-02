@@ -209,9 +209,9 @@ after touching the patch or the workers-types version.
 
 - `apps/os/e2e/itx/` — itx e2e suites (streams, itx, project
   ingress, security), run through `pnpm e2e` against a live deployment.
-- `apps/os/src/itx/e2e/` — the example matrix: the REPL example catalogue
+- `apps/os/e2e/examples/` — the example matrix: the REPL example catalogue
   executed across every runtime (browser REPL, Node, `runScript`, project
-  worker), `pnpm e2e:itx`.
+  worker), `pnpm e2e:examples`.
 - Known caveat: repo-sourced project-worker scenarios fail against LOCAL vite
   dev with a masked `internal error; reference =` (capnweb/vite-dev RpcTarget
   identity class). They pass against deployed previews — verify there before

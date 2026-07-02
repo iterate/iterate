@@ -1,6 +1,6 @@
 import { expect } from "@playwright/test";
 import JSON5 from "json5";
-import { EXAMPLE_CASES } from "../apps/os/src/itx/e2e/example-cases.ts";
+import { EXAMPLE_CASES } from "../apps/os/e2e/examples/example-cases.ts";
 import { ITX_EXAMPLES } from "../apps/os/src/itx/examples.ts";
 import { test } from "./test-support/test.ts";
 

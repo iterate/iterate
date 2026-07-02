@@ -5,11 +5,11 @@
 
 import { fileURLToPath } from "node:url";
 import type { RpcStub } from "capnweb";
-import { connectItx } from "../../itx-client.ts";
-import type { Itx, Session } from "../../types.ts";
-import { localDevServerBaseUrl } from "../../../e2e/test-support/dev-server.ts";
+import { connectItx } from "../../src/itx-client.ts";
+import type { Itx, Session } from "../../src/types.ts";
+import { localDevServerBaseUrl } from "../test-support/dev-server.ts";
 
-const appRoot = fileURLToPath(new URL("../../..", import.meta.url));
+const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 export function adminApiSecret() {
   const secret =

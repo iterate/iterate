@@ -1,6 +1,6 @@
 // The itx example catalogue: one data structure that is BOTH the "Examples"
 // panel in the REPL UI and the script set the e2e suite runs across every
-// execution runtime (apps/os/src/itx/e2e/*). Each entry is a self-contained
+// execution runtime (apps/os/e2e/examples/*). Each entry is a self-contained
 // script body that runs with `itx` and `vars` in scope and uses an explicit
 // `return` — exactly the shape every runtime accepts:
 //

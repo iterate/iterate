@@ -127,7 +127,7 @@ cd apps/os && doppler run -- pnpm exec vitest run --config e2e/vitest.config.ts 
 cd apps/os && doppler run --config preview_2 -- env ITX_BASE_URL=https://os.iterate-preview-2.com pnpm exec vitest run --config e2e/vitest.config.ts e2e/itx/
 
 # examples matrix (all runtimes)
-cd apps/os && doppler run -- pnpm e2e:itx
+cd apps/os && doppler run -- pnpm e2e:examples
 
 # golden-path smokes
 cd apps/os && doppler run -- pnpm exec tsx e2e/itx/onboarding-smoke.ts

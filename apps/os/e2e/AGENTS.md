@@ -35,7 +35,8 @@ If you need to target captun or another custom target, override explicitly:
 - Live deployment tests: `pnpm e2e` (itx e2e suites in `e2e/itx/`, agents, admin-project,
   preview smoke).
 - Egress + secret substitution coverage lives in itx suite
-  (`e2e/itx/itx.e2e.test.ts`); the cross-runtime example matrix is `pnpm e2e:itx`.
+  (`e2e/itx/itx.e2e.test.ts`); the cross-runtime example matrix is `pnpm e2e:examples`
+  (`e2e/examples/`).
 - Preview smoke: `pnpm e2e -t "OS preview smoke"` (`preview-smoke.e2e.test.ts`) exercises a
   deployed preview, including its project MCP route (it derives its project slug from
   `GITHUB_SHA` when set).

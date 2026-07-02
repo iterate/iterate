@@ -3,7 +3,7 @@
 // (local dev server, preview, or production — whatever APP_CONFIG_BASE_URL
 // points at), through every server-side runtime of the itx
 // (/api/itx). The browser runtime runs the same catalogue in
-// itx.browser.test.ts; itx behavior itself is proven by
+// examples-browser.test.ts; itx behavior itself is proven by
 // apps/os/e2e/itx/*.
 //
 // KNOWN CAVEAT (local vite dev only): repo-sourced project worker dials can
@@ -13,7 +13,7 @@
 // failures against a deployed preview before treating them as regressions.
 
 import { expect, test as baseTest } from "vitest";
-import { ITX_EXAMPLES } from "../examples.ts";
+import { ITX_EXAMPLES } from "../../src/itx/examples.ts";
 import { connectGlobal } from "./e2e-env.ts";
 import { EXAMPLE_CASES, EXAMPLE_IDS_WITHOUT_CASES } from "./example-cases.ts";
 import { bakeProjectWorkerRunner, MATRIX_RUNTIMES, runExampleCode } from "./example-matrix.ts";

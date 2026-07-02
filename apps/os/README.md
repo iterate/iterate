@@ -65,7 +65,7 @@ pnpm dev                 # local OS dev with Doppler-backed env (all workers in 
 pnpm typecheck           # TypeScript (includes route-tree freshness check)
 pnpm test                # unit tests
 pnpm e2e                 # real-worker e2e (itx e2e suites + preview smoke) against a live deployment
-pnpm e2e:itx             # the itx example matrix across all execution runtimes
+pnpm e2e:examples        # the itx example matrix across all execution runtimes
 pnpm cli itx run --eval 'return await itx.whoami()'
                          # run an itx script against the deployment in your Doppler config
 pnpm cli claude-mcp      # open Claude against the OS MCP server in your local Doppler config
@@ -81,8 +81,8 @@ Use `pnpm run deploy`, not `pnpm deploy`; `deploy` is also a pnpm built-in.
 
 The e2e lanes run against a real OS deployment, not the Workers Vitest pool:
 `pnpm e2e` (config `e2e/vitest.config.ts`: `e2e/vitest/**` plus itx
-suites in `e2e/itx/**`) and `pnpm e2e:itx` (config
-`src/itx/e2e/vitest.config.ts`: the example matrix, including a browser
+suites in `e2e/itx/**`) and `pnpm e2e:examples` (config
+`e2e/examples/vitest.config.ts`: the example matrix, including a browser
 runtime). Start the worker in one terminal, then run tests from another
 through the matching Doppler config. For local dev configs, test helpers read
 `.alchemy/dev-server.json` to find the selected port; deployed configs get

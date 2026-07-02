@@ -30,7 +30,7 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "scripts/cli.ts",
       "scripts/dev.ts",
       "scripts/itx.ts",
-      "src/itx/e2e/vitest.config.ts",
+      "e2e/examples/vitest.config.ts",
       // Operational smoke for the create-project -> onboarding-greeting path.
       "e2e/itx/onboarding-smoke.ts",
     ],
@@ -161,6 +161,10 @@ const config: KnipConfig = {
     "apps/os/e2e/test-support/app-config-env.ts": ["files", "exports"],
     "apps/os/src/**": ["exports", "types"],
     "apps/os/e2e/test-support/**": ["exports", "types"],
+    // Example-matrix harness modules export helpers consumed across the
+    // matrix/browser suites and root Playwright specs; keep the same policy
+    // they had under src/**.
+    "apps/os/e2e/examples/**": ["exports", "types"],
     "apps/streams-example-app/src/lib/use-initial-tail-scroll.ts": ["types"],
     // TanStack Start resolves the router factory by convention from the
     // entrypoint, so there is no direct import Knip can follow.

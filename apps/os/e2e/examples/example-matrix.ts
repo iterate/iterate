@@ -1,7 +1,7 @@
 // The execution-runtime matrix for catalogue examples: ONE script body (an
 // example's `code`, with `itx` + `vars` in scope and a trailing `return`)
 // runs through every server-side runtime. The browser runtime lives in
-// itx.browser.test.ts (vitest's browser project); everything else is here.
+// examples-browser.test.ts (vitest's browser project); everything else is here.
 //
 //   node            AsyncFunction over an itx Cap'n Web stub in this process
 //   cli             spawned `tsx scripts/cli.ts itx run --eval … --context …`
@@ -15,7 +15,7 @@ import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { RpcTarget } from "capnweb";
-import type { ItxExample, ItxExampleRuntime } from "../examples.ts";
+import type { ItxExample, ItxExampleRuntime } from "../../src/itx/examples.ts";
 import { baseUrl, connectProject } from "./e2e-env.ts";
 
 export const MATRIX_RUNTIMES = ["node", "cli", "run-script", "project-worker"] as const;
@@ -48,7 +48,7 @@ export async function runExampleCode(
 }
 
 const execFileAsync = promisify(execFile);
-const APP_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
+const APP_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
 async function runInCli(input: {
   code: string;

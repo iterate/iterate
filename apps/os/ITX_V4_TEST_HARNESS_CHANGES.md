@@ -65,9 +65,9 @@ elements; a 240s budget for two LLM turns).
   is now a chat round-trip through a real PTY; new `data-layer-smoke.ts` runs
   the full headless loop (create → subscribe → greeting → pong).
 
-## itx examples matrix (`apps/os/src/itx/e2e/`)
+## itx examples matrix (`apps/os/e2e/examples/`)
 
-- `itx.e2e.test.ts` + `example-matrix.ts` rewritten for the itx surface;
+- `examples-matrix.e2e.test.ts` + `example-matrix.ts` rewritten for the itx surface;
   every catalogue example runs identically across **five runtimes**: browser
   (vitest browser project / Playwright REPL spec), node, **cli** (spawned
   `tsx scripts/cli.ts itx run` parsing its single JSON stdout — restored once
@@ -149,6 +149,6 @@ that commit; the coverage disposition is catalogued in the sections below.
 ## Net CI shape (unchanged contract, new contents)
 
 `pnpm test` (unit) → `pnpm e2e` (preview smoke + itx suites + agent-tools) →
-`pnpm e2e:itx` (matrix) → root `pnpm spec` (21 specs) — all green locally and
+`pnpm e2e:examples` (matrix) → root `pnpm spec` (21 specs) — all green locally and
 in PR CI against the deployed preview, with vitest-artifacts run roots and
 Playwright traces uploaded as CI artifacts.

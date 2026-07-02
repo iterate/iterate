@@ -86,8 +86,9 @@ describe("preview test commands", () => {
     const playwrightInstall = "pnpm --dir ../.. exec playwright install chromium";
     const fullOsSuite = "pnpm e2e;";
     const broadItx =
-      "OS_ITX_E2E_FILE_PARALLELISM=true OS_ITX_E2E_SKIP_MATRIX=true pnpm e2e:itx --project node";
-    const matrix = "pnpm e2e:itx --project node src/itx/e2e/itx.e2e.test.ts -t 'catalogue example'";
+      "OS_ITX_E2E_FILE_PARALLELISM=true OS_ITX_E2E_SKIP_MATRIX=true pnpm e2e:examples --project node";
+    const matrix =
+      "pnpm e2e:examples --project node e2e/examples/examples-matrix.e2e.test.ts -t 'catalogue example'";
     const playwrightSpec = "pnpm --dir ../.. spec";
 
     expect(script).toContain(playwrightInstall);
