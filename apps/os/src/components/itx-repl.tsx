@@ -41,9 +41,10 @@ interface ItxReplProps {
   canRun: boolean;
   code: string;
   /** The context this REPL session is connected to. Project-context examples
-   * only run on a project-scoped handle, so the global REPL offers them as
-   * reading material with a pointer to a project REPL instead. */
-  context: "global" | "project";
+   * only run on a project-scoped handle, so the session REPL (which holds the
+   * OS Session, not an itx) offers them as reading material with a pointer to
+   * a project REPL instead. */
+  context: "session" | "project";
   entries: BrowserReplEntry[];
   examples: ItxExample[];
   examplesOpen: boolean;
@@ -198,16 +199,16 @@ export function ItxRepl({
           <ScrollArea className="min-h-0 flex-1">
             <div className="flex flex-col gap-4 p-4">
               {examples.map((example) => {
-                // A project handle can run the global examples (narrowing to
-                // itself), but a global handle cannot run project ones.
-                const runnableHere = context === "project" || example.context === "global";
+                // A project handle can run the session examples (narrowing to
+                // itself), but a session handle cannot run project ones.
+                const runnableHere = context === "project" || example.context === "session";
                 return (
                   <article key={example.id} className="flex flex-col gap-3 rounded-md border p-3">
                     <div className="flex flex-col gap-1">
                       <h3 className="text-sm font-medium">{example.title}</h3>
                       <p className="text-sm text-muted-foreground">{example.description}</p>
                       <p className="font-mono text-xs text-muted-foreground">
-                        {example.context === "project" ? "project context" : "global context"}
+                        {example.context === "project" ? "project context" : "session context"}
                         {" · runs in: "}
                         {example.runtimes.join(", ")}
                       </p>
