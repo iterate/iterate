@@ -18,7 +18,7 @@ import {
   projectsListQueryKey,
   projectsListStaleTime,
 } from "~/lib/projects-query.ts";
-import { connectItx, reconnectItx } from "~/itx/itx-react.tsx";
+import { connectItxBrowser, reconnectItx } from "~/itx/itx-react.tsx";
 import type { ProjectListEntry } from "~/types.ts";
 
 type OrganizationSummary = {
@@ -76,7 +76,7 @@ function ProjectsIndexPage() {
       const organizationSlug = project.organizationId
         ? organizations.find((organization) => organization.id === project.organizationId)?.slug
         : undefined;
-      const itx = await connectItx();
+      const itx = await connectItxBrowser();
       await itx.projects.create({
         projectId: project.id,
         slug: project.slug,

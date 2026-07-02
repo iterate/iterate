@@ -9,7 +9,7 @@
  * one for a READ, one for a LIVE subscription:
  *
  *   1. GET THE HANDLE   → useItx()                          (in render; suspends until connected)
- *   2. …IMPERATIVELY    → await connectItx()                (in handlers/closures; a Promise — the
+ *   2. …IMPERATIVELY    → await connectItxBrowser()                (in handlers/closures; a Promise — the
  *                                                            non-render sibling of useItx)
  *   3. READ ONCE        → useItxQuery({ key, query })       (suspends until resolved)
  *   4. SUBSCRIBE / LIVE → useItxEffect((itx) => cleanup, deps)
@@ -132,7 +132,7 @@ function socketFor(context: string | undefined): Promise<Itx> {
   const { promise, resolve, reject } = Promise.withResolvers<Itx>();
   // Keep an internal handler so a dial that rejects with no live awaiter (the
   // reader unmounted, or only the hook ever held it) never surfaces as an
-  // unhandledrejection — real `connectItx()` awaiters still observe it.
+  // unhandledrejection — real `connectItxBrowser()` awaiters still observe it.
   void promise.catch(() => {});
   // A dial that never connects must not suspend forever: time out and close, so
   // the close handler below drops the entry and the next render re-dials.
@@ -155,7 +155,7 @@ function socketFor(context: string | undefined): Promise<Itx> {
   // RESOLVED, so this reject is a no-op — a transient post-open drop stays a
   // clean re-dial for `use()`, never an error-boundary throw (the deliberate
   // design). But a dial that closes BEFORE opening never resolved: reject it so
-  // imperative `connectItx()` awaiters fail fast instead of hanging on a
+  // imperative `connectItxBrowser()` awaiters fail fast instead of hanging on a
   // forever-pending promise. The hook re-dials regardless — `wake()` re-points
   // its snapshot to the fresh promise before this rejection is observed.
   ws.addEventListener("close", () => {
@@ -187,7 +187,7 @@ export function reconnectItx(address?: ItxAddress): void {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 1. Connection: <ItxProvider> + useItx() + connectItx()
+// 1. Connection: <ItxProvider> + useItx() + connectItxBrowser()
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Default address = the global context. Lets useItx() work with NO provider. */
@@ -256,10 +256,10 @@ export function useItx(override?: ItxAddress): Itx {
  * NEVER suspend its parent's first paint).
  *
  *   const onCreate = async () => {
- *     const itx = await connectItx();                  // global context
+ *     const itx = await connectItxBrowser();                  // global context
  *     await itx.projects.create({ slug });
  *   };
- *   const itx = await connectItx({ projectId: slug }); // lazy; never suspends the caller
+ *   const itx = await connectItxBrowser({ projectId: slug }); // lazy; never suspends the caller
  *
  * WHY a separate accessor exists (and why `ssr: false` doesn't remove the need):
  * reaching itx splits into three concerns, and only the first is about SSR —
@@ -284,7 +284,7 @@ export function useItx(override?: ItxAddress): Itx {
  * to land on that socket. Running outside render there is no provider context to
  * read: pass the address explicitly (defaults to global).
  */
-export function connectItx(address?: ItxAddress): Promise<Itx> {
+export function connectItxBrowser(address?: ItxAddress): Promise<Itx> {
   return socketFor(address?.projectId);
 }
 
@@ -351,7 +351,7 @@ export function useItxQuery<T>({
  *
  * NOT for the must-NOT-suspend case: a component whose main content does not
  * depend on itx (e.g. the agent feed, the ⌘K tree) dials lazily via
- * {@link connectItx} inside a closure instead, so a slow/down socket degrades
+ * {@link connectItxBrowser} inside a closure instead, so a slow/down socket degrades
  * just that widget and never suspends the page.
  *
  * Subscribe to live pushes:

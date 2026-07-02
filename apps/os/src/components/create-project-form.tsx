@@ -21,7 +21,7 @@ import {
 import { toast } from "@iterate-com/ui/components/sonner";
 import { z } from "zod";
 import { projectsListQueryKey } from "~/lib/projects-query.ts";
-import { connectItx, reconnectItx } from "~/itx/itx-react.tsx";
+import { connectItxBrowser, reconnectItx } from "~/itx/itx-react.tsx";
 
 const PROJECT_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -44,7 +44,7 @@ export function CreateProjectForm() {
       // Straight through the itx session: create registers the project with
       // the auth worker (org grant -> claims) and runs the engine bootstrap
       // saga, then widens THIS socket's access to the new project.
-      const itx = await connectItx();
+      const itx = await connectItxBrowser();
       const project = itx.projects.create({
         slug: input.slug,
         ...(input.organizationSlug ? { organizationSlug: input.organizationSlug } : {}),

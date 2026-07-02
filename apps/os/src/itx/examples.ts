@@ -12,7 +12,7 @@
 //                   executed against `await this.env.ITX.get()`
 //
 // Almost every example is written against a PROJECT itx (context: "project"):
-// the harness — a project REPL, connectItx({ projectId }), runScript, or a
+// the harness — a project REPL, connectItxBrowser({ projectId }), runScript, or a
 // dynamic worker's env.ITX — is already scoped into the project, and the
 // script gets straight to work: itx.streams.get("/some/path").append(...).
 // Global-context examples run against the Session catalog (the global/admin
