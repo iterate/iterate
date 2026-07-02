@@ -13,18 +13,18 @@ programs against. When this README and `types.ts` disagree, `types.ts` wins.
 
 ## Layout
 
-| Path                   | What                                                                                                                               |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `types.ts`             | The public ITX contract (the design of record)                                                                                     |
-| `rpc-targets.ts`       | ALL RpcTarget classes: the session/project/agent surfaces, MCP/OpenAPI clients, capability provision, stream subscriptions, egress |
-| `auth.ts`              | The auth adapter: credentials → `ItxAuth` (see below)                                                                              |
-| `itx-client.ts`        | `connectItx()` — the Node/CLI client over a Cap'n Web WebSocket                                                                    |
-| `ingress.ts`           | The shared routing decision (which requests belong to itx)                                                                         |
-| `project-directory.ts` | Slug → project id resolution against the auth worker, cached in the `PROJECT_DIRECTORY` KV namespace                               |
-| `env.ts`               | The binding contract every itx worker deploys with (`nextEnv`)                                                                     |
-| `workers/`             | One entrypoint per deployed itx worker ([worker topology](../../docs/worker-topology.md))                                          |
-| `domains/`             | One folder per domain: `streams`, `projects`, `repos`, `agents`, `secrets`, `workers` (dynamic), `itx`, `inbound-mcp-server`       |
-| `e2e-fixtures.ts`      | Worker-hosted fixtures for itx e2e suites (`/__itx_e2e/*`)                                                                         |
+| Path                   | What                                                                                                                                  |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `types.ts`             | The public ITX contract (the design of record)                                                                                        |
+| `rpc-targets.ts`       | ALL RpcTarget classes: the session/project/agent surfaces, MCP/OpenAPI clients, capability provision, stream subscriptions, egress    |
+| `auth.ts`              | The auth adapter: credentials → `ItxAuth` (see below)                                                                                 |
+| `itx-client.ts`        | `connectItx()` — the Node/CLI client over a Cap'n Web WebSocket                                                                       |
+| `ingress.ts`           | The shared routing decision (which requests belong to itx)                                                                            |
+| `project-directory.ts` | Slug → project id resolution against the auth worker, cached in the `PROJECT_DIRECTORY` KV namespace                                  |
+| `env.ts`               | The binding contract every itx worker deploys with (`nextEnv`)                                                                        |
+| `workers/`             | One entrypoint per deployed itx worker ([worker topology](../../docs/worker-topology.md))                                             |
+| `domains/`             | One folder per domain: `streams`, `projects`, `repos`, `agents`, `secrets`, `workers` (dynamic), `itx`, `voice`, `inbound-mcp-server` |
+| `e2e-fixtures.ts`      | Worker-hosted fixtures for itx e2e suites (`/__itx_e2e/*`)                                                                            |
 
 Each domain owns its Durable Object plus a stream-processor contract
 (`*-processor-contract.ts`, pure: event schemas + reducer) and implementation
