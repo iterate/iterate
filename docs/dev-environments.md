@@ -349,7 +349,27 @@ GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --pre
 These share the PR's lease and PR-body state with CI, so a local run renews
 (never fights) the slot CI claimed for the same PR.
 
-### Story 3: a manual slot for experiments
+### Story 3: pin a PR to a slot
+
+`preview assign` says "this PR shall have this slot" (or whatever is free)
+and records it in the PR body's managed section, so the next deploy — CI or
+local — lands there:
+
+```bash
+# give PR 1234 whatever slot is free (fails fast with the holder table if none):
+doppler run --project _shared --config prd -- pnpm preview assign --pull-request-number 1234
+
+# pin PR 1234 to preview-3 specifically:
+doppler run --project _shared --config prd -- pnpm preview assign --pull-request-number 1234 --slot 3
+```
+
+If the PR already holds a satisfying slot, assign just renews it. Moving to a
+different slot releases the old lease and marks the PR's deployed apps for
+redeploy (the next `preview deploy` re-lands them on the new slot). If the
+requested slot is leased, assign names the holder and refuses without
+`--force`. A GitHub token comes from `GITHUB_TOKEN` or a logged-in `gh` CLI.
+
+### Story 4: a manual slot for experiments
 
 Lease a slot under your own name first — that is what stops PR previews from
 deploying over you and PR cleanups from destroying your work:
@@ -379,7 +399,7 @@ Deploying to `preview_N` **without** holding the lease bypasses the whole
 protection model — the slot's rightful holder will deploy over you, and their
 cleanup may destroy your worker.
 
-### Story 4: all slots are taken / something is stuck
+### Story 5: all slots are taken / something is stuck
 
 `pnpm preview reclaim` is the conflict-resolution tool. It classifies every
 leased slot by how its holder is actually behaving:

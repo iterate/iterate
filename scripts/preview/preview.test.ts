@@ -1015,3 +1015,119 @@ describe("orphaned lease garbage collection during acquire", () => {
     expect(acquireSpecific).not.toHaveBeenCalled();
   });
 });
+
+describe("assignEnvironmentConfigLease", () => {
+  const { assignEnvironmentConfigLease } = previewInternals;
+
+  it("keeps and renews the recorded slot when no specific slot is requested", async () => {
+    const semaphore = fakeSemaphore({
+      renew: vi.fn(async () => fakeLease({ expiresAt: 1_800_000_000_000 })),
+    });
+
+    const result = await assignEnvironmentConfigLease({
+      holder: "pr-1600",
+      leaseMs: 1000,
+      recordedLease: previousLease,
+      semaphore,
+      wantedSlug: null,
+    });
+
+    expect(result.outcome).toBe("kept");
+    expect(result.lease.slug).toBe("preview-2");
+    expect(result.changedFromSlug).toBeNull();
+    expect(semaphore.acquire).not.toHaveBeenCalled();
+  });
+
+  it("keeps the recorded slot when it is the one requested", async () => {
+    const semaphore = fakeSemaphore({
+      renew: vi.fn(async () => fakeLease()),
+    });
+
+    const result = await assignEnvironmentConfigLease({
+      holder: "pr-1600",
+      leaseMs: 1000,
+      recordedLease: previousLease,
+      semaphore,
+      wantedSlug: "preview-2",
+    });
+
+    expect(result.outcome).toBe("kept");
+    expect(semaphore.acquireSpecific).not.toHaveBeenCalled();
+  });
+
+  it("moves to the requested slot and releases the previously held lease", async () => {
+    const release = vi.fn(async () => ({ released: true }));
+    const semaphore = fakeSemaphore({
+      renew: vi.fn(async () => fakeLease()),
+      acquireSpecific: vi.fn(async () =>
+        fakeLease({
+          slug: "preview-5",
+          data: { dopplerConfig: "preview_5" },
+          leaseId: "1197a5b3-a705-4380-9958-6a0dbead16b7",
+        }),
+      ),
+      release,
+    });
+
+    const result = await assignEnvironmentConfigLease({
+      holder: "pr-1600",
+      leaseMs: 1000,
+      recordedLease: previousLease,
+      semaphore,
+      wantedSlug: "preview-5",
+    });
+
+    expect(result.outcome).toBe("moved");
+    expect(result.lease.slug).toBe("preview-5");
+    expect(result.changedFromSlug).toBe("preview-2");
+    expect(result.previousLeaseReleased).toBe(true);
+    expect(release).toHaveBeenCalledWith(
+      expect.objectContaining({ slug: "preview-2", leaseId: previousLease.leaseId }),
+    );
+  });
+
+  it("explains who holds a requested slot instead of taking it without --force", async () => {
+    const semaphore = fakeSemaphore({
+      list: vi.fn(async () => [
+        {
+          data: { dopplerConfig: "preview_5" },
+          holder: "pr-1601",
+          lastAcquiredAt: null,
+          lastReleasedAt: null,
+          leaseState: "leased" as const,
+          leasedUntil: Date.now() + 60_000,
+          slug: "preview-5",
+        },
+      ]),
+    });
+
+    await expect(
+      assignEnvironmentConfigLease({
+        holder: "pr-1600",
+        leaseMs: 1000,
+        recordedLease: null,
+        semaphore,
+        wantedSlug: "preview-5",
+      }),
+    ).rejects.toThrow(/pr-1601[\s\S]*--force/);
+  });
+
+  it("passes force through to evict the current holder", async () => {
+    const acquireSpecific = vi.fn(async () =>
+      fakeLease({ slug: "preview-5", data: { dopplerConfig: "preview_5" } }),
+    );
+    const semaphore = fakeSemaphore({ acquireSpecific });
+
+    const result = await assignEnvironmentConfigLease({
+      force: true,
+      holder: "pr-1600",
+      leaseMs: 1000,
+      recordedLease: null,
+      semaphore,
+      wantedSlug: "preview-5",
+    });
+
+    expect(result.outcome).toBe("assigned");
+    expect(acquireSpecific).toHaveBeenCalledWith(expect.objectContaining({ force: true }));
+  });
+});

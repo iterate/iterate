@@ -349,6 +349,79 @@ export async function cleanup(options: PullRequestCommandOptions = {}) {
 }
 
 /**
+ * Assign a preview slot to a PR — a specific slot or whatever is free — and record it in the PR body's managed preview section.
+ */
+type AssignOptions = PullRequestCommandOptions & {
+  /** Preview slot: a number (3) or slug (preview-3 / preview_3). Omit to take any free slot. */
+  slot?: string;
+  /** Evict the slot's current holder first. Their deployment on the slot will be clobbered. */
+  force?: boolean;
+};
+
+export async function assign(options: AssignOptions = {}) {
+  const runtime = createPreviewRuntime();
+  const context = await resolvePullRequestPreviewContext({
+    commandEnvironment: runtime.commandEnvironment,
+    githubToken: resolveGithubToken(options, runtime.commandEnvironment),
+    pullRequestNumber: resolvePullRequestNumber(options, runtime.commandEnvironment),
+  });
+  const semaphore = runtime.createPreviewSemaphoreResourceClient();
+  const holder = pullRequestHolder(context.pullRequestNumber);
+  const wantedSlug = options.slot ? normalizePreviewSlotSlug(options.slot) : null;
+  logPreview(
+    `assign for PR #${context.pullRequestNumber} — ${wantedSlug ? `wants ${wantedSlug}` : "wants any free slot"}, holder ${holder}`,
+  );
+
+  const current = await readCloudflarePreviewState(context);
+  const result = await assignEnvironmentConfigLease({
+    fetchPullRequestState: makePullRequestStateFetcher(
+      context.githubToken,
+      context.repositoryFullName,
+    ),
+    force: options.force,
+    holder,
+    leaseMs: defaultPreviewLeaseMs,
+    recordedLease: current.state.environmentConfigLease,
+    semaphore,
+    wantedSlug,
+  });
+
+  const update = await updatePreviewState(context, (state) => ({
+    ...state,
+    environmentConfigLease: result.lease,
+    apps: result.changedFromSlug
+      ? Object.fromEntries(
+          Object.entries(state.apps).map(([appSlug, entry]) => [
+            appSlug,
+            {
+              ...entry,
+              status: "claim-failed" as const,
+              message: `Slot reassigned from ${result.changedFromSlug} to ${result.lease.slug}; run preview deploy to redeploy here.`,
+              updatedAt: new Date().toISOString(),
+            },
+          ]),
+        )
+      : state.apps,
+  }));
+  logPreview(
+    `PR body updated: PR #${context.pullRequestNumber} now records ${result.lease.slug} (doppler config ${result.lease.dopplerConfig})`,
+  );
+
+  return {
+    pullRequestNumber: context.pullRequestNumber,
+    slot: result.lease.slug,
+    dopplerConfig: result.lease.dopplerConfig,
+    holder,
+    leasedUntil: new Date(result.lease.leasedUntil).toISOString(),
+    outcome: result.outcome,
+    previousSlot: result.changedFromSlug,
+    previousLeaseReleased: result.previousLeaseReleased,
+    appsMarkedForRedeploy: result.changedFromSlug ? Object.keys(update.state.apps) : [],
+    nextStep: `doppler run --project _shared --config prd -- pnpm preview deploy --pull-request-number ${context.pullRequestNumber}`,
+  };
+}
+
+/**
  * Show environment config lease inventory and active leases for PR previews.
  */
 export async function status() {
@@ -1887,8 +1960,24 @@ async function getWorkersDevSubdomain(project: string, config: string) {
   return parsed.result.subdomain.trim();
 }
 
+function tryReadGhAuthToken() {
+  try {
+    return (
+      execFileSync("gh", ["auth", "token"], {
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "pipe"],
+      }).trim() || undefined
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 function resolveGithubToken(options: PullRequestCommandOptions, env: NodeJS.ProcessEnv): string {
-  return requireValue(options.githubToken || env.GITHUB_TOKEN?.trim(), "GITHUB_TOKEN is required.");
+  return requireValue(
+    options.githubToken || env.GITHUB_TOKEN?.trim() || tryReadGhAuthToken(),
+    "GITHUB_TOKEN is required (or authenticate the gh CLI).",
+  );
 }
 
 function resolvePullRequestNumber(
@@ -2603,6 +2692,135 @@ async function claimEnvironmentConfigLease(input: {
   return toEnvironmentConfigLease(lease);
 }
 
+/**
+ * Core of `preview assign`: keep/renew the recorded slot when it satisfies
+ * the request, otherwise take the wanted slot (or any free one) and release
+ * the previously-held lease so it doesn't stay claimed against a slot the PR
+ * no longer records.
+ */
+async function assignEnvironmentConfigLease(input: {
+  fetchPullRequestState?: PullRequestStateFetcher | null;
+  force?: boolean;
+  holder: string;
+  leaseMs: number;
+  recordedLease: EnvironmentConfigLease | null;
+  semaphore: PreviewSemaphoreResourceClient;
+  wantedSlug: string | null;
+}): Promise<{
+  lease: EnvironmentConfigLease;
+  outcome: "kept" | "assigned" | "moved";
+  changedFromSlug: string | null;
+  previousLeaseReleased: boolean;
+}> {
+  let heldLease: EnvironmentConfigLease | null = null;
+  if (input.recordedLease) {
+    const reasserted = await reassertEnvironmentConfigLease({
+      holder: input.holder,
+      lease: input.recordedLease,
+      leaseMs: input.leaseMs,
+      semaphore: input.semaphore,
+    });
+    if (reasserted.ok) {
+      heldLease = reasserted.lease;
+      if (!input.wantedSlug || input.wantedSlug === reasserted.lease.slug) {
+        return {
+          lease: reasserted.lease,
+          outcome: "kept",
+          changedFromSlug: null,
+          previousLeaseReleased: false,
+        };
+      }
+    } else {
+      logPreview(`recorded slot is gone: ${reasserted.message}`);
+    }
+  }
+
+  let lease: EnvironmentConfigLease;
+  if (input.wantedSlug) {
+    if (input.force) {
+      const currentHolder = await findEnvironmentConfigLeaseHolder(
+        input.semaphore,
+        input.wantedSlug,
+      );
+      if (currentHolder && currentHolder !== input.holder) {
+        logPreview(
+          `--force: evicting ${currentHolder} from ${input.wantedSlug}. Their deployment on the slot is now fair game.`,
+        );
+      }
+    }
+
+    const acquired = await input.semaphore.acquireSpecific({
+      leaseMs: input.leaseMs,
+      slug: input.wantedSlug,
+      type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+      holder: input.holder,
+      force: input.force,
+    });
+    if (!acquired) {
+      const currentHolder = await findEnvironmentConfigLeaseHolder(
+        input.semaphore,
+        input.wantedSlug,
+      );
+      if (currentHolder) {
+        const prUrl = holderPullRequestUrl(currentHolder);
+        throw new Error(
+          [
+            `${input.wantedSlug} is leased by ${currentHolder}${prUrl ? ` (${prUrl})` : ""}.`,
+            "Re-run with --force to evict them (their deployment will be clobbered), or pick a free slot:",
+            await describeEnvironmentConfigLeases(input.semaphore),
+          ].join("\n"),
+        );
+      }
+
+      throw new Error(
+        [
+          `${input.wantedSlug} is not a known preview slot. Known slots:`,
+          await describeEnvironmentConfigLeases(input.semaphore),
+        ].join("\n"),
+      );
+    }
+    lease = toEnvironmentConfigLease(acquired);
+  } else {
+    // A human is asking right now — fail fast with the holder table instead
+    // of queueing like CI does.
+    lease = toEnvironmentConfigLease(
+      await acquireAnyEnvironmentConfigLease({
+        semaphore: input.semaphore,
+        fetchPullRequestState: input.fetchPullRequestState,
+        holder: input.holder,
+        leaseMs: input.leaseMs,
+        waitTotalMs: 0,
+      }),
+    );
+  }
+  logPreview(
+    `lease assigned: ${lease.slug} held by ${input.holder} until ${formatUntil(lease.leasedUntil)}`,
+  );
+
+  let previousLeaseReleased = false;
+  if (heldLease && heldLease.slug !== lease.slug) {
+    const released = await input.semaphore.release({
+      type: heldLease.type,
+      slug: heldLease.slug,
+      leaseId: heldLease.leaseId,
+    });
+    previousLeaseReleased = released.released;
+    logPreview(
+      released.released
+        ? `previous slot ${heldLease.slug} released — any deployment still there is now unprotected`
+        : `previous slot ${heldLease.slug} was already gone`,
+    );
+  }
+
+  const previousSlug = input.recordedLease?.slug ?? null;
+  return {
+    lease,
+    outcome: heldLease ? "moved" : "assigned",
+    changedFromSlug: previousSlug && previousSlug !== lease.slug ? previousSlug : null,
+    previousLeaseReleased,
+  };
+}
+
 function toEnvironmentConfigLease(lease: {
   data: Record<string, unknown>;
   expiresAt: number;
@@ -2978,6 +3196,7 @@ function resolvePreviewCompareBaseSha(params: {
 export const previewInternals = {
   ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
   acquireAnyEnvironmentConfigLease,
+  assignEnvironmentConfigLease,
   claimEnvironmentConfigLease,
   classifyEnvironmentConfigLeases,
   classifyLeaseForReclaim,
