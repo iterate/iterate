@@ -141,11 +141,12 @@ describe("page debugging demo", () => {
       await demoPage.locator("#generateSnippet").click();
       await demoPage.waitForFunction((previousProjectId) => {
         const output = JSON.parse(document.querySelector("#agentOutput")?.textContent ?? "{}");
-        return (
-          output.projectId !== previousProjectId &&
-          document.querySelector("#targetStatus")?.textContent?.includes("Snippet connected")
-        );
+        return output.projectId !== previousProjectId;
       }, initialSession.projectId);
+      await demoPage.locator("#runHere").click();
+      await demoPage.waitForFunction(() =>
+        document.querySelector("#targetStatus")?.textContent?.includes("Snippet connected"),
+      );
 
       await demoPage.locator("#agentClick").click();
       await demoPage.waitForFunction(() => document.querySelector("#counter")?.textContent === "1");

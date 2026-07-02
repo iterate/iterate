@@ -518,7 +518,6 @@ function pageDebuggingDemoHtml() {
       let session;
       let agentProject;
       let agentProjectId;
-      let mountedProjectId;
 
       document.querySelector("#increment").addEventListener("click", () => {
         const counter = document.querySelector("#counter");
@@ -526,7 +525,6 @@ function pageDebuggingDemoHtml() {
       });
 
       async function generateSession() {
-        const shouldRemount = mountedProjectId === session?.projectId;
         agentProject = undefined;
         agentProjectId = undefined;
         snippetStatus.textContent = "Generating snippet...";
@@ -539,7 +537,6 @@ function pageDebuggingDemoHtml() {
           path: session.path,
           projectId: session.projectId,
         }, null, 2);
-        if (shouldRemount) await runSnippetHere();
       }
 
       async function copySnippet() {
@@ -550,15 +547,11 @@ function pageDebuggingDemoHtml() {
       async function runSnippetHere() {
         if (!snippetEl.value.trim()) await generateSession();
         await (0, eval)(snippetEl.value);
-        mountedProjectId = session.projectId;
         targetStatus.textContent = "Snippet connected. PageTools is mounted at debugPage.";
       }
 
       async function pageCapability() {
         if (!session) await generateSession();
-        if (mountedProjectId !== session.projectId) {
-          throw new Error("Run the snippet before using agent controls for this session.");
-        }
         if (!agentProject || agentProjectId !== session.projectId) {
           const { connectPageItx } = await import("${CLIENT_PATH}");
           agentProject = connectPageItx({
