@@ -59,9 +59,6 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
-  SidebarMenuSub,
-  SidebarMenuSubButton,
-  SidebarMenuSubItem,
   SidebarSeparator,
   useSidebar,
 } from "@iterate-com/ui/components/sidebar";
@@ -105,7 +102,7 @@ export function AppSidebar({ routeConfig }: { routeConfig: PublicRouteConfig }) 
         <AppSidebarHeader projects={projects} />
       </SidebarHeader>
       <SidebarContent>
-        <AppSidebarNav routeConfig={routeConfig} projects={projects} />
+        <AppSidebarNav routeConfig={routeConfig} />
       </SidebarContent>
       <SidebarFooter>
         <AppSidebarCollapseButton />
@@ -383,13 +380,7 @@ function authWorkerOrigin(config: PublicConfig) {
   return "https://auth.iterate.com";
 }
 
-function AppSidebarNav({
-  projects,
-  routeConfig,
-}: {
-  projects: ProjectListEntry[];
-  routeConfig: PublicRouteConfig;
-}) {
+function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
   const matchRoute = useMatchRoute();
   const matches = useMatches();
   const activeProjectSlug = getActiveProjectSlug(matches);
@@ -427,29 +418,9 @@ function AppSidebarNav({
                 <ScrollText />
                 <span>Projects</span>
               </SidebarMenuButton>
-              <SidebarMenuSub>
-                {projects.map((project) => (
-                  <SidebarMenuSubItem key={project.id}>
-                    <SidebarMenuSubButton
-                      isActive={Boolean(
-                        matchRoute({
-                          to: "/projects/$projectSlug",
-                          params: { projectSlug: project.slug },
-                          fuzzy: true,
-                        }),
-                      )}
-                      render={
-                        <Link
-                          to="/projects/$projectSlug/agents/new"
-                          params={{ projectSlug: project.slug }}
-                        />
-                      }
-                    >
-                      <span>{project.slug}</span>
-                    </SidebarMenuSubButton>
-                  </SidebarMenuSubItem>
-                ))}
-              </SidebarMenuSub>
+              {/* No per-project sub-list here: the switcher and the /projects
+                  page own project navigation, and duplicate slug-named links
+                  break the Playwright specs' strict-mode locators. */}
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarGroupContent>

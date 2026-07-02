@@ -223,6 +223,9 @@ function ProjectsTable({
                   href={`https://${hostname}`}
                   target="_blank"
                   rel="noopener noreferrer"
+                  // Accessible name must not contain the slug: the specs locate
+                  // THE project link by slug with a strict-mode locator.
+                  aria-label="Project website"
                   className="text-blue-500 hover:underline"
                 >
                   {hostname}
