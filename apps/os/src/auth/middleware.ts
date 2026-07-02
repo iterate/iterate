@@ -12,7 +12,7 @@ import {
 
 // Registered as requestMiddleware in src/start.ts — `type: "request"` makes
 // early `Response` returns part of the contract (and the context it passes to
-// `next` flow into every server route, server function, and oRPC procedure):
+// `next` flow into every server route and server function):
 // https://tanstack.com/start/latest/docs/framework/react/guide/middleware
 export const iterateAuthMiddleware = createMiddleware({ type: "request" }).server(
   async ({ request, context, next }) => {

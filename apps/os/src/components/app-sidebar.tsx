@@ -390,7 +390,7 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
   if (activeProjectSlug) {
     return (
       <ProjectSidebarGroup
-        // Custom hostnames don't exist yet (task #13): the list carries none.
+        // Custom hostnames don't exist yet (tasks/os-project-archival.md): the list carries none.
         customHostname={null}
         projectSlug={activeProjectSlug}
         projectHostnameBases={routeConfig.projectHostnameBases}
@@ -624,7 +624,7 @@ const PROJECT_STREAM_NAV_ITEMS: readonly ProjectStreamNavItemConfig[] = [
     streamPath: StreamPath.parse("/streams"),
     to: "/projects/$projectSlug/streams",
   },
-  // TODO(itx-v4 cutover): the /mcp page returns when the inbound MCP surface does.
+  // TODO: the /mcp page returns when the inbound MCP surface does.
 ];
 
 function ProjectStreamNavItem({

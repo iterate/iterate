@@ -54,7 +54,7 @@ export const ONBOARDING_AGENT_SYSTEM_PROMPT = [
 
 const PROJECT_WORKER_READY_ATTEMPTS = 20;
 const PROJECT_WORKER_READY_RETRY_MS = 100;
-const PROJECT_WORKER_READY_URL = "https://minimal-itx-v4.localhost/__itx_project_ready";
+const PROJECT_WORKER_READY_URL = "https://iterate-project.localhost/__itx_project_ready";
 
 export class ProjectProcessor extends StreamProcessor<
   typeof ProjectProcessorContract,

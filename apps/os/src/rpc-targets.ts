@@ -1607,7 +1607,7 @@ async function connectMcp(
     },
     requestInit: input.headers ? { headers: input.headers } : undefined,
   });
-  const client = new McpSdkClient({ name: "minimal-itx-v4-mcp-client", version: "1.0.0" });
+  const client = new McpSdkClient({ name: "iterate-os-mcp-client", version: "1.0.0" });
   try {
     await client.connect(transport, options);
     return client;

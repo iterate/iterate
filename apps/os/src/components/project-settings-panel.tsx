@@ -30,11 +30,11 @@ export function ProjectSettingsPanel({
       </SettingsSection>
 
       <SettingsSection title="Hostname routing">
-        {/* TODO(task #13): custom hostnames (updateConfig/ensureCustomHostname)
+        {/* TODO(tasks/os-project-archival.md): custom hostnames (updateConfig/ensureCustomHostname)
             have no itx surface yet — restore this section when they do. */}
         <SettingsField label="Custom hostname">
           <p className="text-xs text-muted-foreground">
-            Custom hostnames return soon (TODO task #13). This project is served at{" "}
+            Custom hostnames return soon (tasks/os-project-archival.md). This project is served at{" "}
             <code className="text-xs">{defaultHostname}</code>.
           </p>
         </SettingsField>
