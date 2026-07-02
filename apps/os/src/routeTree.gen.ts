@@ -32,6 +32,7 @@ import { Route as AppProjectsProjectSlugRouteRouteImport } from './routes/_app/p
 import { Route as AdminStreamsProjectIdIndexRouteImport } from './routes/admin/streams/$projectId/index'
 import { Route as AppProjectsProjectSlugIndexRouteImport } from './routes/_app/projects/$projectSlug/index'
 import { Route as AdminStreamsProjectIdSplatRouteImport } from './routes/admin/streams/$projectId/$'
+import { Route as AppProjectsProjectSlugVoiceRouteImport } from './routes/_app/projects/$projectSlug/voice'
 import { Route as AppProjectsProjectSlugSettingsRouteImport } from './routes/_app/projects/$projectSlug/settings'
 import { Route as AppProjectsProjectSlugReplRouteImport } from './routes/_app/projects/$projectSlug/repl'
 import { Route as AppProjectsProjectSlugReactivityRouteImport } from './routes/_app/projects/$projectSlug/reactivity'
@@ -167,6 +168,12 @@ const AdminStreamsProjectIdSplatRoute =
     path: '/$',
     getParentRoute: () => AdminStreamsProjectIdRouteRoute,
   } as any)
+const AppProjectsProjectSlugVoiceRoute =
+  AppProjectsProjectSlugVoiceRouteImport.update({
+    id: '/voice',
+    path: '/voice',
+    getParentRoute: () => AppProjectsProjectSlugRouteRoute,
+  } as any)
 const AppProjectsProjectSlugSettingsRoute =
   AppProjectsProjectSlugSettingsRouteImport.update({
     id: '/settings',
@@ -284,6 +291,7 @@ export interface FileRoutesByFullPath {
   '/projects/$projectSlug/reactivity': typeof AppProjectsProjectSlugReactivityRoute
   '/projects/$projectSlug/repl': typeof AppProjectsProjectSlugReplRoute
   '/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
+  '/projects/$projectSlug/voice': typeof AppProjectsProjectSlugVoiceRoute
   '/admin/streams/$projectId/$': typeof AdminStreamsProjectIdSplatRoute
   '/projects/$projectSlug/': typeof AppProjectsProjectSlugIndexRoute
   '/admin/streams/$projectId/': typeof AdminStreamsProjectIdIndexRoute
@@ -316,6 +324,7 @@ export interface FileRoutesByTo {
   '/projects/$projectSlug/reactivity': typeof AppProjectsProjectSlugReactivityRoute
   '/projects/$projectSlug/repl': typeof AppProjectsProjectSlugReplRoute
   '/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
+  '/projects/$projectSlug/voice': typeof AppProjectsProjectSlugVoiceRoute
   '/admin/streams/$projectId/$': typeof AdminStreamsProjectIdSplatRoute
   '/projects/$projectSlug': typeof AppProjectsProjectSlugIndexRoute
   '/admin/streams/$projectId': typeof AdminStreamsProjectIdIndexRoute
@@ -357,6 +366,7 @@ export interface FileRoutesById {
   '/_app/projects/$projectSlug/reactivity': typeof AppProjectsProjectSlugReactivityRoute
   '/_app/projects/$projectSlug/repl': typeof AppProjectsProjectSlugReplRoute
   '/_app/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
+  '/_app/projects/$projectSlug/voice': typeof AppProjectsProjectSlugVoiceRoute
   '/admin/streams/$projectId/$': typeof AdminStreamsProjectIdSplatRoute
   '/_app/projects/$projectSlug/': typeof AppProjectsProjectSlugIndexRoute
   '/admin/streams/$projectId/': typeof AdminStreamsProjectIdIndexRoute
@@ -398,6 +408,7 @@ export interface FileRouteTypes {
     | '/projects/$projectSlug/reactivity'
     | '/projects/$projectSlug/repl'
     | '/projects/$projectSlug/settings'
+    | '/projects/$projectSlug/voice'
     | '/admin/streams/$projectId/$'
     | '/projects/$projectSlug/'
     | '/admin/streams/$projectId/'
@@ -430,6 +441,7 @@ export interface FileRouteTypes {
     | '/projects/$projectSlug/reactivity'
     | '/projects/$projectSlug/repl'
     | '/projects/$projectSlug/settings'
+    | '/projects/$projectSlug/voice'
     | '/admin/streams/$projectId/$'
     | '/projects/$projectSlug'
     | '/admin/streams/$projectId'
@@ -470,6 +482,7 @@ export interface FileRouteTypes {
     | '/_app/projects/$projectSlug/reactivity'
     | '/_app/projects/$projectSlug/repl'
     | '/_app/projects/$projectSlug/settings'
+    | '/_app/projects/$projectSlug/voice'
     | '/admin/streams/$projectId/$'
     | '/_app/projects/$projectSlug/'
     | '/admin/streams/$projectId/'
@@ -659,6 +672,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminStreamsProjectIdSplatRouteImport
       parentRoute: typeof AdminStreamsProjectIdRouteRoute
     }
+    '/_app/projects/$projectSlug/voice': {
+      id: '/_app/projects/$projectSlug/voice'
+      path: '/voice'
+      fullPath: '/projects/$projectSlug/voice'
+      preLoaderRoute: typeof AppProjectsProjectSlugVoiceRouteImport
+      parentRoute: typeof AppProjectsProjectSlugRouteRoute
+    }
     '/_app/projects/$projectSlug/settings': {
       id: '/_app/projects/$projectSlug/settings'
       path: '/settings'
@@ -812,6 +832,7 @@ interface AppProjectsProjectSlugRouteRouteChildren {
   AppProjectsProjectSlugReactivityRoute: typeof AppProjectsProjectSlugReactivityRoute
   AppProjectsProjectSlugReplRoute: typeof AppProjectsProjectSlugReplRoute
   AppProjectsProjectSlugSettingsRoute: typeof AppProjectsProjectSlugSettingsRoute
+  AppProjectsProjectSlugVoiceRoute: typeof AppProjectsProjectSlugVoiceRoute
   AppProjectsProjectSlugIndexRoute: typeof AppProjectsProjectSlugIndexRoute
   AppProjectsProjectSlugReposSplatRoute: typeof AppProjectsProjectSlugReposSplatRoute
   AppProjectsProjectSlugSecretsSecretIdRoute: typeof AppProjectsProjectSlugSecretsSecretIdRoute
@@ -831,6 +852,7 @@ const AppProjectsProjectSlugRouteRouteChildren: AppProjectsProjectSlugRouteRoute
       AppProjectsProjectSlugReactivityRoute,
     AppProjectsProjectSlugReplRoute: AppProjectsProjectSlugReplRoute,
     AppProjectsProjectSlugSettingsRoute: AppProjectsProjectSlugSettingsRoute,
+    AppProjectsProjectSlugVoiceRoute: AppProjectsProjectSlugVoiceRoute,
     AppProjectsProjectSlugIndexRoute: AppProjectsProjectSlugIndexRoute,
     AppProjectsProjectSlugReposSplatRoute:
       AppProjectsProjectSlugReposSplatRoute,
