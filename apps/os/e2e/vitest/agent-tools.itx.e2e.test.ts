@@ -61,7 +61,9 @@ test(
     // Force the toggle regardless of the deployment's default provider.
     await agent.stream.append({
       type: "events.iterate.com/agent/llm-provider-selected",
-      payload: { provider: "cloudflare-ai" },
+      // The contract requires the model alongside the provider; a model-less
+      // append is schema-invalid and wedges the agent processor's ingest.
+      payload: { model: "@cf/moonshotai/kimi-k2.7-code", provider: "cloudflare-ai" },
     });
 
     const response = await agent.ask({ message: "Reply with a short greeting." });
