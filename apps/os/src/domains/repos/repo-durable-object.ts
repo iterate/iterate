@@ -16,7 +16,6 @@ import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { CommitRepoFilesInput, CommitRepoFilesResult, RepoFileChange } from "../../types.ts";
 import { PROJECT_WORKER_SOURCE_PATH, RepoArtifactNameCodec } from "./utils.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.ts";
-import { RepoProcessorContract } from "./repo-processor-contract.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 
 const REPO_DEFAULT_BRANCH = "main";
@@ -41,7 +40,6 @@ export class RepoDurableObject extends DurableObject<Env> {
     }),
   });
   readonly #repoProcessor = this.#host.add(
-    RepoProcessorContract.slug,
     (deps) =>
       new RepoProcessor({
         ...deps,

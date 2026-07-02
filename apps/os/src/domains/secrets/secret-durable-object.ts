@@ -11,7 +11,6 @@ import {
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "./crypto.ts";
 import { SecretProcessor } from "./secret-processor-implementation.ts";
-import { SecretProcessorContract } from "./secret-processor-contract.ts";
 import {
   requestWithSecretHeaders,
   secretErrorResponse,
@@ -27,10 +26,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       projectId: this.#name.projectId,
     }),
   });
-  readonly #secretProcessor = this.#processorHost.add(
-    SecretProcessorContract.slug,
-    (deps) => new SecretProcessor(deps),
-  );
+  readonly #secretProcessor = this.#processorHost.add((deps) => new SecretProcessor(deps));
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
     return this.#processorHost.wakeStreamSubscriber(args);

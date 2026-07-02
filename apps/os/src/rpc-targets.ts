@@ -57,8 +57,8 @@ import {
 } from "./domains/itx/openapi-types.ts";
 import { callMcpToolPath } from "./domains/itx/mcp-client.ts";
 import { ITX_EXAMPLES, type ItxExample } from "./itx/examples.ts";
+import type { ProcessorState } from "./domains/streams/processor-contracts.ts";
 import type {
-  ProcessorState,
   StreamProcessor,
   StreamProcessorContract,
 } from "./domains/streams/stream-processor.ts";
