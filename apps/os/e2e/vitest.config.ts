@@ -28,7 +28,10 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    fileParallelism: false,
+    // Parallel in CI: each file creates its own projects against a deployed
+    // slot, so files are independent. Sequential locally to not hammer a
+    // single dev server.
+    fileParallelism: process.env.CI === "true",
     hookTimeout: 120_000,
     include: ["./e2e/vitest/**/*.test.ts"],
     passWithNoTests: true,

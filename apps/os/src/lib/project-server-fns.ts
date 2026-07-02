@@ -5,7 +5,7 @@ import { env } from "cloudflare:workers";
 import { authenticateCapnwebAdmin } from "~/auth/admin-auth-cookie.ts";
 import { getUserPrincipal, type UserPrincipal } from "~/auth/principal.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
-import { readProjectBySlug } from "~/project-directory.ts";
+import { readProjectById, readProjectBySlug } from "~/project-directory.ts";
 import type { UnauthenticatedItx } from "~/types.ts";
 import type { RequestContext } from "~/request-context.ts";
 
@@ -66,9 +66,14 @@ export const createMyProjectServerFn: (input: {
     });
     const description = await project.describe();
 
+    // The auth worker may normalize (slugify) the requested slug; create
+    // primes the directory with the canonical record before resolving, so
+    // read it back rather than echoing the submitted slug into ingress URLs.
+    const record = await readProjectById(env.PROJECT_DIRECTORY, description.projectId);
+
     return withIngressUrl(context, {
       id: description.projectId,
-      slug: data.slug,
+      slug: record?.slug ?? data.slug,
       organizationId: organizationIdForCreate(userPrincipal, data.organizationSlug),
       customHostname: null,
       createdAt: null,
