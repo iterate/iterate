@@ -13,16 +13,14 @@ import { Identifier } from "@iterate-com/ui/components/identifier";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
+import { deleteProjectServerFn } from "~/lib/project-server-fns.ts";
 import {
-  createMyProjectServerFn,
-  deleteProjectServerFn,
-  listMyProjectsServerFn,
-  myProjectsListInput,
-  myProjectsQueryKey,
-  myProjectsStaleTime,
-  type Project,
-} from "~/lib/project-server-fns.ts";
-import { reconnectItx } from "~/itx/itx-react.tsx";
+  fetchProjectsList,
+  projectsListQueryKey,
+  projectsListStaleTime,
+} from "~/lib/projects-query.ts";
+import { connectItx, reconnectItx } from "~/itx/itx-react.tsx";
+import type { ProjectListEntry } from "~/types.ts";
 
 type OrganizationSummary = {
   id: string;
@@ -47,12 +45,7 @@ function ProjectsIndexPending() {
   );
 }
 
-function buildProjectHostname(input: {
-  slug: string;
-  customHostname: string | null;
-  projectHostnameBases: readonly string[];
-}) {
-  if (input.customHostname) return input.customHostname;
+function buildProjectHostname(input: { slug: string; projectHostnameBases: readonly string[] }) {
   const base = input.projectHostnameBases[0];
   if (!base) return null;
   return `${input.slug}.${normalizeProjectHostnameBase(base)}`;
@@ -64,12 +57,14 @@ function ProjectsIndexPage() {
   const organizations = session?.authenticated ? session.session.organizations : [];
   const isAdmin = session?.authenticated ? session.user.isAdmin === true : false;
   const queryClient = useQueryClient();
+  // The list comes straight from the itx session (`session.projects.list()`),
+  // shared with the app sidebar through the one projects cache entry.
   const list = useQuery({
-    queryKey: myProjectsQueryKey,
-    queryFn: () => listMyProjectsServerFn({ data: myProjectsListInput }),
-    staleTime: myProjectsStaleTime,
+    queryKey: projectsListQueryKey,
+    queryFn: fetchProjectsList,
+    staleTime: projectsListStaleTime,
   });
-  const projects = list.data?.projects ?? [];
+  const projects = list.data ?? [];
   const hasProjects = projects.length > 0;
 
   const deleteProject = useMutation({
@@ -77,31 +72,33 @@ function ProjectsIndexPage() {
       return await deleteProjectServerFn({ data: input });
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: myProjectsQueryKey });
+      await queryClient.invalidateQueries({ queryKey: projectsListQueryKey });
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });
 
   // "Set up" for a project the auth worker knows about but this deployment's
-  // engine does not: re-run the create with the claim's exact id and slug. The
-  // auth side is idempotent (createForOrganization returns the existing row),
-  // then the engine bootstrap saga runs.
+  // engine does not: re-run `projects.create` on the itx session with the
+  // claim's exact id and slug. The auth side is idempotent
+  // (createForOrganization returns the existing row), then the engine
+  // bootstrap saga runs.
   const recoverProject = useMutation({
-    mutationFn: async (project: Project) => {
+    mutationFn: async (project: ProjectListEntry) => {
       const organizationSlug = project.organizationId
         ? organizations.find((organization) => organization.id === project.organizationId)?.slug
         : undefined;
-      return await createMyProjectServerFn({
-        data: {
-          id: project.id,
-          slug: project.slug,
-          organizationSlug,
-        },
+      const itx = await connectItx();
+      await itx.projects.create({
+        projectId: project.id,
+        slug: project.slug,
+        ...(organizationSlug === undefined ? {} : { organizationSlug }),
       });
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: myProjectsQueryKey });
+      // Drop the global socket BEFORE refetching so the list re-dials with
+      // the widened access, then invalidate the shared cache entry.
       reconnectItx();
+      await queryClient.invalidateQueries({ queryKey: projectsListQueryKey });
       toast.success("Project set up");
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
@@ -141,7 +138,11 @@ function ProjectsIndexPage() {
         </div>
       </div>
 
-      {!hasProjects ? (
+      {list.isPending ? (
+        <div className="text-sm text-muted-foreground" data-spinner="true">
+          Loading projects...
+        </div>
+      ) : !hasProjects ? (
         <div className="rounded-xl border border-dashed bg-card/60 px-6 py-14 text-center">
           <div className="mx-auto flex max-w-md flex-col items-center gap-4">
             <div className="flex size-12 items-center justify-center rounded-full bg-muted">
@@ -189,8 +190,8 @@ function ProjectsTable({
   deleteProject: UseMutationResult<unknown, Error, { id: string }>;
   organizations: OrganizationSummary[];
   projectHostnameBases: readonly string[];
-  projects: Project[];
-  recoverProject: UseMutationResult<unknown, Error, Project>;
+  projects: ProjectListEntry[];
+  recoverProject: UseMutationResult<unknown, Error, ProjectListEntry>;
 }) {
   return (
     <div className="overflow-x-auto rounded-lg border">
@@ -206,7 +207,6 @@ function ProjectsTable({
       {projects.map((project) => {
         const hostname = buildProjectHostname({
           slug: project.slug,
-          customHostname: project.customHostname,
           projectHostnameBases,
         });
 
@@ -244,7 +244,7 @@ function ProjectsTable({
   );
 }
 
-function ProjectNameCell({ project }: { project: Project }) {
+function ProjectNameCell({ project }: { project: ProjectListEntry }) {
   return (
     <div className="min-w-0 space-y-0.5">
       {project.deploymentStatus === "ready" ? (
@@ -263,7 +263,7 @@ function ProjectNameCell({ project }: { project: Project }) {
   );
 }
 
-function ProjectStatusCell({ project }: { project: Project }) {
+function ProjectStatusCell({ project }: { project: ProjectListEntry }) {
   switch (project.deploymentStatus) {
     case "ready":
       return <Badge>Ready</Badge>;
@@ -280,8 +280,8 @@ function ProjectActionsCell({
   recoverProject,
 }: {
   deleteProject: UseMutationResult<unknown, Error, { id: string }>;
-  project: Project;
-  recoverProject: UseMutationResult<unknown, Error, Project>;
+  project: ProjectListEntry;
+  recoverProject: UseMutationResult<unknown, Error, ProjectListEntry>;
 }) {
   if (project.deploymentStatus === "missing") {
     const isPending = recoverProject.isPending && recoverProject.variables?.id === project.id;
@@ -328,7 +328,7 @@ function ProjectOrganizationCell({
   project,
   organizations,
 }: {
-  project: Project;
+  project: ProjectListEntry;
   organizations: OrganizationSummary[];
 }) {
   if (!project.organizationId) {

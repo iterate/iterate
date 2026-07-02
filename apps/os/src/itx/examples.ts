@@ -68,16 +68,17 @@ return await itx.whoami();
     id: "list-projects",
     title: "List projects, then open one",
     description:
-      "A Session vends itxs: projects.list() shows the project ids you can reach, and projects.get(id) returns the project-scoped itx — the same handle a project REPL holds. Every project-context example starts there.",
+      "A Session vends itxs: projects.list() shows the projects you can reach (id, slug, org, deployment status), and projects.get(id) returns the project-scoped itx — the same handle a project REPL holds. Every project-context example starts there.",
     context: "global",
     runtimes: ["browser", "node", "cli"],
     code: `
-// Every project id you have access to (admins see all; users see their own).
-const projectIds = await itx.projects.list();
+// Every project you have access to (admins see all; users see their own):
+// { id, slug, organizationId, organizationName, deploymentStatus }.
+const projects = await itx.projects.list();
 
 // Open one. The result is an itx scoped to that project — the same shape a
 // project REPL's \`itx\` has (streams, repo, workers, runScript, ...).
-const pid = vars.projectId ?? projectIds[0];
+const pid = vars.projectId ?? projects[0]?.id;
 if (!pid) throw new Error("Create a project first: await itx.projects.create({ slug: 'demo' })");
 const project = await itx.projects.get(pid);
 

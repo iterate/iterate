@@ -63,8 +63,34 @@ export interface Session {
 export interface ProjectCollection {
   get(projectId: string): Promise<Itx>;
   create(args: { organizationSlug?: string; projectId?: string; slug: string }): Promise<Itx>;
-  list(): string[];
+  /**
+   * The projects this session's principal can reach, enriched engine-side:
+   * user principals list their claims (plus anything the live context was
+   * widened to after a create); admin principals list every deployment-known
+   * project from the project directory. Each entry carries the project's
+   * {@link ProjectDeploymentStatus} so callers never probe per project.
+   */
+  list(): Promise<ProjectListEntry[]>;
 }
+
+/**
+ * Whether a project the directory knows about actually exists in THIS
+ * deployment's engine:
+ * - \`ready\` — the project stream's bootstrap saga ran (\`state.created\`).
+ * - \`missing\` — the engine has no state for it (e.g. the deployment was reset
+ *   while the auth worker kept its rows); it can be set up again.
+ * - \`unknown\` — the probe failed (engine hiccup); don't block the list on it.
+ */
+export type ProjectDeploymentStatus = "ready" | "missing" | "unknown";
+
+/** One entry of {@link ProjectCollection.list}. */
+export type ProjectListEntry = {
+  id: string;
+  slug: string;
+  organizationId: string | null;
+  organizationName: string | null;
+  deploymentStatus: ProjectDeploymentStatus;
+};
 
 /**
  * An **itx**: a capability context scoped into one project at one path.

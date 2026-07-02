@@ -85,6 +85,34 @@ export async function readProjectById(
     .catch(() => null);
 }
 
+/**
+ * Every deployment-known project record (`project:` keys), for admin listings.
+ * KV `list` pages through cursors; values are fetched per page in parallel.
+ * Capped — a deployment with more projects than the cap gets a truncated
+ * admin list, not an unbounded KV scan.
+ */
+export async function listProjectDirectory(
+  directory: KVNamespace,
+  { limit = 1000 }: { limit?: number } = {},
+): Promise<ProjectDirectoryRecord[]> {
+  const records: ProjectDirectoryRecord[] = [];
+  let cursor: string | undefined;
+  while (records.length < limit) {
+    const page = await directory.list({ prefix: "project:", cursor });
+    const values = await Promise.all(
+      page.keys
+        .slice(0, limit - records.length)
+        .map((key) => directory.get<ProjectDirectoryRecord>(key.name, "json").catch(() => null)),
+    );
+    for (const record of values) {
+      if (record) records.push(record);
+    }
+    if (page.list_complete) break;
+    cursor = page.cursor;
+  }
+  return records;
+}
+
 /** Eagerly cache a project the caller just created or resolved. */
 export async function primeProjectDirectory(
   directory: KVNamespace,

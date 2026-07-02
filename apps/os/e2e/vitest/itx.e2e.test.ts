@@ -210,7 +210,17 @@ describe("itx", () => {
     const projects = itx.projects;
 
     expect(await itx.whoami()).toBe("alice");
-    expect(await projects.list()).toEqual(["prj_alice", "prj_ref"]);
+    // list() enriches each scope: an impersonated principal's scopes have no
+    // directory record, so the id doubles as the slug and the org is unknown.
+    const list = await projects.list();
+    expect(list.map((project) => project.id)).toEqual(["prj_alice", "prj_ref"]);
+    expect(list[0]).toMatchObject({
+      id: "prj_alice",
+      slug: "prj_alice",
+      organizationId: null,
+      organizationName: null,
+    });
+    expect(["ready", "missing", "unknown"]).toContain(list[0]?.deploymentStatus);
   });
 
   test("Authenticated internal auth itx can create project and append to stream", async () => {
@@ -2863,7 +2873,7 @@ describe("itx", () => {
     // If we didn't do Promise.all, this wouldn't work - wouldn't be sent as part of the same batch
     const [principal, projects] = await Promise.all([itx.whoami(), itx.projects.list()]);
     expect(principal).toBe("alice");
-    expect(projects).toEqual(["prj_alice", "prj_ref"]);
+    expect(projects.map((project) => project.id)).toEqual(["prj_alice", "prj_ref"]);
 
     // session is now finished - cannot be used again in batch http mode
     await expect(session.authenticate).rejects.toThrow();

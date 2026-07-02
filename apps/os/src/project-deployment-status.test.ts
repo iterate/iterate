@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { deploymentStatusesFromProbes } from "./project-server-fns.ts";
+import { deploymentStatusesFromProbes } from "./project-deployment-status.ts";
 
 function fulfilled(value: boolean): PromiseSettledResult<boolean> {
   return { status: "fulfilled", value };

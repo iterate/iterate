@@ -64,6 +64,7 @@ export function principalFromSession(session: AuthenticatedSession): UserPrincip
     isAdmin: isAdminRole(session.user),
     organizations: session.session.organizations.map((organization) => ({
       id: organization.id,
+      name: organization.name,
       slug: organization.slug,
       role: organization.role,
     })),

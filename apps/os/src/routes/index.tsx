@@ -1,6 +1,6 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { requireAuthenticatedRootRedirectTargetFromSession } from "../lib/auth.ts";
-import { listMyProjectsServerFn } from "~/lib/project-server-fns.ts";
+import { listReadyProjectsServerFn } from "~/lib/project-server-fns.ts";
 
 export const Route = createFileRoute("/")({
   loader: async ({ context, location }) => {
@@ -11,21 +11,16 @@ export const Route = createFileRoute("/")({
       context.currentProjectHostSlug,
     );
 
-    // The my-projects list is claims-sourced (the auth worker knows which
-    // projects the caller may access) with a per-project engine-existence
-    // probe. During preview/dev testing we often reset only the engine,
-    // leaving auth's database intact — those projects come back as
-    // `deploymentStatus: "missing"` and the `/projects` page offers a
-    // one-click set-up.
+    // `session.projects.list()` includes projects the auth worker knows about
+    // but this deployment's engine does not (`deploymentStatus: "missing"` —
+    // e.g. after an engine-only reset; the `/projects` page offers a one-click
+    // set-up for those).
     //
     // Root redirect must make a different decision: only projects that
     // actually exist in this deployment are valid redirect targets. If auth
     // knows about ten projects but this engine has only one of them, `/`
     // should go to that one project, not stay on the picker.
-    const projectsData = await listMyProjectsServerFn({ data: { limit: 100, offset: 0 } });
-    const projects = projectsData.projects.filter(
-      (project) => project.deploymentStatus === "ready",
-    );
+    const projects = await listReadyProjectsServerFn();
 
     const project =
       projects.find((candidate) => candidate.slug === target.projectSlug) ??

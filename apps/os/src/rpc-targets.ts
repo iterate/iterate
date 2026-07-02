@@ -11,7 +11,12 @@ import {
   widenProjectAccess,
 } from "./auth.ts";
 import { itxEnv as env } from "./env.ts";
-import { primeProjectDirectory } from "./project-directory.ts";
+import {
+  listProjectDirectory,
+  primeProjectDirectory,
+  readProjectById,
+} from "./project-directory.ts";
+import { deploymentStatusesFromProbes } from "./project-deployment-status.ts";
 import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
 import { normalizeAgentPath } from "./domains/agents/utils.ts";
@@ -71,6 +76,7 @@ import type {
   OpenApiCollection,
   OpenApiConnectInput,
   ProjectCollection,
+  ProjectListEntry,
   ProjectRepoCollection,
   ProjectStreamCollection,
   ProjectEgress,
@@ -896,8 +902,101 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
     return { organizationId: null, projectId: "prj_" + crypto.randomUUID(), slug: args.slug };
   }
 
-  list() {
-    return this.props.auth.listAccessibleProjects();
+  /**
+   * The session's projects, enriched: identity (id/slug/org) from the auth
+   * claims or the project directory, deployment status from a concurrent
+   * engine probe (`state.created` on each project's processor snapshot). A
+   * probe failure degrades THAT entry to "unknown" — the list always renders.
+   */
+  async list() {
+    const bases = await this.#listEntryBases();
+    const outcomes = await Promise.allSettled(
+      bases.map(async (base) => {
+        const state = await projectProcessorState(base.id);
+        return state.created === true;
+      }),
+    );
+    const statuses = deploymentStatusesFromProbes(
+      bases.map((base) => base.id),
+      outcomes,
+    );
+    return bases.map((base) => ({
+      ...base,
+      deploymentStatus: statuses.get(base.id) ?? "unknown",
+    }));
+  }
+
+  /**
+   * Which projects the list covers, and what we know about each before the
+   * engine probe:
+   * - a signed-in user (including admin-role users): the access token's
+   *   project claims — org name joined from the organization claims — plus any
+   *   project the live context was widened to after a create (directory-read,
+   *   since claims lag until the next token refresh).
+   * - admin-secret / admin-cookie principals: every deployment-known project
+   *   from the PROJECT_DIRECTORY KV. The directory record's `name` is the
+   *   PROJECT name, so these entries carry no organization name.
+   * - impersonated users (test lane): their project scopes, directory-read.
+   */
+  async #listEntryBases(): Promise<Omit<ProjectListEntry, "deploymentStatus">[]> {
+    const userPrincipal = userPrincipalOf(this.props.auth);
+    if (userPrincipal) {
+      const organizationNames = new Map(
+        userPrincipal.organizations.map((organization) => [
+          organization.id,
+          organization.name ?? null,
+        ]),
+      );
+      const projectIds = new Set([
+        ...userPrincipal.projects.map((project) => project.id),
+        ...this.props.auth.listAccessibleProjects(),
+      ]);
+      const claims = new Map(userPrincipal.projects.map((project) => [project.id, project]));
+      return await Promise.all(
+        [...projectIds].map(async (projectId) => {
+          const claim = claims.get(projectId);
+          if (claim) {
+            return {
+              id: claim.id,
+              slug: claim.slug,
+              organizationId: claim.organizationId,
+              organizationName: organizationNames.get(claim.organizationId) ?? null,
+            };
+          }
+          return await this.#directoryEntryBase(projectId);
+        }),
+      );
+    }
+
+    if (this.props.auth.isAdmin()) {
+      const records = await listProjectDirectory(env.PROJECT_DIRECTORY);
+      return records.map((record) => ({
+        id: record.id,
+        slug: record.slug,
+        organizationId: record.organizationId,
+        organizationName: null,
+      }));
+    }
+
+    return await Promise.all(
+      this.props.auth
+        .listAccessibleProjects()
+        .map((projectId) => this.#directoryEntryBase(projectId)),
+    );
+  }
+
+  async #directoryEntryBase(
+    projectId: string,
+  ): Promise<Omit<ProjectListEntry, "deploymentStatus">> {
+    const record = await readProjectById(env.PROJECT_DIRECTORY, projectId);
+    return {
+      id: projectId,
+      // A scope the directory has never seen (impersonated test principals)
+      // still lists — the id doubles as the slug.
+      slug: record?.slug ?? projectId,
+      organizationId: record?.organizationId ?? null,
+      organizationName: null,
+    };
   }
 }
 

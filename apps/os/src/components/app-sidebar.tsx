@@ -69,25 +69,28 @@ import { StreamPath, type StreamPath as StreamPathType } from "~/lib/stream-link
 import type { AppConfig } from "~/config.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import {
-  listMyProjectsServerFn,
-  myProjectsListInput,
-  myProjectsQueryKey,
-  myProjectsStaleTime,
-  type Project,
-} from "~/lib/project-server-fns.ts";
+  fetchProjectsList,
+  projectsListQueryKey,
+  projectsListStaleTime,
+} from "~/lib/projects-query.ts";
+import type { ProjectListEntry } from "~/types.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
 
 type PublicConfig = PublicAppConfig<AppConfig>;
 
 export function AppSidebar({ routeConfig }: { routeConfig: PublicRouteConfig }) {
+  // Client-only read through the itx session (itx never SSRs): the sidebar
+  // renders empty during SSR and populates after hydration. Plain useQuery —
+  // not the suspending useItxQuery — so the always-mounted shell never
+  // suspends on the socket.
   const { data } = useQuery({
-    queryKey: myProjectsQueryKey,
-    queryFn: () => listMyProjectsServerFn({ data: myProjectsListInput }),
-    staleTime: myProjectsStaleTime,
+    queryKey: projectsListQueryKey,
+    queryFn: fetchProjectsList,
+    staleTime: projectsListStaleTime,
   });
   // Missing projects (auth knows them, this deployment's engine does not) are
   // not navigable — the /projects page owns setting them up.
-  const projects = data?.projects.filter((project) => project.deploymentStatus !== "missing") ?? [];
+  const projects = data?.filter((project) => project.deploymentStatus !== "missing") ?? [];
 
   // Sidebar composition follows shadcn sidebar blocks 07/08:
   // https://ui.shadcn.com/blocks/sidebar
@@ -113,7 +116,7 @@ export function AppSidebar({ routeConfig }: { routeConfig: PublicRouteConfig }) 
   );
 }
 
-function AppSidebarHeader({ projects }: { projects: Project[] }) {
+function AppSidebarHeader({ projects }: { projects: ProjectListEntry[] }) {
   const matches = useMatches();
   const { isMobile } = useSidebar();
   const activeProjectSlug = getActiveProjectSlug(matches);
@@ -384,20 +387,20 @@ function AppSidebarNav({
   projects,
   routeConfig,
 }: {
-  projects: Project[];
+  projects: ProjectListEntry[];
   routeConfig: PublicRouteConfig;
 }) {
   const matchRoute = useMatchRoute();
   const matches = useMatches();
   const activeProjectSlug = getActiveProjectSlug(matches);
-  const activeProject = projects.find((project) => project.slug === activeProjectSlug);
 
   // Drive the project nav from the active route slug, not list membership, so a valid
-  // project that isn't in the cached list (e.g. beyond the first page) still shows its nav.
+  // project that isn't in the cached list still shows its nav.
   if (activeProjectSlug) {
     return (
       <ProjectSidebarGroup
-        customHostname={activeProject?.customHostname ?? null}
+        // Custom hostnames don't exist yet (task #13): the list carries none.
+        customHostname={null}
         projectSlug={activeProjectSlug}
         projectHostnameBases={routeConfig.projectHostnameBases}
         appBaseUrl={routeConfig.baseUrl}

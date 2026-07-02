@@ -20,8 +20,8 @@ import {
 } from "@iterate-com/ui/components/select";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { z } from "zod";
-import { createMyProjectServerFn, myProjectsQueryKey } from "~/lib/project-server-fns.ts";
-import { reconnectItx } from "~/itx/itx-react.tsx";
+import { projectsListQueryKey } from "~/lib/projects-query.ts";
+import { connectItx, reconnectItx } from "~/itx/itx-react.tsx";
 
 const PROJECT_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -41,22 +41,31 @@ export function CreateProjectForm() {
   const organizations = session?.authenticated ? session.session.organizations : [];
   const createProject = useMutation({
     mutationFn: async (input: { slug: string; organizationSlug: string }) => {
-      return await createMyProjectServerFn({
-        data: {
-          slug: input.slug,
-          organizationSlug: input.organizationSlug || undefined,
-        },
+      // Straight through the itx session: create registers the project with
+      // the auth worker (org grant -> claims) and runs the engine bootstrap
+      // saga, then widens THIS socket's access to the new project.
+      const itx = await connectItx();
+      const project = itx.projects.create({
+        slug: input.slug,
+        ...(input.organizationSlug ? { organizationSlug: input.organizationSlug } : {}),
       });
+      const description = await project.describe();
+      // The auth worker may normalize (slugify) the requested slug; the
+      // same-socket list carries the canonical record for the just-widened
+      // project, so read it back rather than echoing the submitted slug.
+      const entries = await itx.projects.list();
+      const entry = entries.find((candidate) => candidate.id === description.projectId);
+      return { id: description.projectId, slug: entry?.slug ?? input.slug };
     },
     onSuccess: async (project) => {
       // Refresh the browser auth session so it carries the new project's
       // claim BEFORE navigating to the project-scoped route (#1516); without
       // this the project route loads before the session knows the project.
       await refresh({ force: true });
-      await queryClient.invalidateQueries({ queryKey: myProjectsQueryKey });
       // Drop the global itx socket so it re-dials with the refreshed claims —
       // otherwise itx.projects.list (connect-time principal) omits this project.
       reconnectItx();
+      await queryClient.invalidateQueries({ queryKey: projectsListQueryKey });
       await router.invalidate({ sync: true });
       // New projects land in the agent onboarding flow (origin/main UX).
       await router.navigate({
