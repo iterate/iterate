@@ -17,33 +17,29 @@ import {
   useInitialTailScroll,
 } from "../lib/use-initial-tail-scroll.ts";
 import { DEFAULT_STREAM_PROJECT_ID } from "../lib/stream-rpc.ts";
+import { runStreamControl } from "../lib/stream-control.ts";
 import { EventFeedView } from "./-event-feed-view.tsx";
 import { StreamStateView } from "./-stream-state-view.tsx";
 import { ViewSwitcher } from "./-view-switcher.tsx";
-import { durableObjectProcessorSubscriber } from "~/domains/streams/engine/shared/callable-subscriber.ts";
 import {
   acquireStreamRuntime,
   type BrowserProcessorConfig,
   type StreamBrowserSnapshot,
   type StreamBrowserStore,
   type StreamRuntimeState,
-} from "~/domains/streams/engine/browser/stream-browser-store.ts";
-import {
-  DEFAULT_CIRCUIT_BREAKER_BURST_CAPACITY,
-  DEFAULT_CIRCUIT_BREAKER_REFILL_RATE_PER_MINUTE,
-} from "~/domains/streams/engine/processors/circuit-breaker/contract.ts";
+} from "~/next/domains/streams/client-libraries/browser/stream-browser-store.ts";
 import {
   type StreamBrowserDatabase,
   type StreamEventRow,
-} from "~/domains/streams/engine/browser/stream-browser-db.ts";
-import { browserProcessorStateStorage } from "~/domains/streams/engine/browser/processor-state-storage.ts";
+} from "~/next/domains/streams/client-libraries/browser/stream-browser-db.ts";
+import { browserProcessorStateStorage } from "~/next/domains/streams/client-libraries/browser/processor-state-storage.ts";
 import {
   BROWSER_RAW_EVENTS_SCHEMA_VERSION,
   BrowserRawEventsContract,
   BrowserRawEventsProcessor,
   type BrowserRawEventsState,
-} from "~/domains/streams/engine/processors/browser-raw-events/implementation.ts";
-import { useStreamQuery } from "~/domains/streams/engine/browser/hooks/use-stream-query.ts";
+} from "~/next/domains/streams/client-libraries/processors/browser-raw-events/implementation.ts";
+import { useStreamQuery } from "~/next/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 
 export function StreamPage({ streamView }: { streamView: StreamViewSearch }) {
   return (
@@ -1145,6 +1141,7 @@ function StreamSidebar({
         snapshot={snapshot}
         streamDatabase={streamDatabase}
         streamStore={streamStore}
+        streamView={streamView}
       />
       <InsertEventsTool streamStore={streamStore} streamPath={streamView.path} />
       <StreamControlTool snapshot={snapshot} streamStore={streamStore} />
@@ -1156,11 +1153,13 @@ function SubscriptionTool({
   snapshot,
   streamDatabase,
   streamStore,
+  streamView,
   eventCount,
 }: {
   snapshot: StreamBrowserSnapshot;
   streamDatabase: StreamBrowserDatabase;
   streamStore: StreamBrowserStore;
+  streamView: StreamViewSearch;
   eventCount: number;
 }) {
   const [actionFeedback, setActionFeedback] = useState<
@@ -1290,10 +1289,16 @@ function SubscriptionTool({
           type="button"
           onClick={() => {
             setActionFeedback("killing");
-            void streamStore.kill().then(
-              () => setActionFeedback("done"),
-              () => setActionFeedback("error"),
-            );
+            void runStreamControl({
+              path: streamView.path,
+              projectId: streamView.projectId,
+              verb: "kill",
+            })
+              .then(() => streamStore.nudge())
+              .then(
+                () => setActionFeedback("done"),
+                () => setActionFeedback("error"),
+              );
           }}
         >
           Kill
@@ -1305,10 +1310,16 @@ function SubscriptionTool({
           type="button"
           onClick={() => {
             setActionFeedback("resetting");
-            void streamStore.reset().then(
-              () => setActionFeedback("done"),
-              () => setActionFeedback("error"),
-            );
+            void runStreamControl({
+              path: streamView.path,
+              projectId: streamView.projectId,
+              verb: "reset",
+            })
+              .then(() => streamStore.nudge())
+              .then(
+                () => setActionFeedback("done"),
+                () => setActionFeedback("error"),
+              );
           }}
         >
           Reset
@@ -1371,6 +1382,20 @@ function useStreamRuntimeState(streamStore: StreamBrowserStore, connectionStatus
   return { runtimeState, pollError };
 }
 
+/**
+ * The gate slice of the stream's core reduced state. On the next engine
+ * `runtimeState().coreProcessorState` is deliberately `unknown` on the public
+ * `Stream` capability, so the sidebar parses out just what it renders.
+ */
+function parseGateState(core: unknown): { paused: boolean; pauseReason: string | null } {
+  if (core === null || typeof core !== "object") return { paused: false, pauseReason: null };
+  const { paused, pauseReason } = core as { paused?: unknown; pauseReason?: unknown };
+  return {
+    paused: paused === true,
+    pauseReason: typeof pauseReason === "string" ? pauseReason : null,
+  };
+}
+
 function StreamControlTool({
   snapshot,
   streamStore,
@@ -1379,18 +1404,10 @@ function StreamControlTool({
   streamStore: StreamBrowserStore;
 }) {
   const { runtimeState, pollError } = useStreamRuntimeState(streamStore, snapshot.connectionStatus);
-  const core = runtimeState?.coreProcessorState;
-  const paused = core?.paused ?? false;
-  const pauseReason = core?.pauseReason ?? null;
+  const { paused, pauseReason } = parseGateState(runtimeState?.coreProcessorState);
 
-  const [burstCapacity, setBurstCapacity] = useState(() =>
-    String(DEFAULT_CIRCUIT_BREAKER_BURST_CAPACITY),
-  );
-  const [refillRatePerMinute, setRefillRatePerMinute] = useState(() =>
-    String(DEFAULT_CIRCUIT_BREAKER_REFILL_RATE_PER_MINUTE),
-  );
   const [controlAction, setControlAction] = useState<
-    "idle" | "resuming" | "configuring" | "done" | "error"
+    "idle" | "pausing" | "resuming" | "done" | "error"
   >("idle");
 
   async function resumeStream() {
@@ -1410,35 +1427,14 @@ function StreamControlTool({
     }
   }
 
-  async function applyCircuitBreakerConfig() {
-    if (core === undefined) return;
-    const burst = Math.floor(Number(burstCapacity));
-    const refill = Math.floor(Number(refillRatePerMinute));
-    if (!Number.isFinite(burst) || burst <= 0 || !Number.isFinite(refill) || refill <= 0) {
-      return;
-    }
-
-    const subscriptionKey = "circuit-breaker";
-    setControlAction("configuring");
+  async function pauseStream() {
+    setControlAction("pausing");
     try {
       await streamStore.appendBatch({
         events: [
           {
-            type: "events.iterate.com/stream/subscription-configured",
-            payload: {
-              subscriptionKey,
-              subscriber: durableObjectProcessorSubscriber({
-                bindingName: "STREAM_PROCESSOR_RUNNER",
-                durableObjectName: `${DEFAULT_STREAM_PROJECT_ID}:${core.path}:${subscriptionKey}`,
-                processorName: "circuit-breaker",
-              }),
-            },
-            idempotencyKey: `subscription:${subscriptionKey}`,
-          },
-          {
-            type: "events.iterate.com/circuit-breaker/configured",
-            payload: { burstCapacity: burst, refillRatePerMinute: refill },
-            idempotencyKey: `circuit-breaker:${burst}:${refill}`,
+            type: "events.iterate.com/stream/paused",
+            payload: { reason: "operator pause from sidebar" },
           },
         ],
       });
@@ -1493,7 +1489,22 @@ function StreamControlTool({
         >
           Resume stream
         </button>
-      ) : null}
+      ) : (
+        <button
+          className="w-full cursor-pointer whitespace-nowrap rounded-md border border-[#d8dde4] bg-white px-3 py-2 text-[13px] font-medium text-[#475467] hover:border-[#bac2cf] hover:bg-[#f8f9fb] disabled:cursor-default disabled:opacity-55"
+          data-testid="stream-pause-button"
+          disabled={
+            controlAction === "pausing" ||
+            runtimeState === undefined ||
+            snapshot.connectionStatus !== "subscribed"
+          }
+          title="Append events.iterate.com/stream/paused — ordinary appends are rejected until the stream is resumed."
+          type="button"
+          onClick={() => void pauseStream()}
+        >
+          Pause stream
+        </button>
+      )}
       {pollError === undefined ? null : (
         <output
           className="font-mono text-[11px] text-[#b42318]"
@@ -1503,61 +1514,6 @@ function StreamControlTool({
           {pollError}
         </output>
       )}
-      <h3 className="m-0 pt-1 text-[11px] font-semibold uppercase tracking-[0.04em] text-[#98a2b3]">
-        Circuit breaker
-      </h3>
-      <form
-        className="grid gap-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void applyCircuitBreakerConfig();
-        }}
-      >
-        <label className="grid gap-1 text-[11px] font-medium text-[#667085]">
-          <span>Burst capacity</span>
-          <input
-            className="min-w-0 rounded-md border border-[#e1e5eb] bg-white/70 px-2 py-1.5 font-mono text-xs"
-            data-testid="circuit-breaker-burst-capacity"
-            min="1"
-            step="1"
-            type="number"
-            value={burstCapacity}
-            onChange={(event) => setBurstCapacity(event.currentTarget.value)}
-          />
-        </label>
-        <label className="grid gap-1 text-[11px] font-medium text-[#667085]">
-          <span>Refill / minute</span>
-          <input
-            className="min-w-0 rounded-md border border-[#e1e5eb] bg-white/70 px-2 py-1.5 font-mono text-xs"
-            data-testid="circuit-breaker-refill-rate"
-            min="1"
-            step="1"
-            type="number"
-            value={refillRatePerMinute}
-            onChange={(event) => setRefillRatePerMinute(event.currentTarget.value)}
-          />
-        </label>
-        <button
-          className="cursor-pointer whitespace-nowrap rounded-md border border-[#d8dde4] bg-white px-3 py-2 text-[13px] font-medium text-[#475467] hover:border-[#bac2cf] hover:bg-[#f8f9fb] disabled:cursor-default disabled:opacity-55"
-          data-testid="circuit-breaker-apply"
-          disabled={
-            controlAction === "configuring" || paused || snapshot.connectionStatus !== "subscribed"
-          }
-          title={
-            paused
-              ? "Resume the stream first — circuit-breaker/configured cannot append while paused."
-              : undefined
-          }
-          type="submit"
-        >
-          Apply limits
-        </button>
-        {paused ? (
-          <p className="m-0 text-[11px] leading-snug text-[#667085]">
-            Limits can only be changed while the gate is active. Resume the stream first.
-          </p>
-        ) : null}
-      </form>
       {controlAction === "idle" ? null : (
         <output
           className={

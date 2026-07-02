@@ -22,28 +22,6 @@ export function toStreamWebSocketUrl(args: { path: string; projectId?: string })
   return url.toString();
 }
 
-export function streamProcessorRunnerName(args: {
-  projectId: string;
-  path: string;
-  subscriptionKey: string;
-}) {
-  return `${args.projectId}:${e2eStreamPath(args.path)}:${args.subscriptionKey}`;
-}
-
-export function toStreamProcessorRunnerWebSocketUrl(
-  runnerName: string,
-  params: { processorSlug?: string } = {},
-) {
-  const url = new URL(e2eWorkerUrl());
-  url.pathname = `/stream-processor-runner/${runnerName}`;
-  if (params.processorSlug !== undefined) {
-    url.searchParams.set("processorSlug", params.processorSlug);
-  }
-  if (url.protocol === "http:") url.protocol = "ws:";
-  if (url.protocol === "https:") url.protocol = "wss:";
-  return url.toString();
-}
-
 export function streamRoute(args: { path: string; projectId?: string; view?: string }) {
   const search = streamViewSearch({
     path: e2eStreamPath(args.path),

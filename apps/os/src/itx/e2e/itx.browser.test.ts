@@ -1,19 +1,20 @@
-// Browser execution mode: a real Chromium tab holds an itx over a Cap'n Web
-// WebSocket — the same handle, same catalogue examples, same capability verbs
-// as Node, the CLI, and the worker runtimes. Examples run through the REAL
-// REPL evaluation pipeline (compile + import rewriting + scope), so what the
-// Examples panel shows is exactly what this suite proves. The browser is also
-// a PROVIDER: it can register live capabilities backed by browser-owned
-// objects (tabs as tool servers).
+// Browser execution mode: a real Chromium tab holds a next-engine itx over a
+// Cap'n Web WebSocket (/api/itx-next) — the same stubs, same catalogue
+// examples, same capability verbs as Node and the worker runtimes. Examples
+// run through the REAL REPL evaluation pipeline (compile + import rewriting +
+// scope), so what the Examples panel shows is exactly what this suite proves.
+// The browser is also a PROVIDER: it can mount live capabilities backed by
+// browser-owned objects (tabs as tool servers).
 //
 // Auth: browser WebSockets cannot set Authorization headers, so the admin
-// cookie is installed through Playwright's context (vitest browser command) —
-// same bridge the old capnweb suite used.
+// cookie is installed through Playwright's context (vitest browser command);
+// the engine's from-server-cookie lane accepts the `iterate-admin-auth`
+// cookie riding the handshake.
 
-import { afterAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { commands } from "vitest/browser";
-import { newWebSocketRpcSession, RpcTarget, type RpcStub } from "capnweb";
-import type { ItxHandle } from "../handle.ts";
+import { newWebSocketRpcSession, type RpcStub } from "capnweb";
+import type { Itx, Session, UnauthenticatedItx } from "../../next/types.ts";
 import {
   createBrowserReplScope,
   DEFAULT_BROWSER_REPL_CODE,
@@ -33,31 +34,21 @@ declare const __ITX_BROWSER_E2E__: {
 const httpsTarget = __ITX_BROWSER_E2E__.baseUrl.startsWith("https:");
 
 const BROWSER_EXAMPLES = ITX_EXAMPLES.filter(
-  (example) => example.runtimes.includes("browser") && EXAMPLE_CASES[example.id] !== undefined,
+  (example) =>
+    example.context === "project" &&
+    example.runtimes.includes("browser") &&
+    EXAMPLE_CASES[example.id] !== undefined,
 );
 
 describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
-  const createdProjectIds: string[] = [];
-
-  afterAll(async () => {
-    using itx = await connectFromBrowser();
-    for (const id of createdProjectIds.toReversed()) {
-      await itx.projects.remove({ id }).catch(() => {});
-    }
-  });
-
-  it("runs the default browser REPL snippet against a live itx", async () => {
-    using itx = await connectFromBrowser();
-    await expect(
-      evalBrowserReplSessionCode({
-        code: DEFAULT_BROWSER_REPL_CODE,
-        itx,
-        scope: createBrowserReplScope(),
-      }),
-    ).resolves.toMatchObject({
-      projects: expect.any(Array),
-      total: expect.any(Number),
+  it("runs the default browser REPL snippet against a live session", async () => {
+    using session = await connectFromBrowser();
+    const result = await evalBrowserReplSessionCode({
+      code: DEFAULT_BROWSER_REPL_CODE,
+      itx: session,
+      scope: createBrowserReplScope(),
     });
+    expect(Array.isArray(result)).toBe(true);
   }, 45_000);
 
   // The catalogue, through the real REPL pipeline, against a project-scoped
@@ -66,12 +57,11 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
   let sharedProjectId: Promise<string> | null = null;
   function ensureBrowserMatrixProject(): Promise<string> {
     sharedProjectId ??= (async () => {
-      using itx = await connectFromBrowser();
-      const project = (await itx.projects.create({
+      using session = await connectFromBrowser();
+      using project = session.projects.create({
         slug: `itx-browser-${uniqueSuffix()}`.slice(0, 40),
-      })) as { id: string };
-      createdProjectIds.push(project.id);
-      return project.id;
+      });
+      return (await project.describe()).projectId;
     })();
     return sharedProjectId;
   }
@@ -80,59 +70,67 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
     const exampleCase = EXAMPLE_CASES[example.id]!;
     it(`runs catalogue example "${example.id}" in the REPL pipeline`, async () => {
       const projectId = await ensureBrowserMatrixProject();
-      using itx = await connectFromBrowser(projectId);
+      using session = await connectFromBrowser();
+      using project = session.projects.get(projectId);
 
       const ctx = { marker: `browser-${uniqueSuffix()}`, projectId };
       const vars = exampleCase.vars?.(ctx) ?? {};
       const result = await evalBrowserReplSessionCode({
         code: example.code,
-        itx,
+        itx: project,
         scope: createBrowserReplScope({ projectId, vars }),
       });
       exampleCase.assert(result, ctx, expect);
     }, 120_000);
   }
 
-  // The browser-as-provider story (a tab registering live, browser-owned
-  // objects) is covered by the matrix run of "provide-plain-object": its
+  // The browser-as-provider story (a tab mounting live, browser-owned
+  // objects) is covered by the matrix run of "provide-live-capability": its
   // closures live in this tab, so the asserted values can only have been
   // computed by calls travelling back over the open session.
 
-  it("provides a browser path-call cap with an SDK-shaped surface", async () => {
+  it("provides a browser live capability with a flattened SDK-shaped surface", async () => {
     const projectId = await ensureBrowserMatrixProject();
-    using projectItx = await connectFromBrowser(projectId);
+    using session = await connectFromBrowser();
+    using project = session.projects.get(projectId);
 
-    class BrowserSdk extends RpcTarget {
-      async call({ path, args }: { path: string[]; args: unknown[] }) {
-        return { args, method: path.join("."), provider: "browser-tab" };
-      }
-    }
-
-    await projectItx.provideCapability({
-      name: "browserSlack",
-      capability: new BrowserSdk() as never,
+    using provision = await project.provideCapability({
+      capability: {
+        invokeCapability({ args, path }: { args: unknown[]; path: string[] }) {
+          return { args, method: path.join("."), provider: "browser-tab" };
+        },
+      },
+      flattenNestedPaths: true,
+      path: ["browserSlack"],
+      type: "live",
     });
 
-    const result = (await (
-      projectItx as never as Record<string, any>
-    ).browserSlack.chat.postMessage({
+    const result = (await (project as never as Record<string, any>).browserSlack.chat.postMessage({
       channel: "C_BROWSER",
       text: "hello from a browser tab",
     })) as { method: string; provider: string };
     expect(result).toMatchObject({ method: "chat.postMessage", provider: "browser-tab" });
+    await provision.revoke();
   }, 45_000);
 });
 
 // ---- connection -------------------------------------------------------------
 
-async function connectFromBrowser(context?: string): Promise<RpcStub<ItxHandle>> {
+/**
+ * An admin Session for this tab. Cookie-authenticated: the admin cookie rides
+ * the WebSocket handshake and `authenticate({ type: "from-server-cookie" })`
+ * exchanges it for the session catalog, pipelined on the same socket.
+ */
+async function connectFromBrowser(): Promise<RpcStub<Session & Itx>> {
   await installAdminCookie();
-  const wsUrl = new URL(
-    context ? `/api/itx/${encodeURIComponent(context)}` : "/api/itx",
-    baseUrl(),
-  );
+  // Coexistence: the next engine's capnweb surface is served at /api/itx-next
+  // until the legacy stack is removed (mirrors ~/itx/itx-react.tsx).
+  const wsUrl = new URL("/api/itx-next", baseUrl());
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
-  return newWebSocketRpcSession<ItxHandle>(new WebSocket(wsUrl));
+  const unauthenticated = newWebSocketRpcSession<UnauthenticatedItx>(new WebSocket(wsUrl));
+  return unauthenticated.authenticate({ type: "from-server-cookie" }) as unknown as RpcStub<
+    Session & Itx
+  >;
 }
 
 async function installAdminCookie() {
@@ -147,7 +145,7 @@ async function installAdminCookie() {
     }
   ).setItxAdminCookie({
     secret: __ITX_BROWSER_E2E__.adminApiSecret,
-    url: new URL("/api/itx", baseUrl()).toString(),
+    url: new URL("/api/itx-next", baseUrl()).toString(),
   });
   if (!result.cookies?.some((cookie) => cookie.name === "iterate-admin-auth")) {
     throw new Error("iterate-admin-auth cookie was not installed.");

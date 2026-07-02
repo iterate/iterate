@@ -1,7 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link, useMatches, useNavigate } from "@tanstack/react-router";
 import { CheckIcon, ChevronDownIcon } from "lucide-react";
-import { StreamState, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import {
   Breadcrumb,
   BreadcrumbEllipsis,
@@ -15,7 +14,7 @@ import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-
 import { Input } from "@iterate-com/ui/components/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@iterate-com/ui/components/popover";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { coreStateToStreamState } from "~/domains/streams/stream-runtime.ts";
+import { parseBrowserCoreStreamTreeState } from "~/next/domains/streams/client-libraries/browser/core-processor-state.ts";
 import { connectItx } from "~/itx/itx-react.tsx";
 import type {
   RouteBreadcrumbLoaderData,
@@ -193,17 +192,17 @@ function isProjectCollectionOrLayoutBreadcrumb(input: {
  * OPTIONAL: a slow or down socket may only degrade this navigator, never
  * suspend or blank the chrome. So we dial LAZILY and non-suspending via
  * `connectItx` inside the effect (gated by `enabled`) rather than the
- * suspending `useItx` hook — addressing the project by SLUG so we share the
+ * suspending `useItx` hook — addressing the project by ID so we share the
  * same pooled socket the project page already warmed (the provider keys on
- * slug), instead of opening a second socket for the same project.
+ * project ID), instead of opening a second socket for the same project.
  */
 function useStreamChildPaths(input: {
   enabled: boolean;
-  projectSlug: string;
-  streamPath: StreamPathType;
-}): StreamPathType[] | undefined {
-  const [childPaths, setChildPaths] = useState<StreamPathType[]>();
-  const { enabled, projectSlug, streamPath } = input;
+  projectId: string;
+  streamPath: string;
+}): string[] | undefined {
+  const [childPaths, setChildPaths] = useState<string[]>();
+  const { enabled, projectId, streamPath } = input;
 
   useEffect(() => {
     // Reset on every input change INCLUDING close: a reopened popover (or a
@@ -212,13 +211,11 @@ function useStreamChildPaths(input: {
     setChildPaths(undefined);
     if (!enabled) return;
     let cancelled = false;
-    void connectItx({ projectId: projectSlug })
+    void connectItx({ projectId })
       .then(async (itx) => await itx.streams.get(streamPath).runtimeState())
       .then((state) => {
         if (!cancelled) {
-          setChildPaths([
-            ...StreamState.parse(coreStateToStreamState(state.coreProcessorState)).childPaths,
-          ]);
+          setChildPaths([...parseBrowserCoreStreamTreeState(state.coreProcessorState).childPaths]);
         }
       })
       .catch(() => {
@@ -228,12 +225,12 @@ function useStreamChildPaths(input: {
     return () => {
       cancelled = true;
     };
-  }, [enabled, projectSlug, streamPath]);
+  }, [enabled, projectId, streamPath]);
 
   return childPaths;
 }
 
-function BreadcrumbLabel({ crumb }: { crumb: { label: string; streamPath?: StreamPathType } }) {
+function BreadcrumbLabel({ crumb }: { crumb: { label: string; streamPath?: string } }) {
   if (!crumb.streamPath) return <>{crumb.label}</>;
   return <EventsStreamPathLabel path={crumb.streamPath} label={crumb.label} />;
 }
@@ -242,7 +239,7 @@ function renderCrumbLink({
   crumb,
   streamBreadcrumb,
 }: {
-  crumb: { streamPath?: StreamPathType; to?: string };
+  crumb: { streamPath?: string; to?: string };
   streamBreadcrumb: RouteBreadcrumbLoaderData["streamBreadcrumb"];
 }) {
   if (crumb.streamPath && streamBreadcrumb) {
@@ -273,7 +270,7 @@ function StreamSegmentNavigator({
 }: {
   isCurrent?: boolean;
   label: string;
-  segmentPath: StreamPathType;
+  segmentPath: string;
   streamBreadcrumb: NonNullable<RouteBreadcrumbLoaderData["streamBreadcrumb"]>;
 }) {
   const navigate = useNavigate();
@@ -281,7 +278,7 @@ function StreamSegmentNavigator({
   const parentPath = streamPathParent(segmentPath);
   const fetchedSiblings = useStreamChildPaths({
     enabled: open,
-    projectSlug: streamBreadcrumb.projectSlug,
+    projectId: streamBreadcrumb.projectId,
     streamPath: parentPath,
   });
   const siblingPaths = useMemo(() => {
@@ -290,7 +287,7 @@ function StreamSegmentNavigator({
     return paths.toSorted((left, right) => left.localeCompare(right));
   }, [fetchedSiblings, segmentPath]);
 
-  function navigateToSibling(path: StreamPathType) {
+  function navigateToSibling(path: string) {
     setOpen(false);
     if (path === segmentPath && isCurrent) return;
     void navigate({
@@ -343,7 +340,7 @@ function StreamChildrenBreadcrumb({
   const [newChildSegment, setNewChildSegment] = useState("");
   const fetchedChildren = useStreamChildPaths({
     enabled: open,
-    projectSlug: streamBreadcrumb.projectSlug,
+    projectId: streamBreadcrumb.projectId,
     streamPath: streamBreadcrumb.streamPath,
   });
   const children = useMemo(
@@ -351,7 +348,7 @@ function StreamChildrenBreadcrumb({
     [fetchedChildren],
   );
 
-  function navigateToChild(childPath: StreamPathType) {
+  function navigateToChild(childPath: string) {
     setOpen(false);
     void navigate({
       to: "/projects/$projectSlug/streams/$",
@@ -435,6 +432,6 @@ function StreamChildrenBreadcrumb({
   );
 }
 
-function getStreamSegmentLabel(path: StreamPathType) {
+function getStreamSegmentLabel(path: string) {
   return path === "/" ? "/" : (path.split("/").at(-1) ?? path);
 }

@@ -245,7 +245,9 @@ return { mountType: mount?.type, note: event.payload.note, offset: event.offset 
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-const greeter = itx.workers.get({
+// Await the ref before calling: script isolates reach itx over Workers RPC,
+// which does not pipeline calls through an unresolved return value.
+const greeter = await itx.workers.get({
   type: "stateless",
   entrypoint: "Greeter",
   path: "/",
@@ -284,7 +286,7 @@ return {
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-const counter = itx.workers.get({
+const counter = await itx.workers.get({
   type: "stateful",
   className: "CounterDurableObject",
   // The durable identity: reuse the key to come back to the same state.
@@ -407,7 +409,7 @@ return { record }; // ["capability-provided", "capability-revoked"]
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-const agent = itx.agents.get(vars.agentPath ?? "/agents/repl-demo");
+const agent = await itx.agents.get(vars.agentPath ?? "/agents/repl-demo");
 
 // The returned value is the committed stream event — the durable record the
 // agent loop reduces into its history.

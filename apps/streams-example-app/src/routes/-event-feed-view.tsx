@@ -17,17 +17,17 @@ import {
   acquireStreamRuntime,
   type StreamBrowserSnapshot,
   type StreamBrowserStore,
-} from "~/domains/streams/engine/browser/stream-browser-store.ts";
-import type { StreamBrowserDatabase } from "~/domains/streams/engine/browser/stream-browser-db.ts";
-import { browserProcessorStateStorage } from "~/domains/streams/engine/browser/processor-state-storage.ts";
+} from "~/next/domains/streams/client-libraries/browser/stream-browser-store.ts";
+import type { StreamBrowserDatabase } from "~/next/domains/streams/client-libraries/browser/stream-browser-db.ts";
+import { browserProcessorStateStorage } from "~/next/domains/streams/client-libraries/browser/processor-state-storage.ts";
 import {
   BROWSER_EVENT_FEED_SCHEMA_VERSION,
   BROWSER_EVENT_FEED_TABLE,
   BrowserEventFeedContract,
   BrowserEventFeedProcessor,
   type BrowserEventFeedState,
-} from "~/domains/streams/engine/processors/browser-event-feed/implementation.ts";
-import { useStreamQuery } from "~/domains/streams/engine/browser/hooks/use-stream-query.ts";
+} from "~/next/domains/streams/client-libraries/processors/browser-event-feed/implementation.ts";
+import { useStreamQuery } from "~/next/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 
 type FeedItemRow = {
   local_index: number;

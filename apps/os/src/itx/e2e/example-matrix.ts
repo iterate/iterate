@@ -45,6 +45,12 @@ export async function runExampleCode(
 }
 
 const LOADER_CONTENTION_MESSAGE = "Too many concurrent dynamic workers";
+// The engine redacts server-side exceptions to "internal error; reference = …"
+// before they cross Cap'n Web. Mid-suite that shape is overwhelmingly loader
+// isolate saturation (each script execution and inline worker is its own
+// isolate), so treat it as the same retryable transient; a persistent engine
+// bug still fails after the backoff budget.
+const MASKED_INTERNAL_ERROR_MESSAGE = "internal error; reference =";
 const LOADER_CONTENTION_BACKOFF_MS = [2_000, 5_000, 10_000];
 
 async function retryOnWorkerStartupContention<T>(run: () => Promise<T>): Promise<T> {
@@ -53,7 +59,10 @@ async function retryOnWorkerStartupContention<T>(run: () => Promise<T>): Promise
       return await run();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (!message.includes(LOADER_CONTENTION_MESSAGE)) throw error;
+      const retryable =
+        message.includes(LOADER_CONTENTION_MESSAGE) ||
+        message.includes(MASKED_INTERNAL_ERROR_MESSAGE);
+      if (!retryable) throw error;
       await new Promise((resolve) => setTimeout(resolve, backoffMs));
     }
   }

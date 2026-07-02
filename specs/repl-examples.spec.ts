@@ -18,7 +18,8 @@ test.describe("itx REPL catalogue examples", () => {
     test(`runs "${example.id}" through the project REPL`, async ({ helpers, page }) => {
       await using fixture = await helpers.createFixture(`repl-${example.id}`);
       await page.goto(`/projects/${fixture.project.slug}/repl`);
-      await page.getByRole("button", { name: "Run" }).waitFor();
+      // exact: the project slug can contain "run", which substring-matches sidebar buttons
+      await page.getByRole("button", { name: "Run", exact: true }).waitFor();
       page.videoMode?.setStartTime(); // start video from now
       await page.getByTestId("itx-repl-editor").locator(".cm-content").waitFor();
 
@@ -39,7 +40,7 @@ test.describe("itx REPL catalogue examples", () => {
       const editor = page.getByTestId("itx-repl-editor").locator(".cm-content");
       await editor.fill(code);
 
-      await page.getByRole("button", { name: "Run" }).click();
+      await page.getByRole("button", { name: "Run", exact: true }).click();
 
       const entry = page.locator(`[data-entry-index="${entryIndex}"][data-status="success"]`);
       await entry.waitFor();

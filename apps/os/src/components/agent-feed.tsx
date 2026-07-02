@@ -20,9 +20,9 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/u
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { cn } from "@iterate-com/ui/lib/utils";
-import { AGENT_UI_FEED_TABLE } from "~/domains/streams/browser-processors/agent-ui-processor.ts";
-import { useStreamQuery } from "~/domains/streams/engine/browser/hooks/use-stream-query.ts";
-import type { StreamBrowserDatabase } from "~/domains/streams/engine/browser/stream-browser-db.ts";
+import { AGENT_UI_FEED_TABLE } from "~/next/domains/streams/client-libraries/processors/agent-ui-processor.ts";
+import { useStreamQuery } from "~/next/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
+import type { StreamBrowserDatabase } from "~/next/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import { useVirtualizedTailScroll } from "~/lib/use-virtualized-tail-scroll.ts";
 
 /**
@@ -216,7 +216,12 @@ function AgentFeedItemRow({
   if (item.kind !== "activity") {
     if (item.kind === "user") {
       return (
-        <Message from="user" className="pb-2 pt-3.5">
+        <Message
+          from="user"
+          className="pb-2 pt-3.5"
+          data-testid="agent-feed-message"
+          data-kind="user"
+        >
           <MessageContent className="group-[.is-user]:rounded-2xl">
             <div className="whitespace-pre-wrap leading-6">{item.text}</div>
           </MessageContent>
@@ -224,7 +229,12 @@ function AgentFeedItemRow({
       );
     }
     return (
-      <Message from="assistant" className="py-2">
+      <Message
+        from="assistant"
+        className="py-2"
+        data-testid="agent-feed-message"
+        data-kind="assistant"
+      >
         <MessageContent>
           <MessageResponse className="min-w-0 max-w-full overflow-hidden">
             {item.text}

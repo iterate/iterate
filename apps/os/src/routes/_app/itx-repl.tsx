@@ -1,7 +1,9 @@
 // The browser itx REPL: a Cap'n Web session straight from the browser tab to
-// /api/itx, with `itx` in scope. Because itx is symmetric, anything you can
-// do here you can do from Node, a worker cap, or the project worker — and the
-// browser can PROVIDE live capabilities too (see the examples).
+// the next engine (/api/itx-next), with `itx` in scope — the Session catalog
+// in the global/admin REPL, the project itx in a project REPL. Because itx is
+// symmetric, anything you can do here you can do from Node, runScript, or a
+// dynamic worker — and the browser can PROVIDE live capabilities too (see the
+// examples).
 //
 // The REPL rides the ONE browser itx primitive — useItx (~/itx/itx-react.tsx).
 // It does NOT open its own socket: the global repl shares the tab's global
@@ -12,7 +14,6 @@
 
 import { Suspense, useEffect, useRef, useState } from "react";
 import { ClientOnly, createFileRoute } from "@tanstack/react-router";
-import type { RpcStub } from "capnweb";
 import {
   createBrowserReplScope,
   DEFAULT_BROWSER_REPL_CODE,
@@ -20,8 +21,7 @@ import {
   type BrowserReplEntry,
 } from "~/itx/browser-repl.ts";
 import { ITX_EXAMPLES } from "~/itx/examples.ts";
-import type { ItxHandle } from "~/itx/handle.ts";
-import { useItx } from "~/itx/itx-react.tsx";
+import { useItx, type ItxReactHandle } from "~/itx/itx-react.tsx";
 import { ItxRepl } from "~/components/itx-repl.tsx";
 
 export const Route = createFileRoute("/_app/itx-repl")({
@@ -98,7 +98,7 @@ function ItxReplPage({
   initialCode = DEFAULT_BROWSER_REPL_CODE,
   scope,
 }: {
-  itx: RpcStub<ItxHandle>;
+  itx: ItxReactHandle;
   context?: "global" | "project";
   initialCode?: string;
   scope?: Record<string, unknown>;
@@ -115,7 +115,7 @@ function ItxReplPage({
   // binds/clears a reference — it never disposes `itx` or closes the socket
   // (the pool owns that). A fresh stub after a pool reconnect rebinds here.
   useEffect(() => {
-    const globals = globalThis as typeof globalThis & { itx?: RpcStub<ItxHandle> };
+    const globals = globalThis as typeof globalThis & { itx?: ItxReactHandle };
     globals.itx = itx;
     return () => {
       if (globals.itx === itx) delete globals.itx;

@@ -1,11 +1,44 @@
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
 import { newWorkersRpcResponse } from "capnweb";
-import { env } from "cloudflare:workers";
-import { parseStreamRpcRequest, streamDurableObjectName } from "./lib/stream-rpc.ts";
-import { PublicStreamRpcTarget } from "~/domains/streams/engine/workers/durable-objects/stream.ts";
+import { parseStreamRpcRequest } from "./lib/stream-rpc.ts";
+import { trustedInternalAuthContext } from "~/next/auth.ts";
+import { StreamRpcTarget } from "~/next/rpc-targets.ts";
+import { resolveStreamPath } from "~/next/domains/streams/utils.ts";
+import type { Stream } from "~/next/types.ts";
 
-export { Stream } from "~/domains/streams/engine/workers/durable-objects/stream.ts";
-export { StreamProcessorRunner } from "~/domains/streams/engine/workers/test-support/stream-processor-runner.ts";
+export { StreamDurableObject } from "~/next/domains/streams/stream-durable-object.ts";
+
+/**
+ * The capnweb surface this playground serves at `/api/streams`.
+ *
+ * It wraps the next engine's `StreamRpcTarget` with `trustedInternalAuthContext()`:
+ * the example app is an AUTH-LESS playground, so every caller gets the
+ * trusted-internal (admin) authority instead of walking through the real
+ * deployment's `UnauthenticatedItx.authenticate()` door.
+ *
+ * `kill()`/`reset()` are playground-only operator verbs on top of the public
+ * `Stream` capability — the sidebar's restart/reset experiments need them, and
+ * the next engine deliberately keeps them off the public contract.
+ */
+class PlaygroundStreamRpcTarget extends StreamRpcTarget {
+  override at(path: Parameters<Stream["at"]>[0]) {
+    return new PlaygroundStreamRpcTarget({
+      auth: this.props.auth,
+      projectId: this.props.projectId,
+      path: resolveStreamPath(this.props.path, path),
+    });
+  }
+
+  /** Abort the stream DO; the durable log is kept and a woken event is appended on restart. */
+  kill() {
+    return this.durableObjectStub.kill();
+  }
+
+  /** Wipe all stream DO storage, then abort — the next connection starts a fresh stream. */
+  reset() {
+    return this.durableObjectStub.reset();
+  }
+}
 
 export default createServerEntry({
   async fetch(request) {
@@ -15,18 +48,15 @@ export default createServerEntry({
       return new Response("ok", { headers: { "content-type": "text/plain" } });
     }
 
-    if (url.pathname.startsWith("/stream-processor-runner/")) {
-      const name = decodeURIComponent(url.pathname.slice("/stream-processor-runner/".length));
-      return env.STREAM_PROCESSOR_RUNNER.getByName(name).fetch(request);
-    }
-
     if (url.pathname === "/api/streams") {
       const { projectId, path } = parseStreamRpcRequest({ url });
       return newWorkersRpcResponse(
         request,
-        new PublicStreamRpcTarget(
-          env.STREAM.getByName(streamDurableObjectName({ projectId, path })),
-        ),
+        new PlaygroundStreamRpcTarget({
+          auth: trustedInternalAuthContext(),
+          projectId,
+          path,
+        }),
       );
     }
 

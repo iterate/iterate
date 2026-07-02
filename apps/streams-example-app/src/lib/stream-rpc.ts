@@ -42,10 +42,6 @@ export function normalizeStreamPath(args: { path?: string | null }) {
   return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
-export function streamDurableObjectName(args: { projectId: string; path: string }) {
-  return `${args.projectId}:${args.path}`;
-}
-
 /** Parse `/api/streams?path=...&projectId=...` into stream DO identity parts. */
 export function parseStreamRpcRequest(args: { url: URL }) {
   if (args.url.pathname !== "/api/streams") {

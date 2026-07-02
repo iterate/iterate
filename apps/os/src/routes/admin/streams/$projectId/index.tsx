@@ -2,7 +2,6 @@ import { useMemo } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { ArrowLeftIcon, RadioTowerIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
-import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { StreamExplorerTreePage } from "~/components/stream-explorer.tsx";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/domains/durable-object-names.ts";
 import { useItx } from "~/itx/itx-react.tsx";
@@ -16,12 +15,18 @@ function AdminStreamProjectPage() {
   const itx = useItx();
   const navigate = useNavigate();
   const streamProjectId = projectId === NULL_DURABLE_OBJECT_PROJECT_ID ? null : projectId;
+  // Admin pages address arbitrary projects through the global (admin) session:
+  // the deployment-wide stream catalog for the null project, otherwise the
+  // project's own itx via projects.get(id).
   const source = useMemo(
-    () => (streamPath: StreamPathType) => itx.streams.project(streamProjectId).get(streamPath),
+    () => (streamPath: string) =>
+      streamProjectId == null
+        ? itx.streams.get(streamPath)
+        : itx.projects.get(streamProjectId).streams.get(streamPath),
     [itx, streamProjectId],
   );
 
-  function openStream(streamPath: StreamPathType) {
+  function openStream(streamPath: string) {
     void navigate({
       to: "/admin/streams/$projectId/$",
       params: { projectId, _splat: streamPath },

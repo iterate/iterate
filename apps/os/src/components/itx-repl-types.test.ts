@@ -29,7 +29,7 @@ const compilerOptions: ts.CompilerOptions = {
 };
 
 describe("itx REPL TypeScript declarations", () => {
-  test("autocomplete options include itx JSDoc as CodeMirror completion info", async () => {
+  test("autocomplete on the itx handle offers the next-engine surface", async () => {
     const env = createReplTypeScriptEnv("itx.");
     const result = await getAutocompletionWithDocs({
       env,
@@ -37,34 +37,33 @@ describe("itx REPL TypeScript declarations", () => {
       context: { explicit: true, pos: "itx.".length },
     });
 
-    expect(result?.options.find((option) => option.label === "provideCapability")?.info).toContain(
-      "Provide a capability",
-    );
-    expect(result?.options.find((option) => option.label === "describe")?.info).toContain(
-      "Who/what am I holding?",
-    );
-    expect(result?.options.find((option) => option.label === "fetch")?.info).toContain(
-      "explicit project egress",
-    );
+    // The handle is Session & Itx (see the prelude): the Session catalog and
+    // every project built-in must complete.
+    const labels = new Set(result?.options.map((option) => option.label));
+    for (const member of [
+      "describe",
+      "projects",
+      "provideCapability",
+      "repo",
+      "runScript",
+      "secrets",
+      "streams",
+      "whoami",
+      "workers",
+    ]) {
+      expect(labels, `expected completion "${member}"`).toContain(member);
+    }
   });
 
-  test("completion docs come verbatim from the design-of-record ~/itx/types.ts", async () => {
-    const env = createReplTypeScriptEnv("itx.");
-    const result = await getAutocompletionWithDocs({
-      env,
-      path: REPL_SOURCE_PATH,
-      context: { explicit: true, pos: "itx.".length },
-    });
-
-    // These strings exist only in ~/itx/types.ts, never in the REPL prelude:
-    // the provideCapability() doc's runSwiftOnMyMac example and
-    // revokeCapability()'s shadow note.
-    expect(result?.options.find((option) => option.label === "provideCapability")?.info).toContain(
-      "runSwiftOnMyMac",
-    );
-    expect(result?.options.find((option) => option.label === "revokeCapability")?.info).toContain(
-      "cannot be revoked, only",
-    );
+  test("the editor's type surface is the raw next-engine contract, verbatim", () => {
+    // itx-repl-types.ts re-exports ~/next/types.ts?raw as the virtual
+    // filesystem's /itx-types.ts, so completions can never drift from the
+    // design of record. Sentinels prove it's the real file, not a copy of the
+    // removed legacy surface.
+    expect(itxTypesDeclaration).toContain("Public ITX capability contract");
+    expect(itxTypesDeclaration).toContain("export interface Session");
+    expect(itxTypesDeclaration).toContain("export interface Itx extends ItxCapabilityHost");
+    expect(itxTypesDeclaration).not.toContain("ItxHandle");
   });
 
   test("REPL session globals from the prelude type-check in a snippet", () => {
@@ -73,10 +72,15 @@ describe("itx REPL TypeScript declarations", () => {
     const code = [
       'const projectScoped: string = projectId ?? "global";',
       "const target: object = new RpcTarget();",
-      "const fn: ItxFn<StreamEvent[]> = (handle: ItxHandle) =>",
-      '  handle.streams.get({ projectId: projectId ?? null, path: "/chat" }).getEvents();',
-      "const previous: unknown[] = [$_, _, vars.anything];",
-      "[projectScoped, target, fn, previous];",
+      "const read: (handle: Itx) => Promise<StreamEvent[]> = (handle) =>",
+      '  handle.streams.get("/chat").getEvents();',
+      "const recipe: ProvideCapabilityInput = {",
+      '  expression: ["streams", ["get", "/x"]],',
+      '  path: ["alias"],',
+      '  type: "itx-expression",',
+      "};",
+      "const previous: unknown[] = [$_, _, vars.anything, recipe];",
+      "[projectScoped, target, read, previous];",
     ].join("\n");
     const env = createReplTypeScriptEnv(code);
 
@@ -86,26 +90,26 @@ describe("itx REPL TypeScript declarations", () => {
     expect(diagnostics).toEqual([]);
   });
 
-  test("handles returned by itx.projects.get carry the capability fallthrough", async () => {
-    const code = 'const project = await itx.projects.get("demo");\nproject.slack.chat.';
+  test("core next-engine calls type-check against the raw types file", () => {
+    const code = [
+      "const description = await itx.describe();",
+      'const events = await itx.streams.get("/x").append({ type: "demo", payload: { a: 1 } });',
+      "const commit = await itx.repo.commitFiles({",
+      '  changes: [{ content: "hi", path: "notes/hi.md" }],',
+      '  message: "note",',
+      "});",
+      "[description.projectId, events[0]?.offset, commit.commitOid];",
+    ].join("\n");
     const env = createReplTypeScriptEnv(code);
-    const result = await getAutocompletionWithDocs({
-      env,
-      path: REPL_SOURCE_PATH,
-      context: { explicit: true, pos: code.length },
-    });
 
-    // The fallthrough index signature offers no named completions, but the
-    // access itself must type-check: no semantic errors on the snippet.
-    expect(result).not.toBeNull();
     const diagnostics = env.languageService
       .getSemanticDiagnostics(REPL_SOURCE_PATH)
       .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
     expect(diagnostics).toEqual([]);
   });
 
-  test("nested autocomplete options include itx JSDoc as CodeMirror completion info", async () => {
-    const code = 'const project = await itx.projects.get("demo");\nproject.';
+  test("nested autocomplete resolves the Stream capability members", async () => {
+    const code = 'itx.streams.get("/x").';
     const env = createReplTypeScriptEnv(code);
     const result = await getAutocompletionWithDocs({
       env,
@@ -113,9 +117,10 @@ describe("itx REPL TypeScript declarations", () => {
       context: { explicit: true, pos: code.length },
     });
 
-    expect(result?.options.find((option) => option.label === "provideCapability")?.info).toContain(
-      "Provide a capability",
-    );
+    const labels = new Set(result?.options.map((option) => option.label));
+    for (const member of ["append", "getEvents", "subscribe", "waitForEvent"]) {
+      expect(labels, `expected completion "${member}"`).toContain(member);
+    }
   });
 
   test("CodeMirror completion source delegates to the REPL TypeScript worker", async () => {

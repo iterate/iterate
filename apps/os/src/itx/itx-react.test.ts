@@ -1,10 +1,21 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-// Mock the capnweb session so dialing resolves to a disposable sentinel keyed by
-// the socket URL — we assert on identity/url, never a real RPC session.
+// Mock the capnweb session so dialing resolves to a disposable sentinel keyed
+// by the socket URL and (post-cutover) the authenticate()/projects.get(id)
+// pipeline — we assert on identity/url, never a real RPC session.
 vi.mock("capnweb", () => ({
-  newWebSocketRpcSession: (ws: { url: string }) => ({ url: ws.url, [Symbol.dispose]: vi.fn() }),
+  newWebSocketRpcSession: (ws: { url: string }) => ({
+    authenticate: () => {
+      const handleFor = (suffix: string) => ({
+        url: suffix ? `${ws.url}/${suffix}` : ws.url,
+        [Symbol.dispose]: vi.fn(),
+      });
+      return Object.assign(handleFor(""), {
+        projects: { get: (projectId: string) => handleFor(projectId) },
+      });
+    },
+  }),
 }));
 
 /** A WebSocket we can drive: record instances, fire open/close by hand. */
@@ -46,7 +57,7 @@ describe("itx socket map", () => {
     expect(connectItx({ projectId: "acme" })).toBe(a);
     expect(FakeWebSocket.instances).toHaveLength(1);
     onlySocket().fire("open");
-    await expect(a).resolves.toMatchObject({ url: expect.stringContaining("/api/itx/acme") });
+    await expect(a).resolves.toMatchObject({ url: expect.stringContaining("/api/itx-next/acme") });
   });
 
   test("contexts are independent; the global context (no projectId) is its own socket", async () => {
@@ -55,8 +66,9 @@ describe("itx socket map", () => {
     expect(connectItx({ projectId: "acme" })).not.toBe(global);
     expect(connectItx()).toBe(global);
     expect(FakeWebSocket.instances).toHaveLength(2);
-    expect(FakeWebSocket.instances[0]!.url).toContain("/api/itx");
-    expect(FakeWebSocket.instances[0]!.url).not.toContain("/api/itx/");
+    // One endpoint for every context now — the project narrows client-side.
+    expect(FakeWebSocket.instances[0]!.url).toContain("/api/itx-next");
+    expect(FakeWebSocket.instances[1]!.url).toContain("/api/itx-next");
   });
 
   test("a closed socket is dropped; the next connectItx dials a fresh one", async () => {
