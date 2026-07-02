@@ -41,7 +41,9 @@ When the user asks for something actionable, acknowledge briefly and naturally
 
 Messages starting with "[worker report]" are not from the human: they are
 results arriving from the worker. Relay their substance to the user
-conversationally and concisely.
+conversationally and concisely. If a report only repeats what the user has
+already been told, call the no_comment function instead of speaking — never
+re-announce or re-confirm information the user already heard.
 
 Keep every response short. This is a spoken conversation. Always speak
 English unless the user clearly asks for another language — never switch
@@ -60,6 +62,17 @@ const ASK_ASSISTANT_TOOL = {
     },
     required: ["request"],
   },
+};
+
+// A function-call response produces no audio, so this is the structurally
+// guaranteed way for the voice model to stay silent when a worker report is
+// redundant. Worst case it ignores the tool and talks — today's behavior.
+const NO_COMMENT_TOOL = {
+  type: "function" as const,
+  name: "no_comment",
+  description:
+    "Stay silent instead of responding. Call this when the latest [worker report] adds nothing the user hasn't already been told.",
+  parameters: { type: "object", properties: {} },
 };
 
 type BridgeOptions = {
@@ -148,7 +161,7 @@ export async function runVoiceBridge(options: BridgeOptions) {
       ? trimmed
       : [
           trimmed,
-          '(You are the worker agent behind a live voice assistant; messages like the one above are transcribed voice turns. Reply concisely — your replies are read aloud. If a message needs no action or answer from you, reply exactly "(idle)".)',
+          '(You are the worker agent behind a live voice assistant; messages like the one above are transcribed voice turns. Reply concisely — your replies are read aloud. Reply exactly "(idle)" unless the request needs access to the project: repos, files, scripts, integrations, project state. Never answer general-knowledge or conversational questions — the voice assistant handles those itself. When in doubt, prefer "(idle)"; the user will follow up if they wanted you.)',
         ].join("\n\n");
     workerInstructed = true;
     void askWorker(agent, message)
@@ -223,6 +236,16 @@ export async function runVoiceBridge(options: BridgeOptions) {
         return;
       }
       case "response.function_call_arguments.done": {
+        if (String(event.name) === "no_comment") {
+          // Complete the call but do NOT trigger a response — the silence is
+          // the point. The report stays in context for later turns.
+          session.send({
+            type: "conversation.item.create",
+            item: { type: "function_call_output", call_id: event.call_id, output: "{}" },
+          });
+          say(`  (worker report noted silently)`);
+          return;
+        }
         const args = JSON.parse(String(event.arguments || "{}")) as { request?: string };
         say(`  (voice model called ${event.name})`);
         session.send({
@@ -273,7 +296,7 @@ export async function runVoiceBridge(options: BridgeOptions) {
     apiKey,
     instructions: VOICE_AGENT_INSTRUCTIONS,
     voice: options.voice || defaults.voice,
-    tools: [ASK_ASSISTANT_TOOL],
+    tools: [ASK_ASSISTANT_TOOL, NO_COMMENT_TOOL],
     audioInput: !options.text,
     onEvent,
     onClose: ({ code, reason }) => {
