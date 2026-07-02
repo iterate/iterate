@@ -1,7 +1,6 @@
 #!/usr/bin/env npx tsx
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { createAdminOsItx } from "./test-support/os-client.ts";
 
 const DEFAULT_BASE_URL = "https://os.iterate-preview-2.com";
