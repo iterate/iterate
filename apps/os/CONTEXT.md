@@ -583,21 +583,20 @@ _Avoid_: Project MCP route, inbound MCP
 - The **Project Ingress Entry Point** class/export name is `ProjectIngressEntrypoint`.
 - The **Project Ingress Entry Point** takes only a stable **Project ID** prop in v1, resolves the Project Durable Object stub by using that **Project ID** as the Durable Object name, and delegates the request to the Project Durable Object's ingress RPC.
 - The **Project Ingress Entry Point** does not accept **Project Slug** props in v1; slug-to-ID resolution happens before a request reaches hot ingress.
-- **Project Egress** is future work. Until it is implemented, itx Script
-  `fetch(...)` and `itx.fetch(...)` calls go through the default **itx Fetch
-  Capability**.
-- The old Project Egress intercept route is deleted; egress interception is a live `fetch` capability shadow on the project's itx context, session-bound and scoped to exactly one **Project**.
-- A live `fetch` shadow dispatches BEFORE the default egress pipe, so it sees `getSecret(...)` references unsubstituted; without a shadow, Project Egress header Secret references are replaced with raw **Secret Material** before public fetch.
-- Project-scoped Secret CRUD goes through the **D1-backed Secrets Capability**;
-  UI and script callers must not reimplement Secret storage behavior directly.
+- **Project Egress** is implemented as the project-owned outbound door.
+  Explicit `itx.egress.fetch(...)` calls and dynamic-worker bare `fetch(...)`
+  both route through the **Project Durable Object**.
+- A live Project Egress interceptor dispatches before Secret substitution, so
+  it sees `getSecret(...)` references unsubstituted. Without an interceptor,
+  Project Egress replaces allowed header Secret references before public fetch.
+- Project-scoped Secret CRUD goes through path-addressed **Secret Durable
+  Objects**. UI and script callers must not reimplement Secret storage
+  behavior directly.
 - Project-scoped Secret reads return redacted Secret summaries and metadata,
   not raw Secret material.
-- The first Project Egress Secret Injection proof also resolves Secret material through the **D1-backed Secrets Capability**; Secret Durable Objects are not in the immediate substitution path.
-- A **Project Secret** has a stable **Secret ID** for management routes and CRUD reads/removals.
-- A **Project Secret** has one **Secret Key** that is unique within its **Project**.
-- **Secret Keys** are arbitrary strings and are not required to be URL-safe.
-- Upserting a **Project Secret** by **Secret Key** preserves the existing **Secret ID** when that key already exists in the Project.
-- **Secret References** resolve by **Secret Key**, such as `getSecret({ key: "openai-api-key" })`.
+- A **Project Secret** is addressed by a normalized path under `/secrets/`.
+- **Secret References** resolve by path, such as
+  `getSecret({ path: "/secrets/openai-api-key" })`.
 - The app worker's **OS MCP Handler** owns MCP protocol paths, OAuth
   protected-resource metadata paths, and 404s for unsupported paths below
   `/api/mcp`.

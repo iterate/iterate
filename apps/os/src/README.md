@@ -90,6 +90,19 @@ and only then emits `events.iterate.com/project/created`. Streams are the
 coordination layer for all of this — bootstrap is events and processors, not a
 setup RPC.
 
+## Events
+
+Event types are past-tense facts under `events.iterate.com/...`; the repo-wide
+rules are in [`docs/events.md`](../../../docs/events.md). In this engine,
+contracts declare event schemas and reducers in `*-processor-contract.ts`, and
+implementations put side effects in `*-processor-implementation.ts`.
+
+Streams keep raw ingress facts where that matters for audit and replay. For
+example, Slack webhook delivery appends
+`events.iterate.com/slack/webhook-received` to `/integrations/slack`, and the
+Slack processors route or project that fact into agent-facing behavior without
+mutating the original payload.
+
 ## Capabilities
 
 Built-ins are explicit members of the `Itx` interface (`streams`, `repos`,
