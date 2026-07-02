@@ -1,4 +1,4 @@
-/** @name getOAuthProjectSelectionBySessionAndClient */
+/** @name getFreshOAuthProjectSelectionBySessionId */
 SELECT session_id AS sessionId,
   client_id AS clientId,
   user_id AS userId,
@@ -7,18 +7,7 @@ SELECT session_id AS sessionId,
   updated_at AS updatedAt
 FROM oauthProjectSelection
 WHERE session_id = :sessionId
-  AND client_id = :clientId
-LIMIT 1;
-
-/** @name getLatestOAuthProjectSelectionByUserId */
-SELECT session_id AS sessionId,
-  client_id AS clientId,
-  user_id AS userId,
-  project_ids AS projectIds,
-  created_at AS createdAt,
-  updated_at AS updatedAt
-FROM oauthProjectSelection
-WHERE user_id = :userId
+  AND updated_at > :minUpdatedAt
 ORDER BY updated_at DESC
 LIMIT 1;
 
@@ -50,6 +39,6 @@ RETURNING session_id AS sessionId,
   created_at AS createdAt,
   updated_at AS updatedAt;
 
-/** @name deleteOAuthProjectSelectionsByUserId */
+/** @name deleteStaleOAuthProjectSelections */
 DELETE FROM oauthProjectSelection
-WHERE user_id = :userId;
+WHERE updated_at <= :maxUpdatedAt;

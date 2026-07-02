@@ -1,6 +1,6 @@
 import { ITERATE_PROJECT_SCOPE_PREFIX } from "@iterate-com/shared/auth-claims";
 import { parseStringArray } from "./db/helpers.ts";
-import { getLatestOAuthProjectSelectionByUserId } from "./db/queries/.generated/index.ts";
+import { getFreshOAuthProjectSelectionBySessionId } from "./db/queries/.generated/index.ts";
 import { db } from "./db/index.ts";
 
 // Project-scoped tokens: when a client requests the `project` scope, the user
@@ -14,22 +14,34 @@ import { db } from "./db/index.ts";
 //   2. postLogin.consentReferenceId reads that row and encodes
 //      { userId, projectIds } into the consent flow's opaque referenceId
 //      (build/parse helpers below).
-//   3. customAccessTokenClaims decodes the referenceId, deletes the stored
-//      rows (it's a one-shot handoff, not durable state), and narrows the
+//   3. customAccessTokenClaims decodes the referenceId and narrows the
 //      token's `projects` claim + `project:<id>` scope entries to the
 //      selection.
 //
 // Refreshed tokens re-enter step 3 with the referenceId preserved by
 // better-auth, so the narrowing sticks for the lifetime of the grant.
+//
+// Stored rows are a short-lived handoff, not durable per-user state: the
+// oauth-provider does not run customAccessTokenClaims when minting opaque
+// tokens (claims are reconstructed at introspection), so there is no reliable
+// mint-time hook to consume the row, and consentReferenceId is invoked up to
+// three times per flow so delete-on-read would break the flow. Instead
+// lookups are scoped to the auth browser session and ignore rows older than
+// the authorization flow could plausibly last — a later connection from a new
+// client goes back through /project-access.
 const OAUTH_PROJECT_SELECTION_REFERENCE_PREFIX = "iterate-project-selection-v1";
+export const OAUTH_PROJECT_SELECTION_MAX_AGE_MS = 10 * 60 * 1000;
 
-export async function resolveStoredProjectSelection(params: { userId: string | null | undefined }) {
-  if (!params.userId) {
+export async function resolveStoredProjectSelection(params: {
+  sessionId: string | null | undefined;
+}) {
+  if (!params.sessionId) {
     return null;
   }
 
-  const selection = await getLatestOAuthProjectSelectionByUserId(db, {
-    userId: params.userId,
+  const selection = await getFreshOAuthProjectSelectionBySessionId(db, {
+    sessionId: params.sessionId,
+    minUpdatedAt: Date.now() - OAUTH_PROJECT_SELECTION_MAX_AGE_MS,
   });
   if (!selection) {
     return null;

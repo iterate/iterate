@@ -1,10 +1,12 @@
 import { ORPCError } from "@orpc/server";
 import { os, protectedMiddleware } from "../orpc.ts";
 import {
+  deleteStaleOAuthProjectSelections,
   listOrganizationsForUser,
   listProjectsByOrganizationId,
   upsertOAuthProjectSelectionReturning,
 } from "../../db/queries/index.ts";
+import { OAUTH_PROJECT_SELECTION_MAX_AGE_MS } from "../../oauth-project-selection.ts";
 import { toMembershipRole, toUserRecord } from "./_shared.ts";
 
 const me = os.user.me.handler(async ({ context }) => {
@@ -61,6 +63,11 @@ const storeOAuthProjectSelection = os.user.storeOAuthProjectSelection
     }
 
     const now = Date.now();
+    // Selections outside the lookup freshness window are dead rows; sweep
+    // them opportunistically since nothing else consumes them.
+    await deleteStaleOAuthProjectSelections(context.db, {
+      maxUpdatedAt: now - OAUTH_PROJECT_SELECTION_MAX_AGE_MS,
+    });
     await upsertOAuthProjectSelectionReturning(context.db, {
       sessionId: context.session.session.id,
       clientId: input.clientId,

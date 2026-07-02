@@ -15,7 +15,6 @@ import {
 } from "@iterate-com/shared/auth-claims";
 import { betterAuth } from "better-auth";
 import {
-  deleteOAuthProjectSelectionsByUserId,
   getSessionActiveOrganizationIdById,
   listOrganizationsForUser,
   listProjectsForUser,
@@ -169,12 +168,12 @@ export function getAuthPlugins(env: Record<string, unknown>) {
             return false;
           }
 
-          const selection = await resolveStoredProjectSelection({ userId: session?.userId });
+          const selection = await resolveStoredProjectSelection({ sessionId: session?.id });
 
           return !selection;
         },
         consentReferenceId: async ({ session }) => {
-          const selection = await resolveStoredProjectSelection({ userId: session?.userId });
+          const selection = await resolveStoredProjectSelection({ sessionId: session?.id });
           if (!selection || !session?.userId) {
             return undefined;
           }
@@ -196,10 +195,6 @@ export function getAuthPlugins(env: Record<string, unknown>) {
       allowUnauthenticatedClientRegistration: true,
       customAccessTokenClaims: async ({ user, referenceId, scopes }) => {
         const selection = parseOAuthProjectSelectionReferenceId(referenceId);
-        if (selection?.userId) {
-          await deleteOAuthProjectSelectionsByUserId(db, { userId: selection.userId });
-        }
-
         const isProjectScopedToken = scopes.includes(ITERATE_PROJECT_SELECTION_SCOPE);
         const selectedProjectIds = isProjectScopedToken ? (selection?.projectIds ?? []) : null;
         const [organizations, projects] = await Promise.all([

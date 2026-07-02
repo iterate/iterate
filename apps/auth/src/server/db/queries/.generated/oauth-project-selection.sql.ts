@@ -1,6 +1,6 @@
 import type { Client } from "sqlfu";
 
-const getOAuthProjectSelectionBySessionAndClientSql = `
+const getFreshOAuthProjectSelectionBySessionIdSql = `
 SELECT session_id AS sessionId,
   client_id AS clientId,
   user_id AS userId,
@@ -9,87 +9,38 @@ SELECT session_id AS sessionId,
   updated_at AS updatedAt
 FROM oauthProjectSelection
 WHERE session_id = ?
-  AND client_id = ?
-LIMIT 1;
-`.trim();
-const getOAuthProjectSelectionBySessionAndClientQuery = (
-  params: getOAuthProjectSelectionBySessionAndClient.Params,
-) => ({
-  name: "getOAuthProjectSelectionBySessionAndClient",
-  sql: getOAuthProjectSelectionBySessionAndClientSql,
-  args: [params.sessionId, params.clientId],
-});
-
-export const getOAuthProjectSelectionBySessionAndClient = Object.assign(
-  async function getOAuthProjectSelectionBySessionAndClient(
-    client: Client,
-    params: getOAuthProjectSelectionBySessionAndClient.Params,
-  ): Promise<getOAuthProjectSelectionBySessionAndClient.Result | null> {
-    const rows = await client.all<getOAuthProjectSelectionBySessionAndClient.Result>(
-      getOAuthProjectSelectionBySessionAndClientQuery(params),
-    );
-    return rows.length > 0 ? rows[0] : null;
-  },
-  {
-    sql: getOAuthProjectSelectionBySessionAndClientSql,
-    query: getOAuthProjectSelectionBySessionAndClientQuery,
-  },
-);
-
-export namespace getOAuthProjectSelectionBySessionAndClient {
-  export type Params = {
-    sessionId: string;
-    clientId: string;
-  };
-  export type Result = {
-    sessionId: string;
-    clientId: string;
-    userId: string;
-    projectIds: string;
-    createdAt: number;
-    updatedAt: number;
-  };
-}
-
-const getLatestOAuthProjectSelectionByUserIdSql = `
-SELECT session_id AS sessionId,
-  client_id AS clientId,
-  user_id AS userId,
-  project_ids AS projectIds,
-  created_at AS createdAt,
-  updated_at AS updatedAt
-FROM oauthProjectSelection
-WHERE user_id = ?
+  AND updated_at > ?
 ORDER BY updated_at DESC
 LIMIT 1;
 `.trim();
-const getLatestOAuthProjectSelectionByUserIdQuery = (
-  params: getLatestOAuthProjectSelectionByUserId.Params,
+const getFreshOAuthProjectSelectionBySessionIdQuery = (
+  params: getFreshOAuthProjectSelectionBySessionId.Params,
 ) => ({
-  name: "getLatestOAuthProjectSelectionByUserId",
-  sql: getLatestOAuthProjectSelectionByUserIdSql,
-  args: [params.userId],
+  name: "getFreshOAuthProjectSelectionBySessionId",
+  sql: getFreshOAuthProjectSelectionBySessionIdSql,
+  args: [params.sessionId, params.minUpdatedAt],
 });
 
-export const getLatestOAuthProjectSelectionByUserId = Object.assign(
-  async function getLatestOAuthProjectSelectionByUserId(
+export const getFreshOAuthProjectSelectionBySessionId = Object.assign(
+  async function getFreshOAuthProjectSelectionBySessionId(
     client: Client,
-    params: getLatestOAuthProjectSelectionByUserId.Params,
-  ): Promise<getLatestOAuthProjectSelectionByUserId.Result | null> {
-    const rows = await client.all<getLatestOAuthProjectSelectionByUserId.Result>(
-      getLatestOAuthProjectSelectionByUserIdQuery(params),
+    params: getFreshOAuthProjectSelectionBySessionId.Params,
+  ): Promise<getFreshOAuthProjectSelectionBySessionId.Result | null> {
+    const rows = await client.all<getFreshOAuthProjectSelectionBySessionId.Result>(
+      getFreshOAuthProjectSelectionBySessionIdQuery(params),
     );
     return rows.length > 0 ? rows[0] : null;
   },
   {
-    sql: getLatestOAuthProjectSelectionByUserIdSql,
-    query: getLatestOAuthProjectSelectionByUserIdQuery,
+    sql: getFreshOAuthProjectSelectionBySessionIdSql,
+    query: getFreshOAuthProjectSelectionBySessionIdQuery,
   },
 );
 
-export namespace getLatestOAuthProjectSelectionByUserId {
+export namespace getFreshOAuthProjectSelectionBySessionId {
   export type Params = {
-    userId: string;
+    sessionId: string;
+    minUpdatedAt: number;
   };
   export type Result = {
     sessionId: string;
@@ -179,33 +130,30 @@ export namespace upsertOAuthProjectSelectionReturning {
   };
 }
 
-const deleteOAuthProjectSelectionsByUserIdSql = `
+const deleteStaleOAuthProjectSelectionsSql = `
 DELETE FROM oauthProjectSelection
-WHERE user_id = ?;
+WHERE updated_at <= ?;
 `.trim();
-const deleteOAuthProjectSelectionsByUserIdQuery = (
-  params: deleteOAuthProjectSelectionsByUserId.Params,
+const deleteStaleOAuthProjectSelectionsQuery = (
+  params: deleteStaleOAuthProjectSelections.Params,
 ) => ({
-  name: "deleteOAuthProjectSelectionsByUserId",
-  sql: deleteOAuthProjectSelectionsByUserIdSql,
-  args: [params.userId],
+  name: "deleteStaleOAuthProjectSelections",
+  sql: deleteStaleOAuthProjectSelectionsSql,
+  args: [params.maxUpdatedAt],
 });
 
-export const deleteOAuthProjectSelectionsByUserId = Object.assign(
-  async function deleteOAuthProjectSelectionsByUserId(
+export const deleteStaleOAuthProjectSelections = Object.assign(
+  async function deleteStaleOAuthProjectSelections(
     client: Client,
-    params: deleteOAuthProjectSelectionsByUserId.Params,
+    params: deleteStaleOAuthProjectSelections.Params,
   ) {
-    return client.run(deleteOAuthProjectSelectionsByUserIdQuery(params));
+    return client.run(deleteStaleOAuthProjectSelectionsQuery(params));
   },
-  {
-    sql: deleteOAuthProjectSelectionsByUserIdSql,
-    query: deleteOAuthProjectSelectionsByUserIdQuery,
-  },
+  { sql: deleteStaleOAuthProjectSelectionsSql, query: deleteStaleOAuthProjectSelectionsQuery },
 );
 
-export namespace deleteOAuthProjectSelectionsByUserId {
+export namespace deleteStaleOAuthProjectSelections {
   export type Params = {
-    userId: string;
+    maxUpdatedAt: number;
   };
 }
