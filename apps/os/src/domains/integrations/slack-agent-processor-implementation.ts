@@ -112,9 +112,10 @@ export class SlackAgentProcessor extends StreamProcessor<
 
         const slackEvent = parsed.data.event;
         const target = slackAgentTargetFromWebhookPayload(event.payload);
+        const botUserId = state.botUserId ?? botUserIdFromPayload(event.payload);
         const botBotId = state.botBotId ?? botBotIdFromPayload(event.payload);
-        if (isOwnBotMessage(slackEvent, botBotId)) return;
-        if (isBotAction(slackEvent, state.botUserId)) return;
+        if (isOwnBotMessage(slackEvent, { botBotId, botUserId })) return;
+        if (isBotAction(slackEvent, botUserId)) return;
         if (readStringField(slackEvent, "type") !== "message") {
           blockProcessorWhile(async () => {
             await appendAgentInput({
@@ -238,16 +239,25 @@ function isBotMessage(slackEvent: Record<string, unknown>): boolean {
   return false;
 }
 
-// Returns true only when the message came from our own bot (same bot_id as the
-// authorized app). Falls back to blocking all bots when our bot_id is unknown.
+// Returns true only when the message came from our own bot. Slack's
+// `authorizations` payload often carries the authorized bot `user_id` without a
+// `bot_id`, so fall back to comparing the message's bot user identity before
+// considering other bot messages safe to forward.
 function isOwnBotMessage(
   slackEvent: Record<string, unknown>,
-  botBotId: string | undefined,
+  identity: { botBotId: string | undefined; botUserId: string | undefined },
 ): boolean {
-  if (botBotId == null) return isBotMessage(slackEvent);
+  if (!isBotMessage(slackEvent)) return false;
+
   const msgBotId = readStringField(slackEvent, "bot_id");
-  if (msgBotId == null) return false;
-  return msgBotId === botBotId;
+  if (identity.botBotId != null && msgBotId != null) return msgBotId === identity.botBotId;
+
+  const msgUserId =
+    readStringField(slackEvent, "user") ??
+    readStringField(readRecordField(slackEvent, "bot_profile"), "user_id");
+  if (identity.botUserId != null && msgUserId != null) return msgUserId === identity.botUserId;
+
+  return identity.botBotId == null && identity.botUserId == null;
 }
 
 /**

@@ -718,6 +718,63 @@ describe("SlackAgentProcessor", () => {
     // Bot-authored messages never get the eyes reaction, even when forwarded.
     expect(slackCalls.filter((call) => call.method === "reactions.add")).toHaveLength(0);
   });
+
+  it("forwards other bot messages when Slack authorizations omit bot_id", async () => {
+    const { cursors, processor, slackCalls, stream } = setup();
+
+    const payload = humanMessageWebhookPayload({ text: "<@UBOT> !debug" });
+    delete (payload.body.authorizations[0] as Record<string, unknown>).bot_id;
+    const event = payload.body.event as Record<string, unknown>;
+    event.subtype = "bot_message";
+    event.bot_id = "BOTHERBOT";
+    event.user = "UOTHERBOT";
+    event.bot_profile = { id: "BOTHERBOT", user_id: "UOTHERBOT" };
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload,
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    const scripts = stream.events.filter(
+      (streamEvent) => streamEvent.type === "events.iterate.com/itx/script-execution-requested",
+    );
+    expect(scripts).toHaveLength(1);
+    expect((scripts[0]!.payload as { code: string }).code).toContain(
+      "const debug = await itx.describe();",
+    );
+    expect(slackCalls.filter((call) => call.method === "reactions.add")).toHaveLength(0);
+  });
+
+  it("ignores our own bot messages when Slack authorizations omit bot_id", async () => {
+    const { cursors, processor, slackCalls, stream } = setup();
+
+    const payload = humanMessageWebhookPayload({ text: "<@UBOT> !debug" });
+    delete (payload.body.authorizations[0] as Record<string, unknown>).bot_id;
+    const event = payload.body.event as Record<string, unknown>;
+    event.subtype = "bot_message";
+    event.bot_id = "BBOT";
+    event.user = "UBOT";
+    event.bot_profile = { id: "BBOT", user_id: "UBOT" };
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload,
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    expect(
+      stream.events.filter((streamEvent) => {
+        return streamEvent.type === "events.iterate.com/itx/script-execution-requested";
+      }),
+    ).toHaveLength(0);
+    expect(
+      stream.events.filter(
+        (streamEvent) => streamEvent.type === "events.iterate.com/agent/input-added",
+      ),
+    ).toHaveLength(0);
+    expect(slackCalls).toHaveLength(0);
+  });
 });
 
 describe("eyesReactionTargetFromWebhookPayload", () => {
