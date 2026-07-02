@@ -7,10 +7,10 @@ import {
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { FolderPlus } from "lucide-react";
 import { useAuthClient } from "@iterate-com/auth/client";
+import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { toast } from "@iterate-com/ui/components/sonner";
-import type { ReactNode } from "react";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import {
@@ -70,17 +70,7 @@ function ProjectsIndexPage() {
     staleTime: myProjectsStaleTime,
   });
   const projects = list.data?.projects ?? [];
-
-  // The scoped oRPC list intentionally merges two sources:
-  // - OS D1 rows for projects that exist in this deployment.
-  // - Auth-session project claims when auth still knows about a project but this
-  //   OS worker database does not. That happens in preview/dev when we delete or
-  //   recreate the OS database but leave the auth worker database intact. Showing
-  //   those auth-only rows separately lets us recover the exact auth-owned
-  //   project IDs and slugs without inventing random fallback slugs.
-  const osProjects = projects.filter((project) => !project.isOrphanedProjectFromAuthService);
-  const recoveredProjects = projects.filter((project) => project.isOrphanedProjectFromAuthService);
-  const hasProjects = osProjects.length > 0 || recoveredProjects.length > 0;
+  const hasProjects = projects.length > 0;
 
   const deleteProject = useMutation({
     mutationFn: async (input: { id: string }) => {
@@ -92,6 +82,10 @@ function ProjectsIndexPage() {
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });
 
+  // "Set up" for a project the auth worker knows about but this deployment's
+  // engine does not: re-run the create with the claim's exact id and slug. The
+  // auth side is idempotent (createForOrganization returns the existing row),
+  // then the engine bootstrap saga runs.
   const recoverProject = useMutation({
     mutationFn: async (project: Project) => {
       const organizationSlug = project.organizationId
@@ -108,7 +102,7 @@ function ProjectsIndexPage() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: myProjectsQueryKey });
       reconnectItx();
-      toast.success("Project recovered");
+      toast.success("Project set up");
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });
@@ -117,9 +111,9 @@ function ProjectsIndexPage() {
     <section className="space-y-5 p-4">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="space-y-1">
-          <h2 className="text-sm font-semibold">Projects</h2>
+          <h2 className="text-sm font-semibold">Your projects</h2>
           <p className="text-sm text-muted-foreground">
-            Create and manage projects in this OS deployment.
+            Projects you can access, and whether they exist in this deployment.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -170,93 +164,43 @@ function ProjectsIndexPage() {
           </div>
         </div>
       ) : (
-        <>
-          <ProjectTableSection
-            title="Projects in this OS deployment"
-            description="These projects exist in this OS worker database and are present in your auth session."
-          >
-            {osProjects.length === 0 ? (
-              <EmptyTableMessage>
-                No OS-backed projects are available in this deployment.
-              </EmptyTableMessage>
-            ) : (
-              <OsProjectsTable
-                projects={osProjects}
-                organizations={organizations}
-                projectHostnameBases={routeConfig.projectHostnameBases}
-                deleteProject={deleteProject}
-              />
-            )}
-          </ProjectTableSection>
-
-          <ProjectTableSection
-            title="Recovered from auth session"
-            description="These projects are present in your auth session but do not exist in this OS worker deployment."
-          >
-            {recoveredProjects.length === 0 ? (
-              <EmptyTableMessage>No auth-only projects need recovery.</EmptyTableMessage>
-            ) : (
-              <RecoveredProjectsTable
-                projects={recoveredProjects}
-                organizations={organizations}
-                recoverProject={recoverProject}
-              />
-            )}
-          </ProjectTableSection>
-        </>
+        <ProjectsTable
+          projects={projects}
+          organizations={organizations}
+          projectHostnameBases={routeConfig.projectHostnameBases}
+          deleteProject={deleteProject}
+          recoverProject={recoverProject}
+        />
       )}
     </section>
   );
 }
 
-function ProjectTableSection({
-  children,
-  description,
-  title,
-}: {
-  children: ReactNode;
-  description: string;
-  title: string;
-}) {
-  return (
-    <section className="space-y-2">
-      <div className="space-y-1">
-        <h3 className="text-sm font-medium">{title}</h3>
-        <p className="text-xs text-muted-foreground">{description}</p>
-      </div>
-      {children}
-    </section>
-  );
-}
+const PROJECT_ROW_GRID =
+  "grid min-w-[980px] grid-cols-[240px_220px_minmax(220px,1fr)_220px_200px] items-start gap-3 px-3";
 
-function EmptyTableMessage({ children }: { children: ReactNode }) {
-  return (
-    <div className="rounded-lg border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
-      {children}
-    </div>
-  );
-}
-
-function OsProjectsTable({
+function ProjectsTable({
   deleteProject,
   organizations,
   projectHostnameBases,
   projects,
+  recoverProject,
 }: {
   deleteProject: UseMutationResult<unknown, Error, { id: string }>;
   organizations: OrganizationSummary[];
   projectHostnameBases: readonly string[];
   projects: Project[];
+  recoverProject: UseMutationResult<unknown, Error, Project>;
 }) {
   return (
     <div className="overflow-x-auto rounded-lg border">
-      <div className="grid min-w-[1040px] grid-cols-[220px_160px_220px_180px_minmax(220px,1fr)_190px_96px] border-b bg-muted/40 px-3 py-2 text-xs font-medium text-muted-foreground">
-        <div>ID</div>
-        <div>Slug</div>
+      <div
+        className={`${PROJECT_ROW_GRID} border-b bg-muted/40 py-2 text-xs font-medium text-muted-foreground`}
+      >
+        <div>Project</div>
         <div>Organization</div>
-        <div>Custom hostname</div>
         <div>Hostname</div>
-        <div>Created</div>
+        <div>Status</div>
         <div />
       </div>
       {projects.map((project) => {
@@ -269,14 +213,10 @@ function OsProjectsTable({
         return (
           <div
             key={project.id}
-            className="grid min-w-[1040px] grid-cols-[220px_160px_220px_180px_minmax(220px,1fr)_190px_96px] items-start gap-3 border-b px-3 py-3 text-sm last:border-b-0"
+            className={`${PROJECT_ROW_GRID} border-b py-3 text-sm last:border-b-0`}
           >
-            <Identifier value={project.id} textClassName="text-xs text-muted-foreground" />
-            <ProjectSlugCell project={project} />
+            <ProjectNameCell project={project} />
             <ProjectOrganizationCell project={project} organizations={organizations} />
-            <div className="truncate text-xs text-muted-foreground">
-              {project.customHostname ?? "None"}
-            </div>
             <div className="truncate text-xs">
               {hostname ? (
                 <a
@@ -291,17 +231,12 @@ function OsProjectsTable({
                 <span className="text-muted-foreground">-</span>
               )}
             </div>
-            <div className="text-xs text-muted-foreground">{project.createdAt ?? "-"}</div>
-            <Button
-              size="sm"
-              variant="destructive"
-              onClick={() => deleteProject.mutate({ id: project.id })}
-              disabled={deleteProject.isPending && deleteProject.variables?.id === project.id}
-            >
-              {deleteProject.isPending && deleteProject.variables?.id === project.id
-                ? "Deleting..."
-                : "Delete"}
-            </Button>
+            <ProjectStatusCell project={project} />
+            <ProjectActionsCell
+              project={project}
+              deleteProject={deleteProject}
+              recoverProject={recoverProject}
+            />
           </div>
         );
       })}
@@ -309,48 +244,84 @@ function OsProjectsTable({
   );
 }
 
-function RecoveredProjectsTable({
-  organizations,
-  projects,
-  recoverProject,
-}: {
-  organizations: OrganizationSummary[];
-  projects: Project[];
-  recoverProject: UseMutationResult<unknown, Error, Project>;
-}) {
+function ProjectNameCell({ project }: { project: Project }) {
   return (
-    <div className="overflow-x-auto rounded-lg border">
-      <div className="grid min-w-[820px] grid-cols-[220px_180px_240px_minmax(160px,1fr)_120px] border-b bg-muted/40 px-3 py-2 text-xs font-medium text-muted-foreground">
-        <div>ID</div>
-        <div>Slug</div>
-        <div>Organization</div>
-        <div>Status</div>
-        <div />
-      </div>
-      {projects.map((project) => (
-        <div
-          key={project.id}
-          className="grid min-w-[820px] grid-cols-[220px_180px_240px_minmax(160px,1fr)_120px] items-start gap-3 border-b px-3 py-3 text-sm last:border-b-0"
+    <div className="min-w-0 space-y-0.5">
+      {project.deploymentStatus === "ready" ? (
+        <Link
+          to="/projects/$projectSlug/agents/new"
+          params={{ projectSlug: project.slug }}
+          className="block truncate font-medium hover:underline"
         >
-          <Identifier value={project.id} textClassName="text-xs text-muted-foreground" />
-          <div className="truncate font-medium">{project.slug}</div>
-          <ProjectOrganizationCell project={project} organizations={organizations} />
-          <div className="text-xs text-muted-foreground">
-            Auth session only; missing from this OS worker database.
-          </div>
-          <Button
-            size="sm"
-            onClick={() => recoverProject.mutate(project)}
-            disabled={recoverProject.isPending && recoverProject.variables?.id === project.id}
-          >
-            {recoverProject.isPending && recoverProject.variables?.id === project.id
-              ? "Recovering..."
-              : "Recover"}
-          </Button>
-        </div>
-      ))}
+          {project.slug}
+        </Link>
+      ) : (
+        <div className="truncate font-medium">{project.slug}</div>
+      )}
+      <Identifier value={project.id} textClassName="text-xs text-muted-foreground" />
     </div>
   );
+}
+
+function ProjectStatusCell({ project }: { project: Project }) {
+  switch (project.deploymentStatus) {
+    case "ready":
+      return <Badge>Ready</Badge>;
+    case "missing":
+      return <Badge variant="secondary">Not set up in this deployment</Badge>;
+    case "unknown":
+      return <Badge variant="outline">Unknown</Badge>;
+  }
+}
+
+function ProjectActionsCell({
+  deleteProject,
+  project,
+  recoverProject,
+}: {
+  deleteProject: UseMutationResult<unknown, Error, { id: string }>;
+  project: Project;
+  recoverProject: UseMutationResult<unknown, Error, Project>;
+}) {
+  if (project.deploymentStatus === "missing") {
+    const isPending = recoverProject.isPending && recoverProject.variables?.id === project.id;
+    return (
+      <div className="flex justify-end">
+        <Button size="sm" onClick={() => recoverProject.mutate(project)} disabled={isPending}>
+          {isPending ? "Setting up..." : "Set up"}
+        </Button>
+      </div>
+    );
+  }
+
+  if (project.deploymentStatus === "ready") {
+    const isDeleting = deleteProject.isPending && deleteProject.variables?.id === project.id;
+    return (
+      <div className="flex justify-end gap-2">
+        <Button
+          nativeButton={false}
+          type="button"
+          variant="outline"
+          size="sm"
+          render={
+            <Link to="/projects/$projectSlug/agents/new" params={{ projectSlug: project.slug }} />
+          }
+        >
+          Open
+        </Button>
+        <Button
+          size="sm"
+          variant="destructive"
+          onClick={() => deleteProject.mutate({ id: project.id })}
+          disabled={isDeleting}
+        >
+          {isDeleting ? "Deleting..." : "Delete"}
+        </Button>
+      </div>
+    );
+  }
+
+  return <div className="text-right text-xs text-muted-foreground">-</div>;
 }
 
 function ProjectOrganizationCell({
@@ -365,26 +336,17 @@ function ProjectOrganizationCell({
   }
 
   const organization = organizations.find((candidate) => candidate.id === project.organizationId);
+  const organizationName = project.organizationName ?? organization?.name ?? organization?.slug;
+  if (!organizationName) {
+    return (
+      <Identifier value={project.organizationId} textClassName="text-xs text-muted-foreground" />
+    );
+  }
+
   return (
     <div className="min-w-0">
-      <div className="truncate text-xs">
-        {organization?.name ?? organization?.slug ?? project.organizationId}
-      </div>
-      <div className="truncate text-xs text-muted-foreground">{project.organizationId}</div>
+      <div className="truncate text-xs">{organizationName}</div>
+      <Identifier value={project.organizationId} textClassName="text-xs text-muted-foreground" />
     </div>
-  );
-}
-
-function ProjectSlugCell({ project }: { project: Project }) {
-  return (
-    <Link
-      to="/projects/$projectSlug/agents/new"
-      params={{
-        projectSlug: project.slug,
-      }}
-      className="truncate font-medium hover:underline"
-    >
-      {project.slug}
-    </Link>
   );
 }

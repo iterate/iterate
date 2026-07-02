@@ -14,7 +14,7 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
-import { listAdminProjectsServerFn } from "~/lib/project-server-fns.ts";
+import { listAdminProjectsServerFn, type Project } from "~/lib/project-server-fns.ts";
 
 const PAGE_SIZE = 100;
 
@@ -93,6 +93,8 @@ function AdminProjectsPage() {
               <TableRow>
                 <TableHead>Slug</TableHead>
                 <TableHead>ID</TableHead>
+                <TableHead>Organization</TableHead>
+                <TableHead>Status</TableHead>
                 <TableHead>Custom hostname</TableHead>
                 <TableHead>Created</TableHead>
                 <TableHead>Updated</TableHead>
@@ -113,6 +115,16 @@ function AdminProjectsPage() {
                   </TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">
                     {project.id}
+                  </TableCell>
+                  <TableCell>
+                    {project.organizationName ?? (
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {project.organizationId ?? "-"}
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <ProjectStatusBadge project={project} />
                   </TableCell>
                   <TableCell>
                     {project.customHostname ? (
@@ -162,6 +174,17 @@ function AdminProjectsPage() {
       </div>
     </section>
   );
+}
+
+function ProjectStatusBadge({ project }: { project: Project }) {
+  switch (project.deploymentStatus) {
+    case "ready":
+      return <Badge>Ready</Badge>;
+    case "missing":
+      return <Badge variant="secondary">Not set up in this deployment</Badge>;
+    case "unknown":
+      return <Badge variant="outline">Unknown</Badge>;
+  }
 }
 
 function ProjectsSkeleton() {
