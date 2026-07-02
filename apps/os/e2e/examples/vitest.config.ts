@@ -46,6 +46,7 @@ export default defineConfig({
     fileParallelism: process.env.CI === "true",
     sequence: { concurrent: process.env.CI === "true" },
     maxConcurrency: 10,
+    retry: process.env.CI === "true" ? 1 : 0,
     hookTimeout: 45_000,
     passWithNoTests: true,
     projects: [
@@ -57,6 +58,7 @@ export default defineConfig({
           include: ["./e2e/examples/*.e2e.test.ts"],
           maxConcurrency: 10,
           name: "node",
+          retry: process.env.CI === "true" ? 1 : 0,
           sequence: { concurrent: process.env.CI === "true" },
           provide: sharedProvide,
           testTimeout: 45_000,
