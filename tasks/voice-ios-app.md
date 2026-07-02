@@ -58,7 +58,7 @@ a project, and talks to his worker agent.
   OpenAI in CI).
 - **Auth**: OAuth authorization-code + PKCE against the auth worker via
   expo-auth-session in-app browser; scopes `openid profile email
-  offline_access` + project-selection scope; RFC 8707 `resource` = the OS
+offline_access` + project-selection scope; RFC 8707 `resource` = the OS
   base so the audience validates. Client registration: dynamic registration
   (unauthenticated allowed) or reuse the `iterate-cli` device client —
   whichever works first, documented. Issuer discovery from the OS base via
