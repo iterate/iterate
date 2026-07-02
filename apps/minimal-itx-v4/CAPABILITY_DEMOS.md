@@ -5,10 +5,11 @@ process can **provide a live capability into a project**, and the worker (or an
 agent running inside it) then **calls that capability back over RPC** as if it
 were local.
 
-- **Blind relay egress** — the client provides a `dial()` TCP capability. The
-  worker materializes secrets, runs TLS itself, and pushes only encrypted
-  records through the client's socket. The client moves bytes; it never sees the
-  HTTP request, the body, or the substituted secret.
+- **Blind relay egress** — the client provides a `dial()` TCP capability. Once
+  installed, the worker carries **every** outbound request through the client's
+  socket: it materializes any secret, runs TLS itself, and pushes only encrypted
+  records down the wire. The client moves bytes; it never sees the HTTP request,
+  the body, or the substituted secret.
 - **Page debugging** — the client (a browser tab) provides a `debugPage()` DOM
   capability. The worker, or the demo page acting as an agent, drives that tab
   remotely: snapshot the DOM, click, fill, screenshot.
@@ -51,10 +52,11 @@ live demo state/log, and a downloadable standalone `trpc-cli` client:
 3. Choose `plain-intercept-listen`, then click **Fetch Postman GET/POST** on the
    page. The Node process prints the full request URL, method, headers, and body
    — an interceptor runs _before_ secret substitution, so it sees placeholders.
-4. Restart the CLI, choose `blind-relay-listen`, then click a secret-bearing
-   script such as **Fetch Headers With Secret**. Now the Node process prints only
-   encrypted connection metadata: host, SNI, remote IP, first TLS bytes, byte
-   counts. The plaintext is gone.
+4. Restart the CLI, choose `blind-relay-listen`, then click **any** fetch button
+   — a plain Postman fetch or a secret-bearing one. The Node process now prints
+   only encrypted connection metadata for each: host, SNI, remote IP, first TLS
+   bytes, byte counts. The plaintext is gone, and for secret requests the
+   substituted secret never reaches the relay either.
 5. Watch **Live relay demo state** on the page; it polls the Durable Object once
    per second for status and observations.
 
@@ -70,8 +72,9 @@ secret: /secrets/playground/api-token = demo-secret-material
 ### CLI modes
 
 - `plain-intercept-listen` / `blind-relay-listen` — stay attached to the shared
-  project until Ctrl+C, logging each page-triggered request (plaintext, or
-  encrypted metadata respectively).
+  project until Ctrl+C. Both see **every** page-triggered request: the plain
+  interceptor logs plaintext (it runs before secret substitution); the blind
+  relay logs encrypted connection metadata only.
 - `plain-intercept` / `blind-relay` — run one CLI-generated request end to end.
 - `blind-relay-proof` — the blind relay path plus an assertion that the relay
   transcript contains none of the secret, body, path, or query-token plaintext.

@@ -1645,7 +1645,10 @@ function playgroundExamples(origin: string) {
       code: `async function run(itx) {
   return await itx.egress.fetch(
     new Request("${POSTMAN_ECHO_GET_URL}", {
-      headers: { "x-itx-demo": "postman-get" },
+      headers: {
+        "${BLIND_RELAY_SKIP_TLS_VERIFY_HEADER}": "1",
+        "x-itx-demo": "postman-get",
+      },
     }),
   );
 }`,
@@ -1658,6 +1661,7 @@ function playgroundExamples(origin: string) {
     new Request("${POSTMAN_ECHO_POST_URL}", {
       method: "POST",
       headers: {
+        "${BLIND_RELAY_SKIP_TLS_VERIFY_HEADER}": "1",
         "content-type": "application/json",
         "x-itx-demo": "postman-post-json",
       },

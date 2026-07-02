@@ -16,6 +16,7 @@ import type {
 } from "../../types.ts";
 import { deepRetainRpcStubs } from "../itx/live-capability.ts";
 import { secretErrorResponse, secretReferencePathsFromHeaders } from "../secrets/utils.ts";
+import { relayedFetchWithBlindRelay } from "./blind-relay.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 
@@ -80,9 +81,20 @@ export class ProjectDurableObject extends DurableObject<Env> {
     } catch {
       return secretErrorResponse("secret_reference_required", 400);
     }
-    if (secretPaths.length === 0) return fetch(request);
     if (secretPaths.length > 1) {
       return secretErrorResponse("multiple_secret_paths_not_supported", 400);
+    }
+
+    // A blind relay carries every outbound request through the client-owned
+    // socket, so the listener sees each egress (secret or not) as encrypted
+    // bytes — symmetric with an interceptor seeing every request.
+    const relay: BlindEgressRelay | undefined =
+      this.#egressMode?.kind === "blind-relay" ? this.#egressMode.retained.value : undefined;
+
+    // No secret to substitute: the request is already materialized.
+    if (secretPaths.length === 0) {
+      if (relay !== undefined) return relayedFetchWithBlindRelay(request, relay);
+      return fetch(request);
     }
 
     const secret = this.env.SECRET.getByName(
@@ -91,9 +103,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
         path: secretPaths[0]!,
       }),
     );
-    if (this.#egressMode?.kind === "blind-relay") {
-      return secret.fetchWithBlindRelay(request, this.#egressMode.retained.value);
-    }
+    if (relay !== undefined) return secret.fetchWithBlindRelay(request, relay);
     return secret.fetch(request);
   }
 
