@@ -332,6 +332,14 @@ function withoutBindingsToMissingScripts<B extends Bindings>(owner: string, bind
 const LOCAL_AUX_WORKERS_MANIFEST = ".alchemy/local/aux-workers.json";
 const localAuxWorkerConfigPaths: string[] = [];
 
+// Alchemy's default compatibility date floats with its own miniflare, which
+// can be NEWER than the runtime @cloudflare/vite-plugin executes locally (it
+// pins an older miniflare). When they skew, `pnpm dev` dies with "This Worker
+// requires compatibility date X, but the newest date supported by this server
+// binary is Y" on the next config regeneration. Local dev pins to the newest
+// date the local runtime supports; deploys keep the floating default.
+const localCompatibilityDate = ctx.app.local ? "2026-05-01" : undefined;
+
 /** A small non-app OS worker: esbuild-bundled, no routes, no workers.dev URL,
  * standard observability, APP_CONFIG injected. */
 async function osWorker<B extends Bindings>(
@@ -350,6 +358,7 @@ async function osWorker<B extends Bindings>(
     adopt: true,
     entrypoint: props.entrypoint,
     bundle: { minify: true },
+    compatibilityDate: localCompatibilityDate,
     compatibilityFlags: props.compatibilityFlags,
     eventSources,
     bindings: {
@@ -461,6 +470,7 @@ const appWorker = await IterateAppWorker(ctx, {
   // `${ctx.workerName}` itself is the ingress router (it owns the routes);
   // the dashboard app deploys under its own name.
   name: workerNames.app,
+  compatibilityDate: localCompatibilityDate,
   main: "./src/workers/app.ts",
   bindings: {
     ITX_API: apiWorker,

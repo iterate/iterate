@@ -269,6 +269,11 @@ export class VoiceSession {
           return;
         }
         this.#addEntry("status", `voice model called ${String(event.name)} (acked)`);
+        // Complete the call but do NOT trigger a follow-up response: the model
+        // usually already spoke its ack in the same response as the tool call,
+        // and a forced response here makes it say "working on it" twice. The
+        // tool output sits in context; the worker report triggers the next
+        // response naturally.
         this.#send({
           type: "conversation.item.create",
           item: {
@@ -277,7 +282,6 @@ export class VoiceSession {
             output: JSON.stringify({ status: "forwarded to worker; report will follow" }),
           },
         });
-        this.#whenResponseIdle(() => this.#sendResponseCreate());
         return;
       }
       case "response.output_audio.delta":

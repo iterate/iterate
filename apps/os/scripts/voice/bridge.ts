@@ -271,6 +271,11 @@ export async function runVoiceBridge(options: BridgeOptions) {
         }
         const args = JSON.parse(String(event.arguments || "{}")) as { request?: string };
         say(`  (voice model called ${event.name})`);
+        // Complete the call but do NOT trigger a follow-up response: the model
+        // usually already spoke its ack in the same response as the tool call,
+        // and a forced response here makes it say "working on it" twice. The
+        // tool output sits in context; the worker report triggers the next
+        // response naturally.
         session.send({
           type: "conversation.item.create",
           item: {
@@ -279,7 +284,6 @@ export async function runVoiceBridge(options: BridgeOptions) {
             output: JSON.stringify({ status: "forwarded to worker; report will follow" }),
           },
         });
-        whenResponseIdle(() => sendResponseCreate());
         // In auto mode the turn was already forwarded verbatim — the tool call
         // is just the voice model agreeing with us. Only forward in tool mode.
         if (options.forward === "tool" && args.request) forwardTurn(args.request, "tool-call");
