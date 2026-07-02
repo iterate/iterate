@@ -74,3 +74,13 @@ export function readStreamStateOnce(
  * the admin stream browser addresses them as `/admin/streams/__null__/...`.
  */
 export const NULL_DURABLE_OBJECT_PROJECT_ID = "__null__";
+
+/**
+ * Human label for the `__null__` namespace wherever it would otherwise render
+ * as a project id. URLs and route params keep the sentinel; only display
+ * strings use this (deployment-level streams like slack-team-directory
+ * legitimately live there).
+ */
+export function streamProjectDisplayLabel(projectId: string): string {
+  return projectId === NULL_DURABLE_OBJECT_PROJECT_ID ? "Global (deployment)" : projectId;
+}
