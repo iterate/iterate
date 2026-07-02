@@ -55,6 +55,7 @@ import {
   type OpenApiOperation,
 } from "./domains/itx/openapi-types.ts";
 import { callMcpToolPath } from "./domains/itx/mcp-client.ts";
+import { ITX_EXAMPLES, type ItxExample } from "./itx/examples.ts";
 import type {
   ProcessorState,
   StreamProcessor,
@@ -69,9 +70,12 @@ import type {
   CfExecutionContext,
   ItxAuth,
   Itx,
+  ItxExampleCatalog,
+  ItxExampleSummary,
   Session,
   McpClientCollection,
   McpClientConnectInput,
+  McpClientRpc,
   OpenApiCollection,
   OpenApiConnectInput,
   ProjectCollection,
@@ -1021,6 +1025,7 @@ const PROJECT_BUILTIN_CAPABILITY_PATHS = [
   "ai",
   "agents",
   "egress",
+  "examples",
   "gmail",
   "integrations",
   "mcp",
@@ -1160,6 +1165,10 @@ export class ItxRpcTarget extends RpcTarget implements Itx {
 
   get egress() {
     return new ProjectEgressRpcTarget({ projectId: this.props.projectId });
+  }
+
+  get examples(): ItxExampleCatalog {
+    return new ItxExampleCatalogRpcTarget();
   }
 
   get gmail(): GmailCapability {
@@ -1536,7 +1545,38 @@ export class StreamProcessorRpcTarget<Contract extends StreamProcessorContract>
   }
 }
 
+// The examples catalogue is plain data (src/itx/examples.ts) shared with the
+// REPL "Examples" panel and the e2e matrix. Exposing it as a built-in lets
+// agents and scripts browse known-good snippets instead of guessing at the
+// surface; list() omits the code bodies so it stays cheap to skim.
+export class ItxExampleCatalogRpcTarget extends RpcTarget implements ItxExampleCatalog {
+  async list() {
+    return ITX_EXAMPLES.map(exampleSummary);
+  }
+
+  async get(input: Parameters<ItxExampleCatalog["get"]>[0]) {
+    const example = ITX_EXAMPLES.find((candidate) => candidate.id === input.id);
+    if (!example) {
+      throw new Error(`unknown example "${input.id}" — itx.examples.list() has every id`);
+    }
+    return { ...exampleSummary(example), code: example.code };
+  }
+}
+
+function exampleSummary(example: ItxExample): ItxExampleSummary {
+  return {
+    context: example.context,
+    description: example.description,
+    id: example.id,
+    title: example.title,
+  };
+}
+
 type McpClientDeps = { egress: Fetcher };
+
+// Exa's hosted MCP server works unauthenticated (rate-limited); pre-connecting
+// it gives every project web search with zero setup.
+const EXA_MCP_URL = "https://mcp.exa.ai/mcp";
 
 class McpClientCollectionRpcTarget extends RpcTarget implements McpClientCollection {
   constructor(readonly props: McpClientDeps) {
@@ -1545,6 +1585,10 @@ class McpClientCollectionRpcTarget extends RpcTarget implements McpClientCollect
 
   connect(input: Parameters<McpClientCollection["connect"]>[0]) {
     return McpClientRpcTarget.connect(input, this.props);
+  }
+
+  get exa(): McpClientRpc {
+    return new McpClientRpcTarget({ config: { url: EXA_MCP_URL }, egress: this.props.egress });
   }
 }
 

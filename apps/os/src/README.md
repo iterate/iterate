@@ -106,7 +106,7 @@ mutating the original payload.
 
 Built-ins are explicit members of the `Itx` interface (`streams`, `repos`,
 `repo`, `agents`, `secrets`, `workers`, `worker`, `egress`, `mcp`, `openapi`,
-`ai`, `processor`, plus `agent`/`chat` on agent scopes). A call like
+`ai`, `examples`, `processor`, plus `agent`/`chat` on agent scopes). A call like
 `itx.streams.get("/x")` resolves in the isolate without touching the ITX
 Durable Object; the trade-off is that a mounted capability can never shadow a
 built-in name.
@@ -135,7 +135,10 @@ stranger who finds the capability there.
 client targets (no mount, no events): `connect` discovers (lists MCP tools /
 fetches the OpenAPI spec through project egress), and the returned target
 answers `describe()` and fallback-dispatches every other property as a tool
-name / flat `operationId`.
+name / flat `operationId`. `project.mcp.exa` is the same client shape
+pre-connected to Exa's public MCP server (`https://mcp.exa.ai/mcp`), so every
+project has web search (`web_search_exa`) and page reading (`web_fetch_exa`)
+with zero setup.
 
 ## Secrets and egress
 
@@ -179,8 +182,11 @@ started/chunk/output/completed events. The agent contract: respond with
 exactly one fenced JavaScript block containing a single
 `async (itx) => { … }`, which the ITX processor executes; replies reach the
 user via `itx.chat.sendMessage({ message })`
-(`events.iterate.com/agents/web-message-sent`). `agent.ask({ message })` is
-the send-and-wait convenience.
+(`events.iterate.com/agents/web-message-sent`). Scripts behave like tool
+calls: a returned value (or thrown error) renders back into history as the
+next input and triggers another turn, while a script that returns `undefined`
+ends the loop — the completion event then carries no `result` key.
+`agent.ask({ message })` is the send-and-wait convenience.
 
 ## Stream processor hosting
 

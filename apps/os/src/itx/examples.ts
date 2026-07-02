@@ -425,6 +425,44 @@ return { offset: sent.offset, payload: sent.payload, type: sent.type };
 `.trim(),
   },
   {
+    id: "browse-examples",
+    title: "Browse this catalogue through itx.examples",
+    description:
+      "The catalogue itself is a built-in capability: list() returns every entry without its code (cheap to skim), get({ id }) returns one with the full script body. Agents use this to copy working patterns instead of guessing at the surface.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const summaries = await itx.examples.list();
+
+// Summaries carry { id, title, description, context } — no code. Fetch one
+// entry's full script body by id.
+const example = await itx.examples.get({ id: vars.exampleId ?? "describe-project" });
+
+return {
+  count: summaries.length,
+  hasCode: typeof example.code === "string" && example.code.length > 0,
+  id: example.id,
+};
+`.trim(),
+  },
+  {
+    id: "exa-web-search",
+    title: "Web search through the built-in Exa MCP server",
+    description:
+      "itx.mcp.exa is a pre-connected MCP client for Exa's public server (https://mcp.exa.ai/mcp): web_search_exa({ query, numResults }) searches, web_fetch_exa({ urls }) reads pages as markdown. Tool names are flat calls on the client — the same shape any itx.mcp.connect({ url }) client has. External service, so run it interactively.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+// Fan independent lookups out in parallel — each tool call is one round trip.
+const [search, pages] = await Promise.all([
+  itx.mcp.exa.web_search_exa({ query: vars.query ?? "Cloudflare Durable Objects", numResults: 3 }),
+  itx.mcp.exa.web_fetch_exa({ urls: [vars.url ?? "https://developers.cloudflare.com/durable-objects/"], maxCharacters: 2000 }),
+]);
+
+return { pages, search };
+`.trim(),
+  },
+  {
     id: "ai-models",
     title: "Workers AI is a built-in capability",
     description:

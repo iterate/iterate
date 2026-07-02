@@ -14,6 +14,9 @@
 //   ai-models       depends on the deployment's upstream Workers AI account
 //                   (catalog availability + latency); interactive reading
 //                   material, not matrix material.
+//   exa-web-search  calls Exa's public MCP server (external service, rate
+//                   limited); interactive reading material, same rationale as
+//                   ai-models.
 
 export type ExampleRunContext = {
   /** Unique per example × runtime, for stream/event payload assertions. */
@@ -27,7 +30,12 @@ export type ExampleCase = {
 };
 
 /** Example ids that intentionally have no matrix case (see header). */
-export const EXAMPLE_IDS_WITHOUT_CASES = new Set(["whoami", "list-projects", "ai-models"]);
+export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
+  "whoami",
+  "list-projects",
+  "ai-models",
+  "exa-web-search",
+]);
 
 export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   "describe-project": {
@@ -123,6 +131,12 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     vars: ({ marker }) => ({ capPath: `journal_${marker.replace(/-/g, "_")}` }),
     assert: (result, _ctx, expect) => {
       expect(result).toEqual({ record: ["capability-provided", "capability-revoked"] });
+    },
+  },
+  "browse-examples": {
+    assert: (result, _ctx, expect) => {
+      expect(result).toMatchObject({ hasCode: true, id: "describe-project" });
+      expect((result as { count: number }).count).toBeGreaterThan(10);
     },
   },
   "agent-send-message": {
