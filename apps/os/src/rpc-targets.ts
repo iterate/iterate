@@ -940,7 +940,11 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
     requestedScope?: "mine" | "deployment",
   ): Promise<Omit<ProjectListEntry, "deploymentStatus">[]> {
     const userPrincipal = userPrincipalOf(this.props.auth);
-    const scope = requestedScope ?? (userPrincipal ? "mine" : "deployment");
+    // Default to the caller's own projects for EVERY principal shape (user,
+    // impersonated, admin) — only pure admin principals, which have no
+    // projects of their own, default to the deployment listing.
+    const scope =
+      requestedScope ?? (userPrincipal || !this.props.auth.isAdmin() ? "mine" : "deployment");
     if (scope === "deployment") {
       if (!this.props.auth.isAdmin()) {
         throw new Error('projects.list({ scope: "deployment" }) requires an admin principal');
