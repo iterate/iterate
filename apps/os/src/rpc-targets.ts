@@ -17,6 +17,7 @@ import {
   readProjectById,
 } from "./project-directory.ts";
 import { deploymentStatusesFromProbes } from "./project-deployment-status.ts";
+import { timedStep } from "./lib/step-timing.ts";
 import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
 import { normalizeAgentPath } from "./domains/agents/utils.ts";
@@ -221,28 +222,33 @@ async function requestRepoCreate(input: {
     path,
     projectId: input.projectId,
   });
-  const [, createRequested] = await stream.append(
-    buildDurableObjectProcessorSubscriptionConfiguredEvent({
-      durableObjectName: streamDurableObjectName({ projectId: input.projectId, path }),
-      processorSlug: RepoProcessorContract.slug,
-      subscriberType: "repo",
-    }),
-    {
-      type: "events.iterate.com/repo/create-requested",
-      idempotencyKey: `repo-create-requested:${input.projectId}:${path}`,
-      payload: { projectId: input.projectId, path },
-    },
+  const timing = { projectId: input.projectId, path };
+  const [, createRequested] = await timedStep("create-timing", timing, "repo-append", () =>
+    stream.append(
+      buildDurableObjectProcessorSubscriptionConfiguredEvent({
+        durableObjectName: streamDurableObjectName({ projectId: input.projectId, path }),
+        processorSlug: RepoProcessorContract.slug,
+        subscriberType: "repo",
+      }),
+      {
+        type: "events.iterate.com/repo/create-requested",
+        idempotencyKey: `repo-create-requested:${input.projectId}:${path}`,
+        payload: { projectId: input.projectId, path },
+      },
+    ),
   );
 
-  await stream.waitForEvent({
-    afterOffset: createRequested.offset - 1,
-    eventTypes: ["events.iterate.com/repo/created"],
-    predicate: (event) =>
-      event.payload?.projectId === input.projectId && event.payload?.path === path,
-    // Tight on purpose: creates should be fast (see tasks/os-cold-create-latency.md
-    // for the cold-slot outliers). Preview CI warms slots before the suites.
-    timeoutMs: 60_000,
-  });
+  await timedStep("create-timing", timing, "wait-repo-created", () =>
+    stream.waitForEvent({
+      afterOffset: createRequested.offset - 1,
+      eventTypes: ["events.iterate.com/repo/created"],
+      predicate: (event) =>
+        event.payload?.projectId === input.projectId && event.payload?.path === path,
+      // Tight on purpose: creates should be fast (see tasks/os-cold-create-latency.md
+      // for the cold-slot outliers). Preview CI warms slots before the suites.
+      timeoutMs: 60_000,
+    }),
+  );
 
   return new RepoRpcTarget({ auth: input.auth, path, projectId: input.projectId });
 }
@@ -791,7 +797,10 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
   }
 
   async create(args: Parameters<ProjectCollection["create"]>[0]) {
-    const registered = await this.#registerProject(args);
+    const registered = await timedStep("create-timing", { slug: args.slug }, "auth-register", () =>
+      this.#registerProject(args),
+    );
+    const timing = { projectId: registered.projectId };
     args.projectId = registered.projectId;
     // The auth worker may normalize the slug (slugify); adopt its canonical
     // form so stream events agree with the directory and ingress hostnames.
@@ -802,47 +811,61 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
     widenProjectAccess(this.props.auth, registered.projectId);
     // Prime the slug->id directory cache so the post-create navigation (and
     // the first project-host request) never miss into the auth worker.
-    await primeProjectDirectory(env.PROJECT_DIRECTORY, {
-      id: registered.projectId,
-      slug: registered.slug,
-      organizationId: registered.organizationId,
-      name: registered.slug,
-    });
+    await timedStep("create-timing", timing, "prime-directory", () =>
+      primeProjectDirectory(env.PROJECT_DIRECTORY, {
+        id: registered.projectId,
+        slug: registered.slug,
+        organizationId: registered.organizationId,
+        name: registered.slug,
+      }),
+    );
 
     const stream = rootStream({
       auth: this.props.auth,
       projectId: args.projectId,
     });
 
-    const [, , createRequested] = await stream.append(
-      buildDurableObjectProcessorSubscriptionConfiguredEvent({
-        durableObjectName: streamDurableObjectName({ projectId: args.projectId, path: "/" }),
-        processorSlug: ProjectProcessorContract.slug,
-        subscriberType: "project",
-      }),
-      buildDurableObjectProcessorSubscriptionConfiguredEvent({
-        durableObjectName: streamDurableObjectName({
-          projectId: args.projectId,
-          path: PROJECT_REPO_PATH,
+    const appendRootEvents = () =>
+      stream.append(
+        buildDurableObjectProcessorSubscriptionConfiguredEvent({
+          durableObjectName: streamDurableObjectName({
+            projectId: registered.projectId,
+            path: "/",
+          }),
+          processorSlug: ProjectProcessorContract.slug,
+          subscriberType: "project",
         }),
-        processorSlug: RepoProcessorContract.slug,
-        subscriberType: "repo",
-      }),
-      {
-        type: "events.iterate.com/project/create-requested",
-        idempotencyKey: `project-create-requested:${args.projectId}`,
-        payload: { projectId: args.projectId, slug: args.slug },
-      },
+        buildDurableObjectProcessorSubscriptionConfiguredEvent({
+          durableObjectName: streamDurableObjectName({
+            projectId: registered.projectId,
+            path: PROJECT_REPO_PATH,
+          }),
+          processorSlug: RepoProcessorContract.slug,
+          subscriberType: "repo",
+        }),
+        {
+          type: "events.iterate.com/project/create-requested",
+          idempotencyKey: `project-create-requested:${registered.projectId}`,
+          payload: { projectId: registered.projectId, slug: registered.slug },
+        },
+      );
+    const [, , createRequested] = await timedStep(
+      "create-timing",
+      timing,
+      "root-append",
+      appendRootEvents,
     );
-    await stream.waitForEvent({
-      afterOffset: createRequested.offset - 1,
-      eventTypes: ["events.iterate.com/project/created"],
-      predicate: (event) => event.payload?.projectId === args.projectId,
-      // Tight on purpose: the saga should complete in seconds (see
-      // tasks/os-cold-create-latency.md for the cold-slot outliers that must
-      // be fixed, not waited out). Preview CI warms slots before the suites.
-      timeoutMs: 60_000,
-    });
+    await timedStep("create-timing", timing, "wait-project-created", () =>
+      stream.waitForEvent({
+        afterOffset: createRequested.offset - 1,
+        eventTypes: ["events.iterate.com/project/created"],
+        predicate: (event) => event.payload?.projectId === args.projectId,
+        // Tight on purpose: the saga should complete in seconds (see
+        // tasks/os-cold-create-latency.md for the cold-slot outliers that must
+        // be fixed, not waited out). Preview CI warms slots before the suites.
+        timeoutMs: 60_000,
+      }),
+    );
 
     return new ItxRpcTarget({
       auth: this.props.auth,
