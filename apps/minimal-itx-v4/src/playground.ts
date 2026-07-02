@@ -413,7 +413,7 @@ function playgroundHtml(origin: string): string {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Minimal ITX v4 Playground</title>
+  <title>Blind Relay POC Playground</title>
   <style>
     :root {
       color-scheme: light dark;
@@ -470,9 +470,15 @@ function playgroundHtml(origin: string): string {
       border-color: #1463ff;
       background: #eef4ff;
     }
+    .preset span {
+      display: block;
+      margin-top: 4px;
+      color: #647084;
+      font-size: 12px;
+    }
     .editor {
       display: grid;
-      grid-template-rows: auto minmax(320px, 52vh) auto minmax(180px, 32vh);
+      grid-template-rows: auto minmax(320px, 46vh) auto auto minmax(180px, 30vh);
       min-width: 0;
     }
     .bar {
@@ -529,18 +535,29 @@ function playgroundHtml(origin: string): string {
       margin: 18px 0;
       color: #4c3700;
     }
+    .summary {
+      border-top: 1px solid #d8dde6;
+      padding: 10px 12px;
+      color: #172033;
+      font-size: 13px;
+      min-height: 22px;
+    }
+    .summary code {
+      background: #eef1f5;
+      border-radius: 4px;
+      padding: 1px 4px;
+    }
     @media (max-width: 780px) {
       main { padding: 18px; }
       .layout { grid-template-columns: 1fr; }
-      .editor { grid-template-rows: auto 360px auto 280px; }
+      .editor { grid-template-rows: auto 360px auto auto 280px; }
     }
   </style>
 </head>
 <body>
   <main>
-    <h1>Minimal ITX v4 Playground</h1>
-    <p>Run ITX query presets against this deployed Worker. Pick a preset, edit the JSON command, then run it against the hosted ITX surface.</p>
-    <p>Plain intercept sees <code>getSecret(...)</code> placeholders; blind relay only sees encrypted TLS bytes after the Worker substitutes the secret.</p>
+    <h1>Blind Relay POC Playground</h1>
+    <p>Run ITX presets against this deployed Worker. Plain intercept sees <code>getSecret(...)</code> placeholders; blind relay receives only encrypted TLS bytes after the Worker substitutes the secret.</p>
     <div class="warning">Demo-only: anyone with this URL can create throwaway projects on this dev Worker. Do not enter real secrets.</div>
     <div class="layout">
       <aside class="panel presets" id="presets"></aside>
@@ -554,6 +571,7 @@ function playgroundHtml(origin: string): string {
           <span class="meta" id="status">Ready</span>
           <button class="run" id="run">Run</button>
         </div>
+        <div class="summary" id="summary">Select a preset and run it to see the proof summary.</div>
         <pre id="output">{}</pre>
       </section>
     </div>
@@ -563,6 +581,7 @@ function playgroundHtml(origin: string): string {
     const presets = document.querySelector("#presets");
     const code = document.querySelector("#code");
     const output = document.querySelector("#output");
+    const summary = document.querySelector("#summary");
     const statusEl = document.querySelector("#status");
     const title = document.querySelector("#title");
     const run = document.querySelector("#run");
@@ -582,6 +601,9 @@ function playgroundHtml(origin: string): string {
       button.className = "preset";
       button.type = "button";
       button.textContent = example.title;
+      const description = document.createElement("span");
+      description.textContent = example.description;
+      button.append(description);
       button.addEventListener("click", () => select(index));
       presets.append(button);
     });
@@ -590,6 +612,7 @@ function playgroundHtml(origin: string): string {
       run.disabled = true;
       statusEl.textContent = "Running...";
       output.textContent = "";
+      summary.textContent = "Running selected preset...";
       try {
         JSON.parse(code.value);
         const response = await fetch("/playground/run", {
@@ -599,14 +622,51 @@ function playgroundHtml(origin: string): string {
         });
         const body = await response.json();
         output.textContent = JSON.stringify(body, null, 2);
+        summary.innerHTML = summarizeResult(body);
         statusEl.textContent = response.ok ? "Done" : "Failed";
       } catch (error) {
         output.textContent = String(error && error.stack ? error.stack : error);
+        summary.textContent = "Command failed before it returned a JSON result.";
         statusEl.textContent = "Failed";
       } finally {
         run.disabled = false;
       }
     });
+
+    function summarizeResult(body) {
+      if (!body || !body.ok) return escapeHtml(body && body.error ? body.error : "Command failed.");
+      const result = body.result || {};
+      switch (result.action || JSON.parse(code.value).action) {
+        case "secret-egress": {
+          const auth = result.response && result.response.body && result.response.body.headers && result.response.body.headers.authorization;
+          const used = result.secret && result.secret.audit && result.secret.audit.usedCount;
+          return "Target received materialized auth <code>" + escapeHtml(String(auth || "missing")) + "</code>; audit usedCount is <code>" + escapeHtml(String(used ?? "pending")) + "</code>.";
+        }
+        case "plain-intercept-placeholder": {
+          const auth = result.response && result.response.body && result.response.body.headers && result.response.body.headers.authorization;
+          const used = result.secret && result.secret.audit && result.secret.audit.usedCount;
+          return "Interceptor saw placeholder auth <code>" + escapeHtml(String(auth || "missing")) + "</code>; audit usedCount is <code>" + escapeHtml(String(used ?? "pending")) + "</code>.";
+        }
+        case "blind-relay-proof-command":
+          return "Run the command below from the repo root to prove the relay transcript hides the secret, body, path, and query token.";
+        case "project-egress":
+          return "Hosted target received a normal project egress request.";
+        case "create-project":
+          return "Created throwaway project <code>" + escapeHtml(String(result.projectId || result.name || "unknown")) + "</code>.";
+        case "whoami":
+          return "Authenticated as <code>" + escapeHtml(String(result.principal && result.principal.kind || "unknown")) + "</code>.";
+        default:
+          return "Command returned successfully.";
+      }
+    }
+
+    function escapeHtml(value) {
+      return value
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
 
     select(selected);
   </script>
@@ -619,6 +679,7 @@ function playgroundExamples(origin: string) {
     {
       id: "whoami",
       title: "Who Am I",
+      description: "Shows the trusted-internal playground session.",
       code: `{
   "action": "whoami"
 }`,
@@ -626,6 +687,7 @@ function playgroundExamples(origin: string) {
     {
       id: "create-project",
       title: "Create Project",
+      description: "Creates a disposable ITX project on this Worker.",
       code: `{
   "action": "create-project",
   "prefix": "demo"
@@ -634,6 +696,7 @@ function playgroundExamples(origin: string) {
     {
       id: "project-egress",
       title: "Project Egress",
+      description: "Sends a normal project egress request to the hosted target.",
       code: `{
   "action": "project-egress",
   "targetUrl": "${origin}/playground/target",
@@ -643,6 +706,7 @@ function playgroundExamples(origin: string) {
     {
       id: "secret-egress",
       title: "Secret Egress",
+      description: "Shows the target receiving materialized secret auth.",
       code: `{
   "action": "secret-egress",
   "targetUrl": "${origin}/playground/target",
@@ -654,6 +718,7 @@ function playgroundExamples(origin: string) {
     {
       id: "plain-intercept-placeholder",
       title: "Plain Intercept Placeholder",
+      description: "Shows a normal interceptor only seeing getSecret(...).",
       code: `{
   "action": "plain-intercept-placeholder",
   "targetUrl": "${origin}/playground/target",
@@ -665,6 +730,7 @@ function playgroundExamples(origin: string) {
     {
       id: "blind-relay-proof-command",
       title: "Blind Relay Proof Command",
+      description: "Prints the repo command for the TLS relay proof.",
       code: `{
   "action": "blind-relay-proof-command"
 }`,

@@ -19,6 +19,8 @@ import type { UnauthenticatedItx } from "./src/types.ts";
 import { TRUSTED_INTERNAL_ITX_TOKEN } from "./src/auth.ts";
 import {
   BLIND_RELAY_PINNED_CERT_SHA256_HEADER,
+  completedHttpResponseLength,
+  parseHttpResponse,
   relayedFetchWithBlindRelay,
 } from "./src/domains/projects/blind-relay.ts";
 import { RepoArtifactNameCodec } from "./src/domains/repos/utils.ts";
@@ -166,6 +168,7 @@ type BlindRelayObservation = {
   firstWorkerToTarget: Uint8Array;
   host: string;
   port: number;
+  targetToWorkerChunks: Uint8Array[];
   workerToTargetChunks: Uint8Array[];
 };
 
@@ -188,6 +191,7 @@ class BlindRelayConnectionTarget extends RpcTarget implements BlindEgressRelayCo
     socket.on("data", (chunk: Buffer) => {
       const bytes = new Uint8Array(chunk);
       observation.bytesTargetToWorker += bytes.byteLength;
+      observation.targetToWorkerChunks.push(bytes.slice());
       if (observation.firstTargetToWorker.byteLength === 0) {
         observation.firstTargetToWorker = bytes.slice(0, 96);
       }
@@ -257,6 +261,7 @@ class BlindRelayTarget extends RpcTarget implements BlindEgressRelay, Disposable
       firstWorkerToTarget: new Uint8Array(),
       host,
       port,
+      targetToWorkerChunks: [],
       workerToTargetChunks: [],
     };
     this.observations.push(observation);
@@ -369,9 +374,11 @@ function expectBlindRelayTranscriptToHidePlaintext(
   observation: BlindRelayObservation,
   hiddenStrings: string[],
 ) {
-  const transcript = concatenateBytes(observation.workerToTargetChunks);
-  expect(transcript[0]).toBe(0x16);
-  const relayText = asciiPreview(transcript);
+  const workerToTargetTranscript = concatenateBytes(observation.workerToTargetChunks);
+  const targetToWorkerTranscript = concatenateBytes(observation.targetToWorkerChunks);
+  expect(workerToTargetTranscript[0]).toBe(0x16);
+  expect(targetToWorkerTranscript[0]).toBe(0x16);
+  const relayText = `${asciiPreview(workerToTargetTranscript)}\n${asciiPreview(targetToWorkerTranscript)}`;
   for (const hiddenString of hiddenStrings) {
     expect(relayText).not.toContain(hiddenString);
   }
@@ -386,6 +393,10 @@ function concatenateBytes(chunks: Uint8Array[]): Uint8Array {
     offset += chunk.byteLength;
   }
   return result;
+}
+
+function httpBytes(text: string): Uint8Array {
+  return new Uint8Array(Buffer.from(text, "utf8"));
 }
 
 class PathFunctionTarget extends RpcTarget {
@@ -436,6 +447,56 @@ async function waitForCondition(
 
 // These are hand written tests - they MUST pass
 describe("minimal itx v4", () => {
+  test("Blind relay HTTP parser handles complete response framing", async () => {
+    const fixed = httpBytes("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhelloextra");
+    const fixedLength = completedHttpResponseLength(fixed);
+    expect(fixedLength).toBe(fixed.byteLength - "extra".length);
+    await expect(parseHttpResponse(fixed.slice(0, fixedLength)).text()).resolves.toBe("hello");
+
+    const chunked = httpBytes(
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\nextra",
+    );
+    const chunkedLength = completedHttpResponseLength(chunked);
+    expect(chunkedLength).toBe(chunked.byteLength - "extra".length);
+    await expect(parseHttpResponse(chunked.slice(0, chunkedLength)).text()).resolves.toBe("hello");
+
+    const chunkedWithTrailers = httpBytes(
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\nx-demo: trailer\r\n\r\n",
+    );
+    expect(completedHttpResponseLength(chunkedWithTrailers)).toBe(chunkedWithTrailers.byteLength);
+    await expect(parseHttpResponse(chunkedWithTrailers).text()).resolves.toBe("hello");
+
+    const conflictingFraming = httpBytes(
+      "HTTP/1.1 200 OK\r\nContent-Length: 999\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\nextra",
+    );
+    const conflictingLength = completedHttpResponseLength(conflictingFraming);
+    expect(conflictingLength).toBe(conflictingFraming.byteLength - "extra".length);
+    await expect(
+      parseHttpResponse(conflictingFraming.slice(0, conflictingLength)).text(),
+    ).resolves.toBe("hello");
+  });
+
+  test("Blind relay HTTP parser distinguishes incomplete and malformed framing", () => {
+    expect(
+      completedHttpResponseLength(httpBytes("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhe")),
+    ).toBeUndefined();
+    expect(
+      completedHttpResponseLength(
+        httpBytes("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhe"),
+      ),
+    ).toBeUndefined();
+    expect(() =>
+      completedHttpResponseLength(
+        httpBytes("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nz\r\nhello\r\n"),
+      ),
+    ).toThrow("invalid chunk size");
+    expect(() =>
+      completedHttpResponseLength(
+        httpBytes("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhelloX\n"),
+      ),
+    ).toThrow("chunk missing CRLF");
+  });
+
   test("Unauthenticated itx can't do anything", async () => {
     using session = withItxSession();
     await expect((<any>session).projects).rejects.toThrow();
@@ -863,7 +924,7 @@ describe("minimal itx v4", () => {
         description: "blind egress proof secret to be available",
       });
 
-      using intercept = await project.egress.useBlindRelay(relay);
+      using intercept = await project.egress.useBlindRelayForSecretEgress(relay);
       const request = new Request(`${target.url}/secret-path?token=worker-only`, {
         body: "payload hidden from relay",
         headers: {

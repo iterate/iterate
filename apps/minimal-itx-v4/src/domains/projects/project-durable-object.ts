@@ -116,7 +116,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     });
   }
 
-  useBlindRelay(relay: BlindEgressRelay): ProjectEgressIntercept {
+  useBlindRelayForSecretEgress(relay: BlindEgressRelay): ProjectEgressIntercept {
     const mode: ProjectEgressMode = {
       kind: "blind-relay",
       retained: deepRetainRpcStubs(relay),

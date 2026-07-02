@@ -123,8 +123,26 @@ async function runTlsHttpRequest({
           fail(error);
           return;
         }
-        if (responseChunks.length > 0) complete(concatBytes(responseChunks));
-        else fail(new Error("blind relay TLS connection closed before response"));
+        if (responseChunks.length === 0) {
+          fail(new Error("blind relay TLS connection closed before response"));
+          return;
+        }
+
+        try {
+          const responseBytes = concatBytes(responseChunks);
+          const completeLength = completedHttpResponseLength(responseBytes);
+          if (completeLength !== undefined) {
+            complete(responseBytes.slice(0, completeLength));
+            return;
+          }
+          if (isCloseDelimitedHttpResponse(responseBytes)) {
+            complete(responseBytes);
+            return;
+          }
+          fail(new Error("blind relay TLS connection closed before complete HTTP response"));
+        } catch (parseError) {
+          fail(parseError);
+        }
       },
     });
 
@@ -229,7 +247,7 @@ async function serializeHttpRequest(request: Request, url: URL): Promise<Uint8Ar
   return concatBytes([textEncoder.encode(head), body]);
 }
 
-function parseHttpResponse(bytes: Uint8Array): Response {
+export function parseHttpResponse(bytes: Uint8Array): Response {
   const headerEnd = indexOfHeaderEnd(bytes);
   if (headerEnd === -1) throw new Error("blind relay response did not contain HTTP headers");
 
@@ -264,27 +282,22 @@ function parseHttpResponse(bytes: Uint8Array): Response {
 }
 
 function decodeChunkedBody(bytes: Uint8Array): Uint8Array {
-  const chunks: Uint8Array[] = [];
-  let offset = 0;
-  while (offset < bytes.byteLength) {
-    const lineEnd = indexOfCrlf(bytes, offset);
-    if (lineEnd === -1) throw new Error("blind relay chunked response was truncated");
-    const sizeLine = textDecoder.decode(bytes.slice(offset, lineEnd));
-    const size = Number.parseInt(sizeLine.split(";", 1)[0]!.trim(), 16);
-    if (!Number.isFinite(size)) throw new Error(`invalid chunk size: ${sizeLine}`);
-    offset = lineEnd + 2;
-    if (size === 0) return concatBytes(chunks);
-    chunks.push(bytes.slice(offset, offset + size));
-    offset += size + 2;
-  }
-  throw new Error("blind relay chunked response missing final chunk");
+  const result = parseChunkedBody(bytes);
+  if (result === undefined) throw new Error("blind relay chunked response was truncated");
+  return result.body;
 }
 
-function completedHttpResponseLength(bytes: Uint8Array): number | undefined {
+export function completedHttpResponseLength(bytes: Uint8Array): number | undefined {
   const headerEnd = indexOfHeaderEnd(bytes);
   if (headerEnd === -1) return undefined;
   const headerText = textDecoder.decode(bytes.slice(0, headerEnd));
   const headerLines = headerText.split("\r\n").slice(1);
+  const transferEncodingLine = headerLines.find((line) => /^transfer-encoding:/i.test(line));
+  if (/\bchunked\b/i.test(transferEncodingLine ?? "")) {
+    const chunkedBody = parseChunkedBody(bytes.slice(headerEnd + 4));
+    return chunkedBody === undefined ? undefined : headerEnd + 4 + chunkedBody.encodedLength;
+  }
+
   const contentLengthLine = headerLines.find((line) => /^content-length:/i.test(line));
   if (contentLengthLine !== undefined) {
     const contentLength = Number(contentLengthLine.slice(contentLengthLine.indexOf(":") + 1));
@@ -295,31 +308,56 @@ function completedHttpResponseLength(bytes: Uint8Array): number | undefined {
     return bytes.byteLength >= totalLength ? totalLength : undefined;
   }
 
-  const transferEncodingLine = headerLines.find((line) => /^transfer-encoding:/i.test(line));
-  if (/\bchunked\b/i.test(transferEncodingLine ?? "")) {
-    const chunkedBodyEnd = completedChunkedBodyLength(bytes.slice(headerEnd + 4));
-    return chunkedBodyEnd === undefined ? undefined : headerEnd + 4 + chunkedBodyEnd;
-  }
-
   return undefined;
 }
 
-function completedChunkedBodyLength(bytes: Uint8Array): number | undefined {
+function isCloseDelimitedHttpResponse(bytes: Uint8Array): boolean {
+  const headerEnd = indexOfHeaderEnd(bytes);
+  if (headerEnd === -1) return false;
+  const headerText = textDecoder.decode(bytes.slice(0, headerEnd));
+  const headerLines = headerText.split("\r\n").slice(1);
+  const transferEncodingLine = headerLines.find((line) => /^transfer-encoding:/i.test(line));
+  if (/\bchunked\b/i.test(transferEncodingLine ?? "")) {
+    return false;
+  }
+  return headerLines.every((line) => !/^content-length:/i.test(line));
+}
+
+function parseChunkedBody(
+  bytes: Uint8Array,
+): { body: Uint8Array; encodedLength: number } | undefined {
+  const chunks: Uint8Array[] = [];
   let offset = 0;
   while (offset < bytes.byteLength) {
     const lineEnd = indexOfCrlf(bytes, offset);
     if (lineEnd === -1) return undefined;
     const sizeLine = textDecoder.decode(bytes.slice(offset, lineEnd));
-    const size = Number.parseInt(sizeLine.split(";", 1)[0]!.trim(), 16);
-    if (!Number.isFinite(size)) throw new Error(`invalid chunk size: ${sizeLine}`);
+    const sizeToken = sizeLine.split(";", 1)[0]!.trim();
+    if (!/^[0-9a-f]+$/i.test(sizeToken)) throw new Error(`invalid chunk size: ${sizeLine}`);
+    const size = Number.parseInt(sizeToken, 16);
+    if (!Number.isSafeInteger(size)) throw new Error(`invalid chunk size: ${sizeLine}`);
     offset = lineEnd + 2;
     if (size === 0) {
-      const trailerEnd = indexOfHeaderEnd(bytes, offset);
-      return trailerEnd === -1 ? undefined : trailerEnd + 4;
+      const trailerEnd = completedTrailerLength(bytes, offset);
+      return trailerEnd === undefined
+        ? undefined
+        : { body: concatBytes(chunks), encodedLength: trailerEnd };
     }
+    if (offset + size + 2 > bytes.byteLength) return undefined;
+    chunks.push(bytes.slice(offset, offset + size));
     offset += size + 2;
+    if (bytes[offset - 2] !== 13 || bytes[offset - 1] !== 10) {
+      throw new Error("blind relay chunked response chunk missing CRLF terminator");
+    }
   }
   return undefined;
+}
+
+function completedTrailerLength(bytes: Uint8Array, offset: number): number | undefined {
+  if (offset + 2 > bytes.byteLength) return undefined;
+  if (bytes[offset] === 13 && bytes[offset + 1] === 10) return offset + 2;
+  const trailerEnd = indexOfHeaderEnd(bytes, offset);
+  return trailerEnd === -1 ? undefined : trailerEnd + 4;
 }
 
 async function certificateSha256(cert: X509Certificate): Promise<string> {
