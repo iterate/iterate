@@ -230,6 +230,14 @@ export async function runVoiceBridge(options: BridgeOptions) {
     }
   };
 
+  // The bridge must stay pending until the conversation ends: the CLI exits
+  // when this function resolves, and `using agent` is disposed at return.
+  let endConversation = () => {};
+  const conversationEnded = new Promise<void>((resolve) => {
+    endConversation = resolve;
+  });
+  let closingIntentionally = false;
+
   const session = connectRealtime({
     provider,
     model: options.model || defaults.model,
@@ -240,8 +248,11 @@ export async function runVoiceBridge(options: BridgeOptions) {
     audioInput: !options.text,
     onEvent,
     onClose: ({ code, reason }) => {
-      say(`realtime socket closed (${code}${reason ? `: ${reason}` : ""})`);
-      process.exit(code === 1000 ? 0 : 1);
+      if (!closingIntentionally) {
+        say(`realtime socket closed unexpectedly (${code}${reason ? `: ${reason}` : ""})`);
+        process.exitCode = 1;
+      }
+      endConversation();
     },
   });
   await session.ready;
@@ -257,9 +268,11 @@ export async function runVoiceBridge(options: BridgeOptions) {
       if (options.forward === "auto") forwardTurn(line, "text");
     });
     rl.on("close", () => {
+      closingIntentionally = true;
       speaker.dispose();
       session.close();
     });
+    await conversationEnded;
     return;
   }
 
@@ -267,16 +280,19 @@ export async function runVoiceBridge(options: BridgeOptions) {
     device: options.mic,
     onChunk: (base64) => session.send({ type: "input_audio_buffer.append", audio: base64 }),
     onExit: ({ code }) => {
+      if (closingIntentionally) return;
       say(`mic capture exited (${code}) — check the ffmpeg avfoundation device (--mic).`);
-      process.exit(1);
+      process.exitCode = 1;
+      endConversation();
     },
   });
   process.on("SIGINT", () => {
+    closingIntentionally = true;
     mic.stop();
     speaker.dispose();
     session.close();
-    process.exit(0);
   });
+  await conversationEnded;
 }
 
 /**

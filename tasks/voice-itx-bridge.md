@@ -8,7 +8,12 @@ branch: mmkal/26/07/02/voice-itx-bridge
 
 ## Status summary
 
-Spec fleshed out from a loose prompt; implementation starting. Nothing built yet.
+Working end-to-end in text mode against local dev with OpenAI Realtime: user
+turns forward to a real itx codemode agent, worker reports inject back, the
+voice agent relays results. Tool-only mode demonstrated the motivating
+failure (voice model says "let me get that going" and never calls the tool).
+Remaining: real-mic audio mode is written but untested (needs a human), and
+Grok itself is untested (needs `XAI_API_KEY`).
 
 ## The ask (as given)
 
@@ -66,18 +71,26 @@ _These are assumptions made while fleshing out an underspecified task._
 
 ## Checklist
 
-- [ ] task file fleshed out and committed first
-- [ ] realtime client (thin ws wrapper, Grok/OpenAI dialects, session.update
-      with instructions + ask_assistant tool + server VAD)
-- [ ] itx assistant lane (connect, sendMessage on turn end, stream-watch for
+- [x] task file fleshed out and committed first _(commit b303ab08b)_
+- [x] realtime client (thin ws wrapper, Grok/OpenAI dialects, session.update
+      with instructions + `ask_assistant` tool + server VAD)
+      _(`apps/os/scripts/voice/realtime.ts`)_
+- [x] itx assistant lane (connect, sendMessage on turn end, stream-watch for
       web-message-sent replies, inject + response.create)
-- [ ] `ask_assistant` tool completion path (function_call_output ack + dedupe)
-- [ ] `--text` REPL mode
-- [ ] audio mode (ffmpeg capture, ffplay playback, barge-in: stop playback on
-      input_audio_buffer.speech_started)
-- [ ] `pnpm cli voice chat` wiring + docs blurb in apps/os/docs
-- [ ] end-to-end demo transcript in text mode against local dev (committed to
-      the PR body, not the repo)
+      _(`bridge.ts` — `forwardTurn`/`askWorker`; client-side 120s wait instead
+      of `agent.ask`'s server-side 45s cap)_
+- [x] `ask_assistant` tool completion path (`function_call_output` ack +
+      dedupe) _(acked immediately with "forwarded to worker"; in auto mode the
+      call is not re-forwarded)_
+- [x] `--text` REPL mode _(readline over stdin; the whole e2e test path)_
+- [x] audio mode (ffmpeg capture, ffplay playback, barge-in: stop playback on
+      `input_audio_buffer.speech_started`) _(`audio.ts` — written, compiles,
+      but not exercised with a real mic yet)_
+- [x] `pnpm cli voice chat` wiring + docs blurb
+      _(`voice` namespace on the OS CLI; docs in `scripts/voice/README.md`
+      rather than apps/os/docs — it's a prototype)_
+- [x] end-to-end demo transcript in text mode against local dev (committed to
+      the PR body, not the repo) _(see PR #1591 body)_
 - [ ] (stretch) try real Grok voice with a real mic — needs `XAI_API_KEY` in
       doppler and a human with a mouth; leaving for Misha
 
@@ -95,3 +108,22 @@ _These are assumptions made while fleshing out an underspecified task._
 ## Implementation log
 
 - (start) worktree created off origin/main at b1fb37f95.
+- Grok Voice Agent API researched: `wss://api.x.ai/v1/realtime?model=grok-voice-latest`,
+  OpenAI Realtime-compatible wire protocol, voices eve/ara/rex/sal/leo,
+  `$0.05/min`. Also has a `force_message` item type (verbatim TTS injection) —
+  not used, but handy if paraphrasing annoys.
+- Built `apps/os/scripts/voice/{realtime,audio,bridge,cli}.ts` + README.
+- Gotcha: the CLI command resolving ends the process (trpc-cli) and disposes
+  the `using` itx handles — the bridge originally returned right after wiring
+  the REPL and died silently. Now stays pending until the conversation ends.
+- E2E (text mode, local dev, OpenAI Realtime): greeting + "list files in my
+  project repo" both forwarded; worker codemode agent listed the real seeded
+  repo files; report injected; voice agent relayed them. In the same run the
+  voice model also spontaneously called `ask_assistant` (acked, deduped).
+- `--forward tool` run: voice model said "Sure, let me get that going" and
+  never called the tool. Request never reached the worker. QED on the
+  motivation for client-side forwarding.
+- Untested: audio mode (mic/speakers), Grok provider (no `XAI_API_KEY`).
+- Worker prompt-following niggle: it replies to pure chit-chat instead of
+  "(idle)" sometimes — harmless (the voice agent gets a redundant report),
+  could be tuned via agent instructions later.
