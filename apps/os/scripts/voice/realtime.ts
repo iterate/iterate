@@ -5,9 +5,9 @@
 
 import WebSocket from "ws";
 
-export type RealtimeProvider = "grok" | "openai";
+type RealtimeProvider = "grok" | "openai";
 
-export type FunctionTool = {
+type FunctionTool = {
   type: "function";
   name: string;
   description: string;
@@ -19,7 +19,7 @@ export type RealtimeServerEvent = {
   [key: string]: unknown;
 };
 
-export type RealtimeSessionConfig = {
+type RealtimeSessionConfig = {
   provider: RealtimeProvider;
   model: string;
   apiKey: string;
@@ -33,7 +33,7 @@ export type RealtimeSessionConfig = {
   onClose: (info: { code: number; reason: string }) => void;
 };
 
-export type RealtimeSession = {
+type RealtimeSession = {
   send(event: Record<string, unknown>): void;
   close(): void;
   /** Resolves once the socket is open and `session.update` has been sent. */

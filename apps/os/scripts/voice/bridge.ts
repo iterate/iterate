@@ -60,7 +60,7 @@ const ASK_ASSISTANT_TOOL = {
   },
 };
 
-export type BridgeOptions = {
+type BridgeOptions = {
   provider?: string;
   model?: string;
   voice?: string;
