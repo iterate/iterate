@@ -1,31 +1,31 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env.ts";
-import type { CfExecutionContext, Secret, Session } from "./types.ts";
+import type { CfExecutionContext, Itx, Secret, Session } from "./types.ts";
 import { TRUSTED_INTERNAL_ITX_TOKEN } from "./auth.ts";
 import { UnauthenticatedItxRpcTarget } from "./rpc-targets.ts";
 
 type PlaygroundCommandRequest = {
-  action?: unknown;
   code?: unknown;
-  input?: unknown;
 };
 
-const PLAYGROUND_ACTIONS = [
-  "whoami",
-  "create-project",
-  "project-egress",
-  "plain-intercept-placeholder",
-  "secret-egress",
-  "blind-relay-proof-command",
-] as const;
+const PLAYGROUND_DEMO_PROJECT_ID = "playground-demo-default";
+const PLAYGROUND_DEMO_PROJECT_SLUG = "playground-demo-default";
+const PLAYGROUND_DEMO_SECRET_PATH = "/secrets/playground/api-token";
+const PLAYGROUND_DEMO_SECRET_MATERIAL = "demo-secret-material";
+const POSTMAN_ECHO_GET_URL = "https://postman-echo.com/get?source=itx-playground";
+const POSTMAN_ECHO_HEADERS_URL = "https://postman-echo.com/headers";
+const POSTMAN_ECHO_POST_URL = "https://postman-echo.com/post";
+const BLIND_RELAY_SKIP_TLS_VERIFY_HEADER = "x-itx-blind-relay-insecure-skip-tls-verify";
 const ITX_EGRESS_CLI_DEPENDENCIES =
   "tsx@4.21.0 trpc-cli@0.15.1 @orpc/server@1.14.6 zod@4.4.3 capnweb@0.8.0 ws@8.19.0";
 
 type PlaygroundDemoPhase =
   | "idle"
+  | "cli_listening"
   | "waiting_for_node_relay"
   | "plain_intercept_saw_plaintext"
   | "relay_connected"
+  | "encrypted_relay_observed"
   | "secret_egress_relayed"
   | "target_received_request"
   | "relay_saw_ciphertext_only"
@@ -167,20 +167,6 @@ async function runPlaygroundCommand(request: Request, ctx: CfExecutionContext): 
   const parsed = parsePlaygroundCommandRequest(input);
   if (parsed instanceof Response) return parsed;
 
-  if (typeof parsed.action !== "string" || parsed.action.trim() === "") {
-    return Response.json({ error: "action is required" }, { status: 400 });
-  }
-  if (!PLAYGROUND_ACTIONS.includes(parsed.action as (typeof PLAYGROUND_ACTIONS)[number])) {
-    return Response.json(
-      {
-        availableActions: PLAYGROUND_ACTIONS,
-        error: `unknown action: ${parsed.action}`,
-        ok: false,
-      },
-      { status: 400 },
-    );
-  }
-
   const startedAt = Date.now();
   const session = new UnauthenticatedItxRpcTarget(new Headers(), ctx).authenticate({
     type: "trusted-internal",
@@ -190,7 +176,7 @@ async function runPlaygroundCommand(request: Request, ctx: CfExecutionContext): 
 
   try {
     const result = await withTimeout(
-      runPlaygroundAction(parsed.action, parsed.input, session, helpers),
+      evaluatePlaygroundScript(parsed, session, helpers),
       20_000,
       "command timed out after 20s",
     );
@@ -205,188 +191,135 @@ async function runPlaygroundCommand(request: Request, ctx: CfExecutionContext): 
         durationMs: Date.now() - startedAt,
         error: error instanceof Error ? error.message : String(error),
         ok: false,
-        stack:
-          booleanParam(parsed.input, "debug", false) && error instanceof Error
-            ? error.stack
-            : undefined,
+        stack: error instanceof Error ? error.stack : undefined,
       },
       { status: 500 },
     );
   }
 }
 
-function parsePlaygroundCommandRequest(input: PlaygroundCommandRequest):
-  | {
-      action: string;
-      input: Record<string, unknown>;
-    }
-  | Response {
-  if (typeof input.action === "string") {
-    return { action: input.action, input: objectInput(input.input) };
-  }
-
-  if (typeof input.code === "string") {
-    try {
-      const codeInput = JSON.parse(input.code) as unknown;
-      if (isRecord(codeInput) && typeof codeInput.action === "string") {
-        return {
-          action: codeInput.action,
-          input: objectInput(codeInput),
-        };
-      }
-      return Response.json(
-        { error: "JSON snippet must include an action string" },
-        { status: 400 },
-      );
-    } catch {
-      return Response.json(
-        {
-          error:
-            "Cloudflare Workers disallow eval/code generation. Use one of the JSON action snippets in the textarea.",
-        },
-        { status: 400 },
-      );
-    }
-  }
-
-  return Response.json({ error: "action is required" }, { status: 400 });
+function parsePlaygroundCommandRequest(input: PlaygroundCommandRequest): string | Response {
+  if (typeof input.code === "string" && input.code.trim() !== "") return input.code;
+  return Response.json({ error: "code is required" }, { status: 400 });
 }
 
-async function runPlaygroundAction(
-  action: string,
-  input: Record<string, unknown>,
+async function evaluatePlaygroundScript(
+  code: string,
   session: Session,
   helpers: ReturnType<typeof playgroundHelpers>,
 ): Promise<unknown> {
-  switch (action) {
-    case "whoami":
-      return {
-        principal: session.whoami(),
-        projects: session.projects.list(),
-      };
+  const project = await helpers.project(session);
+  const execution = await project.runScript(wrapPlaygroundScript(code, helpers.origin));
+  return execution.result;
+}
 
-    case "create-project": {
-      const project = await session.projects.create({
-        slug: helpers.projectSlug(stringParam(input, "prefix", "demo")),
-      });
-      return await project.describe();
-    }
+function wrapPlaygroundScript(code: string, origin: string): string {
+  return `async (itx) => {
+  const origin = ${JSON.stringify(origin)};
+  const PLAYGROUND_DEMO_PROJECT_ID = ${JSON.stringify(PLAYGROUND_DEMO_PROJECT_ID)};
+  const PLAYGROUND_DEMO_PROJECT_SLUG = ${JSON.stringify(PLAYGROUND_DEMO_PROJECT_SLUG)};
+  const PLAYGROUND_DEMO_SECRET_PATH = ${JSON.stringify(PLAYGROUND_DEMO_SECRET_PATH)};
+  const PLAYGROUND_DEMO_SECRET_MATERIAL = ${JSON.stringify(PLAYGROUND_DEMO_SECRET_MATERIAL)};
+  const ITX_EGRESS_CLI_DEPENDENCIES = ${JSON.stringify(ITX_EGRESS_CLI_DEPENDENCIES)};
 
-    case "project-egress": {
-      const project = await session.projects.create({
-        slug: helpers.projectSlug(stringParam(input, "prefix", "egress")),
-      });
-      const targetUrl = stringParam(input, "targetUrl", helpers.targetUrl());
-      const response = await project.egress.fetch(
-        new Request(targetUrl, {
-          body: stringParam(input, "body", "hello from project egress"),
-          headers: {
-            "content-type": "text/plain",
-            "x-itx-demo": "plain-egress",
-          },
-          method: "POST",
-        }),
-      );
-
-      return {
-        project: await project.describe(),
-        response: await helpers.responseSummary(response),
-        targetUrl,
-      };
-    }
-
-    case "plain-intercept-placeholder": {
-      const project = await session.projects.create({
-        slug: helpers.projectSlug(stringParam(input, "prefix", "intercept")),
-      });
-      const targetUrl = stringParam(input, "targetUrl", helpers.targetUrl());
-      const secretPath = stringParam(input, "secretPath", "/secrets/playground/intercept-token");
-      const secret = project.secrets.get(secretPath);
+  const helpers = {
+    origin,
+    targetUrl(path = "/playground/target") {
+      return new URL(path, origin).toString();
+    },
+    async ensureDemoSecret(project, targetUrl) {
+      const secret = project.secrets.get(PLAYGROUND_DEMO_SECRET_PATH);
       await secret.update({
         egress: { urls: [targetUrl] },
-        material: stringParam(input, "secretMaterial", "intercept-demo-secret"),
+        material: PLAYGROUND_DEMO_SECRET_MATERIAL,
       });
       await waitForSecretMaterial(secret);
-
-      const intercept = await project.egress.intercept(async (request) =>
-        Response.json({
-          body: await request.text(),
-          headers: headersToObject(request.headers),
-          intercepted: true,
-          note: "Plain intercept runs before secret substitution, so it sees the getSecret(...) placeholder, not material.",
-          url: request.url,
-        }),
-      );
-      try {
-        const response = await project.egress.fetch(
-          new Request(targetUrl, {
-            body: stringParam(input, "body", "plain interceptor should see this body"),
-            headers: {
-              authorization: `Bearer getSecret({ path: "${secretPath}" })`,
-              "content-type": "text/plain",
-              "x-itx-demo": "plain-intercept-placeholder",
-            },
-            method: "POST",
-          }),
-        );
-
-        return {
-          project: await project.describe(),
-          response: await helpers.responseSummary(response),
-          secret: await secret.describe(),
-          targetUrl,
-        };
-      } finally {
-        await intercept.release();
-      }
-    }
-
-    case "secret-egress": {
-      const project = await session.projects.create({
-        slug: helpers.projectSlug(stringParam(input, "prefix", "secret-egress")),
+      return secret;
+    },
+    async project() {
+      return await itx.projects.create({
+        projectId: PLAYGROUND_DEMO_PROJECT_ID,
+        slug: PLAYGROUND_DEMO_PROJECT_SLUG,
       });
-      const targetUrl = stringParam(input, "targetUrl", helpers.targetUrl());
-      const secretPath = stringParam(input, "secretPath", "/secrets/playground/api-token");
-      const secretMaterial = stringParam(input, "secretMaterial", "demo-secret-material");
-      const secret = project.secrets.get(secretPath);
-      await secret.update({
-        egress: { urls: [targetUrl] },
-        material: secretMaterial,
-      });
-      await waitForSecretMaterial(secret);
+    },
+    projectSlug(prefix = "playground") {
+      return prefix + "-" + crypto.randomUUID().slice(0, 8);
+    },
+    async responseSummary(response) {
+      return await responseSummary(response);
+    },
+    deployedBlindRelayCommand() {
+      return [
+        'tmp="$(mktemp -d)"',
+        '&& cd "$tmp"',
+        "&& npm init -y >/dev/null",
+        "&& npm install " + ITX_EGRESS_CLI_DEPENDENCIES + " >/dev/null",
+        "&& curl -fsS " + origin + "/playground/itx-egress-cli.mts -o itx-egress-cli.mts",
+        "&& npx tsx itx-egress-cli.mts run --base-url " + origin + ' --demo-id default --body "payload hidden from relay" --secret-material "blind-secret-material"',
+      ].join(" ");
+    },
+  };
 
-      const response = await project.egress.fetch(
-        new Request(targetUrl, {
-          body: stringParam(
-            input,
-            "body",
-            "the request asks for a placeholder, not raw secret material",
-          ),
-          headers: {
-            authorization: `Bearer getSecret({ path: "${secretPath}" })`,
-            "content-type": "text/plain",
-            "x-itx-demo": "secret-egress",
-          },
-          method: "POST",
-        }),
-      );
+  ${code}
 
-      return {
-        project: await project.describe(),
-        response: await helpers.responseSummary(response),
-        secret: await secret.describe(),
-        targetUrl,
-      };
-    }
-
-    case "blind-relay-proof-command":
-      return {
-        command: helpers.deployedBlindRelayCommand(),
-        whyThisIsACommand:
-          "The deployed Worker creates TLS ciphertext, but the relay side still needs a real TCP socket. This command downloads and runs a standalone Node relay against the deployed Worker.",
-      };
+  if (typeof run !== "function") {
+    throw new Error("script must define async function run(itx, helpers)");
   }
-  throw new Error(`unknown playground action: ${action}`);
+  return await toJsonable(await run(itx, helpers));
+
+  async function toJsonable(value) {
+    if (value instanceof Response) return await responseSummary(value);
+    if (value instanceof Request) {
+      return {
+        body: await value.clone().text(),
+        headers: headersToObject(value.headers),
+        method: value.method,
+        url: value.url,
+      };
+    }
+    if (value instanceof Headers) return headersToObject(value);
+    if (value instanceof Uint8Array) return Array.from(value);
+    if (value instanceof Error) return { message: value.message, stack: value.stack };
+    if (Array.isArray(value)) return await Promise.all(value.map(toJsonable));
+    if (value !== null && typeof value === "object") {
+      return Object.fromEntries(
+        await Promise.all(
+          Object.entries(value).map(async ([key, item]) => [key, await toJsonable(item)]),
+        ),
+      );
+    }
+    return value ?? null;
+  }
+
+  async function responseSummary(response) {
+    const contentType = response.headers.get("content-type") || "";
+    const body = contentType.includes("application/json")
+      ? await response.json()
+      : await response.text();
+    return {
+      body,
+      headers: headersToObject(response.headers),
+      status: response.status,
+      statusText: response.statusText,
+    };
+  }
+
+  function headersToObject(headers) {
+    return Object.fromEntries([...headers.entries()].sort(([left], [right]) => left.localeCompare(right)));
+  }
+
+  async function waitForSecretMaterial(secret) {
+    const deadline = Date.now() + 5000;
+    let lastDescription = await secret.describe();
+    while (!lastDescription.hasMaterial) {
+      if (Date.now() >= deadline) {
+        throw new Error("secret material did not become available before timeout: " + JSON.stringify(lastDescription));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      lastDescription = await secret.describe();
+    }
+  }
+}`;
 }
 
 function playgroundHelpers(origin: string) {
@@ -394,6 +327,21 @@ function playgroundHelpers(origin: string) {
     origin,
     targetUrl(path = "/playground/target") {
       return new URL(path, origin).toString();
+    },
+    async ensureDemoSecret(project: Itx, targetUrl: string) {
+      const secret = project.secrets.get(PLAYGROUND_DEMO_SECRET_PATH);
+      await secret.update({
+        egress: { urls: [targetUrl] },
+        material: PLAYGROUND_DEMO_SECRET_MATERIAL,
+      });
+      await waitForSecretMaterial(secret);
+      return secret;
+    },
+    async project(session: Session) {
+      return await session.projects.create({
+        projectId: PLAYGROUND_DEMO_PROJECT_ID,
+        slug: PLAYGROUND_DEMO_PROJECT_SLUG,
+      });
     },
     projectSlug(prefix = "playground") {
       return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
@@ -408,7 +356,7 @@ function playgroundHelpers(origin: string) {
         "&& npm init -y >/dev/null",
         `&& npm install ${ITX_EGRESS_CLI_DEPENDENCIES} >/dev/null`,
         `&& curl -fsS ${origin}/playground/itx-egress-cli.mts -o itx-egress-cli.mts`,
-        `&& npx tsx itx-egress-cli.mts run --base-url ${origin} --demo-id default`,
+        `&& npx tsx itx-egress-cli.mts run --base-url ${origin} --demo-id default --body "payload hidden from relay" --secret-material "blind-secret-material"`,
       ].join(" ");
     },
   };
@@ -432,18 +380,23 @@ const SECRET_MATERIAL = "blind-secret-material";
 const HIDDEN_BODY = "payload hidden from relay";
 const HIDDEN_PATH = "/playground/target";
 const HIDDEN_QUERY = "worker-only";
+const PLAYGROUND_DEMO_PROJECT_ID = "playground-demo-default";
+const PLAYGROUND_DEMO_PROJECT_SLUG = "playground-demo-default";
+const PLAYGROUND_DEMO_SECRET_PATH = "/secrets/playground/api-token";
 
 class BlindRelayConnectionTarget extends RpcTarget {
   #observation;
+  #onClose;
   #readQueue = [];
   #readWaiters = [];
   #socket;
   #closed = false;
   #error;
 
-  constructor({ observation, socket }) {
+  constructor({ observation, onClose, socket }) {
     super();
     this.#observation = observation;
+    this.#onClose = onClose;
     this.#socket = socket;
 
     socket.on("data", (chunk) => {
@@ -478,7 +431,7 @@ class BlindRelayConnectionTarget extends RpcTarget {
     this.#observation.bytesWorkerToTarget += chunk.byteLength;
     this.#observation.workerToTargetChunks.push(chunk.slice());
     if (this.#observation.firstWorkerToTarget.byteLength === 0) {
-      this.#observation.firstWorkerToTarget = chunk.slice(0, 96);
+      this.#observation.firstWorkerToTarget = chunk.slice(0, 2048);
     }
     await new Promise((resolve, reject) => {
       this.#socket.write(chunk, (error) => {
@@ -496,6 +449,7 @@ class BlindRelayConnectionTarget extends RpcTarget {
   #finishReads(error) {
     if (this.#closed) return;
     this.#closed = true;
+    this.#onClose?.(this.#observation);
     for (const waiter of this.#readWaiters.splice(0)) {
       if (error === null) waiter.resolve(null);
       else waiter.reject(error);
@@ -506,6 +460,12 @@ class BlindRelayConnectionTarget extends RpcTarget {
 class BlindRelayTarget extends RpcTarget {
   observations = [];
   #sockets = new Set();
+  #logRequests;
+
+  constructor({ logRequests = false } = {}) {
+    super();
+    this.#logRequests = logRequests;
+  }
 
   async dial({ host, port }) {
     const socket = net.connect({ host, port });
@@ -515,16 +475,52 @@ class BlindRelayTarget extends RpcTarget {
     const observation = {
       bytesTargetToWorker: 0,
       bytesWorkerToTarget: 0,
+      closedAt: undefined,
+      connectedAt: undefined,
       firstTargetToWorker: new Uint8Array(),
       firstWorkerToTarget: new Uint8Array(),
       host,
+      id: this.observations.length + 1,
+      localAddress: undefined,
+      localPort: undefined,
       port,
+      remoteAddress: undefined,
+      remotePort: undefined,
+      startedAt: new Date().toISOString(),
       targetToWorkerChunks: [],
       workerToTargetChunks: [],
     };
     this.observations.push(observation);
+    if (this.#logRequests) {
+      console.log("[encrypted request #" + observation.id + "] dial " + host + ":" + port);
+    }
 
-    return new BlindRelayConnectionTarget({ observation, socket });
+    socket.once("connect", () => {
+      observation.connectedAt = new Date().toISOString();
+      observation.localAddress = socket.localAddress;
+      observation.localPort = socket.localPort;
+      observation.remoteAddress = socket.remoteAddress;
+      observation.remotePort = socket.remotePort;
+      if (this.#logRequests) {
+        console.log(
+          "[encrypted request #" +
+            observation.id +
+            "] connected remote=" +
+            observation.remoteAddress +
+            ":" +
+            observation.remotePort,
+        );
+      }
+    });
+
+    return new BlindRelayConnectionTarget({
+      observation,
+      onClose: (closedObservation) => {
+        closedObservation.closedAt = new Date().toISOString();
+        if (this.#logRequests) printRequestLog("encrypted relay request", [summarizeEncryptedObservation(closedObservation)]);
+      },
+      socket,
+    });
   }
 
   dispose() {
@@ -541,7 +537,7 @@ async function runBlindRelay({
   secretMaterial = SECRET_MATERIAL,
 }) {
   const baseUrl = normalizeBaseUrl(inputBaseUrl || process.env.ITX_BASE_URL || DEFAULT_BASE_URL);
-  const relay = new BlindRelayTarget();
+  const relay = new BlindRelayTarget({ logRequests: true });
   const session = connectItx(baseUrl);
   let relayHandle;
 
@@ -629,10 +625,11 @@ async function runBlindRelay({
       relayDialed: observation.host + ":" + observation.port,
       targetClientIp: responseBody.clientIp,
     };
+    const requestLog = relay.observations.map(summarizeEncryptedObservation);
     await postEvent(baseUrl, demoId, {
       phase: "relay_saw_ciphertext_only",
       message: "Relay transcript contained TLS records and did not contain the secret, body, path, or query token.",
-      detail: proof,
+      detail: { ...proof, requestLog },
     });
 
     console.log(assertTranscript ? "Blind relay proof passed." : "Blind relay completed.");
@@ -644,9 +641,11 @@ async function runBlindRelay({
     console.log("Relay bytes worker->target: " + proof.bytesWorkerToTarget);
     console.log("Relay bytes target->worker: " + proof.bytesTargetToWorker);
     console.log("Plaintext checked absent from relay transcript: " + hiddenStrings.join(", "));
+    printRequestLog("encrypted relay request log", requestLog);
     return {
       mode: assertTranscript ? "blind-relay-proof" : "blind-relay",
       proof,
+      requestLog,
       targetReceivedAuth: responseBody.headers[EGRESS_PROOF_HEADER],
       targetResponse: responseBody,
     };
@@ -672,6 +671,7 @@ async function runPlainIntercept({
   const baseUrl = normalizeBaseUrl(inputBaseUrl || process.env.ITX_BASE_URL || DEFAULT_BASE_URL);
   const session = connectItx(baseUrl);
   let interceptHandle;
+  const requestLog = [];
 
   try {
     await postEvent(baseUrl, demoId, {
@@ -703,9 +703,12 @@ async function runPlainIntercept({
       const intercepted = {
         body: await request.text(),
         headers: headersToObject(request.headers),
+        method: request.method,
         note: "Plain intercept runs before secret substitution, so it sees plaintext body and getSecret(...) placeholders.",
         url: request.url,
       };
+      requestLog.push(intercepted);
+      printRequestLog("plain intercept request", [intercepted]);
       await postEvent(baseUrl, demoId, {
         phase: "plain_intercept_saw_plaintext",
         message: "Plain interceptor saw the egress request before secret substitution.",
@@ -729,9 +732,11 @@ async function runPlainIntercept({
     console.log("Worker: " + baseUrl);
     console.log("Interceptor saw body: " + responseBody.body);
     console.log("Interceptor saw auth: " + responseBody.headers[EGRESS_PROOF_HEADER]);
+    printRequestLog("plain intercept request log", requestLog);
     return {
       intercepted: responseBody,
       mode: "plain-intercept",
+      requestLog,
       secret: await secret.describe(),
     };
   } catch (error) {
@@ -742,6 +747,98 @@ async function runPlainIntercept({
     throw error;
   } finally {
     if (interceptHandle !== undefined) await interceptHandle.release().catch(() => {});
+    session[Symbol.dispose]?.();
+  }
+}
+
+async function runPlainInterceptListen({
+  baseUrl: inputBaseUrl,
+  demoId = "default",
+}) {
+  const baseUrl = normalizeBaseUrl(inputBaseUrl || process.env.ITX_BASE_URL || DEFAULT_BASE_URL);
+  const session = connectItx(baseUrl);
+  let interceptHandle;
+  const requestLog = [];
+
+  try {
+    const root = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+    const project = await sharedDemoProject(root, demoId);
+    interceptHandle = await project.egress.intercept(async (request) => {
+      const intercepted = {
+        body: await request.text(),
+        headers: headersToObject(request.headers),
+        method: request.method,
+        note: "Plain listener sees the request before any secret substitution or outbound fetch.",
+        url: request.url,
+      };
+      requestLog.push(intercepted);
+      printRequestLog("plain listener request", [intercepted]);
+      await postEvent(baseUrl, demoId, {
+        phase: "plain_intercept_saw_plaintext",
+        message: "Local plain listener saw an outbound ITX request.",
+        detail: intercepted,
+      });
+      return Response.json({
+        interceptedBy: "local-node-plain-listener",
+        request: intercepted,
+        requestNumber: requestLog.length,
+      });
+    });
+
+    await postEvent(baseUrl, demoId, {
+      phase: "cli_listening",
+      message: "Local plain interceptor is listening on shared project " + PLAYGROUND_DEMO_PROJECT_ID + ".",
+      detail: { mode: "plain-intercept-listen", projectId: PLAYGROUND_DEMO_PROJECT_ID },
+    });
+    console.log("Plain intercept listener installed.");
+    console.log("Worker: " + baseUrl);
+    console.log("Shared project: " + PLAYGROUND_DEMO_PROJECT_ID);
+    console.log("Open " + new URL("/playground", baseUrl).toString() + " and click fetch buttons.");
+    console.log("This mode prints full request URL, method, headers, and body. Press Ctrl+C to stop.");
+    await waitForShutdown();
+    return { mode: "plain-intercept-listen", requestLog };
+  } finally {
+    if (interceptHandle !== undefined) await interceptHandle.release().catch(() => {});
+    session[Symbol.dispose]?.();
+  }
+}
+
+async function runBlindRelayListen({
+  baseUrl: inputBaseUrl,
+  demoId = "default",
+}) {
+  const baseUrl = normalizeBaseUrl(inputBaseUrl || process.env.ITX_BASE_URL || DEFAULT_BASE_URL);
+  const relay = new BlindRelayTarget({ logRequests: true });
+  const session = connectItx(baseUrl);
+  let relayHandle;
+
+  try {
+    const root = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+    const project = await sharedDemoProject(root, demoId);
+    relayHandle = await project.egress.useBlindRelayForSecretEgress(relay);
+    await postEvent(baseUrl, demoId, {
+      phase: "cli_listening",
+      message: "Local blind relay is listening on shared project " + PLAYGROUND_DEMO_PROJECT_ID + ".",
+      detail: { mode: "blind-relay-listen", projectId: PLAYGROUND_DEMO_PROJECT_ID },
+    });
+    console.log("Blind relay listener installed.");
+    console.log("Worker: " + baseUrl);
+    console.log("Shared project: " + PLAYGROUND_DEMO_PROJECT_ID);
+    console.log("Open " + new URL("/playground", baseUrl).toString() + " and click a secret-bearing fetch button.");
+    console.log("This mode prints host/SNI/IP/TLS byte metadata only. Press Ctrl+C to stop.");
+    await waitForShutdown();
+    const requestLog = relay.observations.map(summarizeEncryptedObservation);
+    printRequestLog("encrypted relay request log", requestLog);
+    return { mode: "blind-relay-listen", requestLog };
+  } finally {
+    if (relayHandle !== undefined) await relayHandle.release().catch(() => {});
+    relay.dispose();
     session[Symbol.dispose]?.();
   }
 }
@@ -823,6 +920,97 @@ function headersToObject(headers) {
   return Object.fromEntries([...headers.entries()].sort(([left], [right]) => left.localeCompare(right)));
 }
 
+async function sharedDemoProject(root, demoId) {
+  const suffix = String(demoId || "default").replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 40) || "default";
+  return await root.projects.create({
+    projectId: suffix === "default" ? PLAYGROUND_DEMO_PROJECT_ID : "playground-demo-" + suffix,
+    slug: suffix === "default" ? PLAYGROUND_DEMO_PROJECT_SLUG : "playground-demo-" + suffix,
+  });
+}
+
+function printRequestLog(title, entries) {
+  console.log("");
+  console.log(title + " (" + entries.length + ")");
+  console.log(JSON.stringify(entries, null, 2));
+  console.log("");
+}
+
+function summarizeEncryptedObservation(observation) {
+  return {
+    bytesTargetToWorker: observation.bytesTargetToWorker,
+    bytesWorkerToTarget: observation.bytesWorkerToTarget,
+    closedAt: observation.closedAt,
+    connectedAt: observation.connectedAt,
+    firstTargetToWorkerBytes: bytesPreview(observation.firstTargetToWorker),
+    firstWorkerToTargetBytes: bytesPreview(observation.firstWorkerToTarget),
+    id: observation.id,
+    localAddress: observation.localAddress,
+    localPort: observation.localPort,
+    note: "Encrypted relay mode does not expose HTTP headers or body.",
+    requestedHost: observation.host,
+    requestedPort: observation.port,
+    remoteAddress: observation.remoteAddress,
+    remotePort: observation.remotePort,
+    sni: extractTlsClientHelloSni(observation.firstWorkerToTarget),
+    startedAt: observation.startedAt,
+  };
+}
+
+function bytesPreview(bytes, max = 32) {
+  return Array.from(bytes.slice(0, max))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join(" ");
+}
+
+function extractTlsClientHelloSni(bytes) {
+  try {
+    if (bytes.length < 5 || bytes[0] !== 22) return null;
+    let offset = 5;
+    if (bytes[offset] !== 1) return null;
+    offset += 4;
+    offset += 2 + 32;
+    const sessionIdLength = bytes[offset];
+    offset += 1 + sessionIdLength;
+    const cipherSuitesLength = (bytes[offset] << 8) | bytes[offset + 1];
+    offset += 2 + cipherSuitesLength;
+    const compressionMethodsLength = bytes[offset];
+    offset += 1 + compressionMethodsLength;
+    const extensionsLength = (bytes[offset] << 8) | bytes[offset + 1];
+    offset += 2;
+    const extensionsEnd = offset + extensionsLength;
+    while (offset + 4 <= extensionsEnd) {
+      const type = (bytes[offset] << 8) | bytes[offset + 1];
+      const length = (bytes[offset + 2] << 8) | bytes[offset + 3];
+      offset += 4;
+      if (type === 0) {
+        let nameOffset = offset + 2;
+        const listEnd = offset + length;
+        while (nameOffset + 3 <= listEnd) {
+          const nameType = bytes[nameOffset];
+          const nameLength = (bytes[nameOffset + 1] << 8) | bytes[nameOffset + 2];
+          nameOffset += 3;
+          if (nameType === 0) {
+            return Buffer.from(bytes.slice(nameOffset, nameOffset + nameLength)).toString("utf8");
+          }
+          nameOffset += nameLength;
+        }
+      }
+      offset += length;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+async function waitForShutdown() {
+  await new Promise((resolve) => {
+    const done = () => resolve();
+    process.once("SIGINT", done);
+    process.once("SIGTERM", done);
+  });
+}
+
 const router = os.router({
   run: os
     .input(
@@ -831,12 +1019,18 @@ const router = os.router({
         body: z.string().default(HIDDEN_BODY).describe("Request body to send through egress"),
         demoId: z.string().default("default").describe("Durable Object demo id shown on the playground page"),
         mode: z
-          .enum(["plain-intercept", "blind-relay", "blind-relay-proof"])
-          .describe("plain-intercept shows unencrypted request data; blind-relay sends encrypted TLS bytes through local Node; blind-relay-proof also asserts the relay transcript does not contain plaintext"),
+          .enum(["plain-intercept-listen", "blind-relay-listen", "plain-intercept", "blind-relay", "blind-relay-proof"])
+          .describe("listener modes stay attached while you click web UI fetch buttons; plain-intercept shows headers/body; blind-relay shows encrypted connection metadata"),
         secretMaterial: z.string().default(SECRET_MATERIAL).describe("Secret material the Worker substitutes before egress"),
       }),
     )
     .handler(async ({ input }) => {
+      if (input.mode === "plain-intercept-listen") {
+        return await runPlainInterceptListen(input);
+      }
+      if (input.mode === "blind-relay-listen") {
+        return await runBlindRelayListen(input);
+      }
       if (input.mode === "plain-intercept") {
         return await runPlainIntercept(input);
       }
@@ -934,20 +1128,6 @@ function isRecord(input: unknown): input is Record<string, unknown> {
   return typeof input === "object" && input !== null && !Array.isArray(input);
 }
 
-function objectInput(input: unknown): Record<string, unknown> {
-  return isRecord(input) ? input : {};
-}
-
-function stringParam(input: Record<string, unknown>, key: string, fallback: string): string {
-  const value = input[key];
-  return typeof value === "string" && value.length > 0 ? value : fallback;
-}
-
-function booleanParam(input: Record<string, unknown>, key: string, fallback: boolean): boolean {
-  const value = input[key];
-  return typeof value === "boolean" ? value : fallback;
-}
-
 function playgroundDemoId(url: URL): string {
   const [, , , demoId] = url.pathname.split("/");
   return demoId === undefined || demoId.trim() === "" ? "default" : demoId;
@@ -959,9 +1139,11 @@ function playgroundDemoPath(url: URL): string {
 }
 
 function demoPhase(input: unknown): PlaygroundDemoPhase {
-  return input === "waiting_for_node_relay" ||
+  return input === "cli_listening" ||
+    input === "waiting_for_node_relay" ||
     input === "plain_intercept_saw_plaintext" ||
     input === "relay_connected" ||
+    input === "encrypted_relay_observed" ||
     input === "secret_egress_relayed" ||
     input === "target_received_request" ||
     input === "relay_saw_ciphertext_only" ||
@@ -1046,10 +1228,10 @@ function playgroundHtml(origin: string): string {
       border: 1px solid #d8dde6;
       border-radius: 8px;
     }
-    .presets {
+    .examples {
       padding: 10px;
     }
-    .preset {
+    .example {
       width: 100%;
       display: block;
       margin: 0 0 8px;
@@ -1062,11 +1244,11 @@ function playgroundHtml(origin: string): string {
       cursor: pointer;
       font: inherit;
     }
-    .preset.active {
+    .example.active {
       border-color: #1463ff;
       background: #eef4ff;
     }
-    .preset span {
+    .example span {
       display: block;
       margin-top: 4px;
       color: #647084;
@@ -1230,19 +1412,20 @@ function playgroundHtml(origin: string): string {
 </head>
 <body>
   <main>
-    <h1>Blind Relay POC Playground</h1>
-    <p>Run ITX presets against this deployed Worker. Plain intercept sees <code>getSecret(...)</code> placeholders; blind relay receives only encrypted TLS bytes after the Worker substitutes the secret.</p>
+    <h1>ITX Egress Playground</h1>
+    <p>Run ITX fetch scripts against this deployed Worker. Start the local CLI in plain mode to see request headers and bodies, or in blind relay mode to see only encrypted connection metadata.</p>
     <div class="warning">Demo-only: anyone with this URL can create throwaway projects on this dev Worker. Do not enter real secrets.</div>
     <section class="panel demo-box">
       <h2>Run the interactive ITX egress CLI</h2>
-      <p>This downloads a self-contained TypeScript CLI into a temp directory, installs pinned copies of <code>tsx</code>, <code>trpc-cli</code>, <code>@orpc/server</code>, <code>zod</code>, <code>capnweb</code>, and <code>ws</code>, then prompts you to choose plain intercept, blind relay, or blind relay proof mode. Requires Node.js 20+ and npm.</p>
+      <p>This downloads a self-contained TypeScript CLI into a temp directory, installs pinned copies of <code>tsx</code>, <code>trpc-cli</code>, <code>@orpc/server</code>, <code>zod</code>, <code>capnweb</code>, and <code>ws</code>, then prompts you to choose plain intercept, blind relay, listener, or proof mode. Requires Node.js 20+ and npm.</p>
       <ol>
-        <li>You run Node locally.</li>
-        <li>For plain intercept mode, the interceptor sees the unencrypted request before secret substitution.</li>
-        <li>For blind relay modes, the Worker substitutes <code>getSecret(...)</code>, then Node opens the TCP connection, so the target sees your local relay IP while the relay only sees encrypted TLS bytes.</li>
+        <li>You run Node locally and choose a listener mode.</li>
+        <li>Click one of the ITX fetch buttons below.</li>
+        <li>Plain listener mode prints headers and bodies; blind relay listener mode prints host/SNI/IP and byte counts for encrypted secret egress.</li>
       </ol>
+      <p class="meta">Shared project: <code>${PLAYGROUND_DEMO_PROJECT_ID}</code>. Guaranteed demo secret: <code>${PLAYGROUND_DEMO_SECRET_PATH}</code> = <code>${PLAYGROUND_DEMO_SECRET_MATERIAL}</code>.</p>
       <div class="command-row">
-        <button class="preset" id="copy-command" type="button">Copy command</button>
+        <button class="example" id="copy-command" type="button">Copy command</button>
         <code class="command" id="relay-command">${blindRelayCommand}</code>
       </div>
       <p class="meta">Raw script: <a href="${blindRelayScriptUrl}">${blindRelayScriptUrl}</a></p>
@@ -1251,17 +1434,17 @@ function playgroundHtml(origin: string): string {
       <h2>Live relay demo state</h2>
       <div class="status-row">
         <div>Demo state: <span class="phase" id="demo-phase">loading</span></div>
-        <button class="preset" id="reset-demo" type="button">Reset log</button>
+        <button class="example" id="reset-demo" type="button">Reset log</button>
       </div>
       <div class="meta" id="demo-updated">Waiting for status...</div>
       <div class="proof-grid" id="demo-proof"></div>
       <div class="logs" id="demo-logs"></div>
     </section>
     <div class="layout">
-      <aside class="panel presets" id="presets"></aside>
+      <aside class="panel examples" id="examples"></aside>
       <section class="panel editor">
         <div class="bar">
-          <strong id="title">Snippet</strong>
+          <strong id="title">ITX Script</strong>
           <span class="meta" id="origin">${escapeHtml(origin)}</span>
         </div>
         <textarea id="code" spellcheck="false"></textarea>
@@ -1269,14 +1452,14 @@ function playgroundHtml(origin: string): string {
           <span class="meta" id="status">Ready</span>
           <button class="run" id="run">Run</button>
         </div>
-        <div class="summary" id="summary">Select a preset and run it to see the proof summary.</div>
+        <div class="summary" id="summary">Select an ITX script and run it. If the local CLI is listening, it will log the request.</div>
         <pre id="output">{}</pre>
       </section>
     </div>
   </main>
   <script>
     const examples = ${examples};
-    const presets = document.querySelector("#presets");
+    const examplesEl = document.querySelector("#examples");
     const code = document.querySelector("#code");
     const output = document.querySelector("#output");
     const summary = document.querySelector("#summary");
@@ -1296,30 +1479,29 @@ function playgroundHtml(origin: string): string {
       selected = index;
       code.value = examples[index].code;
       title.textContent = examples[index].title;
-      for (const [buttonIndex, button] of [...presets.querySelectorAll("button")].entries()) {
+      for (const [buttonIndex, button] of [...examplesEl.querySelectorAll("button")].entries()) {
         button.classList.toggle("active", buttonIndex === index);
       }
     }
 
     examples.forEach((example, index) => {
       const button = document.createElement("button");
-      button.className = "preset";
+      button.className = "example";
       button.type = "button";
       button.textContent = example.title;
       const description = document.createElement("span");
       description.textContent = example.description;
       button.append(description);
       button.addEventListener("click", () => select(index));
-      presets.append(button);
+      examplesEl.append(button);
     });
 
     run.addEventListener("click", async () => {
       run.disabled = true;
       statusEl.textContent = "Running...";
       output.textContent = "";
-      summary.textContent = "Running selected preset...";
+      summary.textContent = "Running selected ITX script...";
       try {
-        JSON.parse(code.value);
         const response = await fetch("/playground/run", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -1354,25 +1536,23 @@ function playgroundHtml(origin: string): string {
     function summarizeResult(body) {
       if (!body || !body.ok) return escapeHtml(body && body.error ? body.error : "Command failed.");
       const result = body.result || {};
-      switch (result.action || JSON.parse(code.value).action) {
-        case "secret-egress": {
-          const auth = result.response && result.response.body && result.response.body.headers && result.response.body.headers.authorization;
+      switch (examples[selected].title) {
+        case "Fetch Headers With Secret":
+        case "POST With Secret":
+        case "Hosted Target With Secret": {
+          const responseBody = result.response && result.response.body;
+          const headers = responseBody && (responseBody.headers || (responseBody.request && responseBody.request.headers));
+          const auth = headers && (headers.authorization || headers["x-itx-egress-proof"]);
           const used = result.secret && result.secret.audit && result.secret.audit.usedCount;
           return "Target received materialized auth <code>" + escapeHtml(String(auth || "missing")) + "</code>; audit usedCount is <code>" + escapeHtml(String(used ?? "pending")) + "</code>.";
         }
-        case "plain-intercept-placeholder": {
-          const auth = result.response && result.response.body && result.response.body.headers && result.response.body.headers.authorization;
-          const used = result.secret && result.secret.audit && result.secret.audit.usedCount;
-          return "Interceptor saw placeholder auth <code>" + escapeHtml(String(auth || "missing")) + "</code>; audit usedCount is <code>" + escapeHtml(String(used ?? "pending")) + "</code>.";
-        }
-        case "blind-relay-proof-command":
-          return "Run the command below in any terminal with Node.js 20+ and npm. It creates a temp directory, downloads the oRPC-backed CLI, and prompts for plain intercept, blind relay, or blind relay proof mode.";
-        case "project-egress":
-          return "Hosted target received a normal project egress request.";
-        case "create-project":
-          return "Created throwaway project <code>" + escapeHtml(String(result.projectId || result.name || "unknown")) + "</code>.";
-        case "whoami":
-          return "Authenticated as <code>" + escapeHtml(String(result.principal && result.principal.kind || "unknown")) + "</code>.";
+        case "Interactive Egress CLI Command":
+          return "Run the command below in any terminal with Node.js 20+ and npm. Choose plain-intercept-listen or blind-relay-listen, then click fetch buttons here.";
+        case "Fetch Postman GET":
+        case "Fetch Postman POST":
+          return "Postman Echo returned the outbound request details. The local plain listener also prints these request headers and body if it is running.";
+        case "Describe Demo Project":
+          return "Running inside shared project <code>" + escapeHtml(String(result.id || result.slug || "unknown")) + "</code>.";
         default:
           return "Command returned successfully.";
       }
@@ -1413,9 +1593,11 @@ function playgroundHtml(origin: string): string {
     function phaseLabel(phase) {
       const labels = {
         idle: "Idle",
+        cli_listening: "Local CLI is listening",
         waiting_for_node_relay: "Waiting for local Node relay",
         plain_intercept_saw_plaintext: "Plain interceptor saw plaintext",
         relay_connected: "Node relay connected",
+        encrypted_relay_observed: "Encrypted relay observed request",
         secret_egress_relayed: "Secret egress relayed",
         target_received_request: "Target received request",
         relay_saw_ciphertext_only: "Done: relay only saw encrypted TLS bytes",
@@ -1457,63 +1639,116 @@ function playgroundHtml(origin: string): string {
 function playgroundExamples(origin: string) {
   return [
     {
-      id: "whoami",
-      title: "Who Am I",
-      description: "Shows the trusted-internal playground session.",
-      code: `{
-  "action": "whoami"
+      title: "Describe Demo Project",
+      description: "Shows the project-scoped ITX object used by every snippet.",
+      code: `async function run(itx) {
+  return await itx.describe();
 }`,
     },
     {
-      id: "create-project",
-      title: "Create Project",
-      description: "Creates a disposable ITX project on this Worker.",
-      code: `{
-  "action": "create-project",
-  "prefix": "demo"
+      title: "Fetch Postman GET",
+      description: "GET request to Postman Echo without a secret.",
+      code: `async function run(itx) {
+  return await itx.egress.fetch(
+    new Request("${POSTMAN_ECHO_GET_URL}", {
+      headers: { "x-itx-demo": "postman-get" },
+    }),
+  );
 }`,
     },
     {
-      id: "project-egress",
-      title: "Project Egress",
-      description: "Sends a normal project egress request to the hosted target.",
-      code: `{
-  "action": "project-egress",
-  "targetUrl": "${origin}/playground/target",
-  "body": "hello from project egress"
+      title: "Fetch Postman POST",
+      description: "POST JSON to Postman Echo without a secret.",
+      code: `async function run(itx) {
+  return await itx.egress.fetch(
+    new Request("${POSTMAN_ECHO_POST_URL}", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-itx-demo": "postman-post-json",
+      },
+      body: JSON.stringify({ hello: "from ITX playground" }),
+    }),
+  );
 }`,
     },
     {
-      id: "secret-egress",
-      title: "Secret Egress",
-      description: "Shows the target receiving materialized secret auth.",
-      code: `{
-  "action": "secret-egress",
-  "targetUrl": "${origin}/playground/target",
-  "secretPath": "/secrets/playground/api-token",
-  "secretMaterial": "demo-secret-material",
-  "body": "the request asks for a placeholder, not raw secret material"
+      title: "Fetch Headers With Secret",
+      description: "GET Postman Echo headers with the guaranteed demo secret.",
+      code: `async function run(itx) {
+  const secret = itx.secrets.get("${PLAYGROUND_DEMO_SECRET_PATH}");
+  await secret.update({
+    material: "${PLAYGROUND_DEMO_SECRET_MATERIAL}",
+    egress: { urls: ["${POSTMAN_ECHO_HEADERS_URL}"] },
+  });
+
+  return await itx.egress.fetch(
+    new Request("${POSTMAN_ECHO_HEADERS_URL}", {
+      headers: {
+        authorization: 'Bearer getSecret({ path: "${PLAYGROUND_DEMO_SECRET_PATH}" })',
+        "${BLIND_RELAY_SKIP_TLS_VERIFY_HEADER}": "1",
+        "x-itx-demo": "postman-secret-headers",
+      },
+    }),
+  );
 }`,
     },
     {
-      id: "plain-intercept-placeholder",
-      title: "Plain Intercept Placeholder",
-      description: "Shows a normal interceptor only seeing getSecret(...).",
-      code: `{
-  "action": "plain-intercept-placeholder",
-  "targetUrl": "${origin}/playground/target",
-  "secretPath": "/secrets/playground/intercept-token",
-  "secretMaterial": "intercept-demo-secret",
-  "body": "plain interceptor should see this body"
+      title: "POST With Secret",
+      description: "POST to Postman Echo with the guaranteed demo secret header.",
+      code: `async function run(itx) {
+  const secret = itx.secrets.get("${PLAYGROUND_DEMO_SECRET_PATH}");
+  await secret.update({
+    material: "${PLAYGROUND_DEMO_SECRET_MATERIAL}",
+    egress: { urls: ["${POSTMAN_ECHO_POST_URL}"] },
+  });
+
+  return await itx.egress.fetch(
+    new Request("${POSTMAN_ECHO_POST_URL}", {
+      method: "POST",
+      headers: {
+        authorization: 'Bearer getSecret({ path: "${PLAYGROUND_DEMO_SECRET_PATH}" })',
+        "${BLIND_RELAY_SKIP_TLS_VERIFY_HEADER}": "1",
+        "content-type": "text/plain",
+        "x-itx-demo": "postman-secret-post",
+      },
+      body: "body sent with a substituted secret header",
+    }),
+  );
 }`,
     },
     {
-      id: "blind-relay-proof-command",
+      title: "Hosted Target With Secret",
+      description: "POST to this Worker target so the page can log the received request.",
+      code: `async function run(itx) {
+  const secret = itx.secrets.get("${PLAYGROUND_DEMO_SECRET_PATH}");
+  await secret.update({
+    material: "${PLAYGROUND_DEMO_SECRET_MATERIAL}",
+    egress: { urls: ["${origin}/playground/target"] },
+  });
+
+  return await itx.egress.fetch(
+    new Request("${origin}/playground/target?demo=default", {
+      method: "POST",
+      headers: {
+        authorization: 'Bearer getSecret({ path: "${PLAYGROUND_DEMO_SECRET_PATH}" })',
+        "content-type": "text/plain",
+        "x-itx-demo": "hosted-secret-target",
+      },
+      body: "hosted target request with substituted secret",
+    }),
+  );
+}`,
+    },
+    {
       title: "Interactive Egress CLI Command",
       description:
-        "Prints the standalone oRPC-backed CLI command for choosing plain or blind egress modes.",
-      code: `{
-  "action": "blind-relay-proof-command"
+        "Prints the standalone oRPC-backed CLI command for choosing listener or proof modes.",
+      code: `async function run(_itx, helpers) {
+  return {
+    command: helpers.deployedBlindRelayCommand(),
+    note: "Run this in a local terminal. Pick plain-intercept-listen for headers/bodies or blind-relay-listen for encrypted metadata.",
+  };
 }`,
     },
   ].map((example) => ({

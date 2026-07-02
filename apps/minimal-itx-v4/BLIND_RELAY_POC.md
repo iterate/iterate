@@ -7,9 +7,9 @@ normal `minimal-itx-v4` deployment:
 https://minimal-itx-v4-blind-relay-poc.iterate-dev-preview.workers.dev/playground
 ```
 
-Open the playground, pick a preset, edit the JSON command, and click **Run**.
-The commands run server-side against the ITX surface with trusted-internal
-authority on this dev Worker.
+Open the playground, pick an ITX script button, inspect the async function in the
+textarea, edit it if you want, and click **Run**. The edited script runs
+server-side inside the shared demo project on this dev Worker.
 
 The playground also hosts the browser UI, a small Durable Object that stores the
 current demo state/log, and a downloadable standalone TypeScript `trpc-cli`
@@ -26,27 +26,48 @@ https://minimal-itx-v4-blind-relay-poc.iterate-dev-preview.workers.dev/playgroun
    temp directory, installs pinned copies of `tsx`, `trpc-cli`, `@orpc/server`,
    `zod`, `capnweb`, and `ws`, downloads `itx-egress-cli.mts`, and prompts for
    a mode.
-3. Watch **Live relay demo state** on the page. It polls the Durable Object once
-   per second. Blind relay modes should end at `relay_saw_ciphertext_only`, with
-   the target IP, relay byte counts, and request log.
-4. Optional warmup: run **Secret Egress**. Point at the summary: the hosted target receives
-   `authorization: Bearer demo-secret-material`, proving normal secret
-   substitution still works.
-5. Optional warmup: run **Plain Intercept Placeholder**. Point at the summary: a normal
-   interceptor sees `getSecret({ path: ... })`, not the materialized secret, and
-   the secret audit count stays at zero.
+3. Choose `plain-intercept-listen` in the CLI, then click **Fetch Postman GET**
+   or **Fetch Postman POST** on the page. The local Node process prints full
+   request URL, method, headers, and body.
+4. Restart the CLI and choose `blind-relay-listen`, then click a secret-bearing
+   script such as **Fetch Headers With Secret**. The local Node process prints
+   encrypted connection metadata: requested host, SNI when available, remote IP,
+   TLS byte previews, and byte counts.
+5. Watch **Live relay demo state** on the page. It polls the Durable Object once
+   per second for listener/proof status and request observations.
 
-## Presets
+## Shared Demo Inputs
 
-- **Project Egress** creates a throwaway project and sends a normal egress
-  request to `/playground/target`.
-- **Plain Intercept Placeholder** installs a normal egress interceptor. It sees
-  the request before secret substitution, so the response includes an
-  `authorization` header containing `getSecret({ path: ... })`, not the secret
-  material. The secret audit count remains zero.
-- **Secret Egress** creates a secret, sends an egress request with a
-  `getSecret(...)` placeholder, and shows the hosted target receiving the
-  substituted header, for example `authorization: Bearer demo-secret-material`.
+The browser scripts and the local CLI use the same shared project by default:
+
+```text
+projectId: playground-demo-default
+slug: playground-demo-default
+```
+
+The page guarantees this demo secret before secret-bearing requests:
+
+```text
+/secrets/playground/api-token = demo-secret-material
+```
+
+## ITX Scripts
+
+The left-side buttons load actual async ITX functions into the textarea. The Run
+button sends the edited JavaScript to the Worker and evaluates it as
+`async function run(itx, helpers)`, where `itx` is the shared demo project root.
+
+- **Fetch Postman GET** sends a normal `itx.egress.fetch(...)` GET to
+  `https://postman-echo.com/get?source=itx-playground`.
+- **Fetch Postman POST** sends a normal JSON POST to
+  `https://postman-echo.com/post`.
+- **Fetch Headers With Secret** sends `authorization:
+Bearer getSecret({ path: "/secrets/playground/api-token" })` to
+  `https://postman-echo.com/headers`, which echoes the substituted
+  `Bearer demo-secret-material` header.
+- **POST With Secret** sends a secret-bearing POST to Postman Echo.
+- **Hosted Target With Secret** sends a secret-bearing POST to this Worker’s
+  `/playground/target?demo=default`, so the page can correlate target events.
 - **Interactive Egress CLI Command** prints the same one-liner shown at the top
   of the page.
 
@@ -57,13 +78,20 @@ own the raw TCP socket needed by the relay side. The hosted one-liner runs an
 interactive `trpc-cli` script backed by an oRPC router from your machine:
 
 ```bash
-tmp="$(mktemp -d)" && cd "$tmp" && npm init -y >/dev/null && npm install tsx@4.21.0 trpc-cli@0.15.1 @orpc/server@1.14.6 zod@4.4.3 capnweb@0.8.0 ws@8.19.0 >/dev/null && curl -fsS https://minimal-itx-v4-blind-relay-poc.iterate-dev-preview.workers.dev/playground/itx-egress-cli.mts -o itx-egress-cli.mts && npx tsx itx-egress-cli.mts run --base-url https://minimal-itx-v4-blind-relay-poc.iterate-dev-preview.workers.dev --demo-id default
+tmp="$(mktemp -d)" && cd "$tmp" && npm init -y >/dev/null && npm install tsx@4.21.0 trpc-cli@0.15.1 @orpc/server@1.14.6 zod@4.4.3 capnweb@0.8.0 ws@8.19.0 >/dev/null && curl -fsS https://minimal-itx-v4-blind-relay-poc.iterate-dev-preview.workers.dev/playground/itx-egress-cli.mts -o itx-egress-cli.mts && npx tsx itx-egress-cli.mts run --base-url https://minimal-itx-v4-blind-relay-poc.iterate-dev-preview.workers.dev --demo-id default --body "payload hidden from relay" --secret-material "blind-secret-material"
 ```
 
 CLI modes:
 
+- `plain-intercept-listen` installs a normal egress interceptor on the shared
+  demo project and stays attached until Ctrl+C. Each page-triggered request is
+  printed with URL, method, headers, and body.
+- `blind-relay-listen` installs a local TCP relay on the shared demo project and
+  stays attached until Ctrl+C. Secret-bearing page-triggered requests are
+  printed as encrypted connection metadata only: host, SNI, remote IP, first TLS
+  bytes, and byte counts.
 - `plain-intercept` installs a normal egress interceptor and shows the
-  unencrypted request body/header placeholder before secret substitution.
+  unencrypted request body/header placeholder for one CLI-generated request.
 - `blind-relay` installs a local TCP relay and shows the target receiving the
   materialized secret from the Node process's egress IP while the relay sees TLS
   bytes.
