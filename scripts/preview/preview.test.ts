@@ -11,7 +11,12 @@ import {
 
 const {
   ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+  acquireAnyEnvironmentConfigLease,
+  claimEnvironmentConfigLease,
   evaluateCloudflareZoneCheck,
+  holderPullRequestUrl,
+  reassertEnvironmentConfigLease,
+  resolveSlotWaitTotalMs,
   expandPreviewDependencies,
   orderPreviewDeployBatches,
   parseCloudflarePreviewState,
@@ -164,6 +169,26 @@ describe("preview retry selection", () => {
         pullRequestHeadSha: "current-head",
       }).map((app) => app.slug),
     ).toEqual(["os", "auth"]);
+  });
+
+  it("retries apps whose slot claim failed", () => {
+    expect(
+      selectPreviewAppsNeedingRetry({
+        previousState: {
+          apps: {
+            semaphore: {
+              appDisplayName: "Semaphore",
+              appSlug: "semaphore",
+              headSha: "current-head",
+              status: "claim-failed",
+              updatedAt: "2026-05-01T00:00:00.000Z",
+            },
+          },
+          environmentConfigLease: null,
+        },
+        pullRequestHeadSha: "current-head",
+      }).map((app) => app.slug),
+    ).toEqual(["semaphore"]);
   });
 
   it("does not retry previously failed apps from older commits", () => {
@@ -572,5 +597,280 @@ describe("splitRepositoryFullName", () => {
     expect(() => splitRepositoryFullName("iterate/iterate/extra")).toThrow(
       "Expected repository full name to look like owner/repo.",
     );
+  });
+});
+
+describe("lease holder helpers", () => {
+  it("derives a PR url from pr-N holders", () => {
+    expect(holderPullRequestUrl("pr-1592")).toBe("https://github.com/iterate/iterate/pull/1592");
+    expect(holderPullRequestUrl("manual-jonas")).toBeNull();
+    expect(holderPullRequestUrl(null)).toBeNull();
+  });
+
+  it("parses PREVIEW_SLOT_WAIT_MS overrides", () => {
+    expect(resolveSlotWaitTotalMs({})).toBe(20 * 60 * 1000);
+    expect(resolveSlotWaitTotalMs({ PREVIEW_SLOT_WAIT_MS: "0" })).toBe(0);
+    expect(resolveSlotWaitTotalMs({ PREVIEW_SLOT_WAIT_MS: "5000" })).toBe(5000);
+    expect(() => resolveSlotWaitTotalMs({ PREVIEW_SLOT_WAIT_MS: "later" })).toThrow(
+      "PREVIEW_SLOT_WAIT_MS",
+    );
+  });
+});
+
+type FakeLease = {
+  data: Record<string, unknown>;
+  expiresAt: number;
+  holder?: string | null;
+  leaseId: string;
+  slug: string;
+  type: string;
+};
+
+function fakeLease(overrides: Partial<FakeLease> = {}): FakeLease {
+  return {
+    data: { dopplerConfig: "preview_2" },
+    expiresAt: Date.now() + 60_000,
+    holder: "pr-1600",
+    leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
+    slug: "preview-2",
+    type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+    ...overrides,
+  };
+}
+
+function fakeSemaphore(overrides: Record<string, unknown> = {}) {
+  return {
+    acquire: vi.fn(async () => fakeLease()),
+    acquireSpecific: vi.fn(async () => null),
+    renew: vi.fn(async () => null),
+    release: vi.fn(async () => ({ released: true })),
+    list: vi.fn(async () => []),
+    ...overrides,
+  };
+}
+
+const previousLease = EnvironmentConfigLease.parse({
+  dopplerConfig: "preview_2",
+  leasedUntil: 1_700_000_000_000,
+  leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
+  slug: "preview-2",
+  type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+});
+
+describe("claimEnvironmentConfigLease", () => {
+  it("renews the recorded lease when this PR still holds it", async () => {
+    const semaphore = fakeSemaphore({
+      renew: vi.fn(async () => fakeLease({ expiresAt: 1_800_000_000_000 })),
+    });
+
+    const lease = await claimEnvironmentConfigLease({
+      createPreviewSemaphoreResourceClient: () => semaphore,
+      holder: "pr-1600",
+      leaseMs: 1000,
+      previousEnvironmentConfigLease: previousLease,
+      waitTotalMs: 0,
+    });
+
+    expect(lease.slug).toBe("preview-2");
+    expect(lease.leasedUntil).toBe(1_800_000_000_000);
+    expect(semaphore.acquire).not.toHaveBeenCalled();
+    expect(semaphore.acquireSpecific).not.toHaveBeenCalled();
+  });
+
+  it("re-takes the recorded slot when the lease expired but the slot is free", async () => {
+    const semaphore = fakeSemaphore({
+      acquireSpecific: vi.fn(async () =>
+        fakeLease({ leaseId: "1197a5b3-a705-4380-9958-6a0dbead16b7" }),
+      ),
+    });
+
+    const lease = await claimEnvironmentConfigLease({
+      createPreviewSemaphoreResourceClient: () => semaphore,
+      holder: "pr-1600",
+      leaseMs: 1000,
+      previousEnvironmentConfigLease: previousLease,
+      waitTotalMs: 0,
+    });
+
+    expect(lease.slug).toBe("preview-2");
+    expect(lease.leaseId).toBe("1197a5b3-a705-4380-9958-6a0dbead16b7");
+    expect(semaphore.acquireSpecific).toHaveBeenCalledWith(
+      expect.objectContaining({ slug: "preview-2", holder: "pr-1600" }),
+    );
+    expect(semaphore.acquireSpecific).toHaveBeenCalledWith(
+      expect.not.objectContaining({ force: true }),
+    );
+    expect(semaphore.acquire).not.toHaveBeenCalled();
+  });
+
+  it("moves to a fresh slot when someone else now holds the recorded one", async () => {
+    const semaphore = fakeSemaphore({
+      acquire: vi.fn(async () =>
+        fakeLease({ slug: "preview-5", data: { dopplerConfig: "preview_5" } }),
+      ),
+      list: vi.fn(async () => [
+        {
+          data: { dopplerConfig: "preview_2" },
+          holder: "pr-1601",
+          lastAcquiredAt: null,
+          lastReleasedAt: null,
+          leaseState: "leased" as const,
+          leasedUntil: Date.now() + 60_000,
+          slug: "preview-2",
+        },
+      ]),
+    });
+
+    const lease = await claimEnvironmentConfigLease({
+      createPreviewSemaphoreResourceClient: () => semaphore,
+      holder: "pr-1600",
+      leaseMs: 1000,
+      previousEnvironmentConfigLease: previousLease,
+      waitTotalMs: 0,
+    });
+
+    expect(lease.slug).toBe("preview-5");
+    expect(lease.dopplerConfig).toBe("preview_5");
+    expect(semaphore.acquire).toHaveBeenCalledWith(expect.objectContaining({ holder: "pr-1600" }));
+  });
+
+  it("propagates unexpected semaphore errors instead of silently switching slots", async () => {
+    const semaphore = fakeSemaphore({
+      renew: vi.fn(async () => {
+        throw new Error("semaphore is down");
+      }),
+    });
+
+    await expect(
+      claimEnvironmentConfigLease({
+        createPreviewSemaphoreResourceClient: () => semaphore,
+        holder: "pr-1600",
+        leaseMs: 1000,
+        previousEnvironmentConfigLease: previousLease,
+        waitTotalMs: 0,
+      }),
+    ).rejects.toThrow("semaphore is down");
+    expect(semaphore.acquire).not.toHaveBeenCalled();
+  });
+});
+
+describe("acquireAnyEnvironmentConfigLease", () => {
+  function conflictError() {
+    const error = new Error("No resource is currently available for this type.");
+    (error as Error & { code: string }).code = "CONFLICT";
+    return error;
+  }
+
+  it("queues while all slots are leased and takes the first free one", async () => {
+    const acquire = vi
+      .fn()
+      .mockRejectedValueOnce(conflictError())
+      .mockResolvedValueOnce(
+        fakeLease({ slug: "preview-7", data: { dopplerConfig: "preview_7" } }),
+      );
+    const semaphore = fakeSemaphore({ acquire });
+
+    const lease = await acquireAnyEnvironmentConfigLease({
+      semaphore,
+      holder: "pr-1600",
+      leaseMs: 1000,
+      waitTotalMs: 60_000,
+    });
+
+    expect(lease.slug).toBe("preview-7");
+    expect(acquire).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails with the holder table and remediation once the wait budget is spent", async () => {
+    const semaphore = fakeSemaphore({
+      acquire: vi.fn(async () => {
+        throw conflictError();
+      }),
+      list: vi.fn(async () => [
+        {
+          data: { dopplerConfig: "preview_1" },
+          holder: "pr-1601",
+          lastAcquiredAt: null,
+          lastReleasedAt: null,
+          leaseState: "leased" as const,
+          leasedUntil: Date.now() + 3_600_000,
+          slug: "preview-1",
+        },
+      ]),
+    });
+
+    await expect(
+      acquireAnyEnvironmentConfigLease({
+        semaphore,
+        holder: "pr-1600",
+        leaseMs: 1000,
+        waitTotalMs: 0,
+      }),
+    ).rejects.toThrow(/pr-1601[\s\S]*preview release --slot N --force/);
+  });
+
+  it("propagates non-contention errors immediately", async () => {
+    const semaphore = fakeSemaphore({
+      acquire: vi.fn(async () => {
+        throw new Error("UNAUTHORIZED");
+      }),
+    });
+
+    await expect(
+      acquireAnyEnvironmentConfigLease({
+        semaphore,
+        holder: "pr-1600",
+        leaseMs: 1000,
+        waitTotalMs: 60_000,
+      }),
+    ).rejects.toThrow("UNAUTHORIZED");
+  });
+});
+
+describe("reassertEnvironmentConfigLease", () => {
+  it("confirms a still-held lease by renewing it", async () => {
+    const semaphore = fakeSemaphore({
+      renew: vi.fn(async () => fakeLease()),
+    });
+
+    const result = await reassertEnvironmentConfigLease({
+      holder: "pr-1600",
+      lease: previousLease,
+      leaseMs: 1000,
+      semaphore,
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("refuses when the slot now belongs to another PR", async () => {
+    const semaphore = fakeSemaphore({
+      list: vi.fn(async () => [
+        {
+          data: { dopplerConfig: "preview_2" },
+          holder: "pr-1601",
+          lastAcquiredAt: null,
+          lastReleasedAt: null,
+          leaseState: "leased" as const,
+          leasedUntil: Date.now() + 60_000,
+          slug: "preview-2",
+        },
+      ]),
+    });
+
+    const result = await reassertEnvironmentConfigLease({
+      holder: "pr-1600",
+      lease: previousLease,
+      leaseMs: 1000,
+      semaphore,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.currentHolder).toBe("pr-1601");
+      expect(result.message).toContain("preview-2");
+      expect(result.message).toContain("pr-1601");
+      expect(result.message).toContain("https://github.com/iterate/iterate/pull/1601");
+    }
   });
 });

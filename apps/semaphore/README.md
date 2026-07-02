@@ -39,7 +39,12 @@ pnpm test:e2e     # requires `SEMAPHORE_BASE_URL`
 
 ## Environment config leases for PR previews
 
-Semaphore owns the environment config lease inventory used by PR previews. The repo-root preview CLI usually runs through the shared production Doppler config:
+Semaphore owns the environment config lease inventory used by PR previews.
+Leases record a `holder` (`pr-1234` from the PR flow, `manual-<user>` from
+`pnpm preview acquire`) so every slot is attributable, and acquire-specific/
+release take an explicit `force` flag for human overrides — evictions are
+logged events (`evicted`, `force-released`), never implicit. The repo-root
+preview CLI usually runs through the shared production Doppler config:
 
 ```bash
 doppler run --project _shared --config prd -- pnpm preview status

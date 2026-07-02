@@ -21,6 +21,13 @@ export const semaphoreKeySchema = z
   .toLowerCase()
   .regex(/^(?=.*[a-z])[a-z0-9-]+$/, "must match ^(?=.*[a-z])[a-z0-9-]+$");
 
+/**
+ * Free-text identity of whoever holds a lease, e.g. `pr-1592` or
+ * `manual-jonas`. Stored with the lease and shown by list/status tooling so
+ * collisions are attributable.
+ */
+export const semaphoreHolderSchema = z.string().trim().min(1).max(200);
+
 export type SemaphoreJsonObject = Record<string, unknown>;
 
 function isJsonValue(value: unknown): boolean {
@@ -74,6 +81,7 @@ export const SemaphoreResourceRecord = z.object({
   data: semaphoreDataSchema,
   leaseState: z.enum(["available", "leased"]),
   leasedUntil: z.number().int().positive().nullable(),
+  holder: z.string().nullable().default(null),
   lastAcquiredAt: z.number().int().positive().nullable(),
   lastReleasedAt: z.number().int().positive().nullable(),
   createdAt: z.string(),
@@ -86,6 +94,7 @@ export const SemaphoreLeaseRecord = z.object({
   data: semaphoreDataSchema,
   leaseId: z.uuid(),
   expiresAt: z.number().int().positive(),
+  holder: z.string().nullable().default(null),
 });
 
 const AddResourceInput = z.object({
@@ -112,12 +121,20 @@ export const AcquireResourceInput = z.object({
   type: semaphoreKeySchema,
   leaseMs: semaphoreLeaseMsSchema,
   waitMs: semaphoreWaitMsSchema.optional(),
+  holder: semaphoreHolderSchema.optional(),
 });
 
-const AcquireSpecificResourceInput = z.object({
+export const AcquireSpecificResourceInput = z.object({
   type: semaphoreKeySchema,
   slug: semaphoreKeySchema,
   leaseMs: semaphoreLeaseMsSchema,
+  holder: semaphoreHolderSchema.optional(),
+  /**
+   * Evict any active lease on the slug before acquiring. The eviction is
+   * recorded (event `evicted`, with the previous holder). Only pass this on an
+   * explicit human `--force`; automation must never steal a held resource.
+   */
+  force: z.boolean().optional(),
 });
 
 const RenewResourceLeaseInput = z.object({
@@ -127,11 +144,21 @@ const RenewResourceLeaseInput = z.object({
   leaseMs: semaphoreLeaseMsSchema,
 });
 
-export const ReleaseResourceInput = z.object({
-  type: semaphoreKeySchema,
-  slug: semaphoreKeySchema,
-  leaseId: z.uuid(),
-});
+export const ReleaseResourceInput = z
+  .object({
+    type: semaphoreKeySchema,
+    slug: semaphoreKeySchema,
+    leaseId: z.uuid().optional(),
+    /**
+     * Release whatever lease is on the slug, even without its leaseId. The
+     * forced release is recorded (event `force-released`, with the evicted
+     * holder). Only pass this on an explicit human `--force`.
+     */
+    force: z.boolean().optional(),
+  })
+  .refine((value) => Boolean(value.force || value.leaseId), {
+    message: "leaseId is required unless force is true",
+  });
 
 const DeleteResourceResult = z.object({
   deleted: z.boolean(),

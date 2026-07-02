@@ -263,6 +263,62 @@ describe.sequential("live semaphore E2E", () => {
     expect(waitingLease.slug).toBe("only");
   }, 120_000);
 
+  test("records the lease holder and honors force acquire/release", async () => {
+    const type = uniqueType();
+    const created = await semaphore.resources.add({
+      type,
+      slug: "contested",
+      data: { token: "secret-contested" },
+    });
+    createdResources.push({ type, slug: created.slug });
+
+    const lease = await semaphore.resources.acquireSpecific({
+      type,
+      slug: "contested",
+      leaseMs: 60_000,
+      holder: "pr-1600",
+    });
+    expect(lease).not.toBeNull();
+    leasedResources.push({ type, slug: "contested", leaseId: lease!.leaseId });
+    expect(lease!.holder).toBe("pr-1600");
+
+    const listed = await semaphore.resources.list({ type });
+    expect(listed[0]).toMatchObject({ leaseState: "leased", holder: "pr-1600" });
+
+    // Without force the held slug stays held.
+    expect(
+      await semaphore.resources.acquireSpecific({
+        type,
+        slug: "contested",
+        leaseMs: 60_000,
+        holder: "pr-1601",
+      }),
+    ).toBeNull();
+
+    // Force evicts and records the new holder.
+    const stolen = await semaphore.resources.acquireSpecific({
+      type,
+      slug: "contested",
+      leaseMs: 60_000,
+      holder: "pr-1601",
+      force: true,
+    });
+    expect(stolen).not.toBeNull();
+    leasedResources.push({ type, slug: "contested", leaseId: stolen!.leaseId });
+    expect(stolen!.holder).toBe("pr-1601");
+
+    // The evicted lease id no longer releases; force does.
+    expect(
+      await semaphore.resources.release({ type, slug: "contested", leaseId: lease!.leaseId }),
+    ).toEqual({ released: false });
+    expect(await semaphore.resources.release({ type, slug: "contested", force: true })).toEqual({
+      released: true,
+    });
+
+    const releasedList = await semaphore.resources.list({ type });
+    expect(releasedList[0]).toMatchObject({ leaseState: "available", holder: null });
+  }, 120_000);
+
   test("supports the contract client against the live worker", async () => {
     const type = uniqueType();
     const created = await semaphore.resources.add({

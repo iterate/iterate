@@ -294,12 +294,106 @@ auth flows specifically, always start with a fresh profile + `cookies clear`.
 
 Each preview slot N is a complete, isolated stack on the dev/preview
 Cloudflare account: `os.iterate-preview-N.com`, `auth.iterate-preview-N.com`,
-and `<proj-slug>.iterate-preview-N.app`. Slots are leased via semaphore
-(`environment-config-lease`, slugs `preview-1..9`). CI acquires a lease per PR,
-deploys the apps touched by the PR, runs e2e, and destroys the PR's deployed
-apps and releases the lease on PR close. OS preview deploys include auth and
-wait for the slot's auth deployment before OS starts because OS bakes auth JWKS
-during deployment.
+and `<proj-slug>.iterate-preview-N.app`. There are nine slots
+(`preview-1..9`), leased via semaphore (`environment-config-lease`).
+
+### The lease model: one slot per PR, for the PR's whole life
+
+A slot belongs to whoever holds its semaphore lease, and every lease records
+a **holder** (`pr-1234` for the PR flow, `manual-<user>` for humans). The
+invariants:
+
+- **A PR keeps its slot from first deploy until the PR closes.** Every
+  `preview deploy` / `preview test` run renews the lease for 24h; closing the
+  PR tears the apps down and releases it. Lease expiry is only the safety
+  valve for abandoned PRs (no pushes for >24h).
+- **Nothing steals a live lease without a human `--force`.** Before running
+  tests or destroying anything, the tooling re-asserts that the PR still
+  holds the slot, and refuses (with an explanation naming the current holder)
+  if it doesn't. So a stale PR's cleanup can never destroy another PR's
+  preview, and e2e never runs against someone else's deployment.
+- **Contention queues instead of exploding.** When all nine slots are leased,
+  `preview deploy` waits in line (logging who holds what every few minutes)
+  for up to 20 minutes before failing with the full holder table and
+  remediation steps. `PREVIEW_SLOT_WAIT_MS=0` makes it fail fast.
+- **Everything is attributable.** `pnpm preview status` shows each slot's
+  holder, PR link, and expiry; the semaphore UI at semaphore.iterate.com
+  shows the same; every lease transition (acquired/renewed/evicted/expired/
+  force-released) is logged as an event in the coordinator.
+
+CI and local machines run the **same commands against the same semaphore** —
+there is no CI-only path.
+
+### Story 1: CI previews my PR
+
+Opening/pushing a PR that touches preview-relevant paths triggers the
+`Cloudflare Previews` workflow, which runs `pnpm preview deploy` then
+`pnpm preview test`. The PR body's managed "Environment Config Lease" section
+records the slot, per-app URLs and statuses; the workflow logs narrate every
+decision (which apps were selected and why, lease transitions, slot waits).
+Closing or merging the PR runs `pnpm preview cleanup`, which destroys the
+PR's apps and releases the slot — after verifying the PR still holds it.
+
+### Story 2: run what CI runs, locally
+
+```bash
+# same lifecycle as CI for PR 1234 (deploy + test):
+doppler run --project _shared --config prd -- pnpm preview:ci 1234
+
+# or the individual steps CI runs:
+GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview deploy --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview test --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview cleanup --pull-request-number 1234
+```
+
+These share the PR's lease and PR-body state with CI, so a local run renews
+(never fights) the slot CI claimed for the same PR.
+
+### Story 3: a manual slot for experiments
+
+Lease a slot under your own name first — that is what stops PR previews from
+deploying over you and PR cleanups from destroying your work:
+
+```bash
+doppler run --project _shared --config prd -- pnpm preview status              # who holds what
+doppler run --project _shared --config prd -- pnpm preview acquire --slot 9    # lease it (3h default, --hours N)
+# → prints leaseId + the matching release command
+# if preview-9 is taken you'll be told who holds it; --force evicts them (their
+# deployment gets clobbered by whatever you deploy next — only for stale holds)
+
+# Deploy (same primitive as everything else; auth first because OS bakes its JWKS):
+(cd apps/auth && doppler run --project auth --config preview_9 -- pnpm alchemy:up)
+(cd apps/os   && doppler run --project os   --config preview_9 -- pnpm run deploy)
+
+# Point a browser at it (same org-claims requirement as local dev — see
+# "Acting as users" above; bare --admin lands on the auth login page):
+doppler run --project os --config preview_9 -- pnpm auth:mint --admin --browser-url
+
+# Tear down and release when done:
+(cd apps/os   && doppler run --project os   --config preview_9 -- pnpm run destroy)
+(cd apps/auth && doppler run --project auth --config preview_9 -- pnpm alchemy:down)
+doppler run --project _shared --config prd -- pnpm preview release --slot 9 --lease-id <leaseId>
+```
+
+Deploying to `preview_N` **without** holding the lease bypasses the whole
+protection model — the slot's rightful holder will deploy over you, and their
+cleanup may destroy your worker.
+
+### Story 4: something is stuck / who owns what
+
+```bash
+doppler run --project _shared --config prd -- pnpm preview status     # holders, PR links, expiries
+doppler run --project _shared --config prd -- pnpm preview reconcile  # leases vs Doppler configs vs Cloudflare zones
+
+# free a slot whose holder is gone (abandoned manual hold, deleted PR, ...):
+doppler run --project _shared --config prd -- pnpm preview release --slot 4 --force
+```
+
+`--force` (on `acquire` and `release`) is the only way to take a live lease
+from its holder. It logs an `evicted`/`force-released` event with both
+identities, so the audit trail survives.
+
+### Slot plumbing (OAuth constants)
 
 The slot's OS↔auth OAuth client credentials are **constants in Doppler**
 (`auth/preview_N` carries `AUTH_SEED_OAUTH_CLIENTS`; `os/preview_N` carries
@@ -308,33 +402,7 @@ into its database, so the DB can never drift from Doppler and the two apps
 need no deploy-time coordination. Provisioning/rotation:
 `doppler run --project _shared --config prd -- pnpm preview provision-auth-preview-configs --rotate`.
 
-### Creating a preview environment from your machine
-
-CI is just a thin wrapper — everything reproduces locally:
-
-```bash
-# 1. Lease a slot first (otherwise a PR's cleanup can destroy your deploy):
-doppler run --project _shared --config prd -- pnpm preview status              # see what's free
-doppler run --project _shared --config prd -- pnpm preview acquire --slot 9    # lease it (3h default)
-# → prints leaseId + the matching release command
-
-# 2. Deploy (same primitive as everything else; auth first because OS bakes its JWKS):
-(cd apps/auth && doppler run --project auth --config preview_9 -- pnpm alchemy:up)
-(cd apps/os   && doppler run --project os   --config preview_9 -- pnpm run deploy)
-
-# 3. Point a browser at it (same org-claims requirement as local dev — see
-#    "Acting as users" above; bare --admin lands on the auth login page):
-doppler run --project os --config preview_9 -- pnpm auth:mint --admin --browser-url
-
-# 4. Tear down and release when done:
-(cd apps/os   && doppler run --project os   --config preview_9 -- pnpm run destroy)
-(cd apps/auth && doppler run --project auth --config preview_9 -- pnpm alchemy:down)
-doppler run --project _shared --config prd -- pnpm preview release --slot 9 --lease-id <leaseId>
-```
-
-For the PR-centric flow (managed PR comment, tests, cleanup) use
-`pnpm preview deploy|test|cleanup --pull-request-number N` under
-`doppler run --project _shared --config prd` — see
+More detail on the semaphore primitive:
 [devops-cloudflare-doppler-alchemy-setup.md](devops-cloudflare-doppler-alchemy-setup.md).
 
 ## Tunnels and webhooks
