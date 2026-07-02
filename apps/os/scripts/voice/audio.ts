@@ -40,6 +40,9 @@ export function createSpeaker() {
       ...PCM_ARGS,
       ...["-i", "pipe:0"],
     ]);
+    // ffplay dies at arbitrary moments (barge-in SIGKILL) and a write can race
+    // that death — an unhandled stdin 'error' (EPIPE) would crash the bridge.
+    ffplay.stdin.on("error", () => {});
     ffplay.on("exit", () => {
       ffplay = null;
     });
@@ -48,7 +51,8 @@ export function createSpeaker() {
 
   return {
     play(base64Pcm16: string) {
-      ensureProcess().stdin.write(Buffer.from(base64Pcm16, "base64"));
+      const target = ensureProcess();
+      if (target.stdin.writable) target.stdin.write(Buffer.from(base64Pcm16, "base64"));
     },
     stop() {
       ffplay?.kill("SIGKILL");

@@ -93,7 +93,17 @@ export async function runVoiceBridge(options: BridgeOptions) {
     projectId,
   });
 
-  const say = (line: string) => process.stdout.write(`${line}\n`);
+  // Assistant deltas stream onto an open line; any other output must close
+  // that line first or the two interleave mid-word.
+  let assistantLineOpen = false;
+  const endAssistantLine = () => {
+    if (assistantLineOpen) process.stdout.write("\n");
+    assistantLineOpen = false;
+  };
+  const say = (line: string) => {
+    endAssistantLine();
+    process.stdout.write(`${line}\n`);
+  };
   say(`voice: ${provider} (${options.model || defaults.model})`);
   say(`worker: ${projectId}${options.agentPath} @ ${options.baseUrl}`);
   say(options.text ? `mode: text — type, enter to send, ctrl-c to quit` : `mode: audio — speak!`);
@@ -149,17 +159,12 @@ export async function runVoiceBridge(options: BridgeOptions) {
     if (options.forward === "auto") forwardTurn(transcript, origin);
   };
 
-  let assistantLineOpen = false;
   const printDelta = (delta: string) => {
     if (!assistantLineOpen) {
       process.stdout.write("assistant: ");
       assistantLineOpen = true;
     }
     process.stdout.write(delta);
-  };
-  const endAssistantLine = () => {
-    if (assistantLineOpen) process.stdout.write("\n");
-    assistantLineOpen = false;
   };
 
   const onEvent = (event: RealtimeServerEvent) => {
