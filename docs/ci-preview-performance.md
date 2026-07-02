@@ -28,9 +28,10 @@ seconds and run alongside OS.
   measured at 20s–3m39s (and once ~40min during a webhook incident), because a
   push has to clear GitHub's run creation → scheduling → `workflow_job` webhook
   → dispatch chain before any runner starts. Depot CI receives the push webhook
-  directly and picks up in ~7s. The `pull_request` triggers therefore live in
-  `.depot/workflows/cloudflare-previews.yml`; the GitHub workflow keeps only
-  the PR-close cleanup job (see [CI workflows](ci-workflows.md)).
+  directly and picks up in ~7s. The whole preview lifecycle — deploy + e2e and
+  the PR-close cleanup — lives in one Depot workflow
+  (`.depot/workflows/cloudflare-previews.yml`); there is no GitHub Actions
+  preview workflow (see [CI workflows](ci-workflows.md)).
 - **Deploys run in one parallel batch.** OS bakes the auth JWKS at deploy time,
   but instead of waiting for auth to finish first, the OS deploy _polls_ the
   slot's auth worker for JWKS (`apps/os/alchemy.run.ts`, 120s deadline). All

@@ -62,10 +62,9 @@ describe("preview workflow scope", () => {
     expect(cloudflarePreviewSharedPaths).toContain("scripts/preview/**");
     expect(cloudflarePreviewSharedPaths).toContain("packages/ui/**");
     expect(cloudflarePreviewAdditionalTriggerPaths).toContain("apps/iterate-com/**");
-    expect(cloudflarePreviewSharedPaths).toContain(
-      ".github/ts-workflows/workflows/cloudflare-previews.ts",
-    );
-    expect(cloudflarePreviewSharedPaths).toContain(".github/workflows/cloudflare-previews.yml");
+    // The preview lifecycle is one Depot CI workflow; a change to it triggers
+    // a full-fleet preview and must be mirrored in that file's own paths list.
+    expect(cloudflarePreviewSharedPaths).toContain(".depot/workflows/cloudflare-previews.yml");
   });
 });
 

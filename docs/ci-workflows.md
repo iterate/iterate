@@ -26,10 +26,12 @@ TypeScript workflow object with the checked-in YAML, and CI fails if they drift.
 
 Useful entry points:
 
-- `.github/ts-workflows/workflows/cloudflare-previews.ts` controls the preview
-  deploy/e2e GitHub Actions workflow.
 - `.github/ts-workflows/utils/index.ts` contains shared runner/setup helpers.
-- `.github/workflows/cloudflare-previews.yml` is generated output.
+- `.github/ts-workflows/workflows/*.ts` are the workflow sources;
+  `.github/workflows/*.yml` are the generated output.
+
+The preview deploy/e2e/cleanup workflow is **not** here — it runs on Depot CI
+(`.depot/workflows/cloudflare-previews.yml`); see the Depot CI section below.
 
 ### Preview Deploy And Test Model
 
@@ -187,18 +189,23 @@ store unless new measurements show otherwise.
 
 ## Depot CI Preview Workflow
 
-`.depot/workflows/cloudflare-previews.yml` is the PRIMARY preview deploy+e2e
-workflow. Measured 2026-07-02: GitHub Actions runner assignment on
-`depot-ubuntu-24.04-16` took 20s-3m39s across runs (and one push waited ~40min
-for GitHub to create the run at all), while Depot CI picked up a push in ~6s
-with `pnpm install` at ~8s.
+`.depot/workflows/cloudflare-previews.yml` owns the whole preview lifecycle —
+deploy + e2e on open/reopen/synchronize, cleanup on close. There is no GitHub
+Actions preview workflow. Measured 2026-07-02: GitHub Actions runner
+assignment on `depot-ubuntu-24.04-16` took 20s-3m39s across runs (and one push
+waited ~40min for GitHub to create the run at all), while Depot CI picked up a
+push in ~6s with `pnpm install` at ~8s.
 
-- `pull_request` open/reopen/synchronize triggers live in the Depot CI
+- `pull_request` open/reopen/synchronize/closed triggers all live in this one
   workflow. Depot registers automatic triggers when the file lands on the
   default branch — branch-only changes to the `on:` block do not take effect
   until merged.
-- The generated GitHub workflow keeps only the PR-close cleanup job, so the
-  two systems never race a deploy against the same preview slot lease.
+- Deploy and cleanup share the workflow so the concurrency groups coordinate
+  them: closing a PR mid-deploy cancels the in-flight deploy run
+  (`cancel-in-progress` at the workflow level) and then runs cleanup, so the
+  two never race the same preview slot. Its `paths` list mirrors
+  `cloudflarePreviewSharedPaths` + `cloudflarePreviewAdditionalTriggerPaths` +
+  each app's `paths` in `scripts/preview/preview.ts`.
 - Secrets come from `depot ci secrets --org 0p91s0lz49`: `DOPPLER_TOKEN` and
   `ITERATE_BOT_GITHUB_TOKEN`.
 

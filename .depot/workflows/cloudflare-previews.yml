@@ -1,21 +1,27 @@
-# Depot CI preview deploy + e2e.
+# The whole preview lifecycle — deploy + e2e on open/reopen/synchronize, and
+# cleanup on close — lives here on Depot CI. Depot CI picks up jobs in ~7s
+# where GitHub Actions runner assignment took 20s-3m39s (measured 2026-07-02,
+# once ~40min during a webhook incident).
 #
-# This is the PRIMARY preview workflow: Depot CI picks up jobs in ~7s where
-# GitHub Actions runner assignment took 20s-3m39s (measured 2026-07-02), so
-# the pull_request triggers live here. The GitHub workflow
-# (.github/workflows/cloudflare-previews.yml, generated from ts-workflows)
-# keeps only the PR-close cleanup job — cleanup is not latency-sensitive and
-# GitHub's `closed` trigger is the reliable place to hear about it. Keep the
-# paths below in sync with the generated GitHub workflow's list (source of
-# truth: scripts/preview/preview.ts path constants).
+# Deploy and cleanup share one workflow so the concurrency groups coordinate
+# them: closing a PR mid-deploy cancels the in-flight deploy run
+# (cancel-in-progress at the workflow level) and then runs cleanup — the two
+# never race the same preview slot. (When deploy ran on Depot and cleanup on
+# GitHub, a close during a run tore down the slot under the deploy.)
+#
+# Depot registers automatic triggers when this file is on the default branch —
+# branch-only changes to the `on:` block do not take effect until merged. Test
+# a branch with:
+#   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
+#     --workflow cloudflare-previews.yml --ref <branch> \
+#     --input pull-request-number=<pr>
 #
 # Secrets (depot ci secrets --org 0p91s0lz49): DOPPLER_TOKEN,
 # ITERATE_BOT_GITHUB_TOKEN.
 #
-# Manual run against a PR:
-#   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
-#     --workflow cloudflare-previews.yml --ref <branch> \
-#     --input pull-request-number=<pr>
+# Keep the `paths` list below in sync with `cloudflarePreviewSharedPaths` +
+# `cloudflarePreviewAdditionalTriggerPaths` + each app's `paths` in
+# scripts/preview/preview.ts (asserted in scripts/preview/preview.test.ts).
 
 name: Cloudflare Previews (Depot CI)
 
@@ -25,9 +31,8 @@ on:
       - opened
       - reopened
       - synchronize
+      - closed
     paths:
-      - .github/workflows/cloudflare-previews.yml
-      - .github/ts-workflows/workflows/cloudflare-previews.ts
       - .depot/workflows/cloudflare-previews.yml
       - packages/shared/**
       - packages/ui/**
@@ -53,6 +58,7 @@ concurrency:
 
 jobs:
   preview:
+    if: github.event.action != 'closed'
     name: Preview / deploy + e2e
     # 8-core: the job is network-bound (waiting on deployed slots), not
     # CPU-bound. Depot metrics on a full run showed peak CPU ~30% and peak
@@ -111,5 +117,38 @@ jobs:
             test-results
             apps/os/test-results
             /tmp/os-e2e-*
-            /tmp/os-itx-e2e-*
           if-no-files-found: ignore
+  cleanup:
+    if: github.event.action == 'closed'
+    name: Preview / cleanup
+    runs-on: depot-ubuntu-24.04
+    concurrency:
+      group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
+      - name: Install Doppler CLI
+        run: |-
+          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
+          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
+      - name: Preview / cleanup
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
+        run: |-
+          set -euo pipefail
+          doppler run --project _shared --config prd -- pnpm preview cleanup \
+            --github-token "$GITHUB_TOKEN" \
+            --pull-request-number "${{ github.event.pull_request.number }}"

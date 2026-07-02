@@ -45,10 +45,20 @@ const sharedResolve = {
 // root Playwright REPL specs, so it stays out of the preview lane).
 export default defineConfig({
   test: {
-    // Parallel in CI: each test provisions its own project against a deployed
-    // slot, so files — and tests within a file — are independent. Sequential
-    // locally so a single dev server isn't hammered and output stays readable.
+    // Run-scheduler options live at the ROOT test level — this is where vitest
+    // reads them, even with `projects`. (Setting them only inside a project is
+    // silently ignored and the suite falls back to sequential.) Parallel in
+    // CI: each test provisions its own project against a deployed slot, so
+    // files — and tests within a file — are independent. Sequential locally so
+    // a single dev server isn't hammered and output stays readable.
     fileParallelism: ci,
+    sequence: { concurrent: ci },
+    // Bounds concurrent tests per file; the deployed slot handles the fan-out
+    // (every test is its own project DO), the runner just holds sockets.
+    maxConcurrency: 6,
+    // One retry in CI: tests are self-contained (fresh project per test), so a
+    // rare load-induced flake re-runs in seconds instead of failing the suite.
+    retry: ci ? 1 : 0,
     passWithNoTests: true,
     projects: [
       {
@@ -66,15 +76,6 @@ export default defineConfig({
           // need headroom, and slow-but-passing beats flaky.
           hookTimeout: 240_000,
           testTimeout: 240_000,
-          sequence: { concurrent: ci },
-          // Bounds concurrent tests per file; the deployed slot handles the
-          // fan-out (every test is its own project DO), the runner just holds
-          // sockets.
-          maxConcurrency: 6,
-          // One retry in CI: tests are self-contained (fresh project per
-          // test), so a rare load-induced flake re-runs in seconds instead of
-          // failing the whole suite.
-          retry: ci ? 1 : 0,
         },
       },
       {
@@ -91,9 +92,6 @@ export default defineConfig({
           provide: sharedProvide,
           testTimeout: 45_000,
           hookTimeout: 45_000,
-          sequence: { concurrent: ci },
-          maxConcurrency: 6,
-          retry: ci ? 1 : 0,
           browser: {
             commands: {
               // Browser WebSockets cannot set Authorization headers, so the
