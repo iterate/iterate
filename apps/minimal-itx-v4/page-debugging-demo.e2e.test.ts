@@ -90,9 +90,13 @@ describe("page debugging demo", () => {
       await targetPage.evaluate(async (code) => {
         await (0, eval)(code);
       }, snippet);
-      expect(await targetPage.locator("#__itx_page_debugging_enable_capture").textContent()).toBe(
-        "Enable Host Capture",
-      );
+      const iterateWidgetButton = targetPage.getByLabel("Open ITERATE sharing menu");
+      await expectText(iterateWidgetButton, "ITERATE");
+      expect(await iterateWidgetButton.locator("svg[viewBox='0 0 500 500']").count()).toBe(1);
+      await iterateWidgetButton.click();
+      await expectText(targetPage.locator("#__itx_page_debugging_widget"), "Sharing with ITERATE");
+      await expectText(targetPage.locator("#__itx_page_debugging_widget"), "Share a screenshot");
+      await expectText(targetPage.locator("#__itx_page_debugging_widget"), "Stop sharing");
 
       await demoPage.locator("#agentClick").click();
       await targetPage.waitForFunction(
@@ -151,8 +155,17 @@ describe("page debugging demo", () => {
       await demoPage.locator("#agentClick").click();
       await demoPage.waitForFunction(() => document.querySelector("#counter")?.textContent === "1");
       expect(await demoPage.locator("#counter").textContent()).toBe("1");
+
+      await targetPage.getByRole("button", { name: "Stop sharing" }).click();
+      await targetPage.waitForFunction(
+        () => !document.querySelector("#__itx_page_debugging_widget"),
+      );
     } finally {
       await browser.close();
     }
   }, 45_000);
 });
+
+async function expectText(locator: { textContent(): Promise<string | null> }, expected: string) {
+  expect(await locator.textContent()).toContain(expected);
+}

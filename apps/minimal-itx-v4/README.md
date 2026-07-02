@@ -132,12 +132,16 @@ Live demo flow:
 2. Open any target page in the same browser and paste the snippet into that
    page's DevTools console. Paste into the host page, not a cross-origin iframe,
    if you want host-page screenshots.
-3. Return to the demo page and click **Take Screenshot**. The screenshot is
+3. The target page gets a small **ITERATE** widget in the bottom-right corner.
+   Its menu says **Sharing with ITERATE** and includes **Share a screenshot**,
+   **Enable screen capture**, **Copy page URL**, and **Stop sharing**. Stop
+   sharing removes the widget and revokes that demo session's short-lived tokens.
+4. Return to the demo page and click **Take Screenshot**. The screenshot is
    rendered back into the demo page.
-4. Click **Snapshot**, **Click counter**, or **Fill message** to show that those
+5. Click **Snapshot**, **Click counter**, or **Fill message** to show that those
    calls also cross the worker and invoke the mounted `debugPage` capability in
    the target page.
-5. For a no-DevTools demo, click **Run in this tab** instead; that mounts the
+6. For a no-DevTools demo, click **Run in this tab** instead; that mounts the
    same capability on the demo page itself.
 
 The generated snippet imports only the worker-hosted client module:

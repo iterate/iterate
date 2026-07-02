@@ -8,6 +8,7 @@ import type { CfExecutionContext, ItxAuthToken } from "./types.ts";
 const DEMO_PREFIX = "/page-debugging";
 const CONNECT_PATH = `${DEMO_PREFIX}/connect`;
 const CLIENT_PATH = `${DEMO_PREFIX}/client.mjs`;
+const REVOKE_PATH = `${DEMO_PREFIX}/revoke`;
 const SESSION_PATH = `${DEMO_PREFIX}/session`;
 const PROTOCOL_PREFIX = "itx-page-debugging.";
 const DEFAULT_PATH = ["debugPage"] as const;
@@ -59,6 +60,22 @@ export class PageDebuggingDemoDurableObject extends DurableObject<Env> {
         return Response.json({ error: "method not allowed" }, { status: 405 });
       }
       return Response.json(await createDemoSession(this.env, this.ctx, this.ctx.storage, request), {
+        headers: { "access-control-allow-origin": "*" },
+      });
+    }
+
+    if (url.pathname === REVOKE_PATH) {
+      if (request.method === "OPTIONS") return corsResponse();
+      if (request.method !== "POST") {
+        return Response.json({ error: "method not allowed" }, { status: 405 });
+      }
+      const claims = await verifyDemoToken(
+        this.env,
+        this.ctx.storage,
+        tokenFromAuthorization(request),
+      );
+      if (!claims) return Response.json({ error: "unauthorized" }, { status: 401 });
+      return Response.json(await revokeDemoTokens(this.ctx.storage, claims), {
         headers: { "access-control-allow-origin": "*" },
       });
     }
@@ -130,6 +147,7 @@ async function createDemoSession(
       connectUrl,
       path,
       projectId,
+      revokeUrl: new URL(REVOKE_PATH, origin).toString(),
       token: providerToken,
     }),
   };
@@ -176,6 +194,7 @@ function generateSnippet(input: {
   connectUrl: string;
   path: string[];
   projectId: string;
+  revokeUrl: string;
   token: string;
 }) {
   return [
@@ -184,6 +203,7 @@ function generateSnippet(input: {
     "  window.__itxPageDebugging = await connectPageTools({",
     `    connectUrl: ${JSON.stringify(input.connectUrl)},`,
     `    projectId: ${JSON.stringify(input.projectId)},`,
+    `    revokeUrl: ${JSON.stringify(input.revokeUrl)},`,
     `    token: ${JSON.stringify(input.token)},`,
     `    path: ${JSON.stringify(input.path)},`,
     "  });",
@@ -243,6 +263,15 @@ function tokenStorageKey(jti: string) {
   return `token:${jti}`;
 }
 
+async function revokeDemoTokens(storage: DurableObjectState["storage"], claims: TokenClaims) {
+  const tokens = await storage.list<TokenClaims>({ prefix: "token:" });
+  const keys = [...tokens]
+    .filter(([, tokenClaims]) => tokenClaims.projectId === claims.projectId)
+    .map(([key]) => key);
+  if (keys.length > 0) await storage.delete(keys);
+  return { ok: true, revoked: keys.length };
+}
+
 async function sign(env: Env, body: string) {
   const secret = env.SECRET_ENCRYPTION_KEY ?? "minimal-itx-v4-page-debugging-demo";
   const key = await crypto.subtle.importKey(
@@ -265,6 +294,11 @@ function constantTimeEqual(a: string, b: string) {
 function tokenFromProtocol(request: Request) {
   const protocol = acceptedPageDebuggingProtocol(request);
   return protocol ? protocol.slice(PROTOCOL_PREFIX.length) : null;
+}
+
+function tokenFromAuthorization(request: Request) {
+  const authorization = request.headers.get("authorization");
+  return authorization?.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : null;
 }
 
 function acceptedPageDebuggingProtocol(request: Request) {
@@ -297,7 +331,7 @@ function websocketUrl(url: URL) {
 function corsResponse() {
   return new Response(null, {
     headers: {
-      "access-control-allow-headers": "content-type",
+      "access-control-allow-headers": "authorization, content-type",
       "access-control-allow-methods": "POST, OPTIONS",
       "access-control-allow-origin": "*",
     },
@@ -627,16 +661,15 @@ import { queryAllByLabelText, queryAllByPlaceholderText, queryAllByRole, queryAl
 import userEvent from "https://esm.sh/@testing-library/user-event@14.6.1?bundle";
 
 const PROTOCOL_PREFIX = ${JSON.stringify(PROTOCOL_PREFIX)};
-const CAPTURE_BUTTON_ID = "__itx_page_debugging_enable_capture";
+const SHARING_WIDGET_ID = "__itx_page_debugging_widget";
 
 export function connectPageItx({ connectUrl, token }) {
   return newWebSocketRpcSession(new WebSocket(connectUrl, [PROTOCOL_PREFIX + token]));
 }
 
-export async function connectPageTools({ connectUrl, installCaptureButton = true, path = ["debugPage"], token }) {
+export async function connectPageTools({ connectUrl, installCaptureButton = true, path = ["debugPage"], revokeUrl, token }) {
   const project = connectPageItx({ connectUrl, token });
   const tools = new PageTools();
-  if (installCaptureButton) installHostCaptureButton(tools);
   const provision = await project.provideCapability({
     capability: tools,
     flattenNestedPaths: false,
@@ -645,49 +678,178 @@ export async function connectPageTools({ connectUrl, installCaptureButton = true
     type: "live",
     types: PAGE_TOOLS_TYPES,
   });
+  if (installCaptureButton) installIterateSharingWidget({ path, project, provision, revokeUrl, token, tools });
   return { project, provision, tools };
 }
 
-function installHostCaptureButton(tools) {
+function installIterateSharingWidget({ path, project, provision, revokeUrl, token, tools }) {
   let host;
   try {
     host = hostDocument();
   } catch {
     return;
   }
-  if (host.getElementById(CAPTURE_BUTTON_ID)) return;
-  const button = host.createElement("button");
-  button.id = CAPTURE_BUTTON_ID;
-  button.type = "button";
-  button.textContent = "Enable Host Capture";
-  button.style.cssText = [
+  host.getElementById(SHARING_WIDGET_ID)?.remove();
+
+  const widget = host.createElement("div");
+  widget.id = SHARING_WIDGET_ID;
+  widget.style.cssText = [
     "position:fixed",
     "right:16px",
     "bottom:16px",
     "z-index:2147483647",
-    "border:0",
-    "border-radius:8px",
+    "font:13px system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
+  ].join(";");
+
+  const logo = host.createElement("button");
+  logo.type = "button";
+  logo.setAttribute("aria-label", "Open ITERATE sharing menu");
+  logo.style.cssText = [
+    "align-items:center",
     "background:#111827",
+    "border:0",
+    "border-radius:999px",
+    "box-shadow:0 12px 32px rgba(15,23,42,.28)",
     "color:#fff",
     "cursor:pointer",
-    "font:600 14px system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
-    "padding:9px 12px",
-    "box-shadow:0 8px 24px rgba(15,23,42,.25)",
+    "display:flex",
+    "font:800 12px system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
+    "gap:8px",
+    "letter-spacing:0",
+    "padding:10px 13px",
   ].join(";");
-  button.addEventListener("click", async () => {
-    button.disabled = true;
-    button.textContent = "Choose this tab...";
+  logo.innerHTML =
+    '<svg aria-hidden="true" width="22" height="22" viewBox="0 0 500 500" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;flex:0 0 auto;border-radius:5px"><rect width="500" height="500" fill="black"/><path d="M264.649 170.149H289.821L286.092 186.904L276.303 233.444L270.709 259.971L263.717 293.015L258.124 320.008L251.131 352.586L249.267 364.687V371.668L249.733 372.133H253.462L259.522 369.806L266.048 365.617L275.371 357.24L282.829 349.328L286.558 345.14L288.888 346.071L294.948 350.725L308 360.498L307.068 362.36L303.339 367.944L296.813 376.322L291.685 382.837L286.558 388.422L282.363 393.076L275.837 399.592L272.108 402.849L267.446 406.573L262.785 409.83L256.725 413.554L247.869 417.742L238.08 420.535L231.554 421H224.096L216.637 420.069L211.51 418.673L206.382 416.811L201.255 413.088L196.594 408.434L192.865 400.988L191.466 394.938L191 389.818V383.768L193.797 365.152L199.857 335.832L207.315 301.392L224.096 223.205L225.028 216.224V206.916L224.562 205.054L222.231 204.123L219.434 203.193L206.382 203.658L196.127 204.589H193.331V178.526L194.263 175.734L258.59 170.615L264.649 170.149Z" fill="white"/><path d="M264.649 78H268.844L275.836 78.9308L282.362 80.7924L287.49 83.5848L292.151 87.7734L295.414 92.8928L297.278 96.616L299.143 105.924L299.609 113.836L299.143 118.49L298.677 122.213L296.812 128.729L293.549 134.779L290.286 138.502L286.091 141.76L282.362 143.621L278.167 145.018L274.438 145.948L267.912 146.414H260.92L254.394 145.483L249.267 144.087L244.139 141.294L239.944 138.037L236.681 133.383L233.884 127.332L232.486 121.282L232.02 117.559V108.716L232.952 101.735L234.816 95.6852L237.613 90.1004L240.41 86.3772L246.936 82.1886L252.529 79.8616L259.522 78.4654L264.649 78Z" fill="white"/></svg><span>ITERATE</span>';
+
+  const menu = host.createElement("div");
+  menu.style.cssText = [
+    "background:#fff",
+    "border:1px solid #d9e2ec",
+    "border-radius:8px",
+    "bottom:52px",
+    "box-shadow:0 18px 44px rgba(15,23,42,.22)",
+    "color:#1f2933",
+    "display:none",
+    "min-width:250px",
+    "overflow:hidden",
+    "position:absolute",
+    "right:0",
+  ].join(";");
+
+  const header = host.createElement("div");
+  header.style.cssText = "padding:12px 12px 8px;border-bottom:1px solid #eef2f7";
+  header.innerHTML =
+    '<div style="font-weight:750">Sharing with ITERATE</div><div style="color:#52606d;font-size:12px;margin-top:3px">Mounted at ' +
+    escapeHtml(path.join(".")) +
+    '</div>';
+
+  const status = host.createElement("div");
+  status.style.cssText =
+    "background:#f8fafc;color:#334e68;font-size:12px;line-height:1.35;min-height:34px;padding:9px 12px";
+  status.textContent = "Connected. Use the demo page to drive this tab.";
+
+  const preview = host.createElement("img");
+  preview.alt = "Last screenshot shared with ITERATE";
+  preview.style.cssText =
+    "display:none;width:100%;max-height:120px;object-fit:cover;border-top:1px solid #eef2f7";
+
+  const actions = host.createElement("div");
+  actions.style.cssText = "display:grid;padding:6px";
+
+  const shareScreenshot = menuButton(host, "Share a screenshot");
+  shareScreenshot.addEventListener("click", async () => {
+    shareScreenshot.disabled = true;
+    status.textContent = "Preparing screenshot...";
+    const image = await tools.screenshot({ mode: "auto", maxWidth: 960, quality: 0.65 });
+    if (image.error) {
+      status.textContent = image.hint || image.message || image.error;
+    } else {
+      tools.sharedScreenshot = image;
+      preview.src = "data:" + image.mime + ";base64," + image.base64;
+      preview.style.display = "block";
+      status.textContent = "Screenshot shared: " + image.width + "x" + image.height + " via " + image.mode + ".";
+    }
+    shareScreenshot.disabled = false;
+  });
+
+  const enableCapture = menuButton(host, "Enable screen capture");
+  enableCapture.addEventListener("click", async () => {
+    enableCapture.disabled = true;
+    status.textContent = "Choose this browser tab in the picker...";
     const result = await tools.enableScreenCapture();
     if (result.ok) {
-      button.textContent = "Host Capture Enabled";
-      setTimeout(() => button.remove(), 900);
+      status.textContent = "Screen capture enabled. Screenshots now use true host-tab pixels.";
+      enableCapture.textContent = "Screen capture enabled";
     } else {
-      button.disabled = false;
-      button.textContent = "Enable Host Capture";
+      enableCapture.disabled = false;
+      status.textContent = result.message || result.hint || result.error;
       console.error("[itx] screen capture setup failed", result);
     }
   });
-  host.body.appendChild(button);
+
+  const copyUrl = menuButton(host, "Copy page URL");
+  copyUrl.addEventListener("click", async () => {
+    await host.defaultView?.navigator.clipboard?.writeText(host.defaultView.location.href);
+    status.textContent = "Page URL copied.";
+  });
+
+  const stopSharing = menuButton(host, "Stop sharing");
+  stopSharing.style.color = "#b42318";
+  stopSharing.addEventListener("click", async () => {
+    stopSharing.disabled = true;
+    status.textContent = "Stopping sharing...";
+    try {
+      await provision.revoke?.();
+      project?.[Symbol.dispose]?.();
+      if (revokeUrl) {
+        await fetch(revokeUrl, {
+          headers: { authorization: "Bearer " + token },
+          method: "POST",
+        });
+      }
+    } finally {
+      widget.remove();
+    }
+  });
+
+  actions.append(shareScreenshot, enableCapture, copyUrl, stopSharing);
+  menu.append(header, actions, status, preview);
+  widget.append(menu, logo);
+  logo.addEventListener("click", () => {
+    menu.style.display = menu.style.display === "none" ? "block" : "none";
+  });
+  host.body.appendChild(widget);
+}
+
+function menuButton(host, label) {
+  const button = host.createElement("button");
+  button.type = "button";
+  button.textContent = label;
+  button.style.cssText = [
+    "background:#fff",
+    "border:0",
+    "border-radius:6px",
+    "color:#1f2933",
+    "cursor:pointer",
+    "font:600 13px system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
+    "padding:9px 10px",
+    "text-align:left",
+  ].join(";");
+  button.addEventListener("mouseenter", () => {
+    if (!button.disabled) button.style.background = "#f0f4f8";
+  });
+  button.addEventListener("mouseleave", () => {
+    button.style.background = "#fff";
+  });
+  return button;
+}
+
+function escapeHtml(value) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
 }
 
 function hostDocument() {
@@ -792,7 +954,20 @@ export class PageTools extends RpcTarget {
         if (!node) return { error: "selector-not-found", selector: options.selector };
         const width = Math.max(node.scrollWidth || 0, node.getBoundingClientRect().width || 0, 1);
         const pixelRatio = Math.min(1, maxWidth / width);
-        canvas = await toCanvas(node, { cacheBust: true, pixelRatio });
+        const widget = this.document.getElementById(SHARING_WIDGET_ID);
+        const filter = (candidate) => {
+          if (!(candidate instanceof this.window.Element)) return true;
+          if (widget && (candidate === widget || widget.contains(candidate))) return false;
+          if (
+            candidate instanceof this.window.HTMLImageElement &&
+            !candidate.currentSrc &&
+            !candidate.getAttribute("src")
+          ) {
+            return false;
+          }
+          return true;
+        };
+        canvas = await toCanvas(node, { filter, pixelRatio });
       }
 
       const dataUrl = canvas.toDataURL("image/jpeg", quality);
