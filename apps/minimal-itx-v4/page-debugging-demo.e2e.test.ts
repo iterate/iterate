@@ -197,6 +197,7 @@ describe("page debugging demo", () => {
         "connect-src 'self'",
         "img-src 'self' data:",
         "style-src 'self' 'unsafe-inline'",
+        "require-trusted-types-for 'script'",
         `frame-src ${workerOrigin}`,
       ].join("; ");
       await targetPage.route("https://strict-host.iterate-demo.test/**", (route) =>
