@@ -1261,6 +1261,9 @@ const plugin: StrictPlugin = {
           "@iterate-com/shared/callable/descriptor-types\\.ts",
           "@iterate-com/shared/codemode/types",
           "@iterate-com/shared/streams/types",
+          // Canonical Iterate auth claim schemas (zod-only module) — the auth
+          // contract's introspection output must match token claims exactly.
+          "@iterate-com/shared/auth-claims",
         ];
         const compiledRegex = ALLOWED_RUNTIME_IMPORT_REGEX.map(
           (pattern) => new RegExp(`^${pattern}$`),

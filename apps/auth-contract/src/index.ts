@@ -1,6 +1,10 @@
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import { oc, type ContractRouterClient } from "@orpc/contract";
+import {
+  IterateAuthAccessTokenOrganizationClaim,
+  IterateAuthProjectClaim,
+} from "@iterate-com/shared/auth-claims";
 import { z } from "zod";
 
 export const SERVICE_TOKEN_HEADER = "x-iterate-service-token";
@@ -144,6 +148,40 @@ export const InternalSetOAuthClientInput = z.object({
   skipConsent: z.boolean().optional(),
 });
 export type InternalSetOAuthClientInput = z.infer<typeof InternalSetOAuthClientInput>;
+
+export const InternalIntrospectOAuthAccessTokenInput = z.object({
+  token: z.string().min(1),
+  audiences: z.array(z.string().min(1)).min(1),
+});
+export type InternalIntrospectOAuthAccessTokenInput = z.infer<
+  typeof InternalIntrospectOAuthAccessTokenInput
+>;
+
+export const InternalIntrospectOAuthAccessTokenOutput = z.discriminatedUnion("active", [
+  z.object({
+    active: z.literal(false),
+    reason: z.string().optional(),
+  }),
+  z.object({
+    active: z.literal(true),
+    sub: z.string(),
+    sid: z.string().optional(),
+    clientId: z.string(),
+    iss: z.string(),
+    aud: z.union([z.string(), z.array(z.string())]),
+    iat: z.number(),
+    exp: z.number(),
+    scope: z.string(),
+    scopes: z.array(z.string()),
+    organizations: z.array(IterateAuthAccessTokenOrganizationClaim),
+    projects: z.array(IterateAuthProjectClaim),
+    isAdmin: z.boolean(),
+    role: z.string().nullable(),
+  }),
+]);
+export type InternalIntrospectOAuthAccessTokenOutput = z.infer<
+  typeof InternalIntrospectOAuthAccessTokenOutput
+>;
 
 export const OAuthProjectSelectionInput = z.object({
   clientId: z.string().min(1),
@@ -437,6 +475,15 @@ export const authContract = oc.router({
         })
         .input(InternalSetOAuthClientInput)
         .output(OAuthClientRecord),
+      introspectAccessToken: oc
+        .route({
+          method: "POST",
+          path: "/internal/oauth/introspect-access-token",
+          summary: "Introspect an OAuth access token for internal resource servers",
+          tags: ["internal", "oauth"],
+        })
+        .input(InternalIntrospectOAuthAccessTokenInput)
+        .output(InternalIntrospectOAuthAccessTokenOutput),
     },
     user: {
       upsertVerifiedEmail: oc

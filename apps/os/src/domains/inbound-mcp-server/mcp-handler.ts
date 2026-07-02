@@ -1,6 +1,10 @@
-import { createIterateAuth } from "@iterate-com/auth/server";
+import { createIterateAuth, type AccessTokenClaims } from "@iterate-com/auth/server";
 import {
+  ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM,
+  ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM,
+  ITERATE_IS_ADMIN_CLAIM,
   ITERATE_PROJECT_SELECTION_SCOPE,
+  ITERATE_ROLE_CLAIM,
   listProjectScopeIds,
 } from "@iterate-com/shared/auth-claims";
 import { oauthResourceAudienceVariants } from "@iterate-com/shared/oauth-resource";
@@ -11,7 +15,8 @@ import { z } from "zod";
 import { newHttpBatchRpcSession } from "capnweb";
 import { env } from "cloudflare:workers";
 import packageJson from "../../../package.json" with { type: "json" };
-import { authenticateAdminApiSecret } from "~/auth/admin.ts";
+import { authenticateAdminApiSecret, readBearerToken } from "~/auth/admin.ts";
+import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import { principalFromAccessToken } from "~/auth/principal.ts";
 import { MCP_START_MOUNT_PATH, resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
 import { readProjectBySlug } from "~/project-directory.ts";
@@ -165,7 +170,7 @@ async function resolveMcpAuth(input: {
     });
   }
 
-  const accessToken = await auth.authenticateBearer({ headers: input.request.headers });
+  const accessToken = await resolveOAuthAccessToken({ ...input, auth, audiences: mcpAudiences });
   if (!accessToken) return unauthorizedMcpResponse(input, "Missing or invalid bearer token");
   const audiences = Array.isArray(accessToken.aud) ? accessToken.aud : [accessToken.aud];
   if (!audiences.some((audience) => mcpAudiences.includes(audience))) {
@@ -198,6 +203,61 @@ async function resolveMcpAuth(input: {
     projects,
     scopes,
   };
+}
+
+// Iterate Auth issues a JWT access token only when the client requests an RFC
+// 8707 `resource` (audience); clients that omit it — Grok's connector, generic
+// MCP clients — get an OPAQUE token instead. The JWT verifier can't read those,
+// so fall back to the auth worker's introspection endpoint, which validates the
+// opaque token against its (hashed) store and reconstructs the same claims.
+async function resolveOAuthAccessToken(input: {
+  auth: ReturnType<typeof createIterateAuth>;
+  context: RequestContext;
+  request: Request;
+  audiences: readonly string[];
+}): Promise<AccessTokenClaims | null> {
+  const jwtAccessToken = await input.auth.authenticateBearer({ headers: input.request.headers });
+  if (jwtAccessToken) return jwtAccessToken;
+
+  const bearerToken = readBearerToken(input.request.headers.get("authorization"));
+  if (!bearerToken) return null;
+
+  try {
+    const result = await createAuthWorkerServiceClient(
+      input.context,
+    ).internal.oauth.introspectAccessToken({
+      token: bearerToken,
+      audiences: [...input.audiences],
+    });
+    if (!result.active) {
+      input.context.log.info("os.mcp.opaque_token_inactive");
+      input.context.log.set({ mcpAuth: { opaqueIntrospection: result.reason ?? "inactive" } });
+      return null;
+    }
+
+    return {
+      sub: result.sub,
+      sid: result.sid,
+      iss: result.iss,
+      aud: result.aud,
+      iat: result.iat,
+      exp: result.exp,
+      scope: result.scope,
+      scopes: result.scopes,
+      [ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM]: result.organizations,
+      [ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM]: result.projects,
+      [ITERATE_IS_ADMIN_CLAIM]: result.isAdmin,
+      [ITERATE_ROLE_CLAIM]: result.role,
+    };
+  } catch (error) {
+    input.context.log.info("os.mcp.opaque_introspection_error");
+    input.context.log.set({
+      mcpAuth: {
+        opaqueIntrospectionError: error instanceof Error ? error.message : String(error),
+      },
+    });
+    return null;
+  }
 }
 
 function createMcpIterateAuth(

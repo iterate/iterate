@@ -301,3 +301,65 @@ export namespace listSystemOAuthClients {
     redirectUrisJson: string;
   };
 }
+
+const getOAuthAccessTokenForInternalIntrospectionSql = `
+SELECT oat.id,
+  oat.clientId,
+  oat.sessionId,
+  oat.userId,
+  oat.referenceId,
+  oat.expiresAt,
+  oat.createdAt,
+  oat.scopes,
+  oc.disabled AS clientDisabled,
+  s.expiresAt AS sessionExpiresAt,
+  u.role AS userRole
+FROM oauthAccessToken oat
+JOIN oauthClient oc ON oc.clientId = oat.clientId
+LEFT JOIN session s ON s.id = oat.sessionId
+LEFT JOIN user u ON u.id = oat.userId
+WHERE oat.token = ?
+LIMIT 1;
+`.trim();
+const getOAuthAccessTokenForInternalIntrospectionQuery = (
+  params: getOAuthAccessTokenForInternalIntrospection.Params,
+) => ({
+  name: "getOAuthAccessTokenForInternalIntrospection",
+  sql: getOAuthAccessTokenForInternalIntrospectionSql,
+  args: [params.token],
+});
+
+export const getOAuthAccessTokenForInternalIntrospection = Object.assign(
+  async function getOAuthAccessTokenForInternalIntrospection(
+    client: Client,
+    params: getOAuthAccessTokenForInternalIntrospection.Params,
+  ): Promise<getOAuthAccessTokenForInternalIntrospection.Result | null> {
+    const rows = await client.all<getOAuthAccessTokenForInternalIntrospection.Result>(
+      getOAuthAccessTokenForInternalIntrospectionQuery(params),
+    );
+    return rows.length > 0 ? rows[0] : null;
+  },
+  {
+    sql: getOAuthAccessTokenForInternalIntrospectionSql,
+    query: getOAuthAccessTokenForInternalIntrospectionQuery,
+  },
+);
+
+export namespace getOAuthAccessTokenForInternalIntrospection {
+  export type Params = {
+    token: string;
+  };
+  export type Result = {
+    id: string;
+    clientId: string;
+    sessionId?: string;
+    userId?: string;
+    referenceId?: string;
+    expiresAt: number;
+    createdAt: number;
+    scopes: string;
+    clientDisabled?: number;
+    sessionExpiresAt: number;
+    userRole?: string;
+  };
+}
