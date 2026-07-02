@@ -32,17 +32,9 @@ import { queryOptions } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { orpcClient } from "../../utils/query.tsx";
 
-export type Organization = Awaited<ReturnType<typeof orpcClient.user.myOrganizations>>[number];
+type Organization = Awaited<ReturnType<typeof orpcClient.user.myOrganizations>>[number];
 export type Project = Awaited<ReturnType<typeof orpcClient.project.list>>[number];
 export type InventoryOrganization = Organization & { projects: Project[] };
-
-export const NameInput = z.object({
-  name: z.string().trim().min(1, "Name is required").max(100, "Keep it under 100 characters"),
-});
-
-export const ProjectInput = NameInput.extend({
-  organizationSlug: z.string().trim().min(1, "Choose an organization"),
-});
 
 export function inventoryQueryOptions() {
   return queryOptions({
@@ -213,7 +205,7 @@ export function OrganizationDialog(props: {
   open: boolean;
   isPending: boolean;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (input: z.infer<typeof NameInput>) => void;
+  onSubmit: (input: { name: string }) => void;
 }) {
   return (
     <NameDialog
@@ -234,7 +226,7 @@ export function ProjectDialog(props: {
   organizations: InventoryOrganization[];
   isPending: boolean;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (input: z.infer<typeof ProjectInput>) => void;
+  onSubmit: (input: { name: string; organizationSlug: string }) => void;
 }) {
   const [organizationSlug, setOrganizationSlug] = useState("");
   const defaultOrganizationSlug = props.state?.organizationSlug ?? props.organizations[0]?.slug;
@@ -276,6 +268,10 @@ export function ProjectDialog(props: {
     />
   );
 }
+
+const NameInput = z.object({
+  name: z.string().trim().min(1, "Name is required").max(100, "Keep it under 100 characters"),
+});
 
 export function NameDialog(props: {
   open: boolean;

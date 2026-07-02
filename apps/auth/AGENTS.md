@@ -38,8 +38,9 @@ One worker, four ways in — each with its own credential:
   `WorkerEntrypoint` and implements `AuthWorkerRpc` (also declared in
   `@iterate-com/auth-contract`): project directory lookups, project creation,
   `prj_` id minting (`src/server/project-directory.ts`). OS binds it as `AUTH`
-  in `apps/os/alchemy.run.ts`; in OS local dev it is a _remote_ binding that
-  proxies to the deployed worker.
+  in every worker (`apps/os/alchemy.run.ts`) — the binding is required, so a
+  fresh environment must deploy auth before OS. In OS local dev it is a
+  _remote_ binding that proxies to the deployed worker.
   [Service bindings + RPC](https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/rpc/),
   [remote bindings](https://developers.cloudflare.com/workers/local-development/#remote-bindings).
 

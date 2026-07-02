@@ -171,12 +171,13 @@ const env: Record<string, string | undefined> = {
     process.env.VITE_ENABLE_EMAIL_OTP_SIGNIN ??
     (process.env.ALCHEMY_STAGE?.startsWith("dev") ? "true" : undefined),
   APP_CONFIG_ITERATE_AUTH__JWKS: await resolveStaticAuthJwks(resolvedAuthIssuer),
-  // The auth service token is deploy-time-only (dev OAuth client bootstrap
-  // below). Runtime OS→auth calls authenticate by holding the AUTH service
-  // binding instead, so the token must NOT ship inside APP_CONFIG — strip the
-  // APP_CONFIG_-prefixed spelling and keep the plain one for the bootstrap.
-  ITERATE_AUTH_SERVICE_TOKEN:
-    process.env.ITERATE_AUTH_SERVICE_TOKEN ?? process.env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN,
+  // The auth service token (ITERATE_AUTH_SERVICE_TOKEN, straight from Doppler)
+  // is deploy-time-only: the dev OAuth client bootstrap below is its sole
+  // consumer. Runtime OS→auth calls authenticate by holding the AUTH service
+  // binding instead, so no APP_CONFIG_ spelling may exist — force-strip the
+  // legacy one so the secret can never ship inside worker APP_CONFIG even
+  // while old Doppler configs still define it. (Delete this line once
+  // APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN is gone from every os config.)
   APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN: undefined,
 };
 
@@ -295,21 +296,16 @@ const statefulWorker = DurableObjectNamespace<StatefulWorkerDurableObject>("work
 // the binding is the credential, so no service token ships in worker config.
 // The auth app deploys per stage as `auth-<stage>` (apps/auth/alchemy.run.ts);
 // personal dev stages (dev_<user>) share the `dev` auth deployment, mirroring
-// the auth.iterate-dev.com issuer they use. Override with
-// ITERATE_AUTH_WORKER_NAME when an environment pairs with a nonstandard auth
-// stage.
-const authWorkerName =
-  process.env.ITERATE_AUTH_WORKER_NAME ??
-  slugify(`auth-${ctx.app.stage.startsWith("dev") ? "dev" : ctx.app.stage}`);
-const authIssuerIsLoopback = (() => {
-  try {
-    return ["localhost", "127.0.0.1", "::1", "[::1]"].includes(
-      new URL(resolvedAuthIssuer ?? "https://auth.iterate.com/api/auth").hostname,
-    );
-  } catch {
-    return false;
-  }
-})();
+// the auth.iterate-dev.com issuer they use.
+//
+// The binding is REQUIRED: OS cannot log anyone in or resolve a project host
+// without a live auth worker, so if `auth-<stage>` is not deployed yet,
+// Cloudflare rejecting this binding is the correct loud failure — deploy the
+// auth app first.
+const authWorkerName = slugify(`auth-${ctx.app.stage.startsWith("dev") ? "dev" : ctx.app.stage}`);
+const authIssuerIsLoopback = resolvedAuthIssuer
+  ? ["localhost", "127.0.0.1", "::1", "[::1]"].includes(new URL(resolvedAuthIssuer).hostname)
+  : false;
 // Fully-local dev has no auth worker inside vite's workerd, so the binding is
 // a REMOTE binding: code still calls `env.AUTH.method()`, but wrangler/vite
 // proxy fetch and RPC to the DEPLOYED auth worker for the stage
@@ -320,20 +316,7 @@ const authWorkerBinding = {
   ...WorkerRef<AuthWorkerEntrypoint>({ service: authWorkerName }),
   ...(ctx.app.local && !authIssuerIsLoopback ? { dev: { remote: true } } : {}),
 };
-// A service binding to a script that does not exist fails the deploy; probe
-// and degrade instead (OS deploys, directory lookups/creates fail with a
-// clear runtime error) so bootstrapping a brand-new environment stays
-// order-independent between the two apps.
-const authWorkerMissing = ctx.app.local
-  ? false
-  : (await findMissingWorkerScripts([authWorkerName])).size > 0;
-if (authWorkerMissing) {
-  console.warn(
-    `[alchemy.run] Auth worker ${authWorkerName} is not deployed — omitting the AUTH service ` +
-      `binding. Project directory lookups and project creation will fail until the auth worker ` +
-      `is deployed and OS is redeployed.`,
-  );
-}
+
 // ---- Fresh-stage bootstrap --------------------------------------------------
 // Cloudflare rejects a cross-script DO binding whose target script does not
 // exist yet (error 10061), and the itx workers reference each other — a
@@ -430,7 +413,7 @@ async function osWorker<B extends Bindings>(
 // contract. All itx workers get the full set so any of them can host any
 // capability, exactly like the single-worker original itx came from.
 const itxBindings = {
-  ...(authWorkerMissing ? {} : { AUTH: authWorkerBinding }),
+  AUTH: authWorkerBinding,
   AI: Ai(),
   AGENT: agent,
   ARTIFACTS: Artifacts({ namespace: artifactsNamespace }),
@@ -518,7 +501,7 @@ const appWorker = await IterateAppWorker(ctx, {
   name: workerNames.app,
   main: "./src/workers/app.ts",
   bindings: {
-    ...(authWorkerMissing ? {} : { AUTH: authWorkerBinding }),
+    AUTH: authWorkerBinding,
     ITX_API: apiWorker,
     // Server-side project reads share the ingress directory cache.
     PROJECT_DIRECTORY: projectDirectory,
@@ -541,7 +524,7 @@ const appWorker = await IterateAppWorker(ctx, {
 const ingressWorker = await osWorker("ingress", {
   entrypoint: "./src/workers/ingress.ts",
   bindings: {
-    ...(authWorkerMissing ? {} : { AUTH: authWorkerBinding }),
+    AUTH: authWorkerBinding,
     APP: appWorker,
     ITX_API: apiWorker,
   },

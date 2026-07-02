@@ -2,7 +2,7 @@ import { RpcTarget } from "cloudflare:workers";
 import { Client as McpSdkClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { AppConfig } from "./config.ts";
-import { authWorker, maybeAuthWorker } from "./auth/auth-worker-service.ts";
+import { authWorker } from "./auth/auth-worker-service.ts";
 import { parseConfig } from "./config.ts";
 import {
   resolveItxAuth,
@@ -883,13 +883,8 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
     if (args.projectId !== undefined) {
       return { organizationId: null, projectId: args.projectId, slug: args.slug };
     }
-    const auth = maybeAuthWorker();
-    if (auth) {
-      const minted = await auth.mintProjectId();
-      return { organizationId: null, projectId: minted.id, slug: args.slug };
-    }
-    // No auth worker in this deployment (e.g. unit-test envs): mint locally.
-    return { organizationId: null, projectId: "prj_" + crypto.randomUUID(), slug: args.slug };
+    const minted = await authWorker().mintProjectId();
+    return { organizationId: null, projectId: minted.id, slug: args.slug };
   }
 
   list() {

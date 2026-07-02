@@ -67,6 +67,10 @@ function ProjectsIndexPage() {
     );
   }
 
+  // Render-time <Navigate> rather than a beforeLoad redirect: the target
+  // depends on the inventory query, which authenticates with the session
+  // cookie from the browser — the SSR oRPC link (utils/query.tsx) does not
+  // forward request cookies, so this decision can only be made client-side.
   const firstOrganization = inventoryQuery.data[0];
   if (firstOrganization) {
     return (

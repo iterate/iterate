@@ -23,7 +23,8 @@ const config = getConfig(
     quoteStyle: "double",
     // @tanstack/start-plugin-core appends this Register block when the vite
     // plugin runs the generator; mirror it so this script produces the same
-    // output as the build.
+    // output as the build. Source of the footer (pin bumps may change it):
+    // https://github.com/TanStack/router/blob/main/packages/start-plugin-core/src/start-compiler-plugin/route-tree-footer.ts
     routeTreeFileFooter: [
       [
         'import type { getRouter } from "./router.tsx";',

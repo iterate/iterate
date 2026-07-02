@@ -26,9 +26,49 @@ import { appendSetCookieHeaders, resolveAuthLogoutReturnTo } from "./logout.ts";
 import {
   createProjectForOrganization,
   getProjectBySlug,
-  listProjectsForUserRpc,
+  listProjectsForUser,
   mintProjectId,
 } from "./project-directory.ts";
+
+/**
+ * The worker entrypoint. Two transports on one class:
+ *
+ *  - `fetch` — everything HTTP: the better-auth OIDC provider under
+ *    /api/auth/*, the oRPC service API under /api/orpc/*, and the TanStack
+ *    Start UI for all remaining paths (the Hono app wired up below).
+ *  - Named methods — Workers RPC for the OS workers that hold the `AUTH`
+ *    service binding (apps/os/alchemy.run.ts). Extending WorkerEntrypoint is
+ *    what makes the methods callable over a binding; plain
+ *    `export default { fetch }` objects cannot expose RPC.
+ *    https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/rpc/
+ *
+ * The RPC methods carry no credential: a service binding can only be attached
+ * by a deploy into this Cloudflare account, so holding the binding IS the
+ * authorization (same trust as the old x-iterate-service-token, minus the
+ * secret to leak). OAuth/OIDC flows deliberately stay on the public hostname —
+ * browsers, CLIs, and third-party MCP clients cannot hold bindings.
+ */
+export default class AuthWorker extends WorkerEntrypoint<CloudflareEnv> implements AuthWorkerRpc {
+  override fetch(request: Request) {
+    return app.fetch(request, this.env, this.ctx);
+  }
+
+  createProjectForOrganization(input: CreateProjectForOrganizationInput) {
+    return createProjectForOrganization(input);
+  }
+
+  getProjectBySlug(input: ProjectInput) {
+    return getProjectBySlug(input);
+  }
+
+  listProjectsForUser(input: { userId: string }) {
+    return listProjectsForUser(input);
+  }
+
+  mintProjectId() {
+    return mintProjectId();
+  }
+}
 
 const app = hono();
 const allowedBrowserOrigins = new Set(getAllowedBrowserOrigins());
@@ -133,46 +173,6 @@ app.all("*", (c) =>
     },
   }),
 );
-
-/**
- * The worker entrypoint. Two transports on one class:
- *
- *  - `fetch` — everything HTTP: the better-auth OIDC provider under
- *    /api/auth/*, the oRPC service API under /api/orpc/*, and the TanStack
- *    Start UI for all remaining paths (the Hono app above).
- *  - Named methods — Workers RPC for the OS workers that hold the `AUTH`
- *    service binding (apps/os/alchemy.run.ts). Extending WorkerEntrypoint is
- *    what makes the methods callable over a binding; plain
- *    `export default { fetch }` objects cannot expose RPC.
- *    https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/rpc/
- *
- * The RPC methods carry no credential: a service binding can only be attached
- * by a deploy into this Cloudflare account, so holding the binding IS the
- * authorization (same trust as the old x-iterate-service-token, minus the
- * secret to leak). OAuth/OIDC flows deliberately stay on the public hostname —
- * browsers, CLIs, and third-party MCP clients cannot hold bindings.
- */
-export default class AuthWorker extends WorkerEntrypoint<CloudflareEnv> implements AuthWorkerRpc {
-  override fetch(request: Request): Response | Promise<Response> {
-    return app.fetch(request, this.env, this.ctx);
-  }
-
-  createProjectForOrganization(input: CreateProjectForOrganizationInput) {
-    return createProjectForOrganization(input);
-  }
-
-  getProjectBySlug(input: ProjectInput) {
-    return getProjectBySlug(input);
-  }
-
-  listProjectsForUser(input: { userId: string }) {
-    return listProjectsForUserRpc(input);
-  }
-
-  mintProjectId() {
-    return mintProjectId();
-  }
-}
 
 export function preserveOAuthResourceRedirect(request: Request, response: Response) {
   const requestUrl = new URL(request.url);

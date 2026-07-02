@@ -26,7 +26,7 @@
 
 import { authenticateCapnwebAdmin } from "./auth/admin-auth-cookie.ts";
 import { authenticateAdminBearer } from "./auth/admin.ts";
-import { maybeAuthWorker } from "./auth/auth-worker-service.ts";
+import { authWorker } from "./auth/auth-worker-service.ts";
 import { createOsIterateAuth } from "./auth/iterate-auth-client.ts";
 import {
   principalFromAccessToken,
@@ -246,9 +246,7 @@ function contextFromImpersonatedToken(token: ItxAuthToken): ItxAuthContext {
 const DIRECTORY_CACHE_TTL_MS = 30_000;
 const directoryCache = new Map<string, { expiresAt: number; hasProject: boolean }>();
 
-function authWorkerProjectDirectory(): ProjectDirectory | undefined {
-  const authWorker = maybeAuthWorker();
-  if (!authWorker) return undefined;
+function authWorkerProjectDirectory(): ProjectDirectory {
   return {
     async userHasProject(userPrincipal, projectId) {
       const cacheKey = `${userPrincipal.userId}:${projectId}`;
@@ -257,7 +255,7 @@ function authWorkerProjectDirectory(): ProjectDirectory | undefined {
 
       let projects;
       try {
-        projects = await authWorker.listProjectsForUser({ userId: userPrincipal.userId });
+        projects = await authWorker().listProjectsForUser({ userId: userPrincipal.userId });
       } catch {
         // Auth worker unreachable is NOT "no membership": deny THIS check
         // without caching the denial, so the next request retries instead

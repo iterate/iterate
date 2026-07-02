@@ -102,7 +102,9 @@ function OrganizationInventoryPage() {
   });
 
   // Unknown or no-longer-visible organization slug: fall back to the index,
-  // which redirects to the first organization or the empty state.
+  // which redirects to the first organization or the empty state. Render-time
+  // <Navigate> because the check needs the client-authenticated inventory
+  // query (see the matching comment in projects.index.tsx).
   if (inventoryQuery.isSuccess && !selectedOrganization) {
     return <Navigate to="/projects" replace />;
   }

@@ -5,14 +5,14 @@ import {
   type UserProjectRecord,
 } from "@iterate-com/auth-contract";
 import { ORPCError } from "@orpc/server";
-import { z } from "zod";
+import { z } from "zod/v4";
 import { db } from "./db/index.ts";
 import { parseProjectMetadata } from "./db/helpers.ts";
 import {
   getOrganizationBySlug,
   getProjectWithOrganizationBySlug,
   insertProjectReturning,
-  listProjectsForUser,
+  listProjectsForUser as listProjectsForUserQuery,
 } from "./db/queries/index.ts";
 import { resolveProjectCreateTarget } from "./project-slugs.ts";
 import { generateId, toProjectRecord, toProjectRecordFromReturnedRow } from "./records.ts";
@@ -27,6 +27,11 @@ import { generateId, toProjectRecord, toProjectRecordFromReturnedRow } from "./r
 //
 // Inputs are zod-parsed even though callers are first-party workers: RPC
 // crosses a deploy boundary, and the two sides can be skewed mid-rollout.
+//
+// Errors are ORPCError so the conflict/not-found vocabulary stays shared with
+// the oRPC routers (project-slugs.ts serves both). Over Workers RPC they
+// arrive as plain Errors — the message survives, the code does not — and no
+// OS caller branches on codes.
 
 /** See AuthWorkerRpc.mintProjectId. */
 export async function mintProjectId(): Promise<{ id: string }> {
@@ -95,11 +100,11 @@ const ListProjectsForUserInput = z.object({ userId: z.string().min(1) });
 /** See AuthWorkerRpc.listProjectsForUser. Same query the OAuth project claims
  * are built from (auth-plugins.ts), so OS's stale-claims fallback and the
  * token claims can never disagree. */
-export async function listProjectsForUserRpc(
+export async function listProjectsForUser(
   rawInput: z.infer<typeof ListProjectsForUserInput>,
 ): Promise<UserProjectRecord[]> {
   const input = ListProjectsForUserInput.parse(rawInput);
-  const projects = await listProjectsForUser(db, { userId: input.userId });
+  const projects = await listProjectsForUserQuery(db, { userId: input.userId });
   return projects.map((project) => ({
     id: project.id,
     slug: project.slug,

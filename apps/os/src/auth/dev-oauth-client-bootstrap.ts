@@ -32,7 +32,7 @@ export function resolveLocalDevOAuthClientBootstrap(
 
   const authIssuer = env.APP_CONFIG_ITERATE_AUTH__ISSUER ?? env.ITERATE_OAUTH_ISSUER;
   const baseUrl = env.APP_CONFIG_BASE_URL;
-  const serviceToken = env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN ?? env.ITERATE_AUTH_SERVICE_TOKEN;
+  const serviceToken = env.ITERATE_AUTH_SERVICE_TOKEN;
 
   if (
     !authIssuer ||

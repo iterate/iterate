@@ -116,7 +116,7 @@ export const listAdminProjectsServerFn: (input: {
 }) => Promise<ProjectListResult> = createServerFn({ method: "GET" })
   .validator((input: { limit?: number; offset?: number }) => input)
   .handler(() => {
-    // TODO(task #13): auth worker internal.project.listAll powers this.
+    // TODO(task #13): a listAllProjects method on AuthWorkerRpc powers this.
     return Promise.resolve({ projects: [], total: 0 });
   });
 

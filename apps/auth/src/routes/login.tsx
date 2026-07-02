@@ -52,6 +52,10 @@ export const Route = createFileRoute("/login")({
     // to do here, go where the caller wanted. (In the OAuth flow we stay and
     // render "continue as this account" instead.)
     if (loginState.user && !isOAuthProviderFlowSearch(search)) {
+      // `href`, not `to`: the target is a runtime-arbitrary same-origin path
+      // (already sanitized by safeRedirectPath), while `to` is typed against
+      // the route tree. A path-only href stays a client-side navigation:
+      // https://tanstack.com/router/latest/docs/framework/react/api/router/redirectFunction
       throw redirect({ href: safeRedirectPath(search.redirect) });
     }
     return { loginState };

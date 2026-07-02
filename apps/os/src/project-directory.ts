@@ -13,7 +13,7 @@
  * prime from another isolate). Hits are written back, and `projects.create`
  * primes the cache eagerly so the post-create navigation never misses.
  */
-import { maybeAuthWorker } from "./auth/auth-worker-service.ts";
+import { authWorker } from "./auth/auth-worker-service.ts";
 
 export type ProjectDirectoryRecord = {
   id: string;
@@ -110,13 +110,8 @@ async function writeThrough(directory: KVNamespace, record: ProjectDirectoryReco
 async function lookupAuthWorker(
   slug: string,
 ): Promise<{ ok: true; record: ProjectDirectoryRecord | null } | { ok: false }> {
-  const authWorker = maybeAuthWorker();
-  // No auth worker deployed for this stage: the KV cache (primed at create)
-  // is the whole directory. Report "no record" rather than "unreachable" so
-  // the negative memo still works.
-  if (!authWorker) return { ok: true, record: null };
   try {
-    const record = await authWorker.getProjectBySlug({ projectSlug: slug });
+    const record = await authWorker().getProjectBySlug({ projectSlug: slug });
     if (!record) return { ok: true, record: null };
     return {
       ok: true,

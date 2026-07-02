@@ -23,13 +23,6 @@ import { BOOTSTRAP_ADMIN_EMAIL } from "../../bootstrap-admin.ts";
 // project creation, project-id minting) moved to Workers RPC on the worker
 // entrypoint — see ../../project-directory.ts and worker.ts.
 
-function extractCookieHeader(setCookieHeader: string | null): string | null {
-  if (!setCookieHeader) return null;
-  const firstCookie = setCookieHeader.split(/,(?=[^;]+=[^;]+)/)[0]?.trim();
-  if (!firstCookie) return null;
-  return firstCookie.split(";")[0] ?? null;
-}
-
 // Client CREATION goes through better-auth's admin API (adminCreateOAuthClient)
 // so rows get the oauth-provider plugin's defaults (grant/response types, token
 // endpoint auth method, hashed secret storage). That API wants an admin
@@ -37,47 +30,34 @@ function extractCookieHeader(setCookieHeader: string | null): string | null {
 // service token (scripts/render-admin-seed.ts writes that credential row at
 // deploy time). The caller already proved it holds the token via
 // serviceMiddleware, so this is a format conversion, not an extra trust step.
-async function getBootstrapAdminAuthHeaders(params: {
-  serviceAuthToken: string;
-}): Promise<Headers> {
-  const signInResult = await auth.api.signInEmail({
-    returnHeaders: true,
-    body: {
-      email: BOOTSTRAP_ADMIN_EMAIL,
-      password: params.serviceAuthToken,
-    },
-  });
-
-  const cookie = extractCookieHeader(signInResult.headers.get("set-cookie"));
-  if (!cookie) {
-    throw new ORPCError("INTERNAL_SERVER_ERROR", {
-      message: "Failed to establish bootstrap admin auth session",
-    });
-  }
-
-  return new Headers({ cookie });
-}
-
-function requireServiceAuthToken(env: { SERVICE_AUTH_TOKEN?: string }): string {
-  const serviceAuthToken = env.SERVICE_AUTH_TOKEN?.trim();
+async function createOAuthClientViaAdminApi(params: {
+  env: { SERVICE_AUTH_TOKEN?: string };
+  clientName: string;
+  redirectURIs: string[];
+}) {
+  const serviceAuthToken = params.env.SERVICE_AUTH_TOKEN?.trim();
   if (!serviceAuthToken) {
     throw new ORPCError("INTERNAL_SERVER_ERROR", {
       message: "SERVICE_AUTH_TOKEN is required for OAuth client provisioning",
     });
   }
-  return serviceAuthToken;
-}
 
-async function createOAuthClientViaAdminApi(params: {
-  serviceAuthToken: string;
-  clientName: string;
-  redirectURIs: string[];
-}) {
-  const headers = await getBootstrapAdminAuthHeaders({
-    serviceAuthToken: params.serviceAuthToken,
+  const signInResult = await auth.api.signInEmail({
+    returnHeaders: true,
+    body: {
+      email: BOOTSTRAP_ADMIN_EMAIL,
+      password: serviceAuthToken,
+    },
   });
+  const sessionCookie = signInResult.headers.getSetCookie()[0]?.split(";")[0];
+  if (!sessionCookie) {
+    throw new ORPCError("INTERNAL_SERVER_ERROR", {
+      message: "Failed to establish bootstrap admin auth session",
+    });
+  }
+
   const created = await auth.api.adminCreateOAuthClient({
-    headers,
+    headers: new Headers({ cookie: sessionCookie }),
     body: {
       client_name: params.clientName,
       redirect_uris: params.redirectURIs,
@@ -131,8 +111,18 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
     const trustCallerClientId = isDevStageClient && Boolean(existingByClientId?.clientSecret);
     const existing = trustCallerClientId ? existingByClientId : existingByReferenceId;
     const callerHoldsSecret = Boolean(input.existingClientSecret) && !input.rotateClientSecret;
+    // A dev client is only kept when it was matched by the CALLER's client id.
+    // If the caller's pair no longer exists in the db (auth-dev db reset,
+    // another worktree rotated it away), keeping the referenceId row would
+    // return that row's clientId with the caller's unrelated secret — a broken
+    // pair the server cannot detect (secrets are stored hashed) and the caller
+    // would persist. Rotate instead, like every `pnpm dev` did historically.
+    const keepExisting =
+      Boolean(existing?.clientSecret) &&
+      callerHoldsSecret &&
+      (trustCallerClientId || !isDevStageClient);
 
-    if (existing?.clientSecret && callerHoldsSecret && input.existingClientSecret) {
+    if (keepExisting && existing && input.existingClientSecret) {
       // Re-pointing a dev referenceId at the caller's client may leave the
       // previously referenced row dangling — disable it.
       if (
@@ -189,7 +179,7 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
     }
 
     const created = await createOAuthClientViaAdminApi({
-      serviceAuthToken: requireServiceAuthToken(context.env),
+      env: context.env,
       clientName: input.clientName,
       redirectURIs,
     });
@@ -256,7 +246,7 @@ const setOAuthClient = os.internal.oauth.setClient
       // (token endpoint auth method, grant/response types, …), then overwrite
       // the generated credentials with the caller-provided constants.
       const created = await createOAuthClientViaAdminApi({
-        serviceAuthToken: requireServiceAuthToken(context.env),
+        env: context.env,
         clientName: input.clientName,
         redirectURIs,
       });
