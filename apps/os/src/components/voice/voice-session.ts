@@ -17,7 +17,7 @@
 // Plain class + subscribe/getSnapshot so React renders it with
 // useSyncExternalStore; all lifecycle is imperative and owned here.
 
-import { connectItx } from "~/itx/itx-react.tsx";
+import { connectItxBrowser } from "~/itx/itx-react.tsx";
 import type { VoiceRealtimeConnection } from "~/lib/voice-server-fns.ts";
 
 const USER_TURN_EVENT = "events.iterate.com/voice/user-turn-transcribed";
@@ -377,7 +377,7 @@ export class VoiceSession {
   }
 
   async #agentStream() {
-    const itx = await connectItx({ projectId: this.#projectId });
+    const itx = await connectItxBrowser({ projectId: this.#projectId });
     return itx.agents.get(this.#agentPath).stream;
   }
 
