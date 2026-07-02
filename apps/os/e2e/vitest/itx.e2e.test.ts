@@ -2863,9 +2863,7 @@ describe("itx", () => {
         }
       `,
     };
-    using worker = project.workers.get<{
-      compute(input: { left: number; right: number }): Promise<{ greeting: string; sum: number }>;
-    }>({
+    using worker = project.workers.get({
       entrypoint: "TsEntrypoint",
       path: "/",
       source: {
@@ -2873,7 +2871,9 @@ describe("itx", () => {
         options: { entryPoint: "worker.ts" },
       },
       type: "stateless",
-    });
+    }) as unknown as {
+      compute(input: { left: number; right: number }): Promise<{ greeting: string; sum: number }>;
+    } & Disposable;
 
     expect(await worker.compute({ left: 20, right: 22 })).toEqual({
       greeting: "hello from bundled typescript",
@@ -2947,6 +2947,7 @@ describe("itx", () => {
         message: "Point the Slack SDK at the e2e mock",
       });
 
+      // @ts-expect-error - Cap'n Web stub typing flattens the nested surface.
       const posted = await project.worker.slack.chat.postMessage({
         channel: "C123",
         text: "hi from the project worker",
@@ -2960,7 +2961,7 @@ describe("itx", () => {
 
       // Any nested Web API family resolves — nothing slack-specific is
       // enumerated in the worker.
-      // @ts-expect-error - the typed surface only spells out chat.postMessage.
+      // @ts-expect-error - Cap'n Web stub typing flattens the nested surface.
       const users = await project.worker.slack.users.list();
       expect(users).toMatchObject({
         members: [
