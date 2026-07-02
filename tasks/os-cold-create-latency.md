@@ -28,5 +28,12 @@ this quickly):
 - the project worker probe compiling the seeded worker via the dynamic
   worker loader on a cold isolate
 
+Same family, second data point: the auth OAuth **callback**
+(`/api/iterate-auth/callback`) takes 30-90s on freshly deployed slots (both
+signup and create-project specs saw the browser parked on the callback URL
+past a 30s budget; auth already has `global_fetch_strictly_public`). Whatever
+is cold here — the token exchange, the auth DO, or an os-side fetch — likely
+shares a cause with the slow first creates.
+
 Fix ideas once measured: parallelize independent saga steps, pre-warm the
 loader path at deploy, batch the birth appends.
