@@ -23,7 +23,7 @@ import { SlackProcessorContract } from "../integrations/slack-processor-contract
 import { isSlackAgentPath, SLACK_INTEGRATION_STREAM_PATH } from "../integrations/utils.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 
-export const ONBOARDING_AGENT_PATH = "/agents/onboarding";
+const ONBOARDING_AGENT_PATH = "/agents/onboarding";
 
 /**
  * Agents under `/agents/slack/**` are Slack-thread agents: the slack webhook
@@ -31,7 +31,7 @@ export const ONBOARDING_AGENT_PATH = "/agents/onboarding";
  * processor transcribes them, and replies go out through the itx.slack Web
  * API capability instead of web chat.
  */
-export const SLACK_AGENT_SYSTEM_PROMPT = [
+const SLACK_AGENT_SYSTEM_PROMPT = [
   "You are an iterate AI agent running inside a Slack thread.",
   "Respond with exactly one fenced JavaScript code block and no surrounding prose.",
   "The code block must contain a single async arrow function: async (itx) => { ... }.",
@@ -44,7 +44,7 @@ export const SLACK_AGENT_SYSTEM_PROMPT = [
  * The onboarding agent is a normal web-chat agent whose system prompt embeds
  * the seeded ONBOARDING.md script. Same codemode contract as every agent.
  */
-export const ONBOARDING_AGENT_SYSTEM_PROMPT = [
+const ONBOARDING_AGENT_SYSTEM_PROMPT = [
   DEFAULT_AGENT_SYSTEM_PROMPT,
   "",
   "You are this project's onboarding agent. Follow the onboarding script below.",
@@ -54,7 +54,7 @@ export const ONBOARDING_AGENT_SYSTEM_PROMPT = [
 
 const PROJECT_WORKER_READY_ATTEMPTS = 20;
 const PROJECT_WORKER_READY_RETRY_MS = 100;
-const PROJECT_WORKER_READY_URL = "https://minimal-itx-v4.localhost/__itx_project_ready";
+const PROJECT_WORKER_READY_URL = "https://iterate-project.localhost/__itx_project_ready";
 
 export class ProjectProcessor extends StreamProcessor<
   typeof ProjectProcessorContract,

@@ -1,7 +1,7 @@
 import type { AppConfig } from "~/config.ts";
 import { adminPrincipal, type AdminPrincipal } from "~/auth/principal.ts";
 
-export function readBearerToken(headerValue: string | null): string | null {
+function readBearerToken(headerValue: string | null): string | null {
   if (!headerValue) return null;
   const match = /^bearer\s+(.+)$/i.exec(headerValue);
   const token = match?.[1]?.trim() ?? "";

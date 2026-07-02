@@ -561,7 +561,7 @@ function scopeAssignmentTarget(name: string) {
   return `scope.${name}`;
 }
 
-export function formatBrowserReplResult(result: unknown): {
+function formatBrowserReplResult(result: unknown): {
   language: "json" | "text";
   text: string;
 } {

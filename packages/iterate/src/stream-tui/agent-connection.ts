@@ -19,12 +19,6 @@ export type AgentConnectionStatus =
   | { kind: "live" }
   | { kind: "reconnecting"; detail: string };
 
-export type AgentConnection = {
-  /** Append one user message to the agent stream (triggers the agent loop). */
-  sendMessage(text: string): Promise<void>;
-  dispose(): void;
-};
-
 /**
  * Resolve itx credentials for the TUI, in priority order: an admin API secret
  * from the environment (doppler / e2e lanes), an explicit bearer token, then
@@ -49,6 +43,12 @@ export function resolveItxAuth(input: { configName: string | undefined }): ItxAu
       "(APP_CONFIG_ADMIN_API_SECRET) or a bearer token (ITERATE_BEARER_TOKEN).",
   );
 }
+
+type AgentConnection = {
+  /** Append one user message to the agent stream (triggers the agent loop). */
+  sendMessage(text: string): Promise<void>;
+  dispose(): void;
+};
 
 export function connectAgentFeed(input: {
   auth: ItxAuthCredentials;

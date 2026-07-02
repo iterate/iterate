@@ -34,7 +34,7 @@ describe("AppConfig", () => {
     ).toEqual("admin-api-secret-example");
   });
 
-  it("accepts an optional Slack bot token for codemode Slack examples", () => {
+  it("accepts the legacy top-level Slack bot token during migration", () => {
     expect(
       parseAppConfigFromEnv({
         configSchema: AppConfig,
@@ -57,6 +57,7 @@ describe("AppConfig", () => {
           oauthClientId: "slack-client-id",
           oauthClientSecret: "slack-client-secret",
           webhookSigningSecret: "slack-signing-secret",
+          botToken: "slack-bot-token",
         }),
         APP_CONFIG_INTEGRATIONS__GOOGLE: JSON.stringify({
           oauthClientId: "google-client-id",
@@ -72,6 +73,7 @@ describe("AppConfig", () => {
     expect(parsed.integrations.slack?.webhookSigningSecret.exposeSecret()).toEqual(
       "slack-signing-secret",
     );
+    expect(parsed.integrations.slack?.botToken?.exposeSecret()).toEqual("slack-bot-token");
     expect(parsed.integrations.google?.oauthClientId).toEqual("google-client-id");
     expect(parsed.integrations.google?.oauthClientSecret.exposeSecret()).toEqual(
       "google-client-secret",

@@ -52,6 +52,12 @@ export default defineConfig({
     // files — and tests within a file — are independent. Sequential locally so
     // a single dev server isn't hammered and output stays readable.
     fileParallelism: ci,
+    // Cap the stampede: all files first-touching a freshly deployed slot at
+    // once is what pushes cold creates past the (deliberately tight) saga
+    // timeout. Preview CI also warms the slot with one sequential
+    // onboarding-smoke create before the suites. See
+    // tasks/os-cold-create-latency.md.
+    maxWorkers: 4,
     sequence: { concurrent: ci },
     // Bounds concurrent tests per file; the deployed slot handles the fan-out
     // (every test is its own project DO), the runner just holds sockets.

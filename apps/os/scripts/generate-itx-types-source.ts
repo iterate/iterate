@@ -1,7 +1,7 @@
-// Embeds src/types.ts verbatim into a generated module so WORKER code
-// (agent system prompts) can ship the itx type surface as a string. The
-// browser already gets it via vite's `?raw` (itx-repl-types.ts); workers
-// bundle with esbuild, which has no raw-import, hence this tiny codegen.
+// Embeds src/types.ts verbatim into a generated module so any bundler target
+// (worker agent system prompts, the browser REPL's editor types) can ship the
+// itx type surface as a string. Workers bundle with esbuild, which has no
+// raw-import, hence this tiny codegen.
 // Freshness is enforced by src/types-source.generated.test.ts.
 //
 // Regenerate: pnpm generate:itx-types-source

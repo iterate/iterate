@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { connectItx } from "~/itx/itx-react.tsx";
+import { connectItxBrowser } from "~/itx/itx-react.tsx";
 import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
@@ -61,12 +61,12 @@ function ProjectAgentDetailContent() {
   // The socket is keyed by project ID (the provider pre-warmed it), and agents
   // are addressed by their stream path (e.g. "/agents/onboarding").
   async function submitAgentMessage(message: string) {
-    const itx = await connectItx({ projectId: project.id });
+    const itx = await connectItxBrowser({ projectId: project.id });
     await itx.agents.get(streamPath).sendMessage(message);
   }
 
   async function interruptAgentMessage(llmRequestId: number) {
-    const itx = await connectItx({ projectId: project.id });
+    const itx = await connectItxBrowser({ projectId: project.id });
     await itx.streams.get(streamPath).append({
       type: "events.iterate.com/agent/llm-request-cancelled",
       payload: {

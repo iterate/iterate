@@ -17,7 +17,7 @@ export function resolveMcpBaseUrl(input: {
   return normalizeUrlWithoutSearchOrHash(new URL(MCP_START_MOUNT_PATH, parsed.origin).toString());
 }
 
-export function normalizeUrlWithoutSearchOrHash(value: string) {
+function normalizeUrlWithoutSearchOrHash(value: string) {
   const url = new URL(value);
   url.search = "";
   url.hash = "";
@@ -25,7 +25,7 @@ export function normalizeUrlWithoutSearchOrHash(value: string) {
   return url.toString().replace(/\/$/, "");
 }
 
-export function isLocalhostHostname(hostname: string) {
+function isLocalhostHostname(hostname: string) {
   return (
     hostname === "localhost" ||
     hostname === "127.0.0.1" ||

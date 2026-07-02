@@ -478,6 +478,13 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // let it overlap the warmup and the vitest lane; it's ready by the
         // time we reach the specs instead of adding ~4s in front of them.
         "pnpm --dir ../.. exec playwright install chromium > /tmp/os-preview-pw-install.log 2>&1 & PW_INSTALL_PID=$!",
+        // Create-saga warmup: one sequential real project create pays the
+        // cold-start costs (cold DO chain, repo seed, worker probe) that
+        // otherwise surface as rotating "saw 0 events" timeout flakes across
+        // the concurrent e2e suites (see tasks/os-cold-create-latency.md).
+        // Runs in the background, concurrently with the HTTP-route warmup
+        // below; we wait for it before starting the suites.
+        "pnpm exec tsx e2e/vitest/onboarding-smoke.ts > /tmp/os-preview-smoke.log 2>&1 & SMOKE_PID=$!",
         // Warm the freshly-deployed slot before the concurrent burst: a cold
         // deployment answers its first requests only after loading each
         // worker, and a 40-connection stampede against zero warm isolates
@@ -487,8 +494,11 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // warming it for the login-flow specs.
         'for path in /api/health / /api/itx /sign-in /api/iterate-auth/login; do curl -sL -o /dev/null --max-time 20 "$OS_BASE_URL$path" || true; done',
         // Subshell so the bare `wait` reaps only these curls, not the
-        // background chromium install started above.
+        // background chromium install / create-smoke started above.
         '( for i in 1 2 3 4 5 6 7 8; do (curl -s -o /dev/null --max-time 20 "$OS_BASE_URL/api/health" && curl -s -o /dev/null --max-time 20 "$OS_BASE_URL/") & done; wait )',
+        // Block on the create-saga warmup before the suites — a failed warmup
+        // means the slot is broken, so fail loudly rather than flake.
+        'wait "$SMOKE_PID" || { cat /tmp/os-preview-smoke.log; exit 1; }',
         // The e2e vitest lane and the Playwright specs hit the same slot but
         // provision independent projects, so they run concurrently: the vitest
         // lane in the background, the specs in the foreground. The vitest log

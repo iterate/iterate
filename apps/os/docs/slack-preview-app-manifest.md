@@ -3,8 +3,8 @@
 Use this runbook when a browser-using agent needs to create or repair the Slack
 app for an OS preview slot.
 
-For the end-to-end testing flow and the `Niterate Bot` duplicate-reply caveat
-in the Iterate Slack workspace, see
+For the end-to-end testing flow and the `Niterate (CI bot)` duplicate-reply
+caveat in the Iterate Slack workspace, see
 [`docs/slack-testing.md`](../../../docs/slack-testing.md).
 For bulk creation of the remaining preview Slack apps and the secrets handoff
 form, see
@@ -14,8 +14,8 @@ Each preview slot gets its own Slack app:
 
 | OS config   | Slack label         | Dashboard URL                      | Slack app name        |
 | ----------- | ------------------- | ---------------------------------- | --------------------- |
-| `preview_N` | `preview-N`         | `https://os.iterate-preview-N.com` | `Iterate (preview-N)` |
-| `preview_1` | `preview-1` example | `https://os.iterate-preview-1.com` | `Iterate (preview-1)` |
+| `preview_N` | `preview-N`         | `https://os.iterate-preview-N.com` | `iterate (preview-N)` |
+| `preview_1` | `preview-1` example | `https://os.iterate-preview-1.com` | `iterate (preview-1)` |
 
 Do not reuse the production Slack app for previews, and do not point one Slack
 app at multiple preview slots. Slack has one active Events API Request URL per
@@ -44,8 +44,8 @@ Use hyphen form (`preview-N`) in Slack labels and hostnames, and underscore form
 
 ```yaml
 display_information:
-  name: Iterate (preview-N)
-  description: Iterate Slack agent for preview-N testing only
+  name: iterate (preview-N)
+  description: iterate Slack agent for preview-N testing only
   background_color: "#111827"
 features:
   app_home:
@@ -53,7 +53,7 @@ features:
     messages_tab_enabled: true
     messages_tab_read_only_enabled: false
   agent_view:
-    agent_description: Test Iterate's preview-N Slack agent against the preview OS deployment.
+    agent_description: Test iterate's preview-N Slack agent against the preview OS deployment.
     suggested_prompts:
       - title: Debug this thread
         message: "!debug"
@@ -126,16 +126,10 @@ verified yet, create the app with a bootstrap manifest first:
 
 ```yaml
 display_information:
-  name: Iterate (preview-N)
-  description: Iterate Slack agent for preview-N testing only
+  name: iterate (preview-N)
+  description: iterate Slack agent for preview-N testing only
   background_color: "#111827"
 features:
-  app_home:
-    home_tab_enabled: false
-    messages_tab_enabled: true
-    messages_tab_read_only_enabled: false
-  agent_view:
-    agent_description: Test Iterate's preview-N Slack agent against the preview OS deployment.
   bot_user:
     display_name: iterate-preview-N
     always_online: true
@@ -176,6 +170,12 @@ Then finish Doppler and deployment, return to **App Manifest**, paste the full
 manifest, and save it. Slack URL verification will succeed only after the
 preview worker has the matching signing secret and is deployed.
 
+The bootstrap manifest intentionally omits `features.agent_view`, app-home
+settings, Events API subscriptions, and interactivity. Slack validates Agent
+View against `message.im`, `app_home_opened`, and a verifiable request URL, so
+those fields belong in the full manifest only after the preview worker can
+answer Slack's URL verification challenge.
+
 ## Copy Slack credentials
 
 After Slack creates the app, open **Basic Information** and collect:
@@ -183,6 +183,8 @@ After Slack creates the app, open **Basic Information** and collect:
 - **Client ID**
 - **Client Secret**
 - **Signing Secret**
+- Optional fallback for smoke testing: **Bot User OAuth Token** from
+  **OAuth & Permissions**
 - Optional for inventory only: **App ID** and **Team ID**
 
 Do not use the Verification Token.
@@ -196,12 +198,15 @@ or an interactive prompt; do not paste them into this file.
 export SLACK_CLIENT_ID='...'
 export SLACK_CLIENT_SECRET='...'
 export SLACK_SIGNING_SECRET='...'
+export SLACK_BOT_TOKEN='' # optional xoxb- token from OAuth & Permissions
 
 jq -nc \
   --arg id "$SLACK_CLIENT_ID" \
   --arg secret "$SLACK_CLIENT_SECRET" \
   --arg signing "$SLACK_SIGNING_SECRET" \
-  '{oauthClientId:$id,oauthClientSecret:$secret,webhookSigningSecret:$signing}' |
+  --arg bot "$SLACK_BOT_TOKEN" \
+  '{oauthClientId:$id,oauthClientSecret:$secret,webhookSigningSecret:$signing}
+    + if $bot == "" then {} else {botToken:$bot} end' |
   doppler secrets set APP_CONFIG_INTEGRATIONS__SLACK \
     --project os \
     --config preview_N \
@@ -273,7 +278,7 @@ separate deployment.
 Use a private or dedicated Slack test channel; message events in channels where
 the bot is present are real triggers. In the Iterate Slack workspace, avoid
 shared public channels for preview testing unless duplicate replies from the
-production `Niterate Bot` app are acceptable.
+production `iterate` app or legacy `Niterate (CI bot)` actor are acceptable.
 
 1. Invite the preview bot to the channel:
 
@@ -313,11 +318,11 @@ Slack's Events API and OAuth.
 - **Events verify but no project reacts**: the Slack workspace may not be
   claimed through OS. Run the OS **Connect Slack** flow for the intended
   project.
-- **Preview and `Niterate Bot` both reply**: this is usually an internal
-  Iterate Slack workspace artifact. Production and preview apps can both be
-  installed there with broad `message.channels` subscriptions, and
-  `chat:write.public` means the production app can post into public channels
-  even when its bot user is not visibly in the channel. See
+- **Preview and another Iterate-owned bot both reply**: this is usually an
+  internal Iterate Slack workspace artifact. Production and preview apps can
+  both be installed there with broad `message.channels` subscriptions, and
+  `chat:write.public` means an app can post into public channels even when its
+  bot user is not visibly in the channel. See
   [`docs/slack-testing.md`](../../../docs/slack-testing.md).
 - **Channel messages do nothing**: invite the preview bot to the channel and
   verify the app has been reinstalled after any scope changes. Slack applies
