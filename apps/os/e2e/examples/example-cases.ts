@@ -5,12 +5,13 @@
 // a runnable example is missing one (so examples can't silently rot).
 //
 // Not here by design:
-//   whoami          global-context: it runs against the Session catalog, not a
-//                   project itx. The matrix (and the Playwright REPL specs)
-//                   execute in a project scope where `itx.whoami` /
-//                   `itx.projects` do not exist. Session behavior is proven by
-//                   the itx e2e suites (apps/os/e2e/itx/itx.e2e.test.ts).
-//   list-projects   global-context, same reason as whoami.
+//   whoami          session-context: it runs against the OS Session (what
+//                   authenticate() returns), not a project itx. The matrix
+//                   (and the Playwright REPL specs) execute in a project scope
+//                   where `itx.whoami` / `itx.projects` do not exist. Session
+//                   behavior is proven by the itx e2e suites
+//                   (apps/os/e2e/itx/itx.e2e.test.ts).
+//   list-projects   session-context, same reason as whoami.
 //   ai-models       depends on the deployment's upstream Workers AI account
 //                   (catalog availability + latency); interactive reading
 //                   material, not matrix material.

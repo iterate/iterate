@@ -1549,13 +1549,17 @@ export class StreamProcessorRpcTarget<Contract extends StreamProcessorContract>
 // REPL "Examples" panel and the e2e matrix. Exposing it as a built-in lets
 // agents and scripts browse known-good snippets instead of guessing at the
 // surface; list() omits the code bodies so it stays cheap to skim.
+// Session-context entries are excluded: they run against the OS Session
+// (what authenticate() returns), which an itx holder does not have.
+const PROJECT_CONTEXT_EXAMPLES = ITX_EXAMPLES.filter((example) => example.context === "project");
+
 class ItxExampleCatalogRpcTarget extends RpcTarget implements ItxExampleCatalog {
   async list() {
-    return ITX_EXAMPLES.map(exampleSummary);
+    return PROJECT_CONTEXT_EXAMPLES.map(exampleSummary);
   }
 
   async get(input: Parameters<ItxExampleCatalog["get"]>[0]) {
-    const example = ITX_EXAMPLES.find((candidate) => candidate.id === input.id);
+    const example = PROJECT_CONTEXT_EXAMPLES.find((candidate) => candidate.id === input.id);
     if (!example) {
       throw new Error(`unknown example "${input.id}" — itx.examples.list() has every id`);
     }
@@ -1565,7 +1569,6 @@ class ItxExampleCatalogRpcTarget extends RpcTarget implements ItxExampleCatalog 
 
 function exampleSummary(example: ItxExample): ItxExampleSummary {
   return {
-    context: example.context,
     description: example.description,
     id: example.id,
     title: example.title,

@@ -506,19 +506,20 @@ export type McpClientConnectInput = {
 export type McpClientRpc = object;
 
 /**
- * Read-only catalogue of known-good itx script snippets — the same entries the
- * REPL "Examples" panel shows. `list()` returns every entry without its code;
- * `get({ id })` returns one entry with the full script body. Agents copy
- * working patterns from here instead of guessing at the surface.
+ * Read-only catalogue of known-good itx script snippets — the project-context
+ * entries of the REPL "Examples" panel. `list()` returns every entry without
+ * its code; `get({ id })` returns one entry with the full script body. Agents
+ * copy working patterns from here instead of guessing at the surface.
+ * Session-level examples (whoami, projects.list) are excluded: they run
+ * against the OS Session `authenticate()` returns, which an itx holder does
+ * not have.
  */
 export interface ItxExampleCatalog {
   get(input: { id: string }): Promise<ItxExampleWithCode>;
   list(): Promise<ItxExampleSummary[]>;
 }
 
-/** One catalogue entry. `context: "global"` entries need a Session, not a project itx. */
 export type ItxExampleSummary = {
-  context: "global" | "project";
   description: string;
   id: string;
   title: string;
