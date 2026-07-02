@@ -461,9 +461,14 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       [
         "set -euo pipefail",
         "pnpm --dir ../.. exec playwright install chromium",
-        "pnpm e2e",
-        "pnpm e2e:examples --project node",
+        // The vitest lanes and the Playwright specs hit the same deployed slot
+        // but provision independent projects, so they run concurrently; the
+        // vitest log is replayed once the specs finish.
+        "(pnpm e2e && pnpm e2e:examples --project node) > /tmp/os-preview-vitest.log 2>&1 & VITEST_PID=$!",
         "pnpm --dir ../.. spec",
+        'VITEST_OK=0; wait "$VITEST_PID" || VITEST_OK=$?',
+        "cat /tmp/os-preview-vitest.log",
+        'exit "$VITEST_OK"',
       ].join("; "),
     ],
   },

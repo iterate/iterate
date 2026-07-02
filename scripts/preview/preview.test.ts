@@ -84,17 +84,18 @@ describe("preview test commands", () => {
   it("runs root Playwright specs after OS preview Vitest lanes", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs[2];
     const playwrightInstall = "pnpm --dir ../.. exec playwright install chromium";
-    const fullOsSuite = "pnpm e2e;";
-    const examples = "pnpm e2e:examples --project node";
+    // The vitest lanes run in a background subshell concurrently with the
+    // Playwright specs; the wait propagates their exit code.
+    const vitestLanes = "(pnpm e2e && pnpm e2e:examples --project node)";
     const playwrightSpec = "pnpm --dir ../.. spec";
 
     expect(script).toContain(playwrightInstall);
-    expect(script).toContain(fullOsSuite);
-    expect(script).toContain(examples);
+    expect(script).toContain(vitestLanes);
     expect(script).toContain(playwrightSpec);
-    expect(script.indexOf(playwrightInstall)).toBeLessThan(script.indexOf(fullOsSuite));
-    expect(script.indexOf(fullOsSuite)).toBeLessThan(script.indexOf(examples));
-    expect(script.indexOf(examples)).toBeLessThan(script.indexOf(playwrightSpec));
+    expect(script).toContain('wait "$VITEST_PID"');
+    expect(script).toContain('exit "$VITEST_OK"');
+    expect(script.indexOf(playwrightInstall)).toBeLessThan(script.indexOf(vitestLanes));
+    expect(script.indexOf(vitestLanes)).toBeLessThan(script.indexOf(playwrightSpec));
   });
 });
 
