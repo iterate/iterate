@@ -18,11 +18,13 @@ const PLAYGROUND_ACTIONS = [
   "secret-egress",
   "blind-relay-proof-command",
 ] as const;
-const BLIND_RELAY_CLIENT_DEPENDENCIES = "tsx@4.21.0 capnweb@0.8.0 ws@8.19.0";
+const ITX_EGRESS_CLI_DEPENDENCIES =
+  "tsx@4.21.0 trpc-cli@0.15.1 @orpc/server@1.14.6 zod@4.4.3 capnweb@0.8.0 ws@8.19.0";
 
 type PlaygroundDemoPhase =
   | "idle"
   | "waiting_for_node_relay"
+  | "plain_intercept_saw_plaintext"
   | "relay_connected"
   | "secret_egress_relayed"
   | "target_received_request"
@@ -123,8 +125,12 @@ export async function playgroundResponse(
     });
   }
 
-  if (url.pathname === "/playground/blind-relay-proof.ts") {
-    return new Response(blindRelayProofScript(), {
+  if (
+    url.pathname === "/playground/itx-egress-cli.mts" ||
+    url.pathname === "/playground/itx-egress-cli.ts" ||
+    url.pathname === "/playground/blind-relay-proof.ts"
+  ) {
+    return new Response(itxEgressCliScript(), {
       headers: {
         "cache-control": "no-store",
         "content-type": "text/plain; charset=utf-8",
@@ -400,18 +406,21 @@ function playgroundHelpers(origin: string) {
         'tmp="$(mktemp -d)"',
         '&& cd "$tmp"',
         "&& npm init -y >/dev/null",
-        `&& npm install ${BLIND_RELAY_CLIENT_DEPENDENCIES} >/dev/null`,
-        `&& curl -fsS ${origin}/playground/blind-relay-proof.ts -o blind-relay-proof.ts`,
-        `&& npx tsx blind-relay-proof.ts ${origin} default`,
+        `&& npm install ${ITX_EGRESS_CLI_DEPENDENCIES} >/dev/null`,
+        `&& curl -fsS ${origin}/playground/itx-egress-cli.mts -o itx-egress-cli.mts`,
+        `&& npx tsx itx-egress-cli.mts run --base-url ${origin} --demo-id default`,
       ].join(" ");
     },
   };
 }
 
-function blindRelayProofScript(): string {
+function itxEgressCliScript(): string {
   return String.raw`import net from "node:net";
 import tls from "node:tls";
 import { createHash } from "node:crypto";
+import { os } from "@orpc/server";
+import { createCli } from "trpc-cli";
+import { z } from "zod";
 import { RpcTarget, newWebSocketRpcSession } from "capnweb";
 import WebSocket from "ws";
 
@@ -524,9 +533,14 @@ class BlindRelayTarget extends RpcTarget {
   }
 }
 
-async function main() {
-  const baseUrl = normalizeBaseUrl(process.argv[2] || process.env.ITX_BASE_URL || DEFAULT_BASE_URL);
-  const demoId = process.argv[3] || process.env.ITX_DEMO_ID || "default";
+async function runBlindRelay({
+  assertTranscript,
+  baseUrl: inputBaseUrl,
+  body = HIDDEN_BODY,
+  demoId = "default",
+  secretMaterial = SECRET_MATERIAL,
+}) {
+  const baseUrl = normalizeBaseUrl(inputBaseUrl || process.env.ITX_BASE_URL || DEFAULT_BASE_URL);
   const relay = new BlindRelayTarget();
   const session = connectItx(baseUrl);
   let relayHandle;
@@ -553,7 +567,7 @@ async function main() {
     const secret = project.secrets.get(secretPath);
     await secret.update({
       egress: { urls: [targetUrl.toString()] },
-      material: SECRET_MATERIAL,
+      material: secretMaterial,
     });
     await waitForCondition(async () => (await secret.describe()).hasMaterial, {
       description: "secret material to become available",
@@ -568,7 +582,7 @@ async function main() {
 
     const response = await project.egress.fetch(
       new Request(targetUrl.toString(), {
-        body: HIDDEN_BODY,
+        body,
         headers: {
           [BLIND_RELAY_PINNED_CERT_SHA256_HEADER]: targetCertSha256,
           [EGRESS_PROOF_HEADER]: 'Bearer getSecret({ path: "' + secretPath + '" })',
@@ -595,9 +609,9 @@ async function main() {
       ...observation.targetToWorkerChunks,
     ]);
     const transcriptText = Buffer.from(transcript).toString("latin1");
-    const hiddenStrings = [SECRET_MATERIAL, HIDDEN_BODY, HIDDEN_PATH, HIDDEN_QUERY];
+    const hiddenStrings = [secretMaterial, body, HIDDEN_PATH, HIDDEN_QUERY];
     const leakedStrings = hiddenStrings.filter((hiddenString) => transcriptText.includes(hiddenString));
-    if (leakedStrings.length > 0) {
+    if (assertTranscript && leakedStrings.length > 0) {
       throw new Error("relay transcript leaked plaintext: " + leakedStrings.join(", "));
     }
 
@@ -611,6 +625,7 @@ async function main() {
       firstTargetToWorkerByte: observation.firstTargetToWorker[0],
       firstWorkerToTargetByte: observation.firstWorkerToTarget[0],
       hiddenStringsCheckedAbsent: hiddenStrings,
+      leakedStrings,
       relayDialed: observation.host + ":" + observation.port,
       targetClientIp: responseBody.clientIp,
     };
@@ -620,7 +635,7 @@ async function main() {
       detail: proof,
     });
 
-    console.log("Blind relay proof passed.");
+    console.log(assertTranscript ? "Blind relay proof passed." : "Blind relay completed.");
     console.log("Worker: " + baseUrl);
     console.log("Demo status: " + new URL("/playground", baseUrl).toString());
     console.log("Target saw client IP: " + (responseBody.clientIp || "(not exposed by local dev)"));
@@ -629,6 +644,12 @@ async function main() {
     console.log("Relay bytes worker->target: " + proof.bytesWorkerToTarget);
     console.log("Relay bytes target->worker: " + proof.bytesTargetToWorker);
     console.log("Plaintext checked absent from relay transcript: " + hiddenStrings.join(", "));
+    return {
+      mode: assertTranscript ? "blind-relay-proof" : "blind-relay",
+      proof,
+      targetReceivedAuth: responseBody.headers[EGRESS_PROOF_HEADER],
+      targetResponse: responseBody,
+    };
   } catch (error) {
     await postEvent(baseUrl, demoId, {
       phase: "failed",
@@ -638,6 +659,89 @@ async function main() {
   } finally {
     if (relayHandle !== undefined) await relayHandle.release().catch(() => {});
     relay.dispose();
+    session[Symbol.dispose]?.();
+  }
+}
+
+async function runPlainIntercept({
+  baseUrl: inputBaseUrl,
+  body = HIDDEN_BODY,
+  demoId = "default",
+  secretMaterial = SECRET_MATERIAL,
+}) {
+  const baseUrl = normalizeBaseUrl(inputBaseUrl || process.env.ITX_BASE_URL || DEFAULT_BASE_URL);
+  const session = connectItx(baseUrl);
+  let interceptHandle;
+
+  try {
+    await postEvent(baseUrl, demoId, {
+      phase: "waiting_for_node_relay",
+      message: "CLI started plain interceptor mode and is connecting to the Worker ITX API.",
+      detail: { baseUrl, demoId },
+    });
+
+    const root = session.authenticate({
+      type: "trusted-internal",
+      token: TRUSTED_INTERNAL_ITX_TOKEN,
+    });
+    const project = root.projects.create({
+      slug: "plain-intercept-demo-" + crypto.randomUUID().slice(0, 8),
+    });
+    const targetUrl = new URL("/playground/target", baseUrl);
+    targetUrl.searchParams.set("demo", demoId);
+    const secretPath = "/secrets/plain-intercept-demo/" + crypto.randomUUID();
+    const secret = project.secrets.get(secretPath);
+    await secret.update({
+      egress: { urls: [targetUrl.toString()] },
+      material: secretMaterial,
+    });
+    await waitForCondition(async () => (await secret.describe()).hasMaterial, {
+      description: "secret material to become available",
+    });
+
+    interceptHandle = await project.egress.intercept(async (request) => {
+      const intercepted = {
+        body: await request.text(),
+        headers: headersToObject(request.headers),
+        note: "Plain intercept runs before secret substitution, so it sees plaintext body and getSecret(...) placeholders.",
+        url: request.url,
+      };
+      await postEvent(baseUrl, demoId, {
+        phase: "plain_intercept_saw_plaintext",
+        message: "Plain interceptor saw the egress request before secret substitution.",
+        detail: intercepted,
+      });
+      return Response.json(intercepted);
+    });
+
+    const response = await project.egress.fetch(
+      new Request(targetUrl.toString(), {
+        body,
+        headers: {
+          [EGRESS_PROOF_HEADER]: 'Bearer getSecret({ path: "' + secretPath + '" })',
+          "content-type": "text/plain",
+        },
+        method: "POST",
+      }),
+    );
+    const responseBody = await response.json();
+    console.log("Plain intercept completed.");
+    console.log("Worker: " + baseUrl);
+    console.log("Interceptor saw body: " + responseBody.body);
+    console.log("Interceptor saw auth: " + responseBody.headers[EGRESS_PROOF_HEADER]);
+    return {
+      intercepted: responseBody,
+      mode: "plain-intercept",
+      secret: await secret.describe(),
+    };
+  } catch (error) {
+    await postEvent(baseUrl, demoId, {
+      phase: "failed",
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  } finally {
+    if (interceptHandle !== undefined) await interceptHandle.release().catch(() => {});
     session[Symbol.dispose]?.();
   }
 }
@@ -715,10 +819,35 @@ function normalizeBaseUrl(input) {
   return url.toString().replace(/\/$/, "");
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
+function headersToObject(headers) {
+  return Object.fromEntries([...headers.entries()].sort(([left], [right]) => left.localeCompare(right)));
+}
+
+const router = os.router({
+  run: os
+    .input(
+      z.object({
+        baseUrl: z.string().default(DEFAULT_BASE_URL).describe("Deployed minimal-itx-v4 Worker base URL"),
+        body: z.string().default(HIDDEN_BODY).describe("Request body to send through egress"),
+        demoId: z.string().default("default").describe("Durable Object demo id shown on the playground page"),
+        mode: z
+          .enum(["plain-intercept", "blind-relay", "blind-relay-proof"])
+          .describe("plain-intercept shows unencrypted request data; blind-relay sends encrypted TLS bytes through local Node; blind-relay-proof also asserts the relay transcript does not contain plaintext"),
+        secretMaterial: z.string().default(SECRET_MATERIAL).describe("Secret material the Worker substitutes before egress"),
+      }),
+    )
+    .handler(async ({ input }) => {
+      if (input.mode === "plain-intercept") {
+        return await runPlainIntercept(input);
+      }
+      return await runBlindRelay({
+        ...input,
+        assertTranscript: input.mode === "blind-relay-proof",
+      });
+    }),
 });
+
+void createCli({ name: "itx-egress-demo", router }).run({ prompts: true });
 `;
 }
 
@@ -872,7 +1001,7 @@ function playgroundHtml(origin: string): string {
   const examples = JSON.stringify(playgroundExamples(origin));
   const blindRelayCommand = escapeHtml(playgroundHelpers(origin).deployedBlindRelayCommand());
   const blindRelayScriptUrl = escapeHtml(
-    new URL("/playground/blind-relay-proof.ts", origin).toString(),
+    new URL("/playground/itx-egress-cli.mts", origin).toString(),
   );
   return `<!doctype html>
 <html lang="en">
@@ -1104,12 +1233,12 @@ function playgroundHtml(origin: string): string {
     <p>Run ITX presets against this deployed Worker. Plain intercept sees <code>getSecret(...)</code> placeholders; blind relay receives only encrypted TLS bytes after the Worker substitutes the secret.</p>
     <div class="warning">Demo-only: anyone with this URL can create throwaway projects on this dev Worker. Do not enter real secrets.</div>
     <section class="panel demo-box">
-      <h2>Run the local Node relay</h2>
-      <p>This downloads a self-contained TypeScript relay client into a temp directory, installs pinned copies of <code>tsx</code>, <code>capnweb</code>, and <code>ws</code>, then connects your machine to this Worker. Requires Node.js 20+ and npm.</p>
+      <h2>Run the interactive ITX egress CLI</h2>
+      <p>This downloads a self-contained TypeScript CLI into a temp directory, installs pinned copies of <code>tsx</code>, <code>trpc-cli</code>, <code>@orpc/server</code>, <code>zod</code>, <code>capnweb</code>, and <code>ws</code>, then prompts you to choose plain intercept, blind relay, or blind relay proof mode. Requires Node.js 20+ and npm.</p>
       <ol>
         <li>You run Node locally.</li>
-        <li>The Worker substitutes <code>getSecret(...)</code> before egress.</li>
-        <li>Node opens the TCP connection, so the target sees your local relay IP while the relay only sees encrypted TLS bytes.</li>
+        <li>For plain intercept mode, the interceptor sees the unencrypted request before secret substitution.</li>
+        <li>For blind relay modes, the Worker substitutes <code>getSecret(...)</code>, then Node opens the TCP connection, so the target sees your local relay IP while the relay only sees encrypted TLS bytes.</li>
       </ol>
       <div class="command-row">
         <button class="preset" id="copy-command" type="button">Copy command</button>
@@ -1236,7 +1365,7 @@ function playgroundHtml(origin: string): string {
           return "Interceptor saw placeholder auth <code>" + escapeHtml(String(auth || "missing")) + "</code>; audit usedCount is <code>" + escapeHtml(String(used ?? "pending")) + "</code>.";
         }
         case "blind-relay-proof-command":
-          return "Run the command below in any terminal with Node.js 20+ and npm. It creates a temp directory, downloads the relay script, and proves the relay transcript hides the secret, body, path, and query token.";
+          return "Run the command below in any terminal with Node.js 20+ and npm. It creates a temp directory, downloads the oRPC-backed CLI, and prompts for plain intercept, blind relay, or blind relay proof mode.";
         case "project-egress":
           return "Hosted target received a normal project egress request.";
         case "create-project":
@@ -1284,6 +1413,7 @@ function playgroundHtml(origin: string): string {
       const labels = {
         idle: "Idle",
         waiting_for_node_relay: "Waiting for local Node relay",
+        plain_intercept_saw_plaintext: "Plain interceptor saw plaintext",
         relay_connected: "Node relay connected",
         secret_egress_relayed: "Secret egress relayed",
         target_received_request: "Target received request",
@@ -1378,8 +1508,9 @@ function playgroundExamples(origin: string) {
     },
     {
       id: "blind-relay-proof-command",
-      title: "Blind Relay Proof Command",
-      description: "Prints the standalone Node relay command for the TLS relay proof.",
+      title: "Interactive Egress CLI Command",
+      description:
+        "Prints the standalone oRPC-backed CLI command for choosing plain or blind egress modes.",
       code: `{
   "action": "blind-relay-proof-command"
 }`,

@@ -12,22 +12,23 @@ The commands run server-side against the ITX surface with trusted-internal
 authority on this dev Worker.
 
 The playground also hosts the browser UI, a small Durable Object that stores the
-current demo state/log, and a downloadable standalone TypeScript relay client:
+current demo state/log, and a downloadable standalone TypeScript `trpc-cli`
+client backed by an oRPC router:
 
 ```text
-https://minimal-itx-v4-blind-relay-poc.iterate-dev-preview.workers.dev/playground/blind-relay-proof.ts
+https://minimal-itx-v4-blind-relay-poc.iterate-dev-preview.workers.dev/playground/itx-egress-cli.mts
 ```
 
 ## 5-minute demo
 
 1. Open the playground URL above.
-2. Copy **Run the local Node relay** into a terminal. It creates a temp
-   directory, installs pinned copies of `tsx`, `capnweb`, and `ws`, downloads
-   `blind-relay-proof.ts`, and runs the local TCP relay against the deployed
-   Worker.
+2. Copy **Run the interactive ITX egress CLI** into a terminal. It creates a
+   temp directory, installs pinned copies of `tsx`, `trpc-cli`, `@orpc/server`,
+   `zod`, `capnweb`, and `ws`, downloads `itx-egress-cli.mts`, and prompts for
+   a mode.
 3. Watch **Live relay demo state** on the page. It polls the Durable Object once
-   per second and should end at `relay_saw_ciphertext_only`, with the target IP,
-   relay byte counts, and request log.
+   per second. Blind relay modes should end at `relay_saw_ciphertext_only`, with
+   the target IP, relay byte counts, and request log.
 4. Optional warmup: run **Secret Egress**. Point at the summary: the hosted target receives
    `authorization: Bearer demo-secret-material`, proving normal secret
    substitution still works.
@@ -46,18 +47,28 @@ https://minimal-itx-v4-blind-relay-poc.iterate-dev-preview.workers.dev/playgroun
 - **Secret Egress** creates a secret, sends an egress request with a
   `getSecret(...)` placeholder, and shows the hosted target receiving the
   substituted header, for example `authorization: Bearer demo-secret-material`.
-- **Blind Relay Proof Command** prints the same one-liner shown at the top of
-  the page.
+- **Interactive Egress CLI Command** prints the same one-liner shown at the top
+  of the page.
 
 ## Blind Relay Proof
 
 The browser page can prove normal egress and secret substitution, but it cannot
-own the raw TCP socket needed by the relay side. The hosted one-liner runs that
-piece from your machine:
+own the raw TCP socket needed by the relay side. The hosted one-liner runs an
+interactive `trpc-cli` script backed by an oRPC router from your machine:
 
 ```bash
-tmp="$(mktemp -d)" && cd "$tmp" && npm init -y >/dev/null && npm install tsx@4.21.0 capnweb@0.8.0 ws@8.19.0 >/dev/null && curl -fsS https://minimal-itx-v4-blind-relay-poc.iterate-dev-preview.workers.dev/playground/blind-relay-proof.ts -o blind-relay-proof.ts && npx tsx blind-relay-proof.ts https://minimal-itx-v4-blind-relay-poc.iterate-dev-preview.workers.dev default
+tmp="$(mktemp -d)" && cd "$tmp" && npm init -y >/dev/null && npm install tsx@4.21.0 trpc-cli@0.15.1 @orpc/server@1.14.6 zod@4.4.3 capnweb@0.8.0 ws@8.19.0 >/dev/null && curl -fsS https://minimal-itx-v4-blind-relay-poc.iterate-dev-preview.workers.dev/playground/itx-egress-cli.mts -o itx-egress-cli.mts && npx tsx itx-egress-cli.mts run --base-url https://minimal-itx-v4-blind-relay-poc.iterate-dev-preview.workers.dev --demo-id default
 ```
+
+CLI modes:
+
+- `plain-intercept` installs a normal egress interceptor and shows the
+  unencrypted request body/header placeholder before secret substitution.
+- `blind-relay` installs a local TCP relay and shows the target receiving the
+  materialized secret from the Node process's egress IP while the relay sees TLS
+  bytes.
+- `blind-relay-proof` runs the same blind relay path and also fails if the relay
+  transcript contains the secret, body, path, or query token plaintext.
 
 Expected result:
 
