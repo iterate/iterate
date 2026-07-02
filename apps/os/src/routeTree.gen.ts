@@ -35,6 +35,7 @@ import { Route as AdminStreamsProjectIdSplatRouteImport } from './routes/admin/s
 import { Route as AppProjectsProjectSlugSettingsRouteImport } from './routes/_app/projects/$projectSlug/settings'
 import { Route as AppProjectsProjectSlugReplRouteImport } from './routes/_app/projects/$projectSlug/repl'
 import { Route as AppProjectsProjectSlugReactivityRouteImport } from './routes/_app/projects/$projectSlug/reactivity'
+import { Route as AppProjectsProjectSlugIntegrationsRouteImport } from './routes/_app/projects/$projectSlug/integrations'
 import { Route as AppProjectsProjectSlugStreamsRouteRouteImport } from './routes/_app/projects/$projectSlug/streams/route'
 import { Route as AppProjectsProjectSlugAgentsRouteRouteImport } from './routes/_app/projects/$projectSlug/agents/route'
 import { Route as AppProjectsProjectSlugStreamsIndexRouteImport } from './routes/_app/projects/$projectSlug/streams/index'
@@ -184,6 +185,12 @@ const AppProjectsProjectSlugReactivityRoute =
     path: '/reactivity',
     getParentRoute: () => AppProjectsProjectSlugRouteRoute,
   } as any)
+const AppProjectsProjectSlugIntegrationsRoute =
+  AppProjectsProjectSlugIntegrationsRouteImport.update({
+    id: '/integrations',
+    path: '/integrations',
+    getParentRoute: () => AppProjectsProjectSlugRouteRoute,
+  } as any)
 const AppProjectsProjectSlugStreamsRouteRoute =
   AppProjectsProjectSlugStreamsRouteRouteImport.update({
     id: '/streams',
@@ -273,6 +280,7 @@ export interface FileRoutesByFullPath {
   '/admin/streams/': typeof AdminStreamsIndexRoute
   '/projects/$projectSlug/agents': typeof AppProjectsProjectSlugAgentsRouteRouteWithChildren
   '/projects/$projectSlug/streams': typeof AppProjectsProjectSlugStreamsRouteRouteWithChildren
+  '/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
   '/projects/$projectSlug/reactivity': typeof AppProjectsProjectSlugReactivityRoute
   '/projects/$projectSlug/repl': typeof AppProjectsProjectSlugReplRoute
   '/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
@@ -304,6 +312,7 @@ export interface FileRoutesByTo {
   '/admin': typeof AdminIndexRoute
   '/projects': typeof AppProjectsIndexRoute
   '/admin/streams': typeof AdminStreamsIndexRoute
+  '/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
   '/projects/$projectSlug/reactivity': typeof AppProjectsProjectSlugReactivityRoute
   '/projects/$projectSlug/repl': typeof AppProjectsProjectSlugReplRoute
   '/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
@@ -344,6 +353,7 @@ export interface FileRoutesById {
   '/admin/streams/': typeof AdminStreamsIndexRoute
   '/_app/projects/$projectSlug/agents': typeof AppProjectsProjectSlugAgentsRouteRouteWithChildren
   '/_app/projects/$projectSlug/streams': typeof AppProjectsProjectSlugStreamsRouteRouteWithChildren
+  '/_app/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
   '/_app/projects/$projectSlug/reactivity': typeof AppProjectsProjectSlugReactivityRoute
   '/_app/projects/$projectSlug/repl': typeof AppProjectsProjectSlugReplRoute
   '/_app/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
@@ -384,6 +394,7 @@ export interface FileRouteTypes {
     | '/admin/streams/'
     | '/projects/$projectSlug/agents'
     | '/projects/$projectSlug/streams'
+    | '/projects/$projectSlug/integrations'
     | '/projects/$projectSlug/reactivity'
     | '/projects/$projectSlug/repl'
     | '/projects/$projectSlug/settings'
@@ -415,6 +426,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/projects'
     | '/admin/streams'
+    | '/projects/$projectSlug/integrations'
     | '/projects/$projectSlug/reactivity'
     | '/projects/$projectSlug/repl'
     | '/projects/$projectSlug/settings'
@@ -454,6 +466,7 @@ export interface FileRouteTypes {
     | '/admin/streams/'
     | '/_app/projects/$projectSlug/agents'
     | '/_app/projects/$projectSlug/streams'
+    | '/_app/projects/$projectSlug/integrations'
     | '/_app/projects/$projectSlug/reactivity'
     | '/_app/projects/$projectSlug/repl'
     | '/_app/projects/$projectSlug/settings'
@@ -667,6 +680,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppProjectsProjectSlugReactivityRouteImport
       parentRoute: typeof AppProjectsProjectSlugRouteRoute
     }
+    '/_app/projects/$projectSlug/integrations': {
+      id: '/_app/projects/$projectSlug/integrations'
+      path: '/integrations'
+      fullPath: '/projects/$projectSlug/integrations'
+      preLoaderRoute: typeof AppProjectsProjectSlugIntegrationsRouteImport
+      parentRoute: typeof AppProjectsProjectSlugRouteRoute
+    }
     '/_app/projects/$projectSlug/streams': {
       id: '/_app/projects/$projectSlug/streams'
       path: '/streams'
@@ -788,6 +808,7 @@ const AppProjectsProjectSlugStreamsRouteRouteWithChildren =
 interface AppProjectsProjectSlugRouteRouteChildren {
   AppProjectsProjectSlugAgentsRouteRoute: typeof AppProjectsProjectSlugAgentsRouteRouteWithChildren
   AppProjectsProjectSlugStreamsRouteRoute: typeof AppProjectsProjectSlugStreamsRouteRouteWithChildren
+  AppProjectsProjectSlugIntegrationsRoute: typeof AppProjectsProjectSlugIntegrationsRoute
   AppProjectsProjectSlugReactivityRoute: typeof AppProjectsProjectSlugReactivityRoute
   AppProjectsProjectSlugReplRoute: typeof AppProjectsProjectSlugReplRoute
   AppProjectsProjectSlugSettingsRoute: typeof AppProjectsProjectSlugSettingsRoute
@@ -804,6 +825,8 @@ const AppProjectsProjectSlugRouteRouteChildren: AppProjectsProjectSlugRouteRoute
       AppProjectsProjectSlugAgentsRouteRouteWithChildren,
     AppProjectsProjectSlugStreamsRouteRoute:
       AppProjectsProjectSlugStreamsRouteRouteWithChildren,
+    AppProjectsProjectSlugIntegrationsRoute:
+      AppProjectsProjectSlugIntegrationsRoute,
     AppProjectsProjectSlugReactivityRoute:
       AppProjectsProjectSlugReactivityRoute,
     AppProjectsProjectSlugReplRoute: AppProjectsProjectSlugReplRoute,

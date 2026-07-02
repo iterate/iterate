@@ -106,6 +106,46 @@ export class RepoDurableObject extends DurableObject<Env> {
     return result;
   }
 
+  /** Committed file contents at HEAD, or null when the path does not exist. */
+  async readFile(input: { path: string }): Promise<RepoFileRead | null> {
+    const path = normalizeRepoFilePath(input.path);
+    const repo = await this.repoGitAccess();
+    const snapshot = await cloneRepoSnapshot({
+      branch: repo.defaultBranch,
+      remote: repo.remote,
+      token: repo.token,
+    });
+    const absolutePath = `${REPO_DIR}/${path}`;
+    if (!(await snapshot.filesystem.exists(absolutePath))) return null;
+    return {
+      commitOid: snapshot.commitOid,
+      content: await snapshot.filesystem.readFile(absolutePath),
+      path,
+    };
+  }
+
+  /** All committed file paths at HEAD. */
+  async listFiles(): Promise<{ commitOid: string; paths: string[] }> {
+    const repo = await this.repoGitAccess();
+    const snapshot = await cloneRepoSnapshot({
+      branch: repo.defaultBranch,
+      remote: repo.remote,
+      token: repo.token,
+    });
+    const paths: string[] = [];
+    const walk = async (dir: string) => {
+      for (const entry of await snapshot.filesystem.readdir(dir)) {
+        if (dir === REPO_DIR && entry === ".git") continue;
+        const absolute = `${dir}/${entry}`;
+        const stat = await snapshot.filesystem.stat(absolute);
+        if (stat.type === "directory") await walk(absolute);
+        else paths.push(absolute.slice(REPO_DIR.length + 1));
+      }
+    };
+    await walk(REPO_DIR);
+    return { commitOid: snapshot.commitOid, paths: paths.sort() };
+  }
+
   private projectedWorkerSource(input: { branch: string; sourcePath: string }) {
     const key = workerSourceProjectionStorageKey(input);
     const value = this.ctx.storage.kv.get<unknown>(key);
@@ -382,6 +422,25 @@ async function commitFilesToArtifactRepo(input: {
     commitOid: commit.oid,
     noChanges: false,
   };
+}
+
+type RepoFileRead = { commitOid: string; content: string; path: string };
+
+/** Shallow single-branch clone of HEAD for read operations. */
+async function cloneRepoSnapshot(input: { branch: string; remote: string; token: string }) {
+  const filesystem = new InMemoryFs();
+  const git = createGit(filesystem, REPO_DIR);
+  await git.clone({
+    branch: input.branch,
+    depth: 1,
+    singleBranch: true,
+    url: input.remote,
+    username: "x",
+    password: input.token,
+  });
+  const [head] = await git.log({ depth: 1 });
+  if (!head) throw new Error("Repo has no commits.");
+  return { commitOid: head.oid, filesystem, git };
 }
 
 class RepoSourceFileMissingError extends Error {

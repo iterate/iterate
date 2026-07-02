@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 
-test("project ingress should serve a counter page backed by worker.js state", async () => {
+test("project ingress serves the static seeded homepage at the root", async () => {
   const marker = crypto.randomUUID();
 
   using session = withItxSession();
@@ -14,27 +14,7 @@ test("project ingress should serve a counter page backed by worker.js state", as
 
   const pageResponse = await fetch(buildUrl({ path: `/${projectId}` }));
   expect(pageResponse.status).toBe(200);
-  expect(pageResponse.headers.get("content-type")).toContain("text/html");
-  const pageHtml = await pageResponse.text();
-  expect(pageHtml).toMatch(/<form\b/i);
-  expect(pageHtml).toMatch(/method=["']post["']/i);
-  expect(pageHtml).toContain(`/${projectId}/increment`);
-  expect(pageHtml).toMatch(/<button\b[\s\S]*increment/i);
-  expect(pageHtml).toMatch(/count:\s*0/i);
-
-  const firstIncrementPage = await fetch(buildUrl({ path: `/${projectId}/increment` }), {
-    method: "POST",
-  });
-  expect(firstIncrementPage.status).toBe(200);
-  expect(firstIncrementPage.headers.get("content-type")).toContain("text/html");
-  expect(await firstIncrementPage.text()).toMatch(/count:\s*1/i);
-
-  const secondIncrementPage = await fetch(buildUrl({ path: `/${projectId}/increment` }), {
-    method: "POST",
-  });
-  expect(secondIncrementPage.status).toBe(200);
-  expect(secondIncrementPage.headers.get("content-type")).toContain("text/html");
-  expect(await secondIncrementPage.text()).toMatch(/count:\s*2/i);
+  expect(await pageResponse.text()).toContain("Hello from your Iterate project worker");
 });
 
 // Multi-app routing: the seeded root worker.js is a router over the project's
@@ -56,8 +36,9 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
   using project = itx.projects.create({ slug });
   const { projectId } = await project.describe();
 
-  const fetchApp = (appHostPrefix: string, init?: RequestInit) => {
-    const base = new URL(buildUrl({ path: "/" }));
+  const fetchApp = (appHostPrefix: string, init?: RequestInit & { path?: string }) => {
+    const path = init?.path ?? "/";
+    const base = new URL(buildUrl({ path }));
     if (base.hostname === "localhost" || base.hostname.endsWith(".localhost")) {
       const headers = new Headers(init?.headers);
       headers.set("x-forwarded-host", `${appHostPrefix}.localhost`);
@@ -67,7 +48,7 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
     // same derivation the preview smoke uses for the MCP host.
     const previewMatch = /^os\.(iterate-preview-\d+)\.com$/.exec(base.hostname);
     const projectBase = previewMatch ? `${previewMatch[1]}.app` : base.hostname;
-    return fetch(`${base.protocol}//${appHostPrefix}.${projectBase}/`, init);
+    return fetch(`${base.protocol}//${appHostPrefix}.${projectBase}${path}`, init);
   };
 
   // Stateless app via the `--` single-label form; a spoofed x-iterate-app
@@ -78,19 +59,36 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
   expect(hello.status).toBe(200);
   expect(await hello.json()).toMatchObject({ app: "hello", projectId });
 
-  // Stateful app: state survives across requests. (The single-label `--`
-  // form is the one platform wildcard certs can serve — dotted
-  // `<app>.<slug>.<base>` needs a second wildcard level and is exercised in
-  // the unit tests + reserved for custom hostnames.)
-  const first = await fetchApp(`counter--${slug}`, { method: "POST" });
-  expect(first.status).toBe(200);
-  expect(await first.json()).toMatchObject({ app: "counter", count: 1 });
+  // Stateful app: an HTML counter page whose increment REDIRECTS back to /
+  // so the browser URL never sticks, with Durable Object state surviving
+  // across requests. (The single-label `--` form is the one platform
+  // wildcard certs can serve — dotted `<app>.<slug>.<base>` needs a second
+  // wildcard level and is exercised in the unit tests + reserved for custom
+  // hostnames.)
+  const page = await fetchApp(`counter--${slug}`);
+  expect(page.status).toBe(200);
+  expect(await page.text()).toMatch(/count:\s*0/i);
 
-  const second = await fetchApp(`counter--${slug}`, { method: "POST" });
-  expect(await second.json()).toMatchObject({ app: "counter", count: 2 });
+  const increment = await fetchApp(`counter--${slug}`, {
+    method: "POST",
+    path: "/increment",
+    redirect: "manual",
+  });
+  expect(increment.status).toBe(303);
+  expect(increment.headers.get("location")).toBe("/");
 
+  await fetchApp(`counter--${slug}`, { method: "POST", path: "/increment" });
   const read = await fetchApp(`counter--${slug}`);
-  expect(await read.json()).toMatchObject({ app: "counter", count: 2 });
+  expect(await read.text()).toMatch(/count:\s*2/i);
+
+  // The seeded repo is readable through the engine's repo capability.
+  const workerSource = await project.repo.readFile({ path: "worker.js" });
+  expect(workerSource?.content).toContain("const APPS");
+  const tree = await project.repo.listFiles();
+  expect(tree.paths).toEqual(
+    expect.arrayContaining(["worker.js", "apps/hello/worker.js", "apps/counter/worker.js"]),
+  );
+  expect(await project.repo.readFile({ path: "nope.md" })).toBeNull();
 
   // Unknown apps 404 in the router itself.
   const unknown = await fetchApp(`nope--${slug}`);

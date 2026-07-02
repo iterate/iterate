@@ -131,6 +131,19 @@ const config: KnipConfig = {
   // Keep the config honest in CI/local runs: if Knip thinks our patterns or
   // workspace setup drifted, fail instead of silently warning.
   treatConfigHintsAsErrors: true,
+  include: [
+    "files",
+    "dependencies",
+    "unlisted",
+    "unresolved",
+    "exports",
+    "nsExports",
+    "types",
+    "nsTypes",
+    "enumMembers",
+    "namespaceMembers",
+    "duplicates",
+  ],
   entry: ["playwright.config.ts", "specs/**/*.spec.ts"],
   project: ["playwright.config.ts", "specs/**/*.ts"],
   // Keep this root command intentionally scoped. When Knip includes dependent

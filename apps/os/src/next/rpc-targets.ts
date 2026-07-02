@@ -273,6 +273,14 @@ class RepoRpcTarget extends RpcTarget implements Repo {
     return this.durableObjectStub.commitFiles(input);
   }
 
+  listFiles() {
+    return this.durableObjectStub.listFiles();
+  }
+
+  readFile(input: Parameters<Repo["readFile"]>[0]) {
+    return this.durableObjectStub.readFile(input);
+  }
+
   get processor() {
     return this.durableObjectStub.processor;
   }

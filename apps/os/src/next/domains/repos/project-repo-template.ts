@@ -5,8 +5,8 @@ const DEFAULT_PROJECT_WORKER_SOURCE = `
   // app is its own repo-backed dynamic worker (a self-contained JS module —
   // repo-backed workers are single-file for now); ingress selects one via the
   // trusted x-iterate-app header (hosts like hello--<slug>.<base> or
-  // <app>.<custom-hostname>). Requests with no app selected serve the demo
-  // counter page below.
+  // <app>.<custom-hostname>). Requests with no app selected get the static
+  // homepage string below.
   const APPS = {
     hello: {
       type: "stateless",
@@ -34,42 +34,11 @@ const DEFAULT_PROJECT_WORKER_SOURCE = `
         return await app.fetch(req);
       }
 
-      const url = new URL(req.url);
-      if (url.pathname === "/" && req.method === "GET") {
-        const counter = await this.counter();
-        return this.renderCounterPage(req, await counter.current());
-      }
-      if (url.pathname === "/increment" && req.method === "POST") {
-        const counter = await this.counter();
-        return this.renderCounterPage(req, await counter.increment());
-      }
-      return new Response(\`project worker fetched \${new URL(req.url).pathname}\`);
-    }
-
-    counter() {
-      return this.env.ITX.get().then((project) => project.workers.get(APPS.counter));
-    }
-
-    renderCounterPage(req, count) {
-      // The path lane (/prj_<id>/...) strips its prefix before the worker
-      // sees the URL, but the BROWSER still lives at the prefixed URL — the
-      // lane advertises the prefix so rendered links/actions resolve. Host
-      // lanes (<slug>.<base>) have no prefix.
-      const prefix = req.headers.get("x-iterate-url-prefix") ?? "";
-      const action = \`\${prefix}/increment\`;
+      // The seeded homepage is a plain static string; apps live on their own
+      // hosts (e.g. counter--<slug>.<base>).
       return new Response(
-        \`<!doctype html>
-          <html>
-            <body>
-              <main>
-                <p>count: \${count}</p>
-                <form method="post" action="\${action}">
-                  <button type="submit">increment</button>
-                </form>
-              </main>
-            </body>
-          </html>\`,
-        { headers: { "content-type": "text/html; charset=utf-8" } },
+        "Hello from your Iterate project worker. Apps: hello--<slug> (stateless), counter--<slug> (stateful). Edit worker.js in the project repo to change this.",
+        { headers: { "content-type": "text/plain; charset=utf-8" } },
       );
     }
 
@@ -112,10 +81,31 @@ const COUNTER_APP_WORKER_SOURCE = `
   // dynamic worker. State survives across requests under its durableWorkerKey.
   export class CounterApp extends DurableObject {
     async fetch(req) {
-      if (req.method === "POST") {
-        return Response.json({ app: "counter", count: await this.increment() });
+      // The path lane advertises its stripped URL prefix; host lanes have none.
+      const prefix = req.headers.get("x-iterate-url-prefix") ?? "";
+      const url = new URL(req.url);
+
+      if (req.method === "POST" && url.pathname === "/increment") {
+        await this.increment();
+        // Redirect back so the browser URL never sticks at /increment.
+        return new Response(null, { status: 303, headers: { location: \`\${prefix}/\` } });
       }
-      return Response.json({ app: "counter", count: await this.current() });
+
+      const count = await this.current();
+      return new Response(
+        \`<!doctype html>
+          <html>
+            <body>
+              <main>
+                <p>count: \${count}</p>
+                <form method="post" action="\${prefix}/increment">
+                  <button type="submit">increment</button>
+                </form>
+              </main>
+            </body>
+          </html>\`,
+        { headers: { "content-type": "text/html; charset=utf-8" } },
+      );
     }
 
     async increment() {
@@ -127,8 +117,7 @@ const COUNTER_APP_WORKER_SOURCE = `
     async current() {
       return this.ctx.storage.kv.get("n") ?? 0;
     }
-  }
-`;
+  }`;
 
 export const PROJECT_REPO_AGENTS_MD = `# Project Agent Notes
 

@@ -11,6 +11,7 @@ import {
   GitBranch,
   KeyRound,
   LogOut,
+  Plug,
   Plus,
   Radio,
   ScrollText,
@@ -606,6 +607,7 @@ type ProjectStreamNavItemConfig = {
   streamPath: StreamPathType;
   to:
     | "/projects/$projectSlug/agents"
+    | "/projects/$projectSlug/integrations"
     | "/projects/$projectSlug/secrets"
     | "/projects/$projectSlug/repos"
     | "/projects/$projectSlug/streams";
@@ -619,7 +621,13 @@ const PROJECT_STREAM_NAV_ITEMS: readonly ProjectStreamNavItemConfig[] = [
     streamPath: StreamPath.parse("/agents"),
     to: "/projects/$projectSlug/agents",
   },
-  // TODO(itx-v4 cutover): /integrations (slack/google) returns in a later phase.
+  {
+    fuzzy: false,
+    icon: Plug,
+    label: "/integrations",
+    streamPath: StreamPath.parse("/integrations"),
+    to: "/projects/$projectSlug/integrations",
+  },
   {
     fuzzy: true,
     icon: KeyRound,

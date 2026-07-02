@@ -291,7 +291,15 @@ export interface ProjectRepoCollection extends RepoCollection {
 export interface Repo {
   commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult>;
   create(): Promise<Repo>;
+  /** All committed file paths at HEAD. */
+  listFiles(): Promise<{ commitOid: string; paths: string[] }>;
   processor: StreamProcessorRpc<RepoProcessorState>;
+  /** Committed file contents at HEAD; null when the path does not exist. */
+  readFile(input: { path: string }): Promise<{
+    commitOid: string;
+    content: string;
+    path: string;
+  } | null>;
   whoami(): Promise<string>;
 }
 
