@@ -14,7 +14,6 @@
     "probe:do-duration": "tsx ./scripts/do-duration-probe.ts",
     "deploy": "doppler run -- tsx ./alchemy.run.ts",
     "destroy": "doppler run -- tsx ./alchemy.run.ts --destroy",
-    "e2e:examples": "vitest run --config e2e/examples/vitest.config.ts",
     "routes:generate": "tsx ./scripts/generate-route-tree.ts",
     "generate:itx-types-source": "tsx ./scripts/generate-itx-types-source.ts",
     "routes:check": "tsx ./scripts/generate-route-tree.ts --check",

@@ -356,7 +356,11 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
           ? { error: payload.error, executionId: input.executionId }
           : {
               executionId: input.executionId,
-              result: "result" in payload ? json(payload.result) : null,
+              // A script that returns undefined omits `result` entirely. The
+              // distinction is load-bearing for agents: "returned a value"
+              // feeds the result back for another turn, "returned nothing"
+              // ends the loop.
+              ...(payload.result === undefined ? {} : { result: json(payload.result) }),
             };
       return this.stream.append({
         type: "events.iterate.com/itx/script-execution-completed",

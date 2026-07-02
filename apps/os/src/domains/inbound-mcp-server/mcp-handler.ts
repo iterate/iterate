@@ -44,7 +44,7 @@ const ExecJsInput = z.object({
   code: z
     .string()
     .describe(
-      "JavaScript async arrow function to execute, e.g. async (itx) => { return await itx.describe(); }",
+      "JavaScript async arrow function to execute, e.g. async (itx) => { return await itx.describe(); }. Whatever it returns (JSON-serializable) is the tool result; a thrown error surfaces as the tool error.",
     ),
   project: z.string().optional().describe("Project slug to run this code against."),
 });
@@ -52,6 +52,19 @@ const AskAssistantInput = z.object({
   message: z.string().trim().min(1).describe("Plain-language request for the project assistant."),
   project: z.string().optional().describe("Project slug to ask the assistant of."),
 });
+
+// Written for the LLM on the other end of the MCP connection: same tool-call
+// stance as the agent system prompts (small data-first snippets), adapted for
+// the request/response shape — here the return value IS the tool result.
+const EXEC_JS_DESCRIPTION = [
+  "Execute JavaScript against an Iterate project. The code must be a single async arrow function: async (itx) => { ... }. Whatever it returns (JSON-serializable) is the tool result.",
+  "",
+  "Treat each call like a tool call, not a program: keep snippets small and single-purpose. Fetch data and RETURN it so you can look at it before deciding what to do next — do not pattern-match response shapes you have never seen, compose user-facing prose from unknown fields, or wrap calls in defensive try/catch (a thrown error comes back as the tool error, which is more useful than a hand-built { error } object). Return only what you need: pick fields, slice arrays.",
+  "",
+  "Use JavaScript for what separate calls cannot do: Promise.all to fan out independent requests concurrently, map/filter to trim big responses.",
+  "",
+  "Discovering the surface: `await itx.describe()` lists the project's capabilities; `await itx.examples.list()` is a catalogue of known-good snippets (streams, repo, workers, secrets, provideCapability, MCP, ...) and `await itx.examples.get({ id })` returns one with full code — copy working patterns from there. Web search is built in via Exa: `await itx.mcp.exa.web_search_exa({ query, numResults })`, page reading via `itx.mcp.exa.web_fetch_exa({ urls })`.",
+].join("\n");
 
 const mcpCorsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -104,6 +117,7 @@ function createServer(input: {
         "This is an Iterate OS project MCP server.",
         "Use exec_js to run a JavaScript async arrow function against a project.",
         "Use ask_assistant to ask the project's assistant agent in plain language.",
+        "Prefer several small single-purpose calls (fetch data, return it, look at it, act) over one giant defensive script; use Promise.all inside a call to parallelize independent requests.",
       ].join("\n"),
     },
   );
@@ -123,8 +137,7 @@ function createServer(input: {
     "exec_js",
     {
       title: "Run code",
-      description:
-        "Execute JavaScript against an Iterate project. The code must be a single async arrow function: async (itx) => { ... }.",
+      description: EXEC_JS_DESCRIPTION,
       inputSchema: ExecJsInput,
     },
     async (rawInput) => {
