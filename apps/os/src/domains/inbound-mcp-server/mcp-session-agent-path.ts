@@ -1,4 +1,4 @@
-export const MCP_AGENT_PATH_PREFIX = "/agents/mcp";
+const MCP_AGENT_PATH_PREFIX = "/agents/mcp";
 const textEncoder = new TextEncoder();
 
 export function isMcpAgentPath(agentPath: string) {

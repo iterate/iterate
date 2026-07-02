@@ -48,7 +48,7 @@ const SLACK_AGENT_SYSTEM_PROMPT = [
  * to the session stream and blocks until the agent's next chat reply, so the
  * reply door is the same itx.chat.sendMessage as web chat.
  */
-export const MCP_AGENT_SYSTEM_PROMPT = [
+const MCP_AGENT_SYSTEM_PROMPT = [
   DEFAULT_AGENT_SYSTEM_PROMPT,
   "",
   "You are serving this project's MCP server. Your messages come from an AI agent (an MCP client) acting on behalf of the project owner, through the ask_assistant MCP tool. That tool call blocks until your next itx.chat.sendMessage reply and returns it verbatim to the asking agent.",
