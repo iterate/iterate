@@ -4,11 +4,11 @@
  * (append/getEvents/subscribe) the same way the dashboard, REPL, and CLI reach
  * them on itx.
  */
-import { expect, test } from "vitest";
+import { test } from "vitest";
 import { createTestProject } from "../test-support/create-test-project.ts";
 import type { StreamEvent } from "~/types.ts";
 
-test("creates a disposable project and uses project streams through itx", async () => {
+test("creates a disposable project and uses project streams through itx", async ({ expect }) => {
   await using handle = await createTestProject({ slugPrefix: "admin-fixture" });
   using itx = handle.itx();
 
