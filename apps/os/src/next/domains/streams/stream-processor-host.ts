@@ -63,8 +63,10 @@ type HostedProcessorDeps = {
 
 // Structural: the host drives the processor's public surface only. (A
 // `StreamProcessor<any, ...>` bound would compare #-private fields nominally
-// and reject concrete subclasses over their state types.)
-type AnyHostedProcessor = {
+// and reject concrete subclasses over their state types.) Exported because the
+// browser mirror runtime (client-libraries/browser/stream-browser-store.ts)
+// hosts processors through the same surface.
+export type AnyHostedProcessor = {
   contract: {
     slug: string;
     version?: string;
@@ -364,7 +366,12 @@ export function createStreamProcessorHost(
   };
 }
 
-function announceContract(contract: {
+/**
+ * Serializable contract announcement carried on a subscription's connect event.
+ * Shared by this Durable Object host and the browser mirror runtime so both
+ * kinds of hosted processor land identically on the stream's presence roster.
+ */
+export function announceContract(contract: {
   slug: string;
   version?: string;
   description?: string;
