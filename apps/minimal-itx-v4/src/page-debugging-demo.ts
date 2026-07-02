@@ -501,6 +501,8 @@ function pageDebuggingDemoHtml() {
       const targetStatus = document.querySelector("#targetStatus");
       let session;
       let agentProject;
+      let agentProjectId;
+      let mountedProjectId;
 
       document.querySelector("#increment").addEventListener("click", () => {
         const counter = document.querySelector("#counter");
@@ -508,6 +510,9 @@ function pageDebuggingDemoHtml() {
       });
 
       async function generateSession() {
+        const shouldRemount = mountedProjectId === session?.projectId;
+        agentProject = undefined;
+        agentProjectId = undefined;
         snippetStatus.textContent = "Generating snippet...";
         const response = await fetch("${SESSION_PATH}", { method: "POST" });
         session = await response.json();
@@ -518,6 +523,7 @@ function pageDebuggingDemoHtml() {
           path: session.path,
           projectId: session.projectId,
         }, null, 2);
+        if (shouldRemount) await runSnippetHere();
       }
 
       async function copySnippet() {
@@ -528,19 +534,30 @@ function pageDebuggingDemoHtml() {
       async function runSnippetHere() {
         if (!snippetEl.value.trim()) await generateSession();
         await (0, eval)(snippetEl.value);
+        mountedProjectId = session.projectId;
         targetStatus.textContent = "Snippet connected. PageTools is mounted at debugPage.";
       }
 
       async function pageCapability() {
         if (!session) await generateSession();
-        if (!agentProject) {
+        if (mountedProjectId !== session.projectId) {
+          throw new Error("Run the snippet before using agent controls for this session.");
+        }
+        if (!agentProject || agentProjectId !== session.projectId) {
           const { connectPageItx } = await import("${CLIENT_PATH}");
           agentProject = connectPageItx({
             connectUrl: session.connectUrl,
             token: session.agentToken,
           });
+          agentProjectId = session.projectId;
         }
-        return agentProject[session.path[0]];
+        return resolveCapabilityPath(agentProject, session.path);
+      }
+
+      function resolveCapabilityPath(root, path) {
+        const capability = path.reduce((target, segment) => target?.[segment], root);
+        if (!capability) throw new Error("Capability not found at " + path.join("."));
+        return capability;
       }
 
       async function runAgentAction(label, action) {

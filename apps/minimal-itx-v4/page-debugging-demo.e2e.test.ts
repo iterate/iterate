@@ -82,6 +82,19 @@ describe("page debugging demo", () => {
         document.querySelector("#agentOutput")?.textContent?.includes("Increment counter"),
       );
       expect(await page.locator("#agentOutput").textContent()).toContain("Increment counter");
+
+      await page.locator("#generateSnippet").click();
+      await page.waitForFunction((previousProjectId) => {
+        const output = JSON.parse(document.querySelector("#agentOutput")?.textContent ?? "{}");
+        return (
+          output.projectId !== previousProjectId &&
+          document.querySelector("#targetStatus")?.textContent?.includes("Snippet connected")
+        );
+      }, initialSession.projectId);
+
+      await page.locator("#agentClick").click();
+      await page.waitForFunction(() => document.querySelector("#counter")?.textContent === "2");
+      expect(await page.locator("#counter").textContent()).toBe("2");
     } finally {
       await browser.close();
     }
