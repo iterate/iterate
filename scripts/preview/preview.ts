@@ -133,13 +133,13 @@ export async function test(options: PullRequestCommandOptions = {}) {
     };
   }
 
-  const entries: CloudflarePreviewAppEntry[] = [];
-  // Preview e2e commands are full app-level suites. Run them one at a time so
-  // unrelated app checks do not multiply load against the same preview slot.
-  for (const app of testableApps) {
+  // Preview e2e commands are full app-level suites. They run concurrently:
+  // each app deploys its own workers, and the non-OS suites are seconds-long
+  // smokes whose load is negligible next to the OS lanes.
+  const maybeEntries = await mapWithConcurrency(testableApps, testableApps.length, async (app) => {
     const existingEntry = current.state.apps[app.slug];
     if (!existingEntry?.publicUrl) {
-      continue;
+      return null;
     }
 
     const startedAt = Date.now();
@@ -168,22 +168,21 @@ export async function test(options: PullRequestCommandOptions = {}) {
       `[preview] test ${testResult.exitCode === 0 ? "passed" : "failed"}: ${app.slug} (${formatDurationMs(testDurationMs)})`,
     );
 
-    entries.push(
-      CloudflarePreviewAppEntry.parse({
-        ...existingEntry,
-        appDisplayName: app.displayName,
-        appSlug: app.slug,
-        message:
-          testResult.exitCode === 0
-            ? null
-            : commandFailureMessage(testResult, "Preview tests failed after deploy."),
-        runUrl: context.workflowRunUrl ?? existingEntry.runUrl ?? null,
-        status: testResult.exitCode === 0 ? "deployed" : "tests-failed",
-        testDurationMs,
-        updatedAt: new Date().toISOString(),
-      } satisfies CloudflarePreviewAppEntry),
-    );
-  }
+    return CloudflarePreviewAppEntry.parse({
+      ...existingEntry,
+      appDisplayName: app.displayName,
+      appSlug: app.slug,
+      message:
+        testResult.exitCode === 0
+          ? null
+          : commandFailureMessage(testResult, "Preview tests failed after deploy."),
+      runUrl: context.workflowRunUrl ?? existingEntry.runUrl ?? null,
+      status: testResult.exitCode === 0 ? "deployed" : "tests-failed",
+      testDurationMs,
+      updatedAt: new Date().toISOString(),
+    } satisfies CloudflarePreviewAppEntry);
+  });
+  const entries = maybeEntries.filter((entry): entry is CloudflarePreviewAppEntry => entry != null);
 
   const ok = !entries.some((entry) => entry.status === "tests-failed");
   if (entries.length > 0) {

@@ -38,7 +38,7 @@ The preview workflow is deliberately simple:
 - select the apps affected by the PR diff;
 - include declared preview dependencies, currently OS -> auth;
 - deploy the selected apps in one parallel batch;
-- after deployment has finished, run tests for deployed apps one at a time.
+- after deployment has finished, run tests for deployed apps concurrently.
 
 The preview script does not try to prove dependency freshness or start each app's
 tests as soon as it is individually ready. That lost little in the measured case
