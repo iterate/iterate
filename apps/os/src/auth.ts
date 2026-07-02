@@ -262,7 +262,17 @@ function authWorkerProjectDirectory(): ProjectDirectory {
         // of locking the user out for the cache window.
         return false;
       }
-      const hasProject = projects.some((project) => project.id === projectId);
+      // Gate on the organizations already in the principal's claims — the same
+      // scope the pre-service-binding fallback used (it looked up projects
+      // per claims org). This keeps itx access in step with the dashboard's
+      // claims-gated directory reads (getProjectBySlugServerFn): the fallback
+      // recovers projects created in an org the user already holds, without
+      // silently widening access to brand-new org memberships the token has
+      // not caught up to yet.
+      const claimsOrganizationIds = new Set(userPrincipal.organizations.map((org) => org.id));
+      const hasProject = projects.some(
+        (project) => project.id === projectId && claimsOrganizationIds.has(project.organizationId),
+      );
       directoryCache.set(cacheKey, {
         expiresAt: Date.now() + DIRECTORY_CACHE_TTL_MS,
         hasProject,

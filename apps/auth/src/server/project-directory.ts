@@ -72,6 +72,9 @@ export async function createProjectForOrganization(
     createdAt: now,
     updatedAt: now,
   });
+  if (!created) {
+    throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Failed to create project" });
+  }
 
   return toProjectRecordFromReturnedRow(created);
 }
