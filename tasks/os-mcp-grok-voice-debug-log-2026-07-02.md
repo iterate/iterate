@@ -867,6 +867,80 @@ entries) or the selection reference is missing (empty projects). Watch the
 auth tail (`/tmp/auth-preview-4-grok-tail.log`) for the scopes Grok requests
 at `/authorize`.
 
+## 2026-07-02T17:25Z Update: hash fix verified via synthetic token; second bug found and fixed
+
+Verification without Grok: inserted a synthetic `oauthAccessToken` row into
+the preview-4 auth DB with `token = base64url(sha256(<known raw value>))`,
+reusing the clientId/userId/referenceId/scopes of Grok's most recent real
+token row, then POSTed an MCP `initialize` with the raw value as bearer.
+
+- Before the hash fix the lookup returned `not_found`.
+- After deploying `706de08` (auth at that sha), the tail showed the token
+  IS found — `not_found` is gone.
+- New failure: `opaque_internal_introspection_error: "Output validation
+failed"` — the oRPC contract declares `sid: z.string().optional()` but the
+  handler returned `sid: null` (synthetic row has no session; the session FK
+  is on-delete-set-null so real tokens can hit this too).
+- Fix: `sid: token.sessionId ?? undefined` in
+  `apps/auth/src/server/orpc/routers/internal.ts`.
+
+Also confirmed from the DB rows: Grok's earlier tokens are fully healthy —
+scopes `["openid","profile","email","offline_access","project"]` and a valid
+`iterate-project-selection-v1` referenceId selecting
+`prj_e774914d27304b9b82532351c467e0ac`, all for the same user. So project
+selection DID run, Grok requests the project scope, and once introspection
+passes, project grants should reconstruct correctly. Hypotheses A, C, D, and
+E are all dead: the token Grok sends is a genuine preview-4 Better Auth
+access token.
+
+Parallel bisect deployment ready for Grok testing:
+`https://zero-trust-mcp-preview4.templestein.workers.dev/mcp` — the
+known-good zero-trust resource server advertising preview-4 Better Auth as
+its authorization server, validating bearers via the userinfo endpoint
+(tools: ping, echo_json, whoami). Source:
+`/Users/jonastemplestein/src/tries/2026-07-02-zero-trust-mcp-preview4-auth`.
+Tail: `cd` there and `bunx wrangler tail zero-trust-mcp-preview4 --format pretty`.
+
+## 2026-07-02T17:40Z RESOLVED (pending Grok retest): full e2e green with opaque token
+
+Deployed `3ed0ba4` to preview-4 (auth + os). Synthetic-opaque-token
+verification now passes the ENTIRE path, including the real production MCP
+endpoint:
+
+- `POST https://mcp.iterate-preview-4.com/debug/oauth-verify-mcp-base`
+  `initialize` → 200; `tools/list` → `ping`, `echo_json`.
+- `POST https://mcp.iterate-preview-4.com/` (the real endpoint)
+  `initialize` → 200; `tools/list` → `exec_js` with project grants resolved
+  from the selection referenceId.
+
+Root cause was two OS/auth-side bugs in the new internal introspection path,
+not Grok:
+
+1. Raw-value token lookup vs hashed storage (fixed `706de08`).
+2. `sid: null` violating the oRPC output schema (`z.string().optional()`)
+   for session-less tokens (fixed `3ed0ba4`).
+
+Test artifact: a synthetic `oauthAccessToken` row (id
+`PmMHJXvm1zWWm99IGqPuqnu1z2tPOdDC`) in the preview-4 auth DB, raw value known
+locally, expires 2026-07-02T19:16:48Z. Self-cleans on expiry.
+
+Next: retest in Grok Voice Builder against
+`https://mcp.iterate-preview-4.com/api/mcp`. Note Grok's cached tokens from
+earlier attempts have 30-minute expiries, so it may need a fresh OAuth
+round-trip; expired tokens now return a clean `invalid_token` challenge with
+reason `expired` rather than `not_found`. Optionally also test the
+reverse-bisect server
+`https://zero-trust-mcp-preview4.templestein.workers.dev/mcp`. Tail running:
+`/tmp/os-tail-live.log` (os-preview-4-app).
+
+Follow-ups before merging PR 1588 to prd:
+
+- Decide whether the debug endpoints/verbose Grok logging stay or get
+  stripped.
+- Consider whether OS should keep the JWT-first verifier + internal opaque
+  fallback, or whether auth should mint JWT access tokens for MCP clients.
+- The `sid`/hash fixes are needed regardless.
+
 ## Current Best Hypotheses
 
 ### Hypothesis A: Grok Sends The Wrong Token In The Authorization Header
