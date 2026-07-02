@@ -777,6 +777,9 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
   async create(args: Parameters<ProjectCollection["create"]>[0]) {
     const registered = await this.#registerProject(args);
     args.projectId = registered.projectId;
+    // The auth worker may normalize the slug (slugify); adopt its canonical
+    // form so stream events agree with the directory and ingress hostnames.
+    args.slug = registered.slug;
     // The creating session can use the project immediately; a signed-in user's
     // claims catch up on the next token refresh (directory fallback covers the
     // gap for other connections).
