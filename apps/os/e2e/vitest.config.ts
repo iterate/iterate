@@ -32,7 +32,10 @@ export default defineConfig({
     // slot, so files are independent. Sequential locally to not hammer a
     // single dev server.
     fileParallelism: process.env.CI === "true",
-    hookTimeout: 120_000,
+    // Generous: e2e runs against live deployments, concurrently with the
+    // Playwright specs in preview CI — cold slots under combined load need
+    // headroom, and slow-but-passing beats flaky.
+    hookTimeout: 240_000,
     include: ["./e2e/vitest/**/*.test.ts"],
     passWithNoTests: true,
     setupFiles: ["./e2e/vitest/setup.ts"],
@@ -42,7 +45,7 @@ export default defineConfig({
       [E2E_RUN_SLUG_KEY]: vitestRunSlug,
       [E2E_REPO_ROOT_KEY]: repoRoot,
     },
-    testTimeout: 120_000,
+    testTimeout: 240_000,
     onConsoleLog(log, type, entity) {
       if (entity?.type !== "test") return;
 
