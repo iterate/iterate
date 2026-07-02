@@ -121,6 +121,8 @@ export interface Itx extends ItxCapabilityHost {
   agents: AgentCollection;
   describe(): Promise<ProjectDescription>;
   egress: ProjectEgress;
+  /** Read-only catalogue of known-good itx script snippets (\`list()\`, \`get({ id })\`). */
+  examples: ItxExampleCatalog;
   /** Gmail REST proxy for the project's connected Google account. */
   gmail: GmailCapability;
   /** Slack/Google connection status, OAuth start/complete, disconnect. */
@@ -491,6 +493,13 @@ export type OpenApiRpc = object;
 
 export interface McpClientCollection {
   connect(input: McpClientConnectInput): Promise<McpClientRpc>;
+  /**
+   * The public Exa MCP server (https://mcp.exa.ai/mcp), pre-connected for every
+   * project: web search and page reading as flat tool calls.
+   * \`itx.mcp.exa.web_search_exa({ query, numResults })\` searches the web;
+   * \`itx.mcp.exa.web_fetch_exa({ urls, maxCharacters })\` reads pages as markdown.
+   */
+  exa: McpClientRpc;
 }
 
 export type McpClientConnectInput = {
@@ -500,6 +509,28 @@ export type McpClientConnectInput = {
 };
 
 export type McpClientRpc = object;
+
+/**
+ * Read-only catalogue of known-good itx script snippets — the project-context
+ * entries of the REPL "Examples" panel. \`list()\` returns every entry without
+ * its code; \`get({ id })\` returns one entry with the full script body. Agents
+ * copy working patterns from here instead of guessing at the surface.
+ * Session-level examples (whoami, projects.list) are excluded: they run
+ * against the OS Session \`authenticate()\` returns, which an itx holder does
+ * not have.
+ */
+export interface ItxExampleCatalog {
+  get(input: { id: string }): Promise<ItxExampleWithCode>;
+  list(): Promise<ItxExampleSummary[]>;
+}
+
+export type ItxExampleSummary = {
+  description: string;
+  id: string;
+  title: string;
+};
+
+export type ItxExampleWithCode = ItxExampleSummary & { code: string };
 
 /**
  * Shared host operations for objects that can own dynamic ITX capabilities.

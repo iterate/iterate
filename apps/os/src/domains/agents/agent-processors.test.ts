@@ -177,6 +177,80 @@ describe("minimal web-chat agent processors", () => {
     // The verbatim type surface rides along so the agent knows what it holds.
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("RpcStub<Itx>");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("export interface Itx extends ItxCapabilityHost");
+    // Tool-call stance: small data-first snippets, parallel fan-out, explicit
+    // loop-ending rule, and the built-in discovery surfaces.
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("Promise.all");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("returns undefined ends your turn");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.mcp.exa.web_search_exa");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.examples.list()");
+  });
+
+  it("feeds a returned script result back as input and schedules another turn", async () => {
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({ stream });
+    const cursors = new Map<object, number>();
+    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
+
+    await stream.append({
+      type: "events.iterate.com/itx/script-execution-completed",
+      payload: { executionId: "agent-output:7", result: { inbox: ["a", "b"] } },
+    });
+    await deliver();
+    await deliver();
+
+    const input = stream.events.find(
+      (event) => event.type === "events.iterate.com/agent/input-added",
+    );
+    expect(input?.payload?.content).toContain("Your script returned");
+    expect(input?.payload?.content).toContain('"inbox"');
+    expect(
+      stream.events.some(
+        (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
+      ),
+    ).toBe(true);
+  });
+
+  it("feeds a thrown script error back as input", async () => {
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({ stream });
+    const cursors = new Map<object, number>();
+
+    await stream.append({
+      type: "events.iterate.com/itx/script-execution-completed",
+      payload: { executionId: "agent-output:7", error: "gmail exploded" },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors });
+
+    const input = stream.events.find(
+      (event) => event.type === "events.iterate.com/agent/input-added",
+    );
+    expect(input?.payload?.content).toContain("Your script threw");
+    expect(input?.payload?.content).toContain("gmail exploded");
+  });
+
+  it("ends the loop when a script returns nothing, and ignores foreign executions", async () => {
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({ stream });
+    const cursors = new Map<object, number>();
+
+    await stream.append(
+      // The agent's own script returned undefined — the completion event
+      // carries no `result` key (see ItxProcessor#executeScript).
+      {
+        type: "events.iterate.com/itx/script-execution-completed",
+        payload: { executionId: "agent-output:7" },
+      },
+      // A non-agent execution (e.g. a Slack bang command) on the same stream.
+      {
+        type: "events.iterate.com/itx/script-execution-completed",
+        payload: { executionId: "slack-bang-command-9", result: { noisy: true } },
+      },
+    );
+    await deliverNewEvents({ processor: agent, stream, cursors });
+
+    expect(
+      stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
+    ).toEqual([]);
   });
 
   it("normalizes web input, requests AI by reference, and turns output into script execution", async () => {
