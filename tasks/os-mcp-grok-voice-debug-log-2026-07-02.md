@@ -941,6 +941,45 @@ Follow-ups before merging PR 1588 to prd:
   fallback, or whether auth should mint JWT access tokens for MCP clients.
 - The `sid`/hash fixes are needed regardless.
 
+## 2026-07-02T18:05Z Update: Grok works; project-selection skip diagnosed and fixed
+
+User confirmed Grok now lists tools from
+`https://mcp.iterate-preview-4.com/api/mcp` (run-script tool present). New
+question: why was the user never asked to select/create a project.
+
+Diagnosis:
+
+- The user WAS asked once, at 13:34Z (first OAuth round of the day). One
+  `oauthProjectSelection` row was created then and never deleted.
+- The intended one-shot consumption lives in `customAccessTokenClaims`, but
+  the oauth-provider does not invoke that hook when minting OPAQUE tokens
+  (claims are reconstructed at introspection time) — so the row survived ~10
+  mints.
+- `resolveStoredProjectSelection` looked rows up by USER id
+  (`getLatestOAuthProjectSelectionByUserId`), while the table is keyed
+  `(session_id, client_id)`. Grok registers a new dynamic client per
+  connection, so every new client silently inherited the first client's
+  selection and `postLogin.shouldRedirect` skipped `/project-access` forever.
+- Delete-on-read is not an option: better-auth calls `consentReferenceId` up
+  to three times within one authorize→consent flow. The postLogin hooks also
+  never receive a clientId, so per-client lookup isn't possible.
+
+Fix (deployed to preview-4):
+
+- New query `getFreshOAuthProjectSelectionBySessionId` — lookup scoped to the
+  auth browser session with a 10-minute freshness window
+  (`OAUTH_PROJECT_SELECTION_MAX_AGE_MS`, generous vs the 600s authorization
+  code lifetime). A later connection from a new client re-enters
+  `/project-access`.
+- Removed the dead mint-time `deleteOAuthProjectSelectionsByUserId` call;
+  stale rows are swept opportunistically in `storeOAuthProjectSelection`
+  (`deleteStaleOAuthProjectSelections`).
+- Deleted the stale 13:34Z selection row from the preview-4 auth DB.
+
+Retest expectation: reconnecting Grok should now show the project
+select/create page during OAuth, then list tools scoped to the chosen
+project.
+
 ## Current Best Hypotheses
 
 ### Hypothesis A: Grok Sends The Wrong Token In The Authorization Header
