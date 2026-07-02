@@ -28,16 +28,16 @@ Object and route, so they can be deployed and torn down independently.
 
 ## Blind relay egress
 
-Deployed playground:
+The worker's home page (`/`) links to both demos. The blind relay playground is at:
 
 ```text
 https://minimal-itx-v4-blind-relay-poc.iterate-dev-preview.workers.dev/playground
 ```
 
-Open it, pick an ITX script button, read (or edit) the `async function run(itx)`
-in the textarea, and click **Run**. The script runs server-side inside the
-shared demo project. The page also hosts a small Durable Object that stores the
-live demo state/log, and a downloadable standalone `trpc-cli` client:
+Open it, pick an ITX script button, read (or edit) the `async (itx) => { ... }`
+function in the textarea, and click **Run**. The script runs server-side inside
+the shared demo project. The page also hosts a small Durable Object that stores
+the live demo state/log, and a downloadable standalone `trpc-cli` listener:
 
 ```text
 .../playground/itx-egress-cli.mts
@@ -46,17 +46,17 @@ live demo state/log, and a downloadable standalone `trpc-cli` client:
 ### 5-minute demo
 
 1. Open the playground URL.
-2. Copy the **Run the interactive ITX egress CLI** command into a terminal. It
-   makes a temp dir, installs pinned `tsx`, `trpc-cli`, `@orpc/server`, `zod`,
-   `capnweb`, and `ws`, downloads `itx-egress-cli.mts`, and prompts for a mode.
-3. Choose `plain-intercept-listen`, then click **Fetch Postman GET/POST** on the
-   page. The Node process prints the full request URL, method, headers, and body
-   — an interceptor runs _before_ secret substitution, so it sees placeholders.
-4. Restart the CLI, choose `blind-relay-listen`, then click **any** fetch button
-   — a plain Postman fetch or a secret-bearing one. The Node process now prints
-   only encrypted connection metadata for each: host, SNI, remote IP, first TLS
-   bytes, byte counts. The plaintext is gone, and for secret requests the
-   substituted secret never reaches the relay either.
+2. Copy the **Run a local egress listener** command into a terminal. It makes a
+   temp dir, installs pinned deps, downloads `itx-egress-cli.mts`, and asks you
+   to pick a mode.
+3. Pick `plain`, then click **any** fetch button on the page. The Node process
+   prints the full request (URL, method, headers, body). A plain interceptor
+   runs _before_ secret substitution, so it sees `getSecret(...)` placeholders.
+4. Restart the CLI, pick `blind`, then click **any** fetch button — plain or
+   secret-bearing. Now the Node process prints only encrypted connection
+   metadata: host, SNI, remote IP, first TLS bytes, byte counts. The plaintext
+   is gone, and for secret requests the substituted secret never reaches the
+   relay either.
 5. Watch **Live relay demo state** on the page; it polls the Durable Object once
    per second for status and observations.
 
@@ -71,25 +71,26 @@ secret: /secrets/playground/api-token = demo-secret-material
 
 ### CLI modes
 
-- `plain-intercept-listen` / `blind-relay-listen` — stay attached to the shared
-  project until Ctrl+C. Both see **every** page-triggered request: the plain
-  interceptor logs plaintext (it runs before secret substitution); the blind
-  relay logs encrypted connection metadata only.
-- `plain-intercept` / `blind-relay` — run one CLI-generated request end to end.
-- `blind-relay-proof` — the blind relay path plus an assertion that the relay
-  transcript contains none of the secret, body, path, or query-token plaintext.
+There are just two, and both stay attached to the shared project until Ctrl+C,
+logging **every** request you trigger from the page:
+
+- `plain` — installs an egress interceptor and prints the full request (URL,
+  method, headers, body). Runs before secret substitution.
+- `blind` — installs a blind relay and prints only encrypted TLS metadata
+  (host, SNI, remote IP, byte counts). The worker substitutes secrets and
+  terminates TLS itself, so the relay never sees plaintext.
 
 For a self-contained one-liner:
 
 ```bash
-tmp="$(mktemp -d)" && cd "$tmp" && npm init -y >/dev/null && npm install tsx@4.21.0 trpc-cli@0.15.1 @orpc/server@1.14.6 zod@4.4.3 capnweb@0.8.0 ws@8.19.0 >/dev/null && curl -fsS https://minimal-itx-v4-blind-relay-poc.iterate-dev-preview.workers.dev/playground/itx-egress-cli.mts -o itx-egress-cli.mts && npx tsx itx-egress-cli.mts run --base-url https://minimal-itx-v4-blind-relay-poc.iterate-dev-preview.workers.dev --demo-id default --body "payload hidden from relay" --secret-material "blind-secret-material"
+tmp="$(mktemp -d)" && cd "$tmp" && npm init -y >/dev/null && npm install tsx@4.21.0 trpc-cli@0.15.1 @orpc/server@1.14.6 zod@4.4.3 capnweb@0.8.0 ws@8.19.0 >/dev/null && curl -fsS https://minimal-itx-v4-blind-relay-poc.iterate-dev-preview.workers.dev/playground/itx-egress-cli.mts -o itx-egress-cli.mts && npx tsx itx-egress-cli.mts listen --base-url https://minimal-itx-v4-blind-relay-poc.iterate-dev-preview.workers.dev --demo-id default
 ```
 
-Expected result: the HTTPS target receives `Bearer blind-secret-material` from
-the relay machine's IP, the relay observation records TLS bytes starting with
-`0x16`, the transcript holds no plaintext, and the secret's usage audit
-increments. This is intentionally narrow — the worker terminates TLS; the relay
-only dials TCP and shuttles encrypted records.
+With `blind`, a secret-bearing request reaches the HTTPS target as
+`Bearer demo-secret-material` from the relay machine's IP, the relay observation
+records TLS bytes starting with `0x16`, and its transcript holds no plaintext.
+This is intentionally narrow — the worker terminates TLS; the relay only dials
+TCP and shuttles encrypted records.
 
 The original Vitest proof remains a repo regression test:
 
