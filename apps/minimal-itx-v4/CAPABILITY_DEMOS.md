@@ -116,32 +116,36 @@ https://minimal-itx-v4.iterate-dev-preview.workers.dev/page-debugging
 ### Live demo flow
 
 1. Open the demo page and copy the generated snippet.
-2. Paste it into any target page's DevTools console (the host page, not a
-   cross-origin iframe, if you want host-page screenshots). The snippet imports
-   only the worker-hosted client module:
-
-   ```js
-   const { connectPageTools } = await import("http://127.0.0.1:8791/page-debugging/client.mjs");
-   ```
-
+2. Paste it into any target page's DevTools console. The snippet is
+   **dependency-free** — no imports, no external `<script>`, no socket.
 3. The target page gets an **ITERATE** widget bottom-right with **Share a
-   screenshot**, **Enable screen capture**, **Copy page URL**, and **Stop
-   sharing** (which revokes that session's tokens).
-4. Back on the demo page, click **Take Screenshot**, **Snapshot**, **Click
-   counter**, or **Fill message**. Each call crosses the worker and invokes the
-   mounted `debugPage` capability in the target tab.
+   screenshot**, **Copy page URL**, and **Stop sharing** (which revokes that
+   session's tokens).
+4. Back on the demo page, run a script — **Snapshot**, **Take a screenshot**,
+   **Click the counter button**, **Fill the message field**. Each shows the
+   exact code, crosses the worker, and invokes the mounted `debugPage`
+   capability in the target tab.
 5. For a no-DevTools demo, click **Run in this tab** to mount the same capability
    on the demo page itself.
 
-### How the capability is provided
+### How the capability is provided (and why it survives strict CSP)
 
-The client module imports `capnweb`, Testing Library DOM queries, and
-`user-event` from esm.sh, then mounts a `PageTools` `RpcTarget` and hands it to
-the worker. Because browsers can't set `Authorization` on WebSocket upgrades,
-the auth token rides in `Sec-WebSocket-Protocol` as `itx-page-debugging.<token>`;
-the server verifies the HMAC and checks the token id still exists in storage
-before vending project ITX. `screenshot()` falls back to a host-DOM render by
-default and uses the Screen Capture API once the user enables host capture.
+The snippet can't load capnweb or open a WebSocket from the host page — a strict
+host CSP (`script-src`/`connect-src 'self'`) forbids both. So everything
+networked lives in a **worker-origin iframe** the snippet embeds
+(`/page-debugging/bridge`), which runs under the worker's own permissive CSP: it
+loads `capnweb`, opens the capability socket, and mounts a `PageTools`
+`RpcTarget`. Because browsers can't set `Authorization` on WebSocket upgrades,
+the token rides in `Sec-WebSocket-Protocol` as `itx-page-debugging.<token>`; the
+server verifies the HMAC and checks the token id still exists in storage before
+vending project ITX.
+
+Every `PageTools` method forwards the actual DOM work to the host page over
+`postMessage`, where the dependency-free snippet runs it with plain DOM APIs
+(role/label/text/testid/css queries, click/fill/read, snapshot, an SVG
+screenshot render). The one hard limit: no pasted snippet can escape a total
+`default-src 'self'` — the host must allow the worker origin in `frame-src`
+(the common strict case that locks down script/connect but permits framing).
 
 Each generated session gets a throwaway project id and split provider/agent
 tokens, so concurrent demos never fight over the same mounted capability.
