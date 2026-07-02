@@ -572,36 +572,6 @@ export const authContract = oc.router({
         .input(OrgInput)
         .output(z.array(OrganizationMemberRecord)),
     },
-    project: {
-      createForOrganization: oc
-        .route({
-          method: "POST",
-          path: "/internal/project/create-for-organization",
-          summary: "Create a project for an organization in internal service flows",
-          tags: ["internal", "project"],
-        })
-        .input(InternalCreateProjectForOrganizationInput)
-        .output(ProjectRecord),
-      mintProjectId: oc
-        .route({
-          method: "POST",
-          path: "/internal/project/mint-project-id",
-          summary:
-            "Mint a canonical project id (prj_) without creating an auth-side project — for OS operator/recovery creates with no owning organization",
-          tags: ["internal", "project"],
-        })
-        .output(z.object({ id: z.string() })),
-      bySlug: oc
-        .route({
-          method: "GET",
-          path: "/internal/project/by-slug",
-          summary:
-            "Look up a project by slug in internal service flows — OS ingress slug resolution and claims-miss directory reads. Null when no project has the slug.",
-          tags: ["internal", "project"],
-        })
-        .input(z.object({ projectSlug: z.string().trim().min(1) }))
-        .output(ProjectRecord.nullable()),
-    },
     session: {
       createProjectIngressToken: oc
         .route({

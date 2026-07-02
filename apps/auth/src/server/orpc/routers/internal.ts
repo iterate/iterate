@@ -2,18 +2,16 @@ import { ORPCError } from "@orpc/server";
 import { resolveUniqueSlug } from "@iterate-com/shared/slug";
 import { os, protectedMiddleware, serviceMiddleware } from "../orpc.ts";
 import { auth, createProjectIngressToken as createSignedProjectIngressToken } from "../../auth.ts";
-import { parseProjectMetadata, parseStringArray } from "../../db/helpers.ts";
+import { parseStringArray } from "../../db/helpers.ts";
 import {
   disableOAuthClientById,
   getOAuthClientByClientId,
   getOAuthClientByReferenceId,
   getOrganizationBySlug,
-  getProjectWithOrganizationBySlug,
   getUserByEmail,
   getUserById,
   insertMembership,
   insertOrganization,
-  insertProjectReturning,
   insertUser,
   listMembersByOrganizationId,
   overwriteOAuthClientByClientId,
@@ -22,15 +20,7 @@ import {
   updateVerifiedUserById,
 } from "../../db/queries/index.ts";
 import { BOOTSTRAP_ADMIN_EMAIL } from "../../bootstrap-admin.ts";
-import {
-  generateId,
-  toMembershipRole,
-  toOrganizationRecord,
-  toProjectRecord,
-  toProjectRecordFromReturnedRow,
-  toUserRecord,
-} from "./_shared.ts";
-import { resolveProjectCreateTarget } from "./project-slugs.ts";
+import { generateId, toMembershipRole, toOrganizationRecord, toUserRecord } from "./_shared.ts";
 
 function extractCookieHeader(setCookieHeader: string | null): string | null {
   if (!setCookieHeader) return null;
@@ -179,74 +169,10 @@ const members = os.internal.organization.members
     }));
   });
 
-// Auth is the canonical minter of the prj_ id space. OS calls this for the
-// operator/recovery create path (no owning organization), so even org-less
-// projects get auth-minted ids and OS never mints locally.
-const mintProjectId = os.internal.project.mintProjectId
-  .use(serviceMiddleware)
-  .handler(async () => ({ id: generateId("prj") }));
-
-// Plain slug lookup for trusted service flows: OS ingress resolves project
-// platform hosts (<slug>.<base>) to project ids here, and OS server reads use
-// it for the stale-claims window right after a create. The service token is
-// fully trusted, so there is no user scoping — callers enforce their own
-// authorization (OS checks the reader's org membership; ingress only maps
-// slug -> id).
-const projectBySlug = os.internal.project.bySlug
-  .use(serviceMiddleware)
-  .handler(async ({ context, input }) => {
-    const projectRow = await getProjectWithOrganizationBySlug(context.db, {
-      slug: input.projectSlug,
-    });
-    if (!projectRow) return null;
-    return toProjectRecord({
-      id: projectRow.id,
-      organizationId: projectRow.organizationId,
-      name: projectRow.name,
-      slug: projectRow.slug,
-      metadata: parseProjectMetadata(projectRow.metadata),
-      archivedAt:
-        typeof projectRow.archivedAt === "number" ? new Date(projectRow.archivedAt) : null,
-    });
-  });
-
-const createForOrganization = os.internal.project.createForOrganization
-  .use(serviceMiddleware)
-  .handler(async ({ context, input }) => {
-    const organization = await getOrganizationBySlug(context.db, {
-      slug: input.organizationSlug,
-    });
-    if (!organization) {
-      throw new ORPCError("NOT_FOUND", { message: "Organization not found" });
-    }
-
-    const target = await resolveProjectCreateTarget({
-      db: context.db,
-      id: input.id,
-      name: input.name,
-      organizationId: organization.id,
-      slug: input.slug,
-    });
-    if (target.kind === "existing") {
-      return toProjectRecordFromReturnedRow(target.project);
-    }
-
-    const projectId = input.id ?? generateId("prj");
-
-    const now = Date.now();
-    const created = await insertProjectReturning(context.db, {
-      id: projectId,
-      organizationId: organization.id,
-      name: input.name,
-      slug: target.slug,
-      metadata: JSON.stringify(input.metadata ?? {}),
-      archivedAt: null,
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    return toProjectRecordFromReturnedRow(created);
-  });
+// The project directory (create / mint id / slug lookup) is NOT on the HTTP
+// oRPC surface: OS reaches it over the AUTH Workers RPC binding instead, so
+// the single implementation lives in ../../project-directory.ts and is exposed
+// only through the worker entrypoint (AuthWorkerRpc). No HTTP caller remains.
 
 const ensureOAuthClient = os.internal.oauth.ensureClient
   .use(serviceMiddleware)
@@ -558,11 +484,6 @@ export const internal = os.internal.router({
   organization: {
     createForUser,
     members,
-  },
-  project: {
-    bySlug: projectBySlug,
-    createForOrganization,
-    mintProjectId,
   },
   session: {
     createProjectIngressToken,
