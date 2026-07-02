@@ -112,9 +112,17 @@ durable-objects/*.workers.test.ts`).
   `itx-mcp-auth` fixture parts, old `itx.e2e.test.ts`) → `e2e/itx/**` suites.
 - Legacy Slack unit suites (9 + 18 tests on main under
   `src/domains/slack/stream-processors/`) → `src/domains/integrations/
-slack-processors.test.ts` (consolidated; case-by-case disposition tracked
-  there) + the full-chain `e2e/itx/slack-agent.e2e.test.ts` (synthetic signed
-  webhook → router → agent → LLM → egress audit).
+slack-processors.test.ts`. A case-by-case audit (2026-07-02) mapped all 27
+  legacy cases: covered ones consolidated, 12 uncovered ones ported (webhook
+  replay-on-forward-failure — the 2026-06-15 prd regression guard — ack
+  semantics, bot-authored edge cases, !debug bang command, agent-input-before-
+  eyes-reaction ordering, interactivity payloads, other-bot forwarding). Only
+  two behaviors are gone with the itx contract:
+  `state.connection.connectionId` and the `agent/status-updated` status
+  trigger (assistant status now keys off the LLM-request lifecycle — the
+  replacement behavior is tested). The full chain is e2e-tested by
+  `e2e/itx/slack-agent.e2e.test.ts` (synthetic signed webhook → router →
+  agent → LLM → egress audit), which runs in preview CI.
 - Google OAuth token refresh (`src/domains/secrets/oauth.test.ts`) →
   `src/domains/integrations/google-tokens.test.ts` (restored 2026-07-02 after
   the coverage audit).
