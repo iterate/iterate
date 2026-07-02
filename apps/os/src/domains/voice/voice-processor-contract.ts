@@ -11,7 +11,7 @@ import { z } from "zod";
 import { defineProcessorContract } from "../streams/stream-processor.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 
-export const VOICE_AGENT_PATH_PREFIX = "/agents/voice/";
+const VOICE_AGENT_PATH_PREFIX = "/agents/voice/";
 
 export function isVoiceAgentPath(agentPath: string): boolean {
   return agentPath.startsWith(VOICE_AGENT_PATH_PREFIX);
@@ -78,5 +78,3 @@ export const VoiceProcessorContract = defineProcessorContract({
     "events.iterate.com/voice/say-requested",
   ],
 });
-
-export type VoiceProcessorState = z.infer<typeof VoiceProcessorContract.stateSchema>;

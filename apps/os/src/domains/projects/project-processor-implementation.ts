@@ -48,7 +48,7 @@ const SLACK_AGENT_SYSTEM_PROMPT = [
  * voice client relays out loud. The prompt scopes them to project work — the
  * voice assistant on the other side handles conversation itself.
  */
-export const VOICE_AGENT_SYSTEM_PROMPT = [
+const VOICE_AGENT_SYSTEM_PROMPT = [
   DEFAULT_AGENT_SYSTEM_PROMPT,
   "",
   "You are the worker agent behind a live voice assistant. Your inputs are transcribed voice turns from the user, and your replies are read aloud by the voice assistant — keep them short and speakable.",

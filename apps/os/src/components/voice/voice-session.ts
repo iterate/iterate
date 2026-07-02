@@ -80,7 +80,7 @@ export type VoiceTranscriptEntry = {
   text: string;
 };
 
-export type VoiceSessionSnapshot = {
+type VoiceSessionSnapshot = {
   status: "idle" | "connecting" | "live" | "ended";
   micActive: boolean;
   entries: VoiceTranscriptEntry[];
