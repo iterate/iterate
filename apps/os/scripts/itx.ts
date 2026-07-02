@@ -8,6 +8,7 @@
 // hold live capabilities and long-lived subscriptions for as long as the
 // process runs.
 
+import { exec as execCallback } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import process from "node:process";
 import repl from "node:repl";
@@ -212,6 +213,84 @@ export async function egressProxy(options: EgressProxyOptions) {
   });
   await handle.release().catch(() => {});
   relay[Symbol.dispose]();
+  process.exit(0);
+}
+
+// A live capability that runs shell commands on THIS machine. Same idea as the
+// egress proxy: the CLI provides an RpcTarget; whatever calls it (a worker, an
+// agent, another script) executes here, over the authenticated itx session.
+class LocalComputerTarget extends RpcTarget {
+  async exec(command: string): Promise<{ code: number; stderr: string; stdout: string }> {
+    if (typeof command !== "string" || command.trim() === "") {
+      throw new Error("exec requires a non-empty command string");
+    }
+    console.log(`  exec: ${command}`);
+    return await new Promise((resolve) => {
+      execCallback(command, { maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+        const code =
+          error && typeof (error as { code?: unknown }).code === "number"
+            ? (error as { code: number }).code
+            : 0;
+        resolve({ code, stderr: String(stderr), stdout: String(stdout) });
+      });
+    });
+  }
+}
+
+/**
+ * Mount THIS machine's shell as a project capability: `itx.<path>.exec(cmd)`.
+ *
+ * The CLI provides a live `exec` RpcTarget over its authenticated itx session,
+ * so anything holding the project's itx (a worker, an agent, `itx run`) can run
+ * commands on your computer while this process is attached. For shits and
+ * giggles — obviously don't point an untrusted agent at it.
+ */
+type UseMyComputerOptions = {
+  /** Project id to mount the computer capability on. */
+  context: string;
+  /** Capability path to mount at, e.g. --path jispwoso -> itx.jispwoso.exec. */
+  path?: string;
+  /** OS base URL. Defaults to APP_CONFIG_BASE_URL. */
+  baseUrl?: string;
+};
+
+export async function useMyComputer(options: UseMyComputerOptions) {
+  const project = options.context?.trim();
+  if (!project) throw new Error("--context <project id> is required.");
+  const mountPath = options.path?.trim() || "computer";
+  if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(mountPath)) {
+    throw new Error(`--path must be a JS identifier (got "${mountPath}").`);
+  }
+
+  using itx = connectItx({ ...adminConnection(options), projectId: project });
+  using _provision = await itx.provideCapability({
+    capability: new LocalComputerTarget(),
+    flattenNestedPaths: false,
+    instructions:
+      "Runs a shell command on the operator's local machine and returns { code, stdout, stderr }.",
+    path: [mountPath],
+    type: "live",
+    types:
+      "interface Computer { exec(command: string): Promise<{ code: number; stdout: string; stderr: string }> }",
+  });
+
+  console.log(
+    [
+      `Your computer is mounted at itx.${mountPath}.exec on project ${project}.`,
+      "Anything holding this project's itx can now run commands on THIS machine.",
+      "",
+      "Try it from another terminal:",
+      `  pnpm cli itx run --context ${project} -e "return await itx.${mountPath}.exec('uname -a')"`,
+      "",
+      "Ctrl+C to detach.",
+      "",
+    ].join("\n"),
+  );
+
+  await new Promise<void>((resolve) => {
+    process.once("SIGINT", resolve);
+    process.once("SIGTERM", resolve);
+  });
   process.exit(0);
 }
 
