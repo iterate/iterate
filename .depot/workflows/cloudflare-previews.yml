@@ -1,17 +1,46 @@
-# Depot CI variant of .github/workflows/cloudflare-previews.yml.
+# Depot CI preview deploy + e2e.
 #
-# Depot CI runners pick up jobs in ~5-10s where GitHub Actions + Depot GHA
-# runners spend 20s-3min in queue/assignment (measured 2026-07-02), which is
-# the largest fixed cost left in the preview deploy+e2e pipeline. Keep the
-# steps in sync with the generated GitHub workflow.
+# This is the PRIMARY preview workflow: Depot CI picks up jobs in ~7s where
+# GitHub Actions runner assignment took 20s-3m39s (measured 2026-07-02), so
+# the pull_request triggers live here. The GitHub workflow
+# (.github/workflows/cloudflare-previews.yml, generated from ts-workflows)
+# keeps only the PR-close cleanup job — cleanup is not latency-sensitive and
+# GitHub's `closed` trigger is the reliable place to hear about it. Keep the
+# paths below in sync with the generated GitHub workflow's list (source of
+# truth: scripts/preview/preview.ts path constants).
 #
-# Test from a checkout without pushing:
-#   depot ci run --workflow .depot/workflows/cloudflare-previews.yml \
-#     --org 0p91s0lz49 --repo iterate/iterate
+# Secrets (depot ci secrets --org 0p91s0lz49): DOPPLER_TOKEN,
+# ITERATE_BOT_GITHUB_TOKEN.
+#
+# Manual run against a PR:
+#   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
+#     --workflow cloudflare-previews.yml --ref <branch> \
+#     --input pull-request-number=<pr>
 
 name: Cloudflare Previews (Depot CI)
 
 on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+    paths:
+      - .github/workflows/cloudflare-previews.yml
+      - .github/ts-workflows/workflows/cloudflare-previews.ts
+      - .depot/workflows/cloudflare-previews.yml
+      - packages/shared/**
+      - packages/ui/**
+      - packages/mock-http-proxy/**
+      - scripts/preview/**
+      - apps/iterate-com/**
+      - apps/auth-example/**
+      - apps/os/**
+      - apps/auth/**
+      - apps/auth-contract/**
+      - apps/os/src/domains/streams/**
+      - apps/semaphore/**
+      - apps/streams-example-app/**
   workflow_dispatch:
     inputs:
       pull-request-number:
@@ -24,7 +53,6 @@ concurrency:
 
 jobs:
   preview:
-    if: github.event.action != 'closed'
     name: Preview / deploy + e2e
     runs-on: depot-ubuntu-24.04-16
     concurrency:
