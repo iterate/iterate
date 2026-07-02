@@ -59,9 +59,13 @@ export default defineConfig({
     // tasks/os-cold-create-latency.md.
     maxWorkers: 4,
     sequence: { concurrent: ci },
-    // Bounds concurrent tests per file; the deployed slot handles the fan-out
-    // (every test is its own project DO), the runner just holds sockets.
-    maxConcurrency: 6,
+    // Bounds concurrent tests per file. Each test creates a project (a whole
+    // DO chain), so with maxWorkers:4 the slot sees ~4×this many concurrent
+    // creates. At 6 the slot overloaded ("Durable Object storage operation
+    // exceeded timeout"); 3 keeps the fan-out fast (206s of test-work in
+    // ~110s wall) without tipping the slot over. Raise only with evidence the
+    // slot stays healthy — see tasks/os-cold-create-latency.md.
+    maxConcurrency: 3,
     // One retry in CI: tests are self-contained (fresh project per test), so a
     // rare load-induced flake re-runs in seconds instead of failing the suite.
     retry: ci ? 1 : 0,

@@ -505,10 +505,13 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // is replayed once the specs finish.
         "pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 & E2E_PID=$!",
         'wait "$PW_INSTALL_PID" || { cat /tmp/os-preview-pw-install.log; exit 1; }',
-        "pnpm --dir ../.. spec",
+        // Capture the specs' exit without aborting (set -e) so the vitest lane
+        // always finishes and its log is replayed — a Playwright flake must not
+        // hide (or orphan) the vitest results.
+        "SPEC_OK=0; pnpm --dir ../.. spec || SPEC_OK=$?",
         'E2E_OK=0; wait "$E2E_PID" || E2E_OK=$?',
         "cat /tmp/os-preview-vitest.log",
-        '[ "$E2E_OK" -eq 0 ]',
+        '[ "$E2E_OK" -eq 0 ] && [ "$SPEC_OK" -eq 0 ]',
       ].join("; "),
     ],
   },
