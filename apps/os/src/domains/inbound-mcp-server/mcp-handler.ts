@@ -108,7 +108,7 @@ function createServer(input: { auth: McpAuth; context: RequestContext; env: Env 
       requireScope(input.auth, requiredToolScope);
 
       // Access was verified above (OAuth project grants / admin secret), so the
-      // script runs through the next engine's admin lane over one pipelined
+      // script runs through the itx admin lane over one pipelined
       // HTTP batch. runScript executes the async arrow function in a fresh
       // dynamic-worker isolate scoped to the project.
       try {

@@ -46,7 +46,7 @@ test("stream page appends through the shared browser mirror @preview", async ({ 
 });
 
 // The legacy engine's hosted circuit-breaker processor (via the removed
-// StreamProcessorRunner DO) is gone; on the next engine the pause door is core
+// StreamProcessorRunner DO) is gone; on itx the pause door is core
 // stream behavior, driven directly through the sidebar's pause/resume gate.
 test("sidebar stream gate pauses and resumes ordinary appends", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;

@@ -84,5 +84,5 @@ The itx engine (`apps/os/src/`) is the reference implementation of all
 of this: every domain (projects, repos, agents, secrets, itx scopes) is a
 processor contract folding its own stream, and a capability context is a
 domain object whose state is its capability table, rebuilt from
-`capability-provided` events. (Design lineage: `apps/os/docs/itx-next.md`,
+`capability-provided` events. (Design lineage: `apps/os/docs/itx-design.md`,
 "The address unification" — a pre-migration record.)

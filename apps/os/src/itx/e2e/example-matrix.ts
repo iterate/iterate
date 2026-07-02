@@ -3,7 +3,7 @@
 // runs through every server-side runtime. The browser runtime lives in
 // itx.browser.test.ts (vitest's browser project); everything else is here.
 //
-//   node            AsyncFunction over a next-engine Cap'n Web stub in this process
+//   node            AsyncFunction over an itx Cap'n Web stub in this process
 //   cli             spawned `tsx scripts/cli.ts itx run --eval … --context …`
 //                   (a genuinely separate process; parses the CLI's one JSON doc)
 //   run-script      project.runScript(`async (itx) => { const vars = …; <body> }`)

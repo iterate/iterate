@@ -91,7 +91,7 @@ The review question for any of this is always the same: **what does
 ---
 
 Everything below is the appendix: how the above actually works, in build
-order. Design history: `apps/os/docs/itx-next.md` (the arc) and `DECISIONS.md`
+order. Design history: `apps/os/docs/itx-design.md` (the arc) and `DECISIONS.md`
 (what changed on contact with reality). The agent-facing surface is
 `types.ts` — handwritten, import-free, the design of record the
 implementation conforms to.

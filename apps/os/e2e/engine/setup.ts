@@ -1,11 +1,11 @@
 /**
- * Engine-suite environment defaults.
+ * itx e2e environment defaults.
  *
- * The next-engine e2e suites are URL-driven black boxes: point ITX_BASE_URL at
+ * The itx e2e suites are URL-driven black boxes: point ITX_BASE_URL at
  * any live os deployment (vite dev server or deployed worker). When unset, the
  * local dev server discovery file provides the target — same resolution the
- * rest of the os e2e lane uses. During coexistence the os deployment serves
- * the next capnweb surface at /api/itx.
+ * rest of the os e2e lane uses. The deployment serves the itx capnweb
+ * surface at /api/itx.
  */
 import { fileURLToPath } from "node:url";
 import { readLocalDevServerInfo } from "@iterate-com/shared/alchemy/local-dev-server";

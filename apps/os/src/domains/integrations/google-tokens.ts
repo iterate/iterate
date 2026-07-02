@@ -1,4 +1,4 @@
-// Google OAuth token storage + refresh on the next engine.
+// Google OAuth token storage + refresh on itx.
 //
 // Tokens live as AES-GCM ciphertext (SECRET_ENCRYPTION_KEY) inside events on
 // the per-project `/integrations/google` stream — the "ciphertext in stream
@@ -8,7 +8,7 @@
 // substitution pipeline does not cover), which is why Google does not use the
 // secret Durable Object path Slack uses.
 
-import { nextEnv } from "../../env.ts";
+import { itxEnv } from "../../env.ts";
 import type { StreamEvent } from "../../types.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "../secrets/crypto.ts";
 import { integrationStreamStub, readAllStreamEvents } from "./integration-streams.ts";
@@ -99,7 +99,7 @@ export async function getFreshGoogleAccessToken(input: {
 
   const accessToken = await decryptSecretMaterial(
     state.encryptedAccessToken,
-    nextEnv.SECRET_ENCRYPTION_KEY,
+    itxEnv.SECRET_ENCRYPTION_KEY,
   );
   if (
     !state.expiresAt ||
@@ -115,7 +115,7 @@ export async function getFreshGoogleAccessToken(input: {
   }
   const refreshToken = await decryptSecretMaterial(
     state.encryptedRefreshToken,
-    nextEnv.SECRET_ENCRYPTION_KEY,
+    itxEnv.SECRET_ENCRYPTION_KEY,
   );
 
   const google = input.config.integrations.google;
@@ -148,13 +148,13 @@ export async function getFreshGoogleAccessToken(input: {
     payload: {
       encryptedAccessToken: await encryptSecretMaterial(
         tokenData.access_token,
-        nextEnv.SECRET_ENCRYPTION_KEY,
+        itxEnv.SECRET_ENCRYPTION_KEY,
       ),
       ...(tokenData.refresh_token
         ? {
             encryptedRefreshToken: await encryptSecretMaterial(
               tokenData.refresh_token,
-              nextEnv.SECRET_ENCRYPTION_KEY,
+              itxEnv.SECRET_ENCRYPTION_KEY,
             ),
           }
         : {}),

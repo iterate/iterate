@@ -32,7 +32,7 @@ Ten workers: ingress, app, api, and seven engine Durable Object workers.
 | `<n>-worker`    | `src/workers/worker.ts`  | `StatefulWorkerDurableObject` (stateful dynamic workers)                                               |
 
 All engine workers (api + the seven DO workers) deploy with the **same
-binding set** (`engineBindings` in `alchemy.run.ts`; the matching type is
+binding set** (`itxBindings` in `alchemy.run.ts`; the matching type is
 `src/env.ts`): every DO namespace, `AI`, `LOADER` (Worker Loader),
 `ARTIFACTS`, `PROJECT_DIRECTORY` (the slug→id KV cache), and the secret
 encryption key. Any engine worker can host any capability — exactly like the
@@ -42,7 +42,7 @@ resolves identically in all of them. They all carry `nodejs_compat` (repo git
 and dynamic worker loading need Node APIs) and `global_fetch_strictly_public`.
 
 Every DO worker has a tiny default fetch returning a
-`{"worker": "os-next-<id>"}` 404 — useful as a cold-start probe and a "which
+`{"worker": "os-<id>"}` 404 — useful as a cold-start probe and a "which
 worker am I talking to" check.
 
 ## Cross-script Durable Object bindings
@@ -86,7 +86,7 @@ browser ──► <n> ────┼────────────► <n>
 The routing decision itself lives in `src/ingress.ts` and is shared with
 the app worker: in local dev the browser talks to vite (the app worker)
 directly, so the app worker runs the same decision first and forwards engine
-traffic over the same `NEXT_API` service binding. One code path, no dev/prod
+traffic over the same `ITX_API` service binding. One code path, no dev/prod
 fork.
 
 For project platform hosts, the api worker resolves slug → project id through

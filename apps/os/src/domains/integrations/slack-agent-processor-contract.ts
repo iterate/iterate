@@ -1,7 +1,7 @@
 // Contract for the "slack-agent" processor that runs on one routed Slack
 // agent stream (`/agents/slack/<channel>/ts-<threadTs>`).
 //
-// Rewritten new-style for the next engine from the pre-migration (git history)
+// Rewritten new-style for itx from the pre-migration (git history)
 // reference. It owns no event types of its own: everything it consumes and
 // emits belongs to the slack router, the agent processor, or the itx
 // processor contracts.

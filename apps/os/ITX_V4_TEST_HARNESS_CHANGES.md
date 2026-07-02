@@ -41,7 +41,7 @@ elements; a 240s budget for two LLM turns).
 ## OS vitest e2e (`apps/os/e2e/`)
 
 - **New `e2e/engine/` suites** (ported from minimal-itx-v4's black-box e2e):
-  streams, stream-security, project-ingress, itx, stream-lifecycle-failing +
+  streams, stream-security, project-ingress, itx, stream-lifecycle +
   `test-helpers.ts`/`setup.ts`/`itx-capability-fixtures.ts` and the
   `onboarding-smoke.ts` operational smoke. They run inside the existing
   `e2e/vitest.config.ts` project (its `include` gained

@@ -1,5 +1,5 @@
 // The browser itx REPL: a Cap'n Web session straight from the browser tab to
-// the next engine (/api/itx), with `itx` in scope — the Session catalog
+// itx (/api/itx), with `itx` in scope — the Session catalog
 // in the global/admin REPL, the project itx in a project REPL. Because itx is
 // symmetric, anything you can do here you can do from Node, runScript, or a
 // dynamic worker — and the browser can PROVIDE live capabilities too (see the

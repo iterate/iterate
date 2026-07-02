@@ -11,14 +11,14 @@ export { StreamDurableObject } from "~/domains/streams/stream-durable-object.ts"
 /**
  * The capnweb surface this playground serves at `/api/streams`.
  *
- * It wraps the next engine's `StreamRpcTarget` with `trustedInternalAuthContext()`:
+ * It wraps the itx `StreamRpcTarget` with `trustedInternalAuthContext()`:
  * the example app is an AUTH-LESS playground, so every caller gets the
  * trusted-internal (admin) authority instead of walking through the real
  * deployment's `UnauthenticatedItx.authenticate()` door.
  *
  * `kill()`/`reset()` are playground-only operator verbs on top of the public
  * `Stream` capability — the sidebar's restart/reset experiments need them, and
- * the next engine deliberately keeps them off the public contract.
+ * itx deliberately keeps them off the public contract.
  */
 class PlaygroundStreamRpcTarget extends StreamRpcTarget {
   override at(path: Parameters<Stream["at"]>[0]) {

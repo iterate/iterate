@@ -8,7 +8,7 @@ declare module "cloudflare:workers" {
 }
 
 // Minimal ambient stand-ins for @cloudflare/workers-types globals referenced
-// (type-only) by apps/os/src/next source that the chat TUI imports. This
+// (type-only) by apps/os/src source that the chat TUI imports. This
 // package runs in node/bun, so structural stubs are enough for typechecking.
 interface Fetcher {
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;

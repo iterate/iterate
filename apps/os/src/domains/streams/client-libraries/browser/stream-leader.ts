@@ -70,10 +70,11 @@ export function acquireWriterRole(args: { lockName: string }): WriterRole {
  * Versioned by the processor's schema so a deploy that migrates the shared OPFS DB lets a
  * fresh tab take over instead of waiting forever behind an old tab's lock.
  *
- * The `next-` prefix keeps this election disjoint from the legacy engine's
- * `stream-writer:` locks: during coexistence both engines can run on the same
- * origin against different OPFS mirrors, and contending for one lock would let
- * a legacy writer starve a next-engine tab (or vice versa).
+ * A deploy that renames the lock (or bumps the schema version) briefly lets an
+ * old tab and a fresh tab write concurrently — the same window a schema
+ * migration already accepts by design: the fresh tab takes over instead of
+ * waiting forever behind the old tab's lock, and the mirror self-heals on
+ * reload.
  */
 export function streamWriterLockName(args: {
   projectId: string;
@@ -81,5 +82,5 @@ export function streamWriterLockName(args: {
   slug: string;
   schemaVersion: number;
 }): string {
-  return `next-stream-writer:${args.projectId}:${args.streamPath}:${args.slug}:v${args.schemaVersion}`;
+  return `stream-writer:${args.projectId}:${args.streamPath}:${args.slug}:v${args.schemaVersion}`;
 }

@@ -348,6 +348,11 @@ test("closing a Cap'n Web session without unsubscribe removes its stream subscri
   }
 });
 
+// KNOWN GAP (2026-07-02, fails against deployed previews): when a WebSocket
+// client drops mid-waitForEvent, the stream keeps the internal waitForEvent
+// subscription until session cleanup notices — the DO stays pinned longer than
+// it should (same failure family as the cross-script subscription DO-duration
+// incident). Un-skip once waitForEvent registers an abort on transport drop.
 test.skip("dropping a WebSocket waitForEvent caller cleans up the internal waitForEvent subscription", async () => {
   const marker = crypto.randomUUID();
   const streamPath = `/lifecycle-wait-for-event-${marker}`;

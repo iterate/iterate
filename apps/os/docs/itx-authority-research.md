@@ -13,7 +13,7 @@ have to decide whether authority is derived from the CONTEXT (the itx
 durable object) or from the USER that connects to it. Also: GuardCapability
 seems pretty fucking complicated — find better options."
 
-Companions: `itx-next.md` (esp. "The address unification" and its LOCKED
+Companions: `itx-design.md` (esp. "The address unification" and its LOCKED
 sections), `src/itx/itx.ts` / `handle.ts` /
 `access.ts` / `entrypoint.ts` / `fetch.ts`, `DECISIONS.md` (D17),
 `docs/domain-objects-and-stream-processors.md`.
@@ -116,7 +116,7 @@ that matter for _authority_:
 That last sentence is the canonical blessing for identity at the restore
 edge: even in the purest capability protocol Kenton wrote, _who you are_
 may gate _what a name restores to_. itx already implements this ("restore
-stays gated", itx-next.md, address unification §1) — the open question is
+stays gated", itx-design.md, address unification §1) — the open question is
 only whether the _result_ of a gated restore can differ per principal.
 persistent.capnp's answer is yes: sealing is per-owner by design.
 
@@ -240,7 +240,7 @@ Stated as the implementation actually is (`access.ts`, `handle.ts`,
    `itx.fetch` is egress **with secret substitution**, and `shareUrl`
    mints bearer tokens. Holding the context = root on the project.
 3. **The principal is not on the handle.** `ItxRuntime` has
-   `access`/`capabilityPath` but no principal; `itx-next.md §5` already
+   `access`/`capabilityPath` but no principal; `itx-design.md §5` already
    decided the direction ("`ItxProps` carries the principal, not a
    precomputed access list") but it isn't built.
 4. **Origin is attribution, not authority** — and the code defends that
@@ -455,7 +455,7 @@ needed, add caveats to the share token rather than re-platforming refs.
 
 ## 4. GuardCapability: critique, and two-plus simpler designs
 
-The locked sketch (itx-next.md, "Locked in review (2026-06-11 evening)"):
+The locked sketch (itx-design.md, "Locked in review (2026-06-11 evening)"):
 `itx.narrow({ scopes })` = handle sugar (~15 lines) that extends a child
 context and provides **GuardCapability rows whose PROPS are the scope
 rules**; address-shaped guards make the narrowed context durable and
@@ -699,7 +699,7 @@ auth system's ability to express per-project roles.**
 
 Concretely, in order:
 
-1. **Now (doctrine, zero code):** amend itx-next.md's locked section:
+1. **Now (doctrine, zero code):** amend itx-design.md's locked section:
    `itx.narrow({scopes})`/GuardCapability is replaced by the
    principal-compiled path mask. Write the deputy rule and the machine-
    principal rule into the Laws (a capability runs with its home
@@ -772,7 +772,7 @@ gets back.
   Decentralized Authorization in the Cloud" (NDSS 2014) —
   theory.stanford.edu/~ataly/Papers/macaroons.pdf
 - Biscuit tokens — biscuitsec.org
-- In-repo: `apps/os/docs/itx-next.md`
+- In-repo: `apps/os/docs/itx-design.md`
   (address unification, LOCKED sections), `apps/os/src/itx/{itx,handle,access,entrypoint,fetch,refs}.ts`,
   `apps/os/src/itx/DECISIONS.md` (D7, D16–D18),
   `packages/shared/src/auth-claims.ts`,

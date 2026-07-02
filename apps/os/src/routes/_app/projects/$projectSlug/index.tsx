@@ -37,7 +37,7 @@ function ProjectHomePage() {
     <section className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[minmax(24rem,38rem)_minmax(0,1fr)]">
       <aside className="min-h-0 overflow-auto border-b p-4 md:border-r md:border-b-0">
         <div className="flex flex-col gap-6">
-          {/* TODO(itx-v4 cutover): the onboarding-agent flow has no next-engine
+          {/* TODO(itx-v4 cutover): the onboarding-agent flow has no itx
               equivalent yet; `created` from the project processor is the only
               readiness signal for now. */}
           {created ? null : (

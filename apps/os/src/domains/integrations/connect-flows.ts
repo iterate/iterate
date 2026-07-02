@@ -1,6 +1,6 @@
 // Engine-side OAuth connect flows for Slack and Google, resurrected from the
 // legacy integration plumbing (pre-migration integration-api.ts, git history, +
-// the pre-purge secrets domain) and re-homed onto the next engine:
+// the pre-purge secrets domain) and re-homed onto itx:
 //
 //   - OAuth state:    stateless HMAC-signed token (oauth-state.ts), no D1.
 //   - Slack token:    engine secret DO `/secrets/integrations/slack/bot-token`
@@ -22,7 +22,7 @@ import type {
   IntegrationProvider,
   RouteSlackWebhookResult,
 } from "../../types.ts";
-import { nextEnv } from "../../env.ts";
+import { itxEnv } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "../secrets/crypto.ts";
@@ -100,7 +100,7 @@ export async function startOAuthFlow(input: {
         provider: "slack",
         userId: input.userId,
       },
-      nextEnv.SECRET_ENCRYPTION_KEY,
+      itxEnv.SECRET_ENCRYPTION_KEY,
     );
     const authorizationUrl = new URL("https://slack.com/oauth/v2/authorize");
     authorizationUrl.searchParams.set("client_id", slack.oauthClientId);
@@ -124,7 +124,7 @@ export async function startOAuthFlow(input: {
       provider: "google",
       userId: input.userId,
     },
-    nextEnv.SECRET_ENCRYPTION_KEY,
+    itxEnv.SECRET_ENCRYPTION_KEY,
   );
   const authorizationUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   authorizationUrl.searchParams.set("access_type", "offline");
@@ -155,7 +155,7 @@ export async function completeSlackConnect(input: {
 }): Promise<CompleteConnectResult> {
   const stateData = await verifyOAuthState(
     { provider: "slack", state: input.state },
-    nextEnv.SECRET_ENCRYPTION_KEY,
+    itxEnv.SECRET_ENCRYPTION_KEY,
   );
   if (!stateData || stateData.projectId !== input.projectId) {
     return { callbackUrl: null, error: "slack_oauth_invalid_state", ok: false };
@@ -224,7 +224,7 @@ export async function recordSlackConnection(input: {
   teamId: string;
   teamName: string;
 }): Promise<void> {
-  await nextEnv.SECRET.getByName(
+  await itxEnv.SECRET.getByName(
     DurableObjectNameCodec.stringify({
       projectId: input.projectId,
       path: SLACK_BOT_TOKEN_SECRET_PATH,
@@ -280,7 +280,7 @@ export async function completeGoogleConnect(input: {
 }): Promise<CompleteConnectResult> {
   const stateData = await verifyOAuthState(
     { provider: "google", state: input.state },
-    nextEnv.SECRET_ENCRYPTION_KEY,
+    itxEnv.SECRET_ENCRYPTION_KEY,
   );
   if (!stateData || stateData.projectId !== input.projectId) {
     return { callbackUrl: null, error: "google_oauth_invalid_state", ok: false };
@@ -338,13 +338,13 @@ export async function completeGoogleConnect(input: {
       email: userInfo.email,
       encryptedAccessToken: await encryptSecretMaterial(
         tokenData.access_token,
-        nextEnv.SECRET_ENCRYPTION_KEY,
+        itxEnv.SECRET_ENCRYPTION_KEY,
       ),
       ...(tokenData.refresh_token
         ? {
             encryptedRefreshToken: await encryptSecretMaterial(
               tokenData.refresh_token,
-              nextEnv.SECRET_ENCRYPTION_KEY,
+              itxEnv.SECRET_ENCRYPTION_KEY,
             ),
           }
         : {}),
@@ -388,7 +388,7 @@ export async function getConnectionStatus(input: {
   }
 
   // The slack router processor's reduced state is the connection projection.
-  const project = nextEnv.PROJECT.getByName(
+  const project = itxEnv.PROJECT.getByName(
     DurableObjectNameCodec.stringify({
       projectId: input.projectId,
       path: SLACK_INTEGRATION_STREAM_PATH,
@@ -423,7 +423,7 @@ export async function disconnectProvider(input: {
     }).catch(() => null);
     // Secrets have no delete; emptying the egress allowlist makes the stored
     // material unusable.
-    await nextEnv.SECRET.getByName(
+    await itxEnv.SECRET.getByName(
       DurableObjectNameCodec.stringify({
         projectId: input.projectId,
         path: SLACK_BOT_TOKEN_SECRET_PATH,
@@ -454,7 +454,7 @@ export async function disconnectProvider(input: {
   if (state.connected && state.encryptedAccessToken !== undefined) {
     const token = await decryptSecretMaterial(
       state.encryptedAccessToken,
-      nextEnv.SECRET_ENCRYPTION_KEY,
+      itxEnv.SECRET_ENCRYPTION_KEY,
     ).catch(() => null);
     if (token !== null) {
       await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(token)}`, {

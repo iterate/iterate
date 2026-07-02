@@ -316,7 +316,7 @@ export function ProjectStreamView({
       ]);
       return {
         runtimeState,
-        // The next engine's Stream.runtimeState() types coreProcessorState as
+        // The itx Stream.runtimeState() types coreProcessorState as
         // unknown; parse out the slice this panel needs.
         streamMaxOffset: parseBrowserCoreProcessorState(streamRuntimeState.coreProcessorState)
           .maxOffset,
@@ -728,7 +728,7 @@ function reduceStreamViewEvent(
   state: EventsStreamViewState,
   event: FeedEvent,
 ): EventsStreamViewState {
-  // The next engine's event envelope is structurally a superset of the shared
+  // The itx event envelope is structurally a superset of the shared
   // reducer's StreamEvent ({type, payload?, metadata?, offset, createdAt}), so
   // the cast the legacy view already relied on keeps holding.
   const reduction = runProcessorReduce({

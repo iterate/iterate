@@ -29,7 +29,7 @@ const compilerOptions: ts.CompilerOptions = {
 };
 
 describe("itx REPL TypeScript declarations", () => {
-  test("autocomplete on the itx handle offers the next-engine surface", async () => {
+  test("autocomplete on the itx handle offers the itx surface", async () => {
     const env = createReplTypeScriptEnv("itx.");
     const result = await getAutocompletionWithDocs({
       env,
@@ -55,7 +55,7 @@ describe("itx REPL TypeScript declarations", () => {
     }
   });
 
-  test("the editor's type surface is the raw next-engine contract, verbatim", () => {
+  test("the editor's type surface is the raw itx contract, verbatim", () => {
     // itx-repl-types.ts re-exports ~/types.ts?raw as the virtual
     // filesystem's /itx-types.ts, so completions can never drift from the
     // design of record. Sentinels prove it's the real file, not a copy of the
@@ -90,7 +90,7 @@ describe("itx REPL TypeScript declarations", () => {
     expect(diagnostics).toEqual([]);
   });
 
-  test("core next-engine calls type-check against the raw types file", () => {
+  test("core itx calls type-check against the raw types file", () => {
     const code = [
       "const description = await itx.describe();",
       'const events = await itx.streams.get("/x").append({ type: "demo", payload: { a: 1 } });',

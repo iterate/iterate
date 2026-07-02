@@ -7,7 +7,7 @@
 > paths below refer to the deleted implementation.
 
 Horizon design — eventualities we are deliberately shaping the data
-structures for WITHOUT building yet. Separate from itx-next.md (the
+structures for WITHOUT building yet. Separate from itx-design.md (the
 current arc's working notes) on purpose. Sibling reading:
 itx-authority-research.md (the principal/authority report).
 

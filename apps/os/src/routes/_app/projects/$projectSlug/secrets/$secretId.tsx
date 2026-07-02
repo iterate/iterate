@@ -62,7 +62,7 @@ function ProjectSecretDetailContent() {
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });
-  // TODO(itx-v4 cutover): the next-engine secret surface has no delete verb yet;
+  // TODO(itx-v4 cutover): the itx secret surface has no delete verb yet;
   // the delete button returns when it does.
   const form = useForm({
     defaultValues: {

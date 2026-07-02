@@ -213,7 +213,7 @@ export function parseGroupFeedData(data: unknown): GroupFeedData | undefined {
         offset: row.offset,
         type: row.type,
         createdAt: row.createdAt,
-        // The next engine's event model types payload as an object record.
+        // The itx event model types payload as an object record.
         ...(row.payload !== null && typeof row.payload === "object" && !Array.isArray(row.payload)
           ? { payload: row.payload as Record<string, unknown> }
           : {}),

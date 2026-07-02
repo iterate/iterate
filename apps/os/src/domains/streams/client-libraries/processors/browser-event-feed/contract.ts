@@ -9,7 +9,7 @@ export const BrowserEventFeedContract = defineProcessorContract({
   version: "0.1.0",
   description:
     "Groups consecutive stream events of the same type into the browser feed_items table.",
-  // The next engine derives a processor's empty fold from `stateSchema.parse({})`
+  // itx derives a processor's empty fold from `stateSchema.parse({})`
   // (there is no separate `initialState`), so the schema spreads
   // INITIAL_FEED_STATE under whatever was persisted — parse({}) IS the initial
   // state, and a persisted snapshot passes through unchanged.

@@ -29,7 +29,7 @@ export const Route = createFileRoute("/_app/projects/$projectSlug")({
 function ProjectLayout() {
   const { project } = Route.useRouteContext();
   // One shared project socket for every route under this layout, keyed by the
-  // project ID: context resolution is client-side on the next engine
+  // project ID: context resolution is client-side on itx
   // (authenticate() then projects.get(id)), so the address must be the id the
   // engine knows, not the slug. Routes that need the GLOBAL session instead
   // call `useItx({})` to force it.

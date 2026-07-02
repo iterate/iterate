@@ -1383,7 +1383,7 @@ function useStreamRuntimeState(streamStore: StreamBrowserStore, connectionStatus
 }
 
 /**
- * The gate slice of the stream's core reduced state. On the next engine
+ * The gate slice of the stream's core reduced state. On itx
  * `runtimeState().coreProcessorState` is deliberately `unknown` on the public
  * `Stream` capability, so the sidebar parses out just what it renders.
  */

@@ -99,8 +99,8 @@ export class StreamBrowserDatabase implements Disposable {
       if (ok) pending.resolve(result);
       else pending.reject(new Error(error ?? "stream db worker error"));
     };
-    // The cache version namespaces the channel too: during coexistence a legacy-engine
-    // tab mirrors the same stream into a different OPFS file, and its change
+    // The cache version namespaces the channel too: a tab from an older deploy
+    // mirrors the same stream into a different OPFS file, and its change
     // notifications must not re-run this mirror's queries (or vice versa).
     this.#channel = new BroadcastChannel(
       `stream-db:${DATABASE_CACHE_VERSION}:${encodeURIComponent(projectId)}:${encodeURIComponent(streamPath)}`,
@@ -440,7 +440,7 @@ export class StreamBrowserDatabase implements Disposable {
 // OPFS layout: one folder per projectId, one SQLite file per stream path inside it.
 // Bump this when the local mirror file itself can be wedged by browser OPFS state;
 // the mirror is a cache and will be replayed from the durable stream.
-// "v4" is the next engine's namespace: legacy-engine mirrors on the same origin
+// "v4" is the itx namespace: legacy-engine mirrors on the same origin
 // live under "v3", so the two engines can never open (or clear) each other's files.
 const DATABASE_CACHE_VERSION = "v4";
 

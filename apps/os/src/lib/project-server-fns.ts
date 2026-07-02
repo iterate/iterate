@@ -16,7 +16,7 @@ import type { RequestContext } from "~/request-context.ts";
  *
  * The auth worker is the source of truth for which projects exist; the session
  * principal's project claims are the fast path for reads. Creation goes
- * through the next engine's `projects.create` over an HTTP-batch capnweb call
+ * through the itx `projects.create` over an HTTP-batch capnweb call
  * that forwards the caller's session cookie — the same user-lane door the
  * browser uses. (Future direction: the form calls itx directly and these
  * server functions dissolve; they stay for now so SSR loaders and the app
@@ -54,7 +54,7 @@ export const createMyProjectServerFn: (input: {
     const userPrincipal = getUserPrincipal(context.principal);
     if (!userPrincipal) throw new Error("Sign in to create projects.");
 
-    // One pipelined HTTP batch into the next engine, authenticated with the
+    // One pipelined HTTP batch into itx, authenticated with the
     // caller's own session cookie: create registers the project with the auth
     // worker (org grant -> claims) and runs the engine bootstrap saga.
     const session = engineBatchSession(context);
@@ -82,7 +82,7 @@ export const deleteProjectServerFn: (input: {
 }) => Promise<{ ok: true; id: string; deleted: boolean }> = createServerFn({ method: "POST" })
   .validator((input: { id: string }) => input)
   .handler(({ data }) => {
-    // TODO(task #13): project archival on the next engine (auth-worker archive
+    // TODO(task #13): project archival on itx (auth-worker archive
     // + engine teardown). Everything resets during the migration, so deletion
     // is deliberately absent rather than half-implemented.
     throw new Error(`Project deletion is not available yet (project ${data.id}).`);

@@ -4,7 +4,7 @@
  * and is forwarded whole over a service binding:
  *
  *   MCP hostname                 → app worker `/api/mcp`
- *   next-engine lane             → next API worker (capnweb, e2e fixtures,
+ *   itx lane             → next API worker (capnweb, e2e fixtures,
  *                                  `/prj_<id>` path lane, project hosts)
  *   OS host                      → the app worker (TanStack dashboard / API)
  *   everything else              → 404
@@ -16,7 +16,7 @@
 import { parseConfig } from "~/config.ts";
 import { normalizeIngressHost } from "~/ingress/host-headers.ts";
 import { MCP_START_MOUNT_PATH } from "~/lib/mcp-base-url.ts";
-import { nextEngineRequest } from "~/ingress.ts";
+import { apiWorkerRequest } from "~/ingress.ts";
 
 export default {
   async fetch(inbound: Request, env: Env) {
@@ -29,11 +29,11 @@ export default {
     const mcpRequest = rewriteMcpHostRequest({ config, request });
     if (mcpRequest) return await env.APP.fetch(mcpRequest);
 
-    const nextRequest = nextEngineRequest({ config, request });
-    if (nextRequest) return await env.NEXT_API.fetch(nextRequest);
+    const nextRequest = apiWorkerRequest({ config, request });
+    if (nextRequest) return await env.ITX_API.fetch(nextRequest);
 
     // Everything else is the OS host (project + custom hostnames all went to
-    // NEXT_API above, which owns the 404 for hosts that resolve to nothing).
+    // ITX_API above, which owns the 404 for hosts that resolve to nothing).
     return await env.APP.fetch(request);
   },
 };

@@ -375,7 +375,7 @@ async function osWorker<B extends Bindings>(
 // Bindings every engine worker carries — src/env.ts is the matching
 // contract. All engine workers get the full set so any of them can host any
 // capability, exactly like the single-worker original the engine came from.
-const engineBindings = {
+const itxBindings = {
   AI: Ai(),
   AGENT: agent,
   ARTIFACTS: Artifacts({ namespace: artifactsNamespace }),
@@ -388,7 +388,7 @@ const engineBindings = {
   REPO: repo,
   SECRET: secret,
   SECRET_ENCRYPTION_KEY: alchemy.secret(
-    process.env.SECRET_ENCRYPTION_KEY ?? "os-next-dev-secret-encryption-key",
+    process.env.SECRET_ENCRYPTION_KEY ?? "os-dev-secret-encryption-key",
   ),
   STREAM: stream,
   WORKER: statefulWorker,
@@ -404,7 +404,7 @@ function engineWorker(id: keyof typeof workerNames, entrypoint: string) {
   return osWorker(id, {
     entrypoint,
     compatibilityFlags: engineCompatibilityFlags,
-    bindings: engineBindings,
+    bindings: itxBindings,
   });
 }
 
@@ -463,7 +463,7 @@ const appWorker = await IterateAppWorker(ctx, {
   name: workerNames.app,
   main: "./src/workers/app.ts",
   bindings: {
-    NEXT_API: apiWorker,
+    ITX_API: apiWorker,
     // Server-side project reads share the ingress directory cache.
     PROJECT_DIRECTORY: projectDirectory,
   },
@@ -486,7 +486,7 @@ const ingressWorker = await osWorker("ingress", {
   entrypoint: "./src/workers/ingress.ts",
   bindings: {
     APP: appWorker,
-    NEXT_API: apiWorker,
+    ITX_API: apiWorker,
   },
 });
 

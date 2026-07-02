@@ -1,13 +1,13 @@
 import { env as workerEnv } from "cloudflare:workers";
 
 /**
- * The binding contract every next-engine worker is deployed with (alchemy.run.ts
- * binds these names identically in each next-hosting worker).
+ * The binding contract every itx worker is deployed with (alchemy.run.ts
+ * binds these names identically in each of them).
  *
- * apps/os declares a repo-wide ambient `Env` for the legacy workers
- * (src/lib/worker-env.d.ts). The next engine deliberately does not participate
- * in that union while both stacks coexist: next code imports this `Env` and the
- * `nextEnv` accessor explicitly, so neither stack's types leak into the other.
+ * The repo-wide ambient `Env` (src/lib/worker-env.d.ts) covers the two
+ * dashboard-side workers (app + ingress); the itx workers deliberately do not
+ * participate in that union — they import this `Env` and the `itxEnv`
+ * accessor explicitly, so neither side's types leak into the other.
  */
 export interface Env {
   AI: Ai;
@@ -39,4 +39,4 @@ export interface Env {
   >;
 }
 
-export const nextEnv = workerEnv as unknown as Env;
+export const itxEnv = workerEnv as unknown as Env;

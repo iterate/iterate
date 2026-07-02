@@ -3,7 +3,7 @@
 The old intercept-route design was deleted once `fetch` became an ordinary
 shadowable itx capability. A live `fetch` cap intercepts all project egress with
 the same session-bound semantics and the same secret-withholding property
-(placeholders reach the interceptor unsubstituted). See `apps/os/docs/itx-next.md`
+(placeholders reach the interceptor unsubstituted). See `apps/os/docs/itx-design.md`
 §9.
 
 OS no longer stores an external egress proxy URL on Projects. Tests and operator

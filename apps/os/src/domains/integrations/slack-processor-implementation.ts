@@ -1,4 +1,4 @@
-// Implements the "slack" webhook-router processor on the next engine.
+// Implements the "slack" webhook-router processor on itx.
 //
 // Behavioral reference: the pre-migration slack processor (git history).
 // Emitted event types, payloads, and idempotency keys are stable wire formats.

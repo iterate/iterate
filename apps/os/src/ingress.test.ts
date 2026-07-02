@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { decideIngressRoute, nextEngineRequest, type IngressResolvers } from "./ingress.ts";
+import { decideIngressRoute, apiWorkerRequest, type IngressResolvers } from "./ingress.ts";
 
 const PREVIEW_CONFIG = {
   baseUrl: "https://os.iterate-preview-2.com",
@@ -230,9 +230,9 @@ it("honors x-forwarded-host for host classification", async () => {
   });
 });
 
-it("nextEngineRequest forwards project hosts and engine paths, keeps the app lane", () => {
+it("apiWorkerRequest forwards project hosts and engine paths, keeps the app lane", () => {
   const forward = (url: string, headers?: HeadersInit) =>
-    nextEngineRequest({ config: DEV_CONFIG, request: new Request(url, { headers }) });
+    apiWorkerRequest({ config: DEV_CONFIG, request: new Request(url, { headers }) });
 
   expect(forward("http://localhost:56455/projects/demo")).toBeNull();
   expect(forward("http://localhost:56455/api/itx")).not.toBeNull();

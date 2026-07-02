@@ -6,7 +6,7 @@ import type { StreamDurableObject } from "~/domains/streams/stream-durable-objec
 
 const ctx = await initAlchemy("streams-example-app", AppConfig, process.env);
 
-// The next-engine StreamDurableObject's `Env` type declares the full next
+// The itx StreamDurableObject's `Env` type declares the full next
 // binding set (AGENT/ITX/PROJECT/REPO/SECRET/WORKER/AI/ARTIFACTS/LOADER/...),
 // but this standalone playground only exercises the stream surface. At runtime
 // the class touches `env.STREAM` alone (appends, ancestor announcements,

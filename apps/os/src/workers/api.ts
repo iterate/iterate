@@ -1,5 +1,5 @@
 /**
- * Next-engine API worker: the capnweb surface at `/api/itx`, the
+ * Itx API worker: the capnweb surface at `/api/itx`, the
  * `/api/itx/admin-cookie` browser auth bridge, the worker-hosted e2e
  * fixtures, and project ingress — every lane `decideIngressRoute`
  * (src/ingress.ts) can resolve: the `/prj_<id>/...` path lane, project

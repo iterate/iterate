@@ -1,4 +1,4 @@
-// Implements the "slack-agent" processor on the next engine.
+// Implements the "slack-agent" processor on itx.
 //
 // Behavioral reference: the pre-migration slack-agent processor (git history).
 // Emitted event types, payloads, and idempotency keys are stable wire formats.
@@ -12,7 +12,7 @@
 //   processor checkpoint is the guardrail; failed batches replay from the last
 //   fully processed offset.
 //
-// Adaptation from legacy: the next engine's agent contract has no
+// Adaptation from legacy: the itx agent contract has no
 // `agent/status-updated` event. The Slack "is thinking..." status now keys off
 // the agent's own LLM request lifecycle (`llm-request-requested` /
 // `llm-request-completed`), and "is using tools..." off the itx script

@@ -10,7 +10,7 @@ import {
   userPrincipalOf,
   widenProjectAccess,
 } from "./auth.ts";
-import { nextEnv as env } from "./env.ts";
+import { itxEnv as env } from "./env.ts";
 import { primeProjectDirectory } from "./project-directory.ts";
 import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";

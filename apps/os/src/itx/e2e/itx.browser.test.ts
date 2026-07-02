@@ -1,4 +1,4 @@
-// Browser execution mode: a real Chromium tab holds a next-engine itx over a
+// Browser execution mode: a real Chromium tab holds an itx handle over a
 // Cap'n Web WebSocket (/api/itx) — the same stubs, same catalogue
 // examples, same capability verbs as Node and the worker runtimes. Examples
 // run through the REAL REPL evaluation pipeline (compile + import rewriting +
@@ -123,7 +123,7 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
  */
 async function connectFromBrowser(): Promise<RpcStub<Session & Itx>> {
   await installAdminCookie();
-  // Coexistence: the next engine's capnweb surface is served at /api/itx
+  // The itx capnweb surface is served at /api/itx
   // until the legacy stack is removed (mirrors ~/itx/itx-react.tsx).
   const wsUrl = new URL("/api/itx", baseUrl());
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";

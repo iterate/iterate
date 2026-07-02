@@ -41,8 +41,12 @@ try {
   });
 } finally {
   rmSync(xdgConfigHome, { recursive: true, force: true });
+  // Disposal is currently a no-op: the itx surface has no projects.remove yet
+  // (TODO task #13), so disposable TUI projects are leaked until stages reset.
   await project[Symbol.asyncDispose]();
-  console.info(`[tui-test] Deleted disposable project ${project.project.id}`);
+  console.info(
+    `[tui-test] Released disposable project ${project.project.id} (removal pending task #13)`,
+  );
 }
 
 async function runTuiTest(input: { env: NodeJS.ProcessEnv }) {

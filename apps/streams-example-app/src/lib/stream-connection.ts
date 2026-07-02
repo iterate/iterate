@@ -2,7 +2,7 @@ import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import type { Stream } from "~/types.ts";
 
 /**
- * What the playground worker serves at `/api/streams`: the next engine's
+ * What the playground worker serves at `/api/streams`: the itx
  * public `Stream` capability plus two playground-only operator verbs
  * (`kill`/`reset`) used by the sidebar's restart/reset experiments.
  */

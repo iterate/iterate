@@ -2,7 +2,7 @@
  * Deployment-targeted test for disposable admin projects driven through itx:
  * the admin handle creates a throwaway project and exercises project streams
  * (append/getEvents/subscribe) the same way the dashboard, REPL, and CLI reach
- * them on the next engine.
+ * them on itx.
  */
 import { expect, test } from "vitest";
 import { createTestProject } from "../test-support/create-test-project.ts";

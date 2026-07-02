@@ -1,4 +1,4 @@
-import { nextEnv as env } from "../../env.ts";
+import { itxEnv as env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { DynamicWorkerRef, DynamicWorkerSource } from "../../types.ts";
 import { stableSha256 } from "./utils.ts";

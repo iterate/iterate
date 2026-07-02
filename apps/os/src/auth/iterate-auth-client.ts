@@ -7,7 +7,7 @@ const authClients = new Map<string, OsIterateAuth>();
 
 /**
  * Build (and cache) the iterate-auth relying-party client for this deployment.
- * Shared by the TanStack Start request middleware and the next-engine itx auth
+ * Shared by the TanStack Start request middleware and the itx auth
  * adapter — one client config, one cache, regardless of which worker asks.
  */
 export function createOsIterateAuth(config: AppConfig, requestUrl: string): OsIterateAuth | null {

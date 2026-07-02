@@ -22,7 +22,7 @@
       "@iterate-com/shared/*": ["../../packages/shared/src/*"]
     }
   },
-  // The next engine sources under ../os/src/next are pulled in transitively via
+  // The apps/os sources under ../os/src are pulled in transitively via
   // the `~` alias imports, so they do not need explicit include entries.
   "include": ["src/**/*.ts", "src/**/*.tsx", "e2e/**/*.ts"],
   "exclude": []

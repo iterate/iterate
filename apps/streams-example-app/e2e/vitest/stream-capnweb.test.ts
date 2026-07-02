@@ -441,7 +441,7 @@ describe("stream capnweb protocol", () => {
   });
 
   // The legacy engine's hosted circuit-breaker processor is gone; the pause
-  // door it drove is core stream behavior on the next engine, exercised here
+  // door it drove is core stream behavior on itx, exercised here
   // directly through the public paused/resumed events.
   e2eIt("pauses and resumes ordinary appends through the core stream gate", async () => {
     const path = e2eStreamPathLabel("stream-capnweb-pause-gate");
@@ -517,7 +517,7 @@ describe("stream capnweb protocol", () => {
       appended,
     ]);
     // Deliveries are server pushes: the subscriber never ORIGINATES a request
-    // for them. Unlike the legacy engine, the next engine's worker→DO bridge
+    // for them. Unlike the legacy engine, the itx worker→DO bridge
     // observes each delivery's result, so the browser answers every push with
     // one `resolve` frame — allowed here; anything else outbound is not.
     const outbound = outboundFrames(frames, afterSubscribe);
@@ -578,7 +578,7 @@ function outboundFrames(messages: WebSocketFrame[], afterFrameIndex: number) {
 
 /**
  * Protocol predicate for inbound frames that batch delivery may produce: the
- * push itself, the server's pull of the delivery result (the next engine
+ * push itself, the server's pull of the delivery result (itx
  * observes it — see the resolve-frame note in the wire test), and releases
  * during subscribe teardown.
  */

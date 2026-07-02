@@ -3,7 +3,7 @@ import { streamRpcPath, withStreamConnectionFromBrowser } from "./stream-rpc.ts"
 /**
  * One-shot playground operator verb against the `/api/streams` endpoint.
  *
- * The next-engine browser mirror has no `kill()`/`reset()` (they are not part
+ * The itx browser mirror has no `kill()`/`reset()` (they are not part
  * of the public `Stream` capability), so the sidebar buttons dial their own
  * short-lived connection to the playground RPC target instead. Both verbs
  * `ctx.abort()` the Durable Object mid-call, so a rejected RPC is the expected

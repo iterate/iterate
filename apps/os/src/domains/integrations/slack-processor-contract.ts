@@ -1,5 +1,5 @@
 // Contract for the "slack" webhook-router processor mounted on the per-project
-// `/integrations/slack` stream. Rewritten new-style for the next engine from
+// `/integrations/slack` stream. Rewritten new-style for itx from
 // the pre-migration slack domain (git history).
 
 import { z } from "zod";

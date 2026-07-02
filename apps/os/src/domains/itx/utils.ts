@@ -93,9 +93,9 @@ export function itxEntrypointScopeCacheKey(scope: ItxEntrypointScope): string {
 
 /**
  * Narrow structural view of the `ItxEntrypoint` loopback export on
- * `ctx.exports`. apps/os types `ctx.exports` globally against the legacy
- * worker main module while both stacks coexist, so the next engine resolves
- * its own loopback structurally (same pattern as `projectEgressFetcher`).
+ * `ctx.exports`. `ctx.exports` is typed globally (src/lib/worker-env.d.ts);
+ * this module keeps its own structural view so it never depends on the
+ * ambient global Env (same pattern as `projectEgressFetcher`).
  */
 type ItxEntrypointLoopbackExports = Record<
   "ItxEntrypoint",

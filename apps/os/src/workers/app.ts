@@ -5,8 +5,8 @@
  * In the per-worker topology (docs/worker-topology.md) this worker has no
  * routes and no Durable Objects: the ingress worker forwards app-host
  * traffic here. In local dev the browser talks to vite — i.e. to this worker
- * directly — so the shared next-engine routing decision runs here first and
- * forwards engine/project-host traffic over the same NEXT_API service
+ * directly — so the shared itx routing decision runs here first and
+ * forwards engine/project-host traffic over the same ITX_API service
  * binding the ingress worker uses in production.
  *
  * Worker bindings are intentionally not threaded through request context —
@@ -17,7 +17,7 @@ import handler from "@tanstack/react-start/server-entry";
 import { withEvlog } from "@iterate-com/shared/evlog";
 import { AppConfig, parseConfig } from "~/config.ts";
 import type { RequestContext } from "~/request-context.ts";
-import { nextEngineRequest } from "~/ingress.ts";
+import { apiWorkerRequest } from "~/ingress.ts";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
@@ -27,11 +27,11 @@ export default {
     // https://developers.cloudflare.com/workers/runtime-apis/bindings/#how-bindings-work
     const config = parseConfig(env);
 
-    // Next-engine lanes (local dev talks to this worker directly, so the
+    // Itx lanes (local dev talks to this worker directly, so the
     // forward lives here as well as in the ingress worker): the capnweb
     // surface + fixtures + `/prj_` path lanes, and project platform hosts.
-    const nextRequest = nextEngineRequest({ config, request });
-    if (nextRequest) return await env.NEXT_API.fetch(nextRequest);
+    const nextRequest = apiWorkerRequest({ config, request });
+    if (nextRequest) return await env.ITX_API.fetch(nextRequest);
 
     // Everything below emits one structured "wide event" log line per request.
     return withEvlog(

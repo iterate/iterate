@@ -79,7 +79,7 @@ export async function decideIngressRoute(input: {
         urlPrefix: `/${head}`,
       });
     }
-    if (isEngineApiPath(url.pathname)) return { lane: "api" };
+    if (isItxApiPath(url.pathname)) return { lane: "api" };
     return { lane: "os" };
   }
 
@@ -133,7 +133,7 @@ function projectRoute(input: {
 }
 
 /** Engine path lanes served by the api worker on the OS host. */
-export function isEngineApiPath(pathname: string): boolean {
+export function isItxApiPath(pathname: string): boolean {
   if (pathname === "/api/itx" || pathname.startsWith("/api/itx/")) return true;
   if (pathname.startsWith("/__itx_e2e/")) return true;
   return false;
@@ -183,7 +183,7 @@ function isOsHost(input: {
  * runs the full `decideIngressRoute` and owns the 404 for hosts that resolve
  * to nothing.
  */
-export function nextEngineRequest(input: {
+export function apiWorkerRequest(input: {
   config: { baseUrl?: string; projectHostnameBases?: readonly string[] };
   request: Request;
 }): Request | null {
@@ -193,7 +193,7 @@ export function nextEngineRequest(input: {
   if (!isOsHost({ baseUrl: input.config.baseUrl, bases, host, requestUrl: url })) {
     return input.request;
   }
-  if (isEngineApiPath(url.pathname)) return input.request;
+  if (isItxApiPath(url.pathname)) return input.request;
   if (/^\/prj_[^/]/.test(url.pathname)) return input.request;
   return null;
 }

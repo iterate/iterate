@@ -31,7 +31,7 @@ export function ProjectSettingsPanel({
 
       <SettingsSection title="Hostname routing">
         {/* TODO(task #13): custom hostnames (updateConfig/ensureCustomHostname)
-            have no next-engine surface yet — restore this section when they do. */}
+            have no itx surface yet — restore this section when they do. */}
         <SettingsField label="Custom hostname">
           <p className="text-xs text-muted-foreground">
             Custom hostnames return soon (TODO task #13). This project is served at{" "}

@@ -80,7 +80,7 @@ export type BrowserStreamConnectionConfig = {
 };
 
 /**
- * What `runtimeState()` returns on the next engine: `coreProcessorState` is
+ * What `runtimeState()` returns on itx: `coreProcessorState` is
  * deliberately `unknown` on the public `Stream` capability (the full core state
  * is server internals). The runtime parses the slice it needs through
  * `parseBrowserCoreProcessorState`.
@@ -131,7 +131,7 @@ export type StreamBrowserStore = Disposable & {
     subscriptionKey: SubscriptionKey;
   }): StreamRpcResult<ProcessorRuntimeState | null>;
   /**
-   * Mirror reset is local-only on the next engine: the `Stream` capability has
+   * Mirror reset is local-only on itx: the `Stream` capability has
    * no `kill()`/`reset()`, so this clears the local tables + checkpoint and
    * reconnects, letting reconcile + replay rebuild the mirror from the server.
    */
@@ -972,7 +972,7 @@ function createStreamRuntime(
   return {
     streamDatabase,
     appendBatch(appendArgs) {
-      // The next engine's Stream capability appends variadically; the batch
+      // The itx Stream capability appends variadically; the batch
       // arg shape is kept for consumers of the store.
       return callWhenReady((rpc) => rpc.append(...appendArgs.events) as Promise<StreamEvent[]>);
     },

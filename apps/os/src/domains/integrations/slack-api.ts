@@ -1,4 +1,4 @@
-// Slack Web API access for the next engine.
+// Slack Web API access for itx.
 //
 // The project's Slack bot token lives in an engine secret Durable Object
 // (`/secrets/integrations/slack/bot-token`). Calls go through the project
@@ -8,7 +8,7 @@
 // audit trail. When the project has no connected workspace, the deployment
 // `slackBotToken` config (if set) is the fallback, matching legacy behavior.
 
-import { nextEnv } from "../../env.ts";
+import { itxEnv } from "../../env.ts";
 import { projectStub } from "../projects/egress.ts";
 import { SLACK_BOT_TOKEN_SECRET_PATH } from "./utils.ts";
 import { parseConfig } from "~/config.ts";
@@ -53,7 +53,7 @@ export async function callProjectSlackWebApi(input: {
     },
     method: "POST",
   });
-  const response = await projectStub(nextEnv.PROJECT, input.projectId).fetch(request);
+  const response = await projectStub(itxEnv.PROJECT, input.projectId).fetch(request);
   if (response.status === 404 || response.status === 400) {
     // secret_not_found / secret_reference errors from the secret pipeline —
     // not a Slack response. Fall back to the deployment-wide bot token.
@@ -80,7 +80,7 @@ export async function callProjectSlackWebApi(input: {
 
 function readFallbackSlackBotToken(): string | null {
   try {
-    const token = parseConfig(nextEnv).slackBotToken?.exposeSecret();
+    const token = parseConfig(itxEnv).slackBotToken?.exposeSecret();
     return token && token.trim() !== "" ? token : null;
   } catch {
     return null;

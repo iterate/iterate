@@ -27,7 +27,7 @@ export const AGENT_UI_SCHEMA_VERSION = 4;
 
 // planAgentUiOps still types its events against packages/ui's shared Event
 // type; deriving the parameter type here keeps this file free of
-// @iterate-com/shared imports until the ui package moves to the next engine's
+// @iterate-com/shared imports until the ui package moves to the itx
 // event model.
 type AgentUiReducerEvents = Parameters<typeof planAgentUiOps>[1];
 
@@ -36,7 +36,7 @@ export const AgentUiProcessorContract = defineProcessorContract({
   version: "0.1.1",
   description:
     "Browser-side processor that folds agent streams (including partial LLM chunks) into settled chat rows in SQLite plus a live in-flight activity in reduced state.",
-  // The next engine derives a processor's empty fold from `stateSchema.parse({})`
+  // itx derives a processor's empty fold from `stateSchema.parse({})`
   // (there is no separate `initialState`), so the schema spreads
   // initialAgentUiState() under whatever was persisted — parse({}) IS the
   // initial state, and a persisted snapshot passes through unchanged.
