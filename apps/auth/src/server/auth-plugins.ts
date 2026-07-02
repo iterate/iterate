@@ -10,19 +10,17 @@ import {
   ITERATE_IS_ADMIN_CLAIM,
   ITERATE_ORGANIZATIONS_CLAIM,
   ITERATE_ROLE_CLAIM,
-  type IterateAuthOrganizationClaim,
-  type IterateAuthProjectClaim,
 } from "@iterate-com/shared/auth-claims";
 import { betterAuth } from "better-auth";
 import {
   getSessionActiveOrganizationIdById,
   listOrganizationsForUser,
-  listProjectsForUser,
 } from "./db/queries/.generated/index.ts";
 import { db } from "./db/index.ts";
 import {
-  buildAugmentedScopeClaims,
+  buildAccessTokenGrantClaims,
   buildOAuthProjectSelectionReferenceId,
+  listOrganizationClaimsForUser,
   parseOAuthProjectSelectionReferenceId,
   resolveStoredProjectSelection,
 } from "./oauth-project-selection.ts";
@@ -58,38 +56,9 @@ async function getSessionActiveOrganizationId(jwt: Record<string, unknown> | nul
   return authSession?.activeOrganizationId ?? null;
 }
 
-async function listOrganizationClaims(
-  user: Record<string, unknown> | null | undefined,
-): Promise<IterateAuthOrganizationClaim[]> {
-  const userId = typeof user?.id === "string" ? user.id : null;
-  if (!userId) return [];
-
-  const organizations = await listOrganizationsForUser(db, { userId });
-  return organizations.map((organization) => ({
-    id: organization.id,
-    name: organization.name,
-    slug: organization.slug,
-    role:
-      organization.role === "owner" || organization.role === "admin" ? organization.role : "member",
-  }));
-}
-
-async function listProjectClaims(
-  user: Record<string, unknown> | null | undefined,
-  selectedProjectIds: string[] | null,
-): Promise<IterateAuthProjectClaim[]> {
-  const userId = typeof user?.id === "string" ? user.id : null;
-  if (!userId) return [];
-
-  const selectedProjectIdSet = selectedProjectIds ? new Set(selectedProjectIds) : null;
-  const projects = await listProjectsForUser(db, { userId });
-  return projects
-    .filter((project) => !selectedProjectIdSet || selectedProjectIdSet.has(project.id))
-    .map((project) => ({
-      id: project.id,
-      slug: project.slug,
-      organizationId: project.organizationId,
-    }));
+// better-auth hands its user object to plugin hooks as a loose record.
+function userIdOf(user: Record<string, unknown> | null | undefined): string | null {
+  return typeof user?.id === "string" ? user.id : null;
 }
 
 export function getAuthPlugins(env: Record<string, unknown>) {
@@ -194,28 +163,23 @@ export function getAuthPlugins(env: Record<string, unknown>) {
       allowDynamicClientRegistration: true,
       allowUnauthenticatedClientRegistration: true,
       customAccessTokenClaims: async ({ user, referenceId, scopes }) => {
-        const selection = parseOAuthProjectSelectionReferenceId(referenceId);
-        const isProjectScopedToken = scopes.includes(ITERATE_PROJECT_SELECTION_SCOPE);
-        const selectedProjectIds = isProjectScopedToken ? (selection?.projectIds ?? []) : null;
-        const [organizations, projects] = await Promise.all([
-          listOrganizationClaims(user),
-          listProjectClaims(user, selectedProjectIds),
-        ]);
+        const grants = await buildAccessTokenGrantClaims({
+          userId: userIdOf(user),
+          requestedScopes: scopes,
+          selection: parseOAuthProjectSelectionReferenceId(referenceId),
+        });
 
         return {
           ...buildIterateTokenClaims(user),
-          scopes: buildAugmentedScopeClaims({
-            requestedScopes: scopes,
-            projectIds: isProjectScopedToken ? projects.map((project) => project.id) : [],
-          }),
-          [ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM]: organizations,
-          [ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM]: projects,
+          scopes: grants.scopes,
+          [ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM]: grants.organizations,
+          [ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM]: grants.projects,
         };
       },
       customIdTokenClaims: ({ user }) => buildIterateTokenClaims(user),
       customUserInfoClaims: async ({ user, jwt }) => {
         const [organizationClaims, activeOrganizationId] = await Promise.all([
-          listOrganizationClaims(user),
+          listOrganizationClaimsForUser(userIdOf(user)),
           getSessionActiveOrganizationId(jwt as Record<string, unknown> | null | undefined),
         ]);
         return {

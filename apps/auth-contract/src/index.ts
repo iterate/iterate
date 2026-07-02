@@ -1,6 +1,10 @@
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import { oc, type ContractRouterClient } from "@orpc/contract";
+import {
+  IterateAuthAccessTokenOrganizationClaim,
+  IterateAuthProjectClaim,
+} from "@iterate-com/shared/auth-claims";
 import { z } from "zod";
 
 export const SERVICE_TOKEN_HEADER = "x-iterate-service-token";
@@ -29,16 +33,6 @@ export const OrganizationSummary = OrganizationRecord.extend({
   role: OrganizationRole,
 });
 export type OrganizationSummary = z.infer<typeof OrganizationSummary>;
-
-const AccessTokenOrganizationClaim = OrganizationSummary.extend({
-  name: z.string().optional(),
-});
-
-const AccessTokenProjectClaim = z.object({
-  id: z.string(),
-  slug: z.string(),
-  organizationId: z.string(),
-});
 
 export const OrganizationMemberRecord = z.object({
   id: z.string(),
@@ -179,8 +173,8 @@ export const InternalIntrospectOAuthAccessTokenOutput = z.discriminatedUnion("ac
     exp: z.number(),
     scope: z.string(),
     scopes: z.array(z.string()),
-    organizations: z.array(AccessTokenOrganizationClaim),
-    projects: z.array(AccessTokenProjectClaim),
+    organizations: z.array(IterateAuthAccessTokenOrganizationClaim),
+    projects: z.array(IterateAuthProjectClaim),
     isAdmin: z.boolean(),
     role: z.string().nullable(),
   }),

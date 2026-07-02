@@ -1,6 +1,15 @@
-import { ITERATE_PROJECT_SCOPE_PREFIX } from "@iterate-com/shared/auth-claims";
+import {
+  ITERATE_PROJECT_SCOPE_PREFIX,
+  ITERATE_PROJECT_SELECTION_SCOPE,
+  type IterateAuthOrganizationClaim,
+  type IterateAuthProjectClaim,
+} from "@iterate-com/shared/auth-claims";
 import { parseStringArray } from "./db/helpers.ts";
-import { getFreshOAuthProjectSelectionBySessionId } from "./db/queries/.generated/index.ts";
+import {
+  getFreshOAuthProjectSelectionBySessionId,
+  listOrganizationsForUser,
+  listProjectsForUser,
+} from "./db/queries/.generated/index.ts";
 import { db } from "./db/index.ts";
 
 // Project-scoped tokens: when a client requests the `project` scope, the user
@@ -105,6 +114,70 @@ export function buildAugmentedScopeClaims(params: {
   }
 
   return Array.from(scopeClaims);
+}
+
+export async function listOrganizationClaimsForUser(
+  userId: string | null,
+): Promise<IterateAuthOrganizationClaim[]> {
+  if (!userId) return [];
+
+  const organizations = await listOrganizationsForUser(db, { userId });
+  return organizations.map((organization) => ({
+    id: organization.id,
+    name: organization.name,
+    slug: organization.slug,
+    role:
+      organization.role === "owner" || organization.role === "admin" ? organization.role : "member",
+  }));
+}
+
+// The single source of truth for what an access token grants. Two surfaces
+// consume it and MUST stay identical: JWT minting (customAccessTokenClaims in
+// auth-plugins.ts) and opaque-token introspection (the internal oRPC router).
+// If these ever diverged, a client would get different project access
+// depending on whether it happened to receive a JWT or an opaque token.
+export async function buildAccessTokenGrantClaims(params: {
+  userId: string | null;
+  requestedScopes: string[];
+  selection: { userId: string; projectIds: string[] } | null;
+}): Promise<{
+  organizations: IterateAuthOrganizationClaim[];
+  projects: IterateAuthProjectClaim[];
+  scopes: string[];
+}> {
+  const isProjectScoped = params.requestedScopes.includes(ITERATE_PROJECT_SELECTION_SCOPE);
+  // A selection minted for a different user grants nothing; without the
+  // project scope, the token grants every project the user can reach.
+  const selectedProjectIds = isProjectScoped
+    ? params.selection?.userId === params.userId
+      ? params.selection.projectIds
+      : []
+    : null;
+
+  const [organizations, allProjects] = params.userId
+    ? await Promise.all([
+        listOrganizationClaimsForUser(params.userId),
+        listProjectsForUser(db, { userId: params.userId }),
+      ])
+    : [[], []];
+
+  const selectedProjectIdSet = selectedProjectIds ? new Set(selectedProjectIds) : null;
+  const projects: IterateAuthProjectClaim[] = allProjects
+    .filter((project) => !selectedProjectIdSet || selectedProjectIdSet.has(project.id))
+    .map((project) => ({
+      id: project.id,
+      slug: project.slug,
+      organizationId: project.organizationId,
+    }));
+
+  return {
+    organizations,
+    projects,
+    scopes: buildAugmentedScopeClaims({
+      requestedScopes: params.requestedScopes,
+      projectIds: isProjectScoped ? projects.map((project) => project.id) : [],
+    }),
+  };
 }
 
 function normalizeProjectIds(projectIds: Iterable<string>) {

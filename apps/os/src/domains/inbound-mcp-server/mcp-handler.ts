@@ -229,7 +229,11 @@ async function resolveOAuthAccessToken(input: {
       token: bearerToken,
       audiences: [...input.audiences],
     });
-    if (!result.active) return null;
+    if (!result.active) {
+      input.context.log.info("os.mcp.opaque_token_inactive");
+      input.context.log.set({ mcpAuth: { opaqueIntrospection: result.reason ?? "inactive" } });
+      return null;
+    }
 
     return {
       sub: result.sub,
@@ -245,7 +249,13 @@ async function resolveOAuthAccessToken(input: {
       [ITERATE_IS_ADMIN_CLAIM]: result.isAdmin,
       [ITERATE_ROLE_CLAIM]: result.role,
     };
-  } catch {
+  } catch (error) {
+    input.context.log.info("os.mcp.opaque_introspection_error");
+    input.context.log.set({
+      mcpAuth: {
+        opaqueIntrospectionError: error instanceof Error ? error.message : String(error),
+      },
+    });
     return null;
   }
 }

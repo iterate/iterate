@@ -1,10 +1,5 @@
 import { ORPCError } from "@orpc/server";
 import { resolveUniqueSlug } from "@iterate-com/shared/slug";
-import {
-  ITERATE_PROJECT_SELECTION_SCOPE,
-  type IterateAuthAccessTokenOrganizationClaim,
-  type IterateAuthProjectClaim,
-} from "@iterate-com/shared/auth-claims";
 import { os, protectedMiddleware, serviceMiddleware } from "../orpc.ts";
 import { auth, createProjectIngressToken as createSignedProjectIngressToken } from "../../auth.ts";
 import { parseProjectMetadata, parseStringArray } from "../../db/helpers.ts";
@@ -22,8 +17,6 @@ import {
   insertProjectReturning,
   insertUser,
   listMembersByOrganizationId,
-  listOrganizationsForUser,
-  listProjectsForUser,
   overwriteOAuthClientByClientId,
   updateOAuthClientById,
   updateOAuthClientReferenceByClientId,
@@ -31,7 +24,7 @@ import {
 } from "../../db/queries/index.ts";
 import { BOOTSTRAP_ADMIN_EMAIL } from "../../bootstrap-admin.ts";
 import {
-  buildAugmentedScopeClaims,
+  buildAccessTokenGrantClaims,
   parseOAuthProjectSelectionReferenceId,
 } from "../../oauth-project-selection.ts";
 import { isPlatformAdminUser } from "../../platform-admin.ts";
@@ -525,24 +518,13 @@ const setOAuthClient = os.internal.oauth.setClient
     };
   });
 
-function parseOAuthScopes(value: string | null | undefined) {
-  try {
-    const parsed = parseStringArray(value);
-    if (parsed.length > 0) return parsed;
-  } catch {
-    // Older/debug rows may not be JSON-encoded; fall through to space splitting.
-  }
-
-  return value?.split(/\s+/).filter(Boolean) ?? [];
-}
-
-function toMillis(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (value instanceof Date) return value.getTime();
+// The generated row types declare these `date` columns as number, but D1
+// returns Better Auth's date columns as ISO-8601 strings at runtime — accept
+// both shapes rather than trust the declared type.
+function toMillis(value: number | string | null | undefined): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (typeof value !== "string") return null;
 
-  const numeric = Number(value);
-  if (Number.isFinite(numeric)) return numeric;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -579,41 +561,12 @@ const introspectAccessToken = os.internal.oauth.introspectAccessToken
       }
     }
 
-    const requestedScopes = parseOAuthScopes(token.scopes);
-    const selection = parseOAuthProjectSelectionReferenceId(token.referenceId);
-    const isProjectScopedToken = requestedScopes.includes(ITERATE_PROJECT_SELECTION_SCOPE);
-    const selectedProjectIds = isProjectScopedToken
-      ? selection?.userId === token.userId
-        ? selection.projectIds
-        : []
-      : null;
-    const [organizations, allProjects] = await Promise.all([
-      listOrganizationsForUser(context.db, { userId: token.userId }),
-      listProjectsForUser(context.db, { userId: token.userId }),
-    ]);
-
-    const selectedProjectIdSet = selectedProjectIds ? new Set(selectedProjectIds) : null;
-    const projects: IterateAuthProjectClaim[] = allProjects
-      .filter((project) => !selectedProjectIdSet || selectedProjectIdSet.has(project.id))
-      .map((project) => ({
-        id: project.id,
-        slug: project.slug,
-        organizationId: project.organizationId,
-      }));
-    const organizationClaims: IterateAuthAccessTokenOrganizationClaim[] = organizations.map(
-      (organization) => ({
-        id: organization.id,
-        name: organization.name,
-        slug: organization.slug,
-        role:
-          organization.role === "owner" || organization.role === "admin"
-            ? organization.role
-            : "member",
-      }),
-    );
-    const scopes = buildAugmentedScopeClaims({
-      requestedScopes,
-      projectIds: isProjectScopedToken ? projects.map((project) => project.id) : [],
+    // Same builder as JWT minting (customAccessTokenClaims) — opaque and JWT
+    // tokens must reconstruct identical grants.
+    const grants = await buildAccessTokenGrantClaims({
+      userId: token.userId,
+      requestedScopes: parseStringArray(token.scopes),
+      selection: parseOAuthProjectSelectionReferenceId(token.referenceId),
     });
     const role = token.userRole ?? null;
 
@@ -628,10 +581,10 @@ const introspectAccessToken = os.internal.oauth.introspectAccessToken
       aud: input.audiences,
       iat: Math.floor((toMillis(token.createdAt) ?? Date.now()) / 1000),
       exp: Math.floor(expiresAtMs / 1000),
-      scope: scopes.join(" "),
-      scopes,
-      organizations: organizationClaims,
-      projects,
+      scope: grants.scopes.join(" "),
+      scopes: grants.scopes,
+      organizations: grants.organizations,
+      projects: grants.projects,
       isAdmin: isPlatformAdminUser({ role }),
       role,
     };
