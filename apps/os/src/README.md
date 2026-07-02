@@ -3,9 +3,8 @@
 This folder is itx behind `/api/itx` and everything project-scoped in
 OS: streams, repos, agents, secrets, dynamic workers, egress, and the itx
 capability surface itself. It began life as `apps/minimal-itx-v4` and was
-transplanted here whole during the itx-v4 replacement
-(`apps/os/ITX_V4_MIGRATION_REPORT.md` has the history; this README describes
-what is).
+transplanted here whole during the itx-v4 replacement (PR #1585 has the
+history; this README describes what is).
 
 The public contract of record is [`types.ts`](./types.ts) — handwritten,
 import-free, and what every client (browser, CLI, scripts, dynamic workers)
@@ -194,6 +193,11 @@ tells the host which `subscriptionKey` to open; the host subscribes on its own
 stream capability. State is a fold of the journal; the `{offset, state}`
 checkpoint is a disposable cache (the doctrine:
 `docs/domain-objects-and-stream-processors.md`).
+
+The browser stream mirror is a second host of the same engine: the dashboard
+keeps a local event table plus derived tables and runs real `StreamProcessor`
+contracts in the browser host, with announcements preserved
+(`domains/streams/client-libraries/browser/`).
 
 ## Workers RPC types patch
 

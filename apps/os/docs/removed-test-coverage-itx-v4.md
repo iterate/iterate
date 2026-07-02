@@ -3,8 +3,8 @@
 The itx-v4 migration deleted large test surfaces along with the legacy
 implementation. Most had replacements; this document is the honest record of
 what was removed **without** replacement, why, and how to dig each item back
-up. Companion docs: `../ITX_V4_TEST_HARNESS_CHANGES.md` (harness/wiring
-changes), `../ITX_V4_MIGRATION_REPORT.md` (the migration itself).
+up. The companion migration and test-harness-changes reports were deleted
+after the migration landed; both are recoverable from git history at PR #1585.
 
 ## How to recover anything listed here
 
