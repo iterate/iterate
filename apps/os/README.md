@@ -86,7 +86,8 @@ suites in `e2e/vitest/**`) and `pnpm e2e:examples` (config
 runtime). Start the worker in one terminal, then run tests from another
 through the matching Doppler config. For local dev configs, test helpers read
 `.alchemy/dev-server.json` to find the selected port; deployed configs get
-`APP_CONFIG_BASE_URL` from Doppler.
+`APP_CONFIG_BASE_URL` from Doppler. All lanes, targets, and the canonical env
+vars: [docs/testing.md](../../docs/testing.md).
 
 Local dev normally uses the shared `dev` config. Use a personal `dev_<user>`
 config only when you need personal integration secrets.

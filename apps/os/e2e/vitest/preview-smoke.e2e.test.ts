@@ -2,7 +2,7 @@ import { test } from "vitest";
 import { createAdminOsItx, requireBaseUrl as requireOsBaseUrl } from "../test-support/os-client.ts";
 
 function readProjectMcpUrlOverride() {
-  const url = process.env.OS_PROJECT_MCP_URL?.trim();
+  const url = process.env.OS_E2E_MCP_URL?.trim();
   return url ? new URL(url) : null;
 }
 
@@ -16,7 +16,7 @@ function hasAdminApiSecret() {
 }
 
 function previewSmokeProjectSlug() {
-  const explicitSlug = process.env.OS_PREVIEW_SMOKE_PROJECT_SLUG?.trim();
+  const explicitSlug = process.env.OS_E2E_SMOKE_PROJECT_SLUG?.trim();
   if (explicitSlug) return explicitSlug;
 
   const commit = process.env.GITHUB_SHA?.trim().slice(0, 8) || "manual";
@@ -97,7 +97,7 @@ function projectMcpUrlFor(input: { baseUrl: URL }) {
   }
 
   throw new Error(
-    `Cannot derive the MCP URL from OS base ${input.baseUrl}. Set OS_PROJECT_MCP_URL explicitly.`,
+    `Cannot derive the MCP URL from OS base ${input.baseUrl}. Set OS_E2E_MCP_URL explicitly.`,
   );
 }
 

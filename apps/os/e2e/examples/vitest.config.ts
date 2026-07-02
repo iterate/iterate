@@ -10,7 +10,7 @@ import {
 } from "@iterate-com/shared/test-support/vitest-e2e";
 import { E2E_REPO_ROOT_KEY, E2E_RUN_SLUG_KEY } from "../test-support/provide-keys.ts";
 import { createVitestRunSlug } from "../test-support/vitest-naming.ts";
-import { localDevServerBaseUrl } from "../test-support/dev-server.ts";
+import { resolveBaseUrl } from "../test-support/dev-server.ts";
 
 const e2eRoot = fileURLToPath(new URL("..", import.meta.url));
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
@@ -18,11 +18,7 @@ const repoRoot = fileURLToPath(new URL("../../../..", import.meta.url));
 const vitestRunSlug = process.env.OS_E2E_RUN_SLUG?.trim() || createVitestRunSlug();
 const vitestRunRoot = createVitestRunRoot("os-itx-e2e-");
 const ITX_ADMIN_AUTH_COOKIE = "iterate-admin-auth";
-const baseUrl =
-  process.env.OS_ITX_E2E_BASE_URL?.trim().replace(/\/+$/, "") ||
-  process.env.APP_CONFIG_BASE_URL?.trim().replace(/\/+$/, "") ||
-  localDevServerBaseUrl(appRoot) ||
-  "";
+const baseUrl = resolveBaseUrl(appRoot) ?? "";
 
 console.log(`[vitest-artifacts] run root: ${vitestRunRoot}`);
 console.log(`[vitest] run slug: ${vitestRunSlug}`);
@@ -45,7 +41,7 @@ export default defineConfig({
     // share the deployed worker and can run in parallel. Preview CI opts in
     // (see scripts/preview/preview.ts); local runs default to sequential so a
     // single dev server isn't hammered and output stays readable.
-    fileParallelism: process.env.OS_ITX_E2E_FILE_PARALLELISM === "true",
+    fileParallelism: process.env.OS_E2E_EXAMPLES_PARALLEL === "true",
     hookTimeout: 45_000,
     passWithNoTests: true,
     projects: [

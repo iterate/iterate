@@ -18,11 +18,11 @@ include dynamic stream paths and timestamps, so they are local review artifacts 
 checked-in regression snapshots for now.
 
 ```bash
-OS_TUI_SNAPSHOT=1 pnpm --dir apps/os exec tsx ./e2e/tui-test/run.ts -u
+OS_E2E_TUI_SNAPSHOT=1 pnpm --dir apps/os exec tsx ./e2e/tui-test/run.ts -u
 ```
 
 The TUI runner creates a disposable project for each run and passes its ID to the spec as
-`OS_TUI_TEST_PROJECT_ID`.
+`OS_E2E_TUI_PROJECT_ID`.
 
 There is also a headless smoke of the TUI's data layer (shared itx client + shared agent-ui
 reducer, no PTY) that drives a full assistant round trip against a disposable project:

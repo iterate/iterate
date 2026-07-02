@@ -1,20 +1,16 @@
 /**
  * itx e2e environment defaults.
  *
- * The itx e2e suites are URL-driven black boxes: point ITX_BASE_URL at
+ * The itx e2e suites are URL-driven black boxes: point APP_CONFIG_BASE_URL at
  * any live os deployment (vite dev server or deployed worker). When unset, the
  * local dev server discovery file provides the target — same resolution the
  * rest of the os e2e lane uses. The deployment serves the itx capnweb
  * surface at /api/itx.
  */
 import { fileURLToPath } from "node:url";
-import { readLocalDevServerInfo } from "@iterate-com/shared/alchemy/local-dev-server";
+import { resolveBaseUrl } from "../test-support/dev-server.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 
-if (!process.env.ITX_BASE_URL) {
-  const baseUrl =
-    process.env.APP_CONFIG_BASE_URL ??
-    readLocalDevServerInfo(appRoot, { requireLive: true })?.baseUrl;
-  if (baseUrl) process.env.ITX_BASE_URL = baseUrl.replace(/\/+$/, "");
-}
+const baseUrl = resolveBaseUrl(appRoot);
+if (baseUrl) process.env.APP_CONFIG_BASE_URL = baseUrl;

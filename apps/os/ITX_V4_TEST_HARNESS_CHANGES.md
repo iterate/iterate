@@ -48,7 +48,7 @@ elements; a 240s budget for two LLM turns).
   `onboarding-smoke.ts` operational smoke. They run inside the existing
   `e2e/vitest.config.ts` project (its `include` gained
   `./e2e/vitest/**/*.e2e.test.ts` + a setup file that resolves
-  `ITX_BASE_URL` from the dev-server discovery file). URL-driven, admin-secret
+  `APP_CONFIG_BASE_URL` from the dev-server discovery file). URL-driven, admin-secret
   authenticated; worker-hosted fixtures are served by the deployed api worker
   (`/__itx_e2e/…`), replacing minimal's `verify-miniflare` lane per the plan.
 - **`test-support/os-client.ts` / `create-test-project.ts`**: same factory +

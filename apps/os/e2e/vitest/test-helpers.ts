@@ -50,11 +50,9 @@ export function buildUrl({
   path: string;
   protocol?: "ws" | "http";
 }): string {
-  // ITX_API_PATH relocates the capnweb surface when a deployment serves it
-  // somewhere other than /api/itx (unset everywhere since the cutover).
-  const apiPath = process.env.ITX_API_PATH ?? "/api/itx";
-  const mappedPath = path === "/api/itx" ? apiPath : path;
-  const url = new URL(mappedPath, process.env.ITX_BASE_URL ?? DEFAULT_BASE_URL);
+  // setup.ts resolves APP_CONFIG_BASE_URL (Doppler value or the local
+  // dev-server discovery file) before any suite runs.
+  const url = new URL(path, process.env.APP_CONFIG_BASE_URL ?? DEFAULT_BASE_URL);
   if (protocol === "ws") {
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   }

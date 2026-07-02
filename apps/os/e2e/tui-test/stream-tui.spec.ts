@@ -4,10 +4,10 @@ import { expect, test } from "@microsoft/tui-test";
 // subscription on first append, so any /agents/* path is chattable.
 const agentPath = `/agents/tui-test-${Date.now()}`;
 const agentName = agentPath.slice("/agents/".length);
-const projectId = process.env.OS_TUI_TEST_PROJECT_ID || "missing-os-tui-project";
-const testWithProject = process.env.OS_TUI_TEST_PROJECT_ID ? test : test.skip;
+const projectId = process.env.OS_E2E_TUI_PROJECT_ID || "missing-os-tui-project";
+const testWithProject = process.env.OS_E2E_TUI_PROJECT_ID ? test : test.skip;
 const snapshotTest =
-  process.env.OS_TUI_TEST_PROJECT_ID && process.env.OS_TUI_SNAPSHOT === "1" ? test : test.skip;
+  process.env.OS_E2E_TUI_PROJECT_ID && process.env.OS_E2E_TUI_SNAPSHOT === "1" ? test : test.skip;
 
 test.use({
   columns: 100,

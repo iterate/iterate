@@ -1,11 +1,14 @@
 /**
  * Manual smoke: create a project as admin and watch the onboarding agent greet.
  *
- *   doppler run -- pnpm exec tsx e2e/itx/onboarding-smoke.ts [baseUrl]
+ *   doppler run -- pnpm exec tsx e2e/vitest/onboarding-smoke.ts [baseUrl]
  */
+import { fileURLToPath } from "node:url";
 import { connectItx } from "../../src/itx-client.ts";
+import { resolveBaseUrl } from "../test-support/dev-server.ts";
 
-const baseUrl = (process.argv[2] ?? process.env.ITX_BASE_URL ?? "http://localhost:56455").replace(
+const appRoot = fileURLToPath(new URL("../..", import.meta.url));
+const baseUrl = (process.argv[2] ?? resolveBaseUrl(appRoot) ?? "http://localhost:56455").replace(
   /\/+$/,
   "",
 );

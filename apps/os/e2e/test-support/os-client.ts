@@ -1,21 +1,19 @@
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { RpcStub } from "capnweb";
-import { localDevServerBaseUrl } from "./dev-server.ts";
+import { resolveBaseUrl } from "./dev-server.ts";
 import { connectItx } from "~/itx-client.ts";
 import type { Itx, Session } from "~/types.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 export function requireBaseUrl() {
-  let baseUrl = process.env.APP_CONFIG_BASE_URL?.trim().replace(/\/+$/, "");
-  baseUrl ||= localDevServerBaseUrl(appRoot);
+  let baseUrl = resolveBaseUrl(appRoot);
   if (!baseUrl) {
     console.log(`No base URL found in environment, reading from Doppler.`);
     const dopplerEnv = execSync(`doppler run -- node -p 'JSON.stringify(process.env)'`);
     Object.assign(process.env, JSON.parse(dopplerEnv.toString()), process.env);
-    baseUrl = process.env.APP_CONFIG_BASE_URL?.trim().replace(/\/+$/, "");
-    baseUrl ||= localDevServerBaseUrl(appRoot);
+    baseUrl = resolveBaseUrl(appRoot);
   }
   if (!baseUrl) {
     throw new Error(

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import type { RpcStub } from "capnweb";
 import { connectItx } from "../../src/itx-client.ts";
 import type { Itx, Session } from "../../src/types.ts";
-import { localDevServerBaseUrl } from "../test-support/dev-server.ts";
+import { resolveBaseUrl } from "../test-support/dev-server.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -18,11 +18,7 @@ export function adminApiSecret() {
 }
 
 export function baseUrl() {
-  const url =
-    process.env.OS_ITX_E2E_BASE_URL?.trim().replace(/\/+$/, "") ||
-    process.env.APP_CONFIG_BASE_URL?.trim().replace(/\/+$/, "") ||
-    localDevServerBaseUrl(appRoot) ||
-    "";
+  const url = resolveBaseUrl(appRoot) ?? "";
   if (!url) {
     throw new Error(
       "APP_CONFIG_BASE_URL is required for itx e2e tests, or start local dev with `pnpm dev` first.",

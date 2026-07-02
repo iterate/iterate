@@ -118,6 +118,7 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 - [CI workflows](docs/ci-workflows.md) — generated GitHub Actions, Depot runners, and the one Depot CI image-bake workflow
 - [TypeScript conventions](docs/typescript-conventions.md)
 - [Design system & React](docs/design-system.md)
+- [Testing](docs/testing.md) — test lanes, how to run them against any environment, and the canonical env vars
 - [Vitest patterns](docs/vitest-patterns.md)
 - [Domain objects & stream processors](docs/domain-objects-and-stream-processors.md)
 

@@ -124,7 +124,7 @@ cd apps/os && pnpm dev start --detach
 
 # engine e2e vs local dev / preview
 cd apps/os && doppler run -- pnpm exec vitest run --config e2e/vitest.config.ts e2e/vitest/
-cd apps/os && doppler run --config preview_2 -- env ITX_BASE_URL=https://os.iterate-preview-2.com pnpm exec vitest run --config e2e/vitest.config.ts e2e/vitest/
+cd apps/os && doppler run --config preview_2 -- env APP_CONFIG_BASE_URL=https://os.iterate-preview-2.com pnpm exec vitest run --config e2e/vitest.config.ts e2e/vitest/
 
 # examples matrix (all runtimes)
 cd apps/os && doppler run -- pnpm e2e:examples

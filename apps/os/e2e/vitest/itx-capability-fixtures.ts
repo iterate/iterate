@@ -12,7 +12,7 @@ type CapabilityFixtureInput = {
 };
 
 function deployedFixtureBaseUrl(): string | null {
-  const raw = process.env.ITX_BASE_URL?.trim();
+  const raw = process.env.APP_CONFIG_BASE_URL?.trim();
   if (!raw) return null;
 
   const url = new URL(raw);

@@ -21,15 +21,10 @@ REPL, and CLI use. The oRPC product surface is gone; nothing here talks to oRPC 
 
 ## Lanes
 
-All Vitest lanes require a base URL plus the deployment admin credential
-(`APP_CONFIG_ADMIN_API_SECRET`, supplied by the Doppler config). The usual invocation is
-`doppler run --config <config> -- pnpm e2e [-t <filter>]` from `apps/os`. Deployed configs supply
-the base URL: `prd` → `os.iterate.com`, `preview_N` → `os.iterate-preview-N.com`. Local configs
-(`dev` and `dev_<you>`) read `.alchemy/dev-server.json` from the running CLI-managed dev server
-(`pnpm dev` or `pnpm dev start --detach`).
-
-If you need to target captun or another custom target, override explicitly:
-`OS_ITX_E2E_BASE_URL=http://localhost:<port> doppler run --config dev -- pnpm e2e`.
+The usual invocation is `doppler run --config <config> -- pnpm e2e [-t <filter>]` from `apps/os`.
+How to target local dev / previews / prd and the canonical env vars
+(`APP_CONFIG_BASE_URL`, `APP_CONFIG_ADMIN_API_SECRET`, the `OS_E2E_*` harness knobs) are documented
+in [docs/testing.md](../../../docs/testing.md).
 
 - Live deployment tests: `pnpm e2e` (itx e2e suites in `e2e/vitest/`, agents, admin-project,
   preview smoke).

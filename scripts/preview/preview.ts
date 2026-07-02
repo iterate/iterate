@@ -462,7 +462,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         "set -euo pipefail",
         "pnpm --dir ../.. exec playwright install chromium",
         "pnpm e2e",
-        "OS_ITX_E2E_FILE_PARALLELISM=true OS_ITX_E2E_SKIP_MATRIX=true pnpm e2e:examples --project node",
+        "OS_E2E_EXAMPLES_PARALLEL=true OS_E2E_EXAMPLES_SKIP_MATRIX=true pnpm e2e:examples --project node",
         "pnpm e2e:examples --project node e2e/examples/examples-matrix.e2e.test.ts -t 'catalogue example'",
         "pnpm --dir ../.. spec",
       ].join("; "),
