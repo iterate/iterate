@@ -488,7 +488,9 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // -L: /api/iterate-auth/login redirects to the slot's auth worker,
         // warming it for the login-flow specs.
         'for path in /api/health / /api/itx /sign-in /api/iterate-auth/login; do curl -sL -o /dev/null --max-time 20 "$OS_BASE_URL$path" || true; done',
-        'for i in 1 2 3 4 5 6 7 8; do (curl -s -o /dev/null --max-time 20 "$OS_BASE_URL/api/health" && curl -s -o /dev/null --max-time 20 "$OS_BASE_URL/") & done; wait',
+        // Subshell so the bare `wait` reaps only these curls, not the
+        // background chromium install started above.
+        '( for i in 1 2 3 4 5 6 7 8; do (curl -s -o /dev/null --max-time 20 "$OS_BASE_URL/api/health" && curl -s -o /dev/null --max-time 20 "$OS_BASE_URL/") & done; wait )',
         // All lanes hit the same deployed slot but provision independent
         // projects, so everything runs concurrently: the two vitest lanes run
         // in the background while the Playwright specs run in the foreground.
