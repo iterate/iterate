@@ -5,12 +5,13 @@
  * case fast — ingress resolves EVERY project-host request through this, and
  * server-side reads use it for the stale-claims window right after create.
  *
- * Layering per lookup: an in-isolate memo (seconds; also the only place
- * negatives are cached — KV's 60s minimum TTL would make a pre-create probe
- * of a fresh slug 404 the create-then-navigate flow), then KV (positive
- * entries only, bounded TTL so a re-created slug can't go stale for long),
- * then the auth worker; hits are written back, and `projects.create` primes
- * the cache eagerly so the post-create navigation never misses.
+ * Layering per lookup: KV first (global, no expiry — slugs are immutable,
+ * create overwrites its keys, and admin-lane projects have no auth-side row
+ * so the cache is their only directory), then the auth worker behind a
+ * short in-isolate negative memo (the only place negatives are cached; it
+ * shields the auth worker from lookup storms without ever hiding a KV
+ * prime from another isolate). Hits are written back, and `projects.create`
+ * primes the cache eagerly so the post-create navigation never misses.
  */
 import { createAuthWorkerServiceClient } from "../auth/auth-worker-service.ts";
 import type { AppConfig } from "../config.ts";

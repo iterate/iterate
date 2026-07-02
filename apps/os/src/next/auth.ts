@@ -255,19 +255,28 @@ function authWorkerProjectDirectory(config: AppConfig): ProjectDirectory | undef
       if (cached && cached.expiresAt > Date.now()) return cached.hasProject;
 
       let hasProject = false;
+      let lookupFailed = false;
       for (const organization of userPrincipal.organizations) {
         const client = createAuthWorkerServiceClient(
           { config },
           { asUserId: userPrincipal.userId },
         );
-        const projects = await client.project
-          .list({ organizationSlug: organization.slug })
-          .catch(() => []);
+        let projects;
+        try {
+          projects = await client.project.list({ organizationSlug: organization.slug });
+        } catch {
+          // Auth worker unreachable is NOT "no membership": deny THIS check
+          // without caching the denial, so the next request retries instead
+          // of locking the user out for the cache window.
+          lookupFailed = true;
+          continue;
+        }
         if (projects.some((project) => project.id === projectId)) {
           hasProject = true;
           break;
         }
       }
+      if (!hasProject && lookupFailed) return false;
       directoryCache.set(cacheKey, {
         expiresAt: Date.now() + DIRECTORY_CACHE_TTL_MS,
         hasProject,
