@@ -70,36 +70,28 @@ describe("preview workflow scope", () => {
 });
 
 describe("preview test commands", () => {
-  it("uploads both Playwright and Vitest artifacts for OS preview failures", () => {
+  it("uploads Playwright and Vitest artifacts for OS preview failures", () => {
     expect(cloudflarePreviewApps.os).toMatchObject({
-      previewTestArtifacts: [
-        "test-results",
-        "apps/os/test-results",
-        "/tmp/os-e2e-*",
-        "/tmp/os-itx-e2e-*",
-      ],
+      previewTestArtifacts: ["test-results", "apps/os/test-results", "/tmp/os-e2e-*"],
     });
   });
 
-  it("runs both OS vitest lanes concurrently with the root Playwright specs", () => {
+  it("runs the OS vitest node project concurrently with the root Playwright specs", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs[2];
     const playwrightInstall = "pnpm --dir ../.. exec playwright install chromium";
-    // The chromium install starts first in the background; both vitest lanes
-    // run in background subshells concurrently with the foreground Playwright
-    // specs; the waits propagate their exit codes.
-    const e2eLane = "pnpm e2e >";
-    const examplesLane = "pnpm e2e:examples --project node >";
+    // The chromium install starts first in the background; the single vitest
+    // lane (node project) runs in a background subshell concurrently with the
+    // foreground Playwright specs; the waits propagate their exit codes.
+    const e2eLane = "pnpm e2e --project node >";
     const playwrightSpec = "pnpm --dir ../.. spec";
 
     expect(script).toContain(playwrightInstall);
     expect(script).toContain(e2eLane);
-    expect(script).toContain(examplesLane);
     expect(script).toContain(playwrightSpec);
     expect(script).toContain('wait "$PW_INSTALL_PID"');
     expect(script).toContain('wait "$E2E_PID"');
-    expect(script).toContain('wait "$EXAMPLES_PID"');
-    expect(script).toContain('[ "$E2E_OK" -eq 0 ] && [ "$EXAMPLES_OK" -eq 0 ]');
-    // Install kicks off before the lanes and completes (wait) before the specs.
+    expect(script).toContain('[ "$E2E_OK" -eq 0 ]');
+    // Install kicks off before the lane and completes (wait) before the specs.
     expect(script.indexOf(playwrightInstall)).toBeLessThan(script.indexOf(e2eLane));
     expect(script.indexOf(e2eLane)).toBeLessThan(script.indexOf(playwrightSpec));
   });

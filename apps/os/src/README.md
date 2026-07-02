@@ -211,7 +211,8 @@ after touching the patch or the workers-types version.
   ingress, security), run through `pnpm e2e` against a live deployment.
 - `apps/os/e2e/examples/` — the example matrix: the REPL example catalogue
   executed across every runtime (browser REPL, Node, `runScript`, project
-  worker), `pnpm e2e:examples`.
+  worker). Part of `pnpm e2e` (the `node` project runs the matrix headless; the
+  `browser` project runs it in a real browser).
 - Known caveat: repo-sourced project-worker scenarios fail against LOCAL vite
   dev with a masked `internal error; reference =` (capnweb/vite-dev RpcTarget
   identity class). They pass against deployed previews — verify there before

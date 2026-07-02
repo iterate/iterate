@@ -458,27 +458,22 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // ~60s as of 2026-07-02). Crossing them warns, never fails.
     previewDeployBudgetMs: 55_000,
     previewTestBudgetMs: 80_000,
-    previewTestArtifacts: [
-      "test-results",
-      "apps/os/test-results",
-      "/tmp/os-e2e-*",
-      "/tmp/os-itx-e2e-*",
-    ],
+    previewTestArtifacts: ["test-results", "apps/os/test-results", "/tmp/os-e2e-*"],
     previewTestBaseUrlEnvVar: "OS_BASE_URL",
-    // The full apps/os e2e Vitest suite (preview smoke + engine + itx lanes)
-    // and the itx e2e (node project only — the browser project needs a
-    // Playwright chromium install the preview e2e job doesn't have) read
+    // The apps/os e2e Vitest suite runs its `node` project (engine + itx
+    // catalogue matrix; the `browser` project is skipped here — the root
+    // Playwright REPL specs cover the catalogue in-browser). It reads
     // APP_CONFIG_BASE_URL + APP_CONFIG_ADMIN_API_SECRET from the leased
-    // preview Doppler config. Root Playwright specs run after those Vitest
-    // lanes, using the same preview Doppler config.
+    // preview Doppler config. Root Playwright specs run alongside it, using
+    // the same preview Doppler config.
     previewTestCommandArgs: [
       "bash",
       "-c",
       [
         "set -euo pipefail",
         // The chromium download hits no deployed slot, so start it first and
-        // let it overlap the warmup and vitest lanes; it's ready by the time
-        // we reach the specs instead of adding ~4s in front of them.
+        // let it overlap the warmup and the vitest lane; it's ready by the
+        // time we reach the specs instead of adding ~4s in front of them.
         "pnpm --dir ../.. exec playwright install chromium > /tmp/os-preview-pw-install.log 2>&1 & PW_INSTALL_PID=$!",
         // Warm the freshly-deployed slot before the concurrent burst: a cold
         // deployment answers its first requests only after loading each
@@ -491,18 +486,16 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // Subshell so the bare `wait` reaps only these curls, not the
         // background chromium install started above.
         '( for i in 1 2 3 4 5 6 7 8; do (curl -s -o /dev/null --max-time 20 "$OS_BASE_URL/api/health" && curl -s -o /dev/null --max-time 20 "$OS_BASE_URL/") & done; wait )',
-        // All lanes hit the same deployed slot but provision independent
-        // projects, so everything runs concurrently: the two vitest lanes run
-        // in the background while the Playwright specs run in the foreground.
-        // Vitest logs are replayed once specs finish.
-        "pnpm e2e > /tmp/os-preview-vitest.log 2>&1 & E2E_PID=$!",
-        "pnpm e2e:examples --project node > /tmp/os-preview-examples.log 2>&1 & EXAMPLES_PID=$!",
+        // The e2e vitest lane and the Playwright specs hit the same slot but
+        // provision independent projects, so they run concurrently: the vitest
+        // lane in the background, the specs in the foreground. The vitest log
+        // is replayed once the specs finish.
+        "pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 & E2E_PID=$!",
         'wait "$PW_INSTALL_PID" || { cat /tmp/os-preview-pw-install.log; exit 1; }',
         "pnpm --dir ../.. spec",
         'E2E_OK=0; wait "$E2E_PID" || E2E_OK=$?',
-        'EXAMPLES_OK=0; wait "$EXAMPLES_PID" || EXAMPLES_OK=$?',
-        "cat /tmp/os-preview-vitest.log /tmp/os-preview-examples.log",
-        '[ "$E2E_OK" -eq 0 ] && [ "$EXAMPLES_OK" -eq 0 ]',
+        "cat /tmp/os-preview-vitest.log",
+        '[ "$E2E_OK" -eq 0 ]',
       ].join("; "),
     ],
   },

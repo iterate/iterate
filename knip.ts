@@ -30,7 +30,6 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "scripts/cli.ts",
       "scripts/dev.ts",
       "scripts/itx.ts",
-      "e2e/examples/vitest.config.ts",
       // Operational smoke for the create-project -> onboarding-greeting path.
       "e2e/vitest/onboarding-smoke.ts",
       // Used by apps/streams-example-app through its `~` alias into apps/os

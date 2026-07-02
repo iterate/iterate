@@ -37,12 +37,13 @@ seconds and run alongside OS.
   apps deploy at once.
 - **Test-level concurrency.** Every e2e test provisions its own project against
   the deployed slot, so tests within a file are independent. In CI the vitest
-  configs set `sequence.concurrent` with `maxConcurrency: 6` and `retry: 1`
-  (`apps/os/e2e/vitest.config.ts`, `apps/os/e2e/examples/vitest.config.ts`).
-  This alone took the itx suite from 287s to ~50s.
-- **All test lanes run concurrently.** `pnpm e2e`, `pnpm e2e:examples`, and the
-  root Playwright specs run at the same time against the slot, and the four
-  apps' suites run concurrently too (`scripts/preview/preview.ts`).
+  config sets `sequence.concurrent` with `maxConcurrency: 6` and `retry: 1`
+  (`apps/os/e2e/vitest.config.ts`). This alone took the itx suite from 287s to
+  ~50s.
+- **All test lanes run concurrently.** The `pnpm e2e` vitest suite (its `node`
+  project — engine e2e + itx catalogue matrix in one config) and the root
+  Playwright specs run at the same time against the slot, and the four apps'
+  suites run concurrently too (`scripts/preview/preview.ts`).
 - **Playwright runs 6 workers, `fullyParallel`, in CI** (`playwright.config.ts`)
   — every spec creates its own fixture project.
 - **The slot is warmed before the burst.** A cold deployment answers its first
