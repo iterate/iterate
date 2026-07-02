@@ -33,13 +33,6 @@ type RealtimeSessionConfig = {
   onClose: (info: { code: number; reason: string }) => void;
 };
 
-type RealtimeSession = {
-  send(event: Record<string, unknown>): void;
-  close(): void;
-  /** Resolves once the socket is open and `session.update` has been sent. */
-  ready: Promise<void>;
-};
-
 export function resolveProvider(explicit: string | undefined): RealtimeProvider {
   if (explicit === "grok" || explicit === "openai") return explicit;
   if (explicit) throw new Error(`Unknown provider ${JSON.stringify(explicit)}: grok | openai`);
@@ -52,6 +45,13 @@ export const providerDefaults = {
   grok: { model: "grok-voice-latest", voice: "ara", apiKeyEnvVar: "XAI_API_KEY" },
   openai: { model: "gpt-realtime", voice: "marin", apiKeyEnvVar: "OPENAI_API_KEY" },
 } satisfies Record<RealtimeProvider, { model: string; voice: string; apiKeyEnvVar: string }>;
+
+type RealtimeSession = {
+  send(event: Record<string, unknown>): void;
+  close(): void;
+  /** Resolves once the socket is open and `session.update` has been sent. */
+  ready: Promise<void>;
+};
 
 export function connectRealtime(config: RealtimeSessionConfig): RealtimeSession {
   const url =
