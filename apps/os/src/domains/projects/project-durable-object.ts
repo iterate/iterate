@@ -13,7 +13,6 @@ import type {
   ProjectEgressInterceptor,
 } from "../../types.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { runHttpsThroughProxy } from "./egress-https-proxy.ts";
 import {
   createStreamProcessorHost,
   type StreamSubscriberWakeRequest,
@@ -25,6 +24,7 @@ import { SlackProcessorContract } from "../integrations/slack-processor-contract
 import { SlackProcessor } from "../integrations/slack-processor-implementation.ts";
 import { eyesReactionTargetFromWebhookPayload } from "../integrations/slack-agent-processor-implementation.ts";
 import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
+import { runHttpsThroughProxy } from "./egress-https-proxy.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 
