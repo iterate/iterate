@@ -115,7 +115,7 @@ function sessionUpdateEvent(config: RealtimeSessionConfig) {
       audio: {
         input: {
           format: audioFormat,
-          transcription: { model: "gpt-4o-mini-transcribe" },
+          transcription: { model: "gpt-4o-mini-transcribe", language: "en" },
           turn_detection: config.audioInput ? { type: "server_vad" } : null,
         },
         output: { format: audioFormat, voice: config.voice },

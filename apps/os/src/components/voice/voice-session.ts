@@ -39,7 +39,9 @@ Messages starting with "[worker report]" are not from the human: they are
 results arriving from the worker. Relay their substance to the user
 conversationally and concisely.
 
-Keep every response short. This is a spoken conversation.
+Keep every response short. This is a spoken conversation. Always speak
+English unless the user clearly asks for another language — never switch
+languages based on a short or ambiguous utterance.
 `.trim();
 
 const ASK_ASSISTANT_TOOL = {
@@ -89,6 +91,10 @@ export class VoiceSession {
   #turnTranscripts = new Map<string, string>();
   #forwardedItems = new Set<string>();
   #openAssistantEntryId: number | null = null;
+  // Two quick turns can debounce into ONE worker reply that satisfies both
+  // waiters — dedupe by the reply event's stream offset so it injects once.
+  #seenWorkerReplyOffsets = new Set<number>();
+  #workerInstructed = false;
 
   #micContext: AudioContext | null = null;
   #micStream: MediaStream | null = null;
@@ -138,7 +144,7 @@ export class VoiceSession {
           audio: {
             input: {
               format: { type: "audio/pcm", rate: AUDIO_SAMPLE_RATE },
-              transcription: { model: "gpt-4o-mini-transcribe" },
+              transcription: { model: "gpt-4o-mini-transcribe", language: "en" },
               turn_detection: { type: "server_vad" },
             },
             output: { format: { type: "audio/pcm", rate: AUDIO_SAMPLE_RATE }, voice: "marin" },
@@ -189,7 +195,7 @@ export class VoiceSession {
     this.#addEntry("you", trimmed);
     this.#whenResponseIdle(() => {
       this.#send(userTextItem(trimmed));
-      this.#send({ type: "response.create" });
+      this.#sendResponseCreate();
     });
     this.#forwardTurn(trimmed);
   }
@@ -234,7 +240,7 @@ export class VoiceSession {
             output: JSON.stringify({ status: "forwarded to worker; report will follow" }),
           },
         });
-        this.#whenResponseIdle(() => this.#send({ type: "response.create" }));
+        this.#whenResponseIdle(() => this.#sendResponseCreate());
         return;
       }
       case "response.output_audio.delta":
@@ -266,14 +272,19 @@ export class VoiceSession {
     const transcript = this.#turnTranscripts.get(itemId);
     if (!transcript?.trim()) return;
     this.#forwardedItems.add(itemId);
-    this.#addEntry("you", transcript.trim());
-    this.#forwardTurn(transcript.trim());
+    // Transcription often completes after the assistant has started replying —
+    // slot the user's turn in front of the open assistant entry, where it
+    // actually happened.
+    const beforeId = this.#openAssistantEntryId;
+    this.#addEntry("you", transcript.trim(), beforeId);
+    this.#forwardTurn(transcript.trim(), beforeId);
   }
 
-  #forwardTurn(text: string) {
-    this.#addEntry("worker-request", text);
+  #forwardTurn(text: string, beforeEntryId?: number | null) {
+    this.#addEntry("worker-request", text, beforeEntryId);
     void this.#askWorker(text)
       .then((reply) => {
+        if (reply === null) return; // duplicate — another forward already handled it
         if (reply === WORKER_IDLE_REPLY) {
           this.#addEntry("worker-reply", "(idle — nothing to report)");
           return;
@@ -281,23 +292,28 @@ export class VoiceSession {
         this.#addEntry("worker-reply", reply);
         this.#whenResponseIdle(() => {
           this.#send(userTextItem(`[worker report] ${reply}`));
-          this.#send({ type: "response.create" });
+          this.#sendResponseCreate();
         });
       })
       .catch((error: Error) => {
         this.#addEntry("error", `worker error: ${error.message}`);
         this.#whenResponseIdle(() => {
           this.#send(userTextItem(`[worker report] The worker hit an error: ${error.message}`));
-          this.#send({ type: "response.create" });
+          this.#sendResponseCreate();
         });
       });
   }
 
   async #askWorker(text: string) {
-    const message = [
-      text,
-      '(You are the worker agent behind a live voice assistant; the message above is one transcribed voice turn. Reply concisely — your reply is read aloud. If it needs no action or answer, reply exactly "(idle)".)',
-    ].join("\n\n");
+    // The instruction envelope rides the FIRST message only — the agent's
+    // history is durable, repeating it every turn is noise.
+    const message = this.#workerInstructed
+      ? text
+      : [
+          text,
+          '(You are the worker agent behind a live voice assistant; messages like the one above are transcribed voice turns. Reply concisely — your replies are read aloud. If a message needs no action or answer from you, reply exactly "(idle)".)',
+        ].join("\n\n");
+    this.#workerInstructed = true;
     const itx = await connectItx({ projectId: this.#projectId });
     const agent = itx.agents.get(this.#agentPath);
     const sent = await agent.sendMessage(message);
@@ -306,6 +322,8 @@ export class VoiceSession {
       eventTypes: [WORKER_REPLY_EVENT],
       timeoutMs: WORKER_REPLY_TIMEOUT_MS,
     });
+    if (this.#seenWorkerReplyOffsets.has(reply.offset)) return null;
+    this.#seenWorkerReplyOffsets.add(reply.offset);
     const payload = reply.payload as { message?: unknown };
     return typeof payload.message === "string" ? payload.message.trim() : JSON.stringify(payload);
   }
@@ -399,6 +417,16 @@ export class VoiceSession {
     if (this.#socket?.readyState === WebSocket.OPEN) this.#socket.send(JSON.stringify(event));
   }
 
+  /**
+   * Mark the response active BEFORE the server confirms it — waiting for
+   * `response.created` leaves a window where a second injection races in and
+   * the API rejects it with `conversation_already_has_active_response`.
+   */
+  #sendResponseCreate() {
+    this.#responseActive = true;
+    this.#send({ type: "response.create" });
+  }
+
   #whenResponseIdle(inject: () => void) {
     if (this.#responseActive) this.#injectionQueue.push(inject);
     else inject();
@@ -417,9 +445,14 @@ export class VoiceSession {
     });
   }
 
-  #addEntry(kind: VoiceTranscriptEntry["kind"], text: string) {
+  #addEntry(kind: VoiceTranscriptEntry["kind"], text: string, beforeEntryId?: number | null) {
     const id = this.#nextEntryId++;
-    this.#update({ entries: [...this.#snapshot.entries, { id, kind, text }] });
+    const entries = [...this.#snapshot.entries];
+    const at =
+      beforeEntryId == null ? -1 : entries.findIndex((entry) => entry.id === beforeEntryId);
+    if (at === -1) entries.push({ id, kind, text });
+    else entries.splice(at, 0, { id, kind, text });
+    this.#update({ entries });
     return id;
   }
 

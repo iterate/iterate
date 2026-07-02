@@ -43,7 +43,9 @@ Messages starting with "[worker report]" are not from the human: they are
 results arriving from the worker. Relay their substance to the user
 conversationally and concisely.
 
-Keep every response short. This is a spoken conversation.
+Keep every response short. This is a spoken conversation. Always speak
+English unless the user clearly asks for another language — never switch
+languages based on a short or ambiguous utterance.
 `.trim();
 
 const ASK_ASSISTANT_TOOL = {
@@ -117,6 +119,13 @@ export async function runVoiceBridge(options: BridgeOptions) {
     if (responseActive) injectionQueue.push(inject);
     else inject();
   };
+  // Mark the response active BEFORE the server confirms it — waiting for
+  // `response.created` leaves a window where a second injection races in and
+  // the API rejects it with `conversation_already_has_active_response`.
+  const sendResponseCreate = () => {
+    responseActive = true;
+    session.send({ type: "response.create" });
+  };
 
   // User-turn transcripts, keyed by conversation item id. Grok streams
   // incremental `.updated` transcription events; OpenAI sends `.completed`.
@@ -124,13 +133,28 @@ export async function runVoiceBridge(options: BridgeOptions) {
   // response — whichever comes first wins, the other is deduped.
   const turnTranscripts = new Map<string, string>();
   const forwardedItems = new Set<string>();
+  // Two quick turns can debounce into ONE worker reply that satisfies both
+  // waiters — dedupe by the reply event's stream offset so it injects once.
+  const seenWorkerReplyOffsets = new Set<number>();
+  let workerInstructed = false;
 
   const forwardTurn = (text: string, origin: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
     say(`  → worker (${origin}): ${trimmed}`);
-    void askWorker(agent, trimmed)
-      .then((reply) => {
+    // The instruction envelope rides the FIRST message only — the agent's
+    // history is durable, repeating it every turn is noise.
+    const message = workerInstructed
+      ? trimmed
+      : [
+          trimmed,
+          '(You are the worker agent behind a live voice assistant; messages like the one above are transcribed voice turns. Reply concisely — your replies are read aloud. If a message needs no action or answer from you, reply exactly "(idle)".)',
+        ].join("\n\n");
+    workerInstructed = true;
+    void askWorker(agent, message)
+      .then(({ offset, reply }) => {
+        if (seenWorkerReplyOffsets.has(offset)) return;
+        seenWorkerReplyOffsets.add(offset);
         if (reply === WORKER_IDLE_REPLY) {
           say(`  ← worker: (idle — nothing to report)`);
           return;
@@ -138,14 +162,14 @@ export async function runVoiceBridge(options: BridgeOptions) {
         say(`  ← worker: ${reply}`);
         whenResponseIdle(() => {
           session.send(userTextItem(`[worker report] ${reply}`));
-          session.send({ type: "response.create" });
+          sendResponseCreate();
         });
       })
       .catch((error: Error) => {
         say(`  ← worker error: ${error.message}`);
         whenResponseIdle(() => {
           session.send(userTextItem(`[worker report] The worker hit an error: ${error.message}`));
-          session.send({ type: "response.create" });
+          sendResponseCreate();
         });
       });
   };
@@ -209,7 +233,7 @@ export async function runVoiceBridge(options: BridgeOptions) {
             output: JSON.stringify({ status: "forwarded to worker; report will follow" }),
           },
         });
-        whenResponseIdle(() => session.send({ type: "response.create" }));
+        whenResponseIdle(() => sendResponseCreate());
         // In auto mode the turn was already forwarded verbatim — the tool call
         // is just the voice model agreeing with us. Only forward in tool mode.
         if (options.forward === "tool" && args.request) forwardTurn(args.request, "tool-call");
@@ -268,7 +292,7 @@ export async function runVoiceBridge(options: BridgeOptions) {
       if (!line.trim()) return;
       whenResponseIdle(() => {
         session.send(userTextItem(line));
-        session.send({ type: "response.create" });
+        sendResponseCreate();
       });
       if (options.forward === "auto") forwardTurn(line, "text");
     });
@@ -305,19 +329,17 @@ export async function runVoiceBridge(options: BridgeOptions) {
  * `Agent.ask`, but with a client-side wait so codemode work gets more than the
  * server-side 45s.
  */
-async function askWorker(agent: RpcStub<Agent>, text: string) {
-  const message = [
-    text,
-    '(You are the worker agent behind a live voice assistant; the message above is one transcribed voice turn. Reply concisely — your reply is read aloud. If it needs no action or answer, reply exactly "(idle)".)',
-  ].join("\n\n");
+async function askWorker(agent: RpcStub<Agent>, message: string) {
   const sent = await agent.sendMessage(message);
-  const reply = await agent.stream.waitForEvent({
+  const replyEvent = await agent.stream.waitForEvent({
     afterOffset: sent.offset,
     eventTypes: [WORKER_REPLY_EVENT],
     timeoutMs: WORKER_REPLY_TIMEOUT_MS,
   });
-  const payload = reply.payload as { message?: unknown };
-  return typeof payload.message === "string" ? payload.message.trim() : JSON.stringify(payload);
+  const payload = replyEvent.payload as { message?: unknown };
+  const reply =
+    typeof payload.message === "string" ? payload.message.trim() : JSON.stringify(payload);
+  return { offset: replyEvent.offset, reply };
 }
 
 async function createThrowawayProject(connection: {
