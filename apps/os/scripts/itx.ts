@@ -16,6 +16,7 @@ import { RpcTarget } from "capnweb";
 import { readLocalDevServerInfo } from "@iterate-com/shared/alchemy/local-dev-server";
 
 import { connectItx } from "../src/itx-client.ts";
+import { EgressProxyRelay } from "./egress-proxy-relay.ts";
 
 const ASSISTANT_RESPONSE_TYPE = "events.iterate.com/agents/web-message-sent";
 
@@ -158,6 +159,59 @@ export async function agentSmoke(options: AgentSmokeOptions) {
   );
 
   // The Cap'n Web WebSocket would otherwise keep the process alive.
+  process.exit(0);
+}
+
+type EgressProxyOptions = {
+  /** Project id whose egress should tunnel through this machine. */
+  context: string;
+  /** OS base URL. Defaults to APP_CONFIG_BASE_URL. */
+  baseUrl?: string;
+};
+
+/**
+ * Install a non-MITM egress HTTPS proxy on a project and hold it open.
+ *
+ * The worker keeps terminating TLS itself; this authenticated CLI process only
+ * dials TCP and shuttles encrypted records, so every outbound HTTPS request
+ * from the project leaves from THIS machine's IP as ciphertext. The proxy can
+ * see the target host/port and byte counts but never the request, body, or the
+ * substituted secret.
+ */
+export async function egressProxy(options: EgressProxyOptions) {
+  const project = options.context?.trim();
+  if (!project) throw new Error("--context <project id> is required.");
+
+  using itx = connectItx({ ...adminConnection(options), projectId: project });
+  const relay = new EgressProxyRelay({
+    onDial: (info) =>
+      console.log(`  [#${info.id}] dial ${info.host}:${info.port} — tunneling encrypted TLS`),
+  });
+  using handle = await itx.egress.useEgressHttpsProxy(relay);
+
+  console.log(
+    [
+      `Egress HTTPS proxy installed on project ${project}.`,
+      "Every outbound HTTPS request from this project now tunnels through this machine",
+      "as encrypted TLS — the worker substitutes secrets and runs TLS, so this process",
+      "only sees host/port + byte counts, never the request/body/secret.",
+      "",
+      "Trigger project egress from another terminal, e.g.:",
+      `  pnpm cli itx run --context ${project} \\`,
+      `    -e "return (await itx.egress.fetch(new Request('https://example.com', {` +
+        ` headers: { 'x-itx-egress-proxy-insecure-skip-tls-verify': '1' } }))).status"`,
+      "",
+      "Watching for dials — Ctrl+C to detach.",
+      "",
+    ].join("\n"),
+  );
+
+  await new Promise<void>((resolve) => {
+    process.once("SIGINT", resolve);
+    process.once("SIGTERM", resolve);
+  });
+  await handle.release().catch(() => {});
+  relay[Symbol.dispose]();
   process.exit(0);
 }
 
