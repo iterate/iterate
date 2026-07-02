@@ -243,6 +243,30 @@ describe("minimal web-chat agent processors", () => {
     });
   });
 
+  it("treats MCP-origin messages like any other inbound user message", async () => {
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({ stream });
+    const cursors = new Map<object, number>();
+    const deliver = (processor: ProcessorLike) => deliverNewEvents({ processor, stream, cursors });
+
+    await stream.append({
+      type: "events.iterate.com/agents/user-message-received",
+      payload: { origin: "mcp", content: "how many agents does this project have?" },
+      metadata: { mcpTool: "ask_assistant" },
+    });
+    await deliver(agent);
+    await deliver(agent);
+
+    expect(stream.events.map((event) => event.type)).toEqual([
+      "events.iterate.com/agents/user-message-received",
+      "events.iterate.com/agent/input-added",
+      "events.iterate.com/agent/llm-request-scheduled",
+    ]);
+    expect(stream.events[1]!.payload).toMatchObject({
+      content: "how many agents does this project have?",
+    });
+  });
+
   it("does not fire a second LLM call when a second message arrives during the first request", async () => {
     const stream = new MemoryStream();
     const aiCalls: unknown[] = [];

@@ -21,6 +21,7 @@ import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts
 import { SlackAgentProcessorContract } from "../integrations/slack-agent-processor-contract.ts";
 import { SlackProcessorContract } from "../integrations/slack-processor-contract.ts";
 import { isSlackAgentPath, SLACK_INTEGRATION_STREAM_PATH } from "../integrations/utils.ts";
+import { isMcpAgentPath } from "../inbound-mcp-server/mcp-session-agent-path.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 
 export const ONBOARDING_AGENT_PATH = "/agents/onboarding";
@@ -38,6 +39,19 @@ export const SLACK_AGENT_SYSTEM_PROMPT = [
   "Incoming Slack webhook events arrive as your inputs. Reply only when mentioned, directly asked, or clearly needed.",
   "To reply in the thread, use await itx.slack.chat.postMessage({ channel, thread_ts, text }) with the channel and thread_ts from the incoming webhook payloads. Never use itx.chat.sendMessage for Slack replies. Do not return side-effect-only call results unless you need to inspect them on your next turn.",
   "Use project capabilities on itx when they are relevant.",
+].join("\n");
+
+/**
+ * Agents under `/agents/mcp/**` are inbound MCP session agents: one stream per
+ * inbound MCP session. The ask_assistant MCP tool appends the caller's message
+ * to the session stream and blocks until the agent's next chat reply, so the
+ * reply door is the same itx.chat.sendMessage as web chat.
+ */
+export const MCP_AGENT_SYSTEM_PROMPT = [
+  DEFAULT_AGENT_SYSTEM_PROMPT,
+  "",
+  "You are serving this project's MCP server. Your messages come from an AI agent (an MCP client) acting on behalf of the project owner, through the ask_assistant MCP tool. That tool call blocks until your next itx.chat.sendMessage reply and returns it verbatim to the asking agent.",
+  "Reply exactly once per request with await itx.chat.sendMessage({ message }) — that message IS the MCP tool result. Do the requested work directly with your capabilities; only ask a clarifying question when the request is genuinely ambiguous.",
 ].join("\n");
 
 /**
@@ -160,6 +174,8 @@ export class ProjectProcessor extends StreamProcessor<
             // Agents under /agents/slack/** additionally get the slack-agent
             // processor subscription and the Slack reply prompt — this is THE
             // place the "slack thread streams are slack agents" rule lives.
+            // Likewise "/agents/mcp/** streams are inbound MCP session agents":
+            // same processors, MCP reply prompt.
             const isSlack = isSlackAgentPath(childPath);
             await this.deps.itx.streams.get(childPath).append(
               // Identical idempotency keys to the create-time onboarding birth
@@ -169,7 +185,11 @@ export class ProjectProcessor extends StreamProcessor<
                 llmProvider: this.deps.defaultLlmProvider,
                 projectId: this.deps.itx.projectId,
                 slack: isSlack,
-                systemPrompt: isSlack ? SLACK_AGENT_SYSTEM_PROMPT : DEFAULT_AGENT_SYSTEM_PROMPT,
+                systemPrompt: isSlack
+                  ? SLACK_AGENT_SYSTEM_PROMPT
+                  : isMcpAgentPath(childPath)
+                    ? MCP_AGENT_SYSTEM_PROMPT
+                    : DEFAULT_AGENT_SYSTEM_PROMPT,
               }),
             );
             return;

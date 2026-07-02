@@ -101,10 +101,11 @@ export const AgentProcessorContract = defineProcessorContract({
       }),
     },
     "events.iterate.com/agents/user-message-received": {
-      description: "The web UI sent a user message to the agent.",
+      description:
+        "A user message reached the agent — from the web UI, or from an MCP client acting on the project owner's behalf.",
       payloadSchema: z.object({
         content: z.string(),
-        origin: z.literal("web"),
+        origin: z.enum(["web", "mcp"]),
       }),
     },
     "events.iterate.com/agents/web-message-sent": {
