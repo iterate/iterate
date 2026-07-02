@@ -277,6 +277,25 @@ function agentBirthCertificateEvents(input: {
         provider: input.llmProvider,
       },
     },
+    // Per-agent boot context as a model-visible input (the system prompt is
+    // static; ids and paths are not). dont-trigger-request: this must never
+    // wake the LLM by itself.
+    {
+      type: "events.iterate.com/agent/input-added" as const,
+      idempotencyKey: `agent/boot-context:${input.projectId}:${input.childPath}`,
+      payload: {
+        content: [
+          "Platform context for this agent:",
+          `- Project id: ${input.projectId}`,
+          `- Your agent stream path: ${input.childPath} (your itx scope; your transcript lives here)`,
+          '- The project repo is at repo path "/" — seeded with worker.js (a router over the apps below), apps/hello/worker.js (stateless), apps/counter/worker.js (stateful), AGENTS.md, and ONBOARDING.md. Change it with itx.repo.commitFiles({ message, changes: [{ path, content }] }).',
+          "- Other agents live at /agents/<name> (itx.agents.list() / itx.agents.get(path)); Slack thread agents appear under /agents/slack/<channel>/ts-<ts>; secrets under /secrets/**.",
+          '- Streams are path-addressed: itx.streams.get(path).append(event) / getEvents() / waitFor(); path "/" is the project root stream.',
+          "- itx.describe() lists the capabilities currently available in your scope.",
+        ].join("\n"),
+        llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
+      },
+    },
   ];
 }
 

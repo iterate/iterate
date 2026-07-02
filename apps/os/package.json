@@ -16,6 +16,7 @@
     "destroy": "doppler run -- tsx ./alchemy.run.ts --destroy",
     "e2e:itx": "vitest run --config src/itx/e2e/vitest.config.ts",
     "routes:generate": "tsx ./scripts/generate-route-tree.ts",
+    "generate:itx-types-source": "tsx ./scripts/generate-itx-types-source.ts",
     "routes:check": "tsx ./scripts/generate-route-tree.ts --check",
     "typecheck": "pnpm routes:check && tsc --noEmit",
     "test": "pnpm test:unit",

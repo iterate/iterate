@@ -169,10 +169,14 @@ function sseStream(...chunks: unknown[]): ReadableStream<Uint8Array> {
 describe("minimal web-chat agent processors", () => {
   it("explains the exact codemode shape expected by the ITX script runner", () => {
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
-      "The code block must contain a single async arrow function: async (itx) => { ... }.",
+      "The block must contain a single async arrow function",
     );
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("async (itx) => {");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("await itx.chat.sendMessage({ message })");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).not.toContain("containing an async function");
+    // The verbatim type surface rides along so the agent knows what it holds.
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("RpcStub<Itx>");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("export interface Itx extends ItxCapabilityHost");
   });
 
   it("normalizes web input, requests AI by reference, and turns output into script execution", async () => {
