@@ -133,53 +133,34 @@ async function runWorkspaceCodemodeProof(input: {
 }
 
 function workspaceCodemodeScript() {
+  // itx-v4 cutover: this used to drive the workspaces domain (gitClone /
+  // writeFile / gitCommit / gitPush against a checkout). The workspaces
+  // domain is gone — the engine's repo capability commits directly to the
+  // project repo — so the proof is now: MCP exec_js -> repo.commitFiles,
+  // then an identical second commit whose noChanges: true is the read-back
+  // (commits are content-addressed and idempotent).
   return `async (itx) => {
-  const repo = await itx.repos.get({ path: "/repos/project" }).getInfo();
-  const dir = \`/workspace-preview-example-\${Date.now()}\`;
-  const fileName = \`workspace-preview-example-\${Date.now()}.md\`;
-  const password = repo.token.includes("?expires=")
-    ? repo.token.split("?expires=")[0]
-    : repo.token;
-  const auth = { username: "x", password };
+  const fileName = "workspace-preview-example-" + Date.now() + ".md";
+  const content = "# Workspace itx preview example\\n\\nCreated: " + new Date().toISOString() + "\\n";
 
-  await itx.workspace.gitClone({
-    url: repo.remote,
-    dir,
-    branch: repo.defaultBranch,
-    depth: 1,
-    ...auth,
-  });
-
-  const filePath = \`\${dir}/\${fileName}\`;
-  await itx.workspace.writeFile(
-    filePath,
-    \`# Workspace itx preview example\\n\\nCreated: \${new Date().toISOString()}\\n\`,
-  );
-  const readBack = await itx.workspace.readFile(filePath);
-  await itx.workspace.gitAdd({ dir, filepath: fileName });
-  const commit = await itx.workspace.gitCommit({
-    dir,
+  const commit = await itx.repo.commitFiles({
     message: "Verify workspace codemode preview example",
-    author: { name: "Codemode", email: "codemode@iterate.com" },
+    changes: [{ path: fileName, content }],
   });
-  const pushed = await itx.workspace.gitPush({
-    dir,
-    remote: "origin",
-    ref: repo.defaultBranch,
-    ...auth,
+
+  const readBack = await itx.repo.commitFiles({
+    message: "Read-back probe (identical tree must be a no-op)",
+    changes: [{ path: fileName, content }],
   });
 
   return {
-    commit,
-    fileName,
-    pushed,
-    readBack,
-    repo: {
-      slug: repo.slug,
-      remote: repo.remote,
-      defaultBranch: repo.defaultBranch,
+    commit: {
+      branch: commit.branch,
+      changedPaths: commit.changedPaths,
+      noChanges: commit.noChanges,
     },
-    status: await itx.workspace.gitStatus({ dir }),
+    fileName,
+    readBackNoChanges: readBack.noChanges,
   };
 }`;
 }
