@@ -55,11 +55,13 @@ describe("page debugging demo", () => {
     try {
       await demoPage.goto(buildUrl({ path: "/page-debugging" }));
       await demoPage.waitForFunction(() =>
-        document.querySelector<HTMLTextAreaElement>("#snippet")?.value.includes("connectPageTools"),
+        document
+          .querySelector<HTMLTextAreaElement>("#snippet")
+          ?.value.includes("__itxPageDebugging"),
       );
 
       const snippet = await demoPage.locator("#snippet").inputValue();
-      expect(snippet).toContain("/page-debugging/client.mjs");
+      expect(snippet).toContain("/page-debugging/bridge");
       expect(snippet).toContain("window.__itxPageDebugging");
       const initialSession = JSON.parse(
         (await demoPage.locator("#agentOutput").textContent()) ?? "{}",
@@ -167,6 +169,94 @@ describe("page debugging demo", () => {
       await targetPage.waitForFunction(
         () => !document.querySelector("#__itx_page_debugging_widget"),
       );
+    } finally {
+      await browser.close();
+    }
+  }, 45_000);
+
+  test("drives a cross-origin host page whose CSP forbids external scripts and sockets", async () => {
+    const browser = await chromium.launch({ headless: true });
+    const demoPage = await browser.newPage();
+    const targetPage = await browser.newPage();
+    const workerOrigin = new URL(buildUrl({ path: "/page-debugging" })).origin;
+
+    try {
+      await demoPage.goto(buildUrl({ path: "/page-debugging" }));
+      await demoPage.waitForFunction(() =>
+        document
+          .querySelector<HTMLTextAreaElement>("#snippet")
+          ?.value.includes("__itxPageDebugging"),
+      );
+      const snippet = await demoPage.locator("#snippet").inputValue();
+
+      // A third-party host on its own origin with a strict CSP: no external
+      // script modules, no external sockets. It only permits framing the worker.
+      const strictCsp = [
+        "default-src 'self'",
+        "script-src 'self' 'unsafe-inline'",
+        "connect-src 'self'",
+        "img-src 'self' data:",
+        "style-src 'self' 'unsafe-inline'",
+        `frame-src ${workerOrigin}`,
+      ].join("; ");
+      await targetPage.route("https://strict-host.iterate-demo.test/**", (route) =>
+        route.fulfill({
+          status: 200,
+          headers: {
+            "content-security-policy": strictCsp,
+            "content-type": "text/html; charset=utf-8",
+          },
+          body: `<!doctype html><html><head><meta charset="utf-8"><title>Strict Host</title></head>
+            <body><h1>Strict CSP Host</h1>
+            <button id="increment" type="button">Increment counter</button>
+            <span id="counter" data-testid="counter">0</span>
+            <label>Message <input id="message" aria-label="Message" /></label>
+            <script>document.querySelector("#increment").addEventListener("click",function(){var c=document.querySelector("#counter");c.textContent=String(Number(c.textContent||"0")+1);});</script>
+            </body></html>`,
+        }),
+      );
+      await targetPage.goto("https://strict-host.iterate-demo.test/");
+
+      // The old approach is genuinely blocked here: the host page itself can
+      // neither import the worker client module nor open the capability socket.
+      const importResult = await targetPage.evaluate(async (url) => {
+        try {
+          await import(/* @vite-ignore */ url);
+          return "loaded";
+        } catch {
+          return "blocked";
+        }
+      }, `${workerOrigin}/page-debugging/client.mjs`);
+      expect(importResult).toBe("blocked");
+
+      // The CSP-safe snippet still works: everything networked runs in the
+      // worker-origin iframe, and only DOM ops cross into the host page.
+      await targetPage.evaluate(async (code) => {
+        await (0, eval)(code);
+      }, snippet);
+      await expectText(targetPage.getByLabel("Open ITERATE sharing menu"), "ITERATE");
+
+      const runAgentScript = async (index: number) => {
+        await demoPage.locator("#agentExamples button").nth(index).click();
+        await demoPage.locator("#agentRun").click();
+      };
+
+      // Agent (worker side) drives the strict host page: click the counter.
+      await runAgentScript(2);
+      await targetPage.waitForFunction(
+        () => document.querySelector("#counter")?.textContent === "1",
+      );
+      expect(await targetPage.locator("#counter").textContent()).toBe("1");
+      await demoPage.waitForFunction(() =>
+        document.querySelector("#agentOutput")?.textContent?.includes('"counter": "1"'),
+      );
+
+      // And fill the message field on the strict host page.
+      await runAgentScript(3);
+      await targetPage.waitForFunction(
+        () => document.querySelector<HTMLInputElement>("#message")?.value === "hello from ITX",
+      );
+      expect(await targetPage.locator("#message").inputValue()).toBe("hello from ITX");
     } finally {
       await browser.close();
     }

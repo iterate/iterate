@@ -8,6 +8,7 @@ import type { CfExecutionContext, ItxAuthToken } from "./types.ts";
 const DEMO_PREFIX = "/page-debugging";
 const CONNECT_PATH = `${DEMO_PREFIX}/connect`;
 const CLIENT_PATH = `${DEMO_PREFIX}/client.mjs`;
+const BRIDGE_PATH = `${DEMO_PREFIX}/bridge`;
 const REVOKE_PATH = `${DEMO_PREFIX}/revoke`;
 const SESSION_PATH = `${DEMO_PREFIX}/session`;
 const PROTOCOL_PREFIX = "itx-page-debugging.";
@@ -52,6 +53,13 @@ export class PageDebuggingDemoDurableObject extends DurableObject<Env> {
           "content-type": "application/javascript; charset=utf-8",
         },
       });
+    }
+
+    // The bridge is the worker-origin iframe the CSP-safe snippet embeds. It
+    // runs under this worker's (permissive) CSP, so it can load capnweb and open
+    // the capability WebSocket even when the host page forbids both.
+    if (url.pathname === BRIDGE_PATH) {
+      return htmlResponse(pageDebuggingBridgeHtml());
     }
 
     if (url.pathname === SESSION_PATH) {
@@ -143,12 +151,12 @@ async function createDemoSession(
     projectId,
     providerToken,
     snippet: generateSnippet({
-      clientModuleUrl: new URL(CLIENT_PATH, origin).toString(),
+      bridgeUrl: new URL(BRIDGE_PATH, origin).toString(),
       connectUrl,
       path,
-      projectId,
       revokeUrl: new URL(REVOKE_PATH, origin).toString(),
       token: providerToken,
+      workerOrigin: origin,
     }),
   };
 }
@@ -190,27 +198,35 @@ function tokenForProject(claims: TokenClaims): ItxAuthToken {
 }
 
 function generateSnippet(input: {
-  clientModuleUrl: string;
+  bridgeUrl: string;
   connectUrl: string;
   path: string[];
-  projectId: string;
   revokeUrl: string;
   token: string;
+  workerOrigin: string;
 }) {
-  return [
-    "(async () => {",
-    `  // Mounts PageTools on this tab as the project capability at path: ${input.path.join(".")}`,
-    `  const { connectPageTools } = await import(${JSON.stringify(input.clientModuleUrl)});`,
-    "  window.__itxPageDebugging = await connectPageTools({",
-    `    connectUrl: ${JSON.stringify(input.connectUrl)},`,
-    `    projectId: ${JSON.stringify(input.projectId)},`,
-    `    revokeUrl: ${JSON.stringify(input.revokeUrl)},`,
-    `    token: ${JSON.stringify(input.token)},`,
-    `    path: ${JSON.stringify(input.path)}, // capability mount path`,
-    "  });",
-    `  console.log("[itx] PageTools provided at ${input.path.join(".")}. Keep window.__itxPageDebugging while debugging.");`,
-    "})();",
-  ].join("\n");
+  const config = {
+    bridgeUrl: input.bridgeUrl,
+    connectUrl: input.connectUrl,
+    path: input.path,
+    revokeUrl: input.revokeUrl,
+    token: input.token,
+    workerOrigin: input.workerOrigin,
+  };
+  // Dependency-free by design: no import(), no external <script>, no direct
+  // WebSocket. All of that lives in the worker-origin bridge iframe, so a strict
+  // host CSP (script-src / connect-src 'self') can't block it. This snippet only
+  // touches the host DOM and talks to the iframe over postMessage.
+  return (
+    "(async () => {\n" +
+    `  // PageTools capability mounted at path: ${input.path.join(".")}\n` +
+    `  const ITX = ${JSON.stringify(config)};` +
+    PAGE_DEBUGGING_HOST_SNIPPET_BODY +
+    '\n  console.log("[itx] page debugging bridge attached at ' +
+    input.path.join(".") +
+    '. Call window.__itxPageDebugging.stop() to detach.");\n' +
+    "})();\n"
+  );
 }
 
 async function mintDemoToken(env: Env, claims: TokenClaims): Promise<string> {
@@ -745,6 +761,311 @@ function pageDebuggingDemoHtml() {
   </body>
 </html>`;
 }
+
+// Shared capability metadata, interpolated into both the client module and the
+// bridge so the mounted PageTools describes itself identically either way.
+const PAGE_TOOLS_INSTRUCTIONS =
+  "In-page PageTools. Use snapshot first for semantic structure. Use screenshot when visual layout, canvas, iframe, or styling matters. Screen capture is host-tab pixels after the user enables capture in the target page; render mode is a silent host-DOM fallback.";
+const PAGE_TOOLS_TYPES =
+  "export type Capability = PageTools; interface ScreenshotResult { mime?: string; base64?: string; width?: number; height?: number; mode?: 'capture' | 'render'; error?: string; hint?: string; message?: string; } interface PageTools { snapshot(): Promise<unknown>; enableScreenCapture(): Promise<unknown>; screenshot(options?: { mode?: 'auto' | 'capture' | 'render'; maxWidth?: number; quality?: number; selector?: string }): Promise<ScreenshotResult>; getByRole(role: string, options?: { name?: string }): Locator; getByLabelText(text: string): Locator; getByText(text: string): Locator; locator(selector: string): Locator; } interface Locator { click(): Promise<boolean>; fill(value: string): Promise<boolean>; textContent(): Promise<string | null>; inputValue(): Promise<string | null>; describe(): Promise<unknown>; }";
+
+// The bridge runs inside the worker-origin iframe the CSP-safe snippet embeds.
+// It owns everything a strict host CSP forbids — importing capnweb and opening
+// the capability WebSocket — and mounts a PageTools whose every method forwards
+// the actual DOM work to the host page over postMessage.
+function pageDebuggingBridgeHtml() {
+  return `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>ITX page debugging bridge</title></head>
+<body>
+<script type="module">
+import { newWebSocketRpcSession, RpcTarget } from "https://esm.sh/capnweb@0.8.0";
+const PROTOCOL_PREFIX = ${JSON.stringify(PROTOCOL_PREFIX)};
+const INSTRUCTIONS = ${JSON.stringify(PAGE_TOOLS_INSTRUCTIONS)};
+const TYPES = ${JSON.stringify(PAGE_TOOLS_TYPES)};
+const config = Object.fromEntries(new URLSearchParams(location.hash.slice(1)));
+const path = JSON.parse(config.path || '["debugPage"]');
+
+let seq = 0;
+const pending = new Map();
+window.addEventListener("message", (event) => {
+  if (event.source !== window.parent) return;
+  const data = event.data;
+  if (!data || data.__itxHost !== true) return;
+  const waiter = pending.get(data.id);
+  if (!waiter) return;
+  pending.delete(data.id);
+  if (data.ok) waiter.resolve(data.result);
+  else waiter.reject(new Error(data.error || "host op failed"));
+});
+function callHost(op, payload) {
+  return new Promise((resolve, reject) => {
+    const id = ++seq;
+    pending.set(id, { resolve, reject });
+    window.parent.postMessage({ __itxBridge: true, id, op, payload: payload || {} }, "*");
+    setTimeout(() => {
+      if (pending.has(id)) { pending.delete(id); reject(new Error("host operation timed out: " + op)); }
+    }, 15000);
+  });
+}
+
+class Locator extends RpcTarget {
+  constructor(query, index) { super(); this.query = query; this.index = index || 0; }
+  nth(index) { return new Locator(this.query, index); }
+  act(action, value) { return callHost("locator", { query: this.query, index: this.index, action, value }); }
+  click() { return this.act("click"); }
+  dblClick() { return this.act("dblclick"); }
+  hover() { return this.act("hover"); }
+  fill(value) { return this.act("fill", value); }
+  type(text) { return this.act("type", text); }
+  textContent() { return this.act("textContent"); }
+  inputValue() { return this.act("inputValue"); }
+  describe() { return this.act("describe"); }
+  count() { return this.act("count"); }
+  exists() { return this.act("exists"); }
+}
+class PageTools extends RpcTarget {
+  snapshot() { return callHost("snapshot"); }
+  screenshot(options) { return callHost("screenshot", options || {}); }
+  enableScreenCapture() { return callHost("enableScreenCapture"); }
+  title() { return callHost("title"); }
+  url() { return callHost("url"); }
+  getByRole(role, options) { return new Locator({ kind: "role", role, name: options && options.name }); }
+  getByLabelText(text) { return new Locator({ kind: "label", text }); }
+  getByText(text) { return new Locator({ kind: "text", text }); }
+  getByPlaceholderText(text) { return new Locator({ kind: "placeholder", text }); }
+  getByTestId(id) { return new Locator({ kind: "testid", id }); }
+  locator(selector) { return new Locator({ kind: "css", selector }); }
+}
+
+try {
+  const project = newWebSocketRpcSession(new WebSocket(config.connectUrl, [PROTOCOL_PREFIX + config.token]));
+  const tools = new PageTools();
+  await project.provideCapability({ capability: tools, flattenNestedPaths: false, instructions: INSTRUCTIONS, path, type: "live", types: TYPES });
+  window.parent.postMessage({ __itxBridge: true, type: "ready", path }, "*");
+} catch (error) {
+  window.parent.postMessage({ __itxBridge: true, type: "error", error: String((error && error.message) || error) }, "*");
+}
+</script>
+</body>
+</html>`;
+}
+
+// The pasted host snippet's static body. It has zero imports and never opens a
+// socket: it only drives the host DOM (plain APIs) and relays results to the
+// bridge iframe over postMessage. \`ITX\` (config) is prepended by generateSnippet.
+const PAGE_DEBUGGING_HOST_SNIPPET_BODY = String.raw`
+  const WIDGET_ID = "__itx_page_debugging_widget";
+  const bridgeParams = new URLSearchParams({ connectUrl: ITX.connectUrl, token: ITX.token, path: JSON.stringify(ITX.path) });
+  const iframe = document.createElement("iframe");
+  iframe.setAttribute("aria-hidden", "true");
+  iframe.title = "ITERATE page debugging bridge";
+  iframe.style.cssText = "position:fixed;left:-99999px;bottom:0;width:1px;height:1px;border:0;opacity:0";
+  iframe.src = ITX.bridgeUrl + "#" + bridgeParams.toString();
+  (document.body || document.documentElement).appendChild(iframe);
+  window.__itxPageDebugging = { iframe: iframe, stop: function () { iframe.remove(); removeWidget(); } };
+
+  function reply(id, ok, resultOrError) {
+    const message = ok
+      ? { __itxHost: true, id: id, ok: true, result: resultOrError }
+      : { __itxHost: true, id: id, ok: false, error: String((resultOrError && resultOrError.message) || resultOrError) };
+    iframe.contentWindow.postMessage(message, ITX.workerOrigin);
+  }
+
+  window.addEventListener("message", async function (event) {
+    if (event.source !== iframe.contentWindow) return;
+    if (event.origin !== ITX.workerOrigin) return;
+    const data = event.data;
+    if (!data || data.__itxBridge !== true) return;
+    if (data.type === "ready") { installWidget(); return; }
+    if (data.type === "error") { console.error("[itx] bridge failed:", data.error); return; }
+    if (typeof data.id !== "number" || !data.op) return;
+    try { reply(data.id, true, await runOp(data.op, data.payload || {})); }
+    catch (error) { reply(data.id, false, error); }
+  });
+
+  function runOp(op, payload) {
+    if (op === "snapshot") return snapshot();
+    if (op === "title") return document.title;
+    if (op === "url") return location.href;
+    if (op === "screenshot") return renderScreenshot(payload);
+    if (op === "enableScreenCapture") return { error: "screen-capture-unavailable", hint: "Screen capture is not wired in the CSP-safe bridge demo." };
+    if (op === "locator") return locatorAction(payload);
+    throw new Error("unknown op: " + op);
+  }
+
+  function cssEscape(value) {
+    if (window.CSS && CSS.escape) return CSS.escape(String(value));
+    return String(value).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+  }
+  function roleOf(el) {
+    const explicit = el.getAttribute && el.getAttribute("role");
+    if (explicit) return explicit;
+    const tag = el.tagName ? el.tagName.toLowerCase() : "";
+    if (tag === "button") return "button";
+    if (tag === "a" && el.hasAttribute("href")) return "link";
+    if (tag === "input") {
+      const type = (el.getAttribute("type") || "text").toLowerCase();
+      if (type === "button" || type === "submit" || type === "reset") return "button";
+      if (type === "checkbox") return "checkbox";
+      if (type === "radio") return "radio";
+      return "textbox";
+    }
+    if (tag === "textarea") return "textbox";
+    if (tag === "select") return "combobox";
+    if (tag[0] === "h" && tag.length === 2) return "heading";
+    if (tag === "img") return "img";
+    return "";
+  }
+  function accessibleName(el) {
+    const aria = el.getAttribute && el.getAttribute("aria-label");
+    if (aria) return aria.trim();
+    const labelledby = el.getAttribute && el.getAttribute("aria-labelledby");
+    if (labelledby) { const ref = document.getElementById(labelledby); if (ref) return (ref.textContent || "").trim(); }
+    if (el.id) { const label = document.querySelector('label[for="' + cssEscape(el.id) + '"]'); if (label) return (label.textContent || "").trim(); }
+    const wrapLabel = el.closest && el.closest("label");
+    if (wrapLabel) return (wrapLabel.textContent || "").trim();
+    if (el.placeholder) return el.placeholder.trim();
+    return (el.textContent || "").trim();
+  }
+  function resolveAll(query) {
+    if (!query) return [];
+    if (query.kind === "css") return Array.from(document.querySelectorAll(query.selector));
+    if (query.kind === "testid") return Array.from(document.querySelectorAll('[data-testid="' + cssEscape(query.id) + '"]'));
+    if (query.kind === "placeholder") return Array.from(document.querySelectorAll("input,textarea")).filter(function (el) { return (el.getAttribute("placeholder") || "") === query.text; });
+    if (query.kind === "label") return Array.from(document.querySelectorAll("input,textarea,select")).filter(function (el) { return accessibleName(el) === query.text; });
+    if (query.kind === "text") return Array.from(document.querySelectorAll("body *")).filter(function (el) { return (el.textContent || "").trim() === query.text && el.children.length === 0; });
+    if (query.kind === "role") return Array.from(document.querySelectorAll("body *")).filter(function (el) { return roleOf(el) === query.role && (query.name == null || accessibleName(el) === query.name); });
+    return [];
+  }
+  function resolveOne(query, index) {
+    const el = resolveAll(query)[index || 0];
+    if (!el) throw new Error("no element for " + JSON.stringify(query) + " at index " + (index || 0));
+    return el;
+  }
+  function setValue(el, value) {
+    if (el.isContentEditable) { el.textContent = value; el.dispatchEvent(new InputEvent("input", { bubbles: true })); return; }
+    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
+    if (descriptor && descriptor.set) descriptor.set.call(el, value); else el.value = value;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+  function describeElement(el) {
+    return {
+      tag: el.tagName ? el.tagName.toLowerCase() : null,
+      role: roleOf(el) || null,
+      name: accessibleName(el) || null,
+      text: ((el.textContent || "").trim().slice(0, 120)) || null,
+      value: el.value == null ? null : el.value,
+      testid: el.getAttribute ? el.getAttribute("data-testid") : null,
+    };
+  }
+  async function locatorAction(payload) {
+    const action = payload.action;
+    if (action === "count") return resolveAll(payload.query).length;
+    if (action === "exists") return resolveAll(payload.query).length > 0;
+    const el = resolveOne(payload.query, payload.index);
+    if (action === "click") { el.click(); return true; }
+    if (action === "dblclick") { el.click(); el.click(); return true; }
+    if (action === "hover") { el.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })); return true; }
+    if (action === "fill") { setValue(el, payload.value == null ? "" : String(payload.value)); return true; }
+    if (action === "type") { setValue(el, (el.value || "") + (payload.value == null ? "" : String(payload.value))); return true; }
+    if (action === "textContent") return (el.textContent || "").trim();
+    if (action === "inputValue") return el.value == null ? null : el.value;
+    if (action === "describe") return describeElement(el);
+    throw new Error("unknown locator action: " + action);
+  }
+  function snapshot() {
+    const elements = Array.from(document.querySelectorAll("body *")).map(describeElement).filter(function (entry) { return entry.role || entry.name || entry.text; }).slice(0, 100);
+    return { title: document.title, url: location.href, text: (document.body ? document.body.innerText : "").slice(0, 4000), elements: elements };
+  }
+  async function renderScreenshot(payload) {
+    try {
+      const maxWidth = (payload && payload.maxWidth) || 960;
+      const node = document.documentElement;
+      const rect = node.getBoundingClientRect();
+      const width = Math.max(1, Math.min(maxWidth, Math.ceil(rect.width || 1)));
+      const height = Math.max(1, Math.ceil((rect.height || 1) * width / (rect.width || 1)));
+      const clone = node.cloneNode(true);
+      Array.from(clone.querySelectorAll("iframe, script, #" + WIDGET_ID)).forEach(function (dead) { dead.remove(); });
+      clone.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
+      const xml = new XMLSerializer().serializeToString(clone);
+      const svg = "<svg xmlns='http://www.w3.org/2000/svg' width='" + width + "' height='" + height + "'><foreignObject width='100%' height='100%'>" + xml + "</foreignObject></svg>";
+      const image = new Image();
+      image.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+      await image.decode();
+      const canvas = document.createElement("canvas");
+      canvas.width = width; canvas.height = height;
+      canvas.getContext("2d").drawImage(image, 0, 0, width, height);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.6);
+      return { base64: dataUrl.split(",")[1], height: height, mime: "image/jpeg", mode: "render", width: width };
+    } catch (error) {
+      return { error: "render-failed", message: String((error && error.message) || error), mode: "render", hint: "The host CSP may block data: images or tainted-canvas export." };
+    }
+  }
+
+  function widgetEscape(value) { return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+  function menuButton(label) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.style.cssText = "background:#fff;border:0;border-radius:6px;color:#1f2933;cursor:pointer;font:600 13px system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;padding:9px 10px;text-align:left";
+    return button;
+  }
+  function removeWidget() { const existing = document.getElementById(WIDGET_ID); if (existing) existing.remove(); }
+  function installWidget() {
+    removeWidget();
+    const widget = document.createElement("div");
+    widget.id = WIDGET_ID;
+    widget.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:2147483647;font:13px system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif";
+    const logo = document.createElement("button");
+    logo.type = "button";
+    logo.setAttribute("aria-label", "Open ITERATE sharing menu");
+    logo.style.cssText = "align-items:center;background:#111827;border:0;border-radius:999px;box-shadow:0 12px 32px rgba(15,23,42,.28);color:#fff;cursor:pointer;display:flex;font:800 12px system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;gap:8px;padding:10px 13px";
+    logo.innerHTML = '<svg aria-hidden="true" width="22" height="22" viewBox="0 0 500 500" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;flex:0 0 auto;border-radius:5px"><rect width="500" height="500" fill="black"/><path d="M264.649 170.149H289.821L286.092 186.904L276.303 233.444L270.709 259.971L263.717 293.015L258.124 320.008L251.131 352.586L249.267 364.687V371.668L249.733 372.133H253.462L259.522 369.806L266.048 365.617L275.371 357.24L282.829 349.328L286.558 345.14L288.888 346.071L294.948 350.725L308 360.498L307.068 362.36L303.339 367.944L296.813 376.322L291.685 382.837L286.558 388.422L282.363 393.076L275.837 399.592L272.108 402.849L267.446 406.573L262.785 409.83L256.725 413.554L247.869 417.742L238.08 420.535L231.554 421H224.096L216.637 420.069L211.51 418.673L206.382 416.811L201.255 413.088L196.594 408.434L192.865 400.988L191.466 394.938L191 389.818V383.768L193.797 365.152L199.857 335.832L207.315 301.392L224.096 223.205L225.028 216.224V206.916L224.562 205.054L222.231 204.123L219.434 203.193L206.382 203.658L196.127 204.589H193.331V178.526L194.263 175.734L258.59 170.615L264.649 170.149Z" fill="white"/><path d="M264.649 78H268.844L275.836 78.9308L282.362 80.7924L287.49 83.5848L292.151 87.7734L295.414 92.8928L297.278 96.616L299.143 105.924L299.609 113.836L299.143 118.49L298.677 122.213L296.812 128.729L293.549 134.779L290.286 138.502L286.091 141.76L282.362 143.621L278.167 145.018L274.438 145.948L267.912 146.414H260.92L254.394 145.483L249.267 144.087L244.139 141.294L239.944 138.037L236.681 133.383L233.884 127.332L232.486 121.282L232.02 117.559V108.716L232.952 101.735L234.816 95.6852L237.613 90.1004L240.41 86.3772L246.936 82.1886L252.529 79.8616L259.522 78.4654L264.649 78Z" fill="white"/></svg><span>ITERATE</span>';
+    const menu = document.createElement("div");
+    menu.style.cssText = "background:#fff;border:1px solid #d9e2ec;border-radius:10px;bottom:52px;box-shadow:0 18px 44px rgba(15,23,42,.22);color:#1f2933;display:none;min-width:250px;overflow:hidden;position:absolute;right:0";
+    const header = document.createElement("div");
+    header.style.cssText = "padding:12px 12px 8px;border-bottom:1px solid #eef2f7";
+    header.innerHTML = '<div style="font-weight:750">Sharing with ITERATE</div><div style="color:#52606d;font-size:12px;margin-top:3px">Mounted at ' + widgetEscape(ITX.path.join(".")) + '</div>';
+    const status = document.createElement("div");
+    status.style.cssText = "background:#f8fafc;color:#334e68;font-size:12px;line-height:1.35;min-height:34px;padding:9px 12px";
+    status.textContent = "Connected via the ITERATE bridge. Drive this tab from the demo page.";
+    const preview = document.createElement("img");
+    preview.alt = "Last screenshot shared with ITERATE";
+    preview.style.cssText = "display:none;width:100%;max-height:120px;object-fit:cover;border-top:1px solid #eef2f7";
+    const actions = document.createElement("div");
+    actions.style.cssText = "display:grid;padding:6px";
+    const shareScreenshot = menuButton("Share a screenshot");
+    shareScreenshot.addEventListener("click", async function () {
+      shareScreenshot.disabled = true;
+      status.textContent = "Preparing screenshot...";
+      const image = await renderScreenshot({ maxWidth: 960 });
+      if (image.error) { status.textContent = image.hint || image.message || image.error; }
+      else { preview.src = "data:" + image.mime + ";base64," + image.base64; preview.style.display = "block"; status.textContent = "Screenshot shared: " + image.width + "x" + image.height + " via " + image.mode + "."; }
+      shareScreenshot.disabled = false;
+    });
+    const enableCapture = menuButton("Enable screen capture");
+    enableCapture.addEventListener("click", function () { status.textContent = "Screen capture is not wired in the CSP-safe bridge demo."; });
+    const copyUrl = menuButton("Copy page URL");
+    copyUrl.addEventListener("click", async function () { try { await navigator.clipboard.writeText(location.href); status.textContent = "Page URL copied."; } catch (error) { status.textContent = "Copy blocked: " + location.href; } });
+    const stopSharing = menuButton("Stop sharing");
+    stopSharing.style.color = "#b42318";
+    stopSharing.addEventListener("click", async function () {
+      stopSharing.disabled = true;
+      status.textContent = "Stopping sharing...";
+      try { if (ITX.revokeUrl) await fetch(ITX.revokeUrl, { headers: { authorization: "Bearer " + ITX.token }, method: "POST" }); }
+      catch (error) { /* best effort */ }
+      finally { iframe.remove(); widget.remove(); }
+    });
+    actions.append(shareScreenshot, enableCapture, copyUrl, stopSharing);
+    menu.append(header, actions, status, preview);
+    widget.append(menu, logo);
+    logo.addEventListener("click", function () { menu.style.display = menu.style.display === "none" ? "block" : "none"; });
+    (document.body || document.documentElement).appendChild(widget);
+  }
+`;
 
 const PAGE_DEBUGGING_CLIENT_MODULE = `
 import { newWebSocketRpcSession, RpcTarget } from "https://esm.sh/capnweb@0.8.0";
@@ -1305,6 +1626,6 @@ function isVisible(element) {
   return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
 }
 
-const PAGE_TOOLS_INSTRUCTIONS = "In-page PageTools. Use snapshot first for semantic structure. Use screenshot when visual layout, canvas, iframe, or styling matters. Screen capture is host-tab pixels after the user enables capture in the target page; render mode is a silent host-DOM fallback.";
-const PAGE_TOOLS_TYPES = "export type Capability = PageTools; interface ScreenshotResult { mime?: string; base64?: string; width?: number; height?: number; mode?: 'capture' | 'render'; error?: string; hint?: string; message?: string; } interface PageTools { snapshot(): Promise<unknown>; enableScreenCapture(): Promise<unknown>; screenshot(options?: { mode?: 'auto' | 'capture' | 'render'; maxWidth?: number; quality?: number; selector?: string }): Promise<ScreenshotResult>; getByRole(role: string, options?: { name?: string }): Locator; getByLabelText(text: string): Locator; getByText(text: string): Locator; locator(selector: string): Locator; } interface Locator { click(): Promise<boolean>; fill(value: string): Promise<boolean>; textContent(): Promise<string | null>; inputValue(): Promise<string | null>; describe(): Promise<unknown>; }";
+const PAGE_TOOLS_INSTRUCTIONS = ${JSON.stringify(PAGE_TOOLS_INSTRUCTIONS)};
+const PAGE_TOOLS_TYPES = ${JSON.stringify(PAGE_TOOLS_TYPES)};
 `;
