@@ -126,7 +126,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     });
   }
 
-  useTunnelingProxy(relay: TunnelingProxy): ProjectEgressIntercept {
+  useEgressHttpsProxy(relay: TunnelingProxy): ProjectEgressIntercept {
     const mode: ProjectEgressMode = {
       kind: "tunneling-proxy",
       retained: deepRetainRpcStubs(relay),

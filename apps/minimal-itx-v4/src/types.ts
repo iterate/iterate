@@ -331,7 +331,7 @@ export interface ProjectEgressIntercept extends Disposable {
  * `fetch` is the explicit outbound door. Dynamic workers' bare `fetch()` uses
  * the same project egress path through the WorkerEntrypoint gateway.
  *
- * `intercept` and `useTunnelingProxy` install one live runtime
+ * `intercept` and `useEgressHttpsProxy` install one live runtime
  * egress mode on the Project Durable Object. Last writer wins; disposing or
  * releasing the handle clears only the mode it installed if it is still
  * current.
@@ -339,7 +339,7 @@ export interface ProjectEgressIntercept extends Disposable {
 export interface ProjectEgress {
   fetch(req: Request): Promise<Response>;
   intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;
-  useTunnelingProxy(relay: TunnelingProxy): Promise<ProjectEgressIntercept>;
+  useEgressHttpsProxy(relay: TunnelingProxy): Promise<ProjectEgressIntercept>;
 }
 
 export type ProjectDescription = {

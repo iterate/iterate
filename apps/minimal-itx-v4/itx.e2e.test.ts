@@ -920,7 +920,7 @@ describe("minimal itx v4", () => {
         description: "blind egress proof secret to be available",
       });
 
-      using intercept = await project.egress.useTunnelingProxy(relay);
+      using intercept = await project.egress.useEgressHttpsProxy(relay);
       const request = new Request(`${target.url}/secret-path?token=worker-only`, {
         body: "payload hidden from relay",
         headers: {

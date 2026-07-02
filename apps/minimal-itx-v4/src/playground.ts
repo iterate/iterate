@@ -519,7 +519,7 @@ async function runBlindRelayListen({
       token: TRUSTED_INTERNAL_ITX_TOKEN,
     });
     const project = await sharedDemoProject(root, demoId);
-    relayHandle = await project.egress.useTunnelingProxy(relay);
+    relayHandle = await project.egress.useEgressHttpsProxy(relay);
     await postEvent(baseUrl, demoId, {
       phase: "cli_listening",
       message: "Local blind relay is listening on shared project " + PLAYGROUND_DEMO_PROJECT_ID + ".",
@@ -827,7 +827,7 @@ function landingHtml(origin: string): string {
       "// secret and terminates TLS itself — so the real token flows out",
       "// through YOUR machine and the remote server sees YOUR IP address,",
       "// but you only ever move ciphertext.",
-      "using handle = await project.egress.useTunnelingProxy({",
+      "using handle = await project.egress.useEgressHttpsProxy({",
       "  async dial({ host, port }) {",
       "    const socket = net.connect({ host, port });",
       "    return { read(), write(bytes), close() }; // move raw TLS records",

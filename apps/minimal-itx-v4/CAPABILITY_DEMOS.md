@@ -14,7 +14,7 @@ were local.
   capability. The worker, or the demo page acting as an agent, drives that tab
   remotely: snapshot the DOM, click, fill, screenshot.
 
-In both cases the shape is identical: `project.egress.useTunnelingProxy(relay)`
+In both cases the shape is identical: `project.egress.useEgressHttpsProxy(relay)`
 and `connectPageTools(...)` each hand the project a `RpcTarget` that outlives the
 call, and the project invokes it later. That symmetry is the point — ITX lets an
 untrusted-to-the-worker client lend a narrow, live capability without the worker
