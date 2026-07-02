@@ -13,7 +13,6 @@ import { Identifier } from "@iterate-com/ui/components/identifier";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
-import { deleteProjectServerFn } from "~/lib/project-server-fns.ts";
 import {
   fetchProjectsList,
   projectsListQueryKey,
@@ -66,16 +65,6 @@ function ProjectsIndexPage() {
   });
   const projects = list.data ?? [];
   const hasProjects = projects.length > 0;
-
-  const deleteProject = useMutation({
-    mutationFn: async (input: { id: string }) => {
-      return await deleteProjectServerFn({ data: input });
-    },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: projectsListQueryKey });
-    },
-    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
-  });
 
   // "Set up" for a project the auth worker knows about but this deployment's
   // engine does not: re-run `projects.create` on the itx session with the
@@ -169,7 +158,6 @@ function ProjectsIndexPage() {
           projects={projects}
           organizations={organizations}
           projectHostnameBases={routeConfig.projectHostnameBases}
-          deleteProject={deleteProject}
           recoverProject={recoverProject}
         />
       )}
@@ -181,13 +169,11 @@ const PROJECT_ROW_GRID =
   "grid min-w-[980px] grid-cols-[240px_220px_minmax(220px,1fr)_220px_200px] items-start gap-3 px-3";
 
 function ProjectsTable({
-  deleteProject,
   organizations,
   projectHostnameBases,
   projects,
   recoverProject,
 }: {
-  deleteProject: UseMutationResult<unknown, Error, { id: string }>;
   organizations: OrganizationSummary[];
   projectHostnameBases: readonly string[];
   projects: ProjectListEntry[];
@@ -235,11 +221,7 @@ function ProjectsTable({
               )}
             </div>
             <ProjectStatusCell project={project} />
-            <ProjectActionsCell
-              project={project}
-              deleteProject={deleteProject}
-              recoverProject={recoverProject}
-            />
+            <ProjectActionsCell project={project} recoverProject={recoverProject} />
           </div>
         );
       })}
@@ -278,11 +260,9 @@ function ProjectStatusCell({ project }: { project: ProjectListEntry }) {
 }
 
 function ProjectActionsCell({
-  deleteProject,
   project,
   recoverProject,
 }: {
-  deleteProject: UseMutationResult<unknown, Error, { id: string }>;
   project: ProjectListEntry;
   recoverProject: UseMutationResult<unknown, Error, ProjectListEntry>;
 }) {
@@ -298,7 +278,6 @@ function ProjectActionsCell({
   }
 
   if (project.deploymentStatus === "ready") {
-    const isDeleting = deleteProject.isPending && deleteProject.variables?.id === project.id;
     return (
       <div className="flex justify-end gap-2">
         <Button
@@ -311,14 +290,6 @@ function ProjectActionsCell({
           }
         >
           Open
-        </Button>
-        <Button
-          size="sm"
-          variant="destructive"
-          onClick={() => deleteProject.mutate({ id: project.id })}
-          disabled={isDeleting}
-        >
-          {isDeleting ? "Deleting..." : "Delete"}
         </Button>
       </div>
     );
