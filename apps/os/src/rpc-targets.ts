@@ -26,7 +26,11 @@ import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
-import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "./domains/repos/utils.ts";
+import {
+  PROJECT_REPO_PATH,
+  PROJECT_WORKER_ENTRY_POINT,
+  PROJECT_WORKER_SOURCE_EXCLUDE,
+} from "./domains/repos/utils.ts";
 import { normalizeSecretPath } from "./domains/secrets/utils.ts";
 import {
   completeGoogleConnect,
@@ -1131,9 +1135,12 @@ function defaultProjectWorkerRef(): StatelessDynamicWorkerRef {
   return {
     path: "/",
     source: {
-      repoPath: PROJECT_REPO_PATH,
-      sourcePath: PROJECT_WORKER_SOURCE_PATH,
-      type: "repo",
+      files: {
+        exclude: PROJECT_WORKER_SOURCE_EXCLUDE,
+        repoPath: PROJECT_REPO_PATH,
+        type: "repo",
+      },
+      options: { entryPoint: PROJECT_WORKER_ENTRY_POINT },
     },
     type: "stateless",
   };

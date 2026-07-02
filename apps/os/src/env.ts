@@ -19,6 +19,10 @@ export interface Env {
    * project directory (project-directory.ts). */
   PROJECT_DIRECTORY: KVNamespace;
   SECRET_ENCRYPTION_KEY: string;
+  /** Content-addressed dynamic worker build artifact cache
+   * (domains/workers/artifact-store.ts). Every entry is reproducible from its
+   * deterministic build key, so the namespace is safe to wipe. */
+  WORKER_BUILD_CACHE: KVNamespace;
 
   AGENT: DurableObjectNamespace<
     import("./domains/agents/agent-durable-object.ts").AgentDurableObject

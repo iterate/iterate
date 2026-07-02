@@ -91,6 +91,17 @@ overrides:
   "@tanstack/react-query": "5.91.0"
   "wrangler": "4.102.0"
 
+packageExtensions:
+  # @valtown/codemirror-ts's .d.ts imports @typescript/vfs without declaring
+  # it, so it resolves through pnpm's private hoist — which flips to the
+  # typescript@6-peered vfs instance now that @cloudflare/worker-bundler pulls
+  # typescript 6 in. Declaring the peers pins it to the workspace's own
+  # typescript/vfs pair.
+  "@valtown/codemirror-ts":
+    peerDependencies:
+      "@typescript/vfs": "*"
+      typescript: "*"
+
 patchedDependencies:
   # The itx engine (apps/os/src/next) needs ctx.exports loopback RPC types and
   # a non-never RPC return fallback for opaque stream event payloads (the

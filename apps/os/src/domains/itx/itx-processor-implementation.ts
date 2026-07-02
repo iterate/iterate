@@ -389,12 +389,17 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     // runScript is deliberately expressed as a stateless inline DynamicWorkerRef. That
     // keeps script execution on the same DynamicWorkerRunner path as project workers
     // and provided stateless capabilities; ITX adds only the journal events.
+    // `bundle: false` over plain JavaScript is the loader-ready fast path in
+    // resolveWorkerSource: scripts run on every agent turn and must not pay a
+    // build round trip.
     return {
       path: this.#path,
       source: {
-        mainModule: "main.js",
-        modules: { "main.js": source },
-        type: "inline",
+        files: {
+          files: { "main.js": source },
+          type: "inline",
+        },
+        options: { bundle: false, entryPoint: "main.js" },
       },
       entrypoint: "ScriptEntrypoint",
       props: { scriptHash: await sha256Hex(code) },

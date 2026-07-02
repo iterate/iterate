@@ -17,6 +17,7 @@ import {
   OpenAiWsProcessorContract,
 } from "../agents/openai-ws-processor-contract.ts";
 import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
+import { WorkerBuildProcessorContract } from "../workers/worker-build-processor-contract.ts";
 import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
 import { SlackAgentProcessorContract } from "../integrations/slack-agent-processor-contract.ts";
 import { SlackProcessorContract } from "../integrations/slack-processor-contract.ts";
@@ -120,6 +121,17 @@ export class ProjectProcessor extends StreamProcessor<
                 path: "/",
               }),
               processorSlug: ItxProcessorContract.slug,
+              subscriberType: "itx",
+            }),
+            // The worker build processor rides along with every ITX processor
+            // subscription: any scope that can run dynamic workers also owns
+            // their build lifecycle events.
+            buildDurableObjectProcessorSubscriptionConfiguredEvent({
+              durableObjectName: DurableObjectNameCodec.stringify({
+                projectId: this.deps.itx.projectId,
+                path: "/",
+              }),
+              processorSlug: WorkerBuildProcessorContract.slug,
               subscriberType: "itx",
             }),
           );
@@ -262,6 +274,9 @@ function agentBirthCertificateEvents(input: {
     subscription(CloudflareAiProcessorContract.slug, "agent"),
     subscription(OpenAiWsProcessorContract.slug, "agent"),
     subscription(ItxProcessorContract.slug, "itx"),
+    // Paired with the ITX subscription: agent scopes run dynamic workers
+    // (run-script, worker-backed tools), so their streams own build lifecycle.
+    subscription(WorkerBuildProcessorContract.slug, "itx"),
     ...(input.slack ? [subscription(SlackAgentProcessorContract.slug, "agent")] : []),
     {
       type: "events.iterate.com/agent/config-updated" as const,
@@ -288,7 +303,7 @@ function agentBirthCertificateEvents(input: {
           "Platform context for this agent:",
           `- Project id: ${input.projectId}`,
           `- Your agent stream path: ${input.childPath} (your itx scope; your transcript lives here)`,
-          '- The project repo is at repo path "/" — seeded with worker.js (a static homepage + router over the apps below), apps/hello/worker.js (stateless), apps/counter/worker.js (stateful counter page), AGENTS.md, and ONBOARDING.md.',
+          '- The project repo is at repo path "/" — seeded with worker.ts (a static homepage + router over the apps below, plus an itx.worker.slack.* Slack SDK surface), apps/hello/worker.ts (stateless), apps/counter/worker.ts (stateful counter page), package.json (npm deps, installed at worker build time), itx.ts (platform capability types), AGENTS.md, and ONBOARDING.md.',
           "- Read the repo with itx.repo.readFile({ path }) and itx.repo.listFiles(); change it with itx.repo.commitFiles({ message, changes: [{ path, content }] }).",
           "- Other agents live at /agents/<name> (itx.agents.list() / itx.agents.get(path)); Slack thread agents appear under /agents/slack/<channel>/ts-<ts>; secrets under /secrets/**.",
           '- Streams are path-addressed: itx.streams.get(path).append(event) / getEvents() / waitFor(); path "/" is the project root stream.',

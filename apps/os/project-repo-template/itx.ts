@@ -1,3 +1,7 @@
+// The full itx capability surface, exactly as the platform publishes it.
+// This file is kept in sync with the platform by lint codegen — edit the
+// platform types, not this copy.
+// codegen:start {preset: copy, source: ../src/types.ts}
 /**
  * Public ITX capability contract.
  *
@@ -889,3 +893,4 @@ export type CfExecutionContext = {
   exports: ExecutionContext["exports"];
   waitUntil?: ExecutionContext["waitUntil"];
 };
+// codegen:end

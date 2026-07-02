@@ -238,6 +238,14 @@ const projectDirectory = await KVNamespace("project-directory", {
   adopt: true,
 });
 
+// Content-addressed dynamic worker build artifact cache
+// (src/domains/workers/artifact-store.ts): hash-keyed immutable loader-ready
+// bundles, reproducible from their build keys — safe to wipe.
+const workerBuildCache = await KVNamespace("worker-build-cache", {
+  title: `${ctx.workerName}-worker-build-cache`,
+  adopt: true,
+});
+
 // ---- Durable Object namespaces ---------------------------------------------
 // One declaration per class, `scriptName` = the OWNING worker. Alchemy strips
 // `script_name` (and runs class migrations) when the namespace is bound on its
@@ -392,6 +400,7 @@ const itxBindings = {
   ),
   STREAM: stream,
   WORKER: statefulWorker,
+  WORKER_BUILD_CACHE: workerBuildCache,
 };
 // @cloudflare/shell (repo git) and the dynamic worker loader need Node APIs —
 // itx originally ran its whole worker with nodejs_compat.

@@ -116,6 +116,7 @@ export class DynamicWorkerRunner {
     ref: DynamicWorkerRef,
   ): Promise<{ resolved: ResolvedWorkerSource; worker: WorkerStub }> {
     const resolved = await resolveWorkerSource({
+      path: ref.path,
       projectId: this.#projectId,
       source: ref.source,
     });

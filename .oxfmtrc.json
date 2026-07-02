@@ -22,6 +22,7 @@
     ".next/",
     ".wrangler/",
     "routeTree.gen.ts",
+    "project-repo-template.generated.ts",
     "worker-configuration.d.ts",
     "logs.json",
     ".github/workflows/",

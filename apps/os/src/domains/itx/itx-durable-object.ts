@@ -11,6 +11,9 @@ import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import { ItxRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
+import { KvWorkerBuildArtifactStore } from "../workers/artifact-store.ts";
+import { WorkerBuildProcessorContract } from "../workers/worker-build-processor-contract.ts";
+import { WorkerBuildProcessor } from "../workers/worker-build-processor-implementation.ts";
 import { ItxProcessorContract } from "./itx-processor-contract.ts";
 import {
   ItxProcessor,
@@ -65,6 +68,24 @@ export class ItxDurableObject extends DurableObject<Env> {
         }),
       }),
   );
+  // Installed wherever the ITX processor is installed: any scope that can run
+  // ITX dynamic work is a scope whose stream owns worker build lifecycle. The
+  // repo domain stays a file source only — build coordination lives here.
+  readonly #workerBuildProcessor = this.#processorHost.add(
+    WorkerBuildProcessorContract.slug,
+    (deps) =>
+      new WorkerBuildProcessor({
+        ...deps,
+        artifactStore: new KvWorkerBuildArtifactStore(this.env.WORKER_BUILD_CACHE),
+        repoSnapshot: (source) =>
+          this.env.REPO.getByName(
+            DurableObjectNameCodec.stringify({
+              path: source.repoPath,
+              projectId: this.#name.projectId,
+            }),
+          ).getFilesSnapshot(source),
+      }),
+  );
 
   #parentItxScope(): ParentItxScope | undefined {
     const parentPath = parentScopePath(this.#name.path);
@@ -87,6 +108,10 @@ export class ItxDurableObject extends DurableObject<Env> {
 
   get processor() {
     return new StreamProcessorRpcTarget(this.#itxProcessor);
+  }
+
+  get workerBuildProcessor() {
+    return new StreamProcessorRpcTarget(this.#workerBuildProcessor);
   }
 
   // Return types are pinned shallow so `DurableObjectStub<ItxDurableObject>`

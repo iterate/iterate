@@ -9,11 +9,11 @@ import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import type { Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
+import { filterWorkerSnapshotPaths } from "../workers/source-masks.ts";
 import { stableSha256 } from "../workers/utils.ts";
-import type { ResolvedWorkerSource } from "../workers/worker-loader.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { CommitRepoFilesInput, CommitRepoFilesResult, RepoFileChange } from "../../types.ts";
-import { PROJECT_WORKER_SOURCE_PATH, RepoArtifactNameCodec } from "./utils.ts";
+import { RepoArtifactNameCodec } from "./utils.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
@@ -21,13 +21,16 @@ import { RepoProcessor } from "./repo-processor-implementation.ts";
 const REPO_DEFAULT_BRANCH = "main";
 const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 const REPO_DIR = "/repo";
-const WORKER_SOURCE_PROJECTION_VERSION = 1;
 
-type WorkerSourceProjection = ResolvedWorkerSource & {
+export type RepoFilesSnapshot = {
+  commitOid: string;
+  files: Record<string, string>;
+};
+
+export type RepoHead = {
   branch: string;
   commitOid: string;
-  sourcePath: string;
-  version: typeof WORKER_SOURCE_PROJECTION_VERSION;
+  contentHash: string;
 };
 
 export class RepoDurableObject extends DurableObject<Env> {
@@ -58,25 +61,85 @@ export class RepoDurableObject extends DurableObject<Env> {
     return new StreamProcessorRpcTarget(this.#repoProcessor);
   }
 
-  async getWorkerSource(args: { path: string }): Promise<ResolvedWorkerSource> {
-    const sourcePath = normalizeRepoFilePath(args.path);
+  /**
+   * The head of a branch, resolved from a durable cache on the hot path.
+   * Every write to the repo goes through this Durable Object (`commitFiles`
+   * and seeding), so the cache is authoritative once written; a cold miss
+   * repairs it with one shallow clone. The worker build resolver calls this on
+   * every branch-late-bound worker load, which is what makes a repo commit
+   * visible on the next use without a per-load clone.
+   *
+   * `contentHash` identifies the checkout's file contents (a poor man's git
+   * tree oid — the porcelain doesn't expose trees). Build keys prefer it over
+   * the commit oid so repos with identical content — every freshly seeded
+   * project repo — share one build artifact instead of each paying a bundler
+   * run and npm install.
+   */
+  async getHead(input: { branch?: string } = {}): Promise<RepoHead> {
+    const branch = input.branch ?? REPO_DEFAULT_BRANCH;
+    const cached = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
+    if (isRepoHeadRecord(cached)) return { branch, ...cached };
 
-    // Hot path: project ingress and dynamic worker calls ask the Repo DO for
-    // loader-ready source on every request. The synchronous KV API already has
-    // the DO storage cache behind it, so a durable projection is enough here; an
-    // extra JS Map would only duplicate the runtime's own cache and make
-    // invalidation harder to reason about.
-    const projected = this.projectedWorkerSource({
-      branch: REPO_DEFAULT_BRANCH,
-      sourcePath,
-    });
-    if (projected !== null) return projected;
+    const repo = await this.repoGitAccess();
+    const snapshot = await cloneRepoSnapshot({ branch, remote: repo.remote, token: repo.token });
+    const head = {
+      commitOid: snapshot.commitOid,
+      contentHash: await repoContentHash(await readCheckoutFiles(snapshot.filesystem)),
+    };
+    this.ctx.storage.kv.put(repoHeadStorageKey(branch), head);
+    return { branch, ...head };
+  }
 
-    return await this.materializeWorkerSourceProjection({
-      branch: REPO_DEFAULT_BRANCH,
-      overwrite: false,
-      sourcePath,
+  /**
+   * A masked file snapshot at a branch head or pinned commit — the repo file
+   * source for the worker build pipeline. One clone serves the whole snapshot;
+   * include/exclude globs bound what becomes build input.
+   */
+  async getFilesSnapshot(
+    input: {
+      branch?: string;
+      commitOid?: string;
+      exclude?: string[];
+      include?: string[];
+    } = {},
+  ): Promise<RepoFilesSnapshot> {
+    const repo = await this.repoGitAccess();
+    const filesystem = new InMemoryFs();
+    const git = createGit(filesystem, REPO_DIR);
+    const credentials = { password: repo.token, username: "x" };
+
+    if (input.commitOid !== undefined) {
+      // Pinned commits need history: a shallow head clone only contains the
+      // branch tip, so clone the default branch's history and check out the
+      // requested commit. Project repos are small; correctness beats depth
+      // tuning here.
+      await git.clone({ url: repo.remote, ...credentials });
+      await git.checkout({ ref: input.commitOid, force: true });
+    } else {
+      await git.clone({
+        branch: input.branch ?? repo.defaultBranch,
+        depth: 1,
+        singleBranch: true,
+        url: repo.remote,
+        ...credentials,
+      });
+    }
+
+    const [head] = await git.log({ depth: 1 });
+    if (!head) throw new Error("Repo has no commits.");
+    if (input.commitOid !== undefined && head.oid !== input.commitOid) {
+      throw new Error(`Repo checkout of ${input.commitOid} landed on ${head.oid}.`);
+    }
+
+    const checkout = await readCheckoutFiles(filesystem);
+    const selected = filterWorkerSnapshotPaths(Object.keys(checkout).sort(), {
+      exclude: input.exclude,
+      include: input.include,
     });
+    return {
+      commitOid: head.oid,
+      files: Object.fromEntries(selected.map((path) => [path, checkout[path]])),
+    };
   }
 
   whoami(): string {
@@ -95,15 +158,20 @@ export class RepoDurableObject extends DurableObject<Env> {
       token: repo.token,
     });
 
-    if (result.branch === repo.defaultBranch) {
-      // `commitFiles()` is our read-your-write boundary. Once it returns, callers
-      // expect `project.worker` and explicit repo-backed worker refs to see the
-      // pushed source, so main-branch commits refresh the durable source
-      // projection before the RPC resolves.
-      await this.refreshWorkerSourceProjectionsAfterMainCommit(result.changedPaths);
-    }
+    // `commitFiles()` is our read-your-write boundary: once it returns, the
+    // durable head cache names the pushed commit, so the next worker source
+    // resolution builds from it.
+    this.ctx.storage.kv.put(repoHeadStorageKey(result.branch), {
+      commitOid: result.commitOid,
+      contentHash: result.contentHash,
+    });
 
-    return result;
+    return {
+      branch: result.branch,
+      changedPaths: result.changedPaths,
+      commitOid: result.commitOid,
+      noChanges: result.noChanges,
+    };
   }
 
   /** Committed file contents at HEAD, or null when the path does not exist. */
@@ -132,106 +200,8 @@ export class RepoDurableObject extends DurableObject<Env> {
       remote: repo.remote,
       token: repo.token,
     });
-    const paths: string[] = [];
-    const walk = async (dir: string) => {
-      for (const entry of await snapshot.filesystem.readdir(dir)) {
-        if (dir === REPO_DIR && entry === ".git") continue;
-        const absolute = `${dir}/${entry}`;
-        const stat = await snapshot.filesystem.stat(absolute);
-        if (stat.type === "directory") await walk(absolute);
-        else paths.push(absolute.slice(REPO_DIR.length + 1));
-      }
-    };
-    await walk(REPO_DIR);
-    return { commitOid: snapshot.commitOid, paths: paths.sort() };
-  }
-
-  private projectedWorkerSource(input: { branch: string; sourcePath: string }) {
-    const key = workerSourceProjectionStorageKey(input);
-    const value = this.ctx.storage.kv.get<unknown>(key);
-    if (
-      isWorkerSourceProjection(value) &&
-      value.branch === input.branch &&
-      value.sourcePath === input.sourcePath &&
-      value.mainModule === input.sourcePath &&
-      typeof value.modules[input.sourcePath] === "string"
-    ) {
-      return projectionToResolvedWorkerSource(value);
-    }
-
-    if (value !== undefined) {
-      // This projection is an optimization over Git, not the repo authority. If a
-      // future shape change or failed deploy leaves junk in storage, discard it
-      // and fall back to Git materialization instead of serving ambiguous code.
-      this.ctx.storage.kv.delete(key);
-    }
-    return null;
-  }
-
-  private async materializeWorkerSourceProjection(input: {
-    branch: string;
-    overwrite: boolean;
-    sourcePath: string;
-  }): Promise<ResolvedWorkerSource> {
-    // This clone is intentionally outside the request hot path once the
-    // projection exists. We still keep it here as a lazy repair path for old
-    // projects and freshly-created repos, so project creation does not need a new
-    // repo/source-updated event just to seed the cache.
-    const repo = await this.repoGitAccess();
-    const source = await readRepoWorkerSource({
-      branch: input.branch,
-      path: input.sourcePath,
-      remote: repo.remote,
-      token: repo.token,
-    });
-    const projection = await workerSourceProjection({
-      branch: input.branch,
-      content: source.content,
-      commitOid: source.commitOid,
-      sourcePath: input.sourcePath,
-    });
-
-    if (!input.overwrite) {
-      // Lazy reads only fill a missing projection. A concurrent commit can push a
-      // newer worker and overwrite the latest pointer while this old clone is
-      // still running; in that case we return the newer durable projection and
-      // deliberately do not put the stale clone back into storage.
-      const current = this.projectedWorkerSource(input);
-      if (current !== null) return current;
-    }
-
-    this.ctx.storage.kv.put(workerSourceProjectionStorageKey(input), projection);
-    return projectionToResolvedWorkerSource(projection);
-  }
-
-  private async refreshWorkerSourceProjectionsAfterMainCommit(changedPaths: string[]) {
-    // Minimal ITX v4 currently treats repo-backed workers as single-file JS
-    // modules. Always refreshing the seeded project worker means README-only
-    // commits still advance the source cache key to the latest repo commit, while
-    // changed `.js` paths keep explicit dynamic refs from serving stale code.
-    const sourcePaths = new Set([
-      PROJECT_WORKER_SOURCE_PATH,
-      ...changedPaths.filter((path) => path.endsWith(".js")),
-    ]);
-
-    for (const sourcePath of sourcePaths) {
-      try {
-        await this.materializeWorkerSourceProjection({
-          branch: REPO_DEFAULT_BRANCH,
-          overwrite: true,
-          sourcePath,
-        });
-      } catch (error) {
-        if (!(error instanceof RepoSourceFileMissingError)) throw error;
-
-        // If a commit deletes a previously materialized worker file, the durable
-        // projection must disappear with it. Keeping the old projection would make
-        // `project.worker` keep serving code that is no longer in the repo.
-        this.ctx.storage.kv.delete(
-          workerSourceProjectionStorageKey({ branch: REPO_DEFAULT_BRANCH, sourcePath }),
-        );
-      }
-    }
+    const files = await readCheckoutFiles(snapshot.filesystem);
+    return { commitOid: snapshot.commitOid, paths: Object.keys(files).sort() };
   }
 
   private async createArtifactRepo(_input: { path: string; projectId: string | null }) {
@@ -241,11 +211,15 @@ export class RepoDurableObject extends DurableObject<Env> {
     const remote = this.artifactRemote(artifactName);
     const token = await artifactToken(this.requireArtifacts(), artifactName);
 
-    await seedArtifactRepo({
+    const seeded = await seedArtifactRepo({
       branch: defaultBranch,
       files: PROJECT_REPO_INITIAL_FILES,
       remote,
       token,
+    });
+    this.ctx.storage.kv.put(repoHeadStorageKey(defaultBranch), {
+      commitOid: seeded.commitOid,
+      contentHash: seeded.contentHash,
     });
 
     return {
@@ -302,7 +276,7 @@ async function seedArtifactRepo(input: {
   files: Array<{ content: string; path: string }>;
   remote: string;
   token: string;
-}) {
+}): Promise<{ commitOid: string; contentHash: string }> {
   const filesystem = new InMemoryFs();
   const git = createGit(filesystem, REPO_DIR);
   const credentials = { password: input.token, username: "x" };
@@ -350,6 +324,13 @@ async function seedArtifactRepo(input: {
   if (!pushed.ok) {
     throw new Error(`Failed to push ${input.branch}: ${JSON.stringify(pushed.refs)}`);
   }
+
+  const [head] = await git.log({ depth: 1 });
+  if (!head) throw new Error(`Seeded repo has no head commit on ${input.branch}.`);
+  return {
+    commitOid: head.oid,
+    contentHash: await repoContentHash(await readCheckoutFiles(filesystem)),
+  };
 }
 
 async function commitFilesToArtifactRepo(input: {
@@ -359,7 +340,7 @@ async function commitFilesToArtifactRepo(input: {
   message: string;
   remote: string;
   token: string;
-}): Promise<CommitRepoFilesResult> {
+}): Promise<CommitRepoFilesResult & { contentHash: string }> {
   const filesystem = new InMemoryFs();
   const git = createGit(filesystem, REPO_DIR);
   const credentials = { password: input.token, username: "x" };
@@ -397,6 +378,7 @@ async function commitFilesToArtifactRepo(input: {
       branch: input.branch,
       changedPaths,
       commitOid: head.oid,
+      contentHash: await repoContentHash(await readCheckoutFiles(filesystem)),
       noChanges: true,
     };
   }
@@ -420,6 +402,7 @@ async function commitFilesToArtifactRepo(input: {
     branch: input.branch,
     changedPaths,
     commitOid: commit.oid,
+    contentHash: await repoContentHash(await readCheckoutFiles(filesystem)),
     noChanges: false,
   };
 }
@@ -443,92 +426,42 @@ async function cloneRepoSnapshot(input: { branch: string; remote: string; token:
   return { commitOid: head.oid, filesystem, git };
 }
 
-class RepoSourceFileMissingError extends Error {
-  constructor(path: string) {
-    super(`repo does not contain ${path}`);
-  }
+function repoHeadStorageKey(branch: string) {
+  // The value is "latest head at this branch" ({ commitOid, contentHash }),
+  // not immutable history — exactly the late-bound pointer branch-backed
+  // worker file sources resolve through before pinning a build.
+  return `repo-head:${branch}`;
 }
 
-async function readRepoWorkerSource(input: {
-  branch: string;
-  path: string;
-  remote: string;
-  token: string;
-}) {
-  const filesystem = new InMemoryFs();
-  const git = createGit(filesystem, REPO_DIR);
-  await git.clone({
-    branch: input.branch,
-    depth: 1,
-    singleBranch: true,
-    url: input.remote,
-    username: "x",
-    password: input.token,
-  });
-
-  const [head] = await git.log({ depth: 1 });
-  if (!head) throw new Error("Repo has no commits.");
-
-  const absolutePath = `${REPO_DIR}/${input.path}`;
-  if (!(await filesystem.exists(absolutePath))) throw new RepoSourceFileMissingError(input.path);
-  return {
-    commitOid: head.oid,
-    content: await filesystem.readFile(absolutePath),
-  };
-}
-
-async function workerSourceProjection(input: {
-  branch: string;
-  content: string;
-  commitOid: string;
-  sourcePath: string;
-}): Promise<WorkerSourceProjection> {
-  return {
-    branch: input.branch,
-    cacheKey: await stableSha256({
-      commitOid: input.commitOid,
-      path: input.sourcePath,
-      type: "repo-commit-worker-source",
-    }),
-    commitOid: input.commitOid,
-    mainModule: input.sourcePath,
-    modules: { [input.sourcePath]: input.content },
-    sourcePath: input.sourcePath,
-    version: WORKER_SOURCE_PROJECTION_VERSION,
-  };
-}
-
-function projectionToResolvedWorkerSource(
-  projection: WorkerSourceProjection,
-): ResolvedWorkerSource {
-  return {
-    cacheKey: projection.cacheKey,
-    mainModule: projection.mainModule,
-    modules: projection.modules,
-  };
-}
-
-function workerSourceProjectionStorageKey(input: { branch: string; sourcePath: string }) {
-  // The value is "latest source at this branch/path", not immutable history. The
-  // immutable identity lives inside the projection as `commitOid` and `cacheKey`,
-  // which is what Worker Loader and stateful facet restart checks consume.
-  return `repo-worker-source:${input.branch}:${input.sourcePath}`;
-}
-
-function isWorkerSourceProjection(value: unknown): value is WorkerSourceProjection {
+function isRepoHeadRecord(value: unknown): value is { commitOid: string; contentHash: string } {
   if (value === null || typeof value !== "object") return false;
-  const record = value as Partial<WorkerSourceProjection>;
+  const record = value as { commitOid?: unknown; contentHash?: unknown };
   return (
-    record.version === WORKER_SOURCE_PROJECTION_VERSION &&
-    typeof record.branch === "string" &&
-    typeof record.cacheKey === "string" &&
     typeof record.commitOid === "string" &&
-    typeof record.mainModule === "string" &&
-    typeof record.sourcePath === "string" &&
-    record.modules !== null &&
-    typeof record.modules === "object" &&
-    Object.values(record.modules).every((module) => typeof module === "string")
+    record.commitOid.length > 0 &&
+    typeof record.contentHash === "string" &&
+    record.contentHash.length > 0
   );
+}
+
+/** All committed files of a checkout as one path -> content map (skips .git). */
+async function readCheckoutFiles(filesystem: InMemoryFs): Promise<Record<string, string>> {
+  const files: Record<string, string> = {};
+  const walk = async (dir: string) => {
+    for (const entry of await filesystem.readdir(dir)) {
+      if (dir === REPO_DIR && entry === ".git") continue;
+      const absolute = `${dir}/${entry}`;
+      const stat = await filesystem.stat(absolute);
+      if (stat.type === "directory") await walk(absolute);
+      else files[absolute.slice(REPO_DIR.length + 1)] = await filesystem.readFile(absolute);
+    }
+  };
+  await walk(REPO_DIR);
+  return files;
+}
+
+async function repoContentHash(files: Record<string, string>): Promise<string> {
+  return await stableSha256({ files, type: "repo-content" });
 }
 
 function parseCommitFilesInput(input: CommitRepoFilesInput): CommitRepoFilesInput {

@@ -718,24 +718,86 @@ export interface ItxAuth {
 }
 
 /**
- * Declarative source for a dynamic worker.
+ * Where a dynamic worker's source files come from.
  *
- * \`inline\` is the simplest execution primitive: the caller already has module
- * text and asks the Worker Loader to run it. \`repo\` keeps source identity
- * separate from runtime identity; the repo resolves the current worker source
- * and contributes its own cache key, so future repo commits affect the next use.
+ * \`inline\` supplies the file map directly — the primitive behind run-script and
+ * worker-backed provided capabilities where the caller hands over a small
+ * TypeScript entry file, helpers, and optionally a \`package.json\`. \`repo\` names
+ * a project repo snapshot: a branch (late-bound, so future commits affect the
+ * next use) or a pinned commit, narrowed by include/exclude glob masks so a
+ * large repo does not become build input by default.
  */
-export type DynamicWorkerSource =
+export type WorkerFileSource =
   | {
       type: "inline";
-      mainModule: string;
-      modules: Record<string, string>;
+      files: Record<string, string>;
     }
   | {
       type: "repo";
       repoPath: string;
-      sourcePath: string;
+      /** Defaults to the repo's default branch when omitted. */
+      ref?: { branch: string } | { commitOid: string };
+      include?: string[];
+      exclude?: string[];
     };
+
+/** Loader names accepted by Cloudflare's worker bundler \`loader\` option. */
+export type WorkerBundlerLoader =
+  | "js"
+  | "jsx"
+  | "ts"
+  | "tsx"
+  | "json"
+  | "css"
+  | "text"
+  | "binary"
+  | "base64"
+  | "dataurl";
+
+/**
+ * Build options for a dynamic worker.
+ *
+ * This mirrors Cloudflare's \`CreateWorkerOptions\` from
+ * \`@cloudflare/worker-bundler\` minus \`files\` (OS supplies files from the
+ * selected {@link WorkerFileSource}) — deliberately not a parallel option
+ * language. \`bundle: false\` is allowed; the invariant is one OS
+ * materialization pipeline, not one bundled output file. When the file map has
+ * a \`package.json\` with dependencies, the bundler installs them from the npm
+ * registry at build time.
+ */
+export type WorkerBuildOptions = {
+  /** Entry point file path relative to the source root (e.g. "worker.ts"). */
+  entryPoint?: string;
+  /** Bundle all dependencies into a single output file. Default: true. */
+  bundle?: boolean;
+  /** Modules kept external ("cloudflare:*" always is). */
+  externals?: string[];
+  /** Target environment. Default: "es2022". */
+  target?: string;
+  minify?: boolean;
+  sourcemap?: boolean;
+  /** npm registry URL for dependency installs. */
+  registry?: string;
+  jsx?: "transform" | "preserve" | "automatic";
+  jsxImportSource?: string;
+  define?: Record<string, string>;
+  loader?: Record<string, WorkerBundlerLoader>;
+  conditions?: string[];
+  virtualModules?: Record<string, string>;
+};
+
+/**
+ * Declarative source for a dynamic worker: an orthogonal file source plus
+ * Cloudflare-compatible build options.
+ *
+ * Materialization resolves \`files\` to a file map and builds it through
+ * Cloudflare's worker bundler; the loader-ready output is cached by a
+ * deterministic build key, so the same source+options never builds twice.
+ */
+export type DynamicWorkerSource = {
+  files: WorkerFileSource;
+  options?: WorkerBuildOptions;
+};
 
 type DynamicWorkerRefBase = {
   /**
@@ -784,14 +846,31 @@ export type DynamicWorkerRef = StatelessDynamicWorkerRef | StatefulDynamicWorker
 export type DynamicWorkerCapability<T extends object = Record<string, unknown>> = T & Disposable;
 
 /**
+ * Slack Web API surface exposed by the seeded project worker
+ * (\`itx.worker.slack.chat.postMessage({...})\`).
+ *
+ * The seeded repo implements this in userland with the real \`@slack/web-api\`
+ * package (installed by the worker build pipeline from its \`package.json\`), so
+ * any nested Web API method family resolves — the index signature reflects
+ * that this tree is as wide as the SDK's.
+ */
+export interface ProjectWorkerSlack {
+  chat: {
+    postMessage(input: Record<string, unknown>): Promise<Record<string, unknown>>;
+  } & Record<string, unknown>;
+  [family: string]: unknown;
+}
+
+/**
  * Default seeded project worker contract.
  *
- * This documents the reference repo's \`worker.js\` only. Arbitrary dynamic
+ * This documents the reference repo's \`worker.ts\` only. Arbitrary dynamic
  * workers should be typed by callers through \`workers.get<T>(ref)\`.
  */
 export interface ProjectWorker {
   fetch(req: Request): Promise<Response>;
   processEvent(input: { event: StreamEvent }): Promise<void>;
+  slack: ProjectWorkerSlack;
   testFetch(input: { headerValue: string; url: string }): Promise<unknown>;
 }
 

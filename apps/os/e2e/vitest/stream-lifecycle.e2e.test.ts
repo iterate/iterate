@@ -195,11 +195,11 @@ test("global streams reject configured worker subscribers", async () => {
           workerRef: {
             path: "/subscribers/noop",
             source: {
-              mainModule: "index.ts",
-              modules: {
-                "index.ts": "export default { wakeStreamSubscriber() {} };",
+              files: {
+                files: { "index.js": "export default { wakeStreamSubscriber() {} };" },
+                type: "inline",
               },
-              type: "inline",
+              options: { bundle: false, entryPoint: "index.js" },
             },
             type: "stateless",
           },
