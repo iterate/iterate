@@ -50,16 +50,17 @@ export default defineConfig({
     // its own project against a deployed slot, so FILES are independent.
     // Sequential locally so a single dev server isn't hammered.
     fileParallelism: ci,
-    // File-level parallelism only (this matches main): the deployed preview
-    // slot — not the runner — is the bottleneck. Every e2e test creates a
-    // project (a whole cold DO chain), so ~4 concurrent creates is the ceiling
-    // the slot tolerates. Adding intra-file concurrency (`sequence.concurrent`
-    // + maxConcurrency) on top pushed it over — "Durable Object storage
-    // operation exceeded timeout" and rotating timing-teardown flakes at peak
-    // 8-24. The real speedup for the itx monolith is splitting it into files
-    // so THIS knob parallelizes it safely — see
-    // tasks/raise-e2e-maxconcurrency.md.
     maxWorkers: 4,
+    // Intra-file concurrency, back on now that #1601 fixed cold-slot create
+    // latency (~3-5s per saga). Before #1601 the slow cold creates piled up
+    // and overloaded the slot ("Durable Object storage operation exceeded
+    // timeout") at peak 8-24; with fast creates the slot tolerates the
+    // fan-out. peak ≈ maxWorkers × maxConcurrency, so 4×4 = ~16 concurrent
+    // creates against the slot. Watch preview e2e for DO-storage-timeout /
+    // timing-teardown flakes if you push this higher — see
+    // tasks/raise-e2e-maxconcurrency.md.
+    sequence: { concurrent: ci },
+    maxConcurrency: 4,
     // One retry in CI: tests are self-contained (fresh project per test), so a
     // rare load-induced flake re-runs in seconds instead of failing the suite.
     retry: ci ? 1 : 0,
