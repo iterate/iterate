@@ -127,3 +127,18 @@ _These are assumptions made while fleshing out an underspecified task._
 - Worker prompt-following niggle: it replies to pure chit-chat instead of
   "(idle)" sometimes — harmless (the voice agent gets a redundant report),
   could be tuned via agent instructions later.
+- Live testing (Misha, real mic) found and fixed: EPIPE crash on barge-in
+  (ffplay stdin write race), assistant/status line interleaving, and a wedged
+  agent after a dev-server reload killed an in-flight LLM request server-side
+  (platform bug — interrupted requests never resume; workaround is a fresh
+  agent path).
+- **Web version added** at `/projects/<slug>/voice` in the dashboard
+  (`src/routes/_app/projects/$projectSlug/voice.tsx` +
+  `src/components/voice/voice-session.ts` + `src/lib/voice-server-fns.ts`).
+  Ephemeral OpenAI client secret minted server-side (raw key stays on the
+  server; browser authenticates the realtime ws via the
+  `openai-insecure-api-key.<ek_…>` subprotocol — verified empirically).
+  Browser echo cancellation replaces the CLI's biggest audio weakness.
+  Verified end-to-end via Claude-in-Chrome: minted session → voice page →
+  text-mode conversation → worker listed real repo files → stream view shows
+  the worker journal. Mic path needs a human (same as CLI).
