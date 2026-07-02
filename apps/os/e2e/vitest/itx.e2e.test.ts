@@ -493,8 +493,15 @@ describe("itx", () => {
       );
       // Birth now seeds one boot-context input item (platform context: project
       // id, agent path, repo layout) with dont-trigger-request — so history has
-      // exactly that item and no LLM turn ran.
-      expect((await project.agents.get(agentPath).processor.snapshot()).state.history).toEqual([
+      // exactly that item and no LLM turn ran. Ingest is async: wait for the
+      // processor to fold the birth events before asserting (cold slots under
+      // CI load have been seen to lag).
+      const agentProcessor = project.agents.get(agentPath).processor;
+      await waitForCondition(
+        async () => (await agentProcessor.snapshot()).state.history.length > 0,
+        { description: "agent boot-context input to fold into history", timeoutMs: 30_000 },
+      );
+      expect((await agentProcessor.snapshot()).state.history).toEqual([
         expect.objectContaining({
           role: "user",
           content: expect.stringContaining(`Your agent stream path: ${agentPath}`),
@@ -595,6 +602,9 @@ describe("itx", () => {
       });
       await waitForCondition(async () => (await secret.describe()).hasMaterial, {
         description: "OpenAPI secret to be available",
+        // Secret DO folds the update asynchronously; the 5s default flaked on
+        // cold slots under full-suite CI load.
+        timeoutMs: 30_000,
       });
 
       const headers = { authorization: `Bearer getSecret({ path: "${secretPath}" })` };
