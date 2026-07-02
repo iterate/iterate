@@ -50,7 +50,7 @@ Two kinds of connection:
 
 - **Ephemeral** (`subscribe`) — browsers, `waitForEvent`, operators. Dies with
   the caller; nothing re-establishes it.
-- **Configured** (`subscribeConfigured`) — durable desired state, created by
+- **Configured** (`subscribe({ configured: true })`) — durable desired state, created by
   appending an `events.iterate.com/stream/subscription-configured` event. The
   stream re-wakes these subscribers forever: on DO wake, on config change, and
   on any append that finds a configured subscription without a live connection.
@@ -74,8 +74,12 @@ Configured delivery is the same pattern as an itx live capability
 1. The stream **wakes** the subscriber with serializable coordinates only
    (`wakeStreamSubscriber({ stream, subscriptionKey })` on the target DO or
    dynamic worker).
-2. The subscriber answers `subscribeConfigured`, handing the stream a live
-   `processEventBatch` **callback capability**.
+2. The subscriber answers with the one public `subscribe` verb —
+   `subscribe({ subscriptionKey, configured: true, ... })` — handing the stream
+   a live `processEventBatch` **callback capability**. There is no separate
+   handshake method: ephemeral and configured subscriptions share the single
+   `subscribe` entry point (configured is just a stricter admission rule,
+   gated to trusted-internal callers in `StreamRpcTarget`).
 3. The stream duplicates and retains that stub past the RPC call that
    delivered it, invokes it per committed batch, and disposes it on close —
    the same dup/dispose ownership rules as itx capability provision.
@@ -120,7 +124,8 @@ announcements and checkpoints.
 | `core-processor-contract.ts` | Core contract: reduced-state schema + the `events.iterate.com/stream/*` event catalog                           |
 | `stream-storage.ts`          | Chunked SQLite event log (2 MB cell limit → JS chunking)                                                        |
 | `stream-connections.ts`      | Live connection table, delivery pump, RPC stub retention, idle teardown                                         |
-| `stream-processor.ts`        | Processor contracts (`defineProcessorContract`) + the `StreamProcessor` base class                              |
+| `processor-contracts.ts`     | `defineProcessorContract` + event-type → payload-schema resolution machinery                                    |
+| `stream-processor.ts`        | The `StreamProcessor` base class (batch ingest, checkpointing, hooks)                                           |
 | `stream-processor-host.ts`   | Hosts processors in a DO; subscriber half of the wake handshake                                                 |
 | `schemas.ts`                 | `StreamEvent` / `StreamEventInput` zod schemas                                                                  |
 | `utils.ts`                   | Stream path resolution + subscription-configured event builder                                                  |

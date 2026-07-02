@@ -181,12 +181,13 @@ export class StreamDurableObject extends DurableObject<Env> {
         throw new Error(`expected offset ${committed.offset}, got ${expectedOffset}`);
       }
 
-      workingState = this.#reduce({ event: committed, state: workingState });
+      const previousState = workingState;
+      workingState = this.#reduce({ event: committed, state: previousState });
 
       // Core side effects are deferred until after the commit below: they can
       // call back into stream runtime state, so running them mid-batch would
       // observe stale `this.#coreProcessorState`.
-      reducedEvents.push({ event: committed, state: workingState });
+      reducedEvents.push({ event: committed, previousState, state: workingState });
 
       events.push(committed);
       newEvents.push(committed);
@@ -643,8 +644,8 @@ export class StreamDurableObject extends DurableObject<Env> {
   /**
    * Ask a configured subscriber to subscribe back. This is the offer side of a
    * live-capability handshake: the wake carries only serializable coordinates,
-   * and the woken subscriber responds with `subscribeConfigured`, handing this
-   * stream a live `processEventBatch` callback capability (see
+   * and the woken subscriber responds with `subscribe({ configured: true })`,
+   * handing this stream a live `processEventBatch` callback capability (see
    * `stream-processor-host.ts` for the subscriber side and
    * `domains/itx/live-capability.ts` for the same pattern in itx).
    */
@@ -885,8 +886,27 @@ export class StreamDurableObject extends DurableObject<Env> {
    * first render without a separate getState call. Pass `events: false` for a
    * state-only subscription: same batches, `events` always `[]`, consecutive
    * appends coalesced into one state delivery.
+   *
+   * This is the ONLY way a delivery connection is opened. Ephemeral and
+   * configured subscriptions share this verb and everything behind it; the
+   * `configured: true` branch below is just a different admission rule for
+   * the same connection machinery.
    */
   subscribe(args: Parameters<Stream["subscribe"]>[0]): StreamSubscriptionHandle {
+    if (args.configured === true) {
+      // The configured-subscriber handshake response: a woken subscriber calls
+      // the same public verb with its durable subscriptionKey to hand the
+      // stream its live `processEventBatch` callback (see
+      // `#wakeConfiguredSubscriber`). `StreamRpcTarget` restricts
+      // `configured: true` to trusted-internal callers.
+      const subscriptionKey = args.subscriptionKey?.trim() ?? "";
+      if (subscriptionKey.length === 0) throw new Error("subscriptionKey must not be blank.");
+      if (this.#coreProcessorState.configuredSubscribersByKey[subscriptionKey] === undefined) {
+        throw new Error(`configured subscriber "${subscriptionKey}" is not configured`);
+      }
+      return this.#openSubscription({ ...args, subscriptionKey, subscriptionType: "configured" });
+    }
+
     const subscriptionKey = args.subscriptionKey?.trim() || crypto.randomUUID();
     if (this.#coreProcessorState.configuredSubscribersByKey[subscriptionKey] !== undefined) {
       throw new Error(
@@ -894,22 +914,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       );
     }
     return this.#openSubscription({ ...args, subscriptionKey, subscriptionType: "ephemeral" });
-  }
-
-  /**
-   * The configured-subscriber handshake response: a woken subscriber calls this
-   * with its durable subscriptionKey to hand the stream its live
-   * `processEventBatch` callback (see `#wakeConfiguredSubscriber`).
-   */
-  subscribeConfigured(
-    args: Parameters<Stream["subscribe"]>[0] & { subscriptionKey: string },
-  ): StreamSubscriptionHandle {
-    const subscriptionKey = args.subscriptionKey.trim();
-    if (subscriptionKey.length === 0) throw new Error("subscriptionKey must not be blank.");
-    if (this.#coreProcessorState.configuredSubscribersByKey[subscriptionKey] === undefined) {
-      throw new Error(`configured subscriber "${subscriptionKey}" is not configured`);
-    }
-    return this.#openSubscription({ ...args, subscriptionKey, subscriptionType: "configured" });
   }
 
   #openSubscription(
@@ -1078,11 +1082,13 @@ const StreamAppendInput = StreamEventInputSchema.extend({
 });
 
 /**
- * One committed event paired with the core state as of that event — what the
- * append loop hands to `#processEvent` after the commit.
+ * One committed event with the core state before and after reducing it — what
+ * the append loop hands to `#processEvent` after the commit (the same shape
+ * hosted processors receive per reduced event).
  */
 type ReducedCoreEvent = {
   event: StreamEvent;
+  previousState: CoreProcessorState;
   state: CoreProcessorState;
 };
 

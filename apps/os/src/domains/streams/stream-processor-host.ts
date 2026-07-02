@@ -17,32 +17,17 @@
 // This is the subscriber half of the configured-subscription handshake, which
 // is a live-capability provide — the same shape itx capabilities use (see
 // `domains/itx/live-capability.ts`): the Stream DO wakes this host with
-// serializable coordinates only, and the host answers `subscribeConfigured`,
-// handing the stream a live `processEventBatch` callback capability that the
-// stream retains and invokes for every committed batch. Everything else here
-// exists to make that callback safe to re-issue: replay cursors come from the
+// serializable coordinates only, and the host answers with the one public
+// `subscribe` verb (`configured: true` + its durable subscriptionKey), handing
+// the stream a live `processEventBatch` callback capability that the stream
+// retains and invokes for every committed batch. Everything else here exists
+// to make that callback safe to re-issue: replay cursors come from the
 // processor's durable checkpoint, failed batches re-handshake, and connection
 // generations fence off batches from superseded connections.
 
-import type {
-  ProcessEventBatch,
-  Stream,
-  StreamEvent,
-  StreamSubscriptionHandle,
-} from "../../types.ts";
+import type { Stream, StreamEvent, StreamSubscriptionHandle } from "../../types.ts";
 import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "./stream-processor.ts";
 import type { ProcessorContractAnnouncement } from "./core-processor-contract.ts";
-
-type ConfiguredStream = Stream & {
-  subscribeConfigured(input: {
-    subscriptionKey: string;
-    processEventBatch: ProcessEventBatch;
-    replayAfterOffset?: number;
-    eventTypes?: readonly string[];
-    events?: boolean;
-    subscriber?: unknown;
-  }): Promise<StreamSubscriptionHandle>;
-};
 
 /** What the Stream DO sends when asking a hosted processor to subscribe back. */
 export type StreamSubscriberWakeRequest = {
@@ -60,7 +45,7 @@ export type StreamSubscriberWakeRequest = {
  * `new RepoProcessor({ ...deps, github })`.
  */
 type HostedProcessorDeps = {
-  stream: ConfiguredStream;
+  stream: Stream;
   readState: () => StreamProcessorSnapshot<any> | undefined;
   writeState: (snapshot: StreamProcessorSnapshot<any>) => void;
   keepAliveWhile: (work: () => Promise<unknown>) => void;
@@ -117,7 +102,7 @@ const MAX_CONSECUTIVE_INGEST_FAILURES = 3;
 const HOST_IDLE_TEARDOWN_MS = 5 * 60_000;
 
 type StreamProcessorHost = {
-  readonly stream: ConfiguredStream;
+  readonly stream: Stream;
   /**
    * Register a processor under its contract slug. The builder receives the
    * host-provided base deps (checkpoint storage in DO KV keyed by the slug and
@@ -142,7 +127,7 @@ type StreamProcessorHost = {
 
 export function createStreamProcessorHost(
   ctx: DurableObjectState,
-  options: { stream: ConfiguredStream },
+  options: { stream: Stream },
 ): StreamProcessorHost {
   const entries = new Map<string, HostedEntry>();
 
@@ -241,8 +226,9 @@ export function createStreamProcessorHost(
     // the generation gate drops — stalling delivery until the idle teardown. Bail
     // out and let the newer handshake win.
     if (generation !== entry.generation) return;
-    const handle = await options.stream.subscribeConfigured({
+    const handle = await options.stream.subscribe({
       subscriptionKey,
+      configured: true,
       replayAfterOffset: snapshot.offset,
       // The contract is the filter: the stream only delivers event types the
       // processor consumes. A `"*"` in consumes means unfiltered delivery.

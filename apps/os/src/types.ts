@@ -308,6 +308,13 @@ export interface Stream {
   }>;
   subscribe(input: {
     subscriptionKey?: string;
+    /**
+     * Open the durable configured subscription registered under
+     * `subscriptionKey` (the wake-handshake response) instead of an ephemeral
+     * one. Requires trusted-internal auth and an existing
+     * subscription-configured fact for the key.
+     */
+    configured?: boolean;
     processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
     eventTypes?: readonly string[];

@@ -13,7 +13,7 @@ import {
 // event type string), the events it `consumes` and `emits`, and optional
 // `processorDeps` — other contracts whose events it may consume/emit without
 // owning them. `defineProcessorContract(...)` validates the declaration and
-// attaches typed `parseEvent` / `parseEventInput` helpers.
+// attaches typed `buildEvent` / `parseEvent` / `parseEventInput` helpers.
 //
 // The type-level machinery below exists for one purpose: resolving an event
 // type STRING to the payload schema that owns it (local `events` first, then
@@ -222,6 +222,20 @@ type ResolvedEventTypesOnly<
   ? unknown
   : never;
 
+/** `contract.buildEvent(...)`: validate an append input against the resolved payload schema. */
+type ProcessorContractBuildEvent<
+  Events extends EventCatalog,
+  ProcessorDeps extends readonly unknown[],
+> = <
+  const Event extends InputFromType<
+    Events,
+    ProcessorDeps,
+    ResolvedEventType<Events, ProcessorDeps>
+  > & { type: string },
+>(
+  event: Event,
+) => Event;
+
 /** `contract.parseEvent(...)`: validate a committed event, optionally narrowed by an explicit type string. */
 type ProcessorContractParseEvent<
   Events extends EventCatalog,
@@ -330,7 +344,8 @@ export function getEventInputSchema<
  * Validate an append input against the payload schema resolved from a contract's
  * local `events` plus its `processorDeps`. Used by call sites that hold a
  * contract but not a processor instance (e.g. subscription-configured event
- * builders in `utils.ts`).
+ * builders in `utils.ts`); contracts expose it pre-bound as
+ * `contract.buildEvent(...)`.
  */
 export function buildEvent<
   const Contract extends {
@@ -367,7 +382,7 @@ type ResolvedEventInput<Contract> = Contract extends {
 
 /**
  * Typed identity for processor contracts: validation plus the pre-bound
- * `parseEvent` / `parseEventInput` helpers.
+ * `buildEvent` / `parseEvent` / `parseEventInput` helpers.
  *
  * The signature enforces the important invariants at authoring time:
  *
@@ -403,6 +418,7 @@ export function defineProcessorContract<
   events: Events;
   consumes: Consumes;
   emits: Emits;
+  buildEvent: ProcessorContractBuildEvent<Events, ProcessorDeps>;
   parseEvent: ProcessorContractParseEvent<Events, ProcessorDeps>;
   parseEventInput: ProcessorContractParseEventInput<Events, ProcessorDeps>;
 };
@@ -425,6 +441,12 @@ export function defineProcessorContract(contract: unknown): any {
     processorDeps?: readonly unknown[];
   };
   return Object.assign(typedContract, {
+    buildEvent(event: { type: string }) {
+      return buildEvent({
+        contract: typedContract,
+        event: event as ResolvedEventInput<typeof typedContract> & { type: string },
+      });
+    },
     parseEvent: makeContractEventParser(typedContract, "parseEvent", getEventSchema),
     parseEventInput: makeContractEventParser(typedContract, "parseEventInput", getEventInputSchema),
   });
