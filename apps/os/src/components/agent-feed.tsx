@@ -223,6 +223,9 @@ function AgentFeedItemRow({
           data-kind="user"
         >
           <MessageContent className="group-[.is-user]:rounded-2xl">
+            {item.label == null ? null : (
+              <div className="text-xs italic text-muted-foreground">{item.label}</div>
+            )}
             <div className="whitespace-pre-wrap leading-6">{item.text}</div>
           </MessageContent>
         </Message>
@@ -236,6 +239,9 @@ function AgentFeedItemRow({
         data-kind="assistant"
       >
         <MessageContent>
+          {item.label == null ? null : (
+            <div className="text-xs italic text-muted-foreground">{item.label}</div>
+          )}
           <MessageResponse className="min-w-0 max-w-full overflow-hidden">
             {item.text}
           </MessageResponse>

@@ -73,7 +73,10 @@ export const VoiceProcessorContract = defineProcessorContract({
     "events.iterate.com/voice/user-turn-transcribed",
     "events.iterate.com/agents/web-message-sent",
   ],
-  emits: ["events.iterate.com/agent/input-added", "events.iterate.com/voice/say-requested"],
+  emits: [
+    "events.iterate.com/agents/user-message-received",
+    "events.iterate.com/voice/say-requested",
+  ],
 });
 
 export type VoiceProcessorState = z.infer<typeof VoiceProcessorContract.stateSchema>;

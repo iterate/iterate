@@ -104,7 +104,7 @@ export const AgentProcessorContract = defineProcessorContract({
       description: "The web UI sent a user message to the agent.",
       payloadSchema: z.object({
         content: z.string(),
-        origin: z.literal("web"),
+        origin: z.enum(["web", "voice"]),
       }),
     },
     "events.iterate.com/agents/web-message-sent": {

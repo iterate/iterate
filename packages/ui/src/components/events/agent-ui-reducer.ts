@@ -71,6 +71,8 @@ export type AgentUiMessageItem = {
   id: string;
   text: string;
   timestampMs: number;
+  /** Small chip next to the message, e.g. "voice" for spoken turns/utterances. */
+  label?: string;
 };
 
 export type AgentUiItem = AgentUiMessageItem | AgentUiActivity;
@@ -179,17 +181,35 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       // activity settles here; an active one keeps streaming and settles on
       // its own terminal event.
       const hasRunningStep = state.live?.steps.some((step) => step.status === "running") ?? false;
+      const origin = readString(event, "origin");
       const item: AgentUiMessageItem = {
         kind: "user",
         id: `user-${event.offset}`,
         text,
         timestampMs,
+        ...(origin === "voice" ? { label: "voice" } : {}),
       };
       if (hasRunningStep) {
         return { ...state, queuedUserMessages: [...state.queuedUserMessages, item] };
       }
       const base = hasRunningStep ? state : settleLive(state, timestampMs, ops);
       return emitItem(base, ops, item);
+    }
+
+    // What the realtime voice assistant said out loud — an audit fact from the
+    // voice client, rendered as a labeled assistant message. It must NOT
+    // settle the live activity: the voice side often speaks while the worker
+    // is still mid-request.
+    case "events.iterate.com/voice/assistant-utterance-completed": {
+      const text = readString(event, "text");
+      if (text == null) return state;
+      return emitItem(state, ops, {
+        kind: "assistant",
+        id: `voice-utterance-${event.offset}`,
+        text,
+        timestampMs,
+        label: "voice",
+      });
     }
 
     case "events.iterate.com/agents/web-message-sent":

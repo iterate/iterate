@@ -5,8 +5,9 @@ import { VOICE_WORKER_IDLE_REPLY, VoiceProcessorContract } from "./voice-process
  * Processor for one voice agent stream (`/agents/voice/**`).
  *
  * Voice clients append `voice/user-turn-transcribed` facts; this processor
- * renders each into `agent/input-added` (the agent core then debounces and
- * schedules the LLM request as with any input). When the agent replies
+ * renders each into `agents/user-message-received` — the same fact web chat
+ * appends — so the agent core schedules the request normally and the agent
+ * feed UI shows the turn as a user message. When the agent replies
  * (`agents/web-message-sent`), the reply is projected into a
  * `voice/say-requested` event for clients to relay out loud — unless it is
  * the worker's "(idle)" sentinel, which is swallowed. Reply→speech dedup is
@@ -39,12 +40,9 @@ export class VoiceProcessor extends StreamProcessor<typeof VoiceProcessorContrac
       case "events.iterate.com/voice/user-turn-transcribed": {
         blockProcessorWhile(() =>
           append({
-            type: "events.iterate.com/agent/input-added",
+            type: "events.iterate.com/agents/user-message-received",
             idempotencyKey: `voice/render-turn@${event.offset}`,
-            payload: {
-              content: event.payload.transcript,
-              llmRequestPolicy: { behaviour: "after-current-request" },
-            },
+            payload: { content: event.payload.transcript, origin: "voice" },
           }),
         );
         return;
