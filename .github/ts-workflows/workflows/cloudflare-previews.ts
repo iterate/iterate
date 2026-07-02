@@ -38,7 +38,9 @@ export default {
   jobs: {
     cleanup: {
       name: "Preview / cleanup",
-      ...utils.runsOnDepotUbuntuPreview,
+      // Cleanup just runs `pnpm preview cleanup` (a Doppler-wrapped destroy);
+      // it is not latency-sensitive and does not need the preview job's cores.
+      ...utils.runsOnDepotUbuntu,
       concurrency: {
         group: `cloudflare-preview-lifecycle-\${{ github.event.pull_request.number }}`,
         "cancel-in-progress": false,

@@ -167,6 +167,9 @@ export async function test(options: PullRequestCommandOptions = {}) {
     console.error(
       `[preview] test ${testResult.exitCode === 0 ? "passed" : "failed"}: ${app.slug} (${formatDurationMs(testDurationMs)})`,
     );
+    if (testResult.exitCode === 0) {
+      warnIfOverBudget("e2e", app.slug, testDurationMs, app.previewTestBudgetMs);
+    }
 
     return CloudflarePreviewAppEntry.parse({
       ...existingEntry,
@@ -395,6 +398,15 @@ export type CloudflarePreviewApp = {
   previewTestBaseUrlEnvVar: string;
   previewTestArtifacts?: readonly [string, ...string[]];
   previewTestCommandArgs: readonly [string, ...string[]];
+  /**
+   * Soft wall-clock budgets. When a phase runs slower than its budget we emit
+   * a GitHub/Depot `::warning::` annotation (never fail) so preview CI creep
+   * is visible on the PR — see docs/ci-preview-performance.md. Tune these when
+   * a change legitimately shifts the floor; don't just bump them to silence a
+   * regression.
+   */
+  previewDeployBudgetMs?: number;
+  previewTestBudgetMs?: number;
 };
 
 // Deployed apps compile in @iterate-com/shared via many subpath exports (streams,
@@ -442,6 +454,10 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // whenever OS does. Deploys run in parallel: the OS deploy polls the
     // slot's auth worker for JWKS until it responds.
     previewDependencies: ["auth"],
+    // Budgets sit ~25% above the observed green floor (deploy ~40s, e2e lane
+    // ~60s as of 2026-07-02). Crossing them warns, never fails.
+    previewDeployBudgetMs: 55_000,
+    previewTestBudgetMs: 80_000,
     previewTestArtifacts: [
       "test-results",
       "apps/os/test-results",
@@ -460,6 +476,10 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "-c",
       [
         "set -euo pipefail",
+        // The chromium download hits no deployed slot, so start it first and
+        // let it overlap the warmup and vitest lanes; it's ready by the time
+        // we reach the specs instead of adding ~4s in front of them.
+        "pnpm --dir ../.. exec playwright install chromium > /tmp/os-preview-pw-install.log 2>&1 & PW_INSTALL_PID=$!",
         // Warm the freshly-deployed slot before the concurrent burst: a cold
         // deployment answers its first requests only after loading each
         // worker, and a 40-connection stampede against zero warm isolates
@@ -470,12 +490,12 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         'for path in /api/health / /api/itx /sign-in /api/iterate-auth/login; do curl -sL -o /dev/null --max-time 20 "$OS_BASE_URL$path" || true; done',
         'for i in 1 2 3 4 5 6 7 8; do (curl -s -o /dev/null --max-time 20 "$OS_BASE_URL/api/health" && curl -s -o /dev/null --max-time 20 "$OS_BASE_URL/") & done; wait',
         // All lanes hit the same deployed slot but provision independent
-        // projects, so everything runs concurrently: the two vitest lanes and
-        // the chromium install start together, the Playwright specs as soon
-        // as the install finishes. Vitest logs are replayed once specs end.
+        // projects, so everything runs concurrently: the two vitest lanes run
+        // in the background while the Playwright specs run in the foreground.
+        // Vitest logs are replayed once specs finish.
         "pnpm e2e > /tmp/os-preview-vitest.log 2>&1 & E2E_PID=$!",
         "pnpm e2e:examples --project node > /tmp/os-preview-examples.log 2>&1 & EXAMPLES_PID=$!",
-        "pnpm --dir ../.. exec playwright install chromium",
+        'wait "$PW_INSTALL_PID" || { cat /tmp/os-preview-pw-install.log; exit 1; }',
         "pnpm --dir ../.. spec",
         'E2E_OK=0; wait "$E2E_PID" || E2E_OK=$?',
         'EXAMPLES_OK=0; wait "$EXAMPLES_PID" || EXAMPLES_OK=$?',
@@ -1010,6 +1030,28 @@ function formatDurationMs(durationMs: number) {
   }
 
   return `${(durationMs / 1_000).toFixed(1)}s`;
+}
+
+/**
+ * Soft performance guardrail: when a phase runs slower than its budget, emit a
+ * GitHub/Depot `::warning::` workflow-command annotation so preview CI creep
+ * surfaces on the PR without failing the run. No-op when no budget is set or
+ * the phase is within budget. See docs/ci-preview-performance.md.
+ */
+function warnIfOverBudget(
+  phase: "deploy" | "e2e",
+  slug: string,
+  actualMs: number,
+  budgetMs: number | undefined,
+) {
+  if (budgetMs == null || actualMs <= budgetMs) return;
+  const over = formatDurationMs(actualMs - budgetMs);
+  console.log(
+    `::warning title=Preview ${phase} over budget::${slug} ${phase} took ${formatDurationMs(actualMs)}, ` +
+      `${over} over the ${formatDurationMs(budgetMs)} budget. If this is the new floor, update ` +
+      `preview${phase === "deploy" ? "Deploy" : "Test"}BudgetMs in scripts/preview/preview.ts; ` +
+      `otherwise see docs/ci-preview-performance.md before landing.`,
+  );
 }
 
 function readPreviewMessage(message: string | null | undefined) {
@@ -1775,6 +1817,9 @@ async function deployPreviewAppWithStatus(input: {
     console.error(
       `[preview] deploy ${entry.status === "awaiting-tests" ? "passed" : "failed"}: ${input.app.slug} (${formatDurationMs(deployDurationMs)})`,
     );
+    if (entry.status === "awaiting-tests") {
+      warnIfOverBudget("deploy", input.app.slug, deployDurationMs, input.app.previewDeployBudgetMs);
+    }
     return CloudflarePreviewAppEntry.parse({
       ...entry,
       deployDurationMs,

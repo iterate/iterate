@@ -29,7 +29,7 @@ on:
 jobs:
   cleanup:
     name: Preview / cleanup
-    runs-on: depot-ubuntu-24.04-16
+    runs-on: depot-ubuntu-24.04
     concurrency:
       group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
       cancel-in-progress: false

@@ -54,7 +54,12 @@ concurrency:
 jobs:
   preview:
     name: Preview / deploy + e2e
-    runs-on: depot-ubuntu-24.04-16
+    # 8-core: the job is network-bound (waiting on deployed slots), not
+    # CPU-bound. Depot metrics on a full run showed peak CPU ~30% and peak
+    # memory ~10% of a 16-core box, so 8 cores keeps peak ~60% with headroom
+    # while halving the per-second cost. Re-check with
+    # `depot ci metrics --run <id>` before changing.
+    runs-on: depot-ubuntu-24.04-8
     concurrency:
       group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number || inputs.pull-request-number }}
       cancel-in-progress: false

@@ -115,7 +115,8 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 
 - [Dev environments](docs/dev-environments.md) — local dev, minting identities/admin sessions, browsers for agents, preview-from-local
 - [Coding style](docs/coding-style.md)
-- [CI workflows](docs/ci-workflows.md) — generated GitHub Actions, Depot runners, and the one Depot CI image-bake workflow
+- [CI workflows](docs/ci-workflows.md) — generated GitHub Actions, Depot runners, Depot CI, and the image-bake workflow
+- [Preview CI performance](docs/ci-preview-performance.md) — how the preview deploy+e2e check stays ~2-3 min, the budget guardrail, and how to keep it fast without raising cost
 - [TypeScript conventions](docs/typescript-conventions.md)
 - [Design system & React](docs/design-system.md)
 - [Slack testing](docs/slack-testing.md) — real Slack flows, preview app setup, and internal duplicate-bot caveats
