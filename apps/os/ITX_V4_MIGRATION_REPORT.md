@@ -19,19 +19,21 @@ Playwright green at phase boundaries.
 
 ### Done (all committed, CI green)
 
-| Phase                                                                                                                                             | State         |
-| ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
-| Slices A–C (transplant, auth adapter, create+onboarding, openai-ws, browser mirror, core cutover)                                                 | done          |
-| Frontend cutover + streams-example-app on the engine                                                                                              | done          |
-| Traffic flip: `/api/itx` is the engine's; coexistence path deleted                                                                                | done          |
-| Phase 4: final 10-worker topology (ingress, app, api + 7 engine DO workers); legacy stack deleted; D1/queue/R2 gone                               | done          |
-| Phase 6: examples matrix — browser, node, **cli**, run-script, project-worker runtimes                                                            | done          |
-| Phase 7: `packages/shared/{streams,callable,durable-object-utils}` deleted (events components vendor their fold locally; apps/os owns StreamPath) | done          |
-| Phase 8: five-goal Playwright specs (signup / create-project / agent-chat + repl + reactivity)                                                    | done          |
-| Phase 9: `apps/minimal-itx-v4` deleted; knip/tsconfig hygiene; workspace green                                                                    | done          |
-| Phase 10: chat TUI rebuilt on the shared engine client stack                                                                                      | done          |
-| Project directory: auth-worker `internal.project.bySlug` + `PROJECT_DIRECTORY` KV cache (primed at create)                                        | done          |
-| Phase 12: Slack + Google on the engine                                                                                                            | **in flight** |
+| Phase                                                                                                                                             | State |
+| ------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| Slices A–C (transplant, auth adapter, create+onboarding, openai-ws, browser mirror, core cutover)                                                 | done  |
+| Frontend cutover + streams-example-app on the engine                                                                                              | done  |
+| Traffic flip: `/api/itx` is the engine's; coexistence path deleted                                                                                | done  |
+| Phase 4: final 10-worker topology (ingress, app, api + 7 engine DO workers); legacy stack deleted; D1/queue/R2 gone                               | done  |
+| Phase 6: examples matrix — browser, node, **cli**, run-script, project-worker runtimes                                                            | done  |
+| Phase 7: `packages/shared/{streams,callable,durable-object-utils}` deleted (events components vendor their fold locally; apps/os owns StreamPath) | done  |
+| Phase 8: five-goal Playwright specs (signup / create-project / agent-chat + repl + reactivity)                                                    | done  |
+| Phase 9: `apps/minimal-itx-v4` deleted; knip/tsconfig hygiene; workspace green                                                                    | done  |
+| Phase 10: chat TUI rebuilt on the shared engine client stack                                                                                      | done  |
+| Project directory: auth-worker `internal.project.bySlug` + `PROJECT_DIRECTORY` KV cache (primed at create, no expiry)                             | done  |
+| Phase 12: Slack + Google on the engine (secret-DO tokens, engine processors on existing DOs, synthetic-webhook e2e green vs preview)              | done  |
+| Multi-app projects: seeded app router + `decideIngressRoute` (one unit-tested fn) + `x-iterate-app` host lanes, e2e green vs preview              | done  |
+| The very end: quarantine folders deleted (Phase 12 landed; git history keeps them)                                                                | done  |
 
 ### Verified (2026-07-02)
 
