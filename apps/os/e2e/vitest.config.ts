@@ -61,11 +61,14 @@ export default defineConfig({
     sequence: { concurrent: ci },
     // Bounds concurrent tests per file. Each test creates a project (a whole
     // DO chain), so with maxWorkers:4 the slot sees ~4×this many concurrent
-    // creates. At 6 the slot overloaded ("Durable Object storage operation
-    // exceeded timeout"); 3 keeps the fan-out fast (206s of test-work in
-    // ~110s wall) without tipping the slot over. Raise only with evidence the
-    // slot stays healthy — see tasks/os-cold-create-latency.md.
-    maxConcurrency: 3,
+    // creates, and the slot is the bottleneck, not the runner. main runs
+    // reliably at ~4 concurrent (maxWorkers only, no intra-file concurrency);
+    // pushing higher overloaded it ("Durable Object storage operation
+    // exceeded timeout" at ~24; a timing-sensitive teardown test failed at
+    // ~12). 2 keeps peak ~8 — still ~2.5× faster than sequential — and
+    // retry:1 mops up the occasional slow-slot flake. The real fix is
+    // splitting the itx monolith into files (tasks/os-cold-create-latency.md).
+    maxConcurrency: 2,
     // One retry in CI: tests are self-contained (fresh project per test), so a
     // rare load-induced flake re-runs in seconds instead of failing the suite.
     retry: ci ? 1 : 0,
