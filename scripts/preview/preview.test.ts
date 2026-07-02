@@ -48,12 +48,12 @@ describe("preview deploy ordering", () => {
     ).toEqual([["semaphore"]]);
   });
 
-  it("deploys auth before OS when both are selected", () => {
+  it("deploys OS and auth in one parallel batch", () => {
     expect(
       orderPreviewDeployBatches([cloudflarePreviewApps.os, cloudflarePreviewApps.auth]).map(
         (batch) => batch.map((app) => app.slug),
       ),
-    ).toEqual([["auth"], ["os"]]);
+    ).toEqual([["os", "auth"]]);
   });
 });
 
@@ -81,21 +81,24 @@ describe("preview test commands", () => {
     });
   });
 
-  it("runs root Playwright specs after OS preview Vitest lanes", () => {
+  it("runs both OS vitest lanes concurrently with the root Playwright specs", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs[2];
     const playwrightInstall = "pnpm --dir ../.. exec playwright install chromium";
-    // The vitest lanes run in a background subshell concurrently with the
-    // Playwright specs; the wait propagates their exit code.
-    const vitestLanes = "(pnpm e2e && pnpm e2e:examples --project node)";
+    // Both vitest lanes run in background subshells concurrently with the
+    // Playwright specs; the waits propagate their exit codes.
+    const e2eLane = "pnpm e2e >";
+    const examplesLane = "pnpm e2e:examples --project node >";
     const playwrightSpec = "pnpm --dir ../.. spec";
 
     expect(script).toContain(playwrightInstall);
-    expect(script).toContain(vitestLanes);
+    expect(script).toContain(e2eLane);
+    expect(script).toContain(examplesLane);
     expect(script).toContain(playwrightSpec);
-    expect(script).toContain('wait "$VITEST_PID"');
-    expect(script).toContain('exit "$VITEST_OK"');
-    expect(script.indexOf(playwrightInstall)).toBeLessThan(script.indexOf(vitestLanes));
-    expect(script.indexOf(vitestLanes)).toBeLessThan(script.indexOf(playwrightSpec));
+    expect(script).toContain('wait "$E2E_PID"');
+    expect(script).toContain('wait "$EXAMPLES_PID"');
+    expect(script).toContain('[ "$E2E_OK" -eq 0 ] && [ "$EXAMPLES_OK" -eq 0 ]');
+    expect(script.indexOf(e2eLane)).toBeLessThan(script.indexOf(playwrightInstall));
+    expect(script.indexOf(playwrightInstall)).toBeLessThan(script.indexOf(playwrightSpec));
   });
 });
 

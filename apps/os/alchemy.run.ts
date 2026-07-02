@@ -41,8 +41,14 @@ const resolvedAuthIssuer =
 // Doppler-provided production JWKS. Key rotation in auth requires an OS
 // redeploy. On fetch failure the worker falls back to remote JWKS at runtime.
 async function fetchJwksWithRetry(url: string): Promise<{ keys: unknown[] }> {
+  // Deadline, not attempt-count: preview deploys OS and auth concurrently, so
+  // on a fresh slot this poll is what waits out the auth deploy (~40s). On an
+  // existing slot the first fetch succeeds immediately.
+  const deadline = Date.now() + 120_000;
+  let attempt = 0;
   let lastError: unknown;
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  while (true) {
+    attempt += 1;
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -53,13 +59,11 @@ async function fetchJwksWithRetry(url: string): Promise<{ keys: unknown[] }> {
       return jwks as { keys: unknown[] };
     } catch (error) {
       lastError = error;
-      if (attempt < 3) {
-        console.warn(`[alchemy.run] JWKS fetch attempt ${attempt} failed, retrying:`, error);
-        await new Promise((resolve) => setTimeout(resolve, attempt * 2_000));
-      }
+      if (Date.now() >= deadline) throw lastError;
+      console.warn(`[alchemy.run] JWKS fetch attempt ${attempt} failed, retrying:`, error);
+      await new Promise((resolve) => setTimeout(resolve, 3_000));
     }
   }
-  throw lastError;
 }
 
 async function resolveStaticAuthJwks(issuer: string | undefined) {

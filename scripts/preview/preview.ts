@@ -439,8 +439,9 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "apps/auth-contract/**",
       "apps/os/src/domains/streams/**",
     ],
-    // OS bakes auth JWKS during deployment, so the slot's auth deployment must
-    // finish before OS deploy starts.
+    // OS bakes auth JWKS during deployment, so the slot's auth must deploy
+    // whenever OS does. Deploys run in parallel: the OS deploy polls the
+    // slot's auth worker for JWKS until it responds.
     previewDependencies: ["auth"],
     previewTestArtifacts: [
       "test-results",
@@ -460,15 +461,18 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "-c",
       [
         "set -euo pipefail",
+        // All lanes hit the same deployed slot but provision independent
+        // projects, so everything runs concurrently: the two vitest lanes and
+        // the chromium install start together, the Playwright specs as soon
+        // as the install finishes. Vitest logs are replayed once specs end.
+        "pnpm e2e > /tmp/os-preview-vitest.log 2>&1 & E2E_PID=$!",
+        "pnpm e2e:examples --project node > /tmp/os-preview-examples.log 2>&1 & EXAMPLES_PID=$!",
         "pnpm --dir ../.. exec playwright install chromium",
-        // The vitest lanes and the Playwright specs hit the same deployed slot
-        // but provision independent projects, so they run concurrently; the
-        // vitest log is replayed once the specs finish.
-        "(pnpm e2e && pnpm e2e:examples --project node) > /tmp/os-preview-vitest.log 2>&1 & VITEST_PID=$!",
         "pnpm --dir ../.. spec",
-        'VITEST_OK=0; wait "$VITEST_PID" || VITEST_OK=$?',
-        "cat /tmp/os-preview-vitest.log",
-        'exit "$VITEST_OK"',
+        'E2E_OK=0; wait "$E2E_PID" || E2E_OK=$?',
+        'EXAMPLES_OK=0; wait "$EXAMPLES_PID" || EXAMPLES_OK=$?',
+        "cat /tmp/os-preview-vitest.log /tmp/os-preview-examples.log",
+        '[ "$E2E_OK" -eq 0 ] && [ "$EXAMPLES_OK" -eq 0 ]',
       ].join("; "),
     ],
   },
@@ -2064,13 +2068,11 @@ function expandPreviewDependencies(appSlugs: readonly CloudflarePreviewAppSlugTy
 }
 
 function orderPreviewDeployBatches(apps: readonly PreviewAppRuntime[]) {
-  const os = apps.find((app) => app.slug === "os");
-  const auth = apps.find((app) => app.slug === "auth");
-  if (!os || !auth) {
-    return apps.length > 0 ? [[...apps]] : [];
-  }
-
-  return [apps.filter((app) => app.slug !== "os"), [os]];
+  // One parallel batch. OS bakes auth JWKS during deployment, but its
+  // deploy-time JWKS fetch polls the slot's auth worker until it responds
+  // (apps/os/alchemy.run.ts fetchJwksWithRetry), so it no longer needs the
+  // auth deploy sequenced before it.
+  return apps.length > 0 ? [[...apps]] : [];
 }
 
 async function mapWithConcurrency<T, Result>(

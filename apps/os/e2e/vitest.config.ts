@@ -28,10 +28,14 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    // Parallel in CI: each file creates its own projects against a deployed
-    // slot, so files are independent. Sequential locally to not hammer a
-    // single dev server.
+    // Parallel in CI: each test creates its own projects against a deployed
+    // slot, so files — and tests within a file — are independent. Sequential
+    // locally to not hammer a single dev server.
     fileParallelism: process.env.CI === "true",
+    sequence: { concurrent: process.env.CI === "true" },
+    // Bounds concurrent tests per file; the deployed slot handles the fan-out
+    // (every test is its own project DO), the runner just holds sockets.
+    maxConcurrency: 10,
     // Generous: e2e runs against live deployments, concurrently with the
     // Playwright specs in preview CI — cold slots under combined load need
     // headroom, and slow-but-passing beats flaky.

@@ -44,6 +44,8 @@ export default defineConfig({
     // Parallel in CI (files are independent projects); sequential locally so a
     // dev-server target is not hammered.
     fileParallelism: process.env.CI === "true",
+    sequence: { concurrent: process.env.CI === "true" },
+    maxConcurrency: 10,
     hookTimeout: 45_000,
     passWithNoTests: true,
     projects: [
@@ -53,7 +55,9 @@ export default defineConfig({
           environment: "node",
           hookTimeout: 45_000,
           include: ["./e2e/examples/*.e2e.test.ts"],
+          maxConcurrency: 10,
           name: "node",
+          sequence: { concurrent: process.env.CI === "true" },
           provide: sharedProvide,
           testTimeout: 45_000,
         },
