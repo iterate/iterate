@@ -93,48 +93,28 @@ To move a workflow:
    one-secret model (source Slack/bot tokens from Doppler, see `utils/slack.ts`).
 3. `pnpm workflows && pnpm --dir .github/ts-workflows build`.
 
-### What has moved, and what can't (yet)
+### What runs where
 
-**On Depot** (`DEPOT_WORKFLOW_NAMES`): `lint-typecheck`, `test`, `deploy-auth`,
-`deploy-tunnels`, `release`, `autofix`, `pullfrog`. Each needs only the secrets
-Depot already has — `DOPPLER_TOKEN` (+ `ITERATE_BOT_GITHUB_TOKEN` for the
-github-script jobs).
+**On Depot** (`DEPOT_WORKFLOW_NAMES`): everything Depot-compatible —
+`lint-typecheck`, `test`, `deploy-auth`, `deploy-tunnels`, `release`, `autofix`,
+`pullfrog`, `ci`, `nag`, `pr-dashboard`, `deploy-os`, `deploy-semaphore`,
+`deploy-streams-example-app`. Depot needs only **`DOPPLER_TOKEN`** (+
+`ITERATE_BOT_GITHUB_TOKEN` for the github-script jobs).
 
-**Still on GitHub Actions, and why** — two blockers:
+Slack-posting jobs (ci's failure notify, nag, pr-dashboard, the cloudflare-app
+`slack-success`/`slack-failure` jobs) resolve `SLACK_CI_BOT_TOKEN` from Doppler:
+`getSlackClient()` (no arg) → `getSlackBotToken()` runs
+`doppler secrets --project _shared --config prd get --plain SLACK_CI_BOT_TOKEN`,
+so each such job just needs `DOPPLER_TOKEN` in its `env`. **This means
+`SLACK_CI_BOT_TOKEN` must live in Doppler `_shared/prd`** (not a GitHub/Depot
+secret).
 
-1. **Slack.** `ci`, `nag`, `pr-dashboard`, and the cloudflare-app deploys
-   (`deploy-os`, `deploy-semaphore`, `deploy-streams-example-app`, via their
-   `slack-success` / `slack-failure` jobs) post to Slack with
-   `SLACK_CI_BOT_TOKEN`. That token is a **GitHub repo secret** — it is _not_ in
-   Depot's secrets and _not_ in Doppler `_shared/prd` (verified 2026-07-03).
-   Until it's reachable from Depot, these can't move.
-2. **Reusable-workflow coupling.** `deploy` is `workflow_call`-only, invoked by
-   `ci.yml` via `./.github/workflows/deploy.yml`. A GitHub Actions workflow can
-   only call a reusable workflow under `.github/workflows/` — never `.depot/` —
-   so `deploy` stays wherever `ci` is. `ci` is slack-blocked, so `deploy` is too.
+The old `deploy` reusable workflow is gone — its single job (deploy
+`apps/iterate-com`) is inlined into `ci.yml`.
 
-`claude-assistant` (issue_comment/issues triggers Depot doesn't support) and
-`generate-workflows` (the self-referential guardian) stay on GitHub permanently.
-
-### Finishing the migration (one secret, then flip)
-
-To move the remaining six, make `SLACK_CI_BOT_TOKEN` reachable from Doppler so
-the "one secret" model holds (Depot needs only `DOPPLER_TOKEN`):
-
-1. Add `SLACK_CI_BOT_TOKEN` to Doppler `_shared/prd` (the config Depot's
-   `DOPPLER_TOKEN` resolves).
-2. Rewire the `getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}")` call sites
-   (in `ci.ts`, `nag.ts`, `pr-dashboard.ts`, `cloudflare-app-workflow.ts`) to
-   `getSlackClient()` — the no-arg form falls back to
-   `getSlackBotToken()`, which reads it from Doppler (see `utils/slack.ts`).
-   Ensure those jobs run under a Doppler context (`setupDopplerBaked` +
-   `DOPPLER_TOKEN` env).
-3. Add `ci`, `nag`, `pr-dashboard`, `deploy-os`, `deploy-semaphore`,
-   `deploy-streams-example-app` to `DEPOT_WORKFLOW_NAMES`. `ci` calls `deploy`
-   as a reusable workflow, so move `deploy` in the same step and update the
-   `uses:` path from `./.github/workflows/deploy.yml` to
-   `./.depot/workflows/deploy.yml` (Depot resolves local `.depot` reusable
-   workflows).
+**Permanent GitHub-Actions holdouts:** `claude-assistant` (issue_comment/issues
+triggers Depot doesn't support) and `generate-workflows` (the self-referential
+guardian).
 
 ### The validation constraint (read before merging)
 
