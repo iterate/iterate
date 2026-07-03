@@ -26,9 +26,11 @@ type StatefulWorkerRpc = {
 /**
  * Small internal executor for DynamicWorkerRefs.
  *
- * This is intentionally not an RpcTarget. Public capability-tree access goes
- * through `WorkerRpcTarget`; ITX processors use this directly so mounted
- * capabilities, project workers, and run-script all share one execution path.
+ * WORKER-WORKER-INTERNAL: only `DynamicWorkerEntrypoint` (stateless dispatch)
+ * and `StatefulWorkerDurableObject` (stateful class hosting) may construct
+ * this — both live in the worker worker, the sole owner of the LOADER binding.
+ * Everything else reaches dynamic workers through the `DYNAMIC_WORKERS`
+ * service binding. This is intentionally not an RpcTarget.
  */
 export class DynamicWorkerRunner {
   readonly #bindings: WorkerBindings;

@@ -29,17 +29,25 @@ Ten workers: ingress, app, api, and seven itx Durable Object workers.
 | `<n>-agent`     | `src/workers/agent.ts`   | `AgentDurableObject` (agent + LLM provider processors)                                          |
 | `<n>-repo`      | `src/workers/repo.ts`    | `RepoDurableObject` (git over Cloudflare Artifacts)                                             |
 | `<n>-secret`    | `src/workers/secret.ts`  | `SecretDurableObject`                                                                           |
-| `<n>-worker`    | `src/workers/worker.ts`  | `StatefulWorkerDurableObject` (stateful dynamic workers)                                        |
+| `<n>-worker`    | `src/workers/worker.ts`  | **All dynamic workers**: `DynamicWorkerEntrypoint` (stateless) + `StatefulWorkerDurableObject`  |
 
 All itx workers (api + the seven DO workers) deploy with the **same
 binding set** (`itxBindings` in `alchemy.run.ts`; the matching type is
-`src/env.ts`): every DO namespace, `AI`, `LOADER` (Worker Loader),
-`ARTIFACTS`, `PROJECT_DIRECTORY` (the slug→id KV cache), and the secret
-encryption key. Any itx worker can host any capability — exactly like the
-single-worker implementation they came from — and each re-exports the shared loopback
+`src/env.ts`): every DO namespace, `AI`, `DYNAMIC_WORKERS` (a service binding
+to the worker worker's `DynamicWorkerEntrypoint`), `ARTIFACTS`,
+`PROJECT_DIRECTORY` (the slug→id KV cache), and the secret encryption key.
+Any itx worker can host any capability — exactly like the single-worker
+implementation they came from — and each re-exports the shared loopback
 entrypoints (`ItxEntrypoint`, `ProjectEgressEntrypoint`) so `ctx.exports`
 resolves identically in all of them. They all carry `nodejs_compat` (repo git
 and dynamic worker loading need Node APIs) and `global_fetch_strictly_public`.
+
+One deliberate exception to the uniform set: **only the worker worker binds
+`LOADER` (Worker Loader)**. It is the single owner of dynamic workers — every
+other worker dispatches through `DYNAMIC_WORKERS`, so exactly one worker's
+loopback stubs ever live inside a dynamic worker's env and each source has one
+warm isolate instead of one per calling worker
+(`src/domains/workers/dynamic-worker-entrypoint.ts` has the full rationale).
 
 Every DO worker has a tiny default fetch returning a
 `{"worker": "os-<id>"}` 404 — useful as a cold-start probe and a "which

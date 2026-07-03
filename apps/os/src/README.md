@@ -156,7 +156,10 @@ the interceptor sees placeholders, never material
 ## Dynamic workers
 
 `itx.workers.get(ref)` runs caller-supplied code in an isolate via the Worker
-Loader. A `DynamicWorkerRef` is `stateless` (a WorkerEntrypoint export, with
+Loader. All dynamic workers are owned by the worker worker: its
+`DynamicWorkerEntrypoint` is the only holder of a `LOADER` binding, and every
+other worker dispatches through the `DYNAMIC_WORKERS` service binding
+(`domains/workers/dynamic-worker-entrypoint.ts` explains why). A `DynamicWorkerRef` is `stateless` (a WorkerEntrypoint export, with
 optional `props`) or `stateful` (a DurableObject class export hosted by
 `StatefulWorkerDurableObject` under a `durableWorkerKey`); source is `inline`
 (module text) or `repo` (resolved from a project repo, so commits affect the

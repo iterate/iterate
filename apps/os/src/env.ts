@@ -24,6 +24,21 @@ export interface Env {
   ARTIFACTS: Artifacts;
   ARTIFACTS_ACCOUNT_ID: string;
   ARTIFACTS_NAMESPACE: string;
+  /**
+   * The worker worker's dynamic-worker service (its default entrypoint,
+   * `DynamicWorkerEntrypoint`). The ONLY way any worker other than the worker
+   * worker runs a dynamic worker — see
+   * domains/workers/dynamic-worker-entrypoint.ts for the ownership rationale.
+   */
+  DYNAMIC_WORKERS: Service<
+    import("./domains/workers/dynamic-worker-entrypoint.ts").DynamicWorkerEntrypoint
+  >;
+  /**
+   * Worker Loader. Bound ONLY in the worker worker (alchemy.run.ts) — every
+   * other worker reaches dynamic workers through DYNAMIC_WORKERS above. The
+   * shared Env keeps the field so worker-worker code typechecks; reading it
+   * anywhere else returns undefined at runtime.
+   */
   LOADER: WorkerLoader;
   /** Slug -> project id (+ metadata) cache in front of the auth worker's
    * project directory (project-directory.ts). */

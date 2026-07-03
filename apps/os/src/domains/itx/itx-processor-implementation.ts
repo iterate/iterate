@@ -15,7 +15,7 @@ import type {
   StreamEvent,
 } from "../../types.ts";
 import { sha256Hex } from "../workers/utils.ts";
-import type { DynamicWorkerRunner } from "../workers/worker-runner.ts";
+import type { Env } from "../../env.ts";
 import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
 import { ItxProcessorContract } from "./itx-processor-contract.ts";
 import {
@@ -99,7 +99,8 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
   readonly contract = ItxProcessorContract;
   #itx: Itx;
   #path: string;
-  #workerRunner: DynamicWorkerRunner;
+  #projectId: string;
+  #dynamicWorkers: Env["DYNAMIC_WORKERS"];
   #parent: ParentItxScope | undefined;
   #liveCapabilities = new Map<string, LiveCapability>();
 
@@ -107,7 +108,9 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     args: StreamProcessorConstructorArgs<typeof ItxProcessorContract, object> & {
       itx: Itx;
       path: string;
-      workerRunner: DynamicWorkerRunner;
+      projectId: string;
+      /** The worker worker's dynamic-worker service (runs run-script workers in this scope). */
+      dynamicWorkers: Env["DYNAMIC_WORKERS"];
       // The enclosing scope, or undefined at the project root ("/"). Present for
       // every nested scope (agents, sub-agents, agent namespaces) so capability
       // lookups that miss locally can fall through to the surrounding scope.
@@ -117,7 +120,8 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     super(args);
     this.#itx = args.itx;
     this.#path = normalizePath(args.path);
-    this.#workerRunner = args.workerRunner;
+    this.#projectId = args.projectId;
+    this.#dynamicWorkers = args.dynamicWorkers;
     this.#parent = args.parent;
   }
 
@@ -369,10 +373,14 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     };
 
     try {
-      const worker = await this.#workerRunner.getStatelessEntrypoint<{ run(): Promise<unknown> }>(
-        await this.#scriptWorkerRef(input.code),
-      );
-      const result = await worker.run();
+      // Scripts execute inside THIS scope: the loaded worker's env.ITX resolves
+      // to the same path this processor owns, not the script ref's path.
+      const result = await this.#dynamicWorkers.invokeCapability({
+        path: ["run"],
+        projectId: this.#projectId,
+        ref: await this.#scriptWorkerRef(input.code),
+        scopePath: this.#path,
+      });
       await complete({ result });
     } catch (error) {
       await complete({ error: error instanceof Error ? error.message : String(error) });
@@ -391,8 +399,8 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
       }
     `;
     // runScript is deliberately expressed as a stateless inline DynamicWorkerRef. That
-    // keeps script execution on the same DynamicWorkerRunner path as project workers
-    // and provided stateless capabilities; ITX adds only the journal events.
+    // keeps script execution on the same worker-worker dispatch path as project
+    // workers and provided stateless capabilities; ITX adds only the journal events.
     return {
       path: this.#path,
       source: {

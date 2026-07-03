@@ -191,7 +191,9 @@ It requires `SERVICE_AUTH_TOKEN` (run through Doppler for the auth project).
 `alchemy.run.ts` defines the deployment: the full worker topology
 ([worker-topology.md](./worker-topology.md)), the Durable Object namespaces
 (each owned by its worker, bound cross-script everywhere else), the
-`PROJECT_DIRECTORY` KV namespace, a `WorkerLoader`, the Workers AI binding,
+`PROJECT_DIRECTORY` KV namespace, a `WorkerLoader` (worker worker only — it
+owns all dynamic workers; everyone else uses the `DYNAMIC_WORKERS` service
+binding), the Workers AI binding,
 Cloudflare Artifacts for repos, and routes on the ingress worker for the app
 base URL, the MCP base URL, and each project hostname base. Fresh stages
 bootstrap with an automatic two-pass deploy (cross-script bindings to

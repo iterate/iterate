@@ -19,13 +19,7 @@ import { timedStep } from "./lib/step-timing.ts";
 import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
 import { normalizeAgentPath } from "./domains/agents/utils.ts";
-import {
-  itxEntrypointProps,
-  itxEntrypointBinding,
-  itxEntrypointScopeCacheKey,
-  rejectBuiltinCollision,
-  withInvokeCapabilityFallback,
-} from "./domains/itx/utils.ts";
+import { rejectBuiltinCollision, withInvokeCapabilityFallback } from "./domains/itx/utils.ts";
 import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
@@ -48,7 +42,6 @@ import {
   resolveStreamPath,
 } from "./domains/streams/utils.ts";
 import { DynamicWorkerRef as WorkerRefSchema } from "./domains/workers/schemas.ts";
-import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
 import {
   isObjectSchema,
   listOpenApiOperations,
@@ -690,8 +683,6 @@ class DynamicWorkerCollectionRpcTarget extends RpcTarget implements DynamicWorke
   constructor(
     readonly props: {
       auth: ItxAuth;
-      ctx: CfExecutionContext;
-      loader: Env["LOADER"];
       projectId: string;
     },
   ) {
@@ -704,8 +695,6 @@ class DynamicWorkerCollectionRpcTarget extends RpcTarget implements DynamicWorke
   ) {
     const parsed = WorkerRefSchema.parse(ref);
     return new DynamicWorkerRpcTarget({
-      ctx: this.props.ctx,
-      loader: this.props.loader,
       projectId: this.props.projectId,
       ref: parsed,
     }) as unknown as DynamicWorkerCapability<T>;
@@ -721,33 +710,13 @@ class DynamicWorkerCollectionRpcTarget extends RpcTarget implements DynamicWorke
  * the flattened capability dispatcher.
  */
 class DynamicWorkerRpcTarget extends RpcTarget {
-  readonly #runner: DynamicWorkerRunner;
+  readonly #projectId: string;
   readonly #ref: DynamicWorkerRef;
 
-  constructor(props: {
-    ctx: CfExecutionContext;
-    loader: Env["LOADER"];
-    projectId: string;
-    ref: DynamicWorkerRef;
-  }) {
+  constructor(props: { projectId: string; ref: DynamicWorkerRef }) {
     super();
+    this.#projectId = props.projectId;
     this.#ref = props.ref;
-    const itxScope = itxEntrypointProps({
-      path: normalizePath(props.ref.path),
-      projectId: props.projectId,
-    });
-    this.#runner = new DynamicWorkerRunner({
-      bindings: {
-        // The dynamic worker's ITX binding is supplied by the host context, not
-        // by the worker ref. Props remain worker-supplied, but auth/scope stay
-        // under the project/agent/ITX object that is doing the hosting.
-        ITX: itxEntrypointBinding(props.ctx.exports, itxScope),
-      },
-      globalOutbound: projectEgressFetcher(props.ctx.exports, props.projectId),
-      loader: props.loader,
-      projectId: props.projectId,
-      workerScopeKey: itxEntrypointScopeCacheKey(itxScope),
-    });
     return withInvokeCapabilityFallback(this);
   }
 
@@ -760,17 +729,23 @@ class DynamicWorkerRpcTarget extends RpcTarget {
     flattenNestedPath?: boolean;
     path: string[];
   }) {
-    // Keep every dynamic worker invocation behind DynamicWorkerRunner. Stateless
-    // entrypoints, stateful DO facets, provided worker capabilities, and
-    // project.worker all then share the same loader/egress/ITX binding rules.
-    // Return values pass through untouched on purpose: an RpcTarget returned by
-    // the dynamic worker must remain a live object-capability so Cap'n Web can
-    // serialize it as a chained/pipelined stub for the outer caller.
-    return await this.#runner.invokeCapability({
+    // Every dynamic worker invocation goes through the worker worker
+    // (DynamicWorkerEntrypoint): stateless entrypoints, stateful DO facets,
+    // provided worker capabilities, and project.worker all share its
+    // loader/egress/ITX binding rules. Args and return values pass through
+    // untouched on purpose: both directions may carry live RPC stubs, and an
+    // RpcTarget returned by the dynamic worker must remain a live
+    // object-capability so Cap'n Web can serialize it as a chained/pipelined
+    // stub for the outer caller.
+    return await env.DYNAMIC_WORKERS.invokeCapability({
       args,
       flattenNestedPath,
       path,
+      projectId: this.#projectId,
       ref: this.#ref,
+      // A worker reached through the public collection runs in the itx scope
+      // of its own path.
+      scopePath: this.#ref.path,
     });
   }
 }
@@ -1288,8 +1263,6 @@ export class ItxRpcTarget extends RpcTarget implements Itx {
   get workers() {
     return new DynamicWorkerCollectionRpcTarget({
       auth: this.props.auth,
-      ctx: this.props.ctx,
-      loader: env.LOADER,
       projectId: this.props.projectId,
     });
   }
