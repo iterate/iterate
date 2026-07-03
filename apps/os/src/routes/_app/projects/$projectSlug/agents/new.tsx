@@ -9,6 +9,7 @@ import { connectItxBrowser } from "~/itx/itx-react.tsx";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/new")({
+  staticData: { breadcrumb: "New agent" },
   // The page creates a child of /agents, so it inherits that stream context —
   // the header shows the /agents ancestry and ⌘K opens on the agents tree.
   loader: ({ context }) =>

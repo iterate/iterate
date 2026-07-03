@@ -82,15 +82,18 @@ export function PathBreadcrumbs() {
       },
     ];
   });
+  // The stream ancestry IS the path; route crumbs that remain (e.g. "Repl",
+  // "Reactivity" — project pages that aren't themselves a stream view) trail
+  // it. Stream pages publish no route crumb, so their trail is pure ancestry.
   const crumbs = streamBreadcrumb
     ? [
-        ...routeCrumbs.slice(0, -1),
         ...streamPathAncestors(streamBreadcrumb.streamPath).map((streamPath) => ({
           id: `stream:${streamPath}`,
           label: getStreamSegmentLabel(streamPath),
           to: undefined,
           streamPath,
         })),
+        ...routeCrumbs,
       ]
     : routeCrumbs;
 
