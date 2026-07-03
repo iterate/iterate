@@ -1545,13 +1545,26 @@ export class StreamProcessorRpcTarget<Contract extends StreamProcessorContract>
   implements StreamProcessorRpc<ProcessorState<Contract>>
 {
   readonly #processor: StreamProcessor<Contract, object>;
+  readonly #catchUpBeforeSnapshot: (() => Promise<void>) | undefined;
 
-  constructor(processor: StreamProcessor<Contract, object>) {
+  constructor(
+    processor: StreamProcessor<Contract, object>,
+    options: {
+      /**
+       * Host-provided pull-through (`StreamProcessorHost.catchUp`): snapshots
+       * served over this target reflect events the push delivery has not
+       * brought yet, giving remote readers read-your-writes.
+       */
+      catchUpBeforeSnapshot?: () => Promise<void>;
+    } = {},
+  ) {
     super();
     this.#processor = processor;
+    this.#catchUpBeforeSnapshot = options.catchUpBeforeSnapshot;
   }
 
-  snapshot() {
+  async snapshot() {
+    await this.#catchUpBeforeSnapshot?.();
     return this.#processor.snapshot();
   }
 

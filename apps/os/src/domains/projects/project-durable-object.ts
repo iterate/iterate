@@ -96,7 +96,12 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   get processor() {
-    return new StreamProcessorRpcTarget(this.#projectProcessor);
+    return new StreamProcessorRpcTarget(this.#projectProcessor, {
+      // Lists served from this snapshot (child streams, secrets) must reflect
+      // a child stream created moments ago even when the root stream's push
+      // delivery is lagging or a wake was dropped.
+      catchUpBeforeSnapshot: () => this.#processorHost.catchUp(ProjectProcessorContract.slug),
+    });
   }
 
   async fetch(request: Request): Promise<Response> {
