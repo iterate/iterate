@@ -32,19 +32,27 @@ export function getEventName() {
   return eventName;
 }
 
+/** The subset of GitHub webhook event payload fields our CI scripts read. */
+export type GithubEventPayload = {
+  action?: string;
+  pull_request?: { number: number; body?: string | null; merged?: boolean };
+};
+
 export function readEventPayload() {
   const eventPath = process.env.GITHUB_EVENT_PATH;
   if (!eventPath) {
     throw new Error("GITHUB_EVENT_PATH is required");
   }
-  return JSON.parse(readFileSync(eventPath, "utf8")) as Record<string, any>;
+  return JSON.parse(readFileSync(eventPath, "utf8")) as GithubEventPayload;
 }
 
 export function getRunUrl() {
   const serverUrl = process.env.GITHUB_SERVER_URL || "https://github.com";
   const repository = process.env.GITHUB_REPOSITORY;
   const runId = process.env.GITHUB_RUN_ID;
-  if (!repository || !runId) return "";
+  if (!repository || !runId) {
+    throw new Error("GITHUB_REPOSITORY and GITHUB_RUN_ID are required");
+  }
   return `${serverUrl}/${repository}/actions/runs/${runId}`;
 }
 

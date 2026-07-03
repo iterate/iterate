@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 
+import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
 import { getOctokit, getRepo } from "./github.ts";
-import { isMainModule } from "./main-module.ts";
 
 export async function createRelease() {
   const releaseName = process.env.RELEASE_NAME;

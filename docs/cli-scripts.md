@@ -26,15 +26,14 @@ trpc-cli scripts/preview/preview.ts --help
 For app-style CLIs, use the existing pattern:
 
 ```ts
-import { realpathSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 
 export async function doThing(options: { name: string }) {
   return { ok: true, name: options.name };
 }
 
-if (realpathSync(process.argv[1]!) === realpathSync(fileURLToPath(import.meta.url))) {
+if (isMainModule(import.meta.url)) {
   void createCli({
     ...import.meta,
     name: "my-script",

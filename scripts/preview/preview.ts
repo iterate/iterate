@@ -979,7 +979,7 @@ const defaultPreviewReadyUrlPath = "/api/__internal/health";
 const defaultPreviewTestMaxAttempts = 1;
 const defaultPreviewTestRetryDelayMs = 5_000;
 const defaultPreviewDeployConcurrency = 5;
-const ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE = "environment-config-lease";
+const ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE = "environment-config-lease" as const;
 const previewEnvironmentSlotNumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
 const sharedAuthPreviewSecretsCopiedFromDev = [
   "APP_CONFIG_GOOGLE_CLIENT_ID",
@@ -2025,30 +2025,15 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
   console.log("done");
 }
 
-function authPreviewJwksResetCommand(input: { config: string; slot: number }) {
-  return [
-    "run",
-    "--project",
-    "auth",
-    "--config",
-    input.config,
-    "--",
-    "pnpm",
-    "--dir",
-    "apps/auth",
-    "exec",
-    "wrangler",
-    "d1",
-    "execute",
-    `auth-preview-${input.slot}-auth-db`,
-    "--remote",
-    "--command",
-    "delete from jwks;",
-  ];
-}
-
+// Better Auth encrypts jwks rows with APP_CONFIG_BETTER_AUTH_SECRET; after a
+// rotation the old rows can no longer be decrypted, so they must be cleared.
 function clearAuthPreviewJwks(input: { config: string; slot: number }) {
-  runDoppler(authPreviewJwksResetCommand(input));
+  runDoppler([
+    ...["run", "--project", "auth", "--config", input.config, "--"],
+    ...["pnpm", "--dir", "apps/auth", "exec", "wrangler", "d1", "execute"],
+    `auth-preview-${input.slot}-auth-db`,
+    ...["--remote", "--command", "delete from jwks;"],
+  ]);
   console.log(`slot ${input.slot}: cleared auth JWKS rows after Better Auth secret rotation`);
 }
 
@@ -3406,7 +3391,6 @@ export const previewInternals = {
   ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
   acquireAnyEnvironmentConfigLease,
   assignEnvironmentConfigLease,
-  authPreviewJwksResetCommand,
   claimEnvironmentConfigLease,
   classifyEnvironmentConfigLeases,
   classifyLeaseForReclaim,

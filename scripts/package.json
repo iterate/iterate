@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@iterate-com/shared": "workspace:*",
@@ -15,6 +16,8 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@types/node": "^25.0.10",
+    "typescript": "^5.9.3",
     "vitest": "^4.1.7"
   }
 }

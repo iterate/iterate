@@ -35,10 +35,6 @@ export const slackUsers = [
   },
 ];
 
-export function resolveSlackChannel(channelName: string) {
-  return slackChannelIds[channelName as keyof typeof slackChannelIds] ?? channelName;
-}
-
 export function getSlackBotToken() {
   if (process.env.SLACK_CI_BOT_TOKEN) {
     return process.env.SLACK_CI_BOT_TOKEN;

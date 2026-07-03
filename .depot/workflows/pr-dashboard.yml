@@ -1,8 +1,4 @@
 name: Daily PR dashboard
-permissions:
-  actions: write
-  contents: read
-  pull-requests: read
 on:
   pull_request:
     types:

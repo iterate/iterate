@@ -1,5 +1,7 @@
+import type { RestEndpointMethodTypes } from "@octokit/rest";
+
+import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
 import { getEventName, getOctokit, getRepo, prState, readEventPayload } from "./github.ts";
-import { isMainModule } from "./main-module.ts";
 import { getSlackClient, slackChannelIds, slackUsers } from "./slack.ts";
 
 type NagInfo = {
@@ -127,13 +129,8 @@ export async function nagPrs() {
   }
 }
 
-type PullRequest = {
-  number: number;
-  title: string;
-  html_url: string;
-  body?: string | null;
-  user?: { login?: string } | null;
-};
+/** An open pull request as returned by Octokit's pulls.list. */
+type PullRequest = RestEndpointMethodTypes["pulls"]["list"]["response"]["data"][number];
 
 async function nagOrGiveUp({
   github,

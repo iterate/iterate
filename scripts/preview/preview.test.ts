@@ -12,7 +12,6 @@ import {
 const {
   ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
   acquireAnyEnvironmentConfigLease,
-  authPreviewJwksResetCommand,
   claimEnvironmentConfigLease,
   evaluateCloudflareZoneCheck,
   holderPullRequestUrl,
@@ -121,6 +120,7 @@ describe("preview compare base", () => {
         previousState: {
           apps: {},
           environmentConfigLease: null,
+          notice: null,
         },
         pullRequestBaseSha: "base-sha",
       }),
@@ -141,6 +141,7 @@ describe("preview compare base", () => {
             },
           },
           environmentConfigLease: null,
+          notice: null,
         },
         pullRequestBaseSha: "base-sha",
       }),
@@ -163,6 +164,7 @@ describe("preview retry selection", () => {
             },
           },
           environmentConfigLease: null,
+          notice: null,
         },
         pullRequestHeadSha: "current-head",
       }).map((app) => app.slug),
@@ -183,6 +185,7 @@ describe("preview retry selection", () => {
             },
           },
           environmentConfigLease: null,
+          notice: null,
         },
         pullRequestHeadSha: "current-head",
       }).map((app) => app.slug),
@@ -203,6 +206,7 @@ describe("preview retry selection", () => {
             },
           },
           environmentConfigLease: null,
+          notice: null,
         },
         pullRequestHeadSha: "current-head",
       }),
@@ -287,6 +291,7 @@ describe("cloudflare preview state helpers", () => {
         }),
       },
       environmentConfigLease: null,
+      notice: null,
     });
 
     expect(body).toContain("# User content");
@@ -338,30 +343,6 @@ describe("environmentConfigLeaseInventory", () => {
       "preview-7",
       "preview-8",
       "preview-9",
-    ]);
-  });
-});
-
-describe("auth preview provisioning", () => {
-  it("clears Better Auth JWKS rows for a rotated preview slot", () => {
-    expect(authPreviewJwksResetCommand({ config: "preview_8", slot: 8 })).toEqual([
-      "run",
-      "--project",
-      "auth",
-      "--config",
-      "preview_8",
-      "--",
-      "pnpm",
-      "--dir",
-      "apps/auth",
-      "exec",
-      "wrangler",
-      "d1",
-      "execute",
-      "auth-preview-8-auth-db",
-      "--remote",
-      "--command",
-      "delete from jwks;",
     ]);
   });
 });

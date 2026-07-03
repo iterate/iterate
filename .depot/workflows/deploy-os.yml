@@ -78,7 +78,5 @@ jobs:
       - name: Notify Slack
         env:
           APP_DISPLAY_NAME: OS
-          COMMIT_SHA: ${{ github.sha }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           PUBLIC_URL: ${{ needs.deploy.outputs.public_url }}
         run: pnpm tsx scripts/ci/notify.ts deploy-${{ needs.deploy.result }}

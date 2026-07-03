@@ -1,6 +1,6 @@
+import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
 import { getRunUrl } from "./github.ts";
-import { isMainModule } from "./main-module.ts";
-import { getSlackClient, resolveSlackChannel, slackChannelIds } from "./slack.ts";
+import { getSlackClient, slackChannelIds } from "./slack.ts";
 
 type DeployOptions = {
   app: string;
@@ -8,17 +8,9 @@ type DeployOptions = {
   commitSha: string;
   runUrl: string;
   publicUrl?: string;
-  channel?: string;
 };
 
-export async function notifyDeploy({
-  app,
-  status,
-  commitSha,
-  runUrl,
-  publicUrl,
-  channel = "#ci",
-}: DeployOptions) {
+export async function notifyDeploy({ app, status, commitSha, runUrl, publicUrl }: DeployOptions) {
   const slack = getSlackClient();
   const shortSha = commitSha.slice(0, 7);
   const message =
@@ -37,13 +29,13 @@ export async function notifyDeploy({
         ].join(" ");
 
   await slack.chat.postMessage({
-    channel: resolveSlackChannel(channel),
+    channel: slackChannelIds["#ci"],
     text: message,
   });
 }
 
 export async function notifyWorkflowFailure() {
-  const needs = JSON.parse(process.env.NEEDS || "{}") as Record<string, { result?: string }>;
+  const needs = JSON.parse(readOption("NEEDS")) as Record<string, { result?: string }>;
   const failedJobs = Object.entries(needs)
     .filter(([, value]) => value.result === "failure")
     .map(([name]) => name);
@@ -61,8 +53,8 @@ export async function notifyWorkflowFailure() {
   });
 }
 
-function readOption(name: string, fallback?: string) {
-  const value = process.env[name] || fallback;
+function readOption(name: string) {
+  const value = process.env[name];
   if (!value) throw new Error(`${name} is required`);
   return value;
 }
@@ -73,10 +65,9 @@ async function main() {
     await notifyDeploy({
       app: readOption("APP_DISPLAY_NAME"),
       status: command === "deploy-success" ? "success" : "failure",
-      commitSha: readOption("COMMIT_SHA", process.env.GITHUB_SHA),
-      runUrl: readOption("RUN_URL", getRunUrl()),
+      commitSha: readOption("GITHUB_SHA"),
+      runUrl: getRunUrl(),
       publicUrl: process.env.PUBLIC_URL,
-      channel: process.env.SLACK_CHANNEL_NAME || "#ci",
     });
     return;
   }

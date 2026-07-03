@@ -1,14 +1,8 @@
-import { getEventName, getOctokit, getRepo } from "./github.ts";
-import { isMainModule } from "./main-module.ts";
-import { getSlackClient, slackChannelIds, slackUsers } from "./slack.ts";
+import type { RestEndpointMethodTypes } from "@octokit/rest";
 
-type PrSearchItem = {
-  number: number;
-  title: string;
-  html_url: string;
-  draft?: boolean;
-  user?: { login?: string };
-};
+import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
+import { getEventName, getOctokit, getRepo } from "./github.ts";
+import { getSlackClient, slackChannelIds, slackUsers } from "./slack.ts";
 
 export async function updatePrDashboard() {
   const github = getOctokit();
@@ -25,7 +19,7 @@ export async function updatePrDashboard() {
       q: `repo:${repo.owner}/${repo.repo} is:pr ${queryParts}`,
       per_page: 100,
     });
-    return data.items as PrSearchItem[];
+    return data.items;
   };
 
   const [mergedTodayRaw, closedToday, openedToday, oldOpen] = await Promise.all([
@@ -46,6 +40,9 @@ export async function updatePrDashboard() {
   );
   mergedToday.sort((a, b) => (a.pr.merged_at || "").localeCompare(b.pr.merged_at || ""));
 
+  /** A PR as returned by Octokit's search.issuesAndPullRequests. */
+  type PrSearchItem =
+    RestEndpointMethodTypes["search"]["issuesAndPullRequests"]["response"]["data"]["items"][number];
   const link = (item: PrSearchItem) =>
     `<${item.html_url}|#${item.number} ${item.title.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}>`;
   const by = (login: string | undefined) => {
