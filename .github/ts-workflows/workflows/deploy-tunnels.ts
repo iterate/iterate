@@ -47,7 +47,7 @@ export default workflow({
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
-          run: "doppler run -- pnpm alchemy:up",
+          run: "doppler run -- pnpm run-script deploy",
         },
       ],
     },

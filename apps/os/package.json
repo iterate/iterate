@@ -21,7 +21,7 @@
     "routes:generate": "tsx ./scripts/generate-route-tree.ts",
     "generate:itx-types-source": "tsx ./scripts/generate-itx-types-source.ts",
     "routes:check": "tsx ./scripts/generate-route-tree.ts --check",
-    "typecheck": "pnpm routes:check && tsc --noEmit",
+    "typecheck": "pnpm routes:check && pnpm gen:wrangler:check && tsc --noEmit",
     "test": "pnpm test:unit",
     "test:unit": "vitest run",
     "e2e": "vitest --config e2e/vitest.config.ts",

@@ -16,6 +16,7 @@ dist
 .wrangler
 .dev.vars*
 .alchemy
+.dev-server
 
 !.dev.vars.example
 .env*

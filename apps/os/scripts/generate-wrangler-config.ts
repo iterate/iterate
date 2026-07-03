@@ -1,8 +1,9 @@
 /**
  * Generates apps/os/wrangler.jsonc from the root envs.ts.
  *
- *   pnpm gen:wrangler        # rewrite wrangler.jsonc
- *   pnpm gen:wrangler --check # exit 1 if the checked-in file is stale (CI)
+ *   pnpm gen:wrangler         # rewrite wrangler.jsonc
+ *   pnpm gen:wrangler:check   # exit 1 if the checked-in file is stale
+ *                             # (chained into `pnpm typecheck`, so CI enforces it)
  *
  * The top-level config is local dev (no routes, containers off so `pnpm dev`
  * never needs Docker); each deployed environment gets an env block expanded
@@ -23,13 +24,12 @@ const CONFIG_PATH = fileURLToPath(new URL("../wrangler.jsonc", import.meta.url))
 
 /**
  * Secrets every deployment needs, sourced from the env's Doppler config.
- * `deploy.ts` builds its --secrets-file from exactly this list and fails
- * before deploying when the Doppler config is missing one; the vite plugin
- * loads exactly these keys from process.env in local dev.
+ * `deploy.ts` builds its --secrets-file from exactly this list (plus the
+ * deploy-time-baked APP_CONFIG_ITERATE_AUTH__JWKS) and fails before
+ * deploying when the Doppler config is missing one.
  */
 export const REQUIRED_SECRETS = [
   "APP_CONFIG_ADMIN_API_SECRET",
-  "APP_CONFIG_BASE_URL",
   "APP_CONFIG_CLOUDFLARE__API_TOKEN",
   "APP_CONFIG_GEMINI_API_KEY",
   "APP_CONFIG_INTEGRATIONS__GITHUB",
@@ -37,16 +37,36 @@ export const REQUIRED_SECRETS = [
   "APP_CONFIG_INTEGRATIONS__SLACK",
   "APP_CONFIG_ITERATE_AUTH__CLIENT_ID",
   "APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET",
-  "APP_CONFIG_ITERATE_AUTH__ISSUER",
   "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN",
   "APP_CONFIG_LOGS",
-  "APP_CONFIG_MCP__BASE_URL",
   "APP_CONFIG_OPEN_AI_API_KEY",
   "APP_CONFIG_POSTHOG",
-  "APP_CONFIG_PROJECT_HOSTNAME_BASES",
   "APP_CONFIG_SLACK_BOT_TOKEN",
   "APP_CONFIG_X_AI_API_KEY",
   "SECRET_ENCRYPTION_KEY",
+];
+
+/**
+ * Env-shaping config that is NOT secret and already lives in envs.ts —
+ * emitted as per-env `vars` so the worker's runtime hostnames can never
+ * drift from the routes generated off the same entry. Local dev has no env
+ * block, so the top-level `secrets.required` also lists these names and the
+ * vite plugin loads them from the Doppler-provided process.env.
+ */
+export function envShapedVars(env: DeployedEnv) {
+  return {
+    APP_CONFIG_BASE_URL: env.baseUrl,
+    APP_CONFIG_MCP__BASE_URL: env.mcpBaseUrl,
+    APP_CONFIG_PROJECT_HOSTNAME_BASES: JSON.stringify(env.projectHostnameBases),
+    APP_CONFIG_ITERATE_AUTH__ISSUER: `${env.authBaseUrl}/api/auth`,
+  };
+}
+
+const ENV_SHAPED_KEYS = [
+  "APP_CONFIG_BASE_URL",
+  "APP_CONFIG_MCP__BASE_URL",
+  "APP_CONFIG_PROJECT_HOSTNAME_BASES",
+  "APP_CONFIG_ITERATE_AUTH__ISSUER",
 ];
 
 const DO_CLASSES = {
@@ -103,10 +123,14 @@ function workerBindings(input: { workerName: string; accountId: string; kvId?: s
 
 /**
  * Every hostname routed to the os worker: the app base URL, the MCP host,
- * and the project-host patterns (`base`, `*.base` and the broad `*base` —
- * the last because the preview zone only reliably invoked the worker for
- * project hosts once the catch-all existed). The zone is the hostname minus
- * its first label for app/MCP hosts; project bases are themselves zones.
+ * and the project-host patterns. The zone is the hostname minus its first
+ * label for app/MCP hosts; project bases are themselves zones.
+ *
+ * Project bases get three patterns: `base/*`, `*.base/*`, and `*base/*`.
+ * The catch-all `*base/*` should subsume the others, but the live preview
+ * zone only reliably invoked the worker for project hosts once all three
+ * existed (observed 2026-06) — kept verbatim; collapse only with an edge
+ * experiment proving it.
  */
 function routes(env: DeployedEnv) {
   const appHost = new URL(env.baseUrl).hostname;
@@ -124,15 +148,17 @@ function routes(env: DeployedEnv) {
 }
 
 function envBlock(env: DeployedEnv) {
+  const bindings = workerBindings({
+    workerName: env.osWorkerName,
+    accountId: env.cloudflareAccountId,
+    kvId: env.resources.projectDirectoryKvId,
+  });
   return {
     name: env.osWorkerName,
     account_id: env.cloudflareAccountId,
     routes: routes(env),
-    ...workerBindings({
-      workerName: env.osWorkerName,
-      accountId: env.cloudflareAccountId,
-      kvId: env.resources.projectDirectoryKvId,
-    }),
+    ...bindings,
+    vars: { ...bindings.vars, ...envShapedVars(env) },
   };
 }
 
@@ -155,6 +181,9 @@ const config = {
   // this (deploys ignore the dev section entirely).
   dev: { enable_containers: false },
   ...workerBindings({ workerName: "os-dev", accountId: "" }),
+  // Local dev loads the env-shaping keys from Doppler like any other secret
+  // (deployed envs get them as generated vars instead — see envShapedVars).
+  secrets: { required: [...REQUIRED_SECRETS, ...ENV_SHAPED_KEYS] },
   env: Object.fromEntries(Object.entries(envs).map(([name, env]) => [name, envBlock(env)])),
 };
 
@@ -162,7 +191,7 @@ const config = {
 // this module without triggering a rewrite.
 if (process.argv[1]?.endsWith("generate-wrangler-config.ts")) {
   const header = `// GENERATED by scripts/generate-wrangler-config.ts from the root envs.ts — do not edit.
-// Regenerate: pnpm gen:wrangler   (CI fails when stale)
+// Regenerate: pnpm gen:wrangler   (pnpm typecheck fails when stale)
 `;
   const rendered = header + JSON.stringify(config, null, 2) + "\n";
 

@@ -83,7 +83,7 @@ jobs:
         working-directory: apps/streams-example-app
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm tsx ./alchemy.run.ts
+        run: doppler run -- pnpm run-script deploy
   slack-success:
     needs:
       - variables

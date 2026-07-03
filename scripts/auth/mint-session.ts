@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { SignJWT, importJWK, type JWK } from "jose";
@@ -8,6 +8,7 @@ import {
   ITERATE_IS_ADMIN_CLAIM,
   ITERATE_ROLE_CLAIM,
 } from "@iterate-com/shared/auth-claims";
+import { readDevServerInfo } from "../../apps/os/scripts/lib/dev-server-info.ts";
 
 // Mint an OS session for any identity — dev, preview, and production.
 //
@@ -88,30 +89,15 @@ function findRepoRoot(start: string) {
   return start;
 }
 
-function isPidAlive(pid: number) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function resolveBaseUrl(): string {
   if (args["base-url"]) return args["base-url"].replace(/\/+$/, "");
   const fromEnv = process.env.APP_CONFIG_BASE_URL?.trim();
   if (fromEnv) return fromEnv.replace(/\/+$/, "");
   const repoRoot = findRepoRoot(process.cwd());
-  const discovery = join(repoRoot, "apps/os/.dev-server/dev-server.json");
-  if (existsSync(discovery)) {
-    const info = JSON.parse(readFileSync(discovery, "utf8")) as { baseUrl?: string; pid?: number };
-    // Ignore a stale discovery file: after a crash or `kill -9` the recorded
-    // port is dead, and minting against it would hand back a browser URL that
-    // points nowhere. Treat a dead pid as "no dev server".
-    if (info.baseUrl && (typeof info.pid !== "number" || isPidAlive(info.pid))) {
-      return info.baseUrl.replace(/\/+$/, "");
-    }
-  }
+  // requireLive: a stale discovery file (crash, kill -9) would hand back a
+  // browser URL that points nowhere.
+  const info = readDevServerInfo(join(repoRoot, "apps/os"), { requireLive: true });
+  if (info) return info.baseUrl.replace(/\/+$/, "");
   throw new Error(
     "Could not resolve the OS base URL: pass --base-url, set APP_CONFIG_BASE_URL, " +
       "or start the local dev server (apps/os/.dev-server/dev-server.json).",

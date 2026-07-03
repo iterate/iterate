@@ -56,14 +56,14 @@ export default {
     const config = parseConfig(env);
 
     const mcpRequest = rewriteMcpHostRequest({ config, request });
-    if (mcpRequest) return await appFetch(mcpRequest, env, ctx, config);
+    if (mcpRequest) return await appFetch(mcpRequest, ctx, config);
 
     const apiRequest = apiWorkerRequest({ config, request });
     if (apiRequest) return await apiFetch(apiRequest, env, ctx, config);
 
     // Everything else is the OS host (project + custom hostnames all took the
     // api lane above, which owns the 404 for hosts that resolve to nothing).
-    return await appFetch(request, env, ctx, config);
+    return await appFetch(request, ctx, config);
   },
 };
 
@@ -72,7 +72,7 @@ export default {
  * /api routes (inbound MCP, health). Every request emits one structured
  * "wide event" log line.
  */
-async function appFetch(request: Request, _env: Env, ctx: ExecutionContext, config: AppConfig) {
+async function appFetch(request: Request, ctx: ExecutionContext, config: AppConfig) {
   return withEvlog(
     { request, app: { name: "@iterate-com/os", slug: "os" }, config, executionCtx: ctx },
     async ({ log }) => {
@@ -164,7 +164,7 @@ function directoryResolvers(config: AppConfig, env: Env): IngressResolvers {
   };
 }
 
-export function stripInternalHeaders(request: Request) {
+function stripInternalHeaders(request: Request) {
   const headers = new Headers(request.headers);
   headers.delete("x-iterate-resolved-ingress");
   headers.delete("x-iterate-app");

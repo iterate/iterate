@@ -1,31 +1,48 @@
 /**
- * The complete map of deployed Iterate environments.
+ * The complete map of deployed Iterate environments, for every app.
  *
  * This file is the single source of truth for what makes one deployed
  * environment different from another: hostnames, worker names, Cloudflare
  * account, and the IDs of the handful of Cloudflare resources that carry
  * them (D1, KV). Everything here is non-secret and reviewed like any other
- * code; secrets live in Doppler (one config per env, named below).
+ * code; secrets live in Doppler (one config per env per app, named below).
  *
- * Consumers:
- *   - apps/os/scripts/generate-wrangler-config.ts expands this into
- *     apps/os/wrangler.jsonc env blocks (checked in, CI-verified fresh)
- *   - apps/os/scripts/{deploy,ensure-resources,erase-data}.ts take
- *     `--env <name>` and look the environment up here
+ * Each app has its own map (envs/os, authEnvs, semaphoreEnvs, tunnelsEnvs,
+ * streamsExampleEnvs) because apps deploy to different subsets of
+ * environments — forcing them into one record would mean optional fields
+ * that lie. Hostnames follow conventions (`previewSlot(n)` derives them);
+ * resource IDs are Cloudflare-assigned and must be spelled out.
+ *
+ * Consumers: each app's scripts/{generate-wrangler-config,deploy,
+ * ensure-resources,erase-data}.ts, via scripts/lib/env-context.ts. All take
+ * `--env <name>` and look the environment up here.
  *
  * Local dev environments (`dev`, `dev_<you>`) are deliberately NOT listed:
- * they never deploy — `pnpm dev` runs the top-level wrangler config defaults
- * under your local Doppler context.
+ * they never deploy — `pnpm dev` runs each app's top-level wrangler config
+ * defaults under your local Doppler context.
  *
- * Adding a preview slot: add `preview_<N>: previewSlot(<N>)`, run
- * `pnpm --dir apps/os ensure-resources --env preview_<N>`, paste the printed
- * resource IDs below, commit, deploy.
+ * Bringing up a new env (e.g. a new preview slot): add its entry with
+ * `UNPROVISIONED` resource IDs, run that app's
+ * `pnpm ensure-resources --env <name>` (creates whatever is missing and
+ * prints the real IDs), paste them here, commit, regenerate wrangler config,
+ * deploy. Deploys refuse to ship UNPROVISIONED IDs.
  */
 
+/** The production Cloudflare account (iterate.com zones). */
+export const PRD_ACCOUNT_ID = "04b3b57291ef2626c6a8daa9d47065a7";
+/** The shared dev/preview Cloudflare account (iterate-preview-N and dev zones). */
+export const PREVIEW_AND_DEV_ACCOUNT_ID = "376ef7ed81b0573f93524de763666c15";
+
 /**
- * One deployed environment. A single environment spans apps — the os worker
- * and the auth worker (whose D1 the os erase-data script wipes) deploy into
- * the same env entry.
+ * Placeholder for a Cloudflare resource that hasn't been created yet.
+ * Deploy scripts refuse to ship it; `ensure-resources` replaces it.
+ */
+export const UNPROVISIONED = "UNPROVISIONED";
+
+/**
+ * One deployed environment of the OS product. A single environment spans
+ * apps — the os worker and the auth worker (whose D1 the os erase-data
+ * script wipes) deploy into the same env entry.
  */
 export interface DeployedEnv {
   /**
@@ -80,11 +97,6 @@ function previewSlot(n: number, resources: DeployedEnv["resources"]): DeployedEn
   };
 }
 
-/** The production Cloudflare account (iterate.com zones). */
-const PRD_ACCOUNT_ID = "04b3b57291ef2626c6a8daa9d47065a7";
-/** The shared dev/preview Cloudflare account (iterate-preview-N and dev zones). */
-const PREVIEW_AND_DEV_ACCOUNT_ID = "376ef7ed81b0573f93524de763666c15";
-
 export const envs = {
   prd: {
     cloudflareAccountId: PRD_ACCOUNT_ID,
@@ -132,18 +144,161 @@ export const envs = {
     projectDirectoryKvId: "a981052b548843f2a643f4a4bc0d7109",
     authDbId: "51003bad-73c1-43b4-9905-2806067b4534",
   }),
+  preview_9: previewSlot(9, {
+    projectDirectoryKvId: UNPROVISIONED,
+    authDbId: UNPROVISIONED,
+  }),
 } satisfies Record<string, DeployedEnv>;
 
 /** A deployed environment name, e.g. "prd" or "preview_3". */
 export type EnvName = keyof typeof envs;
 
-/** Look up a deployed env by name, with a helpful error listing valid names. */
-export function requireEnv(name: string): DeployedEnv {
-  const env = (envs as Record<string, DeployedEnv>)[name];
+/**
+ * apps/auth deploys everywhere os does, PLUS `dev_global`
+ * (auth.iterate-dev.com) — the shared issuer every local dev environment
+ * signs in through. The subset of fields auth's scripts need.
+ */
+export interface AuthDeployedEnv {
+  cloudflareAccountId: string;
+  /** Doppler config (project `auth`) supplying this env's secrets. */
+  dopplerConfig: string;
+  authWorkerName: string;
+  authBaseUrl: string;
+  resources: { authDbId: string };
+}
+
+export const authEnvs = {
+  ...envs,
+  dev_global: {
+    cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    dopplerConfig: "dev_global",
+    authWorkerName: "auth-dev-global",
+    authBaseUrl: "https://auth.iterate-dev.com",
+    resources: { authDbId: "a4e70d97-74aa-4f9f-8da9-4540e552b2a9" },
+  },
+} satisfies Record<string, AuthDeployedEnv>;
+
+/**
+ * apps/semaphore — the preview-slot lease coordinator. prd serves all real
+ * leasing (its coordinator DO holds live lease state — deploy over it, never
+ * erase it); preview slots deploy it too so semaphore PRs get previews.
+ */
+export interface SemaphoreEnv {
+  cloudflareAccountId: string;
+  /** Doppler config (project `semaphore`) supplying this env's secrets. */
+  dopplerConfig: string;
+  workerName: string;
+  baseUrl: string;
+  resources: {
+    /** D1: lease inventory (`<worker>-resources`). */
+    resourcesDbId: string;
+  };
+}
+
+function semaphorePreviewSlot(n: number, resourcesDbId: string): SemaphoreEnv {
+  return {
+    cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    dopplerConfig: `preview_${n}`,
+    workerName: `semaphore-preview-${n}`,
+    baseUrl: `https://semaphore.iterate-preview-${n}.com`,
+    resources: { resourcesDbId },
+  };
+}
+
+export const semaphoreEnvs = {
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    workerName: "semaphore-prd",
+    baseUrl: "https://semaphore.iterate.com",
+    resources: { resourcesDbId: "2a393c91-3f01-455c-a462-2486653b0a10" },
+  },
+  preview_1: semaphorePreviewSlot(1, UNPROVISIONED),
+  preview_2: semaphorePreviewSlot(2, UNPROVISIONED),
+  preview_3: semaphorePreviewSlot(3, "17493958-1589-4a2c-a280-0a55bc11a92c"),
+  preview_4: semaphorePreviewSlot(4, UNPROVISIONED),
+  preview_5: semaphorePreviewSlot(5, "eea19312-34e2-4e5c-be19-fe6929636544"),
+  preview_6: semaphorePreviewSlot(6, "1b27c077-5dec-4a13-848c-249a321601b4"),
+  preview_7: semaphorePreviewSlot(7, UNPROVISIONED),
+  preview_8: semaphorePreviewSlot(8, "53858fae-e556-445d-b2ce-0b68fe56582f"),
+  preview_9: semaphorePreviewSlot(9, UNPROVISIONED),
+} satisfies Record<string, SemaphoreEnv>;
+
+/**
+ * apps/tunnels — the captun gateway. prd only; dev tunnels ride prd.
+ * No per-env resources (one DO class, no D1/KV), so its checked-in
+ * wrangler.jsonc is hand-written rather than generated.
+ */
+export interface TunnelsEnv {
+  cloudflareAccountId: string;
+  /** Doppler config (project `tunnels`) supplying this env's secrets. */
+  dopplerConfig: string;
+  workerName: string;
+  /** Gateway hostname; tunnels live at `<name>.<hostname>`. */
+  hostname: string;
+}
+
+export const tunnelsEnvs = {
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    workerName: "tunnels-prd",
+    hostname: "tunnels.iterate.com",
+  },
+} satisfies Record<string, TunnelsEnv>;
+
+/**
+ * apps/streams-example-app — the streams browser UI. workers.dev only:
+ * no routes, no DNS, no resources, no secrets.
+ */
+export interface StreamsExampleEnv {
+  cloudflareAccountId: string;
+  /** Doppler config (project `streams-example-app`) supplying deploy credentials. */
+  dopplerConfig: string;
+  workerName: string;
+  /** workers.dev origin (the account's workers.dev subdomain is fixed). */
+  baseUrl: string;
+}
+
+function streamsExamplePreviewSlot(n: number): StreamsExampleEnv {
+  return {
+    cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    dopplerConfig: `preview_${n}`,
+    workerName: `streams-example-app-preview-${n}`,
+    baseUrl: `https://streams-example-app-preview-${n}.iterate-dev-preview.workers.dev`,
+  };
+}
+
+export const streamsExampleEnvs = {
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    workerName: "streams-example-app-prd",
+    baseUrl: "https://streams-example-app-prd.iterate.workers.dev",
+  },
+  preview_1: streamsExamplePreviewSlot(1),
+  preview_2: streamsExamplePreviewSlot(2),
+  preview_3: streamsExamplePreviewSlot(3),
+  preview_4: streamsExamplePreviewSlot(4),
+  preview_5: streamsExamplePreviewSlot(5),
+  preview_6: streamsExamplePreviewSlot(6),
+  preview_7: streamsExamplePreviewSlot(7),
+  preview_8: streamsExamplePreviewSlot(8),
+  preview_9: streamsExamplePreviewSlot(9),
+} satisfies Record<string, StreamsExampleEnv>;
+
+/** Look up an env by name in an app's map, with a helpful error listing valid names. */
+export function requireEnvIn<T>(map: Record<string, T>, name: string): T {
+  const env = map[name];
   if (!env) {
     throw new Error(
-      `Unknown environment ${JSON.stringify(name)}. Known: ${Object.keys(envs).join(", ")}`,
+      `Unknown environment ${JSON.stringify(name)}. Known: ${Object.keys(map).join(", ")}`,
     );
   }
   return env;
+}
+
+/** Look up a deployed OS env by name. */
+export function requireEnv(name: string): DeployedEnv {
+  return requireEnvIn(envs, name);
 }

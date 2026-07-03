@@ -43,7 +43,7 @@ Everything is declared in two places:
 
 Secrets live in Doppler only. `secrets.required` in the config lists their
 names: local dev (`doppler run -- vite dev`) loads exactly those keys from
-process.env, and `pnpm deploy --env <name>` ships them atomically with the
+process.env, and `pnpm run deploy --env <name>` ships them atomically with the
 code via `wrangler deploy --secrets-file`.
 
 ## Lifecycle scripts (apps/os/scripts)
@@ -51,7 +51,7 @@ code via `wrangler deploy --secrets-file`.
 | Command                         | What                                                                                                |
 | ------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `pnpm dev`                      | local dev server (vite + workerd); `start --detach`/`status`/`attach`/`kill` for parallel worktrees |
-| `pnpm deploy --env preview_3`   | build → deploy+secrets (one version) → smoke probe                                                  |
+| `pnpm run deploy --env preview_3`   | build → deploy+secrets (one version) → smoke probe                                                  |
 | `pnpm ensure-resources --env X` | create-only bring-up (KV, auth D1, DNS); reconciles IDs into envs.ts                                |
 | `pnpm erase-data --env X`       | wipe auth D1 rows + project-directory KV; DOs become unreachable orphans                            |
 
@@ -72,3 +72,14 @@ run rarely, if ever, since orphaned storage costs pennies.
 - Local dev containers are off by default (`dev.enable_containers: false` in
   wrangler.jsonc) so `pnpm dev` never needs Docker; sandbox DOs fail at
   their constructor until you enable them.
+
+## Cutover from the 11-worker topology
+
+The first single-worker deploy to an env that previously ran the per-DO
+split creates FRESH Durable Object namespaces on the merged script — every
+existing stream/agent/project DO in that env becomes an unreachable orphan.
+That's a data reset, not a code deploy: pair it with `erase-data` and an
+auth redeploy so the env is coherently empty rather than half-remembered.
+The old `os-<env>` per-DO scripts (`os-<env>-stream`, `-agent`, …) are dead
+afterwards and can be deleted from the Cloudflare dashboard at leisure —
+deleting them cascades nothing the new world uses.

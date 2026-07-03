@@ -1,5 +1,5 @@
 /**
- * Runtime smoke: boots the OS dev server (and a real `pnpm run deploy`) and
+ * Runtime smoke: boots the OS dev server and
  * probes SSR, `/api/health`, and itx admin auth. Skipped by default and in
  * CI — run `pnpm test:smoke` (`RUNTIME_SMOKE_FULL=1`) locally.
  */

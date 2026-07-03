@@ -1,13 +1,14 @@
 /**
  * Deploy apps/os to a deployed environment:
  *
- *   pnpm deploy:env --env preview_3
- *   pnpm deploy:env --env prd
+ *   pnpm run deploy --env preview_3
+ *   pnpm run deploy --env prd
  *
  * Steps, all fail-fast:
- *   1. Verify the env's Doppler config carries every secret wrangler.jsonc
- *      requires (secrets.required) — plus bake the static auth JWKS
- *      (issuer keys + forge public key) as APP_CONFIG_ITERATE_AUTH__JWKS.
+ *   1. Verify the env's Doppler config carries every required secret, bake
+ *      the static auth JWKS (issuer keys + forge public key), and validate
+ *      the exact runtime config with the worker's own zod schema — a config
+ *      that would throw on every request fails HERE, not after shipping.
  *   2. `vite build` with CLOUDFLARE_ENV=<env>, so the build output's
  *      wrangler.json is flattened for that env (name, routes, bindings).
  *   3. `wrangler deploy --config <built config> --secrets-file <doppler>` —
@@ -23,17 +24,24 @@ import { globSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { REQUIRED_SECRETS } from "./generate-wrangler-config.ts";
-import { resolveEnvContext, type EnvContext } from "./lib/env-context.ts";
+import { envs } from "../../../envs.ts";
+import {
+  assertProvisioned,
+  resolveEnvContext,
+  type EnvContext,
+} from "../../../scripts/lib/env-context.ts";
+import { parseConfig } from "../src/config.ts";
+import { envShapedVars, REQUIRED_SECRETS } from "./generate-wrangler-config.ts";
 
 const APP_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
-const ctx = await resolveEnvContext();
+const ctx = await resolveEnvContext({ envs, dopplerProject: "os" });
+assertProvisioned(ctx.name, ctx.env.resources);
 console.log(
   `Deploying apps/os to ${ctx.name} (worker ${ctx.env.osWorkerName}, account ${ctx.env.cloudflareAccountId})`,
 );
 
-// ---- 1. Secrets --------------------------------------------------------------
+// ---- 1. Secrets + config validation -------------------------------------------
 const secretValues: Record<string, string> = {};
 const missing: string[] = [];
 for (const key of REQUIRED_SECRETS) {
@@ -47,10 +55,16 @@ if (missing.length > 0) {
       `Set them (doppler secrets set --config ${ctx.env.dopplerConfig} ...) and retry.`,
   );
 }
+// Baked at deploy time, so it's the one secret not in secrets.required.
 secretValues.APP_CONFIG_ITERATE_AUTH__JWKS = await bakeStaticAuthJwks(ctx);
+
+// Parse the exact env the worker will see (secrets + generated vars) with
+// the worker's own schema — the strongest possible pre-flight.
+parseConfig({ ...secretValues, ...envShapedVars(ctx.env) });
 
 // ---- 2. Build ----------------------------------------------------------------
 run("pnpm", ["exec", "tsx", "./scripts/generate-wrangler-config.ts", "--check"]);
+rmSync(join(APP_ROOT, "dist"), { recursive: true, force: true });
 run("pnpm", ["exec", "vite", "build"], { CLOUDFLARE_ENV: ctx.name });
 
 const builtConfigs = globSync("dist/**/wrangler.json", { cwd: APP_ROOT });
@@ -79,8 +93,12 @@ try {
 }
 
 // ---- 4. Smoke ------------------------------------------------------------------
-await smoke(`${ctx.env.baseUrl}/`, (status) => status < 500, "dashboard");
-await smoke(`${ctx.env.baseUrl}/api/itx`, (status) => status > 0 && status < 500, "itx api");
+await smoke(
+  `${ctx.env.baseUrl}/`,
+  (status) => status === 200 || (status >= 300 && status < 400),
+  "dashboard",
+);
+await smoke(`${ctx.env.baseUrl}/api/itx`, (status) => status < 500, "itx api");
 console.log(`✅ ${ctx.name} deployed and serving at ${ctx.env.baseUrl}`);
 
 function run(command: string, args: string[], extraEnv: Record<string, string> = {}) {
@@ -98,31 +116,24 @@ function run(command: string, args: string[], extraEnv: Record<string, string> =
 /**
  * A static JWKS lets the worker verify auth JWTs without a runtime fetch,
  * and is the only trustworthy carrier for the forge public key (identity
- * minting — scripts/auth/mint-session.ts). Forge keys in production-serving
- * configs require the explicit AUTH_FORGE_ALLOW_PRODUCTION opt-in.
+ * minting — scripts/auth/mint-session.ts). An explicit
+ * APP_CONFIG_ITERATE_AUTH__JWKS in Doppler wins over the live fetch — the
+ * break-glass path for deploying os while the auth worker is down. Forge
+ * keys in production-serving configs require the explicit
+ * AUTH_FORGE_ALLOW_PRODUCTION opt-in.
  */
-async function bakeStaticAuthJwks(ctx: EnvContext): Promise<string> {
-  const issuer = ctx.secrets.APP_CONFIG_ITERATE_AUTH__ISSUER?.replace(/\/+$/, "");
-  if (!issuer) throw new Error("APP_CONFIG_ITERATE_AUTH__ISSUER missing from Doppler config.");
+async function bakeStaticAuthJwks(ctx: EnvContext<(typeof envs)[keyof typeof envs]>) {
+  const issuer = `${ctx.env.authBaseUrl}/api/auth`;
 
-  let jwks: { keys: Record<string, unknown>[] } | undefined;
-  for (let attempt = 1; attempt <= 3 && !jwks; attempt++) {
-    try {
-      const response = await fetch(`${issuer}/jwks`, { signal: AbortSignal.timeout(10_000) });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const body = (await response.json()) as { keys?: Record<string, unknown>[] };
-      if (!Array.isArray(body.keys) || body.keys.length === 0) throw new Error("JWKS has no keys");
-      jwks = body as { keys: Record<string, unknown>[] };
-    } catch (error) {
-      if (attempt === 3) {
-        throw new Error(
-          `Deploy-time JWKS fetch from ${issuer} failed after 3 attempts (${error}). ` +
-            `Deploy the auth worker for ${ctx.name} first, or fix the issuer in Doppler.`,
-        );
-      }
-      await new Promise((res) => setTimeout(res, 2000 * attempt));
-    }
+  const pinned = ctx.secrets.APP_CONFIG_ITERATE_AUTH__JWKS?.trim();
+  if (pinned) {
+    console.warn(
+      `Using the JWKS pinned in Doppler (APP_CONFIG_ITERATE_AUTH__JWKS) instead of fetching ${issuer}/jwks.`,
+    );
   }
+  const jwks = pinned
+    ? (JSON.parse(pinned) as { keys: Record<string, unknown>[] })
+    : await fetchJwksWithRetry(`${issuer}/jwks`, ctx.name);
 
   const forgePrivateJwk = ctx.secrets.AUTH_FORGE_PRIVATE_JWK?.trim();
   if (forgePrivateJwk) {
@@ -141,9 +152,29 @@ async function bakeStaticAuthJwks(ctx: EnvContext): Promise<string> {
     > & { d?: string };
     if (!publicJwk.kid || !publicJwk.kty)
       throw new Error("AUTH_FORGE_PRIVATE_JWK must be a JWK with kid and kty");
-    if (!jwks!.keys.some((key) => key.kid === publicJwk.kid)) jwks!.keys.push(publicJwk);
+    if (!jwks.keys.some((key) => key.kid === publicJwk.kid)) jwks.keys.push(publicJwk);
   }
   return JSON.stringify(jwks);
+}
+
+async function fetchJwksWithRetry(url: string, envName: string) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const body = (await response.json()) as { keys?: Record<string, unknown>[] };
+      if (!Array.isArray(body.keys) || body.keys.length === 0) throw new Error("JWKS has no keys");
+      return body as { keys: Record<string, unknown>[] };
+    } catch (error) {
+      if (attempt === 3) {
+        throw new Error(
+          `Deploy-time JWKS fetch from ${url} failed after 3 attempts (${error}). ` +
+            `Deploy the auth worker for ${envName} first, or pin APP_CONFIG_ITERATE_AUTH__JWKS in Doppler.`,
+        );
+      }
+      await new Promise((res) => setTimeout(res, 2000 * attempt));
+    }
+  }
 }
 
 async function smoke(url: string, ok: (status: number) => boolean, label: string) {

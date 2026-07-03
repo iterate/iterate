@@ -44,7 +44,7 @@ jobs:
         working-directory: apps/auth
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm alchemy:up
+        run: doppler run -- pnpm run-script deploy
   deploy-dev-global:
     runs-on:
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
@@ -64,4 +64,4 @@ jobs:
         working-directory: apps/auth
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm alchemy:up
+        run: doppler run -- pnpm run-script deploy

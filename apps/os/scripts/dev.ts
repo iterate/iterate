@@ -94,12 +94,9 @@ export async function restart(options: StartOptions = {}) {
 export async function kill() {
   const info = readDevServerInfo(APP_ROOT);
   if (!info || !isPidAlive(info.pid)) return { status: "not running" };
-  // Negative pid: signal the whole process group (doppler -> pnpm -> vite).
-  try {
-    process.kill(-info.pid, "SIGTERM");
-  } catch {
-    process.kill(info.pid, "SIGTERM");
-  }
+  // The recorded pid is vite's (the discovery plugin writes its own pid);
+  // its doppler/pnpm parents exit on their own once vite dies.
+  process.kill(info.pid, "SIGTERM");
   for (let i = 0; i < 50 && isPidAlive(info.pid); i++) await sleep(100);
   if (isPidAlive(info.pid)) process.kill(info.pid, "SIGKILL");
   return { status: "stopped", pid: info.pid };
@@ -120,7 +117,7 @@ export async function attach() {
   );
   let offset = 0;
   for (;;) {
-    const size = statSync(LOG_PATH).size;
+    const size = existsSync(LOG_PATH) ? statSync(LOG_PATH).size : offset;
     if (size > offset) {
       await new Promise<void>((res, rej) => {
         const stream = createReadStream(LOG_PATH, { start: offset, end: size - 1 });
