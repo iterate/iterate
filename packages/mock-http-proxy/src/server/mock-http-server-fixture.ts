@@ -1,9 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { once } from "node:events";
 import type * as msw from "msw";
 import type * as mswNode from "msw/node";
 import type { Har } from "har-format";
@@ -12,6 +10,7 @@ import { request } from "undici";
 import { WebSocketServer, type RawData } from "ws";
 import { HarRecorder, type RecorderOpts } from "../har/har-recorder.ts";
 import { bridgeWebSocketToUpstream, firstHeaderValue } from "./websocket-upstream-bridge.ts";
+import { listenOnFetchSafePort } from "./fetch-safe-listen.ts";
 import { incomingHeadersToHeaders } from "./http-utils.ts";
 import {
   createNativeMswServer,
@@ -260,12 +259,7 @@ export async function useMockHttpServer(
   });
 
   const host = options.host ?? "127.0.0.1";
-  server.listen(options.port ?? 0, host);
-  await once(server, "listening");
-
-  const address = server.address() as AddressInfo;
-  const port = address.port;
-  const url = `http://${host}:${String(port)}`;
+  const { port, url } = await listenOnFetchSafePort(server, { host, port: options.port ?? 0 });
   let disposed = false;
   const dispose = async (): Promise<void> => {
     if (disposed) return;
