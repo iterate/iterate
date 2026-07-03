@@ -167,6 +167,7 @@ export function AgentPillComposer({
               }
             }}
             rows={1}
+            aria-label={message?.placeholder ?? "Message this stream"}
             placeholder={message?.placeholder ?? "Message this stream"}
             className="field-sizing-content max-h-32 min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-base leading-snug outline-none"
           />

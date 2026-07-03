@@ -65,7 +65,6 @@
 import {
   createContext,
   use,
-  useContext,
   useEffect,
   useMemo,
   useSyncExternalStore,
@@ -228,7 +227,7 @@ export function ItxProvider({
     [projectId, path, baseUrl],
   );
   useSocket(projectId); // pre-warm: suspend here so children read it synchronously
-  return <ItxAddressContext.Provider value={address}>{children}</ItxAddressContext.Provider>;
+  return <ItxAddressContext value={address}>{children}</ItxAddressContext>;
 }
 
 /**
@@ -245,7 +244,7 @@ export function ItxProvider({
  *   const onSend = () => itx.chat.sendMessage({ text });
  */
 export function useItx(override?: ItxAddress): Itx {
-  const contextAddress = useContext(ItxAddressContext);
+  const contextAddress = use(ItxAddressContext);
   return useSocket((override ?? contextAddress).projectId);
 }
 

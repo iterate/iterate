@@ -351,10 +351,10 @@ function AppSidebarUser() {
 }
 
 function userInitials(label: string) {
-  const parts = label
-    .split(/\s+/)
-    .map((part) => part.trim())
-    .filter(Boolean);
+  const parts = label.split(/\s+/).flatMap((part) => {
+    const trimmed = part.trim();
+    return trimmed ? [trimmed] : [];
+  });
   const initials = parts
     .slice(0, 2)
     .map((part) => part.at(0))
@@ -448,13 +448,14 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
 
 function getActiveProjectSlug(matches: ReturnType<typeof useMatches>) {
   return matches
-    .map((match) => match.params)
-    .map((params) =>
-      typeof params === "object" && params && "projectSlug" in params
-        ? params.projectSlug
-        : undefined,
+    .flatMap(({ params }) =>
+      typeof params === "object" &&
+      params &&
+      "projectSlug" in params &&
+      typeof params.projectSlug === "string"
+        ? [params.projectSlug]
+        : [],
     )
-    .filter((projectSlug): projectSlug is string => typeof projectSlug === "string")
     .at(-1);
 }
 
