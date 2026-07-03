@@ -640,14 +640,14 @@ return {
   },
   {
     id: "github-mcp-connect",
-    title: "GitHub as a provided integration (official MCP server)",
+    title: "GitHub's MCP server as a provided integration",
     description:
-      "GitHub needs no builtin: store a fine-grained PAT as a project secret, mount GitHub's official MCP server into the integrations collection with one durable provideCapability, and call it at the same fully qualified connection address a builtin would use. The PAT rides as a getSecret placeholder substituted at project egress — no isolate ever holds it. Needs a real PAT in vars.githubPat, so run it interactively.",
+      "The provided-integration lane, using GitHub's official MCP server: store a fine-grained PAT as a project secret, mount the server into the collection with one durable provideCapability, and call it at the same fully qualified connection address a builtin uses. The PAT rides as a getSecret placeholder substituted at project egress — no isolate ever holds it. (The BUILT-IN github integration — dashboard connect, api.request, sandbox gh — is separate; this mounts under the github-mcp slug because built-in slugs cannot be shadowed.) Needs a real PAT in vars.githubPat, so run it interactively.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
 const connection = vars.connection ?? "main";
-const tokenPath = \`/secrets/integrations/github/\${connection}/token\`;
+const tokenPath = \`/secrets/integrations/github-mcp/\${connection}/token\`;
 
 // 1. The PAT lives in a Secret DO with a GitHub-only egress allowlist.
 const secret = itx.secrets.get(tokenPath);
@@ -665,7 +665,7 @@ for (let attempt = 0; attempt < 50 && !described.hasMaterial; attempt += 1) {
 // itx-expression is a journaled recipe: replayed per call, revocable,
 // enumerated by itx.integrations.list().
 await itx.provideCapability({
-  path: ["integrations", "github", connection],
+  path: ["integrations", "github-mcp", connection],
   type: "itx-expression",
   instructions:
     "GitHub via the official MCP server: create_issue({ owner, repo, title }), list_pull_requests, get_file_contents, search_code, ...",
@@ -682,7 +682,7 @@ await itx.provideCapability({
 });
 
 // 3. Same address shape as a builtin — {slug}.{connection}.{method}.
-const me = await itx.integrations.github[connection].get_me({});
+const me = await itx.integrations["github-mcp"][connection].get_me({});
 return { login: me?.login ?? me, listed: await itx.integrations.list() };
 `.trim(),
   },

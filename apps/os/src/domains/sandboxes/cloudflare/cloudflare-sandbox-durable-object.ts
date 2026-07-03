@@ -1,6 +1,7 @@
 import { Sandbox } from "@cloudflare/sandbox";
 import type { Env } from "../../../env.ts";
 import { DurableObjectNameCodec } from "../../durable-object-names.ts";
+import { githubTokenSecretPath } from "../../integrations/utils.ts";
 import { PROJECT_REPO_PATH } from "../../repos/utils.ts";
 import { normalizeCloudflareSandboxPath } from "./utils.ts";
 
@@ -131,6 +132,56 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
       throw error;
     });
     return this.#repoClone;
+  }
+
+  /**
+   * Hand this sandbox a GitHub connection's credentials so `gh` and `git`
+   * just work: `GH_TOKEN`/`GITHUB_TOKEN` land in the session environment
+   * (the `gh` CLI reads GH_TOKEN natively) and a git credential helper serves
+   * the same token to plain `git` for github.com remotes.
+   *
+   * The token comes from the connection's Secret Durable Object through the
+   * audited platform reveal — a container runs its own TLS to github.com, so
+   * there is no egress hop to substitute a placeholder at; this is the same
+   * "credential as bytes outside a fetch header" lane the reveal exists for.
+   * Every call lands on the secret's audit trail as
+   * `sandbox:{projectId}:{path}`. Disconnecting the GitHub connection empties
+   * the secret's egress allowlist, which also refuses future reveals.
+   *
+   * Container filesystems and session env are ephemeral — call this again
+   * after a container restart (same rule as ensureProjectRepo), and name the
+   * connection explicitly: there is no implicit connection anywhere in the
+   * integrations model, this included.
+   */
+  async ensureGithubAuth(input: { connection: string }): Promise<void> {
+    const identity = this.#identity();
+    const secret = this.env.SECRET.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: identity.projectId,
+        path: githubTokenSecretPath(input.connection),
+      }),
+    );
+    let token: string;
+    try {
+      token = await secret.revealForPlatformUse({
+        usedBy: `sandbox:${identity.projectId}:${identity.path}`,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `github connection "${input.connection}" has no usable token for this project (${message}). Connect GitHub from the dashboard, or use itx.integrations.list() to see connections.`,
+      );
+    }
+    await this.setEnvVars({ GH_TOKEN: token, GITHUB_TOKEN: token });
+    // Plain `git` does not read GH_TOKEN; a static credential helper serves
+    // the session env token for github.com remotes (gh's own setup-git needs
+    // gh present and authenticated — this works with or without gh).
+    const helper = await this.exec(
+      `git config --global credential."https://github.com".helper '!f() { echo username=x-access-token; echo password=$GH_TOKEN; }; f'`,
+    );
+    if (!helper.success) {
+      throw new Error(`configuring the git credential helper failed (exit ${helper.exitCode})`);
+    }
   }
 
   async #cloneProjectRepo(): Promise<void> {

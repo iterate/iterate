@@ -14,7 +14,7 @@ import {
 } from "@iterate-com/ui/components/item";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { AlertCircle, Circle, Mail, MessageSquare } from "lucide-react";
+import { AlertCircle, Circle, Github, Mail, MessageSquare } from "lucide-react";
 import { z } from "zod";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
@@ -83,6 +83,7 @@ function ProjectIntegrationsContent() {
   );
   const slackConnections = builtinConnections.filter((entry) => entry.integration === "slack");
   const googleConnections = builtinConnections.filter((entry) => entry.integration === "google");
+  const githubConnections = builtinConnections.filter((entry) => entry.integration === "github");
   const providedConnections = (connections ?? []).filter((entry) => entry.source === "provided");
   const oauthErrorLabel = search.error ? search.error.replaceAll("_", " ") : null;
 
@@ -122,6 +123,29 @@ function ProjectIntegrationsContent() {
       window.location.href = result.authorizationUrl;
     },
     onError: (error) => toast.error(`Failed to connect Google: ${error.message}`),
+  });
+  const startGithub = useMutation({
+    mutationFn: async () => {
+      if (!userId) throw new Error("You must be signed in to connect GitHub.");
+      return await itx.integrations.startOAuthFlow({
+        provider: "github",
+        userId,
+        callbackUrl: window.location.href,
+      });
+    },
+    onSuccess: (result) => {
+      window.location.href = result.authorizationUrl;
+    },
+    onError: (error) => toast.error(`Failed to connect GitHub: ${error.message}`),
+  });
+  const disconnectGithub = useMutation({
+    mutationFn: async (connection: string) =>
+      await itx.integrations.disconnect({ connection, provider: "github" }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["itx", "integrations", project.slug] });
+      toast.success("GitHub disconnected");
+    },
+    onError: (error) => toast.error(`Failed to disconnect GitHub: ${error.message}`),
   });
   const disconnectGoogle = useMutation({
     mutationFn: async (connection: string) =>
@@ -201,6 +225,35 @@ function ProjectIntegrationsContent() {
           </ItemActions>
         </Item>
 
+        <Item variant="outline" className="items-start justify-between gap-4 p-4">
+          <ItemMedia variant="icon">
+            <Github className="size-4" />
+          </ItemMedia>
+          <ItemContent className="min-w-0">
+            <ItemTitle>GitHub</ItemTitle>
+            <ItemDescription>
+              {connectedCount(githubConnections) > 0
+                ? `${connectedCount(githubConnections)} connected account${connectedCount(githubConnections) === 1 ? "" : "s"}`
+                : "Connect GitHub for the REST API and gh/git inside sandboxes."}
+            </ItemDescription>
+            {githubConnections.map((entry) => (
+              <ConnectionRow
+                key={entry.path}
+                entry={entry}
+                provider="github"
+                disconnecting={disconnectGithub.isPending}
+                onDisconnect={() => disconnectGithub.mutate(entry.connection)}
+              />
+            ))}
+          </ItemContent>
+          <ItemActions>
+            <Button size="sm" disabled={startGithub.isPending} onClick={() => startGithub.mutate()}>
+              {startGithub.isPending ? <Spinner /> : null}
+              Connect GitHub
+            </Button>
+          </ItemActions>
+        </Item>
+
         {providedConnections.length > 0 ? (
           <Item variant="outline" className="items-start justify-between gap-4 p-4">
             <ItemMedia variant="icon">
@@ -242,7 +295,7 @@ function ConnectionRow({
   disconnecting: boolean;
   entry: ConnectionEntry;
   onDisconnect: () => void;
-  provider: "google" | "slack";
+  provider: "github" | "google" | "slack";
 }) {
   return (
     <div className="mt-2 flex items-start justify-between gap-2 rounded-md border p-2">
@@ -266,7 +319,7 @@ function IntegrationMetadata({
   provider,
 }: {
   connection?: Connection;
-  provider: "google" | "slack";
+  provider: "github" | "google" | "slack";
 }) {
   if (!connection?.connected) return null;
 

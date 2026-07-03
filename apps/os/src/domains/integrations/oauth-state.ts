@@ -23,7 +23,7 @@ const OAuthStateData = z.object({
   expiresAt: z.number(),
   nonce: z.string(),
   projectId: z.string(),
-  provider: z.enum(["google", "slack"]),
+  provider: z.enum(["github", "google", "slack"]),
   userId: z.string(),
 });
 
@@ -45,7 +45,7 @@ export async function createOAuthState(
 
 /** Signature + expiry + provider validation. Returns null on any mismatch. */
 export async function verifyOAuthState(
-  input: { provider: "google" | "slack"; state: string },
+  input: { provider: "github" | "google" | "slack"; state: string },
   keyMaterial: string,
 ): Promise<OAuthStateData | null> {
   const [version, payload, signature] = input.state.split(".");

@@ -171,7 +171,18 @@ export interface Ai {
 
 /** The integration slugs whose call surfaces ship with the OS deployment
  * (mirrored by BUILTIN_INTEGRATION_SLUGS in domains/integrations/utils.ts). */
-export type BuiltinIntegrationSlug = "google" | "slack";
+export type BuiltinIntegrationSlug = "github" | "google" | "slack";
+
+/** Input to \`itx.integrations.github["<connection>"].api.request(...)\` — a
+ * GitHub REST call relative to https://api.github.com; the response is
+ * \`{ data, headers, status, statusText }\`. For shell/git work, prefer a
+ * sandbox with \`ensureGithubAuth\` (the \`gh\` CLI just works there). */
+export type GithubRequestInput = {
+  body?: unknown;
+  method?: string;
+  path: string;
+  query?: Record<string, boolean | number | string | null | undefined>;
+};
 
 /** Input to \`itx.integrations.google["<connection>"].gmail.request(...)\` — a
  * Gmail REST call relative to https://gmail.googleapis.com/gmail/v1; the
@@ -415,7 +426,11 @@ export interface SandboxCollection {
  * https://developers.cloudflare.com/sandbox/ for the API. One addition: every
  * container start kicks off a clone of the project's repo to
  * \`/workspace/repo\` — \`await sandbox.ensureProjectRepo()\` before work that
- * depends on it.
+ * depends on it. \`await sandbox.ensureGithubAuth({ connection })\` hands the
+ * container a connected GitHub connection's token (GH_TOKEN/GITHUB_TOKEN in
+ * the session env + a git credential helper), so \`gh\` and \`git push\` to
+ * github.com just work; like the repo clone, re-run it after a container
+ * restart.
  */
 export type CloudflareSandbox = object;
 

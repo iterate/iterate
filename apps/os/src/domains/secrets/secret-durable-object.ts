@@ -84,6 +84,44 @@ export class SecretDurableObject extends DurableObject<Env> {
     };
   }
 
+  /**
+   * Audited platform reveal: the ONE lane where material leaves this Durable
+   * Object as bytes rather than by substitution — for credentials that must
+   * exist outside a fetch header (the exemplar: GH_TOKEN in a sandbox
+   * container's environment, where `gh` and `git` do their own TLS and no
+   * egress hop exists to substitute at).
+   *
+   * Deliberately NOT on the public Secret capability (rpc-targets.ts): agents
+   * and project scripts can never call it. It is reachable only through the
+   * raw env.SECRET namespace stubs that platform code holds. Every reveal
+   * requires a live egress allowlist (disconnect empties it, killing reveals
+   * and substitutions alike) and lands on the audit trail with `usedBy`.
+   */
+  async revealForPlatformUse(input: { usedBy: string }): Promise<string> {
+    await this.#processorHost.catchUp(SecretProcessorContract.slug);
+    const { state } = await this.#secretProcessor.snapshot();
+    if (state.encryptedMaterial === null) {
+      throw new Error(`secret ${this.#name.path} has no material`);
+    }
+    if (state.egress.urls.length === 0) {
+      throw new Error(
+        `secret ${this.#name.path} has an empty egress allowlist (disconnected); refusing to reveal`,
+      );
+    }
+    const material = await decryptSecretMaterial(
+      state.encryptedMaterial,
+      this.env.SECRET_ENCRYPTION_KEY,
+    );
+    await this.#processorHost.stream.append({
+      type: "events.iterate.com/secret/used",
+      payload: {
+        usedAt: new Date().toISOString(),
+        usedBy: input.usedBy,
+      },
+    });
+    return material;
+  }
+
   async fetch(request: Request): Promise<Response> {
     // TODO: support websocket upgrade requests here once egress substitution
     // needs non-HTTP fetches. Keeping this on fetch() preserves that path.

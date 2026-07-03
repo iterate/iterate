@@ -43,6 +43,7 @@ import {
   startOAuthFlow,
 } from "./domains/integrations/connect-flows.ts";
 import { BUILTIN_INTEGRATION_SLUGS } from "./domains/integrations/utils.ts";
+import { callGithubApi } from "./domains/integrations/github-api.ts";
 import { callGmailApi } from "./domains/integrations/gmail-api.ts";
 import { getFreshGoogleAccessToken } from "./domains/integrations/google-tokens.ts";
 import { callProjectSlackWebApi } from "./domains/integrations/slack-api.ts";
@@ -105,6 +106,7 @@ import type {
   DynamicWorkerCapability,
   DynamicWorkerCollection,
   DynamicWorkerRef,
+  GithubRequestInput,
   GmailRequestInput,
   IntegrationConnectionListEntry,
   ProjectIntegrations,
@@ -535,6 +537,24 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
         projectId: this.props.projectId,
       });
       return await callGmailApi({ request: args[0] as GmailRequestInput, token });
+    }
+
+    if (slug === "github") {
+      if (!connection || method.length < 2) {
+        throw new Error(
+          'itx.integrations.github expected `<connection>.api.request({...})` (e.g. itx.integrations.github["jonas"].api.request({ path: "/user/repos" })); use itx.integrations.list() to see connections.',
+        );
+      }
+      if (method[0] !== "api" || method[1] !== "request" || method.length !== 2) {
+        throw new Error(
+          `itx.integrations.github["${connection}"] exposes api.request(...); got "${method.join(".")}". For shell/git work, use a sandbox with ensureGithubAuth.`,
+        );
+      }
+      return await callGithubApi({
+        connection,
+        projectId: this.props.projectId,
+        request: args[0] as GithubRequestInput,
+      });
     }
 
     if (BUILTIN_INTEGRATION_SLUGS.has(slug)) {
@@ -1164,6 +1184,10 @@ const PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS: readonly CapabilityDescription[] 
           '// itx.integrations.google["<connection>"] exposes:',
           "interface GoogleConnection {",
           "  gmail: { request(input: GmailRequestInput): Promise<{ data: unknown; headers: Record<string, string>; status: number; statusText: string }> };",
+          "}",
+          '// itx.integrations.github["<connection>"] exposes:',
+          "interface GithubConnection {",
+          "  api: { request(input: GithubRequestInput): Promise<{ data: unknown; headers: Record<string, string>; status: number; statusText: string }> };",
           "}",
           '// itx.integrations.slack["<connection>"] takes any Slack Web API method as a',
           "// dotted path with ONE body argument; there is no request() wrapper:",

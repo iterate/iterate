@@ -165,21 +165,41 @@ The one mechanical accommodation: `integrations` is a **namespace builtin** —
 `rejectBuiltinCollision` allows mounts at depth ≥ 2 under it (mounting at
 `["integrations"]` itself is still a collision).
 
-## GitHub is the worked example of "no builtin needed"
+## GitHub: the third builtin, and the sandbox handoff
 
-GitHub ships as two example-catalogue entries (`github-mcp-connect`,
-`github-webhooks-project-worker`), zero platform code. API calls: a
-fine-grained PAT in a Secret DO + one durable mount of GitHub's official MCP
-server (`expression: ["mcp", ["connect", { url, headers: { authorization:
-"Bearer getSecret({ path })" } }]]`) — the agent calls
-`itx.integrations.github.main.create_issue({...})` at the same address shape
-as a builtin, and no isolate ever holds the token. Webhooks: per-project
-ingress already exists — the project host routes to the repo-backed
-`worker.js`, whose fetch appends deliveries to the connection's
-`/integrations/github/<connection>` journal (an unguessable URL token stands
-in for HMAC verification, which worker code cannot do without holding the
-signing secret). Builtins earn their place through deployment-owned OAuth
-apps + first-party ingress; PAT-based GitHub needs neither.
+GitHub earned builtin status the moment it needed a deployment-owned connect
+flow plus a credential handoff no substitution hop can cover:
+
+- **Connect** uses the deployment's GitHub App (its OAuth client credentials
+  in `APP_CONFIG_INTEGRATIONS__GITHUB`): the standard web flow through
+  `startOAuthFlow`/`completeConnect`, connection named from the GitHub login,
+  user token stored at `/secrets/integrations/github/<connection>/token` with
+  a GitHub-hosts egress allowlist, `github/connected` on the journal. One
+  exchange half + one `recordConnection` call — the shape every provider pays.
+- **API calls** stay confined:
+  `itx.integrations.github["<connection>"].api.request({ path: "/user/repos" })`
+  carries a `getSecret` placeholder through project egress like every other
+  builtin.
+- **`gh` in a sandbox just works** via
+  `await sandbox.ensureGithubAuth({ connection: "<name>" })`: the sandbox
+  Durable Object (platform code) pulls the token through the Secret DO's
+  **audited platform reveal** and plants `GH_TOKEN`/`GITHUB_TOKEN` in the
+  container session plus a git credential helper for github.com remotes.
+  A container runs its own TLS to github.com — there is no egress hop to
+  substitute a placeholder at — so this is the one lane where material leaves
+  the Secret DO as bytes: `revealForPlatformUse` is not on the public secret
+  capability (agents and project scripts can never call it), refuses when the
+  egress allowlist is empty (disconnect kills reveals and substitutions
+  alike), and every reveal lands on the audit trail as
+  `sandbox:{projectId}:{path}`. Session env and container filesystems are
+  ephemeral — re-run it after a restart, and name the connection explicitly.
+
+Known limit: if the deployment's GitHub App issues _expiring_ user tokens,
+`expiresAt` is recorded on the connected fact and refresh is the deferred
+derived-secrets follow-up. The provided-lane exhibits remain in the catalogue:
+`github-mcp-connect` (GitHub's MCP server mounted under the `github-mcp` slug
+— built-in slugs cannot be shadowed) and `github-webhooks-project-worker`
+(deliveries landing on the project host's own worker).
 
 ## Deliberately not built
 

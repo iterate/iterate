@@ -26,6 +26,9 @@ export async function handleIntegrationApiRequest(input: {
   if (url.pathname === "/api/integrations/google/callback") {
     return await handleOAuthCallback({ ...input, provider: "google" });
   }
+  if (url.pathname === "/api/integrations/github/callback") {
+    return await handleOAuthCallback({ ...input, provider: "github" });
+  }
   if (url.pathname === "/api/integrations/slack/webhook") {
     return await handleVerifiedSlackWebhook({
       ...input,
@@ -60,7 +63,7 @@ function requireAdminSecret(context: RequestContext): string {
 async function handleOAuthCallback(input: {
   auth: Principal | null | undefined;
   context: RequestContext;
-  provider: "google" | "slack";
+  provider: "github" | "google" | "slack";
   request: Request;
 }): Promise<Response> {
   const url = new URL(input.request.url);

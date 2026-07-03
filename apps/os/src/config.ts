@@ -102,6 +102,16 @@ export const AppConfig = z.object({
           scopes: publicValue(z.array(GoogleScope).default(DEFAULT_GOOGLE_OAUTH_SCOPES)),
         })
         .optional(),
+      /** The deployment's GitHub App, used for the user-authorization web
+       * flow (connect) — the App's OAuth client credentials. Other App fields
+       * (appId, privateKey, webhookSigningSecret) ride in the same Doppler
+       * JSON for future installation-token/webhook work and are ignored here. */
+      github: z
+        .object({
+          oauthClientId: publicValue(z.string().trim().min(1)),
+          oauthClientSecret: redacted(z.string().trim().min(1)),
+        })
+        .optional(),
     })
     .default({}),
   typeIdPrefix: z

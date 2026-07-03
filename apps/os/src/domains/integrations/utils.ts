@@ -16,7 +16,11 @@ export const SLACK_TEAM_DIRECTORY_STREAM_PATH = "/integrations/slack-team-direct
  * and the capability-mount collision guard all consume it, so a new builtin
  * cannot silently miss one of them.
  */
-export const BUILTIN_INTEGRATION_SLUGS: ReadonlySet<string> = new Set(["slack", "google"]);
+export const BUILTIN_INTEGRATION_SLUGS: ReadonlySet<string> = new Set([
+  "slack",
+  "google",
+  "github",
+]);
 
 export const SLACK_CONNECTED_EVENT_TYPE = "events.iterate.com/slack/connected";
 export const SLACK_DISCONNECTED_EVENT_TYPE = "events.iterate.com/slack/disconnected";
@@ -27,6 +31,9 @@ export const SLACK_TEAM_UNCLAIMED_EVENT_TYPE = "events.iterate.com/slack/team-un
 export const GOOGLE_CONNECTED_EVENT_TYPE = "events.iterate.com/google/connected";
 export const GOOGLE_DISCONNECTED_EVENT_TYPE = "events.iterate.com/google/disconnected";
 export const GOOGLE_TOKEN_REFRESHED_EVENT_TYPE = "events.iterate.com/google/token-refreshed";
+
+export const GITHUB_CONNECTED_EVENT_TYPE = "events.iterate.com/github/connected";
+export const GITHUB_DISCONNECTED_EVENT_TYPE = "events.iterate.com/github/disconnected";
 
 export function readRecord(value: unknown): Record<string, unknown> | null {
   return value != null && typeof value === "object" && !Array.isArray(value)
@@ -63,6 +70,14 @@ export function integrationConnectionStreamPath(slug: string, connection: string
 /** Itx secret Durable Object path holding one Slack connection's bot token. */
 export function slackBotTokenSecretPath(connection: string): string {
   return `/secrets/integrations/slack/${connection}/bot-token`;
+}
+
+/** Itx secret Durable Object path holding one GitHub connection's user token.
+ * Consumed two ways: `getSecret` placeholder substitution for API calls
+ * through project egress, and the audited platform reveal that hands `gh`
+ * inside a sandbox its GH_TOKEN. */
+export function githubTokenSecretPath(connection: string): string {
+  return `/secrets/integrations/github/${connection}/token`;
 }
 
 /**

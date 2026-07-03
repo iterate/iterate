@@ -44,6 +44,8 @@ import { readGoogleTokenState } from "./google-tokens.ts";
 import { callProjectSlackWebApi } from "./slack-api.ts";
 import { SlackProcessorContract } from "./slack-processor-contract.ts";
 import {
+  GITHUB_CONNECTED_EVENT_TYPE,
+  GITHUB_DISCONNECTED_EVENT_TYPE,
   GOOGLE_CONNECTED_EVENT_TYPE,
   GOOGLE_DISCONNECTED_EVENT_TYPE,
   SLACK_CONNECTED_EVENT_TYPE,
@@ -57,6 +59,7 @@ import {
   readString,
   integrationConnectionStreamPath,
   sanitizeConnectionName,
+  githubTokenSecretPath,
   slackBotTokenSecretPath,
 } from "./utils.ts";
 import type { AppConfig } from "~/config.ts";
@@ -65,6 +68,12 @@ function requireSlackConfig(config: AppConfig) {
   const slack = config.integrations.slack;
   if (!slack) throw new Error("Slack integration runtime config is not configured.");
   return slack;
+}
+
+function requireGithubConfig(config: AppConfig) {
+  const github = config.integrations.github;
+  if (!github) throw new Error("GitHub integration runtime config is not configured.");
+  return github;
 }
 
 function requireGoogleConfig(config: AppConfig) {
@@ -118,6 +127,27 @@ export async function startOAuthFlow(input: {
     return { authorizationUrl: authorizationUrl.toString() };
   }
 
+  if (input.provider === "github") {
+    const github = requireGithubConfig(input.config);
+    const state = await createOAuthState(
+      {
+        callbackUrl: input.callbackUrl,
+        projectId: input.projectId,
+        provider: "github",
+        userId: input.userId,
+      },
+      itxEnv.SECRET_ENCRYPTION_KEY,
+    );
+    const authorizationUrl = new URL("https://github.com/login/oauth/authorize");
+    authorizationUrl.searchParams.set("client_id", github.oauthClientId);
+    authorizationUrl.searchParams.set(
+      "redirect_uri",
+      oauthRedirectUri({ baseUrl, provider: "github" }),
+    );
+    authorizationUrl.searchParams.set("state", state);
+    return { authorizationUrl: authorizationUrl.toString() };
+  }
+
   const google = requireGoogleConfig(input.config);
   const codeVerifier = randomBase64Url(32);
   const codeChallenge = await sha256Base64Url(codeVerifier);
@@ -164,9 +194,14 @@ export async function completeConnect(input: {
   state: string;
   userId: string | null;
 }): Promise<CompleteConnectResult> {
-  return input.provider === "slack"
-    ? await completeSlackConnect(input)
-    : await completeGoogleConnect(input);
+  switch (input.provider) {
+    case "slack":
+      return await completeSlackConnect(input);
+    case "google":
+      return await completeGoogleConnect(input);
+    case "github":
+      return await completeGithubConnect(input);
+  }
 }
 
 /**
@@ -356,6 +391,100 @@ async function recordSlackConnection(input: {
   });
 }
 
+async function completeGithubConnect(input: {
+  code: string;
+  config: AppConfig;
+  projectId: string;
+  state: string;
+  userId: string | null;
+}): Promise<CompleteConnectResult> {
+  const stateData = await verifyOAuthState(
+    { provider: "github", state: input.state },
+    itxEnv.SECRET_ENCRYPTION_KEY,
+  );
+  if (!stateData || stateData.projectId !== input.projectId) {
+    return { callbackUrl: null, error: "github_oauth_invalid_state", ok: false };
+  }
+  const callbackUrl = stateData.callbackUrl ?? null;
+  if (input.userId === null || stateData.userId !== input.userId) {
+    return { callbackUrl, error: "github_oauth_user_mismatch", ok: false };
+  }
+
+  const github = requireGithubConfig(input.config);
+  const baseUrl = requestBaseUrl(input);
+  const tokenResponse = await fetch("https://github.com/login/oauth/access_token", {
+    body: new URLSearchParams({
+      client_id: github.oauthClientId,
+      client_secret: github.oauthClientSecret.exposeSecret(),
+      code: input.code,
+      redirect_uri: oauthRedirectUri({ baseUrl, provider: "github" }),
+    }),
+    headers: { accept: "application/json", "content-type": "application/x-www-form-urlencoded" },
+    method: "POST",
+  });
+  const tokenData = (await tokenResponse.json()) as {
+    access_token?: string;
+    error?: string;
+    expires_in?: number;
+  };
+  if (!tokenResponse.ok || !tokenData.access_token) {
+    return { callbackUrl, error: tokenData.error ?? "github_oauth_failed", ok: false };
+  }
+
+  const userResponse = await fetch("https://api.github.com/user", {
+    headers: {
+      accept: "application/vnd.github+json",
+      authorization: `Bearer ${tokenData.access_token}`,
+      "user-agent": "iterate-os",
+    },
+  });
+  const user = (await userResponse.json()) as { id?: number; login?: string };
+  if (!userResponse.ok || user.id === undefined) {
+    return { callbackUrl, error: "github_user_lookup_failed", ok: false };
+  }
+
+  // The GitHub login names the connection; the opaque numeric id is the
+  // fallback when the login sanitizes away.
+  const connection =
+    sanitizeConnectionName(user.login ?? "") || `github-${sanitizeConnectionName(String(user.id))}`;
+  await recordConnection({
+    connection,
+    projectId: input.projectId,
+    slug: "github",
+    secrets: [
+      {
+        // api.github.com for gh/REST; github.com + uploads/objects hosts so
+        // git-over-https and release/LFS traffic substitute too.
+        egressUrls: [
+          "https://api.github.com",
+          "https://github.com",
+          "https://uploads.github.com",
+          "https://objects.githubusercontent.com",
+        ],
+        material: tokenData.access_token,
+        path: githubTokenSecretPath(connection),
+      },
+    ],
+    connectedEvent: {
+      type: GITHUB_CONNECTED_EVENT_TYPE,
+      payload: {
+        connection,
+        externalId: String(user.id),
+        login: user.login,
+        projectId: input.projectId,
+        // GitHub Apps can be configured to issue expiring user tokens; when
+        // expires_in is present the token dies after ~8h and refresh is the
+        // (deferred) derived-secrets follow-up — recorded so status can say so.
+        ...(tokenData.expires_in
+          ? { expiresAt: new Date(Date.now() + tokenData.expires_in * 1000).toISOString() }
+          : {}),
+      },
+    },
+  });
+
+  return { callbackUrl, ok: true };
+}
+
 async function completeGoogleConnect(input: {
   code: string;
   config: AppConfig;
@@ -485,6 +614,29 @@ export async function getConnectionStatus(input: {
     };
   }
 
+  if (input.provider === "github") {
+    const path = integrationConnectionStreamPath("github", input.connection);
+    for await (const event of streamEventsNewestFirst(input.projectId, path)) {
+      if (
+        event.type !== GITHUB_CONNECTED_EVENT_TYPE &&
+        event.type !== GITHUB_DISCONNECTED_EVENT_TYPE
+      ) {
+        continue;
+      }
+      const payload = readRecord(event.payload) ?? {};
+      return {
+        connected: event.type === GITHUB_CONNECTED_EVENT_TYPE,
+        displayName: readString(payload.login) ?? null,
+        externalId: readString(payload.externalId) ?? null,
+        metadata: {
+          expiresAt: readString(payload.expiresAt),
+          login: readString(payload.login),
+        },
+      };
+    }
+    return { connected: false, displayName: null, externalId: null, metadata: {} };
+  }
+
   // Slack status is the same machine as google's: a newest-first fold over
   // the connection journal that stops at the first lifecycle fact. Reading
   // the journal directly (not a processor snapshot) gives read-your-writes
@@ -557,6 +709,29 @@ export async function disconnectProvider(input: {
         payload: { connection: input.connection, projectId: input.projectId, teamId },
       });
     }
+    return { success: true };
+  }
+
+  if (input.provider === "github") {
+    // No provider-side revocation: it would require reading the raw token
+    // back (Basic-auth DELETE /applications/{client_id}/token), and
+    // disconnect never touches material. Emptying the egress allowlist makes
+    // the stored token unusable for API calls and sandbox reveals alike.
+    await itxEnv.SECRET.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: input.projectId,
+        path: githubTokenSecretPath(input.connection),
+      }),
+    )
+      .update({ egress: { urls: [] } })
+      .catch(() => null);
+    await integrationStreamStub(
+      input.projectId,
+      integrationConnectionStreamPath("github", input.connection),
+    ).append({
+      type: GITHUB_DISCONNECTED_EVENT_TYPE,
+      payload: { connection: input.connection, projectId: input.projectId },
+    });
     return { success: true };
   }
 
