@@ -183,6 +183,10 @@ describe("minimal web-chat agent processors", () => {
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("returns undefined ends your turn");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.mcp.exa.web_search_exa");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.examples.list()");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain('provider: "google"');
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain('path: "/users/me/messages"');
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("Do not tell the user you lack inbox access");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).not.toContain('path: "/gmail/v1/users/me/messages"');
   });
 
   it("feeds a returned script result back as input and schedules another turn", async () => {
@@ -314,6 +318,29 @@ describe("minimal web-chat agent processors", () => {
     expect(aiCalls[0]).toMatchObject({
       stream: true,
       messages: [expect.objectContaining({ role: "system" }), { role: "user", content: "hello" }],
+    });
+  });
+
+  it("treats MCP-origin messages like any other inbound user message", async () => {
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({ stream });
+    const cursors = new Map<object, number>();
+    const deliver = (processor: ProcessorLike) => deliverNewEvents({ processor, stream, cursors });
+
+    await stream.append({
+      type: "events.iterate.com/agents/user-message-received",
+      payload: { origin: "mcp", content: "how many agents does this project have?" },
+    });
+    await deliver(agent);
+    await deliver(agent);
+
+    expect(stream.events.map((event) => event.type)).toEqual([
+      "events.iterate.com/agents/user-message-received",
+      "events.iterate.com/agent/input-added",
+      "events.iterate.com/agent/llm-request-scheduled",
+    ]);
+    expect(stream.events[1]!.payload).toMatchObject({
+      content: "how many agents does this project have?",
     });
   });
 

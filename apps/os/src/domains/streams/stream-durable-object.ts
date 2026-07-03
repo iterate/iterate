@@ -124,6 +124,15 @@ export class StreamDurableObject extends DurableObject<Env> {
   // subscriptionKeys with a configured subscriber wakeup in flight, so concurrent
   // reconciliation runs never wake the same subscriber twice.
   #connecting = new Set<string>();
+  // Retry bookkeeping for failed configured-subscriber wakes. Without a retry,
+  // one transient RPC failure (subscriber cold start, cross-script hiccup)
+  // silences the subscription until the NEXT qualifying append — which for
+  // write-once streams like secrets may never come
+  // (tasks/stream-subscriber-deliveries-stall-mid-turn.md). In-memory is
+  // deliberate: an eviction drops the timers, but the durable subscription
+  // config survives and the next append or subscriber read re-wakes.
+  #wakeRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  #wakeRetryAttempts = new Map<string, number>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -1095,11 +1104,37 @@ export class StreamDurableObject extends DurableObject<Env> {
           await this.wakeConfiguredSubscriber({ configured, subscriptionKey });
         } catch (error) {
           console.error("Stream configured subscriber wakeup failed", { error, subscriptionKey });
+          this.#scheduleConfiguredWakeRetry(subscriptionKey);
         } finally {
           this.#connecting.delete(subscriptionKey);
         }
       });
     }
+  }
+
+  // Backoff retry for a failed configured-subscriber wake. Gives up after a
+  // bounded number of attempts (the subscriber is then genuinely broken, and
+  // every later append still re-triggers reconciliation).
+  #scheduleConfiguredWakeRetry(subscriptionKey: string): void {
+    const MAX_WAKE_RETRY_ATTEMPTS = 6;
+    if (this.#wakeRetryTimers.has(subscriptionKey)) return;
+    const attempt = (this.#wakeRetryAttempts.get(subscriptionKey) ?? 0) + 1;
+    this.#wakeRetryAttempts.set(subscriptionKey, attempt);
+    if (attempt > MAX_WAKE_RETRY_ATTEMPTS) {
+      console.error("Stream configured subscriber wakeup retries exhausted", {
+        subscriptionKey,
+        attempts: attempt - 1,
+      });
+      return;
+    }
+
+    const delayMs = Math.min(30_000, 500 * 2 ** (attempt - 1));
+    const timer = setTimeout(() => {
+      this.#wakeRetryTimers.delete(subscriptionKey);
+      if (!this.#needsConfiguredReconcile()) return;
+      this.#reconcileConnections();
+    }, delayMs);
+    this.#wakeRetryTimers.set(subscriptionKey, timer);
   }
 
   #startSubscription(
@@ -1240,6 +1275,13 @@ export class StreamDurableObject extends DurableObject<Env> {
     };
 
     this.#connections.set(subscriptionKey, connection);
+    // A live connection resets the wake-retry ledger for its key.
+    this.#wakeRetryAttempts.delete(subscriptionKey);
+    const pendingRetry = this.#wakeRetryTimers.get(subscriptionKey);
+    if (pendingRetry !== undefined) {
+      clearTimeout(pendingRetry);
+      this.#wakeRetryTimers.delete(subscriptionKey);
+    }
     // The presence fact lands after the connection is registered and after the
     // replay cursor is fixed, so connected is the tail of any first batch it
     // shares with replayed events.

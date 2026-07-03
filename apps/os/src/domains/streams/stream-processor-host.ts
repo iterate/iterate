@@ -122,6 +122,17 @@ type StreamProcessorHost = {
   add<P extends AnyHostedProcessor>(name: string, build: (deps: HostedProcessorDeps) => P): P;
   /** Wire this to the host DO's wakeStreamSubscriber RPC method. */
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void>;
+  /**
+   * Pull any events the push delivery has not (yet) brought this processor and
+   * ingest them now. Call before serving a read that must reflect a write the
+   * caller just made (read-your-writes): push delivery is asynchronous and can
+   * stall when a configured-subscriber wake is lost mid-chain (see
+   * tasks/stream-subscriber-deliveries-stall-mid-turn.md). Ingest is
+   * checkpoint-filtered and serialized, so racing a live subscription is safe.
+   * Failures are logged and swallowed — the read then serves the last
+   * successfully ingested state, exactly as it would have without the pull.
+   */
+  catchUp(name: string): Promise<void>;
 };
 
 export function createStreamProcessorHost(
@@ -344,6 +355,26 @@ export function createStreamProcessorHost(
         ingestChain: Promise.resolve(),
       });
       return processor;
+    },
+
+    async catchUp(name) {
+      const entry = requireEntry(name);
+      try {
+        const { offset } = await entry.processor.snapshot();
+        const events = await options.stream.getEvents({ afterOffset: offset });
+        if (events.length === 0) return;
+        // Non-consumed event types reduce to no-ops but still advance the
+        // checkpoint, mirroring what a filtered subscription's cursor does.
+        await entry.processor.ingest({
+          events,
+          streamMaxOffset: events[events.length - 1]!.offset,
+        });
+      } catch (error) {
+        console.error(
+          `stream processor "${name}" catch-up failed; serving last ingested state`,
+          error,
+        );
+      }
     },
 
     async wakeStreamSubscriber(args) {

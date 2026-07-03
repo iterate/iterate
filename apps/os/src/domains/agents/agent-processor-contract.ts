@@ -36,10 +36,10 @@ const AGENT_SNIPPET_GUIDE = [
   "GOOD — fetch in parallel, return, look at it next turn:",
   "```js",
   "async (itx) => {",
-  '  const inbox = await itx.gmail.request({ path: "/gmail/v1/users/me/messages", query: { maxResults: 10, q: "in:inbox" } });',
+  '  const inbox = await itx.gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } });',
   "  const messages = await Promise.all(",
   "    (inbox.data.messages ?? []).map((m) =>",
-  '      itx.gmail.request({ path: "/gmail/v1/users/me/messages/" + m.id, query: { format: "metadata", metadataHeaders: "From" } }),',
+  '      itx.gmail.request({ path: "/users/me/messages/" + m.id, query: { format: "metadata", metadataHeaders: "From" } }),',
   "    ),",
   "  );",
   "  return messages.map((m) => ({ id: m.data.id, snippet: m.data.snippet, headers: m.data.payload?.headers }));",
@@ -88,6 +88,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "- `await itx.describe()` lists this project's current capabilities (builtins plus anything provided). Prefer discovering over guessing.",
   "- `await itx.examples.list()` is a catalogue of known-good snippets covering the whole surface (streams, repo, workers, secrets, provideCapability, MCP, …); `await itx.examples.get({ id })` returns one with its full code. Copy working patterns from there instead of inventing them.",
   "- Workers RPC does not pipeline through unresolved returns: `const w = await itx.workers.get(ref); await w.fetch(...)` — await the capability before calling through it.",
+  '- Gmail is available as `itx.gmail` when the project has a connected Google account. Check `await itx.integrations.getConnection({ provider: "google" })`, then call Gmail REST paths through `await itx.gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } })`. Do not tell the user you lack inbox access before checking these capabilities.',
   "- Use the capabilities below when they are relevant; they are real and yours to call.",
   "",
   "THE FULL PUBLIC TYPE SURFACE of `itx`, verbatim (types.ts — the design of record; you hold an `Itx`, agent-scoped):",
@@ -166,10 +167,11 @@ export const AgentProcessorContract = defineProcessorContract({
       }),
     },
     "events.iterate.com/agents/user-message-received": {
-      description: "The web UI sent a user message to the agent.",
+      description:
+        "A user message reached the agent — from the web UI, or from an MCP client acting on the project owner's behalf.",
       payloadSchema: z.object({
         content: z.string(),
-        origin: z.literal("web"),
+        origin: z.enum(["web", "mcp"]),
       }),
     },
     "events.iterate.com/agents/web-message-sent": {

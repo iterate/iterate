@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Stream, StreamEvent, StreamEventInput } from "../../types.ts";
+import { SLACK_AGENT_SYSTEM_PROMPT } from "../projects/project-processor-implementation.ts";
 import { SlackProcessor } from "./slack-processor-implementation.ts";
 import {
   SlackAgentProcessor,
@@ -845,6 +846,13 @@ describe("eyesReactionTargetFromWebhookPayload", () => {
 });
 
 describe("compileBangCommand", () => {
+  it("tells Slack agents to use the Google-backed Gmail capability for inbox requests", () => {
+    expect(SLACK_AGENT_SYSTEM_PROMPT).toContain("itx.gmail.request");
+    expect(SLACK_AGENT_SYSTEM_PROMPT).toContain('provider: "google"');
+    expect(SLACK_AGENT_SYSTEM_PROMPT).toContain('path: "/users/me/messages"');
+    expect(SLACK_AGENT_SYSTEM_PROMPT).toContain("do not claim you lack inbox access");
+  });
+
   it("wraps bare expressions in an async itx arrow", () => {
     expect(
       compileBangCommand({ channel: "C1", message: "!whoami", threadTs: "1.2" })?.code,

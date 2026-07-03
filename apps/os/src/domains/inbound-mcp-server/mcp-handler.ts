@@ -15,8 +15,9 @@ import { z } from "zod";
 import { newHttpBatchRpcSession } from "capnweb";
 import { env } from "cloudflare:workers";
 import packageJson from "../../../package.json" with { type: "json" };
+import { resolveMcpSessionAgentPath } from "./mcp-session-agent-path.ts";
 import { authenticateAdminApiSecret, readBearerToken } from "~/auth/admin.ts";
-import { authWorker } from "~/env.ts";
+import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import { principalFromAccessToken } from "~/auth/principal.ts";
 import { MCP_START_MOUNT_PATH, resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
 import { readProjectBySlug } from "~/project-directory.ts";
@@ -32,9 +33,12 @@ type McpAuth = {
   authType: "admin_api_secret" | "oauth_access_token";
   projects: ProjectGrant[];
   scopes: string[];
+  /** Stable identity for this caller's MCP session agent stream. */
+  sessionKey?: string;
 };
 
 const requiredToolScope = "profile";
+const ASK_ASSISTANT_TIMEOUT_MS = 120_000;
 const ExecJsInput = z.object({
   code: z
     .string()
@@ -42,6 +46,10 @@ const ExecJsInput = z.object({
       "JavaScript async arrow function to execute, e.g. async (itx) => { return await itx.describe(); }. Whatever it returns (JSON-serializable) is the tool result; a thrown error surfaces as the tool error.",
     ),
   project: z.string().optional().describe("Project slug to run this code against."),
+});
+const AskAssistantInput = z.object({
+  message: z.string().trim().min(1).describe("Plain-language request for the project assistant."),
+  project: z.string().optional().describe("Project slug to ask the assistant of."),
 });
 
 // Written for the LLM on the other end of the MCP connection: same tool-call
@@ -95,13 +103,19 @@ export async function handleInboundMcpRequest(input: {
   );
 }
 
-function createServer(input: { auth: McpAuth; context: RequestContext; env: Env }) {
+function createServer(input: {
+  auth: McpAuth;
+  context: RequestContext;
+  env: Env;
+  request: Request;
+}) {
   const server = new McpServer(
     { name: "os", version: packageJson.version },
     {
       instructions: [
         "This is an Iterate OS project MCP server.",
         "Use exec_js to run a JavaScript async arrow function against a project.",
+        "Use ask_assistant to ask the project's assistant agent in plain language.",
         "Prefer several small single-purpose calls (fetch data, return it, look at it, act) over one giant defensive script; use Promise.all inside a call to parallelize independent requests.",
       ].join("\n"),
     },
@@ -109,6 +123,19 @@ function createServer(input: { auth: McpAuth; context: RequestContext; env: Env 
 
   const projects = input.auth.projects;
   const requireProjectInput = input.auth.authType === "admin_api_secret" || projects.length > 1;
+  const resolveProject = async (requestedProject: string | undefined) => {
+    const project = await resolveToolProject(input.context, projects, requestedProject, {
+      authType: input.auth.authType,
+      requireProjectInput,
+    });
+    requireScope(input.auth, requiredToolScope);
+    return project;
+  };
+  // Resolved once per inbound request (createServer is per-request), so the
+  // no-session fallback maps every tool call in one request to ONE
+  // /agents/mcp/request-* stream instead of minting a stream per call.
+  let sessionAgentPath: Promise<string> | undefined;
+  const resolveSessionAgentPath = () => (sessionAgentPath ??= resolveMcpSessionAgentPath(input));
 
   server.registerTool(
     "exec_js",
@@ -119,24 +146,22 @@ function createServer(input: { auth: McpAuth; context: RequestContext; env: Env 
     },
     async (rawInput) => {
       const parsedInput = ExecJsInput.parse(rawInput);
-      const project = await resolveToolProject(projects, parsedInput.project, {
-        authType: input.auth.authType,
-        requireProjectInput,
-      });
-      requireScope(input.auth, requiredToolScope);
+      const project = await resolveProject(parsedInput.project);
 
       // Access was verified above (OAuth project grants / admin secret), so the
       // script runs through the itx admin lane over one pipelined
       // HTTP batch. runScript executes the async arrow function in a fresh
-      // dynamic-worker isolate scoped to the project.
+      // dynamic-worker isolate scoped to this MCP session's agent stream, so
+      // the session transcript at /agents/mcp/** records every execution.
       try {
+        const agentPath = await resolveSessionAgentPath();
         const session = engineBatchSession(input.context);
         const root = session.authenticate({
           type: "admin-secret",
           secret: requireAdminSecret(input.context),
         });
-        const projectItx = root.projects.get(project.id);
-        const execution = await projectItx.runScript(parsedInput.code);
+        const sessionAgent = root.projects.get(project.id).agents.get(agentPath);
+        const execution = await sessionAgent.runScript(parsedInput.code);
         return {
           content: [
             {
@@ -153,6 +178,67 @@ function createServer(input: { auth: McpAuth; context: RequestContext; env: Env 
           isError: true,
         };
       }
+    },
+  );
+
+  server.registerTool(
+    "ask_assistant",
+    {
+      title: "Ask assistant",
+      description:
+        "Ask this project's assistant agent in plain language. Blocks until the assistant replies (up to two minutes) and returns its reply. Conversation history lives on this MCP session's agent stream; asks are a plain chat conversation, so send them one at a time — concurrent asks on one session interleave like two people typing into the same chat.",
+      inputSchema: AskAssistantInput,
+    },
+    async (rawInput) => {
+      const parsedInput = AskAssistantInput.parse(rawInput);
+      const project = await resolveProject(parsedInput.project);
+      const agentPath = await resolveSessionAgentPath();
+
+      // One pipelined batch: agents.ask appends the message and waits for the
+      // agent's next chat reply server-side. Reply matching is by order on the
+      // session stream, not per-request correlation — the session belongs to
+      // this one MCP client, so interleaved replies are the client's own doing
+      // (same trust model as one person running exec_js mid-conversation).
+      let reply;
+      try {
+        reply = await engineBatchSession(input.context)
+          .authenticate({ type: "admin-secret", secret: requireAdminSecret(input.context) })
+          .projects.get(project.id)
+          .agents.get(agentPath)
+          .ask({
+            message: parsedInput.message,
+            origin: "mcp",
+            timeoutMs: ASK_ASSISTANT_TIMEOUT_MS,
+          });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `The assistant did not reply in time: ${message}. The session transcript is the ${agentPath} stream.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const message = reply.payload?.message;
+      if (typeof message !== "string" || message.trim() === "") {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Assistant reply event ${reply.offset} did not include a message. The session transcript is the ${agentPath} stream.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: "text" as const, text: message }],
+        isError: false,
+      };
     },
   );
 
@@ -215,6 +301,9 @@ async function resolveMcpAuth(input: {
     authType: "oauth_access_token",
     projects,
     scopes,
+    sessionKey: principal.sessionId
+      ? `oauth-session:${principal.sessionId}`
+      : `oauth-user:${principal.userId}`,
   };
 }
 
@@ -236,7 +325,9 @@ async function resolveOAuthAccessToken(input: {
   if (!bearerToken) return null;
 
   try {
-    const result = await authWorker().introspectAccessToken({
+    const result = await createAuthWorkerServiceClient(
+      input.context,
+    ).internal.oauth.introspectAccessToken({
       token: bearerToken,
       audiences: [...input.audiences],
     });
@@ -296,6 +387,7 @@ function readAccessTokenScopes(accessToken: { scope?: string; scopes?: string[] 
 }
 
 async function resolveToolProject(
+  context: RequestContext,
   projects: ProjectGrant[],
   requestedProject: string | undefined,
   options: { authType: McpAuth["authType"]; requireProjectInput: boolean },
@@ -312,7 +404,11 @@ async function resolveToolProject(
     // KV directory cache in front of the auth worker (also resolves
     // admin-lane projects, which are primed at create but never registered
     // with the auth directory).
-    const record = await readProjectBySlug(env.PROJECT_DIRECTORY, normalizedRequestedProject);
+    const record = await readProjectBySlug(
+      context.config,
+      env.PROJECT_DIRECTORY,
+      normalizedRequestedProject,
+    );
     if (!record) throw new Error(`Project not found: ${normalizedRequestedProject}`);
     return { id: record.id, slug: record.slug };
   }
