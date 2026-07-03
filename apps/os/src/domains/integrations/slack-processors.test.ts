@@ -158,6 +158,7 @@ describe("SlackProcessor (webhook router)", () => {
     const acked: unknown[] = [];
     const processor = new SlackProcessor({
       stream,
+      connection: CONNECTION,
       acknowledgeRoutedWebhook: ({ payload }) => {
         acked.push(payload);
       },
@@ -193,19 +194,13 @@ describe("SlackProcessor (webhook router)", () => {
     expect(acked).toHaveLength(1);
   });
 
-  it("skips route creation for webhooks that arrive before the connected fact folds", async () => {
-    // No connected event => no connection name => no derivable thread path.
-    // Route CREATION is skipped (the webhook is not forwarded anywhere), but
-    // the checkpoint still advances — this is a drop, not a wedge.
+  it("routes webhooks that arrive before the connected fact folds", async () => {
+    // The connection is a projection of the host DO's name, not folded state,
+    // so routing is total from the very first webhook — event ordering cannot
+    // produce a window where a message is dropped.
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/slack/nustom");
-    const acked: unknown[] = [];
-    const processor = new SlackProcessor({
-      stream,
-      acknowledgeRoutedWebhook: ({ payload }) => {
-        acked.push(payload);
-      },
-    });
+    const processor = new SlackProcessor({ stream, connection: CONNECTION });
     const cursors = new Map<object, number>();
 
     await stream.append({
@@ -214,20 +209,17 @@ describe("SlackProcessor (webhook router)", () => {
     });
     await deliverNewEvents({ cursors, processor, stream });
 
-    expect(network.streams.size).toBe(1); // nothing forwarded anywhere
-    expect(
-      stream.events.filter(
-        (event) => event.type === "events.iterate.com/slack/thread-route-configured",
-      ),
-    ).toHaveLength(0);
-    expect(acked).toEqual([]);
-    expect(processor.checkpointOffset).toBe(1);
+    const routed = network.eventsAt("/agents/slack/nustom/c123/ts-111-222");
+    expect(routed.map((event) => event.type)).toEqual([
+      "events.iterate.com/slack/thread-route-configured",
+      "events.iterate.com/slack/webhook-received",
+    ]);
   });
 
   it("forwards follow-up webhooks through the reduced routing table", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/slack/nustom");
-    const processor = new SlackProcessor({ stream });
+    const processor = new SlackProcessor({ stream, connection: CONNECTION });
     const cursors = new Map<object, number>();
 
     await stream.append({
@@ -259,7 +251,7 @@ describe("SlackProcessor (webhook router)", () => {
   it("drops item-keyed events (reactions) whose thread has no route", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/slack/nustom");
-    const processor = new SlackProcessor({ stream });
+    const processor = new SlackProcessor({ stream, connection: CONNECTION });
     const cursors = new Map<object, number>();
 
     await stream.append({
@@ -289,13 +281,12 @@ describe("SlackProcessor (webhook router)", () => {
   it("reduces connected/disconnected facts into connection state", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/slack/nustom");
-    const processor = new SlackProcessor({ stream });
+    const processor = new SlackProcessor({ stream, connection: CONNECTION });
     const cursors = new Map<object, number>();
 
     await stream.append(connectedEvent());
     await deliverNewEvents({ cursors, processor, stream });
     expect(processor.state.connection).toMatchObject({
-      connection: CONNECTION,
       status: "connected",
       teamId: TEAM_ID,
     });
@@ -314,6 +305,7 @@ describe("SlackProcessor (webhook router)", () => {
     const acked: unknown[] = [];
     const processor = new SlackProcessor({
       stream,
+      connection: CONNECTION,
       acknowledgeRoutedWebhook: ({ payload }) => {
         acked.push(payload);
       },
@@ -345,6 +337,7 @@ describe("SlackProcessor (webhook router)", () => {
     const acked: unknown[] = [];
     const processor = new SlackProcessor({
       stream,
+      connection: CONNECTION,
       acknowledgeRoutedWebhook: ({ payload }) => {
         acked.push(payload);
       },
@@ -385,7 +378,7 @@ describe("SlackProcessor (webhook router)", () => {
       }
       return originalRoutedAppend(...inputs);
     };
-    const processor = new SlackProcessor({ stream });
+    const processor = new SlackProcessor({ stream, connection: CONNECTION });
     // The connected fact folds first (the connection names new thread paths).
     const [connected] = await stream.append(connectedEvent());
     await processor.ingest({ events: [connected!], streamMaxOffset: 1 });

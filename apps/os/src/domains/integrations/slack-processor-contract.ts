@@ -36,8 +36,6 @@ export const SlackProcessorContract = defineProcessorContract({
     connection: z
       .object({
         status: z.enum(["connected", "disconnected"]).default("disconnected"),
-        /** The named connection this router stream belongs to (folded from the connected fact). */
-        connection: z.string().optional(),
         externalId: z.string().optional(),
         teamId: z.string().optional(),
         teamName: z.string().optional(),

@@ -56,6 +56,12 @@ export class ProjectDurableObject extends DurableObject<Env> {
   readonly #slackProcessor = this.#processorHost.add((deps) => {
     return new SlackProcessor({
       ...deps,
+      // This DO instance hosts one connection's router stream
+      // (/integrations/slack/{connection}); the name IS the connection. A
+      // non-connection path (e.g. the project root hosting no router) never
+      // wakes this processor, so the fallback string is unreachable in
+      // practice and only satisfies totality.
+      connection: connectionFromIntegrationStreamPath(this.#name.path) ?? "",
       acknowledgeRoutedWebhook: async ({ payload }) => {
         // This DO instance hosts one connection's router stream
         // (/integrations/slack/{connection}); the path names the bot token.

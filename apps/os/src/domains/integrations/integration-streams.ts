@@ -21,10 +21,7 @@ export function integrationStreamStub(projectId: string | null, path: string) {
 }
 
 /** All events of one stream, oldest first, paged through the getEvents cursor. */
-export async function readAllStreamEvents(
-  projectId: string | null,
-  path: string,
-): Promise<StreamEvent[]> {
+async function readAllStreamEvents(projectId: string | null, path: string): Promise<StreamEvent[]> {
   const stream = integrationStreamStub(projectId, path);
   const events: StreamEvent[] = [];
   let afterOffset = 0;

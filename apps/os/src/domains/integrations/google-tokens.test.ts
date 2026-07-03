@@ -50,12 +50,26 @@ const streamNetwork = vi.hoisted(() => {
         },
         async getEvents({
           afterOffset = 0,
+          beforeOffset = Number.MAX_SAFE_INTEGER,
           limit = 500,
         }: {
           afterOffset?: number;
+          beforeOffset?: number | null;
           limit?: number;
         }) {
-          return events.filter((event) => event.offset > afterOffset).slice(0, limit);
+          return events
+            .filter(
+              (event) =>
+                event.offset > afterOffset &&
+                event.offset < (beforeOffset ?? Number.MAX_SAFE_INTEGER),
+            )
+            .slice(0, limit);
+        },
+        async runtimeState() {
+          return {
+            coreProcessorState: { maxOffset: events.length },
+            runtime: { connections: {} },
+          };
         },
       };
     },

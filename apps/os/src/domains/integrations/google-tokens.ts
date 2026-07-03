@@ -2,16 +2,19 @@
 //
 // Tokens live as AES-GCM ciphertext (SECRET_ENCRYPTION_KEY) inside events on
 // the per-project, per-connection `/integrations/google/{connection}` stream —
-// the "ciphertext in stream events" storage home. The stream only carries connect/disconnect/refresh
-// facts, so folding it per Gmail call is cheap. Refresh needs raw token
+// the "ciphertext in stream events" storage home. Refresh needs raw token
 // material (the refresh token goes in a form body, which the secret
 // substitution pipeline does not cover), which is why Google does not use the
 // secret Durable Object path Slack uses.
+//
+// The journal grows by one token-refreshed event per refresh forever, and the
+// state is read on EVERY Gmail call — so the fold runs newest-first over a
+// tail read (see readGoogleTokenState) instead of replaying the whole journal.
 
 import { itxEnv } from "../../env.ts";
 import type { StreamEvent } from "../../types.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "../secrets/crypto.ts";
-import { integrationStreamStub, readAllStreamEvents } from "./integration-streams.ts";
+import { integrationStreamStub } from "./integration-streams.ts";
 import {
   GOOGLE_CONNECTED_EVENT_TYPE,
   GOOGLE_DISCONNECTED_EVENT_TYPE,
@@ -38,53 +41,76 @@ type GoogleTokenState = {
   scopes?: string[];
 };
 
-function foldGoogleTokenState(events: readonly StreamEvent[]): GoogleTokenState {
-  let state: GoogleTokenState = { connected: false };
-  for (const event of events) {
+/**
+ * Newest-first fold: refreshes layer onto the most recent connected fact, so
+ * scanning backwards can stop at the first connected/disconnected event —
+ * everything older is superseded. Returns null while still inconclusive (no
+ * lifecycle fact seen yet in the events scanned so far).
+ */
+function foldGoogleTokenStateBackward(
+  newestFirst: readonly StreamEvent[],
+): GoogleTokenState | null {
+  let encryptedAccessToken: EncryptedMaterial | undefined;
+  let encryptedRefreshToken: EncryptedMaterial | undefined;
+  let expiresAt: string | undefined;
+  let scopes: string[] | undefined;
+  for (const event of newestFirst) {
     const payload = readRecord(event.payload) ?? {};
     switch (event.type) {
+      case GOOGLE_DISCONNECTED_EVENT_TYPE:
+        return { connected: false };
+      case GOOGLE_TOKEN_REFRESHED_EVENT_TYPE:
+        // Newest wins: only fill fields no newer refresh already supplied.
+        encryptedAccessToken ??= readEncrypted(payload.encryptedAccessToken);
+        encryptedRefreshToken ??= readEncrypted(payload.encryptedRefreshToken);
+        expiresAt ??= readString(payload.expiresAt);
+        scopes ??= readStringArray(payload.scopes);
+        break;
       case GOOGLE_CONNECTED_EVENT_TYPE:
-        state = {
+        return {
           connected: true,
           email: readString(payload.email),
-          encryptedAccessToken: readEncrypted(payload.encryptedAccessToken),
-          encryptedRefreshToken: readEncrypted(payload.encryptedRefreshToken),
-          expiresAt: readString(payload.expiresAt),
+          encryptedAccessToken: encryptedAccessToken ?? readEncrypted(payload.encryptedAccessToken),
+          encryptedRefreshToken:
+            encryptedRefreshToken ?? readEncrypted(payload.encryptedRefreshToken),
+          expiresAt: expiresAt ?? readString(payload.expiresAt),
           googleUserId: readString(payload.googleUserId),
           name: readString(payload.name),
           picture: readString(payload.picture),
-          scopes: readStringArray(payload.scopes),
+          scopes: scopes ?? readStringArray(payload.scopes),
         };
-        break;
-      case GOOGLE_TOKEN_REFRESHED_EVENT_TYPE:
-        if (!state.connected) break;
-        state = {
-          ...state,
-          encryptedAccessToken:
-            readEncrypted(payload.encryptedAccessToken) ?? state.encryptedAccessToken,
-          encryptedRefreshToken:
-            readEncrypted(payload.encryptedRefreshToken) ?? state.encryptedRefreshToken,
-          expiresAt: readString(payload.expiresAt) ?? state.expiresAt,
-          scopes: readStringArray(payload.scopes) ?? state.scopes,
-        };
-        break;
-      case GOOGLE_DISCONNECTED_EVENT_TYPE:
-        state = { connected: false };
-        break;
       default:
         break;
     }
   }
-  return state;
+  return null;
 }
+
+const TOKEN_STATE_PAGE_SIZE = 200;
 
 export async function readGoogleTokenState(
   projectId: string,
   connection: string,
 ): Promise<GoogleTokenState> {
-  return foldGoogleTokenState(
-    await readAllStreamEvents(projectId, integrationConnectionStreamPath("google", connection)),
+  const stream = integrationStreamStub(
+    projectId,
+    integrationConnectionStreamPath("google", connection),
   );
+  // Tail read: page backwards from the journal head until the fold hits a
+  // lifecycle fact. One refresh per Gmail-token expiry accretes forever, so a
+  // forward replay would be O(every refresh ever); the tail is O(1) pages in
+  // practice (the connected fact is only ever preceded by nothing).
+  const { coreProcessorState } = await stream.runtimeState();
+  const maxOffset = (coreProcessorState as { maxOffset?: number }).maxOffset ?? 0;
+  let beforeOffset = maxOffset + 1;
+  while (beforeOffset > 1) {
+    const afterOffset = Math.max(0, beforeOffset - 1 - TOKEN_STATE_PAGE_SIZE);
+    const page = await stream.getEvents({ afterOffset, beforeOffset });
+    const state = foldGoogleTokenStateBackward([...page].reverse());
+    if (state !== null) return state;
+    beforeOffset = afterOffset + 1;
+  }
+  return { connected: false };
 }
 
 /**

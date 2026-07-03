@@ -19,6 +19,12 @@ type SlackProcessorDeps = {
    * being forwarded". Best-effort: failures must not affect routing.
    */
   acknowledgeRoutedWebhook?(input: { payload: unknown }): Promise<void> | void;
+  /**
+   * The named connection this router serves — a projection of the host DO's
+   * own name (`/integrations/slack/{connection}`), not folded state, so it is
+   * total from the first webhook and independent of event ordering.
+   */
+  connection: string;
 };
 
 export class SlackProcessor extends StreamProcessor<
@@ -38,7 +44,6 @@ export class SlackProcessor extends StreamProcessor<
           connection: {
             status: "connected" as const,
             externalId: event.payload.externalId,
-            ...(event.payload.connection == null ? {} : { connection: event.payload.connection }),
             ...(event.payload.teamId == null ? {} : { teamId: event.payload.teamId }),
             ...(event.payload.teamName == null ? {} : { teamName: event.payload.teamName }),
           },
@@ -81,15 +86,10 @@ export class SlackProcessor extends StreamProcessor<
      * The router deliberately does not decide whether a Slack webhook is
      * meaningful to the agent. Its only job is to ask: can this webhook
      * be keyed as `channel:thread_ts`, and have we already learned where
-     * that Slack thread should be forwarded?
-     *
-     * The named connection (folded from the connected fact) qualifies newly
-     * created thread paths. Before the connected fact folds, `connection` is
-     * undefined: route CREATION is skipped (no thread path can be derived
-     * yet), while existing routes in the table still forward fine.
+     * that Slack thread should be forwarded? The named connection (from the
+     * host DO's own name) qualifies newly created thread paths.
      */
-    const connection = state.connection.connection;
-    const route = slackRouteFromWebhookBody(event.payload.body, connection);
+    const route = slackRouteFromWebhookBody(event.payload.body, this.deps.connection);
     if (route == null) return;
 
     const streamPath = state.routes[route.key] ?? route.streamPath;
@@ -159,10 +159,7 @@ type SlackRoute = {
   threadTs: string;
 };
 
-function slackRouteFromWebhookBody(
-  body: unknown,
-  connection: string | undefined,
-): SlackRoute | null {
+function slackRouteFromWebhookBody(body: unknown, connection: string): SlackRoute | null {
   const parsed = z
     .object({
       type: z.literal("event_callback"),
@@ -179,7 +176,7 @@ function slackRouteFromWebhookBody(
 
 function slackRouteFromEvent(
   slackEvent: Record<string, unknown>,
-  connection: string | undefined,
+  connection: string,
 ): SlackRoute | null {
   const item = readRecord(slackEvent.item);
   if (item != null && typeof item.channel === "string" && typeof item.ts === "string") {
@@ -214,10 +211,7 @@ function slackRouteFromEvent(
   });
 }
 
-function slackRouteFromInteraction(
-  body: unknown,
-  connection: string | undefined,
-): SlackRoute | null {
+function slackRouteFromInteraction(body: unknown, connection: string): SlackRoute | null {
   const interaction = readRecord(body);
   if (interaction == null) return null;
 
@@ -242,23 +236,18 @@ function slackRouteFromInteraction(
 function routeFromChannelAndThread(input: {
   canCreateRoute: boolean;
   channel: string;
-  connection: string | undefined;
+  connection: string;
   threadTs: string;
 }): SlackRoute {
   return {
     canCreateRoute: input.canCreateRoute,
     channel: input.channel,
     key: `${input.channel}:${input.threadTs}`,
-    // No connection yet (connected fact not folded) => no derivable thread
-    // path; the caller then only forwards through already-reduced routes.
-    streamPath:
-      input.connection === undefined
-        ? undefined
-        : slackThreadStreamPath({
-            channel: input.channel,
-            connection: input.connection,
-            threadTs: input.threadTs,
-          }),
+    streamPath: slackThreadStreamPath({
+      channel: input.channel,
+      connection: input.connection,
+      threadTs: input.threadTs,
+    }),
     threadTs: input.threadTs,
   };
 }
