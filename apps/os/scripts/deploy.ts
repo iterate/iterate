@@ -81,6 +81,24 @@ if (builtConfigs.length !== 1) {
 const builtConfig = join(APP_ROOT, builtConfigs[0]);
 
 // ---- 3. Deploy (code + secrets in one version) --------------------------------
+// Gotcha (observed live 2026-07-03): when the target worker has NO Durable
+// Object classes yet (fresh worker, or an alchemy-era "parked" placeholder),
+// `wrangler deploy --secrets-file` fails with 10061 — the initial class
+// migrations don't make it into that upload path. A plain deploy first
+// establishes the classes (existing secrets are preserved across versions),
+// then the secrets deploy lands code+secrets atomically as usual.
+const cfEnv = {
+  CLOUDFLARE_API_TOKEN: ctx.secrets.CLOUDFLARE_API_TOKEN,
+  CLOUDFLARE_ACCOUNT_ID: ctx.env.cloudflareAccountId,
+};
+const remote = await ctx
+  .cf<{ bindings?: { type: string }[] }>(`/workers/scripts/${ctx.env.osWorkerName}/settings`)
+  .catch(() => null);
+if (!remote?.bindings?.some((binding) => binding.type === "durable_object_namespace")) {
+  console.log("Worker has no Durable Object classes yet — plain deploy first to establish them.");
+  run("pnpm", ["exec", "wrangler", "deploy", "--config", builtConfig], cfEnv);
+}
+
 const secretsDir = mkdtempSync(join(tmpdir(), "os-deploy-secrets-"));
 const secretsFile = join(secretsDir, "secrets.json");
 try {
@@ -88,10 +106,7 @@ try {
   run(
     "pnpm",
     ["exec", "wrangler", "deploy", "--config", builtConfig, "--secrets-file", secretsFile],
-    {
-      CLOUDFLARE_API_TOKEN: ctx.secrets.CLOUDFLARE_API_TOKEN,
-      CLOUDFLARE_ACCOUNT_ID: ctx.env.cloudflareAccountId,
-    },
+    cfEnv,
   );
 } finally {
   rmSync(secretsDir, { recursive: true, force: true });

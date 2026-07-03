@@ -146,8 +146,8 @@ export const envs = {
     authDbId: "51003bad-73c1-43b4-9905-2806067b4534",
   }),
   preview_9: previewSlot(9, {
-    projectDirectoryKvId: UNPROVISIONED,
-    authDbId: UNPROVISIONED,
+    projectDirectoryKvId: "9fac543a7e994b7f972328c6a07152ac",
+    authDbId: "ebf149cb-d3ed-48c5-a2d0-010166b25033",
   }),
 } satisfies Record<string, DeployedEnv>;
 
@@ -214,15 +214,15 @@ export const semaphoreEnvs = {
     baseUrl: "https://semaphore.iterate.com",
     resources: { resourcesDbId: "2a393c91-3f01-455c-a462-2486653b0a10" },
   },
-  preview_1: semaphorePreviewSlot(1, UNPROVISIONED),
-  preview_2: semaphorePreviewSlot(2, UNPROVISIONED),
+  preview_1: semaphorePreviewSlot(1, "1a5b713d-eba3-4538-a356-0e5c3e2e8251"),
+  preview_2: semaphorePreviewSlot(2, "711994bd-4faa-42f0-80ac-fc292d68569d"),
   preview_3: semaphorePreviewSlot(3, "17493958-1589-4a2c-a280-0a55bc11a92c"),
-  preview_4: semaphorePreviewSlot(4, UNPROVISIONED),
+  preview_4: semaphorePreviewSlot(4, "f61083ef-23b5-4201-8731-8d3d46ebfeaa"),
   preview_5: semaphorePreviewSlot(5, "eea19312-34e2-4e5c-be19-fe6929636544"),
   preview_6: semaphorePreviewSlot(6, "1b27c077-5dec-4a13-848c-249a321601b4"),
-  preview_7: semaphorePreviewSlot(7, UNPROVISIONED),
+  preview_7: semaphorePreviewSlot(7, "619f7832-6a56-46ed-b760-476ba10bdfd4"),
   preview_8: semaphorePreviewSlot(8, "53858fae-e556-445d-b2ce-0b68fe56582f"),
-  preview_9: semaphorePreviewSlot(9, UNPROVISIONED),
+  preview_9: semaphorePreviewSlot(9, "53522759-5f82-4055-b0c2-248d66988b7d"),
 } satisfies Record<string, SemaphoreEnv>;
 
 /**

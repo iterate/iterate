@@ -106,6 +106,21 @@ if (builtConfigs.length !== 1) {
 const builtConfig = join(APP_ROOT, builtConfigs[0]);
 
 // ---- 4. Deploy (code + secrets in one version) --------------------------------
+// Gotcha (observed live 2026-07-03 on os): a worker with NO Durable Object
+// classes yet (fresh, or an alchemy-era "parked" placeholder) fails
+// `wrangler deploy --secrets-file` with 10061 — initial class migrations
+// don't ride that upload path. Plain deploy first to establish classes.
+const remoteSettings = await ctx
+  .cf<{ bindings?: { type: string }[] }>(`/workers/scripts/${ctx.env.workerName}/settings`)
+  .catch(() => null);
+if (!remoteSettings?.bindings?.some((binding) => binding.type === "durable_object_namespace")) {
+  console.log("Worker has no Durable Object classes yet — plain deploy first to establish them.");
+  run("pnpm", ["exec", "wrangler", "deploy", "--config", builtConfig], {
+    CLOUDFLARE_API_TOKEN: ctx.secrets.CLOUDFLARE_API_TOKEN,
+    CLOUDFLARE_ACCOUNT_ID: ctx.env.cloudflareAccountId,
+  });
+}
+
 const secretsDir = mkdtempSync(join(tmpdir(), "semaphore-deploy-secrets-"));
 const secretsFile = join(secretsDir, "secrets.json");
 try {
