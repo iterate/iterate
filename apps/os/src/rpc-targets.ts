@@ -1319,7 +1319,7 @@ type CapabilityHostRpcTargetProps = {
  * `itx.capabilityHosts.get("/")` addresses the project root from anywhere —
  * that is how an agent provides a capability to the whole project.
  */
-export class CapabilityHostRpcTarget extends RpcTarget implements CapabilityHost {
+class CapabilityHostRpcTarget extends RpcTarget implements CapabilityHost {
   // Private on purpose: on the capability surfaces, every PUBLIC member name is
   // claimed capability namespace (the fallback proxy checks `key in target`,
   // and ITX_SURFACE_MEMBER_NAMES bans mounts from shadowing members). A public
