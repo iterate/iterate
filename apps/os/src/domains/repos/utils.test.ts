@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { countOccurrences, replaceLiteralOccurrences } from "./edit-utils.ts";
 import { RepoArtifactNameCodec } from "./utils.ts";
 
 describe("RepoArtifactNameCodec", () => {
@@ -30,5 +31,23 @@ describe("RepoArtifactNameCodec", () => {
     expect(() => RepoArtifactNameCodec.stringify({ projectId: "global", path: "/" })).toThrow(
       /reserved/,
     );
+  });
+});
+
+describe("repo edit helpers", () => {
+  test("counts non-overlapping occurrences", () => {
+    expect(countOccurrences("one two one", "one")).toBe(2);
+    expect(countOccurrences("aaaa", "aa")).toBe(2);
+    expect(countOccurrences("unchanged", "missing")).toBe(0);
+  });
+
+  test("replaces newString literally instead of as a JavaScript replacement template", () => {
+    expect(
+      replaceLiteralOccurrences({
+        content: "const value = ORIGINAL;",
+        oldString: "ORIGINAL",
+        newString: "$& $1 $$",
+      }),
+    ).toBe("const value = $& $1 $$;");
   });
 });

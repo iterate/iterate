@@ -20,6 +20,7 @@ import type {
   EditRepoFileResult,
   RepoFileChange,
 } from "../../types.ts";
+import { countOccurrences, replaceLiteralOccurrences } from "./edit-utils.ts";
 import { PROJECT_WORKER_SOURCE_PATH, RepoArtifactNameCodec } from "./utils.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
@@ -464,9 +465,11 @@ async function editArtifactRepoFile(input: {
         );
       }
 
-      const edited = input.replaceAll
-        ? content.split(input.oldString).join(input.newString)
-        : content.replace(input.oldString, input.newString);
+      const edited = replaceLiteralOccurrences({
+        content,
+        newString: input.newString,
+        oldString: input.oldString,
+      });
       await filesystem.writeFile(absolutePath, edited);
       await git.add({ filepath: input.path });
 
@@ -715,16 +718,6 @@ function parseEditRepoFileInput(input: EditRepoFileInput): EditRepoFileInput {
     message: input.message.trim(),
     path: normalizeRepoFilePath(input.path),
   };
-}
-
-function countOccurrences(haystack: string, needle: string): number {
-  let count = 0;
-  let index = 0;
-  while ((index = haystack.indexOf(needle, index)) !== -1) {
-    count++;
-    index += needle.length;
-  }
-  return count;
 }
 
 function normalizeRepoFilePath(path: string): string {
