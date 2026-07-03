@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { ExternalLink } from "lucide-react";
 import { z } from "zod";
 import { Button } from "@iterate-com/ui/components/button";
@@ -24,11 +24,13 @@ import {
   TableRow,
 } from "@iterate-com/ui/components/table";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
+import { StreamViewSection } from "~/components/stream-view-section.tsx";
 import { RepoArtifactNameCodec } from "~/domains/repos/utils.ts";
 import { buildArtifactViewerUrl } from "~/lib/artifact-viewer-url.ts";
 import { formatRelativeTime } from "~/lib/format-relative-time.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
-import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
+import { useItx, useItxState } from "~/itx/itx-react.tsx";
+import type { ProjectProcessorState } from "~/types.ts";
 
 const CreateRepoForm = z.object({
   path: z
@@ -73,21 +75,24 @@ function ProjectReposIndexContent() {
   const navigate = useNavigate();
   const { project, routeConfig } = Route.useLoaderData();
   const itx = useItx();
-  const queryClient = useQueryClient();
   const [filter, setFilter] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; direction: SortDirection }>({
     key: "createdAt",
     direction: "desc",
   });
-  const reposKey = ["repos", project.slug];
-  const reposList = useItxQuery({ key: reposKey, query: (itx) => itx.repos.list() });
+  // The repos list is a slice of the project processor's reduced state; new
+  // repos land here via the processor's state push, no invalidation needed.
+  const projectState = useItxState<ProjectProcessorState>(
+    (itx, setState) => itx.processor.onStateChange(setState),
+    [],
+  ).state;
+  const reposList = projectState?.repos;
   const createRepo = useMutation({
     mutationFn: async (input: { path: string }) => {
       await itx.repos.create({ path: input.path });
       return input.path;
     },
-    onSuccess: async (path) => {
-      await queryClient.invalidateQueries({ queryKey: ["itx", ...reposKey] });
+    onSuccess: (path) => {
       form.reset();
       void navigate({
         to: "/projects/$projectSlug/repos/$",
@@ -116,7 +121,7 @@ function ProjectReposIndexContent() {
   const repos = reposList;
   const visibleRepos = useMemo(() => {
     const query = filter.trim().toLowerCase();
-    return repos
+    return (repos ?? [])
       .filter((repo) => {
         if (!query) return true;
         return repo.path.toLowerCase().includes(query);
@@ -195,7 +200,11 @@ function ProjectReposIndexContent() {
         </Button>
       </div>
 
-      {repos.length === 0 ? (
+      {repos === undefined ? (
+        <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
+          Loading repos…
+        </div>
+      ) : repos.length === 0 ? (
         <Empty className="rounded-lg border">
           <EmptyHeader>
             <EmptyTitle>No Repos</EmptyTitle>
@@ -278,6 +287,12 @@ function ProjectReposIndexContent() {
           </Table>
         </div>
       )}
+
+      <StreamViewSection
+        projectId={project.id}
+        streamPath="/repos"
+        emptyLabel="No events on the repos catalogue stream yet."
+      />
     </section>
   );
 }

@@ -3,9 +3,9 @@ import { connectItx, type ItxWebSocketMessage } from "../../src/itx-client.ts";
 import type {
   Agent,
   ItxAuthCredentials,
-  Itx,
+  ProjectRpcTarget,
   Session,
-  UnauthenticatedItx,
+  UnauthenticatedOs,
 } from "../../src/types.ts";
 
 export type { ItxWebSocketMessage };
@@ -69,16 +69,16 @@ export function buildUrl({
  * recording) is plumbed straight through to the client.
  */
 export function withItxSession(input: AgentItxSessionInput): RpcStub<Agent>;
-export function withItxSession(input: ProjectItxSessionInput): RpcStub<Itx>;
+export function withItxSession(input: ProjectItxSessionInput): RpcStub<ProjectRpcTarget>;
 export function withItxSession(input: AuthenticatedItxSessionInput): RpcStub<Session>;
-export function withItxSession(input?: ItxSessionInput): RpcStub<UnauthenticatedItx>;
+export function withItxSession(input?: ItxSessionInput): RpcStub<UnauthenticatedOs>;
 export function withItxSession(
   input:
     | AgentItxSessionInput
     | AuthenticatedItxSessionInput
     | ItxSessionInput
     | ProjectItxSessionInput = {},
-): RpcStub<Agent> | RpcStub<Session> | RpcStub<Itx> | RpcStub<UnauthenticatedItx> {
+): RpcStub<Agent> | RpcStub<Session> | RpcStub<ProjectRpcTarget> | RpcStub<UnauthenticatedOs> {
   const baseUrl = requireAppBaseUrl();
   if (!("auth" in input)) return connectItx({ ...input, baseUrl });
   if (!("projectId" in input)) return connectItx({ ...input, baseUrl });

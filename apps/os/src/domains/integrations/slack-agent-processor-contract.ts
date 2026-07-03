@@ -9,7 +9,7 @@
 import { z } from "zod";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
-import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
+import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { SlackProcessorContract } from "./slack-processor-contract.ts";
 
 /**
@@ -34,18 +34,18 @@ export const SlackAgentProcessorContract = defineProcessorContract({
     threadTs: z.string().optional(),
   }),
   events: {},
-  processorDeps: [AgentProcessorContract, ItxProcessorContract, SlackProcessorContract],
+  processorDeps: [AgentProcessorContract, CapabilityHostProcessorContract, SlackProcessorContract],
   consumes: [
     "events.iterate.com/slack/thread-route-configured",
     "events.iterate.com/slack/webhook-received",
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-completed",
-    "events.iterate.com/itx/script-execution-requested",
-    "events.iterate.com/itx/script-execution-completed",
+    "events.iterate.com/capability-host/script-execution-requested",
+    "events.iterate.com/capability-host/script-execution-completed",
   ],
   emits: [
     "events.iterate.com/agent/input-added",
-    "events.iterate.com/itx/script-execution-requested",
+    "events.iterate.com/capability-host/script-execution-requested",
   ],
 });
 

@@ -50,19 +50,20 @@ export const DERIVED_SECRETS = ["APP_CONFIG_ADMIN_ALLOWLIST", "APP_CONFIG_EMAIL_
 /**
  * Env-shaping config that is NOT secret and already lives in envs.ts —
  * emitted as per-env `vars` so the worker's runtime origin can never drift
- * from the route generated off the same entry. The VITE_ prefix is
- * load-bearing: the client bundle inlines these via import.meta.env, so
- * deploy.ts also passes them into the `vite build` environment. Local dev has
- * no env block; `dev-all` exports them (see the root package.json).
+ * from the route generated off the same entry. The names are the same
+ * `APP_CONFIG_*` keys src/config.ts parses at runtime; deploy.ts also passes
+ * them into the `vite build` environment because vite.config.ts inlines the
+ * origin into the client bundle (`__AUTH_APP_ORIGIN__`). Local dev has no env
+ * block; the key loads from process.env under `doppler run -- vite dev`.
  */
 export function envShapedVars(env: AuthDeployedEnv) {
   return {
-    VITE_AUTH_APP_ORIGIN: env.authBaseUrl,
-    VITE_PUBLIC_URL: env.authBaseUrl,
+    APP_CONFIG_AUTH_APP_ORIGIN: env.authBaseUrl,
+    APP_CONFIG_PUBLIC_URL: env.authBaseUrl,
   };
 }
 
-const ENV_SHAPED_KEYS = ["VITE_AUTH_APP_ORIGIN", "VITE_PUBLIC_URL"];
+const ENV_SHAPED_KEYS = ["APP_CONFIG_AUTH_APP_ORIGIN"];
 
 const OBSERVABILITY = {
   enabled: true,

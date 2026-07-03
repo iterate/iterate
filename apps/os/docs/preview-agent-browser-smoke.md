@@ -84,14 +84,14 @@ resulting session cookies, then let the OAuth flow complete:
    echo it:
 
    ```bash
-   export SECRET=$(doppler secrets get SERVICE_AUTH_TOKEN --project auth --config prd --plain)
+   export SECRET=$(doppler secrets get APP_CONFIG_SERVICE_AUTH_TOKEN --project auth --config prd --plain)
    curl -s -c /tmp/auth.txt -X POST https://auth.iterate.com/api/auth/sign-in/email \
      -H 'content-type: application/json' \
      --data "$(python3 -c 'import json,os;print(json.dumps({"email":"admin@nustom.com","password":os.environ["SECRET"]}))')"
    ```
 
    - email: `admin@nustom.com` (`BOOTSTRAP_ADMIN_EMAIL`)
-   - password: the auth worker's `SERVICE_AUTH_TOKEN` (Doppler `auth/prd`)
+   - password: the auth worker's `APP_CONFIG_SERVICE_AUTH_TOKEN` (Doppler `auth/prd`)
 
 2. **Inject the `__Secure-better-auth.session_{token,data}` cookies** into the
    browser (`AB cookies set --curl <json>`; the jar uses `#HttpOnly_` lines —
@@ -140,6 +140,6 @@ doppler run --config preview_N -- pnpm cli itx run \
 - **Live stream display uses WebSocket.** If sent messages and agent replies do
   not render live in the browser even though the conversation completes
   server-side, verify the agent state through `pnpm cli itx run` and inspect the
-  `/api/itx` WebSocket path in Workers logs.
+  `/api` WebSocket path in Workers logs.
 - Don't `agent-browser close` the `--cdp` instance (it kills the browser);
   `pkill -f ab-own` to clean up.

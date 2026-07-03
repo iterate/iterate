@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createOAuthState, parseOAuthStateUnverified, verifyOAuthState } from "./oauth-state.ts";
-import { verifySlackSignature } from "./integration-api.ts";
+import { verifySlackSignature } from "./slack-signature.ts";
 
 const KEY = "test-secret-encryption-key";
 

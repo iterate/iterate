@@ -1,6 +1,6 @@
 # itx (`src`)
 
-This folder is itx behind `/api/itx` and everything project-scoped in
+This folder is itx behind `/api` — os' one API — and everything project-scoped in
 OS: streams, repos, agents, secrets, dynamic workers, egress, and the itx
 capability surface itself. It began life as `apps/minimal-itx-v4` and was
 transplanted here whole during the itx-v4 replacement (PR #1585 has the
@@ -12,25 +12,25 @@ programs against. When this README and `types.ts` disagree, `types.ts` wins.
 
 ## Layout
 
-| Path                   | What                                                                                                                               |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `types.ts`             | The public ITX contract (the design of record)                                                                                     |
-| `rpc-targets.ts`       | ALL RpcTarget classes: the session/project/agent surfaces, MCP/OpenAPI clients, capability provision, stream subscriptions, egress |
-| `auth.ts`              | The auth adapter: credentials → `ItxAuth` (see below)                                                                              |
-| `itx-client.ts`        | `connectItx()` — the Node/CLI client over a Cap'n Web WebSocket                                                                    |
-| `ingress.ts`           | The shared routing decision (which requests belong to itx)                                                                         |
-| `project-directory.ts` | Slug → project id resolution against the auth worker, cached in the `PROJECT_DIRECTORY` KV namespace                               |
-| `env.ts`               | The binding contract every itx worker deploys with (`nextEnv`)                                                                     |
-| `workers/`             | One entrypoint per deployed itx worker ([worker topology](../../docs/worker-topology.md))                                          |
-| `domains/`             | One folder per domain: `streams`, `projects`, `repos`, `agents`, `secrets`, `workers` (dynamic), `itx`, `inbound-mcp-server`       |
-| `e2e-fixtures.ts`      | Worker-hosted fixtures for itx e2e suites (`/__itx_e2e/*`)                                                                         |
+| Path                   | What                                                                                                                                            |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `types.ts`             | The public ITX contract (the design of record)                                                                                                  |
+| `rpc-targets.ts`       | ALL RpcTarget classes: the session/project/agent surfaces, MCP/OpenAPI clients, capability provision, stream subscriptions, egress              |
+| `auth.ts`              | The auth adapter: credentials → `ItxAuth` (see below)                                                                                           |
+| `itx-client.ts`        | `connectItx()` — the Node/CLI client over a Cap'n Web WebSocket                                                                                 |
+| `ingress.ts`           | The shared routing decision (which requests belong to itx)                                                                                      |
+| `project-directory.ts` | Slug → project id resolution against the auth worker, cached in the `PROJECT_DIRECTORY` KV namespace                                            |
+| `env.ts`               | The binding contract every itx worker deploys with (`nextEnv`)                                                                                  |
+| `workers/`             | One entrypoint per deployed itx worker ([worker topology](../../docs/worker-topology.md))                                                       |
+| `domains/`             | One folder per domain: `streams`, `projects`, `repos`, `agents`, `secrets`, `workers` (dynamic), `capability-host`, `itx`, `inbound-mcp-server` |
+| `e2e-fixtures.ts`      | Worker-hosted fixtures for itx e2e suites (`/__itx_e2e/*`)                                                                                      |
 
 Each domain owns its Durable Object plus a stream-processor contract
 (`*-processor-contract.ts`, pure: event schemas + reducer) and implementation
 (`*-processor-implementation.ts`, side effects). RpcTargets deliberately do NOT
 live in domain files.
 
-## The three nouns
+## The four nouns
 
 - A **session** is what `authenticate()` returns: a catalog that vends itxs
   (`projects`, plus admin-only deployment-wide `streams`/`repos`). It is not
@@ -38,14 +38,126 @@ live in domain files.
 - A **project** is the tenant / isolation boundary — a `prj_…` id, its Durable
   Objects, its streams. Per-project confinement is the one security invariant
   itx keeps.
-- An **itx** is a capability context scoped into one project at one path. The
-  same interface serves the project root (`/`) and every nested scope
-  (`/agents/bla`); a nested scope sees its own mounted capabilities plus
-  everything inherited from enclosing scopes (child → parent → project).
+- An **itx** is a capability context scoped into one project at one path.
+  "itx" is a NAMING CONVENTION, not a class: an itx is normally an instance of
+  `ProjectRpcTarget` whose capability host sits at `"/"` — and sometimes at
+  `"/agents/…"`, which is what "an agent context" means. Same type either way;
+  a nested scope sees its own mounted capabilities plus everything inherited
+  from enclosing scopes (child → parent → project).
+- A **capability host** is the durable dynamic-capability table (and script
+  journal) at one scope path — one `CapabilityHostDurableObject` per
+  `{projectId, path}`. Host operations are `provideCapability`,
+  `revokeCapability`, `runScript`, and `__describe()`. Each itx fronts exactly
+  one host (`itx.capabilityHost`; `itx.provideCapability`/`revokeCapability`
+  are shortcuts onto it), and `itx.capabilityHosts.get(path)` addresses any
+  other scope's host — `get("/")` mounts on the whole project.
+
+## `__describe()`: discovery everywhere
+
+Every node in the tree answers `__describe()` with the same envelope
+(`Description` in types.ts): `instructions` (prose for this node), `types`
+(TypeScript source), `children` (one-line blip per member — the high-level
+map), and `parent` (where the node sits). Nodes add structured extras — a
+project adds `projectId`/`name`/`capabilities`, a session adds `principal`,
+an agent adds `whoami` — so `__describe` is also the identity query; there is
+no separate `describe()`/`whoami()`.
+
+Deep discovery is a walk: read `children`, recurse into what you care about
+(see the `discover-tree` example). Mounted capabilities answer `__describe()`
+too — the capability host serves it from the mount's provide-time
+`instructions`/`types` metadata, never dialing the live target, so discovery
+works even when a session-bound provider is offline. `__describe` is an
+invalid MOUNT name (a mount there would be unreachable behind the
+interception), but it traverses dynamic paths like any other segment — the
+interception is the only mechanism, no proxy special cases.
+
+Today each node hand-writes its description (`describeNode` in
+`domains/itx/utils.ts` only enforces the shape); the intended evolution is a
+transitive mechanism where a parent composes its children's descriptions.
+
+## The capability tree
+
+What a caller can reach, top to bottom. Concrete classes in parentheses (all in
+`rpc-targets.ts`); `->` marks methods that vend a new capability. Every node
+also has `__describe()` (not repeated below).
+
+```
+UnauthenticatedOs (UnauthenticatedOsRpcTarget)         ws/POST /api
+`-- authenticate(credentials)                          -> Session
+
+Session (SessionRpcTarget)                             a catalog; NOT an itx
+|                                                      __describe().principal = who you are
+|-- streams / repos (projectId: null collections)      admin: deployment-wide
+`-- projects (ProjectCollectionRpcTarget)
+    |-- list()
+    |-- create({ slug })                               -> Itx (project root)
+    `-- get("prj_...")                                 -> Itx (project root)
+
+Itx (ProjectRpcTarget) -- "itx" is a convention: capabilityHost.path selects
+|      the scope. "/" = project root; "/agents/..." = an agent context.
+|      __describe() = identity + children map + full capability inventory.
+|-- capabilityHost (CapabilityHostRpcTarget)           THIS scope's durable table
+|   |-- path
+|   |-- __describe()                                   .capabilities = own + inherited
+|   |                                                    mounts, scope-tagged
+|   |-- provideCapability(input)                       -> CapabilityProvision (revoke handle)
+|   |-- revokeCapability({ path, providedAtOffset? })
+|   |-- invokeCapability({ path, args })               explicit dynamic dispatch
+|   |-- runScript(code)                                async (itx) => {...} in THIS scope
+|   `-- <anything else>                                dotted fallback -> invokeCapability
+|-- capabilityHosts (CapabilityHostCollectionRpcTarget)
+|   `-- get(path)                                      -> CapabilityHost of ANY scope;
+|                                                         get("/") mounts project-wide
+|-- provideCapability / revokeCapability               shortcuts -> capabilityHost
+|-- debug()                                            dashboard/debug info (Slack-friendly)
+|-- integrations (IntegrationsRpcTarget)               connections + connection-scoped proxies
+|   |-- getConnection / startOAuthFlow / disconnect
+|   |-- gmail (GmailRpcTarget)                         gmail.request({ path, query })
+|   `-- slack (SlackRpcTarget)                         slack.chat.postMessage({ ... })
+|-- streams repos repo agents sandboxes secrets        project built-ins, resolved in
+|   workers worker egress ai mcp openapi               the isolate (never shadowable)
+|   examples processor
+|-- agent? chat?                                       DERIVED getters: present only when
+|                                                        capabilityHost.path is /agents/...
+`-- <anything else>                                    DYNAMIC: the proxy routes unknown
+                                                         roots to capabilityHost
+                                                         .invokeCapability({ path, args }),
+                                                         which chains child -> parent -> "/"
+
+Agent (AgentRpcTarget) -- via itx.agents.get("/agents/...") or itx.agent
+|                                                      __describe().whoami = "agent <prj>:<path>"
+|-- capabilityHost (CapabilityHostRpcTarget)           the AGENT scope's table
+|-- provideCapability / revokeCapability               shortcuts -> capabilityHost
+|-- chat (AgentChatRpcTarget), stream, processor
+|-- sendMessage(text), ask({ message })
+`-- <anything else>                                    same dynamic fallback, agent scope
+
+CapabilityProvision (CapabilityProvisionRpcTarget)     returned by every provide
+|-- path, providedAtOffset
+|-- revoke()
+`-- [Symbol.dispose]                                   `using` revokes on scope exit
+```
+
+The itx and agent surfaces have NO dispatch machinery of their own: the
+`withInvokeCapabilityFallback` proxy routes every unknown dotted root straight
+to the injected capability host, and the host itself carries the same fallback
+(`host.foo.bar(x)` is `host.invokeCapability({ path: ["foo","bar"], args: [x] })`).
+
+The load-bearing asymmetry: **reads chain up, writes stay local.**
+`invokeCapability`/`__describe` fall through to the enclosing scope on a miss
+(agent -> namespace -> project root), so a root mount is visible everywhere.
+`provideCapability` always mounts on exactly the host you called it on — to
+mount elsewhere, address that scope explicitly via `capabilityHosts.get(path)`.
+
+Slack webhook ingress (`/api/integrations/slack/webhook`) is deliberately NOT
+on this tree: it is an HTTP lane on the api worker
+(`domains/integrations/slack-webhook-api.ts`) that routes signed events
+directly into the claiming project's stream. The OAuth callback routes stay
+app-side (they need the browser session).
 
 ## Connecting and authenticating
 
-`/api/itx` exports one unauthenticated Cap'n Web target with a single method:
+`/api` exports one unauthenticated Cap'n Web target with a single method:
 
 ```ts
 using unauthenticated = connectItx({ baseUrl });
@@ -106,15 +218,14 @@ mutating the original payload.
 
 Built-ins are explicit members of the `Itx` interface (`streams`, `repos`,
 `repo`, `agents`, `sandboxes`, `secrets`, `workers`, `worker`, `egress`,
-`mcp`, `openapi`, `ai`, `examples`, `processor`, plus `agent`/`chat` on agent
-scopes). A call like
-`itx.streams.get("/x")` resolves in the isolate without touching the ITX
-Durable Object; the trade-off is that a mounted capability can never shadow a
-built-in name.
+`mcp`, `openapi`, `ai`, `examples`, `processor`, `debug`, plus `agent`/`chat`
+on agent scopes). A call like `itx.streams.get("/x")` resolves in the isolate
+without touching the capability-host Durable Object; the trade-off is that a
+mounted capability can never shadow a built-in name.
 
 Everything else is dynamic: unknown dotted paths fall through to the mounted
-capability table (longest-prefix resolution in the ITX processor, backed by
-`capability-provided` events on the scope's stream). `provideCapability`
+capability table (longest-prefix resolution in the capability-host processor, backed by
+`capability-provided` events on the scope's stream). `capabilityHost.provideCapability`
 accepts two recipes (`ProvideCapabilityInput`):
 
 - `live` — any RPC-able value: a bare function, an object of methods, or an
@@ -122,7 +233,7 @@ accepts two recipes (`ProvideCapabilityInput`):
   Live capabilities are session-bound: the mount event is durable, but calls
   travel back over the provider's connection and die with it.
 - `itx-expression` — a durable expression replayed against the project's own
-  itx surface (`domains/itx/itx-expression.ts`), so a mount survives
+  itx surface (`domains/capability-host/itx-expression.ts`), so a mount survives
   disconnects without holding a live stub.
 
 Every mount carries optional `instructions` (prose) and `types` (a TypeScript

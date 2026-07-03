@@ -11,7 +11,7 @@
  * Lanes:
  *
  *   "os"       — the dashboard/app pipeline (OS host, non-itx paths)
- *   "api"      — itx path lanes on the OS host: /api/itx[...] and
+ *   "api"      — rpc path lanes on the OS host: /api, /api/admin-cookie, and
  *                /__itx_e2e/...
  *   "project"  — a project worker target, resolved from:
  *                  /prj_<id>/...                      (URL rewritten)
@@ -79,7 +79,7 @@ export async function decideIngressRoute(input: {
         urlPrefix: `/${head}`,
       });
     }
-    if (isItxApiPath(url.pathname)) return { lane: "api" };
+    if (isApiWorkerLanePath(url.pathname)) return { lane: "api" };
     return { lane: "os" };
   }
 
@@ -132,9 +132,23 @@ function projectRoute(input: {
   };
 }
 
-/** Itx path lanes served by the api worker on the OS host. */
-function isItxApiPath(pathname: string): boolean {
-  if (pathname === "/api/itx" || pathname.startsWith("/api/itx/")) return true;
+/**
+ * Path lanes served by the api worker on the OS host: the capnweb rpc
+ * endpoint at exactly `/api` (plus its admin-cookie bridge), the Slack
+ * webhook ingress lanes (the api worker holds the full itx binding set, so events
+ * route without an RPC hop), and the e2e fixture lane. Deliberately
+ * exact-match: other `/api/*` paths (`/api/mcp`, `/api/health`, the OAuth
+ * callback routes under `/api/integrations/...`) are app routes and stay on
+ * the "os" lane.
+ */
+function isApiWorkerLanePath(pathname: string): boolean {
+  if (pathname === "/api" || pathname === "/api/admin-cookie") return true;
+  if (
+    pathname === "/api/integrations/slack/webhook" ||
+    pathname === "/api/integrations/slack/interactivity-webhook"
+  ) {
+    return true;
+  }
   if (pathname.startsWith("/__itx_e2e/")) return true;
   return false;
 }
@@ -193,7 +207,7 @@ export function apiWorkerRequest(input: {
   if (!isOsHost({ baseUrl: input.config.baseUrl, bases, host, requestUrl: url })) {
     return input.request;
   }
-  if (isItxApiPath(url.pathname)) return input.request;
+  if (isApiWorkerLanePath(url.pathname)) return input.request;
   if (/^\/prj_[^/]/.test(url.pathname)) return input.request;
   return null;
 }

@@ -12,8 +12,8 @@ import { createAuthContractClient } from "@iterate-com/auth-contract";
 // with the same Doppler values is a no-op, and nothing ever rotates a seeded
 // client — so the credentials in Doppler can never drift from the database.
 //
-// Runs automatically from scripts/deploy.ts after every deploy, and
-// standalone against any environment:
+// Runs automatically from apps/auth/scripts/deploy.ts after a deploy,
+// and standalone against any environment:
 //
 //   doppler run --project auth --config dev_global -- pnpm seed-oauth-clients
 //   doppler run --project auth --config preview_3 -- pnpm seed-oauth-clients
@@ -28,22 +28,60 @@ export const SeedOAuthClientSpec = z.object({
 });
 export type SeedOAuthClientSpec = z.infer<typeof SeedOAuthClientSpec>;
 
-export const SeedOAuthClientsEnv = z.object({
-  AUTH_SEED_OAUTH_CLIENTS: z
-    .string()
-    .transform((value, ctx) => {
-      try {
-        return JSON.parse(value) as unknown;
-      } catch (error) {
-        ctx.addIssue({ code: "custom", message: `not valid JSON: ${error}` });
-        return z.NEVER;
-      }
-    })
-    .pipe(z.array(SeedOAuthClientSpec)),
-  APP_CONFIG_SERVICE_AUTH_TOKEN: z.string().min(1),
-  // The deployed auth origin to seed, e.g. https://auth.iterate-dev.com.
-  APP_CONFIG_AUTH_APP_ORIGIN: z.url(),
-});
+const OptionalNonEmptyString = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+  z.string().trim().min(1).optional(),
+);
+
+const OptionalUrl = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+  z.url().optional(),
+);
+
+export const SeedOAuthClientsEnv = z
+  .object({
+    AUTH_SEED_OAUTH_CLIENTS: z
+      .string()
+      .transform((value, ctx) => {
+        try {
+          return JSON.parse(value) as unknown;
+        } catch (error) {
+          ctx.addIssue({ code: "custom", message: `not valid JSON: ${error}` });
+          return z.NEVER;
+        }
+      })
+      .pipe(z.array(SeedOAuthClientSpec)),
+    APP_CONFIG_SERVICE_AUTH_TOKEN: OptionalNonEmptyString,
+    // The deployed auth origin to seed, e.g. https://auth.iterate-dev.com.
+    APP_CONFIG_AUTH_APP_ORIGIN: OptionalUrl,
+  })
+  .transform((env, ctx) => {
+    const serviceAuthToken = env.APP_CONFIG_SERVICE_AUTH_TOKEN;
+    if (!serviceAuthToken) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["APP_CONFIG_SERVICE_AUTH_TOKEN"],
+        message: "APP_CONFIG_SERVICE_AUTH_TOKEN is required",
+      });
+      return z.NEVER;
+    }
+
+    const authAppOrigin = env.APP_CONFIG_AUTH_APP_ORIGIN;
+    if (!authAppOrigin) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["APP_CONFIG_AUTH_APP_ORIGIN"],
+        message: "APP_CONFIG_AUTH_APP_ORIGIN is required",
+      });
+      return z.NEVER;
+    }
+
+    return {
+      authAppOrigin,
+      clients: env.AUTH_SEED_OAUTH_CLIENTS,
+      serviceAuthToken,
+    };
+  });
 
 async function waitForAuthDeployment(baseUrl: string, timeoutMs = 120_000) {
   const discoveryUrl = `${baseUrl.replace(/\/+$/, "")}/api/auth/.well-known/openid-configuration`;
@@ -75,18 +113,14 @@ export async function seedOAuthClients(
   if (!parsed.success) {
     throw new Error(`seed-oauth-clients env invalid: ${z.prettifyError(parsed.error)}`);
   }
-  const {
-    AUTH_SEED_OAUTH_CLIENTS: clients,
-    APP_CONFIG_SERVICE_AUTH_TOKEN,
-    APP_CONFIG_AUTH_APP_ORIGIN,
-  } = parsed.data;
-  const seedThroughUrl = opts.baseUrl?.trim() || APP_CONFIG_AUTH_APP_ORIGIN;
+  const { authAppOrigin, clients, serviceAuthToken } = parsed.data;
+  const seedThroughUrl = opts.baseUrl?.trim() || authAppOrigin;
 
   await waitForAuthDeployment(seedThroughUrl);
 
   const authClient = createAuthContractClient({
     baseUrl: seedThroughUrl,
-    serviceToken: APP_CONFIG_SERVICE_AUTH_TOKEN,
+    serviceToken: serviceAuthToken,
   });
 
   for (const spec of clients) {

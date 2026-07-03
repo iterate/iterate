@@ -29,7 +29,6 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { authEnvs } from "../../../envs.ts";
 import { assertProvisioned, resolveEnvContext } from "../../../scripts/lib/env-context.ts";
-import { DEFAULT_ADMIN_ALLOWLIST } from "../src/server/platform-admin.ts";
 import {
   envShapedVars,
   REQUIRED_SECRETS,
@@ -38,6 +37,10 @@ import {
 import { seedOAuthClients } from "./seed-oauth-clients.ts";
 
 const APP_ROOT = fileURLToPath(new URL("..", import.meta.url));
+
+// Keep in sync with the `adminAllowlist` default in src/config.ts — deploys
+// always ship an explicit value so the seed SQL and the runtime agree.
+const DEFAULT_ADMIN_ALLOWLIST = "*@nustom.com";
 
 const ctx = await resolveEnvContext({ envs: authEnvs, dopplerProject: "auth" });
 assertProvisioned(ctx.name, ctx.env.resources);
@@ -70,7 +73,12 @@ if (missing.length > 0) {
 secretValues.APP_CONFIG_ADMIN_ALLOWLIST =
   ctx.secrets.APP_CONFIG_ADMIN_ALLOWLIST ?? DEFAULT_ADMIN_ALLOWLIST;
 secretValues.APP_CONFIG_EMAIL_OTP_ENABLED =
-  ctx.secrets.APP_CONFIG_EMAIL_OTP_ENABLED?.trim() || (ctx.name.startsWith("dev") ? "true" : "");
+  ctx.secrets.APP_CONFIG_EMAIL_OTP_ENABLED?.trim() ||
+  (ctx.name.startsWith("dev") ? "true" : "false");
+// Base domain project homepages live under. An explicit Doppler value wins;
+// otherwise src/config.ts's default applies at runtime.
+const projectHostnameBase = ctx.secrets.APP_CONFIG_PROJECT_HOSTNAME_BASE?.trim();
+if (projectHostnameBase) secretValues.APP_CONFIG_PROJECT_HOSTNAME_BASE = projectHostnameBase;
 
 // ---- 2. D1 migrations + bootstrap-admin seed ------------------------------------
 // The migrations step below reads wrangler.jsonc directly (and the vite
@@ -89,8 +97,8 @@ const seedDir = mkdtempSync(join(tmpdir(), "auth-deploy-seed-"));
 try {
   const seedFile = join(seedDir, "admin-seed.sql");
   run("pnpm", ["exec", "tsx", "./scripts/render-admin-seed.ts", seedFile], {
-    SERVICE_AUTH_TOKEN: secretValues.APP_CONFIG_SERVICE_AUTH_TOKEN,
-    ADMIN_ALLOWLIST: secretValues.APP_CONFIG_ADMIN_ALLOWLIST,
+    APP_CONFIG_SERVICE_AUTH_TOKEN: secretValues.APP_CONFIG_SERVICE_AUTH_TOKEN,
+    APP_CONFIG_ADMIN_ALLOWLIST: secretValues.APP_CONFIG_ADMIN_ALLOWLIST,
   });
   run(
     "pnpm",
@@ -102,9 +110,10 @@ try {
 }
 
 // ---- 3. Build -------------------------------------------------------------------
-// The VITE_ vars ride the build environment because Vite statically inlines
-// import.meta.env.VITE_* into the client bundle (auth-client.ts, query.tsx,
-// auth-plugins.ts isProduction) — the runtime bindings alone can't reach it.
+// The env-shaped vars ride the build environment because Vite statically
+// inlines them into the client bundle (vite.config.ts's __AUTH_APP_ORIGIN__
+// define; auth-plugins.ts isProduction reads import.meta.env.VITE_APP_STAGE)
+// — the runtime bindings alone can't reach it.
 rmSync(join(APP_ROOT, "dist"), { recursive: true, force: true });
 run("pnpm", ["exec", "vite", "build"], {
   CLOUDFLARE_ENV: ctx.name,

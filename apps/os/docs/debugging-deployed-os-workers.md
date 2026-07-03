@@ -145,7 +145,7 @@ The deployed worker name comes from the env's entry in the root `envs.ts` as
 `${manifest.slug}-${app.stage}` and then used by `apps/os/alchemy.run.ts` as
 `ctx.workerName`. For production OS, `os-prd` is the ingress router; the app
 worker is `os-prd-app`, the itx api worker is `os-prd-api`, and each Durable
-Object class has its own worker (`os-prd-stream`, `os-prd-itx`,
+Object class has its own worker (`os-prd-stream`, `os-prd-capability-host`,
 `os-prd-project`, `os-prd-agent`, `os-prd-repo`, `os-prd-secret`,
 `os-prd-worker`). See [worker-topology.md](./worker-topology.md). Pick the
 worker that owns the code you are debugging.

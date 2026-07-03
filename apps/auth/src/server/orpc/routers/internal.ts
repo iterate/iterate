@@ -2,6 +2,7 @@ import { ORPCError } from "@orpc/server";
 import { resolveUniqueSlug } from "@iterate-com/shared/slug";
 import { os, protectedMiddleware, serviceMiddleware } from "../orpc.ts";
 import { auth, createProjectIngressToken as createSignedProjectIngressToken } from "../../auth.ts";
+import { config } from "../../env.ts";
 import { parseProjectMetadata, parseStringArray } from "../../db/helpers.ts";
 import {
   disableOAuthClientById,
@@ -404,11 +405,10 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
       );
     }
 
-    const serviceAuthToken = context.env.APP_CONFIG_SERVICE_AUTH_TOKEN?.trim();
+    const serviceAuthToken = config.serviceAuthToken.exposeSecret().trim();
     if (!serviceAuthToken) {
       throw new ORPCError("INTERNAL_SERVER_ERROR", {
-        message:
-          "APP_CONFIG_SERVICE_AUTH_TOKEN is required for bootstrap OAuth client provisioning",
+        message: "config.serviceAuthToken is required for bootstrap OAuth client provisioning",
       });
     }
 
@@ -492,10 +492,10 @@ const setOAuthClient = os.internal.oauth.setClient
       // Create through the admin API so the row gets the plugin's defaults
       // (token endpoint auth method, grant/response types, …), then overwrite
       // the generated credentials with the caller-provided constants.
-      const serviceAuthToken = context.env.APP_CONFIG_SERVICE_AUTH_TOKEN?.trim();
+      const serviceAuthToken = config.serviceAuthToken.exposeSecret().trim();
       if (!serviceAuthToken) {
         throw new ORPCError("INTERNAL_SERVER_ERROR", {
-          message: "APP_CONFIG_SERVICE_AUTH_TOKEN is required for OAuth client provisioning",
+          message: "config.serviceAuthToken is required for OAuth client provisioning",
         });
       }
       const headers = await getBootstrapAdminAuthHeaders({ serviceAuthToken });
@@ -584,7 +584,7 @@ const introspectAccessToken = os.internal.oauth.introspectAccessToken
       // contract models absent sessions as undefined, not null.
       sid: token.sessionId ?? undefined,
       clientId: token.clientId,
-      iss: `${context.env.VITE_AUTH_APP_ORIGIN.replace(/\/+$/, "")}/api/auth`,
+      iss: `${config.authAppOrigin.replace(/\/+$/, "")}/api/auth`,
       aud: input.audiences,
       iat: Math.floor((toMillis(token.createdAt) ?? Date.now()) / 1000),
       exp: Math.floor(expiresAtMs / 1000),

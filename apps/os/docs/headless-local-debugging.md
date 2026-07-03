@@ -24,8 +24,8 @@ a _deployed_ preview against _production_ auth.
 pnpm dev-all   # monorepo root: starts apps/auth (localhost:7101) AND apps/os (localhost)
 ```
 
-`pnpm dev-all` exports `ITERATE_OAUTH_ISSUER=http://localhost:7101/api/auth` and
-points OS at it. OS writes its chosen base URL to
+`pnpm dev-all` points OS at the local auth issuer through
+`APP_CONFIG_ITERATE_AUTH__ISSUER`. OS writes its chosen base URL to
 `apps/os/.dev-server/dev-server.json`; drive the browser against that localhost
 URL.
 
@@ -70,7 +70,7 @@ Local/non-prod auth enables email OTP and a deterministic code:
 
 - Any email matching `/\+.*test@/i` skips email send and accepts OTP **`424242`**
   (see `apps/auth/src/server/auth-plugins.ts`).
-- Sign-_up_ is gated by `SIGNUP_ALLOWLIST` (auth Doppler). The local list allows
+- Sign-_up_ is gated by `APP_CONFIG_SIGNUP_ALLOWLIST` (auth Doppler). The local list allows
   `*@nustom.com`, `testuser+*@gmail.com`, etc. A brand-new email outside the
   allowlist returns `403 "Sign up is not available for this email address"`, so
   use e.g. `testuser+<scenario>@gmail.com`.

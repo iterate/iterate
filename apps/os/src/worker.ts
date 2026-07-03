@@ -23,18 +23,18 @@ import { e2eFixtureResponse } from "./e2e-fixtures.ts";
 import type { Env } from "./env.ts";
 import { apiWorkerRequest, decideIngressRoute, type IngressResolvers } from "./ingress.ts";
 import { readProjectByHostname, resolveProjectIdBySlug } from "./project-directory.ts";
-import { ProjectCollectionRpcTarget, UnauthenticatedItxRpcTarget } from "./rpc-targets.ts";
+import { ProjectCollectionRpcTarget, UnauthenticatedOsRpcTarget } from "./rpc-targets.ts";
+import { handleSlackWebhookApiRequest } from "./domains/integrations/slack-webhook-api.ts";
 import { handleCapnwebAdminCookieRequest } from "./auth/admin-auth-cookie.ts";
-import { normalizeIngressHost } from "./ingress/host-headers.ts";
-import { MCP_START_MOUNT_PATH } from "./lib/mcp-base-url.ts";
+import { rewriteMcpHostRequest } from "./ingress/mcp-host-rewrite.ts";
 import { AppConfig, parseConfig } from "./config.ts";
 import type { RequestContext } from "./request-context.ts";
 
 // Every Durable Object class in the product, plus the loopback entrypoints
 // (`ctx.exports`) shared by the itx runtime.
 export { AgentDurableObject } from "./domains/agents/agent-durable-object.ts";
+export { CapabilityHostDurableObject } from "./domains/capability-host/capability-host-durable-object.ts";
 export { CloudflareSandboxDurableObject } from "./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts";
-export { ItxDurableObject } from "./domains/itx/itx-durable-object.ts";
 export { ProjectDurableObject } from "./domains/projects/project-durable-object.ts";
 export { RepoDurableObject } from "./domains/repos/repo-durable-object.ts";
 export { SecretDurableObject } from "./domains/secrets/secret-durable-object.ts";
@@ -96,8 +96,8 @@ async function appFetch(request: Request, ctx: ExecutionContext, config: AppConf
 }
 
 /**
- * The itx api pipeline: the capnweb surface at `/api/itx`, the
- * `/api/itx/admin-cookie` browser auth bridge, worker-hosted e2e fixtures,
+ * The api pipeline: the capnweb surface at `/api`, the
+ * `/api/admin-cookie` browser auth bridge, worker-hosted e2e fixtures,
  * and project ingress — every lane `decideIngressRoute` (src/ingress.ts) can
  * resolve.
  */
@@ -136,12 +136,18 @@ async function apiFetch(request: Request, env: Env, ctx: ExecutionContext, confi
     return Response.json({ error: "not found" }, { status: 404 });
   }
 
-  if (url.pathname === "/api/itx/admin-cookie") {
+  if (url.pathname === "/api/admin-cookie") {
     return await handleCapnwebAdminCookieRequest({ config, request });
   }
 
-  if (url.pathname !== "/api/itx") return Response.json({ error: "not found" }, { status: 404 });
-  const unauthenticated = new UnauthenticatedItxRpcTarget({
+  // Slack webhook ingress lives here (not the app lane): this pipeline has
+  // the engine bindings, so a signed event routes straight into the claiming
+  // project's stream without a capnweb round trip.
+  const slackWebhookResponse = await handleSlackWebhookApiRequest({ config, request });
+  if (slackWebhookResponse !== null) return slackWebhookResponse;
+
+  if (url.pathname !== "/api") return Response.json({ error: "not found" }, { status: 404 });
+  const unauthenticated = new UnauthenticatedOsRpcTarget({
     config,
     ctx,
     headers: request.headers,
@@ -174,36 +180,4 @@ function stripInternalHeaders(request: Request) {
   headers.delete("x-forwarded-proto");
   headers.delete("x-iterate-ingress-hostname");
   return new Request(request, { headers });
-}
-
-/**
- * When the MCP host is a dedicated hostname (distinct from the app host),
- * rewrite requests on it onto the app's `/api/mcp` mount path.
- */
-export function rewriteMcpHostRequest(input: {
-  config: { baseUrl?: string; mcp?: { baseUrl: string } };
-  request: Request;
-}) {
-  if (!input.config.baseUrl || !input.config.mcp?.baseUrl) return null;
-
-  const requestUrl = new URL(input.request.url);
-  const mcpUrl = new URL(input.config.mcp.baseUrl);
-  if (normalizeIngressHost(requestUrl.hostname) !== normalizeIngressHost(mcpUrl.hostname)) {
-    return null;
-  }
-
-  const appUrl = new URL(input.config.baseUrl);
-  if (normalizeIngressHost(mcpUrl.hostname) === normalizeIngressHost(appUrl.hostname)) return null;
-
-  const pathSuffix = requestUrl.pathname.startsWith(`${MCP_START_MOUNT_PATH}/`)
-    ? requestUrl.pathname.slice(MCP_START_MOUNT_PATH.length)
-    : requestUrl.pathname === MCP_START_MOUNT_PATH || requestUrl.pathname === "/"
-      ? ""
-      : requestUrl.pathname;
-
-  requestUrl.protocol = appUrl.protocol;
-  requestUrl.host = appUrl.host;
-  requestUrl.pathname = `${MCP_START_MOUNT_PATH}${pathSuffix}`;
-
-  return new Request(requestUrl, input.request);
 }

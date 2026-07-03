@@ -17,10 +17,11 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { AlertCircle, Circle, Mail, MessageSquare } from "lucide-react";
 import { z } from "zod";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
+import { StreamViewSection } from "~/components/stream-view-section.tsx";
 import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
-import type { Itx } from "~/types.ts";
+import type { ProjectRpcTarget } from "~/types.ts";
 
-type Connection = Awaited<ReturnType<Itx["integrations"]["getConnection"]>>;
+type Connection = Awaited<ReturnType<ProjectRpcTarget["integrations"]["getConnection"]>>;
 
 const Search = z.object({
   error: z.string().optional(),
@@ -190,6 +191,12 @@ function ProjectIntegrationsContent() {
           </ItemActions>
         </Item>
       </ItemGroup>
+
+      <StreamViewSection
+        projectId={project.id}
+        streamPath="/integrations"
+        emptyLabel="No events on the integrations stream yet."
+      />
     </section>
   );
 }

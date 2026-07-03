@@ -3,9 +3,8 @@ import { APIError } from "better-auth";
 import { signJWT, verifyJWT } from "better-auth/crypto";
 import { matchesSignupAllowlist, parseSignupAllowlist } from "@iterate-com/shared/signup-allowlist";
 import { generateDefaultAvatar } from "@iterate-com/shared/default-avatar";
-import { env } from "./env.ts";
+import { config, env } from "./env.ts";
 import { getAuthPlugins } from "./auth-plugins.ts";
-import { DEFAULT_ADMIN_ALLOWLIST } from "./platform-admin.ts";
 
 const LOCAL_OAUTH_CLIENT_ORIGINS = [
   "http://localhost:6274",
@@ -13,8 +12,13 @@ const LOCAL_OAUTH_CLIENT_ORIGINS = [
   "http://[::1]:6274",
 ] as const;
 
-export function getAllowedBrowserOrigins() {
-  return [env.VITE_AUTH_APP_ORIGIN, env.VITE_PUBLIC_URL, ...LOCAL_OAUTH_CLIENT_ORIGINS];
+export function getAllowedBrowserOrigins(): string[] {
+  // config.authAppOrigin/publicUrl are `publicValue`-tagged strings; a tagged
+  // string is assignable to `string`, so collect them into a plain `string[]`
+  // (dropping an unset publicUrl) for comparing/`Set`ing against request origins.
+  const origins: string[] = [config.authAppOrigin, ...LOCAL_OAUTH_CLIENT_ORIGINS];
+  if (config.publicUrl) origins.push(config.publicUrl);
+  return origins;
 }
 
 function isAllowedBrowserOrigin(origin: string | null | undefined) {
@@ -30,13 +34,13 @@ export type ProjectIngressTokenPayload = {
 };
 
 export async function createProjectIngressToken(payload: ProjectIngressTokenPayload) {
-  return signJWT(payload, env.APP_CONFIG_BETTER_AUTH_SECRET, 60 * 60);
+  return signJWT(payload, config.betterAuthSecret.exposeSecret(), 60 * 60);
 }
 
 export async function verifyProjectIngressToken(token: string) {
   const payload = await verifyJWT<ProjectIngressTokenPayload>(
     token,
-    env.APP_CONFIG_BETTER_AUTH_SECRET,
+    config.betterAuthSecret.exposeSecret(),
   );
   if (!payload || payload.type !== "project-ingress" || !payload.userId || !payload.email) {
     return null;
@@ -47,11 +51,15 @@ export async function verifyProjectIngressToken(token: string) {
 export const auth = betterAuth({
   appName: "Iterate Auth",
   database: env.DB,
-  baseURL: env.VITE_AUTH_APP_ORIGIN,
-  plugins: getAuthPlugins(env),
+  baseURL: config.authAppOrigin,
+  plugins: getAuthPlugins({
+    emailOtpEnabled: config.emailOtpEnabled,
+    resendApiKey: config.resendApiKey.exposeSecret(),
+    resendDomain: config.resendDomain,
+  }),
   trustedOrigins: (request) =>
     isAllowedBrowserOrigin(request?.headers.get("origin")) ? getAllowedBrowserOrigins() : [],
-  secret: env.APP_CONFIG_BETTER_AUTH_SECRET,
+  secret: config.betterAuthSecret.exposeSecret(),
   session: {
     storeSessionInDatabase: true,
     cookieCache: {
@@ -69,7 +77,7 @@ export const auth = betterAuth({
       create: {
         before: async (user) => {
           const email = user.email.trim().toLowerCase();
-          const allowlist = parseSignupAllowlist(env.APP_CONFIG_SIGNUP_ALLOWLIST);
+          const allowlist = parseSignupAllowlist(config.signupAllowlist);
           if (!matchesSignupAllowlist(email, allowlist)) {
             throw new APIError("FORBIDDEN", {
               message: "Sign up is not available for this email address",
@@ -79,9 +87,7 @@ export const auth = betterAuth({
           // Email-domain promotion is safe because password signup is disabled:
           // both remaining sign-in methods (Google, email OTP) prove mailbox
           // ownership before this hook runs.
-          const platformAdminAllowlist = parseSignupAllowlist(
-            env.APP_CONFIG_ADMIN_ALLOWLIST ?? DEFAULT_ADMIN_ALLOWLIST,
-          );
+          const platformAdminAllowlist = parseSignupAllowlist(config.adminAllowlist);
           const isPlatformAdmin = matchesSignupAllowlist(email, platformAdminAllowlist);
 
           return {
@@ -98,8 +104,9 @@ export const auth = betterAuth({
 
   socialProviders: {
     google: {
-      clientId: env.APP_CONFIG_GOOGLE_CLIENT_ID,
-      clientSecret: env.APP_CONFIG_GOOGLE_CLIENT_SECRET,
+      clientId: config.googleClientId,
+      clientSecret: config.googleClientSecret.exposeSecret(),
+      prompt: "select_account",
     },
   },
   disabledPaths: ["/token"],

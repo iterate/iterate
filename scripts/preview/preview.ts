@@ -991,11 +991,11 @@ const defaultPreviewDeployConcurrency = 5;
 const ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE = "environment-config-lease";
 const previewEnvironmentSlotNumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
 const sharedAuthPreviewSecretsCopiedFromDev = [
-  "GOOGLE_CLIENT_ID",
-  "GOOGLE_CLIENT_SECRET",
-  "RESEND_BOT_DOMAIN",
-  "RESEND_BOT_API_KEY",
-  "SIGNUP_ALLOWLIST",
+  "APP_CONFIG_GOOGLE_CLIENT_ID",
+  "APP_CONFIG_GOOGLE_CLIENT_SECRET",
+  "APP_CONFIG_RESEND_DOMAIN",
+  "APP_CONFIG_RESEND_API_KEY",
+  "APP_CONFIG_SIGNUP_ALLOWLIST",
 ] as const;
 
 export const EnvironmentConfigLease = z.object({
@@ -1950,11 +1950,12 @@ function commandFailureSummary(result: { stderr: string; stdout: string }) {
 
 async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
   const rootValues: Record<string, string> = {
-    VITE_ENABLE_EMAIL_OTP_SIGNIN: "true",
+    APP_CONFIG_EMAIL_OTP_ENABLED: "true",
   };
   for (const name of sharedAuthPreviewSecretsCopiedFromDev) {
-    if (getDopplerSecret("auth", "preview", name)) continue;
-    const value = getDopplerSecret("auth", "dev", name);
+    // Prefer an existing preview-root value; otherwise seed it from auth/dev.
+    const value =
+      getDopplerSecret("auth", "preview", name) || getDopplerSecret("auth", "dev", name);
     if (!value) throw new Error(`auth/dev is missing ${name}`);
     rootValues[name] = value;
   }
@@ -2004,9 +2005,10 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
       // readPreviewAppConfig reads APP_CONFIG_BASE_URL to learn the app's public
       // URL. Origins/routes themselves are generated from the root envs.ts.
       APP_CONFIG_BASE_URL: authOrigin,
+      AUTH_SEED_OAUTH_CLIENTS: seed,
+      APP_CONFIG_AUTH_APP_ORIGIN: authOrigin,
       APP_CONFIG_BETTER_AUTH_SECRET: betterAuthSecret,
       APP_CONFIG_SERVICE_AUTH_TOKEN: serviceToken,
-      AUTH_SEED_OAUTH_CLIENTS: seed,
     });
 
     setDopplerSecrets("os", config, {

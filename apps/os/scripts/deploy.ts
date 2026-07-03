@@ -103,7 +103,7 @@ await smoke(
   (status) => status === 200 || (status >= 300 && status < 400),
   "dashboard",
 );
-await smoke(`${ctx.env.baseUrl}/api/itx`, (status) => status < 500, "itx api");
+await smoke(`${ctx.env.baseUrl}/api`, (status) => status < 500, "os api");
 console.log(`✅ ${ctx.name} deployed and serving at ${ctx.env.baseUrl}`);
 
 function run(command: string, args: string[], extraEnv: Record<string, string> = {}) {

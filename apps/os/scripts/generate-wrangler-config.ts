@@ -81,7 +81,7 @@ const ENV_SHAPED_KEYS = [
 
 const DO_CLASSES = {
   AGENT: "AgentDurableObject",
-  ITX: "ItxDurableObject",
+  CAPABILITY_HOST: "CapabilityHostDurableObject",
   PROJECT: "ProjectDurableObject",
   REPO: "RepoDurableObject",
   SANDBOX: "CloudflareSandboxDurableObject",

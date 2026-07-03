@@ -6,7 +6,7 @@ import { auth, type AuthSession, verifyProjectIngressToken } from "../auth.ts";
 import { db, type DB } from "../db/index.ts";
 import { parseBoolean, parseTimestampMs } from "../db/helpers.ts";
 import { getUserById } from "../db/queries/.generated/index.ts";
-import type { CloudflareEnv } from "../env.ts";
+import { config, type CloudflareEnv } from "../env.ts";
 
 type ProjectIngressUser = NonNullable<AuthSession>["user"];
 
@@ -47,7 +47,7 @@ export const variablesProvider = () =>
       ? null
       : await authenticateProjectIngressUser(c.req.header("authorization"));
     const serviceAuthorized = authenticateServiceRequest({
-      expectedServiceToken: c.env.APP_CONFIG_SERVICE_AUTH_TOKEN,
+      expectedServiceToken: config.serviceAuthToken.exposeSecret(),
       providedServiceToken: c.req.header(SERVICE_TOKEN_HEADER),
     });
 

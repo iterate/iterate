@@ -32,7 +32,7 @@ npx iterate setup \
   --os-base-url https://dev-yourname-os.dev.iterate.com \
   --auth-base-url https://auth.iterate.com \
   --daemon-base-url http://localhost:3001 \
-  --admin-password-env-var-name SERVICE_AUTH_TOKEN \
+  --admin-password-env-var-name APP_CONFIG_SERVICE_AUTH_TOKEN \
   --user-email dev-yourname@iterate.com \
   --scope global
 ```
@@ -100,7 +100,7 @@ Config shape:
       "daemonBaseUrl": "http://localhost:3001",
       "auth": {
         "strategy": "admin",
-        "adminPasswordEnvVarName": "SERVICE_AUTH_TOKEN",
+        "adminPasswordEnvVarName": "APP_CONFIG_SERVICE_AUTH_TOKEN",
         "userEmail": "dev-yourname@iterate.com"
       }
     }
@@ -129,7 +129,7 @@ You can pin explicitly:
 npx iterate setup \
   --os-base-url https://dev-yourname-os.dev.iterate.com \
   --daemon-base-url http://localhost:3001 \
-  --admin-password-env-var-name SERVICE_AUTH_TOKEN \
+  --admin-password-env-var-name APP_CONFIG_SERVICE_AUTH_TOKEN \
   --user-email dev-yourname@iterate.com \
   --scope workspace
 ```

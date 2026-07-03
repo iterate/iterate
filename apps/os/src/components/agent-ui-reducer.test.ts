@@ -94,11 +94,11 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/itx/script-execution-requested",
+        type: "events.iterate.com/capability-host/script-execution-requested",
         payload: { executionId: "x1", code: "await stream.read()" },
       },
       {
-        type: "events.iterate.com/itx/script-execution-completed",
+        type: "events.iterate.com/capability-host/script-execution-completed",
         payload: { executionId: "x1", ok: true, result: 12, durationMs: 400, logs: [] },
       },
       {
@@ -269,11 +269,11 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/itx/script-execution-requested",
+        type: "events.iterate.com/capability-host/script-execution-requested",
         payload: { executionId: "exec-1", code: "1+1" },
       },
       {
-        type: "events.iterate.com/itx/script-execution-completed",
+        type: "events.iterate.com/capability-host/script-execution-completed",
         payload: { executionId: "exec-1", outcome: { status: "success" } },
       },
       // The agent goes idle between rounds — the activity waits, not settles.
@@ -287,7 +287,7 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/itx/script-execution-requested",
+        type: "events.iterate.com/capability-host/script-execution-requested",
         payload: { executionId: "exec-2", code: "2+2" },
       },
       {

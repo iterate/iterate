@@ -10,7 +10,7 @@
  *   (auth-plugins.ts).
  *
  * The role is granted three ways:
- * - the signup hook in auth.ts, for emails matching APP_CONFIG_ADMIN_ALLOWLIST
+ * - the signup hook in auth.ts, for emails matching `config.adminAllowlist`
  *   (default `*@nustom.com`),
  * - the deploy-time seed SQL, which
  *   backfills users who existed before their email domain was allowlisted —
@@ -25,14 +25,6 @@
  * Not to be confused with per-organization membership roles
  * ("owner"/"admin"/"member" on the member table) — see orpc.ts.
  */
-/**
- * The platform-admin allowlist applied when no explicit
- * APP_CONFIG_ADMIN_ALLOWLIST value exists: deploy.ts defaults the shipped
- * binding to it, and local dev (which has no Doppler key for it) falls back
- * to it at the signup-hook read site.
- */
-export const DEFAULT_ADMIN_ALLOWLIST = "*@nustom.com";
-
 export function isPlatformAdminUser(
   user: { role?: unknown } | Record<string, unknown> | null | undefined,
 ): boolean {

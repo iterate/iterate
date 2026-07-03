@@ -5,6 +5,7 @@ import { createTanstackQueryUtils } from "@orpc/tanstack-query";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
 import type { AppRouter } from "../server/orpc/index.ts";
+import { getAuthAppOrigin } from "./auth-app-origin.ts";
 
 const queryClientOptions: QueryClientConfig = {
   defaultOptions: {
@@ -23,7 +24,7 @@ export const makeQueryClient = createIsomorphicFn()
 const link = new RPCLink({
   url: new URL(
     "/api/orpc",
-    import.meta.env.SSR ? import.meta.env.VITE_AUTH_APP_ORIGIN : window.location.origin,
+    typeof window === "undefined" ? getAuthAppOrigin() : window.location.origin,
   ).toString(),
 });
 

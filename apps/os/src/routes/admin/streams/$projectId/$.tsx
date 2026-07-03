@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { StreamExplorerDetail } from "~/components/stream-explorer.tsx";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { useItx } from "~/itx/itx-react.tsx";
@@ -48,17 +48,7 @@ function AdminStreamDetailPage() {
       source={source}
       streamView={{
         emptyLabel: "No events in this stream yet.",
-        projectSlug: projectId,
         projectId: streamProjectId,
-        renderStreamPathLink: ({ path, children, className }) => (
-          <Link
-            to="/admin/streams/$projectId/$"
-            params={{ projectId, _splat: path }}
-            {...(className == null ? {} : { className })}
-          >
-            {children}
-          </Link>
-        ),
         streamSource: source,
       }}
     />

@@ -49,12 +49,11 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   Personal `dev_<you>` configs may still carry personal integration secrets,
   but they should not carry app/MCP/project-host URL overrides.
 
-  Don't (re)introduce legacy `ITERATE_OAUTH_*` / `ITERATE_AUTH_JWKS` vars in
-  these configs: an explicit JWKS in Doppler overrides the deploy-time fetch
-  from the auth worker, and a stale one makes OS silently reject every
-  session — login just bounces back to `/sign-in` with no error. (This broke
-  all `dev_<user>` and preview logins once; cleaned out of `dev_*` and the
-  `preview` root on 2026-06-12.)
+  Don't add old flat auth OAuth/JWKS vars in these configs: an explicit JWKS in
+  Doppler overrides the deploy-time fetch from the auth worker, and a stale one
+  makes OS silently reject every session — login just bounces back to
+  `/sign-in` with no error. This broke all `dev_<user>` and preview logins
+  once; the stale keys were cleaned out on 2026-06-12.
 
 - The chosen port is recorded in **`apps/os/.dev-server/dev-server.json`**
   (`{pid, port, baseUrl, logPath, stoppedAt?}`).

@@ -1,4 +1,4 @@
-// Itx-side stream access for the integrations domain.
+// itx-side stream access for the integrations domain.
 //
 // These helpers dial the Stream Durable Objects directly (same shape as
 // StreamRpcTarget's stub minting) so the domain modules do not import the

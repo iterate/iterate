@@ -9,7 +9,12 @@ import { writeWranglerConfig } from "./scripts/generate-wrangler-config.ts";
 // the cloudflare plugin reads it, so dev and build can never see stale config.
 writeWranglerConfig();
 
+const authAppOrigin = process.env.APP_CONFIG_AUTH_APP_ORIGIN?.trim() ?? "";
+
 export default defineConfig({
+  define: {
+    __AUTH_APP_ORIGIN__: JSON.stringify(authAppOrigin),
+  },
   server: {
     cors: {
       origin: (origin, cb) => cb(null as unknown as Error, origin ?? true),

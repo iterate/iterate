@@ -113,12 +113,8 @@ if (!forgePrivateJwkJson) {
   );
 }
 
-const issuer = (
-  process.env.APP_CONFIG_ITERATE_AUTH__ISSUER ?? process.env.ITERATE_OAUTH_ISSUER
-)?.trim();
-const clientId = (
-  process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID ?? process.env.ITERATE_OAUTH_CLIENT_ID
-)?.trim();
+const issuer = process.env.APP_CONFIG_ITERATE_AUTH__ISSUER?.trim();
+const clientId = process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID?.trim();
 if (!issuer || !clientId) {
   throw new Error(
     "APP_CONFIG_ITERATE_AUTH__ISSUER and APP_CONFIG_ITERATE_AUTH__CLIENT_ID are required in the environment.",

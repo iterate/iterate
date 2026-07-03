@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rewriteMcpHostRequest } from "./worker.ts";
+import { rewriteMcpHostRequest } from "./ingress/mcp-host-rewrite.ts";
 
 describe("rewriteMcpHostRequest", () => {
   it.each([
