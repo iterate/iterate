@@ -194,7 +194,7 @@ function StreamTreeNode({
   streamPath: string;
 }) {
   const childPaths = useMemo(
-    () => [...state.childPaths].sort((left, right) => left.localeCompare(right)),
+    () => state.childPaths.toSorted((left, right) => left.localeCompare(right)),
     [state.childPaths],
   );
   const expanded = expandedPaths.has(streamPath);

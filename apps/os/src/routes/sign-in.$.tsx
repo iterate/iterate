@@ -2,8 +2,9 @@ import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { extractPublicConfigSchema } from "@iterate-com/shared/config";
 import { z } from "zod";
-import { MailIcon } from "lucide-react";
+import { AlertCircleIcon, MailIcon } from "lucide-react";
 import { useAuthClient } from "@iterate-com/auth/client";
+import { Alert, AlertDescription, AlertTitle } from "@iterate-com/ui/components/alert";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Card,
@@ -14,6 +15,7 @@ import {
 } from "@iterate-com/ui/components/card";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { AppConfig } from "../config.ts";
+import { SIGN_IN_AUTH_ERRORS } from "~/auth/errors.ts";
 import { getPublicConfigServerFn } from "~/lib/public-route-config.ts";
 
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
@@ -21,6 +23,7 @@ const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
 export const Route = createFileRoute("/sign-in/$")({
   validateSearch: z.looseObject({
     redirect_url: z.string().optional(),
+    auth_error: z.enum(SIGN_IN_AUTH_ERRORS).optional(),
   }),
   loader: async () => ({
     config: PublicConfigSchema.parse(JSON.parse(await getPublicConfigServerFn())),
@@ -31,10 +34,11 @@ export const Route = createFileRoute("/sign-in/$")({
 function SignInRoute() {
   const { signIn } = useAuthClient();
   const { config } = Route.useLoaderData();
-  const { redirect_url: redirectUrl } = Route.useSearch();
+  const { auth_error: authError, redirect_url: redirectUrl } = Route.useSearch();
   const returnTo = safeRedirectPath(redirectUrl);
   const emailOtpEnabled = config.iterateAuth?.emailOtpEnabled ?? false;
   const [redirectingTo, setRedirectingTo] = useState<"email" | "google" | null>(null);
+  const signInError = authError ? signInErrorCopy[authError] : null;
 
   function startEmailSignIn() {
     setRedirectingTo("email");
@@ -55,6 +59,13 @@ function SignInRoute() {
         </CardHeader>
         <Separator />
         <CardContent className="space-y-3 pt-6">
+          {signInError ? (
+            <Alert variant="destructive">
+              <AlertCircleIcon className="size-4" />
+              <AlertTitle>{signInError.title}</AlertTitle>
+              <AlertDescription>{signInError.description}</AlertDescription>
+            </Alert>
+          ) : null}
           {emailOtpEnabled ? (
             <Button
               className="w-full border-border bg-background text-foreground shadow-sm transition-colors hover:bg-muted"
@@ -82,6 +93,14 @@ function SignInRoute() {
     </main>
   );
 }
+
+const signInErrorCopy = {
+  session_verification_failed: {
+    title: "Sign-in could not be verified",
+    description:
+      "Auth returned a session, but OS could not verify it. Try signing in again; if this keeps happening, contact Iterate support.",
+  },
+} satisfies Record<(typeof SIGN_IN_AUTH_ERRORS)[number], { title: string; description: string }>;
 
 function GoogleIcon() {
   return (

@@ -10,8 +10,8 @@ import {
 } from "../streams/stream-processor-host.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "./crypto.ts";
-import { SecretProcessor } from "./secret-processor-implementation.ts";
 import { SecretProcessorContract } from "./secret-processor-contract.ts";
+import { SecretProcessor } from "./secret-processor-implementation.ts";
 import {
   requestWithSecretHeaders,
   secretErrorResponse,
@@ -27,17 +27,16 @@ export class SecretDurableObject extends DurableObject<Env> {
       projectId: this.#name.projectId,
     }),
   });
-  readonly #secretProcessor = this.#processorHost.add(
-    SecretProcessorContract.slug,
-    (deps) => new SecretProcessor(deps),
-  );
+  readonly #secretProcessor = this.#processorHost.add((deps) => new SecretProcessor(deps));
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
     return this.#processorHost.wakeStreamSubscriber(args);
   }
 
   get processor() {
-    return new StreamProcessorRpcTarget(this.#secretProcessor);
+    return new StreamProcessorRpcTarget(this.#secretProcessor, {
+      catchUpBeforeSnapshot: () => this.#processorHost.catchUp(SecretProcessorContract.slug),
+    });
   }
 
   async update(input: SecretUpdateInput) {
@@ -72,6 +71,11 @@ export class SecretDurableObject extends DurableObject<Env> {
   }
 
   async describe(): Promise<SecretDescription> {
+    // update() appends to the stream and the processor folds it in
+    // asynchronously; pull-through makes update() -> describe()
+    // read-your-writes even when the configured subscription's wake is slow
+    // or was dropped.
+    await this.#processorHost.catchUp(SecretProcessorContract.slug);
     const { state } = await this.#secretProcessor.snapshot();
     return {
       audit: state.audit,
@@ -91,6 +95,9 @@ export class SecretDurableObject extends DurableObject<Env> {
       return secretErrorResponse("secret_reference_required", 400);
     }
 
+    // Same pull-through as describe(): egress substitution right after
+    // update() must see the just-stored material.
+    await this.#processorHost.catchUp(SecretProcessorContract.slug);
     const { state } = await this.#secretProcessor.snapshot();
     if (state.encryptedMaterial === null) {
       return secretErrorResponse("secret_not_found", 404);

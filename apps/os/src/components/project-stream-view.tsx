@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -77,10 +78,12 @@ import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { useItx } from "~/itx/itx-react.tsx";
 import { presenceLabel, sparklinePoints, useSimulatedRttMetrics } from "~/lib/stream-presence.ts";
 import { useStreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useVirtualizedTailScroll } from "~/lib/use-virtualized-tail-scroll.ts";
 
 const DEFAULT_RAW_EVENT_YAML =
   "type: events.iterate.com/os/manual-event\npayload:\n  message: Hello from OS\n";
+
+/** How many rows past the virtualizer's window the tail query prefetches. */
+const TAIL_PREFETCH_ROWS = 32;
 
 const MAX_PRESENCE_AVATARS = 4;
 
@@ -489,6 +492,7 @@ export function ProjectStreamView({
                 value={feedSearch}
                 onChange={(event) => setSearch({ q: event.target.value || undefined })}
                 placeholder="Search feed…"
+                aria-label="Search feed"
                 className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
               />
             </div>
@@ -502,16 +506,18 @@ export function ProjectStreamView({
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         {activeTab === "agent" ? (
           <AgentFeedView
-            database={store.streamDatabase}
-            liveState={agentUiState}
-            search={feedSearch}
-            emptyLabel={connectionLabel}
-            isInterruptingQueuedMessages={isInterrupting}
             {...(runningLlmRequestId != null &&
             (agentUiState?.queuedUserMessages ?? []).length > 0 &&
             messageComposer?.onInterrupt != null
               ? { onInterruptQueuedMessages: interruptMessage }
               : {})}
+            // Fresh virtualizer state per stream mirror (see AgentFeedView docs).
+            key={store.streamDatabase.databasePath}
+            database={store.streamDatabase}
+            liveState={agentUiState}
+            search={feedSearch}
+            emptyLabel={connectionLabel}
+            isInterruptingQueuedMessages={isInterrupting}
             // The reduced-state row only exists once the processor has
             // checkpointed; an already-subscribed empty stream is "nothing
             // here yet", not "connecting".
@@ -896,13 +902,15 @@ function ProjectStreamRawView({
           </Centered>
         ) : (
           <VirtualEventRows
-            key={eventTypeFilter}
+            // Fresh virtualizer (measurements, end anchor) per stream mirror
+            // and per filter — stale state from another list would misplace
+            // the scroll position.
+            key={`${database.databasePath}:${eventTypeFilter}`}
             database={database}
             emptyLabel={typeFilter == null ? emptyLabel : "No events match this type."}
             eventCount={eventCount}
             expandedOffsets={expandedOffsets}
             onToggleOffset={toggleOffset}
-            resetKey={database}
             scrollElementRef={scrollContainerRef}
             typeFilter={typeFilter}
           />
@@ -918,7 +926,6 @@ function VirtualEventRows({
   eventCount,
   expandedOffsets,
   onToggleOffset,
-  resetKey,
   scrollElementRef,
   typeFilter,
 }: {
@@ -927,10 +934,13 @@ function VirtualEventRows({
   eventCount: number;
   expandedOffsets: ReadonlySet<number>;
   onToggleOffset: (offset: number) => void;
-  resetKey: unknown;
   scrollElementRef: RefObject<HTMLDivElement | null>;
   typeFilter: string | null;
 }) {
+  // TanStack Virtual owns all tail behavior: `anchorTo: "end"` starts the list
+  // at the newest events and `followOnAppend` chases appends while the reader
+  // is pinned to the end (every row is a virtual item, so nothing else needs
+  // to watch the scroll position).
   const virtualizer = useVirtualizer({
     count: eventCount,
     getScrollElement: () => scrollElementRef.current,
@@ -942,17 +952,22 @@ function VirtualEventRows({
     overscan: 24,
     directDomUpdates: true,
   });
-  useVirtualizedTailScroll({
-    count: eventCount,
-    resetKey,
-    scrollElementRef,
-    virtualizer,
-  });
+
+  // Open at the newest events: this component mounts gated behind the count
+  // query, so the virtualizer never sees a 0→N count transition for
+  // followOnAppend to chase (see agent-feed.tsx).
+  useLayoutEffect(() => {
+    virtualizer.scrollToEnd();
+    // useVirtualizer returns one stable instance for the component's lifetime,
+    // so this runs once on mount; later appends are followOnAppend's job.
+  }, [virtualizer]);
 
   const virtualItems = virtualizer.getVirtualItems();
   const first = virtualItems[0]?.index ?? 0;
   const last = virtualItems.at(-1)?.index ?? -1;
-  const windowSize = Math.max(0, last + 1 - first);
+  // Extends past the virtualizer's window so rows appended while pinned to the
+  // tail are already in the snapshot when the count grows (see agent-feed.tsx).
+  const windowSize = Math.max(0, last + 1 + TAIL_PREFETCH_ROWS - first);
   const rowsResult = useStreamQuery(
     database,
     typeFilter == null
@@ -965,7 +980,7 @@ function VirtualEventRows({
          WHERE type = ?
          ORDER BY local_index ASC
          LIMIT ? OFFSET ?`,
-    typeFilter == null ? [first, last + 1] : [typeFilter, windowSize, first],
+    typeFilter == null ? [first, first + windowSize] : [typeFilter, windowSize, first],
   );
   // Retain the last committed rows across range re-queries. When the visible
   // window shifts (append grows the list, or a scroll moves it), the range SQL
@@ -973,9 +988,11 @@ function VirtualEventRows({
   // range's rows. Rendering straight from that pending data blanks every
   // already-visible row to a grey skeleton for a frame. Keeping the last "ok"
   // rows means only genuinely-new indices fall back to a skeleton.
-  const lastRowsRef = useRef<Map<number, StreamEventRow>>(new Map());
+  const lastRowsRef = useRef<Map<number, StreamEventRow> | null>(null);
   const rowsByIndex = useMemo(() => {
-    if (rowsResult.status !== "ok") return lastRowsRef.current;
+    if (rowsResult.status !== "ok") {
+      return lastRowsRef.current ?? new Map<number, StreamEventRow>();
+    }
     const rows = new Map<number, StreamEventRow>();
     rowsResult.data.forEach((row, position) => {
       const index = typeFilter == null ? Number(row.local_index) : first + position;
