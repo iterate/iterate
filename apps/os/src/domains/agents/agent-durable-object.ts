@@ -9,6 +9,7 @@ import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { SlackAgentProcessor } from "../integrations/slack-agent-processor-implementation.ts";
 import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
+import { slackConnectionFromAgentPath } from "../integrations/utils.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
 import { CloudflareAiProcessor } from "./cloudflare-ai-processor-implementation.ts";
 import { OpenAiWsProcessor } from "./openai-ws-processor-implementation.ts";
@@ -53,9 +54,24 @@ export class AgentDurableObject extends DurableObject<Env> {
       new SlackAgentProcessor({
         ...deps,
         callSlackApi: async (method, body) => {
+          // The agent path carries the named connection
+          // (/agents/slack/{connection}/{channel}/ts-{ts}); without it there is
+          // no bot token to call with.
+          const connection = slackConnectionFromAgentPath(this.#name.path);
+          if (connection === null) {
+            console.error(
+              "[slack-agent] no connection segment in agent path; skipping Slack call",
+              {
+                method,
+                path: this.#name.path,
+              },
+            );
+            return;
+          }
           try {
             await callProjectSlackWebApi({
               body,
+              connection,
               method,
               projectId: this.#name.projectId,
             });

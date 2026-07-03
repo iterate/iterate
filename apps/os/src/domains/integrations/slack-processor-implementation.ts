@@ -38,6 +38,7 @@ export class SlackProcessor extends StreamProcessor<
           connection: {
             status: "connected" as const,
             externalId: event.payload.externalId,
+            ...(event.payload.connection == null ? {} : { connection: event.payload.connection }),
             ...(event.payload.teamId == null ? {} : { teamId: event.payload.teamId }),
             ...(event.payload.teamName == null ? {} : { teamName: event.payload.teamName }),
           },
@@ -81,8 +82,14 @@ export class SlackProcessor extends StreamProcessor<
      * meaningful to the agent. Its only job is to ask: can this webhook
      * be keyed as `channel:thread_ts`, and have we already learned where
      * that Slack thread should be forwarded?
+     *
+     * The named connection (folded from the connected fact) qualifies newly
+     * created thread paths. Before the connected fact folds, `connection` is
+     * undefined: route CREATION is skipped (no thread path can be derived
+     * yet), while existing routes in the table still forward fine.
      */
-    const route = slackRouteFromWebhookBody(event.payload.body);
+    const connection = state.connection.connection;
+    const route = slackRouteFromWebhookBody(event.payload.body, connection);
     if (route == null) return;
 
     const streamPath = state.routes[route.key] ?? route.streamPath;
@@ -152,7 +159,10 @@ type SlackRoute = {
   threadTs: string;
 };
 
-function slackRouteFromWebhookBody(body: unknown): SlackRoute | null {
+function slackRouteFromWebhookBody(
+  body: unknown,
+  connection: string | undefined,
+): SlackRoute | null {
   const parsed = z
     .object({
       type: z.literal("event_callback"),
@@ -161,13 +171,16 @@ function slackRouteFromWebhookBody(body: unknown): SlackRoute | null {
     .loose()
     .safeParse(body);
   if (parsed.success) {
-    return slackRouteFromEvent(parsed.data.event);
+    return slackRouteFromEvent(parsed.data.event, connection);
   }
 
-  return slackRouteFromInteraction(body);
+  return slackRouteFromInteraction(body, connection);
 }
 
-function slackRouteFromEvent(slackEvent: Record<string, unknown>): SlackRoute | null {
+function slackRouteFromEvent(
+  slackEvent: Record<string, unknown>,
+  connection: string | undefined,
+): SlackRoute | null {
   const item = readRecord(slackEvent.item);
   if (item != null && typeof item.channel === "string" && typeof item.ts === "string") {
     return {
@@ -196,11 +209,15 @@ function slackRouteFromEvent(slackEvent: Record<string, unknown>): SlackRoute | 
   return routeFromChannelAndThread({
     canCreateRoute: true,
     channel: slackEvent.channel,
+    connection,
     threadTs: slackThreadTs,
   });
 }
 
-function slackRouteFromInteraction(body: unknown): SlackRoute | null {
+function slackRouteFromInteraction(
+  body: unknown,
+  connection: string | undefined,
+): SlackRoute | null {
   const interaction = readRecord(body);
   if (interaction == null) return null;
 
@@ -217,6 +234,7 @@ function slackRouteFromInteraction(body: unknown): SlackRoute | null {
   return routeFromChannelAndThread({
     canCreateRoute: true,
     channel,
+    connection,
     threadTs,
   });
 }
@@ -224,13 +242,23 @@ function slackRouteFromInteraction(body: unknown): SlackRoute | null {
 function routeFromChannelAndThread(input: {
   canCreateRoute: boolean;
   channel: string;
+  connection: string | undefined;
   threadTs: string;
 }): SlackRoute {
   return {
     canCreateRoute: input.canCreateRoute,
     channel: input.channel,
     key: `${input.channel}:${input.threadTs}`,
-    streamPath: slackThreadStreamPath(input),
+    // No connection yet (connected fact not folded) => no derivable thread
+    // path; the caller then only forwards through already-reduced routes.
+    streamPath:
+      input.connection === undefined
+        ? undefined
+        : slackThreadStreamPath({
+            channel: input.channel,
+            connection: input.connection,
+            threadTs: input.threadTs,
+          }),
     threadTs: input.threadTs,
   };
 }

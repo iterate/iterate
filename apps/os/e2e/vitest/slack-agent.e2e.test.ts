@@ -12,11 +12,15 @@
 
 import { expect, test } from "vitest";
 import type { StreamEvent } from "../../src/types.ts";
+import { DurableObjectNameCodec } from "../../src/domains/durable-object-names.ts";
+import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../../src/domains/streams/utils.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
-const SLACK_BOT_TOKEN_SECRET_PATH = "/secrets/integrations/slack/bot-token";
+const CONNECTION = "main-slack";
+const SLACK_BOT_TOKEN_SECRET_PATH = `/secrets/integrations/slack/${CONNECTION}/bot-token`;
+const SLACK_INTEGRATION_STREAM_PATH = `/integrations/slack/${CONNECTION}`;
 const SLACK_TEAM_DIRECTORY_STREAM_PATH = "/integrations/slack-team-directory";
 
 function slackSigningSecret(): string | null {
@@ -85,7 +89,7 @@ test.skipIf(signingSecret === null)(
     const teamId = `T0E2E${RUN_SUFFIX.toUpperCase()}`;
     const channel = "C0E2ESLACK";
     const threadTs = `${Math.floor(Date.now() / 1000)}.000100`;
-    const agentStreamPath = `/agents/slack/${channel.toLowerCase()}/ts-${threadTs.replace(".", "-")}`;
+    const agentStreamPath = `/agents/slack/${CONNECTION}/${channel.toLowerCase()}/ts-${threadTs.replace(".", "-")}`;
 
     using session = withItxSession();
     using root = session.authenticate({ type: "admin-secret", secret: adminSecret() });
@@ -93,7 +97,8 @@ test.skipIf(signingSecret === null)(
     const { projectId } = await project.describe();
 
     // --- Seed a claimed workspace without OAuth: fake bot token secret +
-    // global team directory claim (the storage the OAuth callback writes).
+    // connection stream (router subscription + connected fact) + global team
+    // directory claim (the storage the OAuth callback writes).
     using secret = project.secrets.get(SLACK_BOT_TOKEN_SECRET_PATH);
     await secret.update({
       egress: { urls: ["https://slack.com"] },
@@ -104,11 +109,34 @@ test.skipIf(signingSecret === null)(
       (description) => description.hasMaterial,
       () => "bot token secret material to fold",
     );
+    using seededIntegrationStream = project.streams.get(SLACK_INTEGRATION_STREAM_PATH);
+    await seededIntegrationStream.append(
+      buildDurableObjectProcessorSubscriptionConfiguredEvent({
+        durableObjectName: DurableObjectNameCodec.stringify({
+          projectId,
+          path: SLACK_INTEGRATION_STREAM_PATH,
+        }),
+        idempotencyKey: `slack-router-subscription:${projectId}:${CONNECTION}`,
+        processorSlug: "slack",
+        subscriberType: "project",
+      }),
+      {
+        type: "events.iterate.com/slack/connected",
+        idempotencyKey: `slack:connected:${teamId}:${projectId}`,
+        payload: {
+          connection: CONNECTION,
+          externalId: teamId,
+          projectId,
+          teamId,
+          teamName: `e2e-${RUN_SUFFIX}`,
+        },
+      },
+    );
     using directory = root.streams.get(SLACK_TEAM_DIRECTORY_STREAM_PATH);
     await directory.append({
       type: "events.iterate.com/slack/team-claimed",
       idempotencyKey: `slack-team-claimed:${teamId}:${projectId}`,
-      payload: { projectId, teamId, teamName: `e2e-${RUN_SUFFIX}` },
+      payload: { connection: CONNECTION, projectId, teamId, teamName: `e2e-${RUN_SUFFIX}` },
     });
 
     // --- An unclaimed team's validly-signed event must be ACKed 200 and
@@ -147,9 +175,9 @@ test.skipIf(signingSecret === null)(
     expect(webhookResponse.status).toBe(200);
     expect(await webhookResponse.json()).toMatchObject({ ok: true });
 
-    // --- Router: the webhook lands on /integrations/slack and is forwarded to
-    // the routed agent stream with its thread route fact.
-    using integrationStream = project.streams.get("/integrations/slack");
+    // --- Router: the webhook lands on the connection's integration stream and
+    // is forwarded to the routed agent stream with its thread route fact.
+    using integrationStream = project.streams.get(SLACK_INTEGRATION_STREAM_PATH);
     await waitFor(
       () => integrationStream.getEvents({ afterOffset: 0 }),
       (events) =>

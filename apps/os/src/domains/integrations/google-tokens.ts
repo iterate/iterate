@@ -1,8 +1,8 @@
 // Google OAuth token storage + refresh on itx.
 //
 // Tokens live as AES-GCM ciphertext (SECRET_ENCRYPTION_KEY) inside events on
-// the per-project `/integrations/google` stream — the "ciphertext in stream
-// events" storage home. The stream only carries connect/disconnect/refresh
+// the per-project, per-connection `/integrations/google/{connection}` stream —
+// the "ciphertext in stream events" storage home. The stream only carries connect/disconnect/refresh
 // facts, so folding it per Gmail call is cheap. Refresh needs raw token
 // material (the refresh token goes in a form body, which the secret
 // substitution pipeline does not cover), which is why Google does not use the
@@ -15,8 +15,8 @@ import { integrationStreamStub, readAllStreamEvents } from "./integration-stream
 import {
   GOOGLE_CONNECTED_EVENT_TYPE,
   GOOGLE_DISCONNECTED_EVENT_TYPE,
-  GOOGLE_INTEGRATION_STREAM_PATH,
   GOOGLE_TOKEN_REFRESHED_EVENT_TYPE,
+  integrationConnectionStreamPath,
   readRecord,
   readString,
 } from "./utils.ts";
@@ -78,21 +78,27 @@ function foldGoogleTokenState(events: readonly StreamEvent[]): GoogleTokenState 
   return state;
 }
 
-export async function readGoogleTokenState(projectId: string): Promise<GoogleTokenState> {
-  return foldGoogleTokenState(await readAllStreamEvents(projectId, GOOGLE_INTEGRATION_STREAM_PATH));
+export async function readGoogleTokenState(
+  projectId: string,
+  connection: string,
+): Promise<GoogleTokenState> {
+  return foldGoogleTokenState(
+    await readAllStreamEvents(projectId, integrationConnectionStreamPath("google", connection)),
+  );
 }
 
 /**
- * Current (fresh) Google access token for the project, refreshing through the
- * OAuth token endpoint and recording the rotated ciphertext when the stored
- * one is within the refresh skew of expiry. Mirrors legacy
- * getFreshGoogleAccessToken semantics.
+ * Current (fresh) Google access token for one named connection of the project,
+ * refreshing through the OAuth token endpoint and recording the rotated
+ * ciphertext when the stored one is within the refresh skew of expiry. Mirrors
+ * legacy getFreshGoogleAccessToken semantics.
  */
 export async function getFreshGoogleAccessToken(input: {
   config: AppConfig;
+  connection: string;
   projectId: string;
 }): Promise<string> {
-  const state = await readGoogleTokenState(input.projectId);
+  const state = await readGoogleTokenState(input.projectId, input.connection);
   if (!state.connected || state.encryptedAccessToken === undefined) {
     throw new Error("GmailCapability requires a connected Google account for this project.");
   }
@@ -143,7 +149,10 @@ export async function getFreshGoogleAccessToken(input: {
     throw new Error(`Google access token refresh failed: ${reason}`);
   }
 
-  await integrationStreamStub(input.projectId, GOOGLE_INTEGRATION_STREAM_PATH).append({
+  await integrationStreamStub(
+    input.projectId,
+    integrationConnectionStreamPath("google", input.connection),
+  ).append({
     type: GOOGLE_TOKEN_REFRESHED_EVENT_TYPE,
     payload: {
       encryptedAccessToken: await encryptSecretMaterial(

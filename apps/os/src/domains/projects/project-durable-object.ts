@@ -19,6 +19,7 @@ import { secretErrorResponse, secretReferencePathsFromHeaders } from "../secrets
 import { SlackProcessor } from "../integrations/slack-processor-implementation.ts";
 import { eyesReactionTargetFromWebhookPayload } from "../integrations/slack-agent-processor-implementation.ts";
 import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
+import { connectionFromIntegrationStreamPath } from "../integrations/utils.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 
@@ -49,18 +50,23 @@ export class ProjectDurableObject extends DurableObject<Env> {
   );
 
   // The Slack webhook router. It only ever WAKES on the Durable Object
-  // instance addressed at `/integrations/slack` (the host stream is this DO's
-  // own path stream), where the OAuth connect / project bootstrap configured
+  // instances addressed at `/integrations/slack/{connection}` (the host stream
+  // is this DO's own path stream), where the OAuth connect flow configured
   // its subscription; registering it on every instance is harmless.
   readonly #slackProcessor = this.#processorHost.add((deps) => {
     return new SlackProcessor({
       ...deps,
       acknowledgeRoutedWebhook: async ({ payload }) => {
+        // This DO instance hosts one connection's router stream
+        // (/integrations/slack/{connection}); the path names the bot token.
+        const connection = connectionFromIntegrationStreamPath(this.#name.path);
+        if (connection === null) return;
         const ack = eyesReactionTargetFromWebhookPayload(payload);
         if (ack == null) return;
         try {
           await callProjectSlackWebApi({
             body: { channel: ack.channel, name: "eyes", timestamp: ack.timestamp },
+            connection,
             method: "reactions.add",
             projectId: this.#name.projectId,
           });

@@ -38,18 +38,30 @@ export async function readAllStreamEvents(
 
 /**
  * Folds the deployment-wide Slack team directory: latest claim wins per team,
- * an unclaim from the claiming project clears it.
+ * an unclaim from the claiming project clears it. A claim names the project
+ * AND the connection that owns the team; claim events without a string
+ * `connection` are ignored (clean break — pre-connections claims do not fold).
  */
-export function foldSlackTeamDirectory(events: readonly StreamEvent[]): Map<string, string> {
-  const claims = new Map<string, string>();
+function foldSlackTeamDirectory(
+  events: readonly StreamEvent[],
+): Map<string, { connection: string; projectId: string }> {
+  const claims = new Map<string, { connection: string; projectId: string }>();
   for (const event of events) {
-    const payload = event.payload as { projectId?: unknown; teamId?: unknown };
+    const payload = event.payload as {
+      connection?: unknown;
+      projectId?: unknown;
+      teamId?: unknown;
+    };
     if (typeof payload?.teamId !== "string" || typeof payload?.projectId !== "string") continue;
     if (event.type === SLACK_TEAM_CLAIMED_EVENT_TYPE) {
-      claims.set(payload.teamId, payload.projectId);
+      if (typeof payload.connection !== "string") continue;
+      claims.set(payload.teamId, {
+        connection: payload.connection,
+        projectId: payload.projectId,
+      });
     } else if (
       event.type === SLACK_TEAM_UNCLAIMED_EVENT_TYPE &&
-      claims.get(payload.teamId) === payload.projectId
+      claims.get(payload.teamId)?.projectId === payload.projectId
     ) {
       claims.delete(payload.teamId);
     }
@@ -57,7 +69,9 @@ export function foldSlackTeamDirectory(events: readonly StreamEvent[]): Map<stri
   return claims;
 }
 
-export async function lookupSlackTeamProject(teamId: string): Promise<string | null> {
+export async function lookupSlackTeamClaim(
+  teamId: string,
+): Promise<{ connection: string; projectId: string } | null> {
   const events = await readAllStreamEvents(null, SLACK_TEAM_DIRECTORY_STREAM_PATH);
   return foldSlackTeamDirectory(events).get(teamId) ?? null;
 }

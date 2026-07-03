@@ -139,6 +139,15 @@ export function withOwnedRpcSession<T extends object>(stub: T, ...owned: Disposa
  * existing builtin on the target RpcTarget (e.g. `streams`, `agents`). Runs in
  * the isolate because it inspects the RpcTarget instance, which the DO can't see.
  */
+/**
+ * Built-in roots that are NAMESPACES: providing under them (depth >= 2) is the
+ * supported extension point, not a collision. `integrations` is the exemplar —
+ * built-in integrations are explicit members of its RpcTarget, and everything
+ * else mounts through the capability table at ["integrations", ...] (the
+ * collection's own dynamic fallback forwards unknown names there).
+ */
+const NAMESPACE_BUILTIN_ROOTS: ReadonlySet<string> = new Set(["integrations"]);
+
 export function rejectBuiltinCollision(target: object, path: string[]): void {
   const root = path[0];
   if (!root) return;
@@ -146,6 +155,7 @@ export function rejectBuiltinCollision(target: object, path: string[]): void {
     throw new Error(`cannot provide capability "${root}": it is a reserved ITX path segment`);
   }
   if (root in target) {
+    if (NAMESPACE_BUILTIN_ROOTS.has(root) && path.length >= 2) return;
     throw new Error(`cannot provide capability "${root}": it is already on this ITX target`);
   }
 }

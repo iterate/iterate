@@ -1,6 +1,6 @@
-// Contract for the "slack" webhook-router processor mounted on the per-project
-// `/integrations/slack` stream. Rewritten new-style for itx from
-// the pre-migration slack domain (git history).
+// Contract for the "slack" webhook-router processor mounted on each
+// per-project `/integrations/slack/{connection}` stream. Rewritten new-style
+// for itx from the pre-migration slack domain (git history).
 
 import { z } from "zod";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
@@ -11,7 +11,7 @@ const NullableOptionalString = z.preprocess(
 );
 
 /**
- * Processor mounted on `/integrations/slack`.
+ * Processor mounted on `/integrations/slack/{connection}`.
  *
  * This processor is only a Slack webhook router. It owns the raw Slack webhook
  * event and a reduced `channel:thread_ts -> streamPath` lookup table. It does
@@ -20,7 +20,7 @@ const NullableOptionalString = z.preprocess(
  * The intended flow is:
  *
  * 1. The webhook route appends the raw Slack Events API body to
- *    `/integrations/slack` as `events.iterate.com/slack/webhook-received`.
+ *    `/integrations/slack/{connection}` as `events.iterate.com/slack/webhook-received`.
  * 2. If the webhook is about a Slack thread and that thread has no route yet,
  *    this processor emits `events.iterate.com/slack/thread-route-configured`.
  * 3. This processor forwards the original webhook body verbatim to the routed
@@ -36,6 +36,8 @@ export const SlackProcessorContract = defineProcessorContract({
     connection: z
       .object({
         status: z.enum(["connected", "disconnected"]).default("disconnected"),
+        /** The named connection this router stream belongs to (folded from the connected fact). */
+        connection: z.string().optional(),
         externalId: z.string().optional(),
         teamId: z.string().optional(),
         teamName: z.string().optional(),
@@ -54,6 +56,7 @@ export const SlackProcessorContract = defineProcessorContract({
       description: "Slack OAuth connection was established for this project.",
       payloadSchema: z
         .object({
+          connection: NullableOptionalString,
           externalId: z.string(),
           projectId: z.string(),
           scopes: z.array(z.string()).optional(),
@@ -67,6 +70,7 @@ export const SlackProcessorContract = defineProcessorContract({
       description: "Slack OAuth connection was removed for this project.",
       payloadSchema: z
         .object({
+          connection: NullableOptionalString,
           externalId: z.string().optional(),
           projectId: z.string(),
           teamId: NullableOptionalString,

@@ -2,15 +2,18 @@
 // legacy integration plumbing (pre-migration integration-api.ts, git history, +
 // the pre-purge secrets domain) and re-homed onto itx:
 //
+// Every connection is NAMED: a project can hold several Slack workspaces and
+// several Google accounts, each addressed by a sanitized connection name.
+//
 //   - OAuth state:    stateless HMAC-signed token (oauth-state.ts), no D1.
-//   - Slack token:    itx secret DO `/secrets/integrations/slack/bot-token`
+//   - Slack token:    itx secret DO `/secrets/integrations/slack/{connection}/bot-token`
 //                     (egress-substituted; material never read back).
-//   - Slack facts:    `/integrations/slack` project stream (connected/
-//                     disconnected + the webhook router's events).
+//   - Slack facts:    `/integrations/slack/{connection}` project stream
+//                     (connected/disconnected + the webhook router's events).
 //   - Team routing:   deployment-wide `/integrations/slack-team-directory`
 //                     stream (claimed/unclaimed events, folded per webhook).
-//   - Google tokens:  AES-GCM ciphertext events on `/integrations/google`
-//                     (google-tokens.ts).
+//   - Google tokens:  AES-GCM ciphertext events on
+//                     `/integrations/google/{connection}` (google-tokens.ts).
 //
 // These functions run in itx workers (they need SECRET_ENCRYPTION_KEY and
 // the DO bindings). The app worker's /api/integrations/* routes reach them
@@ -32,27 +35,23 @@ import {
   sha256Base64Url,
   verifyOAuthState,
 } from "./oauth-state.ts";
-import {
-  foldSlackTeamDirectory,
-  integrationStreamStub,
-  lookupSlackTeamProject,
-  readAllStreamEvents,
-} from "./integration-streams.ts";
+import { integrationStreamStub, lookupSlackTeamClaim } from "./integration-streams.ts";
 import { readGoogleTokenState } from "./google-tokens.ts";
 import { callProjectSlackWebApi } from "./slack-api.ts";
 import { SlackProcessorContract } from "./slack-processor-contract.ts";
 import {
   GOOGLE_CONNECTED_EVENT_TYPE,
   GOOGLE_DISCONNECTED_EVENT_TYPE,
-  GOOGLE_INTEGRATION_STREAM_PATH,
-  SLACK_BOT_TOKEN_SECRET_PATH,
   SLACK_CONNECTED_EVENT_TYPE,
   SLACK_DISCONNECTED_EVENT_TYPE,
-  SLACK_INTEGRATION_STREAM_PATH,
   SLACK_TEAM_CLAIMED_EVENT_TYPE,
   SLACK_TEAM_DIRECTORY_STREAM_PATH,
   SLACK_TEAM_UNCLAIMED_EVENT_TYPE,
   SLACK_WEBHOOK_RECEIVED_EVENT_TYPE,
+  connectionFromIntegrationStreamPath,
+  integrationConnectionStreamPath,
+  sanitizeConnectionName,
+  slackBotTokenSecretPath,
 } from "./utils.ts";
 import type { AppConfig } from "~/config.ts";
 
@@ -193,13 +192,21 @@ export async function completeSlackConnect(input: {
   }
 
   const teamId = tokenData.team.id;
-  const existingClaim = await lookupSlackTeamProject(teamId);
-  if (existingClaim !== null && existingClaim !== input.projectId) {
+  const existingClaim = await lookupSlackTeamClaim(teamId);
+  if (existingClaim !== null && existingClaim.projectId !== input.projectId) {
     return { callbackUrl, error: "slack_team_already_claimed", ok: false };
   }
 
+  // Reconnects reuse the claiming connection's name; fresh connects derive it
+  // from the workspace domain (or the team id when the domain sanitizes away).
+  const connection =
+    existingClaim?.connection ??
+    (sanitizeConnectionName(tokenData.team.domain ?? teamId) ||
+      `team-${sanitizeConnectionName(teamId)}`);
+
   await recordSlackConnection({
     accessToken: tokenData.access_token,
+    connection,
     projectId: input.projectId,
     scopes: slack.scopes,
     teamDomain: tokenData.team.domain,
@@ -218,31 +225,34 @@ export async function completeSlackConnect(input: {
  */
 async function recordSlackConnection(input: {
   accessToken: string;
+  connection: string;
   projectId: string;
   scopes: readonly string[];
   teamDomain?: string;
   teamId: string;
   teamName: string;
 }): Promise<void> {
+  const streamPath = integrationConnectionStreamPath("slack", input.connection);
   await itxEnv.SECRET.getByName(
     DurableObjectNameCodec.stringify({
       projectId: input.projectId,
-      path: SLACK_BOT_TOKEN_SECRET_PATH,
+      path: slackBotTokenSecretPath(input.connection),
     }),
   ).update({
     egress: { urls: ["https://slack.com"] },
     material: input.accessToken,
   });
 
-  await integrationStreamStub(input.projectId, SLACK_INTEGRATION_STREAM_PATH).append(
-    // Arm the webhook router processor on this stream (idempotent; also armed
-    // at project create by the project processor).
+  await integrationStreamStub(input.projectId, streamPath).append(
+    // Arm the webhook router processor on this connection's stream. Connect
+    // time is THE arming point — connection streams are born here, not at
+    // project create.
     buildDurableObjectProcessorSubscriptionConfiguredEvent({
       durableObjectName: DurableObjectNameCodec.stringify({
         projectId: input.projectId,
-        path: SLACK_INTEGRATION_STREAM_PATH,
+        path: streamPath,
       }),
-      idempotencyKey: `slack-router-subscription:${input.projectId}`,
+      idempotencyKey: `slack-router-subscription:${input.projectId}:${input.connection}`,
       processorSlug: SlackProcessorContract.slug,
       subscriberType: "project",
     }),
@@ -250,6 +260,7 @@ async function recordSlackConnection(input: {
       type: SLACK_CONNECTED_EVENT_TYPE,
       idempotencyKey: `slack:connected:${input.teamId}:${input.projectId}`,
       payload: {
+        connection: input.connection,
         externalId: input.teamId,
         projectId: input.projectId,
         scopes: [...input.scopes],
@@ -264,6 +275,7 @@ async function recordSlackConnection(input: {
     type: SLACK_TEAM_CLAIMED_EVENT_TYPE,
     idempotencyKey: `slack-team-claimed:${input.teamId}:${input.projectId}`,
     payload: {
+      connection: input.connection,
       projectId: input.projectId,
       teamId: input.teamId,
       teamName: input.teamName,
@@ -331,10 +343,19 @@ export async function completeGoogleConnect(input: {
     return { callbackUrl, error: "google_userinfo_failed", ok: false };
   }
 
+  // The Gmail local part names the connection; opaque Google ids are the
+  // fallback when the email is missing or sanitizes away.
+  const connection =
+    sanitizeConnectionName(userInfo.email?.split("@")[0] ?? "") ||
+    `google-${sanitizeConnectionName(userInfo.id)}`;
   const scopes = tokenData.scope?.split(" ") ?? google.scopes;
-  await integrationStreamStub(input.projectId, GOOGLE_INTEGRATION_STREAM_PATH).append({
+  await integrationStreamStub(
+    input.projectId,
+    integrationConnectionStreamPath("google", connection),
+  ).append({
     type: GOOGLE_CONNECTED_EVENT_TYPE,
     payload: {
+      connection,
       email: userInfo.email,
       encryptedAccessToken: await encryptSecretMaterial(
         tokenData.access_token,
@@ -367,11 +388,12 @@ export async function completeGoogleConnect(input: {
 // ---------------------------------------------------------------------------
 
 export async function getConnectionStatus(input: {
+  connection: string;
   projectId: string;
   provider: IntegrationProvider;
 }): Promise<IntegrationConnectionStatus> {
   if (input.provider === "google") {
-    const state = await readGoogleTokenState(input.projectId);
+    const state = await readGoogleTokenState(input.projectId, input.connection);
     return {
       connected: state.connected,
       displayName: state.email ?? state.name ?? null,
@@ -391,7 +413,7 @@ export async function getConnectionStatus(input: {
   const project = itxEnv.PROJECT.getByName(
     DurableObjectNameCodec.stringify({
       projectId: input.projectId,
-      path: SLACK_INTEGRATION_STREAM_PATH,
+      path: integrationConnectionStreamPath("slack", input.connection),
     }),
   );
   const snapshot = await (await project.slackProcessor).snapshot();
@@ -409,6 +431,7 @@ export async function getConnectionStatus(input: {
 
 export async function disconnectProvider(input: {
   config: AppConfig;
+  connection: string;
   projectId: string;
   provider: IntegrationProvider;
 }): Promise<{ success: true }> {
@@ -418,6 +441,7 @@ export async function disconnectProvider(input: {
     // the secret-substituted egress path works without reading material).
     await callProjectSlackWebApi({
       body: {},
+      connection: input.connection,
       method: "auth.revoke",
       projectId: input.projectId,
     }).catch(() => null);
@@ -426,14 +450,18 @@ export async function disconnectProvider(input: {
     await itxEnv.SECRET.getByName(
       DurableObjectNameCodec.stringify({
         projectId: input.projectId,
-        path: SLACK_BOT_TOKEN_SECRET_PATH,
+        path: slackBotTokenSecretPath(input.connection),
       }),
     )
       .update({ egress: { urls: [] } })
       .catch(() => null);
-    await integrationStreamStub(input.projectId, SLACK_INTEGRATION_STREAM_PATH).append({
+    await integrationStreamStub(
+      input.projectId,
+      integrationConnectionStreamPath("slack", input.connection),
+    ).append({
       type: SLACK_DISCONNECTED_EVENT_TYPE,
       payload: {
+        connection: input.connection,
         externalId: status.externalId ?? undefined,
         projectId: input.projectId,
         teamId: (status.metadata.teamId as string | undefined) ?? undefined,
@@ -450,7 +478,7 @@ export async function disconnectProvider(input: {
     return { success: true };
   }
 
-  const state = await readGoogleTokenState(input.projectId);
+  const state = await readGoogleTokenState(input.projectId, input.connection);
   if (state.connected && state.encryptedAccessToken !== undefined) {
     const token = await decryptSecretMaterial(
       state.encryptedAccessToken,
@@ -463,11 +491,38 @@ export async function disconnectProvider(input: {
       }).catch(() => null);
     }
   }
-  await integrationStreamStub(input.projectId, GOOGLE_INTEGRATION_STREAM_PATH).append({
+  await integrationStreamStub(
+    input.projectId,
+    integrationConnectionStreamPath("google", input.connection),
+  ).append({
     type: GOOGLE_DISCONNECTED_EVENT_TYPE,
     payload: { projectId: input.projectId },
   });
   return { success: true };
+}
+
+/**
+ * Lists the project's named integration connections by reading the project
+ * root processor's stream catalogue: every `/integrations/{slack|google}/{connection}`
+ * stream the project has created is one connection entry.
+ */
+export async function listIntegrationConnections(
+  projectId: string,
+): Promise<{ connection: string; integration: string; path: string }[]> {
+  const project = itxEnv.PROJECT.getByName(
+    DurableObjectNameCodec.stringify({ projectId, path: "/" }),
+  );
+  const snapshot = await (await project.processor).snapshot();
+  const streams = (snapshot.state as { streams?: { path: string }[] }).streams ?? [];
+  const entries: { connection: string; integration: string; path: string }[] = [];
+  for (const stream of streams) {
+    const connection = connectionFromIntegrationStreamPath(stream.path);
+    if (connection === null) continue;
+    const integration = stream.path.split("/")[2]!;
+    if (integration !== "slack" && integration !== "google") continue;
+    entries.push({ connection, integration, path: stream.path });
+  }
+  return entries;
 }
 
 // ---------------------------------------------------------------------------
@@ -475,10 +530,11 @@ export async function disconnectProvider(input: {
 // ---------------------------------------------------------------------------
 
 /**
- * Routes one validly-signed Slack webhook body to the project that claimed its
- * team, by appending it to that project's `/integrations/slack` stream. The
- * unclaimed case reports `ignored` so the webhook route can ACK-and-drop —
- * see handleVerifiedSlackWebhook in integration-api.ts for why that MUST be a
+ * Routes one validly-signed Slack webhook body to the project + connection
+ * that claimed its team, by appending it to that connection's
+ * `/integrations/slack/{connection}` stream. The unclaimed case reports
+ * `ignored` so the webhook route can ACK-and-drop — see
+ * handleVerifiedSlackWebhook in integration-api.ts for why that MUST be a
  * 200.
  */
 export async function routeSlackWebhook(input: {
@@ -486,11 +542,13 @@ export async function routeSlackWebhook(input: {
   payload: Record<string, unknown>;
   teamId: string;
 }): Promise<RouteSlackWebhookResult> {
-  const events = await readAllStreamEvents(null, SLACK_TEAM_DIRECTORY_STREAM_PATH);
-  const projectId = foldSlackTeamDirectory(events).get(input.teamId);
-  if (projectId === undefined) return { ignored: "team-not-claimed", ok: true };
+  const claim = await lookupSlackTeamClaim(input.teamId);
+  if (claim === null) return { ignored: "team-not-claimed", ok: true };
 
-  await integrationStreamStub(projectId, SLACK_INTEGRATION_STREAM_PATH).append({
+  await integrationStreamStub(
+    claim.projectId,
+    integrationConnectionStreamPath("slack", claim.connection),
+  ).append({
     type: SLACK_WEBHOOK_RECEIVED_EVENT_TYPE,
     idempotencyKey:
       typeof input.payload.event_id === "string"
@@ -504,5 +562,5 @@ export async function routeSlackWebhook(input: {
       body: input.payload,
     },
   });
-  return { ok: true, projectId };
+  return { connection: claim.connection, ok: true, projectId: claim.projectId };
 }

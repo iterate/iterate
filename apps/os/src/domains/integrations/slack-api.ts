@@ -1,7 +1,7 @@
 // Slack Web API access for itx.
 //
-// The project's Slack bot token lives in an itx secret Durable Object
-// (`/secrets/integrations/slack/bot-token`). Calls go through the project
+// Each named Slack connection's bot token lives in an itx secret Durable
+// Object (`/secrets/integrations/slack/{connection}/bot-token`). Calls go through the project
 // egress door with a `getSecret({ path: ... })` placeholder in the
 // authorization header, so token material never leaves the secret DO's
 // substitution pipeline and every outbound attempt lands on the secret's
@@ -11,7 +11,7 @@
 
 import { itxEnv } from "../../env.ts";
 import { projectStub } from "../projects/egress.ts";
-import { SLACK_BOT_TOKEN_SECRET_PATH } from "./utils.ts";
+import { slackBotTokenSecretPath } from "./utils.ts";
 import { parseConfig } from "~/config.ts";
 
 type SlackWebApiResult = { error?: string; ok?: boolean } & Record<string, unknown>;
@@ -34,18 +34,19 @@ async function callSlackWebApi(input: {
 }
 
 /**
- * Slack Web API call authorized by the project's stored bot token, without
- * ever reading the token material: the request carries a secret reference
- * placeholder and traverses the project egress door, which substitutes it in
- * the secret Durable Object. Falls back to the Slack integration bot token
- * when the project has no stored token.
+ * Slack Web API call authorized by one named connection's stored bot token,
+ * without ever reading the token material: the request carries a secret
+ * reference placeholder and traverses the project egress door, which
+ * substitutes it in the secret Durable Object. Falls back to the Slack
+ * integration bot token when the connection has no stored token.
  */
 export async function callProjectSlackWebApi(input: {
   body: Record<string, unknown>;
+  connection: string;
   method: string;
   projectId: string;
 }): Promise<SlackWebApiResult> {
-  const placeholder = `getSecret({ path: "${SLACK_BOT_TOKEN_SECRET_PATH}" })`;
+  const placeholder = `getSecret({ path: "${slackBotTokenSecretPath(input.connection)}" })`;
   const request = new Request(`https://slack.com/api/${input.method}`, {
     body: JSON.stringify(input.body),
     headers: {

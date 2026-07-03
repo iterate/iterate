@@ -1,7 +1,8 @@
 // Unit tests for Google OAuth token storage + refresh (ports the meaningful
 // cases from the legacy src/domains/secrets/oauth.test.ts onto the next
-// implementation). Tokens live as AES-GCM ciphertext in events on the per-project
-// `/integrations/google` stream, so the seam here is an in-memory STREAM
+// implementation). Tokens live as AES-GCM ciphertext in events on the
+// per-project, per-connection `/integrations/google/{connection}` stream, so
+// the seam here is an in-memory STREAM
 // namespace behind the mocked `itxEnv` plus a stubbed global fetch — no
 // workerd, no network.
 
@@ -11,8 +12,8 @@ import { decryptSecretMaterial, encryptSecretMaterial } from "../secrets/crypto.
 import { getFreshGoogleAccessToken } from "./google-tokens.ts";
 import {
   GOOGLE_CONNECTED_EVENT_TYPE,
-  GOOGLE_INTEGRATION_STREAM_PATH,
   GOOGLE_TOKEN_REFRESHED_EVENT_TYPE,
+  integrationConnectionStreamPath,
 } from "./utils.ts";
 import { parseConfig } from "~/config.ts";
 
@@ -75,8 +76,9 @@ vi.mock("../../env.ts", () => ({
 }));
 
 const PROJECT_ID = "prj_test";
+const CONNECTION = "jonas";
 const GOOGLE_STREAM_NAME = DurableObjectNameCodec.stringify(
-  { path: GOOGLE_INTEGRATION_STREAM_PATH, projectId: PROJECT_ID },
+  { path: integrationConnectionStreamPath("google", CONNECTION), projectId: PROJECT_ID },
   { allowNullProjectId: true },
 );
 
@@ -97,7 +99,11 @@ describe("getFreshGoogleAccessToken", () => {
     });
 
     await expect(
-      getFreshGoogleAccessToken({ config: testConfig(), projectId: PROJECT_ID }),
+      getFreshGoogleAccessToken({
+        config: testConfig(),
+        connection: CONNECTION,
+        projectId: PROJECT_ID,
+      }),
     ).resolves.toBe("stored-access-token");
     expect(fetchMock).not.toHaveBeenCalled();
     // Nothing new was recorded on the integration stream.
@@ -123,7 +129,11 @@ describe("getFreshGoogleAccessToken", () => {
     });
 
     await expect(
-      getFreshGoogleAccessToken({ config: testConfig(), projectId: PROJECT_ID }),
+      getFreshGoogleAccessToken({
+        config: testConfig(),
+        connection: CONNECTION,
+        projectId: PROJECT_ID,
+      }),
     ).resolves.toBe("refreshed-access-token");
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -160,7 +170,11 @@ describe("getFreshGoogleAccessToken", () => {
     // serves the rotated token without touching the network again.
     fetchMock.mockClear();
     await expect(
-      getFreshGoogleAccessToken({ config: testConfig(), projectId: PROJECT_ID }),
+      getFreshGoogleAccessToken({
+        config: testConfig(),
+        connection: CONNECTION,
+        projectId: PROJECT_ID,
+      }),
     ).resolves.toBe("refreshed-access-token");
     expect(fetchMock).not.toHaveBeenCalled();
   });
