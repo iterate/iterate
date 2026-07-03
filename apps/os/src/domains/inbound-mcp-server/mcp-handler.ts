@@ -64,6 +64,8 @@ const EXEC_JS_DESCRIPTION = [
   "Use JavaScript for what separate calls cannot do: Promise.all to fan out independent requests concurrently, map/filter to trim big responses.",
   "",
   "Discovering the surface: `await itx.__describe()` lists the project's capabilities (`children` is the member map) — and __describe() works on every node, including provided capabilities; `await itx.examples.list()` is a catalogue of known-good snippets (streams, repo, workers, secrets, provideCapability, MCP, ...) and `await itx.examples.get({ id })` returns one with full code — copy working patterns from there. Web search is built in via Exa: `await itx.mcp.exa.web_search_exa({ query, numResults })`, page reading via `itx.mcp.exa.web_fetch_exa({ urls })`.",
+  "",
+  'Repo edits without a sandbox: use `const repo = itx.repos.get(vars.repoPath ?? "/")`, inspect with `await repo.readFile({ path })`, then apply targeted changes with `await repo.edit({ path, message, oldString, newString })`. `oldString` must match exactly once unless `replaceAll: true`; use `commitFiles` for new files or batch/full-file writes. Reach for `itx.sandboxes.get(...)` only when you need shell commands, tests, package managers, or servers.',
 ].join("\n");
 
 const mcpCorsHeaders = {
