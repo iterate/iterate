@@ -143,7 +143,7 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     assert: (result, _ctx, expect) => {
       expect(result).toMatchObject({ exitCode: 0, os: "Linux" });
       expect((result as { repoFiles: string[] }).repoFiles).toEqual(
-        expect.arrayContaining(["README.md", "worker.js"]),
+        expect.arrayContaining(["README.md", "worker.ts"]),
       );
     },
   },

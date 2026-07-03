@@ -23,7 +23,7 @@ const PROJECT_SLUG = `itx-e2e-${RUN_SUFFIX}`;
 
 // One project, created here (the harness's job); every example then connects
 // INTO it and gets straight to work. The project-worker runtime needs the
-// catalogue baked into the project's worker.js, so the lazy setup commits
+// catalogue baked into the project's worker.ts, so the lazy setup commits
 // that once.
 const MATRIX_EXAMPLES = ITX_EXAMPLES.filter(
   (example) =>
