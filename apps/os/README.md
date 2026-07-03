@@ -21,9 +21,10 @@ It combines:
   and one worker per Durable Object class. See
   [docs/worker-topology.md](./docs/worker-topology.md).
 
-Slack and Google integrations are being rebuilt on itx (in flight);
-their pre-migration source was held in a quarantine folder during the
-migration (deleted once the integrations landed; git history has it).
+Integrations are connections at fully qualified paths
+(`/integrations/<slug>/<connection>`): built-ins (Slack, Google) are named
+members of `itx.integrations`, and projects mount their own through the
+capability table. See [docs/integrations.md](./docs/integrations.md).
 
 ## How To Use It
 
@@ -198,6 +199,7 @@ test coverage removed without replacement is
 ## Read Next
 
 - [itx README](./src/README.md)
+- [Integrations](./docs/integrations.md)
 - [Worker Topology](./docs/worker-topology.md)
 - [Architecture And Operations](./docs/architecture-and-operations.md)
 - [Debugging Deployed OS Workers](./docs/debugging-deployed-os-workers.md)
