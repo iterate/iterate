@@ -22,6 +22,12 @@ import type { Itx } from "~/types.ts";
 
 type Connection = Awaited<ReturnType<Itx["integrations"]["getConnection"]>>;
 
+/** One list() entry enriched with the built-in connection status (null for
+ * provided integrations, whose status lives in project code). */
+type ConnectionEntry = Awaited<ReturnType<Itx["integrations"]["list"]>>[number] & {
+  status: Connection | null;
+};
+
 const Search = z.object({
   error: z.string().optional(),
 });
@@ -53,16 +59,26 @@ function ProjectIntegrationsContent() {
   const queryClient = useQueryClient();
   const connections = useItxQuery({
     key: ["integrations", project.slug],
-    query: async (itx): Promise<{ slack: Connection; google: Connection }> => {
-      const [slack, google] = await Promise.all([
-        itx.integrations.getConnection({ provider: "slack" }),
-        itx.integrations.getConnection({ provider: "google" }),
-      ]);
-      return { slack, google };
+    query: async (itx): Promise<ConnectionEntry[]> => {
+      const entries = await itx.integrations.list();
+      return await Promise.all(
+        entries.map(async (entry) => ({
+          ...entry,
+          status:
+            entry.source === "builtin" &&
+            (entry.integration === "slack" || entry.integration === "google")
+              ? await itx.integrations.getConnection({
+                  connection: entry.connection,
+                  provider: entry.integration,
+                })
+              : null,
+        })),
+      );
     },
   });
-  const slackConnection = connections.slack;
-  const googleConnection = connections.google;
+  const slackConnections = (connections ?? []).filter((entry) => entry.integration === "slack");
+  const googleConnections = (connections ?? []).filter((entry) => entry.integration === "google");
+  const providedConnections = (connections ?? []).filter((entry) => entry.source === "provided");
   const oauthErrorLabel = search.error ? search.error.replaceAll("_", " ") : null;
 
   const startSlack = useMutation({
@@ -80,7 +96,8 @@ function ProjectIntegrationsContent() {
     onError: (error) => toast.error(`Failed to connect Slack: ${error.message}`),
   });
   const disconnectSlack = useMutation({
-    mutationFn: async () => await itx.integrations.disconnect({ provider: "slack" }),
+    mutationFn: async (connection: string) =>
+      await itx.integrations.disconnect({ connection, provider: "slack" }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["itx", "integrations", project.slug] });
       toast.success("Slack disconnected");
@@ -102,7 +119,8 @@ function ProjectIntegrationsContent() {
     onError: (error) => toast.error(`Failed to connect Google: ${error.message}`),
   });
   const disconnectGoogle = useMutation({
-    mutationFn: async () => await itx.integrations.disconnect({ provider: "google" }),
+    mutationFn: async (connection: string) =>
+      await itx.integrations.disconnect({ connection, provider: "google" }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["itx", "integrations", project.slug] });
       toast.success("Google disconnected");
@@ -127,29 +145,25 @@ function ProjectIntegrationsContent() {
           <ItemContent className="min-w-0">
             <ItemTitle>Slack</ItemTitle>
             <ItemDescription>
-              {slackConnection?.connected
-                ? `Connected to ${slackConnection.displayName ?? slackConnection.externalId}`
+              {slackConnections.length > 0
+                ? `${slackConnections.length} connected workspace${slackConnections.length === 1 ? "" : "s"}`
                 : "Connect a Slack workspace to receive project webhooks and use Slack API tools."}
             </ItemDescription>
-            <IntegrationMetadata connection={slackConnection} provider="slack" />
+            {slackConnections.map((entry) => (
+              <ConnectionRow
+                key={entry.path}
+                entry={entry}
+                provider="slack"
+                disconnecting={disconnectSlack.isPending}
+                onDisconnect={() => disconnectSlack.mutate(entry.connection)}
+              />
+            ))}
           </ItemContent>
           <ItemActions>
-            {slackConnection?.connected ? (
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={disconnectSlack.isPending}
-                onClick={() => disconnectSlack.mutate()}
-              >
-                {disconnectSlack.isPending ? <Spinner /> : null}
-                Disconnect
-              </Button>
-            ) : (
-              <Button size="sm" disabled={startSlack.isPending} onClick={() => startSlack.mutate()}>
-                {startSlack.isPending ? <Spinner /> : null}
-                Connect Slack
-              </Button>
-            )}
+            <Button size="sm" disabled={startSlack.isPending} onClick={() => startSlack.mutate()}>
+              {startSlack.isPending ? <Spinner /> : null}
+              Connect Slack
+            </Button>
           </ItemActions>
         </Item>
 
@@ -160,37 +174,78 @@ function ProjectIntegrationsContent() {
           <ItemContent className="min-w-0">
             <ItemTitle>Google</ItemTitle>
             <ItemDescription>
-              {googleConnection?.connected
-                ? `Connected as ${googleConnection.displayName ?? googleConnection.externalId}`
-                : "Connect Google for Gmail, Calendar, Docs, Sheets, and Drive API tools."}
+              {googleConnections.length > 0
+                ? `${googleConnections.length} connected account${googleConnections.length === 1 ? "" : "s"}`
+                : "Connect Google for Gmail API tools."}
             </ItemDescription>
-            <IntegrationMetadata connection={googleConnection} provider="google" />
+            {googleConnections.map((entry) => (
+              <ConnectionRow
+                key={entry.path}
+                entry={entry}
+                provider="google"
+                disconnecting={disconnectGoogle.isPending}
+                onDisconnect={() => disconnectGoogle.mutate(entry.connection)}
+              />
+            ))}
           </ItemContent>
           <ItemActions>
-            {googleConnection?.connected ? (
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={disconnectGoogle.isPending}
-                onClick={() => disconnectGoogle.mutate()}
-              >
-                {disconnectGoogle.isPending ? <Spinner /> : null}
-                Disconnect
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                disabled={startGoogle.isPending}
-                onClick={() => startGoogle.mutate()}
-              >
-                {startGoogle.isPending ? <Spinner /> : null}
-                Connect Google
-              </Button>
-            )}
+            <Button size="sm" disabled={startGoogle.isPending} onClick={() => startGoogle.mutate()}>
+              {startGoogle.isPending ? <Spinner /> : null}
+              Connect Google
+            </Button>
           </ItemActions>
         </Item>
+
+        {providedConnections.length > 0 ? (
+          <Item variant="outline" className="items-start justify-between gap-4 p-4">
+            <ItemMedia variant="icon">
+              <Circle className="size-4" />
+            </ItemMedia>
+            <ItemContent className="min-w-0">
+              <ItemTitle>Project integrations</ItemTitle>
+              <ItemDescription>
+                Mounted by this project through provideCapability; manage them in project code.
+              </ItemDescription>
+              <div className="mt-2 grid gap-1.5 text-xs text-muted-foreground">
+                {providedConnections.map((entry) => (
+                  <IntegrationMetadataRow
+                    key={entry.path}
+                    label={entry.integration}
+                    value={entry.path}
+                  />
+                ))}
+              </div>
+            </ItemContent>
+          </Item>
+        ) : null}
       </ItemGroup>
     </section>
+  );
+}
+
+function ConnectionRow({
+  disconnecting,
+  entry,
+  onDisconnect,
+  provider,
+}: {
+  disconnecting: boolean;
+  entry: ConnectionEntry;
+  onDisconnect: () => void;
+  provider: "google" | "slack";
+}) {
+  return (
+    <div className="mt-2 flex items-start justify-between gap-2 rounded-md border p-2">
+      <div className="min-w-0">
+        <div className="truncate text-xs font-medium">{entry.connection}</div>
+        <div className="truncate text-xs text-muted-foreground">{entry.path}</div>
+        <IntegrationMetadata connection={entry.status ?? undefined} provider={provider} />
+      </div>
+      <Button size="sm" variant="outline" disabled={disconnecting} onClick={onDisconnect}>
+        {disconnecting ? <Spinner /> : null}
+        Disconnect
+      </Button>
+    </div>
   );
 }
 

@@ -123,9 +123,9 @@ export interface Itx extends ItxCapabilityHost {
   egress: ProjectEgress;
   /** Read-only catalogue of known-good itx script snippets (\`list()\`, \`get({ id })\`). */
   examples: ItxExampleCatalog;
-  /** Gmail REST proxy for the project's connected Google account. */
-  gmail: GmailCapability;
-  /** Slack/Google connection status, OAuth start/complete, disconnect. */
+  /** The integrations collection: built-in integrations as named members
+   * (\`itx.integrations.slack["main-slack"].chat.postMessage(...)\`), provided
+   * integrations through the capability table, management verbs, \`list()\`. */
   integrations: ProjectIntegrations;
   mcp: McpClientCollection;
   openapi: OpenApiCollection;
@@ -133,8 +133,6 @@ export interface Itx extends ItxCapabilityHost {
   repo: Repo;
   repos: ProjectRepoCollection;
   secrets: SecretCollection;
-  /** Slack Web API proxy for the project's connected workspace (itx.slack.chat.postMessage(...)). */
-  slack: SlackCapability;
   streams: ProjectStreamCollection;
   worker: ProjectWorker;
   workers: DynamicWorkerCollection;
@@ -157,22 +155,38 @@ export interface Ai {
 }
 
 // -----------------------------------------------------------------------------
-// Integrations (Slack + Google) — the Phase 12 surface.
+// Integrations. The unit is a CONNECTION at a fully qualified path
+// \`/integrations/<slug>/<connection>\` — one integration (slack) can hold many
+// connections (main-slack, support-slack). Built-in integrations (code shipped
+// with the OS deployment) are named members of the collection; any other name
+// resolves through the ordinary ITX capability table, so a project adds its
+// own integration with \`provideCapability({ path: ["integrations", ...] })\` —
+// data, not deployment.
 // -----------------------------------------------------------------------------
 
 export type IntegrationProvider = "google" | "slack";
 
 /**
- * Slack Web API proxy. \`request\` is the explicit form; dotted Web API method
- * paths (\`itx.slack.chat.postMessage({...})\`) resolve through the dynamic
- * path-call fallback onto \`invokeCapability\`.
+ * One connected Slack workspace. \`request\` is the explicit form; dotted Web
+ * API method paths (\`itx.integrations.slack["main-slack"].chat.postMessage(...)\`)
+ * resolve through the dynamic path-call fallback onto \`invokeCapability\`.
  */
-export interface SlackCapability {
+export interface SlackConnection {
   invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
   request(input: {
     body?: Record<string, unknown>;
     method: string;
   }): Promise<Record<string, unknown>>;
+}
+
+/**
+ * The built-in Slack integration: a catalog of this project's connected
+ * workspaces, addressed by connection name. There is no implicit connection —
+ * \`itx.integrations.slack.chat\` is an error, not a default.
+ */
+export interface SlackIntegration {
+  connection(name: string): SlackConnection;
+  invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
 }
 
 export type GmailRequestInput = {
@@ -183,7 +197,8 @@ export type GmailRequestInput = {
   query?: Record<string, boolean | number | string | null | undefined>;
 };
 
-/** Gmail REST proxy (\`itx.gmail.request({ path: "/users/me/messages" })\`). */
+/** Gmail REST proxy for one Google connection
+ * (\`itx.integrations.google["jonas"].gmail.request({ path: "/users/me/messages" })\`). */
 export interface GmailCapability {
   request(input: GmailRequestInput): Promise<{
     data: unknown;
@@ -193,6 +208,17 @@ export interface GmailCapability {
   }>;
 }
 
+/** One connected Google account. */
+export interface GoogleConnection {
+  gmail: GmailCapability;
+}
+
+/** The built-in Google integration: connected accounts by connection name. */
+export interface GoogleIntegration {
+  connection(name: string): GoogleConnection;
+  invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
+}
+
 export type IntegrationConnectionStatus = {
   connected: boolean;
   displayName: string | null;
@@ -200,12 +226,41 @@ export type IntegrationConnectionStatus = {
   metadata: Record<string, unknown>;
 };
 
+/** One entry of {@link ProjectIntegrations.list}. */
+export type IntegrationConnectionListEntry = {
+  /** The connection name; \`"*"\` for an integration-level provided mount that
+   * serves every connection name beneath it. */
+  connection: string;
+  integration: string;
+  /** The fully qualified connection path, e.g. \`/integrations/slack/main-slack\`. */
+  path: string;
+  /** Where the integration's code lives: shipped with the deployment, or
+   * mounted through the capability table. */
+  source: "builtin" | "provided";
+};
+
 export type CompleteConnectResult =
   | { callbackUrl: string | null; ok: true }
   | { callbackUrl: string | null; error: string; ok: false };
 
-/** Project-scoped integration management (connection status, OAuth, disconnect). */
+/**
+ * The \`itx.integrations\` collection.
+ *
+ * Built-in integrations are explicit members (\`slack\`, \`google\`) whose code
+ * ships with the deployment; unknown names fall through the dynamic path-call
+ * fallback into the ITX capability table under the \`integrations\` prefix, so
+ * \`itx.integrations.waitrose.mum.searchProducts("milk")\` reaches whatever the
+ * project mounted at \`["integrations", "waitrose", "mum"]\`. Management verbs
+ * (OAuth, disconnect) are connection-scoped.
+ */
 export interface ProjectIntegrations {
+  google: GoogleIntegration;
+  slack: SlackIntegration;
+  /** Every connection the project holds: built-in connections found on their
+   * \`/integrations/<slug>/<connection>\` journals plus provided mounts from the
+   * capability table. */
+  list(): Promise<IntegrationConnectionListEntry[]>;
+  invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
   completeGoogleConnect(input: {
     code: string;
     state: string;
@@ -216,8 +271,14 @@ export interface ProjectIntegrations {
     state: string;
     userId: string | null;
   }): Promise<CompleteConnectResult>;
-  disconnect(input: { provider: IntegrationProvider }): Promise<{ success: true }>;
-  getConnection(input: { provider: IntegrationProvider }): Promise<IntegrationConnectionStatus>;
+  disconnect(input: {
+    connection: string;
+    provider: IntegrationProvider;
+  }): Promise<{ success: true }>;
+  getConnection(input: {
+    connection: string;
+    provider: IntegrationProvider;
+  }): Promise<IntegrationConnectionStatus>;
   startOAuthFlow(input: {
     callbackUrl?: string;
     provider: IntegrationProvider;
@@ -228,7 +289,7 @@ export interface ProjectIntegrations {
 }
 
 export type RouteSlackWebhookResult =
-  | { ok: true; projectId: string }
+  | { connection: string; ok: true; projectId: string }
   | { ignored: "team-not-claimed"; ok: true };
 
 /** Deployment-wide integration ingress: webhook routing across projects. */

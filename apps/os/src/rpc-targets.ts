@@ -37,6 +37,7 @@ import {
   completeSlackConnect,
   disconnectProvider,
   getConnectionStatus,
+  listIntegrationConnections,
   routeSlackWebhook,
   startOAuthFlow,
 } from "./domains/integrations/connect-flows.ts";
@@ -102,9 +103,13 @@ import type {
   DynamicWorkerCollection,
   DynamicWorkerRef,
   GmailCapability,
+  GmailRequestInput,
+  GoogleConnection,
+  GoogleIntegration,
   ProjectIntegrations,
   SessionIntegrations,
-  SlackCapability,
+  SlackConnection,
+  SlackIntegration,
 } from "./types.ts";
 
 export class StreamRpcTarget extends RpcTarget implements Stream {
@@ -427,25 +432,27 @@ class AiRpcTarget extends RpcTarget implements Ai {
 }
 
 /**
- * The `itx.slack` built-in: a Slack Web API proxy for the project's connected
- * workspace. Dotted Web API method paths (`itx.slack.chat.postMessage({...})`)
- * resolve through the dynamic path-call fallback onto `invokeCapability`;
- * authorization uses the project's stored bot token through the secret
- * substitution egress pipeline (domains/integrations/slack-api.ts).
+ * One connected Slack workspace: `itx.integrations.slack["main-slack"]`.
+ * Dotted Web API method paths (`....chat.postMessage({...})`) resolve through
+ * the dynamic path-call fallback onto `invokeCapability`; authorization uses
+ * the connection's stored bot token through the secret substitution egress
+ * pipeline (domains/integrations/slack-api.ts).
  */
-class SlackRpcTarget extends RpcTarget implements SlackCapability {
-  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+class SlackConnectionRpcTarget extends RpcTarget implements SlackConnection {
+  constructor(readonly props: { auth: ItxAuth; connection: string; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
     return withInvokeCapabilityFallback(this);
   }
 
-  /** itx path-call surface: itx.slack.<Slack Web API method path>(body). */
-  async invokeCapability(call: Parameters<SlackCapability["invokeCapability"]>[0]) {
+  /** Path-call surface: itx.integrations.slack.<connection>.<Web API method path>(body). */
+  async invokeCapability(call: Parameters<SlackConnection["invokeCapability"]>[0]) {
     const { args = [], path } = call;
     const method = path.join(".");
     if (!method) {
-      throw new Error("itx.slack expected a Slack Web API method path.");
+      throw new Error(
+        `itx.integrations.slack["${this.props.connection}"] expected a Slack Web API method path.`,
+      );
     }
     if (args.length > 1) {
       throw new Error(`Slack calls are unary; ${method} received ${args.length} args.`);
@@ -456,46 +463,176 @@ class SlackRpcTarget extends RpcTarget implements SlackCapability {
     });
   }
 
-  async request(input: Parameters<SlackCapability["request"]>[0]) {
+  async request(input: Parameters<SlackConnection["request"]>[0]) {
     return await callProjectSlackWebApi({
       body: input.body ?? {},
+      connection: this.props.connection,
       method: input.method,
       projectId: this.props.projectId,
     });
   }
 }
 
-/** The `itx.gmail` built-in: Gmail REST proxy for the project's Google account. */
-class GmailRpcTarget extends RpcTarget implements GmailCapability {
+/** The built-in Slack integration: connections by name, no implicit default. */
+class SlackIntegrationRpcTarget extends RpcTarget implements SlackIntegration {
   constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+    return withInvokeCapabilityFallback(this);
+  }
+
+  connection(name: string) {
+    return new SlackConnectionRpcTarget({
+      auth: this.props.auth,
+      connection: name,
+      projectId: this.props.projectId,
+    });
+  }
+
+  /** Dotted sugar: itx.integrations.slack["main-slack"].chat.postMessage(...). */
+  async invokeCapability(call: Parameters<SlackIntegration["invokeCapability"]>[0]) {
+    const { args = [], path } = call;
+    const [connection, ...rest] = path;
+    // Every Slack Web API method path has two segments (chat.postMessage,
+    // auth.test), so fewer than two after the first segment means the caller
+    // skipped the connection — the pre-connections address shape.
+    if (!connection || rest.length < 2) {
+      throw new Error(
+        'itx.integrations.slack expected a connection name (e.g. itx.integrations.slack["main-slack"].chat.postMessage(...)); use itx.integrations.list() to see connections.',
+      );
+    }
+    return await this.connection(connection).invokeCapability({ args, path: rest });
+  }
+}
+
+/** One connected Google account: `itx.integrations.google["jonas"]`. */
+class GoogleConnectionRpcTarget extends RpcTarget implements GoogleConnection {
+  constructor(readonly props: { auth: ItxAuth; connection: string; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  async request(request: Parameters<GmailCapability["request"]>[0]) {
-    const token = await getFreshGoogleAccessToken({
-      config: parseConfig(env),
+  get gmail(): GmailCapability {
+    const { connection, projectId } = this.props;
+    return {
+      request: async (request) => {
+        const token = await getFreshGoogleAccessToken({
+          config: parseConfig(env),
+          connection,
+          projectId,
+        });
+        return await callGmailApi({ request, token });
+      },
+    };
+  }
+}
+
+/** The built-in Google integration: connections by name, no implicit default. */
+class GoogleIntegrationRpcTarget extends RpcTarget implements GoogleIntegration {
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+    return withInvokeCapabilityFallback(this);
+  }
+
+  connection(name: string) {
+    return new GoogleConnectionRpcTarget({
+      auth: this.props.auth,
+      connection: name,
       projectId: this.props.projectId,
     });
-    return await callGmailApi({ request, token });
+  }
+
+  /** Dotted sugar: itx.integrations.google["jonas"].gmail.request(...). */
+  async invokeCapability(call: Parameters<GoogleIntegration["invokeCapability"]>[0]) {
+    const { args = [], path } = call;
+    const [connection, ...rest] = path;
+    // gmail.request is two segments; fewer after the first segment means the
+    // caller skipped the connection (the pre-connections itx.gmail shape).
+    if (!connection || rest.length < 2) {
+      throw new Error(
+        'itx.integrations.google expected a connection name (e.g. itx.integrations.google["jonas"].gmail.request(...)); use itx.integrations.list() to see connections.',
+      );
+    }
+    if (rest[0] !== "gmail" || rest[1] !== "request" || rest.length !== 2) {
+      throw new Error(
+        `itx.integrations.google["${connection}"] exposes gmail.request(...); got "${rest.join(".")}".`,
+      );
+    }
+    return await this.connection(connection).gmail.request(args[0] as GmailRequestInput);
   }
 }
 
 /**
- * The `itx.integrations` built-in: connection status, OAuth start/complete,
- * and disconnect for slack/google. The complete* methods are called by the
- * app worker's OAuth callback routes (/api/integrations/<provider>/callback);
- * their authority is the HMAC-signed OAuth state minted by startOAuthFlow,
- * verified itx-side.
+ * The `itx.integrations` collection. Built-in integrations (code shipped with
+ * the deployment) are explicit members; any other name falls through the
+ * dynamic path-call fallback into the ITX capability table under the
+ * `integrations` prefix, so a project extends the collection with ordinary
+ * `provideCapability({ path: ["integrations", ...] })` — data, not deployment.
+ * The complete* methods are called by the app worker's OAuth callback routes
+ * (/api/integrations/<provider>/callback); their authority is the HMAC-signed
+ * OAuth state minted by startOAuthFlow, verified itx-side.
  */
 class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
   constructor(readonly props: { auth: ItxAuth; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
+    return withInvokeCapabilityFallback(this);
+  }
+
+  get #itx() {
+    return env.ITX.getByName(
+      DurableObjectNameCodec.stringify({ path: "/", projectId: this.props.projectId }),
+    );
+  }
+
+  get slack(): SlackIntegration {
+    return new SlackIntegrationRpcTarget({
+      auth: this.props.auth,
+      projectId: this.props.projectId,
+    });
+  }
+
+  get google(): GoogleIntegration {
+    return new GoogleIntegrationRpcTarget({
+      auth: this.props.auth,
+      projectId: this.props.projectId,
+    });
+  }
+
+  /** Non-member names resolve through the project capability table under the
+   * `integrations` prefix — the provided-integration lane. */
+  invokeCapability(call: Parameters<ProjectIntegrations["invokeCapability"]>[0]) {
+    const { args = [], path } = call;
+    return this.#itx.invokeCapability({ args, path: ["integrations", ...path] });
+  }
+
+  async list() {
+    const [builtinConnections, mounted] = await Promise.all([
+      listIntegrationConnections(this.props.projectId),
+      this.#itx.describeCapabilities(),
+    ]);
+    return [
+      ...builtinConnections.map((entry) => ({ ...entry, source: "builtin" as const })),
+      ...mounted
+        .filter((capability) => capability.path[0] === "integrations" && capability.path[1])
+        .map((capability) => ({
+          // A depth-2 mount is integration-level: one recipe serving every
+          // connection name beneath it ("*").
+          connection: capability.path[2] ?? "*",
+          integration: capability.path[1]!,
+          path: `/${capability.path.join("/")}`,
+          source: "provided" as const,
+        })),
+    ];
   }
 
   getConnection(input: Parameters<ProjectIntegrations["getConnection"]>[0]) {
-    return getConnectionStatus({ projectId: this.props.projectId, provider: input.provider });
+    return getConnectionStatus({
+      connection: input.connection,
+      projectId: this.props.projectId,
+      provider: input.provider,
+    });
   }
 
   startOAuthFlow(input: Parameters<ProjectIntegrations["startOAuthFlow"]>[0]) {
@@ -531,6 +668,7 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
   disconnect(input: Parameters<ProjectIntegrations["disconnect"]>[0]) {
     return disconnectProvider({
       config: parseConfig(env),
+      connection: input.connection,
       projectId: this.props.projectId,
       provider: input.provider,
     });
@@ -675,7 +813,7 @@ class AgentRpcTarget extends RpcTarget implements Agent {
     return await this.#itx.runScript(code);
   }
 
-  async invokeCapability({ args = [], path }: Parameters<SlackCapability["invokeCapability"]>[0]) {
+  async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
     return await this.#itx.invokeCapability({ args, path });
   }
 }
@@ -1050,7 +1188,6 @@ const PROJECT_BUILTIN_CAPABILITY_PATHS = [
   "agents",
   "egress",
   "examples",
-  "gmail",
   "integrations",
   "mcp",
   "openapi",
@@ -1058,7 +1195,6 @@ const PROJECT_BUILTIN_CAPABILITY_PATHS = [
   "repo",
   "repos",
   "secrets",
-  "slack",
   "streams",
   "worker",
   "workers",
@@ -1066,10 +1202,15 @@ const PROJECT_BUILTIN_CAPABILITY_PATHS = [
 
 const PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS: readonly CapabilityDescription[] =
   PROJECT_BUILTIN_CAPABILITY_PATHS.map((path) => {
-    if (path === "gmail") {
+    if (path === "integrations") {
       return {
-        instructions:
-          'Gmail REST proxy for the project Google account. Available to Slack agents as itx.gmail when Google is connected; check itx.integrations.getConnection({ provider: "google" }), then call itx.gmail.request({ path: "/users/me/messages", query: { maxResults, q: "in:inbox" } }). Paths are relative to https://gmail.googleapis.com/gmail/v1.',
+        instructions: [
+          "The project's integration connections, each at a fully qualified path /integrations/<slug>/<connection>.",
+          "await itx.integrations.list() enumerates every connection (built-in and provided).",
+          'Slack: await itx.integrations.slack["<connection>"].chat.postMessage({ channel, thread_ts, text }) — any Slack Web API method as a dotted path.',
+          'Gmail: await itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults, q: "in:inbox" } }) — paths relative to https://gmail.googleapis.com/gmail/v1.',
+          'Other names resolve through the project capability table: provideCapability({ path: ["integrations", "<slug>", "<connection>"], ... }) adds a project-owned integration with the same address shape.',
+        ].join("\n"),
         path: [path],
         type: "builtin" as const,
         types: [
@@ -1080,26 +1221,13 @@ const PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS: readonly CapabilityDescription[] 
           "  path: string;",
           "  query?: Record<string, boolean | number | string | null | undefined>;",
           "};",
-          "interface GmailCapability {",
-          "  request(input: GmailRequestInput): Promise<{ data: unknown; headers: Record<string, string>; status: number; statusText: string }>;",
+          "interface GoogleConnection {",
+          "  gmail: { request(input: GmailRequestInput): Promise<{ data: unknown; headers: Record<string, string>; status: number; statusText: string }> };",
+          "}",
+          "interface SlackConnection {",
+          "  request(input: { body?: Record<string, unknown>; method: string }): Promise<Record<string, unknown>>;",
           "}",
         ].join("\n"),
-      };
-    }
-    if (path === "integrations") {
-      return {
-        instructions:
-          'Project integration management. Use itx.integrations.getConnection({ provider: "google" }) before Gmail work and { provider: "slack" } before Slack API work.',
-        path: [path],
-        type: "builtin" as const,
-      };
-    }
-    if (path === "slack") {
-      return {
-        instructions:
-          "Slack Web API proxy for the connected project workspace. Slack thread agents reply with itx.slack.chat.postMessage({ channel, thread_ts, text }).",
-        path: [path],
-        type: "builtin" as const,
       };
     }
     return { path: [path], type: "builtin" as const };
@@ -1230,22 +1358,8 @@ export class ItxRpcTarget extends RpcTarget implements Itx {
     return new ItxExampleCatalogRpcTarget();
   }
 
-  get gmail(): GmailCapability {
-    return new GmailRpcTarget({
-      auth: this.props.auth,
-      projectId: this.props.projectId,
-    });
-  }
-
   get integrations(): ProjectIntegrations {
     return new IntegrationsRpcTarget({
-      auth: this.props.auth,
-      projectId: this.props.projectId,
-    });
-  }
-
-  get slack(): SlackCapability {
-    return new SlackRpcTarget({
       auth: this.props.auth,
       projectId: this.props.projectId,
     });
@@ -1682,7 +1796,7 @@ class McpClientRpcTarget extends RpcTarget {
     return withInvokeCapabilityFallback(this);
   }
 
-  async invokeCapability({ args = [], path }: Parameters<SlackCapability["invokeCapability"]>[0]) {
+  async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
     return await callMcpToolPath({
       args,
       config: this.props.config,
@@ -1731,7 +1845,7 @@ class OpenApiRpcTarget extends RpcTarget {
     return withInvokeCapabilityFallback(this);
   }
 
-  async invokeCapability({ args = [], path }: Parameters<SlackCapability["invokeCapability"]>[0]) {
+  async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
     const operationId = path[0];
     if (!operationId) throw new Error("OpenAPI operation calls need an operationId path.");
     if (path.length > 1) {
