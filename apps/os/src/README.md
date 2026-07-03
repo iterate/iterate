@@ -84,9 +84,9 @@ Itx (ProjectRpcTarget) — "itx" by convention; capabilityHost.path selects the 
 │                                                       get("/") mounts project-wide
 ├─ provideCapability / revokeCapability               shortcuts → capabilityHost
 ├─ describe()                                         project identity + full inventory
-├─ streams repos repo agents secrets workers worker   project built-ins, resolved in the
-│  egress ai gmail slack integrations mcp openapi     isolate (never shadowable)
-│  examples processor
+├─ streams repos repo agents sandboxes secrets       project built-ins, resolved in the
+│  workers worker egress ai gmail slack integrations  isolate (never shadowable)
+│  mcp openapi examples processor debug
 ├─ agent? chat?                                       DERIVED getters: present only when
 │                                                       capabilityHost.path is /agents/…
 └─ <anything else>                                    DYNAMIC: proxy fallback compiles
@@ -175,11 +175,11 @@ mutating the original payload.
 ## Capabilities
 
 Built-ins are explicit members of the `Itx` interface (`streams`, `repos`,
-`repo`, `agents`, `secrets`, `workers`, `worker`, `egress`, `mcp`, `openapi`,
-`ai`, `examples`, `processor`, plus `agent`/`chat` on agent scopes). A call like
-`itx.streams.get("/x")` resolves in the isolate without touching the capability-host
-Durable Object; the trade-off is that a mounted capability can never shadow a
-built-in name.
+`repo`, `agents`, `sandboxes`, `secrets`, `workers`, `worker`, `egress`,
+`mcp`, `openapi`, `ai`, `examples`, `processor`, `debug`, plus `agent`/`chat`
+on agent scopes). A call like `itx.streams.get("/x")` resolves in the isolate
+without touching the capability-host Durable Object; the trade-off is that a
+mounted capability can never shadow a built-in name.
 
 Everything else is dynamic: unknown dotted paths fall through to the mounted
 capability table (longest-prefix resolution in the capability-host processor, backed by

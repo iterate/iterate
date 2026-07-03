@@ -212,11 +212,20 @@ export function createInvokeCapabilityPathProxy(
  * the built-in always wins. If we find we need shadowable built-ins a lot, we'd move
  * resolution behind the DO and pay that round trip; for now this keeps the hot path free.
  */
-export function withInvokeCapabilityFallback<T extends object & InvokeCapabilityTarget>(
+export function withInvokeCapabilityFallback<T extends object>(
   target: T,
-  options: { isReserved?: (segment: string) => boolean } = {},
+  options: {
+    isReserved?: (segment: string) => boolean;
+    /**
+     * Where unknown dotted paths dispatch. Defaults to the target itself, which
+     * must then have `invokeCapability`. The itx/agent surfaces pass their
+     * capability host instead, so they need no pass-through method of their own.
+     */
+    invoker?: InvokeCapabilityTarget;
+  } = {},
 ): T {
   const isReserved = options.isReserved ?? isReservedDynamicPathSegment;
+  const invoker = options.invoker ?? (target as unknown as InvokeCapabilityTarget);
 
   return new Proxy(target, {
     get(target, key) {
@@ -229,7 +238,7 @@ export function withInvokeCapabilityFallback<T extends object & InvokeCapability
         return value;
       }
       if (isReserved(key)) return undefined;
-      return createInvokeCapabilityPathProxy(target, [key], isReserved);
+      return createInvokeCapabilityPathProxy(invoker, [key], isReserved);
     },
     getOwnPropertyDescriptor(target, key) {
       // Unknown dynamic roots must not look like instance fields to Cap'n Web.

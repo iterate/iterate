@@ -16,6 +16,7 @@ import {
 } from "./project-directory.ts";
 import { deploymentStatusesFromProbes } from "./project-deployment-status.ts";
 import { timedStep } from "./lib/step-timing.ts";
+import { buildProjectStreamViewerUrl } from "./lib/stream-viewer-url.ts";
 import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
 import { normalizeAgentPath } from "./domains/agents/utils.ts";
@@ -31,6 +32,7 @@ import { ProjectProcessorContract } from "./domains/projects/project-processor-c
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
 import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "./domains/repos/utils.ts";
+import { normalizeCloudflareSandboxPath } from "./domains/sandboxes/cloudflare/utils.ts";
 import { normalizeSecretPath } from "./domains/secrets/utils.ts";
 import {
   completeGoogleConnect,
@@ -92,6 +94,7 @@ import type {
   RevokeCapabilityInput,
   Repo,
   RepoCollection,
+  SandboxCollection,
   Secret,
   SecretCollection,
   StatelessDynamicWorkerRef,
@@ -262,7 +265,11 @@ class RepoRpcTarget extends RpcTarget implements Repo {
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  get durableObjectStub() {
+  // Private on purpose (unlike StreamRpcTarget's public stub getter): the
+  // Repo Durable Object carries `gitAccess()`, whose write tokens must not be
+  // reachable through the public capnweb surface — itx callers get file-level
+  // methods only.
+  get #durableObjectStub() {
     return env.REPO.getByName(
       DurableObjectNameCodec.stringify(
         {
@@ -283,23 +290,23 @@ class RepoRpcTarget extends RpcTarget implements Repo {
   }
 
   whoami() {
-    return this.durableObjectStub.whoami();
+    return this.#durableObjectStub.whoami();
   }
 
   commitFiles(input: Parameters<Repo["commitFiles"]>[0]) {
-    return this.durableObjectStub.commitFiles(input);
+    return this.#durableObjectStub.commitFiles(input);
   }
 
   listFiles() {
-    return this.durableObjectStub.listFiles();
+    return this.#durableObjectStub.listFiles();
   }
 
   readFile(input: Parameters<Repo["readFile"]>[0]) {
-    return this.durableObjectStub.readFile(input);
+    return this.#durableObjectStub.readFile(input);
   }
 
   get processor() {
-    return this.durableObjectStub.processor;
+    return this.#durableObjectStub.processor;
   }
 }
 
@@ -361,6 +368,36 @@ class AgentCollectionRpcTarget extends RpcTarget implements AgentCollection {
 
   list() {
     return projectProcessorState(this.props.projectId).then((state) => state.agents);
+  }
+}
+
+/**
+ * The `itx.sandboxes` built-in. `get(path)` returns the sandbox Durable
+ * Object's own RPC stub — deliberately NO RpcTarget wrapper, so the caller
+ * sees exactly what the `@cloudflare/sandbox` SDK exposes and new SDK methods
+ * need no forwarding code here. Confinement is by name: the stub is minted
+ * from this project's id plus the validated `/sandboxes/cloudflare/...`
+ * path, after the same project-access assert every collection performs.
+ */
+class SandboxCollectionRpcTarget extends RpcTarget implements SandboxCollection {
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  async get(path: string) {
+    const normalized = normalizeCloudflareSandboxPath(path);
+    const stub = env.SANDBOX.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: this.props.projectId,
+        path: normalized,
+      }),
+    );
+    // Container runtimes do not reliably surface `ctx.id.name`, so the
+    // sandbox learns who it is here, before the stub reaches the caller —
+    // see CloudflareSandboxDurableObject.ensureIdentity.
+    await stub.ensureIdentity({ path: normalized, projectId: this.props.projectId });
+    return stub;
   }
 }
 
@@ -602,7 +639,7 @@ class AgentRpcTarget extends RpcTarget implements Agent {
     super();
     props.auth.assertCanAccessProject(props.projectId);
     normalizeAgentPath(props.capabilityHost.path);
-    return withInvokeCapabilityFallback(this);
+    return withInvokeCapabilityFallback(this, { invoker: props.capabilityHost });
   }
 
   get #path() {
@@ -672,10 +709,6 @@ class AgentRpcTarget extends RpcTarget implements Agent {
 
   whoami() {
     return `agent ${this.props.projectId}:${this.#path}`;
-  }
-
-  async invokeCapability({ args = [], path }: Parameters<SlackCapability["invokeCapability"]>[0]) {
-    return await this.props.capabilityHost.invokeCapability({ args, path });
   }
 }
 
@@ -1057,6 +1090,9 @@ export class CapabilityHostRpcTarget extends RpcTarget implements CapabilityHost
     super();
     props.auth.assertCanAccessProject(props.projectId);
     props.path = normalizePath(props.path);
+    // The host itself gets the dotted-path fallback too: host.foo.bar(x) is
+    // host.invokeCapability({ path: ["foo", "bar"], args: [x] }).
+    return withInvokeCapabilityFallback(this);
   }
 
   get path() {
@@ -1122,6 +1158,7 @@ const PROJECT_BUILTIN_CAPABILITY_PATHS = [
   "agents",
   "capabilityHost",
   "capabilityHosts",
+  "debug",
   "egress",
   "examples",
   "gmail",
@@ -1131,6 +1168,7 @@ const PROJECT_BUILTIN_CAPABILITY_PATHS = [
   "processor",
   "repo",
   "repos",
+  "sandboxes",
   "secrets",
   "slack",
   "streams",
@@ -1184,6 +1222,14 @@ const PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS: readonly CapabilityDescription[] 
         type: "builtin" as const,
       };
     }
+    if (path === "debug") {
+      return {
+        instructions:
+          "Returns formatted OS debug info for this itx scope, including a dashboard stream link.",
+        path: [path],
+        type: "builtin" as const,
+      };
+    }
     if (path === "slack") {
       return {
         instructions:
@@ -1227,7 +1273,7 @@ export class ProjectRpcTarget extends RpcTarget implements Itx {
   constructor(readonly props: ProjectRpcTargetProps) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
-    return withInvokeCapabilityFallback(this);
+    return withInvokeCapabilityFallback(this, { invoker: props.capabilityHost });
   }
 
   get projectId() {
@@ -1249,6 +1295,28 @@ export class ProjectRpcTarget extends RpcTarget implements Itx {
       ...project,
       capabilities: [...PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS, ...mountedCapabilities],
     };
+  }
+
+  async debug() {
+    const [project, config] = await Promise.all([
+      readProjectById(env.PROJECT_DIRECTORY, this.props.projectId).catch(() => null),
+      Promise.resolve(parseConfig(env)),
+    ]);
+    const streamPath = this.props.capabilityHost.path;
+    const streamUrl =
+      project?.slug == null
+        ? (config.baseUrl ?? "https://os.iterate.com")
+        : buildProjectStreamViewerUrl({
+            baseUrl: config.baseUrl,
+            projectSlug: project.slug,
+            streamPath,
+          });
+
+    return [
+      `*Debug:* <${streamUrl}|open stream>`,
+      `Path: \`${streamPath}\``,
+      `Project: \`${project?.slug ?? this.props.projectId}\``,
+    ].join("\n");
   }
 
   get processor() {
@@ -1298,10 +1366,6 @@ export class ProjectRpcTarget extends RpcTarget implements Itx {
 
   revokeCapability(input: Parameters<Itx["revokeCapability"]>[0]) {
     return this.props.capabilityHost.revokeCapability(input);
-  }
-
-  invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
-    return this.props.capabilityHost.invokeCapability({ args, path });
   }
 
   get streams() {
@@ -1367,6 +1431,13 @@ export class ProjectRpcTarget extends RpcTarget implements Itx {
     });
   }
 
+  get sandboxes() {
+    return new SandboxCollectionRpcTarget({
+      auth: this.props.auth,
+      projectId: this.props.projectId,
+    });
+  }
+
   get secrets() {
     return new SecretCollectionRpcTarget({
       auth: this.props.auth,
@@ -1405,6 +1476,7 @@ export class ProjectRpcTarget extends RpcTarget implements Itx {
 const ITX_SURFACE_GUARDS: readonly object[] = [
   ProjectRpcTarget.prototype,
   AgentRpcTarget.prototype,
+  CapabilityHostRpcTarget.prototype,
   { props: true },
 ];
 

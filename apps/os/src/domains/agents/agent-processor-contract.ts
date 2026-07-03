@@ -121,7 +121,7 @@ const LlmRequestPolicy = z
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "0.2.0",
+  version: "0.3.0",
   description:
     "Maintains model-visible web-chat history and requests LLM work from a provider processor.",
   stateSchema: z.object({
@@ -149,6 +149,13 @@ export const AgentProcessorContract = defineProcessorContract({
       .nullable()
       .default(null),
     pendingTriggerOffset: z.number().int().positive().nullable().default(null),
+    /**
+     * Count of finished LLM request lifecycles (completed or cancelled).
+     * llm-request-scheduled idempotency is keyed on this, so every trigger
+     * derivation between two finishes — however delivery batches the inputs —
+     * collapses into one scheduled event at the stream's append dedup layer.
+     */
+    requestGeneration: z.number().int().nonnegative().default(0),
     scriptExecutionsCompleted: z.array(z.string()).default([]),
   }),
   events: {

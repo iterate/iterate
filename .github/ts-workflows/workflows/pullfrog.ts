@@ -28,15 +28,15 @@ export default {
   },
   jobs: {
     pullfrog: {
-      ...utils.runsOnDepotUbuntu,
+      ...utils.runsOnDepotImage,
       steps: [
-        ...utils.setupRepo.map((step) => {
+        ...utils.setupFromImage().map((step) => {
           if (step.name === "Checkout code") {
             step = { ...step, with: { ...step.with, "fetch-depth": 1 } };
           }
           return step;
         }),
-        ...utils.setupDoppler({ config: "dev", project: "_shared" }),
+        ...utils.setupDopplerBaked({ config: "dev", project: "_shared" }),
         // see https://docs.pullfrog.com/getting-started#manual-workflow-setup for more env var options - these need to be in the env for the Pullfrog action to work
         utils.setDopplerEnvVar("ANTHROPIC_API_KEY"),
         utils.setDopplerEnvVar("OPENAI_API_KEY"),

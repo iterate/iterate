@@ -16,26 +16,27 @@ Everything is declared in one place: [`apps/os/alchemy.run.ts`](../alchemy.run.t
 ## The workers
 
 `<n>` is the stage worker name (`os-prd`, `os-preview-N`, `os-dev-<user>`).
-Ten workers: ingress, app, api, and seven itx Durable Object workers.
+Eleven workers: ingress, app, api, and eight engine Durable Object workers.
 
-| Worker                | Entry                            | Owns                                                                                        |
-| --------------------- | -------------------------------- | ------------------------------------------------------------------------------------------- |
-| `<n>` (ingress)       | `src/workers/ingress.ts`         | **All routes.** One config parse, then a service-binding forward                            |
-| `<n>-app`             | `src/workers/app.ts`             | Dashboard: TanStack Start SSR + assets + server functions, inbound MCP `/api/mcp`           |
-| `<n>-api`             | `src/workers/api.ts`             | os' one API: capnweb `/api` (+ `/api/admin-cookie`), `/__itx_e2e` fixtures, project ingress |
-| `<n>-stream`          | `src/workers/stream.ts`          | `StreamDurableObject` (journals, event streams)                                             |
-| `<n>-capability-host` | `src/workers/capability-host.ts` | `CapabilityHostDurableObject` (capability hosts)                                            |
-| `<n>-project`         | `src/workers/project.ts`         | `ProjectDurableObject` + `ProjectEgressEntrypoint`                                          |
-| `<n>-agent`           | `src/workers/agent.ts`           | `AgentDurableObject` (agent + LLM provider processors)                                      |
-| `<n>-repo`            | `src/workers/repo.ts`            | `RepoDurableObject` (git over Cloudflare Artifacts)                                         |
-| `<n>-secret`          | `src/workers/secret.ts`          | `SecretDurableObject`                                                                       |
-| `<n>-worker`          | `src/workers/worker.ts`          | `StatefulWorkerDurableObject` (stateful dynamic workers)                                    |
+| Worker                | Entry                            | Owns                                                                                          |
+| --------------------- | -------------------------------- | --------------------------------------------------------------------------------------------- |
+| `<n>` (ingress)       | `src/workers/ingress.ts`         | **All routes.** One config parse, then a service-binding forward                              |
+| `<n>-app`             | `src/workers/app.ts`             | Dashboard: TanStack Start SSR + assets + server functions, inbound MCP `/api/mcp`             |
+| `<n>-api`             | `src/workers/api.ts`             | os' one API: capnweb `/api` (+ `/api/admin-cookie`), `/__itx_e2e` fixtures, project ingress   |
+| `<n>-stream`          | `src/workers/stream.ts`          | `StreamDurableObject` (journals, event streams)                                               |
+| `<n>-capability-host` | `src/workers/capability-host.ts` | `CapabilityHostDurableObject` (capability hosts)                                              |
+| `<n>-project`         | `src/workers/project.ts`         | `ProjectDurableObject` + `ProjectEgressEntrypoint`                                            |
+| `<n>-agent`           | `src/workers/agent.ts`           | `AgentDurableObject` (agent + LLM provider processors)                                        |
+| `<n>-repo`            | `src/workers/repo.ts`            | `RepoDurableObject` (git over Cloudflare Artifacts)                                           |
+| `<n>-sandbox`         | `src/workers/sandbox.ts`         | `CloudflareSandboxDurableObject` (`@cloudflare/sandbox` containers; Dockerfile.sandbox image) |
+| `<n>-secret`          | `src/workers/secret.ts`          | `SecretDurableObject`                                                                         |
+| `<n>-worker`          | `src/workers/worker.ts`          | `StatefulWorkerDurableObject` (stateful dynamic workers)                                      |
 
-All itx workers (api + the seven DO workers) deploy with the **same
-binding set** (`itxBindings` in `alchemy.run.ts`; the matching type is
+All engine workers (api + the eight DO workers) deploy with the **same
+binding set** (`engineBindings` in `alchemy.run.ts`; the matching type is
 `src/env.ts`): every DO namespace, `AI`, `LOADER` (Worker Loader),
 `ARTIFACTS`, `PROJECT_DIRECTORY` (the slug→id KV cache), and the secret
-encryption key. Any itx worker can host any capability — exactly like the
+encryption key. Any engine worker can host any capability — exactly like the
 single-worker implementation they came from — and each re-exports the shared loopback
 entrypoints (`ItxEntrypoint`, `ProjectEgressEntrypoint`) so `ctx.exports`
 resolves identically in all of them. They all carry `nodejs_compat` (repo git
