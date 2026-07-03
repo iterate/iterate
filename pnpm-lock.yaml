@@ -48,6 +48,9 @@ patchedDependencies:
   '@better-auth/oauth-provider@1.6.9':
     hash: 4f7aa4c17b3fb54c9267438a45532785482d1faef950d7bac29b608cde75ab80
     path: patches/@better-auth__oauth-provider@1.6.9.patch
+  '@cloudflare/worker-bundler@0.2.1':
+    hash: 32bc585471fe714f1fe1916a740bca9c47e37668f4ec7ad78d6e70496f4122d1
+    path: patches/@cloudflare__worker-bundler@0.2.1.patch
   '@cloudflare/workers-types@4.20260621.1':
     hash: ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2
     path: patches/@cloudflare__workers-types@4.20260621.1.patch
@@ -489,7 +492,7 @@ importers:
         version: 0.3.6(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@tanstack/ai@0.10.2)(ai@6.0.159(zod@4.3.6))(zod@4.3.6)
       '@cloudflare/worker-bundler':
         specifier: 0.2.1
-        version: 0.2.1
+        version: 0.2.1(patch_hash=32bc585471fe714f1fe1916a740bca9c47e37668f4ec7ad78d6e70496f4122d1)
       '@codemirror/autocomplete':
         specifier: ^6.20.1
         version: 6.20.1
@@ -14825,7 +14828,7 @@ snapshots:
       - utf-8-validate
       - workerd
 
-  '@cloudflare/worker-bundler@0.2.1':
+  '@cloudflare/worker-bundler@0.2.1(patch_hash=32bc585471fe714f1fe1916a740bca9c47e37668f4ec7ad78d6e70496f4122d1)':
     dependencies:
       '@typescript/vfs': 1.6.4(typescript@6.0.3)
       es-module-lexer: 2.1.0

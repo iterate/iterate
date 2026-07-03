@@ -86,6 +86,11 @@ export default class ProjectWorker extends WorkerEntrypoint<ProjectWorkerEnv> {
     const client = new WebClient(slackConfig.token ?? undefined, {
       ...(slackConfig.slackApiUrl === null ? {} : { slackApiUrl: slackConfig.slackApiUrl }),
     });
+    // The SDK's axios defaults to its node-http adapter, whose response
+    // handling hangs under the Workers runtime; the fetch adapter rides the
+    // platform's native fetch (and therefore project egress) instead.
+    (client as unknown as { axios: { defaults: { adapter: string } } }).axios.defaults.adapter =
+      "fetch";
     return rpcCapabilityTree(client) as Record<string, unknown>;
   }
 

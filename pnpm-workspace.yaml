@@ -107,6 +107,18 @@ patchedDependencies:
   # a non-never RPC return fallback for opaque stream event payloads (the
   # patch originated in minimal-itx-v4, now transplanted into apps/os).
   "@cloudflare/workers-types@4.20260621.1": "patches/@cloudflare__workers-types@4.20260621.1.patch"
+  # Four small resolver fixes for dynamic worker builds (all upstreamable):
+  # 1. extension-probe legacy `main` fields (form-data ships
+  #    `"main": "./lib/form_data"`, which was silently externalized);
+  # 2. let a virtual module's self-named import fall through to normal
+  #    resolution, so a "node:os" virtual module can re-export the real
+  #    external node:os for CommonJS require interop;
+  # 3. pass the `conditions` option through to the bundling plugin's package
+  #    resolver (it always used the built-in ["import", "browser"] default);
+  # 4. resolve require-call imports with the "require" exports condition, so a
+  #    CJS `require("eventemitter3")` gets the CJS build instead of an ESM
+  #    namespace object (p-queue does `class extends require(...)`).
+  "@cloudflare/worker-bundler@0.2.1": "patches/@cloudflare__worker-bundler@0.2.1.patch"
   "alchemy@0.83.3": "patches/alchemy@0.83.3.patch"
   "@better-auth/oauth-provider@1.6.9": "patches/@better-auth__oauth-provider@1.6.9.patch"
   "capnweb@0.8.0": "patches/capnweb@0.8.0.patch"

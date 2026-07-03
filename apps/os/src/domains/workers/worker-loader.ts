@@ -225,6 +225,19 @@ async function resolveFileSource({
   };
 }
 
+/**
+ * Distinguishes the hosting isolate in Worker Loader cache keys. The loader
+ * cache can be shared beyond one worker (observed in local dev's single
+ * workerd; possible wherever scripts share a runtime process), but a dynamic
+ * worker's `env` — its ITX loopback binding, its egress fetcher — is minted
+ * from the CREATING worker's `ctx.exports`. A cross-worker cache hit would
+ * hand worker B an isolate wired to worker A (observed as opaque "internal
+ * error" on invocation), so the host isolate is a runtime-relevant cache
+ * dimension. Stable for this isolate's lifetime, so keys never accumulate
+ * within a host (see itx_dynamic_worker_loader_cap).
+ */
+const HOST_ISOLATE_KEY = crypto.randomUUID();
+
 export function loadResolvedWorker({
   bindings,
   globalOutbound,
@@ -251,6 +264,7 @@ export function loadResolvedWorker({
       : `durable-object:${ref.className}`;
   const cacheKey = [
     "worker-loader",
+    HOST_ISOLATE_KEY,
     projectId,
     ref.path,
     workerScopeKey,
