@@ -26,7 +26,8 @@ on:
         type: string
 jobs:
   release:
-    runs-on: depot-ubuntu-24.04
+    runs-on:
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
