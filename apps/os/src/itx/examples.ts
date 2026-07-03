@@ -384,6 +384,55 @@ return described;
 `.trim(),
   },
   {
+    id: "secret-postman-echo",
+    title: "Use a stored secret in a Postman Echo request",
+    description:
+      "Stores a secret with Postman Echo on its egress allowlist, sends a request through itx.egress.fetch with a getSecret({ path }) header placeholder, and verifies that Postman Echo saw the substituted value while describe() still never exposes the material. External service, so run it interactively.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const secretPath = vars.secretPath ?? "/secrets/postman-echo";
+const material = "demo-" + (vars.note ?? "postman-echo-secret");
+const secret = itx.secrets.get(secretPath);
+
+await secret.update({
+  // Egress checks origins, so this allows any path on postman-echo.com.
+  egress: { urls: ["https://postman-echo.com/"] },
+  material,
+});
+
+// update() is durable immediately, but the secret processor folds the stream
+// asynchronously. Wait until the request path can see the new material.
+let before = await secret.describe();
+for (let attempt = 0; attempt < 50 && !before.hasMaterial; attempt += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  before = await secret.describe();
+}
+
+const response = await itx.egress.fetch(
+  new Request("https://postman-echo.com/get?source=itx-secret-example", {
+    headers: {
+      "x-itx-secret": \`Bearer getSecret({ path: "\${secretPath}" })\`,
+    },
+  }),
+);
+if (!response.ok) {
+  throw new Error(\`Postman Echo returned \${response.status}: \${await response.text()}\`);
+}
+
+const body = await response.json();
+const after = await secret.describe();
+const echoedSecret = body?.headers?.["x-itx-secret"];
+
+return {
+  echoedSecretMatches: echoedSecret === \`Bearer \${material}\`,
+  hasMaterial: after.hasMaterial,
+  materialLeakedInDescription: JSON.stringify(after).includes(material),
+  usedCount: after.audit.usedCount,
+};
+`.trim(),
+  },
+  {
     id: "journal-is-the-record",
     title: "The stream IS the record: provide, revoke, read it back",
     description:
