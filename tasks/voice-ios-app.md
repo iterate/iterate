@@ -168,4 +168,21 @@ notifications; offline; EAS/TestFlight/App Store; auth-worker changes.
 
 ## Implementation log
 
-(append as work happens)
+- 2026-07-03 (night): grill-you interview → spec; OS itx mint capability +
+  e2e; full apps/mobile implementation; 11-spec session-core suite; live
+  node-driven voice e2e against local dev PASSED (worker replied; voice model
+  used no_comment for the redundant report). No Xcode on this machine —
+  native build deferred to Misha.
+- 2026-07-03 (morning): preview slot obtained after auto-retries →
+  preview-8, this branch's e2e (incl. voice mint) passed there; all checks
+  green briefly. Merged base one-ack fix (3c02cb600) and ported it to the
+  mobile core (+2 specs, output_audio_buffer.started as the WebRTC speech
+  signal).
+- 2026-07-03 (afternoon): merged base double-answer fix (9777b2274); prompt
+  drift had now happened twice, so hoisted VOICE_AGENT_INSTRUCTIONS + tool
+  defs into shared `apps/os/src/domains/voice/voice-client-prompts.ts`,
+  imported by dashboard, CLI, and iOS clients (Metro-verified). Ran the live
+  voice e2e against the DEPLOYED preview (`os.iterate-preview-3.com`,
+  doppler preview_3): PASSED with the assistant speaking the worker's
+  report. The red Preview CI check is rotating 240s-timeout flakes in
+  base-branch suite tests, not this diff — evidence posted on the PR.
