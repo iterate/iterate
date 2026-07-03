@@ -9,11 +9,12 @@ import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx } from "~/itx/itx-react.tsx";
 
-export const Route = createFileRoute("/_app/projects/$projectSlug/streams/")({
-  // The project-wide stream explorer: the live stream tree in the side panel,
-  // the root stream in the main space. useItx never SSRs (it throws on the
-  // server — see ~/itx/itx-react.tsx); the tree paints from its own live
-  // subscriptions once the socket connects.
+const SANDBOXES_ROOT = "/sandboxes";
+
+export const Route = createFileRoute("/_app/projects/$projectSlug/sandboxes/")({
+  // Sandboxes ARE streams (a Cloudflare sandbox lives at
+  // /sandboxes/cloudflare/<name>): this page is the /sandboxes catalogue
+  // stream's view, with the live sandbox tree in the side panel.
   validateSearch: StreamViewSearch,
   ssr: false,
   loader: ({ context, params }) =>
@@ -22,21 +23,21 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/streams/")({
       streamBreadcrumb: {
         projectId: context.project.id,
         projectSlug: params.projectSlug,
-        streamPath: StreamPath.parse("/"),
+        streamPath: StreamPath.parse(SANDBOXES_ROOT),
       },
     }),
-  component: ProjectStreamsIndexPage,
+  component: ProjectSandboxesIndexPage,
 });
 
-function ProjectStreamsIndexPage() {
+function ProjectSandboxesIndexPage() {
   return (
     <ItxBoundary>
-      <ProjectStreamsIndexContent />
+      <ProjectSandboxesIndexContent />
     </ItxBoundary>
   );
 }
 
-function ProjectStreamsIndexContent() {
+function ProjectSandboxesIndexContent() {
   const params = Route.useParams();
   const navigate = useNavigate();
   const { project } = Route.useLoaderData();
@@ -48,6 +49,7 @@ function ProjectStreamsIndexContent() {
       panel={
         <StreamTreeBrowser
           source={source}
+          rootPath={SANDBOXES_ROOT}
           onOpenPath={(streamPath) =>
             void navigate(
               linkOptionsForStreamPath(params.projectSlug, StreamPath.parse(streamPath)),
@@ -56,8 +58,8 @@ function ProjectStreamsIndexContent() {
         />
       }
       projectId={project.id}
-      streamPath="/"
-      emptyLabel="No events in the project root stream yet."
+      streamPath={SANDBOXES_ROOT}
+      emptyLabel="No events on the sandboxes catalogue stream yet."
     />
   );
 }

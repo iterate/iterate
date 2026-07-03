@@ -2,6 +2,7 @@ import { useMemo, useState, type ReactElement } from "react";
 import { Link, useMatches, useMatchRoute } from "@tanstack/react-router";
 import {
   ArrowLeft,
+  Box,
   Bug,
   Check,
   ChevronsLeft,
@@ -584,6 +585,7 @@ type ProjectStreamNavItemConfig = {
   to:
     | "/projects/$projectSlug/agents"
     | "/projects/$projectSlug/integrations"
+    | "/projects/$projectSlug/sandboxes"
     | "/projects/$projectSlug/secrets"
     | "/projects/$projectSlug/repos"
     | "/projects/$projectSlug/streams";
@@ -617,6 +619,13 @@ const PROJECT_STREAM_NAV_ITEMS: readonly ProjectStreamNavItemConfig[] = [
     label: "/repos",
     streamPath: StreamPath.parse("/repos"),
     to: "/projects/$projectSlug/repos",
+  },
+  {
+    fuzzy: true,
+    icon: Box,
+    label: "/sandboxes",
+    streamPath: StreamPath.parse("/sandboxes"),
+    to: "/projects/$projectSlug/sandboxes",
   },
   {
     fuzzy: true,

@@ -22,11 +22,11 @@ import type {
 } from "~/lib/route-breadcrumbs.ts";
 import {
   StreamPath,
-  linkOptionsForStreamPath,
   streamPathAncestors,
   streamPathChild,
   streamPathParent,
 } from "~/lib/stream-links.ts";
+import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 
 const CHILD_STREAM_SEGMENT_PATTERN = /^[a-z0-9_-]+$/;
 

@@ -13,7 +13,8 @@ import { connectItxBrowser } from "~/itx/itx-react.tsx";
 import { OPEN_GLOBAL_COMMAND_PALETTE_EVENT } from "~/components/global-command-palette-events.ts";
 import type { RouteBreadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
 import { fetchProjectsList, projectsListQueryKey } from "~/lib/projects-query.ts";
-import { linkOptionsForStreamPath, StreamPath } from "~/lib/stream-links.ts";
+import { StreamPath } from "~/lib/stream-links.ts";
+import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import type { StreamNavigator } from "~/lib/stream-navigation.ts";
 
 /**

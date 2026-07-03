@@ -5,7 +5,8 @@ import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { StreamPage } from "~/components/stream-page.tsx";
 import { StreamTreeBrowser } from "~/components/stream-tree-browser.tsx";
 import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
-import { StreamPath, linkOptionsForStreamPath } from "~/lib/stream-links.ts";
+import { StreamPath } from "~/lib/stream-links.ts";
+import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx } from "~/itx/itx-react.tsx";
 
