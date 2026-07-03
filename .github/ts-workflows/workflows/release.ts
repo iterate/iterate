@@ -41,7 +41,7 @@ export default {
   },
   jobs: {
     release: {
-      ...utils.runsOnDepotUbuntu,
+      ...utils.runsOnDepotImage,
       steps: [
         {
           name: "Checkout code",

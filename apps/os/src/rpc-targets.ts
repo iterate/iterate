@@ -16,6 +16,7 @@ import {
 } from "./project-directory.ts";
 import { deploymentStatusesFromProbes } from "./project-deployment-status.ts";
 import { timedStep } from "./lib/step-timing.ts";
+import { buildProjectStreamViewerUrl } from "./lib/stream-viewer-url.ts";
 import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
 import { normalizeAgentPath } from "./domains/agents/utils.ts";
@@ -35,6 +36,7 @@ import {
   PROJECT_WORKER_ENTRY_POINT,
   PROJECT_WORKER_SOURCE_EXCLUDE,
 } from "./domains/repos/utils.ts";
+import { normalizeCloudflareSandboxPath } from "./domains/sandboxes/cloudflare/utils.ts";
 import { normalizeSecretPath } from "./domains/secrets/utils.ts";
 import {
   completeGoogleConnect,
@@ -94,6 +96,7 @@ import type {
   RevokeCapabilityInput,
   Repo,
   RepoCollection,
+  SandboxCollection,
   Secret,
   SecretCollection,
   StatelessDynamicWorkerRef,
@@ -264,7 +267,11 @@ class RepoRpcTarget extends RpcTarget implements Repo {
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  get durableObjectStub() {
+  // Private on purpose (unlike StreamRpcTarget's public stub getter): the
+  // Repo Durable Object carries `gitAccess()`, whose write tokens must not be
+  // reachable through the public capnweb surface — itx callers get file-level
+  // methods only.
+  get #durableObjectStub() {
     return env.REPO.getByName(
       DurableObjectNameCodec.stringify(
         {
@@ -285,23 +292,23 @@ class RepoRpcTarget extends RpcTarget implements Repo {
   }
 
   whoami() {
-    return this.durableObjectStub.whoami();
+    return this.#durableObjectStub.whoami();
   }
 
   commitFiles(input: Parameters<Repo["commitFiles"]>[0]) {
-    return this.durableObjectStub.commitFiles(input);
+    return this.#durableObjectStub.commitFiles(input);
   }
 
   listFiles() {
-    return this.durableObjectStub.listFiles();
+    return this.#durableObjectStub.listFiles();
   }
 
   readFile(input: Parameters<Repo["readFile"]>[0]) {
-    return this.durableObjectStub.readFile(input);
+    return this.#durableObjectStub.readFile(input);
   }
 
   get processor() {
-    return this.durableObjectStub.processor;
+    return this.#durableObjectStub.processor;
   }
 }
 
@@ -358,6 +365,36 @@ class AgentCollectionRpcTarget extends RpcTarget implements AgentCollection {
 
   list() {
     return projectProcessorState(this.props.projectId).then((state) => state.agents);
+  }
+}
+
+/**
+ * The `itx.sandboxes` built-in. `get(path)` returns the sandbox Durable
+ * Object's own RPC stub — deliberately NO RpcTarget wrapper, so the caller
+ * sees exactly what the `@cloudflare/sandbox` SDK exposes and new SDK methods
+ * need no forwarding code here. Confinement is by name: the stub is minted
+ * from this project's id plus the validated `/sandboxes/cloudflare/...`
+ * path, after the same project-access assert every collection performs.
+ */
+class SandboxCollectionRpcTarget extends RpcTarget implements SandboxCollection {
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  async get(path: string) {
+    const normalized = normalizeCloudflareSandboxPath(path);
+    const stub = env.SANDBOX.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: this.props.projectId,
+        path: normalized,
+      }),
+    );
+    // Container runtimes do not reliably surface `ctx.id.name`, so the
+    // sandbox learns who it is here, before the stub reaches the caller —
+    // see CloudflareSandboxDurableObject.ensureIdentity.
+    await stub.ensureIdentity({ path: normalized, projectId: this.props.projectId });
+    return stub;
   }
 }
 
@@ -1052,6 +1089,7 @@ type ItxRpcTargetProps = {
 const PROJECT_BUILTIN_CAPABILITY_PATHS = [
   "ai",
   "agents",
+  "debug",
   "egress",
   "examples",
   "gmail",
@@ -1061,6 +1099,7 @@ const PROJECT_BUILTIN_CAPABILITY_PATHS = [
   "processor",
   "repo",
   "repos",
+  "sandboxes",
   "secrets",
   "slack",
   "streams",
@@ -1094,6 +1133,14 @@ const PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS: readonly CapabilityDescription[] 
       return {
         instructions:
           'Project integration management. Use itx.integrations.getConnection({ provider: "google" }) before Gmail work and { provider: "slack" } before Slack API work.',
+        path: [path],
+        type: "builtin" as const,
+      };
+    }
+    if (path === "debug") {
+      return {
+        instructions:
+          "Returns formatted OS debug info for this itx scope, including a dashboard stream link.",
         path: [path],
         type: "builtin" as const,
       };
@@ -1150,6 +1197,28 @@ export class ItxRpcTarget extends RpcTarget implements Itx {
       ...project,
       capabilities: [...PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS, ...mountedCapabilities],
     };
+  }
+
+  async debug() {
+    const [project, config] = await Promise.all([
+      readProjectById(env.PROJECT_DIRECTORY, this.props.projectId).catch(() => null),
+      Promise.resolve(parseConfig(env)),
+    ]);
+    const streamPath = this.props.itxPath ?? "/";
+    const streamUrl =
+      project?.slug == null
+        ? (config.baseUrl ?? "https://os.iterate.com")
+        : buildProjectStreamViewerUrl({
+            baseUrl: config.baseUrl,
+            projectSlug: project.slug,
+            streamPath,
+          });
+
+    return [
+      `*Debug:* <${streamUrl}|open stream>`,
+      `Path: \`${streamPath}\``,
+      `Project: \`${project?.slug ?? this.props.projectId}\``,
+    ].join("\n");
   }
 
   get processor() {
@@ -1269,6 +1338,13 @@ export class ItxRpcTarget extends RpcTarget implements Itx {
 
   get repos() {
     return new ProjectRepoCollectionRpcTarget({
+      auth: this.props.auth,
+      projectId: this.props.projectId,
+    });
+  }
+
+  get sandboxes() {
+    return new SandboxCollectionRpcTarget({
       auth: this.props.auth,
       projectId: this.props.projectId,
     });

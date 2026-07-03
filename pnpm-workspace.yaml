@@ -125,6 +125,11 @@ patchedDependencies:
   #    CJS `require("eventemitter3")` gets the CJS build instead of an ESM
   #    namespace object (p-queue does `class extends require(...)`).
   "@cloudflare/worker-bundler@0.2.1": "patches/@cloudflare__worker-bundler@0.2.1.patch"
+  # Local dev containers: the egress interceptor sidecar must be pulled for
+  # the HOST platform — under Rosetta on Apple Silicon it dies with
+  # "setsockopt: protocol not available" and container-backed Durable
+  # Objects (the sandbox worker) never start. See apps/os/docs/sandboxes.md.
+  "@cloudflare/vite-plugin@1.33.2": "patches/@cloudflare__vite-plugin.patch"
   "alchemy@0.83.3": "patches/alchemy@0.83.3.patch"
   "@better-auth/oauth-provider@1.6.9": "patches/@better-auth__oauth-provider@1.6.9.patch"
   "capnweb@0.8.0": "patches/capnweb@0.8.0.patch"

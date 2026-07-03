@@ -42,6 +42,9 @@ export interface Env {
     import("./domains/projects/project-durable-object.ts").ProjectDurableObject
   >;
   REPO: DurableObjectNamespace<import("./domains/repos/repo-durable-object.ts").RepoDurableObject>;
+  SANDBOX: DurableObjectNamespace<
+    import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").CloudflareSandboxDurableObject
+  >;
   SECRET: DurableObjectNamespace<
     import("./domains/secrets/secret-durable-object.ts").SecretDurableObject
   >;
