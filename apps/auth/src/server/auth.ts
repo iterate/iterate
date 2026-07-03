@@ -54,8 +54,9 @@ export const auth = betterAuth({
   baseURL: config.authAppOrigin,
   plugins: getAuthPlugins({
     emailOtpEnabled: config.emailOtpEnabled,
+    emailBinding: env.EMAIL,
+    emailSenderDomain: config.emailSenderDomain || config.resendDomain,
     resendApiKey: config.resendApiKey.exposeSecret(),
-    resendDomain: config.resendDomain,
   }),
   trustedOrigins: (request) =>
     isAllowedBrowserOrigin(request?.headers.get("origin")) ? getAllowedBrowserOrigins() : [],

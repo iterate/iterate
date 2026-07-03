@@ -160,8 +160,9 @@ move to a Workers RPC binding — see the note under "The three surfaces".)
 
 ## Identity model
 
-- **Users** sign in with Google or email OTP (dev/preview always; prod behind
-  `VITE_ENABLE_EMAIL_OTP_SIGNIN`); password signup is disabled. `SIGNUP_ALLOWLIST`
+- **Users** sign in with Google or email OTP (enabled by default in every
+  stage; `APP_CONFIG_EMAIL_OTP_ENABLED=false` is the rollback switch);
+  password signup is disabled. `SIGNUP_ALLOWLIST`
   gates who may sign up; `ADMIN_ALLOWLIST` (default `*@nustom.com`) promotes
   matching emails to platform admin. The full model is documented in
   `src/server/platform-admin.ts`.
@@ -224,6 +225,9 @@ accepts the legacy flat names (`BETTER_AUTH_SECRET`, `VITE_AUTH_APP_ORIGIN`, …
 as a `?? <legacy>` fallback, and the browser bundle's own origin stays a
 build-time `import.meta.env.VITE_AUTH_APP_ORIGIN` (a Vite-inlined client
 concern, like os's `VITE_APP_STAGE`) — so both names live in Doppler.
+Email OTP sends through the Cloudflare Email Service `EMAIL` binding when it is
+available, with legacy Resend config kept only as a fallback. The sender domain
+comes from `APP_CONFIG_EMAIL_SENDER_DOMAIN` (or legacy `APP_CONFIG_RESEND_DOMAIN`).
 
 ## Deployment
 

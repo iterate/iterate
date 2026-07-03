@@ -26,11 +26,12 @@ import {
 } from "./oauth-project-selection.ts";
 import { getOsMcpResourceBases, getOsResourceBases } from "./oauth-resources.ts";
 import { isPlatformAdminUser } from "./platform-admin.ts";
-
-const TEST_EMAIL_PATTERN = /\+.*test@/i;
-const TEST_OTP_CODE = "424242";
-const isProduction = ["prd", "production", "prod"].includes(import.meta.env?.VITE_APP_STAGE);
-const isNonProd = !isProduction;
+import {
+  type CloudflareEmailBinding,
+  TEST_OTP_CODE,
+  sendEmailOtp,
+  shouldUseTestOtp,
+} from "./email.ts";
 
 // Custom claims go out on three surfaces, configured further down in
 // oauthProvider():
@@ -66,8 +67,9 @@ function userIdOf(user: Record<string, unknown> | null | undefined): string | nu
  * build the same plugin set without real secrets. */
 export type AuthPluginOptions = {
   emailOtpEnabled: boolean;
+  emailBinding?: CloudflareEmailBinding | null;
+  emailSenderDomain: string;
   resendApiKey: string;
-  resendDomain: string;
 };
 
 export function getAuthPlugins(options: AuthPluginOptions) {
@@ -98,33 +100,23 @@ export function getAuthPlugins(options: AuthPluginOptions) {
             otpLength: 6,
             expiresIn: 300,
             generateOTP: ({ email }) => {
-              if (isNonProd && TEST_EMAIL_PATTERN.test(email)) {
+              if (shouldUseTestOtp(email)) {
                 return TEST_OTP_CODE;
               }
               return undefined;
             },
             sendVerificationOTP: async ({ email, otp }) => {
-              if (isNonProd && TEST_EMAIL_PATTERN.test(email)) {
+              if (shouldUseTestOtp(email)) {
                 return;
               }
 
-              const response = await fetch("https://api.resend.com/emails", {
-                method: "POST",
-                headers: {
-                  authorization: `Bearer ${options.resendApiKey}`,
-                  "content-type": "application/json",
-                },
-                body: JSON.stringify({
-                  from: `Iterate <noreply+auth@${options.resendDomain}>`,
-                  to: email,
-                  subject: `Your verification code: ${otp}`,
-                  text: `Your verification code is: ${otp}\n\nThis code expires in 5 minutes.`,
-                }),
+              await sendEmailOtp({
+                email,
+                otp,
+                senderDomain: options.emailSenderDomain,
+                emailBinding: options.emailBinding,
+                resendApiKey: options.resendApiKey,
               });
-
-              if (!response.ok) {
-                throw new Error(`Failed to send verification email: ${response.status}`);
-              }
             },
           }),
         ]

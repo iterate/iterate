@@ -116,7 +116,7 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
 - Sign in as an agent/test: mint it (next section). Never script the OAuth
   dance.
 - Test emails: any address matching `+...test@` (e.g. `alice+test@nustom.com`)
-  gets the fixed OTP `424242` in dev/preview and sends no real email.
+  gets the fixed OTP `424242` in every auth stage and sends no real email.
 
 The dev-global auth deploys from `main` (alongside prd auth) and reseeds its
 OAuth clients from Doppler on every deploy — see

@@ -1,5 +1,6 @@
 import alchemy from "alchemy";
 import { D1Database, TanStackStart } from "alchemy/cloudflare";
+import type { Binding } from "alchemy/cloudflare";
 import { Exec } from "alchemy/os";
 import { slugify } from "@iterate-com/shared/slugify";
 import { initAlchemy } from "@iterate-com/shared/alchemy/init";
@@ -79,11 +80,12 @@ const alchemyEnv = AlchemyEnv.parse(process.env);
 // stage so it's available to the `vite build` the worker runs.)
 process.env.VITE_APP_STAGE ||= alchemyEnv.ALCHEMY_STAGE;
 
-// Email OTP is on for dev stages by default; an explicit Doppler value wins.
+// Email OTP is on by default in every stage, including production; an explicit
+// Doppler value still wins for emergency rollback.
 const emailOtpEnabled =
   process.env.APP_CONFIG_EMAIL_OTP_ENABLED ??
   process.env.VITE_ENABLE_EMAIL_OTP_SIGNIN?.trim() ??
-  (alchemyEnv.ALCHEMY_STAGE.startsWith("dev") ? "true" : "false");
+  "true";
 
 // Map the auth config into `APP_CONFIG_*` env vars for initAlchemy. New Doppler
 // configs set these directly; the `?? <legacy>` fallbacks let existing configs
@@ -108,6 +110,10 @@ const configEnv: Record<string, string | undefined> = {
     process.env.APP_CONFIG_GOOGLE_CLIENT_ID ?? process.env.GOOGLE_CLIENT_ID,
   APP_CONFIG_GOOGLE_CLIENT_SECRET:
     process.env.APP_CONFIG_GOOGLE_CLIENT_SECRET ?? process.env.GOOGLE_CLIENT_SECRET,
+  APP_CONFIG_EMAIL_SENDER_DOMAIN:
+    process.env.APP_CONFIG_EMAIL_SENDER_DOMAIN ??
+    process.env.APP_CONFIG_RESEND_DOMAIN ??
+    process.env.RESEND_BOT_DOMAIN,
   APP_CONFIG_RESEND_DOMAIN: process.env.APP_CONFIG_RESEND_DOMAIN ?? process.env.RESEND_BOT_DOMAIN,
   APP_CONFIG_RESEND_API_KEY:
     process.env.APP_CONFIG_RESEND_API_KEY ?? process.env.RESEND_BOT_API_KEY,
@@ -119,6 +125,11 @@ const configEnv: Record<string, string | undefined> = {
 
 const ctx = await initAlchemy(APP_NAME, AppConfig, configEnv);
 const { app, workerName, runtimeConfig } = ctx;
+const emailSenderDomain = (runtimeConfig.emailSenderDomain || runtimeConfig.resendDomain).trim();
+const emailBinding = {
+  type: "send_email",
+  ...(emailSenderDomain ? { allowedSenderAddresses: [`noreply+auth@${emailSenderDomain}`] } : {}),
+} satisfies Binding;
 
 const primaryUrl = alchemyEnv.WORKER_ROUTES[0]
   ? `https://${alchemyEnv.WORKER_ROUTES[0]}`
@@ -143,6 +154,7 @@ const worker = await TanStackStart(APP_NAME, {
   name: workerName,
   bindings: {
     DB,
+    EMAIL: emailBinding,
     // Single typed config blob, parsed at runtime by src/config.ts's
     // parseConfig(env). Local dev keeps it plain-JSON for readability; deploys
     // wrap it in alchemy.secret() so Cloudflare never logs it.
