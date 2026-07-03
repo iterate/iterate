@@ -110,6 +110,28 @@ export const setupDoppler = ({ config, project }: { config: DopplerConfigName; p
     },
   ] as const satisfies Step[];
 
+/**
+ * Like {@link setupDoppler} but WITHOUT installing the CLI — for jobs on
+ * {@link DEPOT_CI_IMAGE}, which already has Doppler baked. Still runs
+ * `doppler setup` so a non-config-scoped DOPPLER_TOKEN knows which config to use.
+ */
+export const setupDopplerBaked = ({
+  config,
+  project,
+}: {
+  config: DopplerConfigName;
+  project: string;
+}) =>
+  [
+    {
+      name: "Setup Doppler (baked CLI)",
+      run: `doppler setup --config ${config} --project ${project}`,
+      env: {
+        DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+      },
+    },
+  ] as const satisfies Step[];
+
 /** Install Depot CLI for Docker builds with persistent layer caching */
 export const setupDepot = [
   {

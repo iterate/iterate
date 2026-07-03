@@ -34,7 +34,27 @@ type WorkflowEntry = {
 //     triggers, which Depot CI does not support.
 //   - generate-workflows: the self-referential generator guardian.
 // See docs/depot-ci.md.
-const DEPOT_WORKFLOW_NAMES = new Set(["lint-typecheck"]);
+const DEPOT_WORKFLOW_NAMES = new Set([
+  "lint-typecheck",
+  "test",
+  "deploy-auth",
+  "deploy-tunnels",
+  "release",
+  "autofix",
+  "pullfrog",
+  // NOT here, and why:
+  //   - ci: posts to Slack (needs SLACK_CI_BOT_TOKEN, not yet on Depot) AND
+  //     calls deploy.yml as a local reusable workflow.
+  //   - deploy: workflow_call-only, invoked by ci.yml via
+  //     ./.github/workflows/deploy.yml — a GitHub workflow can't call a
+  //     reusable workflow living in .depot/, so it stays wherever ci is.
+  //   - nag, pr-dashboard: post to Slack.
+  //   - deploy-os / deploy-semaphore / deploy-streams-example-app
+  //     (cloudflare-app-workflow): slack-success / slack-failure jobs.
+  // All become movable once SLACK_CI_BOT_TOKEN is reachable from Doppler
+  // (_shared/prd) — then rewire the getSlackClient() call sites to the Doppler
+  // fallback and add the names here. See docs/depot-ci.md.
+]);
 
 async function loadWorkflowsContext(input: z.infer<typeof WorkflowsInput>) {
   const tsWorkflowsDir = path.join(import.meta.dirname, "workflows");
