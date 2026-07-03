@@ -15,7 +15,8 @@ import {
   type AgentUiOp,
   type AgentUiState,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import { defineProcessorContract, StreamProcessor } from "../../stream-processor.ts";
+import { defineProcessorContract } from "../../processor-contracts.ts";
+import { StreamProcessor } from "../../stream-processor.ts";
 import { createSchemaEnsurer } from "../browser/ensure-schema-once.ts";
 import type { SqlClient, SqlValue } from "../browser/stream-browser-db.ts";
 

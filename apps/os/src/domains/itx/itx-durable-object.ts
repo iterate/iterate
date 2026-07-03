@@ -11,7 +11,6 @@ import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import { ItxRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
-import { ItxProcessorContract } from "./itx-processor-contract.ts";
 import {
   ItxProcessor,
   type ParentItxScope,
@@ -37,7 +36,6 @@ export class ItxDurableObject extends DurableObject<Env> {
     }),
   });
   readonly #itxProcessor = this.#processorHost.add(
-    ItxProcessorContract.slug,
     (deps) =>
       new ItxProcessor({
         ...deps,

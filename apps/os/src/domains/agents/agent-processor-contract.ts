@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ITX_TYPES_SOURCE } from "../../types-source.generated.ts";
-import { defineProcessorContract } from "../streams/stream-processor.ts";
+import { defineProcessorContract } from "../streams/processor-contracts.ts";
 import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
 
 export const DEFAULT_AGENT_MODEL = "@cf/moonshotai/kimi-k2.7-code";
@@ -15,13 +15,14 @@ const AGENT_SNIPPET_GUIDE = [
   "THE LOOP — your scripts are tool calls:",
   "- Whatever your function RETURNS (JSON-serializable) comes back to you as your next input, and you get another turn to act on it. A thrown error comes back the same way — read it and adapt. Do NOT wrap calls in try/catch or .catch just to survive: a raw thrown error is more useful to you than a hand-built `{ error: ... }` object.",
   "- A script that returns undefined ends your turn. That is how you finish: send your final message(s), return nothing.",
-  "- So the shape of most work is: (1) a short script that fetches data and returns it, (2) you LOOK at the result, (3) a short script that acts on what you saw and tells the user.",
+  '- So the shape of most work is: (1) a short script that tells the user what you\'re doing ("Checking your email now...") and fetches data in one Promise.all, returning the data, (2) you LOOK at the result, (3) a short script that acts on what you saw and tells the user.',
   "",
   "WRITING SNIPPETS — small, single-purpose, data-first:",
   "- Most snippets should just fetch data and return it. You cannot see the data while writing the script, so code that interprets it — if-chains over response shapes, header spelunking, error-message formatting, composing user-facing prose from fields you have never seen — is guesswork. Get the data in front of your eyes first; decide on the next turn.",
   "- Return only what you need: pick fields, slice arrays. The return value lands in your context window.",
   "- Use JavaScript for what your turn-by-turn loop cannot do: `Promise.all` to fan out independent calls concurrently (this is your parallel tool calling — use it constantly), map/filter to trim big responses, loops for genuinely mechanical iteration.",
   "- Send as many chat messages per script as makes sense: a quick acknowledgement before slow work, one message per result, a final summary. Multiple sendMessage calls in one script are normal.",
+  '- Keep the user in the loop on EVERY turn: when a script does real work, include a short progress message in the same Promise.all as the work itself — Promise.all([itx.chat.sendMessage({ message: "Checking your email now..." }), itx.gmail.request(...)]). It costs nothing extra and the user never stares at a silent agent while you fetch.',
   "",
   "BAD — one giant blind script (do not do this):",
   "```js",
@@ -33,10 +34,13 @@ const AGENT_SNIPPET_GUIDE = [
   "}",
   "```",
   "",
-  "GOOD — fetch in parallel, return, look at it next turn:",
+  "GOOD — tell the user what you're doing, fetch in parallel, return, look at it next turn:",
   "```js",
   "async (itx) => {",
-  '  const inbox = await itx.gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } });',
+  "  const [, inbox] = await Promise.all([",
+  '    itx.chat.sendMessage({ message: "Checking your email now..." }),',
+  '    itx.gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }),',
+  "  ]);",
   "  const messages = await Promise.all(",
   "    (inbox.data.messages ?? []).map((m) =>",
   '      itx.gmail.request({ path: "/users/me/messages/" + m.id, query: { format: "metadata", metadataHeaders: "From" } }),',
@@ -56,7 +60,8 @@ const AGENT_SNIPPET_GUIDE = [
   "WEB SEARCH is built in through the public Exa MCP server at `itx.mcp.exa`:",
   "```js",
   "async (itx) => {",
-  "  const [search, pages] = await Promise.all([",
+  "  const [, search, pages] = await Promise.all([",
+  '    itx.chat.sendMessage({ message: "Searching the web for that now..." }),',
   '    itx.mcp.exa.web_search_exa({ query: "cloudflare workers rpc pipelining", numResults: 5 }),',
   '    itx.mcp.exa.web_fetch_exa({ urls: ["https://developers.cloudflare.com/workers/runtime-apis/rpc/"] }),',
   "  ]);",

@@ -5,8 +5,8 @@ import { newHttpBatchRpcSession, RpcTarget } from "capnweb";
 import { WebClient } from "@slack/web-api";
 import { z } from "zod";
 import { RepoArtifactNameCodec } from "../../src/domains/repos/utils.ts";
+import { defineProcessorContract } from "../../src/domains/streams/processor-contracts.ts";
 import {
-  defineProcessorContract,
   StreamProcessor,
   type StreamProcessorSnapshot,
 } from "../../src/domains/streams/stream-processor.ts";

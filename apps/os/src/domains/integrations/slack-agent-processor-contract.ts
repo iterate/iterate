@@ -7,7 +7,7 @@
 // processor contracts.
 
 import { z } from "zod";
-import { defineProcessorContract } from "../streams/stream-processor.ts";
+import { defineProcessorContract } from "../streams/processor-contracts.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
 import { SlackProcessorContract } from "./slack-processor-contract.ts";

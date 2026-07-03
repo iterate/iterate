@@ -5,8 +5,8 @@
 // ```ts
 // export class AgentDurableObject extends DurableObject<Env> {
 //   host = createStreamProcessorHost(this.ctx, { stream });
-//   agent = this.host.add("agent", (deps) => new AgentProcessor({ ...deps, openai }));
-//   search = this.host.add("search", (deps) => new SearchProcessor(deps));
+//   agent = this.host.add((deps) => new AgentProcessor({ ...deps, openai }));
+//   search = this.host.add((deps) => new SearchProcessor(deps));
 //
 //   wakeStreamSubscriber(args: StreamSubscriberWakeRequest) {
 //     return this.host.wakeStreamSubscriber(args);
@@ -14,30 +14,20 @@
 // }
 // ```
 //
-// The Stream DO reaches this entry point from a configured subscriber target.
-// On wake, the host reads the processor's checkpoint and subscribes with its
-// own stable stream capability, so the stream pumps batches into
-// `processor.ingest`.
+// This is the subscriber half of the configured-subscription handshake, which
+// is a live-capability provide — the same shape itx capabilities use (see
+// `domains/itx/live-capability.ts`): the Stream DO wakes this host with
+// serializable coordinates only, and the host answers with the one public
+// `subscribe` verb (`configured: true` + its durable subscriptionKey), handing
+// the stream a live `processEventBatch` callback capability that the stream
+// retains and invokes for every committed batch. Everything else here exists
+// to make that callback safe to re-issue: replay cursors come from the
+// processor's durable checkpoint, failed batches re-handshake, and connection
+// generations fence off batches from superseded connections.
 
-import type {
-  ProcessEventBatch,
-  Stream,
-  StreamEvent,
-  StreamSubscriptionHandle,
-} from "../../types.ts";
+import type { Stream, StreamEvent, StreamSubscriptionHandle } from "../../types.ts";
 import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "./stream-processor.ts";
 import type { ProcessorContractAnnouncement } from "./core-processor-contract.ts";
-
-type ConfiguredStream = Stream & {
-  subscribeConfigured(input: {
-    subscriptionKey: string;
-    processEventBatch: ProcessEventBatch;
-    replayAfterOffset?: number;
-    eventTypes?: readonly string[];
-    events?: boolean;
-    subscriber?: unknown;
-  }): Promise<StreamSubscriptionHandle>;
-};
 
 /** What the Stream DO sends when asking a hosted processor to subscribe back. */
 export type StreamSubscriberWakeRequest = {
@@ -55,7 +45,7 @@ export type StreamSubscriberWakeRequest = {
  * `new RepoProcessor({ ...deps, github })`.
  */
 type HostedProcessorDeps = {
-  stream: ConfiguredStream;
+  stream: Stream;
   readState: () => StreamProcessorSnapshot<any> | undefined;
   writeState: (snapshot: StreamProcessorSnapshot<any>) => void;
   keepAliveWhile: (work: () => Promise<unknown>) => void;
@@ -112,14 +102,14 @@ const MAX_CONSECUTIVE_INGEST_FAILURES = 3;
 const HOST_IDLE_TEARDOWN_MS = 5 * 60_000;
 
 type StreamProcessorHost = {
-  readonly stream: ConfiguredStream;
+  readonly stream: Stream;
   /**
-   * Register a named processor. The builder receives the host-provided base
-   * deps (checkpoint storage in DO KV keyed by `name` and the host's stable
-   * stream capability) and must construct the processor with them. Call during
-   * DO field initialization.
+   * Register a processor under its contract slug. The builder receives the
+   * host-provided base deps (checkpoint storage in DO KV keyed by the slug and
+   * the host's stable stream capability) and must construct the processor with
+   * them. Call during DO field initialization.
    */
-  add<P extends AnyHostedProcessor>(name: string, build: (deps: HostedProcessorDeps) => P): P;
+  add<P extends AnyHostedProcessor>(build: (deps: HostedProcessorDeps) => P): P;
   /** Wire this to the host DO's wakeStreamSubscriber RPC method. */
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void>;
   /**
@@ -137,7 +127,7 @@ type StreamProcessorHost = {
 
 export function createStreamProcessorHost(
   ctx: DurableObjectState,
-  options: { stream: ConfiguredStream },
+  options: { stream: Stream },
 ): StreamProcessorHost {
   const entries = new Map<string, HostedEntry>();
 
@@ -170,6 +160,22 @@ export function createStreamProcessorHost(
     );
   }
 
+  /**
+   * Invalidate an entry's current connection: bump the generation so batches
+   * still queued on it are dropped by the gate in `openSubscription`, then tear
+   * the handle down. The durable checkpoint + subscription key persist, so a
+   * later wake or recovery re-handshakes from where the processor left off.
+   */
+  function supersedeConnection(entry: HostedEntry): void {
+    entry.generation += 1;
+    try {
+      entry.handle?.unsubscribe();
+    } catch {
+      // The producer may already be gone; the handle is dead either way.
+    }
+    entry.handle = undefined;
+  }
+
   // In-memory idle teardown: unsubscribe after a quiet spell so this subscriber
   // DO (and the producer connection it pins) can hibernate. See HOST_IDLE_TEARDOWN_MS.
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -193,19 +199,7 @@ export function createStreamProcessorHost(
   function runIdleDisconnectNow(): void {
     idleTimer = undefined;
     for (const entry of entries.values()) {
-      const handle = entry.handle;
-      if (handle === undefined) continue;
-      // Bump the generation so any batch still queued on this connection is
-      // dropped by the gate in openSubscription. Then unsubscribe; the durable
-      // checkpoint + subscription-key persist, so the producer's next wake
-      // re-handshakes us from where we left off.
-      entry.generation += 1;
-      try {
-        handle.unsubscribe();
-      } catch {
-        // The producer may already be gone; the handle is dead either way.
-      }
-      entry.handle = undefined;
+      if (entry.handle !== undefined) supersedeConnection(entry);
     }
   }
 
@@ -232,8 +226,9 @@ export function createStreamProcessorHost(
     // the generation gate drops — stalling delivery until the idle teardown. Bail
     // out and let the newer handshake win.
     if (generation !== entry.generation) return;
-    const handle = await options.stream.subscribeConfigured({
+    const handle = await options.stream.subscribe({
       subscriptionKey,
+      configured: true,
       replayAfterOffset: snapshot.offset,
       // The contract is the filter: the stream only delivers event types the
       // processor consumes. A `"*"` in consumes means unfiltered delivery.
@@ -302,11 +297,7 @@ export function createStreamProcessorHost(
       error,
     );
 
-    // Invalidate the current connection so its already-delivered batches are
-    // dropped by the generation gate, then tear it down.
-    entry.generation += 1;
-    entry.handle?.unsubscribe();
-    entry.handle = undefined;
+    supersedeConnection(entry);
 
     if (entry.consecutiveIngestFailures <= MAX_CONSECUTIVE_INGEST_FAILURES) {
       // Transient: re-handshake from the durable checkpoint; the stream replays
@@ -336,18 +327,32 @@ export function createStreamProcessorHost(
 
   return {
     stream: options.stream,
-    add(name, build) {
-      if (entries.has(name)) {
-        throw new Error(`Stream processor "${name}" is already registered on this host`);
-      }
+    add(build) {
+      // The registry name is the processor's contract slug, which only exists
+      // after the builder runs; the checkpoint-storage deps close over it
+      // lazily (they are first called on the first snapshot/ingest, long after
+      // registration completes).
+      let registeredSlug: string | undefined;
+      const slug = () => {
+        if (registeredSlug === undefined) {
+          throw new Error("Stream processor checkpoint storage used before registration");
+        }
+        return registeredSlug;
+      };
       const processor = build({
         stream: options.stream,
         readState: () =>
-          ctx.storage.kv.get<StreamProcessorSnapshot<any>>(snapshotKey(name)) ?? undefined,
-        writeState: (snapshot) => void ctx.storage.kv.put(snapshotKey(name), snapshot),
+          ctx.storage.kv.get<StreamProcessorSnapshot<any>>(snapshotKey(slug())) ?? undefined,
+        writeState: (snapshot) => void ctx.storage.kv.put(snapshotKey(slug()), snapshot),
         keepAliveWhile: (work) => void ctx.waitUntil(work()),
       });
-      entries.set(name, {
+      if (entries.has(processor.contract.slug)) {
+        throw new Error(
+          `Stream processor "${processor.contract.slug}" is already registered on this host`,
+        );
+      }
+      registeredSlug = processor.contract.slug;
+      entries.set(registeredSlug, {
         processor,
         handle: undefined,
         consecutiveIngestFailures: 0,
@@ -383,13 +388,10 @@ export function createStreamProcessorHost(
 
       ctx.storage.kv.put(subscriptionKeyKey(name), args.subscriptionKey);
 
-      entry.handle?.unsubscribe();
-      // Invalidate the previous connection (same as recoverFromIngestFailure):
-      // this handshake replaces it, so any batch still queued on it must be
-      // dropped by the generation gate — the new connection's replay from the
-      // checkpoint is authoritative.
-      entry.generation += 1;
-      entry.handle = undefined;
+      // This handshake replaces any previous connection; batches still queued
+      // on it must be dropped — the new connection's replay from the checkpoint
+      // is authoritative.
+      supersedeConnection(entry);
       entry.consecutiveIngestFailures = 0;
 
       await openSubscription(name);
