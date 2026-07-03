@@ -31,7 +31,7 @@ import {
   type EnvContext,
 } from "../../../scripts/lib/env-context.ts";
 import { parseConfig } from "../src/config.ts";
-import { envShapedVars, REQUIRED_SECRETS } from "./generate-wrangler-config.ts";
+import { envShapedVars, OPTIONAL_SECRETS, REQUIRED_SECRETS } from "./generate-wrangler-config.ts";
 
 const APP_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -54,6 +54,10 @@ if (missing.length > 0) {
     `Doppler config ${ctx.env.dopplerConfig} is missing required secrets: ${missing.join(", ")}. ` +
       `Set them (doppler secrets set --config ${ctx.env.dopplerConfig} ...) and retry.`,
   );
+}
+for (const key of OPTIONAL_SECRETS) {
+  const value = ctx.secrets[key];
+  if (value) secretValues[key] = value;
 }
 // Baked at deploy time, so it's the one secret not in secrets.required.
 secretValues.APP_CONFIG_ITERATE_AUTH__JWKS = await bakeStaticAuthJwks(ctx);

@@ -82,7 +82,8 @@ async function adoptDoMigrationTag() {
     `/workers/scripts?per_page=1000`,
   );
   const script = scripts.find((candidate) => candidate.id === ctx.env.workerName);
-  if (!script || script.migration_tag !== null) return;
+  // Loose != also catches the list endpoint omitting the field (undefined).
+  if (!script || script.migration_tag != null) return;
   console.log(`Adopting DO migration tag v1 on ${ctx.env.workerName} (was untagged/alchemy-era)`);
   const form = new FormData();
   form.set("settings", JSON.stringify({ migrations: { new_tag: "v1", steps: [] } }));

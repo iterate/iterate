@@ -23,27 +23,37 @@ import { envs, type DeployedEnv } from "../../../envs.ts";
 const CONFIG_PATH = fileURLToPath(new URL("../wrangler.jsonc", import.meta.url));
 
 /**
- * Secrets every deployment needs, sourced from the env's Doppler config.
- * `deploy.ts` builds its --secrets-file from exactly this list (plus the
- * deploy-time-baked APP_CONFIG_ITERATE_AUTH__JWKS) and fails before
- * deploying when the Doppler config is missing one.
+ * Secrets every deployment MUST have (deploy.ts fails before uploading when
+ * the env's Doppler config is missing one). Keep this to what the product
+ * genuinely can't run without — the zod parseConfig preflight in deploy.ts
+ * is the real arbiter of shape.
  */
 export const REQUIRED_SECRETS = [
   "APP_CONFIG_ADMIN_API_SECRET",
+  "APP_CONFIG_ITERATE_AUTH__CLIENT_ID",
+  "APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET",
+  "APP_CONFIG_OPEN_AI_API_KEY",
+  "SECRET_ENCRYPTION_KEY",
+];
+
+/**
+ * Optional-in-schema secrets: shipped when the env's Doppler config carries
+ * them, silently skipped otherwise (e.g. preview slots have no Slack bot).
+ * Not in the env blocks' `secrets.required` — wrangler would fail deploys
+ * over them — but listed in the top-level (local dev) block so the vite
+ * plugin loads whichever ones your Doppler config has.
+ */
+export const OPTIONAL_SECRETS = [
   "APP_CONFIG_CLOUDFLARE__API_TOKEN",
   "APP_CONFIG_GEMINI_API_KEY",
   "APP_CONFIG_INTEGRATIONS__GITHUB",
   "APP_CONFIG_INTEGRATIONS__GOOGLE",
   "APP_CONFIG_INTEGRATIONS__SLACK",
-  "APP_CONFIG_ITERATE_AUTH__CLIENT_ID",
-  "APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET",
   "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN",
   "APP_CONFIG_LOGS",
-  "APP_CONFIG_OPEN_AI_API_KEY",
   "APP_CONFIG_POSTHOG",
   "APP_CONFIG_SLACK_BOT_TOKEN",
   "APP_CONFIG_X_AI_API_KEY",
-  "SECRET_ENCRYPTION_KEY",
 ];
 
 /**
@@ -181,9 +191,9 @@ const config = {
   // this (deploys ignore the dev section entirely).
   dev: { enable_containers: false },
   ...workerBindings({ workerName: "os-dev", accountId: "" }),
-  // Local dev loads the env-shaping keys from Doppler like any other secret
-  // (deployed envs get them as generated vars instead — see envShapedVars).
-  secrets: { required: [...REQUIRED_SECRETS, ...ENV_SHAPED_KEYS] },
+  // Local dev loads optional secrets and the env-shaping keys from Doppler
+  // too (deployed envs get the latter as generated vars — see envShapedVars).
+  secrets: { required: [...REQUIRED_SECRETS, ...OPTIONAL_SECRETS, ...ENV_SHAPED_KEYS] },
   env: Object.fromEntries(Object.entries(envs).map(([name, env]) => [name, envBlock(env)])),
 };
 
