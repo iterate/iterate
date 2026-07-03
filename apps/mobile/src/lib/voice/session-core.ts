@@ -142,6 +142,9 @@ export class VoiceSessionCore {
   // worker reports queue until the current response finishes.
   #responseActive = false;
   #injectionQueue: (() => void)[] = [];
+  // Whether the in-flight response produced any audible/visible output —
+  // a function-call-only response is silent, and silence needs handling.
+  #responseHadSpeech = false;
 
   // User-turn transcripts keyed by conversation item id; turn end is
   // `input_audio_transcription.completed` or the VAD starting a response,
@@ -247,6 +250,7 @@ export class VoiceSessionCore {
     switch (type) {
       case "response.created": {
         this.#responseActive = true;
+        this.#responseHadSpeech = false;
         // VAD starting a response means the user's turn ended — forward even
         // if the transcription `.completed` event never arrives.
         for (const itemId of this.#turnTranscripts.keys()) this.#forwardTurnFromItem(itemId);
@@ -273,6 +277,7 @@ export class VoiceSessionCore {
       // WebRTC-only lifecycle events for the remote audio track — this is what
       // makes "assistant is speaking" knowable without touching audio buffers.
       case "output_audio_buffer.started": {
+        this.#responseHadSpeech = true;
         this.#update({ assistantSpeaking: true });
         return;
       }
@@ -309,11 +314,10 @@ export class VoiceSessionCore {
           return;
         }
         this.#addEntry("status", `voice model called ${String(event.name)} (acked)`);
-        // Complete the call but do NOT trigger a follow-up response: the model
-        // usually already spoke its ack in the same response as the tool call,
-        // and a forced response here makes it say "working on it" twice. The
-        // tool output sits in context; the worker report triggers the next
-        // response naturally.
+        // If the model already spoke its ack in the same response as the tool
+        // call, a forced follow-up would make it say "working on it" twice —
+        // so stay quiet. But a function-call-ONLY response is silent, and the
+        // user deserves an ack, so force one exactly then.
         this.#send({
           type: "conversation.item.create",
           item: {
@@ -322,11 +326,13 @@ export class VoiceSessionCore {
             output: JSON.stringify({ status: "forwarded to worker; report will follow" }),
           },
         });
+        if (!this.#responseHadSpeech) this.#whenResponseIdle(() => this.#sendResponseCreate());
         return;
       }
       case "response.output_audio_transcript.delta":
       case "response.audio_transcript.delta":
       case "response.output_text.delta": {
+        this.#responseHadSpeech = true;
         this.#appendAssistantDelta(String(event.delta));
         return;
       }

@@ -105,6 +105,39 @@ test("no_comment completes the call silently and journals the suppression", asyn
   });
 });
 
+test("a function-call-only ask_assistant gets exactly one forced spoken ack", async () => {
+  const world = createWorld();
+  await world.session.start();
+
+  // The model responds with ONLY a tool call — no audio, no transcript.
+  world.emit({ type: "response.created" });
+  world.emit({
+    type: "response.function_call_arguments.done",
+    name: "ask_assistant",
+    call_id: "c1",
+  });
+  expect(world.sent.filter((event) => event.type === "response.create")).toHaveLength(0); // queued behind the active response
+  world.emit({ type: "response.done" });
+
+  expect(world.sent.filter((event) => event.type === "response.create")).toHaveLength(1);
+});
+
+test("an ask_assistant alongside a spoken ack does not force a second response", async () => {
+  const world = createWorld();
+  await world.session.start();
+
+  world.emit({ type: "response.created" });
+  world.emit({ type: "response.output_audio_transcript.delta", delta: "On it — " });
+  world.emit({
+    type: "response.function_call_arguments.done",
+    name: "ask_assistant",
+    call_id: "c1",
+  });
+  world.emit({ type: "response.done" });
+
+  expect(world.sent.filter((event) => event.type === "response.create")).toHaveLength(0);
+});
+
 test("typed text rides the same lanes as speech", async () => {
   const world = createWorld();
   await world.session.start();
