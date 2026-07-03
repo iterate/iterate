@@ -74,6 +74,9 @@ export function VoiceAgentConsole({
   const outputSequenceRef = useRef(0);
   // Stream offsets are monotonic, so one number replaces an ever-growing Set.
   const lastPlayedOffsetRef = useRef(0);
+  // Serializes speaker enqueues so bursts of provider deltas can never reorder
+  // while the output AudioContext is still being created.
+  const playbackChainRef = useRef<Promise<void>>(Promise.resolve());
   const inputAudioContextRef = useRef<AudioContext | null>(null);
   const inputNodeRef = useRef<AudioWorkletNode | null>(null);
   const inputMonitorRef = useRef<GainNode | null>(null);
@@ -141,9 +144,12 @@ export function VoiceAgentConsole({
     if (event.type === VOICE_AGENT_OUTPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE) {
       // Playback must never block the subscription loop: a suspended
       // AudioContext can keep resume() pending until a user gesture arrives.
-      void playOutputEvent(event).catch((error) => {
-        setLastError(error instanceof Error ? error.message : String(error));
-      });
+      // One failed frame must not reject the chain and stall later frames.
+      playbackChainRef.current = playbackChainRef.current
+        .then(() => playOutputEvent(event))
+        .catch((error) => {
+          setLastError(error instanceof Error ? error.message : String(error));
+        });
       return;
     }
     if (event.type === VOICE_AGENT_PROVIDER_CONNECTED_EVENT_TYPE) {
@@ -265,7 +271,6 @@ export function VoiceAgentConsole({
 
   async function playOutputEvent(event: StreamEvent) {
     if (event.offset <= lastPlayedOffsetRef.current) return;
-    lastPlayedOffsetRef.current = event.offset;
 
     const payload = parseAudioPayload(event.payload);
     if (!payload || payload.sampleRate !== VOICE_AGENT_OUTPUT_SAMPLE_RATE) return;
@@ -273,6 +278,9 @@ export function VoiceAgentConsole({
     const node = await ensureOutputAudio();
     const buffer = base64ToArrayBuffer(payload.dataBase64);
     node.port.postMessage({ type: "enqueue", buffer }, [buffer]);
+    // Marked only after a successful enqueue: a transient audio-context
+    // failure leaves the offset unplayed instead of silently skipped.
+    lastPlayedOffsetRef.current = event.offset;
     setOutputStats((stats) => ({
       frames: stats.frames + 1,
       bytes: stats.bytes + buffer.byteLength,
@@ -370,7 +378,10 @@ export function VoiceAgentConsole({
   }
 
   // Single in-flight uploader: whatever accumulated while the previous request
-  // was on the wire goes out as one batch, so latency stays bounded.
+  // was on the wire goes out as one batch, so latency stays bounded. A failed
+  // batch is dropped rather than retried — replaying stale mic audio would add
+  // latency and confuse the provider's turn detection — but the drop is
+  // counted so it shows in the metrics.
   async function flushInputFrames() {
     if (inputFlushInFlightRef.current) return;
     inputFlushInFlightRef.current = true;
@@ -380,11 +391,15 @@ export function VoiceAgentConsole({
           0,
           pendingInputEventsRef.current.length,
         );
-        const itx = await connectItxBrowser({ projectId });
-        await itx.streams.get(streamPath).append(...events);
+        try {
+          const itx = await connectItxBrowser({ projectId });
+          await itx.streams.get(streamPath).append(...events);
+        } catch (error) {
+          setDroppedInputFrames((count) => count + events.length);
+          setLastError(error instanceof Error ? error.message : String(error));
+          return;
+        }
       }
-    } catch (error) {
-      setLastError(error instanceof Error ? error.message : String(error));
     } finally {
       inputFlushInFlightRef.current = false;
     }

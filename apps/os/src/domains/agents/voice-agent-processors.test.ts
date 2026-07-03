@@ -433,6 +433,82 @@ describe("VoiceAgentProcessor", () => {
     );
   });
 
+  it("keeps forwarding later inputs after a provider send failure", async () => {
+    const harness = createHarness(VOICE_AGENT_PROVIDER_GEMINI_LIVE);
+
+    await harness.ingestText("First.");
+    await waitFor(() => harness.socket.sent.length === 1);
+    harness.socket.receive({ setupComplete: {} });
+    await waitFor(() => harness.socket.sent.length >= 2);
+
+    harness.socket.failNextSend = true;
+    await harness.ingestText("Dropped by a failing socket.");
+    await harness.ingestText("Second.");
+
+    await waitFor(() =>
+      harness.socket.sent.some((message) => JSON.stringify(message).includes("Second.")),
+    );
+  });
+
+  it("re-dials when the setup changes even within the same provider", async () => {
+    // Sockets whose close() does not flip readyState simulate the in-flight
+    // window where a connection configured for an older setup is still open;
+    // only the setup fingerprint check forces the re-dial then.
+    const sockets: FakeWebSocket[] = [];
+    const stream = new MemoryStream();
+    const processor = new VoiceAgentProcessor({
+      stream,
+      geminiApiKey: "gemini_test",
+      openAiApiKey: "openai_test",
+      xAiApiKey: "xai_test",
+      openProviderWebSocket: async () => {
+        const socket = new FakeWebSocket();
+        socket.closeChangesReadyState = false;
+        sockets.push(socket);
+        return socket as unknown as WebSocket;
+      },
+    });
+
+    let offset = 1000;
+    const ingest = async (event: Omit<StreamEventInput, "offset">) => {
+      offset += 1;
+      await processor.ingest({
+        events: [committedEvent(event as StreamEventInput, offset)],
+        streamMaxOffset: offset,
+      });
+    };
+    const setup = (voiceName: string) =>
+      ingest({
+        type: VOICE_AGENT_SETUP_CONFIGURED_EVENT_TYPE,
+        payload: { provider: VOICE_AGENT_PROVIDER_GEMINI_LIVE, voiceName },
+      });
+    const text = (value: string) =>
+      ingest({ type: VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE, payload: { text: value } });
+
+    await setup("Zephyr");
+    await text("First.");
+    await waitFor(() => sockets.length === 1 && sockets[0]!.sent.length === 1);
+    sockets[0]!.receive({ setupComplete: {} });
+    await waitFor(() => sockets[0]!.sent.length >= 2);
+
+    await setup("Puck");
+    await text("Second.");
+    await waitFor(() => sockets.length === 2);
+    sockets[1]!.receive({ setupComplete: {} });
+    await waitFor(() => sockets[1]!.sent.length >= 2);
+
+    const secondSetup = sockets[1]!.sent[0] as {
+      setup: {
+        generationConfig: {
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: string } } };
+        };
+      };
+    };
+    expect(
+      secondSetup.setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName,
+    ).toBe("Puck");
+  });
+
   it("appends an error event when input arrives before setup", async () => {
     const stream = new MemoryStream();
     const processor = new VoiceAgentProcessor({
@@ -637,14 +713,20 @@ async function waitFor(predicate: () => boolean) {
 class FakeWebSocket {
   readonly sent: unknown[] = [];
   readyState = 1;
+  failNextSend = false;
+  closeChangesReadyState = true;
   #listeners = new Map<string, EventListener[]>();
 
   send(data: string) {
+    if (this.failNextSend) {
+      this.failNextSend = false;
+      throw new Error("send failed: socket closing");
+    }
     this.sent.push(JSON.parse(data));
   }
 
   close() {
-    this.readyState = 3;
+    if (this.closeChangesReadyState) this.readyState = 3;
   }
 
   addEventListener(type: string, listener: EventListener) {

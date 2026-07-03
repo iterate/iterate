@@ -71,6 +71,8 @@ type VoiceAgentProcessorDeps = {
 type ProviderConnection = {
   id: string;
   provider: VoiceAgentProvider;
+  /** JSON fingerprint of the setup this connection's session was configured with. */
+  setupKey: string;
   socket: WebSocket;
   urlForLog: string;
   ready: Promise<void>;
@@ -141,10 +143,13 @@ export class VoiceAgentProcessor extends StreamProcessor<
         // Frames must reach the provider socket in stream order, so forwarding
         // is serialized. Forwarding runs in the background: provider latency
         // must not hold up the processor checkpoint, and failures land on the
-        // stream as error events instead of failing the batch.
-        const task = (this.#sendChain = this.#sendChain.then(() =>
+        // stream as error events instead of failing the batch. The stored
+        // chain swallows rejections so one failed forward (e.g. a send on a
+        // just-closed socket) never wedges later inputs.
+        const task = this.#sendChain.then(() =>
           this.#forwardInputEvent({ event, setup: state.setup }),
-        ));
+        );
+        this.#sendChain = task.catch(() => undefined);
         runInBackground(() => task);
         return;
       }
@@ -191,33 +196,48 @@ export class VoiceAgentProcessor extends StreamProcessor<
       return;
     }
 
-    for (const message of buildInputMessages({ event, provider: connection.provider })) {
-      this.#sendProviderMessage({
-        connection,
-        message,
-        sourceEventOffset: event.offset,
-      });
+    try {
+      for (const message of buildInputMessages({ event, provider: connection.provider })) {
+        this.#sendProviderMessage({
+          connection,
+          message,
+          sourceEventOffset: event.offset,
+        });
+      }
+    } catch (error) {
+      await this.#appendInputError({ error, event });
     }
   }
 
   async #getConnection(setup: VoiceAgentSetup): Promise<ProviderConnection> {
+    // The fingerprint covers model/voice/system instruction, not just the
+    // provider: a setup change that keeps the provider must still re-dial so
+    // the session setup message reflects the new configuration.
+    const setupKey = JSON.stringify(setup);
     if (
-      this.#connection?.provider === setup.provider &&
+      this.#connection?.setupKey === setupKey &&
       this.#connection.socket.readyState === WEBSOCKET_OPEN
     ) {
       return this.#connection;
     }
     if (this.#openingConnection != null) {
-      return await this.#openingConnection;
+      // An in-flight dial may belong to an older setup (setup-configured can
+      // land while a forward is dialing); only adopt a fingerprint match.
+      const opening = await this.#openingConnection.catch(() => null);
+      if (opening?.setupKey === setupKey && opening.socket.readyState === WEBSOCKET_OPEN) {
+        return opening;
+      }
+      opening?.socket.close(1000, "Voice-agent setup changed during dial.");
     }
 
     this.#connection?.socket.close(1000, "Replacing stale voice-agent provider connection.");
-    this.#openingConnection = this.#openProviderConnection(setup);
+    const dial = this.#openProviderConnection(setup);
+    this.#openingConnection = dial;
     try {
-      this.#connection = await this.#openingConnection;
+      this.#connection = await dial;
       return this.#connection;
     } finally {
-      this.#openingConnection = null;
+      if (this.#openingConnection === dial) this.#openingConnection = null;
     }
   }
 
@@ -243,6 +263,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
     const connection: ProviderConnection = {
       id: crypto.randomUUID(),
       provider: setup.provider,
+      setupKey: JSON.stringify(setup),
       socket,
       urlForLog: endpoint.urlForLog(setup),
       ready,
