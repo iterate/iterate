@@ -2845,10 +2845,14 @@ describe("itx", () => {
     using project = itx.projects.create({ slug: `ts-inline-build-${crypto.randomUUID()}` });
 
     const inlineTsFiles = {
+      // Salted per run: an unsalted source would be a warm artifact-cache hit
+      // from a previous run, and this test asserts the COLD path's build
+      // lifecycle events.
       "worker.ts": `
         import { WorkerEntrypoint } from "cloudflare:workers";
         import { add, GREETING } from "./lib/math.ts";
 
+        // build salt ${crypto.randomUUID()}
         export class TsEntrypoint extends WorkerEntrypoint {
           compute(input: { left: number; right: number }): { greeting: string; sum: number } {
             return { greeting: GREETING, sum: add(input.left, input.right) };

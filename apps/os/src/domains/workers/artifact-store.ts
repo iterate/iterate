@@ -8,7 +8,7 @@
  * key), and `expirationTtl` gives cache expiry without a cleanup worker.
  */
 
-export const WORKER_BUILD_ARTIFACT_SCHEMA_VERSION = 7;
+export const WORKER_BUILD_ARTIFACT_SCHEMA_VERSION = 1;
 
 /** Cache lifetime for build artifacts. Every artifact is reproducible from its
  * deterministic build key, so expiry only costs a rebuild on next use. */

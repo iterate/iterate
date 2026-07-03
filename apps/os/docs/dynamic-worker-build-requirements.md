@@ -1,6 +1,6 @@
 # Dynamic Worker Build Requirements
 
-Status: draft for design review.
+Status: implemented (see tasks/os-dynamic-worker-build-pipeline.md and apps/os/src/domains/workers/).
 
 ## Goal
 

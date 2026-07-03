@@ -82,9 +82,11 @@ using agent = connectItx({ agentPath: "/agents/demo", auth, baseUrl, projectId }
 `session.projects.create({ slug })` registers the project with the auth worker
 (the project directory — OS has no database of its own), primes the KV cache,
 then appends the create-request onto the project's root stream. The project
-processor seeds the default repo at `/` from static template files
-(`domains/repos/project-repo-template.ts`: `worker.js`, `README.md`,
-`AGENTS.md`, `ONBOARDING.md`), loads the seeded project worker, boots the
+processor seeds the default repo at `/` from the template folder at
+`apps/os/project-repo-template` (TypeScript `worker.ts` + apps, `package.json`,
+`itx.ts`, `AGENTS.md`, `ONBOARDING.md`; codegen keeps the seeded file map in
+`domains/repos/project-repo-template.generated.ts` in sync), builds and loads
+the seeded project worker through the worker build pipeline, boots the
 onboarding agent,
 and only then emits `events.iterate.com/project/created`. Streams are the
 coordination layer for all of this — bootstrap is events and processors, not a
@@ -156,11 +158,17 @@ the interceptor sees placeholders, never material
 `itx.workers.get(ref)` runs caller-supplied code in an isolate via the Worker
 Loader. A `DynamicWorkerRef` is `stateless` (a WorkerEntrypoint export, with
 optional `props`) or `stateful` (a DurableObject class export hosted by
-`StatefulWorkerDurableObject` under a `durableWorkerKey`); source is `inline`
-(module text) or `repo` (resolved from a project repo, so commits affect the
-next use). Inside loaded code, `await env.ITX.get()` returns a full itx at the
-ref's scope path. `itx.worker` is the seeded project worker — the same
-mechanism pointed at the default repo's `worker.js`.
+`StatefulWorkerDurableObject` under a `durableWorkerKey`). Its source is an
+orthogonal file source plus Cloudflare build options: files come `inline` or
+from a `repo` snapshot (branch late-bound or commit-pinned, masked by
+include/exclude globs), and the worker build pipeline bundles them — multi-file
+TypeScript and `package.json` npm dependencies included — into a KV-cached,
+loader-ready artifact keyed deterministically (see
+`docs/dynamic-worker-build-requirements.md`). Build lifecycle is visible as
+`events.iterate.com/worker-build/*` events on the ref's scope stream. Inside
+loaded code, `await env.ITX.get()` returns a full itx at the ref's scope path.
+`itx.worker` is the seeded project worker — the same mechanism pointed at the
+default repo's `worker.ts`.
 
 Note: in script isolates, Workers RPC does not pipeline through unresolved
 returns — `await itx.workers.get(...)` / `await itx.agents.get(...)` before
