@@ -1,4 +1,3 @@
-import { once } from "node:events";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -22,6 +21,36 @@ async function closeServer(server: Server): Promise<void> {
   });
 }
 
+async function listenForTcpServer(
+  server: Server,
+  { host, port }: { host: string; port: number },
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      server.off("error", onError);
+      server.off("listening", onListening);
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onListening = () => {
+      cleanup();
+      resolve();
+    };
+
+    server.once("error", onError);
+    server.once("listening", onListening);
+
+    try {
+      server.listen(port, host);
+    } catch (error) {
+      cleanup();
+      reject(error);
+    }
+  });
+}
+
 export async function listenOnFetchSafePort(
   server: Server,
   { host = "127.0.0.1", port = 0 }: { host?: string; port?: number } = {},
@@ -31,8 +60,7 @@ export async function listenOnFetchSafePort(
   }
 
   for (let attempt = 1; attempt <= 50; attempt++) {
-    server.listen(port, host);
-    await once(server, "listening");
+    await listenForTcpServer(server, { host, port });
 
     const address = server.address() as AddressInfo | string | null;
     if (!address || typeof address === "string") {
