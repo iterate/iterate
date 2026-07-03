@@ -1,4 +1,5 @@
 import { StreamProcessor } from "../streams/stream-processor.ts";
+import { timedStep } from "../../lib/step-timing.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { PROJECT_REPO_PATH } from "../repos/utils.ts";
 import { PROJECT_REPO_ONBOARDING_MD } from "../repos/project-repo-template.ts";
@@ -24,7 +25,7 @@ import { SlackProcessorContract } from "../integrations/slack-processor-contract
 import { isSlackAgentPath, SLACK_INTEGRATION_STREAM_PATH } from "../integrations/utils.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 
-export const ONBOARDING_AGENT_PATH = "/agents/onboarding";
+const ONBOARDING_AGENT_PATH = "/agents/onboarding";
 
 /**
  * Agents under `/agents/slack/**` are Slack-thread agents: the slack webhook
@@ -32,20 +33,22 @@ export const ONBOARDING_AGENT_PATH = "/agents/onboarding";
  * processor transcribes them, and replies go out through the itx.slack Web
  * API capability instead of web chat.
  */
-export const SLACK_AGENT_SYSTEM_PROMPT = [
+const SLACK_AGENT_SYSTEM_PROMPT = [
   "You are an iterate AI agent running inside a Slack thread.",
   "Respond with exactly one fenced JavaScript code block and no surrounding prose.",
   "The code block must contain a single async arrow function: async (itx) => { ... }.",
   "Incoming Slack webhook events arrive as your inputs. Reply only when mentioned, directly asked, or clearly needed.",
-  "To reply in the thread, use await itx.slack.chat.postMessage({ channel, thread_ts, text }) with the channel and thread_ts from the incoming webhook payloads. Never use itx.chat.sendMessage for Slack replies. Do not return side-effect-only call results unless you need to inspect them on your next turn.",
-  "Use project capabilities on itx when they are relevant.",
+  "To reply in the thread, use await itx.slack.chat.postMessage({ channel, thread_ts, text }) with the channel and thread_ts from the incoming webhook payloads. Never use itx.chat.sendMessage for Slack replies.",
+  "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply — do not pattern-match response shapes blind or wrap calls in defensive try/catch (a raw thrown error is more useful to you). Use Promise.all to fan out independent calls concurrently.",
+  "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
+  "Use project capabilities on itx when they are relevant: await itx.describe() lists them, and await itx.examples.list() / itx.examples.get({ id }) is a catalogue of known-good snippets.",
 ].join("\n");
 
 /**
  * The onboarding agent is a normal web-chat agent whose system prompt embeds
  * the seeded ONBOARDING.md script. Same codemode contract as every agent.
  */
-export const ONBOARDING_AGENT_SYSTEM_PROMPT = [
+const ONBOARDING_AGENT_SYSTEM_PROMPT = [
   DEFAULT_AGENT_SYSTEM_PROMPT,
   "",
   "You are this project's onboarding agent. Follow the onboarding script below.",
@@ -55,7 +58,7 @@ export const ONBOARDING_AGENT_SYSTEM_PROMPT = [
 
 const PROJECT_WORKER_READY_ATTEMPTS = 20;
 const PROJECT_WORKER_READY_RETRY_MS = 100;
-const PROJECT_WORKER_READY_URL = "https://minimal-itx-v4.localhost/__itx_project_ready";
+const PROJECT_WORKER_READY_URL = "https://iterate-project.localhost/__itx_project_ready";
 
 export class ProjectProcessor extends StreamProcessor<
   typeof ProjectProcessorContract,
@@ -114,49 +117,62 @@ export class ProjectProcessor extends StreamProcessor<
           );
         }
         blockProcessorWhile(async () => {
-          await append(
-            buildDurableObjectProcessorSubscriptionConfiguredEvent({
-              durableObjectName: DurableObjectNameCodec.stringify({
-                projectId: this.deps.itx.projectId,
-                path: "/",
-              }),
-              processorSlug: ItxProcessorContract.slug,
-              subscriberType: "itx",
-            }),
-            // The worker build processor rides along with every ITX processor
-            // subscription: any scope that can run dynamic workers also owns
-            // their build lifecycle events.
-            buildDurableObjectProcessorSubscriptionConfiguredEvent({
-              durableObjectName: DurableObjectNameCodec.stringify({
-                projectId: this.deps.itx.projectId,
-                path: "/",
-              }),
-              processorSlug: WorkerBuildProcessorContract.slug,
-              subscriberType: "itx",
-            }),
-          );
-          // Arm the Slack webhook router on `/integrations/slack` from birth,
-          // so a claimed workspace's first webhook routes even if the connect
-          // flow's own belt-and-braces subscription append raced.
-          await this.deps.itx.streams.get(SLACK_INTEGRATION_STREAM_PATH).append(
-            buildDurableObjectProcessorSubscriptionConfiguredEvent({
-              durableObjectName: DurableObjectNameCodec.stringify({
-                projectId: this.deps.itx.projectId,
-                path: SLACK_INTEGRATION_STREAM_PATH,
-              }),
-              idempotencyKey: `slack-router-subscription:${this.deps.itx.projectId}`,
-              processorSlug: SlackProcessorContract.slug,
-              subscriberType: "project",
-            }),
-          );
-          await append({
-            type: "events.iterate.com/repo/create-requested",
-            idempotencyKey: `repo-create-requested:${this.deps.itx.projectId}:${PROJECT_REPO_PATH}`,
-            payload: {
-              path: PROJECT_REPO_PATH,
-              projectId: this.deps.itx.projectId,
-            },
-          });
+          const timing = { projectId: this.deps.itx.projectId };
+          // One atomic root append (itx subscription + repo kickoff, original
+          // relative order preserved) in parallel with the independent Slack
+          // stream append. The previous three sequential awaits were the
+          // slowest lane of the create saga (~1.2-2.6s measured on preview-7;
+          // tasks/os-cold-create-latency.md) — batching cuts it to one
+          // round-trip apiece.
+          await Promise.all([
+            timedStep("create-timing", timing, "root-saga-append", () =>
+              append(
+                buildDurableObjectProcessorSubscriptionConfiguredEvent({
+                  durableObjectName: DurableObjectNameCodec.stringify({
+                    projectId: this.deps.itx.projectId,
+                    path: "/",
+                  }),
+                  processorSlug: ItxProcessorContract.slug,
+                  subscriberType: "itx",
+                }),
+                // The worker build processor rides along with every ITX
+                // processor subscription: any scope that can run dynamic
+                // workers also owns their build lifecycle events.
+                buildDurableObjectProcessorSubscriptionConfiguredEvent({
+                  durableObjectName: DurableObjectNameCodec.stringify({
+                    projectId: this.deps.itx.projectId,
+                    path: "/",
+                  }),
+                  processorSlug: WorkerBuildProcessorContract.slug,
+                  subscriberType: "itx",
+                }),
+                {
+                  type: "events.iterate.com/repo/create-requested",
+                  idempotencyKey: `repo-create-requested:${this.deps.itx.projectId}:${PROJECT_REPO_PATH}`,
+                  payload: {
+                    path: PROJECT_REPO_PATH,
+                    projectId: this.deps.itx.projectId,
+                  },
+                },
+              ),
+            ),
+            // Arm the Slack webhook router on `/integrations/slack` from birth,
+            // so a claimed workspace's first webhook routes even if the connect
+            // flow's own belt-and-braces subscription append raced.
+            timedStep("create-timing", timing, "slack-router-append", () =>
+              this.deps.itx.streams.get(SLACK_INTEGRATION_STREAM_PATH).append(
+                buildDurableObjectProcessorSubscriptionConfiguredEvent({
+                  durableObjectName: DurableObjectNameCodec.stringify({
+                    projectId: this.deps.itx.projectId,
+                    path: SLACK_INTEGRATION_STREAM_PATH,
+                  }),
+                  idempotencyKey: `slack-router-subscription:${this.deps.itx.projectId}`,
+                  processorSlug: SlackProcessorContract.slug,
+                  subscriberType: "project",
+                }),
+              ),
+            ),
+          ]);
         });
         break;
       }
@@ -207,32 +223,39 @@ export class ProjectProcessor extends StreamProcessor<
           return;
         }
         blockProcessorWhile(async () => {
-          await waitForDefaultProjectWorker(this.deps.itx);
-          await append({
-            type: "events.iterate.com/project/created",
-            idempotencyKey: `project-created:${this.deps.itx.projectId}`,
-            payload: state.createRequest!,
-          });
+          const timing = { projectId: this.deps.itx.projectId };
+          await timedStep("create-timing", timing, "worker-probe", () =>
+            waitForDefaultProjectWorker(this.deps.itx),
+          );
+          await timedStep("create-timing", timing, "project-created-append", () =>
+            append({
+              type: "events.iterate.com/project/created",
+              idempotencyKey: `project-created:${this.deps.itx.projectId}`,
+              payload: state.createRequest!,
+            }),
+          );
           // Seed the onboarding agent: full birth certificate (the generic
           // child-stream-created lane later double-appends with the same
           // idempotency keys and dedupes) plus the kickoff input that makes the
           // agent greet the user without waiting for a first message.
-          await this.deps.itx.streams.get(ONBOARDING_AGENT_PATH).append(
-            ...agentBirthCertificateEvents({
-              childPath: ONBOARDING_AGENT_PATH,
-              llmProvider: this.deps.defaultLlmProvider,
-              projectId: this.deps.itx.projectId,
-              systemPrompt: ONBOARDING_AGENT_SYSTEM_PROMPT,
-            }),
-            {
-              type: "events.iterate.com/agent/input-added",
-              idempotencyKey: `project-onboarding-start:${this.deps.itx.projectId}`,
-              payload: {
-                content:
-                  "Start onboarding now. The project owner just created this project and is looking at the chat.",
-                llmRequestPolicy: { behaviour: "after-current-request" as const },
+          await timedStep("create-timing", timing, "onboarding-agent-birth", () =>
+            this.deps.itx.streams.get(ONBOARDING_AGENT_PATH).append(
+              ...agentBirthCertificateEvents({
+                childPath: ONBOARDING_AGENT_PATH,
+                llmProvider: this.deps.defaultLlmProvider,
+                projectId: this.deps.itx.projectId,
+                systemPrompt: ONBOARDING_AGENT_SYSTEM_PROMPT,
+              }),
+              {
+                type: "events.iterate.com/agent/input-added",
+                idempotencyKey: `project-onboarding-start:${this.deps.itx.projectId}`,
+                payload: {
+                  content:
+                    "Start onboarding now. The project owner just created this project and is looking at the chat.",
+                  llmRequestPolicy: { behaviour: "after-current-request" as const },
+                },
               },
-            },
+            ),
           );
         });
         return;

@@ -3,9 +3,8 @@
 This folder is itx behind `/api/itx` and everything project-scoped in
 OS: streams, repos, agents, secrets, dynamic workers, egress, and the itx
 capability surface itself. It began life as `apps/minimal-itx-v4` and was
-transplanted here whole during the itx-v4 replacement
-(`apps/os/ITX_V4_MIGRATION_REPORT.md` has the history; this README describes
-what is).
+transplanted here whole during the itx-v4 replacement (PR #1585 has the
+history; this README describes what is).
 
 The public contract of record is [`types.ts`](./types.ts) — handwritten,
 import-free, and what every client (browser, CLI, scripts, dynamic workers)
@@ -109,7 +108,7 @@ mutating the original payload.
 
 Built-ins are explicit members of the `Itx` interface (`streams`, `repos`,
 `repo`, `agents`, `secrets`, `workers`, `worker`, `egress`, `mcp`, `openapi`,
-`ai`, `processor`, plus `agent`/`chat` on agent scopes). A call like
+`ai`, `examples`, `processor`, plus `agent`/`chat` on agent scopes). A call like
 `itx.streams.get("/x")` resolves in the isolate without touching the ITX
 Durable Object; the trade-off is that a mounted capability can never shadow a
 built-in name.
@@ -138,7 +137,10 @@ stranger who finds the capability there.
 client targets (no mount, no events): `connect` discovers (lists MCP tools /
 fetches the OpenAPI spec through project egress), and the returned target
 answers `describe()` and fallback-dispatches every other property as a tool
-name / flat `operationId`.
+name / flat `operationId`. `project.mcp.exa` is the same client shape
+pre-connected to Exa's public MCP server (`https://mcp.exa.ai/mcp`), so every
+project has web search (`web_search_exa`) and page reading (`web_fetch_exa`)
+with zero setup.
 
 ## Secrets and egress
 
@@ -188,8 +190,11 @@ started/chunk/output/completed events. The agent contract: respond with
 exactly one fenced JavaScript block containing a single
 `async (itx) => { … }`, which the ITX processor executes; replies reach the
 user via `itx.chat.sendMessage({ message })`
-(`events.iterate.com/agents/web-message-sent`). `agent.ask({ message })` is
-the send-and-wait convenience.
+(`events.iterate.com/agents/web-message-sent`). Scripts behave like tool
+calls: a returned value (or thrown error) renders back into history as the
+next input and triggers another turn, while a script that returns `undefined`
+ends the loop — the completion event then carries no `result` key.
+`agent.ask({ message })` is the send-and-wait convenience.
 
 ## Stream processor hosting
 
@@ -202,6 +207,11 @@ tells the host which `subscriptionKey` to open; the host subscribes on its own
 stream capability. State is a fold of the journal; the `{offset, state}`
 checkpoint is a disposable cache (the doctrine:
 `docs/domain-objects-and-stream-processors.md`).
+
+The browser stream mirror is a second host of the same engine: the dashboard
+keeps a local event table plus derived tables and runs real `StreamProcessor`
+contracts in the browser host, with announcements preserved
+(`domains/streams/client-libraries/browser/`).
 
 ## Workers RPC types patch
 
@@ -219,7 +229,8 @@ after touching the patch or the workers-types version.
   ingress, security), run through `pnpm e2e` against a live deployment.
 - `apps/os/e2e/examples/` — the example matrix: the REPL example catalogue
   executed across every runtime (browser REPL, Node, `runScript`, project
-  worker), `pnpm e2e:examples`.
+  worker). Part of `pnpm e2e` (the `node` project runs the matrix headless; the
+  `browser` project runs it in a real browser).
 - Known caveat: repo-sourced project-worker scenarios fail against LOCAL vite
   dev with a masked `internal error; reference =` (capnweb/vite-dev RpcTarget
   identity class). They pass against deployed previews — verify there before

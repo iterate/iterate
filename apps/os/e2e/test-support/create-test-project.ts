@@ -8,7 +8,7 @@ import { connectItx } from "~/itx-client.ts";
  * admin handle may create projects). Returns the project plus a base URL and
  * an async disposer.
  *
- * NOTE: itx has no `projects.remove` yet (TODO task #13), so
+ * NOTE: itx has no `projects.remove` yet (tasks/os-project-archival.md), so
  * disposal is a no-op — dev/preview stages accumulate throwaway projects and
  * are periodically reset. The `await using` shape is kept so tests don't churn
  * when removal lands.
@@ -42,7 +42,7 @@ export async function createTestProject(opts: { slugPrefix: string }) {
       return project;
     },
     [Symbol.asyncDispose]() {
-      // TODO(task #13): project removal on itx.
+      // TODO(tasks/os-project-archival.md): project removal on itx.
       return Promise.resolve();
     },
   };

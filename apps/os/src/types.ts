@@ -58,8 +58,39 @@ export interface Session {
 export interface ProjectCollection {
   get(projectId: string): Promise<Itx>;
   create(args: { organizationSlug?: string; projectId?: string; slug: string }): Promise<Itx>;
-  list(): string[];
+  /**
+   * The session's projects, enriched engine-side. Scope is explicit:
+   * - "mine" (default for user principals): the caller's own claims (plus
+   *   anything the live context was widened to after a create) — even when
+   *   the socket also carries admin credentials.
+   * - "deployment": every deployment-known project from the project
+   *   directory; requires an admin principal (admin secret/cookie or an
+   *   admin-role user). Default for non-user admin principals, which have
+   *   no claims of their own.
+   * Each entry carries the project's {@link ProjectDeploymentStatus} so
+   * callers never probe per project.
+   */
+  list(input?: { scope?: "mine" | "deployment" }): Promise<ProjectListEntry[]>;
 }
+
+/**
+ * Whether a project the directory knows about actually exists in THIS
+ * deployment's engine:
+ * - `ready` — the project stream's bootstrap saga ran (`state.created`).
+ * - `missing` — the engine has no state for it (e.g. the deployment was reset
+ *   while the auth worker kept its rows); it can be set up again.
+ * - `unknown` — the probe failed (engine hiccup); don't block the list on it.
+ */
+export type ProjectDeploymentStatus = "ready" | "missing" | "unknown";
+
+/** One entry of {@link ProjectCollection.list}. */
+export type ProjectListEntry = {
+  id: string;
+  slug: string;
+  organizationId: string | null;
+  organizationName: string | null;
+  deploymentStatus: ProjectDeploymentStatus;
+};
 
 /**
  * An **itx**: a capability context scoped into one project at one path.
@@ -85,6 +116,8 @@ export interface Itx extends ItxCapabilityHost {
   agents: AgentCollection;
   describe(): Promise<ProjectDescription>;
   egress: ProjectEgress;
+  /** Read-only catalogue of known-good itx script snippets (`list()`, `get({ id })`). */
+  examples: ItxExampleCatalog;
   /** Gmail REST proxy for the project's connected Google account. */
   gmail: GmailCapability;
   /** Slack/Google connection status, OAuth start/complete, disconnect. */
@@ -455,6 +488,13 @@ export type OpenApiRpc = object;
 
 export interface McpClientCollection {
   connect(input: McpClientConnectInput): Promise<McpClientRpc>;
+  /**
+   * The public Exa MCP server (https://mcp.exa.ai/mcp), pre-connected for every
+   * project: web search and page reading as flat tool calls.
+   * `itx.mcp.exa.web_search_exa({ query, numResults })` searches the web;
+   * `itx.mcp.exa.web_fetch_exa({ urls, maxCharacters })` reads pages as markdown.
+   */
+  exa: McpClientRpc;
 }
 
 export type McpClientConnectInput = {
@@ -464,6 +504,28 @@ export type McpClientConnectInput = {
 };
 
 export type McpClientRpc = object;
+
+/**
+ * Read-only catalogue of known-good itx script snippets — the project-context
+ * entries of the REPL "Examples" panel. `list()` returns every entry without
+ * its code; `get({ id })` returns one entry with the full script body. Agents
+ * copy working patterns from here instead of guessing at the surface.
+ * Session-level examples (whoami, projects.list) are excluded: they run
+ * against the OS Session `authenticate()` returns, which an itx holder does
+ * not have.
+ */
+export interface ItxExampleCatalog {
+  get(input: { id: string }): Promise<ItxExampleWithCode>;
+  list(): Promise<ItxExampleSummary[]>;
+}
+
+export type ItxExampleSummary = {
+  description: string;
+  id: string;
+  title: string;
+};
+
+export type ItxExampleWithCode = ItxExampleSummary & { code: string };
 
 /**
  * Shared host operations for objects that can own dynamic ITX capabilities.

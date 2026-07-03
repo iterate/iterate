@@ -53,6 +53,12 @@ baseTest("every catalogue example is either matrix-tested or explicitly excluded
   }
 });
 
+// Concurrency-safe under `sequence.concurrent`: the `??=` check-and-assign has
+// no await between them, so it's atomic against other microtasks — the first
+// matrix test to arrive creates the project, every other awaits the same
+// promise (one project, created once). Tests then share that read-only
+// projectId but isolate their writes with a per-runtime `marker` (below), so
+// concurrent examples don't collide.
 let matrixSetupPromise: Promise<{ projectId: string }> | null = null;
 function ensureMatrixProject(): Promise<{ projectId: string }> {
   matrixSetupPromise ??= (async () => {

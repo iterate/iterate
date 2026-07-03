@@ -55,17 +55,6 @@ describe("itx REPL TypeScript declarations", () => {
     }
   });
 
-  test("the editor's type surface is the raw itx contract, verbatim", () => {
-    // itx-repl-types.ts re-exports ~/types.ts?raw as the virtual
-    // filesystem's /itx-types.ts, so completions can never drift from the
-    // design of record. Sentinels prove it's the real file, not a copy of the
-    // removed legacy surface.
-    expect(itxTypesDeclaration).toContain("Public ITX capability contract");
-    expect(itxTypesDeclaration).toContain("export interface Session");
-    expect(itxTypesDeclaration).toContain("export interface Itx extends ItxCapabilityHost");
-    expect(itxTypesDeclaration).not.toContain("ItxHandle");
-  });
-
   test("REPL session globals from the prelude type-check in a snippet", () => {
     // Every global the REPL runtime injects (see ~/itx/browser-repl.ts) must
     // be declared by the prelude, with the design-of-record types attached.

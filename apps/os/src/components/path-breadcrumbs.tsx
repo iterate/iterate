@@ -15,7 +15,7 @@ import { Input } from "@iterate-com/ui/components/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@iterate-com/ui/components/popover";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { parseBrowserCoreStreamTreeState } from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
-import { connectItx } from "~/itx/itx-react.tsx";
+import { connectItxBrowser } from "~/itx/itx-react.tsx";
 import type {
   RouteBreadcrumbLoaderData,
   RouteBreadcrumbStaticData,
@@ -191,7 +191,7 @@ function isProjectCollectionOrLayoutBreadcrumb(input: {
  * (`_app.tsx`), NOT under the project provider, and itx here is deliberately
  * OPTIONAL: a slow or down socket may only degrade this navigator, never
  * suspend or blank the chrome. So we dial LAZILY and non-suspending via
- * `connectItx` inside the effect (gated by `enabled`) rather than the
+ * `connectItxBrowser` inside the effect (gated by `enabled`) rather than the
  * suspending `useItx` hook — addressing the project by ID so we share the
  * same pooled socket the project page already warmed (the provider keys on
  * project ID), instead of opening a second socket for the same project.
@@ -211,7 +211,7 @@ function useStreamChildPaths(input: {
     setChildPaths(undefined);
     if (!enabled) return;
     let cancelled = false;
-    void connectItx({ projectId })
+    void connectItxBrowser({ projectId })
       .then(async (itx) => await itx.streams.get(streamPath).runtimeState())
       .then((state) => {
         if (!cancelled) {

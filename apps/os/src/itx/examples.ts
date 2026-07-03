@@ -12,11 +12,11 @@
 //                   executed against `await this.env.ITX.get()`
 //
 // Almost every example is written against a PROJECT itx (context: "project"):
-// the harness — a project REPL, connectItx({ projectId }), runScript, or a
+// the harness — a project REPL, connectItxBrowser({ projectId }), runScript, or a
 // dynamic worker's env.ITX — is already scoped into the project, and the
 // script gets straight to work: itx.streams.get("/some/path").append(...).
-// Global-context examples run against the Session catalog (the global/admin
-// REPL) instead — that handle vends projects; it is not itself an itx.
+// Session-context examples run against the OS Session (what authenticate()
+// returns) instead — a session vends project itxs; it is not itself an itx.
 //
 // `runtimes` records where a snippet genuinely works unattended. Live
 // capabilities (provideCapability with a `capability` value) are session-bound
@@ -38,8 +38,9 @@ export type ItxExample = {
   /** Script body: `itx` and `vars` in scope, explicit `return`. */
   code: string;
   /** The handle the snippet expects: a project itx (the normal case) or the
-   * global Session catalog (whoami / projects.list only). */
-  context: "global" | "project";
+   * OS Session — what authenticate() returns, not an itx (whoami /
+   * projects.list only). */
+  context: "project" | "session";
   description: string;
   id: string;
   /** Runtimes the snippet runs unattended in (the e2e matrix honors this). */
@@ -55,10 +56,10 @@ const LIVE_SESSION_RUNTIMES: ItxExampleRuntime[] = ["browser", "node", "cli"];
 export const ITX_EXAMPLES: ItxExample[] = [
   {
     id: "whoami",
-    title: "Who am I? (global session)",
+    title: "Who am I? (OS session)",
     description:
-      "The global REPL holds a Session — the catalog authenticate() returned. whoami() reports the principal the socket carries; everything else you do is scoped by it.",
-    context: "global",
+      "The top-level REPL holds the OS Session — the catalog authenticate() returned; it is not an itx. whoami() reports the principal the socket carries; everything else you do is scoped by it.",
+    context: "session",
     runtimes: ["browser", "node", "cli"],
     code: `
 return await itx.whoami();
@@ -68,16 +69,17 @@ return await itx.whoami();
     id: "list-projects",
     title: "List projects, then open one",
     description:
-      "A Session vends itxs: projects.list() shows the project ids you can reach, and projects.get(id) returns the project-scoped itx — the same handle a project REPL holds. Every project-context example starts there.",
-    context: "global",
+      "A Session vends itxs: projects.list() shows the projects you can reach (id, slug, org, deployment status), and projects.get(id) returns the project-scoped itx — the same handle a project REPL holds. Every project-context example starts there.",
+    context: "session",
     runtimes: ["browser", "node", "cli"],
     code: `
-// Every project id you have access to (admins see all; users see their own).
-const projectIds = await itx.projects.list();
+// Every project you have access to (admins see all; users see their own):
+// { id, slug, organizationId, organizationName, deploymentStatus }.
+const projects = await itx.projects.list();
 
 // Open one. The result is an itx scoped to that project — the same shape a
 // project REPL's \`itx\` has (streams, repo, workers, runScript, ...).
-const pid = vars.projectId ?? projectIds[0];
+const pid = vars.projectId ?? projects[0]?.id;
 if (!pid) throw new Error("Create a project first: await itx.projects.create({ slug: 'demo' })");
 const project = await itx.projects.get(pid);
 
@@ -427,6 +429,44 @@ const agent = await itx.agents.get(vars.agentPath ?? "/agents/repl-demo");
 // agent loop reduces into its history.
 const sent = await agent.sendMessage(vars.message ?? "Hello from the examples catalogue");
 return { offset: sent.offset, payload: sent.payload, type: sent.type };
+`.trim(),
+  },
+  {
+    id: "browse-examples",
+    title: "Browse this catalogue through itx.examples",
+    description:
+      "The catalogue itself is a built-in capability: list() returns every project-context entry without its code (cheap to skim), get({ id }) returns one with the full script body. Agents use this to copy working patterns instead of guessing at the surface. Session-context entries are excluded — an itx holder has no Session.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const summaries = await itx.examples.list();
+
+// Summaries carry { id, title, description } — no code. Fetch one entry's
+// full script body by id.
+const example = await itx.examples.get({ id: vars.exampleId ?? "describe-project" });
+
+return {
+  count: summaries.length,
+  hasCode: typeof example.code === "string" && example.code.length > 0,
+  id: example.id,
+};
+`.trim(),
+  },
+  {
+    id: "exa-web-search",
+    title: "Web search through the built-in Exa MCP server",
+    description:
+      "itx.mcp.exa is a pre-connected MCP client for Exa's public server (https://mcp.exa.ai/mcp): web_search_exa({ query, numResults }) searches, web_fetch_exa({ urls }) reads pages as markdown. Tool names are flat calls on the client — the same shape any itx.mcp.connect({ url }) client has. External service, so run it interactively.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+// Fan independent lookups out in parallel — each tool call is one round trip.
+const [search, pages] = await Promise.all([
+  itx.mcp.exa.web_search_exa({ query: vars.query ?? "Cloudflare Durable Objects", numResults: 3 }),
+  itx.mcp.exa.web_fetch_exa({ urls: [vars.url ?? "https://developers.cloudflare.com/durable-objects/"], maxCharacters: 2000 }),
+]);
+
+return { pages, search };
 `.trim(),
   },
   {

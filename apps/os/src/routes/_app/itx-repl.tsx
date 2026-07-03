@@ -1,6 +1,6 @@
 // The browser itx REPL: a Cap'n Web session straight from the browser tab to
-// itx (/api/itx), with `itx` in scope — the Session catalog
-// in the global/admin REPL, the project itx in a project REPL. Because itx is
+// itx (/api/itx), with `itx` in scope — the OS Session (not an itx)
+// in the top-level session REPL, the project itx in a project REPL. Because itx is
 // symmetric, anything you can do here you can do from Node, runScript, or a
 // dynamic worker — and the browser can PROVIDE live capabilities too (see the
 // examples).
@@ -28,11 +28,11 @@ export const Route = createFileRoute("/_app/itx-repl")({
   staticData: {
     breadcrumb: "Repl",
   },
-  component: () => <ConnectedItxRepl context="global" />,
+  component: () => <ConnectedItxRepl context="session" />,
 });
 
 /** The shared "connecting to itx" fallback both repls suspend behind. */
-export function ItxReplConnecting() {
+function ItxReplConnecting() {
   return (
     <div className="p-4 text-sm text-muted-foreground" data-spinner="true">
       Connecting to itx...
@@ -50,12 +50,12 @@ export function ItxReplConnecting() {
  */
 export function ConnectedItxRepl({
   poolContext,
-  context = "global",
+  context = "session",
   initialCode,
   scope,
 }: {
   poolContext?: string;
-  context?: "global" | "project";
+  context?: "session" | "project";
   initialCode?: string;
   scope?: Record<string, unknown>;
 }) {
@@ -81,7 +81,7 @@ function ItxReplConnected({
   scope,
 }: {
   poolContext?: string;
-  context?: "global" | "project";
+  context?: "session" | "project";
   initialCode?: string;
   scope?: Record<string, unknown>;
 }) {
@@ -94,12 +94,12 @@ function ItxReplPage({
   // it must NOT dispose it or close the socket — the pool owns the connection's
   // lifetime and every other component on this context rides the same socket.
   itx,
-  context = "global",
+  context = "session",
   initialCode = DEFAULT_BROWSER_REPL_CODE,
   scope,
 }: {
   itx: ItxReactHandle;
-  context?: "global" | "project";
+  context?: "session" | "project";
   initialCode?: string;
   scope?: Record<string, unknown>;
 }) {

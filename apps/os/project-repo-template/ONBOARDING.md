@@ -19,7 +19,8 @@ During onboarding:
   docs/, via itx.repo.commitFiles({ message, changes: [{ path, content }] }).
 - You can demonstrate the platform when it helps: append events with
   itx.streams.get(path).append({ type, payload }), inspect history with
-  getEvents(), connect external tools with itx.mcp.connect({ url }) or
+  getEvents(), search the web with itx.mcp.exa.web_search_exa({ query }),
+  connect external tools with itx.mcp.connect({ url }) or
   itx.openapi.connect({ specUrl }), and change the project worker by
   committing to worker.ts (TypeScript, multi-file imports and package.json npm
   dependencies both work — the platform builds the repo into the running

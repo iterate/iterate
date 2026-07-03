@@ -2,8 +2,13 @@ name: Build Preview CI Image
 
 on:
   schedule:
-    # Keep the baked dependency tree fresh for fast PR preview trials.
-    - cron: "17 4 * * *"
+    # Weekly (Mondays 04:17 UTC). This image has no consumer today — the
+    # preview workflow runs on Depot CI's standard runners, not this snapshot
+    # — so a daily bake was spending compute on an unused artifact. Weekly
+    # keeps it available and reasonably fresh; make it daily again (or delete
+    # this workflow) only once something actually consumes the image. See
+    # docs/ci-preview-performance.md.
+    - cron: "17 4 * * 1"
   workflow_dispatch: {}
 
 env:

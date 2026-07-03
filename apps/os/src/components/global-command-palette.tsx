@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMatches, useNavigate } from "@tanstack/react-router";
 import { StreamSwitcherDialog } from "./stream-switcher-dialog.tsx";
-import { connectItx } from "~/itx/itx-react.tsx";
+import { connectItxBrowser } from "~/itx/itx-react.tsx";
 import { OPEN_GLOBAL_COMMAND_PALETTE_EVENT } from "~/components/global-command-palette-events.ts";
 import type {
   AppRouteStaticData,
@@ -50,7 +50,7 @@ export function GlobalCommandPalette() {
       source: (path) => ({
         async subscribe(args) {
           // Key by project ID so we share the project provider's pooled socket.
-          const itx = await connectItx({ projectId: activeStream.projectId });
+          const itx = await connectItxBrowser({ projectId: activeStream.projectId });
           return itx.streams.get(path).subscribe(args);
         },
       }),

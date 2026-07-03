@@ -1,6 +1,4 @@
 import { RpcTarget } from "cloudflare:workers";
-import { Client as McpSdkClient } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { AppConfig } from "./config.ts";
 import { createAuthWorkerServiceClient } from "./auth/auth-worker-service.ts";
 import { parseConfig } from "./config.ts";
@@ -11,7 +9,13 @@ import {
   widenProjectAccess,
 } from "./auth.ts";
 import { itxEnv as env } from "./env.ts";
-import { primeProjectDirectory } from "./project-directory.ts";
+import {
+  listProjectDirectory,
+  primeProjectDirectory,
+  readProjectById,
+} from "./project-directory.ts";
+import { deploymentStatusesFromProbes } from "./project-deployment-status.ts";
+import { timedStep } from "./lib/step-timing.ts";
 import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
 import { normalizeAgentPath } from "./domains/agents/utils.ts";
@@ -55,6 +59,8 @@ import {
   operationBodySchema,
   type OpenApiOperation,
 } from "./domains/itx/openapi-types.ts";
+import { callMcpToolPath } from "./domains/itx/mcp-client.ts";
+import { ITX_EXAMPLES, type ItxExample } from "./itx/examples.ts";
 import type {
   ProcessorState,
   StreamProcessor,
@@ -69,12 +75,16 @@ import type {
   CfExecutionContext,
   ItxAuth,
   Itx,
+  ItxExampleCatalog,
+  ItxExampleSummary,
   Session,
   McpClientCollection,
   McpClientConnectInput,
+  McpClientRpc,
   OpenApiCollection,
   OpenApiConnectInput,
   ProjectCollection,
+  ProjectListEntry,
   ProjectRepoCollection,
   ProjectStreamCollection,
   ProjectEgress,
@@ -219,28 +229,33 @@ async function requestRepoCreate(input: {
     path,
     projectId: input.projectId,
   });
-  const [, createRequested] = await stream.append(
-    buildDurableObjectProcessorSubscriptionConfiguredEvent({
-      durableObjectName: streamDurableObjectName({ projectId: input.projectId, path }),
-      processorSlug: RepoProcessorContract.slug,
-      subscriberType: "repo",
-    }),
-    {
-      type: "events.iterate.com/repo/create-requested",
-      idempotencyKey: `repo-create-requested:${input.projectId}:${path}`,
-      payload: { projectId: input.projectId, path },
-    },
+  const timing = { projectId: input.projectId, path };
+  const [, createRequested] = await timedStep("create-timing", timing, "repo-append", () =>
+    stream.append(
+      buildDurableObjectProcessorSubscriptionConfiguredEvent({
+        durableObjectName: streamDurableObjectName({ projectId: input.projectId, path }),
+        processorSlug: RepoProcessorContract.slug,
+        subscriberType: "repo",
+      }),
+      {
+        type: "events.iterate.com/repo/create-requested",
+        idempotencyKey: `repo-create-requested:${input.projectId}:${path}`,
+        payload: { projectId: input.projectId, path },
+      },
+    ),
   );
 
-  await stream.waitForEvent({
-    afterOffset: createRequested.offset - 1,
-    eventTypes: ["events.iterate.com/repo/created"],
-    predicate: (event) =>
-      event.payload?.projectId === input.projectId && event.payload?.path === path,
-    // Generous: repo create clones/seeds a CF Artifacts repo; cold slots under
-    // parallel e2e load have been seen to straggle past 60s.
-    timeoutMs: 120_000,
-  });
+  await timedStep("create-timing", timing, "wait-repo-created", () =>
+    stream.waitForEvent({
+      afterOffset: createRequested.offset - 1,
+      eventTypes: ["events.iterate.com/repo/created"],
+      predicate: (event) =>
+        event.payload?.projectId === input.projectId && event.payload?.path === path,
+      // Tight on purpose: creates should be fast (see tasks/os-cold-create-latency.md
+      // for the cold-slot outliers). Preview CI warms slots before the suites.
+      timeoutMs: 60_000,
+    }),
+  );
 
   return new RepoRpcTarget({ auth: input.auth, path, projectId: input.projectId });
 }
@@ -789,7 +804,10 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
   }
 
   async create(args: Parameters<ProjectCollection["create"]>[0]) {
-    const registered = await this.#registerProject(args);
+    const registered = await timedStep("create-timing", { slug: args.slug }, "auth-register", () =>
+      this.#registerProject(args),
+    );
+    const timing = { projectId: registered.projectId };
     args.projectId = registered.projectId;
     // The auth worker may normalize the slug (slugify); adopt its canonical
     // form so stream events agree with the directory and ingress hostnames.
@@ -800,47 +818,61 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
     widenProjectAccess(this.props.auth, registered.projectId);
     // Prime the slug->id directory cache so the post-create navigation (and
     // the first project-host request) never miss into the auth worker.
-    await primeProjectDirectory(env.PROJECT_DIRECTORY, {
-      id: registered.projectId,
-      slug: registered.slug,
-      organizationId: registered.organizationId,
-      name: registered.slug,
-    });
+    await timedStep("create-timing", timing, "prime-directory", () =>
+      primeProjectDirectory(env.PROJECT_DIRECTORY, {
+        id: registered.projectId,
+        slug: registered.slug,
+        organizationId: registered.organizationId,
+        name: registered.slug,
+      }),
+    );
 
     const stream = rootStream({
       auth: this.props.auth,
       projectId: args.projectId,
     });
 
-    const [, , createRequested] = await stream.append(
-      buildDurableObjectProcessorSubscriptionConfiguredEvent({
-        durableObjectName: streamDurableObjectName({ projectId: args.projectId, path: "/" }),
-        processorSlug: ProjectProcessorContract.slug,
-        subscriberType: "project",
-      }),
-      buildDurableObjectProcessorSubscriptionConfiguredEvent({
-        durableObjectName: streamDurableObjectName({
-          projectId: args.projectId,
-          path: PROJECT_REPO_PATH,
+    const appendRootEvents = () =>
+      stream.append(
+        buildDurableObjectProcessorSubscriptionConfiguredEvent({
+          durableObjectName: streamDurableObjectName({
+            projectId: registered.projectId,
+            path: "/",
+          }),
+          processorSlug: ProjectProcessorContract.slug,
+          subscriberType: "project",
         }),
-        processorSlug: RepoProcessorContract.slug,
-        subscriberType: "repo",
-      }),
-      {
-        type: "events.iterate.com/project/create-requested",
-        idempotencyKey: `project-create-requested:${args.projectId}`,
-        payload: { projectId: args.projectId, slug: args.slug },
-      },
+        buildDurableObjectProcessorSubscriptionConfiguredEvent({
+          durableObjectName: streamDurableObjectName({
+            projectId: registered.projectId,
+            path: PROJECT_REPO_PATH,
+          }),
+          processorSlug: RepoProcessorContract.slug,
+          subscriberType: "repo",
+        }),
+        {
+          type: "events.iterate.com/project/create-requested",
+          idempotencyKey: `project-create-requested:${registered.projectId}`,
+          payload: { projectId: registered.projectId, slug: registered.slug },
+        },
+      );
+    const [, , createRequested] = await timedStep(
+      "create-timing",
+      timing,
+      "root-append",
+      appendRootEvents,
     );
-    await stream.waitForEvent({
-      afterOffset: createRequested.offset - 1,
-      eventTypes: ["events.iterate.com/project/created"],
-      predicate: (event) => event.payload?.projectId === args.projectId,
-      // Generous: the create saga seeds the repo, probes the project worker,
-      // and births the onboarding agent; cold slots under parallel e2e load
-      // have been seen to straggle past 60s.
-      timeoutMs: 120_000,
-    });
+    await timedStep("create-timing", timing, "wait-project-created", () =>
+      stream.waitForEvent({
+        afterOffset: createRequested.offset - 1,
+        eventTypes: ["events.iterate.com/project/created"],
+        predicate: (event) => event.payload?.projectId === args.projectId,
+        // Tight on purpose: the saga should complete in seconds (see
+        // tasks/os-cold-create-latency.md for the cold-slot outliers that must
+        // be fixed, not waited out). Preview CI warms slots before the suites.
+        timeoutMs: 60_000,
+      }),
+    );
 
     return new ItxRpcTarget({
       auth: this.props.auth,
@@ -900,8 +932,109 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
     return { organizationId: null, projectId: "prj_" + crypto.randomUUID(), slug: args.slug };
   }
 
-  list() {
-    return this.props.auth.listAccessibleProjects();
+  /**
+   * The session's projects, enriched: identity (id/slug/org) from the auth
+   * claims or the project directory, deployment status from a concurrent
+   * engine probe (`state.created` on each project's processor snapshot). A
+   * probe failure degrades THAT entry to "unknown" — the list always renders.
+   */
+  async list(input?: Parameters<ProjectCollection["list"]>[0]) {
+    const bases = await this.#listEntryBases(input?.scope);
+    const outcomes = await Promise.allSettled(
+      bases.map(async (base) => {
+        const state = await projectProcessorState(base.id);
+        return state.created === true;
+      }),
+    );
+    const statuses = deploymentStatusesFromProbes(
+      bases.map((base) => base.id),
+      outcomes,
+    );
+    return bases.map((base) => ({
+      ...base,
+      deploymentStatus: statuses.get(base.id) ?? "unknown",
+    }));
+  }
+
+  /**
+   * Which projects the list covers, and what we know about each before the
+   * engine probe. The scope is explicit (see the contract): "mine" reads the
+   * caller's claims even when admin credentials ride the same socket; the
+   * "deployment" scope (PROJECT_DIRECTORY KV, every known project — record
+   * `name` is the PROJECT name, so no organization name) requires an admin
+   * principal. Non-user admin principals have no claims, so they default to
+   * "deployment"; impersonated users (test lane) list their scopes,
+   * directory-read.
+   */
+  async #listEntryBases(
+    requestedScope?: "mine" | "deployment",
+  ): Promise<Omit<ProjectListEntry, "deploymentStatus">[]> {
+    const userPrincipal = userPrincipalOf(this.props.auth);
+    // Default to the caller's own projects for EVERY principal shape (user,
+    // impersonated, admin) — only pure admin principals, which have no
+    // projects of their own, default to the deployment listing.
+    const scope =
+      requestedScope ?? (userPrincipal || !this.props.auth.isAdmin() ? "mine" : "deployment");
+    if (scope === "deployment") {
+      if (!this.props.auth.isAdmin()) {
+        throw new Error('projects.list({ scope: "deployment" }) requires an admin principal');
+      }
+      const records = await listProjectDirectory(env.PROJECT_DIRECTORY);
+      return records.map((record) => ({
+        id: record.id,
+        slug: record.slug,
+        organizationId: record.organizationId,
+        organizationName: null,
+      }));
+    }
+
+    if (userPrincipal) {
+      const organizationNames = new Map(
+        userPrincipal.organizations.map((organization) => [
+          organization.id,
+          organization.name ?? null,
+        ]),
+      );
+      const projectIds = new Set([
+        ...userPrincipal.projects.map((project) => project.id),
+        ...this.props.auth.listAccessibleProjects(),
+      ]);
+      const claims = new Map(userPrincipal.projects.map((project) => [project.id, project]));
+      return await Promise.all(
+        [...projectIds].map(async (projectId) => {
+          const claim = claims.get(projectId);
+          if (claim) {
+            return {
+              id: claim.id,
+              slug: claim.slug,
+              organizationId: claim.organizationId,
+              organizationName: organizationNames.get(claim.organizationId) ?? null,
+            };
+          }
+          return await this.#directoryEntryBase(projectId);
+        }),
+      );
+    }
+
+    return await Promise.all(
+      this.props.auth
+        .listAccessibleProjects()
+        .map((projectId) => this.#directoryEntryBase(projectId)),
+    );
+  }
+
+  async #directoryEntryBase(
+    projectId: string,
+  ): Promise<Omit<ProjectListEntry, "deploymentStatus">> {
+    const record = await readProjectById(env.PROJECT_DIRECTORY, projectId);
+    return {
+      id: projectId,
+      // A scope the directory has never seen (impersonated test principals)
+      // still lists — the id doubles as the slug.
+      slug: record?.slug ?? projectId,
+      organizationId: record?.organizationId ?? null,
+      organizationName: null,
+    };
   }
 }
 
@@ -919,6 +1052,7 @@ const PROJECT_BUILTIN_CAPABILITY_PATHS = [
   "ai",
   "agents",
   "egress",
+  "examples",
   "gmail",
   "integrations",
   "mcp",
@@ -1058,6 +1192,10 @@ export class ItxRpcTarget extends RpcTarget implements Itx {
 
   get egress() {
     return new ProjectEgressRpcTarget({ projectId: this.props.projectId });
+  }
+
+  get examples(): ItxExampleCatalog {
+    return new ItxExampleCatalogRpcTarget();
   }
 
   get gmail(): GmailCapability {
@@ -1235,7 +1373,7 @@ type RevokeCapability = (input: RevokeCapabilityInput) => Promise<void>;
  * by the stream offset that mounted the capability, so disposing an older
  * provision after a replacement cannot revoke the newer mount at the same path.
  */
-export class CapabilityProvisionRpcTarget extends RpcTarget implements CapabilityProvision {
+class CapabilityProvisionRpcTarget extends RpcTarget implements CapabilityProvision {
   readonly #ctx: Pick<CfExecutionContext, "waitUntil"> | undefined;
   readonly #path: string[];
   readonly #providedAtOffset: number;
@@ -1346,7 +1484,7 @@ export class StreamSubscriptionRpcTarget extends RpcTarget implements StreamSubs
  * live runtime interceptor slot and, when there is no interceptor, performs the
  * terminal secret-substitution fetch path.
  */
-export class ProjectEgressRpcTarget extends RpcTarget implements ProjectEgress {
+class ProjectEgressRpcTarget extends RpcTarget implements ProjectEgress {
   constructor(readonly props: { projectId: string }) {
     super();
   }
@@ -1437,21 +1575,53 @@ export class StreamProcessorRpcTarget<Contract extends StreamProcessorContract>
   }
 }
 
-// MCP is common enough to expose as a built-in, but the built-in stays tiny:
-// it is an RpcTarget that gets a project egress Fetcher and otherwise uses the
-// public MCP SDK. A dynamic worker can implement the same shape by calling
-// env.ITX.get().egress.fetch through its single ITX binding.
+// The examples catalogue is plain data (src/itx/examples.ts) shared with the
+// REPL "Examples" panel and the e2e matrix. Exposing it as a built-in lets
+// agents and scripts browse known-good snippets instead of guessing at the
+// surface; list() omits the code bodies so it stays cheap to skim.
+// Session-context entries are excluded: they run against the OS Session
+// (what authenticate() returns), which an itx holder does not have.
+const PROJECT_CONTEXT_EXAMPLES = ITX_EXAMPLES.filter((example) => example.context === "project");
+
+class ItxExampleCatalogRpcTarget extends RpcTarget implements ItxExampleCatalog {
+  async list() {
+    return PROJECT_CONTEXT_EXAMPLES.map(exampleSummary);
+  }
+
+  async get(input: Parameters<ItxExampleCatalog["get"]>[0]) {
+    const example = PROJECT_CONTEXT_EXAMPLES.find((candidate) => candidate.id === input.id);
+    if (!example) {
+      throw new Error(`unknown example "${input.id}" — itx.examples.list() has every id`);
+    }
+    return { ...exampleSummary(example), code: example.code };
+  }
+}
+
+function exampleSummary(example: ItxExample): ItxExampleSummary {
+  return {
+    description: example.description,
+    id: example.id,
+    title: example.title,
+  };
+}
+
 type McpClientDeps = { egress: Fetcher };
 
-type McpRequestOptions = { timeout?: number };
+// Exa's hosted MCP server works unauthenticated (rate-limited); pre-connecting
+// it gives every project web search with zero setup.
+const EXA_MCP_URL = "https://mcp.exa.ai/mcp";
 
-export class McpClientCollectionRpcTarget extends RpcTarget implements McpClientCollection {
+class McpClientCollectionRpcTarget extends RpcTarget implements McpClientCollection {
   constructor(readonly props: McpClientDeps) {
     super();
   }
 
   connect(input: Parameters<McpClientCollection["connect"]>[0]) {
     return McpClientRpcTarget.connect(input, this.props);
+  }
+
+  get exa(): McpClientRpc {
+    return new McpClientRpcTarget({ config: { url: EXA_MCP_URL }, egress: this.props.egress });
   }
 }
 
@@ -1471,108 +1641,13 @@ class McpClientRpcTarget extends RpcTarget {
   }
 
   async invokeCapability({ args = [], path }: Parameters<SlackCapability["invokeCapability"]>[0]) {
-    const options = this.props.config.timeoutMs
-      ? { timeout: this.props.config.timeoutMs }
-      : undefined;
-    const client = await connectMcp(this.props.config, this.props.egress, options);
-    try {
-      return await executeMcpToolCall({ args, client, options, path });
-    } finally {
-      await client.close().catch(() => {});
-    }
+    return await callMcpToolPath({
+      args,
+      config: this.props.config,
+      egress: this.props.egress,
+      path,
+    });
   }
-}
-
-async function connectMcp(
-  input: McpClientConnectInput,
-  egress: Fetcher,
-  options?: McpRequestOptions,
-): Promise<McpSdkClient> {
-  const transport = new StreamableHTTPClientTransport(new URL(input.url), {
-    fetch: (fetchInput: Request | string | URL, init?: RequestInit) => {
-      const request =
-        fetchInput instanceof Request
-          ? new Request(fetchInput, init)
-          : new Request(String(fetchInput), init);
-      // Streamable HTTP may probe a standalone GET SSE channel. This reference
-      // client is deliberately connect -> call -> close, so answering 405 keeps
-      // every invocation stateless and avoids pinning a stream through egress.
-      if (request.method === "GET") {
-        return Promise.resolve(new Response(null, { status: 405 }));
-      }
-      // Headers may contain getSecret({ path }) placeholders. Egress owns
-      // substitution and origin checks, so the MCP adapter just forwards the
-      // SDK-built Request unchanged.
-      return egress.fetch(request);
-    },
-    requestInit: input.headers ? { headers: input.headers } : undefined,
-  });
-  const client = new McpSdkClient({ name: "minimal-itx-v4-mcp-client", version: "1.0.0" });
-  try {
-    await client.connect(transport, options);
-    return client;
-  } catch (error) {
-    await client.close().catch(() => {});
-    throw error;
-  }
-}
-
-async function executeMcpToolCall(input: {
-  args: unknown[];
-  client: McpSdkClient;
-  options?: McpRequestOptions;
-  path: string[];
-}) {
-  const [name, ...extraPath] = input.path;
-  if (!name) throw new Error("MCP tool calls need a tool name path.");
-  if (extraPath.length > 0) {
-    throw new Error(`MCP tools are flat tool names, got "${input.path.join(".")}".`);
-  }
-  const [firstArg] = input.args;
-  const toolArguments =
-    firstArg != null && typeof firstArg === "object" && !Array.isArray(firstArg)
-      ? (firstArg as Record<string, unknown>)
-      : {};
-
-  const result = await input.client.callTool(
-    { name, arguments: toolArguments },
-    undefined,
-    input.options,
-  );
-  // Prefer structured content when a server provides it; otherwise fall back to
-  // the text content convention used by many simple MCP servers.
-  if (result.structuredContent != null) return result.structuredContent;
-
-  if (result.isError) {
-    const message = extractTextContent(result.content).join("\n") || "MCP tool call failed";
-    throw new Error(message);
-  }
-
-  const textParts = extractTextContent(result.content);
-  if (textParts.length > 0) {
-    const text = textParts.join("\n");
-    try {
-      return JSON.parse(text);
-    } catch {
-      return text;
-    }
-  }
-
-  return result;
-}
-
-function extractTextContent(content: unknown) {
-  if (!Array.isArray(content)) return [];
-  return content.flatMap((item) =>
-    item != null &&
-    typeof item === "object" &&
-    "type" in item &&
-    item.type === "text" &&
-    "text" in item &&
-    typeof item.text === "string"
-      ? [item.text]
-      : [],
-  );
 }
 
 // First-party OpenAPI is just an RpcTarget hosted by Project. The only special
@@ -1581,7 +1656,7 @@ function extractTextContent(content: unknown) {
 // implementations aligned: fetch spec, derive operations, then dispatch calls.
 type OpenApiDeps = { egress: Fetcher };
 
-export class OpenApiCollectionRpcTarget extends RpcTarget implements OpenApiCollection {
+class OpenApiCollectionRpcTarget extends RpcTarget implements OpenApiCollection {
   constructor(readonly props: OpenApiDeps) {
     super();
   }

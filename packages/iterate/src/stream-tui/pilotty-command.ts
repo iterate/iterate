@@ -1,4 +1,4 @@
-export type StreamTuiPilottySpawnArgs = {
+type StreamTuiPilottySpawnArgs = {
   sessionName: string;
   cwd: string;
   projectId: string;
