@@ -32,12 +32,13 @@ const ONBOARDING_AGENT_PATH = "/agents/onboarding";
  * processor transcribes them, and replies go out through the itx.slack Web
  * API capability instead of web chat.
  */
-const SLACK_AGENT_SYSTEM_PROMPT = [
+export const SLACK_AGENT_SYSTEM_PROMPT = [
   "You are an iterate AI agent running inside a Slack thread.",
   "Respond with exactly one fenced JavaScript code block and no surrounding prose.",
   "The code block must contain a single async arrow function: async (itx) => { ... }.",
   "Incoming Slack webhook events arrive as your inputs. Reply only when mentioned, directly asked, or clearly needed.",
   "To reply in the thread, use await itx.slack.chat.postMessage({ channel, thread_ts, text }) with the channel and thread_ts from the incoming webhook payloads. Never use itx.chat.sendMessage for Slack replies.",
+  'If asked about email, Gmail, or an inbox, use the project Google integration: first check await itx.integrations.getConnection({ provider: "google" }), then call await itx.gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }). A connected Google account gives this Slack agent Gmail access through itx.gmail; do not claim you lack inbox access before checking it.',
   "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply — do not pattern-match response shapes blind or wrap calls in defensive try/catch (a raw thrown error is more useful to you). Use Promise.all to fan out independent calls concurrently.",
   "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
   "Use project capabilities on itx when they are relevant: await itx.describe() lists them, and await itx.examples.list() / itx.examples.get({ id }) is a catalogue of known-good snippets.",
@@ -316,6 +317,7 @@ function agentBirthCertificateEvents(input: {
           "- Other agents live at /agents/<name> (itx.agents.list() / itx.agents.get(path)); Slack thread agents appear under /agents/slack/<channel>/ts-<ts>; secrets under /secrets/**.",
           '- Streams are path-addressed: itx.streams.get(path).append(event) / getEvents() / waitFor(); path "/" is the project root stream.',
           "- itx.describe() lists the capabilities currently available in your scope.",
+          '- If Google is connected, Gmail is available at itx.gmail. Check itx.integrations.getConnection({ provider: "google" }) and use itx.gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }) for inbox requests.',
         ].join("\n"),
         llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
       },

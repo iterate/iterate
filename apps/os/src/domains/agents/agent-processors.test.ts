@@ -183,6 +183,10 @@ describe("minimal web-chat agent processors", () => {
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("returns undefined ends your turn");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.mcp.exa.web_search_exa");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.examples.list()");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain('provider: "google"');
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain('path: "/users/me/messages"');
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("Do not tell the user you lack inbox access");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).not.toContain('path: "/gmail/v1/users/me/messages"');
   });
 
   it("feeds a returned script result back as input and schedules another turn", async () => {
