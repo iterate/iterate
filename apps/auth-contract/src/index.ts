@@ -189,71 +189,6 @@ export const OAuthProjectSelectionInput = z.object({
 });
 export type OAuthProjectSelectionInput = z.infer<typeof OAuthProjectSelectionInput>;
 
-// ---------------------------------------------------------------------------
-// Workers RPC surface (service binding)
-// ---------------------------------------------------------------------------
-//
-// The auth worker exposes two RPC-style surfaces:
-//
-//  - `authContract` below — the oRPC HTTP API at `/api/orpc/*` on the public
-//    hostname, for callers that can only speak HTTP: the auth app UI (session
-//    cookie), the `iterate` CLI (bearer/service token), and deploy-time Node
-//    scripts (service token) that provision OAuth clients and seed test data.
-//  - `AuthWorkerRpc` — Workers RPC methods on the auth worker's default
-//    entrypoint (apps/auth/src/server/worker.ts), which OS workers reach over
-//    a Cloudflare service binding instead of the public internet. Possession
-//    of the binding IS the credential (a binding can only be attached by a
-//    deploy into the same account), so these methods carry no token header.
-//    https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/rpc/
-//
-// The OIDC/OAuth2 protocol under `/api/auth/*` is the third surface; it is
-// standards-shaped and deliberately not modeled here.
-
-/** One row of `listProjectsForUser` — the projects a user can reach through
- * any organization membership. Slimmer than ProjectRecord on purpose: the OS
- * stale-claims check only needs identity. */
-export const UserProjectRecord = z.object({
-  id: z.string(),
-  slug: z.string(),
-  organizationId: z.string(),
-});
-export type UserProjectRecord = z.infer<typeof UserProjectRecord>;
-
-/**
- * The auth worker's Workers-RPC methods, implemented on the default entrypoint
- * in apps/auth/src/server/worker.ts and consumed by OS workers through the
- * `AUTH` service binding (apps/os/alchemy.run.ts).
- *
- * Trust model: a service binding can only be created by a deploy into the same
- * Cloudflare account, so possession of the binding IS the authorization —
- * these methods are as trusted as the `x-iterate-service-token` HTTP calls the
- * OS runtime used before. Callers do their own user-level authorization (e.g.
- * OS checks org membership from verified JWT claims before calling
- * createProjectForOrganization).
- */
-export interface AuthWorkerRpc {
-  /** Create (or re-adopt, see apps/auth project-slugs resolution) a project
-   * owned by an organization. Auth mints the canonical `prj_` id. */
-  createProjectForOrganization(
-    input: InternalCreateProjectForOrganizationInput,
-  ): Promise<ProjectRecord>;
-  /** Slug -> project lookup for OS ingress and directory reads. Null when no
-   * project has the slug. */
-  getProjectBySlug(input: ProjectInput): Promise<ProjectRecord | null>;
-  /** Every project the user can reach via org membership — OS uses this for
-   * the stale-claims window right after a project is created. */
-  listProjectsForUser(input: { userId: string }): Promise<UserProjectRecord[]>;
-  /** Mint a canonical `prj_` id without creating an auth-side project — for
-   * OS operator/recovery creates with no owning organization. */
-  mintProjectId(): Promise<{ id: string }>;
-  /** RFC 7662-style introspection of an OPAQUE OAuth access token — OS's MCP
-   * server calls this for clients that present opaque bearers instead of
-   * verifiable JWTs. */
-  introspectAccessToken(
-    input: InternalIntrospectOAuthAccessTokenInput,
-  ): Promise<InternalIntrospectOAuthAccessTokenOutput>;
-}
-
 export const authContract = oc.router({
   user: {
     me: oc
@@ -540,6 +475,15 @@ export const authContract = oc.router({
         })
         .input(InternalSetOAuthClientInput)
         .output(OAuthClientRecord),
+      introspectAccessToken: oc
+        .route({
+          method: "POST",
+          path: "/internal/oauth/introspect-access-token",
+          summary: "Introspect an OAuth access token for internal resource servers",
+          tags: ["internal", "oauth"],
+        })
+        .input(InternalIntrospectOAuthAccessTokenInput)
+        .output(InternalIntrospectOAuthAccessTokenOutput),
     },
     user: {
       upsertVerifiedEmail: oc
@@ -571,6 +515,36 @@ export const authContract = oc.router({
         })
         .input(OrgInput)
         .output(z.array(OrganizationMemberRecord)),
+    },
+    project: {
+      createForOrganization: oc
+        .route({
+          method: "POST",
+          path: "/internal/project/create-for-organization",
+          summary: "Create a project for an organization in internal service flows",
+          tags: ["internal", "project"],
+        })
+        .input(InternalCreateProjectForOrganizationInput)
+        .output(ProjectRecord),
+      mintProjectId: oc
+        .route({
+          method: "POST",
+          path: "/internal/project/mint-project-id",
+          summary:
+            "Mint a canonical project id (prj_) without creating an auth-side project — for OS operator/recovery creates with no owning organization",
+          tags: ["internal", "project"],
+        })
+        .output(z.object({ id: z.string() })),
+      bySlug: oc
+        .route({
+          method: "GET",
+          path: "/internal/project/by-slug",
+          summary:
+            "Look up a project by slug in internal service flows — OS ingress slug resolution and claims-miss directory reads. Null when no project has the slug.",
+          tags: ["internal", "project"],
+        })
+        .input(z.object({ projectSlug: z.string().trim().min(1) }))
+        .output(ProjectRecord.nullable()),
     },
     session: {
       createProjectIngressToken: oc

@@ -2019,8 +2019,7 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
       APP_CONFIG_ITERATE_AUTH__ISSUER: `${authOrigin}/api/auth`,
       APP_CONFIG_ITERATE_AUTH__CLIENT_ID: clientId,
       APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET: clientSecret,
-      // No service token: preview OS workers reach auth over the AUTH service
-      // binding, and the dev OAuth client bootstrap only runs on dev_* stages.
+      APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN: serviceToken,
     });
 
     setDopplerSecrets("streams-example-app", config, {

@@ -1,6 +1,6 @@
 import { RpcTarget } from "cloudflare:workers";
 import type { AppConfig } from "./config.ts";
-import { authWorker } from "./env.ts";
+import { createAuthWorkerServiceClient } from "./auth/auth-worker-service.ts";
 import { parseConfig } from "./config.ts";
 import {
   resolveItxAuth,
@@ -896,15 +896,18 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
     const userPrincipal = userPrincipalOf(this.props.auth);
 
     if (userPrincipal && !this.props.auth.isAdmin()) {
-      // OS decides WHICH organization may own the project (from the user's
-      // verified claims — resolveOrganizationSlugForCreate); the auth worker
-      // trusts the binding and creates. That split is deliberate: RPC callers
-      // are authorization-checked here, not re-checked auth-side.
+      const config = this.props.config;
+      if (!config?.iterateAuth?.serviceToken) {
+        throw new Error("project creation requires the auth worker directory to be configured");
+      }
       const organizationSlug = resolveOrganizationSlugForCreate(
         userPrincipal,
         args.organizationSlug,
       );
-      const created = await authWorker().createProjectForOrganization({
+      const created = await createAuthWorkerServiceClient(
+        { config },
+        { asUserId: userPrincipal.userId },
+      ).internal.project.createForOrganization({
         organizationSlug,
         name: args.slug,
         slug: args.slug,
@@ -919,8 +922,14 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
     if (args.projectId !== undefined) {
       return { organizationId: null, projectId: args.projectId, slug: args.slug };
     }
-    const minted = await authWorker().mintProjectId();
-    return { organizationId: null, projectId: minted.id, slug: args.slug };
+    const serviceToken = this.props.config?.iterateAuth?.serviceToken;
+    if (this.props.config && serviceToken) {
+      const minted = await createAuthWorkerServiceClient({
+        config: this.props.config,
+      }).internal.project.mintProjectId();
+      return { organizationId: null, projectId: minted.id, slug: args.slug };
+    }
+    return { organizationId: null, projectId: "prj_" + crypto.randomUUID(), slug: args.slug };
   }
 
   /**

@@ -20,38 +20,29 @@ It answers three questions for the rest of the platform:
   tables and is the sole minter of the `prj_` id space; OS has no database of
   its own and treats auth as its project directory.
 
-## The four surfaces
+## The three surfaces
 
-One worker, four ways in — each with its own credential. Keeping them straight
+One worker, three ways in — each with its own credential. Keeping them straight
 is the single most important thing to understand about this app.
 
-| Surface                | Transport                                     | Callers                                            | Credential                                                 |
-| ---------------------- | --------------------------------------------- | -------------------------------------------------- | ---------------------------------------------------------- |
-| OIDC / OAuth2 provider | `/api/auth/*` on the public hostname          | Browsers, OS login, the `iterate` CLI, MCP clients | The protocol's own (auth codes, PKCE, client secrets)      |
-| UI                     | all other paths (TanStack Start SSR + assets) | Humans                                             | better-auth session cookie                                 |
-| oRPC service API       | `/api/orpc/*` on the public hostname          | The auth UI, the CLI, deploy-time Node scripts     | Session cookie, bearer token, or `x-iterate-service-token` |
-| Workers RPC            | service binding (no URL)                      | OS workers at runtime                              | Holding the `AUTH` binding                                 |
+| Surface                | Transport                                     | Callers                                                    | Credential                                                 |
+| ---------------------- | --------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
+| OIDC / OAuth2 provider | `/api/auth/*` on the public hostname          | Browsers, OS login, the `iterate` CLI, MCP clients         | The protocol's own (auth codes, PKCE, client secrets)      |
+| UI                     | all other paths (TanStack Start SSR + assets) | Humans                                                     | better-auth session cookie                                 |
+| oRPC service API       | `/api/orpc/*` on the public hostname          | The auth UI, the CLI, OS workers, deploy-time Node scripts | Session cookie, bearer token, or `x-iterate-service-token` |
 
-The entrypoint that ties them together is `src/server/worker.ts` — a
-`WorkerEntrypoint` class whose `fetch` runs the Hono app (surfaces 1–3) and
-whose named methods are surface 4:
+The entrypoint that ties them together is `src/server/worker.ts` — a single
+Hono app exported as the worker's default `fetch` handler. Static assets + SSR
+still work: asset routing happens at the edge before `fetch` is invoked, and
+`run_worker_first: ["/api/*"]` (in `alchemy.run.ts`) sends the API paths to the
+worker.
 
-```ts
-export default class AuthWorker extends WorkerEntrypoint<CloudflareEnv> implements AuthWorkerRpc {
-  override fetch(request: Request) { return app.fetch(request, this.env, this.ctx); }
-  createProjectForOrganization(input) { ... }   // Workers RPC — see below
-  getProjectBySlug(input) { ... }
-  listProjectsForUser(input) { ... }
-  mintProjectId() { ... }
-}
-```
-
-Extending `WorkerEntrypoint` is what makes the RPC methods callable over a
-binding — a plain `export default { fetch }` object cannot expose RPC. Static
-assets + SSR still work: asset routing happens at the edge before `fetch` is
-invoked, and `run_worker_first: ["/api/*"]` (in `alchemy.run.ts`) sends the API
-paths to the worker.
-[Service bindings + RPC](https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/rpc/).
+> **Planned:** OS→auth runtime calls (the `internal.project.*` directory
+> procedures) currently ride surface 3 over the public internet with an
+> `x-iterate-service-token`. They are slated to move to a Cloudflare **Workers
+> RPC service binding** — worker-to-worker, no public hop, no shared secret. See
+> `tasks/os-auth-service-binding.md`. Until then, everything below describes the
+> HTTP path that is actually in production.
 
 ### 1. OIDC / OAuth2 provider — `/api/auth/*`
 
@@ -97,12 +88,13 @@ the HttpOnly cookie, so server functions expose only display fields
 ### 3. oRPC service API — `/api/orpc/*`
 
 Typed API defined by the contract in **`@iterate-com/auth-contract`**
-(apps/auth-contract) and implemented in `src/server/orpc/`. It exists for
-callers that can only speak HTTP:
+(apps/auth-contract) and implemented in `src/server/orpc/`. It carries every
+call into the auth worker that isn't the OIDC protocol or a browser page:
 
 - **The auth UI itself** (session cookie) — org/project CRUD, `user.myOrganizations`, the project-access selection store.
 - **The `iterate` CLI** (bearer token from the device/OAuth flow) — `user.myOrganizations`.
-- **Deploy-time Node scripts** (`x-iterate-service-token`) — the `internal.oauth.*` procedures that provision OAuth clients.
+- **OS workers** (`x-iterate-service-token`) — the `internal.project.*` directory procedures (slug lookup, create, mint id) and `internal.oauth.introspectAccessToken` for opaque MCP tokens. See "How it fits with apps/os".
+- **Deploy-time Node scripts** (`x-iterate-service-token`) — the `internal.oauth.*` client-provisioning procedures and the `internal.user`/`internal.organization` test-seeding procedures.
 
 Two role namespaces run through the middlewares in `src/server/orpc/orpc.ts`;
 they are easy to confuse, so they're documented there:
@@ -111,40 +103,20 @@ they are easy to confuse, so they're documented there:
   plugin) — bypasses every membership check.
 - `membership.role` is scoped to one organization — `owner | admin | member`.
 
-### 4. Workers RPC — the `AUTH` service binding
-
-The methods on the `AuthWorker` entrypoint, called by OS workers over a
-Cloudflare service binding instead of the public internet. The contract is the
-**`AuthWorkerRpc`** interface (also in `@iterate-com/auth-contract`); the
-implementation is `src/server/project-directory.ts`:
-
-- `getProjectBySlug` — slug → project record, for OS ingress host resolution and directory reads.
-- `createProjectForOrganization` — create (or re-adopt) a project owned by an org; auth mints the `prj_` id.
-- `listProjectsForUser` — every project a user can reach via org membership; OS uses it for the stale-claims window right after a create.
-- `mintProjectId` — a bare `prj_` id with no owning org, for OS operator/recovery creates.
-
-**Trust model:** a service binding can only be attached by a deploy into the
-same Cloudflare account, so _holding the binding is the authorization_ — there
-is no token on these calls (they replaced HTTP calls that carried
-`x-iterate-service-token`, minus the secret to leak). Callers do their own
-user-level authorization first: OS decides _which_ organization may own a new
-project from the caller's verified JWT claims, then asks auth to create it.
-
 ## How it fits with apps/os
 
-OS has no database. It leans on the auth worker in four distinct ways, over two
-transports:
+OS has no database. It leans on the auth worker in three distinct ways:
 
 ```
                          apps/os worker(s)
       ┌───────────────────────┼──────────────────────────┐
-      │ (a) OIDC protocol      │ (d) Workers RPC           │
-      │  @iterate-com/auth/    │  env.AUTH.getProjectBySlug │
-      │  server, public host   │  ...createProjectFor...    │
-      ▼                        │  ...listProjectsForUser    │
-  auth.iterate.com/api/auth    │  ...mintProjectId          │
-   authorize/token/jwks/       ▼
-   userinfo/revoke        auth-<stage> (service binding, no hostname)
+      │ (a) OIDC protocol      │ (c) oRPC service API      │
+      │  @iterate-com/auth/    │  createAuthWorkerService  │
+      │  server, public host   │  Client().internal.       │
+      ▼                        │   project.bySlug / ...    │
+  auth.iterate.com/api/auth    ▼   ...createForOrganization │
+   authorize/token/jwks/    auth.iterate.com/api/orpc
+   userinfo/revoke           (x-iterate-service-token)
 ```
 
 **(a) Login & tokens — OIDC on the public hostname.** OS is an OAuth client of
@@ -162,44 +134,29 @@ bakes it into OS's config (falling back to a runtime remote-JWKS fetch if that
 fails). **Consequence: rotating auth's signing keys requires an OS redeploy.**
 The forge public key (for `pnpm auth:mint`) is merged into this baked JWKS.
 
-**(c) The project directory — RPC behind a KV cache.** OS ingress resolves
-every project host (`<slug>.iterate.app`) to a project id. `getProjectBySlug`
-is the source of truth; `apps/os/src/project-directory.ts` puts a
-`PROJECT_DIRECTORY` KV cache in front so the hot path rarely pays the RPC.
-Project creation (`createProjectForOrganization` / `mintProjectId`) and the
-stale-claims membership check (`listProjectsForUser`, in
-`apps/os/src/auth.ts` — using the same query the token's project claims are
-minted from) go over the same binding.
-
-**(d) The binding is required.** OS cannot log anyone in or resolve a project
-host without a live auth worker, so `apps/os/alchemy.run.ts` binds `auth-<stage>`
-as `AUTH` on **every** OS worker with no fallback. A brand-new environment must
-therefore **deploy auth before OS** — if `auth-<stage>` doesn't exist,
-Cloudflare rejects the OS deploy, which is the intended loud failure. In OS
-_local_ dev the binding is a
-[remote binding](https://developers.cloudflare.com/workers/local-development/#remote-bindings):
-the code still calls `env.AUTH.method()`, but wrangler/vite proxy the call
-(fetch _and_ RPC) to the deployed auth worker for the stage. Running
-`apps/auth` locally (a loopback issuer) instead resolves the binding through
-the local dev registry. This required a small extension to the repo's alchemy
-patch (`patches/alchemy@0.83.3.patch`) so generated wrangler configs emit
-`remote: true` for a service binding carrying `dev.remote`.
-
-The OS↔auth code lives in `apps/os/src/env.ts` (the `authWorker()` binding
-accessor, `() => env.AUTH`) and `apps/os/src/auth/iterate-auth-client.ts` (the
-OIDC relying-party wiring). OS's own README has more on how the auth worker sits
-in its architecture.
+**(c) The project directory — HTTP oRPC behind a KV cache.** OS ingress resolves
+every project host (`<slug>.iterate.app`) to a project id. The
+`internal.project.*` procedures are the source of truth;
+`apps/os/src/auth/auth-worker-service.ts` builds the service-token HTTP client
+and `apps/os/src/project-directory.ts` puts a `PROJECT_DIRECTORY` KV cache in
+front so the hot path rarely pays the round-trip. Project creation
+(`internal.project.createForOrganization` / `mintProjectId`) and the
+stale-claims membership check (`internal.project.bySlug` in
+`apps/os/src/auth.ts`) go through the same client. OS decides _which_
+organization may own a new project from the caller's verified JWT claims first,
+then asks auth to create it — the service token is fully trusted, so auth does
+no user-level authorization on these routes. (This is the traffic slated to
+move to a Workers RPC binding — see the note under "The three surfaces".)
 
 ## Trust model
 
 - A **session cookie** identifies a human; oRPC middlewares layer org/project
   membership checks on top.
-- The **service token** (`SERVICE_AUTH_TOKEN`) is a deploy-time-only shared
-  secret. It also doubles as the seeded bootstrap admin's password
-  (`scripts/render-admin-seed.ts` writes that credential row), which is how
-  deploy scripts reach better-auth admin APIs that insist on a session.
-- The **service binding is itself the credential** for runtime OS→auth calls —
-  no secret ships in OS worker config.
+- The **service token** (`SERVICE_AUTH_TOKEN`) is a shared secret trusted by the
+  `internal.*` oRPC procedures — OS's runtime directory calls and deploy-time
+  scripts both present it. It also doubles as the seeded bootstrap admin's
+  password (`scripts/render-admin-seed.ts` writes that credential row), which is
+  how deploy scripts reach better-auth admin APIs that insist on a session.
 
 ## Identity model
 
@@ -283,6 +240,6 @@ Hono worker that mounts `@iterate-com/auth/server`'s handler at
 It exercises the exact same OIDC surface OS uses, so it's the cheapest end-to-end
 check that a change to the auth worker didn't break relying parties. It talks
 _only_ to surface 1 (the public OIDC provider) — nothing in it depends on the
-service binding or the oRPC API. Deployed at `auth-example.iterate.app`
+oRPC service API. Deployed at `auth-example.iterate.app`
 (and `auth-example.iterate-preview-N.app` per slot); configure it with an OAuth
 client minted at `/admin/clients` (see `.env.example`).
