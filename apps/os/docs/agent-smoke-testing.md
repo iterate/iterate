@@ -25,7 +25,7 @@ pass `--base-url http://localhost:<port>` using the port in
 
 ```bash
 doppler run --project os --config prd -- pnpm cli itx run \
-  --eval 'const project = await itx.projects.create({ slug: `agent-smoke-${Date.now()}` }); return await project.describe()'
+  --eval 'const project = await itx.projects.create({ slug: `agent-smoke-${Date.now()}` }); return await project.__describe()'
 ```
 
 `create` returns the project itx handle; `describe()` prints the `projectId`
