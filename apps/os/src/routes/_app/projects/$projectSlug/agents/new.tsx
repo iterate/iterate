@@ -88,6 +88,7 @@ function NewAgentPage() {
             onChange={(event) => setMessage(event.currentTarget.value)}
             onKeyDown={onComposerKeyDown}
             rows={1}
+            aria-label="Message a new agent"
             placeholder="Message a new agent"
             className="field-sizing-content max-h-32 min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-base leading-snug outline-none"
           />

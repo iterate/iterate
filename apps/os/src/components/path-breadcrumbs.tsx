@@ -39,13 +39,14 @@ export function PathBreadcrumbs() {
     .at(-1);
 
   const activeProjectSlug = matches
-    .map((match) => match.params)
-    .map((params) =>
-      typeof params === "object" && params && "projectSlug" in params
-        ? params.projectSlug
-        : undefined,
+    .flatMap(({ params }) =>
+      typeof params === "object" &&
+      params &&
+      "projectSlug" in params &&
+      typeof params.projectSlug === "string"
+        ? [params.projectSlug]
+        : [],
     )
-    .filter((projectSlug): projectSlug is string => typeof projectSlug === "string")
     .at(-1);
   const isProjectScoped = activeProjectSlug != null;
   const breadcrumbMatches = isProjectScoped

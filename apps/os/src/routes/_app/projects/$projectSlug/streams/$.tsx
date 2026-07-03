@@ -8,7 +8,6 @@ import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/streams/$")({
   staticData: { hideAppHeader: true, commandPalette: { stream: { mode: "stream" } } },
-  validateSearch: StreamViewSearch,
   params: {
     parse: (raw) => ({
       _splat: streamPathFromSplat(raw._splat),
@@ -17,6 +16,7 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/streams/$")({
       _splat: streamPathToSplat(parsed._splat),
     }),
   },
+  validateSearch: StreamViewSearch,
   ssr: false,
   loader: async ({ context, params }) => {
     const streamPath = params._splat;
