@@ -12,6 +12,9 @@ exports.projectRepoTemplateFiles = ({ meta }) => {
   const relativePaths = [];
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      // Editor droppings (.DS_Store, swapfiles) must not get seeded into
+      // every project repo; the template has no legitimate dotfiles.
+      if (entry.name.startsWith(".")) continue;
       const absolute = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(absolute);
       else relativePaths.push(path.relative(templateDir, absolute).split(path.sep).join("/"));

@@ -12,14 +12,12 @@ export const WORKER_BUILD_ARTIFACT_SCHEMA_VERSION = 1;
 
 /** Cache lifetime for build artifacts. Every artifact is reproducible from its
  * deterministic build key, so expiry only costs a rebuild on next use. */
-export const WORKER_BUILD_ARTIFACT_TTL_SECONDS = 30 * 24 * 60 * 60;
+const WORKER_BUILD_ARTIFACT_TTL_SECONDS = 30 * 24 * 60 * 60;
 
 const KV_PREFIX = `worker-build/v${WORKER_BUILD_ARTIFACT_SCHEMA_VERSION}`;
 
 export type WorkerBuildArtifact = {
   buildKey: string;
-  compatibilityDate?: string;
-  compatibilityFlags?: string[];
   mainModule: string;
   modules: Record<string, string>;
 };
@@ -31,8 +29,6 @@ export type WorkerBuildArtifact = {
  */
 type WorkerBuildArtifactManifest = {
   buildKey: string;
-  compatibilityDate?: string;
-  compatibilityFlags?: string[];
   createdAt: string;
   mainModule: string;
   moduleNames: string[];
@@ -82,13 +78,7 @@ export class KvWorkerBuildArtifactStore implements WorkerBuildArtifactStore {
       modules[name] = content;
     }
 
-    return {
-      buildKey,
-      compatibilityDate: manifest.compatibilityDate,
-      compatibilityFlags: manifest.compatibilityFlags,
-      mainModule: manifest.mainModule,
-      modules,
-    };
+    return { buildKey, mainModule: manifest.mainModule, modules };
   }
 
   async put(artifact: WorkerBuildArtifact): Promise<void> {
@@ -104,8 +94,6 @@ export class KvWorkerBuildArtifactStore implements WorkerBuildArtifactStore {
 
     const manifest: WorkerBuildArtifactManifest = {
       buildKey: artifact.buildKey,
-      compatibilityDate: artifact.compatibilityDate,
-      compatibilityFlags: artifact.compatibilityFlags,
       createdAt: new Date().toISOString(),
       mainModule: artifact.mainModule,
       moduleNames: Object.keys(artifact.modules).sort(),
@@ -115,18 +103,5 @@ export class KvWorkerBuildArtifactStore implements WorkerBuildArtifactStore {
       schemaVersion: WORKER_BUILD_ARTIFACT_SCHEMA_VERSION,
     };
     await this.kv.put(manifestKey(artifact.buildKey), JSON.stringify(manifest), { expirationTtl });
-  }
-}
-
-/** Test double with the same manifest-last write discipline made observable. */
-export class InMemoryWorkerBuildArtifactStore implements WorkerBuildArtifactStore {
-  readonly artifacts = new Map<string, WorkerBuildArtifact>();
-
-  async get(buildKey: string): Promise<WorkerBuildArtifact | null> {
-    return this.artifacts.get(buildKey) ?? null;
-  }
-
-  async put(artifact: WorkerBuildArtifact): Promise<void> {
-    this.artifacts.set(artifact.buildKey, structuredClone(artifact));
   }
 }

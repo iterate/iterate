@@ -11,6 +11,7 @@ const PREFIX = `worker-build/v${WORKER_BUILD_ARTIFACT_SCHEMA_VERSION}`;
 class FakeKv {
   readonly data = new Map<string, string>();
   readonly putOrder: string[] = [];
+  readonly putTtls: (number | undefined)[] = [];
 
   async get(key: string, type?: string): Promise<unknown> {
     const value = this.data.get(key);
@@ -18,16 +19,15 @@ class FakeKv {
     return type === "json" ? JSON.parse(value) : value;
   }
 
-  async put(key: string, value: string, _options?: { expirationTtl?: number }): Promise<void> {
+  async put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void> {
     this.putOrder.push(key);
+    this.putTtls.push(options?.expirationTtl);
     this.data.set(key, value);
   }
 }
 
 const artifact: WorkerBuildArtifact = {
   buildKey: "abc123",
-  compatibilityDate: "2026-05-01",
-  compatibilityFlags: ["nodejs_compat"],
   mainModule: "worker.js",
   modules: {
     "worker.js": "export default {};",
@@ -54,6 +54,11 @@ describe("KvWorkerBuildArtifactStore", () => {
     );
 
     expect(await store(kv).get("abc123")).toEqual(artifact);
+
+    // Expiry is the only cleanup mechanism the cache has — every write must
+    // carry it or an artifact lives forever.
+    expect(kv.putTtls).toHaveLength(3);
+    for (const ttl of kv.putTtls) expect(ttl).toBeGreaterThan(0);
   });
 
   it("misses when there is no manifest, even if modules exist", async () => {

@@ -822,7 +822,9 @@ export type WorkerBundlerLoader =
  * This mirrors Cloudflare's \`CreateWorkerOptions\` from
  * \`@cloudflare/worker-bundler\` minus \`files\` (OS supplies files from the
  * selected {@link WorkerFileSource}) — deliberately not a parallel option
- * language. \`bundle: false\` is allowed; the invariant is one OS
+ * language (drift fails typecheck via the assignability pin in
+ * domains/workers/schemas.ts; this file stays import-free because it is
+ * published verbatim as the itx types surface). \`bundle: false\` is allowed; the invariant is one OS
  * materialization pipeline, not one bundled output file. When the file map has
  * a \`package.json\` with dependencies, the bundler installs them from the npm
  * registry at build time.

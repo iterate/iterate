@@ -16,6 +16,7 @@ type RequestedPayload = z.output<
 >;
 
 type RepoSnapshotResolver = (source: {
+  branch?: string;
   commitOid: string;
   exclude?: string[];
   include?: string[];
@@ -130,8 +131,6 @@ export class WorkerBuildProcessor extends StreamProcessor<typeof WorkerBuildProc
       phase = "store-artifact";
       await this.#artifactStore.put({
         buildKey,
-        compatibilityDate: built.compatibilityDate,
-        compatibilityFlags: built.compatibilityFlags,
         mainModule: built.mainModule,
         modules: built.modules,
       });

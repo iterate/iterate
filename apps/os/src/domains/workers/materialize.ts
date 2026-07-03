@@ -2,14 +2,6 @@ import type { Modules } from "@cloudflare/worker-bundler";
 import type { WorkerBuildOptions } from "../../types.ts";
 import { workerBuildOptionsMatchCloudflare } from "./schemas.ts";
 
-export type MaterializedWorkerBuild = {
-  compatibilityDate?: string;
-  compatibilityFlags?: string[];
-  mainModule: string;
-  modules: Record<string, string>;
-  warnings: string[];
-};
-
 /**
  * Node builtins that workerd provides under `nodejs_compat` at our worker
  * compatibility date. npm packages reach them BARE ("util", not "node:util"),
@@ -84,7 +76,7 @@ const nodeBuiltinVirtualModules = Object.fromEntries(
 export async function materializeWorkerBuild(input: {
   files: Record<string, string>;
   options: WorkerBuildOptions;
-}): Promise<MaterializedWorkerBuild> {
+}): Promise<{ mainModule: string; modules: Record<string, string>; warnings: string[] }> {
   const { createWorker } = await import("@cloudflare/worker-bundler");
   const result = await createWorker({
     ...workerBuildOptionsMatchCloudflare(input.options),
@@ -100,9 +92,12 @@ export async function materializeWorkerBuild(input: {
       ...input.options.virtualModules,
     },
   });
+  // Compatibility date/flags are deliberately NOT read from the source's
+  // wrangler config: OS owns worker compatibility (the constants in
+  // worker-loader.ts, hashed into every build key). A second, source-declared
+  // compat channel would bypass the key and let two builds collide on one
+  // artifact.
   return {
-    compatibilityDate: result.wranglerConfig?.compatibilityDate,
-    compatibilityFlags: result.wranglerConfig?.compatibilityFlags,
     mainModule: result.mainModule,
     modules: loaderReadyModules(result.modules),
     warnings: result.warnings ?? [],

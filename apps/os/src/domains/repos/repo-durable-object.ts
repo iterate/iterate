@@ -28,7 +28,7 @@ export type RepoFilesSnapshot = {
   files: Record<string, string>;
 };
 
-export type RepoHead = {
+type RepoHead = {
   branch: string;
   commitOid: string;
   contentHash: string;
@@ -81,20 +81,31 @@ export class RepoDurableObject extends DurableObject<Env> {
     const cached = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
     if (isRepoHeadRecord(cached)) return { branch, ...cached };
 
-    const repo = await this.repoGitAccess();
-    const snapshot = await cloneRepoSnapshot({ branch, remote: repo.remote, token: repo.token });
+    const snapshot = await this.getFilesSnapshot({ branch });
     const head = {
       commitOid: snapshot.commitOid,
-      contentHash: await repoContentHash(await readCheckoutFiles(snapshot.filesystem)),
+      contentHash: await repoContentHash(snapshot.files),
     };
+
+    // The clone above yields to other calls on this object. A head that
+    // appeared meanwhile came from `commitFiles`/seeding — the authorities —
+    // and may be NEWER than this checkout; writing ours over it would serve a
+    // stale head forever (the cache never self-invalidates).
+    const raced = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
+    if (isRepoHeadRecord(raced)) return { branch, ...raced };
     this.ctx.storage.kv.put(repoHeadStorageKey(branch), head);
     return { branch, ...head };
   }
 
   /**
    * A masked file snapshot at a branch head or pinned commit — the repo file
-   * source for the worker build pipeline. One clone serves the whole snapshot;
-   * include/exclude globs bound what becomes build input.
+   * source for the worker build pipeline, and the one clone-and-read pathway
+   * every read on this object goes through. Include/exclude globs bound what
+   * becomes build input.
+   *
+   * With `commitOid`, `branch` names where that commit lives (git clones are
+   * single-branch): worker builds pin a late-bound branch ref to the head it
+   * saw, so the pinned commit is only reachable through its branch's history.
    */
   async getFilesSnapshot(
     input: {
@@ -108,17 +119,16 @@ export class RepoDurableObject extends DurableObject<Env> {
     const filesystem = new InMemoryFs();
     const git = createGit(filesystem, REPO_DIR);
     const credentials = { password: repo.token, username: "x" };
+    const branch = input.branch ?? repo.defaultBranch;
 
     if (input.commitOid !== undefined) {
-      // Pinned commits need history: a shallow head clone only contains the
-      // branch tip, so clone the default branch's history and check out the
-      // requested commit. Project repos are small; correctness beats depth
-      // tuning here.
-      await git.clone({ url: repo.remote, ...credentials });
+      // Pinned commits need history: a shallow clone only contains the branch
+      // tip. Project repos are small; correctness beats depth tuning here.
+      await git.clone({ branch, url: repo.remote, ...credentials });
       await git.checkout({ ref: input.commitOid, force: true });
     } else {
       await git.clone({
-        branch: input.branch ?? repo.defaultBranch,
+        branch,
         depth: 1,
         singleBranch: true,
         url: repo.remote,
@@ -178,31 +188,17 @@ export class RepoDurableObject extends DurableObject<Env> {
   /** Committed file contents at HEAD, or null when the path does not exist. */
   async readFile(input: { path: string }): Promise<RepoFileRead | null> {
     const path = normalizeRepoFilePath(input.path);
-    const repo = await this.repoGitAccess();
-    const snapshot = await cloneRepoSnapshot({
-      branch: repo.defaultBranch,
-      remote: repo.remote,
-      token: repo.token,
-    });
-    const absolutePath = `${REPO_DIR}/${path}`;
-    if (!(await snapshot.filesystem.exists(absolutePath))) return null;
-    return {
-      commitOid: snapshot.commitOid,
-      content: await snapshot.filesystem.readFile(absolutePath),
-      path,
-    };
+    // Exact map lookup, deliberately not an include mask: glob metacharacters
+    // in a filename must not change what this reads.
+    const { commitOid, files } = await this.getFilesSnapshot();
+    const content = files[path];
+    return content === undefined ? null : { commitOid, content, path };
   }
 
   /** All committed file paths at HEAD. */
   async listFiles(): Promise<{ commitOid: string; paths: string[] }> {
-    const repo = await this.repoGitAccess();
-    const snapshot = await cloneRepoSnapshot({
-      branch: repo.defaultBranch,
-      remote: repo.remote,
-      token: repo.token,
-    });
-    const files = await readCheckoutFiles(snapshot.filesystem);
-    return { commitOid: snapshot.commitOid, paths: Object.keys(files).sort() };
+    const { commitOid, files } = await this.getFilesSnapshot();
+    return { commitOid, paths: Object.keys(files).sort() };
   }
 
   private async createArtifactRepo(_input: { path: string; projectId: string | null }) {
@@ -417,28 +413,13 @@ async function commitFilesToArtifactRepo(input: {
 
 type RepoFileRead = { commitOid: string; content: string; path: string };
 
-/** Shallow single-branch clone of HEAD for read operations. */
-async function cloneRepoSnapshot(input: { branch: string; remote: string; token: string }) {
-  const filesystem = new InMemoryFs();
-  const git = createGit(filesystem, REPO_DIR);
-  await git.clone({
-    branch: input.branch,
-    depth: 1,
-    singleBranch: true,
-    url: input.remote,
-    username: "x",
-    password: input.token,
-  });
-  const [head] = await git.log({ depth: 1 });
-  if (!head) throw new Error("Repo has no commits.");
-  return { commitOid: head.oid, filesystem, git };
-}
-
 function repoHeadStorageKey(branch: string) {
   // The value is "latest head at this branch" ({ commitOid, contentHash }),
   // not immutable history — exactly the late-bound pointer branch-backed
-  // worker file sources resolve through before pinning a build.
-  return `repo-head:${branch}`;
+  // worker file sources resolve through before pinning a build. The version
+  // segment makes a contentHash recipe change a clean cache flush instead of
+  // old and new hashes silently mixing in build keys.
+  return `repo-head:v1:${branch}`;
 }
 
 function isRepoHeadRecord(value: unknown): value is { commitOid: string; contentHash: string } {
@@ -468,6 +449,12 @@ async function readCheckoutFiles(filesystem: InMemoryFs): Promise<Record<string,
   return files;
 }
 
+/**
+ * Whole-checkout content identity. Build keys hash this plus the ref's masks,
+ * so a commit touching only mask-excluded files still changes every build key
+ * for the repo — a spurious cache miss (correct output, one extra build), the
+ * accepted cost of getting fresh-seed artifact dedupe without per-mask hashes.
+ */
 async function repoContentHash(files: Record<string, string>): Promise<string> {
   return await stableSha256({ files, type: "repo-content" });
 }

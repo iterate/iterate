@@ -83,7 +83,12 @@ export class ItxDurableObject extends DurableObject<Env> {
               path: source.repoPath,
               projectId: this.#name.projectId,
             }),
-          ).getFilesSnapshot(source),
+          ).getFilesSnapshot({
+            branch: source.branch,
+            commitOid: source.commitOid,
+            exclude: source.exclude,
+            include: source.include,
+          }),
       }),
   );
 

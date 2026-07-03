@@ -39,7 +39,7 @@ export default class ProjectWorker extends WorkerEntrypoint<ProjectWorkerEnv> {
   async fetch(req: Request): Promise<Response> {
     const appSlug = req.headers.get("x-iterate-app");
     if (appSlug) {
-      const ref = APPS[appSlug as keyof typeof APPS];
+      const ref = Object.hasOwn(APPS, appSlug) ? APPS[appSlug as keyof typeof APPS] : undefined;
       if (!ref) return new Response(`unknown app: ${appSlug}`, { status: 404 });
       const project = await this.env.ITX.get();
       // Workers RPC: await the capability before calling through it.
@@ -91,7 +91,7 @@ export default class ProjectWorker extends WorkerEntrypoint<ProjectWorkerEnv> {
     // platform's native fetch (and therefore project egress) instead.
     (client as unknown as { axios: { defaults: { adapter: string } } }).axios.defaults.adapter =
       "fetch";
-    return rpcCapabilityTree(client) as Record<string, unknown>;
+    return rpcCapabilityTree(client);
   }
 
   async testFetch(input: { headerValue: string; url: string }): Promise<unknown> {
@@ -110,7 +110,7 @@ export default class ProjectWorker extends WorkerEntrypoint<ProjectWorkerEnv> {
  * (`chat.postMessage`, `conversations.history`, ...) as plain nested objects
  * of pre-bound functions, so the whole Web API survives this projection.
  */
-function rpcCapabilityTree(value: object): unknown {
+function rpcCapabilityTree(value: object): Record<string, unknown> {
   const tree: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
     if (typeof entry === "function") {

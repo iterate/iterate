@@ -23,8 +23,6 @@ const BUILD_WAIT_TIMEOUT_MS = 120_000;
  */
 export type ResolvedWorkerSource = {
   cacheKey: string;
-  compatibilityDate?: string;
-  compatibilityFlags?: string[];
   mainModule: string;
   modules: Record<string, string>;
 };
@@ -107,17 +105,14 @@ async function resolveThroughBuildPipeline(input: {
     type: "events.iterate.com/worker-build/requested",
     payload: {
       buildKey: input.buildKey,
-      compatibilityDate: WORKER_COMPATIBILITY_DATE,
-      compatibilityFlags: WORKER_COMPATIBILITY_FLAGS,
-      options: input.options as Record<string, unknown>,
+      options: input.options,
       source: input.source,
     },
   });
 
-  // A build that completed between the cache check and the append emitted its
-  // terminal event BEFORE our requested offset, so waiting forward would hang;
-  // one re-check closes that window (the processor also re-announces
-  // completion for cache hits, so this is belt and braces).
+  // Latency shortcut for the "completed between cache check and append"
+  // window: the processor re-announces completion for cache hits, so the
+  // forward wait below would resolve anyway — this just skips it.
   const raced = await store.get(input.buildKey);
   if (raced !== null) return memoizeArtifact(raced);
 
@@ -149,8 +144,6 @@ async function resolveThroughBuildPipeline(input: {
 function memoizeArtifact(artifact: WorkerBuildArtifact): ResolvedWorkerSource {
   const resolved: ResolvedWorkerSource = {
     cacheKey: artifact.buildKey,
-    compatibilityDate: artifact.compatibilityDate,
-    compatibilityFlags: artifact.compatibilityFlags,
     mainModule: artifact.mainModule,
     modules: artifact.modules,
   };
@@ -162,6 +155,9 @@ function memoizeArtifact(artifact: WorkerBuildArtifact): ResolvedWorkerSource {
   return resolved;
 }
 
+// The fast-path cache key deliberately shares no space with workerBuildKey:
+// both hashes carry a distinct `type` discriminant, so a verbatim load can
+// never collide with a built artifact in the Worker Loader's cache.
 async function loaderReadyInlineSource(
   source: DynamicWorkerSource,
   options: WorkerBuildOptions,
@@ -196,6 +192,8 @@ async function resolveFileSource({
   }
 
   if (source.files.ref !== undefined && "commitOid" in source.files.ref) {
+    // No branch known for a caller-pinned commit: snapshot resolution walks
+    // the default branch's history, so pinning only works for commits on it.
     return {
       commitOid: source.files.ref.commitOid,
       exclude: source.files.exclude,
@@ -216,6 +214,7 @@ async function resolveFileSource({
     source.files.ref === undefined ? {} : { branch: source.files.ref.branch },
   );
   return {
+    branch: head.branch,
     commitOid: head.commitOid,
     contentHash: head.contentHash,
     exclude: source.files.exclude,
@@ -234,9 +233,10 @@ async function resolveFileSource({
  * hand worker B an isolate wired to worker A (observed as opaque "internal
  * error" on invocation), so the host isolate is a runtime-relevant cache
  * dimension. Stable for this isolate's lifetime, so keys never accumulate
- * within a host (see itx_dynamic_worker_loader_cap).
+ * within a host. Lazily initialized: random generation in module scope fails
+ * deploy-time validation (error 10021).
  */
-const HOST_ISOLATE_KEY = crypto.randomUUID();
+let hostIsolateKey: string | undefined;
 
 export function loadResolvedWorker({
   bindings,
@@ -264,7 +264,7 @@ export function loadResolvedWorker({
       : `durable-object:${ref.className}`;
   const cacheKey = [
     "worker-loader",
-    HOST_ISOLATE_KEY,
+    (hostIsolateKey ??= crypto.randomUUID()),
     projectId,
     ref.path,
     workerScopeKey,
@@ -273,8 +273,8 @@ export function loadResolvedWorker({
     resolved.cacheKey,
   ].join(":");
   return loader.get(cacheKey, () => ({
-    compatibilityDate: resolved.compatibilityDate ?? WORKER_COMPATIBILITY_DATE,
-    compatibilityFlags: resolved.compatibilityFlags ?? WORKER_COMPATIBILITY_FLAGS,
+    compatibilityDate: WORKER_COMPATIBILITY_DATE,
+    compatibilityFlags: WORKER_COMPATIBILITY_FLAGS,
     env: bindings,
     globalOutbound,
     mainModule: resolved.mainModule,

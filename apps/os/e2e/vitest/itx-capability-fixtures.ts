@@ -63,6 +63,66 @@ function listen(
   });
 }
 
+/**
+ * Slack Web API stand-in for the WORKER-side WebClient (the seeded project
+ * worker's `slack` surface): local runs spin a loopback server; deployed runs
+ * use the deployment's own /__itx_e2e/slack fixture, since a worker on a
+ * preview cannot reach the test runner's 127.0.0.1. `calls` is only populated
+ * in local mode — deployed assertions must go by response bodies.
+ */
+export async function startMockSlackApi(): Promise<FixtureServer & { calls: string[] }> {
+  const deployedBaseUrl = deployedFixtureBaseUrl();
+  if (deployedBaseUrl !== null) {
+    const url = new URL(deployedBaseUrl);
+    url.pathname = `${E2E_FIXTURE_PREFIX}/slack/`;
+    return { calls: [], close: async () => {}, url: url.toString() };
+  }
+
+  const calls: string[] = [];
+  const server = await listen((req, res) => {
+    const method = (req.url ?? "").replace(/^\//, "").split("?")[0] ?? "";
+    calls.push(method);
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk;
+    });
+    req.on("end", () => {
+      const contentType = String(req.headers["content-type"] ?? "");
+      const payload: Record<string, unknown> = contentType.includes("application/json")
+        ? (JSON.parse(body || "{}") as Record<string, unknown>)
+        : Object.fromEntries(new URLSearchParams(body));
+      res.setHeader("content-type", "application/json");
+      if (method === "chat.postMessage") {
+        res.end(
+          JSON.stringify({
+            ok: true,
+            channel: payload.channel,
+            ts: "1718000000.000100",
+            message: { text: payload.text, type: "message" },
+            via: "mock-slack-api",
+          }),
+        );
+        return;
+      }
+      if (method === "users.list") {
+        res.end(
+          JSON.stringify({
+            ok: true,
+            members: [
+              { id: "U1", name: "ada" },
+              { id: "U2", name: "grace" },
+            ],
+            via: "mock-slack-api",
+          }),
+        );
+        return;
+      }
+      res.end(JSON.stringify({ ok: true, via: "mock-slack-api" }));
+    });
+  }, "/");
+  return { ...server, calls };
+}
+
 export async function startEgressEcho(): Promise<FixtureServer> {
   const deployedBaseUrl = deployedFixtureBaseUrl();
   if (deployedBaseUrl !== null) {

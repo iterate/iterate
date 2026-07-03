@@ -28,6 +28,14 @@ import { ProjectProcessorContract } from "./project-processor-contract.ts";
 const ONBOARDING_AGENT_PATH = "/agents/onboarding";
 
 /**
+ * Every ITX scope gets ALL of these subscriptions or none: a scope that can
+ * run dynamic workers (scripts, worker-backed tools, project workers) must
+ * also own their build lifecycle, or every cold build on that scope hangs
+ * for the full build-wait timeout with nobody listening.
+ */
+const ITX_SCOPE_PROCESSOR_SLUGS = [ItxProcessorContract.slug, WorkerBuildProcessorContract.slug];
+
+/**
  * Agents under `/agents/slack/**` are Slack-thread agents: the slack webhook
  * router forwards raw thread webhooks to their stream, the `slack-agent`
  * processor transcribes them, and replies go out through the itx.slack Web
@@ -127,25 +135,16 @@ export class ProjectProcessor extends StreamProcessor<
           await Promise.all([
             timedStep("create-timing", timing, "root-saga-append", () =>
               append(
-                buildDurableObjectProcessorSubscriptionConfiguredEvent({
-                  durableObjectName: DurableObjectNameCodec.stringify({
-                    projectId: this.deps.itx.projectId,
-                    path: "/",
+                ...ITX_SCOPE_PROCESSOR_SLUGS.map((processorSlug) =>
+                  buildDurableObjectProcessorSubscriptionConfiguredEvent({
+                    durableObjectName: DurableObjectNameCodec.stringify({
+                      projectId: this.deps.itx.projectId,
+                      path: "/",
+                    }),
+                    processorSlug,
+                    subscriberType: "itx" as const,
                   }),
-                  processorSlug: ItxProcessorContract.slug,
-                  subscriberType: "itx",
-                }),
-                // The worker build processor rides along with every ITX
-                // processor subscription: any scope that can run dynamic
-                // workers also owns their build lifecycle events.
-                buildDurableObjectProcessorSubscriptionConfiguredEvent({
-                  durableObjectName: DurableObjectNameCodec.stringify({
-                    projectId: this.deps.itx.projectId,
-                    path: "/",
-                  }),
-                  processorSlug: WorkerBuildProcessorContract.slug,
-                  subscriberType: "itx",
-                }),
+                ),
                 {
                   type: "events.iterate.com/repo/create-requested",
                   idempotencyKey: `repo-create-requested:${this.deps.itx.projectId}:${PROJECT_REPO_PATH}`,
@@ -296,10 +295,7 @@ function agentBirthCertificateEvents(input: {
     // selected llmProvider answers llm-request-requested events.
     subscription(CloudflareAiProcessorContract.slug, "agent"),
     subscription(OpenAiWsProcessorContract.slug, "agent"),
-    subscription(ItxProcessorContract.slug, "itx"),
-    // Paired with the ITX subscription: agent scopes run dynamic workers
-    // (run-script, worker-backed tools), so their streams own build lifecycle.
-    subscription(WorkerBuildProcessorContract.slug, "itx"),
+    ...ITX_SCOPE_PROCESSOR_SLUGS.map((slug) => subscription(slug, "itx")),
     ...(input.slack ? [subscription(SlackAgentProcessorContract.slug, "agent")] : []),
     {
       type: "events.iterate.com/agent/config-updated" as const,

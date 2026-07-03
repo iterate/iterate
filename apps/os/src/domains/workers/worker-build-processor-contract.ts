@@ -1,39 +1,14 @@
 import { z } from "zod";
 import { defineProcessorContract } from "../streams/stream-processor.ts";
+import { ResolvedWorkerFileSource } from "./build-key.ts";
 import { WorkerBuildOptions } from "./schemas.ts";
-
-/**
- * Resolved file source as recorded in build lifecycle events.
- *
- * Repo sources carry identity (repo path, pinned commit, masks) and never
- * expanded file contents — the processor re-resolves them from the repo.
- * Inline sources carry the caller-provided file map by design: for
- * worker-backed provided capabilities the event log IS the durable home of
- * that small file map.
- */
-const ResolvedWorkerFileSourcePayload = z.discriminatedUnion("type", [
-  z.strictObject({
-    files: z.record(z.string(), z.string()),
-    type: z.literal("inline"),
-  }),
-  z.strictObject({
-    commitOid: z.string().regex(/^[0-9a-f]{40}$/),
-    contentHash: z.string().optional(),
-    exclude: z.array(z.string()).optional(),
-    include: z.array(z.string()).optional(),
-    repoPath: z.string(),
-    type: z.literal("repo"),
-  }),
-]);
 
 export const WorkerBuildFailurePhase = z.enum(["resolve-source", "bundle", "store-artifact"]);
 
 const WorkerBuildRequestedPayload = z.strictObject({
   buildKey: z.string().min(1),
-  compatibilityDate: z.string(),
-  compatibilityFlags: z.array(z.string()),
   options: WorkerBuildOptions,
-  source: ResolvedWorkerFileSourcePayload,
+  source: ResolvedWorkerFileSource,
 });
 
 /** Artifact identity and audit metadata — never built module contents. */

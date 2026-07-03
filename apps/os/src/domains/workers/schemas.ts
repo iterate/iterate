@@ -12,7 +12,7 @@ import type {
 
 const DURABLE_WORKER_KEY = /^[a-z][a-z0-9-]{0,62}$/;
 
-export const WorkerFileSource = z.discriminatedUnion("type", [
+const WorkerFileSource = z.discriminatedUnion("type", [
   z.strictObject({
     files: z.record(z.string(), z.string()),
     type: z.literal("inline"),

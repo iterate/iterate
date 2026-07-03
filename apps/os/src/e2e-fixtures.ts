@@ -19,6 +19,10 @@ export async function e2eFixtureResponse(request: Request): Promise<Response | n
     return Response.json({ headers });
   }
 
+  if (kind === "slack") {
+    return await slackFixtureResponse({ request, segments: [encodedAuthorization, ...path] });
+  }
+
   const expectedAuthorization =
     encodedAuthorization === undefined || encodedAuthorization === "_"
       ? undefined
@@ -39,6 +43,48 @@ export async function e2eFixtureResponse(request: Request): Promise<Response | n
   }
 
   return null;
+}
+
+/**
+ * Slack Web API stand-in: the URL's last segment is the Web API method (the
+ * Slack SDK appends it to its configured `slackApiUrl`). Mirrors the local
+ * mock in e2e/vitest/itx-capability-fixtures.ts — canned success bodies, no
+ * auth, no state.
+ */
+async function slackFixtureResponse({
+  request,
+  segments,
+}: {
+  request: Request;
+  segments: (string | undefined)[];
+}): Promise<Response> {
+  const method = segments.filter(Boolean).join("/");
+  const body = await request.text();
+  const contentType = request.headers.get("content-type") ?? "";
+  const payload: Record<string, unknown> = contentType.includes("application/json")
+    ? (JSON.parse(body || "{}") as Record<string, unknown>)
+    : Object.fromEntries(new URLSearchParams(body));
+
+  if (method === "chat.postMessage") {
+    return Response.json({
+      ok: true,
+      channel: payload.channel,
+      ts: "1718000000.000100",
+      message: { text: payload.text, type: "message" },
+      via: "mock-slack-api",
+    });
+  }
+  if (method === "users.list") {
+    return Response.json({
+      ok: true,
+      members: [
+        { id: "U1", name: "ada" },
+        { id: "U2", name: "grace" },
+      ],
+      via: "mock-slack-api",
+    });
+  }
+  return Response.json({ ok: true, via: "mock-slack-api" });
 }
 
 function openApiFixtureResponse({ path, request }: { path: string[]; request: Request }) {
