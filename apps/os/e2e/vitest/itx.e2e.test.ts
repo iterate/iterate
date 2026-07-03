@@ -345,7 +345,7 @@ describe("itx", () => {
     ).rejects.toThrow(/no capability "someMethodInTestRunner.getSecret"/);
   });
 
-  test("Project describe exposes Workers AI as a builtin capability", async () => {
+  test("Project describe exposes self-describing builtin capabilities", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
       type: "admin-secret",
@@ -355,7 +355,16 @@ describe("itx", () => {
     using project = itx.projects.create({ slug: "ai-builtin" });
     const description = await project.describe();
 
-    expect(description.capabilities).toContainEqual({ path: ["ai"], type: "builtin" });
+    expect(description.capabilities).toContainEqual(
+      expect.objectContaining({ path: ["ai"], type: "builtin" }),
+    );
+    expect(description.capabilities).toContainEqual(
+      expect.objectContaining({
+        instructions: expect.stringContaining("Gmail REST proxy"),
+        path: ["gmail"],
+        type: "builtin",
+      }),
+    );
   });
 
   test("Trusted internal root can access global streams and repos", async () => {
