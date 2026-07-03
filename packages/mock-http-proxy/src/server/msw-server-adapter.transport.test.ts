@@ -13,11 +13,11 @@ const activeWebSocketServers = new Set<WebSocketServer>();
 const activeUpstreamHttpServers = new Set<Server>();
 
 async function listen(server: NativeMswServer): Promise<{ baseUrl: string; port: number }> {
-  const { port, url } = await listenOnFetchSafePort(server);
+  const { baseUrl, port } = await listenOnFetchSafePort(server);
   activeServers.add(server);
 
   return {
-    baseUrl: url,
+    baseUrl,
     port,
   };
 }

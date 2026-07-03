@@ -6,9 +6,9 @@ import { createNativeMswServer, type NativeMswServer } from "./msw-server-adapte
 const activeServers = new Set<NativeMswServer>();
 
 async function listen(server: NativeMswServer): Promise<string> {
-  const { url } = await listenOnFetchSafePort(server);
+  const { baseUrl } = await listenOnFetchSafePort(server);
   activeServers.add(server);
-  return url;
+  return baseUrl;
 }
 
 async function close(server: NativeMswServer): Promise<void> {

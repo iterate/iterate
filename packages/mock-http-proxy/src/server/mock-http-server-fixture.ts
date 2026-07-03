@@ -10,7 +10,6 @@ import { request } from "undici";
 import { WebSocketServer, type RawData } from "ws";
 import { HarRecorder, type RecorderOpts } from "../har/har-recorder.ts";
 import { bridgeWebSocketToUpstream, firstHeaderValue } from "./websocket-upstream-bridge.ts";
-import { listenOnFetchSafePort } from "./fetch-safe-listen.ts";
 import { incomingHeadersToHeaders } from "./http-utils.ts";
 import {
   createNativeMswServer,
@@ -23,6 +22,7 @@ import {
   createProxyRequestTransform,
   createProxyWebSocketUrlTransform,
 } from "./proxy-request-transform.ts";
+import { listenOnFetchSafePort } from "./fetch-safe-listen.ts";
 
 export type UseMockHttpServerOptions = {
   recorder?: RecorderOpts;
@@ -259,7 +259,10 @@ export async function useMockHttpServer(
   });
 
   const host = options.host ?? "127.0.0.1";
-  const { port, url } = await listenOnFetchSafePort(server, { host, port: options.port ?? 0 });
+  const { baseUrl: url, port } = await listenOnFetchSafePort(server, {
+    host,
+    port: options.port,
+  });
   let disposed = false;
   const dispose = async (): Promise<void> => {
     if (disposed) return;

@@ -19,10 +19,10 @@ type LifecycleEventName = (typeof lifecycleEventNames)[number];
 type LifecycleEventCall = [LifecycleEventName, { request: Request; requestId: string }];
 
 async function listen(server: NativeMswServer): Promise<{ baseUrl: string; port: number }> {
-  const { port, url } = await listenOnFetchSafePort(server);
+  const { baseUrl, port } = await listenOnFetchSafePort(server);
   activeServers.add(server);
   return {
-    baseUrl: url,
+    baseUrl,
     port,
   };
 }
@@ -41,10 +41,10 @@ async function close(server: NativeMswServer): Promise<void> {
 }
 
 async function listenUpstream(server: Server): Promise<{ baseUrl: string; port: number }> {
-  const { port, url } = await listenOnFetchSafePort(server);
+  const { baseUrl, port } = await listenOnFetchSafePort(server);
   activeUpstreamServers.add(server);
   return {
-    baseUrl: url,
+    baseUrl,
     port,
   };
 }

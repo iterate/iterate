@@ -16,8 +16,8 @@ function harHeaderValue(
 }
 
 async function listen(server: Server): Promise<string> {
-  const { url } = await listenOnFetchSafePort(server);
-  return url;
+  const { baseUrl } = await listenOnFetchSafePort(server);
+  return baseUrl;
 }
 
 async function close(server: Server): Promise<void> {
