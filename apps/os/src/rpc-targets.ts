@@ -837,6 +837,46 @@ class DynamicWorkerRpcTarget extends RpcTarget {
     return withInvokeCapabilityFallback(this);
   }
 
+  // Answered from the REF alone — describing a worker must not boot it (no
+  // loader isolate, no module top-level code, no DO wake). The worker's own
+  // live self-report is a separate, explicit act:
+  // `invokeCapability({ path: ["__describe"] })` loads the worker and calls a
+  // `__describe` the user code may export.
+  async __describe() {
+    const source =
+      this.#ref.source.type === "inline"
+        ? {
+            type: "inline" as const,
+            mainModule: this.#ref.source.mainModule,
+            modules: Object.fromEntries(
+              Object.entries(this.#ref.source.modules).map(([name, text]) => [
+                name,
+                `${text.length} bytes`,
+              ]),
+            ),
+          }
+        : this.#ref.source;
+    return describeNode({
+      instructions:
+        `A ${this.#ref.type} dynamic worker (described from its ref — the worker was NOT loaded). ` +
+        'Dotted calls load it through the Worker Loader and invoke the entrypoint: `worker.someMethod(x)` is `invokeCapability({ path: ["someMethod"], args: [x] })`. ' +
+        "`children` cannot be listed — the worker's methods are whatever its entrypoint exports. " +
+        'To ask the worker to describe ITSELF (boots it; only works if its code implements `__describe`), call `invokeCapability({ path: ["__describe"] })`.',
+      children: {
+        invokeCapability: "Explicit dispatch into the worker: { path, args, flattenNestedPath? }.",
+      },
+      parent: `itx.workers of this project (itx scope path "${this.#ref.path}")`,
+      ref: {
+        ...(this.#ref.type === "stateless"
+          ? { entrypoint: this.#ref.entrypoint, propKeys: Object.keys(this.#ref.props ?? {}) }
+          : { className: this.#ref.className, durableWorkerKey: this.#ref.durableWorkerKey }),
+        path: this.#ref.path,
+        source,
+        type: this.#ref.type,
+      },
+    });
+  }
+
   async invokeCapability({
     args = [],
     flattenNestedPath = false,
