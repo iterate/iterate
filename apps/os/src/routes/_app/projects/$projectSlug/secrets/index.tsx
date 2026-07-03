@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { KeyRound } from "lucide-react";
 import { z } from "zod";
 import { Button } from "@iterate-com/ui/components/button";
@@ -16,8 +16,10 @@ import {
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
+import { StreamViewSection } from "~/components/stream-view-section.tsx";
 import { formatRelativeTime } from "~/lib/format-relative-time.ts";
-import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
+import { useItx, useItxState } from "~/itx/itx-react.tsx";
+import type { ProjectProcessorState } from "~/types.ts";
 
 /** Secrets live at `/secrets/<name>`; the route param is the bare name. */
 const secretPathFromName = (name: string) => `/secrets/${name}`;
@@ -60,21 +62,22 @@ function ProjectSecretsIndexContent() {
   const navigate = useNavigate();
   const { project } = Route.useLoaderData();
   const itx = useItx();
-  const queryClient = useQueryClient();
   const [filter, setFilter] = useState("");
-  const secretsKey = ["secrets", project.slug];
-  const secretsList = useItxQuery({
-    key: secretsKey,
-    query: (itx) => itx.secrets.list(),
-  });
+  // The secrets list is a slice of the project processor's reduced state; the
+  // processor pushes state changes, so a new secret appears here without any
+  // invalidation.
+  const projectState = useItxState<ProjectProcessorState>(
+    (itx, setState) => itx.processor.onStateChange(setState),
+    [],
+  ).state;
+  const secretsList = projectState?.secrets;
 
   const upsertSecret = useMutation({
     mutationFn: async (input: { name: string; material: string }) => {
       await itx.secrets.get(secretPathFromName(input.name)).update({ material: input.material });
       return input.name;
     },
-    onSuccess: async (name) => {
-      await queryClient.invalidateQueries({ queryKey: ["itx", ...secretsKey] });
+    onSuccess: (name) => {
       form.reset();
       void navigate({
         to: "/projects/$projectSlug/secrets/$secretId",
@@ -102,7 +105,7 @@ function ProjectSecretsIndexContent() {
 
   const visibleSecrets = useMemo(() => {
     const query = filter.trim().toLowerCase();
-    return secretsList
+    return (secretsList ?? [])
       .filter((secret) => {
         if (!query) return true;
         return secret.path.toLowerCase().includes(query);
@@ -208,7 +211,11 @@ function ProjectSecretsIndexContent() {
         </Button>
       </div>
 
-      {secretsList.length === 0 ? (
+      {secretsList === undefined ? (
+        <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
+          Loading secrets…
+        </div>
+      ) : secretsList.length === 0 ? (
         <Empty className="rounded-lg border">
           <EmptyHeader>
             <EmptyTitle>No Secrets</EmptyTitle>
@@ -250,6 +257,12 @@ function ProjectSecretsIndexContent() {
           )}
         </div>
       )}
+
+      <StreamViewSection
+        projectId={project.id}
+        streamPath="/secrets"
+        emptyLabel="No events on the secrets catalogue stream yet."
+      />
     </section>
   );
 }

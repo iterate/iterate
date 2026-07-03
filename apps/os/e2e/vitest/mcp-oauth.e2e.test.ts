@@ -208,6 +208,15 @@ test("project MCP OAuth opaque-token flow", async () => {
     redirectUrl = new URL(redirect ?? "", authOrigin);
   }
 
+  // Regression guard for the double project-selection bug: accepting consent
+  // must issue the code, NOT bounce back to /project-access a second time.
+  // Upstream oauth-provider re-ran postLogin.shouldRedirect on the consent
+  // re-entry; our patch (patches/@better-auth__oauth-provider@1.6.9.patch)
+  // passes the postLogin flag so it doesn't.
+  expect(redirectUrl.pathname, "consent must not re-prompt project selection").not.toContain(
+    "/project-access",
+  );
+
   const code = redirectUrl.searchParams.get("code");
   expect(code, "authorization code issued after selection + consent").toBeTruthy();
   expect(redirectUrl.searchParams.get("state")).toBe(state);

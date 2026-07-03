@@ -122,3 +122,170 @@ describe("itx socket map", () => {
     expect(FakeWebSocket.instances).toHaveLength(2);
   });
 });
+
+// The liveness watchdog is module-private; these tests drive it through the
+// public useItxSubscription hook with a real React tree — which also covers
+// the epoch/re-subscribe integration the bare watchdog can't show.
+describe("useItxSubscription liveness", () => {
+  // The watchdog's cadence (see the constants in itx-react.tsx).
+  const INTERVAL = 45_000;
+  const PING_TIMEOUT = 10_000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  });
+  afterEach(() => vi.useRealTimers());
+
+  /**
+   * Mount a component holding one useItxSubscription. Everything is imported
+   * AFTER the file-level vi.resetModules() so the harness's React instance is
+   * the same one itx-react loaded (a static react import here would be a
+   * different copy — instant invalid-hook-call).
+   */
+  async function mountSubscription(
+    makeHandle: () => {
+      ping: () => boolean | Promise<boolean>;
+      unsubscribe: () => void;
+    },
+  ) {
+    const [{ useItxSubscription }, React, { createRoot }] = await Promise.all([
+      import("./itx-react.tsx"),
+      import("react"),
+      import("react-dom/client"),
+    ]);
+    const { act, createElement, Suspense } = React;
+
+    const subscribe = vi.fn(async () => makeHandle());
+    function Harness() {
+      const subscription = useItxSubscription(subscribe as never, []);
+      return createElement("output", { "data-status": subscription.status });
+    }
+
+    const container = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(createElement(Suspense, { fallback: null }, createElement(Harness)));
+    });
+    // The hook suspended on the socket dial; open it and let the effect +
+    // async subscribe settle.
+    await act(async () => {
+      FakeWebSocket.instances.at(-1)!.fire("open");
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    return {
+      subscribe,
+      status: () => container.querySelector("output")?.getAttribute("data-status"),
+      advance: (ms: number) => act(async () => vi.advanceTimersByTimeAsync(ms)),
+      unmount: () => act(async () => root.unmount()),
+    };
+  }
+
+  test("a subscription that keeps answering true stays live and is left alone", async () => {
+    let pings = 0;
+    const harness = await mountSubscription(() => ({
+      ping: () => {
+        pings += 1;
+        return true;
+      },
+      unsubscribe: vi.fn(),
+    }));
+
+    expect(harness.status()).toBe("live");
+    await harness.advance(INTERVAL * 3);
+    expect(pings).toBe(3);
+    expect(harness.subscribe).toHaveBeenCalledTimes(1); // never re-subscribed
+    expect(harness.status()).toBe("live");
+    await harness.unmount();
+  });
+
+  test("ping answering false (server-side subscription gone) re-subscribes", async () => {
+    let handles = 0;
+    const harness = await mountSubscription(() => {
+      handles += 1;
+      const mine = handles;
+      // The FIRST handle dies on the first ping; its replacement stays live.
+      return { ping: () => mine > 1, unsubscribe: vi.fn() };
+    });
+
+    expect(harness.status()).toBe("live");
+    await harness.advance(INTERVAL);
+    expect(harness.subscribe).toHaveBeenCalledTimes(2); // recovered via a fresh subscribe
+    expect(harness.status()).toBe("live");
+    await harness.advance(INTERVAL * 2);
+    expect(harness.subscribe).toHaveBeenCalledTimes(2); // and then left alone
+    await harness.unmount();
+  });
+
+  test("a rejecting ping (dead DO incarnation) re-subscribes", async () => {
+    let handles = 0;
+    const harness = await mountSubscription(() => {
+      handles += 1;
+      const mine = handles;
+      return {
+        ping: () => (mine > 1 ? true : Promise.reject(new Error("Durable Object reset"))),
+        unsubscribe: vi.fn(),
+      };
+    });
+
+    await harness.advance(INTERVAL);
+    expect(harness.subscribe).toHaveBeenCalledTimes(2);
+    expect(harness.status()).toBe("live");
+    await harness.unmount();
+  });
+
+  test("a hanging ping (half-open socket) drops every socket so consumers re-dial", async () => {
+    const { connectItxBrowser } = await import("./itx-react.tsx");
+    const harness = await mountSubscription(() => ({
+      ping: () => new Promise<boolean>(() => {}),
+      unsubscribe: vi.fn(),
+    }));
+    const socketsBefore = FakeWebSocket.instances.length;
+    const globalSocket = connectItxBrowser();
+
+    await harness.advance(INTERVAL + PING_TIMEOUT);
+    // reconnectAllItx ran: the cached socket promise was dropped, the hook
+    // re-suspended, and a FRESH dial started.
+    expect(connectItxBrowser()).not.toBe(globalSocket);
+    expect(FakeWebSocket.instances.length).toBeGreaterThan(socketsBefore);
+
+    // The fresh socket opens → the effect re-runs → a fresh subscription.
+    await act(harness, async () => {
+      FakeWebSocket.instances.at(-1)!.fire("open");
+    });
+    await harness.advance(0);
+    expect(harness.subscribe).toHaveBeenCalledTimes(2);
+    expect(harness.status()).toBe("live");
+    await harness.unmount();
+  });
+
+  test("the tab becoming visible triggers an immediate liveness check", async () => {
+    let handles = 0;
+    const harness = await mountSubscription(() => {
+      handles += 1;
+      const mine = handles;
+      return { ping: () => mine > 1, unsubscribe: vi.fn() };
+    });
+
+    // No interval has elapsed — visibility alone must trigger the check
+    // (waking from sleep is exactly when the socket is most likely dead).
+    document.dispatchEvent(new Event("visibilitychange"));
+    await harness.advance(0);
+    expect(harness.subscribe).toHaveBeenCalledTimes(2);
+    await harness.unmount();
+  });
+});
+
+/** act() through the harness's own React copy (post-resetModules instance). */
+async function act(
+  _harness: { advance: (ms: number) => Promise<unknown> },
+  work: () => Promise<void> | void,
+): Promise<void> {
+  const React = await import("react");
+  await React.act(async () => {
+    await work();
+  });
+}

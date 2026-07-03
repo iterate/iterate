@@ -943,6 +943,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     return new StreamSubscriptionRpcTarget({
       close: () => connection.close("unsubscribed"),
+      isLive: () => connection.isLive(),
       subscriptionKey: args.subscriptionKey,
       streamMaxOffset: this.#coreProcessorState.maxOffset,
     });
