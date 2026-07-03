@@ -7,8 +7,10 @@ import {
   Container,
   DurableObjectNamespace,
   KVNamespace,
+  Self,
   Worker,
   WorkerLoader,
+  WorkerRef,
   WranglerJson,
   createCloudflareApi,
 } from "alchemy/cloudflare";
@@ -398,7 +400,11 @@ function withoutBindingsToMissingScripts<B extends Bindings>(owner: string, bind
   if (missingScripts.size === 0) return bindings;
   return Object.fromEntries(
     Object.entries(bindings).filter(([name, value]) => {
-      const scriptName = (value as { scriptName?: string } | null | undefined)?.scriptName;
+      // Cross-script DO namespaces carry scriptName; name-string service
+      // bindings (WorkerRef) carry service. Both fail on a fresh stage when
+      // the target script does not exist yet.
+      const target = value as { scriptName?: string; service?: string } | null | undefined;
+      const scriptName = target?.scriptName ?? target?.service;
       if (!scriptName || scriptName === owner || !missingScripts.has(scriptName)) return true;
       console.warn(`[alchemy.run]   ${owner}: omitting ${name} -> ${scriptName}`);
       return false;
@@ -472,7 +478,11 @@ const itxBindings = {
   ARTIFACTS_ACCOUNT_ID: artifactsAccountId,
   ARTIFACTS_NAMESPACE: artifactsNamespace,
   ITX: itx,
-  LOADER: WorkerLoader(),
+  // Dynamic workers are owned by the worker worker; every other worker calls
+  // its default entrypoint (DynamicWorkerEntrypoint) through this service
+  // binding. Bound by name-string (like the cross-script DO namespaces) so the
+  // engine workers keep deploying concurrently.
+  DYNAMIC_WORKERS: WorkerRef({ service: workerNames.worker }),
   PROJECT: project,
   PROJECT_DIRECTORY: projectDirectory,
   REPO: repo,
@@ -529,7 +539,15 @@ const [
   // migration); every other itx worker keeps the plain cross-script binding.
   engineWorker("sandbox", "./src/workers/sandbox.ts", { SANDBOX: sandboxContainer }),
   engineWorker("secret", "./src/workers/secret.ts"),
-  engineWorker("worker", "./src/workers/worker.ts"),
+  // The ONLY worker with a Worker Loader: it owns all dynamic workers (see
+  // src/domains/workers/dynamic-worker-entrypoint.ts). Its own DYNAMIC_WORKERS
+  // is a Self binding — loaded workers' itx loopbacks run here, so e.g.
+  // `itx.workers.get(...)` from inside a script resolves without leaving the
+  // worker.
+  engineWorker("worker", "./src/workers/worker.ts", {
+    DYNAMIC_WORKERS: Self,
+    LOADER: WorkerLoader(),
+  }),
   engineWorker("api", "./src/workers/api.ts"),
 ]);
 

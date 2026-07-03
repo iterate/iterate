@@ -8,9 +8,7 @@ import {
   type StreamSubscriberWakeRequest,
 } from "../streams/stream-processor-host.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
-import { projectEgressFetcher } from "../projects/utils.ts";
 import { ItxRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
-import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import { KvWorkerBuildArtifactStore, type WorkerBuildArtifact } from "../workers/artifact-store.ts";
 import { WorkerBuildProcessor } from "../workers/worker-build-processor-implementation.ts";
 import {
@@ -19,17 +17,9 @@ import {
   type ProvideCapabilityInput,
   type RunScriptResult,
 } from "./itx-processor-implementation.ts";
-import { itxEntrypointBinding, itxEntrypointProps, itxEntrypointScopeCacheKey } from "./utils.ts";
 
 export class ItxDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
-  // The host-supplied ITX binding scope and Worker Loader cache scope must be
-  // built from the same normalized value, otherwise a worker can load with one
-  // scope key and resolve `env.ITX.get()` against a different path.
-  readonly #itxScope = itxEntrypointProps({
-    path: this.#name.path,
-    projectId: this.#name.projectId,
-  });
   readonly #processorHost = createStreamProcessorHost(this.ctx, {
     stream: new StreamRpcTarget({
       auth: trustedInternalAuthContext(),
@@ -54,15 +44,8 @@ export class ItxDurableObject extends DurableObject<Env> {
         // chain.
         parent: this.#parentItxScope(),
         path: this.#name.path,
-        workerRunner: new DynamicWorkerRunner({
-          bindings: {
-            ITX: itxEntrypointBinding(this.ctx.exports, this.#itxScope),
-          },
-          globalOutbound: projectEgressFetcher(this.ctx.exports, this.#name.projectId),
-          loader: this.env.LOADER,
-          projectId: this.#name.projectId,
-          workerScopeKey: itxEntrypointScopeCacheKey(this.#itxScope),
-        }),
+        projectId: this.#name.projectId,
+        dynamicWorkers: this.env.DYNAMIC_WORKERS,
       }),
   );
   // Installed wherever the ITX processor is installed: any scope that can run
