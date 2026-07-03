@@ -56,11 +56,13 @@ export default defineConfig({
     // and overloaded the slot ("Durable Object storage operation exceeded
     // timeout") at peak 8-24; with fast creates the slot tolerates the
     // fan-out. peak ≈ maxWorkers × maxConcurrency, so 4×4 = ~16 concurrent
-    // creates against the slot. Watch preview e2e for DO-storage-timeout /
-    // timing-teardown flakes if you push this higher — see
-    // tasks/raise-e2e-maxconcurrency.md.
+    // creates against the slot. 4 (peak ~16) still overloaded on a very cold
+    // slot (161s deploy) — 4 DO-storage-timeout fails that survived retry — so
+    // 3 (peak ~12) is the current ceiling. The robust fix for going higher is
+    // splitting the itx monolith into files (file parallelism at safe
+    // per-file concurrency) — see tasks/raise-e2e-maxconcurrency.md.
     sequence: { concurrent: ci },
-    maxConcurrency: 4,
+    maxConcurrency: 3,
     // One retry in CI: tests are self-contained (fresh project per test), so a
     // rare load-induced flake re-runs in seconds instead of failing the suite.
     retry: ci ? 1 : 0,
