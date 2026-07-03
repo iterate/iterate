@@ -79,6 +79,10 @@ export const AppConfig = z.object({
     })
     .optional(),
   openAiApiKey: redacted(z.string().trim().min(1)),
+  /** Gemini API key for the voice-agent processor's Gemini Live provider. */
+  geminiApiKey: redacted(z.string().trim().min(1)).optional(),
+  /** xAI API key for the voice-agent processor's Grok Realtime provider. */
+  xAiApiKey: redacted(z.string().trim().min(1)).optional(),
   cloudflare: z
     .object({
       apiToken: redacted(z.string().trim().min(1)).optional(),

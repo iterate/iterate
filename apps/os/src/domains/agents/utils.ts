@@ -34,3 +34,22 @@ export function readOpenAiApiKeyFromAppConfig(env: unknown): string | null {
     return null;
   }
 }
+
+/** Same non-throwing contract as the OpenAI reader, for the voice-agent providers. */
+export function readGeminiApiKeyFromAppConfig(env: unknown): string | null {
+  try {
+    const apiKey = parseConfig(env).geminiApiKey?.exposeSecret() ?? "";
+    return apiKey.trim() === "" ? null : apiKey;
+  } catch {
+    return null;
+  }
+}
+
+export function readXAiApiKeyFromAppConfig(env: unknown): string | null {
+  try {
+    const apiKey = parseConfig(env).xAiApiKey?.exposeSecret() ?? "";
+    return apiKey.trim() === "" ? null : apiKey;
+  } catch {
+    return null;
+  }
+}

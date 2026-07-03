@@ -11,6 +11,7 @@ import {
   GitBranch,
   KeyRound,
   LogOut,
+  Mic,
   Plug,
   Plus,
   Radio,
@@ -582,6 +583,7 @@ type ProjectStreamNavItemConfig = {
   streamPath: StreamPathType;
   to:
     | "/projects/$projectSlug/agents"
+    | "/projects/$projectSlug/voice-agents"
     | "/projects/$projectSlug/integrations"
     | "/projects/$projectSlug/secrets"
     | "/projects/$projectSlug/repos"
@@ -595,6 +597,13 @@ const PROJECT_STREAM_NAV_ITEMS: readonly ProjectStreamNavItemConfig[] = [
     label: "/agents",
     streamPath: StreamPath.parse("/agents"),
     to: "/projects/$projectSlug/agents",
+  },
+  {
+    fuzzy: true,
+    icon: Mic,
+    label: "/agents/voice",
+    streamPath: StreamPath.parse("/agents/voice"),
+    to: "/projects/$projectSlug/voice-agents",
   },
   {
     fuzzy: false,

@@ -22,6 +22,11 @@ import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts
 import { SlackAgentProcessorContract } from "../integrations/slack-agent-processor-contract.ts";
 import { SlackProcessorContract } from "../integrations/slack-processor-contract.ts";
 import { isSlackAgentPath, SLACK_INTEGRATION_STREAM_PATH } from "../integrations/utils.ts";
+import { VoiceAgentProcessorContract } from "../agents/voice-agent-processor-contract.ts";
+import {
+  isVoiceAgentPath,
+  VOICE_AGENT_CODE_AGENT_SYSTEM_PROMPT,
+} from "../agents/voice-agent-code-agent.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 
 const ONBOARDING_AGENT_PATH = "/agents/onboarding";
@@ -176,7 +181,10 @@ export class ProjectProcessor extends StreamProcessor<
             // Agents under /agents/slack/** additionally get the slack-agent
             // processor subscription and the Slack reply prompt — this is THE
             // place the "slack thread streams are slack agents" rule lives.
+            // Agents under /agents/voice/** likewise get the voice-agent
+            // processor subscription and the voice-operator-support prompt.
             const isSlack = isSlackAgentPath(childPath);
+            const isVoice = isVoiceAgentPath(childPath);
             await this.deps.itx.streams.get(childPath).append(
               // Identical idempotency keys to the create-time onboarding birth
               // certificate, so whichever lane runs second dedupes cleanly.
@@ -185,7 +193,12 @@ export class ProjectProcessor extends StreamProcessor<
                 llmProvider: this.deps.defaultLlmProvider,
                 projectId: this.deps.itx.projectId,
                 slack: isSlack,
-                systemPrompt: isSlack ? SLACK_AGENT_SYSTEM_PROMPT : DEFAULT_AGENT_SYSTEM_PROMPT,
+                voice: isVoice,
+                systemPrompt: isSlack
+                  ? SLACK_AGENT_SYSTEM_PROMPT
+                  : isVoice
+                    ? VOICE_AGENT_CODE_AGENT_SYSTEM_PROMPT
+                    : DEFAULT_AGENT_SYSTEM_PROMPT,
               }),
             );
             return;
@@ -265,6 +278,7 @@ function agentBirthCertificateEvents(input: {
   llmProvider: AgentLlmProvider;
   projectId: string;
   slack?: boolean;
+  voice?: boolean;
   systemPrompt: string;
 }) {
   const durableObjectName = DurableObjectNameCodec.stringify({
@@ -286,6 +300,7 @@ function agentBirthCertificateEvents(input: {
     subscription(OpenAiWsProcessorContract.slug, "agent"),
     subscription(ItxProcessorContract.slug, "itx"),
     ...(input.slack ? [subscription(SlackAgentProcessorContract.slug, "agent")] : []),
+    ...(input.voice ? [subscription(VoiceAgentProcessorContract.slug, "agent")] : []),
     {
       type: "events.iterate.com/agent/config-updated" as const,
       idempotencyKey: `agent/config-updated:${input.projectId}:${input.childPath}`,

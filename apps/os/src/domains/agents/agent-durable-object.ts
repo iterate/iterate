@@ -16,7 +16,14 @@ import { CloudflareAiProcessorContract } from "./cloudflare-ai-processor-contrac
 import { CloudflareAiProcessor } from "./cloudflare-ai-processor-implementation.ts";
 import { OpenAiWsProcessorContract } from "./openai-ws-processor-contract.ts";
 import { OpenAiWsProcessor } from "./openai-ws-processor-implementation.ts";
-import { parseAgentDurableObjectName, readOpenAiApiKeyFromAppConfig } from "./utils.ts";
+import { VoiceAgentProcessorContract } from "./voice-agent-processor-contract.ts";
+import { VoiceAgentProcessor } from "./voice-agent-processor-implementation.ts";
+import {
+  parseAgentDurableObjectName,
+  readGeminiApiKeyFromAppConfig,
+  readOpenAiApiKeyFromAppConfig,
+  readXAiApiKeyFromAppConfig,
+} from "./utils.ts";
 
 export class AgentDurableObject extends DurableObject<Env> {
   readonly #name = parseAgentDurableObjectName(this.ctx.id.name!);
@@ -50,6 +57,21 @@ export class AgentDurableObject extends DurableObject<Env> {
         ...deps,
         apiKey: readOpenAiApiKeyFromAppConfig(this.env),
         readStreamEvents: () => this.#stream.getEvents(),
+      }),
+  );
+
+  // Registered on every agent host; it only wakes on voice agent streams
+  // (`/agents/voice/**`) where the project processor configured its
+  // subscription. Registered without keys too: the processor then answers
+  // inputs with a clear error-occurred event instead of crashing the host.
+  readonly voiceAgentProcessor = this.#processorHost.add(
+    VoiceAgentProcessorContract.slug,
+    (deps) =>
+      new VoiceAgentProcessor({
+        ...deps,
+        geminiApiKey: readGeminiApiKeyFromAppConfig(this.env),
+        openAiApiKey: readOpenAiApiKeyFromAppConfig(this.env),
+        xAiApiKey: readXAiApiKeyFromAppConfig(this.env),
       }),
   );
 
