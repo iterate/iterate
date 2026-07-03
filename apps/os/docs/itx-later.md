@@ -104,7 +104,7 @@ they need a real DO to host them as facets (Cloudflare's AppRunner
 supervisor pattern; the dial already does exactly this:
 `facets("cap:" + name, () => ({ class: loadWorker(...).getDurableObjectClass(entrypoint) }))`,
 keyed by the HOST context so data survives code upgrades). In the final
-shape the runner is therefore **the context's own DO** — ItxDurableObject
+shape the runner is therefore **the context's own DO** — CapabilityHostDurableObject
 for plain contexts, the rich host for agents: a context's stateful
 capabilities live as facets inside the same DO that holds its journal
 fold, and are deleted with it. No separate runner class exists.

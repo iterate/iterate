@@ -10,7 +10,7 @@ a tiny ingress router owns all routes, the dashboard app and the itx api
 are their own workers, and every Durable Object class is its own worker.
 Traffic is dispatched on hostname and path:
 
-1. Itx lanes: `/api/itx[...]`, `/__itx_e2e/*`, `/prj_<id>/...`, and project
+1. Rpc lanes: `/api` (+ `/api/admin-cookie`), `/__itx_e2e/*`, `/prj_<id>/...`, and project
    platform hosts (`<slug>.iterate.app`, `<slug>.localhost:<port>`) forward to
    the api worker (`src/workers/api.ts`). Project-host requests route to
    the project's seeded worker, never the dashboard.
@@ -41,7 +41,7 @@ token, or a session cookie. Users without an organization are redirected to
 the auth worker's project-access flow.
 
 itx has its own auth adapter (`src/auth.ts`) behind
-`authenticate()` on `/api/itx` — credential lanes and the project-directory
+`authenticate()` on `/api` — credential lanes and the project-directory
 claims fallback are described in [src/README.md](../src/README.md).
 
 ## The Project Directory
@@ -75,11 +75,11 @@ The main app routes (`src/routes/`):
 There are no organization routes; organization membership and selection live
 in the auth worker.
 
-The browser talks to itx over `/api/itx`: one Cap'n Web WebSocket per
+The browser talks to itx over `/api`: one Cap'n Web WebSocket per
 context, managed by `src/itx/itx-react.tsx` (`useItx`/`useItxQuery`/
-`useItxEffect`). `POST /api/itx` serves one-shot HTTP batch sessions (used by
+`useItxEffect`). `POST /api` serves one-shot HTTP batch sessions (used by
 the project-create server function and MCP `exec_js`).
-`/api/itx/admin-cookie` is the browser admin-auth bridge (WebSockets cannot
+`/api/admin-cookie` is the browser admin-auth bridge (WebSockets cannot
 set headers). The app worker keeps only `/api/mcp` and `/api/health`; the
 catch-all `src/routes/api.$.ts` returns 404 (integration callbacks return
 with the integrations domain).
@@ -130,7 +130,7 @@ the authorization server.
 ## itx Scripts
 
 itx executes JavaScript in isolated dynamic Worker sandboxes through
-`itx.runScript(...)` — reached from the browser REPL, agents, the CLI
+`itx.capabilityHost.runScript(...)` — reached from the browser REPL, agents, the CLI
 (`pnpm cli itx run`), and MCP `exec_js`. Every runtime accepts the same
 script shape: a body that runs with `itx` (and `vars`) in scope and ends with
 an explicit `return` (see `src/itx/examples.ts`, the catalogue that doubles

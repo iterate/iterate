@@ -22,12 +22,13 @@ const capabilityName = (p: Record<string, unknown>) =>
   Array.isArray(p.path) ? p.path.join(".") : String(p.name ?? "");
 
 const FRIENDLY_RENDERERS: Record<string, (payload: Record<string, unknown>) => string> = {
-  "events.iterate.com/itx/capability-provided": (p) =>
+  "events.iterate.com/capability-host/capability-provided": (p) =>
     `capability "${capabilityName(p)}" provided (${p.kind ?? "rpc"})`,
-  "events.iterate.com/itx/capability-revoked": (p) => `capability "${capabilityName(p)}" revoked`,
-  "events.iterate.com/itx/capability-disconnected": (p) =>
+  "events.iterate.com/capability-host/capability-revoked": (p) =>
+    `capability "${capabilityName(p)}" revoked`,
+  "events.iterate.com/capability-host/capability-disconnected": (p) =>
     `capability "${capabilityName(p)}" disconnected`,
-  "events.iterate.com/itx/context-created": (p) => `context created: ${p.name ?? ""}`,
+  "events.iterate.com/capability-host/context-created": (p) => `context created: ${p.name ?? ""}`,
 };
 
 export function ItxActivityTail(_props: { projectId: string }) {

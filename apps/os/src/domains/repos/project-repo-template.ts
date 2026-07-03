@@ -81,7 +81,7 @@ const HELLO_APP_WORKER_SOURCE = `
   export default class HelloApp extends WorkerEntrypoint {
     async fetch(req) {
       const project = await this.env.ITX.get();
-      const description = await project.describe();
+      const description = await project.__describe();
       return Response.json({
         app: "hello",
         path: new URL(req.url).pathname,

@@ -30,10 +30,10 @@ export default {
     if (mcpRequest) return await env.APP.fetch(mcpRequest);
 
     const nextRequest = apiWorkerRequest({ config, request });
-    if (nextRequest) return await env.ITX_API.fetch(nextRequest);
+    if (nextRequest) return await env.API.fetch(nextRequest);
 
     // Everything else is the OS host (project + custom hostnames all went to
-    // ITX_API above, which owns the 404 for hosts that resolve to nothing).
+    // API above, which owns the 404 for hosts that resolve to nothing).
     return await env.APP.fetch(request);
   },
 };

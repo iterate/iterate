@@ -97,7 +97,7 @@ export function ItxRepl({
                 <p>
                   Try{" "}
                   <code className="font-mono text-xs">
-                    {context === "project" ? "await itx.describe()" : "await itx.projects.list()"}
+                    {context === "project" ? "await itx.__describe()" : "await itx.projects.list()"}
                   </code>
                   , then edit the selected input and run again.
                 </p>

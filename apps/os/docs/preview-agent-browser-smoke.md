@@ -140,6 +140,6 @@ doppler run --config preview_N -- pnpm cli itx run \
 - **Live stream display uses WebSocket.** If sent messages and agent replies do
   not render live in the browser even though the conversation completes
   server-side, verify the agent state through `pnpm cli itx run` and inspect the
-  `/api/itx` WebSocket path in Workers logs.
+  `/api` WebSocket path in Workers logs.
 - Don't `agent-browser close` the `--cdp` instance (it kills the browser);
   `pkill -f ab-own` to clean up.

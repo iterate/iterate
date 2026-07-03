@@ -80,6 +80,23 @@ describe("dynamic path proxy", () => {
     await expect(stub.ownField()).rejects.toThrow(/instance property/);
   });
 
+  it("lets __describe traverse dynamic paths over RPC (the host intercepts it)", async () => {
+    // NOT reserved on purpose: the capability-host processor answers trailing
+    // __describe from mount metadata, so the proxy must let it through — and
+    // it must survive Cap'n Web's own-descriptor probe (an earlier version
+    // special-cased the get trap only and worked in-process but not over RPC).
+    const target = new HostTarget();
+    const host = withInvokeCapabilityFallback(target);
+    const stub = new RpcStub(host as never) as unknown as {
+      someMount: { sub: { __describe(): Promise<string> } };
+    };
+
+    await expect(stub.someMount.sub.__describe()).resolves.toBe(
+      "dynamic:someMount.sub.__describe:",
+    );
+    expect(target.calls).toEqual([{ args: [], path: ["someMount", "sub", "__describe"] }]);
+  });
+
   it("hides reserved path segments from function-backed path proxies", () => {
     const proxy = createInvokeCapabilityPathProxy({
       invokeCapability: () => "unreachable",
