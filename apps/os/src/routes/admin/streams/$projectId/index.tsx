@@ -25,6 +25,8 @@ function AdminStreamProjectPage() {
     void navigate({
       to: "/admin/streams/$projectId/$",
       params: { projectId, _splat: streamPath },
+      // Fresh view state on the opened stream.
+      search: {},
     });
   }
 

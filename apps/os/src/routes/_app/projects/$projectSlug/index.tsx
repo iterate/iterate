@@ -63,6 +63,9 @@ function ProjectHomePage() {
     void navigate({
       to: "/projects/$projectSlug/agents/streams/$",
       params: { projectSlug: params.projectSlug, _splat: ONBOARDING_AGENT_PATH },
+      // Fresh view state: don't carry this page's stream params (or `welcome`)
+      // into the agent view.
+      search: {},
       replace: true,
     });
   }, [welcome, created, navigate, params.projectSlug]);
@@ -80,6 +83,7 @@ function ProjectHomePage() {
           <Link
             to="/projects/$projectSlug/agents/streams/$"
             params={{ projectSlug: params.projectSlug, _splat: ONBOARDING_AGENT_PATH }}
+            search={{}}
             className={buttonVariants({ size: "lg", className: "w-full" })}
           >
             Continue onboarding

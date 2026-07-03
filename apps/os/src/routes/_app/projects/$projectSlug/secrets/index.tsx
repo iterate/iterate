@@ -89,6 +89,8 @@ function ProjectSecretsIndexContent() {
           projectSlug: params.projectSlug,
           secretId: name,
         },
+        // Fresh view state on the new secret's page.
+        search: {},
       });
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
@@ -248,6 +250,7 @@ function ProjectSecretsIndexContent() {
                       projectSlug: params.projectSlug,
                       secretId: secretNameFromPath(secret.path),
                     }}
+                    search={{}}
                   >
                     <KeyRound className="h-4 w-4 shrink-0 text-muted-foreground" />
                     <span className="truncate">{secretNameFromPath(secret.path)}</span>

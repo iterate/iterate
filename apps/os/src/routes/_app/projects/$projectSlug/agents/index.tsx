@@ -46,6 +46,7 @@ function ProjectAgentsIndexContent() {
       <Link
         to="/projects/$projectSlug/agents/new"
         params={{ projectSlug: params.projectSlug }}
+        search={{}}
         className={buttonVariants({ size: "sm" })}
       >
         New agent

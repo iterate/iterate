@@ -500,7 +500,7 @@ function ProjectSidebarGroup({
             <ProjectSidebarMenuItem
               icon={Settings2}
               label="Settings"
-              render={<Link to="/projects/$projectSlug" params={{ projectSlug }} />}
+              render={<Link to="/projects/$projectSlug" params={{ projectSlug }} search={{}} />}
               isActive={Boolean(
                 matchRoute({
                   to: "/projects/$projectSlug",
@@ -656,7 +656,7 @@ function ProjectStreamNavItem({
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
-        render={<Link to={to} params={{ projectSlug }} />}
+        render={<Link to={to} params={{ projectSlug }} search={{}} />}
         isActive={isActive}
         tooltip={label}
       >

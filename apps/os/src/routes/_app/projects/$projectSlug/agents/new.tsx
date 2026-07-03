@@ -50,6 +50,8 @@ function NewAgentPage() {
           ...params,
           _splat: agentPath,
         },
+        // Fresh view state on the new agent's chat.
+        search: {},
       });
     },
     onError: (mutationError) => {

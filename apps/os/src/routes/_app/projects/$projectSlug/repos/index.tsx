@@ -99,6 +99,8 @@ function ProjectReposIndexContent() {
           projectSlug: params.projectSlug,
           _splat: repoPathToSplat(path),
         },
+        // Fresh view state on the new repo's page.
+        search: {},
       });
     },
     onError: (error) => {
@@ -260,6 +262,7 @@ function ProjectReposIndexContent() {
                             projectSlug: params.projectSlug,
                             _splat: repoSplat,
                           }}
+                          search={{}}
                         >
                           {repo.path}
                         </Link>
