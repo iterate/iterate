@@ -23,7 +23,7 @@ test("project ingress serves the static seeded homepage at the root", async () =
   expect(homepage).toContain(`counter--${requestHost}`);
 });
 
-// Multi-app routing: the seeded root worker.js is a router over the project's
+// Multi-app routing: the seeded root worker.ts is a router over the project's
 // apps (repo-backed dynamic workers), selected by ingress from the host —
 // hello--<slug>.<base> (stateless WorkerEntrypoint) and counter.<slug>.<base>
 // (stateful Durable Object whose state survives across requests). Locally
@@ -68,9 +68,21 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
     return fetch(`${base.protocol}//${appHostPrefix}.${projectBase}${path}`, init);
   };
 
+  // An app's first use is a cold build; past the router's buildBudgetMs it
+  // serves a refreshing 503 building page instead of blocking, so "the app
+  // responds" means "eventually 200 through the building page".
+  const fetchAppReady = async (appHostPrefix: string, init?: RequestInit & { path?: string }) => {
+    const deadline = Date.now() + 120_000;
+    for (;;) {
+      const response = await fetchApp(appHostPrefix, init);
+      if (response.status !== 503 || Date.now() > deadline) return response;
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
+  };
+
   // Stateless app via the `--` single-label form; a spoofed x-iterate-app
   // must not override the host's selection.
-  const hello = await fetchApp(`hello--${slug}`, {
+  const hello = await fetchAppReady(`hello--${slug}`, {
     headers: { "x-iterate-app": "counter" },
   });
   expect(hello.status).toBe(200);
@@ -82,7 +94,7 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
   // wildcard certs can serve — dotted `<app>.<slug>.<base>` needs a second
   // wildcard level and is exercised in the unit tests + reserved for custom
   // hostnames.)
-  const page = await fetchApp(`counter--${slug}`);
+  const page = await fetchAppReady(`counter--${slug}`);
   expect(page.status).toBe(200);
   expect(await page.text()).toMatch(/count:\s*0/i);
 
