@@ -51,7 +51,7 @@ export const VoiceAgentProvider = z.enum([
   VOICE_AGENT_PROVIDER_GROK_REALTIME,
 ]);
 
-export const VOICE_AGENT_PROVIDER_STATUSES = [
+const VOICE_AGENT_PROVIDER_STATUSES = [
   "speech-started",
   "speech-stopped",
   "output-audio-done",
@@ -235,7 +235,6 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
   ],
 });
 
-export type VoiceAgentState = z.infer<typeof VoiceAgentProcessorContract.stateSchema>;
 export type VoiceAgentProvider = z.infer<typeof VoiceAgentProvider>;
 export type VoiceAgentSetup = z.infer<typeof VoiceAgentSetup>;
 export type VoiceAgentProviderStatus = z.infer<typeof VoiceAgentProviderStatus>;

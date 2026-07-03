@@ -55,7 +55,7 @@ type VoiceAgentInputEvent = Extract<
 >;
 type JsonValue = z.infer<ReturnType<typeof z.json>>;
 
-export type VoiceAgentProcessorDeps = {
+type VoiceAgentProcessorDeps = {
   /** Null when the deployment has no key; inputs then fail with a stream error event. */
   geminiApiKey: string | null;
   openAiApiKey: string | null;
@@ -94,7 +94,7 @@ type ProviderContext = {
 const WEBSOCKET_OPEN = 1;
 const PROVIDER_READY_TIMEOUT_MS = 30_000;
 /** Strings longer than this are truncated in provider message audit events. */
-export const AUDIT_MAX_STRING_LENGTH = 256;
+const AUDIT_MAX_STRING_LENGTH = 256;
 
 export class VoiceAgentProcessor extends StreamProcessor<
   typeof VoiceAgentProcessorContract,
