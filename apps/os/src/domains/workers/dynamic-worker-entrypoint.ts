@@ -89,6 +89,7 @@ export class DynamicWorkerEntrypoint extends WorkerEntrypoint<Env> {
       globalOutbound: projectEgressFetcher(this.ctx.exports, projectId),
       loader: this.env.LOADER,
       projectId,
+      waitUntil: (promise) => this.ctx.waitUntil(promise),
       workerScopeKey: itxEntrypointScopeCacheKey(itxScope),
     });
     return await runner.invokeCapability({

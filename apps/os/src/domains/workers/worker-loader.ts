@@ -48,12 +48,16 @@ export async function resolveWorkerSource({
   buildBudgetMs,
   projectId,
   source,
+  waitUntil,
 }: {
   /** Give up on a cold resolve after this long (the build itself keeps
    * running in the builder worker). Omitted = wait for the build. */
   buildBudgetMs?: number;
   projectId: string;
   source: DynamicWorkerSource;
+  /** The hosting request context's `ctx.waitUntil`. A budget-expired resolve
+   * is handed to it so the cold path survives the caller's request ending. */
+  waitUntil: (promise: Promise<unknown>) => void;
 }): Promise<ResolvedWorkerSource> {
   const options = source.options ?? {};
 
@@ -71,6 +75,7 @@ export async function resolveWorkerSource({
   return await withBuildBudget(
     resolveThroughBuilder({ options, projectId, source }),
     buildBudgetMs,
+    waitUntil,
   );
 }
 
@@ -80,6 +85,7 @@ export async function resolveWorkerSource({
 async function withBuildBudget(
   resolution: Promise<ResolvedWorkerSource>,
   budgetMs: number | undefined,
+  waitUntil: (promise: Promise<unknown>) => void,
 ): Promise<ResolvedWorkerSource> {
   if (budgetMs === undefined) return await resolution;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -87,10 +93,15 @@ async function withBuildBudget(
     return await Promise.race([
       resolution,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new WorkerBuildInProgressError("This worker is still building.")),
-          budgetMs,
-        );
+        timer = setTimeout(() => {
+          // The losing resolution must outlive this request: when the caller
+          // returns the building page, the runtime cancels the request's
+          // pending work, and a BUILDER.build RPC that hasn't been dispatched
+          // yet dies with it — every refresh would then restart the cold path
+          // from zero instead of converging on the cached artifact.
+          waitUntil(resolution.catch(() => {}));
+          reject(new WorkerBuildInProgressError("This worker is still building."));
+        }, budgetMs);
       }),
     ]);
   } finally {

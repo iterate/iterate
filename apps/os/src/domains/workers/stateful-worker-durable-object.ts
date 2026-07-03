@@ -44,6 +44,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     globalOutbound: projectEgressFetcher(this.ctx.exports, this.#name.projectId),
     loader: this.env.LOADER,
     projectId: this.#name.projectId,
+    waitUntil: (promise) => this.ctx.waitUntil(promise),
     workerScopeKey: itxEntrypointScopeCacheKey(this.#itxScope),
   });
 

@@ -43,6 +43,7 @@ export class DynamicWorkerRunner {
   readonly #globalOutbound: Fetcher;
   readonly #loader: Env["LOADER"];
   readonly #projectId: string;
+  readonly #waitUntil: (promise: Promise<unknown>) => void;
   readonly #workerScopeKey: string;
 
   constructor(props: {
@@ -50,12 +51,16 @@ export class DynamicWorkerRunner {
     globalOutbound: Fetcher;
     loader: Env["LOADER"];
     projectId: string;
+    /** The host's `ctx.waitUntil` — keeps budget-expired cold builds alive
+     * past the request that gave up on them (see resolveWorkerSource). */
+    waitUntil: (promise: Promise<unknown>) => void;
     workerScopeKey: string;
   }) {
     this.#bindings = props.bindings;
     this.#globalOutbound = props.globalOutbound;
     this.#loader = props.loader;
     this.#projectId = props.projectId;
+    this.#waitUntil = props.waitUntil;
     this.#workerScopeKey = props.workerScopeKey;
   }
 
@@ -158,6 +163,7 @@ export class DynamicWorkerRunner {
       buildBudgetMs,
       projectId: this.#projectId,
       source: ref.source,
+      waitUntil: this.#waitUntil,
     });
     return { resolved, worker: this.#loadResolved(ref, resolved) };
   }
