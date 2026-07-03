@@ -457,7 +457,13 @@ await repo.commitFiles({
   changes: [{ path, content: "# Edit example\\n\\n" + beforeText }],
 });
 
-const before = await repo.readFile({ path });
+// commitFiles is durable when it returns, but a freshly-created repo's first
+// reads can race its bootstrap; poll briefly rather than flake.
+let before = await repo.readFile({ path });
+for (let attempt = 0; attempt < 25 && before === null; attempt += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  before = await repo.readFile({ path });
+}
 if (before === null) throw new Error("Expected seeded file to exist.");
 
 const edit = await repo.edit({
