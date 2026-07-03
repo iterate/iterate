@@ -1,10 +1,10 @@
 /** @name selectResources */
-SELECT type, slug, data, lease_state, leased_until, last_acquired_at, last_released_at, created_at, updated_at
+SELECT type, slug, data, lease_state, leased_until, holder, last_acquired_at, last_released_at, created_at, updated_at
 FROM resources
 ORDER BY type ASC, created_at ASC, slug ASC;
 
 /** @name selectResourcesByType */
-SELECT type, slug, data, lease_state, leased_until, last_acquired_at, last_released_at, created_at, updated_at
+SELECT type, slug, data, lease_state, leased_until, holder, last_acquired_at, last_released_at, created_at, updated_at
 FROM resources
 WHERE type = :type
 ORDER BY created_at ASC, slug ASC;
@@ -14,7 +14,7 @@ INSERT INTO resources (type, slug, data)
 VALUES (:type, :slug, :data);
 
 /** @name selectResourceByTypeAndSlug */
-SELECT type, slug, data, lease_state, leased_until, last_acquired_at, last_released_at, created_at, updated_at
+SELECT type, slug, data, lease_state, leased_until, holder, last_acquired_at, last_released_at, created_at, updated_at
 FROM resources
 WHERE type = :type AND slug = :slug;
 
@@ -32,6 +32,7 @@ LIMIT 1;
 UPDATE resources
 SET lease_state = 'leased',
   leased_until = :leasedUntil,
+  holder = :holder,
   last_acquired_at = :lastAcquiredAt,
   updated_at = strftime('%Y-%m-%d %H:%M:%S', 'now')
 WHERE type = :type AND slug = :slug;
@@ -40,6 +41,7 @@ WHERE type = :type AND slug = :slug;
 UPDATE resources
 SET lease_state = 'available',
   leased_until = NULL,
+  holder = NULL,
   last_released_at = COALESCE(:lastReleasedAt, last_released_at),
   updated_at = strftime('%Y-%m-%d %H:%M:%S', 'now')
 WHERE type = :type AND slug = :slug;

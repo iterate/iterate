@@ -1,7 +1,7 @@
 import type { Client } from "sqlfu";
 
 const selectResourcesSql = `
-SELECT type, slug, data, lease_state, leased_until, last_acquired_at, last_released_at, created_at, updated_at
+SELECT type, slug, data, lease_state, leased_until, holder, last_acquired_at, last_released_at, created_at, updated_at
 FROM resources
 ORDER BY type ASC, created_at ASC, slug ASC;
 `.trim();
@@ -21,6 +21,7 @@ export namespace selectResources {
     data: string;
     lease_state: string;
     leased_until?: number;
+    holder?: string;
     last_acquired_at?: number;
     last_released_at?: number;
     created_at: string;
@@ -29,7 +30,7 @@ export namespace selectResources {
 }
 
 const selectResourcesByTypeSql = `
-SELECT type, slug, data, lease_state, leased_until, last_acquired_at, last_released_at, created_at, updated_at
+SELECT type, slug, data, lease_state, leased_until, holder, last_acquired_at, last_released_at, created_at, updated_at
 FROM resources
 WHERE type = ?
 ORDER BY created_at ASC, slug ASC;
@@ -60,6 +61,7 @@ export namespace selectResourcesByType {
     data: string;
     lease_state: string;
     leased_until?: number;
+    holder?: string;
     last_acquired_at?: number;
     last_released_at?: number;
     created_at: string;
@@ -93,7 +95,7 @@ export namespace insertResourceRow {
 }
 
 const selectResourceByTypeAndSlugSql = `
-SELECT type, slug, data, lease_state, leased_until, last_acquired_at, last_released_at, created_at, updated_at
+SELECT type, slug, data, lease_state, leased_until, holder, last_acquired_at, last_released_at, created_at, updated_at
 FROM resources
 WHERE type = ? AND slug = ?;
 `.trim();
@@ -127,6 +129,7 @@ export namespace selectResourceByTypeAndSlug {
     data: string;
     lease_state: string;
     leased_until?: number;
+    holder?: string;
     last_acquired_at?: number;
     last_released_at?: number;
     created_at: string;
@@ -199,6 +202,7 @@ const updateResourceLeasedSql = `
 UPDATE resources
 SET lease_state = 'leased',
   leased_until = ?,
+  holder = ?,
   last_acquired_at = ?,
   updated_at = strftime('%Y-%m-%d %H:%M:%S', 'now')
 WHERE type = ? AND slug = ?;
@@ -209,7 +213,7 @@ const updateResourceLeasedQuery = (
 ) => ({
   name: "updateResourceLeased",
   sql: updateResourceLeasedSql,
-  args: [data.leasedUntil, data.lastAcquiredAt, params.type, params.slug],
+  args: [data.leasedUntil, data.holder, data.lastAcquiredAt, params.type, params.slug],
 });
 
 export const updateResourceLeased = Object.assign(
@@ -226,6 +230,7 @@ export const updateResourceLeased = Object.assign(
 export namespace updateResourceLeased {
   export type Data = {
     leasedUntil: number | null;
+    holder: string | null;
     lastAcquiredAt: number | null;
   };
   export type Params = {
@@ -238,6 +243,7 @@ const updateResourceAvailableSql = `
 UPDATE resources
 SET lease_state = 'available',
   leased_until = NULL,
+  holder = NULL,
   last_released_at = COALESCE(?, last_released_at),
   updated_at = strftime('%Y-%m-%d %H:%M:%S', 'now')
 WHERE type = ? AND slug = ?;

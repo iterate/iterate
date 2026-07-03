@@ -5,62 +5,68 @@ size: large
 tags: [ci, depot, infra, docs]
 ---
 
-# Move all Depot-compatible CI workflows to Depot CI (+ document it)
+# Move all Depot-compatible CI workflows to Depot CI (needs Doppler-in-image)
 
-Preview deploy/e2e/cleanup already runs on Depot CI
-(`.depot/workflows/cloudflare-previews.yml`). Move the rest of the generated
-GitHub Actions workflows onto Depot CI too, for the same ~7s pickup (vs GitHub's
-20s-3m39s runner assignment).
+Preview deploy/e2e/cleanup already runs on Depot CI. Move the rest of the
+generated workflows too, for the same ~7s pickup vs GitHub's 20s-3m39s. The
+mechanism + the one-secret design are worked out below; the blocker is
+operational (Doppler baked into the Depot image + validating prod deploys),
+which is why it wasn't rushed into the faster-ci PR.
 
-## Scope
+## One secret: DOPPLER_TOKEN (design is proven)
 
-Movable (Depot-supported triggers — push / pull_request / schedule /
-workflow_dispatch / workflow_call / workflow_run / pull_request_review):
+Depot needs exactly one secret, `DOPPLER_TOKEN`, because everything else is in
+Doppler (`_shared/prd`) and the code already sources it from there:
 
-- lint-typecheck, test, autofix, ci, nag, pr-dashboard (per-PR checks — the
-  speed win)
-- deploy-os / deploy-auth / deploy-semaphore / deploy-streams-example-app /
-  deploy-tunnels, deploy, release, pullfrog (prod deploys — validate carefully)
+- deploy-\*/deploy/test run under `doppler run` → Cloudflare/Alchemy/etc. injected.
+- `utils/slack.ts` `getSlackBotToken()` already falls back to
+  `doppler secrets --config prd get SLACK_CI_BOT_TOKEN` when the GitHub secret
+  is absent (which it is on Depot).
+- The only direct `${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}` users (nag,
+  pr-dashboard, release, preview) can source it from Doppler the same way —
+  it resolves via `doppler secrets --project _shared --config prd get --plain
+ITERATE_BOT_GITHUB_TOKEN`.
 
-**Stays on GitHub Actions:** `claude-assistant` — it triggers on
-`issue_comment`, `issues`, and `pull_request_review_comment`, none of which
-Depot CI supports. (Depot DOES support `pull_request_review` — review
-submitted — just not the comment/issue events.) So "all" is really
-"all except claude-assistant".
+Verified 2026-07-02: both SLACK_CI_BOT_TOKEN and ITERATE_BOT_GITHUB_TOKEN
+resolve from Doppler `_shared/prd`.
 
-## How
+## Doppler belongs in the image, not a per-run install
 
-- The workflows are generated from `.github/ts-workflows/workflows/*.ts` into
-  `.github/workflows/*.yml` by `.github/ts-workflows/cli.ts`. Retarget the
-  generator to emit `.depot/workflows/*.yml` for the moved workflows (or emit
-  both and delete the GitHub copies) and update the drift check.
-- Secrets: ensure everything each workflow needs is in `depot ci secrets`
-  (currently only DOPPLER_TOKEN + ITERATE_BOT_GITHUB_TOKEN, and those are
-  interim personal tokens — swap for the iterate-bot PAT + a Doppler service
-  token).
-- Watch: branch-protection required-check names stay the same (Depot GitHub
-  App reports the same check names), but confirm before flipping. Depot
-  registers pull_request/etc. triggers only when the file is on the DEFAULT
-  branch.
+Do NOT `curl | sh` the Doppler CLI in each workflow. Bake Doppler into the
+Depot CI runner image (extend the existing `build-preview-ci-image.yml` bake,
+which already installs Doppler + pnpm + node_modules, and wire the Depot CI
+workflows to use that snapshot as their base — see
+depot.dev/docs/ci/how-to-guides/custom-images), then drop the per-workflow
+`installDopplerCli` steps. This is the operational prerequisite for the move.
 
-## Documentation (rolled into this PR — asked for explicitly)
+## The generator routing (implement then)
 
-Add a doc **discoverable directly from the repo root `README.md` in one hop**
-that explains how Depot CI works here and how to interact with it:
+`.github/ts-workflows/cli.ts` generates ts → `.github/workflows/`. Add a
+`DEPOT_WORKFLOW_NAMES` set and route those names' yaml to `.depot/workflows/`
+(read/write/clean-up the right dir per workflow; delete the stale `.github`
+copy on move). Everything Depot-trigger-compatible moves; the exceptions stay
+on GitHub Actions:
 
-- what Depot CI is and why we use it (pickup latency vs GitHub Actions)
-- where the workflows live (`.depot/workflows/`) and how they're
-  triggered/registered (default-branch registration caveat)
-- the important CLI commands: `depot ci run list` / `workflow list` /
-  `status <run>` / `logs <attempt> [--timestamps] [--output-file]` /
-  `metrics --run <id>` / `dispatch --workflow <name> --ref <branch> --input k=v`
-  / `secrets` (add/list/remove) / `run --workflow <file>` (local, uploads
-  uncommitted patch)
-- gotchas: workflow_dispatch vs pull_request runs share the concurrency group
-  and cancel each other; `logs --output-file` lags a live run; `status`
-  run-id vs workflow-id confusion
-- links: depot.dev/docs/ci (quickstart, compatibility, CLI reference), the org
-  dashboard (https://depot.dev/orgs/0p91s0lz49/workflows)
+- `claude-assistant` — `issue_comment`/`issues`/`pull_request_review_comment`
+  triggers are unsupported by Depot CI. (`pull_request_review` IS supported.)
+- `generate-workflows` — the self-referential generator guardian.
 
-Extend/point to the existing "Depot CI" section in `docs/ci-workflows.md`
-rather than duplicating.
+(A working draft of this routing was prototyped in the faster-ci branch and
+reverted pending the Doppler-in-image work.)
+
+## Cutover checklist
+
+1. Bake Doppler into the Depot CI image; wire workflows to it; drop per-run
+   Doppler installs.
+2. Refactor nag/pr-dashboard/release/preview to source ITERATE_BOT_GITHUB_TOKEN
+   from Doppler.
+3. Flip the workflows into `DEPOT_WORKFLOW_NAMES`, regenerate.
+4. Set Depot's `DOPPLER_TOKEN` to the real CI Doppler service token (scoped
+   `_shared/prd`) — replaces the interim personal token — then
+   `depot ci secrets remove ITERATE_BOT_GITHUB_TOKEN`.
+5. **Validate prod deploys on Depot deliberately** (high blast radius) before
+   relying on them — dispatch each deploy-\* on a branch first.
+6. Confirm branch-protection required-check names still match (Depot GitHub
+   App reports the same names).
+
+See docs/depot-ci.md for the usage/command reference.
