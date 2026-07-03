@@ -81,6 +81,8 @@ declare global {
   type Repo = itxTypes.Repo;
   type CommitRepoFilesInput = itxTypes.CommitRepoFilesInput;
   type CommitRepoFilesResult = itxTypes.CommitRepoFilesResult;
+  type EditRepoFileInput = itxTypes.EditRepoFileInput;
+  type EditRepoFileResult = itxTypes.EditRepoFileResult;
   type Secret = itxTypes.Secret;
   type SecretDescription = itxTypes.SecretDescription;
   type SecretUpdateInput = itxTypes.SecretUpdateInput;

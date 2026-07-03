@@ -237,7 +237,7 @@ accepts two recipes (`ProvideCapabilityInput`):
   disconnects without holding a live stub.
 
 Every mount carries optional `instructions` (prose) and `types` (a TypeScript
-source string exporting `type Capability`). `itx.describe()` returns project
+source string exporting `type Capability`). `itx.__describe()` returns project
 identity plus the full capability inventory — built-ins and mounts, from
 declared metadata only, never by probing live targets. Agents are a first-class
 audience and `describe()` is their only sense organ; write instructions for the

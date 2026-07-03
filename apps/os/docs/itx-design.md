@@ -874,9 +874,9 @@ are read-only" (an earlier framing in this doc) was the wrong frame.
 
 The `caps` namespace exists to dodge name collisions, but reserved names
 already exist as a mechanism. Kernel flattens to root:
-`itx.provideCapability() / itx.revokeCapability() / itx.describe() /
+`itx.provideCapability() / itx.revokeCapability() / itx.__describe() /
 itx.fork() / itx.invoke()` — the `ItxCaps` class dies, and the
-`itx.describe()` vs `caps.describe()` duplication resolves to one merged
+`itx.__describe()` vs `caps.__describe()` duplication resolves to one merged
 view. A handle is **an address, an access set, and five verbs**.
 
 ### 4. Definitions live at PATHS — longest-prefix dispatch — SHIPPED
