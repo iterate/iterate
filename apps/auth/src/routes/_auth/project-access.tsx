@@ -26,8 +26,16 @@ import {
 import { Separator } from "@iterate-com/ui/components/separator";
 import { Navigate, createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
-import { Field, FieldError, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
+import { useEffect, useState } from "react";
+import { slugify } from "@iterate-com/shared/slug";
+import { suggestOrganizationNameFromEmail } from "@iterate-com/shared/name-suggestions";
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+} from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
 import { z } from "zod/v4";
@@ -45,31 +53,51 @@ export const Route = createFileRoute("/_auth/project-access")({
   validateSearch: z.looseObject({
     client_id: z.string().optional(),
     scope: z.string().optional(),
+    redirect: z.string().optional(),
   }),
 });
 
-const CreateOrganizationInput = z.object({
+// Deployed project hostname base for this environment, baked in at build time
+// (e.g. "iterate.app", "iterate-preview-3.app"); see VITE_PROJECT_HOSTNAME_BASE
+// in alchemy.run.ts.
+const PROJECT_HOSTNAME_BASE: string = import.meta.env.VITE_PROJECT_HOSTNAME_BASE || "iterate.app";
+
+const ProjectSlugInput = z
+  .string()
+  .trim()
+  .min(1, "Project slug is required")
+  .max(50)
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Use lowercase letters, numbers, and dashes");
+
+const CreateOrganizationWithProjectInput = z.object({
   name: z.string().trim().min(1, "Organization name is required").max(100),
+  projectSlug: ProjectSlugInput,
 });
 
 const CreateProjectInput = z.object({
   organizationSlug: z.string().trim().min(1, "Organization is required"),
-  name: z.string().trim().min(1, "Project name is required").max(100),
+  slug: ProjectSlugInput,
 });
 
 function RouteComponent() {
-  const { client_id, scope } = Route.useSearch();
+  const { client_id, scope, redirect } = Route.useSearch();
   const navigate = Route.useNavigate();
   const queryClient = useQueryClient();
   const session = useSession();
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[] | null>(null);
-  const [organizationName, setOrganizationName] = useState("");
-  const [projectName, setProjectName] = useState("");
+  const [organizationName, setOrganizationName] = useState(() =>
+    suggestOrganizationNameFromEmail(session.user.email ?? ""),
+  );
+  // null = keep deriving the first project's slug from the organization name;
+  // a string means the user took over. Clearing the field hands control back.
+  const [projectSlugOverride, setProjectSlugOverride] = useState<string | null>(null);
+  const [projectSlug, setProjectSlug] = useState("");
   const [selectedOrganizationSlug, setSelectedOrganizationSlug] = useState("");
   const [isCreateProjectDialogOpen, setIsCreateProjectDialogOpen] = useState(false);
   const hasOAuthClientId = Boolean(client_id);
   const needsProjectSelection =
     scope?.split(" ").includes(ITERATE_PROJECT_SELECTION_SCOPE) ?? false;
+  const redirectTarget = resolveRedirectTarget(redirect);
 
   const oauthClientQuery = useQuery({
     ...oauthClientQueryOptions(client_id ?? ""),
@@ -79,19 +107,35 @@ function RouteComponent() {
   const organizationsQuery = useQuery(organizationsQueryOptions());
   const projectSelectionOptions = projectSelectionQueryOptions(organizationsQuery.data ?? []);
 
+  // Projects are needed for OAuth project selection AND to detect that a
+  // non-OAuth visitor already finished setup (so we bounce them back out
+  // instead of offering to create another project).
+  const wantsProjects = needsProjectSelection || !hasOAuthClientId;
   const projectSelectionQuery = useQuery({
     ...projectSelectionOptions,
-    enabled: needsProjectSelection && Boolean(organizationsQuery.data),
+    enabled: wantsProjects && Boolean(organizationsQuery.data),
   });
 
-  const createOrganizationMutation = useMutation({
-    mutationFn: (input: z.infer<typeof CreateOrganizationInput>) =>
-      orpcClient.organization.create(input),
-    onSuccess: async () => {
-      setOrganizationName("");
-      await queryClient.invalidateQueries({ queryKey: organizationsQueryOptions().queryKey });
+  const createOrganizationWithProjectMutation = useMutation({
+    mutationFn: async (input: z.infer<typeof CreateOrganizationWithProjectInput>) => {
+      const organization = await orpcClient.organization.create({ name: input.name });
+      try {
+        return await orpcClient.project.create({
+          organizationSlug: organization.slug,
+          name: input.projectSlug,
+          slug: input.projectSlug,
+        });
+      } catch (error) {
+        // The organization now exists: refresh it so a retry lands on the
+        // project-only form instead of failing on a duplicate organization.
+        await queryClient.invalidateQueries({ queryKey: organizationsQueryOptions().queryKey });
+        throw error;
+      }
+    },
+    onSuccess: async (project) => {
       if (!hasOAuthClientId) {
-        await navigate({ to: "/" });
+        // Back to the app that sent us here (usually the OS dashboard).
+        window.location.href = redirectTarget ?? "/";
         return;
       }
       if (!needsProjectSelection) {
@@ -101,18 +145,27 @@ function RouteComponent() {
         }
 
         window.location.href = result.url;
+        return;
       }
+      setSelectedProjectIds([project.id]);
+      await queryClient.invalidateQueries({ queryKey: organizationsQueryOptions().queryKey });
+      await queryClient.invalidateQueries({ queryKey: projectSelectionOptions.queryKey });
     },
   });
 
   const createProjectMutation = useMutation({
-    mutationFn: (input: z.infer<typeof CreateProjectInput>) => orpcClient.project.create(input),
+    mutationFn: (input: z.infer<typeof CreateProjectInput>) =>
+      orpcClient.project.create({
+        organizationSlug: input.organizationSlug,
+        name: input.slug,
+        slug: input.slug,
+      }),
     onSuccess: async (project) => {
-      setProjectName("");
+      setProjectSlug("");
       setIsCreateProjectDialogOpen(false);
       if (!hasOAuthClientId) {
-        await queryClient.invalidateQueries({ queryKey: projectSelectionOptions.queryKey });
-        await navigate({ to: "/" });
+        // Back to the app that sent us here (usually the OS dashboard).
+        window.location.href = redirectTarget ?? "/";
         return;
       }
       setSelectedProjectIds((current) => {
@@ -166,7 +219,7 @@ function RouteComponent() {
   });
 
   const isLoadingOAuthClient = hasOAuthClientId && oauthClientQuery.isPending;
-  const isLoadingProjectSelection = needsProjectSelection && projectSelectionQuery.isPending;
+  const isLoadingProjectSelection = wantsProjects && projectSelectionQuery.isPending;
 
   if (isLoadingOAuthClient || organizationsQuery.isPending || isLoadingProjectSelection) {
     return (
@@ -213,7 +266,7 @@ function RouteComponent() {
     );
   }
 
-  if (needsProjectSelection && projectSelectionQuery.isError) {
+  if (wantsProjects && projectSelectionQuery.isError) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-muted/20 p-4">
         <Card className="w-full max-w-md">
@@ -229,7 +282,9 @@ function RouteComponent() {
   const client = oauthClientQuery.data;
   const user = session.user;
   const initials = getInitials(user.name ?? user.email);
-  const clientName = client?.client_name ?? "This application";
+  // Without an OAuth client this is plain first-run setup, so brand the
+  // header as iterate rather than "This application".
+  const clientName = client?.client_name ?? (hasOAuthClientId ? "This application" : "iterate");
   const organizations = organizationsQuery.data;
   const projectSelections = projectSelectionQuery.data ?? [];
   const allProjectIds = projectSelections.flatMap((selection) =>
@@ -239,14 +294,29 @@ function RouteComponent() {
   const effectiveSelectedProjectIds = selectedProjectIds ?? allProjectIds;
   const canContinue = effectiveSelectedProjectIds.length > 0;
   const isCreatingFirstOrganization = organizations.length === 0;
-  const parsedOrganization = CreateOrganizationInput.safeParse({ name: organizationName });
+  const suggestedProjectSlug = organizationName.trim() ? slugify(organizationName) : "";
+  const firstProjectSlug = projectSlugOverride ?? suggestedProjectSlug;
+  const parsedOrganizationWithProject = CreateOrganizationWithProjectInput.safeParse({
+    name: organizationName,
+    projectSlug: firstProjectSlug,
+  });
+  const organizationNameIssues =
+    !parsedOrganizationWithProject.success && organizationName.length > 0
+      ? parsedOrganizationWithProject.error.issues.filter((issue) => issue.path[0] === "name")
+      : [];
+  const firstProjectSlugIssues =
+    !parsedOrganizationWithProject.success && firstProjectSlug.length > 0
+      ? parsedOrganizationWithProject.error.issues.filter(
+          (issue) => issue.path[0] === "projectSlug",
+        )
+      : [];
   const effectiveOrganizationSlug = selectedOrganizationSlug || organizations[0]?.slug || "";
   const parsedProject = CreateProjectInput.safeParse({
     organizationSlug: effectiveOrganizationSlug,
-    name: projectName,
+    slug: projectSlug,
   });
   const isSubmitting =
-    createOrganizationMutation.isPending ||
+    createOrganizationWithProjectMutation.isPending ||
     createProjectMutation.isPending ||
     saveSelectionMutation.isPending ||
     denyMutation.isPending ||
@@ -254,14 +324,14 @@ function RouteComponent() {
 
   const createProjectFormProps = {
     organizations,
-    projectName,
+    projectSlug,
     selectedOrganizationSlug: effectiveOrganizationSlug,
     isSubmitting,
     isCreating: createProjectMutation.isPending,
     isValid: parsedProject.success,
-    error: !parsedProject.success && projectName.length > 0 ? parsedProject.error.issues : null,
+    error: !parsedProject.success && projectSlug.length > 0 ? parsedProject.error.issues : null,
     mutationError: createProjectMutation.isError ? createProjectMutation.error.message : null,
-    onProjectNameChange: setProjectName,
+    onProjectSlugChange: setProjectSlug,
     onOrganizationSlugChange: setSelectedOrganizationSlug,
     onSubmit: () => {
       if (!parsedProject.success) return;
@@ -270,6 +340,9 @@ function RouteComponent() {
   };
 
   if (!hasOAuthClientId && hasProjects) {
+    if (redirectTarget) {
+      return <ExternalRedirect href={redirectTarget} />;
+    }
     return <Navigate to="/" />;
   }
 
@@ -284,7 +357,9 @@ function RouteComponent() {
               label={hasOAuthClientId ? "Project access" : "Setup"}
             />
             <CardTitle className="text-xl">Create your organization</CardTitle>
-            <CardDescription>Start with the team name people recognize.</CardDescription>
+            <CardDescription>
+              Name your organization and your first project comes with it.
+            </CardDescription>
           </CardHeader>
           <Separator />
           <CardContent className="space-y-4">
@@ -300,12 +375,12 @@ function RouteComponent() {
               className="space-y-4"
               onSubmit={(event) => {
                 event.preventDefault();
-                if (!parsedOrganization.success) return;
-                createOrganizationMutation.mutate(parsedOrganization.data);
+                if (!parsedOrganizationWithProject.success) return;
+                createOrganizationWithProjectMutation.mutate(parsedOrganizationWithProject.data);
               }}
             >
               <FieldGroup>
-                <Field data-invalid={!parsedOrganization.success && organizationName.length > 0}>
+                <Field data-invalid={organizationNameIssues.length > 0}>
                   <FieldLabel htmlFor="organization-name">Organization name</FieldLabel>
                   <Input
                     id="organization-name"
@@ -313,17 +388,38 @@ function RouteComponent() {
                     placeholder="Acme"
                     value={organizationName}
                     onChange={(event) => setOrganizationName(event.target.value)}
-                    aria-invalid={!parsedOrganization.success && organizationName.length > 0}
+                    aria-invalid={organizationNameIssues.length > 0}
                     disabled={isSubmitting}
                   />
-                  {!parsedOrganization.success && organizationName.length > 0 ? (
-                    <FieldError errors={parsedOrganization.error.issues} />
+                  {organizationNameIssues.length > 0 ? (
+                    <FieldError errors={organizationNameIssues} />
+                  ) : null}
+                </Field>
+                <Field data-invalid={firstProjectSlugIssues.length > 0}>
+                  <FieldLabel htmlFor="first-project-slug">Project slug</FieldLabel>
+                  <Input
+                    id="first-project-slug"
+                    name="first-project-slug"
+                    placeholder="acme"
+                    value={firstProjectSlug}
+                    onChange={(event) => setProjectSlugOverride(event.target.value || null)}
+                    aria-invalid={firstProjectSlugIssues.length > 0}
+                    disabled={isSubmitting}
+                  />
+                  <FieldDescription>
+                    Your project homepage will be under{" "}
+                    <span className="font-medium text-foreground">
+                      {firstProjectSlug || "your-project"}.{PROJECT_HOSTNAME_BASE}
+                    </span>
+                  </FieldDescription>
+                  {firstProjectSlugIssues.length > 0 ? (
+                    <FieldError errors={firstProjectSlugIssues} />
                   ) : null}
                 </Field>
               </FieldGroup>
-              {createOrganizationMutation.isError ? (
+              {createOrganizationWithProjectMutation.isError ? (
                 <p className="text-sm text-destructive">
-                  {createOrganizationMutation.error.message}
+                  {createOrganizationWithProjectMutation.error.message}
                 </p>
               ) : null}
 
@@ -331,18 +427,20 @@ function RouteComponent() {
                 <Button
                   type="submit"
                   className="flex-1"
-                  disabled={!parsedOrganization.success || isSubmitting}
+                  disabled={!parsedOrganizationWithProject.success || isSubmitting}
                 >
-                  {createOrganizationMutation.isPending ? "Creating..." : "Create organization"}
+                  {createOrganizationWithProjectMutation.isPending ? "Creating..." : "Get started"}
                 </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={isSubmitting}
-                  onClick={() => denyMutation.mutate()}
-                >
-                  Cancel
-                </Button>
+                {hasOAuthClientId ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={isSubmitting}
+                    onClick={() => denyMutation.mutate()}
+                  >
+                    Cancel
+                  </Button>
+                ) : null}
               </div>
             </form>
           </CardContent>
@@ -385,14 +483,16 @@ function RouteComponent() {
           </CardContent>
           <Separator />
           <CardFooter className="gap-3">
-            <Button
-              className="flex-1"
-              variant="outline"
-              disabled={isSubmitting}
-              onClick={() => denyMutation.mutate()}
-            >
-              Cancel
-            </Button>
+            {hasOAuthClientId ? (
+              <Button
+                className="flex-1"
+                variant="outline"
+                disabled={isSubmitting}
+                onClick={() => denyMutation.mutate()}
+              >
+                Cancel
+              </Button>
+            ) : null}
             <Button
               type="submit"
               form="create-first-project-form"
@@ -624,7 +724,7 @@ function CreateProjectForm(props: {
   id?: string;
   className?: string;
   organizations: { id: string; name: string; slug: string }[];
-  projectName: string;
+  projectSlug: string;
   selectedOrganizationSlug: string;
   isSubmitting: boolean;
   isCreating: boolean;
@@ -632,7 +732,7 @@ function CreateProjectForm(props: {
   error: z.core.$ZodIssue[] | null;
   mutationError: string | null;
   showSubmitButton?: boolean;
-  onProjectNameChange: (value: string) => void;
+  onProjectSlugChange: (value: string) => void;
   onOrganizationSlugChange: (value: string) => void;
   onSubmit: () => void;
 }) {
@@ -663,16 +763,22 @@ function CreateProjectForm(props: {
           </NativeSelect>
         </Field>
         <Field data-invalid={Boolean(props.error)}>
-          <FieldLabel htmlFor="project-name">Project name</FieldLabel>
+          <FieldLabel htmlFor="project-slug">Project slug</FieldLabel>
           <Input
-            id="project-name"
-            name="project-name"
-            placeholder="MCP Alpha"
-            value={props.projectName}
-            onChange={(event) => props.onProjectNameChange(event.target.value)}
+            id="project-slug"
+            name="project-slug"
+            placeholder="acme"
+            value={props.projectSlug}
+            onChange={(event) => props.onProjectSlugChange(event.target.value)}
             aria-invalid={Boolean(props.error)}
             disabled={props.isSubmitting}
           />
+          <FieldDescription>
+            Your project homepage will be under{" "}
+            <span className="font-medium text-foreground">
+              {props.projectSlug || "your-project"}.{PROJECT_HOSTNAME_BASE}
+            </span>
+          </FieldDescription>
           {props.error ? <FieldError errors={props.error} /> : null}
         </Field>
       </FieldGroup>
@@ -686,4 +792,26 @@ function CreateProjectForm(props: {
       ) : null}
     </form>
   );
+}
+
+/**
+ * Validates the `?redirect=` search param (set by the app that sent the user
+ * here, e.g. the OS dashboard) so setup can hand the user back when done.
+ * Only plain http(s) URLs are honored.
+ */
+function resolveRedirectTarget(redirect: string | undefined): string | null {
+  if (!redirect) return null;
+  try {
+    const url = new URL(redirect);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function ExternalRedirect(props: { href: string }) {
+  useEffect(() => {
+    window.location.replace(props.href);
+  }, [props.href]);
+  return null;
 }
