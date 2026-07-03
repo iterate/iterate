@@ -41,6 +41,7 @@ type ResourceRow = {
   data: string;
   lease_state: string;
   leased_until?: number | null;
+  holder?: string | null;
   last_acquired_at?: number | null;
   last_released_at?: number | null;
   created_at: string;
@@ -54,6 +55,7 @@ function rowToResourceRecord(row: ResourceRow): SemaphoreResourceRecord {
     data: parseData(row.data),
     leaseState: z.enum(["available", "leased"]).parse(row.lease_state),
     leasedUntil: row.leased_until ?? null,
+    holder: row.holder ?? null,
     lastAcquiredAt: row.last_acquired_at ?? null,
     lastReleasedAt: row.last_released_at ?? null,
     createdAt: row.created_at,
@@ -135,6 +137,7 @@ export async function markResourceLeasedInDb(
     slug: string;
     leasedUntil: number;
     lastAcquiredAt: number;
+    holder: string | null;
   },
 ): Promise<boolean> {
   const result = await updateResourceLeased(
@@ -142,6 +145,7 @@ export async function markResourceLeasedInDb(
     {
       leasedUntil: params.leasedUntil,
       lastAcquiredAt: params.lastAcquiredAt,
+      holder: params.holder,
     },
     {
       type: params.type,

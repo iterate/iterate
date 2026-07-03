@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type { PublicSessionResponse } from "@iterate-com/auth/client";
+import type { SignInAuthError } from "~/auth/errors.ts";
 
 /**
  * The router context provided to createRouter and augmented by the root
@@ -13,6 +14,7 @@ import type { PublicSessionResponse } from "@iterate-com/auth/client";
 export type RouterContext = {
   queryClient: QueryClient;
   authSession?: PublicSessionResponse;
+  authError?: SignInAuthError;
   currentProjectHostSlug?: string | null;
   iterateAuthIssuer?: string;
 };

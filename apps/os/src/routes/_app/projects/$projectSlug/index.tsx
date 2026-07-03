@@ -26,12 +26,12 @@ function ProjectHomePage() {
   // processor, reachable as `itx.processor.snapshot()`. A plain useQuery +
   // refetchInterval polls it until `created` flips true.
   const itx = useItx();
-  const lifecycleStateQuery = useQuery({
+  const { data } = useQuery({
     queryKey: ["itx", "project-lifecycle", project.id],
     queryFn: async () => await itx.processor.snapshot(),
     refetchInterval: (query) => (query.state.data?.state.created ? false : 2_500),
   });
-  const created = lifecycleStateQuery.data?.state.created ?? false;
+  const created = data?.state.created ?? false;
 
   return (
     <section className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[minmax(24rem,38rem)_minmax(0,1fr)]">
@@ -55,7 +55,7 @@ function ProjectHomePage() {
               <p className="text-sm text-muted-foreground">Project lifecycle processor</p>
             </div>
             <pre className="max-h-[calc(100vh-12rem)] overflow-auto rounded-lg border bg-muted p-3 font-mono text-xs whitespace-pre-wrap">
-              {JSON.stringify(lifecycleStateQuery.data ?? null, null, 2)}
+              {JSON.stringify(data ?? null, null, 2)}
             </pre>
           </div>
           <ProjectSettingsPanel project={project} routeConfig={routeConfig} />

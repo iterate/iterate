@@ -8,10 +8,6 @@ import {
 
 type AgentState = z.infer<typeof AgentProcessorContract.stateSchema>;
 type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
-type LlmRequestPolicy = Extract<
-  AgentConsumedEvent,
-  { type: "events.iterate.com/agent/input-added" }
->["payload"]["llmRequestPolicy"];
 
 export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContract> {
   readonly contract = AgentProcessorContract;
@@ -30,7 +26,6 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
     event,
     previousState,
     runInBackground,
-    state,
   }: Parameters<StreamProcessor<typeof AgentProcessorContract>["processEvent"]>[0]): undefined {
     switch (event.type) {
       case "events.iterate.com/agent/config-updated": {
@@ -69,17 +64,16 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
           }),
         );
         return;
-      case "events.iterate.com/agent/input-added":
-        blockProcessorWhile(async () => {
-          await this.#handleInputAdded({
-            append,
-            event,
-            policy: event.payload.llmRequestPolicy,
-            previousState,
-            state,
-          });
-        });
+      case "events.iterate.com/agent/input-added": {
+        // Scheduling the next LLM request is derived from reduced state at the
+        // end of the batch (see #settleLlmRequestScheduling); the only
+        // per-event side effect is interrupting a request already underway.
+        if (event.payload.llmRequestPolicy.behaviour !== "interrupt-current-request") return;
+        const interrupted = previousState.currentRequest;
+        if (interrupted === null) return;
+        blockProcessorWhile(() => append(cancelEventForCurrentRequest(interrupted)));
         return;
+      }
       case "events.iterate.com/agent/llm-request-scheduled":
         this.#scheduledRequestsWithActiveTimers.add(event.payload.requestId);
         runInBackground(async () => {
@@ -108,22 +102,26 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
             idempotencyKey: `itx/script-execution-requested@${event.offset}`,
             payload: {
               code,
-              executionId: `agent-output:${event.offset}`,
+              executionId: `${AGENT_SCRIPT_EXECUTION_ID_PREFIX}${event.offset}`,
             },
           });
         });
         return;
-      case "events.iterate.com/agent/llm-request-completed":
-      case "events.iterate.com/agent/llm-request-cancelled":
-        if (state.currentRequest !== null || state.pendingTriggerOffset === null) return;
+      case "events.iterate.com/itx/script-execution-completed": {
+        const content = scriptResultAgentInput(event);
+        if (content === null) return;
         blockProcessorWhile(() =>
-          this.#appendLlmRequestScheduled({
-            append,
-            sourceOffset: state.pendingTriggerOffset!,
-            state,
+          append({
+            type: "events.iterate.com/agent/input-added",
+            idempotencyKey: `agent/render-script-result@${event.offset}`,
+            payload: {
+              content,
+              llmRequestPolicy: { behaviour: "after-current-request" },
+            },
           }),
         );
         return;
+      }
       default:
         return;
     }
@@ -133,67 +131,48 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
     args: Parameters<StreamProcessor<typeof AgentProcessorContract>["processEventBatch"]>[0],
   ): Promise<void> {
     await super.processEventBatch(args);
-    const scheduled = args.state.currentRequest;
-    if (scheduled?.phase !== "scheduled") return;
-    if (this.#scheduledRequestsWithActiveTimers.has(scheduled.requestId)) return;
+    await this.#settleLlmRequestScheduling(args);
+  }
+
+  /**
+   * The LLM-request scheduling decision, derived from reduced state once per
+   * batch after the whole fold — never per event, where appends made earlier
+   * in the same batch are invisible. "A trigger is pending and no request is
+   * current" means exactly one llm-request-scheduled for the current request
+   * generation; the generation-keyed idempotency makes every re-derivation
+   * (many inputs in one batch, chunked delivery, crash replay) collapse into
+   * the same stream event.
+   */
+  async #settleLlmRequestScheduling(
+    args: Parameters<StreamProcessor<typeof AgentProcessorContract>["processEventBatch"]>[0],
+  ): Promise<void> {
+    const { state } = args;
+    if (state.currentRequest === null) {
+      if (state.pendingTriggerOffset === null) return;
+      await args.append({
+        type: "events.iterate.com/agent/llm-request-scheduled",
+        idempotencyKey: `agent/llm-request-scheduled@generation:${state.requestGeneration}`,
+        payload: {
+          debounceMs: DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
+          model: state.llmConfig.model,
+          provider: state.llmProvider,
+          requestId: `llm-request:gen-${state.requestGeneration}`,
+        },
+      });
+      return;
+    }
+    if (state.currentRequest.phase !== "scheduled") return;
+    if (this.#scheduledRequestsWithActiveTimers.has(state.currentRequest.requestId)) return;
     // No active timer for this scheduled request: the DO restarted and lost the
     // debounce. Fire llm-request-requested immediately. The idempotency key
     // makes this safe if the timer also fires concurrently.
     await args.append({
       type: "events.iterate.com/agent/llm-request-requested",
-      idempotencyKey: `agent/llm-request-requested@${scheduled.scheduledOffset}`,
+      idempotencyKey: `agent/llm-request-requested@${state.currentRequest.scheduledOffset}`,
       payload: {
-        model: args.state.llmConfig.model,
-        provider: args.state.llmProvider,
-        requestId: scheduled.requestId,
-      },
-    });
-  }
-
-  async #handleInputAdded(input: {
-    append: Parameters<StreamProcessor<typeof AgentProcessorContract>["processEvent"]>[0]["append"];
-    event: Extract<AgentConsumedEvent, { type: "events.iterate.com/agent/input-added" }>;
-    policy: LlmRequestPolicy;
-    previousState: AgentState;
-    state: AgentState;
-  }) {
-    if (input.policy.behaviour === "dont-trigger-request") return;
-
-    if (
-      input.policy.behaviour === "interrupt-current-request" &&
-      input.previousState.currentRequest !== null
-    ) {
-      await input.append(cancelEventForCurrentRequest(input.previousState.currentRequest));
-      await this.#appendLlmRequestScheduled({
-        append: input.append,
-        sourceOffset: input.event.offset,
-        state: input.state,
-      });
-      return;
-    }
-
-    if (input.previousState.currentRequest !== null) return;
-    await this.#appendLlmRequestScheduled({
-      append: input.append,
-      sourceOffset: input.event.offset,
-      state: input.state,
-    });
-  }
-
-  async #appendLlmRequestScheduled(input: {
-    append: Parameters<StreamProcessor<typeof AgentProcessorContract>["processEvent"]>[0]["append"];
-    sourceOffset: number;
-    state: AgentState;
-  }) {
-    const requestId = `llm-request:${input.sourceOffset}`;
-    await input.append({
-      type: "events.iterate.com/agent/llm-request-scheduled",
-      idempotencyKey: `agent/llm-request-scheduled@${input.sourceOffset}`,
-      payload: {
-        debounceMs: DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
-        model: input.state.llmConfig.model,
-        provider: input.state.llmProvider,
-        requestId,
+        model: state.llmConfig.model,
+        provider: state.llmProvider,
+        requestId: state.currentRequest.requestId,
       },
     });
   }
@@ -285,21 +264,21 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
       ) {
         return state;
       }
-      return { ...state, currentRequest: null };
+      return { ...state, currentRequest: null, requestGeneration: state.requestGeneration + 1 };
     case "events.iterate.com/agent/llm-request-cancelled":
       if (
         event.payload.phase === "scheduled" &&
         state.currentRequest?.phase === "scheduled" &&
         state.currentRequest.requestId === event.payload.requestId
       ) {
-        return { ...state, currentRequest: null };
+        return { ...state, currentRequest: null, requestGeneration: state.requestGeneration + 1 };
       }
       if (
         event.payload.phase === "requested" &&
         state.currentRequest?.phase === "requested" &&
         state.currentRequest.llmRequestId === event.payload.llmRequestId
       ) {
-        return { ...state, currentRequest: null };
+        return { ...state, currentRequest: null, requestGeneration: state.requestGeneration + 1 };
       }
       return state;
     case "events.iterate.com/itx/script-execution-completed":
@@ -334,6 +313,42 @@ function cancelEventForCurrentRequest(request: NonNullable<AgentState["currentRe
       llmRequestId: request.llmRequestId,
     },
   };
+}
+
+const AGENT_SCRIPT_EXECUTION_ID_PREFIX = "agent-output:";
+
+// The "tool result" half of the codemode loop: a finished script execution
+// renders back into model-visible history so the next turn can look at the
+// data. Two deliberate gaps end the loop instead of feeding it:
+// - executions this agent did not request stay invisible (other scripts —
+//   e.g. Slack bang commands — journal on the same stream);
+// - a script that returned undefined and did not throw produces nothing.
+//   Returning no value is how an agent ends its turn.
+function scriptResultAgentInput(
+  event: Extract<AgentConsumedEvent, { type: "events.iterate.com/itx/script-execution-completed" }>,
+): string | null {
+  const payload = event.payload;
+  if (!payload.executionId.startsWith(AGENT_SCRIPT_EXECUTION_ID_PREFIX)) return null;
+  if (payload.error !== undefined) {
+    return `Your script threw:\n\`\`\`\n${truncateScriptResult(payload.error)}\n\`\`\``;
+  }
+  if (payload.result === undefined) return null;
+  return `Your script returned:\n\`\`\`json\n${truncateScriptResult(stringifyScriptResult(payload.result))}\n\`\`\``;
+}
+
+function stringifyScriptResult(result: unknown): string {
+  try {
+    return JSON.stringify(result, null, 2) ?? String(result);
+  } catch {
+    return String(result);
+  }
+}
+
+const SCRIPT_RESULT_HISTORY_LIMIT = 30_000;
+
+function truncateScriptResult(text: string): string {
+  if (text.length <= SCRIPT_RESULT_HISTORY_LIMIT) return text;
+  return `${text.slice(0, SCRIPT_RESULT_HISTORY_LIMIT)}\n… truncated (${text.length} chars total — return less: slice arrays, pick fields)`;
 }
 
 function extractAsyncJsSnippet(content: string): string | null {

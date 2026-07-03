@@ -1,0 +1,23 @@
+diff --git a/dist/index.mjs b/dist/index.mjs
+index 8c6183a00cb7acd98d4980fadcebbc3ada760b4c..244a2e82667ab19b03adaebb3be63304ad6adc1d 100644
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -27137,11 +27137,17 @@ function getEgressInterceptorImage() {
+ 	return process.env.MINIFLARE_CONTAINER_EGRESS_IMAGE ?? DEFAULT_CONTAINER_EGRESS_INTERCEPTOR_IMAGE;
+ }
+ async function pullEgressInterceptorImage(dockerPath) {
++	// PATCHED (iterate): the egress interceptor must run natively — under
++	// Rosetta on Apple Silicon its transparent-proxy setsockopt fails with
++	// "protocol not available" and every container-backed Durable Object
++	// breaks. Pull the host platform (the image is multi-arch) instead of
++	// the upstream-hardcoded linux/amd64.
++	const hostPlatform = process.arch === "arm64" ? "linux/arm64" : "linux/amd64";
+ 	await runDockerCmd(dockerPath, [
+ 		"pull",
+ 		getEgressInterceptorImage(),
+ 		"--platform",
+-		"linux/amd64"
++		hostPlatform
+ 	]);
+ }
+ async function pullImage(dockerPath, options, logger) {

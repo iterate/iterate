@@ -307,12 +307,12 @@ _Avoid_: Script Execution, Tool Provider, assistant message
 The TypeScript class/export name for the Agent Durable Object.
 _Avoid_: Subagent class, Agent DO class
 
-**withStreamProcessor**:
-The Durable Object mixin API that lets a StreamProcessorRunner register one or more processor instances for one or more Event Stream Paths during lifecycle startup.
-_Avoid_: withStreamProcessorHost, host mixin, dynamic processor registry
+**createStreamProcessorHost**:
+The factory that hosts StreamProcessor instances inside a domain Durable Object: `host.add((deps) => new SomeProcessor(deps))` registers a processor under its contract slug, and `host.wakeStreamSubscriber` answers stream wakeups by re-subscribing from the processor's durable checkpoint.
+_Avoid_: withStreamProcessor, host mixin, dynamic processor registry
 
-**Stream Processor waitUntil**:
-A StreamProcessorRunner-provided best-effort in-memory function that lets processor hooks keep async work alive until a promise settles.
+**Stream Processor keepAliveWhile**:
+A host-provided best-effort in-memory function that lets processor hooks keep async work alive until a promise settles.
 _Avoid_: Durable Object `ctx.waitUntil`, durable scheduler, alarm-backed task
 
 **Project Lifecycle Stream**:

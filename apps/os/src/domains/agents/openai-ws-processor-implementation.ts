@@ -139,21 +139,28 @@ export class OpenAiWsProcessor extends StreamProcessor<
         events: await this.deps.readStreamEvents(),
         llmRequestId,
       });
-      const connection = await this.#getConnection();
-      const requestMessage = buildResponsesClientEvent({
-        messages: body.messages,
-        model,
-        previousResponseId: this.#previousResponseId,
-      });
+      const attemptedPreviousResponseId = this.#previousResponseId;
+      let completion;
       try {
-        connection.client.sendResponseCreate(requestMessage);
+        completion = await this.#createAndConsumeResponse({
+          messages: body.messages,
+          model,
+          previousResponseId: attemptedPreviousResponseId,
+          sourceEvent: input.event,
+        });
       } catch (error) {
-        connection.client.close({ code: 1011, reason: "send-failed" });
-        this.#markConnectionClosed(connection);
-        throw error;
+        if (attemptedPreviousResponseId === null || !isPreviousResponseNotFoundError(error)) {
+          throw error;
+        }
+        this.#previousResponseId = null;
+        completion = await this.#createAndConsumeResponse({
+          idempotencyScope: `retry-without-previous-response:${attemptedPreviousResponseId}`,
+          messages: body.messages,
+          model,
+          previousResponseId: null,
+          sourceEvent: input.event,
+        });
       }
-
-      const completion = await this.#consumeResponse({ connection, sourceEvent: input.event });
       const durationMs = Date.now() - startedAt;
       const providerResult = {
         status: "success" as const,
@@ -221,6 +228,34 @@ export class OpenAiWsProcessor extends StreamProcessor<
     }
   }
 
+  async #createAndConsumeResponse(input: {
+    idempotencyScope?: string;
+    messages: ReturnType<typeof buildAgentLlmRequestBody>["messages"];
+    model: string;
+    previousResponseId: string | null;
+    sourceEvent: LlmRequestRequestedEvent;
+  }): Promise<{ rawResponse: unknown; responseId?: string; text: string; usage?: unknown }> {
+    const connection = await this.#getConnection();
+    const requestMessage = buildResponsesClientEvent({
+      messages: input.messages,
+      model: input.model,
+      previousResponseId: input.previousResponseId,
+    });
+    try {
+      connection.client.sendResponseCreate(requestMessage);
+    } catch (error) {
+      connection.client.close({ code: 1011, reason: "send-failed" });
+      this.#markConnectionClosed(connection);
+      throw error;
+    }
+
+    return await this.#consumeResponse({
+      connection,
+      idempotencyScope: input.idempotencyScope,
+      sourceEvent: input.sourceEvent,
+    });
+  }
+
   /**
    * Reads socket frames until the response terminates. Every frame lands on the
    * stream as an llm-response-chunk so subscribers (e.g. the browser agent UI)
@@ -228,6 +263,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
    */
   async #consumeResponse(input: {
     connection: OpenAiWsConnection;
+    idempotencyScope?: string;
     sourceEvent: LlmRequestRequestedEvent;
   }): Promise<{ rawResponse: unknown; responseId?: string; text: string; usage?: unknown }> {
     const llmRequestId = input.sourceEvent.offset;
@@ -249,7 +285,10 @@ export class OpenAiWsProcessor extends StreamProcessor<
 
       await this.stream.append({
         type: "events.iterate.com/openai-ws/llm-response-chunk",
-        idempotencyKey: `openai-ws/llm-response-chunk@${llmRequestId}:${sequence}`,
+        idempotencyKey:
+          input.idempotencyScope === undefined
+            ? `openai-ws/llm-response-chunk@${llmRequestId}:${sequence}`
+            : `openai-ws/llm-response-chunk@${llmRequestId}:${input.idempotencyScope}:${sequence}`,
         payload: { chunk, llmRequestId, sequence },
       });
       sequence += 1;
@@ -379,6 +418,11 @@ function stringifyError(error: unknown): string {
   } catch {
     return String(error);
   }
+}
+
+function isPreviousResponseNotFoundError(error: unknown): boolean {
+  const message = stringifyError(error);
+  return message.includes("Previous response") && message.includes("not found");
 }
 
 // =============================================================================

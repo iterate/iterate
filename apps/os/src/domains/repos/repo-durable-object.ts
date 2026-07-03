@@ -9,13 +9,13 @@ import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import type { Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
+import { timedStep } from "../../lib/step-timing.ts";
 import { stableSha256 } from "../workers/utils.ts";
 import type { ResolvedWorkerSource } from "../workers/worker-loader.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { CommitRepoFilesInput, CommitRepoFilesResult, RepoFileChange } from "../../types.ts";
 import { PROJECT_WORKER_SOURCE_PATH, RepoArtifactNameCodec } from "./utils.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.ts";
-import { RepoProcessorContract } from "./repo-processor-contract.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 
 const REPO_DEFAULT_BRANCH = "main";
@@ -40,7 +40,6 @@ export class RepoDurableObject extends DurableObject<Env> {
     }),
   });
   readonly #repoProcessor = this.#host.add(
-    RepoProcessorContract.slug,
     (deps) =>
       new RepoProcessor({
         ...deps,
@@ -85,7 +84,7 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   async commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult> {
     const parsed = parseCommitFilesInput(input);
-    const repo = await this.repoGitAccess();
+    const repo = await this.gitAccess();
     const result = await commitFilesToArtifactRepo({
       author: parsed.author,
       branch: parsed.branch ?? repo.defaultBranch,
@@ -109,7 +108,7 @@ export class RepoDurableObject extends DurableObject<Env> {
   /** Committed file contents at HEAD, or null when the path does not exist. */
   async readFile(input: { path: string }): Promise<RepoFileRead | null> {
     const path = normalizeRepoFilePath(input.path);
-    const repo = await this.repoGitAccess();
+    const repo = await this.gitAccess();
     const snapshot = await cloneRepoSnapshot({
       branch: repo.defaultBranch,
       remote: repo.remote,
@@ -126,7 +125,7 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   /** All committed file paths at HEAD. */
   async listFiles(): Promise<{ commitOid: string; paths: string[] }> {
-    const repo = await this.repoGitAccess();
+    const repo = await this.gitAccess();
     const snapshot = await cloneRepoSnapshot({
       branch: repo.defaultBranch,
       remote: repo.remote,
@@ -177,7 +176,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     // projection exists. We still keep it here as a lazy repair path for old
     // projects and freshly-created repos, so project creation does not need a new
     // repo/source-updated event just to seed the cache.
-    const repo = await this.repoGitAccess();
+    const repo = await this.gitAccess();
     const source = await readRepoWorkerSource({
       branch: input.branch,
       path: input.sourcePath,
@@ -235,18 +234,25 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   private async createArtifactRepo(_input: { path: string; projectId: string | null }) {
+    const timing = { projectId: this.#name.projectId, path: this.#name.path };
     const artifactName = this.artifactName();
-    await this.getOrCreateArtifact(artifactName);
+    await timedStep("create-timing", timing, "artifact-get-or-create", () =>
+      this.getOrCreateArtifact(artifactName),
+    );
     const defaultBranch = REPO_DEFAULT_BRANCH;
     const remote = this.artifactRemote(artifactName);
-    const token = await artifactToken(this.requireArtifacts(), artifactName);
+    const token = await timedStep("create-timing", timing, "artifact-token", () =>
+      artifactToken(this.requireArtifacts(), artifactName),
+    );
 
-    await seedArtifactRepo({
-      branch: defaultBranch,
-      files: PROJECT_REPO_INITIAL_FILES,
-      remote,
-      token,
-    });
+    await timedStep("create-timing", timing, "artifact-seed", () =>
+      seedArtifactRepo({
+        branch: defaultBranch,
+        files: PROJECT_REPO_INITIAL_FILES,
+        remote,
+        token,
+      }),
+    );
 
     return {
       artifactName,
@@ -255,7 +261,14 @@ export class RepoDurableObject extends DurableObject<Env> {
     };
   }
 
-  private async repoGitAccess() {
+  /**
+   * Clone coordinates for this repo: remote URL, a write token, and the
+   * default branch. Internal (DO-to-DO) surface — the sandbox domain uses it
+   * to clone the project repo into a container. It is deliberately NOT on the
+   * public `Repo` capability: itx callers get file-level methods, not raw
+   * artifact credentials.
+   */
+  async gitAccess(): Promise<{ defaultBranch: string; remote: string; token: string }> {
     const artifactName = this.artifactName();
     const artifacts = this.requireArtifacts();
     return {

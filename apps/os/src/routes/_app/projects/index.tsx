@@ -58,12 +58,12 @@ function ProjectsIndexPage() {
   const queryClient = useQueryClient();
   // The list comes straight from the itx session (`session.projects.list()`),
   // shared with the app sidebar through the one projects cache entry.
-  const list = useQuery({
+  const { data, isPending } = useQuery({
     queryKey: projectsListQueryKey,
     queryFn: fetchProjectsList,
     staleTime: projectsListStaleTime,
   });
-  const projects = list.data ?? [];
+  const projects = data ?? [];
   const hasProjects = projects.length > 0;
 
   // "Set up" for a project the auth worker knows about but this deployment's
@@ -127,7 +127,7 @@ function ProjectsIndexPage() {
         </div>
       </div>
 
-      {list.isPending ? (
+      {isPending ? (
         <div className="text-sm text-muted-foreground" data-spinner="true">
           Loading projects...
         </div>

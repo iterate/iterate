@@ -172,7 +172,12 @@ Alchemy derives Worker routes from those values. Do not add a separate
 
 PR previews use Semaphore environment config leases. A lease points to one
 Doppler config, such as `preview_2`; every selected app deploys with that same
-config.
+config. A slot belongs to one PR for the PR's whole life: each `preview
+deploy`/`preview test` run renews the PR's 24h lease (holder `pr-N`), and PR
+close releases it after teardown. The tooling re-asserts lease ownership
+before testing or destroying anything and never takes a live lease without a
+human `--force`. The user stories live in
+[dev-environments.md](dev-environments.md#preview-environments).
 
 Preview source of truth:
 
@@ -204,7 +209,8 @@ For PR commands, the CLI only needs a GitHub token and pull request number; it
 derives the repository, head SHA, and base SHA through GitHub.
 
 Direct app deploys to `preview_N` are useful for debugging the primitive, but
-they bypass Semaphore and can collide with a PR that owns the same lease.
+do them only while holding the slot's lease (`pnpm preview acquire --slot N`);
+otherwise they collide with the PR that owns the slot.
 
 ### Semaphore Resource Coordination
 
@@ -215,15 +221,17 @@ and prevents two PRs from deploying to the same slot simultaneously.
 
 #### How leases work
 
-| Concept   | Meaning                                                                |
-| --------- | ---------------------------------------------------------------------- |
-| Resource  | A preview slot (type `environment-config-lease`, slug `preview-N`)     |
-| Lease     | Time-bound claim; identified by a `leaseId` UUID                       |
-| `leaseMs` | API field for how long the lease is held (milliseconds; max 30 days)   |
-| `waitMs`  | API field for how long to wait if no slot is available (max 5 minutes) |
-| Acquire   | Claim any available slot of a given type                               |
-| Release   | Return a slot early (requires the matching `leaseId`)                  |
-| Renew     | Extend the expiry on an active lease                                   |
+| Concept   | Meaning                                                                  |
+| --------- | ------------------------------------------------------------------------ |
+| Resource  | A preview slot (type `environment-config-lease`, slug `preview-N`)       |
+| Lease     | Time-bound claim; identified by a `leaseId` UUID                         |
+| `holder`  | Who holds the lease (`pr-1234`, `manual-jonas`); shown by list/status/UI |
+| `leaseMs` | API field for how long the lease is held (milliseconds; max 30 days)     |
+| `waitMs`  | API field for how long to wait if no slot is available (max 5 minutes)   |
+| Acquire   | Claim any available slot of a given type                                 |
+| Release   | Return a slot early (requires the matching `leaseId`, or `force`)        |
+| Renew     | Extend the expiry on an active lease                                     |
+| `force`   | Human override: evict/release a live lease; logged with both identities  |
 
 Each resource type gets its own Durable Object that serializes lease
 operations, manages a waiter queue, and reaps expired leases via alarms. D1

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import alchemy from "alchemy";
 import {
   Ai,
+  Container,
   DurableObjectNamespace,
   KVNamespace,
   Worker,
@@ -18,17 +19,56 @@ import {
   ITERATE_WORKER_OBSERVABILITY,
   IterateAppWorker,
   IterateRoutes,
+  parkWorkerRoutes,
 } from "@iterate-com/shared/alchemy/iterate-app";
 import { prepareLocalDevServer } from "@iterate-com/shared/alchemy/local-dev-server";
+import { slugify } from "@iterate-com/shared/slugify";
 import { ensureLocalDevOAuthClient } from "./src/auth/dev-oauth-client-bootstrap.ts";
 import { AppConfig } from "./src/config.ts";
 import type { AgentDurableObject } from "./src/domains/agents/agent-durable-object.ts";
 import type { ItxDurableObject } from "./src/domains/itx/itx-durable-object.ts";
 import type { ProjectDurableObject } from "./src/domains/projects/project-durable-object.ts";
 import type { RepoDurableObject } from "./src/domains/repos/repo-durable-object.ts";
+import type { CloudflareSandboxDurableObject } from "./src/domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts";
 import type { SecretDurableObject } from "./src/domains/secrets/secret-durable-object.ts";
 import type { StreamDurableObject } from "./src/domains/streams/stream-durable-object.ts";
 import type { StatefulWorkerDurableObject } from "./src/domains/workers/stateful-worker-durable-object.ts";
+
+// `--park` re-parks the slot edge after `--destroy` deleted every worker:
+// upload a placeholder ingress script and re-ensure + verify routes/DNS
+// against it, so the next tenant's deploy finds live routes instead of
+// paying the route-creation propagation lottery (see parkWorkerRoutes).
+// Alchemy exits the process inside the destroy phase, so this cannot run in
+// the same invocation — package.json "destroy" chains it. Hostnames are read
+// straight from the flat APP_CONFIG_* env vars (with the APP_CONFIG blob as
+// fallback, same precedence as scripts/preview readPreviewAppConfig) instead
+// of the full AppConfig parse, which would drag deploy-time JWKS fetching —
+// against the auth worker this very teardown just deleted — into the park.
+if (process.argv.includes("--park")) {
+  if (/^(1|true|yes)$/i.test(process.env.ALCHEMY_LOCAL ?? "")) process.exit(0);
+  const stage = process.env.ALCHEMY_STAGE?.trim();
+  if (!stage) throw new Error("ALCHEMY_STAGE is required to park a slot.");
+  const appConfigBlob = process.env.APP_CONFIG?.trim()
+    ? (JSON.parse(process.env.APP_CONFIG) as {
+        baseUrl?: string;
+        mcp?: { baseUrl?: string };
+        projectHostnameBases?: string[];
+      })
+    : {};
+  await parkWorkerRoutes({
+    hostnames: osRouteHostnames({
+      baseUrl: process.env.APP_CONFIG_BASE_URL || appConfigBlob.baseUrl,
+      mcp: { baseUrl: process.env.APP_CONFIG_MCP__BASE_URL || appConfigBlob.mcp?.baseUrl },
+      projectHostnameBases: process.env.APP_CONFIG_PROJECT_HOSTNAME_BASES?.trim()
+        ? (JSON.parse(process.env.APP_CONFIG_PROJECT_HOSTNAME_BASES) as string[])
+        : appConfigBlob.projectHostnameBases,
+    }),
+    slug: "os",
+    stage,
+    workerName: slugify(`os-${stage}`),
+  });
+  process.exit(0);
+}
 
 const resolvedAuthIssuer =
   process.env.APP_CONFIG_ITERATE_AUTH__ISSUER ?? process.env.ITERATE_OAUTH_ISSUER;
@@ -41,10 +81,16 @@ const resolvedAuthIssuer =
 // Doppler-provided production JWKS. Key rotation in auth requires an OS
 // redeploy. On fetch failure the worker falls back to remote JWKS at runtime.
 async function fetchJwksWithRetry(url: string): Promise<{ keys: unknown[] }> {
+  // Deadline, not attempt-count: preview deploys OS and auth concurrently, so
+  // on a fresh slot this poll is what waits out the auth deploy (~40s). On an
+  // existing slot the first fetch succeeds immediately.
+  const deadline = Date.now() + 120_000;
+  let attempt = 0;
   let lastError: unknown;
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  while (true) {
+    attempt += 1;
     try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+      const response = await fetch(url, { signal: AbortSignal.timeout(4_000) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const jwks = (await response.json()) as { keys?: unknown[] };
       if (!Array.isArray(jwks.keys) || jwks.keys.length === 0) {
@@ -53,13 +99,11 @@ async function fetchJwksWithRetry(url: string): Promise<{ keys: unknown[] }> {
       return jwks as { keys: unknown[] };
     } catch (error) {
       lastError = error;
-      if (attempt < 3) {
-        console.warn(`[alchemy.run] JWKS fetch attempt ${attempt} failed, retrying:`, error);
-        await new Promise((resolve) => setTimeout(resolve, attempt * 2_000));
-      }
+      if (Date.now() >= deadline) throw lastError;
+      console.warn(`[alchemy.run] JWKS fetch attempt ${attempt} failed, retrying:`, error);
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
     }
   }
-  throw lastError;
 }
 
 async function resolveStaticAuthJwks(issuer: string | undefined) {
@@ -214,6 +258,7 @@ const workerNames = {
   itx: `${ctx.workerName}-itx`,
   project: `${ctx.workerName}-project`,
   repo: `${ctx.workerName}-repo`,
+  sandbox: `${ctx.workerName}-sandbox`,
   secret: `${ctx.workerName}-secret`,
   stream: `${ctx.workerName}-stream`,
   worker: `${ctx.workerName}-worker`,
@@ -223,9 +268,8 @@ const workerNames = {
 // (local dev), and <slug>.iterate-preview-N.app (preview).
 // The preview app shell deliberately lives on the sibling
 // iterate-preview-N.com zone (`os.iterate-preview-N.com`) so project/MCP hosts
-// can own the iterate-preview-N.app zone cleanly.
-const projectHostnameBases = ctx.runtimeConfig.projectHostnameBases ?? [];
-const mcpRouteHostname = routeHostnameForUrl(ctx.runtimeConfig.mcp?.baseUrl);
+// can own the iterate-preview-N.app zone cleanly. Hostname derivation:
+// osRouteHostnames below.
 const artifactsAccountId = requireEnv("CLOUDFLARE_ACCOUNT_ID");
 const artifactsNamespace = `${ctx.workerName}-repos`;
 
@@ -274,6 +318,39 @@ const secret = DurableObjectNamespace<SecretDurableObject>("secret", {
   scriptName: workerNames.secret,
   sqlite: true,
 });
+const sandbox = DurableObjectNamespace<CloudflareSandboxDurableObject>("sandbox", {
+  className: "CloudflareSandboxDurableObject",
+  scriptName: workerNames.sandbox,
+  sqlite: true,
+});
+// The sandbox class is container-backed. Alchemy's Container binding does not
+// carry `script_name` into worker metadata, so it cannot be the cross-script
+// binding other workers use — consumers bind the plain namespace above, and
+// only the OWNING sandbox worker binds this Container (image build + container
+// application + class migration live there). Local dev binds the plain
+// namespace instead so `pnpm dev` never requires Docker; sandbox calls then
+// fail at the Durable Object constructor ("Container is not enabled") until
+// you opt in with OS_SANDBOX_CONTAINER_LOCAL_DEV=true (Docker must be running).
+const sandboxContainerEnabled =
+  !ctx.app.local || process.env.OS_SANDBOX_CONTAINER_LOCAL_DEV === "true";
+const sandboxContainer = sandboxContainerEnabled
+  ? await Container<CloudflareSandboxDurableObject>("sandbox-container", {
+      className: "CloudflareSandboxDurableObject",
+      // No scriptName: this binding exists only on the OWNING sandbox worker.
+      // Alchemy's wrangler.jsonc emission writes container `scriptName` as
+      // `script_name` even on the owner, and a self-referential cross-script
+      // binding makes vite's dev registry proxy serve the class — which drops
+      // `ctx.id.name`, the sandbox's whole identity. Deploy metadata is
+      // unaffected (the DO binding is emitted script-local either way).
+      adopt: true,
+      build: {
+        context: fileURLToPath(new URL(".", import.meta.url)),
+        dockerfile: "Dockerfile.sandbox",
+      },
+      instanceType: "lite",
+      maxInstances: 10,
+    })
+  : sandbox;
 const statefulWorker = DurableObjectNamespace<StatefulWorkerDurableObject>("worker", {
   className: "StatefulWorkerDurableObject",
   scriptName: workerNames.worker,
@@ -294,6 +371,7 @@ const durableObjectWorkerNames = [
   workerNames.itx,
   workerNames.project,
   workerNames.repo,
+  workerNames.sandbox,
   workerNames.secret,
   workerNames.stream,
   workerNames.worker,
@@ -332,14 +410,6 @@ function withoutBindingsToMissingScripts<B extends Bindings>(owner: string, bind
 const LOCAL_AUX_WORKERS_MANIFEST = ".alchemy/local/aux-workers.json";
 const localAuxWorkerConfigPaths: string[] = [];
 
-// Alchemy's default compatibility date floats with its own miniflare, which
-// can be NEWER than the runtime @cloudflare/vite-plugin executes locally (it
-// pins an older miniflare). When they skew, `pnpm dev` dies with "This Worker
-// requires compatibility date X, but the newest date supported by this server
-// binary is Y" on the next config regeneration. Local dev pins to the newest
-// date the local runtime supports; deploys keep the floating default.
-const localCompatibilityDate = ctx.app.local ? "2026-05-01" : undefined;
-
 /** A small non-app OS worker: esbuild-bundled, no routes, no workers.dev URL,
  * standard observability, APP_CONFIG injected. */
 async function osWorker<B extends Bindings>(
@@ -358,7 +428,6 @@ async function osWorker<B extends Bindings>(
     adopt: true,
     entrypoint: props.entrypoint,
     bundle: { minify: true },
-    compatibilityDate: localCompatibilityDate,
     compatibilityFlags: props.compatibilityFlags,
     eventSources,
     bindings: {
@@ -366,6 +435,10 @@ async function osWorker<B extends Bindings>(
       APP_CONFIG: ctx.app.local
         ? JSON.stringify(ctx.rawRuntimeConfig, null, 2)
         : alchemy.secret(JSON.stringify(ctx.rawRuntimeConfig, null, 2)),
+      // The worker's own name, for worker-loader cache keys (src/env.ts
+      // WORKER_SELF): local dev runs every itx worker inside one workerd whose
+      // loader cache is shared, so keys must be parent-worker-unique.
+      WORKER_SELF: name,
     },
     observability: ITERATE_WORKER_OBSERVABILITY,
     url: false,
@@ -395,6 +468,7 @@ const itxBindings = {
   PROJECT: project,
   PROJECT_DIRECTORY: projectDirectory,
   REPO: repo,
+  SANDBOX: sandbox,
   SECRET: secret,
   SECRET_ENCRYPTION_KEY: alchemy.secret(
     process.env.SECRET_ENCRYPTION_KEY ?? "os-dev-secret-encryption-key",
@@ -409,11 +483,15 @@ const itxBindings = {
 // routes instead of going to origin — same reason as the app worker.
 const engineCompatibilityFlags = ["nodejs_compat", "global_fetch_strictly_public"];
 
-function engineWorker(id: keyof typeof workerNames, entrypoint: string) {
+function engineWorker(
+  id: keyof typeof workerNames,
+  entrypoint: string,
+  bindingOverrides?: Bindings,
+) {
   return osWorker(id, {
     entrypoint,
     compatibilityFlags: engineCompatibilityFlags,
-    bindings: itxBindings,
+    bindings: { ...itxBindings, ...bindingOverrides },
   });
 }
 
@@ -428,6 +506,7 @@ const [
   projectWorker,
   agentWorker,
   repoWorker,
+  sandboxWorker,
   secretWorker,
   workerWorker,
   apiWorker,
@@ -437,6 +516,9 @@ const [
   engineWorker("project", "./src/workers/project.ts"),
   engineWorker("agent", "./src/workers/agent.ts"),
   engineWorker("repo", "./src/workers/repo.ts"),
+  // The owner binds the container-backed namespace (image + container app +
+  // migration); every other itx worker keeps the plain cross-script binding.
+  engineWorker("sandbox", "./src/workers/sandbox.ts", { SANDBOX: sandboxContainer }),
   engineWorker("secret", "./src/workers/secret.ts"),
   engineWorker("worker", "./src/workers/worker.ts"),
   engineWorker("api", "./src/workers/api.ts"),
@@ -470,7 +552,6 @@ const appWorker = await IterateAppWorker(ctx, {
   // `${ctx.workerName}` itself is the ingress router (it owns the routes);
   // the dashboard app deploys under its own name.
   name: workerNames.app,
-  compatibilityDate: localCompatibilityDate,
   main: "./src/workers/app.ts",
   bindings: {
     ITX_API: apiWorker,
@@ -500,22 +581,6 @@ const ingressWorker = await osWorker("ingress", {
   },
 });
 
-const baseUrlHostname = ctx.runtimeConfig.baseUrl
-  ? new URL(ctx.runtimeConfig.baseUrl).hostname
-  : undefined;
-await IterateRoutes(ctx, {
-  worker: ingressWorker,
-  hostnames: [
-    ...new Set(
-      [
-        ...(baseUrlHostname ? [baseUrlHostname] : []),
-        ...(mcpRouteHostname ? [mcpRouteHostname] : []),
-        ...projectHostnameBases.flatMap(projectRouteHostnamesForBase),
-      ].filter((hostname) => !hostname.endsWith(".workers.dev")),
-    ),
-  ],
-});
-
 /** Per-worker Env types for src/lib/worker-env.d.ts. */
 export const workers = {
   agent: agentWorker,
@@ -525,6 +590,7 @@ export const workers = {
   itx: itxWorker,
   project: projectWorker,
   repo: repoWorker,
+  sandbox: sandboxWorker,
   secret: secretWorker,
   stream: streamWorker,
   worker: workerWorker,
@@ -532,7 +598,40 @@ export const workers = {
 
 await ctx.app.finalize();
 
+// Routes + DNS are ensured AFTER finalize: they are not alchemy resources
+// (deploys and destroys never delete them — see iterate-app.ts), and running
+// the ensure earlier would let finalize's orphan cleanup delete a route the
+// ensure just verified.
+await IterateRoutes(ctx, {
+  worker: ingressWorker,
+  hostnames: osRouteHostnames(ctx.runtimeConfig),
+});
+
 if (!ctx.app.local) process.exit(0);
+
+/**
+ * Every hostname routed to the os ingress worker for a given config: the app
+ * base URL, the MCP host, and the project-host patterns. Shared between the
+ * deploy path (ctx.runtimeConfig) and `--park` (config parsed straight from
+ * env, no alchemy app).
+ */
+function osRouteHostnames(config: {
+  baseUrl?: string;
+  mcp?: { baseUrl?: string };
+  projectHostnameBases?: string[];
+}) {
+  const baseUrlHostname = config.baseUrl ? new URL(config.baseUrl).hostname : undefined;
+  const configMcpHostname = routeHostnameForUrl(config.mcp?.baseUrl);
+  return [
+    ...new Set(
+      [
+        ...(baseUrlHostname ? [baseUrlHostname] : []),
+        ...(configMcpHostname ? [configMcpHostname] : []),
+        ...(config.projectHostnameBases ?? []).flatMap(projectRouteHostnamesForBase),
+      ].filter((hostname) => !hostname.endsWith(".workers.dev")),
+    ),
+  ];
+}
 
 /**
  * Convert OS project-host bases into Cloudflare route host patterns.
