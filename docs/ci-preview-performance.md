@@ -50,13 +50,18 @@ seconds and run alongside OS.
   suites run concurrently too (`scripts/preview/preview.ts`).
 - **Playwright runs 6 workers, `fullyParallel`, in CI** (`playwright.config.ts`)
   — every spec creates its own fixture project.
-- **The slot is warmed before the burst.** A cold deployment answers its first
-  requests only after loading each worker; ~40 concurrent WebSocket handshakes
-  against zero warm isolates returned edge 499/522s. The test command curls
-  each worker (health, app, itx, auth) before starting the lanes, and the
-  WebSocket handshake timeout is 30s (`apps/os/src/itx-client.ts`).
-- **The chromium install overlaps the warmup.** `playwright install chromium`
-  hits no slot, so it runs in the background while the slot warms and the
+- **One sequential create-saga smoke runs before the burst.** The first real
+  project create pays the genuine cold-start costs (cold DO chain, repo seed,
+  worker probe) once, sequentially, instead of surfacing as rotating timeout
+  flakes across the concurrent suites — and fails loudly if the slot is
+  broken. The curl-round HTTP warmups that used to accompany it existed to
+  absorb post-deploy edge 499/522s; those were zombie worker routes (routes
+  visible in the API but dead at the edge), which deploys now verify and heal
+  directly (`ensureWorkerRoutesAndDns` in
+  `packages/shared/src/alchemy/iterate-app.ts`) and slot teardowns keep parked
+  (`parkWorkerRoutes`), so the curls are gone.
+- **The chromium install overlaps the smoke.** `playwright install chromium`
+  hits no slot, so it runs in the background while the smoke runs and the
   vitest lanes start, instead of blocking the specs.
 - **GitHub API calls retry transient 5xx.** The preview script fetches PR
   context from GitHub's REST API at the start of each step; that API
@@ -91,8 +96,9 @@ creep visible. If you see one:
   you must add coverage, fold it into an existing concurrent lane.
 - **Never serialize what can self-provision.** The apps' suites and the vitest
   lanes run concurrently on purpose; keep it that way.
-- **Keep the warmup.** Removing it brings back the cold-start stampede
-  (edge 499/522s), which fails or retries and makes runs _slower_, not faster.
+- **Keep the create-saga smoke.** Removing it brings back the rotating
+  "saw 0 events" cold-start flakes across the concurrent suites, which fail or
+  retry and make runs _slower_, not faster.
 - **Mind slot load, not just runner load.** More Playwright workers or higher
   `maxConcurrency` increases concurrent pressure on the _deployed slot_, which
   is where the known stream-delivery race lives

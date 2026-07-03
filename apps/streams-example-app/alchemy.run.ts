@@ -1,6 +1,10 @@
 import { DurableObjectNamespace } from "alchemy/cloudflare";
 import { initAlchemy } from "@iterate-com/shared/alchemy/init";
-import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
+import {
+  IterateAppWorker,
+  IterateRoutes,
+  deriveWorkerRouteHosts,
+} from "@iterate-com/shared/alchemy/iterate-app";
 import { AppConfig } from "./src/config.ts";
 import type { StreamDurableObject } from "~/domains/streams/stream-durable-object.ts";
 
@@ -19,15 +23,24 @@ const stream = DurableObjectNamespace<StreamDurableObject>("stream", {
   sqlite: true,
 });
 
-const worker = await IterateApp(ctx, {
+const worker = await IterateAppWorker(ctx, {
   main: "./src/worker.ts",
   bindings: {
     STREAM: stream,
   },
 });
 
+console.dir({ url: ctx.runtimeConfig.baseUrl ?? worker.url, workersDevUrl: worker.url });
+
 export { worker };
 
 await ctx.app.finalize();
+
+// Routes are ensured after finalize — they are not alchemy resources (see
+// iterate-app.ts for the lifecycle rationale).
+await IterateRoutes(ctx, {
+  worker,
+  hostnames: deriveWorkerRouteHosts(ctx.runtimeConfig.baseUrl),
+});
 
 if (!ctx.app.local) process.exit(0);
