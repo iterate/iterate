@@ -38,8 +38,15 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
    * drops it) — the `@cloudflare/sandbox` SDK pushes its name in through
    * `getSandbox()` for the same reason. The sandbox collection awaits this
    * before handing out the stub, and the value is durable, so the identity is
-   * always in place by the time a container start needs it. When the runtime
-   * DOES provide the name, the pushed identity must agree with it.
+   * always in place by the time a container start needs it.
+   *
+   * Identity is WRITE-ONCE. The stub `get()` returns is the bare Durable
+   * Object surface, so this method is callable by anyone holding a sandbox —
+   * if it re-wrote storage, a caller could point an already-named sandbox at
+   * a different project and the next repo clone would embed THAT project's
+   * write token. The first write comes from the collection, which derived the
+   * identity from the caller's authority; everything after must match it (and
+   * must match `ctx.id.name` whenever the runtime provides it).
    */
   async ensureIdentity(identity: SandboxIdentity): Promise<void> {
     const path = normalizeCloudflareSandboxPath(identity.path);
@@ -51,6 +58,15 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
       throw new Error(
         `sandbox identity mismatch: durable object is named "${this.ctx.id.name}", got "${expectedName}"`,
       );
+    }
+    const stored = this.ctx.storage.kv.get<SandboxIdentity>(IDENTITY_STORAGE_KEY);
+    if (stored !== undefined) {
+      if (stored.projectId !== identity.projectId || stored.path !== path) {
+        throw new Error(
+          `sandbox identity mismatch: this sandbox is "${stored.projectId}:${stored.path}", got "${identity.projectId}:${path}"`,
+        );
+      }
+      return;
     }
     this.ctx.storage.kv.put(IDENTITY_STORAGE_KEY, { path, projectId: identity.projectId });
   }
@@ -98,7 +114,14 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
    * this usually returns fast; await it before work that depends on the repo.
    */
   async ensureProjectRepo(): Promise<void> {
-    await this.#ensureRepoClone();
+    // A container restart mid-await resets `#repoClone` (fresh filesystem),
+    // so a clone that completed against the PREVIOUS container must not
+    // satisfy this call — loop until the run we awaited is still current.
+    while (true) {
+      const run = this.#ensureRepoClone();
+      await run;
+      if (this.#repoClone === run) return;
+    }
   }
 
   #ensureRepoClone(): Promise<void> {
