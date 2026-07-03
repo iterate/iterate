@@ -456,6 +456,20 @@ describe("itx", () => {
           expect.objectContaining({ path: secretPath }),
         ]),
       );
+      await waitForCondition(
+        async () => {
+          const state = (await project.processor.snapshot()).state;
+          const streamPaths = new Set(state.streams.map((item) => item.path));
+          const repoPaths = new Set(state.repos.map((item) => item.path));
+          return (
+            streamPaths.has(agentPath) &&
+            streamPaths.has(repoPath) &&
+            streamPaths.has(secretPath) &&
+            repoPaths.has(repoPath)
+          );
+        },
+        { description: "project processor to fold agent, repo, and secret stream lists" },
+      );
       const projectState = (await project.processor.snapshot()).state;
       expect(projectState.streams).toEqual(
         expect.arrayContaining([
