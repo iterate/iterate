@@ -95,18 +95,7 @@ export class PiProcessor extends StreamProcessor<
         // Only act when the fold accepted the request as current (a replayed
         // or superseded request event reduces to a no-op).
         if (state.run.phase !== "streaming" || state.run.llmRequestId !== event.offset) return;
-        if (this.#inFlightLlmRequests.has(event.offset)) return;
-        const controller = new AbortController();
-        this.#inFlightLlmRequests.set(event.offset, controller);
-        const request = this.#requestWithTools(buildPiLlmRequest(state));
-        runInBackground(() =>
-          this.#executeLlmRequest({
-            append,
-            llmRequestId: event.offset,
-            request,
-            signal: controller.signal,
-          }),
-        );
+        this.#startLlmRequest({ append, llmRequestId: event.offset, runInBackground, state });
         return;
       }
       case "events.iterate.com/pi/assistant-message-added": {
@@ -135,11 +124,7 @@ export class PiProcessor extends StreamProcessor<
       }
       case "events.iterate.com/pi/compaction-requested": {
         if (state.compaction?.requestedOffset !== event.offset) return;
-        if (this.#inFlightCompactions.has(event.offset)) return;
-        this.#inFlightCompactions.add(event.offset);
-        runInBackground(() =>
-          this.#executeCompaction({ append, requestedOffset: event.offset, state }),
-        );
+        this.#startCompaction({ append, requestedOffset: event.offset, runInBackground, state });
         return;
       }
       default:
@@ -168,28 +153,27 @@ export class PiProcessor extends StreamProcessor<
     StreamProcessor<typeof PiProcessorContract>["processEventBatch"]
   >[0]): Promise<void> {
     if (state.compaction !== null) {
-      if (!this.#inFlightCompactions.has(state.compaction.requestedOffset)) {
-        // Restart recovery: the summarize call died with the old instance.
-        this.#inFlightCompactions.add(state.compaction.requestedOffset);
-        const { requestedOffset } = state.compaction;
-        runInBackground(() => this.#executeCompaction({ append, requestedOffset, state }));
-      }
+      // Restart recovery: the summarize call died with the old instance.
+      // (#startCompaction no-ops when it is still in flight here.)
+      this.#startCompaction({
+        append,
+        requestedOffset: state.compaction.requestedOffset,
+        runInBackground,
+        state,
+      });
       return;
     }
 
     if (state.run.phase === "streaming") {
-      if (!this.#inFlightLlmRequests.has(state.run.llmRequestId)) {
-        // Restart recovery: re-issue the request. The assistant-message append
-        // is keyed on the llmRequestId, so a lost race with a still-live twin
-        // instance dedups to one recorded message.
-        const llmRequestId = state.run.llmRequestId;
-        const controller = new AbortController();
-        this.#inFlightLlmRequests.set(llmRequestId, controller);
-        const request = this.#requestWithTools(buildPiLlmRequest(state));
-        runInBackground(() =>
-          this.#executeLlmRequest({ append, llmRequestId, request, signal: controller.signal }),
-        );
-      }
+      // Restart recovery: re-issue a request the old instance died holding.
+      // The assistant-message append is keyed on the llmRequestId, so a lost
+      // race with a still-live twin instance dedups to one recorded message.
+      this.#startLlmRequest({
+        append,
+        llmRequestId: state.run.llmRequestId,
+        runInBackground,
+        state,
+      });
       return;
     }
 
@@ -251,6 +235,45 @@ export class PiProcessor extends StreamProcessor<
         payload: { generation: state.generation },
       });
     }
+  }
+
+  /** Register the request as in flight and run it in the background; no-op if already running here. */
+  #startLlmRequest(input: {
+    append: PiAppend;
+    llmRequestId: number;
+    runInBackground: (work: () => Promise<unknown>) => void;
+    state: PiState;
+  }): void {
+    if (this.#inFlightLlmRequests.has(input.llmRequestId)) return;
+    const controller = new AbortController();
+    this.#inFlightLlmRequests.set(input.llmRequestId, controller);
+    const request = this.#requestWithTools(buildPiLlmRequest(input.state));
+    input.runInBackground(() =>
+      this.#executeLlmRequest({
+        append: input.append,
+        llmRequestId: input.llmRequestId,
+        request,
+        signal: controller.signal,
+      }),
+    );
+  }
+
+  /** Register the compaction as in flight and run it in the background; no-op if already running here. */
+  #startCompaction(input: {
+    append: PiAppend;
+    requestedOffset: number;
+    runInBackground: (work: () => Promise<unknown>) => void;
+    state: PiState;
+  }): void {
+    if (this.#inFlightCompactions.has(input.requestedOffset)) return;
+    this.#inFlightCompactions.add(input.requestedOffset);
+    input.runInBackground(() =>
+      this.#executeCompaction({
+        append: input.append,
+        requestedOffset: input.requestedOffset,
+        state: input.state,
+      }),
+    );
   }
 
   #requestWithTools(request: Omit<PiLlmRequest, "tools">): PiLlmRequest {
@@ -394,10 +417,12 @@ export class PiProcessor extends StreamProcessor<
       } else {
         try {
           const message = await this.deps.llm.complete(
-            this.#requestWithTools(buildSummarizationRequest({ plan, state })),
+            { ...buildSummarizationRequest({ plan, state }), tools: [] },
             { signal: new AbortController().signal },
           );
-          const summary = assistantText(message);
+          const summary = message.content
+            .map((block) => (block.type === "text" ? block.text : ""))
+            .join("");
           result =
             message.stopReason === "stop" || message.stopReason === "length"
               ? {
@@ -477,10 +502,14 @@ function reducePiEvent(input: { event: PiConsumedEvent; state: PiState }): PiSta
       // pi's abort: clear both queues, drop any pending trigger, end the run.
       // The in-flight request's partial output still lands in history when its
       // assistant-message-added arrives (as a stale, history-only event).
+      // The generation bumps unconditionally so that an llm-request-requested
+      // event already appended but not yet delivered when the abort landed
+      // (settle races user appends) reduces to a stale no-op instead of
+      // starting a model call the user just cancelled.
       return {
         ...state,
         followUpQueue: [],
-        generation: state.run.phase === "idle" ? state.generation : state.generation + 1,
+        generation: state.generation + 1,
         pendingTrigger: false,
         run: { phase: "idle" },
         steeringQueue: [],
@@ -958,10 +987,6 @@ function needsOverflowRecovery(state: PiState): boolean {
     );
   }
   return false;
-}
-
-function assistantText(message: PiAssistantMessage): string {
-  return message.content.map((block) => (block.type === "text" ? block.text : "")).join("");
 }
 
 function stringifyError(error: unknown): string {

@@ -369,6 +369,26 @@ describe("pi processor: interruption", () => {
     ]);
   });
 
+  it("ignores a request event that raced past an abort (abort bumps the generation)", async () => {
+    // Stream order: the prompt, then the abort, then a request event that was
+    // appended (keyed on generation 0) before the abort landed. The fold must
+    // treat the request as stale — no model call for a cancelled prompt.
+    const { stream, llm, processor, run, eventsOfType } = setup();
+    await stream.append(
+      { type: USER_MESSAGE, payload: { text: "hi" } },
+      { type: "events.iterate.com/pi/abort-requested", payload: {} },
+      { type: LLM_REQUESTED, payload: { generation: 0 } },
+    );
+    await run(() => processor.state.generation === 1);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await run(() => true);
+
+    expect(processor.state.run.phase).toBe("idle");
+    expect(processor.state.pendingTrigger).toBe(false);
+    expect(llm.requests).toHaveLength(0);
+    expect(eventsOfType(ASSISTANT_ADDED)).toHaveLength(0);
+  });
+
   it("abort during tools stops unexecuted calls; the next request synthesizes their missing results", async () => {
     const blocker: PiToolDep = {
       description: "Runs until aborted.",
