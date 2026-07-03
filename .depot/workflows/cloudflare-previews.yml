@@ -1,0 +1,154 @@
+# The whole preview lifecycle — deploy + e2e on open/reopen/synchronize, and
+# cleanup on close — lives here on Depot CI. Depot CI picks up jobs in ~7s
+# where GitHub Actions runner assignment took 20s-3m39s (measured 2026-07-02,
+# once ~40min during a webhook incident).
+#
+# Deploy and cleanup share one workflow so the concurrency groups coordinate
+# them: closing a PR mid-deploy cancels the in-flight deploy run
+# (cancel-in-progress at the workflow level) and then runs cleanup — the two
+# never race the same preview slot. (When deploy ran on Depot and cleanup on
+# GitHub, a close during a run tore down the slot under the deploy.)
+#
+# Depot registers automatic triggers when this file is on the default branch —
+# branch-only changes to the `on:` block do not take effect until merged. Test
+# a branch with:
+#   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
+#     --workflow cloudflare-previews.yml --ref <branch> \
+#     --input pull-request-number=<pr>
+#
+# Secrets (depot ci secrets --org 0p91s0lz49): DOPPLER_TOKEN,
+# ITERATE_BOT_GITHUB_TOKEN.
+#
+# Keep the `paths` list below in sync with `cloudflarePreviewSharedPaths` +
+# `cloudflarePreviewAdditionalTriggerPaths` + each app's `paths` in
+# scripts/preview/preview.ts (asserted in scripts/preview/preview.test.ts).
+
+name: Cloudflare Previews (Depot CI)
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - closed
+    paths:
+      - .depot/workflows/cloudflare-previews.yml
+      - packages/shared/**
+      - packages/ui/**
+      - packages/mock-http-proxy/**
+      - scripts/preview/**
+      - apps/iterate-com/**
+      - apps/auth-example/**
+      - apps/os/**
+      - apps/auth/**
+      - apps/auth-contract/**
+      - apps/os/src/domains/streams/**
+      - apps/semaphore/**
+      - apps/streams-example-app/**
+  workflow_dispatch:
+    inputs:
+      pull-request-number:
+        description: PR number to deploy + test
+        required: true
+
+concurrency:
+  group: cloudflare-previews-${{ github.event.pull_request.number || inputs.pull-request-number }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    if: github.event.action != 'closed'
+    name: Preview / deploy + e2e
+    # 8-core: the job is network-bound (waiting on deployed slots), not
+    # CPU-bound. Depot metrics on a full run showed peak CPU ~30% and peak
+    # memory ~10% of a 16-core box, so 8 cores keeps peak ~60% with headroom
+    # while halving the per-second cost. Re-check with
+    # `depot ci metrics --run <id>` before changing.
+    runs-on: depot-ubuntu-24.04-8
+    concurrency:
+      group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number || inputs.pull-request-number }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
+      - name: Install Doppler CLI
+        run: |-
+          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
+          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
+      - name: Preview / deploy
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
+          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |-
+          set -euo pipefail
+          doppler run --project _shared --config prd -- pnpm preview deploy \
+            --github-token "$GITHUB_TOKEN" \
+            --pull-request-number "${{ github.event.pull_request.number || inputs.pull-request-number }}"
+      - name: Preview / e2e
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
+          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |-
+          set -euo pipefail
+          doppler run --project _shared --config prd -- pnpm preview test \
+            --github-token "$GITHUB_TOKEN" \
+            --pull-request-number "${{ github.event.pull_request.number || inputs.pull-request-number }}"
+      - name: Upload OS preview test artifacts
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-os-test-artifacts
+          path: |-
+            test-results
+            apps/os/test-results
+            /tmp/os-e2e-*
+          if-no-files-found: ignore
+  cleanup:
+    if: github.event.action == 'closed'
+    name: Preview / cleanup
+    runs-on: depot-ubuntu-24.04
+    concurrency:
+      group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
+      - name: Install Doppler CLI
+        run: |-
+          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
+          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
+      - name: Preview / cleanup
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
+        run: |-
+          set -euo pipefail
+          doppler run --project _shared --config prd -- pnpm preview cleanup \
+            --github-token "$GITHUB_TOKEN" \
+            --pull-request-number "${{ github.event.pull_request.number }}"

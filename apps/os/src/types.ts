@@ -58,8 +58,39 @@ export interface Session {
 export interface ProjectCollection {
   get(projectId: string): Promise<Itx>;
   create(args: { organizationSlug?: string; projectId?: string; slug: string }): Promise<Itx>;
-  list(): string[];
+  /**
+   * The session's projects, enriched engine-side. Scope is explicit:
+   * - "mine" (default for user principals): the caller's own claims (plus
+   *   anything the live context was widened to after a create) — even when
+   *   the socket also carries admin credentials.
+   * - "deployment": every deployment-known project from the project
+   *   directory; requires an admin principal (admin secret/cookie or an
+   *   admin-role user). Default for non-user admin principals, which have
+   *   no claims of their own.
+   * Each entry carries the project's {@link ProjectDeploymentStatus} so
+   * callers never probe per project.
+   */
+  list(input?: { scope?: "mine" | "deployment" }): Promise<ProjectListEntry[]>;
 }
+
+/**
+ * Whether a project the directory knows about actually exists in THIS
+ * deployment's engine:
+ * - `ready` — the project stream's bootstrap saga ran (`state.created`).
+ * - `missing` — the engine has no state for it (e.g. the deployment was reset
+ *   while the auth worker kept its rows); it can be set up again.
+ * - `unknown` — the probe failed (engine hiccup); don't block the list on it.
+ */
+export type ProjectDeploymentStatus = "ready" | "missing" | "unknown";
+
+/** One entry of {@link ProjectCollection.list}. */
+export type ProjectListEntry = {
+  id: string;
+  slug: string;
+  organizationId: string | null;
+  organizationName: string | null;
+  deploymentStatus: ProjectDeploymentStatus;
+};
 
 /**
  * An **itx**: a capability context scoped into one project at one path.
@@ -83,8 +114,12 @@ export interface ProjectCollection {
 export interface Itx extends ItxCapabilityHost {
   ai: Ai;
   agents: AgentCollection;
+  /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */
+  debug(): Promise<string>;
   describe(): Promise<ProjectDescription>;
   egress: ProjectEgress;
+  /** Read-only catalogue of known-good itx script snippets (`list()`, `get({ id })`). */
+  examples: ItxExampleCatalog;
   /** Gmail REST proxy for the project's connected Google account. */
   gmail: GmailCapability;
   /** Slack/Google connection status, OAuth start/complete, disconnect. */
@@ -94,6 +129,8 @@ export interface Itx extends ItxCapabilityHost {
   processor: StreamProcessorRpc<ProjectProcessorState>;
   repo: Repo;
   repos: ProjectRepoCollection;
+  /** Path-addressed sandboxes (`itx.sandboxes.get("/sandboxes/cloudflare/whatever")`). */
+  sandboxes: SandboxCollection;
   secrets: SecretCollection;
   /** Slack Web API proxy for the project's connected workspace (itx.slack.chat.postMessage(...)). */
   slack: SlackCapability;
@@ -214,7 +251,19 @@ export interface Agent extends ItxCapabilityHost {
   processor: StreamProcessorRpc<AgentProcessorState>;
   stream: Stream;
   sendMessage(message: string): Promise<StreamEvent>;
-  ask(input: { message: string }): Promise<StreamEvent>;
+  /**
+   * Send-and-wait convenience: appends a user message and resolves with the
+   * agent's next chat reply on this stream. Replies are matched by order, not
+   * correlated per request — concurrent asks on one agent stream interleave
+   * exactly like two people typing into the same chat.
+   */
+  ask(input: {
+    message: string;
+    /** Where the message came from. Defaults to "web". */
+    origin?: "web" | "mcp";
+    /** How long to wait for the reply. Defaults to 45s. */
+    timeoutMs?: number;
+  }): Promise<StreamEvent>;
   whoami(): string;
 }
 
@@ -263,6 +312,13 @@ export interface Stream {
   }>;
   subscribe(input: {
     subscriptionKey?: string;
+    /**
+     * Open the durable configured subscription registered under
+     * `subscriptionKey` (the wake-handshake response) instead of an ephemeral
+     * one. Requires trusted-internal auth and an existing
+     * subscription-configured fact for the key.
+     */
+    configured?: boolean;
     processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
     eventTypes?: readonly string[];
@@ -297,6 +353,33 @@ export interface Repo {
   } | null>;
   whoami(): Promise<string>;
 }
+
+/**
+ * Catalog of sandboxes within one project.
+ *
+ * A sandbox is addressed by its FULL path, which always starts with
+ * `/sandboxes/` and may nest arbitrarily (`/sandboxes/cloudflare/bla/bla`).
+ * The provider is the segment after the prefix — today only
+ * `/sandboxes/cloudflare/...` exists; a future provider is a new prefix, not
+ * a new API. Getting a sandbox is cheap and does not start a container; the
+ * first command does.
+ */
+export interface SandboxCollection {
+  get(path: string): Promise<CloudflareSandbox>;
+}
+
+/**
+ * One Cloudflare Sandbox: the bare `@cloudflare/sandbox` Durable Object stub,
+ * nothing wrapped on top. Whatever the installed SDK exposes is callable —
+ * `exec(command)`, `readFile`/`writeFile`/`listFiles`, `startProcess`,
+ * `gitCheckout`, `exposePort`, `destroy()`, … — so this contract deliberately
+ * does not re-declare that surface (same stance as {@link McpClientRpc}); see
+ * https://developers.cloudflare.com/sandbox/ for the API. One addition: every
+ * container start kicks off a clone of the project's repo to
+ * `/workspace/repo` — `await sandbox.ensureProjectRepo()` before work that
+ * depends on it.
+ */
+export type CloudflareSandbox = object;
 
 /** Secret catalog within one project. */
 export interface SecretCollection {
@@ -455,6 +538,13 @@ export type OpenApiRpc = object;
 
 export interface McpClientCollection {
   connect(input: McpClientConnectInput): Promise<McpClientRpc>;
+  /**
+   * The public Exa MCP server (https://mcp.exa.ai/mcp), pre-connected for every
+   * project: web search and page reading as flat tool calls.
+   * `itx.mcp.exa.web_search_exa({ query, numResults })` searches the web;
+   * `itx.mcp.exa.web_fetch_exa({ urls, maxCharacters })` reads pages as markdown.
+   */
+  exa: McpClientRpc;
 }
 
 export type McpClientConnectInput = {
@@ -464,6 +554,28 @@ export type McpClientConnectInput = {
 };
 
 export type McpClientRpc = object;
+
+/**
+ * Read-only catalogue of known-good itx script snippets — the project-context
+ * entries of the REPL "Examples" panel. `list()` returns every entry without
+ * its code; `get({ id })` returns one entry with the full script body. Agents
+ * copy working patterns from here instead of guessing at the surface.
+ * Session-level examples (whoami, projects.list) are excluded: they run
+ * against the OS Session `authenticate()` returns, which an itx holder does
+ * not have.
+ */
+export interface ItxExampleCatalog {
+  get(input: { id: string }): Promise<ItxExampleWithCode>;
+  list(): Promise<ItxExampleSummary[]>;
+}
+
+export type ItxExampleSummary = {
+  description: string;
+  id: string;
+  title: string;
+};
+
+export type ItxExampleWithCode = ItxExampleSummary & { code: string };
 
 /**
  * Shared host operations for objects that can own dynamic ITX capabilities.

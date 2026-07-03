@@ -1,7 +1,7 @@
 /**
- * Default `pnpm test` checks local sqlfu assets only.
- * Full runtime checks require Cloudflare local/prod env: `pnpm test:smoke`
- * (`RUNTIME_SMOKE_FULL=1`).
+ * Runtime smoke: boots the OS dev server (and a real `pnpm run deploy`) and
+ * probes SSR, `/api/health`, and itx admin auth. Skipped by default and in
+ * CI — run `pnpm test:smoke` (`RUNTIME_SMOKE_FULL=1`) locally.
  */
 import { spawn } from "node:child_process";
 import { dirname } from "node:path";

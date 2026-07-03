@@ -19,7 +19,9 @@ test("can sign up with an email one-time passcode", async ({ page }) => {
 
   // Back on OS, signed in: a fresh user has no projects yet. The /projects
   // pending state renders its data-spinner section twice during the redirect,
-  // which trips spinner-waiter's strict-mode isVisible — sit it out.
+  // which trips spinner-waiter's strict-mode isVisible — sit it out. The
+  // cold-slot OAuth-callback straggle traced back to zombie worker routes,
+  // which the deploy now verifies + heals (tasks/os-cold-create-latency.md).
   await spinnerWaiter.settings.run({ disabled: true }, () =>
     page.getByText("No projects yet").waitFor({ timeout: 30_000 }),
   );

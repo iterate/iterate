@@ -4,31 +4,24 @@ import { requireOrganizationMemberForSession } from "../lib/auth.ts";
 import { AppSidebar } from "~/components/app-sidebar.tsx";
 import { GlobalCommandPalette } from "~/components/global-command-palette.tsx";
 import { PathBreadcrumbs } from "~/components/path-breadcrumbs.tsx";
-import {
-  listMyProjectsServerFn,
-  myProjectsListInput,
-  myProjectsQueryKey,
-  myProjectsStaleTime,
-} from "~/lib/project-server-fns.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import type { AppRouteStaticData } from "~/lib/route-breadcrumbs.ts";
 import { getSidebarDefaultOpen } from "~/lib/sidebar-state.ts";
 
 export const Route = createFileRoute("/_app")({
   beforeLoad: ({ context, location }) =>
-    requireOrganizationMemberForSession(context.authSession, location, context.iterateAuthIssuer),
-  loader: async ({ context }) => {
-    await context.queryClient.ensureQueryData({
-      queryKey: myProjectsQueryKey,
-      queryFn: () => listMyProjectsServerFn({ data: myProjectsListInput }),
-      staleTime: myProjectsStaleTime,
-    });
-
-    return {
-      routeConfig: await getPublicRouteConfig(),
-      sidebarDefaultOpen: (await getSidebarDefaultOpen()).defaultOpen,
-    };
-  },
+    requireOrganizationMemberForSession(
+      context.authSession,
+      location,
+      context.iterateAuthIssuer,
+      context.authError,
+    ),
+  // The project list is NOT pre-warmed here: it comes from the itx session
+  // (browser-only), so the sidebar populates it after hydration.
+  loader: async () => ({
+    routeConfig: await getPublicRouteConfig(),
+    sidebarDefaultOpen: (await getSidebarDefaultOpen()).defaultOpen,
+  }),
   component: AppLayout,
 });
 

@@ -21,14 +21,14 @@ import { cn } from "@iterate-com/ui/lib/utils";
 
 export type AgentComposerMode = "message" | "raw" | "examples";
 
-export type AgentComposerMessageConfig = {
+type AgentComposerMessageConfig = {
   value: string;
   onValueChange: (value: string) => void;
   onSubmit: () => Promise<void> | void;
   placeholder?: string;
 };
 
-export type AgentComposerRawConfig = {
+type AgentComposerRawConfig = {
   value: string;
   onValueChange: (value: string) => void;
   onSubmit: () => Promise<void> | void;
@@ -167,6 +167,7 @@ export function AgentPillComposer({
               }
             }}
             rows={1}
+            aria-label={message?.placeholder ?? "Message this stream"}
             placeholder={message?.placeholder ?? "Message this stream"}
             className="field-sizing-content max-h-32 min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-base leading-snug outline-none"
           />

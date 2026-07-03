@@ -9,7 +9,7 @@ const JSONWebKeySet = z.object({
 const SlackScope = z.string().trim().min(1);
 const GoogleScope = z.string().trim().min(1);
 
-export const DEFAULT_SLACK_BOT_SCOPES = [
+const DEFAULT_SLACK_BOT_SCOPES = [
   "channels:history",
   "channels:join",
   "channels:manage",
@@ -34,7 +34,7 @@ export const DEFAULT_SLACK_BOT_SCOPES = [
   "conversations.connect:write",
 ];
 
-export const DEFAULT_GOOGLE_OAUTH_SCOPES = [
+const DEFAULT_GOOGLE_OAUTH_SCOPES = [
   "openid",
   "https://www.googleapis.com/auth/userinfo.email",
   "https://www.googleapis.com/auth/userinfo.profile",
@@ -92,6 +92,7 @@ export const AppConfig = z.object({
           oauthClientId: publicValue(z.string().trim().min(1)),
           oauthClientSecret: redacted(z.string().trim().min(1)),
           webhookSigningSecret: redacted(z.string().trim().min(1)),
+          botToken: redacted(z.string().trim().min(1)).optional(),
           scopes: publicValue(z.array(SlackScope).default(DEFAULT_SLACK_BOT_SCOPES)),
         })
         .optional(),
@@ -104,8 +105,8 @@ export const AppConfig = z.object({
         .optional(),
     })
     .default({}),
-  /** Deployment-wide Slack bot token fallback used when a project has no
-   * connected Slack workspace secret (codemode Slack examples, dev smokes). */
+  /** Legacy deployment-wide Slack bot token fallback. New configs should set
+   * `integrations.slack.botToken` so each Slack app owns its own token. */
   slackBotToken: redacted(z.string().trim().min(1)).optional(),
   typeIdPrefix: z
     .string()

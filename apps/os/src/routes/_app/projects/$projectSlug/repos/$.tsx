@@ -53,7 +53,7 @@ function ProjectRepoDetailContent() {
   const itx = useItx();
   const queryClient = useQueryClient();
   const repoKey = ["repo", project.slug, repoPath];
-  // TODO(itx-v4 cutover): the old repo surface (readTree/readFile/git log,
+  // TODO: the old repo surface (readTree/readFile/git log,
   // clone token + command blocks) has no itx equivalent yet. The page
   // shows the repo processor's reduced state plus whoami, and offers a minimal
   // "commit file" form via `repo.commitFiles`.

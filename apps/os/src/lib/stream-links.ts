@@ -35,11 +35,6 @@ export function streamPathFromSplat(value: string | undefined) {
   return StreamPath.parse(normalized ? `/${normalized}` : "/");
 }
 
-export function streamPathFromInput(value: string) {
-  const normalized = value.trim().replace(/^\/+/, "");
-  return StreamPath.parse(normalized ? `/${normalized}` : "/");
-}
-
 export function streamPathChild(input: { parent: StreamPath; childSegment: string }) {
   const segment = normalizeStreamSegment(input.childSegment);
   const parent = input.parent === "/" ? "" : input.parent;

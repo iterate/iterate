@@ -12,6 +12,7 @@
 
 import { expect, test } from "vitest";
 import type { StreamEvent } from "../../src/types.ts";
+import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
@@ -60,16 +61,19 @@ async function waitFor<T>(
   message: () => string,
   timeoutMs = 60_000,
 ): Promise<T> {
-  const deadline = Date.now() + timeoutMs;
   let last: T | undefined;
-  for (;;) {
-    last = await read();
-    if (predicate(last)) return last;
-    if (Date.now() > deadline) {
-      throw new Error(`Timed out waiting for ${message()}; last=${JSON.stringify(last)}`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
-  }
+  await waitForCondition(
+    async () => {
+      last = await read();
+      return predicate(last);
+    },
+    {
+      description: () => `${message()}; last=${JSON.stringify(last)}`,
+      intervalMs: 1_000,
+      timeoutMs,
+    },
+  );
+  return last as T;
 }
 
 const signingSecret = slackSigningSecret();

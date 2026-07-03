@@ -11,6 +11,16 @@ import { env as workerEnv } from "cloudflare:workers";
  */
 export interface Env {
   AI: Ai;
+  /**
+   * This worker's own deployed name (e.g. "os-prd-api"). Exists so
+   * worker-loader cache keys are unique per hosting worker: local dev runs
+   * every itx worker inside ONE workerd whose loader cache is shared across
+   * them, and a dynamic worker isolate created by one parent carries that
+   * parent's loopback binding stubs — invoking it from another parent fails
+   * with a redacted internal error. In production each worker has its own
+   * loader, so this is just a stable constant in the key.
+   */
+  WORKER_SELF: string;
   ARTIFACTS: Artifacts;
   ARTIFACTS_ACCOUNT_ID: string;
   ARTIFACTS_NAMESPACE: string;
@@ -28,6 +38,9 @@ export interface Env {
     import("./domains/projects/project-durable-object.ts").ProjectDurableObject
   >;
   REPO: DurableObjectNamespace<import("./domains/repos/repo-durable-object.ts").RepoDurableObject>;
+  SANDBOX: DurableObjectNamespace<
+    import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").CloudflareSandboxDurableObject
+  >;
   SECRET: DurableObjectNamespace<
     import("./domains/secrets/secret-durable-object.ts").SecretDurableObject
   >;

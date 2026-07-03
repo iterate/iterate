@@ -3,7 +3,7 @@ import { D1Database, TanStackStart } from "alchemy/cloudflare";
 import { Exec } from "alchemy/os";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { slugify } from "@iterate-com/shared/slugify";
-import { ensureProxiedDnsForHostnames } from "@iterate-com/shared/alchemy/iterate-app";
+import { IterateRoutes, parkWorkerRoutes } from "@iterate-com/shared/alchemy/iterate-app";
 import { z } from "zod/v4";
 import { seedOAuthClients } from "./scripts/seed-oauth-clients.ts";
 
@@ -54,6 +54,30 @@ const AlchemyEnv = z.object({
   GOOGLE_CLIENT_ID: z.string(),
   GOOGLE_CLIENT_SECRET: z.string(),
 });
+
+// `--park` re-parks the slot edge after `--destroy`: placeholder script plus
+// re-ensured, verified routes, so the next tenant's deploy finds live routes
+// instead of creating them on its critical path (see parkWorkerRoutes).
+// Chained as a separate invocation because alchemy exits the process inside
+// the destroy phase.
+if (process.argv.includes("--park")) {
+  const parkEnv = AlchemyEnv.pick({
+    ALCHEMY_LOCAL: true,
+    ALCHEMY_STAGE: true,
+    CLOUDFLARE_ACCOUNT_ID: true,
+    CLOUDFLARE_API_TOKEN: true,
+    WORKER_ROUTES: true,
+  }).parse(process.env);
+  if (!parkEnv.ALCHEMY_LOCAL) {
+    await parkWorkerRoutes({
+      hostnames: parkEnv.WORKER_ROUTES,
+      slug: APP_NAME,
+      stage: parkEnv.ALCHEMY_STAGE,
+      workerName: slugify(`${APP_NAME}-${parkEnv.ALCHEMY_STAGE}`),
+    });
+  }
+  process.exit(0);
+}
 
 const alchemyEnv = AlchemyEnv.parse(process.env);
 const publicUrl = alchemyEnv.VITE_PUBLIC_URL ?? alchemyEnv.VITE_AUTH_APP_ORIGIN;
@@ -113,7 +137,6 @@ const worker = await TanStackStart(APP_NAME, {
     GOOGLE_CLIENT_ID: alchemy.secret(alchemyEnv.GOOGLE_CLIENT_ID),
     GOOGLE_CLIENT_SECRET: alchemy.secret(alchemyEnv.GOOGLE_CLIENT_SECRET),
   },
-  routes: alchemyEnv.WORKER_ROUTES.map((pattern) => ({ pattern: `${pattern}/*`, adopt: true })),
   adopt: true,
   // Without this flag, same-zone subrequests (e.g. SSR calling our own
   // /api/auth/get-session via the public hostname) bypass Worker routes and
@@ -144,14 +167,12 @@ console.dir(
 
 await app.finalize();
 
-// Worker routes need proxied DNS on the zone to fire; ensure originless
-// records for every routed hostname (e.g. auth.iterate-preview-N.com).
-if (!app.local) {
-  await ensureProxiedDnsForHostnames({
-    hostnames: alchemyEnv.WORKER_ROUTES,
-    comment: `Managed by auth alchemy (${app.stage}).`,
-  });
-}
+// Routes + DNS ensured after finalize, DNS-before-routes, edge-verified
+// (see iterate-app.ts). Auth previously declared routes on the Worker
+// resource and only ensured DNS afterwards — exactly the ordering that
+// produces zombie routes (visible in the API, dead at the edge, every
+// sign-in 522s) on fresh slots.
+await IterateRoutes({ app, slug: APP_NAME }, { worker, hostnames: alchemyEnv.WORKER_ROUTES });
 
 // Seed declarative OAuth clients (Doppler → DB) after every deployed run, so
 // the database always matches AUTH_SEED_OAUTH_CLIENTS in the selected config.

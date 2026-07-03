@@ -8,31 +8,13 @@ export default workflow({
       branches: ["main"],
     },
     pull_request: {},
+    workflow_dispatch: {},
   },
   jobs: {
     "lint-typecheck": {
-      ...utils.runsOnDepotUbuntu,
+      ...utils.runsOnDepotImage,
       steps: [
-        {
-          name: "Checkout code",
-          uses: "actions/checkout@v4",
-        },
-        {
-          name: "Setup pnpm",
-          uses: "pnpm/action-setup@v4",
-        },
-        {
-          name: "Setup Node",
-          uses: "actions/setup-node@v4",
-          with: {
-            "node-version": 24,
-            cache: "pnpm",
-          },
-        },
-        {
-          name: "Install dependencies",
-          run: "pnpm install",
-        },
+        ...utils.setupFromImage(),
         {
           name: "Run Lint",
           run: "pnpm exec oxlint . --threads 1 --deny-warnings",

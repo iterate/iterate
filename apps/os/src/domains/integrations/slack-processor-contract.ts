@@ -3,7 +3,7 @@
 // the pre-migration slack domain (git history).
 
 import { z } from "zod";
-import { defineProcessorContract } from "../streams/stream-processor.ts";
+import { defineProcessorContract } from "../streams/processor-contracts.ts";
 
 const NullableOptionalString = z.preprocess(
   (value) => (value === null ? undefined : value),

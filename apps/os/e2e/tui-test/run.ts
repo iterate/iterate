@@ -42,10 +42,10 @@ try {
 } finally {
   rmSync(xdgConfigHome, { recursive: true, force: true });
   // Disposal is currently a no-op: the itx surface has no projects.remove yet
-  // (TODO task #13), so disposable TUI projects are leaked until stages reset.
+  // (tasks/os-project-archival.md), so disposable TUI projects are leaked until stages reset.
   await project[Symbol.asyncDispose]();
   console.info(
-    `[tui-test] Released disposable project ${project.project.id} (removal pending task #13)`,
+    `[tui-test] Released disposable project ${project.project.id} (removal pending tasks/os-project-archival.md)`,
   );
 }
 

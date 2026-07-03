@@ -5,15 +5,28 @@
 // a runnable example is missing one (so examples can't silently rot).
 //
 // Not here by design:
-//   whoami          global-context: it runs against the Session catalog, not a
-//                   project itx. The matrix (and the Playwright REPL specs)
-//                   execute in a project scope where `itx.whoami` /
-//                   `itx.projects` do not exist. Session behavior is proven by
-//                   the itx e2e suites (apps/os/e2e/itx/itx.e2e.test.ts).
-//   list-projects   global-context, same reason as whoami.
+//   whoami          session-context: it runs against the OS Session (what
+//                   authenticate() returns), not a project itx. The matrix
+//                   (and the Playwright REPL specs) execute in a project scope
+//                   where `itx.whoami` / `itx.projects` do not exist. Session
+//                   behavior is proven by the itx e2e suites
+//                   (apps/os/e2e/itx/itx.e2e.test.ts).
+//   list-projects   session-context, same reason as whoami.
 //   ai-models       depends on the deployment's upstream Workers AI account
 //                   (catalog availability + latency); interactive reading
 //                   material, not matrix material.
+//   exa-web-search  calls Exa's public MCP server (external service, rate
+//                   limited); interactive reading material, same rationale as
+//                   ai-models.
+//   connect-public-mcp
+//                   explicitly connects to Exa's public MCP server; external
+//                   service and rate limited, so keep it interactive.
+//   connect-openapi-petstore
+//                   calls Swagger's public Petstore OpenAPI deployment;
+//                   external service, so keep it interactive.
+//   secret-postman-echo
+//                   calls Postman Echo to prove egress secret substitution;
+//                   external service, so keep it interactive.
 
 export type ExampleRunContext = {
   /** Unique per example × runtime, for stream/event payload assertions. */
@@ -27,7 +40,15 @@ export type ExampleCase = {
 };
 
 /** Example ids that intentionally have no matrix case (see header). */
-export const EXAMPLE_IDS_WITHOUT_CASES = new Set(["whoami", "list-projects", "ai-models"]);
+export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
+  "whoami",
+  "list-projects",
+  "ai-models",
+  "exa-web-search",
+  "connect-public-mcp",
+  "connect-openapi-petstore",
+  "secret-postman-echo",
+]);
 
 export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   "describe-project": {
@@ -123,6 +144,12 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     vars: ({ marker }) => ({ capPath: `journal_${marker.replace(/-/g, "_")}` }),
     assert: (result, _ctx, expect) => {
       expect(result).toEqual({ record: ["capability-provided", "capability-revoked"] });
+    },
+  },
+  "browse-examples": {
+    assert: (result, _ctx, expect) => {
+      expect(result).toMatchObject({ hasCode: true, id: "describe-project" });
+      expect((result as { count: number }).count).toBeGreaterThan(10);
     },
   },
   "agent-send-message": {

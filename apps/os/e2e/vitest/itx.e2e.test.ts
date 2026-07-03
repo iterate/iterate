@@ -5,12 +5,13 @@ import { newHttpBatchRpcSession, RpcTarget } from "capnweb";
 import { WebClient } from "@slack/web-api";
 import { z } from "zod";
 import { RepoArtifactNameCodec } from "../../src/domains/repos/utils.ts";
+import { defineProcessorContract } from "../../src/domains/streams/processor-contracts.ts";
 import {
-  defineProcessorContract,
   StreamProcessor,
   type StreamProcessorSnapshot,
 } from "../../src/domains/streams/stream-processor.ts";
 import type { DynamicWorkerRef, UnauthenticatedItx } from "../../src/types.ts";
+import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { startEgressEcho, startMockMcp, startMockOpenApi } from "./itx-capability-fixtures.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 import type { ItxWebSocketMessage } from "./test-helpers.ts";
@@ -174,20 +175,6 @@ function fencedAgentScript(code: string): string {
   return ["The faux LLM produced this codemode block.", "```js", code.trim(), "```"].join("\n");
 }
 
-async function waitForCondition(
-  predicate: () => boolean | Promise<boolean>,
-  opts: { description: string; intervalMs?: number; timeoutMs?: number },
-): Promise<void> {
-  const timeoutMs = opts.timeoutMs ?? 5_000;
-  const intervalMs = opts.intervalMs ?? 50;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
-  }
-  throw new Error(`Timed out waiting for ${opts.description}`);
-}
-
 // These are hand written tests - they MUST pass
 describe("itx", () => {
   test("Unauthenticated itx can't do anything", async () => {
@@ -210,7 +197,17 @@ describe("itx", () => {
     const projects = itx.projects;
 
     expect(await itx.whoami()).toBe("alice");
-    expect(await projects.list()).toEqual(["prj_alice", "prj_ref"]);
+    // list() enriches each scope: an impersonated principal's scopes have no
+    // directory record, so the id doubles as the slug and the org is unknown.
+    const list = await projects.list();
+    expect(list.map((project) => project.id)).toEqual(["prj_alice", "prj_ref"]);
+    expect(list[0]).toMatchObject({
+      id: "prj_alice",
+      slug: "prj_alice",
+      organizationId: null,
+      organizationName: null,
+    });
+    expect(["ready", "missing", "unknown"]).toContain(list[0]?.deploymentStatus);
   });
 
   test("Authenticated internal auth itx can create project and append to stream", async () => {
@@ -348,7 +345,7 @@ describe("itx", () => {
     ).rejects.toThrow(/no capability "someMethodInTestRunner.getSecret"/);
   });
 
-  test("Project describe exposes Workers AI as a builtin capability", async () => {
+  test("Project describe exposes self-describing builtin capabilities", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
       type: "admin-secret",
@@ -358,7 +355,16 @@ describe("itx", () => {
     using project = itx.projects.create({ slug: "ai-builtin" });
     const description = await project.describe();
 
-    expect(description.capabilities).toContainEqual({ path: ["ai"], type: "builtin" });
+    expect(description.capabilities).toContainEqual(
+      expect.objectContaining({ path: ["ai"], type: "builtin" }),
+    );
+    expect(description.capabilities).toContainEqual(
+      expect.objectContaining({
+        instructions: expect.stringContaining("Gmail REST proxy"),
+        path: ["gmail"],
+        type: "builtin",
+      }),
+    );
   });
 
   test("Trusted internal root can access global streams and repos", async () => {
@@ -450,6 +456,20 @@ describe("itx", () => {
           expect.objectContaining({ path: secretPath }),
         ]),
       );
+      await waitForCondition(
+        async () => {
+          const state = (await project.processor.snapshot()).state;
+          const streamPaths = new Set(state.streams.map((item) => item.path));
+          const repoPaths = new Set(state.repos.map((item) => item.path));
+          return (
+            streamPaths.has(agentPath) &&
+            streamPaths.has(repoPath) &&
+            streamPaths.has(secretPath) &&
+            repoPaths.has(repoPath)
+          );
+        },
+        { description: "project processor to fold agent, repo, and secret stream lists" },
+      );
       const projectState = (await project.processor.snapshot()).state;
       expect(projectState.streams).toEqual(
         expect.arrayContaining([
@@ -483,8 +503,15 @@ describe("itx", () => {
       );
       // Birth now seeds one boot-context input item (platform context: project
       // id, agent path, repo layout) with dont-trigger-request — so history has
-      // exactly that item and no LLM turn ran.
-      expect((await project.agents.get(agentPath).processor.snapshot()).state.history).toEqual([
+      // exactly that item and no LLM turn ran. Ingest is async: wait for the
+      // processor to fold the birth events before asserting (cold slots under
+      // CI load have been seen to lag).
+      const agentProcessor = project.agents.get(agentPath).processor;
+      await waitForCondition(
+        async () => (await agentProcessor.snapshot()).state.history.length > 0,
+        { description: "agent boot-context input to fold into history", timeoutMs: 30_000 },
+      );
+      expect((await agentProcessor.snapshot()).state.history).toEqual([
         expect.objectContaining({
           role: "user",
           content: expect.stringContaining(`Your agent stream path: ${agentPath}`),
@@ -585,6 +612,9 @@ describe("itx", () => {
       });
       await waitForCondition(async () => (await secret.describe()).hasMaterial, {
         description: "OpenAPI secret to be available",
+        // Secret DO folds the update asynchronously; the 5s default flaked on
+        // cold slots under full-suite CI load.
+        timeoutMs: 30_000,
       });
 
       const headers = { authorization: `Bearer getSecret({ path: "${secretPath}" })` };
@@ -2863,7 +2893,7 @@ describe("itx", () => {
     // If we didn't do Promise.all, this wouldn't work - wouldn't be sent as part of the same batch
     const [principal, projects] = await Promise.all([itx.whoami(), itx.projects.list()]);
     expect(principal).toBe("alice");
-    expect(projects).toEqual(["prj_alice", "prj_ref"]);
+    expect(projects.map((project) => project.id)).toEqual(["prj_alice", "prj_ref"]);
 
     // session is now finished - cannot be used again in batch http mode
     await expect(session.authenticate).rejects.toThrow();

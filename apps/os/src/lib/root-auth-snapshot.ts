@@ -1,13 +1,15 @@
 import { createServerFn } from "@tanstack/react-start";
 import type { PublicSessionResponse } from "@iterate-com/auth/client";
 import type { AuthenticatedSession } from "@iterate-com/auth/server";
+import type { SignInAuthError } from "~/auth/errors.ts";
 import {
   normalizeRequestHostname,
   resolveProjectSlugFromHostname,
 } from "~/lib/project-host-routing.ts";
 
-export type RootAuthSnapshot = {
+type RootAuthSnapshot = {
   authSession: PublicSessionResponse;
+  authError: SignInAuthError | undefined;
   iterateAuthIssuer: string | undefined;
   currentProjectHostSlug: string | null;
 };
@@ -29,6 +31,7 @@ export const fetchRootAuthSnapshot: () => Promise<RootAuthSnapshot> = createServ
 }).handler(async ({ context }): Promise<RootAuthSnapshot> => {
   return {
     authSession: toPublicSession(context.iterateAuthSession),
+    authError: context.iterateAuthError,
     iterateAuthIssuer: context.config.iterateAuth?.issuer,
     currentProjectHostSlug: resolveCurrentProjectHostSlug({
       baseUrl: context.config.baseUrl,
