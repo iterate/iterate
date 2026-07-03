@@ -13,8 +13,11 @@ import {
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
+import { InfoRow } from "~/components/info-row.tsx";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { StreamViewSection } from "~/components/stream-view-section.tsx";
+import { StreamPage } from "~/components/stream-page.tsx";
+import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
+import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import type { SecretDescription } from "~/types.ts";
 import { useItx, useItxState } from "~/itx/itx-react.tsx";
 
@@ -24,11 +27,13 @@ const UpdateSecretForm = z.object({
 });
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/secrets/$secretId")({
+  validateSearch: StreamViewSearch,
   ssr: false,
-  loader: ({ context, params }) => ({
-    breadcrumb: params.secretId,
-    project: context.project,
-  }),
+  loader: ({ context, params }) =>
+    breadcrumbLoaderData({
+      project: context.project,
+      streamBreadcrumb: streamBreadcrumb(context.project, `/secrets/${params.secretId}`),
+    }),
   component: ProjectSecretDetailPage,
 });
 
@@ -52,13 +57,20 @@ function ProjectSecretDetailContent() {
     [secretPath],
   );
 
+  // While the processor's first push is in flight, the loading placeholder is
+  // the PANEL — the stream view mounts immediately and warms in parallel.
   if (secret === undefined) {
     return (
-      <section className="w-full p-4">
-        <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
-          Loading secret…
-        </div>
-      </section>
+      <StreamPage
+        panel={
+          <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
+            Loading secret…
+          </div>
+        }
+        projectId={project.id}
+        streamPath={secretPath}
+        emptyLabel="No events on this secret's stream yet."
+      />
     );
   }
   return <SecretDetail projectId={project.id} secret={secret} secretPath={secretPath} />;
@@ -109,10 +121,9 @@ function SecretDetail({
     },
   });
 
-  return (
-    <section className="w-full space-y-4 p-4">
+  const panel = (
+    <>
       <div className="rounded-lg border bg-card">
-        <InfoRow label="Path" value={secretPath} />
         <InfoRow label="Material" value={secret.hasMaterial ? "Stored" : "Missing"} />
         <InfoRow
           label="Egress URLs"
@@ -201,23 +212,15 @@ function SecretDetail({
           </form.Subscribe>
         </form>
       </div>
-
-      <StreamViewSection
-        projectId={projectId}
-        streamPath={secretPath}
-        emptyLabel="No events on this secret's stream yet."
-      />
-    </section>
+    </>
   );
-}
 
-function InfoRow(input: { label: string; value: string }) {
   return (
-    <div className="grid gap-2 border-b p-4 last:border-b-0 md:grid-cols-[9rem_minmax(0,1fr)] md:items-center">
-      <div className="text-xs font-medium text-muted-foreground">{input.label}</div>
-      <code className="min-w-0 break-all rounded bg-muted px-2 py-1 font-mono text-xs">
-        {input.value}
-      </code>
-    </div>
+    <StreamPage
+      panel={panel}
+      projectId={projectId}
+      streamPath={secretPath}
+      emptyLabel="No events on this secret's stream yet."
+    />
   );
 }

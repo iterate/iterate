@@ -16,8 +16,10 @@ import {
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { StreamViewSection } from "~/components/stream-view-section.tsx";
+import { StreamPage } from "~/components/stream-page.tsx";
 import { formatRelativeTime } from "~/lib/format-relative-time.ts";
+import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
+import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx, useItxState } from "~/itx/itx-react.tsx";
 import type { ProjectProcessorState } from "~/types.ts";
 
@@ -41,11 +43,13 @@ const DEFAULT_SECRET_FORM_VALUES = {
 };
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/secrets/")({
+  validateSearch: StreamViewSearch,
   ssr: false,
-  loader: ({ context }) => ({
-    breadcrumb: "/secrets",
-    project: context.project,
-  }),
+  loader: ({ context }) =>
+    breadcrumbLoaderData({
+      project: context.project,
+      streamBreadcrumb: streamBreadcrumb(context.project, "/secrets"),
+    }),
   component: ProjectSecretsIndexPage,
 });
 
@@ -85,6 +89,8 @@ function ProjectSecretsIndexContent() {
           projectSlug: params.projectSlug,
           secretId: name,
         },
+        // Fresh view state on the new secret's page.
+        search: {},
       });
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
@@ -113,8 +119,8 @@ function ProjectSecretsIndexContent() {
       .toSorted((left, right) => left.path.localeCompare(right.path));
   }, [filter, secretsList]);
 
-  return (
-    <section className="w-full space-y-4 p-4">
+  const panel = (
+    <>
       <div className="space-y-3 rounded-lg border bg-card p-4">
         <form
           className="flex flex-col gap-4"
@@ -244,6 +250,7 @@ function ProjectSecretsIndexContent() {
                       projectSlug: params.projectSlug,
                       secretId: secretNameFromPath(secret.path),
                     }}
+                    search={{}}
                   >
                     <KeyRound className="h-4 w-4 shrink-0 text-muted-foreground" />
                     <span className="truncate">{secretNameFromPath(secret.path)}</span>
@@ -257,12 +264,15 @@ function ProjectSecretsIndexContent() {
           )}
         </div>
       )}
+    </>
+  );
 
-      <StreamViewSection
-        projectId={project.id}
-        streamPath="/secrets"
-        emptyLabel="No events on the secrets catalogue stream yet."
-      />
-    </section>
+  return (
+    <StreamPage
+      panel={panel}
+      projectId={project.id}
+      streamPath="/secrets"
+      emptyLabel="No events on the secrets catalogue stream yet."
+    />
   );
 }

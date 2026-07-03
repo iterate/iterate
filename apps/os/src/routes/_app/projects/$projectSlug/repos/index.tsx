@@ -24,11 +24,13 @@ import {
   TableRow,
 } from "@iterate-com/ui/components/table";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { StreamViewSection } from "~/components/stream-view-section.tsx";
+import { StreamPage } from "~/components/stream-page.tsx";
 import { RepoArtifactNameCodec } from "~/domains/repos/utils.ts";
 import { buildArtifactViewerUrl } from "~/lib/artifact-viewer-url.ts";
 import { formatRelativeTime } from "~/lib/format-relative-time.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
+import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
+import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx, useItxState } from "~/itx/itx-react.tsx";
 import type { ProjectProcessorState } from "~/types.ts";
 
@@ -48,17 +50,14 @@ type SortKey = "path" | "createdAt";
 type SortDirection = "asc" | "desc";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/repos/")({
+  validateSearch: StreamViewSearch,
   ssr: false,
-  loader: async ({ context }) => {
-    const { project } = context;
-    const routeConfig = await getPublicRouteConfig();
-
-    return {
-      breadcrumb: "/repos",
-      project,
-      routeConfig,
-    };
-  },
+  loader: async ({ context }) =>
+    breadcrumbLoaderData({
+      project: context.project,
+      routeConfig: await getPublicRouteConfig(),
+      streamBreadcrumb: streamBreadcrumb(context.project, "/repos"),
+    }),
   component: ProjectReposIndexPage,
 });
 
@@ -100,6 +99,8 @@ function ProjectReposIndexContent() {
           projectSlug: params.projectSlug,
           _splat: repoPathToSplat(path),
         },
+        // Fresh view state on the new repo's page.
+        search: {},
       });
     },
     onError: (error) => {
@@ -132,8 +133,8 @@ function ProjectReposIndexContent() {
       });
   }, [filter, repos, sort]);
 
-  return (
-    <section className="w-full space-y-4 p-4">
+  const panel = (
+    <>
       <div className="space-y-3 rounded-lg border bg-card p-4">
         <form
           className="flex flex-col gap-4"
@@ -261,6 +262,7 @@ function ProjectReposIndexContent() {
                             projectSlug: params.projectSlug,
                             _splat: repoSplat,
                           }}
+                          search={{}}
                         >
                           {repo.path}
                         </Link>
@@ -287,13 +289,16 @@ function ProjectReposIndexContent() {
           </Table>
         </div>
       )}
+    </>
+  );
 
-      <StreamViewSection
-        projectId={project.id}
-        streamPath="/repos"
-        emptyLabel="No events on the repos catalogue stream yet."
-      />
-    </section>
+  return (
+    <StreamPage
+      panel={panel}
+      projectId={project.id}
+      streamPath="/repos"
+      emptyLabel="No events on the repos catalogue stream yet."
+    />
   );
 }
 
