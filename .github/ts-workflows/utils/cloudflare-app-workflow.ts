@@ -13,9 +13,12 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
   const workflowName = meta.url.split("/").pop()?.replace(/\.ts$/, "");
   if (!workflowName) throw new Error("Unable to resolve workflow name");
   const deployCommandArgs = app.deployCommandArgs ?? ["pnpm", "tsx", "./alchemy.run.ts"];
+  // Re-trigger the deploy when the workflow's own definition changes. These
+  // cloudflare-app workflows are all Depot-routed (DEPOT_WORKFLOW_NAMES), so the
+  // generated yaml lives in .depot/workflows/, not .github/workflows/.
   const workflowDefinitionPaths = [
     `.github/ts-workflows/workflows/${workflowName}.ts`,
-    `.github/workflows/${workflowName}.yml`,
+    `.depot/workflows/${workflowName}.yml`,
   ];
 
   return workflow({

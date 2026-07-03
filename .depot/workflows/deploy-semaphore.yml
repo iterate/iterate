@@ -13,7 +13,7 @@ on:
       - main
     paths:
       - .github/ts-workflows/workflows/deploy-semaphore.ts
-      - .github/workflows/deploy-semaphore.yml
+      - .depot/workflows/deploy-semaphore.yml
       - apps/semaphore/**
       - packages/shared/**
       - packages/ui/**

@@ -13,7 +13,7 @@ on:
       - main
     paths:
       - .github/ts-workflows/workflows/deploy-os.ts
-      - .github/workflows/deploy-os.yml
+      - .depot/workflows/deploy-os.yml
       - apps/os/**
       - apps/auth/**
       - apps/auth-contract/**
