@@ -79,6 +79,10 @@ export class StreamBrowserDatabase implements Disposable {
   // view still holds its handle, and that view must keep refreshing.
   readonly #liveQueries = new Set<RegisteredQuery>();
   readonly #changeListeners = new Set<(change: StreamDbChange) => void>();
+  // Serializes #refreshLiveQueries passes; #refreshQueued coalesces changes
+  // arriving while a pass is already waiting to run.
+  #refreshPass: Promise<void> = Promise.resolve();
+  #refreshQueued = false;
 
   constructor(
     readonly projectId: string,
@@ -347,34 +351,38 @@ export class StreamBrowserDatabase implements Disposable {
 
   async #runQuery(entry: RegisteredQuery): Promise<void> {
     const previous = entry.snapshot;
-    let next: SqliteQuerySnapshot<Record<string, SqlValue>>;
-    try {
-      const data = await this.exec(entry.sql, entry.params);
-      next = { data, status: "ok", error: undefined };
-    } catch (error) {
-      if (error instanceof Error && error.message.includes("no such table")) {
-        // A view's table may not exist until its processor's first write creates it. Treat
-        // that as an empty result (count 0 / no rows) rather than a surfaced error.
-        next = { data: emptyTableRows(entry.sql), status: "ok", error: undefined };
-      } else {
-        console.error(`[stream-browser-db ${this.streamPath}] SQLite query failed`, {
-          error,
-          params: entry.params,
-          sql: entry.sql,
-        });
-        next = {
-          ...entry.snapshot,
-          status: "error",
-          error: error instanceof Error ? error : new Error(String(error)),
-        };
-      }
-    }
+    const next = await this.#computeSnapshot(entry);
     entry.snapshot = next;
     // Skip notifying when the result is unchanged: useSyncExternalStore re-reads the
     // snapshot on every notify, so spurious notifications churn React re-renders even
     // though nothing the view sees changed.
     if (snapshotsEqual(previous, next)) return;
     for (const listener of entry.listeners) listener();
+  }
+
+  async #computeSnapshot(
+    entry: RegisteredQuery,
+  ): Promise<SqliteQuerySnapshot<Record<string, SqlValue>>> {
+    try {
+      const data = await this.exec(entry.sql, entry.params);
+      return { data, status: "ok", error: undefined };
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("no such table")) {
+        // A view's table may not exist until its processor's first write creates it. Treat
+        // that as an empty result (count 0 / no rows) rather than a surfaced error.
+        return { data: emptyTableRows(entry.sql), status: "ok", error: undefined };
+      }
+      console.error(`[stream-browser-db ${this.streamPath}] SQLite query failed`, {
+        error,
+        params: entry.params,
+        sql: entry.sql,
+      });
+      return {
+        ...entry.snapshot,
+        status: "error",
+        error: error instanceof Error ? error : new Error(String(error)),
+      };
+    }
   }
 
   async #eventsTableExists(): Promise<boolean> {
@@ -397,13 +405,48 @@ export class StreamBrowserDatabase implements Disposable {
 
   #onChange(change: StreamDbChange) {
     this.#infoRefresh = undefined;
-    for (const entry of this.#liveQueries) {
+    this.#refreshLiveQueries();
+    for (const listener of this.#changeListeners) listener(change);
+  }
+
+  /**
+   * Re-run every observed query for one change, apply ALL refreshed snapshots,
+   * and only then notify — in one synchronous pass, so React batches the
+   * listener calls into a single render. Notifying per query as each worker
+   * round-trip resolved let views composing several queries (the agent feed's
+   * item count + visible rows + live processor state) commit inconsistent
+   * intermediate frames — the live→settled handoff flicker.
+   *
+   * Passes are serialized: the worker answers queries in order anyway, and a
+   * later pass must not interleave its snapshot writes with an earlier one.
+   * A change arriving while a pass is queued coalesces into it.
+   */
+  #refreshLiveQueries() {
+    if (this.#refreshQueued) return;
+    this.#refreshQueued = true;
+    this.#refreshPass = this.#refreshPass.then(async () => {
+      this.#refreshQueued = false;
+      if (this.#disposed) return;
       // Skip entries no view is observing (and ones that never started): re-running them
       // wastes a worker round trip and they will run on first subscribe anyway.
-      if (entry.listeners.size === 0 || !entry.started) continue;
-      void this.#runQuery(entry);
-    }
-    for (const listener of this.#changeListeners) listener(change);
+      const entries = [...this.#liveQueries].filter(
+        (entry) => entry.listeners.size > 0 && entry.started,
+      );
+      const refreshed = await Promise.all(
+        entries.map(async (entry) => ({ entry, next: await this.#computeSnapshot(entry) })),
+      );
+      // A dispose while the queries were in flight rejects their execs; don't
+      // publish those rejection-shaped snapshots to unmounting views.
+      if (!this.#disposed) {
+        const changed = refreshed.filter(
+          ({ entry, next }) => !snapshotsEqual(entry.snapshot, next),
+        );
+        for (const { entry, next } of changed) entry.snapshot = next;
+        for (const { entry } of changed) {
+          for (const listener of entry.listeners) listener();
+        }
+      }
+    });
   }
 
   dispose() {

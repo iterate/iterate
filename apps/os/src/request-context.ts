@@ -1,5 +1,6 @@
 import type { SharedRequestLogger } from "@iterate-com/shared/request-logging";
 import type { AuthenticatedSession } from "@iterate-com/auth/server";
+import type { SignInAuthError } from "~/auth/errors.ts";
 import type { AppConfig } from "~/config.ts";
 import type { Principal } from "~/auth/principal.ts";
 
@@ -23,6 +24,7 @@ export interface RequestContext {
   // Set by the iterate auth request middleware (src/auth/middleware.ts).
   principal?: Principal | null;
   iterateAuthSession?: AuthenticatedSession | null;
+  iterateAuthError?: SignInAuthError;
 }
 
 // Register the request context for both public module surfaces used by Start:

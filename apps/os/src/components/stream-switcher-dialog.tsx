@@ -171,14 +171,14 @@ function StreamTreeItem({
   tree: StreamTreeContext;
 }) {
   const expanded = tree.expandedPaths.has(path);
-  const state = useQuery({
+  const { data } = useQuery({
     queryKey: ["stream-switcher-children", tree.scope, path],
     queryFn: async () => {
       const streamState = await readStreamStateOnce(tree.navigator.source, normalizePath(path));
-      return { eventCount: streamState.eventCount, childPaths: [...streamState.childPaths].sort() };
+      return { eventCount: streamState.eventCount, childPaths: streamState.childPaths.toSorted() };
     },
   });
-  const childPaths = state.data?.childPaths ?? [];
+  const childPaths = data?.childPaths ?? [];
 
   return (
     <>
@@ -213,9 +213,9 @@ function StreamTreeItem({
           <span className="truncate font-mono text-xs">
             {path === "/" ? "/" : (path.split("/").at(-1) ?? path)}
           </span>
-          {state.data == null ? null : (
+          {data == null ? null : (
             <span className="ml-auto font-mono text-[10px] tabular-nums text-muted-foreground/70">
-              {state.data.eventCount}
+              {data.eventCount}
             </span>
           )}
         </button>

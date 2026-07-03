@@ -15,6 +15,8 @@ import {
   readProjectById,
 } from "./project-directory.ts";
 import { deploymentStatusesFromProbes } from "./project-deployment-status.ts";
+import { timedStep } from "./lib/step-timing.ts";
+import { buildProjectStreamViewerUrl } from "./lib/stream-viewer-url.ts";
 import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
 import { normalizeAgentPath } from "./domains/agents/utils.ts";
@@ -30,6 +32,7 @@ import { ProjectProcessorContract } from "./domains/projects/project-processor-c
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
 import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "./domains/repos/utils.ts";
+import { normalizeCloudflareSandboxPath } from "./domains/sandboxes/cloudflare/utils.ts";
 import { normalizeSecretPath } from "./domains/secrets/utils.ts";
 import {
   completeGoogleConnect,
@@ -56,8 +59,9 @@ import {
 } from "./domains/itx/openapi-types.ts";
 import { callMcpToolPath } from "./domains/itx/mcp-client.ts";
 import { mintVoiceRealtimeConnection } from "./domains/voice/mint-realtime-connection.ts";
+import { ITX_EXAMPLES, type ItxExample } from "./itx/examples.ts";
+import type { ProcessorState } from "./domains/streams/processor-contracts.ts";
 import type {
-  ProcessorState,
   StreamProcessor,
   StreamProcessorContract,
 } from "./domains/streams/stream-processor.ts";
@@ -65,14 +69,18 @@ import type {
   Agent,
   AgentChat,
   CapabilityProvision,
+  CapabilityDescription,
   AgentCollection,
   Ai,
   CfExecutionContext,
   ItxAuth,
   Itx,
+  ItxExampleCatalog,
+  ItxExampleSummary,
   Session,
   McpClientCollection,
   McpClientConnectInput,
+  McpClientRpc,
   OpenApiCollection,
   OpenApiConnectInput,
   ProjectCollection,
@@ -85,6 +93,7 @@ import type {
   RevokeCapabilityInput,
   Repo,
   RepoCollection,
+  SandboxCollection,
   Secret,
   SecretCollection,
   StatelessDynamicWorkerRef,
@@ -158,16 +167,13 @@ export class StreamRpcTarget extends RpcTarget implements Stream {
   }
 
   subscribe(args: Parameters<Stream["subscribe"]>[0]) {
-    return this.durableObjectStub.subscribe(args);
-  }
-
-  subscribeConfigured(
-    args: Parameters<Stream["subscribe"]>[0] & { subscriptionKey: string },
-  ): Promise<StreamSubscriptionHandle> {
-    if (this.props.auth.principal !== "trusted-internal") {
-      throw new Error("subscribeConfigured requires trusted internal auth");
+    // `configured: true` opens the durable configured subscription for the
+    // given key (the wake-handshake response) — only the platform's own
+    // Durable Objects may do that; everyone else gets ephemeral subscriptions.
+    if (args.configured === true && this.props.auth.principal !== "trusted-internal") {
+      throw new Error("configured subscriptions require trusted internal auth");
     }
-    return this.durableObjectStub.subscribeConfigured(args);
+    return this.durableObjectStub.subscribe(args);
   }
 }
 
@@ -222,28 +228,33 @@ async function requestRepoCreate(input: {
     path,
     projectId: input.projectId,
   });
-  const [, createRequested] = await stream.append(
-    buildDurableObjectProcessorSubscriptionConfiguredEvent({
-      durableObjectName: streamDurableObjectName({ projectId: input.projectId, path }),
-      processorSlug: RepoProcessorContract.slug,
-      subscriberType: "repo",
-    }),
-    {
-      type: "events.iterate.com/repo/create-requested",
-      idempotencyKey: `repo-create-requested:${input.projectId}:${path}`,
-      payload: { projectId: input.projectId, path },
-    },
+  const timing = { projectId: input.projectId, path };
+  const [, createRequested] = await timedStep("create-timing", timing, "repo-append", () =>
+    stream.append(
+      buildDurableObjectProcessorSubscriptionConfiguredEvent({
+        durableObjectName: streamDurableObjectName({ projectId: input.projectId, path }),
+        processorSlug: RepoProcessorContract.slug,
+        subscriberType: "repo",
+      }),
+      {
+        type: "events.iterate.com/repo/create-requested",
+        idempotencyKey: `repo-create-requested:${input.projectId}:${path}`,
+        payload: { projectId: input.projectId, path },
+      },
+    ),
   );
 
-  await stream.waitForEvent({
-    afterOffset: createRequested.offset - 1,
-    eventTypes: ["events.iterate.com/repo/created"],
-    predicate: (event) =>
-      event.payload?.projectId === input.projectId && event.payload?.path === path,
-    // Tight on purpose: creates should be fast (see tasks/os-cold-create-latency.md
-    // for the cold-slot outliers). Preview CI warms slots before the suites.
-    timeoutMs: 60_000,
-  });
+  await timedStep("create-timing", timing, "wait-repo-created", () =>
+    stream.waitForEvent({
+      afterOffset: createRequested.offset - 1,
+      eventTypes: ["events.iterate.com/repo/created"],
+      predicate: (event) =>
+        event.payload?.projectId === input.projectId && event.payload?.path === path,
+      // Tight on purpose: creates should be fast (see tasks/os-cold-create-latency.md
+      // for the cold-slot outliers). Preview CI warms slots before the suites.
+      timeoutMs: 60_000,
+    }),
+  );
 
   return new RepoRpcTarget({ auth: input.auth, path, projectId: input.projectId });
 }
@@ -254,7 +265,11 @@ class RepoRpcTarget extends RpcTarget implements Repo {
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  get durableObjectStub() {
+  // Private on purpose (unlike StreamRpcTarget's public stub getter): the
+  // Repo Durable Object carries `gitAccess()`, whose write tokens must not be
+  // reachable through the public capnweb surface — itx callers get file-level
+  // methods only.
+  get #durableObjectStub() {
     return env.REPO.getByName(
       DurableObjectNameCodec.stringify(
         {
@@ -275,23 +290,23 @@ class RepoRpcTarget extends RpcTarget implements Repo {
   }
 
   whoami() {
-    return this.durableObjectStub.whoami();
+    return this.#durableObjectStub.whoami();
   }
 
   commitFiles(input: Parameters<Repo["commitFiles"]>[0]) {
-    return this.durableObjectStub.commitFiles(input);
+    return this.#durableObjectStub.commitFiles(input);
   }
 
   listFiles() {
-    return this.durableObjectStub.listFiles();
+    return this.#durableObjectStub.listFiles();
   }
 
   readFile(input: Parameters<Repo["readFile"]>[0]) {
-    return this.durableObjectStub.readFile(input);
+    return this.#durableObjectStub.readFile(input);
   }
 
   get processor() {
-    return this.durableObjectStub.processor;
+    return this.#durableObjectStub.processor;
   }
 }
 
@@ -348,6 +363,36 @@ class AgentCollectionRpcTarget extends RpcTarget implements AgentCollection {
 
   list() {
     return projectProcessorState(this.props.projectId).then((state) => state.agents);
+  }
+}
+
+/**
+ * The `itx.sandboxes` built-in. `get(path)` returns the sandbox Durable
+ * Object's own RPC stub — deliberately NO RpcTarget wrapper, so the caller
+ * sees exactly what the `@cloudflare/sandbox` SDK exposes and new SDK methods
+ * need no forwarding code here. Confinement is by name: the stub is minted
+ * from this project's id plus the validated `/sandboxes/cloudflare/...`
+ * path, after the same project-access assert every collection performs.
+ */
+class SandboxCollectionRpcTarget extends RpcTarget implements SandboxCollection {
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  async get(path: string) {
+    const normalized = normalizeCloudflareSandboxPath(path);
+    const stub = env.SANDBOX.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: this.props.projectId,
+        path: normalized,
+      }),
+    );
+    // Container runtimes do not reliably surface `ctx.id.name`, so the
+    // sandbox learns who it is here, before the stub reaches the caller —
+    // see CloudflareSandboxDurableObject.ensureIdentity.
+    await stub.ensureIdentity({ path: normalized, projectId: this.props.projectId });
+    return stub;
   }
 }
 
@@ -642,11 +687,14 @@ class AgentRpcTarget extends RpcTarget implements Agent {
   }
 
   async ask(input: Parameters<Agent["ask"]>[0]) {
-    const sent = await this.sendMessage(input.message);
+    const [sent] = await this.stream.append({
+      type: "events.iterate.com/agents/user-message-received",
+      payload: { content: input.message, origin: input.origin ?? "web" },
+    });
     return await this.stream.waitForEvent({
       afterOffset: sent.offset,
       eventTypes: ["events.iterate.com/agents/web-message-sent"],
-      timeoutMs: 45_000,
+      timeoutMs: input.timeoutMs ?? 45_000,
     });
   }
 
@@ -803,7 +851,10 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
   }
 
   async create(args: Parameters<ProjectCollection["create"]>[0]) {
-    const registered = await this.#registerProject(args);
+    const registered = await timedStep("create-timing", { slug: args.slug }, "auth-register", () =>
+      this.#registerProject(args),
+    );
+    const timing = { projectId: registered.projectId };
     args.projectId = registered.projectId;
     // The auth worker may normalize the slug (slugify); adopt its canonical
     // form so stream events agree with the directory and ingress hostnames.
@@ -814,47 +865,61 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
     widenProjectAccess(this.props.auth, registered.projectId);
     // Prime the slug->id directory cache so the post-create navigation (and
     // the first project-host request) never miss into the auth worker.
-    await primeProjectDirectory(env.PROJECT_DIRECTORY, {
-      id: registered.projectId,
-      slug: registered.slug,
-      organizationId: registered.organizationId,
-      name: registered.slug,
-    });
+    await timedStep("create-timing", timing, "prime-directory", () =>
+      primeProjectDirectory(env.PROJECT_DIRECTORY, {
+        id: registered.projectId,
+        slug: registered.slug,
+        organizationId: registered.organizationId,
+        name: registered.slug,
+      }),
+    );
 
     const stream = rootStream({
       auth: this.props.auth,
       projectId: args.projectId,
     });
 
-    const [, , createRequested] = await stream.append(
-      buildDurableObjectProcessorSubscriptionConfiguredEvent({
-        durableObjectName: streamDurableObjectName({ projectId: args.projectId, path: "/" }),
-        processorSlug: ProjectProcessorContract.slug,
-        subscriberType: "project",
-      }),
-      buildDurableObjectProcessorSubscriptionConfiguredEvent({
-        durableObjectName: streamDurableObjectName({
-          projectId: args.projectId,
-          path: PROJECT_REPO_PATH,
+    const appendRootEvents = () =>
+      stream.append(
+        buildDurableObjectProcessorSubscriptionConfiguredEvent({
+          durableObjectName: streamDurableObjectName({
+            projectId: registered.projectId,
+            path: "/",
+          }),
+          processorSlug: ProjectProcessorContract.slug,
+          subscriberType: "project",
         }),
-        processorSlug: RepoProcessorContract.slug,
-        subscriberType: "repo",
-      }),
-      {
-        type: "events.iterate.com/project/create-requested",
-        idempotencyKey: `project-create-requested:${args.projectId}`,
-        payload: { projectId: args.projectId, slug: args.slug },
-      },
+        buildDurableObjectProcessorSubscriptionConfiguredEvent({
+          durableObjectName: streamDurableObjectName({
+            projectId: registered.projectId,
+            path: PROJECT_REPO_PATH,
+          }),
+          processorSlug: RepoProcessorContract.slug,
+          subscriberType: "repo",
+        }),
+        {
+          type: "events.iterate.com/project/create-requested",
+          idempotencyKey: `project-create-requested:${registered.projectId}`,
+          payload: { projectId: registered.projectId, slug: registered.slug },
+        },
+      );
+    const [, , createRequested] = await timedStep(
+      "create-timing",
+      timing,
+      "root-append",
+      appendRootEvents,
     );
-    await stream.waitForEvent({
-      afterOffset: createRequested.offset - 1,
-      eventTypes: ["events.iterate.com/project/created"],
-      predicate: (event) => event.payload?.projectId === args.projectId,
-      // Tight on purpose: the saga should complete in seconds (see
-      // tasks/os-cold-create-latency.md for the cold-slot outliers that must
-      // be fixed, not waited out). Preview CI warms slots before the suites.
-      timeoutMs: 60_000,
-    });
+    await timedStep("create-timing", timing, "wait-project-created", () =>
+      stream.waitForEvent({
+        afterOffset: createRequested.offset - 1,
+        eventTypes: ["events.iterate.com/project/created"],
+        predicate: (event) => event.payload?.projectId === args.projectId,
+        // Tight on purpose: the saga should complete in seconds (see
+        // tasks/os-cold-create-latency.md for the cold-slot outliers that must
+        // be fixed, not waited out). Preview CI warms slots before the suites.
+        timeoutMs: 60_000,
+      }),
+    );
 
     return new ItxRpcTarget({
       auth: this.props.auth,
@@ -1033,7 +1098,9 @@ type ItxRpcTargetProps = {
 const PROJECT_BUILTIN_CAPABILITY_PATHS = [
   "ai",
   "agents",
+  "debug",
   "egress",
+  "examples",
   "gmail",
   "integrations",
   "mcp",
@@ -1041,6 +1108,7 @@ const PROJECT_BUILTIN_CAPABILITY_PATHS = [
   "processor",
   "repo",
   "repos",
+  "sandboxes",
   "secrets",
   "slack",
   "streams",
@@ -1048,6 +1116,55 @@ const PROJECT_BUILTIN_CAPABILITY_PATHS = [
   "worker",
   "workers",
 ] as const;
+
+const PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS: readonly CapabilityDescription[] =
+  PROJECT_BUILTIN_CAPABILITY_PATHS.map((path) => {
+    if (path === "gmail") {
+      return {
+        instructions:
+          'Gmail REST proxy for the project Google account. Available to Slack agents as itx.gmail when Google is connected; check itx.integrations.getConnection({ provider: "google" }), then call itx.gmail.request({ path: "/users/me/messages", query: { maxResults, q: "in:inbox" } }). Paths are relative to https://gmail.googleapis.com/gmail/v1.',
+        path: [path],
+        type: "builtin" as const,
+        types: [
+          "type GmailRequestInput = {",
+          "  body?: unknown;",
+          "  headers?: Record<string, string>;",
+          "  method?: string;",
+          "  path: string;",
+          "  query?: Record<string, boolean | number | string | null | undefined>;",
+          "};",
+          "interface GmailCapability {",
+          "  request(input: GmailRequestInput): Promise<{ data: unknown; headers: Record<string, string>; status: number; statusText: string }>;",
+          "}",
+        ].join("\n"),
+      };
+    }
+    if (path === "integrations") {
+      return {
+        instructions:
+          'Project integration management. Use itx.integrations.getConnection({ provider: "google" }) before Gmail work and { provider: "slack" } before Slack API work.',
+        path: [path],
+        type: "builtin" as const,
+      };
+    }
+    if (path === "debug") {
+      return {
+        instructions:
+          "Returns formatted OS debug info for this itx scope, including a dashboard stream link.",
+        path: [path],
+        type: "builtin" as const,
+      };
+    }
+    if (path === "slack") {
+      return {
+        instructions:
+          "Slack Web API proxy for the connected project workspace. Slack thread agents reply with itx.slack.chat.postMessage({ channel, thread_ts, text }).",
+        path: [path],
+        type: "builtin" as const,
+      };
+    }
+    return { path: [path], type: "builtin" as const };
+  });
 
 /**
  * The server-side **itx** — the object an `async (itx) => { … }` script holds and
@@ -1088,14 +1205,30 @@ export class ItxRpcTarget extends RpcTarget implements Itx {
     ]);
     return {
       ...project,
-      capabilities: [
-        ...PROJECT_BUILTIN_CAPABILITY_PATHS.map((path) => ({
-          path: [path],
-          type: "builtin" as const,
-        })),
-        ...mountedCapabilities,
-      ],
+      capabilities: [...PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS, ...mountedCapabilities],
     };
+  }
+
+  async debug() {
+    const [project, config] = await Promise.all([
+      readProjectById(env.PROJECT_DIRECTORY, this.props.projectId).catch(() => null),
+      Promise.resolve(parseConfig(env)),
+    ]);
+    const streamPath = this.props.itxPath ?? "/";
+    const streamUrl =
+      project?.slug == null
+        ? (config.baseUrl ?? "https://os.iterate.com")
+        : buildProjectStreamViewerUrl({
+            baseUrl: config.baseUrl,
+            projectSlug: project.slug,
+            streamPath,
+          });
+
+    return [
+      `*Debug:* <${streamUrl}|open stream>`,
+      `Path: \`${streamPath}\``,
+      `Project: \`${project?.slug ?? this.props.projectId}\``,
+    ].join("\n");
   }
 
   get processor() {
@@ -1180,6 +1313,10 @@ export class ItxRpcTarget extends RpcTarget implements Itx {
     return new ProjectEgressRpcTarget({ projectId: this.props.projectId });
   }
 
+  get examples(): ItxExampleCatalog {
+    return new ItxExampleCatalogRpcTarget();
+  }
+
   get gmail(): GmailCapability {
     return new GmailRpcTarget({
       auth: this.props.auth,
@@ -1215,6 +1352,13 @@ export class ItxRpcTarget extends RpcTarget implements Itx {
 
   get repos() {
     return new ProjectRepoCollectionRpcTarget({
+      auth: this.props.auth,
+      projectId: this.props.projectId,
+    });
+  }
+
+  get sandboxes() {
+    return new SandboxCollectionRpcTarget({
       auth: this.props.auth,
       projectId: this.props.projectId,
     });
@@ -1531,13 +1675,26 @@ export class StreamProcessorRpcTarget<Contract extends StreamProcessorContract>
   implements StreamProcessorRpc<ProcessorState<Contract>>
 {
   readonly #processor: StreamProcessor<Contract, object>;
+  readonly #catchUpBeforeSnapshot: (() => Promise<void>) | undefined;
 
-  constructor(processor: StreamProcessor<Contract, object>) {
+  constructor(
+    processor: StreamProcessor<Contract, object>,
+    options: {
+      /**
+       * Host-provided pull-through (`StreamProcessorHost.catchUp`): snapshots
+       * served over this target reflect events the push delivery has not
+       * brought yet, giving remote readers read-your-writes.
+       */
+      catchUpBeforeSnapshot?: () => Promise<void>;
+    } = {},
+  ) {
     super();
     this.#processor = processor;
+    this.#catchUpBeforeSnapshot = options.catchUpBeforeSnapshot;
   }
 
-  snapshot() {
+  async snapshot() {
+    await this.#catchUpBeforeSnapshot?.();
     return this.#processor.snapshot();
   }
 
@@ -1554,7 +1711,41 @@ export class StreamProcessorRpcTarget<Contract extends StreamProcessorContract>
   }
 }
 
+// The examples catalogue is plain data (src/itx/examples.ts) shared with the
+// REPL "Examples" panel and the e2e matrix. Exposing it as a built-in lets
+// agents and scripts browse known-good snippets instead of guessing at the
+// surface; list() omits the code bodies so it stays cheap to skim.
+// Session-context entries are excluded: they run against the OS Session
+// (what authenticate() returns), which an itx holder does not have.
+const PROJECT_CONTEXT_EXAMPLES = ITX_EXAMPLES.filter((example) => example.context === "project");
+
+class ItxExampleCatalogRpcTarget extends RpcTarget implements ItxExampleCatalog {
+  async list() {
+    return PROJECT_CONTEXT_EXAMPLES.map(exampleSummary);
+  }
+
+  async get(input: Parameters<ItxExampleCatalog["get"]>[0]) {
+    const example = PROJECT_CONTEXT_EXAMPLES.find((candidate) => candidate.id === input.id);
+    if (!example) {
+      throw new Error(`unknown example "${input.id}" — itx.examples.list() has every id`);
+    }
+    return { ...exampleSummary(example), code: example.code };
+  }
+}
+
+function exampleSummary(example: ItxExample): ItxExampleSummary {
+  return {
+    description: example.description,
+    id: example.id,
+    title: example.title,
+  };
+}
+
 type McpClientDeps = { egress: Fetcher };
+
+// Exa's hosted MCP server works unauthenticated (rate-limited); pre-connecting
+// it gives every project web search with zero setup.
+const EXA_MCP_URL = "https://mcp.exa.ai/mcp";
 
 class McpClientCollectionRpcTarget extends RpcTarget implements McpClientCollection {
   constructor(readonly props: McpClientDeps) {
@@ -1563,6 +1754,10 @@ class McpClientCollectionRpcTarget extends RpcTarget implements McpClientCollect
 
   connect(input: Parameters<McpClientCollection["connect"]>[0]) {
     return McpClientRpcTarget.connect(input, this.props);
+  }
+
+  get exa(): McpClientRpc {
+    return new McpClientRpcTarget({ config: { url: EXA_MCP_URL }, egress: this.props.egress });
   }
 }
 

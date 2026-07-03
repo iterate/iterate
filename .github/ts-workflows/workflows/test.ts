@@ -11,10 +11,10 @@ export default workflow({
   },
   jobs: {
     test: {
-      ...utils.runsOnDepotUbuntu,
+      ...utils.runsOnDepotImage,
       steps: [
-        ...utils.setupRepo,
-        ...utils.setupDoppler({ config: "dev", project: "test" }),
+        ...utils.setupFromImage(),
+        ...utils.setupDopplerBaked({ config: "dev", project: "test" }),
         {
           name: "Run Tests",
           env: {

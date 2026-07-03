@@ -8,7 +8,7 @@
 // lifetime.
 
 import { z } from "zod";
-import { defineProcessorContract } from "../streams/stream-processor.ts";
+import { defineProcessorContract } from "../streams/processor-contracts.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 
 const VOICE_AGENT_PATH_PREFIX = "/agents/voice/";

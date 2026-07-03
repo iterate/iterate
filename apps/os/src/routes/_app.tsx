@@ -10,7 +10,12 @@ import { getSidebarDefaultOpen } from "~/lib/sidebar-state.ts";
 
 export const Route = createFileRoute("/_app")({
   beforeLoad: ({ context, location }) =>
-    requireOrganizationMemberForSession(context.authSession, location, context.iterateAuthIssuer),
+    requireOrganizationMemberForSession(
+      context.authSession,
+      location,
+      context.iterateAuthIssuer,
+      context.authError,
+    ),
   // The project list is NOT pre-warmed here: it comes from the itx session
   // (browser-only), so the sidebar populates it after hydration.
   loader: async () => ({

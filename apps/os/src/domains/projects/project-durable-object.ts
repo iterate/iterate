@@ -16,7 +16,6 @@ import {
 import { deepRetainRpcStubs } from "../itx/live-capability.ts";
 import { readOpenAiApiKeyFromAppConfig } from "../agents/utils.ts";
 import { secretErrorResponse, secretReferencePathsFromHeaders } from "../secrets/utils.ts";
-import { SlackProcessorContract } from "../integrations/slack-processor-contract.ts";
 import { SlackProcessor } from "../integrations/slack-processor-implementation.ts";
 import { eyesReactionTargetFromWebhookPayload } from "../integrations/slack-agent-processor-implementation.ts";
 import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
@@ -34,7 +33,6 @@ export class ProjectDurableObject extends DurableObject<Env> {
     }),
   });
   readonly #projectProcessor = this.#processorHost.add(
-    ProjectProcessorContract.slug,
     (deps) =>
       new ProjectProcessor({
         ...deps,
@@ -54,7 +52,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
   // instance addressed at `/integrations/slack` (the host stream is this DO's
   // own path stream), where the OAuth connect / project bootstrap configured
   // its subscription; registering it on every instance is harmless.
-  readonly #slackProcessor = this.#processorHost.add(SlackProcessorContract.slug, (deps) => {
+  readonly #slackProcessor = this.#processorHost.add((deps) => {
     return new SlackProcessor({
       ...deps,
       acknowledgeRoutedWebhook: async ({ payload }) => {
@@ -96,7 +94,12 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   get processor() {
-    return new StreamProcessorRpcTarget(this.#projectProcessor);
+    return new StreamProcessorRpcTarget(this.#projectProcessor, {
+      // Lists served from this snapshot (child streams, secrets) must reflect
+      // a child stream created moments ago even when the root stream's push
+      // delivery is lagging or a wake was dropped.
+      catchUpBeforeSnapshot: () => this.#processorHost.catchUp(ProjectProcessorContract.slug),
+    });
   }
 
   async fetch(request: Request): Promise<Response> {

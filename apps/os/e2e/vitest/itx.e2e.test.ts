@@ -5,8 +5,8 @@ import { newHttpBatchRpcSession, RpcTarget } from "capnweb";
 import { WebClient } from "@slack/web-api";
 import { z } from "zod";
 import { RepoArtifactNameCodec } from "../../src/domains/repos/utils.ts";
+import { defineProcessorContract } from "../../src/domains/streams/processor-contracts.ts";
 import {
-  defineProcessorContract,
   StreamProcessor,
   type StreamProcessorSnapshot,
 } from "../../src/domains/streams/stream-processor.ts";
@@ -345,7 +345,7 @@ describe("itx", () => {
     ).rejects.toThrow(/no capability "someMethodInTestRunner.getSecret"/);
   });
 
-  test("Project describe exposes Workers AI as a builtin capability", async () => {
+  test("Project describe exposes self-describing builtin capabilities", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
       type: "admin-secret",
@@ -355,7 +355,16 @@ describe("itx", () => {
     using project = itx.projects.create({ slug: "ai-builtin" });
     const description = await project.describe();
 
-    expect(description.capabilities).toContainEqual({ path: ["ai"], type: "builtin" });
+    expect(description.capabilities).toContainEqual(
+      expect.objectContaining({ path: ["ai"], type: "builtin" }),
+    );
+    expect(description.capabilities).toContainEqual(
+      expect.objectContaining({
+        instructions: expect.stringContaining("Gmail REST proxy"),
+        path: ["gmail"],
+        type: "builtin",
+      }),
+    );
   });
 
   test("Voice builtin mints an ephemeral realtime connection over itx", async () => {
@@ -469,6 +478,20 @@ describe("itx", () => {
           expect.objectContaining({ path: "/" }),
           expect.objectContaining({ path: secretPath }),
         ]),
+      );
+      await waitForCondition(
+        async () => {
+          const state = (await project.processor.snapshot()).state;
+          const streamPaths = new Set(state.streams.map((item) => item.path));
+          const repoPaths = new Set(state.repos.map((item) => item.path));
+          return (
+            streamPaths.has(agentPath) &&
+            streamPaths.has(repoPath) &&
+            streamPaths.has(secretPath) &&
+            repoPaths.has(repoPath)
+          );
+        },
+        { description: "project processor to fold agent, repo, and secret stream lists" },
       );
       const projectState = (await project.processor.snapshot()).state;
       expect(projectState.streams).toEqual(

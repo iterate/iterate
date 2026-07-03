@@ -443,7 +443,7 @@ const persisted = answer();
       ids.add(example.id);
       expect(example.title.length).toBeGreaterThan(0);
       expect(example.description.length).toBeGreaterThan(0);
-      expect(["global", "project"]).toContain(example.context);
+      expect(["project", "session"]).toContain(example.context);
       expect(example.runtimes.length).toBeGreaterThan(0);
       // The statement compiler must accept the snippet — this catches
       // transform bugs around nested template literals, top-level classes,

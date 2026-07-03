@@ -1,4 +1,5 @@
 import { StreamProcessor } from "../streams/stream-processor.ts";
+import { timedStep } from "../../lib/step-timing.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { PROJECT_REPO_PATH } from "../repos/utils.ts";
 import { PROJECT_REPO_ONBOARDING_MD } from "../repos/project-repo-template.ts";
@@ -21,6 +22,7 @@ import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts
 import { SlackAgentProcessorContract } from "../integrations/slack-agent-processor-contract.ts";
 import { SlackProcessorContract } from "../integrations/slack-processor-contract.ts";
 import { isSlackAgentPath, SLACK_INTEGRATION_STREAM_PATH } from "../integrations/utils.ts";
+import { isMcpAgentPath } from "../inbound-mcp-server/mcp-session-agent-path.ts";
 import { isVoiceAgentPath, VoiceProcessorContract } from "../voice/voice-processor-contract.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 
@@ -32,13 +34,30 @@ const ONBOARDING_AGENT_PATH = "/agents/onboarding";
  * processor transcribes them, and replies go out through the itx.slack Web
  * API capability instead of web chat.
  */
-const SLACK_AGENT_SYSTEM_PROMPT = [
+export const SLACK_AGENT_SYSTEM_PROMPT = [
   "You are an iterate AI agent running inside a Slack thread.",
   "Respond with exactly one fenced JavaScript code block and no surrounding prose.",
   "The code block must contain a single async arrow function: async (itx) => { ... }.",
   "Incoming Slack webhook events arrive as your inputs. Reply only when mentioned, directly asked, or clearly needed.",
-  "To reply in the thread, use await itx.slack.chat.postMessage({ channel, thread_ts, text }) with the channel and thread_ts from the incoming webhook payloads. Never use itx.chat.sendMessage for Slack replies. Do not return side-effect-only call results unless you need to inspect them on your next turn.",
-  "Use project capabilities on itx when they are relevant.",
+  "To reply in the thread, use await itx.slack.chat.postMessage({ channel, thread_ts, text }) with the channel and thread_ts from the incoming webhook payloads. Never use itx.chat.sendMessage for Slack replies.",
+  'If asked about email, Gmail, or an inbox, use the project Google integration: first check await itx.integrations.getConnection({ provider: "google" }), then call await itx.gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }). A connected Google account gives this Slack agent Gmail access through itx.gmail; do not claim you lack inbox access before checking it.',
+  "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply — do not pattern-match response shapes blind or wrap calls in defensive try/catch (a raw thrown error is more useful to you). Use Promise.all to fan out independent calls concurrently.",
+  'Keep the thread in the loop on every working turn: when a script does real work, post a short progress note in the same Promise.all as the work itself — Promise.all([itx.slack.chat.postMessage({ channel, thread_ts, text: "Checking your email now..." }), itx.gmail.request(...)]) — so the thread is never silent while you fetch.',
+  "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
+  "Use project capabilities on itx when they are relevant: await itx.describe() lists them, and await itx.examples.list() / itx.examples.get({ id }) is a catalogue of known-good snippets.",
+].join("\n");
+
+/**
+ * Agents under `/agents/mcp/**` are inbound MCP session agents: one stream per
+ * inbound MCP session. The ask_assistant MCP tool appends the caller's message
+ * to the session stream and blocks until the agent's next chat reply, so the
+ * reply door is the same itx.chat.sendMessage as web chat.
+ */
+const MCP_AGENT_SYSTEM_PROMPT = [
+  DEFAULT_AGENT_SYSTEM_PROMPT,
+  "",
+  "You are serving this project's MCP server. Your messages come from an AI agent (an MCP client) acting on behalf of the project owner, through the ask_assistant MCP tool. That tool call blocks until your next itx.chat.sendMessage reply and returns it verbatim to the asking agent.",
+  "This overrides the multi-message chat and every-turn progress-update guidance above: send NO acknowledgements or progress updates — the first sendMessage ends the caller's wait, so it must BE the complete answer. Reply exactly once per request with await itx.chat.sendMessage({ message }). Do the requested work directly with your capabilities; only ask a clarifying question when the request is genuinely ambiguous.",
 ].join("\n");
 
 /**
@@ -134,38 +153,51 @@ export class ProjectProcessor extends StreamProcessor<
           );
         }
         blockProcessorWhile(async () => {
-          await append(
-            buildDurableObjectProcessorSubscriptionConfiguredEvent({
-              durableObjectName: DurableObjectNameCodec.stringify({
-                projectId: this.deps.itx.projectId,
-                path: "/",
-              }),
-              processorSlug: ItxProcessorContract.slug,
-              subscriberType: "itx",
-            }),
-          );
-          // Arm the Slack webhook router on `/integrations/slack` from birth,
-          // so a claimed workspace's first webhook routes even if the connect
-          // flow's own belt-and-braces subscription append raced.
-          await this.deps.itx.streams.get(SLACK_INTEGRATION_STREAM_PATH).append(
-            buildDurableObjectProcessorSubscriptionConfiguredEvent({
-              durableObjectName: DurableObjectNameCodec.stringify({
-                projectId: this.deps.itx.projectId,
-                path: SLACK_INTEGRATION_STREAM_PATH,
-              }),
-              idempotencyKey: `slack-router-subscription:${this.deps.itx.projectId}`,
-              processorSlug: SlackProcessorContract.slug,
-              subscriberType: "project",
-            }),
-          );
-          await append({
-            type: "events.iterate.com/repo/create-requested",
-            idempotencyKey: `repo-create-requested:${this.deps.itx.projectId}:${PROJECT_REPO_PATH}`,
-            payload: {
-              path: PROJECT_REPO_PATH,
-              projectId: this.deps.itx.projectId,
-            },
-          });
+          const timing = { projectId: this.deps.itx.projectId };
+          // One atomic root append (itx subscription + repo kickoff, original
+          // relative order preserved) in parallel with the independent Slack
+          // stream append. The previous three sequential awaits were the
+          // slowest lane of the create saga (~1.2-2.6s measured on preview-7;
+          // tasks/os-cold-create-latency.md) — batching cuts it to one
+          // round-trip apiece.
+          await Promise.all([
+            timedStep("create-timing", timing, "root-saga-append", () =>
+              append(
+                buildDurableObjectProcessorSubscriptionConfiguredEvent({
+                  durableObjectName: DurableObjectNameCodec.stringify({
+                    projectId: this.deps.itx.projectId,
+                    path: "/",
+                  }),
+                  processorSlug: ItxProcessorContract.slug,
+                  subscriberType: "itx",
+                }),
+                {
+                  type: "events.iterate.com/repo/create-requested",
+                  idempotencyKey: `repo-create-requested:${this.deps.itx.projectId}:${PROJECT_REPO_PATH}`,
+                  payload: {
+                    path: PROJECT_REPO_PATH,
+                    projectId: this.deps.itx.projectId,
+                  },
+                },
+              ),
+            ),
+            // Arm the Slack webhook router on `/integrations/slack` from birth,
+            // so a claimed workspace's first webhook routes even if the connect
+            // flow's own belt-and-braces subscription append raced.
+            timedStep("create-timing", timing, "slack-router-append", () =>
+              this.deps.itx.streams.get(SLACK_INTEGRATION_STREAM_PATH).append(
+                buildDurableObjectProcessorSubscriptionConfiguredEvent({
+                  durableObjectName: DurableObjectNameCodec.stringify({
+                    projectId: this.deps.itx.projectId,
+                    path: SLACK_INTEGRATION_STREAM_PATH,
+                  }),
+                  idempotencyKey: `slack-router-subscription:${this.deps.itx.projectId}`,
+                  processorSlug: SlackProcessorContract.slug,
+                  subscriberType: "project",
+                }),
+              ),
+            ),
+          ]);
         });
         break;
       }
@@ -178,9 +210,9 @@ export class ProjectProcessor extends StreamProcessor<
             path: childPath,
           });
           if (childPath.startsWith("/agents/")) {
-            // Agents under /agents/slack/** additionally get the slack-agent
-            // processor subscription and the Slack reply prompt — this is THE
-            // place the "slack thread streams are slack agents" rule lives.
+            // The agent path picks the prompt (agentSystemPromptForPath);
+            // Slack agents additionally get the slack-agent processor
+            // subscription.
             const isSlack = isSlackAgentPath(childPath);
             const isVoice = isVoiceAgentPath(childPath);
             await this.deps.itx.streams.get(childPath).append(
@@ -192,11 +224,7 @@ export class ProjectProcessor extends StreamProcessor<
                 projectId: this.deps.itx.projectId,
                 slack: isSlack,
                 voice: isVoice,
-                systemPrompt: isSlack
-                  ? SLACK_AGENT_SYSTEM_PROMPT
-                  : isVoice
-                    ? VOICE_AGENT_SYSTEM_PROMPT
-                    : DEFAULT_AGENT_SYSTEM_PROMPT,
+                systemPrompt: agentSystemPromptForPath(childPath),
               }),
             );
             return;
@@ -222,32 +250,39 @@ export class ProjectProcessor extends StreamProcessor<
           return;
         }
         blockProcessorWhile(async () => {
-          await waitForDefaultProjectWorker(this.deps.itx);
-          await append({
-            type: "events.iterate.com/project/created",
-            idempotencyKey: `project-created:${this.deps.itx.projectId}`,
-            payload: state.createRequest!,
-          });
+          const timing = { projectId: this.deps.itx.projectId };
+          await timedStep("create-timing", timing, "worker-probe", () =>
+            waitForDefaultProjectWorker(this.deps.itx),
+          );
+          await timedStep("create-timing", timing, "project-created-append", () =>
+            append({
+              type: "events.iterate.com/project/created",
+              idempotencyKey: `project-created:${this.deps.itx.projectId}`,
+              payload: state.createRequest!,
+            }),
+          );
           // Seed the onboarding agent: full birth certificate (the generic
           // child-stream-created lane later double-appends with the same
           // idempotency keys and dedupes) plus the kickoff input that makes the
           // agent greet the user without waiting for a first message.
-          await this.deps.itx.streams.get(ONBOARDING_AGENT_PATH).append(
-            ...agentBirthCertificateEvents({
-              childPath: ONBOARDING_AGENT_PATH,
-              llmProvider: this.deps.defaultLlmProvider,
-              projectId: this.deps.itx.projectId,
-              systemPrompt: ONBOARDING_AGENT_SYSTEM_PROMPT,
-            }),
-            {
-              type: "events.iterate.com/agent/input-added",
-              idempotencyKey: `project-onboarding-start:${this.deps.itx.projectId}`,
-              payload: {
-                content:
-                  "Start onboarding now. The project owner just created this project and is looking at the chat.",
-                llmRequestPolicy: { behaviour: "after-current-request" as const },
+          await timedStep("create-timing", timing, "onboarding-agent-birth", () =>
+            this.deps.itx.streams.get(ONBOARDING_AGENT_PATH).append(
+              ...agentBirthCertificateEvents({
+                childPath: ONBOARDING_AGENT_PATH,
+                llmProvider: this.deps.defaultLlmProvider,
+                projectId: this.deps.itx.projectId,
+                systemPrompt: ONBOARDING_AGENT_SYSTEM_PROMPT,
+              }),
+              {
+                type: "events.iterate.com/agent/input-added",
+                idempotencyKey: `project-onboarding-start:${this.deps.itx.projectId}`,
+                payload: {
+                  content:
+                    "Start onboarding now. The project owner just created this project and is looking at the chat.",
+                  llmRequestPolicy: { behaviour: "after-current-request" as const },
+                },
               },
-            },
+            ),
           );
         });
         return;
@@ -257,6 +292,16 @@ export class ProjectProcessor extends StreamProcessor<
         return;
     }
   }
+}
+
+/** THE place the "agent path decides the reply door" rule lives: Slack thread
+ * agents reply via itx.slack, inbound MCP session agents via their blocked
+ * ask_assistant call, everything else via web chat. */
+function agentSystemPromptForPath(agentPath: string) {
+  if (isSlackAgentPath(agentPath)) return SLACK_AGENT_SYSTEM_PROMPT;
+  if (isMcpAgentPath(agentPath)) return MCP_AGENT_SYSTEM_PROMPT;
+  if (isVoiceAgentPath(agentPath)) return VOICE_AGENT_SYSTEM_PROMPT;
+  return DEFAULT_AGENT_SYSTEM_PROMPT;
 }
 
 const DEFAULT_MODEL_BY_LLM_PROVIDER = {
@@ -322,6 +367,7 @@ function agentBirthCertificateEvents(input: {
           "- Other agents live at /agents/<name> (itx.agents.list() / itx.agents.get(path)); Slack thread agents appear under /agents/slack/<channel>/ts-<ts>; secrets under /secrets/**.",
           '- Streams are path-addressed: itx.streams.get(path).append(event) / getEvents() / waitFor(); path "/" is the project root stream.',
           "- itx.describe() lists the capabilities currently available in your scope.",
+          '- If Google is connected, Gmail is available at itx.gmail. Check itx.integrations.getConnection({ provider: "google" }) and use itx.gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }) for inbox requests.',
         ].join("\n"),
         llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
       },

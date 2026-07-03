@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Stream, StreamEvent, StreamEventInput } from "../../types.ts";
+import { SLACK_AGENT_SYSTEM_PROMPT } from "../projects/project-processor-implementation.ts";
 import { SlackProcessor } from "./slack-processor-implementation.ts";
 import {
   SlackAgentProcessor,
@@ -575,7 +576,7 @@ describe("SlackAgentProcessor", () => {
     expect(slackCalls).toHaveLength(0);
   });
 
-  it("compiles the !debug bang command into a Slack-posting describe script", async () => {
+  it("compiles the !debug bang command into a Slack-posting debug script", async () => {
     const { cursors, processor, slackCalls, stream } = setup();
 
     await stream.append({
@@ -592,15 +593,12 @@ describe("SlackAgentProcessor", () => {
       idempotencyKey: "slack-agent:bang-command:1",
       payload: { executionId: "slack-bang-command-1" },
     });
-    // Legacy called `itx.debug()` and carried an `enqueued` payload flag; on
-    // itx the debug dump is `itx.describe()` and the payload is just
-    // { code, executionId }.
     const code = (scripts[0]!.payload as { code: string }).code;
-    expect(code).toContain("const debug = await itx.describe();");
+    expect(code).toContain("const debug = await itx.debug();");
     expect(code).toContain("await itx.slack.chat.postMessage({");
     expect(code).toContain('channel: "C123"');
     expect(code).toContain('thread_ts: "111.222"');
-    expect(code).toContain("text: `Debug info:");
+    expect(code).toContain("text: `Debug info:\\n${debug}`");
     expect(
       stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
     ).toHaveLength(0);
@@ -741,7 +739,7 @@ describe("SlackAgentProcessor", () => {
     );
     expect(scripts).toHaveLength(1);
     expect((scripts[0]!.payload as { code: string }).code).toContain(
-      "const debug = await itx.describe();",
+      "const debug = await itx.debug();",
     );
     expect(slackCalls.filter((call) => call.method === "reactions.add")).toHaveLength(0);
   });
@@ -845,6 +843,13 @@ describe("eyesReactionTargetFromWebhookPayload", () => {
 });
 
 describe("compileBangCommand", () => {
+  it("tells Slack agents to use the Google-backed Gmail capability for inbox requests", () => {
+    expect(SLACK_AGENT_SYSTEM_PROMPT).toContain("itx.gmail.request");
+    expect(SLACK_AGENT_SYSTEM_PROMPT).toContain('provider: "google"');
+    expect(SLACK_AGENT_SYSTEM_PROMPT).toContain('path: "/users/me/messages"');
+    expect(SLACK_AGENT_SYSTEM_PROMPT).toContain("do not claim you lack inbox access");
+  });
+
   it("wraps bare expressions in an async itx arrow", () => {
     expect(
       compileBangCommand({ channel: "C1", message: "!whoami", threadTs: "1.2" })?.code,

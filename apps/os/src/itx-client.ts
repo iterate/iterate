@@ -58,7 +58,10 @@ function connect<T extends CapnRpcCompatible<T>>(
   url: string,
   onWebSocketMessage?: (message: ItxWebSocketMessage) => void,
 ): CapnRpcStub<T> {
-  const socket = new WebSocket(url, { handshakeTimeout: 10_000 });
+  // 15s: cold deployments answer the upgrade only after the worker chain has
+  // loaded, but #1601's route-healing + the preview slot warmup mean the first
+  // upgrade lands in a few seconds — 15s is headroom, not a hang budget.
+  const socket = new WebSocket(url, { handshakeTimeout: 15_000 });
 
   if (onWebSocketMessage) {
     const start = Date.now();
