@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import alchemy from "alchemy";
 import {
   Ai,
+  Container,
   DurableObjectNamespace,
   KVNamespace,
   Worker,
@@ -26,6 +27,7 @@ import type { AgentDurableObject } from "./src/domains/agents/agent-durable-obje
 import type { ItxDurableObject } from "./src/domains/itx/itx-durable-object.ts";
 import type { ProjectDurableObject } from "./src/domains/projects/project-durable-object.ts";
 import type { RepoDurableObject } from "./src/domains/repos/repo-durable-object.ts";
+import type { CloudflareSandboxDurableObject } from "./src/domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts";
 import type { SecretDurableObject } from "./src/domains/secrets/secret-durable-object.ts";
 import type { StreamDurableObject } from "./src/domains/streams/stream-durable-object.ts";
 import type { StatefulWorkerDurableObject } from "./src/domains/workers/stateful-worker-durable-object.ts";
@@ -218,6 +220,7 @@ const workerNames = {
   itx: `${ctx.workerName}-itx`,
   project: `${ctx.workerName}-project`,
   repo: `${ctx.workerName}-repo`,
+  sandbox: `${ctx.workerName}-sandbox`,
   secret: `${ctx.workerName}-secret`,
   stream: `${ctx.workerName}-stream`,
   worker: `${ctx.workerName}-worker`,
@@ -278,6 +281,34 @@ const secret = DurableObjectNamespace<SecretDurableObject>("secret", {
   scriptName: workerNames.secret,
   sqlite: true,
 });
+const sandbox = DurableObjectNamespace<CloudflareSandboxDurableObject>("sandbox", {
+  className: "CloudflareSandboxDurableObject",
+  scriptName: workerNames.sandbox,
+  sqlite: true,
+});
+// The sandbox class is container-backed. Alchemy's Container binding does not
+// carry `script_name` into worker metadata, so it cannot be the cross-script
+// binding other workers use — consumers bind the plain namespace above, and
+// only the OWNING sandbox worker binds this Container (image build + container
+// application + class migration live there). Local dev binds the plain
+// namespace instead so `pnpm dev` never requires Docker; sandbox calls then
+// fail at the Durable Object constructor ("Container is not enabled") until
+// you opt in with OS_SANDBOX_CONTAINER_LOCAL_DEV=true (Docker must be running).
+const sandboxContainerEnabled =
+  !ctx.app.local || process.env.OS_SANDBOX_CONTAINER_LOCAL_DEV === "true";
+const sandboxContainer = sandboxContainerEnabled
+  ? await Container<CloudflareSandboxDurableObject>("sandbox-container", {
+      className: "CloudflareSandboxDurableObject",
+      scriptName: workerNames.sandbox,
+      adopt: true,
+      build: {
+        context: fileURLToPath(new URL(".", import.meta.url)),
+        dockerfile: "Dockerfile.sandbox",
+      },
+      instanceType: "lite",
+      maxInstances: 10,
+    })
+  : sandbox;
 const statefulWorker = DurableObjectNamespace<StatefulWorkerDurableObject>("worker", {
   className: "StatefulWorkerDurableObject",
   scriptName: workerNames.worker,
@@ -298,6 +329,7 @@ const durableObjectWorkerNames = [
   workerNames.itx,
   workerNames.project,
   workerNames.repo,
+  workerNames.sandbox,
   workerNames.secret,
   workerNames.stream,
   workerNames.worker,
@@ -390,6 +422,7 @@ const itxBindings = {
   PROJECT: project,
   PROJECT_DIRECTORY: projectDirectory,
   REPO: repo,
+  SANDBOX: sandbox,
   SECRET: secret,
   SECRET_ENCRYPTION_KEY: alchemy.secret(
     process.env.SECRET_ENCRYPTION_KEY ?? "os-dev-secret-encryption-key",
@@ -404,11 +437,15 @@ const itxBindings = {
 // routes instead of going to origin — same reason as the app worker.
 const engineCompatibilityFlags = ["nodejs_compat", "global_fetch_strictly_public"];
 
-function engineWorker(id: keyof typeof workerNames, entrypoint: string) {
+function engineWorker(
+  id: keyof typeof workerNames,
+  entrypoint: string,
+  bindingOverrides?: Bindings,
+) {
   return osWorker(id, {
     entrypoint,
     compatibilityFlags: engineCompatibilityFlags,
-    bindings: itxBindings,
+    bindings: { ...itxBindings, ...bindingOverrides },
   });
 }
 
@@ -423,6 +460,7 @@ const [
   projectWorker,
   agentWorker,
   repoWorker,
+  sandboxWorker,
   secretWorker,
   workerWorker,
   apiWorker,
@@ -432,6 +470,9 @@ const [
   engineWorker("project", "./src/workers/project.ts"),
   engineWorker("agent", "./src/workers/agent.ts"),
   engineWorker("repo", "./src/workers/repo.ts"),
+  // The owner binds the container-backed namespace (image + container app +
+  // migration); every other itx worker keeps the plain cross-script binding.
+  engineWorker("sandbox", "./src/workers/sandbox.ts", { SANDBOX: sandboxContainer }),
   engineWorker("secret", "./src/workers/secret.ts"),
   engineWorker("worker", "./src/workers/worker.ts"),
   engineWorker("api", "./src/workers/api.ts"),
@@ -519,6 +560,7 @@ export const workers = {
   itx: itxWorker,
   project: projectWorker,
   repo: repoWorker,
+  sandbox: sandboxWorker,
   secret: secretWorker,
   stream: streamWorker,
   worker: workerWorker,

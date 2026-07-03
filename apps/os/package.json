@@ -27,6 +27,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@cloudflare/sandbox": "0.12.3",
     "@cloudflare/shell": "^0.3.4",
     "@codemirror/autocomplete": "^6.20.1",
     "@codemirror/lint": "^6.9.5",

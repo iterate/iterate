@@ -127,6 +127,8 @@ export interface Itx extends ItxCapabilityHost {
   processor: StreamProcessorRpc<ProjectProcessorState>;
   repo: Repo;
   repos: ProjectRepoCollection;
+  /** Path-addressed Cloudflare Sandboxes (`itx.sandboxes.get("/sandboxes/cloudflare/<name>")`). */
+  sandboxes: SandboxCollection;
   secrets: SecretCollection;
   /** Slack Web API proxy for the project's connected workspace (itx.slack.chat.postMessage(...)). */
   slack: SlackCapability;
@@ -330,6 +332,29 @@ export interface Repo {
   } | null>;
   whoami(): Promise<string>;
 }
+
+/**
+ * Catalog of Cloudflare Sandbox containers within one project.
+ *
+ * A sandbox is addressed by its FULL path — always
+ * `/sandboxes/cloudflare/<name>` — so the provider is visible at every call
+ * site and a future provider is a new prefix, not a new API. Getting a
+ * sandbox is cheap and does not start a container; the first command does.
+ */
+export interface SandboxCollection {
+  get(path: string): CloudflareSandbox;
+}
+
+/**
+ * One Cloudflare Sandbox: the bare `@cloudflare/sandbox` Durable Object stub,
+ * nothing wrapped on top. Whatever the installed SDK exposes is callable —
+ * `exec(command)`, `readFile`/`writeFile`/`listFiles`, `startProcess`,
+ * `gitCheckout`, `exposePort`, `destroy()`, … — so this contract deliberately
+ * does not re-declare that surface (same stance as {@link McpClientRpc}); see
+ * https://developers.cloudflare.com/sandbox/ for the API. The project's repo
+ * is cloned to `/workspace/repo` on every container start.
+ */
+export type CloudflareSandbox = object;
 
 /** Secret catalog within one project. */
 export interface SecretCollection {
