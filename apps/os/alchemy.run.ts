@@ -392,7 +392,6 @@ const itxBindings = {
   ARTIFACTS_NAMESPACE: artifactsNamespace,
   ITX: itx,
   LOADER: WorkerLoader(),
-  PAGE_DEBUGGING_DEMO: pageDebuggingDemo,
   PROJECT: project,
   PROJECT_DIRECTORY: projectDirectory,
   REPO: repo,
@@ -410,11 +409,15 @@ const itxBindings = {
 // routes instead of going to origin — same reason as the app worker.
 const engineCompatibilityFlags = ["nodejs_compat", "global_fetch_strictly_public"];
 
-function engineWorker(id: keyof typeof workerNames, entrypoint: string) {
+function engineWorker(
+  id: keyof typeof workerNames,
+  entrypoint: string,
+  extraBindings: Bindings = {},
+) {
   return osWorker(id, {
     entrypoint,
     compatibilityFlags: engineCompatibilityFlags,
-    bindings: itxBindings,
+    bindings: { ...itxBindings, ...extraBindings },
   });
 }
 
@@ -440,7 +443,9 @@ const [
   engineWorker("repo", "./src/workers/repo.ts"),
   engineWorker("secret", "./src/workers/secret.ts"),
   engineWorker("worker", "./src/workers/worker.ts"),
-  engineWorker("api", "./src/workers/api.ts"),
+  // The api worker hosts AND uses the page-debugging demo DO (same-script
+  // binding — no cross-script 10061), so the binding is api-only, not shared.
+  engineWorker("api", "./src/workers/api.ts", { PAGE_DEBUGGING_DEMO: pageDebuggingDemo }),
 ]);
 
 // Second bootstrap pass (fresh stages only): the cross-script Durable Object
