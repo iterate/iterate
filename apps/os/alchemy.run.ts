@@ -23,7 +23,7 @@ import { prepareLocalDevServer } from "@iterate-com/shared/alchemy/local-dev-ser
 import { ensureLocalDevOAuthClient } from "./src/auth/dev-oauth-client-bootstrap.ts";
 import { AppConfig } from "./src/config.ts";
 import type { AgentDurableObject } from "./src/domains/agents/agent-durable-object.ts";
-import type { ItxDurableObject } from "./src/domains/itx/itx-durable-object.ts";
+import type { CapabilityHostDurableObject } from "./src/domains/capability-host/capability-host-durable-object.ts";
 import type { ProjectDurableObject } from "./src/domains/projects/project-durable-object.ts";
 import type { RepoDurableObject } from "./src/domains/repos/repo-durable-object.ts";
 import type { SecretDurableObject } from "./src/domains/secrets/secret-durable-object.ts";
@@ -204,7 +204,7 @@ const ctx = await initAlchemy("os", AppConfig, env);
 // Durable Object isolate loads only the code it runs (apps/os/docs/
 // worker-topology.md). `${ctx.workerName}` (os-prd, os-preview-N,
 // os-dev-<user>) is the tiny ingress router that owns all routes; the
-// dashboard app, itx API worker, and each Durable Object class get
+// dashboard app, API worker, and each Durable Object class get
 // their own worker. Durable Object classes exported from one worker are
 // bound as cross-script namespaces (`scriptName`) in every worker that
 // dials them.
@@ -214,8 +214,8 @@ const workerNames = {
   agent: `${ctx.workerName}-agent`,
   api: `${ctx.workerName}-api`,
   app: `${ctx.workerName}-app`,
+  capabilityHost: `${ctx.workerName}-capability-host`,
   ingress: ctx.workerName,
-  itx: `${ctx.workerName}-itx`,
   project: `${ctx.workerName}-project`,
   repo: `${ctx.workerName}-repo`,
   secret: `${ctx.workerName}-secret`,
@@ -253,9 +253,9 @@ const stream = DurableObjectNamespace<StreamDurableObject>("stream", {
   scriptName: workerNames.stream,
   sqlite: true,
 });
-const itx = DurableObjectNamespace<ItxDurableObject>("itx", {
-  className: "ItxDurableObject",
-  scriptName: workerNames.itx,
+const capabilityHost = DurableObjectNamespace<CapabilityHostDurableObject>("capability-host", {
+  className: "CapabilityHostDurableObject",
+  scriptName: workerNames.capabilityHost,
   sqlite: true,
 });
 const project = DurableObjectNamespace<ProjectDurableObject>("project", {
@@ -286,7 +286,7 @@ const statefulWorker = DurableObjectNamespace<StatefulWorkerDurableObject>("work
 
 // ---- Fresh-stage bootstrap --------------------------------------------------
 // Cloudflare rejects a cross-script DO binding whose target script does not
-// exist yet (error 10061), and the itx workers reference each other — a
+// exist yet (error 10061), and the engine workers reference each other — a
 // legitimate cycle once everything is deployed, but unsatisfiable on the
 // FIRST deploy of a fresh stage. So: bindings whose target script is missing
 // are omitted this pass, and the run re-executes itself once at the end to
@@ -295,7 +295,7 @@ const statefulWorker = DurableObjectNamespace<StatefulWorkerDurableObject>("work
 // so it never needs it either.
 const durableObjectWorkerNames = [
   workerNames.agent,
-  workerNames.itx,
+  workerNames.capabilityHost,
   workerNames.project,
   workerNames.repo,
   workerNames.secret,
@@ -332,7 +332,7 @@ function withoutBindingsToMissingScripts<B extends Bindings>(owner: string, bind
 // vite.config.ts, and the Worker resources skip alchemy's own miniflare via
 // `dev.url`. One workerd means cross-script DO bindings resolve in-process —
 // the wrangler dev-registry proxy dials remote objects by hex id, which
-// loses `ctx.id.name`, and Stream/itx DOs derive their identity from it.
+// loses `ctx.id.name`, and Stream/capability-host DOs derive their identity from it.
 const LOCAL_AUX_WORKERS_MANIFEST = ".alchemy/local/aux-workers.json";
 const localAuxWorkerConfigPaths: string[] = [];
 
@@ -362,7 +362,7 @@ async function osWorker<B extends Bindings>(
         ? JSON.stringify(ctx.rawRuntimeConfig, null, 2)
         : alchemy.secret(JSON.stringify(ctx.rawRuntimeConfig, null, 2)),
       // The worker's own name, for worker-loader cache keys (src/env.ts
-      // WORKER_SELF): local dev runs every itx worker inside one workerd whose
+      // WORKER_SELF): local dev runs every engine worker inside one workerd whose
       // loader cache is shared, so keys must be parent-worker-unique.
       WORKER_SELF: name,
     },
@@ -380,16 +380,16 @@ async function osWorker<B extends Bindings>(
   return worker;
 }
 
-// Bindings every itx worker carries — src/env.ts is the matching
-// contract. All itx workers get the full set so any of them can host any
+// Bindings every engine worker carries — src/env.ts is the matching
+// contract. All engine workers get the full set so any of them can host any
 // capability, exactly like the single-worker original itx came from.
-const itxBindings = {
+const engineBindings = {
   AI: Ai(),
   AGENT: agent,
   ARTIFACTS: Artifacts({ namespace: artifactsNamespace }),
   ARTIFACTS_ACCOUNT_ID: artifactsAccountId,
   ARTIFACTS_NAMESPACE: artifactsNamespace,
-  ITX: itx,
+  CAPABILITY_HOST: capabilityHost,
   LOADER: WorkerLoader(),
   PROJECT: project,
   PROJECT_DIRECTORY: projectDirectory,
@@ -412,7 +412,7 @@ function engineWorker(id: keyof typeof workerNames, entrypoint: string) {
   return osWorker(id, {
     entrypoint,
     compatibilityFlags: engineCompatibilityFlags,
-    bindings: itxBindings,
+    bindings: engineBindings,
   });
 }
 
@@ -423,7 +423,7 @@ function engineWorker(id: keyof typeof workerNames, entrypoint: string) {
 // order after them.
 const [
   streamWorker,
-  itxWorker,
+  capabilityHostWorker,
   projectWorker,
   agentWorker,
   repoWorker,
@@ -432,7 +432,7 @@ const [
   apiWorker,
 ] = await Promise.all([
   engineWorker("stream", "./src/workers/stream.ts"),
-  engineWorker("itx", "./src/workers/itx.ts"),
+  engineWorker("capabilityHost", "./src/workers/capability-host.ts"),
   engineWorker("project", "./src/workers/project.ts"),
   engineWorker("agent", "./src/workers/agent.ts"),
   engineWorker("repo", "./src/workers/repo.ts"),
@@ -471,7 +471,7 @@ const appWorker = await IterateAppWorker(ctx, {
   name: workerNames.app,
   main: "./src/workers/app.ts",
   bindings: {
-    ITX_API: apiWorker,
+    API: apiWorker,
     // Server-side project reads share the ingress directory cache.
     PROJECT_DIRECTORY: projectDirectory,
   },
@@ -494,7 +494,7 @@ const ingressWorker = await osWorker("ingress", {
   entrypoint: "./src/workers/ingress.ts",
   bindings: {
     APP: appWorker,
-    ITX_API: apiWorker,
+    API: apiWorker,
   },
 });
 
@@ -519,8 +519,8 @@ export const workers = {
   agent: agentWorker,
   api: apiWorker,
   app: appWorker,
+  capabilityHost: capabilityHostWorker,
   ingress: ingressWorker,
-  itx: itxWorker,
   project: projectWorker,
   repo: repoWorker,
   secret: secretWorker,

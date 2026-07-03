@@ -134,19 +134,20 @@ export function withOwnedRpcSession<T extends object>(stub: T, ...owned: Disposa
 }
 
 /**
- * Guards `provideCapability` against shadowing the host's own surface: a
- * capability path's root segment may not be a reserved RPC segment nor an
- * existing builtin on the target RpcTarget (e.g. `streams`, `agents`). Runs in
- * the isolate because it inspects the RpcTarget instance, which the DO can't see.
+ * Guards `provideCapability` against shadowing the itx surface: a capability
+ * path's root segment may not be a reserved RPC segment nor an existing builtin
+ * on any of the guard objects (e.g. `streams`, `agents` on the itx/agent
+ * targets' prototypes). Runs in the isolate because it inspects RpcTarget
+ * shapes, which the capability-host Durable Object can't see.
  */
-export function rejectBuiltinCollision(target: object, path: string[]): void {
+export function rejectBuiltinCollision(guards: readonly object[], path: string[]): void {
   const root = path[0];
   if (!root) return;
   if (isReservedDynamicPathSegment(root)) {
     throw new Error(`cannot provide capability "${root}": it is a reserved ITX path segment`);
   }
-  if (root in target) {
-    throw new Error(`cannot provide capability "${root}": it is already on this ITX target`);
+  if (guards.some((guard) => root in guard)) {
+    throw new Error(`cannot provide capability "${root}": it is already on the ITX surface`);
   }
 }
 

@@ -11,7 +11,7 @@
  * Lanes:
  *
  *   "os"       — the dashboard/app pipeline (OS host, non-itx paths)
- *   "api"      — itx path lanes on the OS host: /api/itx[...] and
+ *   "api"      — rpc path lanes on the OS host: /api, /api/admin-cookie, and
  *                /__itx_e2e/...
  *   "project"  — a project worker target, resolved from:
  *                  /prj_<id>/...                      (URL rewritten)
@@ -132,9 +132,15 @@ function projectRoute(input: {
   };
 }
 
-/** Itx path lanes served by the api worker on the OS host. */
+/**
+ * Path lanes served by the api worker on the OS host: the capnweb rpc
+ * endpoint at exactly `/api` (plus its admin-cookie bridge) and the e2e
+ * fixture lane. Deliberately exact-match: other `/api/*` paths (`/api/mcp`,
+ * `/api/health`, `/api/integrations/...`) are app routes and stay on the
+ * "os" lane.
+ */
 function isItxApiPath(pathname: string): boolean {
-  if (pathname === "/api/itx" || pathname.startsWith("/api/itx/")) return true;
+  if (pathname === "/api" || pathname === "/api/admin-cookie") return true;
   if (pathname.startsWith("/__itx_e2e/")) return true;
   return false;
 }

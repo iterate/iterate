@@ -487,7 +487,7 @@ describe("SlackAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     const scripts = stream.events.filter(
-      (event) => event.type === "events.iterate.com/itx/script-execution-requested",
+      (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
     );
     expect(scripts).toHaveLength(1);
     expect((scripts[0]!.payload as { code: string }).code).toContain("await itx.whoami()");
@@ -586,7 +586,7 @@ describe("SlackAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     const scripts = stream.events.filter(
-      (event) => event.type === "events.iterate.com/itx/script-execution-requested",
+      (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
     );
     expect(scripts).toHaveLength(1);
     expect(scripts[0]).toMatchObject({
@@ -738,7 +738,8 @@ describe("SlackAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     const scripts = stream.events.filter(
-      (streamEvent) => streamEvent.type === "events.iterate.com/itx/script-execution-requested",
+      (streamEvent) =>
+        streamEvent.type === "events.iterate.com/capability-host/script-execution-requested",
     );
     expect(scripts).toHaveLength(1);
     expect((scripts[0]!.payload as { code: string }).code).toContain(
@@ -766,7 +767,7 @@ describe("SlackAgentProcessor", () => {
 
     expect(
       stream.events.filter((streamEvent) => {
-        return streamEvent.type === "events.iterate.com/itx/script-execution-requested";
+        return streamEvent.type === "events.iterate.com/capability-host/script-execution-requested";
       }),
     ).toHaveLength(0);
     expect(
@@ -796,7 +797,7 @@ describe("SlackAgentProcessor", () => {
 
     expect(
       stream.events.filter((streamEvent) => {
-        return streamEvent.type === "events.iterate.com/itx/script-execution-requested";
+        return streamEvent.type === "events.iterate.com/capability-host/script-execution-requested";
       }),
     ).toHaveLength(0);
     expect(

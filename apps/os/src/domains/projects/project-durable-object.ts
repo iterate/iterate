@@ -2,7 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import type { Env } from "../../env.ts";
 import {
-  ItxRpcTarget,
+  projectRootItx,
   ProjectEgressInterceptRpcTarget,
   StreamProcessorRpcTarget,
   StreamRpcTarget,
@@ -13,7 +13,7 @@ import {
   createStreamProcessorHost,
   type StreamSubscriberWakeRequest,
 } from "../streams/stream-processor-host.ts";
-import { deepRetainRpcStubs } from "../itx/live-capability.ts";
+import { deepRetainRpcStubs } from "../capability-host/live-capability.ts";
 import { readOpenAiApiKeyFromAppConfig } from "../agents/utils.ts";
 import { secretErrorResponse, secretReferencePathsFromHeaders } from "../secrets/utils.ts";
 import { SlackProcessor } from "../integrations/slack-processor-implementation.ts";
@@ -40,7 +40,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
         // key configured; otherwise they fall back to Workers AI.
         defaultLlmProvider:
           readOpenAiApiKeyFromAppConfig(this.env) === null ? "cloudflare-ai" : "openai-ws",
-        itx: new ItxRpcTarget({
+        itx: projectRootItx({
           auth: trustedInternalAuthContext(),
           ctx: this.ctx,
           projectId: this.#name.projectId,

@@ -7,7 +7,7 @@ import {
   itxEntrypointProps,
   itxEntrypointScopeCacheKey,
 } from "../itx/utils.ts";
-import { invokeFlattenedPath, replayPath } from "../itx/live-capability.ts";
+import { invokeFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import { DynamicWorkerRunner } from "./worker-runner.ts";
 

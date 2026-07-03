@@ -1,6 +1,6 @@
 /**
- * Itx API worker: the capnweb surface at `/api/itx`, the
- * `/api/itx/admin-cookie` browser auth bridge, the worker-hosted e2e
+ * The API worker: os' one API — the capnweb surface at `/api`, the
+ * `/api/admin-cookie` browser auth bridge, the worker-hosted e2e
  * fixtures, and project ingress — every lane `decideIngressRoute`
  * (src/ingress.ts) can resolve: the `/prj_<id>/...` path lane, project
  * platform hosts (with optional app selection), and directory-registered
@@ -12,7 +12,7 @@ import { e2eFixtureResponse } from "../e2e-fixtures.ts";
 import type { Env } from "../env.ts";
 import { decideIngressRoute, type IngressResolvers } from "../ingress.ts";
 import { readProjectByHostname, resolveProjectIdBySlug } from "../project-directory.ts";
-import { ProjectCollectionRpcTarget, UnauthenticatedItxRpcTarget } from "../rpc-targets.ts";
+import { ProjectCollectionRpcTarget, UnauthenticatedOsRpcTarget } from "../rpc-targets.ts";
 import { handleCapnwebAdminCookieRequest } from "~/auth/admin-auth-cookie.ts";
 import { parseConfig, type AppConfig } from "~/config.ts";
 
@@ -59,12 +59,12 @@ export default {
       return Response.json({ error: "not found" }, { status: 404 });
     }
 
-    if (url.pathname === "/api/itx/admin-cookie") {
+    if (url.pathname === "/api/admin-cookie") {
       return await handleCapnwebAdminCookieRequest({ config, request });
     }
 
-    if (url.pathname !== "/api/itx") return Response.json({ error: "not found" }, { status: 404 });
-    const unauthenticated = new UnauthenticatedItxRpcTarget({
+    if (url.pathname !== "/api") return Response.json({ error: "not found" }, { status: 404 });
+    const unauthenticated = new UnauthenticatedOsRpcTarget({
       config,
       ctx,
       headers: request.headers,

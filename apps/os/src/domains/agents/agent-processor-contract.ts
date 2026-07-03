@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ITX_TYPES_SOURCE } from "../../types-source.generated.ts";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
-import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
+import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 
 export const DEFAULT_AGENT_MODEL = "@cf/moonshotai/kimi-k2.7-code";
 export const DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS = 250;
@@ -254,7 +254,7 @@ export const AgentProcessorContract = defineProcessorContract({
       ]),
     },
   },
-  processorDeps: [ItxProcessorContract],
+  processorDeps: [CapabilityHostProcessorContract],
   consumes: [
     "events.iterate.com/agent/config-updated",
     "events.iterate.com/agent/system-prompt-updated",
@@ -267,8 +267,8 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-completed",
     "events.iterate.com/agent/llm-request-cancelled",
-    "events.iterate.com/itx/script-execution-requested",
-    "events.iterate.com/itx/script-execution-completed",
+    "events.iterate.com/capability-host/script-execution-requested",
+    "events.iterate.com/capability-host/script-execution-completed",
   ],
   emits: [
     "events.iterate.com/agent/system-prompt-updated",
@@ -276,6 +276,6 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-scheduled",
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-cancelled",
-    "events.iterate.com/itx/script-execution-requested",
+    "events.iterate.com/capability-host/script-execution-requested",
   ],
 });

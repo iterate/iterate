@@ -5,7 +5,7 @@ import {
   type RpcStub as CapnRpcStub,
 } from "capnweb";
 import { withOwnedRpcSession } from "./domains/itx/utils.ts";
-import type { Agent, ItxAuthCredentials, Itx, Session, UnauthenticatedItx } from "./types.ts";
+import type { Agent, ItxAuthCredentials, Itx, Session, UnauthenticatedOs } from "./types.ts";
 
 export type ItxWebSocketMessage = [timestamp: number, direction: "in" | "out", data: unknown];
 
@@ -89,18 +89,15 @@ type RpcSessionStub<T extends object> = CapnRpcStub<T> & {
 export function connectItx(input: ConnectAgentItxInput): CapnRpcStub<Agent>;
 export function connectItx(input: ConnectProjectItxInput): CapnRpcStub<Itx>;
 export function connectItx(input: ConnectItxAuthenticatedInput): CapnRpcStub<Session>;
-export function connectItx(input: ConnectItxBaseInput): CapnRpcStub<UnauthenticatedItx>;
+export function connectItx(input: ConnectItxBaseInput): CapnRpcStub<UnauthenticatedOs>;
 export function connectItx(
   input:
     | ConnectAgentItxInput
     | ConnectItxAuthenticatedInput
     | ConnectItxBaseInput
     | ConnectProjectItxInput,
-): CapnRpcStub<Agent> | CapnRpcStub<Itx> | CapnRpcStub<Session> | CapnRpcStub<UnauthenticatedItx> {
-  const session = connect<UnauthenticatedItx>(
-    websocketUrl("/api/itx", input),
-    input.onWebSocketMessage,
-  );
+): CapnRpcStub<Agent> | CapnRpcStub<Itx> | CapnRpcStub<Session> | CapnRpcStub<UnauthenticatedOs> {
+  const session = connect<UnauthenticatedOs>(websocketUrl("/api", input), input.onWebSocketMessage);
   if (!("auth" in input)) return session;
 
   const root = session.authenticate(input.auth) as CapnRpcStub<Session>;
@@ -109,7 +106,7 @@ export function connectItx(
   const project = root.projects.get(input.projectId) as RpcSessionStub<Itx>;
   if (!("agentPath" in input)) return withOwnedRpcSession(project, root, session);
 
-  // An "agent itx" reached from outside `/api/itx` is just this agent's `Agent`
+  // An "agent itx" reached from outside `/api` is just this agent's `Agent`
   // handle. It already carries the agent's own control surface plus the dynamic
   // capability scope chain (agent scope → project scope), so
   // `agent.someProvidedCapability()` resolves whether the capability was mounted

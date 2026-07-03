@@ -1,6 +1,6 @@
 # itx (`src`)
 
-This folder is itx behind `/api/itx` and everything project-scoped in
+This folder is itx behind `/api` — os' one API — and everything project-scoped in
 OS: streams, repos, agents, secrets, dynamic workers, egress, and the itx
 capability surface itself. It began life as `apps/minimal-itx-v4` and was
 transplanted here whole during the itx-v4 replacement (PR #1585 has the
@@ -12,25 +12,25 @@ programs against. When this README and `types.ts` disagree, `types.ts` wins.
 
 ## Layout
 
-| Path                   | What                                                                                                                               |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `types.ts`             | The public ITX contract (the design of record)                                                                                     |
-| `rpc-targets.ts`       | ALL RpcTarget classes: the session/project/agent surfaces, MCP/OpenAPI clients, capability provision, stream subscriptions, egress |
-| `auth.ts`              | The auth adapter: credentials → `ItxAuth` (see below)                                                                              |
-| `itx-client.ts`        | `connectItx()` — the Node/CLI client over a Cap'n Web WebSocket                                                                    |
-| `ingress.ts`           | The shared routing decision (which requests belong to itx)                                                                         |
-| `project-directory.ts` | Slug → project id resolution against the auth worker, cached in the `PROJECT_DIRECTORY` KV namespace                               |
-| `env.ts`               | The binding contract every itx worker deploys with (`nextEnv`)                                                                     |
-| `workers/`             | One entrypoint per deployed itx worker ([worker topology](../../docs/worker-topology.md))                                          |
-| `domains/`             | One folder per domain: `streams`, `projects`, `repos`, `agents`, `secrets`, `workers` (dynamic), `itx`, `inbound-mcp-server`       |
-| `e2e-fixtures.ts`      | Worker-hosted fixtures for itx e2e suites (`/__itx_e2e/*`)                                                                         |
+| Path                   | What                                                                                                                                            |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `types.ts`             | The public ITX contract (the design of record)                                                                                                  |
+| `rpc-targets.ts`       | ALL RpcTarget classes: the session/project/agent surfaces, MCP/OpenAPI clients, capability provision, stream subscriptions, egress              |
+| `auth.ts`              | The auth adapter: credentials → `ItxAuth` (see below)                                                                                           |
+| `itx-client.ts`        | `connectItx()` — the Node/CLI client over a Cap'n Web WebSocket                                                                                 |
+| `ingress.ts`           | The shared routing decision (which requests belong to itx)                                                                                      |
+| `project-directory.ts` | Slug → project id resolution against the auth worker, cached in the `PROJECT_DIRECTORY` KV namespace                                            |
+| `env.ts`               | The binding contract every itx worker deploys with (`nextEnv`)                                                                                  |
+| `workers/`             | One entrypoint per deployed itx worker ([worker topology](../../docs/worker-topology.md))                                                       |
+| `domains/`             | One folder per domain: `streams`, `projects`, `repos`, `agents`, `secrets`, `workers` (dynamic), `capability-host`, `itx`, `inbound-mcp-server` |
+| `e2e-fixtures.ts`      | Worker-hosted fixtures for itx e2e suites (`/__itx_e2e/*`)                                                                                      |
 
 Each domain owns its Durable Object plus a stream-processor contract
 (`*-processor-contract.ts`, pure: event schemas + reducer) and implementation
 (`*-processor-implementation.ts`, side effects). RpcTargets deliberately do NOT
 live in domain files.
 
-## The three nouns
+## The four nouns
 
 - A **session** is what `authenticate()` returns: a catalog that vends itxs
   (`projects`, plus admin-only deployment-wide `streams`/`repos`). It is not
@@ -38,14 +38,84 @@ live in domain files.
 - A **project** is the tenant / isolation boundary — a `prj_…` id, its Durable
   Objects, its streams. Per-project confinement is the one security invariant
   itx keeps.
-- An **itx** is a capability context scoped into one project at one path. The
-  same interface serves the project root (`/`) and every nested scope
-  (`/agents/bla`); a nested scope sees its own mounted capabilities plus
-  everything inherited from enclosing scopes (child → parent → project).
+- An **itx** is a capability context scoped into one project at one path.
+  "itx" is a NAMING CONVENTION, not a class: an itx is normally an instance of
+  `ProjectRpcTarget` whose capability host sits at `"/"` — and sometimes at
+  `"/agents/…"`, which is what "an agent context" means. Same type either way;
+  a nested scope sees its own mounted capabilities plus everything inherited
+  from enclosing scopes (child → parent → project).
+- A **capability host** is the durable dynamic-capability table (and script
+  journal) at one scope path — one `CapabilityHostDurableObject` per
+  `{projectId, path}`. Host operations are `provideCapability`,
+  `revokeCapability`, `runScript`, and `describe()`. Each itx fronts exactly
+  one host (`itx.capabilityHost`; `itx.provideCapability`/`revokeCapability`
+  are shortcuts onto it), and `itx.capabilityHosts.get(path)` addresses any
+  other scope's host — `get("/")` mounts on the whole project.
+
+## The capability tree
+
+What a caller can reach, top to bottom. Concrete classes in parentheses (all in
+`rpc-targets.ts`); `→` marks methods that vend a new capability.
+
+```
+UnauthenticatedOs (UnauthenticatedOsRpcTarget)        ws/POST /api
+└─ authenticate(credentials)                          → Session
+
+Session (SessionRpcTarget)                            a catalog; NOT an itx
+├─ whoami()
+├─ integrations (SessionIntegrationsRpcTarget)        admin: webhook ingress
+├─ streams / repos (…CollectionRpcTarget, projectId: null)   admin: deployment-wide
+└─ projects (ProjectCollectionRpcTarget)
+   ├─ list()
+   ├─ create({ slug })                                → Itx (project root)
+   └─ get("prj_…")                                    → Itx (project root)
+
+Itx (ProjectRpcTarget) — "itx" by convention; capabilityHost.path selects the scope:
+│    "/" = project root; "/agents/…" = an agent context. Same class both ways.
+├─ capabilityHost (CapabilityHostRpcTarget)           THIS scope's durable table
+│  ├─ path
+│  ├─ describe()                                      own + inherited mounts, scope-tagged
+│  ├─ provideCapability(input)                        → CapabilityProvision (revoke handle)
+│  ├─ revokeCapability({ path, providedAtOffset? })
+│  ├─ invokeCapability({ path, args })                explicit dynamic dispatch
+│  └─ runScript(code)                                 async (itx) => {…} in THIS scope
+├─ capabilityHosts (CapabilityHostCollectionRpcTarget)
+│  └─ get(path)                                       → CapabilityHost of ANY scope;
+│                                                       get("/") mounts project-wide
+├─ provideCapability / revokeCapability               shortcuts → capabilityHost
+├─ describe()                                         project identity + full inventory
+├─ streams repos repo agents secrets workers worker   project built-ins, resolved in the
+│  egress ai gmail slack integrations mcp openapi     isolate (never shadowable)
+│  examples processor
+├─ agent? chat?                                       DERIVED getters: present only when
+│                                                       capabilityHost.path is /agents/…
+└─ <anything else>                                    DYNAMIC: proxy fallback compiles
+                                                        itx.foo.bar(x) into capabilityHost
+                                                        .invokeCapability({ path, args }),
+                                                        which chains child → parent → "/"
+
+Agent (AgentRpcTarget) — via itx.agents.get("/agents/…") or itx.agent
+├─ capabilityHost (CapabilityHostRpcTarget)           the AGENT scope's table
+├─ provideCapability / revokeCapability               shortcuts → capabilityHost
+├─ chat (AgentChatRpcTarget) · stream · processor
+├─ sendMessage(text) · ask({ message }) · whoami()
+└─ <anything else>                                    same dynamic fallback, agent scope
+
+CapabilityProvision (CapabilityProvisionRpcTarget)    returned by every provide
+├─ path · providedAtOffset
+├─ revoke()
+└─ [Symbol.dispose]                                   `using` revokes on scope exit
+```
+
+The load-bearing asymmetry: **reads chain up, writes stay local.**
+`invokeCapability`/`describe` fall through to the enclosing scope on a miss
+(agent → namespace → project root), so a root mount is visible everywhere.
+`provideCapability` always mounts on exactly the host you called it on — to
+mount elsewhere, address that scope explicitly via `capabilityHosts.get(path)`.
 
 ## Connecting and authenticating
 
-`/api/itx` exports one unauthenticated Cap'n Web target with a single method:
+`/api` exports one unauthenticated Cap'n Web target with a single method:
 
 ```ts
 using unauthenticated = connectItx({ baseUrl });
@@ -107,13 +177,13 @@ mutating the original payload.
 Built-ins are explicit members of the `Itx` interface (`streams`, `repos`,
 `repo`, `agents`, `secrets`, `workers`, `worker`, `egress`, `mcp`, `openapi`,
 `ai`, `examples`, `processor`, plus `agent`/`chat` on agent scopes). A call like
-`itx.streams.get("/x")` resolves in the isolate without touching the ITX
+`itx.streams.get("/x")` resolves in the isolate without touching the capability-host
 Durable Object; the trade-off is that a mounted capability can never shadow a
 built-in name.
 
 Everything else is dynamic: unknown dotted paths fall through to the mounted
-capability table (longest-prefix resolution in the ITX processor, backed by
-`capability-provided` events on the scope's stream). `provideCapability`
+capability table (longest-prefix resolution in the capability-host processor, backed by
+`capability-provided` events on the scope's stream). `capabilityHost.provideCapability`
 accepts two recipes (`ProvideCapabilityInput`):
 
 - `live` — any RPC-able value: a bare function, an object of methods, or an
@@ -121,7 +191,7 @@ accepts two recipes (`ProvideCapabilityInput`):
   Live capabilities are session-bound: the mount event is durable, but calls
   travel back over the provider's connection and die with it.
 - `itx-expression` — a durable expression replayed against the project's own
-  itx surface (`domains/itx/itx-expression.ts`), so a mount survives
+  itx surface (`domains/capability-host/itx-expression.ts`), so a mount survives
   disconnects without holding a live stub.
 
 Every mount carries optional `instructions` (prose) and `types` (a TypeScript

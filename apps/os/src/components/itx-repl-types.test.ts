@@ -41,11 +41,12 @@ describe("itx REPL TypeScript declarations", () => {
     // every project built-in must complete.
     const labels = new Set(result?.options.map((option) => option.label));
     for (const member of [
+      "capabilityHost",
+      "capabilityHosts",
       "describe",
       "projects",
       "provideCapability",
       "repo",
-      "runScript",
       "secrets",
       "streams",
       "whoami",

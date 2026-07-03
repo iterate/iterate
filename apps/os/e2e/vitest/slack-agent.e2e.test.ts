@@ -182,12 +182,12 @@ test.skipIf(signingSecret === null)(
     // The Slack prompt tells the model to reply via itx.slack.chat.postMessage.
     const withScript = await waitFor(
       () => agentStream.getEvents({ afterOffset: 0 }),
-      (events) => hasEvent(events, "events.iterate.com/itx/script-execution-requested"),
+      (events) => hasEvent(events, "events.iterate.com/capability-host/script-execution-requested"),
       () => `itx script execution on ${agentStreamPath}`,
       120_000,
     );
     const scripts = withScript.filter(
-      (event) => event.type === "events.iterate.com/itx/script-execution-requested",
+      (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
     );
     expect(
       scripts.some((event) => ((event.payload as { code?: string }).code ?? "").includes("slack")),

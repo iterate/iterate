@@ -4,12 +4,12 @@
 // Resurrected from the pre-migration integration-api.ts (git history). The app
 // worker has no itx bindings, so every itx effect goes through a
 // one-shot pipelined capnweb HTTP batch against this deployment's own
-// /api/itx surface using the admin API secret — the same request-scoped
+// /api surface using the admin API secret — the same request-scoped
 // pattern the inbound MCP exec_js tool uses.
 
 // oxlint-disable-next-line iterate/no-capnweb-http-batch -- integration callbacks/webhooks are one-shot request-scoped calls: a single pipelined batch (authenticate -> route/complete) with no socket lifecycle to manage.
 import { newHttpBatchRpcSession } from "capnweb";
-import type { UnauthenticatedItx } from "../../types.ts";
+import type { UnauthenticatedOs } from "../../types.ts";
 import { parseOAuthStateUnverified } from "./oauth-state.ts";
 import type { Principal } from "~/auth/principal.ts";
 import type { RequestContext } from "~/request-context.ts";
@@ -46,8 +46,8 @@ function engineBatchSession(context: RequestContext) {
   const baseUrl = (context.config.baseUrl ?? "").replace(/\/+$/, "");
   if (!baseUrl) throw new Error("baseUrl is not configured");
   // oxlint-disable-next-line iterate/no-capnweb-http-batch -- one-shot pipelined batch per integration request; no socket lifecycle to manage.
-  return newHttpBatchRpcSession<UnauthenticatedItx>(
-    new Request(`${baseUrl}/api/itx`, { method: "POST" }),
+  return newHttpBatchRpcSession<UnauthenticatedOs>(
+    new Request(`${baseUrl}/api`, { method: "POST" }),
   );
 }
 

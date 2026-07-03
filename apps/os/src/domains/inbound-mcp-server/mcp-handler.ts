@@ -21,7 +21,7 @@ import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import { principalFromAccessToken } from "~/auth/principal.ts";
 import { MCP_START_MOUNT_PATH, resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
 import { readProjectBySlug } from "~/project-directory.ts";
-import type { UnauthenticatedItx } from "~/types.ts";
+import type { UnauthenticatedOs } from "~/types.ts";
 import type { RequestContext } from "~/request-context.ts";
 
 type ProjectGrant = {
@@ -161,7 +161,7 @@ function createServer(input: {
           secret: requireAdminSecret(input.context),
         });
         const sessionAgent = root.projects.get(project.id).agents.get(agentPath);
-        const execution = await sessionAgent.runScript(parsedInput.code);
+        const execution = await sessionAgent.capabilityHost.runScript(parsedInput.code);
         return {
           content: [
             {
@@ -430,8 +430,8 @@ function engineBatchSession(context: RequestContext) {
   const baseUrl = (context.config.baseUrl ?? "").replace(/\/+$/, "");
   if (!baseUrl) throw new Error("baseUrl is not configured");
   // oxlint-disable-next-line iterate/no-capnweb-http-batch -- one-shot pipelined batch per exec_js call; no socket lifecycle to manage.
-  return newHttpBatchRpcSession<UnauthenticatedItx>(
-    new Request(`${baseUrl}/api/itx`, { method: "POST" }),
+  return newHttpBatchRpcSession<UnauthenticatedOs>(
+    new Request(`${baseUrl}/api`, { method: "POST" }),
   );
 }
 

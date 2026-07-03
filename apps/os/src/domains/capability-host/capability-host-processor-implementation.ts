@@ -7,7 +7,7 @@ import type {
   CapabilityProvidedPayload,
   CapabilityDescription,
   CapabilityRecord,
-  ItxCapabilityHost,
+  CapabilityHost,
   JsonValue,
   Itx,
   RevokeCapabilityInput,
@@ -17,15 +17,15 @@ import type {
 import { sha256Hex } from "../workers/utils.ts";
 import type { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
-import { ItxProcessorContract } from "./itx-processor-contract.ts";
+import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import {
   evaluateItxExpression,
   invokeNormalizedCapability,
   normalizeCapabilityProvider,
 } from "./itx-expression.ts";
 
-export type ProvideCapabilityInput = Parameters<ItxCapabilityHost["provideCapability"]>[0];
-export type RunScriptResult = Awaited<ReturnType<ItxCapabilityHost["runScript"]>>;
+export type ProvideCapabilityInput = Parameters<CapabilityHost["provideCapability"]>[0];
+export type RunScriptResult = Awaited<ReturnType<CapabilityHost["runScript"]>>;
 
 type CompletedPayload = {
   error?: string;
@@ -87,31 +87,33 @@ function resolveLongestPrefix(records: CapabilityRecord[], path: string[]) {
  *
  * Only the two read operations chain upward (see the class below); mounting is
  * always local, so `provide`/`revoke` are deliberately absent here. In practice
- * this is a `DurableObjectStub<ItxDurableObject>` for the parent scope, but the
+ * this is a `DurableObjectStub<CapabilityHostDurableObject>` for the parent scope, but the
  * processor only depends on these two methods.
  */
-export type ParentItxScope = {
+export type ParentCapabilityHost = {
   invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
-  describeCapabilities(): Promise<CapabilityDescription[]>;
+  describe(): Promise<CapabilityDescription[]>;
 };
 
-export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
-  readonly contract = ItxProcessorContract;
+export class CapabilityHostProcessor extends StreamProcessor<
+  typeof CapabilityHostProcessorContract
+> {
+  readonly contract = CapabilityHostProcessorContract;
   #itx: Itx;
   #path: string;
   #workerRunner: DynamicWorkerRunner;
-  #parent: ParentItxScope | undefined;
+  #parent: ParentCapabilityHost | undefined;
   #liveCapabilities = new Map<string, LiveCapability>();
 
   constructor(
-    args: StreamProcessorConstructorArgs<typeof ItxProcessorContract, object> & {
+    args: StreamProcessorConstructorArgs<typeof CapabilityHostProcessorContract, object> & {
       itx: Itx;
       path: string;
       workerRunner: DynamicWorkerRunner;
       // The enclosing scope, or undefined at the project root ("/"). Present for
       // every nested scope (agents, sub-agents, agent namespaces) so capability
       // lookups that miss locally can fall through to the surrounding scope.
-      parent?: ParentItxScope;
+      parent?: ParentCapabilityHost;
     },
   ) {
     super(args);
@@ -124,9 +126,9 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
   protected override reduce({
     event,
     state,
-  }: Parameters<StreamProcessor<typeof ItxProcessorContract>["reduce"]>[0]) {
+  }: Parameters<StreamProcessor<typeof CapabilityHostProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
-      case "events.iterate.com/itx/capability-provided": {
+      case "events.iterate.com/capability-host/capability-provided": {
         const row: CapabilityRecord = {
           ...event.payload,
           // The stream offset is the provision identity. It is stable,
@@ -145,7 +147,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
             : [...state.capabilities, row],
         };
       }
-      case "events.iterate.com/itx/capability-revoked": {
+      case "events.iterate.com/capability-host/capability-revoked": {
         const revoke = event.payload;
         return {
           ...state,
@@ -158,7 +160,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
           }),
         };
       }
-      case "events.iterate.com/itx/script-execution-requested":
+      case "events.iterate.com/capability-host/script-execution-requested":
         return {
           ...state,
           pendingScriptExecutions: {
@@ -166,7 +168,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
             [event.payload.executionId]: true,
           },
         };
-      case "events.iterate.com/itx/script-execution-completed": {
+      case "events.iterate.com/capability-host/script-execution-completed": {
         const pendingScriptExecutions = { ...state.pendingScriptExecutions };
         delete pendingScriptExecutions[event.payload.executionId];
         return { ...state, pendingScriptExecutions };
@@ -180,8 +182,10 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     event,
     runInBackground,
     state,
-  }: Parameters<StreamProcessor<typeof ItxProcessorContract>["processEvent"]>[0]): undefined {
-    if (event.type !== "events.iterate.com/itx/script-execution-requested") return;
+  }: Parameters<
+    StreamProcessor<typeof CapabilityHostProcessorContract>["processEvent"]
+  >[0]): undefined {
+    if (event.type !== "events.iterate.com/capability-host/script-execution-requested") return;
     if (state.pendingScriptExecutions[event.payload.executionId] !== true) return;
     runInBackground(() =>
       this.#executeScript({ code: event.payload.code, executionId: event.payload.executionId }),
@@ -235,7 +239,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     let committedOffset: number;
     try {
       const [committed] = await this.stream.append({
-        type: "events.iterate.com/itx/capability-provided",
+        type: "events.iterate.com/capability-host/capability-provided",
         payload: record,
       });
       committedOffset = committed.offset;
@@ -266,7 +270,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     const key = liveKey(path);
     const previousLive = this.#liveCapabilities.get(key);
     const [committed] = await this.stream.append({
-      type: "events.iterate.com/itx/capability-revoked",
+      type: "events.iterate.com/capability-host/capability-revoked",
       payload: {
         path,
         ...(providedAtOffset === undefined ? {} : { providedAtOffset }),
@@ -306,7 +310,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
   // declared at. A nearer scope shadows a farther one at the same path (same rule
   // as `resolveLongestPrefix` above), so the caller — usually an LLM deciding what
   // it can invoke — sees exactly one entry per reachable path and where it lives.
-  async describeCapabilities(): Promise<CapabilityDescription[]> {
+  async describe(): Promise<CapabilityDescription[]> {
     const local: CapabilityDescription[] = this.state.capabilities.map((record) => ({
       instructions: record.instructions,
       path: record.path,
@@ -317,7 +321,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     }));
     if (!this.#parent) return local;
     const shadowed = new Set(local.map((c) => JSON.stringify(c.path)));
-    const inherited = await this.#parent.describeCapabilities();
+    const inherited = await this.#parent.describe();
     return [...local, ...inherited.filter((c) => !shadowed.has(JSON.stringify(c.path)))];
   }
 
@@ -325,7 +329,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     const executionId = crypto.randomUUID();
     const completed = this.#waitForScriptCompletion(executionId);
     await this.stream.append({
-      type: "events.iterate.com/itx/script-execution-requested",
+      type: "events.iterate.com/capability-host/script-execution-requested",
       payload: { code, executionId },
     });
     const event = await completed;
@@ -338,7 +342,8 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     let completed: StreamEvent | undefined;
     await this.waitUntilEvent({
       predicate: (event) => {
-        if (event.type !== "events.iterate.com/itx/script-execution-completed") return false;
+        if (event.type !== "events.iterate.com/capability-host/script-execution-completed")
+          return false;
         const payload = event.payload as CompletedPayload;
         if (payload.executionId !== executionId) return false;
         completed = event as StreamEvent;
@@ -363,7 +368,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
               ...(payload.result === undefined ? {} : { result: json(payload.result) }),
             };
       return this.stream.append({
-        type: "events.iterate.com/itx/script-execution-completed",
+        type: "events.iterate.com/capability-host/script-execution-completed",
         payload: completionPayload,
       });
     };

@@ -176,7 +176,8 @@ describe("minimal web-chat agent processors", () => {
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).not.toContain("containing an async function");
     // The verbatim type surface rides along so the agent knows what it holds.
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("RpcStub<Itx>");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("export interface Itx extends ItxCapabilityHost");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("export interface Itx {");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("export interface CapabilityHost {");
     // Tool-call stance: small data-first snippets, parallel fan-out, explicit
     // loop-ending rule, and the built-in discovery surfaces.
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("Promise.all");
@@ -196,7 +197,7 @@ describe("minimal web-chat agent processors", () => {
     const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
 
     await stream.append({
-      type: "events.iterate.com/itx/script-execution-completed",
+      type: "events.iterate.com/capability-host/script-execution-completed",
       payload: { executionId: "agent-output:7", result: { inbox: ["a", "b"] } },
     });
     await deliver();
@@ -220,7 +221,7 @@ describe("minimal web-chat agent processors", () => {
     const cursors = new Map<object, number>();
 
     await stream.append({
-      type: "events.iterate.com/itx/script-execution-completed",
+      type: "events.iterate.com/capability-host/script-execution-completed",
       payload: { executionId: "agent-output:7", error: "gmail exploded" },
     });
     await deliverNewEvents({ processor: agent, stream, cursors });
@@ -239,14 +240,14 @@ describe("minimal web-chat agent processors", () => {
 
     await stream.append(
       // The agent's own script returned undefined — the completion event
-      // carries no `result` key (see ItxProcessor#executeScript).
+      // carries no `result` key (see CapabilityHostProcessor#executeScript).
       {
-        type: "events.iterate.com/itx/script-execution-completed",
+        type: "events.iterate.com/capability-host/script-execution-completed",
         payload: { executionId: "agent-output:7" },
       },
       // A non-agent execution (e.g. a Slack bang command) on the same stream.
       {
-        type: "events.iterate.com/itx/script-execution-completed",
+        type: "events.iterate.com/capability-host/script-execution-completed",
         payload: { executionId: "slack-bang-command-9", result: { noisy: true } },
       },
     );
@@ -311,7 +312,7 @@ describe("minimal web-chat agent processors", () => {
         "events.iterate.com/agent/output-added",
         "events.iterate.com/cloudflare-ai/llm-request-completed",
         "events.iterate.com/agent/llm-request-completed",
-        "events.iterate.com/itx/script-execution-requested",
+        "events.iterate.com/capability-host/script-execution-requested",
       ]),
     );
     expect(aiCalls).toHaveLength(1);

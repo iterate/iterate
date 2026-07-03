@@ -139,7 +139,7 @@ export class SlackAgentProcessor extends StreamProcessor<
           // receipt, so both run in one blocking closure.
           blockProcessorWhile(async () => {
             await append({
-              type: "events.iterate.com/itx/script-execution-requested",
+              type: "events.iterate.com/capability-host/script-execution-requested",
               idempotencyKey: `slack-agent:bang-command:${event.offset}`,
               payload: {
                 code: bangCommand.code,
@@ -161,8 +161,8 @@ export class SlackAgentProcessor extends StreamProcessor<
       }
       case "events.iterate.com/agent/llm-request-requested":
       case "events.iterate.com/agent/llm-request-completed":
-      case "events.iterate.com/itx/script-execution-requested":
-      case "events.iterate.com/itx/script-execution-completed": {
+      case "events.iterate.com/capability-host/script-execution-requested":
+      case "events.iterate.com/capability-host/script-execution-completed": {
         const update = slackAgentStatusForEvent(event);
         if (update == null || state.channel == null || state.threadTs == null) return;
         const { channel, latestMessageTs, threadTs } = state;
@@ -437,12 +437,12 @@ function slackAgentStatusForEvent(event: { type: string }): {
       };
     case "events.iterate.com/agent/llm-request-completed":
       return { clear: true, status: { status: "" } };
-    case "events.iterate.com/itx/script-execution-requested":
+    case "events.iterate.com/capability-host/script-execution-requested":
       return {
         clear: false,
         status: { status: "is using tools...", loading_messages: ["Using tools..."] },
       };
-    case "events.iterate.com/itx/script-execution-completed":
+    case "events.iterate.com/capability-host/script-execution-completed":
       return { clear: true, status: { status: "" } };
     default:
       return null;

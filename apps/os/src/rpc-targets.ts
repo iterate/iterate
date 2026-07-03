@@ -65,6 +65,8 @@ import type {
 import type {
   Agent,
   AgentChat,
+  CapabilityHost,
+  CapabilityHostCollection,
   CapabilityProvision,
   CapabilityDescription,
   AgentCollection,
@@ -97,7 +99,7 @@ import type {
   StreamCollection,
   StreamProcessorRpc,
   StreamSubscriptionHandle,
-  UnauthenticatedItx,
+  UnauthenticatedOs,
   DynamicWorkerCapability,
   DynamicWorkerCollection,
   DynamicWorkerRef,
@@ -346,8 +348,13 @@ class AgentCollectionRpcTarget extends RpcTarget implements AgentCollection {
   get(path: string) {
     return new AgentRpcTarget({
       auth: this.props.auth,
+      capabilityHost: new CapabilityHostRpcTarget({
+        auth: this.props.auth,
+        ctx: this.props.ctx,
+        path: normalizeAgentPath(path),
+        projectId: this.props.projectId,
+      }),
       ctx: this.props.ctx,
-      path: normalizeAgentPath(path),
       projectId: this.props.projectId,
     });
   }
@@ -582,28 +589,43 @@ class AgentChatRpcTarget extends RpcTarget implements AgentChat {
 
 class AgentRpcTarget extends RpcTarget implements Agent {
   constructor(
-    readonly props: { auth: ItxAuth; ctx: CfExecutionContext; path: string; projectId: string },
+    readonly props: {
+      auth: ItxAuth;
+      // The agent scope's own capability host; its (already-normalized) path IS
+      // the agent path. Exposed as `agent.capabilityHost` and used as the
+      // fallback for dynamic dotted-path calls (`agent.someTool(...)`).
+      capabilityHost: CapabilityHostRpcTarget;
+      ctx: CfExecutionContext;
+      projectId: string;
+    },
   ) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
-    props.path = normalizeAgentPath(props.path);
+    normalizeAgentPath(props.capabilityHost.path);
     return withInvokeCapabilityFallback(this);
   }
 
-  get #itx() {
-    return env.ITX.getByName(
-      DurableObjectNameCodec.stringify({
-        projectId: this.props.projectId,
-        path: this.props.path,
-      }),
-    );
+  get #path() {
+    return this.props.capabilityHost.path;
+  }
+
+  get capabilityHost(): CapabilityHost {
+    return this.props.capabilityHost;
+  }
+
+  provideCapability(input: Parameters<Agent["provideCapability"]>[0]) {
+    return this.props.capabilityHost.provideCapability(input);
+  }
+
+  revokeCapability(input: Parameters<Agent["revokeCapability"]>[0]) {
+    return this.props.capabilityHost.revokeCapability(input);
   }
 
   get durableObjectStub() {
     return env.AGENT.getByName(
       DurableObjectNameCodec.stringify({
         projectId: this.props.projectId,
-        path: this.props.path,
+        path: this.#path,
       }),
     );
   }
@@ -616,14 +638,14 @@ class AgentRpcTarget extends RpcTarget implements Agent {
     return new StreamRpcTarget({
       auth: this.props.auth,
       projectId: this.props.projectId,
-      path: this.props.path,
+      path: this.#path,
     });
   }
 
   get chat() {
     return new AgentChatRpcTarget({
       auth: this.props.auth,
-      path: this.props.path,
+      path: this.#path,
       projectId: this.props.projectId,
     });
   }
@@ -649,34 +671,11 @@ class AgentRpcTarget extends RpcTarget implements Agent {
   }
 
   whoami() {
-    return `agent ${this.props.projectId}:${this.props.path}`;
-  }
-
-  async provideCapability(input: Parameters<Agent["provideCapability"]>[0]) {
-    rejectBuiltinCollision(this, input.path);
-    const provision = await this.#itx.provideCapability(input);
-
-    // The ITX Durable Object returns the durable mount coordinates. The public
-    // RPC surface returns an ownership handle that can revoke that exact mount
-    // on explicit revoke or disposal.
-    return new CapabilityProvisionRpcTarget({
-      ctx: this.props.ctx,
-      path: input.path,
-      providedAtOffset: provision.providedAtOffset,
-      revoke: (revokeInput) => this.#itx.revokeCapability(revokeInput),
-    });
-  }
-
-  async revokeCapability(input: Parameters<Agent["revokeCapability"]>[0]) {
-    await this.#itx.revokeCapability(input);
-  }
-
-  async runScript(code: string) {
-    return await this.#itx.runScript(code);
+    return `agent ${this.props.projectId}:${this.#path}`;
   }
 
   async invokeCapability({ args = [], path }: Parameters<SlackCapability["invokeCapability"]>[0]) {
-    return await this.#itx.invokeCapability({ args, path });
+    return await this.props.capabilityHost.invokeCapability({ args, path });
   }
 }
 
@@ -793,7 +792,7 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
     // project directory and widen itself before the synchronous constructor
     // assert runs. Cap'n Web pipelines through the returned promise.
     await this.props.auth.ensureCanAccessProject?.(projectId);
-    return new ItxRpcTarget({
+    return projectRootItx({
       auth: this.props.auth,
       ctx: this.props.ctx,
       projectId: projectId,
@@ -871,7 +870,7 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
       }),
     );
 
-    return new ItxRpcTarget({
+    return projectRootItx({
       auth: this.props.auth,
       ctx: this.props.ctx,
       projectId: args.projectId,
@@ -1035,19 +1034,94 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
   }
 }
 
-type ItxRpcTargetProps = {
+type CapabilityHostRpcTargetProps = {
   auth: ItxAuth;
   ctx: CfExecutionContext;
-  // Which scope's capability table backs runScript/provide/invoke and the dynamic
-  // dotted-path fallback. `"/"` (or omitted) is the project root; `/agents/bla` is
-  // an agent scope. The built-in members below are project-global regardless — only
-  // the dynamic capability table is scoped by this path.
-  itxPath?: string;
+  // Scope path of the durable capability table this host fronts: `"/"` is the
+  // project root, `/agents/bla` an agent scope. Normalized in the constructor.
+  path: string;
   projectId: string;
 };
+
+/**
+ * The host surface for ONE capability scope: mount, revoke, invoke, describe,
+ * and run scripts against the durable capability table at `path` (backed by
+ * the CapabilityHostDurableObject with that name). Mounting is always local to
+ * this scope; reads chain up through enclosing scopes inside the Durable
+ * Object. `itx.capabilityHost` is the current scope's host;
+ * `itx.capabilityHosts.get("/")` addresses the project root from anywhere —
+ * that is how an agent provides a capability to the whole project.
+ */
+export class CapabilityHostRpcTarget extends RpcTarget implements CapabilityHost {
+  constructor(readonly props: CapabilityHostRpcTargetProps) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+    props.path = normalizePath(props.path);
+  }
+
+  get path() {
+    return this.props.path;
+  }
+
+  get #durableObject() {
+    return env.CAPABILITY_HOST.getByName(
+      DurableObjectNameCodec.stringify({ path: this.props.path, projectId: this.props.projectId }),
+    );
+  }
+
+  async provideCapability(input: Parameters<CapabilityHost["provideCapability"]>[0]) {
+    rejectBuiltinCollision(ITX_SURFACE_GUARDS, input.path);
+    const provision = await this.#durableObject.provideCapability(input);
+    // The Durable Object returns the durable mount coordinates. The public RPC
+    // surface returns an ownership handle that can revoke that exact mount on
+    // explicit revoke or disposal.
+    return new CapabilityProvisionRpcTarget({
+      ctx: this.props.ctx,
+      path: input.path,
+      providedAtOffset: provision.providedAtOffset,
+      revoke: (revokeInput) => this.#durableObject.revokeCapability(revokeInput),
+    });
+  }
+
+  async revokeCapability(input: Parameters<CapabilityHost["revokeCapability"]>[0]) {
+    await this.#durableObject.revokeCapability(input);
+  }
+
+  async invokeCapability(call: Parameters<CapabilityHost["invokeCapability"]>[0]) {
+    const { args = [], path } = call;
+    return await this.#durableObject.invokeCapability({ args, path });
+  }
+
+  describe() {
+    return this.#durableObject.describe();
+  }
+
+  async runScript(code: string) {
+    return await this.#durableObject.runScript(code);
+  }
+}
+
+/** Catalog of capability scopes within one project (`itx.capabilityHosts`). */
+class CapabilityHostCollectionRpcTarget extends RpcTarget implements CapabilityHostCollection {
+  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  get(path: string) {
+    return new CapabilityHostRpcTarget({
+      auth: this.props.auth,
+      ctx: this.props.ctx,
+      path,
+      projectId: this.props.projectId,
+    });
+  }
+}
 const PROJECT_BUILTIN_CAPABILITY_PATHS = [
   "ai",
   "agents",
+  "capabilityHost",
+  "capabilityHosts",
   "egress",
   "examples",
   "gmail",
@@ -1066,6 +1140,22 @@ const PROJECT_BUILTIN_CAPABILITY_PATHS = [
 
 const PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS: readonly CapabilityDescription[] =
   PROJECT_BUILTIN_CAPABILITY_PATHS.map((path) => {
+    if (path === "capabilityHost") {
+      return {
+        instructions:
+          "This scope's own capability host: provideCapability({ path, ... }) mounts a dynamic capability here (itx.provideCapability is a shortcut), revokeCapability removes one, describe() lists everything reachable, runScript runs a script in this scope.",
+        path: [path],
+        type: "builtin" as const,
+      };
+    }
+    if (path === "capabilityHosts") {
+      return {
+        instructions:
+          'Capability hosts of OTHER scopes, addressed by path: itx.capabilityHosts.get("/") is the project root — providing there makes a capability visible to every scope in the project.',
+        path: [path],
+        type: "builtin" as const,
+      };
+    }
     if (path === "gmail") {
       return {
         instructions:
@@ -1105,23 +1195,36 @@ const PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS: readonly CapabilityDescription[] 
     return { path: [path], type: "builtin" as const };
   });
 
+type ProjectRpcTargetProps = {
+  auth: ItxAuth;
+  // This scope's own capability host. Its `path` decides which scope this itx
+  // IS — `"/"` for the project root, `/agents/bla` for an agent context. It is
+  // exposed as `itx.capabilityHost` and doubles as the fallback for dynamic
+  // dotted-path calls (`itx.foo.bar(...)` → `capabilityHost.invokeCapability`).
+  capabilityHost: CapabilityHostRpcTarget;
+  ctx: CfExecutionContext;
+  projectId: string;
+};
+
 /**
  * The server-side **itx** — the object an `async (itx) => { … }` script holds and
  * what `env.ITX.get()` returns. One class serves the project root and every nested
- * (agent) scope; `itxPath` selects which scope's dynamic capability table backs it.
+ * (agent) scope; the injected `capabilityHost` selects which scope's dynamic
+ * capability table backs it.
  *
- * DESIGN NOTE — this RpcTarget sits *in front of* the ITX Durable Object. Its
- * built-in members (`streams`, `agents`, `repo`, …) are resolved here in the
- * isolate; only unknown roots fall through `withInvokeCapabilityFallback` to the
- * ITX DO's dynamic table (which itself chains up to enclosing scopes). So the
- * common `itx.streams.get(...)` path never makes a round trip just to check
- * whether `streams` was shadowed. The deliberate cost: a dynamic capability can
- * never shadow a built-in name — the built-in always wins (`rejectBuiltinCollision`
- * enforces this at provide time). If we end up needing shadowable built-ins a lot,
- * we'd move resolution behind the DO and pay the round trip; today we don't.
+ * DESIGN NOTE — this RpcTarget sits *in front of* the capability-host Durable
+ * Object. Its built-in members (`streams`, `agents`, `repo`, …) are resolved here
+ * in the isolate; only unknown roots fall through `withInvokeCapabilityFallback`
+ * to the capability host's dynamic table (which itself chains up to enclosing
+ * scopes). So the common `itx.streams.get(...)` path never makes a round trip
+ * just to check whether `streams` was shadowed. The deliberate cost: a dynamic
+ * capability can never shadow a built-in name — the built-in always wins
+ * (`rejectBuiltinCollision` enforces this at provide time). If we end up needing
+ * shadowable built-ins a lot, we'd move resolution behind the DO and pay the
+ * round trip; today we don't.
  */
-export class ItxRpcTarget extends RpcTarget implements Itx {
-  constructor(readonly props: ItxRpcTargetProps) {
+export class ProjectRpcTarget extends RpcTarget implements Itx {
+  constructor(readonly props: ProjectRpcTargetProps) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
     return withInvokeCapabilityFallback(this);
@@ -1140,7 +1243,7 @@ export class ItxRpcTarget extends RpcTarget implements Itx {
   async describe() {
     const [project, mountedCapabilities] = await Promise.all([
       this.durableObjectStub.describe(),
-      this.#itx.describeCapabilities(),
+      this.props.capabilityHost.describe(),
     ]);
     return {
       ...project,
@@ -1163,48 +1266,42 @@ export class ItxRpcTarget extends RpcTarget implements Itx {
   // no bootstrap step, and means `env.ITX.get()` can return this one class at any
   // path with no per-scope branching. On a project-root itx both are undefined.
   get agent(): Agent | undefined {
-    return this.props.itxPath?.startsWith("/agents/")
-      ? this.agents.get(this.props.itxPath)
-      : undefined;
+    const path = this.props.capabilityHost.path;
+    return path.startsWith("/agents/") ? this.agents.get(path) : undefined;
   }
 
   get chat(): AgentChat | undefined {
     return this.agent?.chat;
   }
 
-  get #itx() {
-    return env.ITX.getByName(
-      DurableObjectNameCodec.stringify({
-        path: this.props.itxPath ?? "/",
-        projectId: this.props.projectId,
-      }),
-    );
+  // The scope's own host, plus the catalog that addresses ANY scope in the
+  // project. Host operations live on the hosts — mounting is an operation on a
+  // scope, and the scope is explicit at the callsite: `itx.capabilityHost`
+  // mounts here, `itx.capabilityHosts.get("/")` mounts on the project root.
+  // `provideCapability`/`revokeCapability` below are shortcuts onto the own
+  // host, because own-scope mounting is the overwhelmingly common case.
+  get capabilityHost(): CapabilityHost {
+    return this.props.capabilityHost;
   }
 
-  async provideCapability(input: Parameters<Itx["provideCapability"]>[0]) {
-    rejectBuiltinCollision(this, input.path);
-    const provision = await this.#itx.provideCapability(input);
-    // The ITX Durable Object returns the durable mount coordinates. The public
-    // RPC surface returns an ownership handle that can revoke that exact mount
-    // on explicit revoke or disposal.
-    return new CapabilityProvisionRpcTarget({
+  get capabilityHosts(): CapabilityHostCollection {
+    return new CapabilityHostCollectionRpcTarget({
+      auth: this.props.auth,
       ctx: this.props.ctx,
-      path: input.path,
-      providedAtOffset: provision.providedAtOffset,
-      revoke: (revokeInput) => this.#itx.revokeCapability(revokeInput),
+      projectId: this.props.projectId,
     });
   }
 
-  async revokeCapability(input: Parameters<Itx["revokeCapability"]>[0]) {
-    await this.#itx.revokeCapability(input);
+  provideCapability(input: Parameters<Itx["provideCapability"]>[0]) {
+    return this.props.capabilityHost.provideCapability(input);
   }
 
-  async runScript(code: string) {
-    return await this.#itx.runScript(code);
+  revokeCapability(input: Parameters<Itx["revokeCapability"]>[0]) {
+    return this.props.capabilityHost.revokeCapability(input);
   }
 
   invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
-    return this.#itx.invokeCapability({ args, path });
+    return this.props.capabilityHost.invokeCapability({ args, path });
   }
 
   get streams() {
@@ -1301,6 +1398,28 @@ export class ItxRpcTarget extends RpcTarget implements Itx {
   }
 }
 
+// Provide-time collision guard inputs: a dynamic capability's root segment must
+// not shadow anything on either itx-facing surface (project itx or agent), and
+// must not collide with the `props` instance field — instance fields live on the
+// instance rather than the prototype, so they need the explicit literal entry.
+const ITX_SURFACE_GUARDS: readonly object[] = [
+  ProjectRpcTarget.prototype,
+  AgentRpcTarget.prototype,
+  { props: true },
+];
+
+/** The itx at a project's root scope, wired to its own root capability host. */
+export function projectRootItx(props: {
+  auth: ItxAuth;
+  ctx: CfExecutionContext;
+  projectId: string;
+}): ProjectRpcTarget {
+  return new ProjectRpcTarget({
+    ...props,
+    capabilityHost: new CapabilityHostRpcTarget({ ...props, path: "/" }),
+  });
+}
+
 function defaultProjectWorkerRef(): StatelessDynamicWorkerRef {
   return {
     path: "/",
@@ -1356,7 +1475,7 @@ class SessionRpcTarget extends RpcTarget implements Session {
   }
 }
 
-export class UnauthenticatedItxRpcTarget extends RpcTarget implements UnauthenticatedItx {
+export class UnauthenticatedOsRpcTarget extends RpcTarget implements UnauthenticatedOs {
   constructor(
     readonly props: {
       config: AppConfig;
@@ -1368,7 +1487,7 @@ export class UnauthenticatedItxRpcTarget extends RpcTarget implements Unauthenti
     super();
   }
 
-  async authenticate(input: Parameters<UnauthenticatedItx["authenticate"]>[0]) {
+  async authenticate(input: Parameters<UnauthenticatedOs["authenticate"]>[0]) {
     const auth = await resolveItxAuth({
       config: this.props.config,
       credentials: input,

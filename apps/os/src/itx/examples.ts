@@ -6,7 +6,7 @@
 //
 //   browser         the REPL (compileBrowserReplFunction wraps the body)
 //   node            AsyncFunction("itx", "vars", code) on a Cap'n Web stub
-//   run-script      itx.runScript(`async (itx) => { const vars = …; <body> }`)
+//   run-script      itx.capabilityHost.runScript(`async (itx) => { const vars = …; <body> }`)
 //                   — the server-side script isolate agents use
 //   project-worker  the body baked into the project repo's worker.js,
 //                   executed against `await this.env.ITX.get()`
@@ -140,7 +140,7 @@ return { appended, count: events.length };
     // matrix should not depend on.
     runtimes: ["browser", "node", "cli", "project-worker"],
     code: `
-const execution = await itx.runScript(\`async (itx) => {
+const execution = await itx.capabilityHost.runScript(\`async (itx) => {
   const description = await itx.describe();
   return { projectId: description.projectId, sum: 6 * 7 };
 }\`);

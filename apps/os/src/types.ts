@@ -1,39 +1,46 @@
 /**
  * Public ITX capability contract.
  *
- * `/api/itx` gives callers one unauthenticated object. Authentication returns a
- * root catalog, and every object reachable from that catalog is a Cap'n Web /
- * Workers RPC capability. Projects and agents expose stable built-ins
- * (`streams`, `repos`, `workers`, `runScript`, etc.) plus dynamic dotted
- * capabilities installed through the stream-backed ITX processor. Streams are
- * the durable coordination layer underneath those surfaces: processors,
- * project bootstrap, repo bootstrap, and agent loops all communicate by
- * appending and reducing events.
+ * `/api` — os' one API — gives callers one unauthenticated object.
+ * Authentication returns a root catalog, and every object reachable from that
+ * catalog is a Cap'n Web / Workers RPC capability. Projects and agents expose
+ * stable built-ins (`streams`, `repos`, `workers`, etc.) plus dynamic dotted
+ * capabilities mounted on capability hosts (`itx.capabilityHost`,
+ * `itx.capabilityHosts.get(path)`). Streams are the durable coordination layer
+ * underneath those surfaces: processors, project bootstrap, repo bootstrap,
+ * and agent loops all communicate by appending and reducing events.
  */
 
 // -----------------------------------------------------------------------------
-// The three nouns. Keeping them distinct is what makes this system legible:
+// The four nouns. Keeping them distinct is what makes this system legible:
 //
-// - a SESSION is what `authenticate()` returns. It is a catalog that *vends*
+// - a SESSION is what `os.authenticate()` returns. It is a catalog that *vends*
 //   itxs; it is not itself an itx.
 // - a PROJECT is the tenant / isolation boundary — a `prj_…` id, its Durable
 //   Objects, its streams. You never hold a "project object"; you hold an itx
 //   scoped into a project.
-// - an ITX is a capability context scoped into one project at one path. It is
-//   the `itx` in every `async (itx) => { … }` script and what `env.ITX.get()`
-//   returns. `session.projects.get(id)` gives you the itx at the project root;
-//   a nested scope (`/agents/bla`) is the SAME type at a deeper path.
+// - an ITX is a capability context scoped into one project at one path. "itx"
+//   is a naming CONVENTION, not a class: an itx is normally an instance of
+//   ProjectRpcTarget whose capability host sits at "/" — and sometimes at
+//   "/agents/…", which is what "an agent context" means. It is the `itx` in
+//   every `async (itx) => { … }` script and what `env.ITX.get()` returns;
+//   `session.projects.get(id)` gives you the itx at the project root.
+// - a CAPABILITY HOST is the durable dynamic-capability table (and script
+//   journal) at one scope path. Each itx fronts exactly one host
+//   (`itx.capabilityHost`; `itx.provideCapability`/`revokeCapability` are
+//   shortcuts onto it); `itx.capabilityHosts.get(path)` addresses any other
+//   scope's host, including the project root at `"/"`.
 // -----------------------------------------------------------------------------
 
 /**
  * Entry point exposed before any principal or project authority is known.
  *
- * `/api/itx` hands every caller one of these; the only thing it can do is
+ * `/api` hands every caller one of these; the only thing it can do is
  * `authenticate(...)`, which on success returns a {@link Session}. This is the
  * canonical Cap'n Web pattern: authority cannot be forged, only handed back by a
  * method that already checked you.
  */
-export interface UnauthenticatedItx {
+export interface UnauthenticatedOs {
   authenticate(input: ItxAuthCredentials): Promise<Session>;
 }
 
@@ -95,7 +102,7 @@ export type ProjectListEntry = {
 /**
  * An **itx**: a capability context scoped into one project at one path.
  *
- * The same interface serves the project root (`itxPath: "/"`) and every nested
+ * The same interface serves the project root (path `"/"`) and every nested
  * scope (`/agents/bla`, `/agents/slack/ts-124`, …). A nested scope is not a
  * different type — it exposes all the project built-ins below PLUS the dynamic
  * capabilities mounted on its own scope and inherited from every enclosing scope
@@ -103,17 +110,33 @@ export type ProjectListEntry = {
  * one). `agent`/`chat` are present only when the scope sits under `/agents/`.
  *
  * DESIGN NOTE — why the built-ins are explicit members, not dynamic entries:
- * this object is an RpcTarget that sits *in front of* the ITX Durable Object. A
- * call like `itx.streams.get("/x")` resolves against these known members in the
- * isolate and never touches the ITX DO, so the hot path pays no extra round trip
- * to check whether `streams` was shadowed. The deliberate trade-off is that a
+ * this object is an RpcTarget that sits *in front of* the capability-host
+ * Durable Object. A call like `itx.streams.get("/x")` resolves against these
+ * known members in the isolate and never touches the DO, so the hot path pays
+ * no extra round trip to check whether `streams` was shadowed. The deliberate trade-off is that a
  * dynamic capability therefore CANNOT shadow a built-in name — the built-in
  * always wins. If shadowable built-ins turn out to be needed often, we'd move
  * resolution behind the DO and accept the round trip; today we don't.
  */
-export interface Itx extends ItxCapabilityHost {
+export interface Itx {
   ai: Ai;
   agents: AgentCollection;
+  /**
+   * This scope's own capability host: the durable capability table behind
+   * this itx (`provideCapability`, `revokeCapability`, `runScript`,
+   * `describe`). Dynamic dotted calls (`itx.foo.bar(...)`) fall back to it.
+   */
+  capabilityHost: CapabilityHost;
+  /**
+   * Capability hosts of OTHER scopes, by path. `capabilityHosts.get("/")` is
+   * the project root — providing there makes a capability visible to every
+   * scope in the project (child scopes inherit ancestors' mounts).
+   */
+  capabilityHosts: CapabilityHostCollection;
+  /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS scope). */
+  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;
+  /** Shortcut for `capabilityHost.revokeCapability`. */
+  revokeCapability(input: RevokeCapabilityInput): Promise<void>;
   describe(): Promise<ProjectDescription>;
   egress: ProjectEgress;
   /** Read-only catalogue of known-good itx script snippets (`list()`, `get({ id })`). */
@@ -242,7 +265,13 @@ export interface AgentCollection {
 }
 
 /** Agent capability surface for message loops and agent-local dynamic tools. */
-export interface Agent extends ItxCapabilityHost {
+export interface Agent {
+  /** The agent scope's own capability host (provide/revoke/runScript/describe). */
+  capabilityHost: CapabilityHost;
+  /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS agent's scope). */
+  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;
+  /** Shortcut for `capabilityHost.revokeCapability`. */
+  revokeCapability(input: RevokeCapabilityInput): Promise<void>;
   chat: AgentChat;
   processor: StreamProcessorRpc<AgentProcessorState>;
   stream: Stream;
@@ -547,19 +576,31 @@ export type ItxExampleSummary = {
 export type ItxExampleWithCode = ItxExampleSummary & { code: string };
 
 /**
- * Shared host operations for objects that can own dynamic ITX capabilities.
- *
- * Project and agent targets both delegate these to their scoped ITX Durable
- * Object, so scripts and mounted tools use the same shape in either context.
+ * The host surface for one capability scope: the durable dynamic-capability
+ * table and script journal at one path inside a project (backed by one
+ * CapabilityHostDurableObject). Mounting is always local to the host's own
+ * scope; reads (`invokeCapability`, `describe`) chain up through
+ * enclosing scopes, so a project-root mount is visible from every scope.
  */
-export interface ItxCapabilityHost {
+export interface CapabilityHost {
+  /** The scope path this host fronts: `"/"` is the project root, `/agents/bla` an agent. */
+  path: string;
+  /** Everything reachable at this scope — own mounts plus inherited ones, each tagged with its declaring scope. */
+  describe(): Promise<CapabilityDescription[]>;
+  /** Explicit dynamic dispatch; the dotted-path fallback (`itx.foo.bar(...)`) compiles to exactly this call. */
+  invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
+  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;
+  revokeCapability(input: RevokeCapabilityInput): Promise<void>;
   runScript(code: string): Promise<{
     completedEvent: StreamEvent;
     executionId: string;
     result: unknown;
   }>;
-  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;
-  revokeCapability(input: RevokeCapabilityInput): Promise<void>;
+}
+
+/** Capability hosts by scope path within one project (`itx.capabilityHosts`). */
+export interface CapabilityHostCollection {
+  get(path: string): CapabilityHost;
 }
 
 /**
@@ -758,7 +799,7 @@ export type RevokeCapabilityInput = {
 };
 
 /**
- * Credentials accepted by `UnauthenticatedItx.authenticate`.
+ * Credentials accepted by `UnauthenticatedOs.authenticate`.
  *
  * - `from-server-cookie` — the browser lane: the deployment's admin cookie or
  *   the signed-in user's session cookie riding the WebSocket handshake.

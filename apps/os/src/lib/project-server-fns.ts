@@ -6,7 +6,7 @@ import { authenticateCapnwebAdmin } from "~/auth/admin-auth-cookie.ts";
 import { getUserPrincipal } from "~/auth/principal.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import { readProjectBySlug } from "~/project-directory.ts";
-import type { ProjectDeploymentStatus, UnauthenticatedItx } from "~/types.ts";
+import type { ProjectDeploymentStatus, UnauthenticatedOs } from "~/types.ts";
 import type { RequestContext } from "~/request-context.ts";
 
 /**
@@ -154,8 +154,8 @@ function engineBatchSession(context: RequestContext) {
   const cookie = context.rawRequest?.headers.get("cookie");
   if (!cookie) throw new Error("Sign in to reach the project engine.");
   // oxlint-disable-next-line iterate/no-capnweb-http-batch -- one-shot pipelined batch per request; no socket lifecycle to manage in a server function.
-  return newHttpBatchRpcSession<UnauthenticatedItx>(
-    new Request(`${baseUrl}/api/itx`, {
+  return newHttpBatchRpcSession<UnauthenticatedOs>(
+    new Request(`${baseUrl}/api`, {
       method: "POST",
       headers: { cookie },
     }),

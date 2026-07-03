@@ -104,7 +104,7 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
           const code = extractAsyncJsSnippet(event.payload.content);
           if (code === null) return;
           await append({
-            type: "events.iterate.com/itx/script-execution-requested",
+            type: "events.iterate.com/capability-host/script-execution-requested",
             idempotencyKey: `itx/script-execution-requested@${event.offset}`,
             payload: {
               code,
@@ -113,7 +113,7 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
           });
         });
         return;
-      case "events.iterate.com/itx/script-execution-completed": {
+      case "events.iterate.com/capability-host/script-execution-completed": {
         const content = scriptResultAgentInput(event);
         if (content === null) return;
         blockProcessorWhile(() =>
@@ -317,7 +317,7 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
         return { ...state, currentRequest: null };
       }
       return state;
-    case "events.iterate.com/itx/script-execution-completed":
+    case "events.iterate.com/capability-host/script-execution-completed":
       return {
         ...state,
         scriptExecutionsCompleted: [...state.scriptExecutionsCompleted, event.payload.executionId],
@@ -361,7 +361,10 @@ const AGENT_SCRIPT_EXECUTION_ID_PREFIX = "agent-output:";
 // - a script that returned undefined and did not throw produces nothing.
 //   Returning no value is how an agent ends its turn.
 function scriptResultAgentInput(
-  event: Extract<AgentConsumedEvent, { type: "events.iterate.com/itx/script-execution-completed" }>,
+  event: Extract<
+    AgentConsumedEvent,
+    { type: "events.iterate.com/capability-host/script-execution-completed" }
+  >,
 ): string | null {
   const payload = event.payload;
   if (!payload.executionId.startsWith(AGENT_SCRIPT_EXECUTION_ID_PREFIX)) return null;

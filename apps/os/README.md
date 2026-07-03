@@ -5,7 +5,7 @@ project-scoped runtime APIs.
 
 It combines:
 
-- **itx** (`src/`) — the capnweb surface at `/api/itx` plus
+- **itx** (`src/`) — the capnweb surface at `/api` plus
   every project-scoped domain: streams, repos, agents, secrets, dynamic
   workers, egress, capabilities. [`src/README.md`](./src/README.md)
   is itx guide; [`src/types.ts`](./src/types.ts) is the

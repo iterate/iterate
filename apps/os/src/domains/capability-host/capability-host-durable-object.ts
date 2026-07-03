@@ -9,17 +9,27 @@ import {
 } from "../streams/stream-processor-host.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
-import { ItxRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
+import { CapabilityHostRpcTarget, ProjectRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import {
-  ItxProcessor,
-  type ParentItxScope,
+  itxEntrypointBinding,
+  itxEntrypointProps,
+  itxEntrypointScopeCacheKey,
+} from "../itx/utils.ts";
+import {
+  CapabilityHostProcessor,
+  type ParentCapabilityHost,
   type ProvideCapabilityInput,
   type RunScriptResult,
-} from "./itx-processor-implementation.ts";
-import { itxEntrypointBinding, itxEntrypointProps, itxEntrypointScopeCacheKey } from "./utils.ts";
+} from "./capability-host-processor-implementation.ts";
 
-export class ItxDurableObject extends DurableObject<Env> {
+/**
+ * One capability scope: the durable dynamic-capability table and script
+ * journal at one `{projectId, path}`. `provideCapability` always mounts here;
+ * `invokeCapability`/`describe` chain up to the enclosing scope's
+ * host on a local miss.
+ */
+export class CapabilityHostDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   // The host-supplied ITX binding scope and Worker Loader cache scope must be
   // built from the same normalized value, otherwise a worker can load with one
@@ -35,14 +45,19 @@ export class ItxDurableObject extends DurableObject<Env> {
       projectId: this.#name.projectId,
     }),
   });
-  readonly #itxProcessor = this.#processorHost.add(
+  readonly #capabilityHostProcessor = this.#processorHost.add(
     (deps) =>
-      new ItxProcessor({
+      new CapabilityHostProcessor({
         ...deps,
-        itx: new ItxRpcTarget({
+        itx: new ProjectRpcTarget({
           auth: trustedInternalAuthContext(),
+          capabilityHost: new CapabilityHostRpcTarget({
+            auth: trustedInternalAuthContext(),
+            ctx: this.ctx,
+            path: this.#name.path,
+            projectId: this.#name.projectId,
+          }),
           ctx: this.ctx,
-          itxPath: this.#name.path,
           projectId: this.#name.projectId,
         }),
         // The enclosing scope, so a capability miss at this path falls through to
@@ -50,7 +65,7 @@ export class ItxDurableObject extends DurableObject<Env> {
         // immediate parent is wired; deeper ancestors are reached because that
         // parent applies the same fallback. Undefined at the root, which ends the
         // chain.
-        parent: this.#parentItxScope(),
+        parent: this.#parentCapabilityHost(),
         path: this.#name.path,
         workerRunner: new DynamicWorkerRunner({
           bindings: {
@@ -64,10 +79,10 @@ export class ItxDurableObject extends DurableObject<Env> {
       }),
   );
 
-  #parentItxScope(): ParentItxScope | undefined {
+  #parentCapabilityHost(): ParentCapabilityHost | undefined {
     const parentPath = parentScopePath(this.#name.path);
     if (parentPath === null) return undefined;
-    const parent = this.env.ITX.getByName(
+    const parent = this.env.CAPABILITY_HOST.getByName(
       DurableObjectNameCodec.stringify({ path: parentPath, projectId: this.#name.projectId }),
     );
     // Forward only the two read methods the child scope chains through. Handing the
@@ -75,7 +90,7 @@ export class ItxDurableObject extends DurableObject<Env> {
     // the DO's self-referential stub type (TS2589); a thin forwarder keeps it shallow.
     return {
       invokeCapability: (input) => parent.invokeCapability(input),
-      describeCapabilities: () => parent.describeCapabilities(),
+      describe: () => parent.describe(),
     };
   }
 
@@ -84,30 +99,30 @@ export class ItxDurableObject extends DurableObject<Env> {
   }
 
   get processor() {
-    return new StreamProcessorRpcTarget(this.#itxProcessor);
+    return new StreamProcessorRpcTarget(this.#capabilityHostProcessor);
   }
 
-  // Return types are pinned shallow so `DurableObjectStub<ItxDurableObject>`
+  // Return types are pinned shallow so `DurableObjectStub<CapabilityHostDurableObject>`
   // doesn't deep-instantiate the processor's inferred signatures (TS2589).
   invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown> {
-    return this.#itxProcessor.invokeCapability(input);
+    return this.#capabilityHostProcessor.invokeCapability(input);
   }
 
   provideCapability(
     input: ProvideCapabilityInput,
   ): Promise<{ path: string[]; providedAtOffset: number }> {
-    return this.#itxProcessor.provideCapability(input);
+    return this.#capabilityHostProcessor.provideCapability(input);
   }
 
   revokeCapability(input: { path: string[]; providedAtOffset?: number }): Promise<void> {
-    return this.#itxProcessor.revokeCapability(input);
+    return this.#capabilityHostProcessor.revokeCapability(input);
   }
 
   runScript(code: string): Promise<RunScriptResult> {
-    return this.#itxProcessor.runScript(code);
+    return this.#capabilityHostProcessor.runScript(code);
   }
 
-  describeCapabilities(): Promise<CapabilityDescription[]> {
-    return this.#itxProcessor.describeCapabilities();
+  describe(): Promise<CapabilityDescription[]> {
+    return this.#capabilityHostProcessor.describe();
   }
 }

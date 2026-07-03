@@ -2,7 +2,7 @@
  * itx-react — the entire React surface for itx, in one file.
  *
  * `itx` is the project's capability handle: a capnweb `RpcStub` reached over ONE
- * WebSocket to `/api/itx[/<projectSlug>]`. This file is everything a component
+ * WebSocket to `/api[/<projectSlug>]`. This file is everything a component
  * needs to talk to the backend — the socket lifecycle AND the React primitives.
  *
  * FOUR primitives — two for GETTING the connection (in render vs imperatively),
@@ -72,7 +72,7 @@ import {
 } from "react";
 import { useSuspenseQuery, type QueryKey } from "@tanstack/react-query";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
-import type { Itx as ProjectItx, Session, UnauthenticatedItx } from "../types.ts";
+import type { Itx as ProjectItx, Session, UnauthenticatedOs } from "../types.ts";
 
 /**
  * The handle type is context-dependent: a project connection holds the project
@@ -116,7 +116,7 @@ const subscribeSockets = (onChange: () => void) => {
 function socketFor(context: string | undefined): Promise<Itx> {
   if (typeof window === "undefined") {
     throw new Error(
-      "itx is browser-only: it dials a WebSocket to /api/itx and never SSRs. " +
+      "itx is browser-only: it dials a WebSocket to /api and never SSRs. " +
         "Render itx consumers under an `ssr: false` route or inside <ClientOnly>.",
     );
   }
@@ -125,7 +125,7 @@ function socketFor(context: string | undefined): Promise<Itx> {
 
   // Context resolution is client-side: one endpoint, authenticate(), then
   // projects.get(<project id>) — the context key is a project ID, not a slug.
-  const url = new URL("/api/itx", window.location.href);
+  const url = new URL("/api", window.location.href);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(url);
   const { promise, resolve, reject } = Promise.withResolvers<Itx>();
@@ -142,7 +142,7 @@ function socketFor(context: string | undefined): Promise<Itx> {
     // on the WebSocket handshake, projects.get narrows to the project context.
     // The session/root stubs live as long as the socket; they are never
     // disposed individually.
-    const unauthenticated = newWebSocketRpcSession<UnauthenticatedItx>(ws);
+    const unauthenticated = newWebSocketRpcSession<UnauthenticatedOs>(ws);
     const root = unauthenticated.authenticate({ type: "from-server-cookie" });
     resolve((context ? root.projects.get(context) : root) as unknown as Itx);
   });

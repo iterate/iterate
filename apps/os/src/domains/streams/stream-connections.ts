@@ -1,7 +1,7 @@
 // Live delivery connections for one Stream Durable Object.
 //
 // A connection is the stream's half of a live-capability handshake — the same
-// shape as an itx live capability (see `domains/itx/live-capability.ts`): the
+// shape as an itx live capability (see `domains/capability-host/live-capability.ts`): the
 // subscriber hands the stream a live `processEventBatch` callback, the stream
 // duplicates and retains that stub past the RPC call that delivered it, invokes
 // it for every committed batch, and disposes it on close. Connections are

@@ -1,5 +1,5 @@
 // Browser execution mode: a real Chromium tab holds an itx handle over a
-// Cap'n Web WebSocket (/api/itx) — the same stubs, same catalogue
+// Cap'n Web WebSocket (/api) — the same stubs, same catalogue
 // examples, same capability verbs as Node and the worker runtimes. Examples
 // run through the REAL REPL evaluation pipeline (compile + import rewriting +
 // scope), so what the Examples panel shows is exactly what this suite proves.
@@ -14,7 +14,7 @@
 import { describe, expect, it } from "vitest";
 import { commands } from "vitest/browser";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
-import type { Itx, Session, UnauthenticatedItx } from "../../src/types.ts";
+import type { Itx, Session, UnauthenticatedOs } from "../../src/types.ts";
 import {
   createBrowserReplScope,
   DEFAULT_BROWSER_REPL_CODE,
@@ -123,10 +123,10 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
  */
 async function connectFromBrowser(): Promise<RpcStub<Session & Itx>> {
   await installAdminCookie();
-  // The itx capnweb surface is served at /api/itx (mirrors ~/itx/itx-react.tsx).
-  const wsUrl = new URL("/api/itx", baseUrl());
+  // The itx capnweb surface is served at /api (mirrors ~/itx/itx-react.tsx).
+  const wsUrl = new URL("/api", baseUrl());
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
-  const unauthenticated = newWebSocketRpcSession<UnauthenticatedItx>(new WebSocket(wsUrl));
+  const unauthenticated = newWebSocketRpcSession<UnauthenticatedOs>(new WebSocket(wsUrl));
   return unauthenticated.authenticate({ type: "from-server-cookie" }) as unknown as RpcStub<
     Session & Itx
   >;
@@ -144,7 +144,7 @@ async function installAdminCookie() {
     }
   ).setItxAdminCookie({
     secret: __ITX_BROWSER_E2E__.adminApiSecret,
-    url: new URL("/api/itx", baseUrl()).toString(),
+    url: new URL("/api", baseUrl()).toString(),
   });
   if (!result.cookies?.some((cookie) => cookie.name === "iterate-admin-auth")) {
     throw new Error("iterate-admin-auth cookie was not installed.");

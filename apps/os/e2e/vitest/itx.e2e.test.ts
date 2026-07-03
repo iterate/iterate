@@ -10,7 +10,7 @@ import {
   StreamProcessor,
   type StreamProcessorSnapshot,
 } from "../../src/domains/streams/stream-processor.ts";
-import type { DynamicWorkerRef, UnauthenticatedItx } from "../../src/types.ts";
+import type { DynamicWorkerRef, UnauthenticatedOs } from "../../src/types.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { startEgressEcho, startMockMcp, startMockOpenApi } from "./itx-capability-fixtures.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
@@ -1078,7 +1078,7 @@ describe("itx", () => {
 
     // The seeded root worker now routes via x-iterate-app (static homepage
     // otherwise); the hello app keeps the path-echo this assertion relies on.
-    const scriptResult = await project.runScript(`async (itx) => {
+    const scriptResult = await project.capabilityHost.runScript(`async (itx) => {
       const response = await itx.worker.fetch(
         new Request("https://example.com/script", { headers: { "x-iterate-app": "hello" } }),
       );
@@ -1835,8 +1835,8 @@ describe("itx", () => {
     expect(events.map((event) => event.type)).toEqual(
       expect.arrayContaining([
         AGENT_OUTPUT_ADDED_TYPE,
-        "events.iterate.com/itx/script-execution-requested",
-        "events.iterate.com/itx/script-execution-completed",
+        "events.iterate.com/capability-host/script-execution-requested",
+        "events.iterate.com/capability-host/script-execution-completed",
         AGENT_WEB_MESSAGE_SENT_TYPE,
         "events.iterate.com/agent/input-added",
       ]),
@@ -1900,10 +1900,11 @@ describe("itx", () => {
     const itxSubscriptionOffset = events.find(
       (event) =>
         event.type === "events.iterate.com/stream/subscription-configured" &&
-        (event.payload as { subscriber?: { type?: string } }).subscriber?.type === "itx",
+        (event.payload as { subscriber?: { type?: string } }).subscriber?.type ===
+          "capability-host",
     )?.offset;
     const scriptRequestedOffset = events.find(
-      (event) => event.type === "events.iterate.com/itx/script-execution-requested",
+      (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
     )?.offset;
     const modelSelectionOffset = events.find(
       (event) => event.type === "events.iterate.com/agent/llm-provider-selected",
@@ -2098,6 +2099,47 @@ describe("itx", () => {
     expect(await agent.scopeProbe.agentScope()).toEqual({
       kind: "agent",
       whoami: `agent ${projectId}:${agentPath}`,
+    });
+  });
+
+  test('An agent scope provides a capability to the whole project via capabilityHosts.get("/")', async () => {
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "admin-secret",
+      secret: adminSecret(),
+    });
+
+    using project = itx.projects.create({ slug: "cross-scope-provide" });
+    await project.describe();
+    const agentPath = `/agents/cross-scope-${crypto.randomUUID()}`;
+    using agent = project.agents.get(agentPath);
+
+    // The provide runs INSIDE the agent scope: the script's `itx` fronts the
+    // agent's own capability host and mounts on the project root by addressing
+    // it through `capabilityHosts.get("/")`.
+    const execution = await agent.capabilityHost.runScript(`async (itx) => {
+      const provision = await itx.capabilityHosts.get("/").provideCapability({
+        type: "live",
+        path: ["crossScopeProbe"],
+        capability: { ping: () => "pong-from-agent-mount" },
+      });
+      // Visible on the root host itself, and through the agent scope's own
+      // inheritance chain (local miss -> parent -> root).
+      const viaRoot = await itx.capabilityHosts
+        .get("/")
+        .invokeCapability({ path: ["crossScopeProbe", "ping"], args: [] });
+      const viaChain = await itx.crossScopeProbe.ping();
+      const describedScopes = (await itx.capabilityHost.describe())
+        .filter((capability) => capability.path.join(".") === "crossScopeProbe")
+        .map((capability) => capability.scope);
+      await provision.revoke();
+      return { viaRoot, viaChain, describedScopes };
+    }`);
+
+    expect(execution.result).toEqual({
+      viaRoot: "pong-from-agent-mount",
+      viaChain: "pong-from-agent-mount",
+      describedScopes: ["/"],
     });
   });
 
@@ -2880,7 +2922,7 @@ describe("itx", () => {
   // take all the actions in this itx script
   test("Authenticated itx whoami and projects list complete in one HTTP batch", async () => {
     // oxlint-disable-next-line iterate/no-capnweb-http-batch -- if this cannot pipeline in one request, Cap'n Web rejects the batch.
-    using session = newHttpBatchRpcSession<UnauthenticatedItx>(buildUrl({ path: "/api/itx" }));
+    using session = newHttpBatchRpcSession<UnauthenticatedOs>(buildUrl({ path: "/api" }));
     using itx = session.authenticate({
       type: "impersonate",
       secret: adminSecret(),
