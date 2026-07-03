@@ -17,6 +17,7 @@ import { InputOTP, InputOTPGroup, InputOTPSlot } from "@iterate-com/ui/component
 import { Label } from "@iterate-com/ui/components/label";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { parseConfig } from "../config.ts";
 import { authClient } from "../utils/auth-client.ts";
 import { getInitials } from "../utils/initials.ts";
 
@@ -27,7 +28,7 @@ import { getInitials } from "../utils/initials.ts";
 const getLoginState = createServerFn({ method: "GET" }).handler(({ context }) => {
   const user = context.variables.session?.user;
   return {
-    emailOtpEnabled: context.cloudflare.env.VITE_ENABLE_EMAIL_OTP_SIGNIN === "true",
+    emailOtpEnabled: parseConfig(context.cloudflare.env).emailOtpEnabled,
     user: user ? { name: user.name ?? null, email: user.email, image: user.image ?? null } : null,
   };
 });

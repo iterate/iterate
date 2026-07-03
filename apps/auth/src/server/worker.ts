@@ -13,6 +13,7 @@ import { RequestHeadersPlugin } from "@orpc/server/plugins";
 import { onError, ORPCError } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/fetch";
 import { auth, getAllowedBrowserOrigins } from "./auth.ts";
+import { config } from "./env.ts";
 import { hono, variablesProvider, type Variables } from "./utils/hono.ts";
 import { appRouter } from "./orpc/index.ts";
 import type { CloudflareEnv } from "./env.ts";
@@ -65,8 +66,8 @@ app.get("/logout", async (c) => {
   const response = c.redirect(
     resolveAuthLogoutReturnTo({
       rawReturnTo: c.req.query("return_to"),
-      authOrigin: c.env.VITE_AUTH_APP_ORIGIN,
-      publicOrigin: c.env.VITE_PUBLIC_URL,
+      authOrigin: config.authAppOrigin,
+      publicOrigin: config.publicUrl,
     }),
   );
   appendSetCookieHeaders(response.headers, signOutResponse.headers);
