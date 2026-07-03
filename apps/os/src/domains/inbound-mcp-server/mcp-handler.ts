@@ -15,6 +15,7 @@ import { z } from "zod";
 import { newHttpBatchRpcSession } from "capnweb";
 import { env } from "cloudflare:workers";
 import packageJson from "../../../package.json" with { type: "json" };
+import { ensureMcpSessionAgentReady } from "./mcp-session-agent-ready.ts";
 import { resolveMcpSessionAgentPath } from "./mcp-session-agent-path.ts";
 import { authenticateAdminApiSecret, readBearerToken } from "~/auth/admin.ts";
 import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
@@ -194,22 +195,24 @@ function createServer(input: {
       const project = await resolveProject(parsedInput.project);
       const agentPath = await resolveSessionAgentPath();
 
-      // One pipelined batch: agents.ask appends the message and waits for the
-      // agent's next chat reply server-side. Reply matching is by order on the
-      // session stream, not per-request correlation — the session belongs to
-      // this one MCP client, so interleaved replies are the client's own doing
-      // (same trust model as one person running exec_js mid-conversation).
+      // agents.ask appends the message and waits for the agent's next chat
+      // reply server-side. Reply matching is by order on the session stream,
+      // not per-request correlation — the session belongs to this one MCP
+      // client, so interleaved replies are the client's own doing (same trust
+      // model as one person running exec_js mid-conversation).
       let reply;
       try {
-        reply = await engineBatchSession(input.context)
-          .authenticate({ type: "admin-secret", secret: requireAdminSecret(input.context) })
-          .projects.get(project.id)
-          .agents.get(agentPath)
-          .ask({
-            message: parsedInput.message,
-            origin: "mcp",
-            timeoutMs: ASK_ASSISTANT_TIMEOUT_MS,
-          });
+        const root = engineBatchSession(input.context).authenticate({
+          type: "admin-secret",
+          secret: requireAdminSecret(input.context),
+        });
+        const projectItx = await root.projects.get(project.id);
+        await ensureMcpSessionAgentReady({ agentPath, projectItx });
+        reply = await projectItx.agents.get(agentPath).ask({
+          message: parsedInput.message,
+          origin: "mcp",
+          timeoutMs: ASK_ASSISTANT_TIMEOUT_MS,
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return {
