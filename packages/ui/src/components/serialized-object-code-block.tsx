@@ -1,4 +1,6 @@
 import { Suspense, lazy, type ComponentType } from "react";
+import { cn } from "../lib/utils.ts";
+import { Spinner } from "./spinner.tsx";
 import type { SerializedObjectCodeBlockProps } from "./serialized-object-code-block.client.tsx";
 
 export type { SerializedObjectCodeBlockProps } from "./serialized-object-code-block.client.tsx";
@@ -15,8 +17,27 @@ const LazyBlock: ComponentType<SerializedObjectCodeBlockProps> = import.meta.env
 
 export function SerializedObjectCodeBlock(props: SerializedObjectCodeBlockProps) {
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<SerializedObjectCodeBlockFallback {...props} />}>
       <LazyBlock {...props} />
     </Suspense>
+  );
+}
+
+function SerializedObjectCodeBlockFallback({
+  className,
+  plainChrome = false,
+}: Pick<SerializedObjectCodeBlockProps, "className" | "plainChrome">) {
+  return (
+    <div className={cn("relative flex min-h-0 flex-col", className)} data-spinner="true">
+      <div
+        className={cn(
+          "flex min-h-16 items-center gap-2 px-3 py-2 text-xs text-muted-foreground",
+          plainChrome ? "" : "rounded border",
+        )}
+      >
+        <Spinner className="size-3.5" />
+        <span>Loading code block...</span>
+      </div>
+    </div>
   );
 }

@@ -1,7 +1,6 @@
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { z } from "zod/v4";
 import { createAuthContractClient } from "@iterate-com/auth-contract";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 
 // Declarative OAuth client seeding: Doppler is the source of truth.
 //
@@ -141,8 +140,7 @@ export async function seedOAuthClients(
   );
 }
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
-if (isMain) {
+if (isMainModule(import.meta.url)) {
   if (!process.env.AUTH_SEED_OAUTH_CLIENTS) {
     console.log("[seed-oauth-clients] AUTH_SEED_OAUTH_CLIENTS not set; nothing to seed.");
     process.exit(0);
