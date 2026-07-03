@@ -360,8 +360,10 @@ describe("itx", () => {
     );
     expect(description.capabilities).toContainEqual(
       expect.objectContaining({
-        instructions: expect.stringContaining("Gmail REST proxy"),
-        path: ["gmail"],
+        instructions: expect.stringContaining(
+          "fully qualified path /integrations/<slug>/<connection>",
+        ),
+        path: ["integrations"],
         type: "builtin",
       }),
     );
