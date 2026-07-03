@@ -2,8 +2,8 @@
  * Goal coverage: an agent uses itx tools. Deterministic version of the
  * Playwright chat spec — drive an agent over itx, instruct it to run a script
  * that appends a proof event, and assert the full codemode loop on the stream:
- * llm request → output → capability-host/script-execution-requested/completed
- * → proof event on the target stream → visible web reply.
+ * llm request → output → capability-host/script-execution-requested/completed → proof
+ * event on the target stream → visible web reply.
  */
 import { test } from "vitest";
 import { createTestProject } from "../test-support/create-test-project.ts";
