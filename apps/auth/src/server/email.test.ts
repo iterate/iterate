@@ -3,9 +3,10 @@ import { describe, it } from "node:test";
 import { getEmailOtpSenderAddress, sendEmailOtp, shouldUseTestOtp } from "./email.ts";
 
 describe("email OTP", () => {
-  it("recognizes +test addresses in any domain case", () => {
+  it("recognizes the explicit +test tag in any domain case", () => {
     assert.equal(shouldUseTestOtp("alice+test@nustom.com"), true);
-    assert.equal(shouldUseTestOtp("alice+LoginTest@NUSTOM.com"), true);
+    assert.equal(shouldUseTestOtp("alice+work+TEST@NUSTOM.com"), true);
+    assert.equal(shouldUseTestOtp("alice+contest@nustom.com"), false);
     assert.equal(shouldUseTestOtp("alice@nustom.com"), false);
   });
 

@@ -1,5 +1,3 @@
-const TEST_EMAIL_PATTERN = /\+.*test@/i;
-
 export const TEST_OTP_CODE = "424242";
 
 type EmailAddress = {
@@ -26,7 +24,11 @@ export type SendEmailOtpOptions = {
 };
 
 export function shouldUseTestOtp(email: string) {
-  return TEST_EMAIL_PATTERN.test(email);
+  const atIndex = email.indexOf("@");
+  if (atIndex <= 0) {
+    return false;
+  }
+  return email.slice(0, atIndex).toLowerCase().endsWith("+test");
 }
 
 export function getEmailOtpSenderAddress(senderDomain: string) {

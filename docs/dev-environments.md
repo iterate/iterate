@@ -115,7 +115,7 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   port-agnostic loopback client above.
 - Sign in as an agent/test: mint it (next section). Never script the OAuth
   dance.
-- Test emails: any address matching `+...test@` (e.g. `alice+test@nustom.com`)
+- Test emails: any address ending its local part with `+test` (e.g. `alice+test@nustom.com`)
   gets the fixed OTP `424242` in every auth stage and sends no real email.
 
 The dev-global auth deploys from `main` (alongside prd auth) and reseeds its
@@ -186,7 +186,7 @@ doppler run --project os --config dev -- pnpm auth:mint --email agent+test@nusto
 ```
 
 A signed-in _human_ never hits this: the real OAuth flow walks you through
-creating an org + project on first sign-in (test emails `+...test@` with OTP
+creating an org + project on first sign-in (test emails ending in `+test` with OTP
 `424242` work for that flow too, fully headless).
 
 The `browserSignInUrl` embeds the (short-lived) tokens as query params — treat
