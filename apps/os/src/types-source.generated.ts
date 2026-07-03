@@ -431,6 +431,11 @@ export interface ProjectRepoCollection extends RepoCollection {
 export interface Repo extends Describable {
   commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult>;
   create(): Promise<Repo>;
+  /**
+   * Safely replace text in one committed file and commit the result. The
+   * \`oldString\` must match exactly once unless \`replaceAll\` is true.
+   */
+  edit(input: EditRepoFileInput): Promise<EditRepoFileResult>;
   /** All committed file paths at HEAD. */
   listFiles(): Promise<{ commitOid: string; paths: string[] }>;
   processor: StreamProcessorRpc<RepoProcessorState>;
@@ -840,6 +845,23 @@ export type CommitRepoFilesResult = {
   changedPaths: string[];
   commitOid: string;
   noChanges: boolean;
+};
+
+/** Command object for a coding-agent-style exact string edit. */
+export type EditRepoFileInput = {
+  author?: { email: string; name: string };
+  branch?: string;
+  message: string;
+  newString: string;
+  oldString: string;
+  path: string;
+  replaceAll?: boolean;
+};
+
+/** Result returned after an exact string edit commit attempt. */
+export type EditRepoFileResult = CommitRepoFilesResult & {
+  occurrenceCount: number;
+  path: string;
 };
 
 /** Dynamic invocation envelope used by flattened live capabilities. */
