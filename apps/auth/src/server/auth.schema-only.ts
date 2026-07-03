@@ -5,6 +5,6 @@ import { getAuthPlugins } from "./auth-plugins.ts";
 export const auth = betterAuth({
   baseURL: "http://localhost:3000",
   secret: "secret",
-  plugins: getAuthPlugins({}),
+  plugins: getAuthPlugins({ emailOtpEnabled: false, resendApiKey: "", resendDomain: "" }),
   database: sqlfuBetterAuthAdapter(),
 });

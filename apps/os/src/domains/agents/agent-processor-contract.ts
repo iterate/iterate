@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ITX_TYPES_SOURCE } from "../../types-source.generated.ts";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
-import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
+import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 
 export const DEFAULT_AGENT_MODEL = "@cf/moonshotai/kimi-k2.7-code";
 export const DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS = 250;
@@ -83,21 +83,22 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "",
   "A response with no code block does nothing and ends your turn (the user never sees your raw text — only what you sendMessage).",
   "",
-  "The `itx` argument is an RpcStub<Itx> (a Cap'n Web RPC stub) scoped to YOUR agent path in this project. Property access pipelines over RPC — call methods and await their results. Because your scope is an agent path, `itx.agent` (your own control surface) and `itx.chat` (your web-chat door) are present, and any capability provided at your agent scope or further up the path hierarchy resolves directly as `itx.<name>`.",
+  "The `itx` argument is an RpcStub<ProjectRpcTarget> (a Cap'n Web RPC stub) scoped to YOUR agent path in this project. Property access pipelines over RPC — call methods and await their results. Because your scope is an agent path, `itx.agent` (your own control surface) and `itx.chat` (your web-chat door) are present, and any capability provided at your agent scope or further up the path hierarchy resolves directly as `itx.<name>`.",
   "",
   "To say anything to the user, call `await itx.chat.sendMessage({ message })`. If no script sends a message, the user sees nothing.",
   "",
   AGENT_SNIPPET_GUIDE,
   "",
-  "DISCOVERING THE SURFACE:",
-  "- `await itx.describe()` lists this project's current capabilities (builtins plus anything provided). Prefer discovering over guessing.",
+  "DISCOVERING THE SURFACE — every node answers `__describe()`:",
+  "- `await itx.__describe()` returns { instructions, types, children, capabilities, ... }: `children` is a one-line map of every member, `capabilities` the full inventory (builtins plus anything provided at your scope or above). Prefer discovering over guessing.",
+  "- The same call works on ANY node — `itx.integrations.__describe()`, `itx.capabilityHost.__describe()`, and any provided capability (`itx.someTool.__describe()` answers from the mount's recorded instructions/types even when its provider is offline). Recurse into children when the blip isn't enough.",
   "- `await itx.examples.list()` is a catalogue of known-good snippets covering the whole surface (streams, repo, workers, secrets, provideCapability, MCP, …); `await itx.examples.get({ id })` returns one with its full code. Copy working patterns from there instead of inventing them.",
   "- Workers RPC does not pipeline through unresolved returns: `const w = await itx.workers.get(ref); await w.fetch(...)` — await the capability before calling through it.",
   '- Integrations are connections at fully qualified paths: `await itx.integrations.list()` enumerates them. A connected Google account gives Gmail via `await itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } })`. Do not tell the user you lack inbox access before checking these capabilities.',
   '- You have real Linux containers: `const sandbox = await itx.sandboxes.get("/sandboxes/cloudflare/<pick-a-path>")` returns the full Cloudflare Sandbox SDK surface (`exec`, `readFile`/`writeFile`, `startProcess`, `gitCheckout`, `exposePort`, `destroy`, …). The path is the identity — the same path is the same container and filesystem until destroyed. The first command boots the container (allow a minute cold); `await sandbox.ensureProjectRepo()` guarantees the project repo is cloned at /workspace/repo with working git credentials; `await sandbox.ensureGithubAuth({ connection })` (a connected GitHub connection from itx.integrations.list()) makes the gh CLI and git-to-github.com work inside the container. Use a sandbox whenever you need to actually run code, shell tools, or servers — the `sandbox-exec` example is the known-good pattern.',
   "- Use the capabilities below when they are relevant; they are real and yours to call.",
   "",
-  "THE FULL PUBLIC TYPE SURFACE of `itx`, verbatim (types.ts — the design of record; you hold an `Itx`, agent-scoped):",
+  "THE FULL PUBLIC TYPE SURFACE of `itx`, verbatim (types.ts — the design of record; you hold a `ProjectRpcTarget`, agent-scoped):",
   "",
   "```ts",
   ITX_TYPES_SOURCE,
@@ -262,7 +263,7 @@ export const AgentProcessorContract = defineProcessorContract({
       ]),
     },
   },
-  processorDeps: [ItxProcessorContract],
+  processorDeps: [CapabilityHostProcessorContract],
   consumes: [
     "events.iterate.com/agent/config-updated",
     "events.iterate.com/agent/system-prompt-updated",
@@ -275,8 +276,8 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-completed",
     "events.iterate.com/agent/llm-request-cancelled",
-    "events.iterate.com/itx/script-execution-requested",
-    "events.iterate.com/itx/script-execution-completed",
+    "events.iterate.com/capability-host/script-execution-requested",
+    "events.iterate.com/capability-host/script-execution-completed",
   ],
   emits: [
     "events.iterate.com/agent/system-prompt-updated",
@@ -284,6 +285,6 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-scheduled",
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/agent/llm-request-cancelled",
-    "events.iterate.com/itx/script-execution-requested",
+    "events.iterate.com/capability-host/script-execution-requested",
   ],
 });

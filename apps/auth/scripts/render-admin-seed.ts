@@ -25,7 +25,7 @@ function escapeSqlString(value: string) {
 function allowlistPatternToSqlLike(pattern: string) {
   if (!/^[a-z0-9*?@._+-]+$/.test(pattern)) {
     throw new Error(
-      `ADMIN_ALLOWLIST pattern "${pattern}" uses minimatch syntax the deploy-time SQL ` +
+      `APP_CONFIG_ADMIN_ALLOWLIST pattern "${pattern}" uses minimatch syntax the deploy-time SQL ` +
         `backfill cannot translate; only the * and ? wildcards are supported.`,
     );
   }
@@ -78,12 +78,12 @@ async function main() {
     throw new Error("Output path is required");
   }
 
-  const serviceAuthToken = process.env.SERVICE_AUTH_TOKEN?.trim();
+  const serviceAuthToken = process.env.APP_CONFIG_SERVICE_AUTH_TOKEN?.trim();
   if (!serviceAuthToken) {
-    throw new Error("SERVICE_AUTH_TOKEN is required");
+    throw new Error("APP_CONFIG_SERVICE_AUTH_TOKEN is required");
   }
 
-  const platformAdminAllowlist = parseSignupAllowlist(process.env.ADMIN_ALLOWLIST ?? "");
+  const platformAdminAllowlist = parseSignupAllowlist(process.env.APP_CONFIG_ADMIN_ALLOWLIST ?? "");
 
   const outputPath = resolve(outputPathArg);
   mkdirSync(dirname(outputPath), { recursive: true });

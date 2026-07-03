@@ -1,39 +1,84 @@
 /**
  * Public ITX capability contract.
  *
- * `/api/itx` gives callers one unauthenticated object. Authentication returns a
- * root catalog, and every object reachable from that catalog is a Cap'n Web /
- * Workers RPC capability. Projects and agents expose stable built-ins
- * (`streams`, `repos`, `workers`, `runScript`, etc.) plus dynamic dotted
- * capabilities installed through the stream-backed ITX processor. Streams are
- * the durable coordination layer underneath those surfaces: processors,
- * project bootstrap, repo bootstrap, and agent loops all communicate by
- * appending and reducing events.
+ * `/api` — os' one API — gives callers one unauthenticated object.
+ * Authentication returns a root catalog, and every object reachable from that
+ * catalog is a Cap'n Web / Workers RPC capability. Projects and agents expose
+ * stable built-ins (`streams`, `repos`, `workers`, etc.) plus dynamic dotted
+ * capabilities mounted on capability hosts (`itx.capabilityHost`,
+ * `itx.capabilityHosts.get(path)`). Streams are the durable coordination layer
+ * underneath those surfaces: processors, project bootstrap, repo bootstrap,
+ * and agent loops all communicate by appending and reducing events.
  */
 
 // -----------------------------------------------------------------------------
-// The three nouns. Keeping them distinct is what makes this system legible:
+// The four nouns. Keeping them distinct is what makes this system legible:
 //
-// - a SESSION is what `authenticate()` returns. It is a catalog that *vends*
+// - a SESSION is what `os.authenticate()` returns. It is a catalog that *vends*
 //   itxs; it is not itself an itx.
 // - a PROJECT is the tenant / isolation boundary — a `prj_…` id, its Durable
 //   Objects, its streams. You never hold a "project object"; you hold an itx
 //   scoped into a project.
-// - an ITX is a capability context scoped into one project at one path. It is
-//   the `itx` in every `async (itx) => { … }` script and what `env.ITX.get()`
-//   returns. `session.projects.get(id)` gives you the itx at the project root;
-//   a nested scope (`/agents/bla`) is the SAME type at a deeper path.
+// - an ITX is a capability context scoped into one project at one path. "itx"
+//   is a naming CONVENTION, not a class: an itx is normally an instance of
+//   ProjectRpcTarget whose capability host sits at "/" — and sometimes at
+//   "/agents/…", which is what "an agent context" means. It is the `itx` in
+//   every `async (itx) => { … }` script and what `env.ITX.get()` returns;
+//   `session.projects.get(id)` gives you the itx at the project root.
+// - a CAPABILITY HOST is the durable dynamic-capability table (and script
+//   journal) at one scope path. Each itx fronts exactly one host
+//   (`itx.capabilityHost`; `itx.provideCapability`/`revokeCapability` are
+//   shortcuts onto it); `itx.capabilityHosts.get(path)` addresses any other
+//   scope's host, including the project root at `"/"`.
 // -----------------------------------------------------------------------------
+
+/**
+ * Self-description of one node in the capability tree — what `__describe()`
+ * returns, on EVERY node, by convention.
+ *
+ * This is the discovery groundwork: `instructions` and `types` are always
+ * present and describe THIS node; `children` is the high-level map (one-line
+ * blip per child member) so a caller can see what exists without walking;
+ * `parent` says where the node sits. Deep discovery is a walk: call
+ * `__describe()` on the children you care about. Nodes add structured extras
+ * (a project adds `projectId`, an agent adds `whoami`, a capability host adds
+ * `capabilities`), so `__describe` is also the identity query — there is no
+ * separate `describe()`/`whoami()`.
+ *
+ * Today each node hand-writes its description (the `describeNode` helper only
+ * enforces the shape); the plan is to grow this into a transitive mechanism
+ * where a parent composes its children's descriptions.
+ */
+export type Description = {
+  /** Prose: what this node is and how to use it. */
+  instructions: string;
+  /** TypeScript source for this node's surface ("" when not yet written). */
+  types: string;
+  /** Discovery map: one-line blip per child member. */
+  children: Record<string, string>;
+  /** Where this node sits / how you reached it. */
+  parent?: string;
+};
+
+/**
+ * Every node in the capability tree answers `__describe()` — see
+ * {@link Description}. Interfaces below extend this instead of redeclaring;
+ * nodes with structured extras (Session, Agent, CapabilityHost, the project
+ * itx) declare their own narrowed signature.
+ */
+export interface Describable {
+  __describe(): Promise<Description>;
+}
 
 /**
  * Entry point exposed before any principal or project authority is known.
  *
- * `/api/itx` hands every caller one of these; the only thing it can do is
+ * `/api` hands every caller one of these; the only thing it can do is
  * `authenticate(...)`, which on success returns a {@link Session}. This is the
  * canonical Cap'n Web pattern: authority cannot be forged, only handed back by a
  * method that already checked you.
  */
-export interface UnauthenticatedItx {
+export interface UnauthenticatedOs extends Describable {
   authenticate(input: ItxAuthCredentials): Promise<Session>;
 }
 
@@ -46,18 +91,33 @@ export interface UnauthenticatedItx {
  * auth can reach them.
  */
 export interface Session {
-  /** Deployment-wide integration ingress (admin/internal only). */
-  integrations: SessionIntegrations;
+  /** Includes `principal` — who this session is (subsumes the old whoami()). */
+  __describe(): Promise<Description & { principal: string }>;
   projects: ProjectCollection;
   repos: RepoCollection;
   streams: StreamCollection;
-  whoami(): string;
 }
 
 /** Catalog of projects reachable from a {@link Session}. */
-export interface ProjectCollection {
-  get(projectId: string): Promise<Itx>;
-  create(args: { organizationSlug?: string; projectId?: string; slug: string }): Promise<Itx>;
+export interface ProjectCollection extends Describable {
+  get(projectId: string): Promise<ProjectRpcTarget>;
+  /**
+   * Register and bootstrap a project. By default this resolves once the
+   * bootstrap saga has committed `project/created` — convenient for scripts
+   * and tests that use the project immediately. Pass
+   * `waitUntilCreated: false` to resolve as soon as the project EXISTS
+   * (identity registered, directory primed, bootstrap events appended): the
+   * saga then runs behind the returned handle, and its progress is ordinary
+   * live processor state (`itx.processor.onStateChange` — `state.created`
+   * flips when bootstrap lands). The dashboard uses the fast path to redirect
+   * into the project instantly and play creation progress from pushes.
+   */
+  create(args: {
+    organizationSlug?: string;
+    projectId?: string;
+    slug: string;
+    waitUntilCreated?: boolean;
+  }): Promise<ProjectRpcTarget>;
   /**
    * The session's projects, enriched engine-side. Scope is explicit:
    * - "mine" (default for user principals): the caller's own claims (plus
@@ -95,7 +155,7 @@ export type ProjectListEntry = {
 /**
  * An **itx**: a capability context scoped into one project at one path.
  *
- * The same interface serves the project root (`itxPath: "/"`) and every nested
+ * The same interface serves the project root (path `"/"`) and every nested
  * scope (`/agents/bla`, `/agents/slack/ts-124`, …). A nested scope is not a
  * different type — it exposes all the project built-ins below PLUS the dynamic
  * capabilities mounted on its own scope and inherited from every enclosing scope
@@ -103,20 +163,41 @@ export type ProjectListEntry = {
  * one). `agent`/`chat` are present only when the scope sits under `/agents/`.
  *
  * DESIGN NOTE — why the built-ins are explicit members, not dynamic entries:
- * this object is an RpcTarget that sits *in front of* the ITX Durable Object. A
- * call like `itx.streams.get("/x")` resolves against these known members in the
- * isolate and never touches the ITX DO, so the hot path pays no extra round trip
- * to check whether `streams` was shadowed. The deliberate trade-off is that a
+ * this object is an RpcTarget that sits *in front of* the capability-host
+ * Durable Object. A call like `itx.streams.get("/x")` resolves against these
+ * known members in the isolate and never touches the DO, so the hot path pays
+ * no extra round trip to check whether `streams` was shadowed. The deliberate trade-off is that a
  * dynamic capability therefore CANNOT shadow a built-in name — the built-in
  * always wins. If shadowable built-ins turn out to be needed often, we'd move
  * resolution behind the DO and accept the round trip; today we don't.
  */
-export interface Itx extends ItxCapabilityHost {
+export interface ProjectRpcTarget {
+  /**
+   * Identity + full capability inventory (subsumes the old describe()):
+   * `projectId`/`name`, every reachable capability, the children map, and the
+   * full public type surface in `types`.
+   */
+  __describe(): Promise<ProjectDescription>;
   ai: Ai;
   agents: AgentCollection;
+  /**
+   * This scope's own capability host: the durable capability table behind
+   * this itx (`provideCapability`, `revokeCapability`, `runScript`,
+   * `__describe`). Dynamic dotted calls (`itx.foo.bar(...)`) fall back to it.
+   */
+  capabilityHost: CapabilityHost;
+  /**
+   * Capability hosts of OTHER scopes, by path. `capabilityHosts.get("/")` is
+   * the project root — providing there makes a capability visible to every
+   * scope in the project (child scopes inherit ancestors' mounts).
+   */
+  capabilityHosts: CapabilityHostCollection;
+  /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS scope). */
+  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;
+  /** Shortcut for `capabilityHost.revokeCapability`. */
+  revokeCapability(input: RevokeCapabilityInput): Promise<void>;
   /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */
   debug(): Promise<string>;
-  describe(): Promise<ProjectDescription>;
   egress: ProjectEgress;
   /** Read-only catalogue of known-good itx script snippets (`list()`, `get({ id })`). */
   examples: ItxExampleCatalog;
@@ -144,12 +225,12 @@ export interface Itx extends ItxCapabilityHost {
 }
 
 /** Agent-local web chat response tool exposed inside agent script execution. */
-export interface AgentChat {
+export interface AgentChat extends Describable {
   sendMessage(input: { message: string }): Promise<StreamEvent>;
 }
 
 /** Workers AI binding exposed through ITX as a project/agent capability. */
-export interface Ai {
+export interface Ai extends Describable {
   models(): Promise<unknown>;
   run(model: string, body: unknown): Promise<unknown>;
 }
@@ -237,7 +318,7 @@ export type CompleteConnectResult =
  * implicit connection: a built-in call without a connection name is an error.
  * Management verbs (OAuth, disconnect) are connection-scoped.
  */
-export interface ProjectIntegrations {
+export interface ProjectIntegrations extends Describable {
   /** Every connection the project holds: `/integrations/<slug>/<connection>`
    * journals plus provided mounts from the capability table (deduped by path;
    * a mount over its own webhook journal is one entry). */
@@ -274,23 +355,22 @@ export type RouteSlackWebhookResult =
   | { connection: string; ok: true; projectId: string }
   | { ignored: "team-not-claimed"; ok: true };
 
-/** Deployment-wide integration ingress: webhook routing across projects. */
-export interface SessionIntegrations {
-  routeSlackWebhook(input: {
-    headers: { slackEventId: string | null; slackRequestTimestamp: string | null };
-    payload: Record<string, unknown>;
-    teamId: string;
-  }): Promise<RouteSlackWebhookResult>;
-}
-
 /** Agent catalog within one project. */
-export interface AgentCollection {
+export interface AgentCollection extends Describable {
   get(path: string): Agent;
   list(): Promise<StreamListItem[]>;
 }
 
 /** Agent capability surface for message loops and agent-local dynamic tools. */
-export interface Agent extends ItxCapabilityHost {
+export interface Agent {
+  /** Includes `whoami` (`"agent <projectId>:<agentPath>"`), `projectId`, `agentPath`. */
+  __describe(): Promise<Description & { agentPath: string; projectId: string; whoami: string }>;
+  /** The agent scope's own capability host (provide/revoke/runScript/__describe). */
+  capabilityHost: CapabilityHost;
+  /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS agent's scope). */
+  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;
+  /** Shortcut for `capabilityHost.revokeCapability`. */
+  revokeCapability(input: RevokeCapabilityInput): Promise<void>;
   chat: AgentChat;
   processor: StreamProcessorRpc<AgentProcessorState>;
   stream: Stream;
@@ -308,11 +388,10 @@ export interface Agent extends ItxCapabilityHost {
     /** How long to wait for the reply. Defaults to 45s. */
     timeoutMs?: number;
   }): Promise<StreamEvent>;
-  whoami(): string;
 }
 
 /** Stream catalog for either a project or the deployment-wide global scope. */
-export interface StreamCollection {
+export interface StreamCollection extends Describable {
   get(path: string): Stream;
 }
 
@@ -328,7 +407,7 @@ export interface ProjectStreamCollection extends StreamCollection {
  * behind domain methods. Domain helpers can construct common event shapes, but
  * callers and processors still work with explicit events.
  */
-export interface Stream {
+export interface Stream extends Describable {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   at(path: string): Stream;
   getEvent(
@@ -372,7 +451,7 @@ export interface Stream {
 }
 
 /** Repo catalog for either a project or the deployment-wide global scope. */
-export interface RepoCollection {
+export interface RepoCollection extends Describable {
   create(input: { path: string }): Promise<Repo>;
   get(path: string): Repo;
 }
@@ -383,7 +462,7 @@ export interface ProjectRepoCollection extends RepoCollection {
 }
 
 /** Git-backed repo capability used by project workers and dynamic worker refs. */
-export interface Repo {
+export interface Repo extends Describable {
   commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult>;
   create(): Promise<Repo>;
   /** All committed file paths at HEAD. */
@@ -408,7 +487,7 @@ export interface Repo {
  * a new API. Getting a sandbox is cheap and does not start a container; the
  * first command does.
  */
-export interface SandboxCollection {
+export interface SandboxCollection extends Describable {
   get(path: string): Promise<CloudflareSandbox>;
 }
 
@@ -430,16 +509,16 @@ export interface SandboxCollection {
 export type CloudflareSandbox = object;
 
 /** Secret catalog within one project. */
-export interface SecretCollection {
+export interface SecretCollection extends Describable {
   get(path: string): Secret;
   list(): Promise<StreamListItem[]>;
 }
 
 /** Path-addressed secret capability. Secret material has no public read API. */
-export interface Secret {
+export interface Secret extends Describable {
   describe(): Promise<SecretDescription>;
   fetch(req: Request): Promise<Response>;
-  processor: StreamProcessorRpc<SecretProcessorState>;
+  processor: StreamProcessorRpc<SecretDescription>;
   update(input: SecretUpdateInput): Promise<StreamEvent>;
 }
 
@@ -494,35 +573,50 @@ export type RepoProcessorState = {
   remote: string | null;
 };
 
-export type SecretProcessorState = {
-  audit: {
-    lastUsedAt?: string;
-    lastUsedBy?: string;
-    lastUsedUrl?: string;
-    usedCount: number;
-  };
-  egress: { urls: string[] };
-  encryptedMaterial: {
-    algorithm: "AES-GCM-SHA256";
-    ciphertext: string;
-    iv: string;
-  } | null;
-};
+// NOTE: there is deliberately no public secret processor state type: a
+// secret's public live state IS its SecretDescription. The internal fold
+// carries the encrypted material; the DO's processor facade projects it away
+// (write-only material) before anything crosses the RPC boundary.
 
 export type ProcessorSnapshot<State> = {
   offset: number;
   state: State;
 };
 
+/**
+ * Live handle for one `onStateChange` subscription.
+ *
+ * `ping()` is the liveness probe: `true` while the subscription is still
+ * registered on the live processor, `false` once it was dropped (delivery
+ * failure, explicit unsubscribe). The call REJECTS when the hosting Durable
+ * Object incarnation is gone. For a subscriber, `false` and a rejection mean
+ * the same thing: re-subscribe. Pushes stop silently when a DO restarts or a
+ * transport half-opens, so a periodic ping is how a client turns "silently
+ * stale" into "detectably dead".
+ */
+export type ProcessorStateSubscriptionHandle = Disposable & {
+  ping(): boolean | Promise<boolean>;
+  unsubscribe(): void;
+};
+
 export interface StreamProcessorRpc<State = unknown> {
   getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
-  onStateChange(cb: (state: State) => unknown): Promise<(() => void) & Disposable>;
+  /**
+   * Server-push of the processor's reduced state. The callback receives the
+   * durable checkpoint `{ offset, state }` — offset-carrying so clients can
+   * commit pushes and `snapshot()` reads monotonically against each other —
+   * once immediately on subscribe (current state IS the first paint) and then
+   * after every checkpointed batch that changed state.
+   */
+  onStateChange(
+    cb: (snapshot: ProcessorSnapshot<State>) => unknown,
+  ): Promise<ProcessorStateSubscriptionHandle>;
   snapshot(): Promise<ProcessorSnapshot<State>>;
   waitUntilEvent(input: { offset: number; timeoutMs?: number }): Promise<void>;
 }
 
 /** Capability-tree entry point for ad-hoc project-scoped worker refs. */
-export interface DynamicWorkerCollection {
+export interface DynamicWorkerCollection extends Describable {
   get<T extends object = Record<string, unknown>>(
     ref: DynamicWorkerRef,
   ): DynamicWorkerCapability<T>;
@@ -546,12 +640,13 @@ export interface ProjectEgressIntercept extends Disposable {
  * Object. Last writer wins; disposing or releasing the handle clears only the
  * interceptor it installed if it is still current.
  */
-export interface ProjectEgress {
+export interface ProjectEgress extends Describable {
   fetch(req: Request): Promise<Response>;
   intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;
 }
 
-export type ProjectDescription = {
+/** What a project itx's `__describe()` returns: the Description convention plus identity and the capability inventory. */
+export type ProjectDescription = Description & {
   capabilities: CapabilityDescription[];
   name: string;
   projectId: string;
@@ -572,7 +667,7 @@ export type CapabilityDescription = {
   types?: string;
 };
 
-export interface OpenApiCollection {
+export interface OpenApiCollection extends Describable {
   connect(input: OpenApiConnectInput): Promise<OpenApiRpc>;
 }
 
@@ -584,7 +679,7 @@ export type OpenApiConnectInput = {
 
 export type OpenApiRpc = object;
 
-export interface McpClientCollection {
+export interface McpClientCollection extends Describable {
   connect(input: McpClientConnectInput): Promise<McpClientRpc>;
   /**
    * The public Exa MCP server (https://mcp.exa.ai/mcp), pre-connected for every
@@ -612,7 +707,7 @@ export type McpClientRpc = object;
  * against the OS Session `authenticate()` returns, which an itx holder does
  * not have.
  */
-export interface ItxExampleCatalog {
+export interface ItxExampleCatalog extends Describable {
   get(input: { id: string }): Promise<ItxExampleWithCode>;
   list(): Promise<ItxExampleSummary[]>;
 }
@@ -626,19 +721,31 @@ export type ItxExampleSummary = {
 export type ItxExampleWithCode = ItxExampleSummary & { code: string };
 
 /**
- * Shared host operations for objects that can own dynamic ITX capabilities.
- *
- * Project and agent targets both delegate these to their scoped ITX Durable
- * Object, so scripts and mounted tools use the same shape in either context.
+ * The host surface for one capability scope: the durable dynamic-capability
+ * table and script journal at one path inside a project (backed by one
+ * CapabilityHostDurableObject). Mounting is always local to the host's own
+ * scope; reads (`invokeCapability`, `__describe`) chain up through
+ * enclosing scopes, so a project-root mount is visible from every scope.
  */
-export interface ItxCapabilityHost {
+export interface CapabilityHost {
+  /** Includes `capabilities`: everything reachable at this scope — own mounts plus inherited ones, tagged with their declaring scope. */
+  __describe(): Promise<Description & { capabilities: CapabilityDescription[]; path: string }>;
+  /** The scope path this host fronts: `"/"` is the project root, `/agents/bla` an agent. */
+  path: string;
+  /** Explicit dynamic dispatch; the dotted-path fallback (`itx.foo.bar(...)`) compiles to exactly this call. */
+  invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
+  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;
+  revokeCapability(input: RevokeCapabilityInput): Promise<void>;
   runScript(code: string): Promise<{
     completedEvent: StreamEvent;
     executionId: string;
     result: unknown;
   }>;
-  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;
-  revokeCapability(input: RevokeCapabilityInput): Promise<void>;
+}
+
+/** Capability hosts by scope path within one project (`itx.capabilityHosts`). */
+export interface CapabilityHostCollection extends Describable {
+  get(path: string): CapabilityHost;
 }
 
 /**
@@ -648,7 +755,7 @@ export interface ItxCapabilityHost {
  * disposal or explicit revoke remove this mount without racing a newer mount at
  * the same path.
  */
-export interface CapabilityProvision extends Disposable {
+export interface CapabilityProvision extends Describable, Disposable {
   readonly path: string[];
   readonly providedAtOffset: number;
   revoke(): Promise<void>;
@@ -725,10 +832,19 @@ export type ProcessorRuntimeState<State = unknown> = {
  */
 export type GetProcessorRuntimeState = () => ProcessorRuntimeState | Promise<ProcessorRuntimeState>;
 
-/** Live subscription handle returned by `Stream.subscribe`. */
+/**
+ * Live subscription handle returned by `Stream.subscribe`.
+ *
+ * `ping()` mirrors {@link ProcessorStateSubscriptionHandle.ping}: `true` while
+ * the connection is still open on the live stream, `false` after it closed
+ * (replaced, delivery failure, unsubscribe); it rejects when the stream's
+ * Durable Object incarnation is gone. Either non-`true` outcome means the
+ * subscriber should re-subscribe.
+ */
 export type StreamSubscriptionHandle = Disposable & {
   subscriptionKey: SubscriptionKey;
   streamMaxOffset: number;
+  ping(): boolean | Promise<boolean>;
   unsubscribe(): void;
 };
 
@@ -837,7 +953,7 @@ export type RevokeCapabilityInput = {
 };
 
 /**
- * Credentials accepted by `UnauthenticatedItx.authenticate`.
+ * Credentials accepted by `UnauthenticatedOs.authenticate`.
  *
  * - `from-server-cookie` — the browser lane: the deployment's admin cookie or
  *   the signed-in user's session cookie riding the WebSocket handshake.

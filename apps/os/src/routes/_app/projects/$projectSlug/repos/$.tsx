@@ -1,7 +1,7 @@
 import { Copy } from "lucide-react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { z } from "zod";
 import { Button } from "@iterate-com/ui/components/button";
 import {
@@ -15,7 +15,9 @@ import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
+import { StreamViewSection } from "~/components/stream-view-section.tsx";
+import type { RepoProcessorState } from "~/types.ts";
+import { useItx, useItxQuery, useItxState } from "~/itx/itx-react.tsx";
 
 const CommitFileForm = z.object({
   path: z.string().trim().min(1, "File path is required"),
@@ -51,19 +53,18 @@ function ProjectRepoDetailContent() {
   const { project } = Route.useLoaderData();
   const repoPath = repoPathFromSplat(params._splat);
   const itx = useItx();
-  const queryClient = useQueryClient();
-  const repoKey = ["repo", project.slug, repoPath];
   // TODO: the old repo surface (readTree/readFile/git log,
   // clone token + command blocks) has no itx equivalent yet. The page
-  // shows the repo processor's reduced state plus whoami, and offers a minimal
-  // "commit file" form via `repo.commitFiles`.
-  const repo = useItxQuery({
-    key: repoKey,
-    query: async (itx) => {
-      const handle = itx.repos.get(repoPath);
-      const [whoami, snapshot] = await Promise.all([handle.whoami(), handle.processor.snapshot()]);
-      return { whoami, snapshot };
-    },
+  // shows the repo processor's reduced state (live — commits and bootstrap
+  // progress push in) plus whoami, and offers a minimal "commit file" form
+  // via `repo.commitFiles`.
+  const repoProcessor = useItxState<RepoProcessorState>(
+    (itx, setState) => itx.repos.get(repoPath).processor.onStateChange(setState),
+    [repoPath],
+  );
+  const whoami = useItxQuery({
+    key: ["repo-whoami", project.slug, repoPath],
+    query: (itx) => itx.repos.get(repoPath).whoami(),
   });
   const commitFile = useMutation({
     mutationFn: async (input: { path: string; content: string; message: string }) => {
@@ -72,8 +73,7 @@ function ProjectRepoDetailContent() {
         changes: [{ path: input.path, content: input.content }],
       });
     },
-    onSuccess: async (result) => {
-      await queryClient.invalidateQueries({ queryKey: ["itx", ...repoKey] });
+    onSuccess: (result) => {
       form.reset();
       toast.success(
         result.noChanges
@@ -97,7 +97,16 @@ function ProjectRepoDetailContent() {
     },
   });
 
-  const { snapshot, whoami } = repo;
+  if (repoProcessor.state === undefined) {
+    return (
+      <section className="w-full p-4">
+        <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
+          Loading repo…
+        </div>
+      </section>
+    );
+  }
+  const snapshot = { offset: repoProcessor.offset ?? 0, state: repoProcessor.state };
 
   return (
     <section className="w-full space-y-4 p-4">
@@ -203,6 +212,12 @@ function ProjectRepoDetailContent() {
           </form.Subscribe>
         </form>
       </div>
+
+      <StreamViewSection
+        projectId={project.id}
+        streamPath={repoPath}
+        emptyLabel="No events on this repo's stream yet."
+      />
     </section>
   );
 }

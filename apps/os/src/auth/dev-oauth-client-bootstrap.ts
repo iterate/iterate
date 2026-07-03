@@ -30,9 +30,9 @@ export function resolveLocalDevOAuthClientBootstrap(
   const target = resolveDevAuthClientSyncTarget(env);
   if (!target) return null;
 
-  const authIssuer = env.APP_CONFIG_ITERATE_AUTH__ISSUER ?? env.ITERATE_OAUTH_ISSUER;
+  const authIssuer = env.APP_CONFIG_ITERATE_AUTH__ISSUER;
   const baseUrl = env.APP_CONFIG_BASE_URL;
-  const serviceToken = env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN ?? env.ITERATE_AUTH_SERVICE_TOKEN;
+  const serviceToken = env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN;
 
   if (
     !authIssuer ||
@@ -49,10 +49,8 @@ export function resolveLocalDevOAuthClientBootstrap(
 
   return {
     authOrigin,
-    existingClientId:
-      env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID ?? env.ITERATE_OAUTH_CLIENT_ID ?? undefined,
-    existingClientSecret:
-      env.APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET ?? env.ITERATE_OAUTH_CLIENT_SECRET ?? undefined,
+    existingClientId: env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID ?? undefined,
+    existingClientSecret: env.APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET ?? undefined,
     redirectURI: `${baseUrl.replace(/\/+$/, "")}/api/iterate-auth/callback`,
     serviceToken,
     target,
@@ -82,8 +80,6 @@ export async function ensureLocalDevOAuthClient(env: Record<string, string | und
 
       env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID = client.clientId;
       env.APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET = client.clientSecret;
-      env.ITERATE_OAUTH_CLIENT_ID = client.clientId;
-      env.ITERATE_OAUTH_CLIENT_SECRET = client.clientSecret;
       return;
     } catch (error) {
       lastError = error;

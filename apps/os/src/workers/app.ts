@@ -6,7 +6,7 @@
  * routes and no Durable Objects: the ingress worker forwards app-host
  * traffic here. In local dev the browser talks to vite — i.e. to this worker
  * directly — so the shared itx routing decision runs here first and
- * forwards itx/project-host traffic over the same ITX_API service
+ * forwards itx/project-host traffic over the same API service
  * binding the ingress worker uses in production.
  *
  * Worker bindings are intentionally not threaded through request context —
@@ -27,11 +27,11 @@ export default {
     // https://developers.cloudflare.com/workers/runtime-apis/bindings/#how-bindings-work
     const config = parseConfig(env);
 
-    // Itx lanes (local dev talks to this worker directly, so the
+    // itx lanes (local dev talks to this worker directly, so the
     // forward lives here as well as in the ingress worker): the capnweb
     // surface + fixtures + `/prj_` path lanes, and project platform hosts.
     const nextRequest = apiWorkerRequest({ config, request });
-    if (nextRequest) return await env.ITX_API.fetch(nextRequest);
+    if (nextRequest) return await env.API.fetch(nextRequest);
 
     // Everything below emits one structured "wide event" log line per request.
     return withEvlog(

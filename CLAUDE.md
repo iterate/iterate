@@ -20,7 +20,7 @@ pattern: [Doppler-backed scripts](apps/os/docs/doppler-backed-scripts.md).
 
 ### itx API
 
-OS exposes project capability handles through `/api/itx`. The app CLI
+OS exposes project capability handles through `/api` — os' one API. The app CLI
 authenticates with the config's admin API secret and can run scripts against a
 project's itx surface:
 
@@ -130,7 +130,8 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 ### App-specific
 
 - [OS app](apps/os/AGENTS.md)
-- [itx](apps/os/src/README.md) — the `/api/itx` surface and its public contract (`types.ts`)
+- [Auth app](apps/auth/README.md) — OIDC provider, org/project directory, and the OS↔auth service API
+- [itx](apps/os/src/README.md) — the `/api` surface and its public contract (`types.ts`)
 - [OS worker topology](apps/os/docs/worker-topology.md)
 - [OS architecture & operations](apps/os/docs/architecture-and-operations.md)
 - [Debugging deployed OS workers](apps/os/docs/debugging-deployed-os-workers.md)

@@ -36,6 +36,10 @@ export class SecretDurableObject extends DurableObject<Env> {
   get processor() {
     return new StreamProcessorRpcTarget(this.#secretProcessor, {
       catchUpBeforeSnapshot: () => this.#processorHost.catchUp(SecretProcessorContract.slug),
+      // Secret material is write-only: the live state that leaves this DO is
+      // the DESCRIPTION — snapshots and onStateChange pushes must never carry
+      // the ciphertext, only the hasMaterial fact.
+      publicState: describeSecretState,
     });
   }
 
@@ -77,11 +81,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     // or was dropped.
     await this.#processorHost.catchUp(SecretProcessorContract.slug);
     const { state } = await this.#secretProcessor.snapshot();
-    return {
-      audit: state.audit,
-      egress: state.egress,
-      hasMaterial: state.encryptedMaterial !== null,
-    };
+    return describeSecretState(state);
   }
 
   /**
@@ -171,4 +171,19 @@ export class SecretDurableObject extends DurableObject<Env> {
 function normalizeEgress(egress: { urls: string[] }): { urls: string[] } {
   for (const url of egress.urls) new URL(url);
   return { urls: [...egress.urls] };
+}
+
+/**
+ * The one projection from internal processor state to the public description.
+ * Shared by describe() and the processor facade's publicState so the two can
+ * never disagree about what leaves the DO.
+ */
+function describeSecretState(
+  state: InstanceType<typeof SecretProcessor>["state"],
+): SecretDescription {
+  return {
+    audit: state.audit,
+    egress: state.egress,
+    hasMaterial: state.encryptedMaterial !== null,
+  };
 }

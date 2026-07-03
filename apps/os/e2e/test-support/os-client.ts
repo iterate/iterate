@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import type { RpcStub } from "capnweb";
 import { resolveBaseUrl } from "./dev-server.ts";
 import { connectItx } from "~/itx-client.ts";
-import type { Itx, Session } from "~/types.ts";
+import type { ProjectRpcTarget, Session } from "~/types.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -37,7 +37,10 @@ export function requireAdminBearerToken() {
  * browser, REPL, and CLI use.
  */
 export function createAdminOsItx(input?: { baseUrl?: string }): RpcStub<Session>;
-export function createAdminOsItx(input: { baseUrl?: string; context: string }): RpcStub<Itx>;
+export function createAdminOsItx(input: {
+  baseUrl?: string;
+  context: string;
+}): RpcStub<ProjectRpcTarget>;
 export function createAdminOsItx(input?: { baseUrl?: string; context?: string }) {
   const baseUrl = input?.baseUrl ?? requireBaseUrl();
   const auth = { type: "admin-secret" as const, secret: requireAdminBearerToken() };

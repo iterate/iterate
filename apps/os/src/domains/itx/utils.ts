@@ -108,6 +108,24 @@ export function itxEntrypointBinding(exports: unknown, props: ItxEntrypointProps
 }
 
 /**
+ * Shape helper for the `__describe()` convention (see `Description` in
+ * types.ts): fills the always-present fields so every node returns
+ * `{ instructions, types, children, ... }` even before it has real content.
+ * Deliberately dumb — each node hand-writes its description; this is the
+ * anchor the future transitive (parent-composes-children) mechanism hangs off.
+ */
+export function describeNode<Extras extends object>(
+  input: {
+    instructions: string;
+    types?: string;
+    children?: Record<string, string>;
+    parent?: string;
+  } & Extras,
+): { instructions: string; types: string; children: Record<string, string> } & Extras {
+  return { children: {}, types: "", ...input };
+}
+
+/**
  * Groups an authenticated child stub with the parent stubs that keep it alive.
  *
  * Cap'n Web callers often want `using project = connectItx({ projectId })`, but
@@ -135,19 +153,24 @@ export function withOwnedRpcSession<T extends object>(stub: T, ...owned: Disposa
 }
 
 /**
- * Built-in roots that are NAMESPACES: providing under them (depth >= 2) is the
- * supported extension point, not a collision — EXCEPT under the names the
- * namespace's own dispatch claims. `integrations` is the exemplar: built-in
- * slugs (slack, google) dispatch in deployment code before the capability
- * table is consulted, so a mount under them would be durable, journaled, and
- * silently unreachable. Reject it loudly at provide time instead.
+/**
+ * Guards `provideCapability` against shadowing the itx surface: a capability
+ * path's root segment may not be a reserved RPC segment nor an existing member
+ * name of the itx-facing surfaces (e.g. `streams`, `agents`). Runs in the
+ * isolate because the member names come from RpcTarget prototypes, which the
+ * capability-host Durable Object can't see (ITX_SURFACE_MEMBER_NAMES in
+ * rpc-targets.ts).
+ *
+ * Namespace exception: some surface members are NAMESPACES whose children are
+ * the supported extension point. `integrations` is the exemplar — mounting at
+ * depth >= 2 under it is how a project adds its own integration — EXCEPT under
+ * the names the collection's own dispatch claims (built-in slugs and the
+ * collection's verbs), where a mount would be durable, journaled, and silently
+ * unreachable; those are rejected loudly at provide time.
  */
 const NAMESPACE_BUILTIN_ROOTS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   [
     "integrations",
-    // Built-in slugs AND the collection's own verbs: dotted resolution checks
-    // the RpcTarget's real members before the capability table, so a mount
-    // under any of these would be durable, journaled, and unreachable.
     new Set([
       ...BUILTIN_INTEGRATION_SLUGS,
       "list",
@@ -160,20 +183,13 @@ const NAMESPACE_BUILTIN_ROOTS: ReadonlyMap<string, ReadonlySet<string>> = new Ma
   ],
 ]);
 
-/**
- * Guards `provideCapability` against shadowing the host's own surface: a
- * capability path's root segment may not be a reserved RPC segment nor an
- * existing builtin on the target RpcTarget (e.g. `streams`, `agents`) — except
- * inside namespace roots, per NAMESPACE_BUILTIN_ROOTS above. Runs in the
- * isolate because it inspects the RpcTarget instance, which the DO can't see.
- */
-export function rejectBuiltinCollision(target: object, path: string[]): void {
+export function rejectBuiltinCollision(surfaceMembers: ReadonlySet<string>, path: string[]): void {
   const root = path[0];
   if (!root) return;
   if (isReservedDynamicPathSegment(root)) {
     throw new Error(`cannot provide capability "${root}": it is a reserved ITX path segment`);
   }
-  if (root in target) {
+  if (surfaceMembers.has(root)) {
     const reservedChildren = NAMESPACE_BUILTIN_ROOTS.get(root);
     if (reservedChildren && path.length >= 2) {
       const child = path[1]!;
@@ -184,7 +200,7 @@ export function rejectBuiltinCollision(target: object, path: string[]): void {
       }
       return;
     }
-    throw new Error(`cannot provide capability "${root}": it is already on this ITX target`);
+    throw new Error(`cannot provide capability "${root}": it is already on the ITX surface`);
   }
 }
 
@@ -196,20 +212,25 @@ export function rejectBuiltinCollision(target: object, path: string[]): void {
  * performs one explicit invokeCapability({ path, args }) call.
  */
 export function createInvokeCapabilityPathProxy(
-  target: InvokeCapabilityTarget,
+  invoker: InvokeCapabilityTarget,
   path: string[] = [],
   isReserved = isReservedDynamicPathSegment,
 ): unknown {
   const valueFor = (key: string) =>
-    createInvokeCapabilityPathProxy(target, [...path, key], isReserved);
+    createInvokeCapabilityPathProxy(invoker, [...path, key], isReserved);
 
   return new Proxy(function () {}, {
     apply(_target, _thisArg, args) {
-      return target.invokeCapability({ args: [...args], path });
+      return invoker.invokeCapability({ args: [...args], path });
     },
     get(target, key, receiver) {
       if (typeof key === "symbol") return Reflect.get(target, key, receiver);
       if (isReserved(key)) return undefined;
+      // NOTE `__describe` is deliberately NOT reserved: it traverses like any
+      // other segment, and the capability-host processor intercepts trailing
+      // `__describe` and answers from the mount's durable metadata
+      // (capability-host-processor-implementation.ts #describeMount). One
+      // mechanism, no proxy special cases.
       return valueFor(key);
     },
     getOwnPropertyDescriptor(target, key) {
@@ -249,11 +270,20 @@ export function createInvokeCapabilityPathProxy(
  * the built-in always wins. If we find we need shadowable built-ins a lot, we'd move
  * resolution behind the DO and pay that round trip; for now this keeps the hot path free.
  */
-export function withInvokeCapabilityFallback<T extends object & InvokeCapabilityTarget>(
+export function withInvokeCapabilityFallback<T extends object>(
   target: T,
-  options: { isReserved?: (segment: string) => boolean } = {},
+  options: {
+    isReserved?: (segment: string) => boolean;
+    /**
+     * Where unknown dotted paths dispatch. Defaults to the target itself, which
+     * must then have `invokeCapability`. The itx/agent surfaces pass their
+     * capability host instead, so they need no pass-through method of their own.
+     */
+    invoker?: InvokeCapabilityTarget;
+  } = {},
 ): T {
   const isReserved = options.isReserved ?? isReservedDynamicPathSegment;
+  const invoker = options.invoker ?? (target as unknown as InvokeCapabilityTarget);
 
   return new Proxy(target, {
     get(target, key) {
@@ -266,7 +296,7 @@ export function withInvokeCapabilityFallback<T extends object & InvokeCapability
         return value;
       }
       if (isReserved(key)) return undefined;
-      return createInvokeCapabilityPathProxy(target, [key], isReserved);
+      return createInvokeCapabilityPathProxy(invoker, [key], isReserved);
     },
     getOwnPropertyDescriptor(target, key) {
       // Unknown dynamic roots must not look like instance fields to Cap'n Web.

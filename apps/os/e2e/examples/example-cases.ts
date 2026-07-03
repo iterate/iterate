@@ -8,9 +8,9 @@
 //   whoami          session-context: it runs against the OS Session (what
 //                   authenticate() returns), not a project itx. The matrix
 //                   (and the Playwright REPL specs) execute in a project scope
-//                   where `itx.whoami` / `itx.projects` do not exist. Session
-//                   behavior is proven by the itx e2e suites
-//                   (apps/os/e2e/itx/itx.e2e.test.ts).
+//                   where the Session's __describe().principal / itx.projects
+//                   do not exist. Session behavior is proven by the itx e2e
+//                   suites (apps/os/e2e/itx/itx.e2e.test.ts).
 //   list-projects   session-context, same reason as whoami.
 //   ai-models       depends on the deployment's upstream Workers AI account
 //                   (catalog availability + latency); interactive reading
@@ -60,6 +60,24 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       expect(builtins).toEqual(
         expect.arrayContaining(["streams", "repo", "workers", "secrets", "ai"]),
       );
+      const children = (result as { children: string[] }).children;
+      expect(children).toEqual(expect.arrayContaining(["capabilityHost", "integrations"]));
+    },
+  },
+  "discover-tree": {
+    assert: (result, _ctx, expect) => {
+      const shaped = result as {
+        integrationsChildren: Record<string, string>;
+        rootChildren: Record<string, string>;
+        scope: string;
+      };
+      expect(shaped.scope).toBe("/");
+      expect(Object.keys(shaped.rootChildren)).toEqual(
+        expect.arrayContaining(["capabilityHost", "capabilityHosts", "streams"]),
+      );
+      expect(Object.keys(shaped.integrationsChildren)).toEqual(
+        expect.arrayContaining(["gmail", "slack"]),
+      );
     },
   },
   "append-and-read-stream": {
@@ -77,7 +95,7 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   "run-script": {
     assert: (result, { projectId }, expect) => {
       expect(result).toEqual({
-        completedEventType: "events.iterate.com/itx/script-execution-completed",
+        completedEventType: "events.iterate.com/capability-host/script-execution-completed",
         result: { projectId, sum: 42 },
       });
     },

@@ -4,7 +4,7 @@ import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../strea
 import { PROJECT_REPO_PATH } from "../repos/utils.ts";
 import { PROJECT_REPO_ONBOARDING_MD } from "../repos/project-repo-template.ts";
 import type { StreamEvent, StreamListItem } from "../../types.ts";
-import type { ItxRpcTarget } from "../../rpc-targets.ts";
+import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   AgentProcessorContract,
@@ -17,7 +17,7 @@ import {
   DEFAULT_OPENAI_WS_MODEL,
   OpenAiWsProcessorContract,
 } from "../agents/openai-ws-processor-contract.ts";
-import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
+import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
 import { SlackAgentProcessorContract } from "../integrations/slack-agent-processor-contract.ts";
 import { slackConnectionFromAgentPath } from "../integrations/utils.ts";
@@ -84,7 +84,7 @@ export class ProjectProcessor extends StreamProcessor<
   {
     /** Provider new agents are born with ("openai-ws" when the deployment has an OpenAI key). */
     defaultLlmProvider: AgentLlmProvider;
-    itx: ItxRpcTarget;
+    itx: ProjectRpcTarget;
   }
 > {
   readonly contract = ProjectProcessorContract;
@@ -148,8 +148,8 @@ export class ProjectProcessor extends StreamProcessor<
                   projectId: this.deps.itx.projectId,
                   path: "/",
                 }),
-                processorSlug: ItxProcessorContract.slug,
-                subscriberType: "itx",
+                processorSlug: CapabilityHostProcessorContract.slug,
+                subscriberType: "capability-host",
               }),
               {
                 type: "events.iterate.com/repo/create-requested",
@@ -285,7 +285,7 @@ function agentBirthCertificateEvents(input: {
     projectId: input.projectId,
     path: input.childPath,
   });
-  const subscription = (processorSlug: string, subscriberType: "agent" | "itx") =>
+  const subscription = (processorSlug: string, subscriberType: "agent" | "capability-host") =>
     buildDurableObjectProcessorSubscriptionConfiguredEvent({
       durableObjectName,
       idempotencyKey: `stream/subscription-configured:${durableObjectName}#${processorSlug}`,
@@ -298,7 +298,7 @@ function agentBirthCertificateEvents(input: {
     // selected llmProvider answers llm-request-requested events.
     subscription(CloudflareAiProcessorContract.slug, "agent"),
     subscription(OpenAiWsProcessorContract.slug, "agent"),
-    subscription(ItxProcessorContract.slug, "itx"),
+    subscription(CapabilityHostProcessorContract.slug, "capability-host"),
     ...(input.slack ? [subscription(SlackAgentProcessorContract.slug, "agent")] : []),
     {
       type: "events.iterate.com/agent/config-updated" as const,
@@ -329,7 +329,7 @@ function agentBirthCertificateEvents(input: {
           "- Read the repo with itx.repo.readFile({ path }) and itx.repo.listFiles(); change it with itx.repo.commitFiles({ message, changes: [{ path, content }] }).",
           "- Other agents live at /agents/<name> (itx.agents.list() / itx.agents.get(path)); Slack thread agents appear under /agents/slack/<connection>/<channel>/ts-<ts>; secrets under /secrets/**.",
           '- Streams are path-addressed: itx.streams.get(path).append(event) / getEvents() / waitFor(); path "/" is the project root stream.',
-          "- itx.describe() lists the capabilities currently available in your scope.",
+          "- itx.__describe() lists the capabilities currently available in your scope; __describe() works on every node (itx.integrations, itx.capabilityHost, any provided capability) when you need detail.",
           '- If Google is connected, Gmail is available per connection: await itx.integrations.list() shows connections, then itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }) for inbox requests.',
         ].join("\n"),
         llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
@@ -364,7 +364,7 @@ function addStreamListItem(items: StreamListItem[], item: StreamListItem): Strea
   return [...items, item].sort((a, b) => a.path.localeCompare(b.path));
 }
 
-async function waitForDefaultProjectWorker(itx: ItxRpcTarget): Promise<void> {
+async function waitForDefaultProjectWorker(itx: ProjectRpcTarget): Promise<void> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= PROJECT_WORKER_READY_ATTEMPTS; attempt += 1) {
     try {

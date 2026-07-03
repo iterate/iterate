@@ -10,43 +10,43 @@ on:
       - main
   workflow_dispatch: {}
 jobs:
-  variables:
-    runs-on: depot-ubuntu-24.04
-    steps:
-      - name: Document rollout strategy
-        run: |-
-          cat <<'EOF' >> "$GITHUB_STEP_SUMMARY"
-          ## Rollout Strategy
-          1. Deploy iterate.com with current environment variables.
-          2. OS deploys separately via deploy-os.yml when apps/os changes.
-          EOF
-  deploy:
-    uses: ./.github/workflows/deploy.yml
-    needs:
-      - variables
-    secrets: inherit
-  slack_failure:
-    needs:
-      - variables
-      - deploy
-    if: always() && contains(needs.*.result, 'failure')
-    runs-on: depot-ubuntu-24.04
-    env:
-      NEEDS: ${{ toJson(needs) }}
+  deploy-iterate-com:
+    runs-on:
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          clean: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Setup Doppler (baked CLI)
+        run: doppler setup --config prd --project iterate-com
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Deploy apps/iterate-com
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: pnpm run deploy
+        working-directory: apps/iterate-com
+  slack_failure:
+    needs:
+      - deploy-iterate-com
+    if: always() && contains(needs.*.result, 'failure')
+    runs-on:
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    env:
+      NEEDS: ${{ toJson(needs) }}
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
+          clean: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
       - name: notify_slack_on_failure
         id: notify_slack_on_failure
         uses: actions/github-script@v7
@@ -62,7 +62,7 @@ jobs:
             const __handler = async function notify_slack_on_failure() {
               const { getSlackClient, slackChannelIds } =
                 await require(".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
-              const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+              const slack = getSlackClient();
               const needs = JSON.parse(process.env.NEEDS);
               const failedJobs = Object.entries(needs)
                 .filter(([_, { result }]) => result === "failure")

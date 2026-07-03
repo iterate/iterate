@@ -17,14 +17,15 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { AlertCircle, Circle, Github, Mail, MessageSquare } from "lucide-react";
 import { z } from "zod";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
+import { StreamViewSection } from "~/components/stream-view-section.tsx";
 import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
-import type { Itx } from "~/types.ts";
+import type { ProjectRpcTarget } from "~/types.ts";
 
-type Connection = Awaited<ReturnType<Itx["integrations"]["getConnection"]>>;
+type Connection = Awaited<ReturnType<ProjectRpcTarget["integrations"]["getConnection"]>>;
 
 /** One list() entry enriched with the built-in connection status (null for
  * provided integrations, whose status lives in project code). */
-type ConnectionEntry = Awaited<ReturnType<Itx["integrations"]["list"]>>[number] & {
+type ConnectionEntry = Awaited<ReturnType<ProjectRpcTarget["integrations"]["list"]>>[number] & {
   status: Connection | null;
 };
 
@@ -277,6 +278,12 @@ function ProjectIntegrationsContent() {
           </Item>
         ) : null}
       </ItemGroup>
+
+      <StreamViewSection
+        projectId={project.id}
+        streamPath="/integrations"
+        emptyLabel="No events on the integrations stream yet."
+      />
     </section>
   );
 }

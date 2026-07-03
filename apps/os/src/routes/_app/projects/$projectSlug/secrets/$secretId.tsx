@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { z } from "zod";
 import { Button } from "@iterate-com/ui/components/button";
 import {
@@ -14,7 +14,9 @@ import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
+import { StreamViewSection } from "~/components/stream-view-section.tsx";
+import type { SecretDescription } from "~/types.ts";
+import { useItx, useItxState } from "~/itx/itx-react.tsx";
 
 const UpdateSecretForm = z.object({
   material: z.string(),
@@ -41,22 +43,43 @@ function ProjectSecretDetailPage() {
 function ProjectSecretDetailContent() {
   const params = Route.useParams();
   const { project } = Route.useLoaderData();
-  const itx = useItx();
-  const queryClient = useQueryClient();
   const secretPath = `/secrets/${params.secretId}`;
-  const secretKey = ["secret", project.slug, secretPath];
-  const secret = useItxQuery({
-    key: secretKey,
-    query: (itx) => itx.secrets.get(secretPath).describe(),
-  });
+  // Live secret processor state (the public description — material stays
+  // write-only server-side): rotations and every egress-gated use push an
+  // updated audit trail into this page while it's open.
+  const { state: secret } = useItxState<SecretDescription>(
+    (itx, setState) => itx.secrets.get(secretPath).processor.onStateChange(setState),
+    [secretPath],
+  );
+
+  if (secret === undefined) {
+    return (
+      <section className="w-full p-4">
+        <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
+          Loading secret…
+        </div>
+      </section>
+    );
+  }
+  return <SecretDetail projectId={project.id} secret={secret} secretPath={secretPath} />;
+}
+
+function SecretDetail({
+  projectId,
+  secret,
+  secretPath,
+}: {
+  projectId: string;
+  secret: SecretDescription;
+  secretPath: string;
+}) {
+  const itx = useItx();
 
   const updateSecret = useMutation({
     mutationFn: async (input: { material?: string; egress?: { urls: string[] } }) => {
       return await itx.secrets.get(secretPath).update(input);
     },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["itx", ...secretKey] });
-      await queryClient.invalidateQueries({ queryKey: ["itx", "secrets", project.slug] });
+    onSuccess: () => {
       form.reset();
       toast.success("Secret updated");
     },
@@ -178,6 +201,12 @@ function ProjectSecretDetailContent() {
           </form.Subscribe>
         </form>
       </div>
+
+      <StreamViewSection
+        projectId={projectId}
+        streamPath={secretPath}
+        emptyLabel="No events on this secret's stream yet."
+      />
     </section>
   );
 }

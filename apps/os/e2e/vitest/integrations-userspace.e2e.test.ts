@@ -81,7 +81,7 @@ describe("provided integrations", () => {
         secret: adminSecret(),
       });
       using project = itx.projects.create({ slug: `waitrose-${RUN_SUFFIX}` });
-      await project.describe();
+      await project.__describe();
       const integrations = project.integrations as any;
 
       // Before the mount, the name resolves through the capability table and
@@ -98,7 +98,7 @@ describe("provided integrations", () => {
           type: "live",
           capability: {},
         }),
-      ).rejects.toThrow(/already on this ITX target/);
+      ).rejects.toThrow(/already on the ITX surface/);
 
       // …but not under the names the collection's own dispatch claims: a mount
       // there would be durable, journaled, and silently unreachable, so it is

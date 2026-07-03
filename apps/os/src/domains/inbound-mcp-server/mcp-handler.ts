@@ -22,7 +22,7 @@ import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import { principalFromAccessToken } from "~/auth/principal.ts";
 import { MCP_START_MOUNT_PATH, resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
 import { readProjectBySlug } from "~/project-directory.ts";
-import type { UnauthenticatedItx } from "~/types.ts";
+import type { UnauthenticatedOs } from "~/types.ts";
 import type { RequestContext } from "~/request-context.ts";
 
 type ProjectGrant = {
@@ -44,7 +44,7 @@ const ExecJsInput = z.object({
   code: z
     .string()
     .describe(
-      "JavaScript async arrow function to execute, e.g. async (itx) => { return await itx.describe(); }. Whatever it returns (JSON-serializable) is the tool result; a thrown error surfaces as the tool error.",
+      "JavaScript async arrow function to execute, e.g. async (itx) => { return await itx.__describe(); }. Whatever it returns (JSON-serializable) is the tool result; a thrown error surfaces as the tool error.",
     ),
   project: z.string().optional().describe("Project slug to run this code against."),
 });
@@ -63,7 +63,7 @@ const EXEC_JS_DESCRIPTION = [
   "",
   "Use JavaScript for what separate calls cannot do: Promise.all to fan out independent requests concurrently, map/filter to trim big responses.",
   "",
-  "Discovering the surface: `await itx.describe()` lists the project's capabilities; `await itx.examples.list()` is a catalogue of known-good snippets (streams, repo, workers, secrets, provideCapability, MCP, ...) and `await itx.examples.get({ id })` returns one with full code — copy working patterns from there. Web search is built in via Exa: `await itx.mcp.exa.web_search_exa({ query, numResults })`, page reading via `itx.mcp.exa.web_fetch_exa({ urls })`.",
+  "Discovering the surface: `await itx.__describe()` lists the project's capabilities (`children` is the member map) — and __describe() works on every node, including provided capabilities; `await itx.examples.list()` is a catalogue of known-good snippets (streams, repo, workers, secrets, provideCapability, MCP, ...) and `await itx.examples.get({ id })` returns one with full code — copy working patterns from there. Web search is built in via Exa: `await itx.mcp.exa.web_search_exa({ query, numResults })`, page reading via `itx.mcp.exa.web_fetch_exa({ urls })`.",
 ].join("\n");
 
 const mcpCorsHeaders = {
@@ -162,7 +162,7 @@ function createServer(input: {
           secret: requireAdminSecret(input.context),
         });
         const sessionAgent = root.projects.get(project.id).agents.get(agentPath);
-        const execution = await sessionAgent.runScript(parsedInput.code);
+        const execution = await sessionAgent.capabilityHost.runScript(parsedInput.code);
         return {
           content: [
             {
@@ -433,8 +433,8 @@ function engineBatchSession(context: RequestContext) {
   const baseUrl = (context.config.baseUrl ?? "").replace(/\/+$/, "");
   if (!baseUrl) throw new Error("baseUrl is not configured");
   // oxlint-disable-next-line iterate/no-capnweb-http-batch -- one-shot pipelined batch per exec_js call; no socket lifecycle to manage.
-  return newHttpBatchRpcSession<UnauthenticatedItx>(
-    new Request(`${baseUrl}/api/itx`, { method: "POST" }),
+  return newHttpBatchRpcSession<UnauthenticatedOs>(
+    new Request(`${baseUrl}/api`, { method: "POST" }),
   );
 }
 

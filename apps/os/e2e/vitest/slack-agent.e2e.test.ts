@@ -94,7 +94,7 @@ test.skipIf(signingSecret === null)(
     using session = withItxSession();
     using root = session.authenticate({ type: "admin-secret", secret: adminSecret() });
     using project = root.projects.create({ slug: `slack-agent-e2e-${RUN_SUFFIX}` });
-    const { projectId } = await project.describe();
+    const { projectId } = await project.__describe();
 
     // --- Seed a claimed workspace without OAuth: fake bot token secret +
     // connection stream (router subscription + connected fact) + global team
@@ -208,12 +208,12 @@ test.skipIf(signingSecret === null)(
     // The Slack prompt tells the model to reply via its connection's postMessage.
     const withScript = await waitFor(
       () => agentStream.getEvents({ afterOffset: 0 }),
-      (events) => hasEvent(events, "events.iterate.com/itx/script-execution-requested"),
+      (events) => hasEvent(events, "events.iterate.com/capability-host/script-execution-requested"),
       () => `itx script execution on ${agentStreamPath}`,
       120_000,
     );
     const scripts = withScript.filter(
-      (event) => event.type === "events.iterate.com/itx/script-execution-requested",
+      (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
     );
     expect(
       scripts.some((event) => ((event.payload as { code?: string }).code ?? "").includes("slack")),

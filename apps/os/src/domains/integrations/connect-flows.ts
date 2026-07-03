@@ -1,4 +1,4 @@
-// Itx-side OAuth connect flows for Slack and Google, resurrected from the
+// itx-side OAuth connect flows for Slack and Google, resurrected from the
 // legacy integration plumbing (pre-migration integration-api.ts, git history, +
 // the pre-purge secrets domain) and re-homed onto itx:
 //

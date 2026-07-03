@@ -10,7 +10,7 @@
  *   (auth-plugins.ts).
  *
  * The role is granted three ways:
- * - the signup hook in auth.ts, for emails matching ADMIN_ALLOWLIST
+ * - the signup hook in auth.ts, for emails matching `config.adminAllowlist`
  *   (default `*@nustom.com`),
  * - the deploy-time seed SQL, which
  *   backfills users who existed before their email domain was allowlisted —
