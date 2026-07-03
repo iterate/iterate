@@ -5,7 +5,10 @@
   "name": "os-dev",
   "main": "./src/worker.ts",
   "compatibility_date": "2026-06-17",
-  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "compatibility_flags": [
+    "nodejs_compat",
+    "global_fetch_strictly_public"
+  ],
   "migrations": [
     {
       "tag": "v1",
@@ -17,81 +20,81 @@
         "CloudflareSandboxDurableObject",
         "SecretDurableObject",
         "StreamDurableObject",
-        "StatefulWorkerDurableObject",
-      ],
-    },
+        "StatefulWorkerDurableObject"
+      ]
+    }
   ],
   "dev": {
-    "enable_containers": false,
+    "enable_containers": false
   },
   "vars": {
     "WORKER_SELF": "os-dev",
     "ARTIFACTS_ACCOUNT_ID": "",
-    "ARTIFACTS_NAMESPACE": "os-dev-repos",
+    "ARTIFACTS_NAMESPACE": "os-dev-repos"
   },
   "durable_objects": {
     "bindings": [
       {
         "name": "AGENT",
-        "class_name": "AgentDurableObject",
+        "class_name": "AgentDurableObject"
       },
       {
         "name": "ITX",
-        "class_name": "ItxDurableObject",
+        "class_name": "ItxDurableObject"
       },
       {
         "name": "PROJECT",
-        "class_name": "ProjectDurableObject",
+        "class_name": "ProjectDurableObject"
       },
       {
         "name": "REPO",
-        "class_name": "RepoDurableObject",
+        "class_name": "RepoDurableObject"
       },
       {
         "name": "SANDBOX",
-        "class_name": "CloudflareSandboxDurableObject",
+        "class_name": "CloudflareSandboxDurableObject"
       },
       {
         "name": "SECRET",
-        "class_name": "SecretDurableObject",
+        "class_name": "SecretDurableObject"
       },
       {
         "name": "STREAM",
-        "class_name": "StreamDurableObject",
+        "class_name": "StreamDurableObject"
       },
       {
         "name": "WORKER",
-        "class_name": "StatefulWorkerDurableObject",
-      },
-    ],
+        "class_name": "StatefulWorkerDurableObject"
+      }
+    ]
   },
   "kv_namespaces": [
     {
       "binding": "PROJECT_DIRECTORY",
-      "id": "local-dev-project-directory",
-    },
+      "id": "local-dev-project-directory"
+    }
   ],
   "ai": {
-    "binding": "AI",
+    "binding": "AI"
   },
   "worker_loaders": [
     {
-      "binding": "LOADER",
-    },
+      "binding": "LOADER"
+    }
   ],
   "artifacts": [
     {
       "binding": "ARTIFACTS",
-      "namespace": "os-dev-repos",
-    },
+      "namespace": "os-dev-repos"
+    }
   ],
   "containers": [
     {
       "class_name": "CloudflareSandboxDurableObject",
       "image": "./Dockerfile.sandbox",
       "instance_type": "lite",
-      "max_instances": 10,
-    },
+      "max_instances": 10
+    }
   ],
   "secrets": {
     "required": [
@@ -113,8 +116,8 @@
       "APP_CONFIG_PROJECT_HOSTNAME_BASES",
       "APP_CONFIG_SLACK_BOT_TOKEN",
       "APP_CONFIG_X_AI_API_KEY",
-      "SECRET_ENCRYPTION_KEY",
-    ],
+      "SECRET_ENCRYPTION_KEY"
+    ]
   },
   "observability": {
     "enabled": true,
@@ -123,13 +126,13 @@
       "enabled": true,
       "head_sampling_rate": 1,
       "persist": true,
-      "invocation_logs": true,
+      "invocation_logs": true
     },
     "traces": {
       "enabled": true,
       "persist": true,
-      "head_sampling_rate": 1,
-    },
+      "head_sampling_rate": 1
+    }
   },
   "env": {
     "prd": {
@@ -138,93 +141,93 @@
       "routes": [
         {
           "pattern": "os.iterate.com/*",
-          "zone_name": "iterate.com",
+          "zone_name": "iterate.com"
         },
         {
           "pattern": "mcp.iterate.com/*",
-          "zone_name": "iterate.com",
+          "zone_name": "iterate.com"
         },
         {
           "pattern": "iterate.app/*",
-          "zone_name": "iterate.app",
+          "zone_name": "iterate.app"
         },
         {
           "pattern": "*.iterate.app/*",
-          "zone_name": "iterate.app",
+          "zone_name": "iterate.app"
         },
         {
           "pattern": "*iterate.app/*",
-          "zone_name": "iterate.app",
-        },
+          "zone_name": "iterate.app"
+        }
       ],
       "vars": {
         "WORKER_SELF": "os-prd",
         "ARTIFACTS_ACCOUNT_ID": "04b3b57291ef2626c6a8daa9d47065a7",
-        "ARTIFACTS_NAMESPACE": "os-prd-repos",
+        "ARTIFACTS_NAMESPACE": "os-prd-repos"
       },
       "durable_objects": {
         "bindings": [
           {
             "name": "AGENT",
-            "class_name": "AgentDurableObject",
+            "class_name": "AgentDurableObject"
           },
           {
             "name": "ITX",
-            "class_name": "ItxDurableObject",
+            "class_name": "ItxDurableObject"
           },
           {
             "name": "PROJECT",
-            "class_name": "ProjectDurableObject",
+            "class_name": "ProjectDurableObject"
           },
           {
             "name": "REPO",
-            "class_name": "RepoDurableObject",
+            "class_name": "RepoDurableObject"
           },
           {
             "name": "SANDBOX",
-            "class_name": "CloudflareSandboxDurableObject",
+            "class_name": "CloudflareSandboxDurableObject"
           },
           {
             "name": "SECRET",
-            "class_name": "SecretDurableObject",
+            "class_name": "SecretDurableObject"
           },
           {
             "name": "STREAM",
-            "class_name": "StreamDurableObject",
+            "class_name": "StreamDurableObject"
           },
           {
             "name": "WORKER",
-            "class_name": "StatefulWorkerDurableObject",
-          },
-        ],
+            "class_name": "StatefulWorkerDurableObject"
+          }
+        ]
       },
       "kv_namespaces": [
         {
           "binding": "PROJECT_DIRECTORY",
-          "id": "68a1bca8ba934ee9ba23c44c13a698f5",
-        },
+          "id": "68a1bca8ba934ee9ba23c44c13a698f5"
+        }
       ],
       "ai": {
-        "binding": "AI",
+        "binding": "AI"
       },
       "worker_loaders": [
         {
-          "binding": "LOADER",
-        },
+          "binding": "LOADER"
+        }
       ],
       "artifacts": [
         {
           "binding": "ARTIFACTS",
-          "namespace": "os-prd-repos",
-        },
+          "namespace": "os-prd-repos"
+        }
       ],
       "containers": [
         {
           "class_name": "CloudflareSandboxDurableObject",
           "image": "./Dockerfile.sandbox",
           "instance_type": "lite",
-          "max_instances": 10,
-        },
+          "max_instances": 10
+        }
       ],
       "secrets": {
         "required": [
@@ -246,8 +249,8 @@
           "APP_CONFIG_PROJECT_HOSTNAME_BASES",
           "APP_CONFIG_SLACK_BOT_TOKEN",
           "APP_CONFIG_X_AI_API_KEY",
-          "SECRET_ENCRYPTION_KEY",
-        ],
+          "SECRET_ENCRYPTION_KEY"
+        ]
       },
       "observability": {
         "enabled": true,
@@ -256,14 +259,14 @@
           "enabled": true,
           "head_sampling_rate": 1,
           "persist": true,
-          "invocation_logs": true,
+          "invocation_logs": true
         },
         "traces": {
           "enabled": true,
           "persist": true,
-          "head_sampling_rate": 1,
-        },
-      },
+          "head_sampling_rate": 1
+        }
+      }
     },
     "preview_1": {
       "name": "os-preview-1",
@@ -271,93 +274,93 @@
       "routes": [
         {
           "pattern": "os.iterate-preview-1.com/*",
-          "zone_name": "iterate-preview-1.com",
+          "zone_name": "iterate-preview-1.com"
         },
         {
           "pattern": "mcp.iterate-preview-1.com/*",
-          "zone_name": "iterate-preview-1.com",
+          "zone_name": "iterate-preview-1.com"
         },
         {
           "pattern": "iterate-preview-1.app/*",
-          "zone_name": "iterate-preview-1.app",
+          "zone_name": "iterate-preview-1.app"
         },
         {
           "pattern": "*.iterate-preview-1.app/*",
-          "zone_name": "iterate-preview-1.app",
+          "zone_name": "iterate-preview-1.app"
         },
         {
           "pattern": "*iterate-preview-1.app/*",
-          "zone_name": "iterate-preview-1.app",
-        },
+          "zone_name": "iterate-preview-1.app"
+        }
       ],
       "vars": {
         "WORKER_SELF": "os-preview-1",
         "ARTIFACTS_ACCOUNT_ID": "376ef7ed81b0573f93524de763666c15",
-        "ARTIFACTS_NAMESPACE": "os-preview-1-repos",
+        "ARTIFACTS_NAMESPACE": "os-preview-1-repos"
       },
       "durable_objects": {
         "bindings": [
           {
             "name": "AGENT",
-            "class_name": "AgentDurableObject",
+            "class_name": "AgentDurableObject"
           },
           {
             "name": "ITX",
-            "class_name": "ItxDurableObject",
+            "class_name": "ItxDurableObject"
           },
           {
             "name": "PROJECT",
-            "class_name": "ProjectDurableObject",
+            "class_name": "ProjectDurableObject"
           },
           {
             "name": "REPO",
-            "class_name": "RepoDurableObject",
+            "class_name": "RepoDurableObject"
           },
           {
             "name": "SANDBOX",
-            "class_name": "CloudflareSandboxDurableObject",
+            "class_name": "CloudflareSandboxDurableObject"
           },
           {
             "name": "SECRET",
-            "class_name": "SecretDurableObject",
+            "class_name": "SecretDurableObject"
           },
           {
             "name": "STREAM",
-            "class_name": "StreamDurableObject",
+            "class_name": "StreamDurableObject"
           },
           {
             "name": "WORKER",
-            "class_name": "StatefulWorkerDurableObject",
-          },
-        ],
+            "class_name": "StatefulWorkerDurableObject"
+          }
+        ]
       },
       "kv_namespaces": [
         {
           "binding": "PROJECT_DIRECTORY",
-          "id": "6d35023e80cc47f5a8d43550fe4679dc",
-        },
+          "id": "6d35023e80cc47f5a8d43550fe4679dc"
+        }
       ],
       "ai": {
-        "binding": "AI",
+        "binding": "AI"
       },
       "worker_loaders": [
         {
-          "binding": "LOADER",
-        },
+          "binding": "LOADER"
+        }
       ],
       "artifacts": [
         {
           "binding": "ARTIFACTS",
-          "namespace": "os-preview-1-repos",
-        },
+          "namespace": "os-preview-1-repos"
+        }
       ],
       "containers": [
         {
           "class_name": "CloudflareSandboxDurableObject",
           "image": "./Dockerfile.sandbox",
           "instance_type": "lite",
-          "max_instances": 10,
-        },
+          "max_instances": 10
+        }
       ],
       "secrets": {
         "required": [
@@ -379,8 +382,8 @@
           "APP_CONFIG_PROJECT_HOSTNAME_BASES",
           "APP_CONFIG_SLACK_BOT_TOKEN",
           "APP_CONFIG_X_AI_API_KEY",
-          "SECRET_ENCRYPTION_KEY",
-        ],
+          "SECRET_ENCRYPTION_KEY"
+        ]
       },
       "observability": {
         "enabled": true,
@@ -389,14 +392,14 @@
           "enabled": true,
           "head_sampling_rate": 1,
           "persist": true,
-          "invocation_logs": true,
+          "invocation_logs": true
         },
         "traces": {
           "enabled": true,
           "persist": true,
-          "head_sampling_rate": 1,
-        },
-      },
+          "head_sampling_rate": 1
+        }
+      }
     },
     "preview_2": {
       "name": "os-preview-2",
@@ -404,93 +407,93 @@
       "routes": [
         {
           "pattern": "os.iterate-preview-2.com/*",
-          "zone_name": "iterate-preview-2.com",
+          "zone_name": "iterate-preview-2.com"
         },
         {
           "pattern": "mcp.iterate-preview-2.com/*",
-          "zone_name": "iterate-preview-2.com",
+          "zone_name": "iterate-preview-2.com"
         },
         {
           "pattern": "iterate-preview-2.app/*",
-          "zone_name": "iterate-preview-2.app",
+          "zone_name": "iterate-preview-2.app"
         },
         {
           "pattern": "*.iterate-preview-2.app/*",
-          "zone_name": "iterate-preview-2.app",
+          "zone_name": "iterate-preview-2.app"
         },
         {
           "pattern": "*iterate-preview-2.app/*",
-          "zone_name": "iterate-preview-2.app",
-        },
+          "zone_name": "iterate-preview-2.app"
+        }
       ],
       "vars": {
         "WORKER_SELF": "os-preview-2",
         "ARTIFACTS_ACCOUNT_ID": "376ef7ed81b0573f93524de763666c15",
-        "ARTIFACTS_NAMESPACE": "os-preview-2-repos",
+        "ARTIFACTS_NAMESPACE": "os-preview-2-repos"
       },
       "durable_objects": {
         "bindings": [
           {
             "name": "AGENT",
-            "class_name": "AgentDurableObject",
+            "class_name": "AgentDurableObject"
           },
           {
             "name": "ITX",
-            "class_name": "ItxDurableObject",
+            "class_name": "ItxDurableObject"
           },
           {
             "name": "PROJECT",
-            "class_name": "ProjectDurableObject",
+            "class_name": "ProjectDurableObject"
           },
           {
             "name": "REPO",
-            "class_name": "RepoDurableObject",
+            "class_name": "RepoDurableObject"
           },
           {
             "name": "SANDBOX",
-            "class_name": "CloudflareSandboxDurableObject",
+            "class_name": "CloudflareSandboxDurableObject"
           },
           {
             "name": "SECRET",
-            "class_name": "SecretDurableObject",
+            "class_name": "SecretDurableObject"
           },
           {
             "name": "STREAM",
-            "class_name": "StreamDurableObject",
+            "class_name": "StreamDurableObject"
           },
           {
             "name": "WORKER",
-            "class_name": "StatefulWorkerDurableObject",
-          },
-        ],
+            "class_name": "StatefulWorkerDurableObject"
+          }
+        ]
       },
       "kv_namespaces": [
         {
           "binding": "PROJECT_DIRECTORY",
-          "id": "8eeea44cda5b45928ee8659701224ade",
-        },
+          "id": "8eeea44cda5b45928ee8659701224ade"
+        }
       ],
       "ai": {
-        "binding": "AI",
+        "binding": "AI"
       },
       "worker_loaders": [
         {
-          "binding": "LOADER",
-        },
+          "binding": "LOADER"
+        }
       ],
       "artifacts": [
         {
           "binding": "ARTIFACTS",
-          "namespace": "os-preview-2-repos",
-        },
+          "namespace": "os-preview-2-repos"
+        }
       ],
       "containers": [
         {
           "class_name": "CloudflareSandboxDurableObject",
           "image": "./Dockerfile.sandbox",
           "instance_type": "lite",
-          "max_instances": 10,
-        },
+          "max_instances": 10
+        }
       ],
       "secrets": {
         "required": [
@@ -512,8 +515,8 @@
           "APP_CONFIG_PROJECT_HOSTNAME_BASES",
           "APP_CONFIG_SLACK_BOT_TOKEN",
           "APP_CONFIG_X_AI_API_KEY",
-          "SECRET_ENCRYPTION_KEY",
-        ],
+          "SECRET_ENCRYPTION_KEY"
+        ]
       },
       "observability": {
         "enabled": true,
@@ -522,14 +525,14 @@
           "enabled": true,
           "head_sampling_rate": 1,
           "persist": true,
-          "invocation_logs": true,
+          "invocation_logs": true
         },
         "traces": {
           "enabled": true,
           "persist": true,
-          "head_sampling_rate": 1,
-        },
-      },
+          "head_sampling_rate": 1
+        }
+      }
     },
     "preview_3": {
       "name": "os-preview-3",
@@ -537,93 +540,93 @@
       "routes": [
         {
           "pattern": "os.iterate-preview-3.com/*",
-          "zone_name": "iterate-preview-3.com",
+          "zone_name": "iterate-preview-3.com"
         },
         {
           "pattern": "mcp.iterate-preview-3.com/*",
-          "zone_name": "iterate-preview-3.com",
+          "zone_name": "iterate-preview-3.com"
         },
         {
           "pattern": "iterate-preview-3.app/*",
-          "zone_name": "iterate-preview-3.app",
+          "zone_name": "iterate-preview-3.app"
         },
         {
           "pattern": "*.iterate-preview-3.app/*",
-          "zone_name": "iterate-preview-3.app",
+          "zone_name": "iterate-preview-3.app"
         },
         {
           "pattern": "*iterate-preview-3.app/*",
-          "zone_name": "iterate-preview-3.app",
-        },
+          "zone_name": "iterate-preview-3.app"
+        }
       ],
       "vars": {
         "WORKER_SELF": "os-preview-3",
         "ARTIFACTS_ACCOUNT_ID": "376ef7ed81b0573f93524de763666c15",
-        "ARTIFACTS_NAMESPACE": "os-preview-3-repos",
+        "ARTIFACTS_NAMESPACE": "os-preview-3-repos"
       },
       "durable_objects": {
         "bindings": [
           {
             "name": "AGENT",
-            "class_name": "AgentDurableObject",
+            "class_name": "AgentDurableObject"
           },
           {
             "name": "ITX",
-            "class_name": "ItxDurableObject",
+            "class_name": "ItxDurableObject"
           },
           {
             "name": "PROJECT",
-            "class_name": "ProjectDurableObject",
+            "class_name": "ProjectDurableObject"
           },
           {
             "name": "REPO",
-            "class_name": "RepoDurableObject",
+            "class_name": "RepoDurableObject"
           },
           {
             "name": "SANDBOX",
-            "class_name": "CloudflareSandboxDurableObject",
+            "class_name": "CloudflareSandboxDurableObject"
           },
           {
             "name": "SECRET",
-            "class_name": "SecretDurableObject",
+            "class_name": "SecretDurableObject"
           },
           {
             "name": "STREAM",
-            "class_name": "StreamDurableObject",
+            "class_name": "StreamDurableObject"
           },
           {
             "name": "WORKER",
-            "class_name": "StatefulWorkerDurableObject",
-          },
-        ],
+            "class_name": "StatefulWorkerDurableObject"
+          }
+        ]
       },
       "kv_namespaces": [
         {
           "binding": "PROJECT_DIRECTORY",
-          "id": "4cbef780af3846bda2cf3869082b807c",
-        },
+          "id": "4cbef780af3846bda2cf3869082b807c"
+        }
       ],
       "ai": {
-        "binding": "AI",
+        "binding": "AI"
       },
       "worker_loaders": [
         {
-          "binding": "LOADER",
-        },
+          "binding": "LOADER"
+        }
       ],
       "artifacts": [
         {
           "binding": "ARTIFACTS",
-          "namespace": "os-preview-3-repos",
-        },
+          "namespace": "os-preview-3-repos"
+        }
       ],
       "containers": [
         {
           "class_name": "CloudflareSandboxDurableObject",
           "image": "./Dockerfile.sandbox",
           "instance_type": "lite",
-          "max_instances": 10,
-        },
+          "max_instances": 10
+        }
       ],
       "secrets": {
         "required": [
@@ -645,8 +648,8 @@
           "APP_CONFIG_PROJECT_HOSTNAME_BASES",
           "APP_CONFIG_SLACK_BOT_TOKEN",
           "APP_CONFIG_X_AI_API_KEY",
-          "SECRET_ENCRYPTION_KEY",
-        ],
+          "SECRET_ENCRYPTION_KEY"
+        ]
       },
       "observability": {
         "enabled": true,
@@ -655,14 +658,14 @@
           "enabled": true,
           "head_sampling_rate": 1,
           "persist": true,
-          "invocation_logs": true,
+          "invocation_logs": true
         },
         "traces": {
           "enabled": true,
           "persist": true,
-          "head_sampling_rate": 1,
-        },
-      },
+          "head_sampling_rate": 1
+        }
+      }
     },
     "preview_4": {
       "name": "os-preview-4",
@@ -670,93 +673,93 @@
       "routes": [
         {
           "pattern": "os.iterate-preview-4.com/*",
-          "zone_name": "iterate-preview-4.com",
+          "zone_name": "iterate-preview-4.com"
         },
         {
           "pattern": "mcp.iterate-preview-4.com/*",
-          "zone_name": "iterate-preview-4.com",
+          "zone_name": "iterate-preview-4.com"
         },
         {
           "pattern": "iterate-preview-4.app/*",
-          "zone_name": "iterate-preview-4.app",
+          "zone_name": "iterate-preview-4.app"
         },
         {
           "pattern": "*.iterate-preview-4.app/*",
-          "zone_name": "iterate-preview-4.app",
+          "zone_name": "iterate-preview-4.app"
         },
         {
           "pattern": "*iterate-preview-4.app/*",
-          "zone_name": "iterate-preview-4.app",
-        },
+          "zone_name": "iterate-preview-4.app"
+        }
       ],
       "vars": {
         "WORKER_SELF": "os-preview-4",
         "ARTIFACTS_ACCOUNT_ID": "376ef7ed81b0573f93524de763666c15",
-        "ARTIFACTS_NAMESPACE": "os-preview-4-repos",
+        "ARTIFACTS_NAMESPACE": "os-preview-4-repos"
       },
       "durable_objects": {
         "bindings": [
           {
             "name": "AGENT",
-            "class_name": "AgentDurableObject",
+            "class_name": "AgentDurableObject"
           },
           {
             "name": "ITX",
-            "class_name": "ItxDurableObject",
+            "class_name": "ItxDurableObject"
           },
           {
             "name": "PROJECT",
-            "class_name": "ProjectDurableObject",
+            "class_name": "ProjectDurableObject"
           },
           {
             "name": "REPO",
-            "class_name": "RepoDurableObject",
+            "class_name": "RepoDurableObject"
           },
           {
             "name": "SANDBOX",
-            "class_name": "CloudflareSandboxDurableObject",
+            "class_name": "CloudflareSandboxDurableObject"
           },
           {
             "name": "SECRET",
-            "class_name": "SecretDurableObject",
+            "class_name": "SecretDurableObject"
           },
           {
             "name": "STREAM",
-            "class_name": "StreamDurableObject",
+            "class_name": "StreamDurableObject"
           },
           {
             "name": "WORKER",
-            "class_name": "StatefulWorkerDurableObject",
-          },
-        ],
+            "class_name": "StatefulWorkerDurableObject"
+          }
+        ]
       },
       "kv_namespaces": [
         {
           "binding": "PROJECT_DIRECTORY",
-          "id": "bc1f3ce2cfe44a559b1d744ecce100f8",
-        },
+          "id": "bc1f3ce2cfe44a559b1d744ecce100f8"
+        }
       ],
       "ai": {
-        "binding": "AI",
+        "binding": "AI"
       },
       "worker_loaders": [
         {
-          "binding": "LOADER",
-        },
+          "binding": "LOADER"
+        }
       ],
       "artifacts": [
         {
           "binding": "ARTIFACTS",
-          "namespace": "os-preview-4-repos",
-        },
+          "namespace": "os-preview-4-repos"
+        }
       ],
       "containers": [
         {
           "class_name": "CloudflareSandboxDurableObject",
           "image": "./Dockerfile.sandbox",
           "instance_type": "lite",
-          "max_instances": 10,
-        },
+          "max_instances": 10
+        }
       ],
       "secrets": {
         "required": [
@@ -778,8 +781,8 @@
           "APP_CONFIG_PROJECT_HOSTNAME_BASES",
           "APP_CONFIG_SLACK_BOT_TOKEN",
           "APP_CONFIG_X_AI_API_KEY",
-          "SECRET_ENCRYPTION_KEY",
-        ],
+          "SECRET_ENCRYPTION_KEY"
+        ]
       },
       "observability": {
         "enabled": true,
@@ -788,14 +791,14 @@
           "enabled": true,
           "head_sampling_rate": 1,
           "persist": true,
-          "invocation_logs": true,
+          "invocation_logs": true
         },
         "traces": {
           "enabled": true,
           "persist": true,
-          "head_sampling_rate": 1,
-        },
-      },
+          "head_sampling_rate": 1
+        }
+      }
     },
     "preview_5": {
       "name": "os-preview-5",
@@ -803,93 +806,93 @@
       "routes": [
         {
           "pattern": "os.iterate-preview-5.com/*",
-          "zone_name": "iterate-preview-5.com",
+          "zone_name": "iterate-preview-5.com"
         },
         {
           "pattern": "mcp.iterate-preview-5.com/*",
-          "zone_name": "iterate-preview-5.com",
+          "zone_name": "iterate-preview-5.com"
         },
         {
           "pattern": "iterate-preview-5.app/*",
-          "zone_name": "iterate-preview-5.app",
+          "zone_name": "iterate-preview-5.app"
         },
         {
           "pattern": "*.iterate-preview-5.app/*",
-          "zone_name": "iterate-preview-5.app",
+          "zone_name": "iterate-preview-5.app"
         },
         {
           "pattern": "*iterate-preview-5.app/*",
-          "zone_name": "iterate-preview-5.app",
-        },
+          "zone_name": "iterate-preview-5.app"
+        }
       ],
       "vars": {
         "WORKER_SELF": "os-preview-5",
         "ARTIFACTS_ACCOUNT_ID": "376ef7ed81b0573f93524de763666c15",
-        "ARTIFACTS_NAMESPACE": "os-preview-5-repos",
+        "ARTIFACTS_NAMESPACE": "os-preview-5-repos"
       },
       "durable_objects": {
         "bindings": [
           {
             "name": "AGENT",
-            "class_name": "AgentDurableObject",
+            "class_name": "AgentDurableObject"
           },
           {
             "name": "ITX",
-            "class_name": "ItxDurableObject",
+            "class_name": "ItxDurableObject"
           },
           {
             "name": "PROJECT",
-            "class_name": "ProjectDurableObject",
+            "class_name": "ProjectDurableObject"
           },
           {
             "name": "REPO",
-            "class_name": "RepoDurableObject",
+            "class_name": "RepoDurableObject"
           },
           {
             "name": "SANDBOX",
-            "class_name": "CloudflareSandboxDurableObject",
+            "class_name": "CloudflareSandboxDurableObject"
           },
           {
             "name": "SECRET",
-            "class_name": "SecretDurableObject",
+            "class_name": "SecretDurableObject"
           },
           {
             "name": "STREAM",
-            "class_name": "StreamDurableObject",
+            "class_name": "StreamDurableObject"
           },
           {
             "name": "WORKER",
-            "class_name": "StatefulWorkerDurableObject",
-          },
-        ],
+            "class_name": "StatefulWorkerDurableObject"
+          }
+        ]
       },
       "kv_namespaces": [
         {
           "binding": "PROJECT_DIRECTORY",
-          "id": "a0f87dc67b39465bb9c00bd05587eadc",
-        },
+          "id": "a0f87dc67b39465bb9c00bd05587eadc"
+        }
       ],
       "ai": {
-        "binding": "AI",
+        "binding": "AI"
       },
       "worker_loaders": [
         {
-          "binding": "LOADER",
-        },
+          "binding": "LOADER"
+        }
       ],
       "artifacts": [
         {
           "binding": "ARTIFACTS",
-          "namespace": "os-preview-5-repos",
-        },
+          "namespace": "os-preview-5-repos"
+        }
       ],
       "containers": [
         {
           "class_name": "CloudflareSandboxDurableObject",
           "image": "./Dockerfile.sandbox",
           "instance_type": "lite",
-          "max_instances": 10,
-        },
+          "max_instances": 10
+        }
       ],
       "secrets": {
         "required": [
@@ -911,8 +914,8 @@
           "APP_CONFIG_PROJECT_HOSTNAME_BASES",
           "APP_CONFIG_SLACK_BOT_TOKEN",
           "APP_CONFIG_X_AI_API_KEY",
-          "SECRET_ENCRYPTION_KEY",
-        ],
+          "SECRET_ENCRYPTION_KEY"
+        ]
       },
       "observability": {
         "enabled": true,
@@ -921,14 +924,14 @@
           "enabled": true,
           "head_sampling_rate": 1,
           "persist": true,
-          "invocation_logs": true,
+          "invocation_logs": true
         },
         "traces": {
           "enabled": true,
           "persist": true,
-          "head_sampling_rate": 1,
-        },
-      },
+          "head_sampling_rate": 1
+        }
+      }
     },
     "preview_6": {
       "name": "os-preview-6",
@@ -936,93 +939,93 @@
       "routes": [
         {
           "pattern": "os.iterate-preview-6.com/*",
-          "zone_name": "iterate-preview-6.com",
+          "zone_name": "iterate-preview-6.com"
         },
         {
           "pattern": "mcp.iterate-preview-6.com/*",
-          "zone_name": "iterate-preview-6.com",
+          "zone_name": "iterate-preview-6.com"
         },
         {
           "pattern": "iterate-preview-6.app/*",
-          "zone_name": "iterate-preview-6.app",
+          "zone_name": "iterate-preview-6.app"
         },
         {
           "pattern": "*.iterate-preview-6.app/*",
-          "zone_name": "iterate-preview-6.app",
+          "zone_name": "iterate-preview-6.app"
         },
         {
           "pattern": "*iterate-preview-6.app/*",
-          "zone_name": "iterate-preview-6.app",
-        },
+          "zone_name": "iterate-preview-6.app"
+        }
       ],
       "vars": {
         "WORKER_SELF": "os-preview-6",
         "ARTIFACTS_ACCOUNT_ID": "376ef7ed81b0573f93524de763666c15",
-        "ARTIFACTS_NAMESPACE": "os-preview-6-repos",
+        "ARTIFACTS_NAMESPACE": "os-preview-6-repos"
       },
       "durable_objects": {
         "bindings": [
           {
             "name": "AGENT",
-            "class_name": "AgentDurableObject",
+            "class_name": "AgentDurableObject"
           },
           {
             "name": "ITX",
-            "class_name": "ItxDurableObject",
+            "class_name": "ItxDurableObject"
           },
           {
             "name": "PROJECT",
-            "class_name": "ProjectDurableObject",
+            "class_name": "ProjectDurableObject"
           },
           {
             "name": "REPO",
-            "class_name": "RepoDurableObject",
+            "class_name": "RepoDurableObject"
           },
           {
             "name": "SANDBOX",
-            "class_name": "CloudflareSandboxDurableObject",
+            "class_name": "CloudflareSandboxDurableObject"
           },
           {
             "name": "SECRET",
-            "class_name": "SecretDurableObject",
+            "class_name": "SecretDurableObject"
           },
           {
             "name": "STREAM",
-            "class_name": "StreamDurableObject",
+            "class_name": "StreamDurableObject"
           },
           {
             "name": "WORKER",
-            "class_name": "StatefulWorkerDurableObject",
-          },
-        ],
+            "class_name": "StatefulWorkerDurableObject"
+          }
+        ]
       },
       "kv_namespaces": [
         {
           "binding": "PROJECT_DIRECTORY",
-          "id": "c32330a310d64ccd8af2c2d760749066",
-        },
+          "id": "c32330a310d64ccd8af2c2d760749066"
+        }
       ],
       "ai": {
-        "binding": "AI",
+        "binding": "AI"
       },
       "worker_loaders": [
         {
-          "binding": "LOADER",
-        },
+          "binding": "LOADER"
+        }
       ],
       "artifacts": [
         {
           "binding": "ARTIFACTS",
-          "namespace": "os-preview-6-repos",
-        },
+          "namespace": "os-preview-6-repos"
+        }
       ],
       "containers": [
         {
           "class_name": "CloudflareSandboxDurableObject",
           "image": "./Dockerfile.sandbox",
           "instance_type": "lite",
-          "max_instances": 10,
-        },
+          "max_instances": 10
+        }
       ],
       "secrets": {
         "required": [
@@ -1044,8 +1047,8 @@
           "APP_CONFIG_PROJECT_HOSTNAME_BASES",
           "APP_CONFIG_SLACK_BOT_TOKEN",
           "APP_CONFIG_X_AI_API_KEY",
-          "SECRET_ENCRYPTION_KEY",
-        ],
+          "SECRET_ENCRYPTION_KEY"
+        ]
       },
       "observability": {
         "enabled": true,
@@ -1054,14 +1057,14 @@
           "enabled": true,
           "head_sampling_rate": 1,
           "persist": true,
-          "invocation_logs": true,
+          "invocation_logs": true
         },
         "traces": {
           "enabled": true,
           "persist": true,
-          "head_sampling_rate": 1,
-        },
-      },
+          "head_sampling_rate": 1
+        }
+      }
     },
     "preview_7": {
       "name": "os-preview-7",
@@ -1069,93 +1072,93 @@
       "routes": [
         {
           "pattern": "os.iterate-preview-7.com/*",
-          "zone_name": "iterate-preview-7.com",
+          "zone_name": "iterate-preview-7.com"
         },
         {
           "pattern": "mcp.iterate-preview-7.com/*",
-          "zone_name": "iterate-preview-7.com",
+          "zone_name": "iterate-preview-7.com"
         },
         {
           "pattern": "iterate-preview-7.app/*",
-          "zone_name": "iterate-preview-7.app",
+          "zone_name": "iterate-preview-7.app"
         },
         {
           "pattern": "*.iterate-preview-7.app/*",
-          "zone_name": "iterate-preview-7.app",
+          "zone_name": "iterate-preview-7.app"
         },
         {
           "pattern": "*iterate-preview-7.app/*",
-          "zone_name": "iterate-preview-7.app",
-        },
+          "zone_name": "iterate-preview-7.app"
+        }
       ],
       "vars": {
         "WORKER_SELF": "os-preview-7",
         "ARTIFACTS_ACCOUNT_ID": "376ef7ed81b0573f93524de763666c15",
-        "ARTIFACTS_NAMESPACE": "os-preview-7-repos",
+        "ARTIFACTS_NAMESPACE": "os-preview-7-repos"
       },
       "durable_objects": {
         "bindings": [
           {
             "name": "AGENT",
-            "class_name": "AgentDurableObject",
+            "class_name": "AgentDurableObject"
           },
           {
             "name": "ITX",
-            "class_name": "ItxDurableObject",
+            "class_name": "ItxDurableObject"
           },
           {
             "name": "PROJECT",
-            "class_name": "ProjectDurableObject",
+            "class_name": "ProjectDurableObject"
           },
           {
             "name": "REPO",
-            "class_name": "RepoDurableObject",
+            "class_name": "RepoDurableObject"
           },
           {
             "name": "SANDBOX",
-            "class_name": "CloudflareSandboxDurableObject",
+            "class_name": "CloudflareSandboxDurableObject"
           },
           {
             "name": "SECRET",
-            "class_name": "SecretDurableObject",
+            "class_name": "SecretDurableObject"
           },
           {
             "name": "STREAM",
-            "class_name": "StreamDurableObject",
+            "class_name": "StreamDurableObject"
           },
           {
             "name": "WORKER",
-            "class_name": "StatefulWorkerDurableObject",
-          },
-        ],
+            "class_name": "StatefulWorkerDurableObject"
+          }
+        ]
       },
       "kv_namespaces": [
         {
           "binding": "PROJECT_DIRECTORY",
-          "id": "43d9f22bbd5b440a9f69c792c950d289",
-        },
+          "id": "82e5bcf61ac04a73ad54c3a19ae236fc"
+        }
       ],
       "ai": {
-        "binding": "AI",
+        "binding": "AI"
       },
       "worker_loaders": [
         {
-          "binding": "LOADER",
-        },
+          "binding": "LOADER"
+        }
       ],
       "artifacts": [
         {
           "binding": "ARTIFACTS",
-          "namespace": "os-preview-7-repos",
-        },
+          "namespace": "os-preview-7-repos"
+        }
       ],
       "containers": [
         {
           "class_name": "CloudflareSandboxDurableObject",
           "image": "./Dockerfile.sandbox",
           "instance_type": "lite",
-          "max_instances": 10,
-        },
+          "max_instances": 10
+        }
       ],
       "secrets": {
         "required": [
@@ -1177,8 +1180,8 @@
           "APP_CONFIG_PROJECT_HOSTNAME_BASES",
           "APP_CONFIG_SLACK_BOT_TOKEN",
           "APP_CONFIG_X_AI_API_KEY",
-          "SECRET_ENCRYPTION_KEY",
-        ],
+          "SECRET_ENCRYPTION_KEY"
+        ]
       },
       "observability": {
         "enabled": true,
@@ -1187,14 +1190,14 @@
           "enabled": true,
           "head_sampling_rate": 1,
           "persist": true,
-          "invocation_logs": true,
+          "invocation_logs": true
         },
         "traces": {
           "enabled": true,
           "persist": true,
-          "head_sampling_rate": 1,
-        },
-      },
+          "head_sampling_rate": 1
+        }
+      }
     },
     "preview_8": {
       "name": "os-preview-8",
@@ -1202,93 +1205,93 @@
       "routes": [
         {
           "pattern": "os.iterate-preview-8.com/*",
-          "zone_name": "iterate-preview-8.com",
+          "zone_name": "iterate-preview-8.com"
         },
         {
           "pattern": "mcp.iterate-preview-8.com/*",
-          "zone_name": "iterate-preview-8.com",
+          "zone_name": "iterate-preview-8.com"
         },
         {
           "pattern": "iterate-preview-8.app/*",
-          "zone_name": "iterate-preview-8.app",
+          "zone_name": "iterate-preview-8.app"
         },
         {
           "pattern": "*.iterate-preview-8.app/*",
-          "zone_name": "iterate-preview-8.app",
+          "zone_name": "iterate-preview-8.app"
         },
         {
           "pattern": "*iterate-preview-8.app/*",
-          "zone_name": "iterate-preview-8.app",
-        },
+          "zone_name": "iterate-preview-8.app"
+        }
       ],
       "vars": {
         "WORKER_SELF": "os-preview-8",
         "ARTIFACTS_ACCOUNT_ID": "376ef7ed81b0573f93524de763666c15",
-        "ARTIFACTS_NAMESPACE": "os-preview-8-repos",
+        "ARTIFACTS_NAMESPACE": "os-preview-8-repos"
       },
       "durable_objects": {
         "bindings": [
           {
             "name": "AGENT",
-            "class_name": "AgentDurableObject",
+            "class_name": "AgentDurableObject"
           },
           {
             "name": "ITX",
-            "class_name": "ItxDurableObject",
+            "class_name": "ItxDurableObject"
           },
           {
             "name": "PROJECT",
-            "class_name": "ProjectDurableObject",
+            "class_name": "ProjectDurableObject"
           },
           {
             "name": "REPO",
-            "class_name": "RepoDurableObject",
+            "class_name": "RepoDurableObject"
           },
           {
             "name": "SANDBOX",
-            "class_name": "CloudflareSandboxDurableObject",
+            "class_name": "CloudflareSandboxDurableObject"
           },
           {
             "name": "SECRET",
-            "class_name": "SecretDurableObject",
+            "class_name": "SecretDurableObject"
           },
           {
             "name": "STREAM",
-            "class_name": "StreamDurableObject",
+            "class_name": "StreamDurableObject"
           },
           {
             "name": "WORKER",
-            "class_name": "StatefulWorkerDurableObject",
-          },
-        ],
+            "class_name": "StatefulWorkerDurableObject"
+          }
+        ]
       },
       "kv_namespaces": [
         {
           "binding": "PROJECT_DIRECTORY",
-          "id": "a981052b548843f2a643f4a4bc0d7109",
-        },
+          "id": "a981052b548843f2a643f4a4bc0d7109"
+        }
       ],
       "ai": {
-        "binding": "AI",
+        "binding": "AI"
       },
       "worker_loaders": [
         {
-          "binding": "LOADER",
-        },
+          "binding": "LOADER"
+        }
       ],
       "artifacts": [
         {
           "binding": "ARTIFACTS",
-          "namespace": "os-preview-8-repos",
-        },
+          "namespace": "os-preview-8-repos"
+        }
       ],
       "containers": [
         {
           "class_name": "CloudflareSandboxDurableObject",
           "image": "./Dockerfile.sandbox",
           "instance_type": "lite",
-          "max_instances": 10,
-        },
+          "max_instances": 10
+        }
       ],
       "secrets": {
         "required": [
@@ -1310,8 +1313,8 @@
           "APP_CONFIG_PROJECT_HOSTNAME_BASES",
           "APP_CONFIG_SLACK_BOT_TOKEN",
           "APP_CONFIG_X_AI_API_KEY",
-          "SECRET_ENCRYPTION_KEY",
-        ],
+          "SECRET_ENCRYPTION_KEY"
+        ]
       },
       "observability": {
         "enabled": true,
@@ -1320,14 +1323,14 @@
           "enabled": true,
           "head_sampling_rate": 1,
           "persist": true,
-          "invocation_logs": true,
+          "invocation_logs": true
         },
         "traces": {
           "enabled": true,
           "persist": true,
-          "head_sampling_rate": 1,
-        },
-      },
-    },
-  },
+          "head_sampling_rate": 1
+        }
+      }
+    }
+  }
 }

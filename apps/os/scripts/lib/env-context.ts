@@ -19,10 +19,17 @@ export interface EnvContext {
   cf: (path: string, init?: RequestInit) => Promise<any>;
 }
 
-/** Resolve `--env <name>` from argv (or ITERATE_ENV) into a full context. */
+/**
+ * Resolve `--env <name>` from argv into a full context. Fallbacks, in order:
+ * ITERATE_ENV, then DOPPLER_CONFIG — the latter so CI's existing
+ * `doppler run --config preview_N -- pnpm run deploy` selects the matching
+ * env without extra plumbing (env names and Doppler config names coincide;
+ * the account-id assertion below still catches any mismatch).
+ */
 export async function resolveEnvContext(argv = process.argv): Promise<EnvContext> {
   const flagIndex = argv.indexOf("--env");
-  const name = flagIndex >= 0 ? argv[flagIndex + 1] : process.env.ITERATE_ENV;
+  const name =
+    flagIndex >= 0 ? argv[flagIndex + 1] : (process.env.ITERATE_ENV ?? process.env.DOPPLER_CONFIG);
   if (!name) throw new Error("Pass --env <name> (e.g. --env preview_3). See envs.ts for the list.");
   const env = requireEnv(name);
 

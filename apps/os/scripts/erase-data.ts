@@ -69,5 +69,8 @@ for (;;) {
 console.log(`KV: deleted ${deleted} keys`);
 
 console.log(
-  `✅ ${ctx.name} data erased — usable immediately. Old Durable Objects are unreachable orphans.`,
+  `✅ ${ctx.name} data erased. Old Durable Objects are unreachable orphans; schema and infra intact.`,
+);
+console.log(
+  `   Note: the auth OAuth clients were data too — redeploy auth for ${ctx.name} (it re-seeds the OS client) before signing in.`,
 );

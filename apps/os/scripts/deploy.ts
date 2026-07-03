@@ -19,10 +19,11 @@
  * can never strand the env's hostnames (the old zombie-route/522 class).
  */
 import { spawnSync } from "node:child_process";
-import { globSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { globSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { REQUIRED_SECRETS } from "./generate-wrangler-config.ts";
 import { resolveEnvContext, type EnvContext } from "./lib/env-context.ts";
 
 const APP_ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -33,10 +34,9 @@ console.log(
 );
 
 // ---- 1. Secrets --------------------------------------------------------------
-const requiredSecrets = readRequiredSecretsFromConfig();
 const secretValues: Record<string, string> = {};
 const missing: string[] = [];
-for (const key of requiredSecrets) {
+for (const key of REQUIRED_SECRETS) {
   const value = ctx.secrets[key];
   if (value === undefined || value === "") missing.push(key);
   else secretValues[key] = value;
@@ -93,15 +93,6 @@ function run(command: string, args: string[], extraEnv: Record<string, string> =
   if (result.status !== 0) {
     throw new Error(`${command} ${args.join(" ")} exited with ${result.status}`);
   }
-}
-
-function readRequiredSecretsFromConfig(): string[] {
-  // Single source of truth: the generator's output. (Strip the // comment
-  // header — the body is plain JSON.)
-  const config = JSON.parse(
-    readFileSync(join(APP_ROOT, "wrangler.jsonc"), "utf8").replace(/^\/\/.*$/gm, ""),
-  );
-  return config.secrets.required as string[];
 }
 
 /**

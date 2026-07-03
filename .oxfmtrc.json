@@ -23,6 +23,7 @@
     ".wrangler/",
     "routeTree.gen.ts",
     "worker-configuration.d.ts",
+    "apps/os/wrangler.jsonc",
     "logs.json",
     ".github/workflows/",
     ".git/",
