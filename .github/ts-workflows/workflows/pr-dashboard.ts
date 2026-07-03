@@ -25,9 +25,11 @@ export default {
   },
   jobs: {
     update_dashboard: {
-      ...utils.runsOnDepotUbuntu,
+      ...utils.runsOnDepotImage,
+      // DOPPLER_TOKEN lets slack.ts resolve SLACK_CI_BOT_TOKEN from Doppler.
+      env: { DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}" },
       steps: [
-        ...utils.setupRepo,
+        ...utils.setupFromImage(),
         await utils.githubScript(
           import.meta,
           { "github-token": "${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}" },
@@ -41,11 +43,9 @@ export default {
               ? "SLACK_PR_DASHBOARD_STATE_TEST"
               : "SLACK_PR_DASHBOARD_STATE";
 
-            const slackToken = "${{ secrets.SLACK_CI_BOT_TOKEN }}";
-            // when run locally via `node cli.ts github-script`, the secret above is an unexpanded
-            // literal (careful not to write the expression-opener character sequence anywhere else
-            // in this script - github rejects the whole workflow file as malformed if we do)
-            const dryRun = slackToken.includes("secrets.SLACK_CI_BOT_TOKEN");
+            // Slack posts only in CI; a local `node cli.ts github-script` run has no CI env,
+            // so it dry-runs instead of posting. The token comes from Doppler via getSlackClient().
+            const dryRun = !process.env.CI;
 
             const now = new Date();
             const today = now.toISOString().slice(0, 10);
@@ -182,7 +182,7 @@ export default {
             // `text` becomes the notification fallback when blocks are present
             const detailsPayload = { channel, text: heading.replaceAll("*", ""), blocks };
 
-            const slack = getSlackClient(slackToken);
+            const slack = getSlackClient();
 
             type State = { date: string; channel: string; ts: string; details_ts?: string };
             const state: State | null = await github.rest.actions

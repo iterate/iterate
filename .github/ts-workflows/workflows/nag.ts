@@ -23,9 +23,11 @@ export default {
         group: "global-nag-concurrency-group",
         "cancel-in-progress": false,
       },
-      ...utils.runsOnDepotUbuntu,
+      ...utils.runsOnDepotImage,
+      // DOPPLER_TOKEN lets slack.ts resolve SLACK_CI_BOT_TOKEN from Doppler.
+      env: { DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}" },
       steps: [
-        ...utils.setupRepo,
+        ...utils.setupFromImage(),
         await utils.githubScript(
           import.meta,
           { "github-token": "${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}" },
@@ -58,7 +60,7 @@ export default {
               const nags = state.read().nags?.filter((n) => n.message_ts) || [];
               for (const nag of nags) {
                 const { getSlackClient, slackChannelIds } = await import("../utils/slack.ts");
-                const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+                const slack = getSlackClient();
                 const reaction = context.payload.pull_request?.merged ? "merged" : "x";
                 await slack.reactions.add({
                   channel: nag.channel || slackChannelIds["#building"],
@@ -182,7 +184,7 @@ export default {
 
               const { getSlackClient, slackChannelIds, slackUsers } =
                 await import("../utils/slack.ts");
-              const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+              const slack = getSlackClient();
               const slackUser = slackUsers.find(
                 (u) => u.github.toLowerCase() === pr.user?.login?.toLowerCase(),
               );
