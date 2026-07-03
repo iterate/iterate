@@ -299,7 +299,12 @@ const sandboxContainerEnabled =
 const sandboxContainer = sandboxContainerEnabled
   ? await Container<CloudflareSandboxDurableObject>("sandbox-container", {
       className: "CloudflareSandboxDurableObject",
-      scriptName: workerNames.sandbox,
+      // No scriptName: this binding exists only on the OWNING sandbox worker.
+      // Alchemy's wrangler.jsonc emission writes container `scriptName` as
+      // `script_name` even on the owner, and a self-referential cross-script
+      // binding makes vite's dev registry proxy serve the class — which drops
+      // `ctx.id.name`, the sandbox's whole identity. Deploy metadata is
+      // unaffected (the DO binding is emitted script-local either way).
       adopt: true,
       build: {
         context: fileURLToPath(new URL(".", import.meta.url)),

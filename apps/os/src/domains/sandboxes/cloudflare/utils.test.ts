@@ -2,12 +2,15 @@ import { describe, expect, it } from "vitest";
 import { normalizeCloudflareSandboxPath } from "./utils.ts";
 
 describe("normalizeCloudflareSandboxPath", () => {
-  it("accepts full cloudflare sandbox paths", () => {
+  it("accepts full cloudflare sandbox paths, arbitrarily nested", () => {
     expect(normalizeCloudflareSandboxPath("/sandboxes/cloudflare/whatever")).toBe(
       "/sandboxes/cloudflare/whatever",
     );
-    expect(normalizeCloudflareSandboxPath("sandboxes/cloudflare/nested/name")).toBe(
-      "/sandboxes/cloudflare/nested/name",
+    expect(normalizeCloudflareSandboxPath("/sandboxes/cloudflare/bla/bla")).toBe(
+      "/sandboxes/cloudflare/bla/bla",
+    );
+    expect(normalizeCloudflareSandboxPath("sandboxes/cloudflare/deeply/nested/path")).toBe(
+      "/sandboxes/cloudflare/deeply/nested/path",
     );
   });
 
@@ -18,7 +21,7 @@ describe("normalizeCloudflareSandboxPath", () => {
     expect(() => normalizeCloudflareSandboxPath("/agents/demo")).toThrow(/sandbox path must be/);
   });
 
-  it("rejects the bare scope with no sandbox name", () => {
+  it("rejects the bare prefix with no path segments under it", () => {
     expect(() => normalizeCloudflareSandboxPath("/sandboxes/cloudflare/")).toThrow(
       /sandbox path must be/,
     );

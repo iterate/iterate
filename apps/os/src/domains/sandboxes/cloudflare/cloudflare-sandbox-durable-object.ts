@@ -8,30 +8,108 @@ import { normalizeCloudflareSandboxPath } from "./utils.ts";
 const SANDBOX_PROJECT_REPO_DIR = "/workspace/repo";
 
 /**
+ * The sandbox's own address, as carried by its Durable Object name:
+ * which project it belongs to and its `/sandboxes/cloudflare/...` path.
+ */
+type SandboxIdentity = { path: string; projectId: string };
+
+const IDENTITY_STORAGE_KEY = "iterate-sandbox-identity";
+
+/**
  * A project-scoped Cloudflare Sandbox: the `@cloudflare/sandbox` container
  * Durable Object, addressed like every other domain object
- * (`{projectId}.iterate/sandboxes/cloudflare/<name>`). The public surface IS
+ * (`{projectId}.iterate/sandboxes/cloudflare/...`). The public surface IS
  * the SDK's — `itx.sandboxes.get(path)` returns this object's bare RPC stub
  * (exec, files, processes, ports, gitCheckout, …) with nothing wrapped on top.
  *
- * The one behavior added over the stock SDK class: on every container start
- * the project's repo is cloned to {@link SANDBOX_PROJECT_REPO_DIR}, so code in
- * the sandbox always finds the project's source checked out. Container
+ * The one behavior added over the stock SDK class: every container start
+ * kicks off a clone of the project repo to {@link SANDBOX_PROJECT_REPO_DIR},
+ * so code in the sandbox finds the project's source checked out. Container
  * filesystems are ephemeral — a restart is a fresh disk — which is why the
- * clone belongs to `onStart` rather than to creation.
+ * clone re-runs per start rather than once at creation; `ensureProjectRepo()`
+ * is the awaitable guarantee.
  */
 export class CloudflareSandboxDurableObject extends Sandbox<Env> {
-  readonly #name = parseCloudflareSandboxDurableObjectName(this.ctx.id.name!);
+  /**
+   * Record who this sandbox is before any other traffic reaches it.
+   *
+   * Identity normally derives from the Durable Object name, but container
+   * runtimes do not reliably surface `ctx.id.name` (the local dev runtime
+   * drops it) — the `@cloudflare/sandbox` SDK pushes its name in through
+   * `getSandbox()` for the same reason. The sandbox collection awaits this
+   * before handing out the stub, and the value is durable, so the identity is
+   * always in place by the time a container start needs it. When the runtime
+   * DOES provide the name, the pushed identity must agree with it.
+   */
+  async ensureIdentity(identity: SandboxIdentity): Promise<void> {
+    const path = normalizeCloudflareSandboxPath(identity.path);
+    const expectedName = DurableObjectNameCodec.stringify({
+      projectId: identity.projectId,
+      path,
+    });
+    if (this.ctx.id.name !== undefined && this.ctx.id.name !== expectedName) {
+      throw new Error(
+        `sandbox identity mismatch: durable object is named "${this.ctx.id.name}", got "${expectedName}"`,
+      );
+    }
+    this.ctx.storage.kv.put(IDENTITY_STORAGE_KEY, { path, projectId: identity.projectId });
+  }
+
+  #identity(): SandboxIdentity {
+    const name = this.ctx.id.name;
+    if (name !== undefined) {
+      const parsed = DurableObjectNameCodec.parse(name);
+      return { path: normalizeCloudflareSandboxPath(parsed.path), projectId: parsed.projectId };
+    }
+    const stored = this.ctx.storage.kv.get<SandboxIdentity>(IDENTITY_STORAGE_KEY);
+    if (!stored) {
+      throw new Error(
+        "sandbox has no identity yet — reach it through itx.sandboxes.get(path), not a raw stub",
+      );
+    }
+    return stored;
+  }
+
+  #repoClone: Promise<void> | undefined;
 
   override async onStart(): Promise<void> {
     await super.onStart();
-    await this.#cloneProjectRepo();
+    // `onStart` runs inside the container framework's blockConcurrencyWhile:
+    // a hard ~30s budget whose cancellation resets the Durable Object AND
+    // tears the fresh container down — and timer events are input-gated, so
+    // the work cannot even bound itself with a deadline in here. The clone
+    // therefore only STARTS here and completes in the background; a caller
+    // that needs the repo deterministically awaits `ensureProjectRepo()`.
+    //
+    // Each start is a fresh container filesystem, so a clone promise from a
+    // previous container must not satisfy this one.
+    this.#repoClone = undefined;
+    this.ctx.waitUntil(
+      this.#ensureRepoClone().catch((error: unknown) =>
+        console.error("sandbox project repo clone failed", error),
+      ),
+    );
   }
 
-  // Runs inside the container-start `blockConcurrencyWhile`, so the first
-  // exec/readFile that woke the container waits until the repo is in place.
-  // Safe to call SDK methods here: the container is already marked healthy
-  // when `onStart` fires, so nothing re-enters startup.
+  /**
+   * The project repo clone, awaitable: resolves once `/workspace/repo` holds
+   * a completed clone for the CURRENT container. Idempotent and safe to call
+   * any time — the clone starts automatically on every container start, so
+   * this usually returns fast; await it before work that depends on the repo.
+   */
+  async ensureProjectRepo(): Promise<void> {
+    await this.#ensureRepoClone();
+  }
+
+  #ensureRepoClone(): Promise<void> {
+    this.#repoClone ??= this.#cloneProjectRepo().catch((error: unknown) => {
+      // Let the next ensure retry instead of caching the failure forever.
+      this.#repoClone = undefined;
+      throw error;
+    });
+    return this.#repoClone;
+  }
+
   async #cloneProjectRepo(): Promise<void> {
     // Probe a marker only a completed clone has — a bare directory check
     // would treat the debris of an interrupted checkout as done and leave
@@ -42,7 +120,7 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
 
     const repo = this.env.REPO.getByName(
       DurableObjectNameCodec.stringify({
-        projectId: this.#name.projectId,
+        projectId: this.#identity().projectId,
         path: PROJECT_REPO_PATH,
       }),
     );
@@ -64,10 +142,4 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
       );
     }
   }
-}
-
-function parseCloudflareSandboxDurableObjectName(name: string) {
-  const parsed = DurableObjectNameCodec.parse(name);
-  normalizeCloudflareSandboxPath(parsed.path);
-  return parsed;
 }

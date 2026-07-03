@@ -132,7 +132,7 @@ export interface Itx extends ItxCapabilityHost {
   processor: StreamProcessorRpc<ProjectProcessorState>;
   repo: Repo;
   repos: ProjectRepoCollection;
-  /** Path-addressed Cloudflare Sandboxes (\`itx.sandboxes.get("/sandboxes/cloudflare/<name>")\`). */
+  /** Path-addressed sandboxes (\`itx.sandboxes.get("/sandboxes/cloudflare/whatever")\`). */
   sandboxes: SandboxCollection;
   secrets: SecretCollection;
   /** Slack Web API proxy for the project's connected workspace (itx.slack.chat.postMessage(...)). */
@@ -339,15 +339,17 @@ export interface Repo {
 }
 
 /**
- * Catalog of Cloudflare Sandbox containers within one project.
+ * Catalog of sandboxes within one project.
  *
- * A sandbox is addressed by its FULL path — always
- * \`/sandboxes/cloudflare/<name>\` — so the provider is visible at every call
- * site and a future provider is a new prefix, not a new API. Getting a
- * sandbox is cheap and does not start a container; the first command does.
+ * A sandbox is addressed by its FULL path, which always starts with
+ * \`/sandboxes/\` and may nest arbitrarily (\`/sandboxes/cloudflare/bla/bla\`).
+ * The provider is the segment after the prefix — today only
+ * \`/sandboxes/cloudflare/...\` exists; a future provider is a new prefix, not
+ * a new API. Getting a sandbox is cheap and does not start a container; the
+ * first command does.
  */
 export interface SandboxCollection {
-  get(path: string): CloudflareSandbox;
+  get(path: string): Promise<CloudflareSandbox>;
 }
 
 /**
@@ -356,8 +358,10 @@ export interface SandboxCollection {
  * \`exec(command)\`, \`readFile\`/\`writeFile\`/\`listFiles\`, \`startProcess\`,
  * \`gitCheckout\`, \`exposePort\`, \`destroy()\`, … — so this contract deliberately
  * does not re-declare that surface (same stance as {@link McpClientRpc}); see
- * https://developers.cloudflare.com/sandbox/ for the API. The project's repo
- * is cloned to \`/workspace/repo\` on every container start.
+ * https://developers.cloudflare.com/sandbox/ for the API. One addition: every
+ * container start kicks off a clone of the project's repo to
+ * \`/workspace/repo\` — \`await sandbox.ensureProjectRepo()\` before work that
+ * depends on it.
  */
 export type CloudflareSandbox = object;
 

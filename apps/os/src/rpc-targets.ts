@@ -370,7 +370,7 @@ class AgentCollectionRpcTarget extends RpcTarget implements AgentCollection {
  * Object's own RPC stub — deliberately NO RpcTarget wrapper, so the caller
  * sees exactly what the `@cloudflare/sandbox` SDK exposes and new SDK methods
  * need no forwarding code here. Confinement is by name: the stub is minted
- * from this project's id plus the validated `/sandboxes/cloudflare/<name>`
+ * from this project's id plus the validated `/sandboxes/cloudflare/...`
  * path, after the same project-access assert every collection performs.
  */
 class SandboxCollectionRpcTarget extends RpcTarget implements SandboxCollection {
@@ -379,13 +379,19 @@ class SandboxCollectionRpcTarget extends RpcTarget implements SandboxCollection 
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  get(path: string) {
-    return env.SANDBOX.getByName(
+  async get(path: string) {
+    const normalized = normalizeCloudflareSandboxPath(path);
+    const stub = env.SANDBOX.getByName(
       DurableObjectNameCodec.stringify({
         projectId: this.props.projectId,
-        path: normalizeCloudflareSandboxPath(path),
+        path: normalized,
       }),
     );
+    // Container runtimes do not reliably surface `ctx.id.name`, so the
+    // sandbox learns who it is here, before the stub reaches the caller —
+    // see CloudflareSandboxDurableObject.ensureIdentity.
+    await stub.ensureIdentity({ path: normalized, projectId: this.props.projectId });
+    return stub;
   }
 }
 
