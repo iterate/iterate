@@ -49,7 +49,7 @@ export function CreateProjectForm() {
         slug: input.slug,
         ...(input.organizationSlug ? { organizationSlug: input.organizationSlug } : {}),
       });
-      const description = await project.describe();
+      const description = await project.__describe();
       // The auth worker may normalize (slugify) the requested slug; the
       // same-socket list carries the canonical record for the just-widened
       // project, so read it back rather than echoing the submitted slug.

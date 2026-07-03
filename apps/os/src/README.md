@@ -47,71 +47,111 @@ live in domain files.
 - A **capability host** is the durable dynamic-capability table (and script
   journal) at one scope path — one `CapabilityHostDurableObject` per
   `{projectId, path}`. Host operations are `provideCapability`,
-  `revokeCapability`, `runScript`, and `describe()`. Each itx fronts exactly
+  `revokeCapability`, `runScript`, and `__describe()`. Each itx fronts exactly
   one host (`itx.capabilityHost`; `itx.provideCapability`/`revokeCapability`
   are shortcuts onto it), and `itx.capabilityHosts.get(path)` addresses any
   other scope's host — `get("/")` mounts on the whole project.
 
+## `__describe()`: discovery everywhere
+
+Every node in the tree answers `__describe()` with the same envelope
+(`Description` in types.ts): `instructions` (prose for this node), `types`
+(TypeScript source), `children` (one-line blip per member — the high-level
+map), and `parent` (where the node sits). Nodes add structured extras — a
+project adds `projectId`/`name`/`capabilities`, a session adds `principal`,
+an agent adds `whoami` — so `__describe` is also the identity query; there is
+no separate `describe()`/`whoami()`.
+
+Deep discovery is a walk: read `children`, recurse into what you care about
+(see the `discover-tree` example). Mounted capabilities answer `__describe()`
+too — the capability host serves it from the mount's provide-time
+`instructions`/`types` metadata, never dialing the live target, so discovery
+works even when a session-bound provider is offline. `__describe` is a
+reserved path segment: no mount can shadow it.
+
+Today each node hand-writes its description (`describeNode` in
+`domains/itx/utils.ts` only enforces the shape); the intended evolution is a
+transitive mechanism where a parent composes its children's descriptions.
+
 ## The capability tree
 
 What a caller can reach, top to bottom. Concrete classes in parentheses (all in
-`rpc-targets.ts`); `→` marks methods that vend a new capability.
+`rpc-targets.ts`); `->` marks methods that vend a new capability. Every node
+also has `__describe()` (not repeated below).
 
 ```
-UnauthenticatedOs (UnauthenticatedOsRpcTarget)        ws/POST /api
-└─ authenticate(credentials)                          → Session
+UnauthenticatedOs (UnauthenticatedOsRpcTarget)         ws/POST /api
+`-- authenticate(credentials)                          -> Session
 
-Session (SessionRpcTarget)                            a catalog; NOT an itx
-├─ whoami()
-├─ integrations (SessionIntegrationsRpcTarget)        admin: webhook ingress
-├─ streams / repos (…CollectionRpcTarget, projectId: null)   admin: deployment-wide
-└─ projects (ProjectCollectionRpcTarget)
-   ├─ list()
-   ├─ create({ slug })                                → Itx (project root)
-   └─ get("prj_…")                                    → Itx (project root)
+Session (SessionRpcTarget)                             a catalog; NOT an itx
+|                                                      __describe().principal = who you are
+|-- streams / repos (projectId: null collections)      admin: deployment-wide
+`-- projects (ProjectCollectionRpcTarget)
+    |-- list()
+    |-- create({ slug })                               -> Itx (project root)
+    `-- get("prj_...")                                 -> Itx (project root)
 
-Itx (ProjectRpcTarget) — "itx" by convention; capabilityHost.path selects the scope:
-│    "/" = project root; "/agents/…" = an agent context. Same class both ways.
-├─ capabilityHost (CapabilityHostRpcTarget)           THIS scope's durable table
-│  ├─ path
-│  ├─ describe()                                      own + inherited mounts, scope-tagged
-│  ├─ provideCapability(input)                        → CapabilityProvision (revoke handle)
-│  ├─ revokeCapability({ path, providedAtOffset? })
-│  ├─ invokeCapability({ path, args })                explicit dynamic dispatch
-│  └─ runScript(code)                                 async (itx) => {…} in THIS scope
-├─ capabilityHosts (CapabilityHostCollectionRpcTarget)
-│  └─ get(path)                                       → CapabilityHost of ANY scope;
-│                                                       get("/") mounts project-wide
-├─ provideCapability / revokeCapability               shortcuts → capabilityHost
-├─ describe()                                         project identity + full inventory
-├─ streams repos repo agents sandboxes secrets       project built-ins, resolved in the
-│  workers worker egress ai gmail slack integrations  isolate (never shadowable)
-│  mcp openapi examples processor debug
-├─ agent? chat?                                       DERIVED getters: present only when
-│                                                       capabilityHost.path is /agents/…
-└─ <anything else>                                    DYNAMIC: proxy fallback compiles
-                                                        itx.foo.bar(x) into capabilityHost
-                                                        .invokeCapability({ path, args }),
-                                                        which chains child → parent → "/"
+Itx (ProjectRpcTarget) -- "itx" is a convention: capabilityHost.path selects
+|      the scope. "/" = project root; "/agents/..." = an agent context.
+|      __describe() = identity + children map + full capability inventory.
+|-- capabilityHost (CapabilityHostRpcTarget)           THIS scope's durable table
+|   |-- path
+|   |-- __describe()                                   .capabilities = own + inherited
+|   |                                                    mounts, scope-tagged
+|   |-- provideCapability(input)                       -> CapabilityProvision (revoke handle)
+|   |-- revokeCapability({ path, providedAtOffset? })
+|   |-- invokeCapability({ path, args })               explicit dynamic dispatch
+|   |-- runScript(code)                                async (itx) => {...} in THIS scope
+|   `-- <anything else>                                dotted fallback -> invokeCapability
+|-- capabilityHosts (CapabilityHostCollectionRpcTarget)
+|   `-- get(path)                                      -> CapabilityHost of ANY scope;
+|                                                         get("/") mounts project-wide
+|-- provideCapability / revokeCapability               shortcuts -> capabilityHost
+|-- debug()                                            dashboard/debug info (Slack-friendly)
+|-- integrations (IntegrationsRpcTarget)               connections + connection-scoped proxies
+|   |-- getConnection / startOAuthFlow / disconnect
+|   |-- gmail (GmailRpcTarget)                         gmail.request({ path, query })
+|   `-- slack (SlackRpcTarget)                         slack.chat.postMessage({ ... })
+|-- streams repos repo agents sandboxes secrets        project built-ins, resolved in
+|   workers worker egress ai mcp openapi               the isolate (never shadowable)
+|   examples processor
+|-- agent? chat?                                       DERIVED getters: present only when
+|                                                        capabilityHost.path is /agents/...
+`-- <anything else>                                    DYNAMIC: the proxy routes unknown
+                                                         roots to capabilityHost
+                                                         .invokeCapability({ path, args }),
+                                                         which chains child -> parent -> "/"
 
-Agent (AgentRpcTarget) — via itx.agents.get("/agents/…") or itx.agent
-├─ capabilityHost (CapabilityHostRpcTarget)           the AGENT scope's table
-├─ provideCapability / revokeCapability               shortcuts → capabilityHost
-├─ chat (AgentChatRpcTarget) · stream · processor
-├─ sendMessage(text) · ask({ message }) · whoami()
-└─ <anything else>                                    same dynamic fallback, agent scope
+Agent (AgentRpcTarget) -- via itx.agents.get("/agents/...") or itx.agent
+|                                                      __describe().whoami = "agent <prj>:<path>"
+|-- capabilityHost (CapabilityHostRpcTarget)           the AGENT scope's table
+|-- provideCapability / revokeCapability               shortcuts -> capabilityHost
+|-- chat (AgentChatRpcTarget), stream, processor
+|-- sendMessage(text), ask({ message })
+`-- <anything else>                                    same dynamic fallback, agent scope
 
-CapabilityProvision (CapabilityProvisionRpcTarget)    returned by every provide
-├─ path · providedAtOffset
-├─ revoke()
-└─ [Symbol.dispose]                                   `using` revokes on scope exit
+CapabilityProvision (CapabilityProvisionRpcTarget)     returned by every provide
+|-- path, providedAtOffset
+|-- revoke()
+`-- [Symbol.dispose]                                   `using` revokes on scope exit
 ```
+
+The itx and agent surfaces have NO dispatch machinery of their own: the
+`withInvokeCapabilityFallback` proxy routes every unknown dotted root straight
+to the injected capability host, and the host itself carries the same fallback
+(`host.foo.bar(x)` is `host.invokeCapability({ path: ["foo","bar"], args: [x] })`).
 
 The load-bearing asymmetry: **reads chain up, writes stay local.**
-`invokeCapability`/`describe` fall through to the enclosing scope on a miss
-(agent → namespace → project root), so a root mount is visible everywhere.
+`invokeCapability`/`__describe` fall through to the enclosing scope on a miss
+(agent -> namespace -> project root), so a root mount is visible everywhere.
 `provideCapability` always mounts on exactly the host you called it on — to
 mount elsewhere, address that scope explicitly via `capabilityHosts.get(path)`.
+
+Slack webhook ingress (`/api/integrations/slack/webhook`) is deliberately NOT
+on this tree: it is an HTTP lane on the api worker
+(`domains/integrations/slack-webhook-api.ts`) that routes signed events
+directly into the claiming project's stream. The OAuth callback routes stay
+app-side (they need the browser session).
 
 ## Connecting and authenticating
 

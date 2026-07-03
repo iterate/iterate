@@ -44,7 +44,7 @@ const ExecJsInput = z.object({
   code: z
     .string()
     .describe(
-      "JavaScript async arrow function to execute, e.g. async (itx) => { return await itx.describe(); }. Whatever it returns (JSON-serializable) is the tool result; a thrown error surfaces as the tool error.",
+      "JavaScript async arrow function to execute, e.g. async (itx) => { return await itx.__describe(); }. Whatever it returns (JSON-serializable) is the tool result; a thrown error surfaces as the tool error.",
     ),
   project: z.string().optional().describe("Project slug to run this code against."),
 });
@@ -63,7 +63,7 @@ const EXEC_JS_DESCRIPTION = [
   "",
   "Use JavaScript for what separate calls cannot do: Promise.all to fan out independent requests concurrently, map/filter to trim big responses.",
   "",
-  "Discovering the surface: `await itx.describe()` lists the project's capabilities; `await itx.examples.list()` is a catalogue of known-good snippets (streams, repo, workers, secrets, provideCapability, MCP, ...) and `await itx.examples.get({ id })` returns one with full code — copy working patterns from there. Web search is built in via Exa: `await itx.mcp.exa.web_search_exa({ query, numResults })`, page reading via `itx.mcp.exa.web_fetch_exa({ urls })`.",
+  "Discovering the surface: `await itx.__describe()` lists the project's capabilities; `await itx.examples.list()` is a catalogue of known-good snippets (streams, repo, workers, secrets, provideCapability, MCP, ...) and `await itx.examples.get({ id })` returns one with full code — copy working patterns from there. Web search is built in via Exa: `await itx.mcp.exa.web_search_exa({ query, numResults })`, page reading via `itx.mcp.exa.web_fetch_exa({ urls })`.",
 ].join("\n");
 
 const mcpCorsHeaders = {

@@ -21,12 +21,14 @@ import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
 import { normalizeAgentPath } from "./domains/agents/utils.ts";
 import {
+  describeNode,
   itxEntrypointProps,
   itxEntrypointBinding,
   itxEntrypointScopeCacheKey,
   rejectBuiltinCollision,
   withInvokeCapabilityFallback,
 } from "./domains/itx/utils.ts";
+import { ITX_TYPES_SOURCE } from "./types-source.generated.ts";
 import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
@@ -39,7 +41,6 @@ import {
   completeSlackConnect,
   disconnectProvider,
   getConnectionStatus,
-  routeSlackWebhook,
   startOAuthFlow,
 } from "./domains/integrations/connect-flows.ts";
 import { callGmailApi } from "./domains/integrations/gmail-api.ts";
@@ -75,7 +76,7 @@ import type {
   Ai,
   CfExecutionContext,
   ItxAuth,
-  Itx,
+  ProjectRpcTarget as ProjectRpcTargetContract,
   ItxExampleCatalog,
   ItxExampleSummary,
   Session,
@@ -108,7 +109,6 @@ import type {
   DynamicWorkerRef,
   GmailCapability,
   ProjectIntegrations,
-  SessionIntegrations,
   SlackCapability,
 } from "./types.ts";
 
@@ -471,8 +471,8 @@ class AiRpcTarget extends RpcTarget implements Ai {
 }
 
 /**
- * The `itx.slack` built-in: a Slack Web API proxy for the project's connected
- * workspace. Dotted Web API method paths (`itx.slack.chat.postMessage({...})`)
+ * The `itx.integrations.slack` built-in: a Slack Web API proxy for the project's connected
+ * workspace. Dotted Web API method paths (`itx.integrations.slack.chat.postMessage({...})`)
  * resolve through the dynamic path-call fallback onto `invokeCapability`;
  * authorization uses the project's stored bot token through the secret
  * substitution egress pipeline (domains/integrations/slack-api.ts).
@@ -484,12 +484,12 @@ class SlackRpcTarget extends RpcTarget implements SlackCapability {
     return withInvokeCapabilityFallback(this);
   }
 
-  /** itx path-call surface: itx.slack.<Slack Web API method path>(body). */
+  /** itx path-call surface: itx.integrations.slack.<Slack Web API method path>(body). */
   async invokeCapability(call: Parameters<SlackCapability["invokeCapability"]>[0]) {
     const { args = [], path } = call;
     const method = path.join(".");
     if (!method) {
-      throw new Error("itx.slack expected a Slack Web API method path.");
+      throw new Error("integrations.slack expected a Slack Web API method path.");
     }
     if (args.length > 1) {
       throw new Error(`Slack calls are unary; ${method} received ${args.length} args.`);
@@ -509,7 +509,7 @@ class SlackRpcTarget extends RpcTarget implements SlackCapability {
   }
 }
 
-/** The `itx.gmail` built-in: Gmail REST proxy for the project's Google account. */
+/** The `itx.integrations.gmail` built-in: Gmail REST proxy for the project's Google account. */
 class GmailRpcTarget extends RpcTarget implements GmailCapability {
   constructor(readonly props: { auth: ItxAuth; projectId: string }) {
     super();
@@ -527,15 +527,48 @@ class GmailRpcTarget extends RpcTarget implements GmailCapability {
 
 /**
  * The `itx.integrations` built-in: connection status, OAuth start/complete,
- * and disconnect for slack/google. The complete* methods are called by the
- * app worker's OAuth callback routes (/api/integrations/<provider>/callback);
- * their authority is the HMAC-signed OAuth state minted by startOAuthFlow,
- * verified itx-side.
+ * and disconnect for slack/google, PLUS the connection-scoped API proxies
+ * (`integrations.gmail`, `integrations.slack`) — they live here because they
+ * only work through the project's connected accounts. The complete* methods
+ * are called by the app worker's OAuth callback routes
+ * (/api/integrations/<provider>/callback); their authority is the HMAC-signed
+ * OAuth state minted by startOAuthFlow, verified itx-side.
  */
 class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
   constructor(readonly props: { auth: ItxAuth; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  async __describe() {
+    return describeNode({
+      instructions:
+        "Project integrations: Slack + Google connection lifecycle, and the connection-scoped API proxies. Check getConnection({ provider }) before using a proxy.",
+      children: {
+        disconnect: "Disconnect a provider.",
+        getConnection: 'Connection status for { provider: "slack" | "google" }.',
+        gmail:
+          'Gmail REST proxy for the connected Google account: gmail.request({ path: "/users/me/messages", query }).',
+        slack:
+          "Slack Web API proxy for the connected workspace: slack.chat.postMessage({ channel, text }).",
+        startOAuthFlow: "Begin the OAuth connect flow; returns the authorization URL.",
+      },
+      parent: "a project itx (itx.integrations)",
+    });
+  }
+
+  get gmail(): GmailCapability {
+    return new GmailRpcTarget({
+      auth: this.props.auth,
+      projectId: this.props.projectId,
+    });
+  }
+
+  get slack(): SlackCapability {
+    return new SlackRpcTarget({
+      auth: this.props.auth,
+      projectId: this.props.projectId,
+    });
   }
 
   getConnection(input: Parameters<ProjectIntegrations["getConnection"]>[0]) {
@@ -578,24 +611,6 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
       projectId: this.props.projectId,
       provider: input.provider,
     });
-  }
-}
-
-/**
- * Deployment-wide integration ingress: routes validly-signed Slack webhooks to
- * the project that claimed the team. Admin/internal only — this is the door
- * the app worker's webhook route calls with the admin API secret.
- */
-class SessionIntegrationsRpcTarget extends RpcTarget implements SessionIntegrations {
-  constructor(readonly props: { auth: ItxAuth }) {
-    super();
-    if (!props.auth.isAdmin()) {
-      throw new Error(`principal "${props.auth.principal}" cannot access deployment integrations`);
-    }
-  }
-
-  routeSlackWebhook(input: Parameters<SessionIntegrations["routeSlackWebhook"]>[0]) {
-    return routeSlackWebhook(input);
   }
 }
 
@@ -707,8 +722,25 @@ class AgentRpcTarget extends RpcTarget implements Agent {
     });
   }
 
-  whoami() {
-    return `agent ${this.props.projectId}:${this.#path}`;
+  async __describe() {
+    return describeNode({
+      instructions:
+        "One agent: the narrow control surface for the agent stream at this path. Dotted calls on unknown members resolve against the agent scope's capability host.",
+      children: {
+        ask: "Send a message and wait for the agent's next chat reply.",
+        capabilityHost: "This agent scope's durable capability table.",
+        chat: "The agent's web-chat door (sendMessage).",
+        processor: "The agent stream processor (snapshot/state).",
+        provideCapability: "Shortcut: mount a capability on THIS agent's scope.",
+        revokeCapability: "Shortcut: remove a mount from THIS agent's scope.",
+        sendMessage: "Append a user message to the agent stream.",
+        stream: "The agent's own event stream.",
+      },
+      parent: `project ${this.props.projectId}, via agents.get("${this.#path}")`,
+      agentPath: this.#path,
+      projectId: this.props.projectId,
+      whoami: `agent ${this.props.projectId}:${this.#path}`,
+    });
   }
 }
 
@@ -1128,8 +1160,23 @@ export class CapabilityHostRpcTarget extends RpcTarget implements CapabilityHost
     return await this.#durableObject.invokeCapability({ args, path });
   }
 
-  describe() {
-    return this.#durableObject.describe();
+  async __describe() {
+    const capabilities = await this.#durableObject.describeCapabilities();
+    // (DO method name: describeCapabilities — it returns the raw array; the
+    // Description envelope is assembled here, where the scope context lives.)
+    return describeNode({
+      instructions: `The capability host at scope "${this.props.path}": the durable dynamic-capability table and script journal for this scope. Mounting is local; reads chain up through enclosing scopes, so \`capabilities\` includes inherited mounts tagged with their declaring scope.`,
+      children: {
+        invokeCapability:
+          "Explicit dynamic dispatch ({ path, args }); dotted calls compile to this.",
+        provideCapability: "Mount a capability on THIS scope; returns a revoke handle.",
+        revokeCapability: "Remove a mount from THIS scope.",
+        runScript: "Run an async (itx) => {...} script in this scope.",
+      },
+      parent: `project ${this.props.projectId}; sibling scopes via capabilityHosts.get(path)`,
+      capabilities,
+      path: this.props.path,
+    });
   }
 
   async runScript(code: string) {
@@ -1161,7 +1208,6 @@ const PROJECT_BUILTIN_CAPABILITY_PATHS = [
   "debug",
   "egress",
   "examples",
-  "gmail",
   "integrations",
   "mcp",
   "openapi",
@@ -1170,7 +1216,6 @@ const PROJECT_BUILTIN_CAPABILITY_PATHS = [
   "repos",
   "sandboxes",
   "secrets",
-  "slack",
   "streams",
   "worker",
   "workers",
@@ -1181,7 +1226,7 @@ const PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS: readonly CapabilityDescription[] 
     if (path === "capabilityHost") {
       return {
         instructions:
-          "This scope's own capability host: provideCapability({ path, ... }) mounts a dynamic capability here (itx.provideCapability is a shortcut), revokeCapability removes one, describe() lists everything reachable, runScript runs a script in this scope.",
+          "This scope's own capability host: provideCapability({ path, ... }) mounts a dynamic capability here (itx.provideCapability is a shortcut), revokeCapability removes one, __describe() lists everything reachable, runScript runs a script in this scope.",
         path: [path],
         type: "builtin" as const,
       };
@@ -1194,30 +1239,10 @@ const PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS: readonly CapabilityDescription[] 
         type: "builtin" as const,
       };
     }
-    if (path === "gmail") {
-      return {
-        instructions:
-          'Gmail REST proxy for the project Google account. Available to Slack agents as itx.gmail when Google is connected; check itx.integrations.getConnection({ provider: "google" }), then call itx.gmail.request({ path: "/users/me/messages", query: { maxResults, q: "in:inbox" } }). Paths are relative to https://gmail.googleapis.com/gmail/v1.',
-        path: [path],
-        type: "builtin" as const,
-        types: [
-          "type GmailRequestInput = {",
-          "  body?: unknown;",
-          "  headers?: Record<string, string>;",
-          "  method?: string;",
-          "  path: string;",
-          "  query?: Record<string, boolean | number | string | null | undefined>;",
-          "};",
-          "interface GmailCapability {",
-          "  request(input: GmailRequestInput): Promise<{ data: unknown; headers: Record<string, string>; status: number; statusText: string }>;",
-          "}",
-        ].join("\n"),
-      };
-    }
     if (path === "integrations") {
       return {
         instructions:
-          'Project integration management. Use itx.integrations.getConnection({ provider: "google" }) before Gmail work and { provider: "slack" } before Slack API work.',
+          "Slack/Google connections plus connection-scoped API proxies: itx.integrations.gmail.request({ path, query }) and itx.integrations.slack.chat.postMessage({ channel, text }). Check itx.integrations.getConnection({ provider }) first.",
         path: [path],
         type: "builtin" as const,
       };
@@ -1226,14 +1251,6 @@ const PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS: readonly CapabilityDescription[] 
       return {
         instructions:
           "Returns formatted OS debug info for this itx scope, including a dashboard stream link.",
-        path: [path],
-        type: "builtin" as const,
-      };
-    }
-    if (path === "slack") {
-      return {
-        instructions:
-          "Slack Web API proxy for the connected project workspace. Slack thread agents reply with itx.slack.chat.postMessage({ channel, thread_ts, text }).",
         path: [path],
         type: "builtin" as const,
       };
@@ -1269,7 +1286,7 @@ type ProjectRpcTargetProps = {
  * shadowable built-ins a lot, we'd move resolution behind the DO and pay the
  * round trip; today we don't.
  */
-export class ProjectRpcTarget extends RpcTarget implements Itx {
+export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContract {
   constructor(readonly props: ProjectRpcTargetProps) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -1286,15 +1303,54 @@ export class ProjectRpcTarget extends RpcTarget implements Itx {
     );
   }
 
-  async describe() {
-    const [project, mountedCapabilities] = await Promise.all([
+  async __describe() {
+    const scopePath = this.props.capabilityHost.path;
+    const [project, hostDescription] = await Promise.all([
       this.durableObjectStub.describe(),
-      this.props.capabilityHost.describe(),
+      this.props.capabilityHost.__describe(),
     ]);
-    return {
-      ...project,
+    const mountedCapabilities = hostDescription.capabilities;
+    return describeNode({
+      instructions:
+        `An itx: project "${project.name}" (${project.projectId}) at scope "${scopePath}". ` +
+        "Built-ins are project-global and identical at every scope; `capabilities` is the full inventory (built-ins + dynamic mounts). " +
+        "Unknown dotted members dispatch dynamically against this scope's capability host, chaining up to the project root. " +
+        "Deep discovery: call __describe() on any child.",
+      types: ITX_TYPES_SOURCE,
+      children: {
+        agents: "Agent catalog: get(path), list().",
+        ai: "Workers AI: run(model, body), models().",
+        capabilityHost: "THIS scope's durable capability table (provide/revoke/runScript).",
+        capabilityHosts: 'Other scopes\' hosts by path; get("/") mounts project-wide.',
+        debug: "Slack-formatted debug info for this scope.",
+        egress: "Project-attributed outbound fetch (+ intercept).",
+        examples: "Catalogue of known-good itx script snippets.",
+        integrations:
+          "Slack/Google connections + connection-scoped proxies (integrations.gmail, integrations.slack).",
+        mcp: "Ad-hoc MCP clients: connect(url).",
+        openapi: "Ad-hoc OpenAPI clients: connect(spec).",
+        processor: "The project stream processor (snapshot/state).",
+        provideCapability: "Shortcut: mount a capability on THIS scope.",
+        repo: "The project repo at /repos/project.",
+        repos: "Repo catalog by path.",
+        revokeCapability: "Shortcut: remove a mount from THIS scope.",
+        sandboxes: "Path-addressed Cloudflare sandboxes.",
+        secrets: "Secret catalog by path.",
+        streams: "Project stream catalog: get(path), list().",
+        worker: "The default repo-backed project worker.",
+        workers: "Dynamic worker refs: get(ref).",
+        ...(scopePath.startsWith("/agents/")
+          ? {
+              agent: "THIS agent's control surface (present because this is an agent scope).",
+              chat: "THIS agent's web-chat door.",
+            }
+          : {}),
+      },
+      parent: scopePath === "/" ? "session.projects" : `the project-root itx (scope "/")`,
       capabilities: [...PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS, ...mountedCapabilities],
-    };
+      name: project.name,
+      projectId: project.projectId,
+    });
   }
 
   async debug() {
@@ -1360,11 +1416,11 @@ export class ProjectRpcTarget extends RpcTarget implements Itx {
     });
   }
 
-  provideCapability(input: Parameters<Itx["provideCapability"]>[0]) {
+  provideCapability(input: Parameters<ProjectRpcTargetContract["provideCapability"]>[0]) {
     return this.props.capabilityHost.provideCapability(input);
   }
 
-  revokeCapability(input: Parameters<Itx["revokeCapability"]>[0]) {
+  revokeCapability(input: Parameters<ProjectRpcTargetContract["revokeCapability"]>[0]) {
     return this.props.capabilityHost.revokeCapability(input);
   }
 
@@ -1391,22 +1447,8 @@ export class ProjectRpcTarget extends RpcTarget implements Itx {
     return new ItxExampleCatalogRpcTarget();
   }
 
-  get gmail(): GmailCapability {
-    return new GmailRpcTarget({
-      auth: this.props.auth,
-      projectId: this.props.projectId,
-    });
-  }
-
   get integrations(): ProjectIntegrations {
     return new IntegrationsRpcTarget({
-      auth: this.props.auth,
-      projectId: this.props.projectId,
-    });
-  }
-
-  get slack(): SlackCapability {
-    return new SlackRpcTarget({
       auth: this.props.auth,
       projectId: this.props.projectId,
     });
@@ -1516,8 +1558,18 @@ class SessionRpcTarget extends RpcTarget implements Session {
     super();
   }
 
-  get integrations() {
-    return new SessionIntegrationsRpcTarget({ auth: this.props.auth });
+  async __describe() {
+    return describeNode({
+      instructions:
+        "An OS Session: the catalog authenticate() returned. Not a project context — use projects.get(id)/create({ slug }) to obtain one. `principal` is who you are.",
+      children: {
+        projects: "Project catalog: list(), get(projectId), create({ slug }) — each vends an itx.",
+        repos: "Deployment-wide repos (admin only; projectId: null).",
+        streams: "Deployment-wide streams (admin only; projectId: null).",
+      },
+      parent: "the /api unauthenticated entrypoint, via authenticate(credentials)",
+      principal: this.props.auth.principal,
+    });
   }
 
   get streams() {
@@ -1541,10 +1593,6 @@ class SessionRpcTarget extends RpcTarget implements Session {
       ctx: this.props.ctx,
     });
   }
-
-  whoami() {
-    return this.props.auth.principal;
-  }
 }
 
 export class UnauthenticatedOsRpcTarget extends RpcTarget implements UnauthenticatedOs {
@@ -1557,6 +1605,16 @@ export class UnauthenticatedOsRpcTarget extends RpcTarget implements Unauthentic
     },
   ) {
     super();
+  }
+
+  async __describe() {
+    return describeNode({
+      instructions:
+        "os' one API (/api), before any authority is known. authenticate(credentials) is the only door; it returns a Session.",
+      children: {
+        authenticate: "Exchange credentials (session cookie, bearer, admin secret) for a Session.",
+      },
+    });
   }
 
   async authenticate(input: Parameters<UnauthenticatedOs["authenticate"]>[0]) {

@@ -58,6 +58,24 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       expect(builtins).toEqual(
         expect.arrayContaining(["streams", "repo", "workers", "secrets", "ai"]),
       );
+      const children = (result as { children: string[] }).children;
+      expect(children).toEqual(expect.arrayContaining(["capabilityHost", "integrations"]));
+    },
+  },
+  "discover-tree": {
+    assert: (result, _ctx, expect) => {
+      const shaped = result as {
+        integrationsChildren: Record<string, string>;
+        rootChildren: Record<string, string>;
+        scope: string;
+      };
+      expect(shaped.scope).toBe("/");
+      expect(Object.keys(shaped.rootChildren)).toEqual(
+        expect.arrayContaining(["capabilityHost", "capabilityHosts", "streams"]),
+      );
+      expect(Object.keys(shaped.integrationsChildren)).toEqual(
+        expect.arrayContaining(["gmail", "slack"]),
+      );
     },
   },
   "append-and-read-stream": {

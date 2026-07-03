@@ -182,7 +182,7 @@ describe("itx", () => {
     await expect((<any>session).projects).rejects.toThrow();
   });
 
-  test("Authenticated itx whoami returns principal", async () => {
+  test("Authenticated session __describe returns principal", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
       type: "impersonate",
@@ -196,7 +196,7 @@ describe("itx", () => {
 
     const projects = itx.projects;
 
-    expect(await itx.whoami()).toBe("alice");
+    expect((await itx.__describe()).principal).toBe("alice");
     // list() enriches each scope: an impersonated principal's scopes have no
     // directory record, so the id doubles as the slug and the org is unknown.
     const list = await projects.list();
@@ -224,13 +224,15 @@ describe("itx", () => {
 
     // TODO project slug should be derived from tests etc as in apps/os
     using project = itx.projects.create({ slug: "alice-project" });
-    const description = await project.describe();
+    const description = await project.__describe();
     expect(description.projectId).toMatch(/prj_[0-9a-f-]+$/);
     expect(description.name).toMatch(/prj_[0-9a-f-]+\.iterate\/$/);
 
     // projects.get namespaces itx state by the given string, so a slug (or
     // any non-prj_ id) must fail loudly instead of minting a phantom project.
-    await expect(itx.projects.get("alice-project").describe()).rejects.toThrow(/not a project id/);
+    await expect(itx.projects.get("alice-project").__describe()).rejects.toThrow(
+      /not a project id/,
+    );
     expect(messages).toContainEqual([
       expect.any(Number),
       "out",
@@ -353,7 +355,7 @@ describe("itx", () => {
     });
 
     using project = itx.projects.create({ slug: "ai-builtin" });
-    const description = await project.describe();
+    const description = await project.__describe();
 
     expect(description.capabilities).toContainEqual(
       expect.objectContaining({ path: ["ai"], type: "builtin" }),
@@ -657,7 +659,7 @@ describe("itx", () => {
         type: "itx-expression",
         types,
       });
-      const described = await project.describe();
+      const described = await project.__describe();
       expect(described.capabilities).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -733,7 +735,7 @@ describe("itx", () => {
         type: "itx-expression",
         types,
       });
-      const described = await project.describe();
+      const described = await project.__describe();
       expect(described.capabilities).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -814,7 +816,7 @@ describe("itx", () => {
         types: docsTypes,
       });
 
-      const described = await project.describe();
+      const described = await project.__describe();
       expect(described.capabilities).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -991,7 +993,7 @@ describe("itx", () => {
       project.exprDomainObject.capability.echo("ok"),
     ).resolves.toBe("domain:ok");
 
-    const description = await project.describe();
+    const description = await project.__describe();
     const domainObjectDescription = description.capabilities.find((capability) =>
       capability.path.every((segment, index) => segment === ["exprDomainObject"][index]),
     );
@@ -1074,7 +1076,7 @@ describe("itx", () => {
     });
 
     using project = itx.projects.create({ slug: "dynamic-worker-project" });
-    const description = await project.describe();
+    const description = await project.__describe();
 
     // The seeded root worker now routes via x-iterate-app (static homepage
     // otherwise); the hello app keeps the path-echo this assertion relies on.
@@ -1575,7 +1577,7 @@ describe("itx", () => {
     });
 
     using project = itx.projects.create({ slug: "worker-capability-matrix" });
-    const { projectId } = await project.describe();
+    const { projectId } = await project.__describe();
     const agentPath = `/agents/worker-capability-${crypto.randomUUID()}`;
     using agent = project.agents.get(agentPath);
 
@@ -1601,7 +1603,7 @@ describe("itx", () => {
                 const count = ((this.ctx.storage.kv.get("count")) ?? 0) + 1;
                 this.ctx.storage.kv.put("count", count);
                 const project = await this.env.ITX.get();
-                const description = await project.describe();
+                const description = await project.__describe();
                 return {
                   count,
                   label,
@@ -1615,7 +1617,7 @@ describe("itx", () => {
                 const itx = await this.env.ITX.get();
                 return {
                   label,
-                  whoami: await itx.agent.whoami(),
+                  whoami: (await itx.agent.__describe()).whoami,
                 };
               }
             }
@@ -1642,7 +1644,7 @@ describe("itx", () => {
             export class InlineProjectEntrypoint extends WorkerEntrypoint {
               async describeScope() {
                 const project = await this.env.ITX.get();
-                const description = await project.describe();
+                const description = await project.__describe();
                 return {
                   projectId: description.projectId,
                   via: "inline-project-stateless",
@@ -1678,7 +1680,7 @@ describe("itx", () => {
                 return {
                   count,
                   label,
-                  whoami: await itx.agent.whoami(),
+                  whoami: (await itx.agent.__describe()).whoami,
                 };
               }
 
@@ -1926,7 +1928,7 @@ describe("itx", () => {
     });
 
     using project = itx.projects.create({ slug: "agent-only-tools" });
-    const { projectId } = await project.describe();
+    const { projectId } = await project.__describe();
     const agentPath = `/agents/agent-only-${crypto.randomUUID()}`;
     using agent = project.agents.get(agentPath);
     const durableWorkerKey = `agent-counter-${crypto.randomUUID()}`;
@@ -1951,7 +1953,7 @@ describe("itx", () => {
                       return {
                         input,
                         projectId: ${JSON.stringify(projectId)},
-                        whoami: await itx.agent.whoami(),
+                        whoami: (await itx.agent.__describe()).whoami,
                       };
                     }
                   }
@@ -2051,7 +2053,7 @@ describe("itx", () => {
     });
 
     using project = itx.projects.create({ slug: "dynamic-worker-scope-cache" });
-    const { projectId } = await project.describe();
+    const { projectId } = await project.__describe();
     const agentPath = `/agents/scope-cache-${crypto.randomUUID()}`;
     using agent = project.agents.get(agentPath);
     const scopeProbeWorkerRef = (path: string) => ({
@@ -2066,13 +2068,13 @@ describe("itx", () => {
             export class ScopeProbeEntrypoint extends WorkerEntrypoint {
               async projectScope() {
                 const itx = await this.env.ITX.get();
-                const description = await itx.describe();
+                const description = await itx.__describe();
                 return { kind: "project", projectId: description.projectId };
               }
 
               async agentScope() {
                 const itx = await this.env.ITX.get();
-                return { kind: "agent", whoami: await itx.agent.whoami() };
+                return { kind: "agent", whoami: (await itx.agent.__describe()).whoami };
               }
             }
           `,
@@ -2110,7 +2112,7 @@ describe("itx", () => {
     });
 
     using project = itx.projects.create({ slug: "cross-scope-provide" });
-    await project.describe();
+    await project.__describe();
     const agentPath = `/agents/cross-scope-${crypto.randomUUID()}`;
     using agent = project.agents.get(agentPath);
 
@@ -2129,7 +2131,7 @@ describe("itx", () => {
         .get("/")
         .invokeCapability({ path: ["crossScopeProbe", "ping"], args: [] });
       const viaChain = await itx.crossScopeProbe.ping();
-      const describedScopes = (await itx.capabilityHost.describe())
+      const describedScopes = (await itx.capabilityHost.__describe()).capabilities
         .filter((capability) => capability.path.join(".") === "crossScopeProbe")
         .map((capability) => capability.scope);
       await provision.revoke();
@@ -2502,7 +2504,7 @@ describe("itx", () => {
       secret: adminSecret(),
     });
     using project = providerItx.projects.create({ slug: `nested-live-${marker}` });
-    const { projectId } = await project.describe();
+    const { projectId } = await project.__describe();
 
     using _toolsProvision = await project.provideCapability({
       path: ["tools"],
@@ -2562,7 +2564,7 @@ describe("itx", () => {
       secret: adminSecret(),
     });
     using project = providerItx.projects.create({ slug: `capability-field-live-${marker}` });
-    const { projectId } = await project.describe();
+    const { projectId } = await project.__describe();
 
     using _toolsProvision = await project.provideCapability({
       path: ["tools"],
@@ -2610,7 +2612,7 @@ describe("itx", () => {
       secret: adminSecret(),
     });
     using project = providerItx.projects.create({ slug: `bare-function-live-${marker}` });
-    const { projectId } = await project.describe();
+    const { projectId } = await project.__describe();
 
     using _addProvision = await project.provideCapability({
       path: ["add"],
@@ -2648,7 +2650,7 @@ describe("itx", () => {
       secret: adminSecret(),
     });
     using project = providerItx.projects.create({ slug: `rpc-target-live-${marker}` });
-    const { projectId } = await project.describe();
+    const { projectId } = await project.__describe();
 
     using _mathProvision = await project.provideCapability({
       path: ["math"],
@@ -2701,7 +2703,7 @@ describe("itx", () => {
       secret: adminSecret(),
     });
     using project = providerItx.projects.create({ slug: `nested-rpc-target-live-${marker}` });
-    const { projectId } = await project.describe();
+    const { projectId } = await project.__describe();
 
     await project.provideCapability({
       path: ["slackSdk"],
@@ -2744,7 +2746,7 @@ describe("itx", () => {
       secret: adminSecret(),
     });
     using project = providerItx.projects.create({ slug: `path-call-live-${marker}` });
-    const { projectId } = await project.describe();
+    const { projectId } = await project.__describe();
 
     using _carrierProvision = await project.provideCapability({
       path: ["carrier"],
@@ -2834,7 +2836,7 @@ describe("itx", () => {
       path: ["replaceProbe"],
       type: "itx-expression",
     });
-    const description = await project.describe();
+    const description = await project.__describe();
     expect(description.capabilities).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -2858,7 +2860,7 @@ describe("itx", () => {
       });
 
       using project = itx.projects.create({ slug: "slack-project" });
-      const description = await project.describe();
+      const description = await project.__describe();
 
       const slack = new WebClient("xoxb-not-a-real-token", {
         retryConfig: { retries: 0 },
@@ -2920,7 +2922,7 @@ describe("itx", () => {
 
   // This test is handy because it proves that we really only need one round trip to
   // take all the actions in this itx script
-  test("Authenticated itx whoami and projects list complete in one HTTP batch", async () => {
+  test("Authenticated session __describe and projects list complete in one HTTP batch", async () => {
     // oxlint-disable-next-line iterate/no-capnweb-http-batch -- if this cannot pipeline in one request, Cap'n Web rejects the batch.
     using session = newHttpBatchRpcSession<UnauthenticatedOs>(buildUrl({ path: "/api" }));
     using itx = session.authenticate({
@@ -2933,8 +2935,8 @@ describe("itx", () => {
       },
     });
     // If we didn't do Promise.all, this wouldn't work - wouldn't be sent as part of the same batch
-    const [principal, projects] = await Promise.all([itx.whoami(), itx.projects.list()]);
-    expect(principal).toBe("alice");
+    const [description, projects] = await Promise.all([itx.__describe(), itx.projects.list()]);
+    expect(description.principal).toBe("alice");
     expect(projects.map((project) => project.id)).toEqual(["prj_alice", "prj_ref"]);
 
     // session is now finished - cannot be used again in batch http mode

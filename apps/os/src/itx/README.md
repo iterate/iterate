@@ -22,7 +22,7 @@ chain, addresses — are an appendix, because you don't need them to act.
 
 ```ts
 // What am I holding? What can I call?
-await itx.describe();
+await itx.__describe();
 // → { context: "prj_…:/", access: ["prj_…"],
 //     capabilities: [{ name: "slack", kind: "rpc", instructions: "Use
 //       itx.slack.<Slack Web API method path>(args), e.g.

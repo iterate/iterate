@@ -14,7 +14,7 @@
 import { describe, expect, it } from "vitest";
 import { commands } from "vitest/browser";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
-import type { Itx, Session, UnauthenticatedOs } from "../../src/types.ts";
+import type { ProjectRpcTarget, Session, UnauthenticatedOs } from "../../src/types.ts";
 import {
   createBrowserReplScope,
   DEFAULT_BROWSER_REPL_CODE,
@@ -61,7 +61,7 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
       using project = session.projects.create({
         slug: `itx-browser-${uniqueSuffix()}`.slice(0, 40),
       });
-      return (await project.describe()).projectId;
+      return (await project.__describe()).projectId;
     })();
     return sharedProjectId;
   }
@@ -121,14 +121,14 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
  * the WebSocket handshake and `authenticate({ type: "from-server-cookie" })`
  * exchanges it for the session catalog, pipelined on the same socket.
  */
-async function connectFromBrowser(): Promise<RpcStub<Session & Itx>> {
+async function connectFromBrowser(): Promise<RpcStub<Session & ProjectRpcTarget>> {
   await installAdminCookie();
   // The itx capnweb surface is served at /api (mirrors ~/itx/itx-react.tsx).
   const wsUrl = new URL("/api", baseUrl());
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
   const unauthenticated = newWebSocketRpcSession<UnauthenticatedOs>(new WebSocket(wsUrl));
   return unauthenticated.authenticate({ type: "from-server-cookie" }) as unknown as RpcStub<
-    Session & Itx
+    Session & ProjectRpcTarget
   >;
 }
 

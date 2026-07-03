@@ -13,6 +13,7 @@ import type { Env } from "../env.ts";
 import { decideIngressRoute, type IngressResolvers } from "../ingress.ts";
 import { readProjectByHostname, resolveProjectIdBySlug } from "../project-directory.ts";
 import { ProjectCollectionRpcTarget, UnauthenticatedOsRpcTarget } from "../rpc-targets.ts";
+import { handleSlackWebhookApiRequest } from "../domains/integrations/slack-webhook-api.ts";
 import { handleCapnwebAdminCookieRequest } from "~/auth/admin-auth-cookie.ts";
 import { parseConfig, type AppConfig } from "~/config.ts";
 
@@ -62,6 +63,12 @@ export default {
     if (url.pathname === "/api/admin-cookie") {
       return await handleCapnwebAdminCookieRequest({ config, request });
     }
+
+    // Slack webhook ingress lives here (not the app worker): this worker has
+    // the engine bindings, so a signed event routes straight into the claiming
+    // project's stream without a capnweb round trip.
+    const slackWebhookResponse = await handleSlackWebhookApiRequest({ config, request });
+    if (slackWebhookResponse !== null) return slackWebhookResponse;
 
     if (url.pathname !== "/api") return Response.json({ error: "not found" }, { status: 404 });
     const unauthenticated = new UnauthenticatedOsRpcTarget({

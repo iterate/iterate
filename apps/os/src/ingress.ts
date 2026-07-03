@@ -134,13 +134,21 @@ function projectRoute(input: {
 
 /**
  * Path lanes served by the api worker on the OS host: the capnweb rpc
- * endpoint at exactly `/api` (plus its admin-cookie bridge) and the e2e
- * fixture lane. Deliberately exact-match: other `/api/*` paths (`/api/mcp`,
- * `/api/health`, `/api/integrations/...`) are app routes and stay on the
- * "os" lane.
+ * endpoint at exactly `/api` (plus its admin-cookie bridge), the Slack
+ * webhook ingress lanes (the api worker holds the engine bindings, so events
+ * route without an RPC hop), and the e2e fixture lane. Deliberately
+ * exact-match: other `/api/*` paths (`/api/mcp`, `/api/health`, the OAuth
+ * callback routes under `/api/integrations/...`) are app routes and stay on
+ * the "os" lane.
  */
 function isItxApiPath(pathname: string): boolean {
   if (pathname === "/api" || pathname === "/api/admin-cookie") return true;
+  if (
+    pathname === "/api/integrations/slack/webhook" ||
+    pathname === "/api/integrations/slack/interactivity-webhook"
+  ) {
+    return true;
+  }
   if (pathname.startsWith("/__itx_e2e/")) return true;
   return false;
 }

@@ -38,6 +38,34 @@ export const ITX_TYPES_SOURCE = `/**
 // -----------------------------------------------------------------------------
 
 /**
+ * Self-description of one node in the capability tree — what \`__describe()\`
+ * returns, on EVERY node, by convention.
+ *
+ * This is the discovery groundwork: \`instructions\` and \`types\` are always
+ * present and describe THIS node; \`children\` is the high-level map (one-line
+ * blip per child member) so a caller can see what exists without walking;
+ * \`parent\` says where the node sits. Deep discovery is a walk: call
+ * \`__describe()\` on the children you care about. Nodes add structured extras
+ * (a project adds \`projectId\`, an agent adds \`whoami\`, a capability host adds
+ * \`capabilities\`), so \`__describe\` is also the identity query — there is no
+ * separate \`describe()\`/\`whoami()\`.
+ *
+ * Today each node hand-writes its description (the \`describeNode\` helper only
+ * enforces the shape); the plan is to grow this into a transitive mechanism
+ * where a parent composes its children's descriptions.
+ */
+export type Description = {
+  /** Prose: what this node is and how to use it. */
+  instructions: string;
+  /** TypeScript source for this node's surface ("" when not yet written). */
+  types: string;
+  /** Discovery map: one-line blip per child member. */
+  children: Record<string, string>;
+  /** Where this node sits / how you reached it. */
+  parent?: string;
+};
+
+/**
  * Entry point exposed before any principal or project authority is known.
  *
  * \`/api\` hands every caller one of these; the only thing it can do is
@@ -46,6 +74,7 @@ export const ITX_TYPES_SOURCE = `/**
  * method that already checked you.
  */
 export interface UnauthenticatedOs {
+  __describe(): Promise<Description>;
   authenticate(input: ItxAuthCredentials): Promise<Session>;
 }
 
@@ -58,18 +87,21 @@ export interface UnauthenticatedOs {
  * auth can reach them.
  */
 export interface Session {
-  /** Deployment-wide integration ingress (admin/internal only). */
-  integrations: SessionIntegrations;
+  /** Includes \`principal\` — who this session is (subsumes the old whoami()). */
+  __describe(): Promise<Description & { principal: string }>;
   projects: ProjectCollection;
   repos: RepoCollection;
   streams: StreamCollection;
-  whoami(): string;
 }
 
 /** Catalog of projects reachable from a {@link Session}. */
 export interface ProjectCollection {
-  get(projectId: string): Promise<Itx>;
-  create(args: { organizationSlug?: string; projectId?: string; slug: string }): Promise<Itx>;
+  get(projectId: string): Promise<ProjectRpcTarget>;
+  create(args: {
+    organizationSlug?: string;
+    projectId?: string;
+    slug: string;
+  }): Promise<ProjectRpcTarget>;
   /**
    * The session's projects, enriched engine-side. Scope is explicit:
    * - "mine" (default for user principals): the caller's own claims (plus
@@ -123,13 +155,19 @@ export type ProjectListEntry = {
  * always wins. If shadowable built-ins turn out to be needed often, we'd move
  * resolution behind the DO and accept the round trip; today we don't.
  */
-export interface Itx {
+export interface ProjectRpcTarget {
+  /**
+   * Identity + full capability inventory (subsumes the old describe()):
+   * \`projectId\`/\`name\`, every reachable capability, the children map, and the
+   * full public type surface in \`types\`.
+   */
+  __describe(): Promise<ProjectDescription>;
   ai: Ai;
   agents: AgentCollection;
   /**
    * This scope's own capability host: the durable capability table behind
    * this itx (\`provideCapability\`, \`revokeCapability\`, \`runScript\`,
-   * \`describe\`). Dynamic dotted calls (\`itx.foo.bar(...)\`) fall back to it.
+   * \`__describe\`). Dynamic dotted calls (\`itx.foo.bar(...)\`) fall back to it.
    */
   capabilityHost: CapabilityHost;
   /**
@@ -144,13 +182,10 @@ export interface Itx {
   revokeCapability(input: RevokeCapabilityInput): Promise<void>;
   /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */
   debug(): Promise<string>;
-  describe(): Promise<ProjectDescription>;
   egress: ProjectEgress;
   /** Read-only catalogue of known-good itx script snippets (\`list()\`, \`get({ id })\`). */
   examples: ItxExampleCatalog;
-  /** Gmail REST proxy for the project's connected Google account. */
-  gmail: GmailCapability;
-  /** Slack/Google connection status, OAuth start/complete, disconnect. */
+  /** Slack/Google connections + the connection-scoped API proxies (\`integrations.gmail\`, \`integrations.slack\`). */
   integrations: ProjectIntegrations;
   mcp: McpClientCollection;
   openapi: OpenApiCollection;
@@ -160,8 +195,6 @@ export interface Itx {
   /** Path-addressed sandboxes (\`itx.sandboxes.get("/sandboxes/cloudflare/whatever")\`). */
   sandboxes: SandboxCollection;
   secrets: SecretCollection;
-  /** Slack Web API proxy for the project's connected workspace (itx.slack.chat.postMessage(...)). */
-  slack: SlackCapability;
   streams: ProjectStreamCollection;
   worker: ProjectWorker;
   workers: DynamicWorkerCollection;
@@ -191,7 +224,7 @@ export type IntegrationProvider = "google" | "slack";
 
 /**
  * Slack Web API proxy. \`request\` is the explicit form; dotted Web API method
- * paths (\`itx.slack.chat.postMessage({...})\`) resolve through the dynamic
+ * paths (\`itx.integrations.slack.chat.postMessage({...})\`) resolve through the dynamic
  * path-call fallback onto \`invokeCapability\`.
  */
 export interface SlackCapability {
@@ -210,7 +243,7 @@ export type GmailRequestInput = {
   query?: Record<string, boolean | number | string | null | undefined>;
 };
 
-/** Gmail REST proxy (\`itx.gmail.request({ path: "/users/me/messages" })\`). */
+/** Gmail REST proxy (\`itx.integrations.gmail.request({ path: "/users/me/messages" })\`). */
 export interface GmailCapability {
   request(input: GmailRequestInput): Promise<{
     data: unknown;
@@ -231,8 +264,18 @@ export type CompleteConnectResult =
   | { callbackUrl: string | null; ok: true }
   | { callbackUrl: string | null; error: string; ok: false };
 
-/** Project-scoped integration management (connection status, OAuth, disconnect). */
+/**
+ * Project-scoped integration management (connection status, OAuth, disconnect)
+ * plus the connection-scoped API proxies: \`integrations.gmail\` and
+ * \`integrations.slack\` live here because they only work through the project's
+ * connected accounts.
+ */
 export interface ProjectIntegrations {
+  __describe(): Promise<Description>;
+  /** Gmail REST proxy for the project's connected Google account. */
+  gmail: GmailCapability;
+  /** Slack Web API proxy for the connected workspace (\`integrations.slack.chat.postMessage(...)\`). */
+  slack: SlackCapability;
   completeGoogleConnect(input: {
     code: string;
     state: string;
@@ -258,15 +301,6 @@ export type RouteSlackWebhookResult =
   | { ok: true; projectId: string }
   | { ignored: "team-not-claimed"; ok: true };
 
-/** Deployment-wide integration ingress: webhook routing across projects. */
-export interface SessionIntegrations {
-  routeSlackWebhook(input: {
-    headers: { slackEventId: string | null; slackRequestTimestamp: string | null };
-    payload: Record<string, unknown>;
-    teamId: string;
-  }): Promise<RouteSlackWebhookResult>;
-}
-
 /** Agent catalog within one project. */
 export interface AgentCollection {
   get(path: string): Agent;
@@ -275,7 +309,9 @@ export interface AgentCollection {
 
 /** Agent capability surface for message loops and agent-local dynamic tools. */
 export interface Agent {
-  /** The agent scope's own capability host (provide/revoke/runScript/describe). */
+  /** Includes \`whoami\` (\`"agent <projectId>:<agentPath>"\`), \`projectId\`, \`agentPath\`. */
+  __describe(): Promise<Description & { agentPath: string; projectId: string; whoami: string }>;
+  /** The agent scope's own capability host (provide/revoke/runScript/__describe). */
   capabilityHost: CapabilityHost;
   /** Shortcut for \`capabilityHost.provideCapability\` (mounts on THIS agent's scope). */
   provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;
@@ -298,7 +334,6 @@ export interface Agent {
     /** How long to wait for the reply. Defaults to 45s. */
     timeoutMs?: number;
   }): Promise<StreamEvent>;
-  whoami(): string;
 }
 
 /** Stream catalog for either a project or the deployment-wide global scope. */
@@ -537,7 +572,8 @@ export interface ProjectEgress {
   intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;
 }
 
-export type ProjectDescription = {
+/** What a project itx's \`__describe()\` returns: the Description convention plus identity and the capability inventory. */
+export type ProjectDescription = Description & {
   capabilities: CapabilityDescription[];
   name: string;
   projectId: string;
@@ -615,14 +651,14 @@ export type ItxExampleWithCode = ItxExampleSummary & { code: string };
  * The host surface for one capability scope: the durable dynamic-capability
  * table and script journal at one path inside a project (backed by one
  * CapabilityHostDurableObject). Mounting is always local to the host's own
- * scope; reads (\`invokeCapability\`, \`describe\`) chain up through
+ * scope; reads (\`invokeCapability\`, \`__describe\`) chain up through
  * enclosing scopes, so a project-root mount is visible from every scope.
  */
 export interface CapabilityHost {
+  /** Includes \`capabilities\`: everything reachable at this scope — own mounts plus inherited ones, tagged with their declaring scope. */
+  __describe(): Promise<Description & { capabilities: CapabilityDescription[]; path: string }>;
   /** The scope path this host fronts: \`"/"\` is the project root, \`/agents/bla\` an agent. */
   path: string;
-  /** Everything reachable at this scope — own mounts plus inherited ones, each tagged with its declaring scope. */
-  describe(): Promise<CapabilityDescription[]>;
   /** Explicit dynamic dispatch; the dotted-path fallback (\`itx.foo.bar(...)\`) compiles to exactly this call. */
   invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
   provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;

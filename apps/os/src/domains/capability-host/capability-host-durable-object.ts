@@ -26,7 +26,7 @@ import {
 /**
  * One capability scope: the durable dynamic-capability table and script
  * journal at one `{projectId, path}`. `provideCapability` always mounts here;
- * `invokeCapability`/`describe` chain up to the enclosing scope's
+ * `invokeCapability`/`describeCapabilities` chain up to the enclosing scope's
  * host on a local miss.
  */
 export class CapabilityHostDurableObject extends DurableObject<Env> {
@@ -90,7 +90,7 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
     // the DO's self-referential stub type (TS2589); a thin forwarder keeps it shallow.
     return {
       invokeCapability: (input) => parent.invokeCapability(input),
-      describe: () => parent.describe(),
+      describeCapabilities: () => parent.describeCapabilities(),
     };
   }
 
@@ -122,7 +122,7 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
     return this.#capabilityHostProcessor.runScript(code);
   }
 
-  describe(): Promise<CapabilityDescription[]> {
-    return this.#capabilityHostProcessor.describe();
+  describeCapabilities(): Promise<CapabilityDescription[]> {
+    return this.#capabilityHostProcessor.describeCapabilities();
   }
 }

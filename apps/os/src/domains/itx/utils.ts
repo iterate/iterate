@@ -10,6 +10,7 @@ type InvokeCapabilityTarget = {
 };
 
 const RESERVED_DYNAMIC_PATH_SEGMENTS: ReadonlySet<string> = new Set([
+  "__describe",
   "__defineGetter__",
   "__defineSetter__",
   "__lookupGetter__",
@@ -107,6 +108,24 @@ export function itxEntrypointBinding(exports: unknown, props: ItxEntrypointProps
 }
 
 /**
+ * Shape helper for the `__describe()` convention (see `Description` in
+ * types.ts): fills the always-present fields so every node returns
+ * `{ instructions, types, children, ... }` even before it has real content.
+ * Deliberately dumb — each node hand-writes its description; this is the
+ * anchor the future transitive (parent-composes-children) mechanism hangs off.
+ */
+export function describeNode<Extras extends object>(
+  input: {
+    instructions: string;
+    types?: string;
+    children?: Record<string, string>;
+    parent?: string;
+  } & Extras,
+): { instructions: string; types: string; children: Record<string, string> } & Extras {
+  return { children: {}, types: "", ...input };
+}
+
+/**
  * Groups an authenticated child stub with the parent stubs that keep it alive.
  *
  * Cap'n Web callers often want `using project = connectItx({ projectId })`, but
@@ -159,26 +178,44 @@ export function rejectBuiltinCollision(guards: readonly object[], path: string[]
  * performs one explicit invokeCapability({ path, args }) call.
  */
 export function createInvokeCapabilityPathProxy(
-  target: InvokeCapabilityTarget,
+  invoker: InvokeCapabilityTarget,
   path: string[] = [],
   isReserved = isReservedDynamicPathSegment,
 ): unknown {
   const valueFor = (key: string) =>
-    createInvokeCapabilityPathProxy(target, [...path, key], isReserved);
+    createInvokeCapabilityPathProxy(invoker, [...path, key], isReserved);
 
   return new Proxy(function () {}, {
     apply(_target, _thisArg, args) {
-      return target.invokeCapability({ args: [...args], path });
+      return invoker.invokeCapability({ args: [...args], path });
     },
     get(target, key, receiver) {
       if (typeof key === "symbol") return Reflect.get(target, key, receiver);
+      // `__describe` works on dynamic paths too: the capability host answers it
+      // from the mount's durable metadata (instructions/types recorded at
+      // provide time), so discovery never dials the live target.
+      if (key === "__describe") {
+        return () => invoker.invokeCapability({ args: [], path: [...path, "__describe"] });
+      }
       if (isReserved(key)) return undefined;
       return valueFor(key);
     },
     getOwnPropertyDescriptor(target, key) {
       const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
       if (descriptor) return descriptor;
-      if (typeof key === "symbol" || isReserved(key)) return undefined;
+      if (typeof key === "symbol") return undefined;
+      // `__describe` is reserved as a MOUNT name but must be traversable here —
+      // Cap'n Web probes own descriptors before reading a segment, so without
+      // this the get-trap special case above is unreachable over RPC.
+      if (key === "__describe") {
+        return {
+          configurable: true,
+          enumerable: true,
+          value: () => invoker.invokeCapability({ args: [], path: [...path, "__describe"] }),
+          writable: false,
+        };
+      }
+      if (isReserved(key)) return undefined;
       // Cap'n Web's server-side path traversal probes own descriptors before
       // reading a segment. Dynamic roots need to look discoverable here so
       // calls like project.slack.chat.postMessage(...) reach the apply trap.
@@ -191,6 +228,7 @@ export function createInvokeCapabilityPathProxy(
     },
     has(target, key) {
       if (typeof key === "symbol") return key in target;
+      if (key === "__describe") return true;
       return !isReserved(key);
     },
   });

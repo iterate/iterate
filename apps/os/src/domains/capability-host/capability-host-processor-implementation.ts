@@ -9,7 +9,7 @@ import type {
   CapabilityRecord,
   CapabilityHost,
   JsonValue,
-  Itx,
+  ProjectRpcTarget,
   RevokeCapabilityInput,
   StatelessDynamicWorkerRef,
   StreamEvent,
@@ -92,14 +92,14 @@ function resolveLongestPrefix(records: CapabilityRecord[], path: string[]) {
  */
 export type ParentCapabilityHost = {
   invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
-  describe(): Promise<CapabilityDescription[]>;
+  describeCapabilities(): Promise<CapabilityDescription[]>;
 };
 
 export class CapabilityHostProcessor extends StreamProcessor<
   typeof CapabilityHostProcessorContract
 > {
   readonly contract = CapabilityHostProcessorContract;
-  #itx: Itx;
+  #itx: ProjectRpcTarget;
   #path: string;
   #workerRunner: DynamicWorkerRunner;
   #parent: ParentCapabilityHost | undefined;
@@ -107,7 +107,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
 
   constructor(
     args: StreamProcessorConstructorArgs<typeof CapabilityHostProcessorContract, object> & {
-      itx: Itx;
+      itx: ProjectRpcTarget;
       path: string;
       workerRunner: DynamicWorkerRunner;
       // The enclosing scope, or undefined at the project root ("/"). Present for
@@ -293,6 +293,23 @@ export class CapabilityHostProcessor extends StreamProcessor<
       if (this.#parent) return await this.#parent.invokeCapability({ args, path });
       throw new Error(`no capability "${path.join(".")}"`);
     }
+    // `__describe` on a mounted capability is answered HERE, from the mount's
+    // durable metadata (instructions/types recorded at provide time) — the
+    // live target is never dialed. This is what makes discovery work on
+    // session-bound live mounts whose provider is offline, and it is the first
+    // rung of the transitive-description ladder.
+    if (path[path.length - 1] === "__describe") {
+      const { record } = hit;
+      const at = path.slice(0, -1);
+      return {
+        instructions:
+          record.instructions ??
+          `A dynamic ${record.type} capability mounted at "${record.path.join(".")}".`,
+        types: record.types ?? "",
+        children: {},
+        parent: `the capability host at scope "${this.#path}" (mounted at "${record.path.join(".")}"${at.length > record.path.length ? `; you asked about the nested path "${at.join(".")}"` : ""})`,
+      };
+    }
     if (hit.record.type === "itx-expression") {
       const evaluated = await evaluateItxExpression(this.#itx, hit.record.expression);
       const provider = await normalizeCapabilityProvider(evaluated, hit.record);
@@ -310,7 +327,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
   // declared at. A nearer scope shadows a farther one at the same path (same rule
   // as `resolveLongestPrefix` above), so the caller — usually an LLM deciding what
   // it can invoke — sees exactly one entry per reachable path and where it lives.
-  async describe(): Promise<CapabilityDescription[]> {
+  async describeCapabilities(): Promise<CapabilityDescription[]> {
     const local: CapabilityDescription[] = this.state.capabilities.map((record) => ({
       instructions: record.instructions,
       path: record.path,
@@ -321,7 +338,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
     }));
     if (!this.#parent) return local;
     const shadowed = new Set(local.map((c) => JSON.stringify(c.path)));
-    const inherited = await this.#parent.describe();
+    const inherited = await this.#parent.describeCapabilities();
     return [...local, ...inherited.filter((c) => !shadowed.has(JSON.stringify(c.path)))];
   }
 

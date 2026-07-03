@@ -33,7 +33,7 @@ export const itxTypesDeclaration: string = ITX_TYPES_SOURCE;
  * `ExecutionContext` — the editor's lib is es2022 + dom), and global aliases
  * so snippets can name the types without importing them.
  *
- * The REPL handle is typed `Session & Itx` — the same pragmatic intersection
+ * The REPL handle is typed `Session & ProjectRpcTarget` — the same pragmatic intersection
  * `~/itx/itx-react.tsx` uses: a project REPL holds the project itx, the
  * global/admin REPL holds the Session catalog, and a wrong call for the
  * context fails at runtime exactly like a missing capability would. Dynamic
@@ -70,7 +70,7 @@ declare global {
   // The design-of-record types, exposed globally so snippets can annotate
   // with them without an import. Shapes live in ./itx-types.ts only.
   type Session = itxTypes.Session;
-  type Itx = itxTypes.Itx;
+  type ProjectRpcTarget = itxTypes.ProjectRpcTarget;
   type Agent = itxTypes.Agent;
   type AgentChat = itxTypes.AgentChat;
   type Stream = itxTypes.Stream;
@@ -103,7 +103,7 @@ declare global {
    * project itx; the global/admin REPL holds the Session catalog. Awaiting is
    * always allowed: over Cap'n Web every member resolves as a promise.
    */
-  const itx: itxTypes.Session & itxTypes.Itx;
+  const itx: itxTypes.Session & itxTypes.ProjectRpcTarget;
   /**
    * Script parameters — always in scope, so the catalogue examples
    * (src/itx/examples.ts) run unchanged in every runtime. Assign your own

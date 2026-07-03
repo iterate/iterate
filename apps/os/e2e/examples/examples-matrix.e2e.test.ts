@@ -64,7 +64,7 @@ function ensureMatrixProject(): Promise<{ projectId: string }> {
   matrixSetupPromise ??= (async () => {
     using itx = connectGlobal();
     using project = itx.projects.create({ slug: PROJECT_SLUG });
-    const { projectId } = await project.describe();
+    const { projectId } = await project.__describe();
     await bakeProjectWorkerRunner({
       examples: MATRIX_EXAMPLES.filter((example) => example.runtimes.includes("project-worker")),
       projectId,

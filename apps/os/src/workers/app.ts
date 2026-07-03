@@ -27,7 +27,7 @@ export default {
     // https://developers.cloudflare.com/workers/runtime-apis/bindings/#how-bindings-work
     const config = parseConfig(env);
 
-    // Itx lanes (local dev talks to this worker directly, so the
+    // itx lanes (local dev talks to this worker directly, so the
     // forward lives here as well as in the ingress worker): the capnweb
     // surface + fixtures + `/prj_` path lanes, and project platform hosts.
     const nextRequest = apiWorkerRequest({ config, request });
