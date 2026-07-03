@@ -191,6 +191,15 @@ describe("minimal web-chat agent processors", () => {
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
       'itx.integrations.google["<connection>"].gmail.request',
     );
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("PROJECT REPO EDITS");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
+      'const repo = itx.repos.get(vars.repoPath ?? "/")',
+    );
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
+      "repo.edit({ path, message, oldString, newString })",
+    );
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("repo-read-file");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("repo-edit-file");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain('path: "/users/me/messages"');
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("Do not tell the user you lack inbox access");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).not.toContain('path: "/gmail/v1/users/me/messages"');

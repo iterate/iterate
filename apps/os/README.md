@@ -163,7 +163,7 @@ doppler run --project os --config dev -- sh -lc '
     --method tools/call \
     --tool-name exec_js \
     --tool-arg project=<project-slug> \
-    --tool-arg "code=async (itx) => { return await itx.describe(); }" \
+    --tool-arg "code=async (itx) => { return await itx.__describe(); }" \
     --header "Authorization: Bearer $APP_CONFIG_ADMIN_API_SECRET"
 '
 ```

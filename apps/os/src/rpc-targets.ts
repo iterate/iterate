@@ -294,10 +294,11 @@ async function requestRepoCreate(input: {
 class RepoRpcTarget extends RpcTarget implements Repo {
   async __describe() {
     return describeNode({
-      instructions: `A git repo (over Cloudflare Artifacts) at path "${this.props.path}": readFile/listFiles/commitFiles, plus create() for first use.`,
+      instructions: `A git repo (over Cloudflare Artifacts) at path "${this.props.path}": readFile/listFiles/commitFiles/edit, plus create() for first use. For coding-agent file changes that do not need a sandbox, readFile then edit is the default targeted workflow; use commitFiles for new files or batch/full-file writes.`,
       children: {
         commitFiles: "Commit a batch of file changes ({ message, changes }).",
         create: "Create the repo if it does not exist yet.",
+        edit: "Replace an exact string in one file and commit it; oldString must match once unless replaceAll is true.",
         listFiles: "List file paths.",
         readFile: "Read one file ({ path }).",
         whoami: "Repo identity string (debug).",
@@ -341,6 +342,10 @@ class RepoRpcTarget extends RpcTarget implements Repo {
 
   commitFiles(input: Parameters<Repo["commitFiles"]>[0]) {
     return this.#durableObjectStub.commitFiles(input);
+  }
+
+  edit(input: Parameters<Repo["edit"]>[0]) {
+    return this.#durableObjectStub.edit(input);
   }
 
   listFiles() {

@@ -944,10 +944,10 @@ describe("compileBangCommand", () => {
       compileBangCommand({
         channel: "C1",
         connection: "nustom",
-        message: "<@U1> !describe",
+        message: "<@U1> !__describe",
         threadTs: "1.2",
       })?.code,
-    ).toContain("await itx.describe()");
+    ).toContain("await itx.__describe()");
   });
 
   it("returns null for ordinary messages", () => {

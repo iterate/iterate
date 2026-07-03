@@ -164,6 +164,27 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       });
     },
   },
+  "repo-read-file": {
+    assert: (result, _ctx, expect) => {
+      expect(result).toMatchObject({
+        exists: true,
+        path: "README.md",
+      });
+      expect((result as { commitOid: string; preview: string }).commitOid).toMatch(/^[0-9a-f]+$/);
+      expect((result as { preview: string }).preview.length).toBeGreaterThan(0);
+    },
+  },
+  "repo-edit-file": {
+    vars: ({ marker }) => ({ path: `notes/edit-example-${marker}.md` }),
+    assert: (result, { marker }, expect) => {
+      expect(result).toEqual({
+        before: "# Edit example\n\nstatus: draft\n",
+        after: "# Edit example\n\nstatus: reviewed\n",
+        changedPaths: [`notes/edit-example-${marker}.md`],
+        occurrenceCount: 1,
+      });
+    },
+  },
   "secrets-lifecycle": {
     vars: ({ marker }) => ({ note: marker, secretPath: `/secrets/example-${marker}` }),
     assert: (result, _ctx, expect) => {
