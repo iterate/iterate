@@ -28,7 +28,9 @@ export function shouldUseTestOtp(email: string) {
   if (atIndex <= 0) {
     return false;
   }
-  return email.slice(0, atIndex).toLowerCase().endsWith("+test");
+  const localPart = email.slice(0, atIndex).toLowerCase();
+  const domain = email.slice(atIndex + 1).toLowerCase();
+  return localPart.endsWith("+test") && domain === "nustom.com";
 }
 
 export function getEmailOtpSenderAddress(senderDomain: string) {
