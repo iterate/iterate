@@ -8,7 +8,7 @@
 export type ServerPreset = { label: string; baseUrl: string };
 
 export const SERVER_PRESETS: ServerPreset[] = [
-  { label: "PR preview", baseUrl: "https://os.iterate-preview-5.com" },
+  { label: "PR preview", baseUrl: "https://os.iterate-preview-8.com" },
   { label: "Production", baseUrl: "https://os.iterate.com" },
   { label: "Local dev", baseUrl: "http://localhost:65339" },
 ];
