@@ -842,8 +842,12 @@ export type WorkerFileSource =
   | {
       type: "repo";
       repoPath: string;
-      /** Defaults to the repo's default branch when omitted. */
-      ref?: { branch: string } | { commitOid: string };
+      /**
+       * Defaults to the repo's default branch when omitted. A pinned commit
+       * may name the branch it lives on — clones are single-branch, so an
+       * off-default-branch commit is unreachable without it.
+       */
+      ref?: { branch: string } | { commitOid: string; branch?: string };
       include?: string[];
       exclude?: string[];
     };

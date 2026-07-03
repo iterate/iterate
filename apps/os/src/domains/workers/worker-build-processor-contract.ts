@@ -31,9 +31,20 @@ export const WorkerBuildProcessorContract = defineProcessorContract({
   description:
     "Materializes dynamic worker sources through Cloudflare's worker bundler into the KV artifact cache, deduped by deterministic build key.",
   stateSchema: z.object({
-    // buildKey -> requestedAt (event createdAt). Present while a build is in
-    // flight; terminal events delete the entry, so the fold stays small.
-    pendingBuilds: z.record(z.string(), z.string()).default({}),
+    // buildKey -> the claim that owns the in-flight build. The REDUCER assigns
+    // claims (first request wins; a request after the stale window re-claims),
+    // and processEvent only builds when its own event holds the claim — one
+    // deterministic owner per key instead of racing side-effect heuristics.
+    // Terminal events delete the entry, so the fold stays small.
+    pendingBuilds: z
+      .record(
+        z.string(),
+        z.object({
+          claimedAtOffset: z.number(),
+          requestedAt: z.string(),
+        }),
+      )
+      .default({}),
   }),
   events: {
     "events.iterate.com/worker-build/requested": {

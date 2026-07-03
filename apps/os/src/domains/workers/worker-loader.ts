@@ -202,9 +202,8 @@ async function resolveFileSource({
   }
 
   if (source.files.ref !== undefined && "commitOid" in source.files.ref) {
-    // No branch known for a caller-pinned commit: snapshot resolution walks
-    // the default branch's history, so pinning only works for commits on it.
     return {
+      branch: source.files.ref.branch,
       commitOid: source.files.ref.commitOid,
       exclude: source.files.exclude,
       include: source.files.include,

@@ -84,7 +84,7 @@ describe("WorkerBuildProcessor", () => {
       events: [requestedEvent({ buildKey: "key-1", offset: 1 })],
       streamMaxOffset: 1,
     });
-    expect(processor.state.pendingBuilds["key-1"]).toBeDefined();
+    expect(processor.state.pendingBuilds["key-1"]?.claimedAtOffset).toBe(1);
 
     await settle();
     expect(appended).toEqual([
@@ -112,7 +112,7 @@ describe("WorkerBuildProcessor", () => {
     expect(appended).toHaveLength(1);
   });
 
-  it("treats an old pending entry as dead and retries the build", async () => {
+  it("treats an old pending claim as dead and retries the build", async () => {
     const { appended, artifactStore, processor, settle } = harness();
     await artifactStore.put(artifact);
 
@@ -133,6 +133,32 @@ describe("WorkerBuildProcessor", () => {
     expect(appended[1]).toMatchObject({
       type: "events.iterate.com/worker-build/completed",
     });
+  });
+
+  it("keeps the original claim when retries arrive inside the stale window", async () => {
+    // Regression: refreshing the pending timestamp on every request would let
+    // sub-window retries push the stale gate out forever — a dead build could
+    // never be retried (livelock). The claim must keep the FIRST timestamp.
+    const { appended, artifactStore, processor, settle } = harness();
+    await artifactStore.put(artifact);
+
+    const firstRequestedAt = new Date(Date.now() - 6 * 60_000).toISOString();
+    const insideWindow = new Date(Date.now() - 5 * 60_000).toISOString();
+    await processor.ingest({
+      events: [
+        requestedEvent({ buildKey: "key-1", createdAt: firstRequestedAt, offset: 1 }),
+        // Arrives 60s after the first — inside the stale window, so it must
+        // neither build nor refresh the claim...
+        requestedEvent({ buildKey: "key-1", createdAt: insideWindow, offset: 2 }),
+        // ...which is what lets THIS one (past the window measured from the
+        // ORIGINAL claim) retry.
+        requestedEvent({ buildKey: "key-1", offset: 3 }),
+      ],
+      streamMaxOffset: 3,
+    });
+    await settle();
+    expect(appended).toHaveLength(2);
+    expect(processor.state.pendingBuilds["key-1"]?.claimedAtOffset).toBe(3);
   });
 
   it("clears pending state when terminal events fold", async () => {

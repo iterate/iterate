@@ -23,7 +23,10 @@ const WorkerFileSource = z.discriminatedUnion("type", [
     ref: z
       .union([
         z.strictObject({ branch: z.string().min(1) }),
-        z.strictObject({ commitOid: z.string().regex(/^[0-9a-f]{40}$/) }),
+        z.strictObject({
+          branch: z.string().min(1).optional(),
+          commitOid: z.string().regex(/^[0-9a-f]{40}$/),
+        }),
       ])
       .optional(),
     repoPath: z.string(),

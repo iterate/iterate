@@ -24,12 +24,16 @@ type RepoSnapshotResolver = (source: {
 }) => Promise<RepoFilesSnapshot>;
 
 /**
- * A crashed or evicted in-flight build leaves its `pendingBuilds` entry
- * behind. A later `requested` for the same key older than this threshold is
- * treated as a legitimate retry instead of a duplicate, so one dead isolate
- * cannot wedge a build key forever.
+ * A crashed or evicted in-flight build leaves its `pendingBuilds` claim
+ * behind. A `requested` event arriving this long after the claim re-claims
+ * the key and retries, so one dead isolate cannot wedge a build key forever.
+ *
+ * Deliberately LONGER than the resolver's 120s build-wait timeout
+ * (worker-loader.ts): a caller that times out and re-requests while a slow
+ * cold build (npm installs) is still legitimately running must dedupe against
+ * it, not start a duplicate bundler run.
  */
-const STALE_PENDING_BUILD_MS = 120_000;
+const STALE_PENDING_BUILD_MS = 300_000;
 
 /**
  * Owns the build lifecycle on the ITX scope stream named by
@@ -60,13 +64,29 @@ export class WorkerBuildProcessor extends StreamProcessor<typeof WorkerBuildProc
     state,
   }: Parameters<StreamProcessor<typeof WorkerBuildProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
-      case "events.iterate.com/worker-build/requested":
+      case "events.iterate.com/worker-build/requested": {
+        // First request claims the key; later requests are concurrent callers
+        // converging on the in-flight build and leave the claim alone — a
+        // refreshed timestamp would keep pushing the stale window out and a
+        // dead build could never be retried. Only a request arriving after
+        // the stale window re-claims (that request IS the retry).
+        const existing = state.pendingBuilds[event.payload.buildKey];
+        if (
+          existing !== undefined &&
+          Date.parse(event.createdAt) - Date.parse(existing.requestedAt) < STALE_PENDING_BUILD_MS
+        ) {
+          return state;
+        }
         return {
           pendingBuilds: {
             ...state.pendingBuilds,
-            [event.payload.buildKey]: event.createdAt,
+            [event.payload.buildKey]: {
+              claimedAtOffset: event.offset,
+              requestedAt: event.createdAt,
+            },
           },
         };
+      }
       case "events.iterate.com/worker-build/completed":
       case "events.iterate.com/worker-build/failed": {
         const pendingBuilds = { ...state.pendingBuilds };
@@ -80,24 +100,15 @@ export class WorkerBuildProcessor extends StreamProcessor<typeof WorkerBuildProc
 
   protected override processEvent({
     event,
-    previousState,
     runInBackground,
+    state,
   }: Parameters<
     StreamProcessor<typeof WorkerBuildProcessorContract>["processEvent"]
   >[0]): undefined {
     if (event.type !== "events.iterate.com/worker-build/requested") return;
 
-    // Dedupe by build key: a request while the same key is already pending is
-    // a concurrent caller converging on the in-flight build — unless that
-    // pending entry is old enough to be a dead build, in which case this
-    // request IS the retry.
-    const pendingSince = previousState.pendingBuilds[event.payload.buildKey];
-    if (
-      pendingSince !== undefined &&
-      Date.parse(event.createdAt) - Date.parse(pendingSince) < STALE_PENDING_BUILD_MS
-    ) {
-      return;
-    }
+    // The fold owns dedupe: build only when THIS event's fold claimed the key.
+    if (state.pendingBuilds[event.payload.buildKey]?.claimedAtOffset !== event.offset) return;
 
     runInBackground(() => this.#build(event.payload, event.offset));
   }
