@@ -81,6 +81,10 @@ export function loadResolvedWorker({
       : `durable-object:${ref.className}`;
   const cacheKey = [
     "worker-loader",
+    // The hosting worker's own name. Loader caches are shared across parent
+    // workers when they run in one workerd (local dev), and a cached isolate
+    // only works for the parent whose loopback stubs it was created with.
+    env.WORKER_SELF,
     projectId,
     ref.path,
     workerScopeKey,
