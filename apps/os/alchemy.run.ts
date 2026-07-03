@@ -70,8 +70,7 @@ if (process.argv.includes("--park")) {
   process.exit(0);
 }
 
-const resolvedAuthIssuer =
-  process.env.APP_CONFIG_ITERATE_AUTH__ISSUER ?? process.env.ITERATE_OAUTH_ISSUER;
+const resolvedAuthIssuer = process.env.APP_CONFIG_ITERATE_AUTH__ISSUER;
 
 // A static JWKS lets the worker verify auth JWTs without any runtime
 // roundtrip to the auth worker, including on cold isolate starts. Fetch it
@@ -117,7 +116,7 @@ async function resolveStaticAuthJwks(issuer: string | undefined) {
   }
   const issuerIsLoopback = ["localhost", "127.0.0.1", "::1"].includes(issuerUrl.hostname);
 
-  const explicit = process.env.APP_CONFIG_ITERATE_AUTH__JWKS ?? process.env.ITERATE_AUTH_JWKS;
+  const explicit = process.env.APP_CONFIG_ITERATE_AUTH__JWKS;
   if (explicit && !issuerIsLoopback) return withForgePublicKey(explicit);
 
   try {
@@ -203,17 +202,13 @@ function withForgePublicKey(jwksJson: string) {
 const env: Record<string, string | undefined> = {
   ...process.env,
   APP_CONFIG_ITERATE_AUTH__ISSUER: resolvedAuthIssuer,
-  APP_CONFIG_ITERATE_AUTH__CLIENT_ID:
-    process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID ?? process.env.ITERATE_OAUTH_CLIENT_ID,
-  APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET:
-    process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET ?? process.env.ITERATE_OAUTH_CLIENT_SECRET,
+  APP_CONFIG_ITERATE_AUTH__CLIENT_ID: process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID,
+  APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET: process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET,
   APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED:
     process.env.APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED ??
-    process.env.VITE_ENABLE_EMAIL_OTP_SIGNIN ??
     (process.env.ALCHEMY_STAGE?.startsWith("dev") ? "true" : undefined),
   APP_CONFIG_ITERATE_AUTH__JWKS: await resolveStaticAuthJwks(resolvedAuthIssuer),
-  APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN:
-    process.env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN ?? process.env.ITERATE_AUTH_SERVICE_TOKEN,
+  APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN: process.env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN,
 };
 
 // Fully-local dev: no Cloudflare resources. Picks a free port and writes

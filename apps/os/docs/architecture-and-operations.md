@@ -177,12 +177,12 @@ managed by `scripts/sync-auth-clients.ts` (`pnpm auth:sync-clients`). For each
 target Doppler config (`dev_<name>`, `preview_1`–`preview_9`, `prd`) it
 ensures two OAuth clients (web + MCP/CLI) via the auth contract's
 `internal.oauth.ensureClient`, then writes `APP_CONFIG_BASE_URL`,
-`APP_CONFIG_MCP__BASE_URL`, `APP_CONFIG_PROJECT_HOSTNAME_BASES`, and the
-`ITERATE_OAUTH_*` / `ITERATE_MCP_OAUTH_*` values back to Doppler. It also
-copies the live auth worker JWKS into `ITERATE_AUTH_JWKS` so the next OS deploy
+`APP_CONFIG_MCP__BASE_URL`, `APP_CONFIG_PROJECT_HOSTNAME_BASES`, and
+`APP_CONFIG_ITERATE_AUTH__*` values back to Doppler. It also copies the live
+auth worker JWKS into `APP_CONFIG_ITERATE_AUTH__JWKS` so the next OS deploy
 bakes keys that can verify tokens issued by the current auth worker.
 
-It requires `SERVICE_AUTH_TOKEN` (run through Doppler for the auth project).
+It requires `APP_CONFIG_SERVICE_AUTH_TOKEN` (run through Doppler for the auth project).
 `AUTH_CLIENT_SYNC_TARGETS` filters targets;
 `ROTATE_AUTH_CLIENT_SECRETS=1` rotates client secrets.
 

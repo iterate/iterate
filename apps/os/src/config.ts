@@ -105,9 +105,6 @@ export const AppConfig = z.object({
         .optional(),
     })
     .default({}),
-  /** Legacy deployment-wide Slack bot token fallback. New configs should set
-   * `integrations.slack.botToken` so each Slack app owns its own token. */
-  slackBotToken: redacted(z.string().trim().min(1)).optional(),
   typeIdPrefix: z
     .string()
     .trim()

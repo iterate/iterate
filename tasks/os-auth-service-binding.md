@@ -12,7 +12,8 @@ internet**: `apps/os/src/auth/auth-worker-service.ts` builds an HTTP oRPC client
 (`@iterate-com/auth-contract`) and calls `internal.project.bySlug`,
 `internal.project.createForOrganization`, `internal.project.mintProjectId`, and
 `internal.oauth.introspectAccessToken`, authenticating with a shared
-`x-iterate-service-token` (`SERVICE_AUTH_TOKEN` / `config.iterateAuth.serviceToken`).
+`x-iterate-service-token`
+(`APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN` / `config.iterateAuth.serviceToken`).
 
 Both workers live in the same Cloudflare account, so this hop can instead be a
 **[Workers RPC service binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/rpc/)** —

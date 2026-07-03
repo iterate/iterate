@@ -84,14 +84,14 @@ resulting session cookies, then let the OAuth flow complete:
    echo it:
 
    ```bash
-   export SECRET=$(doppler secrets get SERVICE_AUTH_TOKEN --project auth --config prd --plain)
+   export SECRET=$(doppler secrets get APP_CONFIG_SERVICE_AUTH_TOKEN --project auth --config prd --plain)
    curl -s -c /tmp/auth.txt -X POST https://auth.iterate.com/api/auth/sign-in/email \
      -H 'content-type: application/json' \
      --data "$(python3 -c 'import json,os;print(json.dumps({"email":"admin@nustom.com","password":os.environ["SECRET"]}))')"
    ```
 
    - email: `admin@nustom.com` (`BOOTSTRAP_ADMIN_EMAIL`)
-   - password: the auth worker's `SERVICE_AUTH_TOKEN` (Doppler `auth/prd`)
+   - password: the auth worker's `APP_CONFIG_SERVICE_AUTH_TOKEN` (Doppler `auth/prd`)
 
 2. **Inject the `__Secure-better-auth.session_{token,data}` cookies** into the
    browser (`AB cookies set --curl <json>`; the jar uses `#HttpOnly_` lines —

@@ -6,8 +6,7 @@
 // authorization header, so token material never leaves the secret DO's
 // substitution pipeline and every outbound attempt lands on the secret's
 // audit trail. When the project has no connected workspace, the deployment's
-// Slack integration `botToken` config is the fallback. The legacy top-level
-// `slackBotToken` is still accepted during the migration.
+// Slack integration `botToken` config is the fallback.
 
 import { itxEnv } from "../../env.ts";
 import { projectStub } from "../projects/egress.ts";
@@ -82,8 +81,7 @@ export async function callProjectSlackWebApi(input: {
 function readFallbackSlackBotToken(): string | null {
   try {
     const config = parseConfig(itxEnv);
-    const token =
-      config.integrations.slack?.botToken?.exposeSecret() ?? config.slackBotToken?.exposeSecret();
+    const token = config.integrations.slack?.botToken?.exposeSecret();
     return token && token.trim() !== "" ? token : null;
   } catch {
     return null;
