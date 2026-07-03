@@ -369,6 +369,10 @@ async function osWorker<B extends Bindings>(
       APP_CONFIG: ctx.app.local
         ? JSON.stringify(ctx.rawRuntimeConfig, null, 2)
         : alchemy.secret(JSON.stringify(ctx.rawRuntimeConfig, null, 2)),
+      // The worker's own name, for worker-loader cache keys (src/env.ts
+      // WORKER_SELF): local dev runs every itx worker inside one workerd whose
+      // loader cache is shared, so keys must be parent-worker-unique.
+      WORKER_SELF: name,
     },
     observability: ITERATE_WORKER_OBSERVABILITY,
     url: false,
