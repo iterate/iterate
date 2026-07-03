@@ -1,5 +1,5 @@
 ---
-status: ready
+status: implemented — awaiting native-build verification on a machine with Xcode, and review
 size: large
 base: mmkal/26/07/02/voice-itx-bridge (PR #1591 — merge it in regularly, another agent is active there)
 pr: https://github.com/iterate/iterate/pull/1605
