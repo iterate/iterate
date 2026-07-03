@@ -211,6 +211,20 @@ pnpm typecheck        # routes:check + tsgo
 (`queries/*.sql`, codegen'd into `.generated/`), and migrations. Regenerate
 after any schema/query edit.
 
+### Configuration
+
+Auth uses the same typed-config mechanism as apps/os. `src/config.ts` declares
+an `AppConfig` zod schema (`redacted()` secrets, `publicValue()` browser-safe
+fields); `alchemy.run.ts` calls the shared `initAlchemy()` which compiles
+`APP_CONFIG_*` Doppler vars (e.g. `APP_CONFIG_BETTER_AUTH_SECRET`,
+`APP_CONFIG_AUTH_APP_ORIGIN`) into a single `APP_CONFIG` worker binding. Server
+code reads `config.*` (from `server/env.ts`'s `parseConfig(env)`), never raw
+`env.*` — `env` now only carries the `DB` binding. `alchemy.run.ts` still
+accepts the legacy flat names (`BETTER_AUTH_SECRET`, `VITE_AUTH_APP_ORIGIN`, …)
+as a `?? <legacy>` fallback, and the browser bundle's own origin stays a
+build-time `import.meta.env.VITE_AUTH_APP_ORIGIN` (a Vite-inlined client
+concern, like os's `VITE_APP_STAGE`) — so both names live in Doppler.
+
 ## Deployment
 
 `alchemy.run.ts` runs, in order: D1 migrations + the admin-seed SQL, the worker,
