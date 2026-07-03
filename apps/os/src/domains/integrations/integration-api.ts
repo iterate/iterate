@@ -89,10 +89,12 @@ async function handleOAuthCallback(input: {
     secret: requireAdminSecret(input.context),
   });
   const project = root.projects.get(unverified.projectId);
-  const result =
-    input.provider === "slack"
-      ? await project.integrations.completeSlackConnect({ code, state, userId })
-      : await project.integrations.completeGoogleConnect({ code, state, userId });
+  const result = await project.integrations.completeConnect({
+    code,
+    provider: input.provider,
+    state,
+    userId,
+  });
 
   if (!result.ok) {
     if (result.error.endsWith("_user_mismatch")) {

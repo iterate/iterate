@@ -1,4 +1,5 @@
 import { normalizePath } from "../durable-object-names.ts";
+import { BUILTIN_INTEGRATION_SLUGS } from "../integrations/utils.ts";
 
 type DisposableLike = {
   [Symbol.dispose]?(): void;
@@ -134,20 +135,24 @@ export function withOwnedRpcSession<T extends object>(stub: T, ...owned: Disposa
 }
 
 /**
+ * Built-in roots that are NAMESPACES: providing under them (depth >= 2) is the
+ * supported extension point, not a collision — EXCEPT under the names the
+ * namespace's own dispatch claims. `integrations` is the exemplar: built-in
+ * slugs (slack, google) dispatch in deployment code before the capability
+ * table is consulted, so a mount under them would be durable, journaled, and
+ * silently unreachable. Reject it loudly at provide time instead.
+ */
+const NAMESPACE_BUILTIN_ROOTS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["integrations", BUILTIN_INTEGRATION_SLUGS],
+]);
+
+/**
  * Guards `provideCapability` against shadowing the host's own surface: a
  * capability path's root segment may not be a reserved RPC segment nor an
- * existing builtin on the target RpcTarget (e.g. `streams`, `agents`). Runs in
- * the isolate because it inspects the RpcTarget instance, which the DO can't see.
+ * existing builtin on the target RpcTarget (e.g. `streams`, `agents`) — except
+ * inside namespace roots, per NAMESPACE_BUILTIN_ROOTS above. Runs in the
+ * isolate because it inspects the RpcTarget instance, which the DO can't see.
  */
-/**
- * Built-in roots that are NAMESPACES: providing under them (depth >= 2) is the
- * supported extension point, not a collision. `integrations` is the exemplar —
- * built-in integrations are explicit members of its RpcTarget, and everything
- * else mounts through the capability table at ["integrations", ...] (the
- * collection's own dynamic fallback forwards unknown names there).
- */
-const NAMESPACE_BUILTIN_ROOTS: ReadonlySet<string> = new Set(["integrations"]);
-
 export function rejectBuiltinCollision(target: object, path: string[]): void {
   const root = path[0];
   if (!root) return;
@@ -155,7 +160,16 @@ export function rejectBuiltinCollision(target: object, path: string[]): void {
     throw new Error(`cannot provide capability "${root}": it is a reserved ITX path segment`);
   }
   if (root in target) {
-    if (NAMESPACE_BUILTIN_ROOTS.has(root) && path.length >= 2) return;
+    const reservedChildren = NAMESPACE_BUILTIN_ROOTS.get(root);
+    if (reservedChildren && path.length >= 2) {
+      const child = path[1]!;
+      if (reservedChildren.has(child)) {
+        throw new Error(
+          `cannot provide capability "${root}.${child}": "${child}" is a built-in ${root} slug and would shadow deployment code`,
+        );
+      }
+      return;
+    }
     throw new Error(`cannot provide capability "${root}": it is already on this ITX target`);
   }
 }

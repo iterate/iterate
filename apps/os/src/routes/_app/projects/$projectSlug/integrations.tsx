@@ -66,6 +66,7 @@ function ProjectIntegrationsContent() {
           ...entry,
           status:
             entry.source === "builtin" &&
+            entry.connection !== null &&
             (entry.integration === "slack" || entry.integration === "google")
               ? await itx.integrations.getConnection({
                   connection: entry.connection,
@@ -155,7 +156,7 @@ function ProjectIntegrationsContent() {
                 entry={entry}
                 provider="slack"
                 disconnecting={disconnectSlack.isPending}
-                onDisconnect={() => disconnectSlack.mutate(entry.connection)}
+                onDisconnect={() => entry.connection && disconnectSlack.mutate(entry.connection)}
               />
             ))}
           </ItemContent>
@@ -184,7 +185,7 @@ function ProjectIntegrationsContent() {
                 entry={entry}
                 provider="google"
                 disconnecting={disconnectGoogle.isPending}
-                onDisconnect={() => disconnectGoogle.mutate(entry.connection)}
+                onDisconnect={() => entry.connection && disconnectGoogle.mutate(entry.connection)}
               />
             ))}
           </ItemContent>

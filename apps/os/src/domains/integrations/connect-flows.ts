@@ -145,7 +145,83 @@ export async function startOAuthFlow(input: {
 // OAuth completion (called from the app worker's callback routes)
 // ---------------------------------------------------------------------------
 
-export async function completeSlackConnect(input: {
+/**
+ * The one connect-completion verb: the app worker's OAuth callback route calls
+ * this provider-blind. Each provider contributes only its exchange half; the
+ * storage half is the shared {@link recordConnection}.
+ */
+export async function completeConnect(input: {
+  code: string;
+  config: AppConfig;
+  projectId: string;
+  provider: IntegrationProvider;
+  state: string;
+  userId: string | null;
+}): Promise<CompleteConnectResult> {
+  return input.provider === "slack"
+    ? await completeSlackConnect(input)
+    : await completeGoogleConnect(input);
+}
+
+/**
+ * The provider-invariant storage half of a connect, shared by every provider's
+ * exchange half and by admin/e2e seeding (which has a token but no OAuth
+ * code). Material travels by argument into Secret DOs — never onto journals.
+ */
+async function recordConnection(input: {
+  connection: string;
+  projectId: string;
+  slug: string;
+  /** Credential material, each written to its own Secret DO with an egress
+   * allowlist. Empty for providers whose tokens live on the journal
+   * (google's refresh flow needs raw material back — see google-tokens.ts). */
+  secrets: readonly { egressUrls: readonly string[]; material: string; path: string }[];
+  /** The connected fact, appended to /integrations/{slug}/{connection}. */
+  connectedEvent: { idempotencyKey?: string; payload: Record<string, unknown>; type: string };
+  /** Arm a webhook-router processor on the connection stream (providers that
+   * route inbound events). Connect time is THE arming point — connection
+   * streams are born here, not at project create. */
+  processorSubscription?: { idempotencyKey: string; processorSlug: string };
+  /** Claim this connection's routing key in a deployment-wide directory
+   * stream (providers with first-party webhook ingress). */
+  directoryClaim?: {
+    event: { idempotencyKey?: string; payload: Record<string, unknown>; type: string };
+    streamPath: string;
+  };
+}): Promise<void> {
+  const streamPath = integrationConnectionStreamPath(input.slug, input.connection);
+  for (const secret of input.secrets) {
+    await itxEnv.SECRET.getByName(
+      DurableObjectNameCodec.stringify({ projectId: input.projectId, path: secret.path }),
+    ).update({
+      egress: { urls: [...secret.egressUrls] },
+      material: secret.material,
+    });
+  }
+  await integrationStreamStub(input.projectId, streamPath).append(
+    ...(input.processorSubscription
+      ? [
+          buildDurableObjectProcessorSubscriptionConfiguredEvent({
+            durableObjectName: DurableObjectNameCodec.stringify({
+              projectId: input.projectId,
+              path: streamPath,
+            }),
+            idempotencyKey: input.processorSubscription.idempotencyKey,
+            processorSlug: input.processorSubscription.processorSlug,
+            subscriberType: "project" as const,
+          }),
+        ]
+      : []),
+    input.connectedEvent,
+  );
+  if (input.directoryClaim) {
+    await integrationStreamStub(null, input.directoryClaim.streamPath).append(
+      input.directoryClaim.event,
+    );
+  }
+}
+
+async function completeSlackConnect(input: {
   code: string;
   config: AppConfig;
   projectId: string;
@@ -217,12 +293,7 @@ export async function completeSlackConnect(input: {
   return { callbackUrl, ok: true };
 }
 
-/**
- * The storage half of a Slack connect, shared by the OAuth callback and by
- * admin/e2e seeding (which has a token but no OAuth code): store the bot
- * token as an egress-substituted secret, arm the webhook router subscription,
- * record the connected fact, and claim the team in the global directory.
- */
+/** Slack's storage half, expressed through the shared {@link recordConnection}. */
 async function recordSlackConnection(input: {
   accessToken: string;
   connection: string;
@@ -232,31 +303,18 @@ async function recordSlackConnection(input: {
   teamId: string;
   teamName: string;
 }): Promise<void> {
-  const streamPath = integrationConnectionStreamPath("slack", input.connection);
-  await itxEnv.SECRET.getByName(
-    DurableObjectNameCodec.stringify({
-      projectId: input.projectId,
-      path: slackBotTokenSecretPath(input.connection),
-    }),
-  ).update({
-    egress: { urls: ["https://slack.com"] },
-    material: input.accessToken,
-  });
-
-  await integrationStreamStub(input.projectId, streamPath).append(
-    // Arm the webhook router processor on this connection's stream. Connect
-    // time is THE arming point — connection streams are born here, not at
-    // project create.
-    buildDurableObjectProcessorSubscriptionConfiguredEvent({
-      durableObjectName: DurableObjectNameCodec.stringify({
-        projectId: input.projectId,
-        path: streamPath,
-      }),
-      idempotencyKey: `slack-router-subscription:${input.projectId}:${input.connection}`,
-      processorSlug: SlackProcessorContract.slug,
-      subscriberType: "project",
-    }),
-    {
+  await recordConnection({
+    connection: input.connection,
+    projectId: input.projectId,
+    slug: "slack",
+    secrets: [
+      {
+        egressUrls: ["https://slack.com"],
+        material: input.accessToken,
+        path: slackBotTokenSecretPath(input.connection),
+      },
+    ],
+    connectedEvent: {
       type: SLACK_CONNECTED_EVENT_TYPE,
       idempotencyKey: `slack:connected:${input.teamId}:${input.projectId}`,
       payload: {
@@ -269,21 +327,27 @@ async function recordSlackConnection(input: {
         teamName: input.teamName,
       },
     },
-  );
-
-  await integrationStreamStub(null, SLACK_TEAM_DIRECTORY_STREAM_PATH).append({
-    type: SLACK_TEAM_CLAIMED_EVENT_TYPE,
-    idempotencyKey: `slack-team-claimed:${input.teamId}:${input.projectId}`,
-    payload: {
-      connection: input.connection,
-      projectId: input.projectId,
-      teamId: input.teamId,
-      teamName: input.teamName,
+    processorSubscription: {
+      idempotencyKey: `slack-router-subscription:${input.projectId}:${input.connection}`,
+      processorSlug: SlackProcessorContract.slug,
+    },
+    directoryClaim: {
+      streamPath: SLACK_TEAM_DIRECTORY_STREAM_PATH,
+      event: {
+        type: SLACK_TEAM_CLAIMED_EVENT_TYPE,
+        idempotencyKey: `slack-team-claimed:${input.teamId}:${input.projectId}`,
+        payload: {
+          connection: input.connection,
+          projectId: input.projectId,
+          teamId: input.teamId,
+          teamName: input.teamName,
+        },
+      },
     },
   });
 }
 
-export async function completeGoogleConnect(input: {
+async function completeGoogleConnect(input: {
   code: string;
   config: AppConfig;
   projectId: string;
@@ -349,34 +413,37 @@ export async function completeGoogleConnect(input: {
     sanitizeConnectionName(userInfo.email?.split("@")[0] ?? "") ||
     `google-${sanitizeConnectionName(userInfo.id)}`;
   const scopes = tokenData.scope?.split(" ") ?? google.scopes;
-  await integrationStreamStub(
-    input.projectId,
-    integrationConnectionStreamPath("google", connection),
-  ).append({
-    type: GOOGLE_CONNECTED_EVENT_TYPE,
-    payload: {
-      connection,
-      email: userInfo.email,
-      encryptedAccessToken: await encryptSecretMaterial(
-        tokenData.access_token,
-        itxEnv.SECRET_ENCRYPTION_KEY,
-      ),
-      ...(tokenData.refresh_token
-        ? {
-            encryptedRefreshToken: await encryptSecretMaterial(
-              tokenData.refresh_token,
-              itxEnv.SECRET_ENCRYPTION_KEY,
-            ),
-          }
-        : {}),
-      expiresAt: tokenData.expires_in
-        ? new Date(Date.now() + tokenData.expires_in * 1000).toISOString()
-        : undefined,
-      googleUserId: userInfo.id,
-      name: userInfo.name,
-      picture: userInfo.picture,
-      projectId: input.projectId,
-      scopes,
+  await recordConnection({
+    connection,
+    projectId: input.projectId,
+    slug: "google",
+    secrets: [],
+    connectedEvent: {
+      type: GOOGLE_CONNECTED_EVENT_TYPE,
+      payload: {
+        connection,
+        email: userInfo.email,
+        encryptedAccessToken: await encryptSecretMaterial(
+          tokenData.access_token,
+          itxEnv.SECRET_ENCRYPTION_KEY,
+        ),
+        ...(tokenData.refresh_token
+          ? {
+              encryptedRefreshToken: await encryptSecretMaterial(
+                tokenData.refresh_token,
+                itxEnv.SECRET_ENCRYPTION_KEY,
+              ),
+            }
+          : {}),
+        expiresAt: tokenData.expires_in
+          ? new Date(Date.now() + tokenData.expires_in * 1000).toISOString()
+          : undefined,
+        googleUserId: userInfo.id,
+        name: userInfo.name,
+        picture: userInfo.picture,
+        projectId: input.projectId,
+        scopes,
+      },
     },
   });
 
@@ -503,8 +570,11 @@ export async function disconnectProvider(input: {
 
 /**
  * Lists the project's named integration connections by reading the project
- * root processor's stream catalogue: every `/integrations/{slack|google}/{connection}`
- * stream the project has created is one connection entry.
+ * root processor's stream catalogue: every `/integrations/<slug>/<connection>`
+ * stream the project has created is one connection entry — the path shape is
+ * the truth, deliberately not filtered to built-in slugs, so a provided
+ * integration that journals its facts there (e.g. webhooks landing on
+ * /integrations/github/main) enumerates like everything else.
  */
 export async function listIntegrationConnections(
   projectId: string,
@@ -518,9 +588,7 @@ export async function listIntegrationConnections(
   for (const stream of streams) {
     const connection = connectionFromIntegrationStreamPath(stream.path);
     if (connection === null) continue;
-    const integration = stream.path.split("/")[2]!;
-    if (integration !== "slack" && integration !== "google") continue;
-    entries.push({ connection, integration, path: stream.path });
+    entries.push({ connection, integration: stream.path.split("/")[2]!, path: stream.path });
   }
   return entries;
 }

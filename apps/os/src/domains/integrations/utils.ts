@@ -10,6 +10,14 @@
  */
 export const SLACK_TEAM_DIRECTORY_STREAM_PATH = "/integrations/slack-team-directory";
 
+/**
+ * The integration slugs whose call surfaces ship with the OS deployment. ONE
+ * constant on purpose — the collection's dispatch, list()'s source labeling,
+ * and the capability-mount collision guard all consume it, so a new builtin
+ * cannot silently miss one of them.
+ */
+export const BUILTIN_INTEGRATION_SLUGS: ReadonlySet<string> = new Set(["slack", "google"]);
+
 export const SLACK_CONNECTED_EVENT_TYPE = "events.iterate.com/slack/connected";
 export const SLACK_DISCONNECTED_EVENT_TYPE = "events.iterate.com/slack/disconnected";
 export const SLACK_WEBHOOK_RECEIVED_EVENT_TYPE = "events.iterate.com/slack/webhook-received";
@@ -48,10 +56,7 @@ export function sanitizeConnectionName(value: string): string {
  * facts, token ciphertext (google), and the webhook router's events (slack)
  * all live at `/integrations/{slug}/{connection}`.
  */
-export function integrationConnectionStreamPath(
-  slug: "google" | "slack",
-  connection: string,
-): string {
+export function integrationConnectionStreamPath(slug: string, connection: string): string {
   return `/integrations/${slug}/${connection}`;
 }
 
@@ -60,22 +65,19 @@ export function slackBotTokenSecretPath(connection: string): string {
   return `/secrets/integrations/slack/${connection}/bot-token`;
 }
 
-function sanitizePathPart(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
-}
-
 /**
  * The routed agent stream path for one Slack thread of one named connection.
  * Stable wire shape: `/agents/slack/{connection}/{channel}/ts-{threadTs}`.
  * The connection segment is already sanitized by construction
- * (sanitizeConnectionName at connect time); channel and ts are sanitized here.
+ * (sanitizeConnectionName at connect time); channel and ts are sanitized here
+ * with the same rule.
  */
 export function slackThreadStreamPath(input: {
   channel: string;
   connection: string;
   threadTs: string;
 }): string {
-  return `/agents/slack/${input.connection}/${sanitizePathPart(input.channel)}/ts-${sanitizePathPart(input.threadTs)}`;
+  return `/agents/slack/${input.connection}/${sanitizeConnectionName(input.channel)}/ts-${sanitizeConnectionName(input.threadTs)}`;
 }
 
 export function isSlackAgentPath(agentPath: string): boolean {
