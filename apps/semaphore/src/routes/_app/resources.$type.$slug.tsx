@@ -212,6 +212,10 @@ function ResourceDetailPage() {
             </dd>
           </div>
           <div>
+            <dt className="text-xs uppercase tracking-wide text-muted-foreground">Holder</dt>
+            <dd className="mt-1">{resource.holder ?? "—"}</dd>
+          </div>
+          <div>
             <dt className="text-xs uppercase tracking-wide text-muted-foreground">Created</dt>
             <dd className="mt-1">{resource.createdAt}</dd>
           </div>
