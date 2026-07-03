@@ -56,7 +56,9 @@ export default workflow({
             "branch=bot/housekeeping",
             'git checkout -b "$branch"',
             "git commit --all --message 'Weekly housekeeping'",
-            'git push --force origin "$branch"',
+            // push with the bot token explicitly: on Depot CI the checkout credentials are not
+            // guaranteed to allow pushes
+            'git push --force "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" "$branch"',
             "if [ -z \"$(gh pr list --head $branch --state open --json number --jq '.[].number')\" ]; then",
             "  gh pr create \\",
             "    --title 'Weekly housekeeping' \\",

@@ -96,9 +96,10 @@ To move a workflow:
 ### What has moved, and what can't (yet)
 
 **On Depot** (`DEPOT_WORKFLOW_NAMES`): `lint-typecheck`, `test`, `deploy-auth`,
-`deploy-tunnels`, `release`, `autofix`, `pullfrog`. Each needs only the secrets
-Depot already has — `DOPPLER_TOKEN` (+ `ITERATE_BOT_GITHUB_TOKEN` for the
-github-script jobs).
+`deploy-tunnels`, `release`, `autofix`, `pullfrog`, `housekeeping`. Each needs
+only the secrets Depot already has — `DOPPLER_TOKEN` (+
+`ITERATE_BOT_GITHUB_TOKEN` for the github-script jobs and the housekeeping
+bot PR).
 
 **Still on GitHub Actions, and why** — two blockers:
 

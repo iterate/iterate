@@ -44,7 +44,7 @@ jobs:
           branch=bot/housekeeping
           git checkout -b "$branch"
           git commit --all --message 'Weekly housekeeping'
-          git push --force origin "$branch"
+          git push --force "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" "$branch"
           if [ -z "$(gh pr list --head $branch --state open --json number --jq '.[].number')" ]; then
             gh pr create \
               --title 'Weekly housekeeping' \

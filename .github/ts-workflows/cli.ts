@@ -42,6 +42,7 @@ const DEPOT_WORKFLOW_NAMES = new Set([
   "release",
   "autofix",
   "pullfrog",
+  "housekeeping",
   // NOT here, and why:
   //   - ci: posts to Slack (needs SLACK_CI_BOT_TOKEN, not yet on Depot) AND
   //     calls deploy.yml as a local reusable workflow.
