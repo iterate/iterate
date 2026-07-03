@@ -18,6 +18,7 @@ export async function updatePrDashboard() {
     const { data } = await github.rest.search.issuesAndPullRequests({
       q: `repo:${repo.owner}/${repo.repo} is:pr ${queryParts}`,
       per_page: 100,
+      advanced_search: "true",
     });
     return data.items;
   };
