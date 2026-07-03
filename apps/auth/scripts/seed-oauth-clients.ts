@@ -52,36 +52,34 @@ export const SeedOAuthClientsEnv = z
       })
       .pipe(z.array(SeedOAuthClientSpec)),
     APP_CONFIG_SERVICE_AUTH_TOKEN: OptionalNonEmptyString,
-    SERVICE_AUTH_TOKEN: OptionalNonEmptyString,
     // The deployed auth origin to seed, e.g. https://auth.iterate-dev.com.
     APP_CONFIG_AUTH_APP_ORIGIN: OptionalUrl,
-    VITE_AUTH_APP_ORIGIN: OptionalUrl,
   })
   .transform((env, ctx) => {
-    const serviceAuthToken = env.APP_CONFIG_SERVICE_AUTH_TOKEN ?? env.SERVICE_AUTH_TOKEN;
+    const serviceAuthToken = env.APP_CONFIG_SERVICE_AUTH_TOKEN;
     if (!serviceAuthToken) {
       ctx.addIssue({
         code: "custom",
         path: ["APP_CONFIG_SERVICE_AUTH_TOKEN"],
-        message: "APP_CONFIG_SERVICE_AUTH_TOKEN or SERVICE_AUTH_TOKEN is required",
+        message: "APP_CONFIG_SERVICE_AUTH_TOKEN is required",
       });
       return z.NEVER;
     }
 
-    const authAppOrigin = env.APP_CONFIG_AUTH_APP_ORIGIN ?? env.VITE_AUTH_APP_ORIGIN;
+    const authAppOrigin = env.APP_CONFIG_AUTH_APP_ORIGIN;
     if (!authAppOrigin) {
       ctx.addIssue({
         code: "custom",
         path: ["APP_CONFIG_AUTH_APP_ORIGIN"],
-        message: "APP_CONFIG_AUTH_APP_ORIGIN or VITE_AUTH_APP_ORIGIN is required",
+        message: "APP_CONFIG_AUTH_APP_ORIGIN is required",
       });
       return z.NEVER;
     }
 
     return {
-      AUTH_SEED_OAUTH_CLIENTS: env.AUTH_SEED_OAUTH_CLIENTS,
-      SERVICE_AUTH_TOKEN: serviceAuthToken,
-      VITE_AUTH_APP_ORIGIN: authAppOrigin,
+      authAppOrigin,
+      clients: env.AUTH_SEED_OAUTH_CLIENTS,
+      serviceAuthToken,
     };
   });
 
@@ -115,18 +113,14 @@ export async function seedOAuthClients(
   if (!parsed.success) {
     throw new Error(`seed-oauth-clients env invalid: ${z.prettifyError(parsed.error)}`);
   }
-  const {
-    AUTH_SEED_OAUTH_CLIENTS: clients,
-    SERVICE_AUTH_TOKEN,
-    VITE_AUTH_APP_ORIGIN,
-  } = parsed.data;
-  const seedThroughUrl = opts.baseUrl?.trim() || VITE_AUTH_APP_ORIGIN;
+  const { authAppOrigin, clients, serviceAuthToken } = parsed.data;
+  const seedThroughUrl = opts.baseUrl?.trim() || authAppOrigin;
 
   await waitForAuthDeployment(seedThroughUrl);
 
   const authClient = createAuthContractClient({
     baseUrl: seedThroughUrl,
-    serviceToken: SERVICE_AUTH_TOKEN,
+    serviceToken: serviceAuthToken,
   });
 
   for (const spec of clients) {
