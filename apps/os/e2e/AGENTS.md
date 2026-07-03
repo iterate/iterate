@@ -26,6 +26,16 @@ How to target local dev / previews / prd and the canonical env vars
 (`APP_CONFIG_BASE_URL`, `APP_CONFIG_ADMIN_API_SECRET`, the `OS_E2E_*` harness knobs) are documented
 in [docs/testing.md](../../../docs/testing.md).
 
+**Local-dev caveat:** a handful of itx e2e failures reproduce ONLY against local `pnpm dev`,
+never on a deployed preview or prd — verify against a preview before treating a local-only red
+as a regression. One class (redacted `Error: internal error; reference = …` from dynamic
+workers) was a shared worker-loader isolate cache across the parent workers that share local
+dev's single workerd (fix: PR #1614). A residual class (`The RPC receiver does not implement
+the method "…"`) is suspected to be capnweb classifying `RpcTarget`s at module-eval time: in
+the vite dev module graph a capnweb copy can evaluate before `cloudflare:workers` publishes the
+real class, so RpcTarget instances serialize as plain objects and their prototype methods
+vanish over RPC. Deployed single-bundle builds evaluate in the right order and are unaffected.
+
 - Live deployment tests: `pnpm e2e` (one config, `e2e/vitest.config.ts`, two projects). The
   `node` project runs the engine suites in `e2e/vitest/` (agents, admin-project, preview
   smoke) and the cross-runtime example matrix in `e2e/examples/`; the `browser` project runs
