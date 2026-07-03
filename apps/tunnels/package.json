@@ -4,20 +4,17 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "alchemy:up": "tsx ./alchemy.run.ts",
-    "alchemy:down": "tsx ./alchemy.run.ts --destroy",
-    "deploy:prd": "doppler run --project tunnels --config prd -- pnpm alchemy:up",
+    "deploy": "tsx ./scripts/deploy.ts",
+    "ensure-resources": "tsx ./scripts/ensure-resources.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@iterate-com/shared": "workspace:*",
-    "alchemy": "^0.83.3",
-    "captun": "https://github.com/iterate/captun/releases/download/v0.0.3-websocket.6aa1207/captun-0.0.3.tgz",
-    "zod": "^4.3.6"
+    "captun": "https://github.com/iterate/captun/releases/download/v0.0.3-websocket.6aa1207/captun-0.0.3.tgz"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:cloudflare",
     "tsx": "^4.20.6",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "wrangler": "catalog:cloudflare"
   }
 }

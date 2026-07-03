@@ -5,6 +5,7 @@ import { matchesSignupAllowlist, parseSignupAllowlist } from "@iterate-com/share
 import { generateDefaultAvatar } from "@iterate-com/shared/default-avatar";
 import { env } from "./env.ts";
 import { getAuthPlugins } from "./auth-plugins.ts";
+import { DEFAULT_ADMIN_ALLOWLIST } from "./platform-admin.ts";
 
 const LOCAL_OAUTH_CLIENT_ORIGINS = [
   "http://localhost:6274",
@@ -29,11 +30,14 @@ export type ProjectIngressTokenPayload = {
 };
 
 export async function createProjectIngressToken(payload: ProjectIngressTokenPayload) {
-  return signJWT(payload, env.BETTER_AUTH_SECRET, 60 * 60);
+  return signJWT(payload, env.APP_CONFIG_BETTER_AUTH_SECRET, 60 * 60);
 }
 
 export async function verifyProjectIngressToken(token: string) {
-  const payload = await verifyJWT<ProjectIngressTokenPayload>(token, env.BETTER_AUTH_SECRET);
+  const payload = await verifyJWT<ProjectIngressTokenPayload>(
+    token,
+    env.APP_CONFIG_BETTER_AUTH_SECRET,
+  );
   if (!payload || payload.type !== "project-ingress" || !payload.userId || !payload.email) {
     return null;
   }
@@ -47,7 +51,7 @@ export const auth = betterAuth({
   plugins: getAuthPlugins(env),
   trustedOrigins: (request) =>
     isAllowedBrowserOrigin(request?.headers.get("origin")) ? getAllowedBrowserOrigins() : [],
-  secret: env.BETTER_AUTH_SECRET,
+  secret: env.APP_CONFIG_BETTER_AUTH_SECRET,
   session: {
     storeSessionInDatabase: true,
     cookieCache: {
@@ -65,7 +69,7 @@ export const auth = betterAuth({
       create: {
         before: async (user) => {
           const email = user.email.trim().toLowerCase();
-          const allowlist = parseSignupAllowlist(env.SIGNUP_ALLOWLIST);
+          const allowlist = parseSignupAllowlist(env.APP_CONFIG_SIGNUP_ALLOWLIST);
           if (!matchesSignupAllowlist(email, allowlist)) {
             throw new APIError("FORBIDDEN", {
               message: "Sign up is not available for this email address",
@@ -75,7 +79,9 @@ export const auth = betterAuth({
           // Email-domain promotion is safe because password signup is disabled:
           // both remaining sign-in methods (Google, email OTP) prove mailbox
           // ownership before this hook runs.
-          const platformAdminAllowlist = parseSignupAllowlist(env.ADMIN_ALLOWLIST);
+          const platformAdminAllowlist = parseSignupAllowlist(
+            env.APP_CONFIG_ADMIN_ALLOWLIST ?? DEFAULT_ADMIN_ALLOWLIST,
+          );
           const isPlatformAdmin = matchesSignupAllowlist(email, platformAdminAllowlist);
 
           return {
@@ -92,8 +98,8 @@ export const auth = betterAuth({
 
   socialProviders: {
     google: {
-      clientId: env.GOOGLE_CLIENT_ID,
-      clientSecret: env.GOOGLE_CLIENT_SECRET,
+      clientId: env.APP_CONFIG_GOOGLE_CLIENT_ID,
+      clientSecret: env.APP_CONFIG_GOOGLE_CLIENT_SECRET,
     },
   },
   disabledPaths: ["/token"],

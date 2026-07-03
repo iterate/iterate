@@ -1982,11 +1982,11 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
 
     const existingServiceToken = input.rotate
       ? null
-      : getDopplerSecret("auth", config, "SERVICE_AUTH_TOKEN");
+      : getDopplerSecret("auth", config, "APP_CONFIG_SERVICE_AUTH_TOKEN");
     const serviceToken = existingServiceToken || freshSecret();
     const existingBetterAuthSecret = input.rotate
       ? null
-      : getDopplerSecret("auth", config, "BETTER_AUTH_SECRET");
+      : getDopplerSecret("auth", config, "APP_CONFIG_BETTER_AUTH_SECRET");
     const betterAuthSecret = existingBetterAuthSecret || freshSecret();
 
     const seed = JSON.stringify([
@@ -2001,12 +2001,11 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
     ]);
 
     setDopplerSecrets("auth", config, {
-      VITE_AUTH_APP_ORIGIN: authOrigin,
-      // readPreviewAppConfig reads APP_CONFIG_BASE_URL to learn the app's public URL.
-      // (Routes themselves are generated from the root envs.ts — no WORKER_ROUTES.)
+      // readPreviewAppConfig reads APP_CONFIG_BASE_URL to learn the app's public
+      // URL. Origins/routes themselves are generated from the root envs.ts.
       APP_CONFIG_BASE_URL: authOrigin,
-      BETTER_AUTH_SECRET: betterAuthSecret,
-      SERVICE_AUTH_TOKEN: serviceToken,
+      APP_CONFIG_BETTER_AUTH_SECRET: betterAuthSecret,
+      APP_CONFIG_SERVICE_AUTH_TOKEN: serviceToken,
       AUTH_SEED_OAUTH_CLIENTS: seed,
     });
 

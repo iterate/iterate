@@ -404,10 +404,11 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
       );
     }
 
-    const serviceAuthToken = context.env.SERVICE_AUTH_TOKEN?.trim();
+    const serviceAuthToken = context.env.APP_CONFIG_SERVICE_AUTH_TOKEN?.trim();
     if (!serviceAuthToken) {
       throw new ORPCError("INTERNAL_SERVER_ERROR", {
-        message: "SERVICE_AUTH_TOKEN is required for bootstrap OAuth client provisioning",
+        message:
+          "APP_CONFIG_SERVICE_AUTH_TOKEN is required for bootstrap OAuth client provisioning",
       });
     }
 
@@ -491,10 +492,10 @@ const setOAuthClient = os.internal.oauth.setClient
       // Create through the admin API so the row gets the plugin's defaults
       // (token endpoint auth method, grant/response types, …), then overwrite
       // the generated credentials with the caller-provided constants.
-      const serviceAuthToken = context.env.SERVICE_AUTH_TOKEN?.trim();
+      const serviceAuthToken = context.env.APP_CONFIG_SERVICE_AUTH_TOKEN?.trim();
       if (!serviceAuthToken) {
         throw new ORPCError("INTERNAL_SERVER_ERROR", {
-          message: "SERVICE_AUTH_TOKEN is required for OAuth client provisioning",
+          message: "APP_CONFIG_SERVICE_AUTH_TOKEN is required for OAuth client provisioning",
         });
       }
       const headers = await getBootstrapAdminAuthHeaders({ serviceAuthToken });

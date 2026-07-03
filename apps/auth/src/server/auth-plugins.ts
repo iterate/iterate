@@ -26,6 +26,7 @@ import {
 } from "./oauth-project-selection.ts";
 import { getOsMcpResourceBases, getOsResourceBases } from "./oauth-resources.ts";
 import { isPlatformAdminUser } from "./platform-admin.ts";
+import type { CloudflareEnv } from "./env.ts";
 
 const TEST_EMAIL_PATTERN = /\+.*test@/i;
 const TEST_OTP_CODE = "424242";
@@ -61,7 +62,16 @@ function userIdOf(user: Record<string, unknown> | null | undefined): string | nu
   return typeof user?.id === "string" ? user.id : null;
 }
 
-export function getAuthPlugins(env: Record<string, unknown>) {
+// Partial: auth.schema-only.ts builds the plugin list with an empty env (it
+// only needs the schema, never the OTP email lane the env fields drive).
+export function getAuthPlugins(
+  env: Partial<
+    Pick<
+      CloudflareEnv,
+      "APP_CONFIG_EMAIL_OTP_ENABLED" | "APP_CONFIG_RESEND_API_KEY" | "APP_CONFIG_RESEND_DOMAIN"
+    >
+  >,
+) {
   const osResourceBases = getOsResourceBases();
   const validAudiences = [...osResourceBases, ...getOsMcpResourceBases()];
 
@@ -83,7 +93,7 @@ export function getAuthPlugins(env: Record<string, unknown>) {
       storeToken: "plain",
       disableSetSessionCookie: true,
     }),
-    ...(env.VITE_ENABLE_EMAIL_OTP_SIGNIN === "true"
+    ...(env.APP_CONFIG_EMAIL_OTP_ENABLED === "true"
       ? [
           emailOTP({
             otpLength: 6,
@@ -102,11 +112,11 @@ export function getAuthPlugins(env: Record<string, unknown>) {
               const response = await fetch("https://api.resend.com/emails", {
                 method: "POST",
                 headers: {
-                  authorization: `Bearer ${env.RESEND_BOT_API_KEY}`,
+                  authorization: `Bearer ${env.APP_CONFIG_RESEND_API_KEY}`,
                   "content-type": "application/json",
                 },
                 body: JSON.stringify({
-                  from: `Iterate <noreply+auth@${env.RESEND_BOT_DOMAIN}>`,
+                  from: `Iterate <noreply+auth@${env.APP_CONFIG_RESEND_DOMAIN}>`,
                   to: email,
                   subject: `Your verification code: ${otp}`,
                   text: `Your verification code is: ${otp}\n\nThis code expires in 5 minutes.`,

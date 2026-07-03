@@ -1,0 +1,48 @@
+// HAND-WRITTEN (no generator: tunnels deploys to prd only) — keep in sync
+// with the root envs.ts `tunnelsEnvs`. Top level is local dev.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tunnels-dev",
+  "main": "./src/worker.ts",
+  "compatibility_date": "2026-06-17",
+  "compatibility_flags": ["nodejs_compat"],
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CaptunServerShard"] }],
+  "durable_objects": {
+    "bindings": [{ "name": "CaptunServerShard", "class_name": "CaptunServerShard" }],
+  },
+  "vars": { "CUSTOM_HOSTNAME": "localhost", "SHARD_COUNT": "1" },
+  "secrets": { "required": ["CAPTUN_TOKEN"] },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": { "enabled": true, "head_sampling_rate": 1, "persist": true, "invocation_logs": true },
+    "traces": { "enabled": true, "persist": true, "head_sampling_rate": 1 },
+  },
+  "env": {
+    "prd": {
+      "name": "tunnels-prd",
+      // envs.ts PRD_ACCOUNT_ID
+      "account_id": "04b3b57291ef2626c6a8daa9d47065a7",
+      "routes": [
+        { "pattern": "tunnels.iterate.com/*", "zone_name": "iterate.com" },
+        { "pattern": "*.tunnels.iterate.com/*", "zone_name": "iterate.com" },
+      ],
+      "durable_objects": {
+        "bindings": [{ "name": "CaptunServerShard", "class_name": "CaptunServerShard" }],
+      },
+      "vars": { "CUSTOM_HOSTNAME": "tunnels.iterate.com", "SHARD_COUNT": "1" },
+      "secrets": { "required": ["CAPTUN_TOKEN"] },
+      "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1,
+        "logs": {
+          "enabled": true,
+          "head_sampling_rate": 1,
+          "persist": true,
+          "invocation_logs": true,
+        },
+        "traces": { "enabled": true, "persist": true, "head_sampling_rate": 1 },
+      },
+    },
+  },
+}

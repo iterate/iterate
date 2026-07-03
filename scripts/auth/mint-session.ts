@@ -18,7 +18,7 @@ import { readDevServerInfo } from "../../apps/os/scripts/lib/dev-server-info.ts"
 // `os/prd`). This script signs an access+id token pair with that key — fully
 // offline, no auth worker involved — so you can be any user instantly. The
 // forge key is a master key; in prod it is gated behind an explicit opt-in at
-// deploy (AUTH_FORGE_ALLOW_PRODUCTION, see apps/os/alchemy.run.ts). An audited
+// deploy (AUTH_FORGE_ALLOW_PRODUCTION, see apps/os/scripts/deploy.ts). An audited
 // mint endpoint on the auth worker is the planned replacement for prod.
 //
 //   # local dev (uses the running dev server's discovery file for the URL)
@@ -109,7 +109,7 @@ if (!forgePrivateJwkJson) {
   throw new Error(
     "AUTH_FORGE_PRIVATE_JWK is not in the environment. Run under a Doppler config that carries " +
       "the forge key — dev, preview, or prd (e.g. `doppler run --project os --config dev -- pnpm auth:mint ...`). " +
-      "Prod additionally requires AUTH_FORGE_ALLOW_PRODUCTION=true at deploy (apps/os/alchemy.run.ts).",
+      "Prod additionally requires AUTH_FORGE_ALLOW_PRODUCTION=true at deploy (apps/os/scripts/deploy.ts).",
   );
 }
 

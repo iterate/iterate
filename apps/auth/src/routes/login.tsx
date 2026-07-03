@@ -21,7 +21,7 @@ import { authClient } from "../utils/auth-client.ts";
 import { getInitials } from "../utils/initials.ts";
 
 const getLoginState = createServerFn({ method: "GET" }).handler(({ context }) => ({
-  emailOtpEnabled: context.cloudflare.env.VITE_ENABLE_EMAIL_OTP_SIGNIN === "true",
+  emailOtpEnabled: context.cloudflare.env.APP_CONFIG_EMAIL_OTP_ENABLED === "true",
   session: context.variables.session,
 }));
 

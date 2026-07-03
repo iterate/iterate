@@ -7,6 +7,11 @@ import viteReact from "@vitejs/plugin-react";
 import { cloudflare } from "@cloudflare/vite-plugin";
 import captunVite from "captun/vite";
 import { defineConfig, type Plugin } from "vite";
+import { writeWranglerConfig } from "./scripts/generate-wrangler-config.ts";
+
+// wrangler.jsonc is generated (gitignored) — refresh it from envs.ts before
+// the cloudflare plugin reads it, so dev and build can never see stale config.
+writeWranglerConfig();
 
 const host = process.env.HOST ?? "127.0.0.1";
 const port = process.env.PORT ? Number(process.env.PORT) : 5173;

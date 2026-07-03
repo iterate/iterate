@@ -12,8 +12,8 @@ import { createAuthContractClient } from "@iterate-com/auth-contract";
 // with the same Doppler values is a no-op, and nothing ever rotates a seeded
 // client — so the credentials in Doppler can never drift from the database.
 //
-// Runs automatically from apps/auth/alchemy.run.ts after a (non-local) deploy,
-// and standalone against any environment:
+// Runs automatically from scripts/deploy.ts after every deploy, and
+// standalone against any environment:
 //
 //   doppler run --project auth --config dev_global -- pnpm seed-oauth-clients
 //   doppler run --project auth --config preview_3 -- pnpm seed-oauth-clients
@@ -40,9 +40,9 @@ export const SeedOAuthClientsEnv = z.object({
       }
     })
     .pipe(z.array(SeedOAuthClientSpec)),
-  SERVICE_AUTH_TOKEN: z.string().min(1),
+  APP_CONFIG_SERVICE_AUTH_TOKEN: z.string().min(1),
   // The deployed auth origin to seed, e.g. https://auth.iterate-dev.com.
-  VITE_AUTH_APP_ORIGIN: z.url(),
+  APP_CONFIG_AUTH_APP_ORIGIN: z.url(),
 });
 
 async function waitForAuthDeployment(baseUrl: string, timeoutMs = 120_000) {
@@ -77,16 +77,16 @@ export async function seedOAuthClients(
   }
   const {
     AUTH_SEED_OAUTH_CLIENTS: clients,
-    SERVICE_AUTH_TOKEN,
-    VITE_AUTH_APP_ORIGIN,
+    APP_CONFIG_SERVICE_AUTH_TOKEN,
+    APP_CONFIG_AUTH_APP_ORIGIN,
   } = parsed.data;
-  const seedThroughUrl = opts.baseUrl?.trim() || VITE_AUTH_APP_ORIGIN;
+  const seedThroughUrl = opts.baseUrl?.trim() || APP_CONFIG_AUTH_APP_ORIGIN;
 
   await waitForAuthDeployment(seedThroughUrl);
 
   const authClient = createAuthContractClient({
     baseUrl: seedThroughUrl,
-    serviceToken: SERVICE_AUTH_TOKEN,
+    serviceToken: APP_CONFIG_SERVICE_AUTH_TOKEN,
   });
 
   for (const spec of clients) {

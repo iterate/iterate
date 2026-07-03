@@ -23,7 +23,9 @@
     ".wrangler/",
     "routeTree.gen.ts",
     "worker-configuration.d.ts",
-    "apps/os/wrangler.jsonc",
+    "apps/auth/wrangler.jsonc",
+    "apps/semaphore/wrangler.jsonc",
+    "apps/streams-example-app/wrangler.jsonc",
     "logs.json",
     ".github/workflows/",
     ".git/",
@@ -32,9 +34,9 @@
     "pnpm-lock.yaml",
     "pnpm-workspace.yaml",
     "**/.repomix-*",
-    "**/.alchemy",
     "**/.iterate/",
     "**/components/ui/",
-    "**/components/ai-elements/"
+    "**/components/ai-elements/",
+    "apps/os/wrangler.jsonc"
   ]
 }

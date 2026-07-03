@@ -79,7 +79,7 @@ export async function resolveEnvContext<E extends DeployableEnv>(options: {
     );
   }
 
-  const cfV4 = async <T,>(path: string, init?: RequestInit): Promise<T> => {
+  const cfV4 = async <T>(path: string, init?: RequestInit): Promise<T> => {
     const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
       ...init,
       headers: {
@@ -105,10 +105,13 @@ export async function resolveEnvContext<E extends DeployableEnv>(options: {
     }
     return body.result as T;
   };
-  const cf = <T,>(path: string, init?: RequestInit) =>
-    cfV4<T>(`/accounts/${accountId}${path}`, init);
-
-  return { name, env, secrets, cf, cfV4 };
+  return {
+    name,
+    env,
+    secrets,
+    cf: <T>(path: string, init?: RequestInit) => cfV4<T>(`/accounts/${accountId}${path}`, init),
+    cfV4,
+  };
 }
 
 /**

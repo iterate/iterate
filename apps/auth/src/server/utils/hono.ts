@@ -47,7 +47,7 @@ export const variablesProvider = () =>
       ? null
       : await authenticateProjectIngressUser(c.req.header("authorization"));
     const serviceAuthorized = authenticateServiceRequest({
-      expectedServiceToken: c.env.SERVICE_AUTH_TOKEN,
+      expectedServiceToken: c.env.APP_CONFIG_SERVICE_AUTH_TOKEN,
       providedServiceToken: c.req.header(SERVICE_TOKEN_HEADER),
     });
 

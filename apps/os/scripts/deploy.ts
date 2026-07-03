@@ -63,7 +63,8 @@ secretValues.APP_CONFIG_ITERATE_AUTH__JWKS = await bakeStaticAuthJwks(ctx);
 parseConfig({ ...secretValues, ...envShapedVars(ctx.env) });
 
 // ---- 2. Build ----------------------------------------------------------------
-run("pnpm", ["exec", "tsx", "./scripts/generate-wrangler-config.ts", "--check"]);
+// vite.config.ts regenerates wrangler.jsonc from envs.ts before the
+// cloudflare plugin reads it — the build below always sees a fresh config.
 rmSync(join(APP_ROOT, "dist"), { recursive: true, force: true });
 run("pnpm", ["exec", "vite", "build"], { CLOUDFLARE_ENV: ctx.name });
 

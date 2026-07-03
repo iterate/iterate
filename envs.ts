@@ -15,7 +15,8 @@
  *
  * Consumers: each app's scripts/{generate-wrangler-config,deploy,
  * ensure-resources,erase-data}.ts, via scripts/lib/env-context.ts. All take
- * `--env <name>` and look the environment up here.
+ * `--env <name>` and look the environment up here. The generated
+ * wrangler.jsonc files are gitignored — this file is the reviewed artifact.
  *
  * Local dev environments (`dev`, `dev_<you>`) are deliberately NOT listed:
  * they never deploy — `pnpm dev` runs each app's top-level wrangler config

@@ -13,15 +13,16 @@ sources of truth:
 There is no IaC framework and no deploy-time state store. Each app carries a
 small set of rhyming imperative scripts in `apps/<app>/scripts/`:
 
-| Script                              | What                                                                 |
-| ----------------------------------- | -------------------------------------------------------------------- |
-| `generate-wrangler-config.ts`       | expands envs.ts into the checked-in `wrangler.jsonc` env blocks (`pnpm gen:wrangler`; `--check` chained into typecheck) |
-| `deploy.ts`                         | `pnpm run deploy --env <name>`: build → `wrangler deploy --secrets-file` (code + secrets in ONE version) → smoke probe |
-| `ensure-resources.ts`               | create-only bring-up (D1/KV/DNS); reconciles new IDs back into envs.ts |
-| `erase-data.ts`                     | wipe an env's data; infrastructure stays (see below)                 |
+| Script                        | What                                                                                                                   |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `generate-wrangler-config.ts` | expands envs.ts into the gitignored `wrangler.jsonc` (vite dev/build regenerate it automatically)                      |
+| `deploy.ts`                   | `pnpm run deploy --env <name>`: build → `wrangler deploy --secrets-file` (code + secrets in ONE version) → smoke probe |
+| `ensure-resources.ts`         | create-only bring-up (D1/KV/DNS); reconciles new IDs back into envs.ts                                                 |
+| `erase-data.ts`               | wipe an env's data; infrastructure stays (see below)                                                                   |
 
-Small apps skip pieces they don't need (tunnels has a hand-written
-wrangler.jsonc and no generator; streams-example-app has no secrets).
+Small apps skip pieces they don't need (tunnels has a hand-written,
+committed wrangler.jsonc and no generator; streams-example-app has no
+secrets). Generated configs are gitignored — envs.ts is what you review.
 
 ## Environment selection is explicit
 
@@ -93,7 +94,7 @@ deploys.
 1. Add the entry to envs.ts (preview slots: `previewSlot(N, {...UNPROVISIONED})`).
 2. `pnpm ensure-resources --env <name>` per app — creates missing D1/KV/DNS
    and prints the IDs to paste into envs.ts.
-3. Commit, `pnpm gen:wrangler`, commit the regenerated wrangler.jsonc.
+3. Commit envs.ts (wrangler.jsonc is generated on demand, never committed).
 4. Deploy auth first (`pnpm --dir apps/auth run deploy --env <name>`), then
    os (its deploy bakes auth's JWKS and fails fast if auth isn't serving).
 

@@ -1,33 +1,23 @@
-import fs from "node:fs";
 import path from "node:path";
 import { Miniflare } from "miniflare";
 import { createD1Client, defineConfig, type DisposableAsyncClient } from "sqlfu";
 
 const here = import.meta.dirname;
-const wranglerPath = path.join(here, ".alchemy", "local", "wrangler.jsonc");
-const persistRoot = path.join(here, "..", "..", ".alchemy", "miniflare", "v3");
 
-async function openAlchemyLocalD1(): Promise<DisposableAsyncClient> {
-  if (!fs.existsSync(wranglerPath)) {
-    throw new Error(
-      `sqlfu.config.ts: ${wranglerPath} not found. Run \`pnpm dev\` once to materialize alchemy's local wrangler config, then retry.`,
-    );
-  }
+// Local dev D1 lives where the @cloudflare/vite-plugin persists it
+// (`.wrangler/state/v3` under the app root), keyed by the stable
+// "local-dev-auth-db" database id from the generated wrangler.jsonc — so
+// sqlfu operates on the exact database `pnpm dev` serves.
+const persistRoot = path.join(here, ".wrangler", "state", "v3");
+const LOCAL_DEV_DATABASE_ID = "local-dev-auth-db";
 
-  const wrangler = JSON.parse(fs.readFileSync(wranglerPath, "utf8"));
-  const d1 = (wrangler.d1_databases ?? []).find(
-    (binding: { binding: string }) => binding.binding === "DB",
-  );
-  if (!d1) {
-    throw new Error(`sqlfu.config.ts: no d1_databases binding "DB" in ${wranglerPath}.`);
-  }
-
+async function openLocalDevD1(): Promise<DisposableAsyncClient> {
   const mf = new Miniflare({
     script: "",
     modules: true,
     defaultPersistRoot: persistRoot,
     d1Persist: true,
-    d1Databases: { DB: d1.database_id },
+    d1Databases: { DB: LOCAL_DEV_DATABASE_ID },
   });
   await mf.ready;
 
@@ -41,7 +31,7 @@ async function openAlchemyLocalD1(): Promise<DisposableAsyncClient> {
 }
 
 export default defineConfig({
-  db: openAlchemyLocalD1,
+  db: openLocalDevD1,
   migrations: {
     path: "./src/server/db/migrations",
     preset: "d1",
