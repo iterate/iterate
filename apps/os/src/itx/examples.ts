@@ -421,6 +421,70 @@ return {
 `.trim(),
   },
   {
+    id: "repo-read-file",
+    title: "Read a file from the project repo",
+    description:
+      "Read committed file contents from the project repo. readFile returns the HEAD commit oid, normalized path, and content, or null when the file does not exist.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const path = vars.path ?? "README.md";
+const repo = itx.repos.get(vars.repoPath ?? "/");
+const file = await repo.readFile({ path });
+
+if (file === null) {
+  return { exists: false, path };
+}
+
+return {
+  exists: true,
+  commitOid: file.commitOid,
+  path: file.path,
+  preview: file.content.slice(0, 120),
+};
+`.trim(),
+  },
+  {
+    id: "repo-edit-file",
+    title: "Read then edit a project repo file",
+    description:
+      "Use readFile to inspect the current content, then edit to replace an exact string and commit the change. edit is safe for coding-agent workflows: oldString must match exactly once unless replaceAll is true.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const path = vars.path ?? "notes/edit-example.md";
+const repo = itx.repos.get(vars.repoPath ?? "/");
+const beforeText = "status: draft\\n";
+const afterText = "status: reviewed\\n";
+
+// Seed a known starting point. Agents can skip this when editing an existing file.
+await repo.commitFiles({
+  message: "Seed edit example",
+  changes: [{ path, content: "# Edit example\\n\\n" + beforeText }],
+});
+
+const before = await repo.readFile({ path });
+if (before === null) throw new Error("Expected seeded file to exist.");
+
+const edit = await repo.edit({
+  path,
+  message: "Mark edit example reviewed",
+  oldString: beforeText,
+  newString: afterText,
+});
+
+const after = await repo.readFile({ path });
+if (after === null) throw new Error("Expected edited file to exist.");
+
+return {
+  before: before.content,
+  after: after.content,
+  changedPaths: edit.changedPaths,
+  occurrenceCount: edit.occurrenceCount,
+};
+`.trim(),
+  },
+  {
     id: "secrets-lifecycle",
     title: "Store a secret; describe() never shows the material",
     description:

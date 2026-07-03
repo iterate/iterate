@@ -13,7 +13,14 @@ import { timedStep } from "../../lib/step-timing.ts";
 import { filterWorkerSnapshotPaths } from "../workers/source-masks.ts";
 import { stableSha256 } from "../workers/utils.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import type { CommitRepoFilesInput, CommitRepoFilesResult, RepoFileChange } from "../../types.ts";
+import type {
+  CommitRepoFilesInput,
+  CommitRepoFilesResult,
+  EditRepoFileInput,
+  EditRepoFileResult,
+  RepoFileChange,
+} from "../../types.ts";
+import { countOccurrences, replaceLiteralOccurrences } from "./edit-utils.ts";
 import { RepoArtifactNameCodec } from "./utils.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.generated.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
@@ -178,6 +185,38 @@ export class RepoDurableObject extends DurableObject<Env> {
       changedPaths: result.changedPaths,
       commitOid: result.commitOid,
       noChanges: result.noChanges,
+    };
+  }
+
+  async edit(input: EditRepoFileInput): Promise<EditRepoFileResult> {
+    const parsed = parseEditRepoFileInput(input);
+    const repo = await this.gitAccess();
+    const result = await editArtifactRepoFile({
+      author: parsed.author,
+      branch: parsed.branch ?? repo.defaultBranch,
+      message: parsed.message,
+      newString: parsed.newString,
+      oldString: parsed.oldString,
+      path: parsed.path,
+      remote: repo.remote,
+      replaceAll: parsed.replaceAll,
+      token: repo.token,
+    });
+
+    // Same read-your-write boundary as commitFiles(): the durable head cache
+    // names the pushed commit before the RPC resolves.
+    this.ctx.storage.kv.put(repoHeadStorageKey(result.branch), {
+      commitOid: result.commitOid,
+      contentHash: result.contentHash,
+    });
+
+    return {
+      branch: result.branch,
+      changedPaths: result.changedPaths,
+      commitOid: result.commitOid,
+      noChanges: result.noChanges,
+      occurrenceCount: result.occurrenceCount,
+      path: result.path,
     };
   }
 
@@ -348,6 +387,90 @@ async function commitFilesToArtifactRepo(input: {
   remote: string;
   token: string;
 }): Promise<CommitRepoFilesResult & { contentHash: string }> {
+  return mutateArtifactRepo({
+    author: input.author,
+    branch: input.branch,
+    message: input.message,
+    remote: input.remote,
+    token: input.token,
+    mutate: async ({ filesystem, git }) => {
+      for (const change of input.changes) {
+        const path = normalizeRepoFilePath(change.path);
+        const absolutePath = `${REPO_DIR}/${path}`;
+
+        if ("delete" in change) {
+          if (await filesystem.exists(absolutePath)) await filesystem.rm(absolutePath);
+          await git.rm({ filepath: path });
+          continue;
+        }
+
+        const dir = absolutePath.replace(/\/[^/]+$/, "");
+        if (dir !== REPO_DIR && !(await filesystem.exists(dir))) {
+          await filesystem.mkdir(dir, { recursive: true });
+        }
+        await filesystem.writeFile(absolutePath, change.content);
+        await git.add({ filepath: path });
+      }
+      return {};
+    },
+  });
+}
+
+async function editArtifactRepoFile(input: {
+  author?: { email: string; name: string };
+  branch: string;
+  message: string;
+  newString: string;
+  oldString: string;
+  path: string;
+  remote: string;
+  replaceAll?: boolean;
+  token: string;
+}): Promise<EditRepoFileResult & { contentHash: string }> {
+  return mutateArtifactRepo({
+    author: input.author,
+    branch: input.branch,
+    message: input.message,
+    remote: input.remote,
+    token: input.token,
+    mutate: async ({ filesystem, git }) => {
+      const absolutePath = `${REPO_DIR}/${input.path}`;
+      if (!(await filesystem.exists(absolutePath))) {
+        throw new Error(`Repo file does not exist: "${input.path}".`);
+      }
+
+      const content = await filesystem.readFile(absolutePath);
+      const occurrenceCount = countOccurrences(content, input.oldString);
+      if (occurrenceCount === 0) {
+        throw new Error(`Edit oldString was not found in "${input.path}".`);
+      }
+      if (!input.replaceAll && occurrenceCount !== 1) {
+        throw new Error(
+          `Edit oldString matched ${occurrenceCount} times in "${input.path}"; pass replaceAll to replace every occurrence.`,
+        );
+      }
+
+      const edited = replaceLiteralOccurrences({
+        content,
+        newString: input.newString,
+        oldString: input.oldString,
+      });
+      await filesystem.writeFile(absolutePath, edited);
+      await git.add({ filepath: input.path });
+
+      return { occurrenceCount, path: input.path };
+    },
+  });
+}
+
+async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: {
+  author?: { email: string; name: string };
+  branch: string;
+  message: string;
+  mutate: (repo: { filesystem: InMemoryFs; git: ReturnType<typeof createGit> }) => Promise<Extra>;
+  remote: string;
+  token: string;
+}): Promise<CommitRepoFilesResult & { contentHash: string } & Extra> {
   const filesystem = new InMemoryFs();
   const git = createGit(filesystem, REPO_DIR);
   const credentials = { password: input.token, username: "x" };
@@ -359,24 +482,7 @@ async function commitFilesToArtifactRepo(input: {
     ...credentials,
   });
 
-  for (const change of input.changes) {
-    const path = normalizeRepoFilePath(change.path);
-    const absolutePath = `${REPO_DIR}/${path}`;
-
-    if ("delete" in change) {
-      if (await filesystem.exists(absolutePath)) await filesystem.rm(absolutePath);
-      await git.rm({ filepath: path });
-      continue;
-    }
-
-    const dir = absolutePath.replace(/\/[^/]+$/, "");
-    if (dir !== REPO_DIR && !(await filesystem.exists(dir))) {
-      await filesystem.mkdir(dir, { recursive: true });
-    }
-    await filesystem.writeFile(absolutePath, change.content);
-    await git.add({ filepath: path });
-  }
-
+  const extra = await input.mutate({ filesystem, git });
   const changedPaths = (await git.status()).map((entry) => entry.filepath).sort();
   if (changedPaths.length === 0) {
     const [head] = await git.log({ depth: 1 });
@@ -387,6 +493,7 @@ async function commitFilesToArtifactRepo(input: {
       commitOid: head.oid,
       contentHash: await repoContentHash(await readCheckoutFiles(filesystem)),
       noChanges: true,
+      ...extra,
     };
   }
 
@@ -394,7 +501,6 @@ async function commitFilesToArtifactRepo(input: {
     author: input.author ?? { email: "support@iterate.com", name: "Iterate" },
     message: input.message,
   });
-
   const pushed = await git.push({
     force: true,
     ref: input.branch,
@@ -411,6 +517,7 @@ async function commitFilesToArtifactRepo(input: {
     commitOid: commit.oid,
     contentHash: await repoContentHash(await readCheckoutFiles(filesystem)),
     noChanges: false,
+    ...extra,
   };
 }
 
@@ -510,6 +617,45 @@ function parseCommitFilesInput(input: CommitRepoFilesInput): CommitRepoFilesInpu
       return { content: change.content, path };
     }),
     message: input.message.trim(),
+  };
+}
+
+function parseEditRepoFileInput(input: EditRepoFileInput): EditRepoFileInput {
+  if (!input || typeof input !== "object") throw new Error("edit input is required.");
+  if (typeof input.message !== "string" || input.message.trim() === "") {
+    throw new Error("edit message must be a non-empty string.");
+  }
+  if (
+    input.branch !== undefined &&
+    (typeof input.branch !== "string" || input.branch.trim() === "")
+  ) {
+    throw new Error("edit branch must be a non-empty string.");
+  }
+  if (input.author !== undefined) {
+    if (
+      typeof input.author.name !== "string" ||
+      input.author.name.trim() === "" ||
+      typeof input.author.email !== "string" ||
+      input.author.email.trim() === ""
+    ) {
+      throw new Error("edit author must include non-empty name and email.");
+    }
+  }
+  if (typeof input.oldString !== "string" || input.oldString === "") {
+    throw new Error("edit oldString must be a non-empty string.");
+  }
+  if (typeof input.newString !== "string") {
+    throw new Error("edit newString must be a string.");
+  }
+  if (input.replaceAll !== undefined && typeof input.replaceAll !== "boolean") {
+    throw new Error("edit replaceAll must be a boolean.");
+  }
+
+  return {
+    ...input,
+    branch: input.branch?.trim(),
+    message: input.message.trim(),
+    path: normalizeRepoFilePath(input.path),
   };
 }
 
