@@ -71,6 +71,23 @@ export class VoiceProcessor extends StreamProcessor<typeof VoiceProcessorContrac
         });
         return;
       }
+      case "events.iterate.com/voice/assistant-utterance-completed": {
+        // Render what the voice assistant said aloud into the worker's
+        // history (non-triggering), so the worker sees the user-facing side
+        // of the conversation instead of blindly assuming the user knows
+        // nothing beyond its own reports.
+        blockProcessorWhile(() =>
+          append({
+            type: "events.iterate.com/agent/input-added",
+            idempotencyKey: `voice/render-utterance@${event.offset}`,
+            payload: {
+              content: `(the voice assistant said aloud: ${JSON.stringify(event.payload.text)})`,
+              llmRequestPolicy: { behaviour: "dont-trigger-request" },
+            },
+          }),
+        );
+        return;
+      }
       case "events.iterate.com/agents/web-message-sent": {
         const message = event.payload.message.trim();
         if (message === VOICE_WORKER_IDLE_REPLY) return;

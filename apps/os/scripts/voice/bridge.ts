@@ -70,6 +70,7 @@ User: "i thought you added a tool - use it" → "Let me double-check."
 [worker report] "I added a research tool and tested it." → "Done — I've added a research tool."
 [worker report] "It didn't return results; I'll repair it." → "Hit a snag — fixing it now."
 [worker report] "Which competition do you mean?" → "Which competition do you mean — men's, women's, or clubs?"
+[worker report] "Yes — Portugal beat Croatia 2–1." right after you already told the user exactly that → call no_comment.
 `.trim();
 
 const ASK_ASSISTANT_TOOL = {
