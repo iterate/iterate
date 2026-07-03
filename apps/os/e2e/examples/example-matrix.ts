@@ -8,7 +8,7 @@
 //                   (a genuinely separate process; parses the CLI's one JSON doc)
 //   run-script      project.runScript(`async (itx) => { const vars = …; <body> }`)
 //                   — the server-side script isolate agents use
-//   project-worker  the body baked into the project's repo worker.js, invoked
+//   project-worker  the body baked into the project's repo worker.ts, invoked
 //                   via project.worker.runItxExample (env.ITX inside)
 
 import { execFile } from "node:child_process";
@@ -144,7 +144,7 @@ async function runInProjectWorker(input: {
 }
 
 /**
- * The project-repo worker.js for the matrix project: every project-worker
+ * The project-repo worker.ts for the matrix project: every project-worker
  * example baked in as `async (itx, vars) => { <body> }`, dispatched by id
  * through ONE exported method. `project.worker.runItxExample(...)` reaches the
  * repo-sourced default worker, and the script's handle is the worker's own
@@ -186,10 +186,10 @@ export default class ItxExampleRunner extends WorkerEntrypoint {
 }
 
 /**
- * Overwrite the matrix project's worker.js with the example runner. This
- * replaces the seeded counter worker — fine inside the matrix's dedicated
+ * Overwrite the matrix project's worker.ts with the example runner. This
+ * replaces the seeded template worker — fine inside the matrix's dedicated
  * test project. Repo-sourced workers are late-bound: the next
- * `project.worker.*` call loads the committed source.
+ * `project.worker.*` call builds the committed source.
  */
 export async function bakeProjectWorkerRunner(input: {
   examples: ItxExample[];
@@ -197,11 +197,11 @@ export async function bakeProjectWorkerRunner(input: {
 }): Promise<void> {
   using project = connectProject(input.projectId);
   const commit = await project.repo.commitFiles({
-    changes: [{ content: projectWorkerRunnerSource(input.examples), path: "worker.js" }],
+    changes: [{ content: projectWorkerRunnerSource(input.examples), path: "worker.ts" }],
     message: "Bake catalogue examples into the project worker",
   });
   if (commit.noChanges) return;
-  if (!commit.changedPaths.includes("worker.js")) {
-    throw new Error(`worker.js runner commit did not land: ${JSON.stringify(commit)}`);
+  if (!commit.changedPaths.includes("worker.ts")) {
+    throw new Error(`worker.ts runner commit did not land: ${JSON.stringify(commit)}`);
   }
 }

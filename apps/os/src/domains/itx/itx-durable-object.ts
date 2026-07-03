@@ -11,7 +11,7 @@ import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import { ItxRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
-import { KvWorkerBuildArtifactStore } from "../workers/artifact-store.ts";
+import { KvWorkerBuildArtifactStore, type WorkerBuildArtifact } from "../workers/artifact-store.ts";
 import { WorkerBuildProcessor } from "../workers/worker-build-processor-implementation.ts";
 import {
   ItxProcessor,
@@ -113,6 +113,17 @@ export class ItxDurableObject extends DurableObject<Env> {
 
   get workerBuildProcessor() {
     return new StreamProcessorRpcTarget(this.#workerBuildProcessor);
+  }
+
+  /**
+   * Artifact read with read-your-write KV semantics: this Durable Object's
+   * build processor wrote the artifact from HERE, so a read from here sees it
+   * even while cross-location KV propagation (~60s) is still in flight. The
+   * resolver falls back to this after a `completed` event when its own
+   * location's KV read misses.
+   */
+  getWorkerBuildArtifact(input: { buildKey: string }): Promise<WorkerBuildArtifact | null> {
+    return new KvWorkerBuildArtifactStore(this.env.WORKER_BUILD_CACHE).get(input.buildKey);
   }
 
   // Return types are pinned shallow so `DurableObjectStub<ItxDurableObject>`

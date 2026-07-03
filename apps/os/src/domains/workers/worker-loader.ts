@@ -132,7 +132,17 @@ async function resolveThroughBuildPipeline(input: {
     );
   }
 
-  const artifact = await store.get(input.buildKey);
+  // The completed event proves the write happened, but KV is only eventually
+  // consistent across locations: the processor wrote from its Durable
+  // Object's location and this read may run anywhere (propagation is bounded
+  // at ~60s). Local KV is the fast path; on a visibility miss, fetch the
+  // artifact from the ITX Durable Object that built it — its location has
+  // read-your-write KV semantics.
+  const artifact =
+    (await store.get(input.buildKey)) ??
+    (await env.ITX.getByName(
+      DurableObjectNameCodec.stringify({ path: input.path, projectId: input.projectId }),
+    ).getWorkerBuildArtifact({ buildKey: input.buildKey }));
   if (artifact === null) {
     throw new Error(
       `Worker build ${input.buildKey} reported completion but the artifact store has no artifact.`,
