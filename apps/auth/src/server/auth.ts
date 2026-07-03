@@ -107,6 +107,7 @@ export const auth = betterAuth({
     google: {
       clientId: config.googleClientId,
       clientSecret: config.googleClientSecret.exposeSecret(),
+      prompt: "select_account",
     },
   },
   disabledPaths: ["/token"],

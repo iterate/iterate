@@ -82,45 +82,34 @@ process.env.VITE_APP_STAGE ||= alchemyEnv.ALCHEMY_STAGE;
 
 // Email OTP is on by default in every stage, including production; an explicit
 // Doppler value still wins for emergency rollback.
-const emailOtpEnabled =
-  process.env.APP_CONFIG_EMAIL_OTP_ENABLED ??
-  process.env.VITE_ENABLE_EMAIL_OTP_SIGNIN?.trim() ??
-  "true";
+const emailOtpEnabled = process.env.APP_CONFIG_EMAIL_OTP_ENABLED ?? "true";
 
-// Map the auth config into `APP_CONFIG_*` env vars for initAlchemy. New Doppler
-// configs set these directly; the `?? <legacy>` fallbacks let existing configs
-// (and the client's build-time `VITE_AUTH_APP_ORIGIN`) keep working through the
-// transition — the same pattern apps/os uses. See src/config.ts for the schema.
+const deployEnvWithoutAppConfig = Object.fromEntries(
+  Object.entries(process.env).filter(
+    ([key]) => key !== "APP_CONFIG" && !key.startsWith("APP_CONFIG_"),
+  ),
+);
+
+// Map the auth config into `APP_CONFIG_*` env vars for initAlchemy. Doppler
+// configs are expected to set the typed AppConfig names directly.
 const configEnv: Record<string, string | undefined> = {
-  ...process.env,
+  ...deployEnvWithoutAppConfig,
   // initAlchemy requires ALCHEMY_LOCAL; the old auth schema defaulted it to
   // non-local when unset (only `alchemy dev` sets it true).
   ALCHEMY_LOCAL: process.env.ALCHEMY_LOCAL ?? "false",
-  APP_CONFIG_AUTH_APP_ORIGIN:
-    process.env.APP_CONFIG_AUTH_APP_ORIGIN ?? process.env.VITE_AUTH_APP_ORIGIN,
-  APP_CONFIG_PUBLIC_URL:
-    process.env.APP_CONFIG_PUBLIC_URL ??
-    process.env.VITE_PUBLIC_URL ??
-    process.env.VITE_AUTH_APP_ORIGIN,
-  APP_CONFIG_BETTER_AUTH_SECRET:
-    process.env.APP_CONFIG_BETTER_AUTH_SECRET ?? process.env.BETTER_AUTH_SECRET,
-  APP_CONFIG_SERVICE_AUTH_TOKEN:
-    process.env.APP_CONFIG_SERVICE_AUTH_TOKEN ?? process.env.SERVICE_AUTH_TOKEN,
-  APP_CONFIG_GOOGLE_CLIENT_ID:
-    process.env.APP_CONFIG_GOOGLE_CLIENT_ID ?? process.env.GOOGLE_CLIENT_ID,
-  APP_CONFIG_GOOGLE_CLIENT_SECRET:
-    process.env.APP_CONFIG_GOOGLE_CLIENT_SECRET ?? process.env.GOOGLE_CLIENT_SECRET,
-  APP_CONFIG_EMAIL_SENDER_DOMAIN:
-    process.env.APP_CONFIG_EMAIL_SENDER_DOMAIN ??
-    process.env.APP_CONFIG_RESEND_DOMAIN ??
-    process.env.RESEND_BOT_DOMAIN,
-  APP_CONFIG_RESEND_DOMAIN: process.env.APP_CONFIG_RESEND_DOMAIN ?? process.env.RESEND_BOT_DOMAIN,
-  APP_CONFIG_RESEND_API_KEY:
-    process.env.APP_CONFIG_RESEND_API_KEY ?? process.env.RESEND_BOT_API_KEY,
-  APP_CONFIG_SIGNUP_ALLOWLIST:
-    process.env.APP_CONFIG_SIGNUP_ALLOWLIST ?? process.env.SIGNUP_ALLOWLIST,
-  APP_CONFIG_ADMIN_ALLOWLIST: process.env.APP_CONFIG_ADMIN_ALLOWLIST ?? process.env.ADMIN_ALLOWLIST,
+  APP_CONFIG_AUTH_APP_ORIGIN: process.env.APP_CONFIG_AUTH_APP_ORIGIN,
+  APP_CONFIG_PUBLIC_URL: process.env.APP_CONFIG_PUBLIC_URL,
+  APP_CONFIG_BETTER_AUTH_SECRET: process.env.APP_CONFIG_BETTER_AUTH_SECRET,
+  APP_CONFIG_SERVICE_AUTH_TOKEN: process.env.APP_CONFIG_SERVICE_AUTH_TOKEN,
+  APP_CONFIG_GOOGLE_CLIENT_ID: process.env.APP_CONFIG_GOOGLE_CLIENT_ID,
+  APP_CONFIG_GOOGLE_CLIENT_SECRET: process.env.APP_CONFIG_GOOGLE_CLIENT_SECRET,
+  APP_CONFIG_EMAIL_SENDER_DOMAIN: process.env.APP_CONFIG_EMAIL_SENDER_DOMAIN,
+  APP_CONFIG_RESEND_DOMAIN: process.env.APP_CONFIG_RESEND_DOMAIN,
+  APP_CONFIG_RESEND_API_KEY: process.env.APP_CONFIG_RESEND_API_KEY,
+  APP_CONFIG_SIGNUP_ALLOWLIST: process.env.APP_CONFIG_SIGNUP_ALLOWLIST,
+  APP_CONFIG_ADMIN_ALLOWLIST: process.env.APP_CONFIG_ADMIN_ALLOWLIST,
   APP_CONFIG_EMAIL_OTP_ENABLED: emailOtpEnabled,
+  APP_CONFIG_PROJECT_HOSTNAME_BASE: process.env.APP_CONFIG_PROJECT_HOSTNAME_BASE,
 };
 
 const ctx = await initAlchemy(APP_NAME, AppConfig, configEnv);
@@ -138,8 +127,8 @@ const primaryUrl = alchemyEnv.WORKER_ROUTES[0]
 await Exec("render-admin-seed", {
   command: `tsx ./scripts/render-admin-seed.ts ${ADMIN_SEED_SQL_PATH}`,
   env: {
-    SERVICE_AUTH_TOKEN: alchemy.secret(runtimeConfig.serviceAuthToken.exposeSecret()),
-    ADMIN_ALLOWLIST: runtimeConfig.adminAllowlist,
+    APP_CONFIG_SERVICE_AUTH_TOKEN: alchemy.secret(runtimeConfig.serviceAuthToken.exposeSecret()),
+    APP_CONFIG_ADMIN_ALLOWLIST: runtimeConfig.adminAllowlist,
   },
   cwd: import.meta.dirname,
 });

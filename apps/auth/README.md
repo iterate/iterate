@@ -152,19 +152,21 @@ move to a Workers RPC binding — see the note under "The three surfaces".)
 
 - A **session cookie** identifies a human; oRPC middlewares layer org/project
   membership checks on top.
-- The **service token** (`SERVICE_AUTH_TOKEN`) is a shared secret trusted by the
-  `internal.*` oRPC procedures — OS's runtime directory calls and deploy-time
-  scripts both present it. It also doubles as the seeded bootstrap admin's
-  password (`scripts/render-admin-seed.ts` writes that credential row), which is
-  how deploy scripts reach better-auth admin APIs that insist on a session.
+- The **service token** (`APP_CONFIG_SERVICE_AUTH_TOKEN` in Doppler) is a shared
+  secret trusted by the `internal.*` oRPC procedures — OS's runtime directory
+  calls and deploy-time scripts both present it. It also doubles as the seeded
+  bootstrap admin's password (`scripts/render-admin-seed.ts` writes that
+  credential row), which is how deploy scripts reach better-auth admin APIs that
+  insist on a session.
 
 ## Identity model
 
 - **Users** sign in with Google or email OTP (enabled by default in every
   stage; `APP_CONFIG_EMAIL_OTP_ENABLED=false` is the rollback switch);
-  password signup is disabled. `SIGNUP_ALLOWLIST`
-  gates who may sign up; `ADMIN_ALLOWLIST` (default `*@nustom.com`) promotes
-  matching emails to platform admin. The full model is documented in
+  password signup is disabled.
+  `APP_CONFIG_SIGNUP_ALLOWLIST` gates who may sign up;
+  `APP_CONFIG_ADMIN_ALLOWLIST` (default `*@nustom.com`) promotes matching emails
+  to platform admin. The full model is documented in
   `src/server/platform-admin.ts`.
 - **Organizations & projects** live in auth's D1 and are the durable source of
   truth. OS keeps per-environment rows and re-adopts from auth after a reset;
@@ -220,11 +222,8 @@ fields); `alchemy.run.ts` calls the shared `initAlchemy()` which compiles
 `APP_CONFIG_*` Doppler vars (e.g. `APP_CONFIG_BETTER_AUTH_SECRET`,
 `APP_CONFIG_AUTH_APP_ORIGIN`) into a single `APP_CONFIG` worker binding. Server
 code reads `config.*` (from `server/env.ts`'s `parseConfig(env)`), never raw
-`env.*` — `env` now only carries the `DB` binding. `alchemy.run.ts` still
-accepts the legacy flat names (`BETTER_AUTH_SECRET`, `VITE_AUTH_APP_ORIGIN`, …)
-as a `?? <legacy>` fallback, and the browser bundle's own origin stays a
-build-time `import.meta.env.VITE_AUTH_APP_ORIGIN` (a Vite-inlined client
-concern, like os's `VITE_APP_STAGE`) — so both names live in Doppler.
+`env.*` — `env` now only carries the `DB` binding. The browser bundle's own
+origin is inlined from `APP_CONFIG_AUTH_APP_ORIGIN` at build time.
 Email OTP sends through the Cloudflare Email Service `EMAIL` binding when it is
 available, with legacy Resend config kept only as a fallback. The sender domain
 comes from `APP_CONFIG_EMAIL_SENDER_DOMAIN` (or legacy `APP_CONFIG_RESEND_DOMAIN`).

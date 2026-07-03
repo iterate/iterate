@@ -7,9 +7,9 @@ import type {
   CapabilityProvidedPayload,
   CapabilityDescription,
   CapabilityRecord,
-  ItxCapabilityHost,
+  CapabilityHost,
   JsonValue,
-  Itx,
+  ProjectRpcTarget,
   RevokeCapabilityInput,
   StatelessDynamicWorkerRef,
   StreamEvent,
@@ -17,15 +17,15 @@ import type {
 import { sha256Hex } from "../workers/utils.ts";
 import type { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
-import { ItxProcessorContract } from "./itx-processor-contract.ts";
+import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import {
   evaluateItxExpression,
   invokeNormalizedCapability,
   normalizeCapabilityProvider,
 } from "./itx-expression.ts";
 
-export type ProvideCapabilityInput = Parameters<ItxCapabilityHost["provideCapability"]>[0];
-export type RunScriptResult = Awaited<ReturnType<ItxCapabilityHost["runScript"]>>;
+export type ProvideCapabilityInput = Parameters<CapabilityHost["provideCapability"]>[0];
+export type RunScriptResult = Awaited<ReturnType<CapabilityHost["runScript"]>>;
 
 type CompletedPayload = {
   error?: string;
@@ -33,6 +33,9 @@ type CompletedPayload = {
   result?: JsonValue;
 };
 const INVALID_PATH_SEGMENTS = new Set([
+  // Mount names only — INVOCATION paths may end in __describe (intercepted in
+  // invokeCapability below); a MOUNT named __describe would be unreachable.
+  "__describe",
   "__proto__",
   "constructor",
   "prototype",
@@ -87,31 +90,33 @@ function resolveLongestPrefix(records: CapabilityRecord[], path: string[]) {
  *
  * Only the two read operations chain upward (see the class below); mounting is
  * always local, so `provide`/`revoke` are deliberately absent here. In practice
- * this is a `DurableObjectStub<ItxDurableObject>` for the parent scope, but the
+ * this is a `DurableObjectStub<CapabilityHostDurableObject>` for the parent scope, but the
  * processor only depends on these two methods.
  */
-export type ParentItxScope = {
+export type ParentCapabilityHost = {
   invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
   describeCapabilities(): Promise<CapabilityDescription[]>;
 };
 
-export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
-  readonly contract = ItxProcessorContract;
-  #itx: Itx;
+export class CapabilityHostProcessor extends StreamProcessor<
+  typeof CapabilityHostProcessorContract
+> {
+  readonly contract = CapabilityHostProcessorContract;
+  #itx: ProjectRpcTarget;
   #path: string;
   #workerRunner: DynamicWorkerRunner;
-  #parent: ParentItxScope | undefined;
+  #parent: ParentCapabilityHost | undefined;
   #liveCapabilities = new Map<string, LiveCapability>();
 
   constructor(
-    args: StreamProcessorConstructorArgs<typeof ItxProcessorContract, object> & {
-      itx: Itx;
+    args: StreamProcessorConstructorArgs<typeof CapabilityHostProcessorContract, object> & {
+      itx: ProjectRpcTarget;
       path: string;
       workerRunner: DynamicWorkerRunner;
       // The enclosing scope, or undefined at the project root ("/"). Present for
       // every nested scope (agents, sub-agents, agent namespaces) so capability
       // lookups that miss locally can fall through to the surrounding scope.
-      parent?: ParentItxScope;
+      parent?: ParentCapabilityHost;
     },
   ) {
     super(args);
@@ -124,9 +129,9 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
   protected override reduce({
     event,
     state,
-  }: Parameters<StreamProcessor<typeof ItxProcessorContract>["reduce"]>[0]) {
+  }: Parameters<StreamProcessor<typeof CapabilityHostProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
-      case "events.iterate.com/itx/capability-provided": {
+      case "events.iterate.com/capability-host/capability-provided": {
         const row: CapabilityRecord = {
           ...event.payload,
           // The stream offset is the provision identity. It is stable,
@@ -145,7 +150,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
             : [...state.capabilities, row],
         };
       }
-      case "events.iterate.com/itx/capability-revoked": {
+      case "events.iterate.com/capability-host/capability-revoked": {
         const revoke = event.payload;
         return {
           ...state,
@@ -158,7 +163,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
           }),
         };
       }
-      case "events.iterate.com/itx/script-execution-requested":
+      case "events.iterate.com/capability-host/script-execution-requested":
         return {
           ...state,
           pendingScriptExecutions: {
@@ -166,7 +171,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
             [event.payload.executionId]: true,
           },
         };
-      case "events.iterate.com/itx/script-execution-completed": {
+      case "events.iterate.com/capability-host/script-execution-completed": {
         const pendingScriptExecutions = { ...state.pendingScriptExecutions };
         delete pendingScriptExecutions[event.payload.executionId];
         return { ...state, pendingScriptExecutions };
@@ -180,8 +185,10 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     event,
     runInBackground,
     state,
-  }: Parameters<StreamProcessor<typeof ItxProcessorContract>["processEvent"]>[0]): undefined {
-    if (event.type !== "events.iterate.com/itx/script-execution-requested") return;
+  }: Parameters<
+    StreamProcessor<typeof CapabilityHostProcessorContract>["processEvent"]
+  >[0]): undefined {
+    if (event.type !== "events.iterate.com/capability-host/script-execution-requested") return;
     if (state.pendingScriptExecutions[event.payload.executionId] !== true) return;
     runInBackground(() =>
       this.#executeScript({ code: event.payload.code, executionId: event.payload.executionId }),
@@ -235,7 +242,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     let committedOffset: number;
     try {
       const [committed] = await this.stream.append({
-        type: "events.iterate.com/itx/capability-provided",
+        type: "events.iterate.com/capability-host/capability-provided",
         payload: record,
       });
       committedOffset = committed.offset;
@@ -266,7 +273,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     const key = liveKey(path);
     const previousLive = this.#liveCapabilities.get(key);
     const [committed] = await this.stream.append({
-      type: "events.iterate.com/itx/capability-revoked",
+      type: "events.iterate.com/capability-host/capability-revoked",
       payload: {
         path,
         ...(providedAtOffset === undefined ? {} : { providedAtOffset }),
@@ -289,6 +296,17 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
       if (this.#parent) return await this.#parent.invokeCapability({ args, path });
       throw new Error(`no capability "${path.join(".")}"`);
     }
+    // `__describe` on a mounted capability is answered HERE, from the mount's
+    // durable metadata (instructions/types recorded at provide time) — the
+    // live target is never dialed, for ANY mount kind. Flattened mounts
+    // especially: forwarding ["...","__describe"] to a flattenNestedPaths
+    // target would hand a discovery probe to a dispatcher that treats every
+    // path as a method route. This is what makes discovery work on
+    // session-bound live mounts whose provider is offline, and it is the first
+    // rung of the transitive-description ladder.
+    if (path[path.length - 1] === "__describe") {
+      return this.#describeMount(hit.record, path.slice(0, -1));
+    }
     if (hit.record.type === "itx-expression") {
       const evaluated = await evaluateItxExpression(this.#itx, hit.record.expression);
       const provider = await normalizeCapabilityProvider(evaluated, hit.record);
@@ -299,6 +317,38 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
       throw new Error(`capability "${hit.record.path.join(".")}" is offline`);
     }
     return await live.invoke(hit.rest, args);
+  }
+
+  /**
+   * The `Description` for one mount, built entirely from the durable record.
+   * `at` is the path the caller asked about (which may be nested below the
+   * mount point). Besides the provider's own instructions/types, the prose
+   * explains HOW dispatch works for this mount kind — most usefully for
+   * `flattenNestedPaths` targets, which are dispatchers rather than object
+   * graphs: their sub-paths cannot be enumerated, only routed.
+   */
+  #describeMount(record: CapabilityRecord, at: string[]) {
+    const mountPoint = record.path.join(".");
+    const asked = at.join(".");
+    const nestedNote =
+      at.length > record.path.length
+        ? ` You asked about the nested path "${asked}" — nesting below the mount is ${record.flattenNestedPaths === true ? "routed, not enumerable: only the provider knows which sub-paths exist" : "resolved by property traversal on the provider's value"}.`
+        : "";
+    const dispatch =
+      record.flattenNestedPaths === true
+        ? `This is a FLATTENED dispatch target: any dotted call under the mount compiles to one invokeCapability call with the remaining path — \`${mountPoint}.a.b(x)\` reaches the provider as \`invokeCapability({ path: ["a","b"], args: [x] })\`. There is no object graph to walk; \`children\` is empty because sub-paths are routes the provider interprets, not members this host can list.`
+        : record.type === "live"
+          ? `Dotted calls under the mount replay onto the provider's value by property traversal (\`${mountPoint}.a.b(x)\` calls \`a.b(x)\` on it). Live mounts are session-bound: the mount record is durable, but calls travel over the provider's connection and fail with "offline" when it disconnects. \`children\` is empty because the host only stores this record, never the provider's shape.`
+          : `A durable itx-expression: on every call the recorded expression is re-evaluated against this scope's own itx and the remaining path is invoked on the result — no live connection is held. \`children\` is empty because the host only stores the recipe, not the evaluated value's shape.`;
+    return {
+      instructions: [
+        record.instructions ?? `A dynamic ${record.type} capability mounted at "${mountPoint}".`,
+        dispatch + nestedNote,
+      ].join("\n\n"),
+      types: record.types ?? "",
+      children: {},
+      parent: `the capability host at scope "${this.#path}" (mounted at "${mountPoint}", providedAtOffset ${record.providedAtOffset})`,
+    };
   }
 
   // Reports everything reachable at this scope: this scope's own mounts plus every
@@ -325,7 +375,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     const executionId = crypto.randomUUID();
     const completed = this.#waitForScriptCompletion(executionId);
     await this.stream.append({
-      type: "events.iterate.com/itx/script-execution-requested",
+      type: "events.iterate.com/capability-host/script-execution-requested",
       payload: { code, executionId },
     });
     const event = await completed;
@@ -338,7 +388,8 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     let completed: StreamEvent | undefined;
     await this.waitUntilEvent({
       predicate: (event) => {
-        if (event.type !== "events.iterate.com/itx/script-execution-completed") return false;
+        if (event.type !== "events.iterate.com/capability-host/script-execution-completed")
+          return false;
         const payload = event.payload as CompletedPayload;
         if (payload.executionId !== executionId) return false;
         completed = event as StreamEvent;
@@ -363,7 +414,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
               ...(payload.result === undefined ? {} : { result: json(payload.result) }),
             };
       return this.stream.append({
-        type: "events.iterate.com/itx/script-execution-completed",
+        type: "events.iterate.com/capability-host/script-execution-completed",
         payload: completionPayload,
       });
     };

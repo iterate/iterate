@@ -33,7 +33,9 @@ export interface Env {
   AGENT: DurableObjectNamespace<
     import("./domains/agents/agent-durable-object.ts").AgentDurableObject
   >;
-  ITX: DurableObjectNamespace<import("./domains/itx/itx-durable-object.ts").ItxDurableObject>;
+  CAPABILITY_HOST: DurableObjectNamespace<
+    import("./domains/capability-host/capability-host-durable-object.ts").CapabilityHostDurableObject
+  >;
   PROJECT: DurableObjectNamespace<
     import("./domains/projects/project-durable-object.ts").ProjectDurableObject
   >;

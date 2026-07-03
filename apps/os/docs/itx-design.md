@@ -420,8 +420,8 @@ The plan:
     Making those three work — one first-party, one user-space, same shape —
     is the acceptance test for CapTarget (the litmus test in §1).
 - Execution = two events on the context's stream:
-  - `events.iterate.com/itx/execution-requested` `{ executionId, code, vars }`
-  - `events.iterate.com/itx/execution-completed` `{ executionId, result | error, durationMs }`
+  - `events.iterate.com/capability-host/execution-requested` `{ executionId, code, vars }`
+  - `events.iterate.com/capability-host/execution-completed` `{ executionId, result | error, durationMs }`
 - **Record-only mode first**: the caller appends `execution-requested`, runs
   the existing `/api/itx/run` loader harness inline (env.ITERATE scoped to
   the context), appends `execution-completed`. Events are the durable
@@ -946,7 +946,7 @@ into this statement. What shipped, in the locked terms:
   The pure functions — `reduceItxJournalEvent`, `resolveLongestProvidedPrefix`,
   path validation, the live-vs-address discriminator — stay module-level and
   are unit-tested over an in-memory journal without workerd. Three names,
-  three questions, as locked: `Itx` (what), `ItxDurableObject` (where),
+  three questions, as locked: `Itx` (what), `CapabilityHostDurableObject` (where),
   a stub (how).
 - **The journal is the only authority.** provide/revoke APPEND
   `capability-provided`/`capability-revoked` (path-keyed payloads carrying
@@ -965,7 +965,7 @@ into this statement. What shipped, in the locked terms:
   journal's first event, and returns a handle; the context materializes
   lazily by consuming its journal; the fold takes the first birth
   certificate and ignores later ones. ContextDO's initialize RPC and
-  descriptor SQLite table are gone — `ItxDurableObject.descriptor()` derives
+  descriptor SQLite table are gone — `CapabilityHostDurableObject.descriptor()` derives
   from state. No idempotency keys as a correctness mechanism anywhere in the
   flow.
 - **Defaults live on the parent chain — Option 2, as locked.** ONE
@@ -1021,7 +1021,7 @@ Still queued from this arc (deliberately not built):
 - **`itx.narrow({ scopes })`** — handle sugar over extend + GuardCapability
   rows; fine-grained access stays zero-kernel-mechanism.
 - **Facet embedding for rich hosts** — agents keep their own
-  ItxDurableObject instances today; `ctx.facets`-hosted processors
+  CapabilityHostDurableObject instances today; `ctx.facets`-hosted processors
   (`ProcessorDurableObject`) remain the recorded direction.
 - **Global as a named instance of the generic host** (and its journal as the
   project-lifecycle surface); global handles stay connect-minted views until
@@ -1075,7 +1075,7 @@ deep: { thought: (q) => … } } })` works directly, callable at any depth
   accessor `capability(name)`. Wire verbs: `itxProvideCapability` /
   `itxRevokeCapability` (itxDescribe/itxInvoke unchanged). Events:
   `cap-defined` + `cap-provided` merged into ONE
-  `events.iterate.com/itx/capability-provided` (payload `kind` records
+  `events.iterate.com/capability-host/capability-provided` (payload `kind` records
   live vs durable), `cap-revoked`/`cap-disconnected` →
   `capability-revoked`/`capability-disconnected`, and the script pair is
   `script-execution-requested`/`script-execution-completed`. Every `Cap*`

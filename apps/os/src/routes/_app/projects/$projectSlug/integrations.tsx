@@ -19,9 +19,9 @@ import { z } from "zod";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { StreamViewSection } from "~/components/stream-view-section.tsx";
 import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
-import type { Itx } from "~/types.ts";
+import type { ProjectRpcTarget } from "~/types.ts";
 
-type Connection = Awaited<ReturnType<Itx["integrations"]["getConnection"]>>;
+type Connection = Awaited<ReturnType<ProjectRpcTarget["integrations"]["getConnection"]>>;
 
 const Search = z.object({
   error: z.string().optional(),

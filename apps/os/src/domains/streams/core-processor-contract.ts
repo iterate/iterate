@@ -57,7 +57,7 @@ const DurableObjectAddress = z.strictObject({
  */
 export const ConfiguredSubscriberDurableObjectType = z.enum([
   "agent",
-  "itx",
+  "capability-host",
   "project",
   "repo",
   "secret",

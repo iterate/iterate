@@ -38,12 +38,15 @@ const targets: Target[] = [
   },
 ];
 
-const authIssuer = process.env.ITERATE_OAUTH_ISSUER?.trim() || "https://auth.iterate.com/api/auth";
+const configuredAuthOrigin = process.env.APP_CONFIG_AUTH_APP_ORIGIN?.trim();
+const authIssuer = configuredAuthOrigin
+  ? `${configuredAuthOrigin.replace(/\/+$/, "")}/api/auth`
+  : "https://auth.iterate.com/api/auth";
 const authBaseUrl =
   process.env.AUTH_BASE_URL?.trim() ||
-  process.env.VITE_AUTH_APP_ORIGIN?.trim() ||
+  process.env.APP_CONFIG_AUTH_APP_ORIGIN?.trim() ||
   new URL(authIssuer).origin;
-const serviceToken = process.env.SERVICE_AUTH_TOKEN?.trim();
+const serviceToken = process.env.APP_CONFIG_SERVICE_AUTH_TOKEN?.trim();
 const authDopplerProject = process.env.DOPPLER_PROJECT?.trim() || "auth";
 const authDopplerConfig = process.env.DOPPLER_CONFIG?.trim() || "prd";
 const targetFilter = new Set(
@@ -56,7 +59,7 @@ const rotateClientSecrets = process.env.ROTATE_AUTH_CLIENT_SECRETS === "1";
 
 if (!serviceToken) {
   throw new Error(
-    "SERVICE_AUTH_TOKEN is required. Run through Doppler for auth prd, for example: doppler run --project auth --config prd -- pnpm --dir apps/os tsx scripts/sync-auth-clients.ts",
+    "APP_CONFIG_SERVICE_AUTH_TOKEN is required. Run through Doppler for auth prd, for example: doppler run --project auth --config prd -- pnpm --dir apps/os tsx scripts/sync-auth-clients.ts",
   );
 }
 
@@ -72,8 +75,11 @@ for (const target of targets) {
   const webRedirectUri = `${target.baseUrl}/api/iterate-auth/callback`;
   const webReferenceId = `os:${target.dopplerConfig}:web`;
   const webClientName = `OS ${target.dopplerConfig} web`;
-  const existingWebClientId = getDopplerSecret(target, "ITERATE_OAUTH_CLIENT_ID");
-  const existingWebClientSecret = getDopplerSecret(target, "ITERATE_OAUTH_CLIENT_SECRET");
+  const existingWebClientId = getDopplerSecret(target, "APP_CONFIG_ITERATE_AUTH__CLIENT_ID");
+  const existingWebClientSecret = getDopplerSecret(
+    target,
+    "APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET",
+  );
   const webClient = await authClient.internal.oauth.ensureClient({
     referenceId: webReferenceId,
     clientName: webClientName,
@@ -91,14 +97,15 @@ for (const target of targets) {
     "http://127.0.0.1:3334/callback",
     "http://localhost:3334/callback",
   ];
-  const existingMcpClientId = getDopplerSecret(target, "ITERATE_MCP_OAUTH_CLIENT_ID");
-  const existingMcpClientSecret = getDopplerSecret(target, "ITERATE_MCP_OAUTH_CLIENT_SECRET");
+  const existingMcpSeed = seedOAuthClients.find(
+    (candidate) => candidate.referenceId === mcpReferenceId,
+  );
   const mcpClient = await authClient.internal.oauth.ensureClient({
     referenceId: mcpReferenceId,
     clientName: mcpClientName,
     redirectURIs: mcpRedirectURIs,
-    existingClientId: existingMcpClientId,
-    existingClientSecret: existingMcpClientSecret,
+    existingClientId: existingMcpSeed?.clientId,
+    existingClientSecret: existingMcpSeed?.clientSecret,
     rotateClientSecret: rotateClientSecrets,
   });
 
@@ -106,14 +113,11 @@ for (const target of targets) {
     APP_CONFIG_BASE_URL: target.baseUrl,
     APP_CONFIG_MCP__BASE_URL: target.mcpBaseUrl,
     APP_CONFIG_PROJECT_HOSTNAME_BASES: JSON.stringify([target.projectHostnameBase]),
-    ITERATE_OAUTH_ISSUER: authIssuer,
-    ITERATE_OAUTH_CLIENT_ID: webClient.clientId,
-    ITERATE_OAUTH_CLIENT_SECRET: webClient.clientSecret,
-    ITERATE_OAUTH_REDIRECT_URI: webRedirectUri,
-    ITERATE_MCP_OAUTH_CLIENT_ID: mcpClient.clientId,
-    ITERATE_MCP_OAUTH_CLIENT_SECRET: mcpClient.clientSecret,
-    ITERATE_AUTH_SERVICE_TOKEN: serviceToken,
-    ITERATE_AUTH_JWKS: JSON.stringify(authJwks),
+    APP_CONFIG_ITERATE_AUTH__ISSUER: authIssuer,
+    APP_CONFIG_ITERATE_AUTH__CLIENT_ID: webClient.clientId,
+    APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET: webClient.clientSecret,
+    APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN: serviceToken,
+    APP_CONFIG_ITERATE_AUTH__JWKS: JSON.stringify(authJwks),
   });
 
   upsertSeedOAuthClient(seedOAuthClients, {

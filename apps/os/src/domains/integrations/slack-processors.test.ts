@@ -33,6 +33,10 @@ class MemoryStreamNetwork {
 class MemoryStream implements Stream {
   events: StreamEvent[] = [];
 
+  async __describe() {
+    return { instructions: "in-memory test stream", types: "", children: {} };
+  }
+
   constructor(
     readonly network: MemoryStreamNetwork,
     readonly path: string,
@@ -487,7 +491,7 @@ describe("SlackAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     const scripts = stream.events.filter(
-      (event) => event.type === "events.iterate.com/itx/script-execution-requested",
+      (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
     );
     expect(scripts).toHaveLength(1);
     expect((scripts[0]!.payload as { code: string }).code).toContain("await itx.whoami()");
@@ -586,7 +590,7 @@ describe("SlackAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     const scripts = stream.events.filter(
-      (event) => event.type === "events.iterate.com/itx/script-execution-requested",
+      (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
     );
     expect(scripts).toHaveLength(1);
     expect(scripts[0]).toMatchObject({
@@ -595,7 +599,7 @@ describe("SlackAgentProcessor", () => {
     });
     const code = (scripts[0]!.payload as { code: string }).code;
     expect(code).toContain("const debug = await itx.debug();");
-    expect(code).toContain("await itx.slack.chat.postMessage({");
+    expect(code).toContain("await itx.integrations.slack.chat.postMessage({");
     expect(code).toContain('channel: "C123"');
     expect(code).toContain('thread_ts: "111.222"');
     expect(code).toContain("text: `Debug info:\\n${debug}`");
@@ -735,7 +739,8 @@ describe("SlackAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     const scripts = stream.events.filter(
-      (streamEvent) => streamEvent.type === "events.iterate.com/itx/script-execution-requested",
+      (streamEvent) =>
+        streamEvent.type === "events.iterate.com/capability-host/script-execution-requested",
     );
     expect(scripts).toHaveLength(1);
     expect((scripts[0]!.payload as { code: string }).code).toContain(
@@ -763,7 +768,7 @@ describe("SlackAgentProcessor", () => {
 
     expect(
       stream.events.filter((streamEvent) => {
-        return streamEvent.type === "events.iterate.com/itx/script-execution-requested";
+        return streamEvent.type === "events.iterate.com/capability-host/script-execution-requested";
       }),
     ).toHaveLength(0);
     expect(
@@ -793,7 +798,7 @@ describe("SlackAgentProcessor", () => {
 
     expect(
       stream.events.filter((streamEvent) => {
-        return streamEvent.type === "events.iterate.com/itx/script-execution-requested";
+        return streamEvent.type === "events.iterate.com/capability-host/script-execution-requested";
       }),
     ).toHaveLength(0);
     expect(
@@ -844,7 +849,7 @@ describe("eyesReactionTargetFromWebhookPayload", () => {
 
 describe("compileBangCommand", () => {
   it("tells Slack agents to use the Google-backed Gmail capability for inbox requests", () => {
-    expect(SLACK_AGENT_SYSTEM_PROMPT).toContain("itx.gmail.request");
+    expect(SLACK_AGENT_SYSTEM_PROMPT).toContain("itx.integrations.gmail.request");
     expect(SLACK_AGENT_SYSTEM_PROMPT).toContain('provider: "google"');
     expect(SLACK_AGENT_SYSTEM_PROMPT).toContain('path: "/users/me/messages"');
     expect(SLACK_AGENT_SYSTEM_PROMPT).toContain("do not claim you lack inbox access");

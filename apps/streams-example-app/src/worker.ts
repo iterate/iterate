@@ -14,7 +14,7 @@ export { StreamDurableObject } from "~/domains/streams/stream-durable-object.ts"
  * It wraps the itx `StreamRpcTarget` with `trustedInternalAuthContext()`:
  * the example app is an AUTH-LESS playground, so every caller gets the
  * trusted-internal (admin) authority instead of walking through the real
- * deployment's `UnauthenticatedItx.authenticate()` door.
+ * deployment's `UnauthenticatedOs.authenticate()` door.
  *
  * `kill()`/`reset()` are playground-only operator verbs on top of the public
  * `Stream` capability — the sidebar's restart/reset experiments need them, and
