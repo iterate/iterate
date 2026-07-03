@@ -609,6 +609,9 @@ export function ProjectStreamView({
           />
         ) : (
           <FeedItemsView
+            // Fresh virtualizer state per stream mirror (see FeedItemsView
+            // docs); filter changes are handled inside without remounting.
+            key={feedStore.streamDatabase.databasePath}
             database={feedStore.streamDatabase}
             emptyLabel={connectionLabel}
             eventType={search.type ?? null}

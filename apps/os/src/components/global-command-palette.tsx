@@ -25,11 +25,17 @@ import type { StreamNavigator } from "~/lib/stream-navigation.ts";
  */
 export function GlobalCommandPalette() {
   const [open, setOpen] = useState(false);
-  // Tier-3 project choice, kept across dialog closes within the page; any
-  // route-provided context wins over it.
+  // The picker step's choice (pages without route stream context). Cleared on
+  // every close so the next ⌘K starts back at the picker — otherwise the
+  // first-ever choice would lock the palette to that project on non-project
+  // pages. Any route-provided context wins over it.
   const [pickedProject, setPickedProject] = useState<{ id: string; slug: string } | null>(null);
   const matches = useMatches();
   const navigate = useNavigate();
+  const handleOpenChange = (next: boolean) => {
+    setOpen(next);
+    if (!next) setPickedProject(null);
+  };
   const routeStream = useMemo(() => activeStreamBreadcrumb(matches), [matches]);
   const activeStream = useMemo(
     () =>
@@ -78,13 +84,15 @@ export function GlobalCommandPalette() {
   }, [activeStream, navigate]);
 
   if (activeStream == null || streamNavigator == null) {
-    return <ProjectPickerDialog open={open} onOpenChange={setOpen} onPick={setPickedProject} />;
+    return (
+      <ProjectPickerDialog open={open} onOpenChange={handleOpenChange} onPick={setPickedProject} />
+    );
   }
 
   return (
     <StreamSwitcherDialog
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={handleOpenChange}
       currentPath={activeStream.streamPath}
       navigator={streamNavigator}
       scope={activeStream.projectId}

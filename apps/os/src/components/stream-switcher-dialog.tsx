@@ -67,7 +67,9 @@ export function StreamSwitcherDialog({
   // the cursor placed after the trailing slash, ready for the leaf.
   useEffect(() => {
     if (!open) return;
-    setExpandedPaths(new Set(streamPathAncestors(currentPath)));
+    // "/" is the tree's root node, not an ancestor of non-root paths — it
+    // must always start expanded or every deeper stream stays hidden.
+    setExpandedPaths(new Set(["/", ...streamPathAncestors(currentPath)]));
     setDestination(destinationPrefill(currentPath));
     requestAnimationFrame(() => {
       const input = inputRef.current;
