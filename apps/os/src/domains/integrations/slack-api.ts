@@ -9,7 +9,7 @@
 // Slack integration `botToken` config is the fallback. The legacy top-level
 // `slackBotToken` is still accepted during the migration.
 
-import { itxEnv } from "../../env.ts";
+import { engineEnv } from "../../env.ts";
 import { projectStub } from "../projects/egress.ts";
 import { SLACK_BOT_TOKEN_SECRET_PATH } from "./utils.ts";
 import { parseConfig } from "~/config.ts";
@@ -54,7 +54,7 @@ export async function callProjectSlackWebApi(input: {
     },
     method: "POST",
   });
-  const response = await projectStub(itxEnv.PROJECT, input.projectId).fetch(request);
+  const response = await projectStub(engineEnv.PROJECT, input.projectId).fetch(request);
   if (response.status === 404 || response.status === 400) {
     // secret_not_found / secret_reference errors from the secret pipeline —
     // not a Slack response. Fall back to the deployment-wide bot token.
@@ -81,7 +81,7 @@ export async function callProjectSlackWebApi(input: {
 
 function readFallbackSlackBotToken(): string | null {
   try {
-    const config = parseConfig(itxEnv);
+    const config = parseConfig(engineEnv);
     const token =
       config.integrations.slack?.botToken?.exposeSecret() ?? config.slackBotToken?.exposeSecret();
     return token && token.trim() !== "" ? token : null;

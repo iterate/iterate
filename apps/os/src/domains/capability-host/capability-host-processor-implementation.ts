@@ -33,6 +33,9 @@ type CompletedPayload = {
   result?: JsonValue;
 };
 const INVALID_PATH_SEGMENTS = new Set([
+  // Mount names only — INVOCATION paths may end in __describe (intercepted in
+  // invokeCapability below); a MOUNT named __describe would be unreachable.
+  "__describe",
   "__proto__",
   "constructor",
   "prototype",

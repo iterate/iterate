@@ -8,9 +8,9 @@
 //   whoami          session-context: it runs against the OS Session (what
 //                   authenticate() returns), not a project itx. The matrix
 //                   (and the Playwright REPL specs) execute in a project scope
-//                   where `itx.whoami` / `itx.projects` do not exist. Session
-//                   behavior is proven by the itx e2e suites
-//                   (apps/os/e2e/itx/itx.e2e.test.ts).
+//                   where the Session's __describe().principal / itx.projects
+//                   do not exist. Session behavior is proven by the itx e2e
+//                   suites (apps/os/e2e/itx/itx.e2e.test.ts).
 //   list-projects   session-context, same reason as whoami.
 //   ai-models       depends on the deployment's upstream Workers AI account
 //                   (catalog availability + latency); interactive reading

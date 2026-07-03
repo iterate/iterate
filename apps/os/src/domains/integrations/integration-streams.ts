@@ -5,7 +5,7 @@
 // RpcTarget layer. All callers are itx workers acting with internal
 // authority; caller-facing confinement stays in rpc-targets.ts.
 
-import { itxEnv } from "../../env.ts";
+import { engineEnv } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { StreamEvent } from "../../types.ts";
 import {
@@ -15,7 +15,7 @@ import {
 } from "./utils.ts";
 
 export function integrationStreamStub(projectId: string | null, path: string) {
-  return itxEnv.STREAM.getByName(
+  return engineEnv.STREAM.getByName(
     DurableObjectNameCodec.stringify({ projectId, path }, { allowNullProjectId: true }),
   );
 }

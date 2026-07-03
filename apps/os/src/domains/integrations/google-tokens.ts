@@ -8,7 +8,7 @@
 // substitution pipeline does not cover), which is why Google does not use the
 // secret Durable Object path Slack uses.
 
-import { itxEnv } from "../../env.ts";
+import { engineEnv } from "../../env.ts";
 import type { StreamEvent } from "../../types.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "../secrets/crypto.ts";
 import { integrationStreamStub, readAllStreamEvents } from "./integration-streams.ts";
@@ -99,7 +99,7 @@ export async function getFreshGoogleAccessToken(input: {
 
   const accessToken = await decryptSecretMaterial(
     state.encryptedAccessToken,
-    itxEnv.SECRET_ENCRYPTION_KEY,
+    engineEnv.SECRET_ENCRYPTION_KEY,
   );
   if (
     !state.expiresAt ||
@@ -115,7 +115,7 @@ export async function getFreshGoogleAccessToken(input: {
   }
   const refreshToken = await decryptSecretMaterial(
     state.encryptedRefreshToken,
-    itxEnv.SECRET_ENCRYPTION_KEY,
+    engineEnv.SECRET_ENCRYPTION_KEY,
   );
 
   const google = input.config.integrations.google;
@@ -148,13 +148,13 @@ export async function getFreshGoogleAccessToken(input: {
     payload: {
       encryptedAccessToken: await encryptSecretMaterial(
         tokenData.access_token,
-        itxEnv.SECRET_ENCRYPTION_KEY,
+        engineEnv.SECRET_ENCRYPTION_KEY,
       ),
       ...(tokenData.refresh_token
         ? {
             encryptedRefreshToken: await encryptSecretMaterial(
               tokenData.refresh_token,
-              itxEnv.SECRET_ENCRYPTION_KEY,
+              engineEnv.SECRET_ENCRYPTION_KEY,
             ),
           }
         : {}),

@@ -2,7 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import type { Env } from "../../env.ts";
 import {
-  projectRootItx,
+  itxForScope,
   ProjectEgressInterceptRpcTarget,
   StreamProcessorRpcTarget,
   StreamRpcTarget,
@@ -40,9 +40,10 @@ export class ProjectDurableObject extends DurableObject<Env> {
         // key configured; otherwise they fall back to Workers AI.
         defaultLlmProvider:
           readOpenAiApiKeyFromAppConfig(this.env) === null ? "cloudflare-ai" : "openai-ws",
-        itx: projectRootItx({
+        itx: itxForScope({
           auth: trustedInternalAuthContext(),
           ctx: this.ctx,
+          path: "/",
           projectId: this.#name.projectId,
         }),
       }),

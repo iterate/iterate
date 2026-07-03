@@ -79,7 +79,7 @@ export async function decideIngressRoute(input: {
         urlPrefix: `/${head}`,
       });
     }
-    if (isItxApiPath(url.pathname)) return { lane: "api" };
+    if (isApiWorkerLanePath(url.pathname)) return { lane: "api" };
     return { lane: "os" };
   }
 
@@ -141,7 +141,7 @@ function projectRoute(input: {
  * callback routes under `/api/integrations/...`) are app routes and stay on
  * the "os" lane.
  */
-function isItxApiPath(pathname: string): boolean {
+function isApiWorkerLanePath(pathname: string): boolean {
   if (pathname === "/api" || pathname === "/api/admin-cookie") return true;
   if (
     pathname === "/api/integrations/slack/webhook" ||
@@ -207,7 +207,7 @@ export function apiWorkerRequest(input: {
   if (!isOsHost({ baseUrl: input.config.baseUrl, bases, host, requestUrl: url })) {
     return input.request;
   }
-  if (isItxApiPath(url.pathname)) return input.request;
+  if (isApiWorkerLanePath(url.pathname)) return input.request;
   if (/^\/prj_[^/]/.test(url.pathname)) return input.request;
   return null;
 }

@@ -8,7 +8,7 @@ import {
   userPrincipalOf,
   widenProjectAccess,
 } from "./auth.ts";
-import { itxEnv as env } from "./env.ts";
+import { engineEnv as env } from "./env.ts";
 import {
   listProjectDirectory,
   primeProjectDirectory,
@@ -484,7 +484,7 @@ class SlackRpcTarget extends RpcTarget implements SlackCapability {
     return withInvokeCapabilityFallback(this);
   }
 
-  __describe() {
+  async __describe() {
     return describeNode({
       instructions:
         'Slack Web API proxy for the project\'s connected workspace — a flattened dispatcher, not an object graph: any dotted method path compiles to one request (`slack.chat.postMessage({ channel, text })` calls the "chat.postMessage" Web API method). `request({ method, body })` is the explicit form. Sub-paths are Slack\'s method catalogue, not enumerable members. Check itx.integrations.getConnection({ provider: "slack" }) first.',
@@ -527,7 +527,7 @@ class GmailRpcTarget extends RpcTarget implements GmailCapability {
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  __describe() {
+  async __describe() {
     return describeNode({
       instructions:
         'Gmail REST proxy for the project\'s connected Google account: request({ path, query, method, body }) against paths relative to https://gmail.googleapis.com/gmail/v1 (e.g. { path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }). Check itx.integrations.getConnection({ provider: "google" }) first.',
@@ -919,9 +919,10 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
     // project directory and widen itself before the synchronous constructor
     // assert runs. Cap'n Web pipelines through the returned promise.
     await this.props.auth.ensureCanAccessProject?.(projectId);
-    return projectRootItx({
+    return itxForScope({
       auth: this.props.auth,
       ctx: this.props.ctx,
+      path: "/",
       projectId: projectId,
     });
   }
@@ -997,9 +998,10 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
       }),
     );
 
-    return projectRootItx({
+    return itxForScope({
       auth: this.props.auth,
       ctx: this.props.ctx,
+      path: "/",
       projectId: args.projectId,
     });
   }
@@ -1200,7 +1202,7 @@ export class CapabilityHostRpcTarget extends RpcTarget implements CapabilityHost
   }
 
   async provideCapability(input: Parameters<CapabilityHost["provideCapability"]>[0]) {
-    rejectBuiltinCollision(ITX_SURFACE_GUARDS, input.path);
+    rejectBuiltinCollision(ITX_SURFACE_MEMBER_NAMES, input.path);
     const provision = await this.#durableObject.provideCapability(input);
     // The Durable Object returns the durable mount coordinates. The public RPC
     // surface returns an ownership handle that can revoke that exact mount on
@@ -1262,63 +1264,48 @@ class CapabilityHostCollectionRpcTarget extends RpcTarget implements CapabilityH
     });
   }
 }
-const PROJECT_BUILTIN_CAPABILITY_PATHS = [
-  "ai",
-  "agents",
-  "capabilityHost",
-  "capabilityHosts",
-  "debug",
-  "egress",
-  "examples",
-  "integrations",
-  "mcp",
-  "openapi",
-  "processor",
-  "repo",
-  "repos",
-  "sandboxes",
-  "secrets",
-  "streams",
-  "worker",
-  "workers",
-] as const;
+/**
+ * THE one table of project built-ins: member name -> one-line blip. Everything
+ * else derives from it — the capability inventory rows in `__describe()`
+ * (via PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS) and the `children` map — so
+ * adding a built-in is one entry here plus the getter on ProjectRpcTarget.
+ */
+const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
+  agents: "Agent catalog: get(path), list().",
+  ai: "Workers AI: run(model, body), models().",
+  capabilityHost:
+    "This scope's own capability host: provideCapability({ path, ... }) mounts a dynamic capability here (itx.provideCapability is a shortcut), revokeCapability removes one, __describe() lists everything reachable, runScript runs a script in this scope.",
+  capabilityHosts:
+    'Capability hosts of OTHER scopes, addressed by path: itx.capabilityHosts.get("/") is the project root — providing there makes a capability visible to every scope in the project.',
+  debug: "Returns formatted OS debug info for this itx scope, including a dashboard stream link.",
+  egress: "Project-attributed outbound fetch (+ intercept).",
+  examples: "Catalogue of known-good itx script snippets: list(), get({ id }).",
+  integrations:
+    "Slack/Google connections plus connection-scoped API proxies: itx.integrations.gmail.request({ path, query }) and itx.integrations.slack.chat.postMessage({ channel, text }). Check itx.integrations.getConnection({ provider }) first.",
+  mcp: "Ad-hoc MCP clients: connect(url); itx.mcp.exa is the built-in Exa web search.",
+  openapi: "Ad-hoc OpenAPI clients: connect(spec).",
+  processor: "The project stream processor (snapshot/state).",
+  provideCapability:
+    "Shortcut: mount a capability on THIS scope (capabilityHost.provideCapability).",
+  repo: "The project repo at /repos/project.",
+  repos: "Repo catalog by path.",
+  revokeCapability: "Shortcut: remove a mount from THIS scope.",
+  sandboxes: "Path-addressed Cloudflare sandboxes.",
+  secrets: "Secret catalog by path.",
+  streams: "Project stream catalog: get(path), list().",
+  worker: "The default repo-backed project worker.",
+  workers: "Dynamic worker refs: get(ref).",
+};
 
-const PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS: readonly CapabilityDescription[] =
-  PROJECT_BUILTIN_CAPABILITY_PATHS.map((path) => {
-    if (path === "capabilityHost") {
-      return {
-        instructions:
-          "This scope's own capability host: provideCapability({ path, ... }) mounts a dynamic capability here (itx.provideCapability is a shortcut), revokeCapability removes one, __describe() lists everything reachable, runScript runs a script in this scope.",
-        path: [path],
-        type: "builtin" as const,
-      };
-    }
-    if (path === "capabilityHosts") {
-      return {
-        instructions:
-          'Capability hosts of OTHER scopes, addressed by path: itx.capabilityHosts.get("/") is the project root — providing there makes a capability visible to every scope in the project.',
-        path: [path],
-        type: "builtin" as const,
-      };
-    }
-    if (path === "integrations") {
-      return {
-        instructions:
-          "Slack/Google connections plus connection-scoped API proxies: itx.integrations.gmail.request({ path, query }) and itx.integrations.slack.chat.postMessage({ channel, text }). Check itx.integrations.getConnection({ provider }) first.",
-        path: [path],
-        type: "builtin" as const,
-      };
-    }
-    if (path === "debug") {
-      return {
-        instructions:
-          "Returns formatted OS debug info for this itx scope, including a dashboard stream link.",
-        path: [path],
-        type: "builtin" as const,
-      };
-    }
-    return { path: [path], type: "builtin" as const };
-  });
+// The shortcut methods are children (callable members) but not capability
+// PATHS — they alias capabilityHost, which already has an inventory row.
+const PROJECT_BUILTIN_NON_PATHS = new Set(["provideCapability", "revokeCapability"]);
+
+const PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS: readonly CapabilityDescription[] = Object.entries(
+  PROJECT_BUILTIN_BLIPS,
+)
+  .filter(([name]) => !PROJECT_BUILTIN_NON_PATHS.has(name))
+  .map(([name, instructions]) => ({ instructions, path: [name], type: "builtin" as const }));
 
 type ProjectRpcTargetProps = {
   auth: ItxAuth;
@@ -1380,27 +1367,7 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
         "Deep discovery: call __describe() on any child.",
       types: ITX_TYPES_SOURCE,
       children: {
-        agents: "Agent catalog: get(path), list().",
-        ai: "Workers AI: run(model, body), models().",
-        capabilityHost: "THIS scope's durable capability table (provide/revoke/runScript).",
-        capabilityHosts: 'Other scopes\' hosts by path; get("/") mounts project-wide.',
-        debug: "Slack-formatted debug info for this scope.",
-        egress: "Project-attributed outbound fetch (+ intercept).",
-        examples: "Catalogue of known-good itx script snippets.",
-        integrations:
-          "Slack/Google connections + connection-scoped proxies (integrations.gmail, integrations.slack).",
-        mcp: "Ad-hoc MCP clients: connect(url).",
-        openapi: "Ad-hoc OpenAPI clients: connect(spec).",
-        processor: "The project stream processor (snapshot/state).",
-        provideCapability: "Shortcut: mount a capability on THIS scope.",
-        repo: "The project repo at /repos/project.",
-        repos: "Repo catalog by path.",
-        revokeCapability: "Shortcut: remove a mount from THIS scope.",
-        sandboxes: "Path-addressed Cloudflare sandboxes.",
-        secrets: "Secret catalog by path.",
-        streams: "Project stream catalog: get(path), list().",
-        worker: "The default repo-backed project worker.",
-        workers: "Dynamic worker refs: get(ref).",
+        ...PROJECT_BUILTIN_BLIPS,
         ...(scopePath.startsWith("/agents/")
           ? {
               agent: "THIS agent's control surface (present because this is an agent scope).",
@@ -1573,26 +1540,39 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
   }
 }
 
-// Provide-time collision guard inputs: a dynamic capability's root segment must
-// not shadow anything on either itx-facing surface (project itx or agent), and
-// must not collide with the `props` instance field — instance fields live on the
-// instance rather than the prototype, so they need the explicit literal entry.
-const ITX_SURFACE_GUARDS: readonly object[] = [
-  ProjectRpcTarget.prototype,
-  AgentRpcTarget.prototype,
-  CapabilityHostRpcTarget.prototype,
-  { props: true },
-];
+// Provide-time collision guard: a dynamic capability's root segment may not
+// shadow any member of the itx-facing surfaces — built-ins always win
+// isolate-side resolution (see the ProjectRpcTarget design note), so a mount
+// behind one would be silently unreachable. Computed from the prototypes;
+// "props" is added by hand because instance fields live on instances, not
+// prototypes.
+const ITX_SURFACE_MEMBER_NAMES: ReadonlySet<string> = new Set([
+  "props",
+  ...[
+    ProjectRpcTarget.prototype,
+    AgentRpcTarget.prototype,
+    CapabilityHostRpcTarget.prototype,
+  ].flatMap((prototype) => Object.getOwnPropertyNames(prototype)),
+]);
 
-/** The itx at a project's root scope, wired to its own root capability host. */
-export function projectRootItx(props: {
+/**
+ * THE one recipe for constructing an itx: a ProjectRpcTarget wired to the
+ * capability host at `path`. Everything that vends an itx goes through here —
+ * session.projects.get/create (path "/"), the ItxEntrypoint behind dynamic
+ * workers' env.ITX, and the capability-host DO's own script-execution itx —
+ * so scope wiring cannot drift between them.
+ */
+export function itxForScope(props: {
   auth: ItxAuth;
   ctx: CfExecutionContext;
+  path: string;
   projectId: string;
 }): ProjectRpcTarget {
   return new ProjectRpcTarget({
-    ...props,
-    capabilityHost: new CapabilityHostRpcTarget({ ...props, path: "/" }),
+    auth: props.auth,
+    capabilityHost: new CapabilityHostRpcTarget(props),
+    ctx: props.ctx,
+    projectId: props.projectId,
   });
 }
 
@@ -1993,7 +1973,14 @@ class McpClientRpcTarget extends RpcTarget {
     return withInvokeCapabilityFallback(this);
   }
 
-  async invokeCapability({ args = [], path }: Parameters<SlackCapability["invokeCapability"]>[0]) {
+  async __describe() {
+    return describeNode({
+      instructions: `An ad-hoc MCP client for ${this.props.config.url} — a flattened dispatcher: any dotted call is one MCP tool invocation (\`client.someTool(input)\` calls the tool "someTool"). Tool names come from the server, not from this node; list them with the server's own discovery if it offers one.`,
+      parent: "itx.mcp (connect(url), or the built-in exa)",
+    });
+  }
+
+  async invokeCapability({ args = [], path }: Parameters<CapabilityHost["invokeCapability"]>[0]) {
     return await callMcpToolPath({
       args,
       config: this.props.config,
@@ -2042,7 +2029,21 @@ class OpenApiRpcTarget extends RpcTarget {
     return withInvokeCapabilityFallback(this);
   }
 
-  async invokeCapability({ args = [], path }: Parameters<SlackCapability["invokeCapability"]>[0]) {
+  async __describe() {
+    return describeNode({
+      instructions:
+        "An ad-hoc OpenAPI client — a flat dispatcher: `client.someOperationId(input)` executes that operation against the spec's server. `children` lists the operations parsed from the spec.",
+      children: Object.fromEntries(
+        this.props.operations.map((operation) => [
+          operation.operationId,
+          `${operation.method.toUpperCase()} ${operation.path}`,
+        ]),
+      ),
+      parent: "itx.openapi.connect(spec)",
+    });
+  }
+
+  async invokeCapability({ args = [], path }: Parameters<CapabilityHost["invokeCapability"]>[0]) {
     const operationId = path[0];
     if (!operationId) throw new Error("OpenAPI operation calls need an operationId path.");
     if (path.length > 1) {

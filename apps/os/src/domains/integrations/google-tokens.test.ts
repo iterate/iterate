@@ -2,7 +2,7 @@
 // cases from the legacy src/domains/secrets/oauth.test.ts onto the next
 // implementation). Tokens live as AES-GCM ciphertext in events on the per-project
 // `/integrations/google` stream, so the seam here is an in-memory STREAM
-// namespace behind the mocked `itxEnv` plus a stubbed global fetch — no
+// namespace behind the mocked `engineEnv` plus a stubbed global fetch — no
 // workerd, no network.
 
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -68,7 +68,7 @@ const streamNetwork = vi.hoisted(() => {
 const SECRET_ENCRYPTION_KEY = "test-secret-encryption-key";
 
 vi.mock("../../env.ts", () => ({
-  itxEnv: {
+  engineEnv: {
     SECRET_ENCRYPTION_KEY: "test-secret-encryption-key",
     STREAM: { getByName: streamNetwork.getByName },
   },

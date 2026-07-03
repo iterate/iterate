@@ -6,7 +6,7 @@ import { env as workerEnv } from "cloudflare:workers";
  *
  * The repo-wide ambient `Env` (src/lib/worker-env.d.ts) covers the two
  * dashboard-side workers (app + ingress); the engine workers deliberately do not
- * participate in that union — they import this `Env` and the `itxEnv`
+ * participate in that union — they import this `Env` and the `engineEnv`
  * accessor explicitly, so neither side's types leak into the other.
  */
 export interface Env {
@@ -54,4 +54,4 @@ export interface Env {
   >;
 }
 
-export const itxEnv = workerEnv as unknown as Env;
+export const engineEnv = workerEnv as unknown as Env;

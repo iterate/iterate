@@ -10,7 +10,6 @@ type InvokeCapabilityTarget = {
 };
 
 const RESERVED_DYNAMIC_PATH_SEGMENTS: ReadonlySet<string> = new Set([
-  "__describe",
   "__defineGetter__",
   "__defineSetter__",
   "__lookupGetter__",
@@ -154,18 +153,19 @@ export function withOwnedRpcSession<T extends object>(stub: T, ...owned: Disposa
 
 /**
  * Guards `provideCapability` against shadowing the itx surface: a capability
- * path's root segment may not be a reserved RPC segment nor an existing builtin
- * on any of the guard objects (e.g. `streams`, `agents` on the itx/agent
- * targets' prototypes). Runs in the isolate because it inspects RpcTarget
- * shapes, which the capability-host Durable Object can't see.
+ * path's root segment may not be a reserved RPC segment nor an existing member
+ * name of the itx-facing surfaces (e.g. `streams`, `agents`). Runs in the
+ * isolate because the member names come from RpcTarget prototypes, which the
+ * capability-host Durable Object can't see (ITX_SURFACE_MEMBER_NAMES in
+ * rpc-targets.ts).
  */
-export function rejectBuiltinCollision(guards: readonly object[], path: string[]): void {
+export function rejectBuiltinCollision(surfaceMembers: ReadonlySet<string>, path: string[]): void {
   const root = path[0];
   if (!root) return;
   if (isReservedDynamicPathSegment(root)) {
     throw new Error(`cannot provide capability "${root}": it is a reserved ITX path segment`);
   }
-  if (guards.some((guard) => root in guard)) {
+  if (surfaceMembers.has(root)) {
     throw new Error(`cannot provide capability "${root}": it is already on the ITX surface`);
   }
 }
@@ -191,31 +191,18 @@ export function createInvokeCapabilityPathProxy(
     },
     get(target, key, receiver) {
       if (typeof key === "symbol") return Reflect.get(target, key, receiver);
-      // `__describe` works on dynamic paths too: the capability host answers it
-      // from the mount's durable metadata (instructions/types recorded at
-      // provide time), so discovery never dials the live target.
-      if (key === "__describe") {
-        return () => invoker.invokeCapability({ args: [], path: [...path, "__describe"] });
-      }
       if (isReserved(key)) return undefined;
+      // NOTE `__describe` is deliberately NOT reserved: it traverses like any
+      // other segment, and the capability-host processor intercepts trailing
+      // `__describe` and answers from the mount's durable metadata
+      // (capability-host-processor-implementation.ts #describeMount). One
+      // mechanism, no proxy special cases.
       return valueFor(key);
     },
     getOwnPropertyDescriptor(target, key) {
       const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
       if (descriptor) return descriptor;
-      if (typeof key === "symbol") return undefined;
-      // `__describe` is reserved as a MOUNT name but must be traversable here —
-      // Cap'n Web probes own descriptors before reading a segment, so without
-      // this the get-trap special case above is unreachable over RPC.
-      if (key === "__describe") {
-        return {
-          configurable: true,
-          enumerable: true,
-          value: () => invoker.invokeCapability({ args: [], path: [...path, "__describe"] }),
-          writable: false,
-        };
-      }
-      if (isReserved(key)) return undefined;
+      if (typeof key === "symbol" || isReserved(key)) return undefined;
       // Cap'n Web's server-side path traversal probes own descriptors before
       // reading a segment. Dynamic roots need to look discoverable here so
       // calls like project.slack.chat.postMessage(...) reach the apply trap.
@@ -228,7 +215,6 @@ export function createInvokeCapabilityPathProxy(
     },
     has(target, key) {
       if (typeof key === "symbol") return key in target;
-      if (key === "__describe") return true;
       return !isReserved(key);
     },
   });

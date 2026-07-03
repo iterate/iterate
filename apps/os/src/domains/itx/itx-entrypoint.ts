@@ -1,7 +1,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import type { Env } from "../../env.ts";
-import { CapabilityHostRpcTarget, ProjectRpcTarget } from "../../rpc-targets.ts";
+import { itxForScope } from "../../rpc-targets.ts";
 import { scopeFromItxEntrypointProps, type ItxEntrypointProps } from "./utils.ts";
 
 /**
@@ -16,14 +16,8 @@ import { scopeFromItxEntrypointProps, type ItxEntrypointProps } from "./utils.ts
  * capability-host scope chain), not from a special entrypoint class.
  */
 export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
-  async get(): Promise<ProjectRpcTarget> {
+  async get() {
     const { path, projectId } = scopeFromItxEntrypointProps(this.ctx.props);
-    const auth = trustedInternalAuthContext();
-    return new ProjectRpcTarget({
-      auth,
-      capabilityHost: new CapabilityHostRpcTarget({ auth, ctx: this.ctx, path, projectId }),
-      ctx: this.ctx,
-      projectId,
-    });
+    return itxForScope({ auth: trustedInternalAuthContext(), ctx: this.ctx, path, projectId });
   }
 }

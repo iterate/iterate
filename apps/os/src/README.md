@@ -66,8 +66,10 @@ Deep discovery is a walk: read `children`, recurse into what you care about
 (see the `discover-tree` example). Mounted capabilities answer `__describe()`
 too — the capability host serves it from the mount's provide-time
 `instructions`/`types` metadata, never dialing the live target, so discovery
-works even when a session-bound provider is offline. `__describe` is a
-reserved path segment: no mount can shadow it.
+works even when a session-bound provider is offline. `__describe` is an
+invalid MOUNT name (a mount there would be unreachable behind the
+interception), but it traverses dynamic paths like any other segment — the
+interception is the only mechanism, no proxy special cases.
 
 Today each node hand-writes its description (`describeNode` in
 `domains/itx/utils.ts` only enforces the shape); the intended evolution is a

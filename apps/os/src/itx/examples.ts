@@ -38,7 +38,7 @@ export type ItxExample = {
   /** Script body: `itx` and `vars` in scope, explicit `return`. */
   code: string;
   /** The handle the snippet expects: a project itx (the normal case) or the
-   * OS Session — what authenticate() returns, not an itx (whoami /
+   * OS Session — what authenticate() returns, not an itx (__describe /
    * projects.list only). */
   context: "project" | "session";
   description: string;

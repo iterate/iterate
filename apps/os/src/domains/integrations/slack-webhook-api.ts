@@ -5,7 +5,7 @@
 // routeSlackWebhook() — no capnweb round trip through the deployment's own
 // /api surface (which is how this code worked when it lived app-side).
 import { routeSlackWebhook } from "./connect-flows.ts";
-import { verifySlackSignature } from "./integration-api.ts";
+import { verifySlackSignature } from "./slack-signature.ts";
 import type { AppConfig } from "~/config.ts";
 
 /**

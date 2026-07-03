@@ -22,7 +22,7 @@ import type {
   IntegrationProvider,
   RouteSlackWebhookResult,
 } from "../../types.ts";
-import { itxEnv } from "../../env.ts";
+import { engineEnv } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "../secrets/crypto.ts";
@@ -100,7 +100,7 @@ export async function startOAuthFlow(input: {
         provider: "slack",
         userId: input.userId,
       },
-      itxEnv.SECRET_ENCRYPTION_KEY,
+      engineEnv.SECRET_ENCRYPTION_KEY,
     );
     const authorizationUrl = new URL("https://slack.com/oauth/v2/authorize");
     authorizationUrl.searchParams.set("client_id", slack.oauthClientId);
@@ -124,7 +124,7 @@ export async function startOAuthFlow(input: {
       provider: "google",
       userId: input.userId,
     },
-    itxEnv.SECRET_ENCRYPTION_KEY,
+    engineEnv.SECRET_ENCRYPTION_KEY,
   );
   const authorizationUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   authorizationUrl.searchParams.set("access_type", "offline");
@@ -155,7 +155,7 @@ export async function completeSlackConnect(input: {
 }): Promise<CompleteConnectResult> {
   const stateData = await verifyOAuthState(
     { provider: "slack", state: input.state },
-    itxEnv.SECRET_ENCRYPTION_KEY,
+    engineEnv.SECRET_ENCRYPTION_KEY,
   );
   if (!stateData || stateData.projectId !== input.projectId) {
     return { callbackUrl: null, error: "slack_oauth_invalid_state", ok: false };
@@ -224,7 +224,7 @@ async function recordSlackConnection(input: {
   teamId: string;
   teamName: string;
 }): Promise<void> {
-  await itxEnv.SECRET.getByName(
+  await engineEnv.SECRET.getByName(
     DurableObjectNameCodec.stringify({
       projectId: input.projectId,
       path: SLACK_BOT_TOKEN_SECRET_PATH,
@@ -280,7 +280,7 @@ export async function completeGoogleConnect(input: {
 }): Promise<CompleteConnectResult> {
   const stateData = await verifyOAuthState(
     { provider: "google", state: input.state },
-    itxEnv.SECRET_ENCRYPTION_KEY,
+    engineEnv.SECRET_ENCRYPTION_KEY,
   );
   if (!stateData || stateData.projectId !== input.projectId) {
     return { callbackUrl: null, error: "google_oauth_invalid_state", ok: false };
@@ -338,13 +338,13 @@ export async function completeGoogleConnect(input: {
       email: userInfo.email,
       encryptedAccessToken: await encryptSecretMaterial(
         tokenData.access_token,
-        itxEnv.SECRET_ENCRYPTION_KEY,
+        engineEnv.SECRET_ENCRYPTION_KEY,
       ),
       ...(tokenData.refresh_token
         ? {
             encryptedRefreshToken: await encryptSecretMaterial(
               tokenData.refresh_token,
-              itxEnv.SECRET_ENCRYPTION_KEY,
+              engineEnv.SECRET_ENCRYPTION_KEY,
             ),
           }
         : {}),
@@ -388,7 +388,7 @@ export async function getConnectionStatus(input: {
   }
 
   // The slack router processor's reduced state is the connection projection.
-  const project = itxEnv.PROJECT.getByName(
+  const project = engineEnv.PROJECT.getByName(
     DurableObjectNameCodec.stringify({
       projectId: input.projectId,
       path: SLACK_INTEGRATION_STREAM_PATH,
@@ -423,7 +423,7 @@ export async function disconnectProvider(input: {
     }).catch(() => null);
     // Secrets have no delete; emptying the egress allowlist makes the stored
     // material unusable.
-    await itxEnv.SECRET.getByName(
+    await engineEnv.SECRET.getByName(
       DurableObjectNameCodec.stringify({
         projectId: input.projectId,
         path: SLACK_BOT_TOKEN_SECRET_PATH,
@@ -454,7 +454,7 @@ export async function disconnectProvider(input: {
   if (state.connected && state.encryptedAccessToken !== undefined) {
     const token = await decryptSecretMaterial(
       state.encryptedAccessToken,
-      itxEnv.SECRET_ENCRYPTION_KEY,
+      engineEnv.SECRET_ENCRYPTION_KEY,
     ).catch(() => null);
     if (token !== null) {
       await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(token)}`, {

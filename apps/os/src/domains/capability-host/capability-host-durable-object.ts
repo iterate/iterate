@@ -9,7 +9,7 @@ import {
 } from "../streams/stream-processor-host.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
-import { CapabilityHostRpcTarget, ProjectRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
+import { itxForScope, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import {
   itxEntrypointBinding,
@@ -49,15 +49,10 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
     (deps) =>
       new CapabilityHostProcessor({
         ...deps,
-        itx: new ProjectRpcTarget({
+        itx: itxForScope({
           auth: trustedInternalAuthContext(),
-          capabilityHost: new CapabilityHostRpcTarget({
-            auth: trustedInternalAuthContext(),
-            ctx: this.ctx,
-            path: this.#name.path,
-            projectId: this.#name.projectId,
-          }),
           ctx: this.ctx,
+          path: this.#name.path,
           projectId: this.#name.projectId,
         }),
         // The enclosing scope, so a capability miss at this path falls through to

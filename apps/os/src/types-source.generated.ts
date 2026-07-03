@@ -228,6 +228,7 @@ export type IntegrationProvider = "google" | "slack";
  * path-call fallback onto \`invokeCapability\`.
  */
 export interface SlackCapability {
+  __describe(): Promise<Description>;
   invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
   request(input: {
     body?: Record<string, unknown>;
@@ -245,6 +246,7 @@ export type GmailRequestInput = {
 
 /** Gmail REST proxy (\`itx.integrations.gmail.request({ path: "/users/me/messages" })\`). */
 export interface GmailCapability {
+  __describe(): Promise<Description>;
   request(input: GmailRequestInput): Promise<{
     data: unknown;
     headers: Record<string, string>;
