@@ -18,6 +18,16 @@
 // (`voice/user-turn-transcribed`, plus audit events) and relays
 // `voice/say-requested` projections into the realtime conversation.
 
+// A VALUE import from apps/os — deliberate: the voice-model prompt and tool
+// definitions are quality-critical and tuned from live sessions upstream, and
+// keeping a copy here drifted twice in one day. The module is import-free and
+// side-effect-free, so Metro bundles it cleanly.
+import {
+  ASK_ASSISTANT_TOOL,
+  NO_COMMENT_TOOL,
+  VOICE_AGENT_INSTRUCTIONS,
+} from "../../../../os/src/domains/voice/voice-client-prompts.ts";
+
 const USER_TURN_EVENT = "events.iterate.com/voice/user-turn-transcribed";
 const CLIENT_CONNECTED_EVENT = "events.iterate.com/voice/client-connected";
 const ASSISTANT_UTTERANCE_EVENT = "events.iterate.com/voice/assistant-utterance-completed";
@@ -25,52 +35,6 @@ const SAY_REQUESTED_EVENT = "events.iterate.com/voice/say-requested";
 const REPORT_SUPPRESSED_EVENT = "events.iterate.com/voice/report-suppressed";
 const WORKER_REPLY_EVENT = "events.iterate.com/agents/web-message-sent";
 const WORKER_IDLE_REPLY = "(idle)";
-
-const VOICE_AGENT_INSTRUCTIONS = `
-You are Iterate's voice assistant — the spoken front-end of a two-agent team.
-Alongside you runs a "worker" agent connected to the user's Iterate project.
-The worker hears everything the user says and does all actual work: running
-scripts, listing files and repos, managing the project. You cannot do any of
-that yourself, and you must never invent results.
-
-When the user asks for something actionable, acknowledge briefly and naturally
-("on it", "let me get that going") — the worker is already working on it.
-
-Messages starting with "[worker report]" are not from the human: they are
-results arriving from the worker. Relay their substance to the user
-conversationally and concisely. If a report only repeats what the user has
-already been told, call the no_comment function instead of speaking — never
-re-announce or re-confirm information the user already heard.
-
-Keep every response short. This is a spoken conversation. Always speak
-English unless the user clearly asks for another language — never switch
-languages based on a short or ambiguous utterance.
-`.trim();
-
-const ASK_ASSISTANT_TOOL = {
-  type: "function",
-  name: "ask_assistant",
-  description:
-    "Send a natural-language request to the worker agent connected to the user's Iterate project. The worker replies asynchronously as a later [worker report] message; this call returns immediately with an acknowledgement.",
-  parameters: {
-    type: "object",
-    properties: {
-      request: { type: "string", description: "The request, phrased for the worker agent." },
-    },
-    required: ["request"],
-  },
-};
-
-// A function-call response produces no audio, so this is the structurally
-// guaranteed way for the voice model to stay silent when a worker report is
-// redundant. Worst case it ignores the tool and talks — today's behavior.
-const NO_COMMENT_TOOL = {
-  type: "function",
-  name: "no_comment",
-  description:
-    "Stay silent instead of responding. Call this when the latest [worker report] adds nothing the user hasn't already been told.",
-  parameters: { type: "object", properties: {} },
-};
 
 export type RealtimeEvent = Record<string, unknown>;
 
