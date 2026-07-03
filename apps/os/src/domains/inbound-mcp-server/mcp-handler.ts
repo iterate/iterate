@@ -63,7 +63,7 @@ const EXEC_JS_DESCRIPTION = [
   "",
   "Use JavaScript for what separate calls cannot do: Promise.all to fan out independent requests concurrently, map/filter to trim big responses.",
   "",
-  "Discovering the surface: `await itx.__describe()` lists the project's capabilities; `await itx.examples.list()` is a catalogue of known-good snippets (streams, repo, workers, secrets, provideCapability, MCP, ...) and `await itx.examples.get({ id })` returns one with full code — copy working patterns from there. Web search is built in via Exa: `await itx.mcp.exa.web_search_exa({ query, numResults })`, page reading via `itx.mcp.exa.web_fetch_exa({ urls })`.",
+  "Discovering the surface: `await itx.__describe()` lists the project's capabilities (`children` is the member map) — and __describe() works on every node, including provided capabilities; `await itx.examples.list()` is a catalogue of known-good snippets (streams, repo, workers, secrets, provideCapability, MCP, ...) and `await itx.examples.get({ id })` returns one with full code — copy working patterns from there. Web search is built in via Exa: `await itx.mcp.exa.web_search_exa({ query, numResults })`, page reading via `itx.mcp.exa.web_fetch_exa({ urls })`.",
 ].join("\n");
 
 const mcpCorsHeaders = {

@@ -43,7 +43,7 @@ export const SLACK_AGENT_SYSTEM_PROMPT = [
   "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply — do not pattern-match response shapes blind or wrap calls in defensive try/catch (a raw thrown error is more useful to you). Use Promise.all to fan out independent calls concurrently.",
   'Keep the thread in the loop on every working turn: when a script does real work, post a short progress note in the same Promise.all as the work itself — Promise.all([itx.integrations.slack.chat.postMessage({ channel, thread_ts, text: "Checking your email now..." }), itx.integrations.gmail.request(...)]) — so the thread is never silent while you fetch.',
   "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
-  "Use project capabilities on itx when they are relevant: await itx.__describe() lists them, and await itx.examples.list() / itx.examples.get({ id }) is a catalogue of known-good snippets.",
+  "Use project capabilities on itx when they are relevant: await itx.__describe() lists them (`children` is the member map, `capabilities` the inventory) — the same __describe() works on any node, including provided capabilities. await itx.examples.list() / itx.examples.get({ id }) is a catalogue of known-good snippets.",
 ].join("\n");
 
 /**
@@ -340,7 +340,7 @@ function agentBirthCertificateEvents(input: {
           "- Read the repo with itx.repo.readFile({ path }) and itx.repo.listFiles(); change it with itx.repo.commitFiles({ message, changes: [{ path, content }] }).",
           "- Other agents live at /agents/<name> (itx.agents.list() / itx.agents.get(path)); Slack thread agents appear under /agents/slack/<channel>/ts-<ts>; secrets under /secrets/**.",
           '- Streams are path-addressed: itx.streams.get(path).append(event) / getEvents() / waitFor(); path "/" is the project root stream.',
-          "- itx.__describe() lists the capabilities currently available in your scope.",
+          "- itx.__describe() lists the capabilities currently available in your scope; __describe() works on every node (itx.integrations, itx.capabilityHost, any provided capability) when you need detail.",
           '- If Google is connected, Gmail is available at itx.integrations.gmail. Check itx.integrations.getConnection({ provider: "google" }) and use itx.integrations.gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }) for inbox requests.',
         ].join("\n"),
         llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
