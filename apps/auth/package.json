@@ -24,7 +24,8 @@
     "db:migrate": "sqlfu migrate",
     "db:rebuild": "rm -f ./src/server/db/.local.db && pnpm db:migrate",
     "deploy:prd": "doppler run --project auth --config prd -- pnpm alchemy:up",
-    "seed-oauth-clients": "tsx ./scripts/seed-oauth-clients.ts"
+    "seed-oauth-clients": "tsx ./scripts/seed-oauth-clients.ts",
+    "test": "node --import tsx --test scripts/*.test.ts"
   },
   "dependencies": {
     "@better-auth/oauth-provider": "^1.6.9",
