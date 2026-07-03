@@ -24,6 +24,10 @@ import {
 class MemoryStream implements Stream {
   events: StreamEvent[] = [];
 
+  async __describe() {
+    return { instructions: "in-memory test stream", types: "", children: {} };
+  }
+
   async append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
     const appended = inputs.map((input) => {
       const existing =
