@@ -105,33 +105,26 @@ async function assertHealthRoute(httpBaseUrl: string) {
 }
 
 /**
- * The itx HTTP boundary (`/api/itx/run`) is the admin/auth gate that replaced
- * the oRPC admin procedures. Probe both sides without running a dynamic worker:
- * an anonymous call is rejected (401) before the body is read, and the baked
- * admin bearer authenticates past the gate — reaching the "functionSource is
- * required" 400 — so a regression in admin itx auth fails the smoke.
+ * The `/api/admin-cookie` bridge is the HTTP-visible admin auth gate on the
+ * api worker. Probe both sides: an anonymous call is rejected (401), and the
+ * baked admin bearer authenticates and mints the capnweb admin cookie (200) —
+ * so a regression in admin api auth fails the smoke.
  */
 async function assertItxAdminAuth(httpBaseUrl: string) {
-  const runUrl = new URL("/api/itx/run", httpBaseUrl);
+  const cookieUrl = new URL("/api/admin-cookie", httpBaseUrl);
 
-  const anonymous = await fetch(runUrl, {
-    body: "{}",
-    headers: { "content-type": "application/json" },
+  const anonymous = await fetch(cookieUrl, {
     method: "POST",
     signal: AbortSignal.timeout(3_000),
   });
   expect(anonymous.status).toBe(401);
 
-  const admin = await fetch(runUrl, {
-    body: "{}",
-    headers: {
-      authorization: `Bearer ${SMOKE_ADMIN_API_SECRET}`,
-      "content-type": "application/json",
-    },
+  const admin = await fetch(cookieUrl, {
+    headers: { authorization: `Bearer ${SMOKE_ADMIN_API_SECRET}` },
     method: "POST",
     signal: AbortSignal.timeout(3_000),
   });
-  expect(admin.status, await admin.clone().text()).toBe(400);
+  expect(admin.status, await admin.clone().text()).toBe(200);
 }
 
 async function assertFullStack(httpBaseUrl: string) {

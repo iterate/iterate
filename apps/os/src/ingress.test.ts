@@ -34,7 +34,7 @@ it("treats the bare localhost project-host base as an OS app-host alias", async 
 });
 
 it("sends itx paths on the OS host to the api lane", async () => {
-  for (const path of ["/api/itx", "/api/itx/admin-cookie", "/__itx_e2e/fixture"]) {
+  for (const path of ["/api", "/api/admin-cookie", "/__itx_e2e/fixture"]) {
     const route = await decideIngressRoute({
       config: DEV_CONFIG,
       method: "GET",
@@ -235,7 +235,7 @@ it("apiWorkerRequest forwards project hosts and itx paths, keeps the app lane", 
     apiWorkerRequest({ config: DEV_CONFIG, request: new Request(url, { headers }) });
 
   expect(forward("http://localhost:56455/projects/demo")).toBeNull();
-  expect(forward("http://localhost:56455/api/itx")).not.toBeNull();
+  expect(forward("http://localhost:56455/api")).not.toBeNull();
   expect(forward("http://localhost:56455/prj_123/x")).not.toBeNull();
   expect(forward("http://demo.localhost:56455/")).not.toBeNull();
   expect(forward("http://hello--demo.localhost:56455/")).not.toBeNull();

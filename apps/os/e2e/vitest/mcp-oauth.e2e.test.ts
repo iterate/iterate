@@ -20,7 +20,7 @@ import { requireBaseUrl as requireOsBaseUrl } from "../test-support/os-client.ts
 //     project, and `exec_js` shows up)
 //
 // It needs a Better Auth browser session, which without a browser means the
-// bootstrap-admin email/password (the auth worker's SERVICE_AUTH_TOKEN). That
+// bootstrap-admin email/password (the auth worker's AppConfig service token). That
 // secret lives in the auth Doppler config, not the OS one, so the test skips
 // cleanly when it is absent (mirroring the preview smoke's admin-secret gate).
 // To run it against a preview slot:
@@ -106,9 +106,11 @@ function authClient(authOrigin: string) {
 }
 
 test("project MCP OAuth opaque-token flow", async () => {
-  const password = process.env.SERVICE_AUTH_TOKEN?.trim() || null;
+  const password = process.env.APP_CONFIG_SERVICE_AUTH_TOKEN?.trim() || null;
   if (!password) {
-    console.log("Skipping MCP OAuth e2e: SERVICE_AUTH_TOKEN not present in this environment.");
+    console.log(
+      "Skipping MCP OAuth e2e: APP_CONFIG_SERVICE_AUTH_TOKEN not present in this environment.",
+    );
     return;
   }
 

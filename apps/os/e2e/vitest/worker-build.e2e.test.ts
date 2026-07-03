@@ -151,7 +151,7 @@ describe("worker builds", () => {
       using session = withItxSession();
       using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
       using project = itx.projects.create({ slug: `swr-${crypto.randomUUID().slice(0, 8)}` });
-      await project.describe();
+      await project.__describe();
 
       const versionSource = (version: string) => [
         'import { DurableObject } from "cloudflare:workers";',

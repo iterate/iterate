@@ -640,7 +640,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    * and the woken subscriber responds with `subscribe({ configured: true })`,
    * handing this stream a live `processEventBatch` callback capability (see
    * `stream-processor-host.ts` for the subscriber side and
-   * `domains/itx/live-capability.ts` for the same pattern in itx).
+   * `domains/capability-host/live-capability.ts` for the same pattern in itx).
    */
   async #wakeConfiguredSubscriber(args: {
     configured: CoreProcessorState["configuredSubscribersByKey"][string];
@@ -683,7 +683,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   ): ConfiguredSubscriberTarget {
     const namespace = {
       agent: this.env.AGENT,
-      itx: this.env.ITX,
+      "capability-host": this.env.CAPABILITY_HOST,
       project: this.env.PROJECT,
       repo: this.env.REPO,
       secret: this.env.SECRET,

@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { withOwnedRpcSession } from "./utils.ts";
+import { withOwnedRpcSession } from "../itx/utils.ts";
 
 type TestStub = {
   dup(): TestStub;

@@ -6,7 +6,7 @@
 //   node            AsyncFunction over an itx Cap'n Web stub in this process
 //   cli             spawned `tsx scripts/cli.ts itx run --eval … --context …`
 //                   (a genuinely separate process; parses the CLI's one JSON doc)
-//   run-script      project.runScript(`async (itx) => { const vars = …; <body> }`)
+//   run-script      project.capabilityHost.runScript(`async (itx) => { const vars = …; <body> }`)
 //                   — the server-side script isolate agents use
 //   project-worker  the body baked into the project's repo worker.ts, invoked
 //                   via project.worker.runItxExample (env.ITX inside)
@@ -121,9 +121,9 @@ async function runInRunScript(input: {
 }): Promise<unknown> {
   using project = connectProject(input.projectId);
   // runScript takes an async arrow function source string (see itx
-  // ItxCapabilityHost contract); the example body becomes its body, with the
+  // CapabilityHost contract); the example body becomes its body, with the
   // case's vars serialized inline.
-  const execution = await project.runScript(
+  const execution = await project.capabilityHost.runScript(
     `async (itx) => {\nconst vars = ${JSON.stringify(input.vars)};\n${input.code}\n}`,
   );
   return execution.result;

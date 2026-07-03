@@ -10,7 +10,7 @@ test("project ingress serves the static seeded homepage at the root", async () =
     secret: adminSecret(),
   });
   using project = itx.projects.create({ slug: `project-ingress-${marker}` });
-  const { projectId } = await project.describe();
+  const { projectId } = await project.__describe();
 
   const pageResponse = await fetch(buildUrl({ path: `/${projectId}` }));
   expect(pageResponse.status).toBe(200);
@@ -40,7 +40,7 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
     secret: adminSecret(),
   });
   using project = itx.projects.create({ slug });
-  const { projectId } = await project.describe();
+  const { projectId } = await project.__describe();
 
   const fetchApp = (appHostPrefix: string, init?: RequestInit & { path?: string }) => {
     const path = init?.path ?? "/";

@@ -6,7 +6,7 @@
 //
 //   browser         the REPL (compileBrowserReplFunction wraps the body)
 //   node            AsyncFunction("itx", "vars", code) on a Cap'n Web stub
-//   run-script      itx.runScript(`async (itx) => { const vars = …; <body> }`)
+//   run-script      itx.capabilityHost.runScript(`async (itx) => { const vars = …; <body> }`)
 //                   — the server-side script isolate agents use
 //   project-worker  the body baked into the project repo's worker.js,
 //                   executed against `await this.env.ITX.get()`
@@ -38,7 +38,7 @@ export type ItxExample = {
   /** Script body: `itx` and `vars` in scope, explicit `return`. */
   code: string;
   /** The handle the snippet expects: a project itx (the normal case) or the
-   * OS Session — what authenticate() returns, not an itx (whoami /
+   * OS Session — what authenticate() returns, not an itx (__describe /
    * projects.list only). */
   context: "project" | "session";
   description: string;
@@ -58,11 +58,12 @@ export const ITX_EXAMPLES: ItxExample[] = [
     id: "whoami",
     title: "Who am I? (OS session)",
     description:
-      "The top-level REPL holds the OS Session — the catalog authenticate() returned; it is not an itx. whoami() reports the principal the socket carries; everything else you do is scoped by it.",
+      "The top-level REPL holds the OS Session — the catalog authenticate() returned; it is not an itx. __describe() works on every node; on a Session its `principal` is who the socket carries.",
     context: "session",
     runtimes: ["browser", "node", "cli"],
     code: `
-return await itx.whoami();
+const description = await itx.__describe();
+return description.principal;
 `.trim(),
   },
   {
@@ -84,18 +85,18 @@ if (!pid) throw new Error("Create a project first: await itx.projects.create({ s
 const project = await itx.projects.get(pid);
 
 // describe() reports the project and its capability table.
-return await project.describe();
+return await project.__describe();
 `.trim(),
   },
   {
     id: "describe-project",
-    title: "Describe the project's capability table",
+    title: "Describe the project (its __describe)",
     description:
-      "describe() is the project's self-report: its id, name, and every capability reachable at this scope — built-ins (streams, repo, workers, ai, ...) plus anything mounted with provideCapability. Agents read this to learn what they can call.",
+      "__describe() works on EVERY node and is the project's self-report: its id, name, a one-line blip per child member (`children`), and every capability reachable at this scope — built-ins plus anything mounted via a capability host. Agents read this to learn what they can call.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-const description = await itx.describe();
+const description = await itx.__describe();
 
 // Built-ins are always there; dynamic mounts carry type "live" or
 // "itx-expression" plus the offset of the event that mounted them.
@@ -103,7 +104,39 @@ return {
   builtins: description.capabilities
     .filter((capability) => capability.type === "builtin")
     .map((capability) => capability.path.join(".")),
+  children: Object.keys(description.children),
   projectId: description.projectId,
+};
+`.trim(),
+  },
+  {
+    id: "discover-tree",
+    title: "Discover the capability tree by walking __describe()",
+    description:
+      "The canonical discovery walk: every node answers __describe() with { instructions, types, children, parent }, so a map of the whole surface is 'read children, recurse into the ones you care about'. Mounted capabilities answer from their durable provide-time metadata — the walk never dials a live target.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+// High-level map: one __describe gives the blips for every child.
+const root = await itx.__describe();
+
+// Deep discovery: recurse into the children you care about.
+const [host, integrations] = await Promise.all([
+  itx.capabilityHost.__describe(),
+  itx.integrations.__describe(),
+]);
+
+return {
+  rootChildren: root.children,
+  scope: host.path,
+  mounts: host.capabilities
+    .filter((capability) => capability.type !== "builtin")
+    .map((capability) => ({
+      path: capability.path.join("."),
+      scope: capability.scope,
+      blip: capability.instructions ?? null,
+    })),
+  integrationsChildren: integrations.children,
 };
 `.trim(),
   },
@@ -140,8 +173,8 @@ return { appended, count: events.length };
     // matrix should not depend on.
     runtimes: ["browser", "node", "cli", "project-worker"],
     code: `
-const execution = await itx.runScript(\`async (itx) => {
-  const description = await itx.describe();
+const execution = await itx.capabilityHost.runScript(\`async (itx) => {
+  const description = await itx.__describe();
   return { projectId: description.projectId, sum: 6 * 7 };
 }\`);
 
@@ -238,7 +271,7 @@ const [event] = await itx.demoStream.append({
   type: "events.iterate.repl/expression-demo",
   payload: { note: vars.note ?? "hello through an expression" },
 });
-const described = await itx.describe();
+const described = await itx.__describe();
 const mount = described.capabilities.find(
   (capability) => capability.path.join(".") === "demoStream",
 );
@@ -577,7 +610,7 @@ const mountedSearch = await itx.publicMcp.web_search_exa({
   query: vars.query ?? "OpenAPI operationId example",
   numResults: 1,
 });
-const mount = (await itx.describe()).capabilities.find(
+const mount = (await itx.__describe()).capabilities.find(
   (capability) => capability.path.join(".") === "publicMcp",
 );
 
@@ -616,7 +649,7 @@ await itx.provideCapability({
 });
 
 const soldPets = await itx.petstore.findPetsByStatus({ status: "sold" });
-const mount = (await itx.describe()).capabilities.find(
+const mount = (await itx.__describe()).capabilities.find(
   (capability) => capability.path.join(".") === "petstore",
 );
 

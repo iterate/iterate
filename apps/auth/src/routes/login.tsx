@@ -3,7 +3,6 @@ import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { useMutation } from "@tanstack/react-query";
 import { z } from "zod/v4";
-import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/avatar";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Card,
@@ -19,7 +18,7 @@ import { Separator } from "@iterate-com/ui/components/separator";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { parseConfig } from "../config.ts";
 import { authClient } from "../utils/auth-client.ts";
-import { getInitials } from "../utils/initials.ts";
+import { AccountChooser } from "./-login-account-chooser.tsx";
 
 // Runs on the server for both SSR and client navigations; the session comes
 // from the request cookie (utils/hono.ts). Only display fields are returned —
@@ -29,7 +28,9 @@ const getLoginState = createServerFn({ method: "GET" }).handler(({ context }) =>
   const user = context.variables.session?.user;
   return {
     emailOtpEnabled: parseConfig(context.cloudflare.env).emailOtpEnabled,
-    user: user ? { name: user.name ?? null, email: user.email, image: user.image ?? null } : null,
+    user: user
+      ? { id: user.id, name: user.name ?? null, email: user.email, image: user.image ?? null }
+      : null,
   };
 });
 
@@ -79,21 +80,31 @@ function RouteComponent() {
 
   return (
     <div className="flex min-h-screen items-center justify-center p-4">
-      <Card className="w-full max-w-sm">
+      <Card className={signedInUser ? "w-full max-w-md" : "w-full max-w-sm"}>
         <CardHeader className="text-center">
           <CardTitle className="text-xl">
-            {signedInUser ? "Continue as this account" : "Sign in"}
+            {signedInUser ? "Choose an account" : "Sign in"}
           </CardTitle>
           <CardDescription>
             {signedInUser
-              ? "You're already signed in. Continue with this account or switch before authorizing the app."
+              ? "Continue with an Iterate account or sign in as someone else."
               : "Sign in to your Iterate account"}
           </CardDescription>
         </CardHeader>
         <Separator />
         <CardContent className="pt-6">
           {signedInUser ? (
-            <SignedInAccountCard redirectTo={redirectTo} user={signedInUser} />
+            <AccountChooser
+              currentUser={signedInUser}
+              continueWithAccount={() =>
+                window.location.assign(getPostLoginRedirectUrl(redirectTo))
+              }
+              refreshCurrentPage={() => {
+                window.location.assign(window.location.pathname + window.location.search);
+              }}
+            >
+              <LoginActions redirectTo={redirectTo} emailOtpEnabled={emailOtpEnabled} />
+            </AccountChooser>
           ) : (
             <LoginActions
               redirectTo={redirectTo}
@@ -103,59 +114,6 @@ function RouteComponent() {
           )}
         </CardContent>
       </Card>
-    </div>
-  );
-}
-
-function SignedInAccountCard({
-  redirectTo,
-  user,
-}: {
-  redirectTo: string;
-  user: { name: string | null; email: string; image: string | null };
-}) {
-  const initials = getInitials(user.name ?? user.email);
-  const switchAccount = useMutation({
-    mutationFn: () => authClient.signOut(),
-    onSuccess: () => {
-      window.location.assign(window.location.pathname + window.location.search);
-    },
-    onError: (error: Error) => {
-      toast.error(error.message || "Failed to switch account");
-    },
-  });
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-3 rounded-xl border bg-muted/30 p-4">
-        <Avatar>
-          {user.image && <AvatarImage src={user.image} alt={user.name ?? user.email} />}
-          <AvatarFallback>{initials}</AvatarFallback>
-        </Avatar>
-        <div className="min-w-0">
-          <p className="truncate text-sm font-medium">{user.name ?? "User"}</p>
-          <p className="truncate text-xs text-muted-foreground">{user.email}</p>
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        <Button
-          className="w-full"
-          size="lg"
-          disabled={switchAccount.isPending}
-          onClick={() => window.location.assign(getPostLoginRedirectUrl(redirectTo))}
-        >
-          Continue with this account
-        </Button>
-        <Button
-          className="w-full"
-          variant="outline"
-          disabled={switchAccount.isPending}
-          onClick={() => switchAccount.mutate()}
-        >
-          {switchAccount.isPending ? "Switching..." : "Use another account"}
-        </Button>
-      </div>
     </div>
   );
 }
