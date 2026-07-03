@@ -2,6 +2,7 @@ import { useMemo, useState, type ReactElement } from "react";
 import { Link, useMatches, useMatchRoute } from "@tanstack/react-router";
 import {
   ArrowLeft,
+  Box,
   Bug,
   Check,
   ChevronsLeft,
@@ -493,13 +494,15 @@ function ProjectSidebarGroup({
             <ProjectSidebarMenuItem
               icon={SquarePen}
               label="New Chat"
-              render={<Link to="/projects/$projectSlug/agents/new" params={{ projectSlug }} />}
+              render={
+                <Link to="/projects/$projectSlug/agents/new" params={{ projectSlug }} search={{}} />
+              }
               isActive={isNewChatActive}
             />
             <ProjectSidebarMenuItem
               icon={Settings2}
               label="Settings"
-              render={<Link to="/projects/$projectSlug" params={{ projectSlug }} />}
+              render={<Link to="/projects/$projectSlug" params={{ projectSlug }} search={{}} />}
               isActive={Boolean(
                 matchRoute({
                   to: "/projects/$projectSlug",
@@ -511,7 +514,9 @@ function ProjectSidebarGroup({
             <ProjectSidebarMenuItem
               icon={SquareTerminal}
               label="Repl"
-              render={<Link to="/projects/$projectSlug/repl" params={{ projectSlug }} />}
+              render={
+                <Link to="/projects/$projectSlug/repl" params={{ projectSlug }} search={{}} />
+              }
               isActive={Boolean(
                 matchRoute({
                   to: "/projects/$projectSlug/repl",
@@ -584,6 +589,7 @@ type ProjectStreamNavItemConfig = {
   to:
     | "/projects/$projectSlug/agents"
     | "/projects/$projectSlug/integrations"
+    | "/projects/$projectSlug/sandboxes"
     | "/projects/$projectSlug/secrets"
     | "/projects/$projectSlug/repos"
     | "/projects/$projectSlug/streams";
@@ -620,6 +626,13 @@ const PROJECT_STREAM_NAV_ITEMS: readonly ProjectStreamNavItemConfig[] = [
   },
   {
     fuzzy: true,
+    icon: Box,
+    label: "/sandboxes",
+    streamPath: StreamPath.parse("/sandboxes"),
+    to: "/projects/$projectSlug/sandboxes",
+  },
+  {
+    fuzzy: true,
     icon: Radio,
     label: "/streams",
     streamPath: StreamPath.parse("/streams"),
@@ -647,7 +660,7 @@ function ProjectStreamNavItem({
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
-        render={<Link to={to} params={{ projectSlug }} />}
+        render={<Link to={to} params={{ projectSlug }} search={{}} />}
         isActive={isActive}
         tooltip={label}
       >

@@ -1,11 +1,13 @@
 // Stream navigation helpers backing the ⌘K stream switcher: one-shot state
 // reads for lazy tree-node loading.
 
+import { useMemo } from "react";
 import type { StreamTreeSource } from "~/components/stream-tree-browser.tsx";
 import {
   parseBrowserCoreStreamTreeState,
   type BrowserCoreStreamTreeState,
 } from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
+import { useItx } from "~/itx/itx-react.tsx";
 
 /**
  * Everything the ⌘K stream switcher needs from its host: a live state source
@@ -83,4 +85,25 @@ export const NULL_DURABLE_OBJECT_PROJECT_ID = "__null__";
  */
 export function streamProjectDisplayLabel(projectId: string): string {
   return projectId === NULL_DURABLE_OBJECT_PROJECT_ID ? "Global (deployment)" : projectId;
+}
+
+/**
+ * The admin pages' stream source: they address arbitrary projects through the
+ * global (admin) session — the deployment-wide stream catalog for the null
+ * project, otherwise the project's own itx via projects.get(id). Returns the
+ * resolved project id (null for the deployment namespace) alongside. The
+ * source's inferred type is the full itx stream handle, so it satisfies both
+ * the tree browser's and the stream view's source contracts.
+ */
+export function useAdminStreamSource(projectId: string) {
+  const itx = useItx();
+  const streamProjectId = projectId === NULL_DURABLE_OBJECT_PROJECT_ID ? null : projectId;
+  const source = useMemo(
+    () => (streamPath: string) =>
+      streamProjectId == null
+        ? itx.streams.get(streamPath)
+        : itx.projects.get(streamProjectId).streams.get(streamPath),
+    [itx, streamProjectId],
+  );
+  return { source, streamProjectId };
 }
