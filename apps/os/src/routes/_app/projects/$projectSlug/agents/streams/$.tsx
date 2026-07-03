@@ -1,18 +1,12 @@
 import { Suspense } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
+import { StreamPage } from "~/components/stream-page.tsx";
 import { connectItxBrowser } from "~/itx/itx-react.tsx";
 import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 
-const AGENTS_ROOT = "/agents";
-
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams/$")({
-  staticData: {
-    hideAppHeader: true,
-    commandPalette: { stream: { mode: "agent", rootPath: AGENTS_ROOT } },
-  },
   params: {
     parse: (raw) => ({
       _splat: streamPathFromSplat(raw._splat),
@@ -77,7 +71,7 @@ function ProjectAgentDetailContent() {
   }
 
   return (
-    <ProjectStreamView
+    <StreamPage
       autoFocusMessageComposer
       emptyLabel="No events on this agent stream yet."
       messageComposer={{
@@ -86,7 +80,6 @@ function ProjectAgentDetailContent() {
         placeholder: "Message this agent",
       }}
       projectId={project.id}
-      showCommandPaletteTrigger
       streamPath={streamPath}
     />
   );

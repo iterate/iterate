@@ -1,34 +1,58 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMatches, useNavigate } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@iterate-com/ui/components/dialog";
 import { StreamSwitcherDialog } from "./stream-switcher-dialog.tsx";
 import { connectItxBrowser } from "~/itx/itx-react.tsx";
 import { OPEN_GLOBAL_COMMAND_PALETTE_EVENT } from "~/components/global-command-palette-events.ts";
-import type {
-  AppRouteStaticData,
-  RouteBreadcrumbLoaderData,
-  RouteCommandPaletteStaticData,
-} from "~/lib/route-breadcrumbs.ts";
+import type { RouteBreadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
+import { fetchProjectsList, projectsListQueryKey } from "~/lib/projects-query.ts";
+import { linkOptionsForStreamPath, StreamPath } from "~/lib/stream-links.ts";
 import type { StreamNavigator } from "~/lib/stream-navigation.ts";
 
-const AGENTS_ROOT = "/agents";
-
+/**
+ * The ⌘K stream switcher, live on EVERY app page. The active project and
+ * stream come from the deepest route match that published a streamBreadcrumb
+ * (every project-scoped page does); outside a project (the projects list,
+ * new-project, the session REPL) the dialog first asks which project to
+ * browse, then shows that project's stream tree from the root.
+ */
 export function GlobalCommandPalette() {
   const [open, setOpen] = useState(false);
+  // Tier-3 project choice, kept across dialog closes within the page; any
+  // route-provided context wins over it.
+  const [pickedProject, setPickedProject] = useState<{ id: string; slug: string } | null>(null);
   const matches = useMatches();
   const navigate = useNavigate();
-  const activeStream = useMemo(() => getActiveStreamCommandContext(matches), [matches]);
+  const routeStream = useMemo(() => getRouteStreamContext(matches), [matches]);
+  const activeStream = useMemo(
+    () =>
+      routeStream ??
+      (pickedProject
+        ? {
+            projectId: pickedProject.id,
+            projectSlug: pickedProject.slug,
+            streamPath: StreamPath.parse("/"),
+          }
+        : null),
+    [routeStream, pickedProject],
+  );
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.defaultPrevented) return;
       if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "k") return;
-      if (activeStream == null) return;
       event.preventDefault();
       setOpen((current) => !current);
     }
 
     function onOpenPalette() {
-      if (activeStream == null) return;
       setOpen(true);
     }
 
@@ -38,11 +62,7 @@ export function GlobalCommandPalette() {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener(OPEN_GLOBAL_COMMAND_PALETTE_EVENT, onOpenPalette);
     };
-  }, [activeStream]);
-
-  useEffect(() => {
-    if (activeStream == null) setOpen(false);
-  }, [activeStream]);
+  }, []);
 
   const streamNavigator = useMemo<StreamNavigator | null>(() => {
     if (activeStream == null) return null;
@@ -56,31 +76,14 @@ export function GlobalCommandPalette() {
       }),
       onOpenPath(path) {
         setOpen(false);
-        if (
-          activeStream.mode === "agent" &&
-          path !== AGENTS_ROOT &&
-          path.startsWith(`${AGENTS_ROOT}/`)
-        ) {
-          void navigate({
-            to: "/projects/$projectSlug/agents/streams/$",
-            params: { projectSlug: activeStream.projectSlug, _splat: path },
-            // Open the new stream with its own default tab and fresh filters
-            // rather than carrying the previous stream's view state across.
-            search: {},
-          });
-          return;
-        }
-
-        void navigate({
-          to: "/projects/$projectSlug/streams/$",
-          params: { projectSlug: activeStream.projectSlug, _splat: path },
-          search: {},
-        });
+        void navigate(linkOptionsForStreamPath(activeStream.projectSlug, StreamPath.parse(path)));
       },
     };
   }, [activeStream, navigate]);
 
-  if (activeStream == null || streamNavigator == null) return null;
+  if (activeStream == null || streamNavigator == null) {
+    return <ProjectPickerDialog open={open} onOpenChange={setOpen} onPick={setPickedProject} />;
+  }
 
   return (
     <StreamSwitcherDialog
@@ -88,39 +91,71 @@ export function GlobalCommandPalette() {
       onOpenChange={setOpen}
       currentPath={activeStream.streamPath}
       navigator={streamNavigator}
-      rootPath={activeStream.rootPath}
       scope={activeStream.projectId}
     />
   );
 }
 
-type ActiveStreamCommandContext = NonNullable<RouteBreadcrumbLoaderData["streamBreadcrumb"]> &
-  NonNullable<NonNullable<RouteCommandPaletteStaticData["commandPalette"]>["stream"]>;
+/**
+ * The ⌘K first step outside any project: pick which project's streams to
+ * browse. The list is the same cached itx `projects.list()` the sidebar keeps
+ * warm, so this is usually instant.
+ */
+function ProjectPickerDialog({
+  onOpenChange,
+  onPick,
+  open,
+}: {
+  onOpenChange: (open: boolean) => void;
+  onPick: (project: { id: string; slug: string }) => void;
+  open: boolean;
+}) {
+  const { data: projects } = useQuery({
+    queryKey: projectsListQueryKey,
+    queryFn: fetchProjectsList,
+    enabled: open,
+  });
 
-function getActiveStreamCommandContext(
-  matches: ReturnType<typeof useMatches>,
-): ActiveStreamCommandContext | null {
-  const streamBreadcrumb = matches
-    .map((match) => (match.loaderData as RouteBreadcrumbLoaderData | undefined)?.streamBreadcrumb)
-    .filter((value): value is NonNullable<RouteBreadcrumbLoaderData["streamBreadcrumb"]> =>
-      Boolean(value),
-    )
-    .at(-1);
-  const streamCommand = matches
-    .map((match) => (match.staticData as AppRouteStaticData | undefined)?.commandPalette?.stream)
-    .filter(
-      (
-        value,
-      ): value is NonNullable<
-        NonNullable<RouteCommandPaletteStaticData["commandPalette"]>["stream"]
-      > => Boolean(value),
-    )
-    .at(-1);
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Streams</DialogTitle>
+          <DialogDescription>Pick a project to browse its streams.</DialogDescription>
+        </DialogHeader>
+        <div className="max-h-80 overflow-y-auto">
+          {projects == null ? (
+            <p className="px-2 py-1.5 text-sm text-muted-foreground">Loading projects…</p>
+          ) : projects.length === 0 ? (
+            <p className="px-2 py-1.5 text-sm text-muted-foreground">No projects yet.</p>
+          ) : (
+            projects.map((project) => (
+              <button
+                key={project.id}
+                type="button"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+                onClick={() => onPick({ id: project.id, slug: project.slug })}
+              >
+                <span className="min-w-0 truncate">{project.slug}</span>
+                <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">
+                  {project.id}
+                </span>
+              </button>
+            ))
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
-  if (streamBreadcrumb == null || streamCommand == null) return null;
-  return {
-    ...streamBreadcrumb,
-    ...streamCommand,
-    rootPath: streamCommand.rootPath ?? "/",
-  };
+function getRouteStreamContext(matches: ReturnType<typeof useMatches>) {
+  return (
+    matches
+      .map((match) => (match.loaderData as RouteBreadcrumbLoaderData | undefined)?.streamBreadcrumb)
+      .filter((value): value is NonNullable<RouteBreadcrumbLoaderData["streamBreadcrumb"]> =>
+        Boolean(value),
+      )
+      .at(-1) ?? null
+  );
 }

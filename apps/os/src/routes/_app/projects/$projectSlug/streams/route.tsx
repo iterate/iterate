@@ -1,8 +1,8 @@
 import { Outlet, createFileRoute } from "@tanstack/react-router";
-import { breadcrumbStaticData } from "~/lib/route-breadcrumbs.ts";
 
+// No breadcrumb here: every child page publishes a streamBreadcrumb whose
+// path ancestry replaces route crumbs entirely.
 export const Route = createFileRoute("/_app/projects/$projectSlug/streams")({
-  staticData: breadcrumbStaticData("/streams"),
   component: StreamsLayout,
 });
 

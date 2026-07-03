@@ -8,7 +8,7 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { connectItxBrowser } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/new")({
-  staticData: { hideAppHeader: true },
+  staticData: { breadcrumb: "New agent" },
   loader: async ({ context }) => {
     const { project } = context;
 

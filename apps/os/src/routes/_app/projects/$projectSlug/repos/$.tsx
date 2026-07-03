@@ -15,7 +15,10 @@ import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { StreamViewSection } from "~/components/stream-view-section.tsx";
+import { StreamPage } from "~/components/stream-page.tsx";
+import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
+import { StreamPath } from "~/lib/stream-links.ts";
+import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import type { RepoProcessorState } from "~/types.ts";
 import { useItx, useItxQuery, useItxState } from "~/itx/itx-react.tsx";
 
@@ -32,11 +35,17 @@ const DEFAULT_COMMIT_FILE_FORM_VALUES = {
 };
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/repos/$")({
+  validateSearch: StreamViewSearch,
   ssr: false,
-  loader: ({ context, params }) => ({
-    breadcrumb: repoPathFromSplat(params._splat),
-    project: context.project,
-  }),
+  loader: ({ context, params }) =>
+    breadcrumbLoaderData({
+      project: context.project,
+      streamBreadcrumb: {
+        projectId: context.project.id,
+        projectSlug: params.projectSlug,
+        streamPath: StreamPath.parse(repoPathFromSplat(params._splat)),
+      },
+    }),
   component: ProjectRepoDetailPage,
 });
 
@@ -108,10 +117,9 @@ function ProjectRepoDetailContent() {
   }
   const snapshot = { offset: repoProcessor.offset ?? 0, state: repoProcessor.state };
 
-  return (
-    <section className="w-full space-y-4 p-4">
+  const panel = (
+    <>
       <div className="rounded-lg border bg-card">
-        <InfoRow label="Path" value={repoPath} />
         <InfoRow label="Whoami" value={whoami} />
         <InfoRow label="Created" value={snapshot.state.created ? "yes" : "no"} />
         <InfoRow label="Initialized" value={snapshot.state.initialized ? "yes" : "no"} />
@@ -212,13 +220,16 @@ function ProjectRepoDetailContent() {
           </form.Subscribe>
         </form>
       </div>
+    </>
+  );
 
-      <StreamViewSection
-        projectId={project.id}
-        streamPath={repoPath}
-        emptyLabel="No events on this repo's stream yet."
-      />
-    </section>
+  return (
+    <StreamPage
+      panel={panel}
+      projectId={project.id}
+      streamPath={repoPath}
+      emptyLabel="No events on this repo's stream yet."
+    />
   );
 }
 

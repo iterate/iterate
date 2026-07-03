@@ -14,7 +14,10 @@ import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { StreamViewSection } from "~/components/stream-view-section.tsx";
+import { StreamPage } from "~/components/stream-page.tsx";
+import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
+import { StreamPath } from "~/lib/stream-links.ts";
+import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import type { SecretDescription } from "~/types.ts";
 import { useItx, useItxState } from "~/itx/itx-react.tsx";
 
@@ -24,11 +27,17 @@ const UpdateSecretForm = z.object({
 });
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/secrets/$secretId")({
+  validateSearch: StreamViewSearch,
   ssr: false,
-  loader: ({ context, params }) => ({
-    breadcrumb: params.secretId,
-    project: context.project,
-  }),
+  loader: ({ context, params }) =>
+    breadcrumbLoaderData({
+      project: context.project,
+      streamBreadcrumb: {
+        projectId: context.project.id,
+        projectSlug: params.projectSlug,
+        streamPath: StreamPath.parse(`/secrets/${params.secretId}`),
+      },
+    }),
   component: ProjectSecretDetailPage,
 });
 
@@ -109,10 +118,9 @@ function SecretDetail({
     },
   });
 
-  return (
-    <section className="w-full space-y-4 p-4">
+  const panel = (
+    <>
       <div className="rounded-lg border bg-card">
-        <InfoRow label="Path" value={secretPath} />
         <InfoRow label="Material" value={secret.hasMaterial ? "Stored" : "Missing"} />
         <InfoRow
           label="Egress URLs"
@@ -201,13 +209,16 @@ function SecretDetail({
           </form.Subscribe>
         </form>
       </div>
+    </>
+  );
 
-      <StreamViewSection
-        projectId={projectId}
-        streamPath={secretPath}
-        emptyLabel="No events on this secret's stream yet."
-      />
-    </section>
+  return (
+    <StreamPage
+      panel={panel}
+      projectId={projectId}
+      streamPath={secretPath}
+      emptyLabel="No events on this secret's stream yet."
+    />
   );
 }
 

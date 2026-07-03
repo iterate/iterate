@@ -2,27 +2,16 @@ import type { StreamPath } from "~/lib/stream-links.ts";
 
 export type RouteBreadcrumbStaticData = {
   breadcrumb?: string;
-  /**
-   * Hides the app shell's breadcrumbs header row. Stream pages set this —
-   * the ⌘K path pill in the stream header replaces breadcrumbs there, and
-   * the stream view renders its own SidebarTrigger.
-   */
-  hideAppHeader?: boolean;
 };
-
-export type RouteCommandPaletteStaticData = {
-  commandPalette?: {
-    stream?: {
-      mode: "stream" | "agent";
-      rootPath?: StreamPath;
-    };
-  };
-};
-
-export type AppRouteStaticData = RouteBreadcrumbStaticData & RouteCommandPaletteStaticData;
 
 export type RouteBreadcrumbLoaderData = {
   breadcrumb?: string;
+  /**
+   * The stream this page is a view of. Every project-scoped page publishes
+   * one (every domain object IS a stream); it drives the stream-aware path
+   * breadcrumbs in the shell header and gives the ⌘K switcher its project +
+   * current-path context.
+   */
   streamBreadcrumb?: {
     projectId: string;
     projectSlug: string;

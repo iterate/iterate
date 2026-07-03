@@ -24,11 +24,14 @@ import {
   TableRow,
 } from "@iterate-com/ui/components/table";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { StreamViewSection } from "~/components/stream-view-section.tsx";
+import { StreamPage } from "~/components/stream-page.tsx";
 import { RepoArtifactNameCodec } from "~/domains/repos/utils.ts";
 import { buildArtifactViewerUrl } from "~/lib/artifact-viewer-url.ts";
 import { formatRelativeTime } from "~/lib/format-relative-time.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
+import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
+import { StreamPath } from "~/lib/stream-links.ts";
+import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx, useItxState } from "~/itx/itx-react.tsx";
 import type { ProjectProcessorState } from "~/types.ts";
 
@@ -48,16 +51,21 @@ type SortKey = "path" | "createdAt";
 type SortDirection = "asc" | "desc";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/repos/")({
+  validateSearch: StreamViewSearch,
   ssr: false,
-  loader: async ({ context }) => {
+  loader: async ({ context, params }) => {
     const { project } = context;
     const routeConfig = await getPublicRouteConfig();
 
-    return {
-      breadcrumb: "/repos",
+    return breadcrumbLoaderData({
       project,
       routeConfig,
-    };
+      streamBreadcrumb: {
+        projectId: project.id,
+        projectSlug: params.projectSlug,
+        streamPath: StreamPath.parse("/repos"),
+      },
+    });
   },
   component: ProjectReposIndexPage,
 });
@@ -132,8 +140,8 @@ function ProjectReposIndexContent() {
       });
   }, [filter, repos, sort]);
 
-  return (
-    <section className="w-full space-y-4 p-4">
+  const panel = (
+    <>
       <div className="space-y-3 rounded-lg border bg-card p-4">
         <form
           className="flex flex-col gap-4"
@@ -287,13 +295,16 @@ function ProjectReposIndexContent() {
           </Table>
         </div>
       )}
+    </>
+  );
 
-      <StreamViewSection
-        projectId={project.id}
-        streamPath="/repos"
-        emptyLabel="No events on the repos catalogue stream yet."
-      />
-    </section>
+  return (
+    <StreamPage
+      panel={panel}
+      projectId={project.id}
+      streamPath="/repos"
+      emptyLabel="No events on the repos catalogue stream yet."
+    />
   );
 }
 

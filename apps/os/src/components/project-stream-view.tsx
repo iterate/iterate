@@ -11,7 +11,7 @@ import {
   type RefObject,
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ChevronDownIcon, FilterIcon, SearchIcon } from "lucide-react";
+import { FilterIcon, SearchIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import {
@@ -21,7 +21,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@iterate-com/ui/components/select";
-import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import type {
   AgentUiLlmStep,
@@ -65,7 +64,6 @@ import type { Stream } from "~/types.ts";
 import { AgentFeedView } from "~/components/agent-feed.tsx";
 import { AgentPillComposer, type AgentComposerMode } from "~/components/agent-pill-composer.tsx";
 import { ExampleEventsPanel } from "~/components/example-events-panel.tsx";
-import { openGlobalCommandPalette } from "~/components/global-command-palette-events.ts";
 import { PresenceAvatar, StreamProcessorsPanel } from "~/components/stream-processors-panel.tsx";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { useItx } from "~/itx/itx-react.tsx";
@@ -168,20 +166,16 @@ export function ProjectStreamView({
   autoFocusMessageComposer = false,
   defaultComposerMode,
   emptyLabel = "No events in this stream yet.",
-  headerAccessory,
   messageComposer,
   projectId,
-  showCommandPaletteTrigger = false,
   streamSource,
   streamPath,
 }: {
   autoFocusMessageComposer?: boolean;
   defaultComposerMode?: "message" | "raw";
   emptyLabel?: string;
-  headerAccessory?: ReactNode;
   messageComposer?: ProjectStreamMessageComposer;
   projectId: string | null;
-  showCommandPaletteTrigger?: boolean;
   streamSource?: ItxStreamSource;
   streamPath: string;
 }) {
@@ -315,6 +309,10 @@ export function ProjectStreamView({
   const activePreset = presets.find((preset) => preset.id === search.preset) ?? defaultPreset;
   const toolsOpen = search.filter === true;
   const feedSearch = search.q ?? "";
+  // Signal active filters on the toggle even while the panel is closed — a
+  // filtered feed with no visible cue reads as missing events.
+  const filtersActive =
+    activePreset.id !== defaultPreset.id || feedSearch !== "" || search.type != null;
   const focusedProcessorKey = search.processor ?? null;
   const procPanelOpen = search.panel === true || focusedProcessorKey != null;
   // Focusing a processor implies the sidebar is open; the metrics button opens
@@ -439,31 +437,22 @@ export function ProjectStreamView({
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-background">
       <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pb-1 pt-2.5">
-        <SidebarTrigger className="-ml-1 md:hidden" />
-        <button
-          type="button"
-          aria-haspopup="dialog"
-          title={
-            showCommandPaletteTrigger
-              ? `${streamPathText} — click or ⌘K to switch streams`
-              : streamPathText
-          }
-          onClick={() => showCommandPaletteTrigger && openGlobalCommandPalette()}
-          className={cn(
-            "flex h-9 min-w-0 items-center gap-2 rounded-full bg-muted px-3.5",
-            showCommandPaletteTrigger && "cursor-pointer hover:bg-muted/70",
-          )}
+        <Tabs
+          value={activeTab}
+          onValueChange={(value) => {
+            const tab = value as ProjectStreamViewTab;
+            setSearch({ tab: tab === "feed" ? undefined : tab });
+          }}
         >
-          <span className="truncate font-mono text-sm">{streamPathText}</span>
-          {showCommandPaletteTrigger ? (
-            <>
-              <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground" />
-              <kbd className="hidden shrink-0 rounded bg-background px-1.5 py-px text-[10px] text-muted-foreground sm:inline">
-                ⌘K
-              </kbd>
-            </>
-          ) : null}
-        </button>
+          <TabsList className="h-8">
+            <TabsTrigger value="feed" className="px-3 text-xs">
+              Feed
+            </TabsTrigger>
+            <TabsTrigger value="state" className="px-3 text-xs">
+              State
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
 
         <div className="ml-auto flex items-center gap-3">
           {presence.length === 0 ? null : (
@@ -524,69 +513,65 @@ export function ProjectStreamView({
             </svg>
             {metrics.rttNow}ms
           </Button>
-          {activeTab === "feed" ? (
-            <Select
-              value={activePreset.id}
-              onValueChange={(value) =>
-                setSearch({
-                  preset: value == null || value === defaultPreset.id ? undefined : value,
-                })
-              }
-            >
-              <SelectTrigger
-                size="sm"
-                className="max-w-44 text-xs"
-                data-testid="stream-feed-preset"
-                title="Feed preset"
-              >
-                {/* Radix can only resolve the selected item's text once the
-                    content has mounted; render the label ourselves. */}
-                <SelectValue>{activePreset.label}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {presets.map((preset) => (
-                  <SelectItem key={preset.id} value={preset.id} className="text-xs">
-                    {preset.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : null}
-          <Tabs
-            value={activeTab}
-            onValueChange={(value) => {
-              const tab = value as ProjectStreamViewTab;
-              setSearch({ tab: tab === "feed" ? undefined : tab });
-            }}
-          >
-            <TabsList className="h-8">
-              <TabsTrigger value="feed" className="px-3 text-xs">
-                Feed
-              </TabsTrigger>
-              <TabsTrigger value="state" className="px-3 text-xs">
-                State
-              </TabsTrigger>
-            </TabsList>
-          </Tabs>
           <Button
             variant="ghost"
             size="icon"
             title="Search & filter"
             aria-expanded={toolsOpen}
             onClick={() => setSearch({ filter: toolsOpen ? undefined : true })}
-            className="rounded-full text-muted-foreground"
+            className="relative rounded-full text-muted-foreground"
           >
             <FilterIcon className="size-3.5" />
+            {filtersActive ? (
+              <span
+                aria-hidden="true"
+                className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-primary"
+              />
+            ) : null}
           </Button>
         </div>
       </header>
-      {headerAccessory == null ? null : <div className="shrink-0">{headerAccessory}</div>}
       {toolsOpen ? (
-        <div className="flex shrink-0 items-center gap-3 px-4 pb-1.5 pt-1">
-          {/* Search filters the agent feed's SQL; the other presets don't take
-              a text filter yet, so don't offer a no-op input there. */}
-          {activeTab === "feed" && activePreset.kind === "agent-chat" ? (
-            <div className="flex h-9 min-w-0 max-w-sm flex-1 items-center gap-2 rounded-full bg-muted px-3.5">
+        <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 px-4 pb-1.5 pt-1">
+          {activeTab === "feed" ? (
+            <div
+              className="flex flex-wrap items-center gap-1.5"
+              role="radiogroup"
+              aria-label="Feed preset"
+              data-testid="stream-feed-preset"
+            >
+              {presets.map((preset) => {
+                const active = preset.id === activePreset.id;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    onClick={() =>
+                      setSearch({
+                        preset: preset.id === defaultPreset.id ? undefined : preset.id,
+                        // The event-type list is scoped to a preset's event
+                        // family; a type from the old preset would silently
+                        // empty the new one.
+                        type: undefined,
+                      })
+                    }
+                    className={cn(
+                      "rounded-full border px-2.5 py-1 text-xs transition-colors",
+                      active
+                        ? "border-transparent bg-foreground text-background"
+                        : "border-border text-muted-foreground hover:bg-muted hover:text-foreground",
+                    )}
+                  >
+                    {preset.label}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+          {activeTab === "feed" ? (
+            <div className="flex h-8 min-w-0 max-w-xs flex-1 items-center gap-2 rounded-full bg-muted px-3">
               <SearchIcon className="size-3.5 shrink-0 text-muted-foreground" />
               <input
                 ref={feedSearchInputRef}
@@ -597,6 +582,14 @@ export function ProjectStreamView({
                 className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
               />
             </div>
+          ) : null}
+          {activeTab === "feed" && activePreset.kind === "feed-items" ? (
+            <FeedEventTypeSelect
+              database={feedStore.streamDatabase}
+              eventTypePrefix={activePreset.eventTypePrefix ?? null}
+              value={search.type ?? null}
+              onChange={(type) => setSearch({ type: type ?? undefined })}
+            />
           ) : null}
           <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">
             {eventCount.toLocaleString()} events · {snapshot.connectionStatus}
@@ -630,7 +623,9 @@ export function ProjectStreamView({
           <FeedItemsView
             database={feedStore.streamDatabase}
             emptyLabel={connectionLabel}
+            eventType={search.type ?? null}
             eventTypePrefix={activePreset.eventTypePrefix ?? null}
+            searchQuery={feedSearch === "" ? null : feedSearch}
           />
         )}
         {procPanelOpen ? (
@@ -723,35 +718,69 @@ function useAgentUiReducedState(database: StreamBrowserDatabase): AgentUiState |
 const TAIL_PREFETCH_ROWS = 32;
 
 /**
+ * The primary event type of a feed_items row — a group row's `data.eventType`,
+ * a singleton's first event type. Every feed filter (preset prefix, exact
+ * type) matches against this expression, entirely in SQL over the local mirror.
+ */
+const FEED_TYPE_EXPRESSION = `COALESCE(json_extract(data, '$.eventType'), json_extract(data, '$.events[0].type'))`;
+
+/** Composed WHERE fragment + params for the feed filters; null when unfiltered. */
+type FeedItemsFilter = { whereSql: string; params: string[] } | null;
+
+function buildFeedItemsFilter(input: {
+  eventType: string | null;
+  eventTypePrefix: string | null;
+  searchQuery: string | null;
+}): FeedItemsFilter {
+  const clauses: string[] = [];
+  const params: string[] = [];
+  if (input.eventTypePrefix != null) {
+    clauses.push(`${FEED_TYPE_EXPRESSION} LIKE ?`);
+    params.push(`${input.eventTypePrefix}%`);
+  }
+  if (input.eventType != null) {
+    clauses.push(`${FEED_TYPE_EXPRESSION} = ?`);
+    params.push(input.eventType);
+  }
+  if (input.searchQuery != null) {
+    clauses.push(`json(data) LIKE ?`);
+    params.push(`%${input.searchQuery}%`);
+  }
+  if (clauses.length === 0) return null;
+  return { whereSql: clauses.join(" AND "), params };
+}
+
+/**
  * Renders the browser-event-feed processor's `feed_items` collection: one row
- * per specific-renderer singleton or per collapsed run of same-type events.
- * A preset's `eventTypePrefix` filters on each row's primary event type — a
- * group row's `data.eventType`, a singleton's first event type — entirely in
- * SQL over the local mirror.
+ * per specific-renderer singleton or per collapsed run of same-type events,
+ * filtered by the active preset's event-type prefix, the exact event-type
+ * filter, and the text search.
  *
  * Same virtualization scheme as the agent feed (agent-feed.tsx): TanStack
  * Virtual owns the tail (anchorTo end + followOnAppend), the row window is a
  * live SQL range query over dense positions, and the count query gates the
  * list so the virtualizer never sees a 0→N transition on mount.
  */
-const FEED_TYPE_FILTER_SQL = `COALESCE(json_extract(data, '$.eventType'), json_extract(data, '$.events[0].type')) LIKE ?`;
-
 function FeedItemsView({
   database,
   emptyLabel,
+  eventType,
   eventTypePrefix,
+  searchQuery,
 }: {
   database: StreamBrowserDatabase;
   emptyLabel: string;
+  eventType: string | null;
   eventTypePrefix: string | null;
+  searchQuery: string | null;
 }) {
-  const filterParams = eventTypePrefix == null ? [] : [`${eventTypePrefix}%`];
+  const filter = buildFeedItemsFilter({ eventType, eventTypePrefix, searchQuery });
   const countResult = useStreamQuery(
     database,
-    eventTypePrefix == null
+    filter == null
       ? `SELECT COUNT(*) AS count FROM feed_items`
-      : `SELECT COUNT(*) AS count FROM feed_items WHERE ${FEED_TYPE_FILTER_SQL}`,
-    filterParams,
+      : `SELECT COUNT(*) AS count FROM feed_items WHERE ${filter.whereSql}`,
+    filter?.params ?? [],
   );
   const itemCount = Number(countResult.data[0]?.count ?? 0);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -767,15 +796,15 @@ function FeedItemsView({
           </Centered>
         ) : itemCount === 0 ? (
           <Centered>
-            {eventTypePrefix == null ? emptyLabel : "No feed items match this preset."}
+            {filter == null ? emptyLabel : "No feed items match the current filters."}
           </Centered>
         ) : (
           <VirtualFeedItems
             // Fresh virtualizer (measurements, end anchor) per mirror and per
-            // preset — stale state from another list would misplace the scroll.
-            key={`${database.databasePath}:${eventTypePrefix ?? ""}`}
+            // filter — stale state from another list would misplace the scroll.
+            key={`${database.databasePath}:${filter?.whereSql ?? ""}:${(filter?.params ?? []).join(" ")}`}
             database={database}
-            eventTypePrefix={eventTypePrefix}
+            filter={filter}
             itemCount={itemCount}
             scrollElementRef={scrollRef}
           />
@@ -787,12 +816,12 @@ function FeedItemsView({
 
 function VirtualFeedItems({
   database,
-  eventTypePrefix,
+  filter,
   itemCount,
   scrollElementRef,
 }: {
   database: StreamBrowserDatabase;
-  eventTypePrefix: string | null;
+  filter: FeedItemsFilter;
   itemCount: number;
   scrollElementRef: RefObject<HTMLDivElement | null>;
 }) {
@@ -821,16 +850,14 @@ function VirtualFeedItems({
   const windowSize = Math.max(0, last + 1 + TAIL_PREFETCH_ROWS - first);
   const rowsResult = useStreamQuery(
     database,
-    eventTypePrefix == null
+    filter == null
       ? `SELECT local_index, component, first_offset, last_offset, event_count, json(data) AS data
          FROM feed_items WHERE local_index >= ? AND local_index < ?
          ORDER BY local_index ASC`
       : `SELECT local_index, component, first_offset, last_offset, event_count, json(data) AS data
-         FROM feed_items WHERE ${FEED_TYPE_FILTER_SQL}
+         FROM feed_items WHERE ${filter.whereSql}
          ORDER BY local_index ASC LIMIT ? OFFSET ?`,
-    eventTypePrefix == null
-      ? [first, first + windowSize]
-      : [`${eventTypePrefix}%`, windowSize, first],
+    filter == null ? [first, first + windowSize] : [...filter.params, windowSize, first],
   );
   // Retain the last committed rows across range re-queries so a shifting
   // window doesn't blank already-visible rows to skeletons (see agent-feed).
@@ -841,12 +868,12 @@ function VirtualFeedItems({
     }
     const rows = new Map<number, Record<string, unknown>>();
     rowsResult.data.forEach((row, position) => {
-      const index = eventTypePrefix == null ? Number(row.local_index) : first + position;
+      const index = filter == null ? Number(row.local_index) : first + position;
       if (Number.isFinite(index)) rows.set(index, row);
     });
     lastRowsRef.current = rows;
     return rows;
-  }, [rowsResult.data, rowsResult.status, eventTypePrefix, first]);
+  }, [rowsResult.data, rowsResult.status, filter, first]);
 
   return (
     <div
@@ -944,6 +971,76 @@ const FeedItemRow = memo(function FeedItemRow({
 /** `events.iterate.com/agent/input-added` → `agent/input-added` — the domain part carries the signal. */
 function shortEventType(type: string): string {
   return type.startsWith("events.iterate.com/") ? type.slice("events.iterate.com/".length) : type;
+}
+
+/** Radix Select forbids the empty-string value; this stands in for "no type filter". */
+const ALL_EVENT_TYPES = "__all__";
+
+/**
+ * Exact event-type filter for the feed-items presets: the distinct primary
+ * event types currently in the local mirror (scoped to the active preset's
+ * prefix so the offered types can actually match), with per-type event counts.
+ */
+function FeedEventTypeSelect({
+  database,
+  eventTypePrefix,
+  onChange,
+  value,
+}: {
+  database: StreamBrowserDatabase;
+  eventTypePrefix: string | null;
+  onChange: (eventType: string | null) => void;
+  value: string | null;
+}) {
+  const typesResult = useStreamQuery(
+    database,
+    eventTypePrefix == null
+      ? `SELECT ${FEED_TYPE_EXPRESSION} AS event_type, SUM(event_count) AS total
+         FROM feed_items GROUP BY event_type ORDER BY event_type`
+      : `SELECT ${FEED_TYPE_EXPRESSION} AS event_type, SUM(event_count) AS total
+         FROM feed_items WHERE ${FEED_TYPE_EXPRESSION} LIKE ?
+         GROUP BY event_type ORDER BY event_type`,
+    eventTypePrefix == null ? [] : [`${eventTypePrefix}%`],
+  );
+  const types = typesResult.data.flatMap((row) =>
+    typeof row.event_type === "string"
+      ? [{ count: Number(row.total ?? 0), type: row.event_type }]
+      : [],
+  );
+  // A stale URL value (hand-edited, or events not mirrored yet) must still
+  // render as the selection so it can be cleared.
+  const options =
+    value != null && !types.some((entry) => entry.type === value)
+      ? [{ count: 0, type: value }, ...types]
+      : types;
+
+  return (
+    <Select
+      value={value ?? ALL_EVENT_TYPES}
+      onValueChange={(next) => onChange(next === ALL_EVENT_TYPES ? null : next)}
+    >
+      <SelectTrigger
+        size="sm"
+        className="max-w-56 font-mono text-xs"
+        data-testid="stream-feed-event-type"
+        title="Event type"
+      >
+        {/* Radix can only resolve the selected item's text once the content
+            has mounted; render the label ourselves. */}
+        <SelectValue>{value == null ? "All event types" : shortEventType(value)}</SelectValue>
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value={ALL_EVENT_TYPES} className="text-xs">
+          All event types
+        </SelectItem>
+        {options.map((entry) => (
+          <SelectItem key={entry.type} value={entry.type} className="font-mono text-xs">
+            {shortEventType(entry.type)} · {entry.count.toLocaleString()}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
 }
 
 function parseFeedItemData(raw: string): FeedItemData | null {

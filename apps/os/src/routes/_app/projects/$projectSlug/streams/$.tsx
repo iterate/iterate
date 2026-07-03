@@ -1,13 +1,12 @@
 import { Suspense } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { StreamExplorerDetail } from "~/components/stream-explorer.tsx";
+import { StreamPage } from "~/components/stream-page.tsx";
 import { useItx } from "~/itx/itx-react.tsx";
 import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/streams/$")({
-  staticData: { hideAppHeader: true, commandPalette: { stream: { mode: "stream" } } },
   params: {
     parse: (raw) => ({
       _splat: streamPathFromSplat(raw._splat),
@@ -58,17 +57,14 @@ function ProjectStreamDetailContent() {
   }
 
   return (
-    <StreamExplorerDetail
-      currentPath={streamPath}
-      showCommandPaletteTrigger
-      streamView={{
-        defaultComposerMode: "raw",
-        messageComposer: {
-          onSubmit: submitMessage,
-          placeholder: "Message this stream",
-        },
-        projectId: project.id,
+    <StreamPage
+      defaultComposerMode="raw"
+      messageComposer={{
+        onSubmit: submitMessage,
+        placeholder: "Message this stream",
       }}
+      projectId={project.id}
+      streamPath={streamPath}
     />
   );
 }

@@ -20,7 +20,13 @@ import type {
   RouteBreadcrumbLoaderData,
   RouteBreadcrumbStaticData,
 } from "~/lib/route-breadcrumbs.ts";
-import { streamPathAncestors, streamPathChild, streamPathParent } from "~/lib/stream-links.ts";
+import {
+  StreamPath,
+  linkOptionsForStreamPath,
+  streamPathAncestors,
+  streamPathChild,
+  streamPathParent,
+} from "~/lib/stream-links.ts";
 
 const CHILD_STREAM_SEGMENT_PATTERN = /^[a-z0-9_-]+$/;
 
@@ -246,11 +252,10 @@ function renderCrumbLink({
   if (crumb.streamPath && streamBreadcrumb) {
     return (
       <Link
-        to="/projects/$projectSlug/streams/$"
-        params={{
-          projectSlug: streamBreadcrumb.projectSlug,
-          _splat: crumb.streamPath,
-        }}
+        {...linkOptionsForStreamPath(
+          streamBreadcrumb.projectSlug,
+          StreamPath.parse(crumb.streamPath),
+        )}
       />
     );
   }
@@ -291,13 +296,7 @@ function StreamSegmentNavigator({
   function navigateToSibling(path: string) {
     setOpen(false);
     if (path === segmentPath && isCurrent) return;
-    void navigate({
-      to: "/projects/$projectSlug/streams/$",
-      params: {
-        projectSlug: streamBreadcrumb.projectSlug,
-        _splat: path,
-      },
-    });
+    void navigate(linkOptionsForStreamPath(streamBreadcrumb.projectSlug, StreamPath.parse(path)));
   }
 
   return (
@@ -351,13 +350,9 @@ function StreamChildrenBreadcrumb({
 
   function navigateToChild(childPath: string) {
     setOpen(false);
-    void navigate({
-      to: "/projects/$projectSlug/streams/$",
-      params: {
-        projectSlug: streamBreadcrumb.projectSlug,
-        _splat: childPath,
-      },
-    });
+    void navigate(
+      linkOptionsForStreamPath(streamBreadcrumb.projectSlug, StreamPath.parse(childPath)),
+    );
   }
 
   function submitNewChild() {
