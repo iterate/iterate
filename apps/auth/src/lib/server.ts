@@ -634,7 +634,14 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
       );
     } catch (error) {
       console.error("OAuth callback error:", error);
-      const message = error instanceof Error ? error.message : String(error);
+      let message = error instanceof Error ? error.message : String(error);
+      // oauth4webapi collapses any token-endpoint OAuth error into one generic
+      // message; without the server's error code ("invalid_client" vs
+      // "invalid_grant") a failed exchange is undiagnosable from the page the
+      // user (or a Playwright screenshot) sees.
+      if (error instanceof oauth.ResponseBodyError) {
+        message += ` [${error.error}${error.error_description ? `: ${error.error_description}` : ""}] (token endpoint HTTP ${error.status})`;
+      }
       return c.text(`OAuth callback exchange failed: ${message}`, 502);
     }
 
