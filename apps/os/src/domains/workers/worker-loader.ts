@@ -15,7 +15,7 @@ const WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];
  * 500 — the build keeps running in the builder worker and the retry hits the
  * artifact cache.
  */
-export class WorkerBuildInProgressError extends Error {
+class WorkerBuildInProgressError extends Error {
   override readonly name = "WorkerBuildInProgressError";
 }
 
