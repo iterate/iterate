@@ -1,16 +1,12 @@
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
-  type RefObject,
 } from "react";
-import { Link } from "@tanstack/react-router";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronDownIcon, FilterIcon, SearchIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
@@ -23,17 +19,6 @@ import {
 } from "@iterate-com/ui/components/select";
 import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
-import type { EventsStreamViewState } from "@iterate-com/ui/components/events/feed-items";
-import {
-  EventsStreamView,
-  type EventsStreamElementType,
-  type EventsStreamRendererMode,
-} from "@iterate-com/ui/components/events/stream-feed";
-import {
-  createInitialStreamViewState,
-  reduceStreamViewEvent,
-  STREAM_VIEW_REDUCER_SLUG,
-} from "@iterate-com/ui/components/events/stream-view-reducer";
 import type {
   AgentUiLlmStep,
   AgentUiState,
@@ -50,11 +35,7 @@ import {
 import { parseBrowserCoreProcessorState } from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import { browserProcessorStateStorage } from "~/domains/streams/client-libraries/browser/processor-state-storage.ts";
-import type {
-  SqliteQueryStatus,
-  StreamBrowserDatabase,
-  StreamEventRow,
-} from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
+import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import {
   acquireStreamRuntime,
   asBrowserStreamClient,
@@ -67,8 +48,16 @@ import {
   BrowserRawEventsProcessor,
   type BrowserRawEventsState,
 } from "~/domains/streams/client-libraries/processors/browser-raw-events/implementation.ts";
+import {
+  BROWSER_EVENT_FEED_SCHEMA_VERSION,
+  BROWSER_EVENT_FEED_TABLE,
+  BrowserEventFeedContract,
+  BrowserEventFeedProcessor,
+  type BrowserEventFeedState,
+} from "~/domains/streams/client-libraries/processors/browser-event-feed/implementation.ts";
+import type { FeedItemData } from "~/domains/streams/client-libraries/processors/browser-event-feed/grouping.ts";
 import { StreamEventInput } from "~/domains/streams/schemas.ts";
-import type { Stream, StreamEvent } from "~/types.ts";
+import type { Stream } from "~/types.ts";
 import { AgentFeedView } from "~/components/agent-feed.tsx";
 import { AgentPillComposer, type AgentComposerMode } from "~/components/agent-pill-composer.tsx";
 import { ExampleEventsPanel } from "~/components/example-events-panel.tsx";
@@ -82,10 +71,88 @@ import { useStreamViewSearch } from "~/lib/stream-view-search.ts";
 const DEFAULT_RAW_EVENT_YAML =
   "type: events.iterate.com/os/manual-event\npayload:\n  message: Hello from OS\n";
 
-/** How many rows past the virtualizer's window the tail query prefetches. */
-const TAIL_PREFETCH_ROWS = 32;
-
 const MAX_PRESENCE_AVATARS = 4;
+
+type ProjectStreamViewTab = "feed" | "state";
+type ItxStreamSource = (streamPath: string) => Stream | Promise<Stream>;
+
+/**
+ * One named configuration of the Feed tab. The feed always renders a feed-item
+ * collection from the local SQLite mirror — never the raw events table — and a
+ * preset picks WHICH collection and how it is filtered:
+ *   - `agent-chat` renders the agent_feed_items collection (the chat view);
+ *   - `feed-items` renders the grouped feed_items collection, optionally
+ *     filtered to one event-type prefix (the domain presets).
+ * The preset selector is the one filter UI element every stream view shares;
+ * each domain contributes its own presets and default via the stream path.
+ */
+type StreamFeedPreset = { id: string; label: string } & (
+  | { kind: "agent-chat" }
+  | { kind: "feed-items"; eventTypePrefix?: string }
+);
+
+const EVERYTHING_PRESET: StreamFeedPreset = {
+  id: "everything",
+  label: "Everything",
+  kind: "feed-items",
+};
+
+/** The domain-specific event-type prefix presets, keyed by stream-path prefix. */
+const DOMAIN_PRESETS: { pathPrefix: string; preset: StreamFeedPreset }[] = [
+  {
+    pathPrefix: "/agents/",
+    preset: {
+      id: "agent-events",
+      label: "Agent events",
+      kind: "feed-items",
+      eventTypePrefix: "events.iterate.com/agent/",
+    },
+  },
+  {
+    pathPrefix: "/secrets/",
+    preset: {
+      id: "secret-events",
+      label: "Secret events",
+      kind: "feed-items",
+      eventTypePrefix: "events.iterate.com/secret/",
+    },
+  },
+  {
+    pathPrefix: "/repos/",
+    preset: {
+      id: "repo-events",
+      label: "Repo events",
+      kind: "feed-items",
+      eventTypePrefix: "events.iterate.com/repo/",
+    },
+  },
+  {
+    pathPrefix: "/integrations/slack",
+    preset: {
+      id: "slack-events",
+      label: "Slack events",
+      kind: "feed-items",
+      eventTypePrefix: "events.iterate.com/slack/",
+    },
+  },
+];
+
+/**
+ * The presets available on a stream, in order — the FIRST one is the domain's
+ * default. Agent streams default to the chat view; other domains default to
+ * their own event family; everything else defaults to the unfiltered feed.
+ */
+function presetsForStream(streamPath: string): StreamFeedPreset[] {
+  const presets: StreamFeedPreset[] = [];
+  if (streamPath.startsWith("/agents/")) {
+    presets.push({ id: "agent-chat", label: "Agent chat", kind: "agent-chat" });
+  }
+  for (const { pathPrefix, preset } of DOMAIN_PRESETS) {
+    if (streamPath.startsWith(pathPrefix)) presets.push(preset);
+  }
+  presets.push(EVERYTHING_PRESET);
+  return presets;
+}
 
 type ProjectStreamMessageComposer = {
   placeholder?: string;
@@ -93,30 +160,13 @@ type ProjectStreamMessageComposer = {
   onSubmit: (message: string) => Promise<void>;
 };
 
-type ProjectStreamViewTab = "agent" | "feed" | "raw" | "state";
-type StreamPathLinkRenderer = (input: {
-  children: ReactNode;
-  className?: string;
-  path: string;
-}) => ReactNode;
-type ItxStreamSource = (streamPath: string) => Stream | Promise<Stream>;
-
-/**
- * Stream events reduced by the browser feed. The itx's event envelope
- * has no `streamPath` (the owning stream is clear from context); the feed
- * reducer still keys some renderers off it, so `normalizeEvent` backfills it.
- */
-type FeedEvent = StreamEvent & { streamPath?: string };
-
 export function ProjectStreamView({
   autoFocusMessageComposer = false,
   defaultComposerMode,
   emptyLabel = "No events in this stream yet.",
   headerAccessory,
   messageComposer,
-  projectSlug,
   projectId,
-  renderStreamPathLink,
   showCommandPaletteTrigger = false,
   streamSource,
   streamPath,
@@ -126,9 +176,7 @@ export function ProjectStreamView({
   emptyLabel?: string;
   headerAccessory?: ReactNode;
   messageComposer?: ProjectStreamMessageComposer;
-  projectSlug: string;
   projectId: string | null;
-  renderStreamPathLink?: StreamPathLinkRenderer;
   showCommandPaletteTrigger?: boolean;
   streamSource?: ItxStreamSource;
   streamPath: string;
@@ -136,10 +184,6 @@ export function ProjectStreamView({
   const itx = useItx();
   const streamPathText = streamPath;
   const streamRuntimeProjectKey = projectId ?? NULL_DURABLE_OBJECT_PROJECT_ID;
-  // The agent-ui processor (presence, live state) runs on every stream; the
-  // chat-shaped Agent view only makes sense for streams under /agents — those
-  // default to it, everything else defaults to the plain feed.
-  const isAgentStream = streamPathText.startsWith("/agents/");
   const resolvedStreamSource = useMemo<ItxStreamSource>(
     () => streamSource ?? ((path) => itx.streams.get(path)),
     [itx, streamSource],
@@ -181,7 +225,6 @@ export function ProjectStreamView({
   );
   const countResult = useStreamQuery(store.streamDatabase, `SELECT COUNT(*) AS count FROM events`);
   const eventCount = Number(countResult.data[0]?.count ?? 0);
-  const reductionKey = `${streamRuntimeProjectKey}:${streamPathText}`;
 
   // A second browser-hosted processor on the same stream (and same per-path
   // SQLite database): folds agent events into settled `agent_feed_items` rows
@@ -219,6 +262,36 @@ export function ProjectStreamView({
     agentStore.getSnapshot,
     agentStore.getServerSnapshot,
   );
+  // Third browser-hosted processor: folds every event into grouped feed_items
+  // rows — the collection the Feed tab's presets filter over.
+  const feedStore = useMemo(
+    () =>
+      acquireStreamRuntime({
+        createStreamClient: streamClientFactory,
+        projectId: streamRuntimeProjectKey,
+        streamPath: streamPathText,
+        slug: BrowserEventFeedContract.slug,
+        schemaVersion: BROWSER_EVENT_FEED_SCHEMA_VERSION,
+        tables: [BROWSER_EVENT_FEED_TABLE],
+        createProcessor({ stream, sql, subscriptionKey }) {
+          const storage = browserProcessorStateStorage<BrowserEventFeedState>({
+            sql,
+            processorSlug: BrowserEventFeedContract.slug,
+            subscriptionKey,
+          });
+          return new BrowserEventFeedProcessor({
+            stream,
+            sql,
+            readState: storage.readState,
+            writeState: storage.writeState,
+          });
+        },
+      }),
+    [streamRuntimeProjectKey, streamClientFactory, streamPathText],
+  );
+  // Subscribing is what STARTS a store's connection (stream-browser-store
+  // refcounts listeners); without this the feed processor never folds.
+  useSyncExternalStore(feedStore.subscribe, feedStore.getSnapshot, feedStore.getServerSnapshot);
   const agentUiState = useAgentUiReducedState(store.streamDatabase);
   const metrics = useSimulatedRttMetrics();
 
@@ -229,11 +302,13 @@ export function ProjectStreamView({
   // default tab and fresh filters.
   const { search, setSearch } = useStreamViewSearch();
 
-  // Each stream's default tab: Agent for /agents streams, Feed otherwise. A
-  // hand-edited `?tab=agent` on a non-agent stream falls back to the default.
-  const defaultTab: ProjectStreamViewTab = isAgentStream ? "agent" : "feed";
-  const activeTab: ProjectStreamViewTab =
-    search.tab == null || (search.tab === "agent" && !isAgentStream) ? defaultTab : search.tab;
+  // Two tabs everywhere: Feed (default) and State. WHAT the feed shows is the
+  // preset's job; the stream path decides which presets exist and which one is
+  // the domain default (the first). A stale/hand-edited preset id falls back.
+  const activeTab: ProjectStreamViewTab = search.tab ?? "feed";
+  const presets = useMemo(() => presetsForStream(streamPathText), [streamPathText]);
+  const defaultPreset = presets[0]!;
+  const activePreset = presets.find((preset) => preset.id === search.preset) ?? defaultPreset;
   const toolsOpen = search.filter === true;
   const feedSearch = search.q ?? "";
   const focusedProcessorKey = search.processor ?? null;
@@ -274,6 +349,7 @@ export function ProjectStreamView({
   function nudgeDeliveries() {
     void store.nudge();
     void agentStore.nudge();
+    void feedStore.nudge();
   }
 
   async function submitMessage() {
@@ -305,6 +381,7 @@ export function ProjectStreamView({
   }
 
   async function clearClientDatabases() {
+    await feedStore.clearLocalDatabase();
     await agentStore.clearLocalDatabase();
     await store.clearLocalDatabase();
     window.location.reload();
@@ -443,24 +520,44 @@ export function ProjectStreamView({
             </svg>
             {metrics.rttNow}ms
           </Button>
+          {activeTab === "feed" ? (
+            <Select
+              value={activePreset.id}
+              onValueChange={(value) =>
+                setSearch({
+                  preset: value == null || value === defaultPreset.id ? undefined : value,
+                })
+              }
+            >
+              <SelectTrigger
+                size="sm"
+                className="max-w-44 text-xs"
+                data-testid="stream-feed-preset"
+                title="Feed preset"
+              >
+                {/* Radix can only resolve the selected item's text once the
+                    content has mounted; render the label ourselves. */}
+                <SelectValue>{activePreset.label}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {presets.map((preset) => (
+                  <SelectItem key={preset.id} value={preset.id} className="text-xs">
+                    {preset.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null}
           <Tabs
             value={activeTab}
             onValueChange={(value) => {
               const tab = value as ProjectStreamViewTab;
-              setSearch({ tab: tab === defaultTab ? undefined : tab });
+              setSearch({ tab: tab === "feed" ? undefined : tab });
             }}
           >
             <TabsList className="h-8">
-              {isAgentStream ? (
-                <TabsTrigger value="agent" className="px-3 text-xs">
-                  Agent
-                </TabsTrigger>
-              ) : null}
               <TabsTrigger value="feed" className="px-3 text-xs">
                 Feed
-              </TabsTrigger>
-              <TabsTrigger value="raw" className="px-3 text-xs">
-                Raw
               </TabsTrigger>
               <TabsTrigger value="state" className="px-3 text-xs">
                 State
@@ -482,9 +579,9 @@ export function ProjectStreamView({
       {headerAccessory == null ? null : <div className="shrink-0">{headerAccessory}</div>}
       {toolsOpen ? (
         <div className="flex shrink-0 items-center gap-3 px-4 pb-1.5 pt-1">
-          {/* Search filters the agent feed's SQL; the other tabs don't take a
-              filter yet, so don't offer a no-op input there. */}
-          {activeTab === "agent" ? (
+          {/* Search filters the agent feed's SQL; the other presets don't take
+              a text filter yet, so don't offer a no-op input there. */}
+          {activeTab === "feed" && activePreset.kind === "agent-chat" ? (
             <div className="flex h-9 min-w-0 max-w-sm flex-1 items-center gap-2 rounded-full bg-muted px-3.5">
               <SearchIcon className="size-3.5 shrink-0 text-muted-foreground" />
               <input
@@ -504,7 +601,9 @@ export function ProjectStreamView({
       ) : null}
 
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-        {activeTab === "agent" ? (
+        {activeTab === "state" ? (
+          <ProjectStreamStateView store={store} />
+        ) : activePreset.kind === "agent-chat" ? (
           <AgentFeedView
             {...(runningLlmRequestId != null &&
             (agentUiState?.queuedUserMessages ?? []).length > 0 &&
@@ -523,37 +622,12 @@ export function ProjectStreamView({
             // here yet", not "connecting".
             isPending={agentUiState == null && agentSnapshot.connectionStatus !== "subscribed"}
           />
-        ) : activeTab === "feed" ? (
-          <ProjectStreamFeedView
-            database={store.streamDatabase}
-            emptyLabel={connectionLabel}
-            renderStreamPathLink={
-              renderStreamPathLink ??
-              (({ path, children, className }) => (
-                <Link
-                  to="/projects/$projectSlug/streams/$"
-                  params={{ projectSlug, _splat: path }}
-                  // Switching to another stream starts fresh: drop this stream's
-                  // tab/filter/processor params rather than carrying them over.
-                  search={{}}
-                  {...(className == null ? {} : { className })}
-                >
-                  {children}
-                </Link>
-              ))
-            }
-            reductionKey={reductionKey}
-            streamPath={streamPath}
-          />
-        ) : activeTab === "raw" ? (
-          <ProjectStreamRawView
-            database={store.streamDatabase}
-            emptyLabel={connectionLabel}
-            typeFilter={search.type ?? null}
-            onTypeFilterChange={(value) => setSearch({ type: value ?? undefined })}
-          />
         ) : (
-          <ProjectStreamStateView store={store} />
+          <FeedItemsView
+            database={feedStore.streamDatabase}
+            emptyLabel={connectionLabel}
+            eventTypePrefix={activePreset.eventTypePrefix ?? null}
+          />
         )}
         {procPanelOpen ? (
           <StreamProcessorsPanel
@@ -611,98 +685,6 @@ function isRunningLlmStep(step: AgentUiStep): step is AgentUiLlmStep {
   return step.kind === "llm" && step.status === "running";
 }
 
-// ---------------------------------------------------------------------------
-// Incremental browser-side reduction over the SQLite raw-event mirror
-// ---------------------------------------------------------------------------
-
-type ReducedStreamState<TState> = {
-  status: SqliteQueryStatus;
-  error?: string;
-  state: TState;
-  events: FeedEvent[];
-};
-
-type ReductionCache<TState> = {
-  key: string;
-  rowCount: number;
-  lastOffset: number;
-  state: TState;
-  events: FeedEvent[];
-};
-
-/**
- * Reduce the SQLite raw-event mirror into a processor's reduced state.
- *
- * The reduction is incremental: appends only reduce the new tail rows on top
- * of the cached state, so live streams (including high-volume LLM chunk
- * deltas) don't replay the whole history on every event. Any non-append
- * change (clear, reset, truncation) recomputes from scratch.
- */
-function useReducedStreamState<TState>(args: {
-  database: StreamBrowserDatabase;
-  reductionKey: string;
-  /** Distinguishes caches when several reductions share one reductionKey. */
-  cacheScope: string;
-  initialState: () => TState;
-  normalizeEvent?: (event: FeedEvent) => FeedEvent;
-  reduceEvent: (state: TState, event: FeedEvent) => TState;
-}): ReducedStreamState<TState> {
-  const rowsResult = useStreamQuery(
-    args.database,
-    `SELECT offset, json(raw_jsonb) AS raw_json FROM events ORDER BY local_index ASC`,
-  );
-  const cacheRef = useRef<ReductionCache<TState> | null>(null);
-  const cacheKey = `${args.cacheScope}:${args.reductionKey}`;
-  const { initialState, normalizeEvent, reduceEvent } = args;
-
-  return useMemo(() => {
-    const cached = cacheRef.current?.key === cacheKey ? cacheRef.current : null;
-
-    if (rowsResult.status !== "ok") {
-      return {
-        status: rowsResult.status,
-        ...(rowsResult.error == null ? {} : { error: rowsResult.error.message }),
-        state: cached?.state ?? initialState(),
-        events: cached?.events ?? [],
-      };
-    }
-
-    const rows = rowsResult.data;
-    const canExtend =
-      cached != null &&
-      rows.length >= cached.rowCount &&
-      (cached.rowCount === 0 || Number(rows[cached.rowCount - 1]?.offset) === cached.lastOffset);
-
-    const startIndex = canExtend ? cached.rowCount : 0;
-    let state = canExtend ? cached.state : initialState();
-    const events = canExtend ? [...cached.events] : [];
-
-    for (let index = startIndex; index < rows.length; index++) {
-      const rawJson = rows[index]?.raw_json;
-      if (typeof rawJson !== "string") continue;
-      let event: FeedEvent;
-      try {
-        event = JSON.parse(rawJson) as FeedEvent;
-      } catch {
-        continue;
-      }
-      event = normalizeEvent?.(event) ?? event;
-      events.push(event);
-      state = reduceEvent(state, event);
-    }
-
-    cacheRef.current = {
-      key: cacheKey,
-      rowCount: rows.length,
-      lastOffset: events.length === 0 ? -1 : events[events.length - 1]!.offset,
-      state,
-      events,
-    };
-
-    return { status: "ok" as const, state, events };
-  }, [rowsResult, cacheKey, initialState, normalizeEvent, reduceEvent]);
-}
-
 /**
  * The agent-ui processor persists its reduced state (live activity with
  * streaming text, presence roster) to `processor_state` on every checkpoint;
@@ -730,348 +712,132 @@ function useAgentUiReducedState(database: StreamBrowserDatabase): AgentUiState |
 }
 
 // ---------------------------------------------------------------------------
-// Feed view: semantic chat-style elements reduced from raw events
+// Feed view: the grouped feed_items collection, filtered by the active preset
 // ---------------------------------------------------------------------------
 
-function ProjectStreamFeedView({
-  database,
-  emptyLabel,
-  renderStreamPathLink,
-  reductionKey,
-  streamPath,
-}: {
-  database: StreamBrowserDatabase;
-  emptyLabel: string;
-  renderStreamPathLink: StreamPathLinkRenderer;
-  reductionKey: string;
-  streamPath: string;
-}) {
-  const normalizeEvent = useCallback(
-    (event: FeedEvent): FeedEvent => (event.streamPath == null ? { ...event, streamPath } : event),
-    [streamPath],
-  );
-  const feed = useReducedStreamState<EventsStreamViewState>({
-    database,
-    reductionKey,
-    cacheScope: STREAM_VIEW_REDUCER_SLUG,
-    initialState: createInitialStreamViewState,
-    normalizeEvent,
-    reduceEvent: reduceStreamViewEvent,
-  });
-  const [rendererMode, setRendererMode] = useState<EventsStreamRendererMode>("raw-pretty");
-  const [hiddenElementTypes, setHiddenElementTypes] = useState<EventsStreamElementType[]>([]);
-  const [openEventOffset, setOpenEventOffset] = useState<number | undefined>(undefined);
-
-  const displayState = useMemo(
-    () => applyRendererMode({ viewState: feed.state, events: feed.events, rendererMode }),
-    [feed.state, feed.events, rendererMode],
-  );
-
-  return (
-    <EventsStreamView
-      className="min-h-0 flex-1"
-      viewState={displayState}
-      events={feed.events}
-      emptyLabel={emptyLabel}
-      isPending={feed.status === "pending" && feed.events.length === 0}
-      {...(feed.error == null ? {} : { errorLabel: feed.error })}
-      {...(openEventOffset == null ? {} : { openEventOffset })}
-      onOpenEventOffsetChange={setOpenEventOffset}
-      hiddenElementTypes={hiddenElementTypes}
-      onHiddenElementTypesChange={setHiddenElementTypes}
-      rendererMode={rendererMode}
-      onRendererModeChange={setRendererMode}
-      renderStreamPathLink={renderStreamPathLink}
-    />
-  );
-}
+/** Newest rows the feed view loads; older history stays in SQLite. */
+const MAX_FEED_ITEMS = 500;
 
 /**
- * The reducer always produces both raw groups and semantic elements; renderer
- * modes are pure view-time filters over that single view state.
+ * Renders the browser-event-feed processor's `feed_items` collection: one row
+ * per specific-renderer singleton or per collapsed run of same-type events.
+ * A preset's `eventTypePrefix` filters on each row's primary event type — a
+ * group row's `data.eventType`, a singleton's first event type — entirely in
+ * SQL over the local mirror.
  */
-function applyRendererMode(args: {
-  viewState: EventsStreamViewState;
-  events: readonly FeedEvent[];
-  rendererMode: EventsStreamRendererMode;
-}): EventsStreamViewState {
-  if (args.rendererMode === "pretty") {
-    return {
-      ...args.viewState,
-      slots: {
-        ...args.viewState.slots,
-        feed: args.viewState.slots.feed.filter((element) => element.type !== "grouped-raw-event"),
-      },
-    };
-  }
-
-  if (args.rendererMode === "raw-single-json") {
-    return {
-      ...args.viewState,
-      slots: {
-        ...args.viewState.slots,
-        feed: [{ type: "raw-json-dump", id: "raw-json-dump", props: { events: [...args.events] } }],
-      },
-    };
-  }
-
-  return args.viewState;
-}
-
-// ---------------------------------------------------------------------------
-// Raw view: virtualized event rows with an event-type filter
-// ---------------------------------------------------------------------------
-
-const ALL_EVENT_TYPES = "__all__";
-
-function ProjectStreamRawView({
+function FeedItemsView({
   database,
   emptyLabel,
-  typeFilter,
-  onTypeFilterChange,
+  eventTypePrefix,
 }: {
   database: StreamBrowserDatabase;
   emptyLabel: string;
-  /** The event-type filter (URL-backed); null = all types. */
-  typeFilter: string | null;
-  onTypeFilterChange: (value: string | null) => void;
+  eventTypePrefix: string | null;
 }) {
-  const eventTypeFilter = typeFilter ?? ALL_EVENT_TYPES;
-  const typesResult = useStreamQuery(
-    database,
-    `SELECT type, COUNT(*) AS count FROM events GROUP BY type ORDER BY type ASC`,
-  );
-  const countResult = useStreamQuery(
-    database,
-    typeFilter == null
-      ? `SELECT COUNT(*) AS count FROM events`
-      : `SELECT COUNT(*) AS count FROM events WHERE type = ?`,
-    typeFilter == null ? [] : [typeFilter],
-  );
-  const eventCount = Number(countResult.data[0]?.count ?? 0);
-  const [expandedOffsets, setExpandedOffsets] = useState<ReadonlySet<number>>(new Set());
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-
-  function toggleOffset(offset: number) {
-    setExpandedOffsets((previous) => {
-      const next = new Set(previous);
-      if (next.has(offset)) {
-        next.delete(offset);
-      } else {
-        next.add(offset);
-      }
-      return next;
-    });
-  }
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center justify-between gap-3 px-4 py-2">
-        <Select
-          value={eventTypeFilter}
-          onValueChange={(value) =>
-            onTypeFilterChange(value == null || value === ALL_EVENT_TYPES ? null : value)
-          }
-        >
-          <SelectTrigger size="sm" className="min-w-0 max-w-full font-mono text-xs">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={ALL_EVENT_TYPES}>All event types</SelectItem>
-            {typesResult.data.map((row) => (
-              <SelectItem
-                key={String(row.type)}
-                value={String(row.type)}
-                className="font-mono text-xs"
-              >
-                {String(row.type)} ({Number(row.count).toLocaleString()})
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <span className="shrink-0 font-mono text-xs text-muted-foreground">
-          {eventCount.toLocaleString()} events
-        </span>
-      </div>
-      <div ref={scrollContainerRef} className="min-h-0 flex-1 overflow-y-auto">
-        {countResult.status !== "ok" ? (
-          <Centered>
-            {countResult.status === "error"
-              ? (countResult.error?.message ?? "SQLite query failed")
-              : "Opening local SQLite mirror"}
-          </Centered>
-        ) : (
-          <VirtualEventRows
-            // Fresh virtualizer (measurements, end anchor) per stream mirror
-            // and per filter — stale state from another list would misplace
-            // the scroll position.
-            key={`${database.databasePath}:${eventTypeFilter}`}
-            database={database}
-            emptyLabel={typeFilter == null ? emptyLabel : "No events match this type."}
-            eventCount={eventCount}
-            expandedOffsets={expandedOffsets}
-            onToggleOffset={toggleOffset}
-            scrollElementRef={scrollContainerRef}
-            typeFilter={typeFilter}
-          />
-        )}
-      </div>
-    </div>
-  );
-}
-
-function VirtualEventRows({
-  database,
-  emptyLabel,
-  eventCount,
-  expandedOffsets,
-  onToggleOffset,
-  scrollElementRef,
-  typeFilter,
-}: {
-  database: StreamBrowserDatabase;
-  emptyLabel: string;
-  eventCount: number;
-  expandedOffsets: ReadonlySet<number>;
-  onToggleOffset: (offset: number) => void;
-  scrollElementRef: RefObject<HTMLDivElement | null>;
-  typeFilter: string | null;
-}) {
-  // TanStack Virtual owns all tail behavior: `anchorTo: "end"` starts the list
-  // at the newest events and `followOnAppend` chases appends while the reader
-  // is pinned to the end (every row is a virtual item, so nothing else needs
-  // to watch the scroll position).
-  const virtualizer = useVirtualizer({
-    count: eventCount,
-    getScrollElement: () => scrollElementRef.current,
-    estimateSize: () => 36,
-    getItemKey: (index) => index,
-    anchorTo: "end",
-    followOnAppend: true,
-    scrollEndThreshold: 80,
-    overscan: 24,
-    directDomUpdates: true,
-  });
-
-  // Open at the newest events: this component mounts gated behind the count
-  // query, so the virtualizer never sees a 0→N count transition for
-  // followOnAppend to chase (see agent-feed.tsx).
-  useLayoutEffect(() => {
-    virtualizer.scrollToEnd();
-    // useVirtualizer returns one stable instance for the component's lifetime,
-    // so this runs once on mount; later appends are followOnAppend's job.
-  }, [virtualizer]);
-
-  const virtualItems = virtualizer.getVirtualItems();
-  const first = virtualItems[0]?.index ?? 0;
-  const last = virtualItems.at(-1)?.index ?? -1;
-  // Extends past the virtualizer's window so rows appended while pinned to the
-  // tail are already in the snapshot when the count grows (see agent-feed.tsx).
-  const windowSize = Math.max(0, last + 1 + TAIL_PREFETCH_ROWS - first);
   const rowsResult = useStreamQuery(
     database,
-    typeFilter == null
-      ? `SELECT local_index, offset, type, idempotency_key, created_at, inserted_at, json(raw_jsonb) AS raw_json
-         FROM events
-         WHERE local_index >= ? AND local_index < ?
-         ORDER BY local_index ASC`
-      : `SELECT local_index, offset, type, idempotency_key, created_at, inserted_at, json(raw_jsonb) AS raw_json
-         FROM events
-         WHERE type = ?
-         ORDER BY local_index ASC
-         LIMIT ? OFFSET ?`,
-    typeFilter == null ? [first, first + windowSize] : [typeFilter, windowSize, first],
+    eventTypePrefix == null
+      ? `SELECT local_index, component, first_offset, last_offset, event_count, json(data) AS data
+         FROM feed_items ORDER BY local_index DESC LIMIT ${MAX_FEED_ITEMS}`
+      : `SELECT local_index, component, first_offset, last_offset, event_count, json(data) AS data
+         FROM feed_items
+         WHERE COALESCE(json_extract(data, '$.eventType'), json_extract(data, '$.events[0].type')) LIKE ?
+         ORDER BY local_index DESC LIMIT ${MAX_FEED_ITEMS}`,
+    eventTypePrefix == null ? [] : [`${eventTypePrefix}%`],
   );
-  // Retain the last committed rows across range re-queries. When the visible
-  // window shifts (append grows the list, or a scroll moves it), the range SQL
-  // query is recreated and briefly reports `pending` carrying a *different*
-  // range's rows. Rendering straight from that pending data blanks every
-  // already-visible row to a grey skeleton for a frame. Keeping the last "ok"
-  // rows means only genuinely-new indices fall back to a skeleton.
-  const lastRowsRef = useRef<Map<number, StreamEventRow> | null>(null);
-  const rowsByIndex = useMemo(() => {
-    if (rowsResult.status !== "ok") {
-      return lastRowsRef.current ?? new Map<number, StreamEventRow>();
-    }
-    const rows = new Map<number, StreamEventRow>();
-    rowsResult.data.forEach((row, position) => {
-      const index = typeFilter == null ? Number(row.local_index) : first + position;
-      if (Number.isFinite(index)) rows.set(index, row as StreamEventRow);
-    });
-    lastRowsRef.current = rows;
-    return rows;
-  }, [rowsResult.data, rowsResult.status, typeFilter, first]);
+  const [expanded, setExpanded] = useState<ReadonlySet<number>>(new Set());
+  const rows = useMemo(() => [...rowsResult.data].reverse(), [rowsResult.data]);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Open pinned to the newest items, like every other feed in the app.
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (element) element.scrollTop = element.scrollHeight;
+  }, [rows.length]);
 
-  if (eventCount === 0) {
-    return <Centered>{emptyLabel}</Centered>;
+  if (rowsResult.status === "error") {
+    return <Centered>{rowsResult.error?.message ?? "SQLite query failed"}</Centered>;
+  }
+  if (rowsResult.status === "pending" && rows.length === 0) {
+    return <Centered>Opening local SQLite mirror</Centered>;
+  }
+  if (rows.length === 0) {
+    return (
+      <Centered>
+        {eventTypePrefix == null ? emptyLabel : "No feed items match this preset."}
+      </Centered>
+    );
   }
 
   return (
-    <div className="px-4">
-      <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
-        {virtualItems.map((item) => {
-          const row = rowsByIndex.get(item.index);
-          return (
-            <article
-              className="absolute left-0 top-0 w-full border-b bg-background py-1.5 font-mono text-xs"
-              // measureElement reads data-index to attribute heights to rows;
-              // without it expanded rows keep their estimated size and the
-              // JSON paints over the rows below.
-              data-index={item.index}
-              key={item.key}
-              ref={virtualizer.measureElement}
-              style={{ transform: `translateY(${item.start}px)` }}
-            >
-              {row ? (
-                <RawEventRow
-                  expanded={expandedOffsets.has(Number(row.offset))}
-                  onToggle={() => onToggleOffset(Number(row.offset))}
-                  row={row}
-                />
-              ) : (
-                <div className="h-6 rounded bg-muted" />
-              )}
-            </article>
-          );
-        })}
-      </div>
+    <div
+      ref={scrollRef}
+      className="min-h-0 flex-1 overflow-y-auto px-4"
+      data-testid="stream-feed-items"
+    >
+      {rows.map((row) => {
+        const localIndex = Number(row.local_index);
+        return (
+          <FeedItemRow
+            key={localIndex}
+            row={row}
+            expanded={expanded.has(localIndex)}
+            onToggle={() =>
+              setExpanded((previous) => {
+                const next = new Set(previous);
+                if (next.has(localIndex)) next.delete(localIndex);
+                else next.add(localIndex);
+                return next;
+              })
+            }
+          />
+        );
+      })}
     </div>
   );
 }
 
-function RawEventRow({
+function FeedItemRow({
   expanded,
   onToggle,
   row,
 }: {
   expanded: boolean;
   onToggle: () => void;
-  row: StreamEventRow;
+  row: Record<string, unknown>;
 }) {
+  const data = parseFeedItemData(String(row.data));
+  const eventType =
+    data && "eventType" in data ? data.eventType : (data?.events[0]?.type ?? String(row.component));
+  const eventCount = Number(row.event_count);
+  const firstOffset = Number(row.first_offset);
+  const lastOffset = Number(row.last_offset);
+
   return (
-    <>
+    <article className="border-b py-1.5 font-mono text-xs">
       <button
         aria-expanded={expanded}
-        className="grid w-full cursor-pointer grid-cols-[64px_minmax(0,1fr)_auto] items-baseline gap-3 text-left text-muted-foreground hover:text-foreground"
+        className="grid w-full cursor-pointer grid-cols-[88px_minmax(0,1fr)_auto] items-baseline gap-3 text-left text-muted-foreground hover:text-foreground"
         onClick={onToggle}
         type="button"
       >
-        <span>#{row.offset}</span>
-        <span className="truncate">{row.type}</span>
-        <time>{row.created_at}</time>
+        <span>
+          {firstOffset === lastOffset ? `#${firstOffset}` : `#${firstOffset}–${lastOffset}`}
+        </span>
+        <span className="truncate">{eventType}</span>
+        <span>{eventCount === 1 ? "1 event" : `${eventCount.toLocaleString()} events`}</span>
       </button>
       {expanded ? (
-        <SerializedObjectCodeBlock className="my-2" data={parseRawEventJson(row.raw_json)} />
+        <SerializedObjectCodeBlock className="my-2" data={data?.events ?? row.data} />
       ) : null}
-    </>
+    </article>
   );
 }
 
-function parseRawEventJson(rawJson: string): unknown {
+function parseFeedItemData(raw: string): FeedItemData | null {
   try {
-    return JSON.parse(rawJson);
+    return JSON.parse(raw) as FeedItemData;
   } catch {
-    return rawJson;
+    return null;
   }
 }
 

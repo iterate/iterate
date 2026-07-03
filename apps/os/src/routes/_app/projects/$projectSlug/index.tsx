@@ -31,7 +31,6 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/")({
  * secondary view, tucked behind a toggle.
  */
 function ProjectHomePage() {
-  const params = Route.useParams();
   const { project, routeConfig } = Route.useLoaderData();
   const lifecycle = useItxState<ProjectProcessorState>(
     (itx, setState) => itx.processor.onStateChange(setState),
@@ -61,7 +60,7 @@ function ProjectHomePage() {
           <ProjectCreationProgress state={lifecycle.state} />
         )}
 
-        <ProjectEventStreamSection projectId={project.id} projectSlug={params.projectSlug} />
+        <ProjectEventStreamSection projectId={project.id} />
       </div>
     </section>
   );
@@ -72,13 +71,7 @@ function ProjectHomePage() {
  * default, and only mounted (it hosts a browser-side SQLite mirror) once
  * opened.
  */
-function ProjectEventStreamSection({
-  projectId,
-  projectSlug,
-}: {
-  projectId: string;
-  projectSlug: string;
-}) {
+function ProjectEventStreamSection({ projectId }: { projectId: string }) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -101,7 +94,6 @@ function ProjectEventStreamSection({
         <div className="flex h-[32rem] min-h-0 flex-col border-t">
           <ProjectStreamView
             emptyLabel="No events in the project root stream yet."
-            projectSlug={projectSlug}
             projectId={projectId}
             streamPath={StreamPath.parse("/")}
           />
