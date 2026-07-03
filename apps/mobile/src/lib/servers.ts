@@ -1,8 +1,9 @@
 // Which OS deployment the app talks to. The field is always editable; these
-// are the one-tap presets. The default is this branch's PR preview slot —
-// prod won't have the voice bridge until PR #1591 and #1605 merge. Preview
-// leases expire; pushing to the PR (or re-running its preview workflow)
-// re-deploys the slot.
+// are the one-tap presets. The deployment must include this branch (the itx
+// `voice` builtin) — prod only qualifies once the voice bridge PRs merge.
+// Preview slots are LEASED and rotate: re-run the Preview workflow on PR
+// #1605, then check the PR's preview comment for the current hostname and
+// correct the preset (or just type it in the app).
 
 export type ServerPreset = { label: string; baseUrl: string };
 

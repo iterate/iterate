@@ -9,10 +9,15 @@ pr: https://github.com/iterate/iterate/pull/1605
 
 ## Status summary
 
-Spec complete (grill-you interview in `voice-ios-app.interview.md`).
-Implementation not started. Main pieces: new Expo app `apps/mobile/`, a small
-OS-side addition (realtime-secret mint on the itx surface + its e2e test), and
-a simulator-verified end-to-end voice round-trip.
+Implementation complete and pushed; PR #1605. All root gates green
+(typecheck/lint/test incl. the new `apps/mobile` vitest suite); the OS-side
+mint capability has a passing itx e2e test; the ported session core passed a
+LIVE end-to-end run (real dev server, real OpenAI Realtime, real worker agent
+round-trip) from Node. **Not verified: the native iOS build** — this machine
+has no Xcode, so the first `npx expo run:ios` happens on Misha's machine
+(`expo prebuild` + full Metro export both pass, which catches config and JS
+errors but not native compile issues). Preview deploy couldn't run: the
+preview slot pool was exhausted — re-run the Preview workflow when back.
 
 ## What this is
 
@@ -88,26 +93,60 @@ offline_access` + project-selection scope; RFC 8707 `resource` = the OS
 
 ## Checklist
 
-- [ ] OS: expose `voice` realtime-secret mint on the itx surface (project
-      scope), delegate the existing server fn to it, + itx e2e test
-- [ ] Scaffold `apps/mobile` (Expo, TS, expo-dev-client, react-native-webrtc,
-      expo-router, tanstack-query, reanimated, expo-secure-store,
-      expo-auth-session, expo-haptics, expo-keep-awake)
-- [ ] Auth: issuer discovery, PKCE flow, token store + refresh discipline
-- [ ] itx client wrapper for RN (connect, authenticate bearer, forced-refresh
-      reconnect seam)
-- [ ] Port `VoiceSession` to a transport-agnostic session core with WebRTC
-      data-channel transport + derived assistantSpeaking/workerBusy
-- [ ] Vitest suite for the session core (fake data channel, recorded events)
-- [ ] Screens: sign-in, server picker, projects, sessions list, voice screen
-      (orb, transcript sheet, bottom bar, worker caption)
-- [ ] Polish: keep-awake, haptics, background audio plist line, mic-denied
-      path
-- [ ] Root typecheck/lint/test green including apps/mobile; knip exclusion
-- [ ] Simulator end-to-end round-trip against a live deployment,
-      screen-recorded into the PR body
-- [ ] PR body: verified-in-simulator vs needs-your-phone checklist; build
-      instructions (`npx expo run:ios --device`)
+- [x] OS: expose `voice` realtime-secret mint on the itx surface (project
+      scope), delegate the existing server fn to it, + itx e2e test — _new
+      `VoiceRpcTarget` builtin in `apps/os/src/rpc-targets.ts`, shared mint in
+      `domains/voice/mint-realtime-connection.ts`, e2e test passed against a
+      live dev server (really minted an `ek_` secret)\_
+- [x] Scaffold `apps/mobile` (Expo SDK 57 / RN 0.86, expo-dev-client,
+      react-native-webrtc, expo-router, tanstack-query, reanimated,
+      expo-secure-store, expo-auth-session, expo-haptics, expo-keep-awake)
+- [x] Auth: issuer discovery, PKCE flow, token store + refresh discipline —
+      _`src/lib/auth.ts`; discovery + dynamic registration + PKCE probed live
+      against auth.iterate-dev.com from this machine_
+- [x] itx client wrapper for RN — _`src/lib/itx.ts`; one cached capnweb
+      session, one auth-shaped refresh+reauth at connection setup_
+- [x] Port `VoiceSession` to a transport-agnostic session core —
+      _`src/lib/voice/session-core.ts` + `webrtc.ts`; adds
+      assistantSpeaking/workerBusy and a `voice/client-connected` stream
+      marker so reopening an old session doesn't replay say-request history_
+- [x] Vitest suite for the session core — _11 specs over a fake realtime
+      transport + fake stream_
+- [x] Screens: sign-in/server picker, projects, sessions list, voice screen
+      (orb, transcript toggle, bottom bar, worker caption)
+- [x] Polish: keep-awake, haptics, background audio plist line, mic-denied
+      path (text-only + `Linking.openSettings()`)
+- [x] Root typecheck/lint/test green including apps/mobile; knip untouched
+      (opt-in list)
+- [x] ~~Simulator end-to-end round-trip, screen-recorded~~ — _IMPOSSIBLE HERE:
+      no Xcode on this machine (CommandLineTools only). Substituted with a
+      stronger-than-nothing live e2e: the exact session-core code driven from
+      Node (WS standing in for the WebRTC data channel) against the real dev
+      server + real OpenAI Realtime — turn forwarded → worker replied →
+      report injected → voice model responded (chose `no_comment`, correctly).
+      `expo prebuild` + `expo export` (full Metro bundle) also pass._
+- [x] PR body: verified vs needs-your-phone checklist; build instructions
+
+## First-run notes for Misha
+
+1. `cd apps/mobile && npx expo run:ios --device` (needs Xcode; see README).
+2. Preview slots were all leased when CI ran — re-run the Preview workflow on
+   PR #1605, then point the app's server field at the assigned
+   `os.iterate-preview-N.com` (the preset says preview-5; correct it if the
+   slot differs).
+3. Simulator + `pnpm dev` local server also works end-to-end (sign-in goes
+   through the hosted dev auth worker).
+
+## Found along the way
+
+- A worker-agent script calling `itx.processor.snapshot()` fails with
+  `The RPC receiver does not implement the method "processor"` in the
+  script-execution lane (observed live on this branch's dev server; the agent
+  never replied to that turn). Pre-existing platform gap, not introduced
+  here — worth its own task.
+- `event-target-shim`'s `exports` map hides the `event-target-shim/index`
+  subpath that react-native-webrtc's typings import — needs a tsconfig
+  `paths` alias under moduleResolution=bundler (done in apps/mobile).
 
 ## Guesses and assumptions
 
