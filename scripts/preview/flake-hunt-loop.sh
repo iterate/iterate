@@ -18,6 +18,12 @@ for i in $(seq "$START_AT" $((START_AT + RUNS - 1))); do
     --pull-request-number "$PR_NUMBER" >"$log" 2>&1
   exit_code=$?
   finished=$(date -u +%H:%M:%S)
+  # `preview test` exits 0 but skips (stale head, no lease) without running
+  # anything — a skip must not count as a green run.
+  if grep -q "skipped: true" "$log"; then
+    echo "run $i: SKIPPED — not a real run ($started-$finished UTC) $log"
+    exit 2
+  fi
   if [ "$exit_code" -eq 0 ]; then
     echo "run $i: PASS ($started-$finished UTC) $log"
   else
