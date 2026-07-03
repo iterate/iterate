@@ -16,6 +16,8 @@ dist
 .wrangler
 .dev.vars*
 .dev-server
+# legacy local state dirs from the alchemy era still exist in old worktrees
+.alchemy
 # generated from the root envs.ts by each app's scripts/generate-wrangler-config.ts
 apps/os/wrangler.jsonc
 apps/auth/wrangler.jsonc
