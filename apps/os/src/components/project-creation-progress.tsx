@@ -14,21 +14,24 @@ type CreationStep = {
   done: boolean;
 };
 
-function creationSteps(state: ProjectProcessorState): CreationStep[] {
+function creationSteps(state: ProjectProcessorState | undefined): CreationStep[] {
+  // `undefined` = the first push has not arrived yet: nothing is ticked.
   return [
-    { key: "registered", label: "Registering project", done: state.createRequest !== null },
-    { key: "repo", label: "Seeding repository", done: state.repos.length > 0 },
+    { key: "registered", label: "Registering project", done: state?.createRequest != null },
+    { key: "repo", label: "Seeding repository", done: (state?.repos.length ?? 0) > 0 },
     {
       key: "integrations",
       label: "Wiring integrations",
-      done: state.streams.some((stream) => stream.path === "/integrations/slack") || state.created,
+      done:
+        state !== undefined &&
+        (state.streams.some((stream) => stream.path === "/integrations/slack") || state.created),
     },
     {
       key: "agent",
       label: "Waking the onboarding agent",
-      done: state.agents.length > 0 || state.created,
+      done: state !== undefined && (state.agents.length > 0 || state.created),
     },
-    { key: "created", label: "Finalizing project", done: state.created },
+    { key: "created", label: "Finalizing project", done: state?.created ?? false },
   ];
 }
 
@@ -38,7 +41,7 @@ function creationSteps(state: ProjectProcessorState): CreationStep[] {
  * pushes the state change that records it; the first not-yet-done step wears
  * the spinner.
  */
-export function ProjectCreationProgress({ state }: { state: ProjectProcessorState }) {
+export function ProjectCreationProgress({ state }: { state: ProjectProcessorState | undefined }) {
   const steps = creationSteps(state);
   const activeIndex = steps.findIndex((step) => !step.done);
 

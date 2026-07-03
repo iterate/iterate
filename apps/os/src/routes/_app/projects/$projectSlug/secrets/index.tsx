@@ -17,8 +17,7 @@ import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { formatRelativeTime } from "~/lib/format-relative-time.ts";
-import { useProjectProcessorState } from "~/lib/project-processor-state.ts";
-import { useItx } from "~/itx/itx-react.tsx";
+import { useItx, useItxState } from "~/itx/itx-react.tsx";
 
 /** Secrets live at `/secrets/<name>`; the route param is the bare name. */
 const secretPathFromName = (name: string) => `/secrets/${name}`;
@@ -59,13 +58,13 @@ function ProjectSecretsIndexPage() {
 function ProjectSecretsIndexContent() {
   const params = Route.useParams();
   const navigate = useNavigate();
-  const { project } = Route.useLoaderData();
   const itx = useItx();
   const [filter, setFilter] = useState("");
   // The secrets list is a slice of the project processor's reduced state; the
   // processor pushes state changes, so a new secret appears here without any
   // invalidation.
-  const secretsList = useProjectProcessorState(project.id).state.secrets;
+  const projectState = useItxState((itx) => itx.processor).state;
+  const secretsList = projectState?.secrets;
 
   const upsertSecret = useMutation({
     mutationFn: async (input: { name: string; material: string }) => {
@@ -100,7 +99,7 @@ function ProjectSecretsIndexContent() {
 
   const visibleSecrets = useMemo(() => {
     const query = filter.trim().toLowerCase();
-    return secretsList
+    return (secretsList ?? [])
       .filter((secret) => {
         if (!query) return true;
         return secret.path.toLowerCase().includes(query);
@@ -206,7 +205,11 @@ function ProjectSecretsIndexContent() {
         </Button>
       </div>
 
-      {secretsList.length === 0 ? (
+      {secretsList === undefined ? (
+        <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
+          Loading secrets…
+        </div>
+      ) : secretsList.length === 0 ? (
         <Empty className="rounded-lg border">
           <EmptyHeader>
             <EmptyTitle>No Secrets</EmptyTitle>

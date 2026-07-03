@@ -4,9 +4,13 @@ import { ActivityIcon, PlusIcon, RefreshCwIcon, RadioIcon } from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { useProjectProcessorState } from "~/lib/project-processor-state.ts";
 import type { StreamEvent } from "~/types.ts";
-import { useItx, useItxSubscription, type ItxSubscriptionStatus } from "~/itx/itx-react.tsx";
+import {
+  useItx,
+  useItxState,
+  useItxSubscription,
+  type ItxSubscriptionStatus,
+} from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/reactivity")({
   ssr: false,
@@ -88,7 +92,7 @@ function ProjectReactivityPage() {
 function ProjectReactivityContent() {
   const { project } = Route.useLoaderData();
   const itx = useItx();
-  const live = useProjectProcessorState(project.id);
+  const live = useItxState((itx) => itx.processor);
   const testStream = useReactivityTestStream();
   // Only ever read inside the append handlers — a ref avoids a render per click.
   const nextActionIdRef = useRef(1);
@@ -104,8 +108,8 @@ function ProjectReactivityContent() {
   const projectState = live.state;
   // The project processor state has no phase/onboarding machine; `created` is
   // the lifecycle fact, and the create request carries the project identity.
-  const phase = projectState.created ? "ready" : "pending";
-  const projectId = projectState.createRequest?.projectId ?? project.id;
+  const phase = projectState?.created ? "ready" : "pending";
+  const projectId = projectState?.createRequest?.projectId ?? project.id;
   const actionObserved = isActionObserved(action, testStream.events);
   const actionSyncing = action.status === "done" && !actionObserved;
   const actionPending = action.status === "running" || actionSyncing;
@@ -218,7 +222,7 @@ function ProjectReactivityContent() {
           />
           <MetricPanel
             label="Processor offset"
-            value={String(live.offset)}
+            value={String(live.offset ?? "-")}
             testId="reactivity-processor-offset"
           />
         </div>
@@ -238,14 +242,16 @@ function ProjectReactivityContent() {
                   </Badge>
                 </dd>
                 <dt className="text-muted-foreground">Created</dt>
-                <dd data-testid="reactivity-onboarding">{String(projectState.created)}</dd>
+                <dd data-testid="reactivity-onboarding">
+                  {projectState === undefined ? "unknown" : String(projectState.created)}
+                </dd>
                 <dt className="text-muted-foreground">Project ID</dt>
                 <dd className="truncate font-mono text-xs" data-testid="reactivity-project-id">
                   {projectId}
                 </dd>
                 <dt className="text-muted-foreground">Streams</dt>
                 <dd className="truncate font-mono text-xs">
-                  {String(projectState.streams.length)}
+                  {projectState === undefined ? "-" : String(projectState.streams.length)}
                 </dd>
               </dl>
             </section>
@@ -316,10 +322,12 @@ function ProjectReactivityContent() {
 
           <div className="grid min-h-0 gap-4 xl:grid-cols-2">
             <JsonPanel title="Subscribed stream events" value={testStream.events} />
-            <JsonPanel title="Live processor state" value={projectState} />
+            <JsonPanel title="Live processor state" value={projectState ?? null} />
             <JsonPanel
               title="Processor snapshot"
-              value={{ offset: live.offset, state: projectState }}
+              value={
+                live.offset === undefined ? null : { offset: live.offset, state: projectState }
+              }
             />
             <CodePanel title="React hook shape" code={liveApi} />
           </div>

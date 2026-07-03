@@ -7,7 +7,7 @@ import { ProjectCreationProgress } from "~/components/project-creation-progress.
 import { ProjectSettingsPanel } from "~/components/project-settings-panel.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
-import { useProjectProcessorState } from "~/lib/project-processor-state.ts";
+import { useItxState } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/")({
   ssr: false,
@@ -32,8 +32,8 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/")({
 function ProjectHomePage() {
   const params = Route.useParams();
   const { project, routeConfig } = Route.useLoaderData();
-  const lifecycle = useProjectProcessorState(project.id);
-  const created = lifecycle.state.created;
+  const lifecycle = useItxState((itx) => itx.processor);
+  const created = lifecycle.state?.created ?? false;
 
   return (
     <section className="flex min-h-0 flex-1 flex-col overflow-auto p-4">

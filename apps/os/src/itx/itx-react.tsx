@@ -17,10 +17,11 @@
  *                                                            server-push subscription: reconnect,
  *                                                            liveness watchdog, re-subscribe, retry —
  *                                                            see its docstring)
- *   5. LIVE STATE       → useItxProcessorState({ key, processor })
- *                                                           (suspends on the first snapshot, then the
- *                                                            server pushes every state change into the
- *                                                            query cache — see its docstring)
+ *   5. LIVE STATE       → useItxState((itx) => itx.processor)
+ *                                                           (the React spelling of
+ *                                                            itx.processor.onStateChange(setState):
+ *                                                            the initial push is the first paint, every
+ *                                                            state change repaints — see its docstring)
  *
  *   (useItxEffect — the reconnect-aware raw effect — is the internal foundation
  *   under the live hooks; it stops being module-private the day a consumer
@@ -81,7 +82,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { useQueryClient, useSuspenseQuery, type QueryKey } from "@tanstack/react-query";
+import { useSuspenseQuery, type QueryKey } from "@tanstack/react-query";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import type {
   Itx as ProjectItx,
@@ -485,11 +486,8 @@ const PING_TIMED_OUT = Symbol("itx-ping-timed-out");
  *
  * Returns a stop function. `onDead` fires at most once; the caller is expected
  * to tear down and re-subscribe (which creates a fresh watchdog).
- *
- * This is the engine under {@link useItxSubscription} — components use that
- * hook; the bare watchdog is exported for non-hook consumers and its tests.
  */
-export function watchItxSubscription(
+function watchItxSubscription(
   ping: () => boolean | Promise<boolean>,
   onDead: (reason: "dead" | "timed-out") => void,
 ): () => void {
@@ -587,7 +585,7 @@ export type ItxSubscriptionStatus = "connecting" | "live" | "error";
 export function useItxSubscription(
   subscribe: (itx: Itx) => Promise<ItxLiveSubscriptionHandle>,
   deps: unknown[],
-  opts?: { enabled?: boolean; itx?: Itx },
+  opts?: { enabled?: boolean },
 ): { status: ItxSubscriptionStatus; error?: string; refresh: () => void } {
   const enabled = opts?.enabled ?? true;
   const [epoch, setEpoch] = useState(0);
@@ -647,7 +645,6 @@ export function useItxSubscription(
       };
     },
     [enabled, epoch, ...deps],
-    opts?.itx === undefined ? undefined : { itx: opts.itx },
   );
 
   return {
@@ -660,73 +657,48 @@ export function useItxSubscription(
 }
 
 /**
- * THE page-data primitive: live reduced state from a stream processor.
+ * THE page-data primitive: live reduced state from a stream processor — the
+ * React spelling of `itx.processor.onStateChange(setState)`:
  *
- * Suspends on the processor's current `snapshot()` for the first paint (riding
- * TanStack Query like {@link useItxQuery}), then subscribes to
- * `onStateChange` so the server pushes every subsequent state change into the
- * same cache entry — no polling, no post-mutation invalidation: a mutation
- * appends events, the processor reduces them, and the push repaints the page.
- *
- *   const { state } = useItxProcessorState({
- *     key: ["project-processor", project.id],
- *     processor: (itx) => itx.processor,
- *   });
+ *   const { state } = useItxState((itx) => itx.processor);
  *   // state.secrets / state.repos / state.agents re-render as events land
  *
- * Commits are offset-monotonic: pushes and snapshot reads both carry the
- * processor's checkpoint offset, and an older `{ offset, state }` never
- * overwrites a newer one, so the initial-read/first-push race is harmless
- * (and a straggler push from a dying subscription is too).
+ * No cache keys, no query client, no separate initial fetch: subscribing to
+ * `onStateChange` delivers the current checkpoint immediately (the server's
+ * initial push IS the first paint) and every subsequent state change after.
+ * Mutations need no invalidation — a mutation appends events, the processor
+ * folds them, the push repaints the page.
  *
- * Recovery is {@link useItxSubscription}'s; `status`/`error`/`refresh` are its
- * fields, passed through for status UI. `key` follows {@link useItxQuery}'s
- * contract (encode what the result is scoped to — per-project state keys by
- * project). Components sharing a key share the cache entry; each maintains its
- * own subscription.
+ * `state` is `undefined` only between mount and the initial push (one round
+ * trip on a warm socket); render a loading row for that window. Anything the
+ * `select` closure captures that should re-subscribe (a secret path, a repo
+ * path) goes in `deps`. Recovery is {@link useItxSubscription}'s;
+ * `status`/`error`/`refresh` are its fields, passed through for status UI.
  */
-export function useItxProcessorState<State>({
-  key,
-  processor,
-  itx,
-}: {
-  key: QueryKey;
-  processor: (itx: Itx) => StreamProcessorRpc<State>;
-  itx?: Itx;
-}): {
-  state: State;
-  offset: number;
+export function useItxState<State>(
+  select: (itx: Itx) => StreamProcessorRpc<State>,
+  deps: unknown[] = [],
+): {
+  state: State | undefined;
+  offset: number | undefined;
   status: ItxSubscriptionStatus;
   error?: string;
   refresh: () => void;
 } {
-  const fallback = useItx();
-  const handle = itx ?? fallback; // an explicit { itx } override wins
-  const queryClient = useQueryClient();
-
-  const queryKey = ["itx", ...(Array.isArray(key) ? key : [key])];
-  // The subscription deps the key by VALUE: a caller's inline `["secrets", slug]`
-  // array is a fresh identity every render and must not resubscribe.
-  const queryKeyHash = JSON.stringify(queryKey);
-
-  const snapshot = useSuspenseQuery({
-    queryKey,
-    queryFn: () => processor(handle).snapshot(),
-    // The push subscription keeps this entry fresh; background refetch would
-    // only race it.
-    staleTime: Infinity,
-  }).data;
+  const [snapshot, setSnapshot] = useState<ProcessorSnapshot<State>>();
 
   const subscription = useItxSubscription(
-    async (effectItx) =>
-      await processor(effectItx).onStateChange((pushed) => {
-        queryClient.setQueryData<ProcessorSnapshot<State>>(queryKey, (previous) =>
+    (itx) =>
+      select(itx).onStateChange((pushed) => {
+        // Offset-monotonic commit: a straggler push from a dying subscription
+        // (or the initial push of a re-subscribe racing a live one) can never
+        // roll state backwards.
+        setSnapshot((previous) =>
           previous !== undefined && previous.offset >= pushed.offset ? previous : pushed,
         );
       }),
-    [queryKeyHash],
-    { itx: handle },
+    deps,
   );
 
-  return { state: snapshot.state, offset: snapshot.offset, ...subscription };
+  return { state: snapshot?.state, offset: snapshot?.offset, ...subscription };
 }

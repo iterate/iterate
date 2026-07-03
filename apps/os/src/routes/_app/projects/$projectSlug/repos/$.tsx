@@ -15,7 +15,7 @@ import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { useItx, useItxProcessorState, useItxQuery } from "~/itx/itx-react.tsx";
+import { useItx, useItxQuery, useItxState } from "~/itx/itx-react.tsx";
 
 const CommitFileForm = z.object({
   path: z.string().trim().min(1, "File path is required"),
@@ -56,10 +56,7 @@ function ProjectRepoDetailContent() {
   // shows the repo processor's reduced state (live — commits and bootstrap
   // progress push in) plus whoami, and offers a minimal "commit file" form
   // via `repo.commitFiles`.
-  const repoProcessor = useItxProcessorState({
-    key: ["repo-processor", project.id, repoPath],
-    processor: (itx) => itx.repos.get(repoPath).processor,
-  });
+  const repoProcessor = useItxState((itx) => itx.repos.get(repoPath).processor, [repoPath]);
   const whoami = useItxQuery({
     key: ["repo-whoami", project.slug, repoPath],
     query: (itx) => itx.repos.get(repoPath).whoami(),
@@ -95,7 +92,16 @@ function ProjectRepoDetailContent() {
     },
   });
 
-  const snapshot = { offset: repoProcessor.offset, state: repoProcessor.state };
+  if (repoProcessor.state === undefined) {
+    return (
+      <section className="w-full p-4">
+        <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
+          Loading repo…
+        </div>
+      </section>
+    );
+  }
+  const snapshot = { offset: repoProcessor.offset ?? 0, state: repoProcessor.state };
 
   return (
     <section className="w-full space-y-4 p-4">

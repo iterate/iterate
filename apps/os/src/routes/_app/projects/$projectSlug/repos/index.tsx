@@ -28,8 +28,7 @@ import { RepoArtifactNameCodec } from "~/domains/repos/utils.ts";
 import { buildArtifactViewerUrl } from "~/lib/artifact-viewer-url.ts";
 import { formatRelativeTime } from "~/lib/format-relative-time.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
-import { useProjectProcessorState } from "~/lib/project-processor-state.ts";
-import { useItx } from "~/itx/itx-react.tsx";
+import { useItx, useItxState } from "~/itx/itx-react.tsx";
 
 const CreateRepoForm = z.object({
   path: z
@@ -81,7 +80,8 @@ function ProjectReposIndexContent() {
   });
   // The repos list is a slice of the project processor's reduced state; new
   // repos land here via the processor's state push, no invalidation needed.
-  const reposList = useProjectProcessorState(project.id).state.repos;
+  const projectState = useItxState((itx) => itx.processor).state;
+  const reposList = projectState?.repos;
   const createRepo = useMutation({
     mutationFn: async (input: { path: string }) => {
       await itx.repos.create({ path: input.path });
@@ -116,7 +116,7 @@ function ProjectReposIndexContent() {
   const repos = reposList;
   const visibleRepos = useMemo(() => {
     const query = filter.trim().toLowerCase();
-    return repos
+    return (repos ?? [])
       .filter((repo) => {
         if (!query) return true;
         return repo.path.toLowerCase().includes(query);
@@ -195,7 +195,11 @@ function ProjectReposIndexContent() {
         </Button>
       </div>
 
-      {repos.length === 0 ? (
+      {repos === undefined ? (
+        <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
+          Loading repos…
+        </div>
+      ) : repos.length === 0 ? (
         <Empty className="rounded-lg border">
           <EmptyHeader>
             <EmptyTitle>No Repos</EmptyTitle>
