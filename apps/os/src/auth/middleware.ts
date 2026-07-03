@@ -1,7 +1,12 @@
-import { isAuthHandlerRequest, type AuthenticatedSession } from "@iterate-com/auth/server";
+import {
+  isAuthHandlerRequest,
+  type AuthenticatedSession,
+  type AuthenticateErrorEvent,
+} from "@iterate-com/auth/server";
 import { createMiddleware } from "@tanstack/react-start";
 import type { RequestContext } from "~/request-context.ts";
 import { authenticateAdminApiSecret } from "~/auth/admin.ts";
+import type { SignInAuthError } from "~/auth/errors.ts";
 import { createOsIterateAuth } from "~/auth/iterate-auth-client.ts";
 import type { OsIterateAuth } from "~/auth/iterate-auth-client.ts";
 import {
@@ -31,6 +36,7 @@ export const iterateAuthMiddleware = createMiddleware({ type: "request" }).serve
       context: {
         principal: resolvedAuth.principal,
         iterateAuthSession: resolvedAuth.session,
+        iterateAuthError: resolvedAuth.error,
         rawRequest: request,
       },
     });
@@ -46,11 +52,12 @@ export const iterateAuthMiddleware = createMiddleware({ type: "request" }).serve
 
 async function resolveRequestAuth(input: {
   auth: OsIterateAuth | null;
-  context: Pick<RequestContext, "config">;
+  context: Pick<RequestContext, "config" | "log">;
   request: Request;
 }): Promise<{
   principal: Principal | null;
   session: AuthenticatedSession | null;
+  error?: SignInAuthError;
   responseHeaders: Headers;
 }> {
   const adminApiPrincipal = authenticateAdminApiSecret(input.context, input.request);
@@ -58,13 +65,16 @@ async function resolveRequestAuth(input: {
     return {
       principal: adminApiPrincipal,
       session: null,
+      error: undefined,
       responseHeaders: new Headers(),
     };
   }
 
   const sessionAuth = await authenticateSession({
     auth: input.auth,
+    context: input.context,
     headers: input.request.headers,
+    request: input.request,
   });
   if (sessionAuth.principal) {
     return sessionAuth;
@@ -77,33 +87,53 @@ async function resolveRequestAuth(input: {
   return {
     principal: bearerPrincipal,
     session: sessionAuth.session,
+    error: sessionAuth.error,
     responseHeaders: sessionAuth.responseHeaders,
   };
 }
 
 async function authenticateSession(input: {
   auth: OsIterateAuth | null;
+  context: Pick<RequestContext, "config" | "log">;
   headers: Headers;
+  request: Request;
 }): Promise<{
   principal: Principal | null;
   session: AuthenticatedSession | null;
+  error?: SignInAuthError;
   responseHeaders: Headers;
 }> {
   if (!input.auth) {
     return {
       principal: null,
       session: null,
+      error: undefined,
       responseHeaders: new Headers(),
     };
   }
 
+  let authError: AuthenticateErrorEvent | null = null;
   const result = await input.auth.authenticate({
     headers: input.headers,
     includeUserInfo: false,
+    onError: (event) => {
+      authError = event;
+    },
   });
+  const hasSessionCookie = /(?:^|;\s*)iterate_session=/u.test(input.headers.get("cookie") ?? "");
+  const error = authError && hasSessionCookie ? "session_verification_failed" : undefined;
+  if (!result.session && authError && error) {
+    logAuthSessionVerificationFailure({
+      context: input.context,
+      error: authError,
+      request: input.request,
+    });
+  }
+
   return {
     principal: result.session ? principalFromSession(result.session) : null,
     session: result.session,
+    error,
     responseHeaders: result.responseHeaders,
   };
 }
@@ -116,4 +146,79 @@ async function authenticateBearerPrincipal(input: {
 
   const accessToken = await input.auth.authenticateBearer({ headers: input.headers });
   return accessToken ? principalFromAccessToken(accessToken) : null;
+}
+
+function logAuthSessionVerificationFailure(input: {
+  context: Pick<RequestContext, "config" | "log">;
+  error: AuthenticateErrorEvent;
+  request: Request;
+}) {
+  const url = new URL(input.request.url);
+  const details = {
+    reason: input.error.reason,
+    error: toLogError(input.error.error),
+    issuer: input.context.config.iterateAuth?.issuer,
+    clientId: input.context.config.iterateAuth?.clientId,
+    jwksKeyIds: input.context.config.iterateAuth?.jwks?.keys
+      ?.map((key) => (typeof key.kid === "string" ? key.kid : null))
+      .filter((kid) => kid !== null),
+    sessionCookie: summarizeSessionCookie(input.request.headers),
+    path: `${url.pathname}${url.search}`,
+  };
+
+  input.context.log.warn("os.auth.session_verification_failed");
+  input.context.log.set({ auth: { sessionVerificationFailure: details } });
+}
+
+function toLogError(error: unknown) {
+  if (error instanceof Error) {
+    return { name: error.name, message: error.message };
+  }
+  return { message: String(error) };
+}
+
+function summarizeSessionCookie(headers: Headers) {
+  const cookieValue = extractCookie(headers.get("cookie") ?? "", "iterate_session");
+  if (!cookieValue) return { present: false };
+
+  try {
+    const tokenSet = JSON.parse(decodeURIComponent(cookieValue)) as {
+      accessToken?: unknown;
+      idToken?: unknown;
+    };
+    return {
+      present: true,
+      parseable: true,
+      accessTokenKid: jwtHeaderKid(tokenSet.accessToken),
+      idTokenKid: jwtHeaderKid(tokenSet.idToken),
+    };
+  } catch {
+    return { present: true, parseable: false };
+  }
+}
+
+function extractCookie(cookieHeader: string, name: string) {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const match = new RegExp(`(?:^|;\\s*)${escapedName}=([^;]*)`, "u").exec(cookieHeader);
+  return match?.[1] ?? null;
+}
+
+function jwtHeaderKid(token: unknown) {
+  if (typeof token !== "string") return null;
+  const encodedHeader = token.split(".", 1)[0];
+  if (!encodedHeader) return null;
+
+  try {
+    const header = JSON.parse(base64UrlDecode(encodedHeader)) as { kid?: unknown };
+    return typeof header.kid === "string" ? header.kid : null;
+  } catch {
+    return null;
+  }
+}
+
+function base64UrlDecode(value: string) {
+  const padded = `${value.replace(/-/gu, "+").replace(/_/gu, "/")}${"=".repeat(
+    (4 - (value.length % 4)) % 4,
+  )}`;
+  return atob(padded);
 }

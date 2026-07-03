@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { createAuthHandler, type IterateAuthConfig, type TokenSet } from "@iterate-com/auth/server";
+import {
+  createAuthHandler,
+  createAuthMiddleware,
+  type IterateAuthConfig,
+  type TokenSet,
+} from "@iterate-com/auth/server";
 
 const config = {
   issuer: "https://auth.iterate-dev.com/api/auth",
@@ -145,6 +150,25 @@ describe("iterate auth login", () => {
       },
     });
   });
+
+  it("reports session verification failures to the auth caller", async () => {
+    const auth = testAuthMiddleware(config);
+    const onError = vi.fn();
+
+    const result = await auth.authenticate({
+      headers: new Headers({
+        cookie: sessionCookie(testTokenSet()),
+      }),
+      includeUserInfo: false,
+      onError,
+    });
+
+    expect(result.session).toBeNull();
+    expect(onError).toHaveBeenCalledWith({
+      reason: "access_token_verify_failed",
+      error: expect.any(Error),
+    });
+  });
 });
 
 function testAuthHandler(
@@ -175,6 +199,35 @@ function testAuthHandler(
   } as unknown as Parameters<typeof createAuthHandler>[1];
 
   return createAuthHandler(authConfig, infra).handler;
+}
+
+function testAuthMiddleware(
+  authConfig: IterateAuthConfig,
+  overrides: Partial<Parameters<typeof createAuthMiddleware>[1]> = {},
+) {
+  const infra = {
+    issuerURL: new URL(authConfig.issuer ?? "https://auth.iterate-dev.com/api/auth"),
+    jwks: {},
+    oauthClient: { client_id: authConfig.clientId },
+    clientAuth: {},
+    insecure: false,
+    secureCookies: false,
+    getAuthorizationServer: async () => {
+      throw new Error("not used by middleware tests");
+    },
+    httpOptions: () => undefined,
+    toTokenSet: () => {
+      throw new Error("not used by middleware tests");
+    },
+    doRefresh: async () => null,
+    getUserInfo: async () => null,
+    cookieOpts: () => ({ httpOnly: true, path: "/", sameSite: "Lax", secure: false }) as const,
+    resource: () => "http://localhost",
+    audiences: () => ["http://localhost"],
+    ...overrides,
+  } as unknown as Parameters<typeof createAuthMiddleware>[1];
+
+  return createAuthMiddleware(authConfig, infra);
 }
 
 function testTokenSet(overrides: Partial<TokenSet> = {}): TokenSet {
