@@ -151,6 +151,35 @@ describe("iterate auth login", () => {
     });
   });
 
+  it("reports non-fatal refresh failures while returning a valid session", async () => {
+    const signed = await signedTokenSet({
+      accessTokenExpiresAt: Date.now() + 15 * 1000,
+    });
+    const doRefresh = vi.fn(async () => {
+      throw new Error("temporary token endpoint failure");
+    });
+    const auth = testAuthMiddleware(config, {
+      doRefresh,
+      jwks: signed.jwks as never,
+    });
+    const onError = vi.fn();
+
+    const result = await auth.authenticate({
+      headers: new Headers({
+        cookie: sessionCookie(signed.tokenSet),
+      }),
+      includeUserInfo: false,
+      onError,
+    });
+
+    expect(doRefresh).toHaveBeenCalledTimes(1);
+    expect(result.session?.user.id).toBe("usr_session");
+    expect(onError).toHaveBeenCalledWith({
+      reason: "session_refresh_failed",
+      error: expect.any(Error),
+    });
+  });
+
   it("reports session verification failures to the auth caller", async () => {
     const auth = testAuthMiddleware(config);
     const onError = vi.fn();

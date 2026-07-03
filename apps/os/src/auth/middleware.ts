@@ -121,8 +121,9 @@ async function authenticateSession(input: {
     },
   });
   const hasSessionCookie = /(?:^|;\s*)iterate_session=/u.test(input.headers.get("cookie") ?? "");
-  const error = authError && hasSessionCookie ? "session_verification_failed" : undefined;
-  if (!result.session && authError && error) {
+  const error =
+    !result.session && authError && hasSessionCookie ? "session_verification_failed" : undefined;
+  if (authError && error) {
     logAuthSessionVerificationFailure({
       context: input.context,
       error: authError,
