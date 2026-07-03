@@ -306,11 +306,11 @@ export function compileBangCommand(input: {
     return {
       code: [
         "async (itx) => {",
-        "  const debug = await itx.describe();",
+        "  const debug = await itx.debug();",
         "  await itx.slack.chat.postMessage({",
         `    channel: ${JSON.stringify(input.channel)},`,
         `    thread_ts: ${JSON.stringify(input.threadTs)},`,
-        "    text: `Debug info:\\n${JSON.stringify(debug, null, 2)}`,",
+        "    text: `Debug info:\\n${debug}`,",
         "  });",
         "}",
       ].join("\n"),

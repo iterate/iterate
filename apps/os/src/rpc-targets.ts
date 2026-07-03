@@ -16,6 +16,7 @@ import {
 } from "./project-directory.ts";
 import { deploymentStatusesFromProbes } from "./project-deployment-status.ts";
 import { timedStep } from "./lib/step-timing.ts";
+import { buildProjectStreamViewerUrl } from "./lib/stream-viewer-url.ts";
 import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
 import { normalizeAgentPath } from "./domains/agents/utils.ts";
@@ -1048,6 +1049,7 @@ type ItxRpcTargetProps = {
 const PROJECT_BUILTIN_CAPABILITY_PATHS = [
   "ai",
   "agents",
+  "debug",
   "egress",
   "examples",
   "gmail",
@@ -1090,6 +1092,14 @@ const PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS: readonly CapabilityDescription[] 
       return {
         instructions:
           'Project integration management. Use itx.integrations.getConnection({ provider: "google" }) before Gmail work and { provider: "slack" } before Slack API work.',
+        path: [path],
+        type: "builtin" as const,
+      };
+    }
+    if (path === "debug") {
+      return {
+        instructions:
+          "Returns formatted OS debug info for this itx scope, including a dashboard stream link.",
         path: [path],
         type: "builtin" as const,
       };
@@ -1146,6 +1156,28 @@ export class ItxRpcTarget extends RpcTarget implements Itx {
       ...project,
       capabilities: [...PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS, ...mountedCapabilities],
     };
+  }
+
+  async debug() {
+    const [project, config] = await Promise.all([
+      readProjectById(env.PROJECT_DIRECTORY, this.props.projectId).catch(() => null),
+      Promise.resolve(parseConfig(env)),
+    ]);
+    const streamPath = this.props.itxPath ?? "/";
+    const streamUrl =
+      project?.slug == null
+        ? (config.baseUrl ?? "https://os.iterate.com")
+        : buildProjectStreamViewerUrl({
+            baseUrl: config.baseUrl,
+            projectSlug: project.slug,
+            streamPath,
+          });
+
+    return [
+      `*Debug:* <${streamUrl}|open stream>`,
+      `Path: \`${streamPath}\``,
+      `Project: \`${project?.slug ?? this.props.projectId}\``,
+    ].join("\n");
   }
 
   get processor() {
