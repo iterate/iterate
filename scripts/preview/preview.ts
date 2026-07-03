@@ -982,11 +982,11 @@ const defaultPreviewDeployConcurrency = 5;
 const ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE = "environment-config-lease";
 const previewEnvironmentSlotNumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
 const sharedAuthPreviewSecretsCopiedFromDev = [
-  "GOOGLE_CLIENT_ID",
-  "GOOGLE_CLIENT_SECRET",
-  "RESEND_BOT_DOMAIN",
-  "RESEND_BOT_API_KEY",
-  "SIGNUP_ALLOWLIST",
+  ["APP_CONFIG_GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_ID"],
+  ["APP_CONFIG_GOOGLE_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET"],
+  ["APP_CONFIG_RESEND_DOMAIN", "RESEND_BOT_DOMAIN"],
+  ["APP_CONFIG_RESEND_API_KEY", "RESEND_BOT_API_KEY"],
+  ["APP_CONFIG_SIGNUP_ALLOWLIST", "SIGNUP_ALLOWLIST"],
 ] as const;
 
 export const EnvironmentConfigLease = z.object({
@@ -1939,33 +1939,20 @@ function commandFailureSummary(result: { stderr: string; stdout: string }) {
   return output || "command failed";
 }
 
-// Flat secret -> its APP_CONFIG_* name (apps/auth reads these at runtime via
-// parseConfig; see apps/auth/src/config.ts). We write both: the flat names feed
-// the client's build-time VITE vars + the alchemy.run legacy fallback, the
-// APP_CONFIG_* names are what the worker config actually consumes.
-const authAppConfigNameByFlat: Record<string, string> = {
-  VITE_AUTH_APP_ORIGIN: "APP_CONFIG_AUTH_APP_ORIGIN",
-  BETTER_AUTH_SECRET: "APP_CONFIG_BETTER_AUTH_SECRET",
-  SERVICE_AUTH_TOKEN: "APP_CONFIG_SERVICE_AUTH_TOKEN",
-  GOOGLE_CLIENT_ID: "APP_CONFIG_GOOGLE_CLIENT_ID",
-  GOOGLE_CLIENT_SECRET: "APP_CONFIG_GOOGLE_CLIENT_SECRET",
-  RESEND_BOT_DOMAIN: "APP_CONFIG_RESEND_DOMAIN",
-  RESEND_BOT_API_KEY: "APP_CONFIG_RESEND_API_KEY",
-  SIGNUP_ALLOWLIST: "APP_CONFIG_SIGNUP_ALLOWLIST",
-};
-
 async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
   const rootValues: Record<string, string> = {
     VITE_ENABLE_EMAIL_OTP_SIGNIN: "true",
     APP_CONFIG_EMAIL_OTP_ENABLED: "true",
   };
-  for (const name of sharedAuthPreviewSecretsCopiedFromDev) {
+  for (const [appConfigName, legacyName] of sharedAuthPreviewSecretsCopiedFromDev) {
     // Prefer an existing preview-root value; otherwise seed it from auth/dev.
     const value =
-      getDopplerSecret("auth", "preview", name) || getDopplerSecret("auth", "dev", name);
-    if (!value) throw new Error(`auth/dev is missing ${name}`);
-    rootValues[name] = value;
-    rootValues[authAppConfigNameByFlat[name]] = value;
+      getDopplerSecret("auth", "preview", appConfigName) ||
+      getDopplerSecret("auth", "dev", appConfigName) ||
+      getDopplerSecret("auth", "dev", legacyName);
+    if (!value) throw new Error(`auth/dev is missing ${appConfigName}`);
+    rootValues[appConfigName] = value;
+    rootValues[legacyName] = value;
   }
   setDopplerSecrets("auth", "preview", rootValues);
   console.log("auth/preview root config ensured");
