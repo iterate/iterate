@@ -4,8 +4,7 @@ import { buttonVariants } from "@iterate-com/ui/components/button";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { StreamPage } from "~/components/stream-page.tsx";
 import { StreamTreeBrowser } from "~/components/stream-tree-browser.tsx";
-import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
-import { StreamPath } from "~/lib/stream-links.ts";
+import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx } from "~/itx/itx-react.tsx";
@@ -19,14 +18,10 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/agents/")({
   // socket connects.
   validateSearch: StreamViewSearch,
   ssr: false,
-  loader: ({ context, params }) =>
+  loader: ({ context }) =>
     breadcrumbLoaderData({
       project: context.project,
-      streamBreadcrumb: {
-        projectId: context.project.id,
-        projectSlug: params.projectSlug,
-        streamPath: StreamPath.parse(AGENTS_ROOT),
-      },
+      streamBreadcrumb: streamBreadcrumb(context.project, AGENTS_ROOT),
     }),
   component: ProjectAgentsIndexPage,
 });
@@ -46,12 +41,6 @@ function ProjectAgentsIndexContent() {
   const itx = useItx();
   const source = useMemo(() => (streamPath: string) => itx.streams.get(streamPath), [itx]);
 
-  function openPath(streamPath: string) {
-    // Anything under /agents is an agent and opens the chat view —
-    // linkOptionsForStreamPath encodes that.
-    void navigate(linkOptionsForStreamPath(params.projectSlug, StreamPath.parse(streamPath)));
-  }
-
   const panel = (
     <>
       <Link
@@ -61,7 +50,15 @@ function ProjectAgentsIndexContent() {
       >
         New agent
       </Link>
-      <StreamTreeBrowser source={source} rootPath={AGENTS_ROOT} onOpenPath={openPath} />
+      {/* Anything under /agents is an agent and opens the chat view —
+          linkOptionsForStreamPath encodes that. */}
+      <StreamTreeBrowser
+        source={source}
+        rootPath={AGENTS_ROOT}
+        onOpenPath={(streamPath) =>
+          void navigate(linkOptionsForStreamPath(params.projectSlug, streamPath))
+        }
+      />
     </>
   );
 

@@ -1,15 +1,18 @@
 import { useEffect } from "react";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
+import { ArrowRightIcon } from "lucide-react";
+import { buttonVariants } from "@iterate-com/ui/components/button";
 import { z } from "zod";
 import { ProjectCreationProgress } from "~/components/project-creation-progress.tsx";
 import { ProjectSettingsPanel } from "~/components/project-settings-panel.tsx";
 import { StreamPage } from "~/components/stream-page.tsx";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
-import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
-import { StreamPath } from "~/lib/stream-links.ts";
+import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItxState } from "~/itx/itx-react.tsx";
 import type { ProjectProcessorState } from "~/types.ts";
+
+const ONBOARDING_AGENT_PATH = "/agents/onboarding";
 
 const HomeSearch = StreamViewSearch.extend({
   /** Set by the create form: play the creation checklist, then hand over to
@@ -20,18 +23,12 @@ const HomeSearch = StreamViewSearch.extend({
 export const Route = createFileRoute("/_app/projects/$projectSlug/")({
   validateSearch: HomeSearch,
   ssr: false,
-  loader: async ({ context, params }) => {
-    return breadcrumbLoaderData({
-      breadcrumb: "Home",
+  loader: async ({ context }) =>
+    breadcrumbLoaderData({
       project: context.project,
       routeConfig: await getPublicRouteConfig(),
-      streamBreadcrumb: {
-        projectId: context.project.id,
-        projectSlug: params.projectSlug,
-        streamPath: StreamPath.parse("/"),
-      },
-    });
-  },
+      streamBreadcrumb: streamBreadcrumb(context.project, "/"),
+    }),
   component: ProjectHomePage,
 });
 
@@ -53,6 +50,10 @@ function ProjectHomePage() {
     [],
   );
   const created = lifecycle.state?.created ?? false;
+  // Onboarding phase: the project is created and the onboarding agent is
+  // still the only agent — the user hasn't started working beyond it yet.
+  const agents = lifecycle.state?.agents ?? [];
+  const inOnboarding = created && agents.length === 1 && agents[0]?.path === ONBOARDING_AGENT_PATH;
 
   // The welcome handoff: arrived here from the create form, so once the saga
   // commits `project/created` (a push flips `created` live — possibly before
@@ -61,7 +62,7 @@ function ProjectHomePage() {
     if (welcome !== true || !created) return;
     void navigate({
       to: "/projects/$projectSlug/agents/streams/$",
-      params: { projectSlug: params.projectSlug, _splat: "/agents/onboarding" },
+      params: { projectSlug: params.projectSlug, _splat: ONBOARDING_AGENT_PATH },
       replace: true,
     });
   }, [welcome, created, navigate, params.projectSlug]);
@@ -74,7 +75,19 @@ function ProjectHomePage() {
         Loading project…
       </div>
     ) : created && welcome !== true ? (
-      <ProjectSettingsPanel project={project} routeConfig={routeConfig} />
+      <>
+        {inOnboarding ? (
+          <Link
+            to="/projects/$projectSlug/agents/streams/$"
+            params={{ projectSlug: params.projectSlug, _splat: ONBOARDING_AGENT_PATH }}
+            className={buttonVariants({ size: "lg", className: "w-full" })}
+          >
+            Continue onboarding
+            <ArrowRightIcon data-icon="inline-end" aria-hidden="true" />
+          </Link>
+        ) : null}
+        <ProjectSettingsPanel project={project} routeConfig={routeConfig} />
+      </>
     ) : (
       // Creating, or the welcome handoff is in flight (the effect above is
       // navigating): keep showing the checklist rather than flashing settings.

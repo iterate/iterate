@@ -1,8 +1,8 @@
-import { Suspense } from "react";
 import { createFileRoute } from "@tanstack/react-router";
+import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { StreamPage } from "~/components/stream-page.tsx";
 import { useItx } from "~/itx/itx-react.tsx";
-import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
+import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 
@@ -17,36 +17,25 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/streams/$")({
   },
   validateSearch: StreamViewSearch,
   ssr: false,
-  loader: async ({ context, params }) => {
-    const streamPath = params._splat;
-    const { project } = context;
-
-    return breadcrumbLoaderData({
-      breadcrumb: streamPath,
-      project,
-      streamPath,
-      streamBreadcrumb: {
-        projectId: project.id,
-        projectSlug: params.projectSlug,
-        streamPath,
-      },
-    });
-  },
+  loader: ({ context, params }) =>
+    breadcrumbLoaderData({
+      project: context.project,
+      streamBreadcrumb: streamBreadcrumb(context.project, params._splat),
+    }),
   component: ProjectStreamDetailPage,
 });
 
 function ProjectStreamDetailPage() {
   return (
-    <Suspense
-      fallback={<div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>}
-    >
+    <ItxBoundary>
       <ProjectStreamDetailContent />
-    </Suspense>
+    </ItxBoundary>
   );
 }
 
 function ProjectStreamDetailContent() {
-  const { project, streamPath } = Route.useLoaderData();
+  const { project } = Route.useLoaderData();
+  const { _splat: streamPath } = Route.useParams();
   const itx = useItx();
 
   async function submitMessage(message: string) {

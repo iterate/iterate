@@ -3,8 +3,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { StreamPage } from "~/components/stream-page.tsx";
 import { StreamTreeBrowser } from "~/components/stream-tree-browser.tsx";
-import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
-import { StreamPath } from "~/lib/stream-links.ts";
+import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx } from "~/itx/itx-react.tsx";
@@ -16,14 +15,10 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/streams/")({
   // subscriptions once the socket connects.
   validateSearch: StreamViewSearch,
   ssr: false,
-  loader: ({ context, params }) =>
+  loader: ({ context }) =>
     breadcrumbLoaderData({
       project: context.project,
-      streamBreadcrumb: {
-        projectId: context.project.id,
-        projectSlug: params.projectSlug,
-        streamPath: StreamPath.parse("/"),
-      },
+      streamBreadcrumb: streamBreadcrumb(context.project, "/"),
     }),
   component: ProjectStreamsIndexPage,
 });
@@ -49,9 +44,7 @@ function ProjectStreamsIndexContent() {
         <StreamTreeBrowser
           source={source}
           onOpenPath={(streamPath) =>
-            void navigate(
-              linkOptionsForStreamPath(params.projectSlug, StreamPath.parse(streamPath)),
-            )
+            void navigate(linkOptionsForStreamPath(params.projectSlug, streamPath))
           }
         />
       }

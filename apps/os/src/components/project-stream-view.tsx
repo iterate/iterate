@@ -1,26 +1,15 @@
 import {
-  memo,
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
-  type RefObject,
 } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import { FilterIcon, SearchIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@iterate-com/ui/components/select";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import type {
   AgentUiLlmStep,
@@ -58,12 +47,12 @@ import {
   BrowserEventFeedProcessor,
   type BrowserEventFeedState,
 } from "~/domains/streams/client-libraries/processors/browser-event-feed/implementation.ts";
-import type { FeedItemData } from "~/domains/streams/client-libraries/processors/browser-event-feed/grouping.ts";
 import { StreamEventInput } from "~/domains/streams/schemas.ts";
 import type { Stream } from "~/types.ts";
 import { AgentFeedView } from "~/components/agent-feed.tsx";
 import { AgentPillComposer, type AgentComposerMode } from "~/components/agent-pill-composer.tsx";
 import { ExampleEventsPanel } from "~/components/example-events-panel.tsx";
+import { FeedEventTypeSelect, FeedItemsView } from "~/components/feed-items-view.tsx";
 import { PresenceAvatar, StreamProcessorsPanel } from "~/components/stream-processors-panel.tsx";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { useItx } from "~/itx/itx-react.tsx";
@@ -180,7 +169,6 @@ export function ProjectStreamView({
   streamPath: string;
 }) {
   const itx = useItx();
-  const streamPathText = streamPath;
   const streamRuntimeProjectKey = projectId ?? NULL_DURABLE_OBJECT_PROJECT_ID;
   const resolvedStreamSource = useMemo<ItxStreamSource>(
     () => streamSource ?? ((path) => itx.streams.get(path)),
@@ -196,7 +184,7 @@ export function ProjectStreamView({
       acquireStreamRuntime({
         createStreamClient: streamClientFactory,
         projectId: streamRuntimeProjectKey,
-        streamPath: streamPathText,
+        streamPath,
         slug: BrowserRawEventsContract.slug,
         schemaVersion: BROWSER_RAW_EVENTS_SCHEMA_VERSION,
         tables: ["events"],
@@ -214,7 +202,7 @@ export function ProjectStreamView({
           });
         },
       }),
-    [streamRuntimeProjectKey, streamClientFactory, streamPathText],
+    [streamRuntimeProjectKey, streamClientFactory, streamPath],
   );
   const snapshot = useSyncExternalStore(
     store.subscribe,
@@ -234,7 +222,7 @@ export function ProjectStreamView({
       acquireStreamRuntime({
         createStreamClient: streamClientFactory,
         projectId: streamRuntimeProjectKey,
-        streamPath: streamPathText,
+        streamPath,
         slug: AgentUiProcessorContract.slug,
         schemaVersion: AGENT_UI_SCHEMA_VERSION,
         resetOnSchemaVersionChange: true,
@@ -253,7 +241,7 @@ export function ProjectStreamView({
           });
         },
       }),
-    [streamRuntimeProjectKey, streamClientFactory, streamPathText],
+    [streamRuntimeProjectKey, streamClientFactory, streamPath],
   );
   const agentSnapshot = useSyncExternalStore(
     agentStore.subscribe,
@@ -267,7 +255,7 @@ export function ProjectStreamView({
       acquireStreamRuntime({
         createStreamClient: streamClientFactory,
         projectId: streamRuntimeProjectKey,
-        streamPath: streamPathText,
+        streamPath,
         slug: BrowserEventFeedContract.slug,
         schemaVersion: BROWSER_EVENT_FEED_SCHEMA_VERSION,
         tables: [BROWSER_EVENT_FEED_TABLE],
@@ -285,7 +273,7 @@ export function ProjectStreamView({
           });
         },
       }),
-    [streamRuntimeProjectKey, streamClientFactory, streamPathText],
+    [streamRuntimeProjectKey, streamClientFactory, streamPath],
   );
   // Subscribing is what STARTS a store's connection (stream-browser-store
   // refcounts listeners); without this the feed processor never folds.
@@ -304,7 +292,7 @@ export function ProjectStreamView({
   // preset's job; the stream path decides which presets exist and which one is
   // the domain default (the first). A stale/hand-edited preset id falls back.
   const activeTab: ProjectStreamViewTab = search.tab ?? "feed";
-  const presets = useMemo(() => presetsForStream(streamPathText), [streamPathText]);
+  const presets = useMemo(() => presetsForStream(streamPath), [streamPath]);
   const defaultPreset = presets[0]!;
   const activePreset = presets.find((preset) => preset.id === search.preset) ?? defaultPreset;
   const toolsOpen = search.filter === true;
@@ -708,347 +696,6 @@ function useAgentUiReducedState(database: StreamBrowserDatabase): AgentUiState |
       return null;
     }
   }, [result.data]);
-}
-
-// ---------------------------------------------------------------------------
-// Feed view: the grouped feed_items collection, filtered by the active preset
-// ---------------------------------------------------------------------------
-
-/** How many rows past the virtualizer's window the tail query prefetches. */
-const TAIL_PREFETCH_ROWS = 32;
-
-/**
- * The primary event type of a feed_items row — a group row's `data.eventType`,
- * a singleton's first event type. Every feed filter (preset prefix, exact
- * type) matches against this expression, entirely in SQL over the local mirror.
- */
-const FEED_TYPE_EXPRESSION = `COALESCE(json_extract(data, '$.eventType'), json_extract(data, '$.events[0].type'))`;
-
-/** Composed WHERE fragment + params for the feed filters; null when unfiltered. */
-type FeedItemsFilter = { whereSql: string; params: string[] } | null;
-
-function buildFeedItemsFilter(input: {
-  eventType: string | null;
-  eventTypePrefix: string | null;
-  searchQuery: string | null;
-}): FeedItemsFilter {
-  const clauses: string[] = [];
-  const params: string[] = [];
-  if (input.eventTypePrefix != null) {
-    clauses.push(`${FEED_TYPE_EXPRESSION} LIKE ?`);
-    params.push(`${input.eventTypePrefix}%`);
-  }
-  if (input.eventType != null) {
-    clauses.push(`${FEED_TYPE_EXPRESSION} = ?`);
-    params.push(input.eventType);
-  }
-  if (input.searchQuery != null) {
-    clauses.push(`json(data) LIKE ?`);
-    params.push(`%${input.searchQuery}%`);
-  }
-  if (clauses.length === 0) return null;
-  return { whereSql: clauses.join(" AND "), params };
-}
-
-/**
- * Renders the browser-event-feed processor's `feed_items` collection: one row
- * per specific-renderer singleton or per collapsed run of same-type events,
- * filtered by the active preset's event-type prefix, the exact event-type
- * filter, and the text search.
- *
- * Same virtualization scheme as the agent feed (agent-feed.tsx): TanStack
- * Virtual owns the tail (anchorTo end + followOnAppend), the row window is a
- * live SQL range query over dense positions, and the count query gates the
- * list so the virtualizer never sees a 0→N transition on mount.
- */
-function FeedItemsView({
-  database,
-  emptyLabel,
-  eventType,
-  eventTypePrefix,
-  searchQuery,
-}: {
-  database: StreamBrowserDatabase;
-  emptyLabel: string;
-  eventType: string | null;
-  eventTypePrefix: string | null;
-  searchQuery: string | null;
-}) {
-  const filter = buildFeedItemsFilter({ eventType, eventTypePrefix, searchQuery });
-  const countResult = useStreamQuery(
-    database,
-    filter == null
-      ? `SELECT COUNT(*) AS count FROM feed_items`
-      : `SELECT COUNT(*) AS count FROM feed_items WHERE ${filter.whereSql}`,
-    filter?.params ?? [],
-  );
-  const itemCount = Number(countResult.data[0]?.count ?? 0);
-  const scrollRef = useRef<HTMLDivElement>(null);
-
-  return (
-    <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto w-full max-w-3xl px-4 pb-6 pt-5 md:px-6">
-        {countResult.status !== "ok" ? (
-          <Centered>
-            {countResult.status === "error"
-              ? (countResult.error?.message ?? "SQLite query failed")
-              : "Opening local SQLite mirror"}
-          </Centered>
-        ) : itemCount === 0 ? (
-          <Centered>
-            {filter == null ? emptyLabel : "No feed items match the current filters."}
-          </Centered>
-        ) : (
-          <VirtualFeedItems
-            // Fresh virtualizer (measurements, end anchor) per mirror and per
-            // filter — stale state from another list would misplace the scroll.
-            key={`${database.databasePath}:${filter?.whereSql ?? ""}:${(filter?.params ?? []).join(" ")}`}
-            database={database}
-            filter={filter}
-            itemCount={itemCount}
-            scrollElementRef={scrollRef}
-          />
-        )}
-      </div>
-    </div>
-  );
-}
-
-function VirtualFeedItems({
-  database,
-  filter,
-  itemCount,
-  scrollElementRef,
-}: {
-  database: StreamBrowserDatabase;
-  filter: FeedItemsFilter;
-  itemCount: number;
-  scrollElementRef: RefObject<HTMLDivElement | null>;
-}) {
-  const [expanded, setExpanded] = useState<ReadonlySet<number>>(new Set());
-  const virtualizer = useVirtualizer({
-    count: itemCount,
-    getScrollElement: () => scrollElementRef.current,
-    estimateSize: () => 44,
-    getItemKey: (index) => index,
-    anchorTo: "end",
-    followOnAppend: true,
-    scrollEndThreshold: 80,
-    overscan: 16,
-    directDomUpdates: true,
-  });
-
-  // Open at the newest items; later appends are followOnAppend's job (this
-  // component mounts gated behind the count query, see agent-feed.tsx).
-  useLayoutEffect(() => {
-    virtualizer.scrollToEnd();
-  }, [virtualizer]);
-
-  const virtualItems = virtualizer.getVirtualItems();
-  const first = virtualItems[0]?.index ?? 0;
-  const last = virtualItems.at(-1)?.index ?? -1;
-  const windowSize = Math.max(0, last + 1 + TAIL_PREFETCH_ROWS - first);
-  const rowsResult = useStreamQuery(
-    database,
-    filter == null
-      ? `SELECT local_index, component, first_offset, last_offset, event_count, json(data) AS data
-         FROM feed_items WHERE local_index >= ? AND local_index < ?
-         ORDER BY local_index ASC`
-      : `SELECT local_index, component, first_offset, last_offset, event_count, json(data) AS data
-         FROM feed_items WHERE ${filter.whereSql}
-         ORDER BY local_index ASC LIMIT ? OFFSET ?`,
-    filter == null ? [first, first + windowSize] : [...filter.params, windowSize, first],
-  );
-  // Retain the last committed rows across range re-queries so a shifting
-  // window doesn't blank already-visible rows to skeletons (see agent-feed).
-  const lastRowsRef = useRef<Map<number, Record<string, unknown>> | null>(null);
-  const rowsByIndex = useMemo(() => {
-    if (rowsResult.status !== "ok") {
-      return lastRowsRef.current ?? new Map<number, Record<string, unknown>>();
-    }
-    const rows = new Map<number, Record<string, unknown>>();
-    rowsResult.data.forEach((row, position) => {
-      const index = filter == null ? Number(row.local_index) : first + position;
-      if (Number.isFinite(index)) rows.set(index, row);
-    });
-    lastRowsRef.current = rows;
-    return rows;
-  }, [rowsResult.data, rowsResult.status, filter, first]);
-
-  return (
-    <div
-      className="relative w-full"
-      style={{ height: virtualizer.getTotalSize() }}
-      data-testid="stream-feed-items"
-    >
-      {virtualItems.map((item) => {
-        const row = rowsByIndex.get(item.index);
-        const localIndex = row == null ? item.index : Number(row.local_index);
-        return (
-          <div
-            className="absolute left-0 top-0 w-full"
-            data-index={item.index}
-            key={item.key}
-            ref={virtualizer.measureElement}
-            style={{ transform: `translateY(${item.start}px)` }}
-          >
-            {row == null ? (
-              <div className="my-1 h-9 rounded-xl bg-muted/40" />
-            ) : (
-              <FeedItemRow
-                row={row}
-                expanded={expanded.has(localIndex)}
-                onToggle={() =>
-                  setExpanded((previous) => {
-                    const next = new Set(previous);
-                    if (next.has(localIndex)) next.delete(localIndex);
-                    else next.add(localIndex);
-                    return next;
-                  })
-                }
-              />
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-const FeedItemRow = memo(function FeedItemRow({
-  expanded,
-  onToggle,
-  row,
-}: {
-  expanded: boolean;
-  onToggle: () => void;
-  row: Record<string, unknown>;
-}) {
-  const data = parseFeedItemData(String(row.data));
-  const eventType =
-    data && "eventType" in data ? data.eventType : (data?.events[0]?.type ?? String(row.component));
-  const eventCount = Number(row.event_count);
-  const firstOffset = Number(row.first_offset);
-  const lastOffset = Number(row.last_offset);
-  const createdAt = data?.events[0]?.createdAt;
-
-  return (
-    <div className="py-0.5">
-      <button
-        aria-expanded={expanded}
-        onClick={onToggle}
-        type="button"
-        className={cn(
-          "flex w-full cursor-pointer items-baseline gap-2.5 rounded-xl bg-muted/40 px-3.5 py-2 text-left",
-          "font-mono text-xs text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground",
-          expanded && "rounded-b-none bg-muted/70 text-foreground",
-        )}
-      >
-        <span className="shrink-0 tabular-nums">
-          {firstOffset === lastOffset ? `#${firstOffset}` : `#${firstOffset}–${lastOffset}`}
-        </span>
-        <span className="min-w-0 truncate text-foreground/80">{shortEventType(eventType)}</span>
-        {eventCount > 1 ? (
-          <span className="shrink-0 rounded-full bg-background px-1.5 py-px text-[10px]">
-            ×{eventCount.toLocaleString()}
-          </span>
-        ) : null}
-        {typeof createdAt === "string" ? (
-          <time className="ml-auto shrink-0 text-[10px]">
-            {new Date(createdAt).toLocaleTimeString()}
-          </time>
-        ) : null}
-      </button>
-      {expanded ? (
-        <div className="rounded-b-xl bg-muted/40 px-3.5 pb-3 pt-1">
-          <SerializedObjectCodeBlock data={data?.events ?? row.data} />
-        </div>
-      ) : null}
-    </div>
-  );
-});
-
-/** `events.iterate.com/agent/input-added` → `agent/input-added` — the domain part carries the signal. */
-function shortEventType(type: string): string {
-  return type.startsWith("events.iterate.com/") ? type.slice("events.iterate.com/".length) : type;
-}
-
-/** Radix Select forbids the empty-string value; this stands in for "no type filter". */
-const ALL_EVENT_TYPES = "__all__";
-
-/**
- * Exact event-type filter for the feed-items presets: the distinct primary
- * event types currently in the local mirror (scoped to the active preset's
- * prefix so the offered types can actually match), with per-type event counts.
- */
-function FeedEventTypeSelect({
-  database,
-  eventTypePrefix,
-  onChange,
-  value,
-}: {
-  database: StreamBrowserDatabase;
-  eventTypePrefix: string | null;
-  onChange: (eventType: string | null) => void;
-  value: string | null;
-}) {
-  const typesResult = useStreamQuery(
-    database,
-    eventTypePrefix == null
-      ? `SELECT ${FEED_TYPE_EXPRESSION} AS event_type, SUM(event_count) AS total
-         FROM feed_items GROUP BY event_type ORDER BY event_type`
-      : `SELECT ${FEED_TYPE_EXPRESSION} AS event_type, SUM(event_count) AS total
-         FROM feed_items WHERE ${FEED_TYPE_EXPRESSION} LIKE ?
-         GROUP BY event_type ORDER BY event_type`,
-    eventTypePrefix == null ? [] : [`${eventTypePrefix}%`],
-  );
-  const types = typesResult.data.flatMap((row) =>
-    typeof row.event_type === "string"
-      ? [{ count: Number(row.total ?? 0), type: row.event_type }]
-      : [],
-  );
-  // A stale URL value (hand-edited, or events not mirrored yet) must still
-  // render as the selection so it can be cleared.
-  const options =
-    value != null && !types.some((entry) => entry.type === value)
-      ? [{ count: 0, type: value }, ...types]
-      : types;
-
-  return (
-    <Select
-      value={value ?? ALL_EVENT_TYPES}
-      onValueChange={(next) => onChange(next === ALL_EVENT_TYPES ? null : next)}
-    >
-      <SelectTrigger
-        size="sm"
-        className="max-w-56 font-mono text-xs"
-        data-testid="stream-feed-event-type"
-        title="Event type"
-      >
-        {/* Radix can only resolve the selected item's text once the content
-            has mounted; render the label ourselves. */}
-        <SelectValue>{value == null ? "All event types" : shortEventType(value)}</SelectValue>
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value={ALL_EVENT_TYPES} className="text-xs">
-          All event types
-        </SelectItem>
-        {options.map((entry) => (
-          <SelectItem key={entry.type} value={entry.type} className="font-mono text-xs">
-            {shortEventType(entry.type)} · {entry.count.toLocaleString()}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
-function parseFeedItemData(raw: string): FeedItemData | null {
-  try {
-    return JSON.parse(raw) as FeedItemData;
-  } catch {
-    return null;
-  }
 }
 
 // ---------------------------------------------------------------------------

@@ -11,9 +11,8 @@ import {
 import { StreamSwitcherDialog } from "./stream-switcher-dialog.tsx";
 import { connectItxBrowser } from "~/itx/itx-react.tsx";
 import { OPEN_GLOBAL_COMMAND_PALETTE_EVENT } from "~/components/global-command-palette-events.ts";
-import type { RouteBreadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
+import { activeStreamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { fetchProjectsList, projectsListQueryKey } from "~/lib/projects-query.ts";
-import { StreamPath } from "~/lib/stream-links.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import type { StreamNavigator } from "~/lib/stream-navigation.ts";
 
@@ -31,16 +30,12 @@ export function GlobalCommandPalette() {
   const [pickedProject, setPickedProject] = useState<{ id: string; slug: string } | null>(null);
   const matches = useMatches();
   const navigate = useNavigate();
-  const routeStream = useMemo(() => getRouteStreamContext(matches), [matches]);
+  const routeStream = useMemo(() => activeStreamBreadcrumb(matches), [matches]);
   const activeStream = useMemo(
     () =>
       routeStream ??
       (pickedProject
-        ? {
-            projectId: pickedProject.id,
-            projectSlug: pickedProject.slug,
-            streamPath: StreamPath.parse("/"),
-          }
+        ? { projectId: pickedProject.id, projectSlug: pickedProject.slug, streamPath: "/" }
         : null),
     [routeStream, pickedProject],
   );
@@ -77,7 +72,7 @@ export function GlobalCommandPalette() {
       }),
       onOpenPath(path) {
         setOpen(false);
-        void navigate(linkOptionsForStreamPath(activeStream.projectSlug, StreamPath.parse(path)));
+        void navigate(linkOptionsForStreamPath(activeStream.projectSlug, path));
       },
     };
   }, [activeStream, navigate]);
@@ -147,16 +142,5 @@ function ProjectPickerDialog({
         </div>
       </DialogContent>
     </Dialog>
-  );
-}
-
-function getRouteStreamContext(matches: ReturnType<typeof useMatches>) {
-  return (
-    matches
-      .map((match) => (match.loaderData as RouteBreadcrumbLoaderData | undefined)?.streamBreadcrumb)
-      .filter((value): value is NonNullable<RouteBreadcrumbLoaderData["streamBreadcrumb"]> =>
-        Boolean(value),
-      )
-      .at(-1) ?? null
   );
 }

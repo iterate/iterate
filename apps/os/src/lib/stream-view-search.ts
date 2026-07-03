@@ -50,7 +50,8 @@ export function useStreamViewSearch(): {
   const setSearch = useCallback(
     (patch: Partial<StreamViewSearch>) => {
       void navigate({
-        // `useNavigate()` isn't scoped to one route (this hook serves two), so
+        // `useNavigate()` isn't scoped to one route (this hook serves every
+        // stream-view route), so
         // without a `to`/`from` the search reducer's inferred type collapses to
         // `never`. The reducer below is written type-safely against our schema;
         // we only erase its type at this un-narrowable assignment boundary.

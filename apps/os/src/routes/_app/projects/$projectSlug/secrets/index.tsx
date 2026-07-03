@@ -18,8 +18,7 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { StreamPage } from "~/components/stream-page.tsx";
 import { formatRelativeTime } from "~/lib/format-relative-time.ts";
-import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
-import { StreamPath } from "~/lib/stream-links.ts";
+import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx, useItxState } from "~/itx/itx-react.tsx";
 import type { ProjectProcessorState } from "~/types.ts";
@@ -46,14 +45,10 @@ const DEFAULT_SECRET_FORM_VALUES = {
 export const Route = createFileRoute("/_app/projects/$projectSlug/secrets/")({
   validateSearch: StreamViewSearch,
   ssr: false,
-  loader: ({ context, params }) =>
+  loader: ({ context }) =>
     breadcrumbLoaderData({
       project: context.project,
-      streamBreadcrumb: {
-        projectId: context.project.id,
-        projectSlug: params.projectSlug,
-        streamPath: StreamPath.parse("/secrets"),
-      },
+      streamBreadcrumb: streamBreadcrumb(context.project, "/secrets"),
     }),
   component: ProjectSecretsIndexPage,
 });

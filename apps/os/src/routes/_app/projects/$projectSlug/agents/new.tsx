@@ -6,14 +6,16 @@ import { Button } from "@iterate-com/ui/components/button";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { connectItxBrowser } from "~/itx/itx-react.tsx";
+import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/new")({
-  staticData: { breadcrumb: "New agent" },
-  loader: async ({ context }) => {
-    const { project } = context;
-
-    return { project };
-  },
+  // The page creates a child of /agents, so it inherits that stream context —
+  // the header shows the /agents ancestry and ⌘K opens on the agents tree.
+  loader: ({ context }) =>
+    breadcrumbLoaderData({
+      project: context.project,
+      streamBreadcrumb: streamBreadcrumb(context.project, "/agents"),
+    }),
   component: NewAgentPage,
 });
 

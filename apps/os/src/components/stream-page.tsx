@@ -21,7 +21,7 @@ export function StreamPage({
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
       {panel == null ? null : (
         <aside className="max-h-[45svh] min-h-0 shrink-0 overflow-y-auto border-b lg:max-h-none lg:w-[26rem] lg:border-b-0 lg:border-r">
-          <div className="space-y-4 p-4">{panel}</div>
+          <div className="flex flex-col gap-4 p-4">{panel}</div>
         </aside>
       )}
       <ProjectStreamView {...streamView} />

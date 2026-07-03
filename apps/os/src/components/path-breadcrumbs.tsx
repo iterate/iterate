@@ -16,16 +16,13 @@ import { Popover, PopoverContent, PopoverTrigger } from "@iterate-com/ui/compone
 import { toast } from "@iterate-com/ui/components/sonner";
 import { parseBrowserCoreStreamTreeState } from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
 import { connectItxBrowser } from "~/itx/itx-react.tsx";
-import type {
-  RouteBreadcrumbLoaderData,
-  RouteBreadcrumbStaticData,
-} from "~/lib/route-breadcrumbs.ts";
 import {
-  StreamPath,
-  streamPathAncestors,
-  streamPathChild,
-  streamPathParent,
-} from "~/lib/stream-links.ts";
+  activeStreamBreadcrumb,
+  type RouteBreadcrumbLoaderData,
+  type RouteBreadcrumbStaticData,
+  type StreamBreadcrumb,
+} from "~/lib/route-breadcrumbs.ts";
+import { streamPathAncestors, streamPathChild, streamPathParent } from "~/lib/stream-links.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 
 const CHILD_STREAM_SEGMENT_PATTERN = /^[a-z0-9_-]+$/;
@@ -37,12 +34,7 @@ export function PathBreadcrumbs() {
     return null;
   }
 
-  const streamBreadcrumb = matches
-    .map((match) => (match.loaderData as RouteBreadcrumbLoaderData | undefined)?.streamBreadcrumb)
-    .filter((value): value is NonNullable<RouteBreadcrumbLoaderData["streamBreadcrumb"]> =>
-      Boolean(value),
-    )
-    .at(-1);
+  const streamBreadcrumb = activeStreamBreadcrumb(matches);
 
   const activeProjectSlug = matches
     .flatMap(({ params }) =>
@@ -247,17 +239,10 @@ function renderCrumbLink({
   streamBreadcrumb,
 }: {
   crumb: { streamPath?: string; to?: string };
-  streamBreadcrumb: RouteBreadcrumbLoaderData["streamBreadcrumb"];
+  streamBreadcrumb: StreamBreadcrumb | undefined;
 }) {
   if (crumb.streamPath && streamBreadcrumb) {
-    return (
-      <Link
-        {...linkOptionsForStreamPath(
-          streamBreadcrumb.projectSlug,
-          StreamPath.parse(crumb.streamPath),
-        )}
-      />
-    );
+    return <Link {...linkOptionsForStreamPath(streamBreadcrumb.projectSlug, crumb.streamPath)} />;
   }
 
   return <Link to={crumb.to ?? "/"} />;
@@ -277,7 +262,7 @@ function StreamSegmentNavigator({
   isCurrent?: boolean;
   label: string;
   segmentPath: string;
-  streamBreadcrumb: NonNullable<RouteBreadcrumbLoaderData["streamBreadcrumb"]>;
+  streamBreadcrumb: StreamBreadcrumb;
 }) {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
@@ -296,7 +281,7 @@ function StreamSegmentNavigator({
   function navigateToSibling(path: string) {
     setOpen(false);
     if (path === segmentPath && isCurrent) return;
-    void navigate(linkOptionsForStreamPath(streamBreadcrumb.projectSlug, StreamPath.parse(path)));
+    void navigate(linkOptionsForStreamPath(streamBreadcrumb.projectSlug, path));
   }
 
   return (
@@ -330,11 +315,7 @@ function StreamSegmentNavigator({
   );
 }
 
-function StreamChildrenBreadcrumb({
-  streamBreadcrumb,
-}: {
-  streamBreadcrumb: NonNullable<RouteBreadcrumbLoaderData["streamBreadcrumb"]>;
-}) {
+function StreamChildrenBreadcrumb({ streamBreadcrumb }: { streamBreadcrumb: StreamBreadcrumb }) {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [newChildSegment, setNewChildSegment] = useState("");
@@ -350,9 +331,7 @@ function StreamChildrenBreadcrumb({
 
   function navigateToChild(childPath: string) {
     setOpen(false);
-    void navigate(
-      linkOptionsForStreamPath(streamBreadcrumb.projectSlug, StreamPath.parse(childPath)),
-    );
+    void navigate(linkOptionsForStreamPath(streamBreadcrumb.projectSlug, childPath));
   }
 
   function submitNewChild() {

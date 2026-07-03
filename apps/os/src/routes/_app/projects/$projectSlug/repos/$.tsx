@@ -1,4 +1,3 @@
-import { Copy } from "lucide-react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
 import { useMutation } from "@tanstack/react-query";
@@ -14,10 +13,10 @@ import {
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
+import { InfoRow } from "~/components/info-row.tsx";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { StreamPage } from "~/components/stream-page.tsx";
-import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
-import { StreamPath } from "~/lib/stream-links.ts";
+import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import type { RepoProcessorState } from "~/types.ts";
 import { useItx, useItxQuery, useItxState } from "~/itx/itx-react.tsx";
@@ -40,11 +39,7 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/repos/$")({
   loader: ({ context, params }) =>
     breadcrumbLoaderData({
       project: context.project,
-      streamBreadcrumb: {
-        projectId: context.project.id,
-        projectSlug: params.projectSlug,
-        streamPath: StreamPath.parse(repoPathFromSplat(params._splat)),
-      },
+      streamBreadcrumb: streamBreadcrumb(context.project, repoPathFromSplat(params._splat)),
     }),
   component: ProjectRepoDetailPage,
 });
@@ -106,13 +101,20 @@ function ProjectRepoDetailContent() {
     },
   });
 
+  // While the processor's first push is in flight, the loading placeholder is
+  // the PANEL — the stream view mounts immediately and warms in parallel.
   if (repoProcessor.state === undefined) {
     return (
-      <section className="w-full p-4">
-        <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
-          Loading repo…
-        </div>
-      </section>
+      <StreamPage
+        panel={
+          <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
+            Loading repo…
+          </div>
+        }
+        projectId={project.id}
+        streamPath={repoPath}
+        emptyLabel="No events on this repo's stream yet."
+      />
     );
   }
   const snapshot = { offset: repoProcessor.offset ?? 0, state: repoProcessor.state };
@@ -236,36 +238,4 @@ function ProjectRepoDetailContent() {
 function repoPathFromSplat(splat: string | undefined) {
   const suffix = splat?.replace(/^\/+/, "") ?? "";
   return `/repos/${suffix}`;
-}
-
-function InfoRow(input: { copyValue?: string; label: string; value: string }) {
-  return (
-    <div className="grid gap-2 border-b p-4 last:border-b-0 md:grid-cols-[10rem_minmax(0,1fr)_auto] md:items-center">
-      <div className="text-xs font-medium text-muted-foreground">{input.label}</div>
-      <code className="min-w-0 break-all rounded bg-muted px-2 py-1 font-mono text-xs">
-        {input.value}
-      </code>
-      {input.copyValue ? <CopyButton value={input.copyValue} /> : <div />}
-    </div>
-  );
-}
-
-function CopyButton(input: { value: string }) {
-  return (
-    <Button
-      type="button"
-      variant="outline"
-      size="icon"
-      className="h-8 w-8 shrink-0"
-      aria-label="Copy"
-      onClick={() => {
-        void navigator.clipboard.writeText(input.value).then(
-          () => toast.success("Copied"),
-          () => toast.error("Could not copy"),
-        );
-      }}
-    >
-      <Copy className="h-4 w-4" />
-    </Button>
-  );
 }

@@ -29,8 +29,7 @@ import { RepoArtifactNameCodec } from "~/domains/repos/utils.ts";
 import { buildArtifactViewerUrl } from "~/lib/artifact-viewer-url.ts";
 import { formatRelativeTime } from "~/lib/format-relative-time.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
-import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
-import { StreamPath } from "~/lib/stream-links.ts";
+import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx, useItxState } from "~/itx/itx-react.tsx";
 import type { ProjectProcessorState } from "~/types.ts";
@@ -53,20 +52,12 @@ type SortDirection = "asc" | "desc";
 export const Route = createFileRoute("/_app/projects/$projectSlug/repos/")({
   validateSearch: StreamViewSearch,
   ssr: false,
-  loader: async ({ context, params }) => {
-    const { project } = context;
-    const routeConfig = await getPublicRouteConfig();
-
-    return breadcrumbLoaderData({
-      project,
-      routeConfig,
-      streamBreadcrumb: {
-        projectId: project.id,
-        projectSlug: params.projectSlug,
-        streamPath: StreamPath.parse("/repos"),
-      },
-    });
-  },
+  loader: async ({ context }) =>
+    breadcrumbLoaderData({
+      project: context.project,
+      routeConfig: await getPublicRouteConfig(),
+      streamBreadcrumb: streamBreadcrumb(context.project, "/repos"),
+    }),
   component: ProjectReposIndexPage,
 });
 

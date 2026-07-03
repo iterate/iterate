@@ -14,7 +14,8 @@ import { StreamPath } from "~/lib/stream-links.ts";
  * otherwise. Fresh `search` everywhere: a new stream opens with its own
  * default tab and filters rather than inheriting the previous view's.
  */
-export function linkOptionsForStreamPath(projectSlug: string, streamPath: StreamPath) {
+export function linkOptionsForStreamPath(projectSlug: string, path: string) {
+  const streamPath = StreamPath.parse(path);
   const segments = streamPath.split("/").filter(Boolean);
   const params = { projectSlug };
 

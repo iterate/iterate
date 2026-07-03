@@ -18,8 +18,7 @@ import { AlertCircle, Circle, Mail, MessageSquare } from "lucide-react";
 import { z } from "zod";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { StreamPage } from "~/components/stream-page.tsx";
-import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
-import { StreamPath } from "~/lib/stream-links.ts";
+import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
 import type { ProjectRpcTarget } from "~/types.ts";
@@ -33,14 +32,10 @@ const Search = StreamViewSearch.extend({
 export const Route = createFileRoute("/_app/projects/$projectSlug/integrations")({
   validateSearch: Search,
   ssr: false,
-  loader: ({ context, params }) =>
+  loader: ({ context }) =>
     breadcrumbLoaderData({
       project: context.project,
-      streamBreadcrumb: {
-        projectId: context.project.id,
-        projectSlug: params.projectSlug,
-        streamPath: StreamPath.parse("/integrations"),
-      },
+      streamBreadcrumb: streamBreadcrumb(context.project, "/integrations"),
     }),
   component: ProjectIntegrationsPage,
 });
