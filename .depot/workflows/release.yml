@@ -101,7 +101,7 @@ jobs:
       - name: Create release
         if: steps.check_changes.outputs.commits != '0'
         env:
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}
+          ITERATE_BOT_GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}
           RELEASE_NAME: ${{ steps.release_info.outputs.release_name }}
           RELEASE_TITLE: ${{ steps.context.outputs.release_title }}
         run: pnpm tsx scripts/ci/create-release.ts

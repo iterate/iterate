@@ -1,4 +1,8 @@
 name: Daily PR dashboard
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
 on:
   pull_request:
     types:
@@ -20,7 +24,7 @@ jobs:
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     env:
       DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}
+      ITERATE_BOT_GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

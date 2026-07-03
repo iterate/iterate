@@ -5,7 +5,7 @@ import { Octokit } from "@octokit/rest";
 import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
 
 export function getOctokit() {
-  const auth = process.env.GITHUB_TOKEN || process.env.ITERATE_BOT_GITHUB_TOKEN;
+  const auth = process.env.ITERATE_BOT_GITHUB_TOKEN || process.env.GITHUB_TOKEN;
   if (!auth) {
     throw new Error("GITHUB_TOKEN or ITERATE_BOT_GITHUB_TOKEN is required");
   }
