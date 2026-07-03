@@ -22,14 +22,14 @@ const AGENT_SNIPPET_GUIDE = [
   "- Return only what you need: pick fields, slice arrays. The return value lands in your context window.",
   "- Use JavaScript for what your turn-by-turn loop cannot do: `Promise.all` to fan out independent calls concurrently (this is your parallel tool calling — use it constantly), map/filter to trim big responses, loops for genuinely mechanical iteration.",
   "- Send as many chat messages per script as makes sense: a quick acknowledgement before slow work, one message per result, a final summary. Multiple sendMessage calls in one script are normal.",
-  '- Keep the user in the loop on EVERY turn: when a script does real work, include a short progress message in the same Promise.all as the work itself — Promise.all([itx.chat.sendMessage({ message: "Checking your email now..." }), itx.gmail.request(...)]). It costs nothing extra and the user never stares at a silent agent while you fetch.',
+  '- Keep the user in the loop on EVERY turn: when a script does real work, include a short progress message in the same Promise.all as the work itself — Promise.all([itx.chat.sendMessage({ message: "Checking your email now..." }), itx.integrations.google["<connection>"].gmail.request(...)]). It costs nothing extra and the user never stares at a silent agent while you fetch.',
   "",
   "BAD — one giant blind script (do not do this):",
   "```js",
   "async (itx) => {",
-  '  const status = await itx.integrations.getConnection({ provider: "google" }).catch((e) => ({ connected: false, error: String(e) }));',
+  "  const connections = await itx.integrations.list().catch((e) => ({ error: String(e) }));",
   '  if (!status.connected) { await itx.chat.sendMessage({ message: "..." }); return { status }; }',
-  "  const resp = await itx.gmail.request({ /* ... */ }).catch((e) => ({ error: String(e) }));",
+  '  const resp = await itx.integrations.google["jonas"].gmail.request({ /* ... */ }).catch((e) => ({ error: String(e) }));',
   "  if (resp.error) { /* ...forty more lines of shape-guessing, per-item catch blocks, and prose built from fields it has never seen... */ }",
   "}",
   "```",
@@ -39,11 +39,11 @@ const AGENT_SNIPPET_GUIDE = [
   "async (itx) => {",
   "  const [, inbox] = await Promise.all([",
   '    itx.chat.sendMessage({ message: "Checking your email now..." }),',
-  '    itx.gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }),',
+  '    itx.integrations.google["jonas"].gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }),',
   "  ]);",
   "  const messages = await Promise.all(",
   "    (inbox.data.messages ?? []).map((m) =>",
-  '      itx.gmail.request({ path: "/users/me/messages/" + m.id, query: { format: "metadata", metadataHeaders: "From" } }),',
+  '      itx.integrations.google["jonas"].gmail.request({ path: "/users/me/messages/" + m.id, query: { format: "metadata", metadataHeaders: "From" } }),',
   "    ),",
   "  );",
   "  return messages.map((m) => ({ id: m.data.id, snippet: m.data.snippet, headers: m.data.payload?.headers }));",
@@ -93,7 +93,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "- `await itx.describe()` lists this project's current capabilities (builtins plus anything provided). Prefer discovering over guessing.",
   "- `await itx.examples.list()` is a catalogue of known-good snippets covering the whole surface (streams, repo, workers, secrets, provideCapability, MCP, …); `await itx.examples.get({ id })` returns one with its full code. Copy working patterns from there instead of inventing them.",
   "- Workers RPC does not pipeline through unresolved returns: `const w = await itx.workers.get(ref); await w.fetch(...)` — await the capability before calling through it.",
-  '- Gmail is available as `itx.gmail` when the project has a connected Google account. Check `await itx.integrations.getConnection({ provider: "google" })`, then call Gmail REST paths through `await itx.gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } })`. Do not tell the user you lack inbox access before checking these capabilities.',
+  '- Integrations are connections at fully qualified paths: `await itx.integrations.list()` enumerates them. A connected Google account gives Gmail via `await itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } })`. Do not tell the user you lack inbox access before checking these capabilities.',
   "- Use the capabilities below when they are relevant; they are real and yours to call.",
   "",
   "THE FULL PUBLIC TYPE SURFACE of `itx`, verbatim (types.ts — the design of record; you hold an `Itx`, agent-scoped):",
@@ -121,7 +121,7 @@ const LlmRequestPolicy = z
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "0.2.0",
+  version: "0.3.0",
   description:
     "Maintains model-visible web-chat history and requests LLM work from a provider processor.",
   stateSchema: z.object({
@@ -149,6 +149,13 @@ export const AgentProcessorContract = defineProcessorContract({
       .nullable()
       .default(null),
     pendingTriggerOffset: z.number().int().positive().nullable().default(null),
+    /**
+     * Count of finished LLM request lifecycles (completed or cancelled).
+     * llm-request-scheduled idempotency is keyed on this, so every trigger
+     * derivation between two finishes — however delivery batches the inputs —
+     * collapses into one scheduled event at the stream's append dedup layer.
+     */
+    requestGeneration: z.number().int().nonnegative().default(0),
     scriptExecutionsCompleted: z.array(z.string()).default([]),
   }),
   events: {

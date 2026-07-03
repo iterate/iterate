@@ -621,13 +621,26 @@ describe("SlackAgentProcessor", () => {
     expect(slackCalls).toHaveLength(0);
   });
 
-  it("compiles the !debug bang command into a Slack-posting describe script", async () => {
+  it("compiles the !debug bang command into a Slack-posting debug script", async () => {
     const { cursors, processor, slackCalls, stream } = setup();
 
-    await stream.append({
-      type: "events.iterate.com/slack/webhook-received",
-      payload: humanMessageWebhookPayload({ text: "!debug" }),
-    });
+    await stream.append(
+      {
+        // The router forwards the route event ahead of webhooks, so the agent
+        // knows its stream path — and from it, the connection the debug reply
+        // must post through.
+        type: "events.iterate.com/slack/thread-route-configured",
+        payload: {
+          channel: "C123",
+          threadTs: "111.222",
+          streamPath: "/agents/slack/nustom/c123/ts-111-222",
+        },
+      },
+      {
+        type: "events.iterate.com/slack/webhook-received",
+        payload: humanMessageWebhookPayload({ text: "!debug" }),
+      },
+    );
     await deliverNewEvents({ cursors, processor, stream });
 
     const scripts = stream.events.filter(
@@ -635,18 +648,15 @@ describe("SlackAgentProcessor", () => {
     );
     expect(scripts).toHaveLength(1);
     expect(scripts[0]).toMatchObject({
-      idempotencyKey: "slack-agent:bang-command:1",
-      payload: { executionId: "slack-bang-command-1" },
+      idempotencyKey: "slack-agent:bang-command:2",
+      payload: { executionId: "slack-bang-command-2" },
     });
-    // Legacy called `itx.debug()` and carried an `enqueued` payload flag; on
-    // itx the debug dump is `itx.describe()` and the payload is just
-    // { code, executionId }.
     const code = (scripts[0]!.payload as { code: string }).code;
-    expect(code).toContain("const debug = await itx.describe();");
-    expect(code).toContain("await itx.slack.chat.postMessage({");
+    expect(code).toContain("const debug = await itx.debug();");
+    expect(code).toContain('await itx.integrations.slack["nustom"].chat.postMessage({');
     expect(code).toContain('channel: "C123"');
     expect(code).toContain('thread_ts: "111.222"');
-    expect(code).toContain("text: `Debug info:");
+    expect(code).toContain("text: `Debug info:\\n${debug}`");
     expect(
       stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
     ).toHaveLength(0);
@@ -776,10 +786,20 @@ describe("SlackAgentProcessor", () => {
     event.user = "UOTHERBOT";
     event.bot_profile = { id: "BOTHERBOT", user_id: "UOTHERBOT" };
 
-    await stream.append({
-      type: "events.iterate.com/slack/webhook-received",
-      payload,
-    });
+    await stream.append(
+      {
+        type: "events.iterate.com/slack/thread-route-configured",
+        payload: {
+          channel: "C123",
+          threadTs: "111.222",
+          streamPath: "/agents/slack/nustom/c123/ts-111-222",
+        },
+      },
+      {
+        type: "events.iterate.com/slack/webhook-received",
+        payload,
+      },
+    );
     await deliverNewEvents({ cursors, processor, stream });
 
     const scripts = stream.events.filter(
@@ -787,7 +807,7 @@ describe("SlackAgentProcessor", () => {
     );
     expect(scripts).toHaveLength(1);
     expect((scripts[0]!.payload as { code: string }).code).toContain(
-      "const debug = await itx.describe();",
+      "const debug = await itx.debug();",
     );
     expect(slackCalls.filter((call) => call.method === "reactions.add")).toHaveLength(0);
   });
@@ -902,15 +922,39 @@ describe("compileBangCommand", () => {
 
   it("wraps bare expressions in an async itx arrow", () => {
     expect(
-      compileBangCommand({ channel: "C1", message: "!whoami", threadTs: "1.2" })?.code,
+      compileBangCommand({
+        channel: "C1",
+        connection: "nustom",
+        message: "!whoami",
+        threadTs: "1.2",
+      })?.code,
     ).toContain("await itx.whoami()");
     expect(
-      compileBangCommand({ channel: "C1", message: "<@U1> !describe", threadTs: "1.2" })?.code,
+      compileBangCommand({
+        channel: "C1",
+        connection: "nustom",
+        message: "<@U1> !describe",
+        threadTs: "1.2",
+      })?.code,
     ).toContain("await itx.describe()");
   });
 
   it("returns null for ordinary messages", () => {
-    expect(compileBangCommand({ channel: "C1", message: "hello", threadTs: "1.2" })).toBeNull();
-    expect(compileBangCommand({ channel: "C1", message: undefined, threadTs: "1.2" })).toBeNull();
+    expect(
+      compileBangCommand({
+        channel: "C1",
+        connection: "nustom",
+        message: "hello",
+        threadTs: "1.2",
+      }),
+    ).toBeNull();
+    expect(
+      compileBangCommand({
+        channel: "C1",
+        connection: "nustom",
+        message: undefined,
+        threadTs: "1.2",
+      }),
+    ).toBeNull();
   });
 });

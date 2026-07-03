@@ -105,8 +105,9 @@ mutating the original payload.
 ## Capabilities
 
 Built-ins are explicit members of the `Itx` interface (`streams`, `repos`,
-`repo`, `agents`, `secrets`, `workers`, `worker`, `egress`, `mcp`, `openapi`,
-`ai`, `examples`, `processor`, plus `agent`/`chat` on agent scopes). A call like
+`repo`, `agents`, `sandboxes`, `secrets`, `workers`, `worker`, `egress`,
+`mcp`, `openapi`, `ai`, `examples`, `processor`, plus `agent`/`chat` on agent
+scopes). A call like
 `itx.streams.get("/x")` resolves in the isolate without touching the ITX
 Durable Object; the trade-off is that a mounted capability can never shadow a
 built-in name.

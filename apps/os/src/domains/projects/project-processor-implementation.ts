@@ -256,7 +256,7 @@ export class ProjectProcessor extends StreamProcessor<
 }
 
 /** THE place the "agent path decides the reply door" rule lives: Slack thread
- * agents reply via itx.slack, inbound MCP session agents via their blocked
+ * agents reply via their connection's Slack Web API, inbound MCP session agents via their blocked
  * ask_assistant call, everything else via web chat. */
 function agentSystemPromptForPath(agentPath: string) {
   if (isSlackAgentPath(agentPath)) {
@@ -327,7 +327,7 @@ function agentBirthCertificateEvents(input: {
           "- Other agents live at /agents/<name> (itx.agents.list() / itx.agents.get(path)); Slack thread agents appear under /agents/slack/<connection>/<channel>/ts-<ts>; secrets under /secrets/**.",
           '- Streams are path-addressed: itx.streams.get(path).append(event) / getEvents() / waitFor(); path "/" is the project root stream.',
           "- itx.describe() lists the capabilities currently available in your scope.",
-          '- If Google is connected, Gmail is available at itx.gmail. Check itx.integrations.getConnection({ provider: "google" }) and use itx.gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }) for inbox requests.',
+          '- If Google is connected, Gmail is available per connection: await itx.integrations.list() shows connections, then itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }) for inbox requests.',
         ].join("\n"),
         llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
       },

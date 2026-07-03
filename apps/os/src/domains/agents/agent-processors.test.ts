@@ -183,7 +183,9 @@ describe("minimal web-chat agent processors", () => {
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("returns undefined ends your turn");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.mcp.exa.web_search_exa");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.examples.list()");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain('provider: "google"');
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
+      'itx.integrations.google["<connection>"].gmail.request',
+    );
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain('path: "/users/me/messages"');
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("Do not tell the user you lack inbox access");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).not.toContain('path: "/gmail/v1/users/me/messages"');
@@ -342,6 +344,101 @@ describe("minimal web-chat agent processors", () => {
     expect(stream.events[1]!.payload).toMatchObject({
       content: "how many agents does this project have?",
     });
+  });
+
+  it("coalesces multiple triggering inputs delivered in one batch into one LLM request", async () => {
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({ stream });
+
+    await stream.append(
+      {
+        type: "events.iterate.com/agent/input-added",
+        payload: {
+          content: "message one",
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        },
+      },
+      {
+        type: "events.iterate.com/agent/input-added",
+        payload: {
+          content: "message two",
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        },
+      },
+    );
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+
+    const scheduled = stream.events.filter(
+      (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
+    );
+    expect(scheduled).toHaveLength(1);
+    expect(scheduled[0]!.payload).toMatchObject({ requestId: "llm-request:gen-0" });
+  });
+
+  it("coalesces triggering inputs even when delivery chunks them across batches", async () => {
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({ stream });
+
+    await stream.append(
+      {
+        type: "events.iterate.com/agent/input-added",
+        payload: {
+          content: "message one",
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        },
+      },
+      {
+        type: "events.iterate.com/agent/input-added",
+        payload: {
+          content: "message two",
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        },
+      },
+    );
+
+    // First chunk delivers only input one; its batch appends the scheduled
+    // event at offset 3. The second chunk delivers only input two — a batch
+    // that predates the scheduled event, so state still shows no current
+    // request. The generation-keyed idempotency collapses the re-derived
+    // schedule into the event already on the stream.
+    await agent.ingest({ events: stream.events.slice(0, 1), streamMaxOffset: 2 });
+    await agent.ingest({ events: stream.events.slice(1, 2), streamMaxOffset: 3 });
+
+    const scheduled = stream.events.filter(
+      (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
+    );
+    expect(scheduled).toHaveLength(1);
+    expect(scheduled[0]!.payload).toMatchObject({ requestId: "llm-request:gen-0" });
+  });
+
+  it("coalesces multiple MCP-origin user messages replayed through the cold session backlog", async () => {
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({ stream });
+    const cursors = new Map<object, number>();
+
+    await stream.append(
+      {
+        type: "events.iterate.com/agents/user-message-received",
+        payload: { origin: "mcp", content: "first ask from MCP" },
+      },
+      {
+        type: "events.iterate.com/agents/user-message-received",
+        payload: { origin: "mcp", content: "second ask from MCP" },
+      },
+    );
+
+    await deliverNewEvents({ processor: agent, stream, cursors });
+    expect(
+      stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
+    ).toHaveLength(2);
+
+    await deliverNewEvents({ processor: agent, stream, cursors });
+
+    const scheduled = stream.events.filter(
+      (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
+    );
+    expect(scheduled).toHaveLength(1);
+    expect(scheduled[0]!.payload).toMatchObject({ requestId: "llm-request:gen-0" });
   });
 
   it("does not fire a second LLM call when a second message arrives during the first request", async () => {
@@ -576,6 +673,73 @@ describe("minimal web-chat agent processors", () => {
       result: { status: "success", usage: { total_tokens: 7 } },
     });
     expect(output.payload).toMatchObject({ content: "```js\nasync (itx) => {}\n```" });
+  });
+
+  it("retries openai-ws once with full input when a previous response id expires", async () => {
+    const stream = new MemoryStream();
+    const sockets: FakeResponsesWebSocket[] = [];
+    let responseCreateCount = 0;
+    const openAiWs = new OpenAiWsProcessor({
+      stream,
+      apiKey: "sk-test",
+      createResponsesWebSocketClient: async () => {
+        const socket = fakeResponsesWebSocket(() => {
+          responseCreateCount += 1;
+          if (responseCreateCount === 1) {
+            return [
+              { type: "response.output_text.delta", delta: "first answer" },
+              { type: "response.completed", response: { id: "resp_1" } },
+            ];
+          }
+          if (responseCreateCount === 2) {
+            return [
+              {
+                type: "response.failed",
+                error: { message: "Previous response with id 'resp_1' not found." },
+              },
+            ];
+          }
+          return [
+            { type: "response.output_text.delta", delta: "second answer" },
+            { type: "response.completed", response: { id: "resp_2" } },
+          ];
+        });
+        sockets.push(socket);
+        return socket;
+      },
+      readStreamEvents: () => stream.getEvents(),
+    });
+    const cursors = new Map<object, number>();
+
+    await stream.append(...openAiWsRequestEvents("first"));
+    await deliverNewEvents({ processor: openAiWs, stream, cursors });
+    const firstCompleted = await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-completed"],
+      timeoutMs: 2_000,
+    });
+
+    await stream.append(...openAiWsRequestEvents("second"));
+    await deliverNewEvents({ processor: openAiWs, stream, cursors });
+    const secondCompleted = await stream.waitForEvent({
+      afterOffset: firstCompleted.offset,
+      eventTypes: ["events.iterate.com/agent/llm-request-completed"],
+      timeoutMs: 2_000,
+    });
+
+    expect(sockets).toHaveLength(1);
+    expect(sockets[0]!.sent).toHaveLength(3);
+    expect(sockets[0]!.sent[1]).toMatchObject({ previous_response_id: "resp_1" });
+    expect(sockets[0]!.sent[2]).not.toHaveProperty("previous_response_id");
+    expect(sockets[0]!.sent[2]).toMatchObject({
+      input: expect.arrayContaining([
+        expect.objectContaining({ role: "user", content: "first" }),
+        expect.objectContaining({ role: "user", content: "second" }),
+      ]),
+    });
+    expect(secondCompleted.payload).toMatchObject({
+      provider: "openai-ws",
+      result: { status: "success" },
+    });
   });
 
   it("does not answer llm requests addressed to cloudflare-ai", async () => {

@@ -207,7 +207,7 @@ test.skipIf(signingSecret === null)(
     );
 
     // --- LLM reply: codemode script execution requested on the agent stream.
-    // The Slack prompt tells the model to reply via itx.slack.chat.postMessage.
+    // The Slack prompt tells the model to reply via its connection's postMessage.
     const withScript = await waitFor(
       () => agentStream.getEvents({ afterOffset: 0 }),
       (events) => hasEvent(events, "events.iterate.com/itx/script-execution-requested"),
