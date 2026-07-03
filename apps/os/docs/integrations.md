@@ -19,18 +19,23 @@ await itx.integrations.google["jonas"].gmail.request({ path: "/users/me/messages
 await itx.integrations.list(); // every connection, built-in and provided
 ```
 
-Two kinds of member, one address space:
+Two kinds of member, one address space — every dotted call is
+`{slug}.{connection}.{...method}`:
 
-- **Built-in integrations are named getters** (`slack`, `google`) — RpcTargets
-  whose code ships with the OS deployment, exactly like the other `Itx`
-  builtins. Each is a catalog of connections by name.
+- **Built-in slugs are dispatch branches** (`slack`, `google`) in the
+  collection's `invokeCapability` — plain imperative branches whose code ships
+  with the OS deployment. Not classes: their only callers are untyped dotted
+  scripts, so a typed per-provider class ladder bought nothing (an earlier cut
+  had one; it was deleted). `BUILTIN_INTEGRATION_SLUGS` is the single constant
+  the dispatch, `list()`'s labeling, and the mount collision guard all share.
 - **Everything else resolves through the ordinary ITX capability table** under
   the `integrations` prefix. A project adds its own integration with
   `provideCapability({ path: ["integrations", ...] })` — **data, not
   deployment**. No registry, no provider files, no new dispatch machinery: the
-  collection's dynamic path fallback forwards unknown names to
-  `invokeCapability({ path: ["integrations", ...] })` and the ITX processor's
-  longest-prefix mount resolution does the rest.
+  ITX processor's longest-prefix mount resolution does the rest. Mounting
+  UNDER a built-in slug (`["integrations", "slack", ...]`) is rejected loudly
+  at provide time — the dispatch would shadow it, making the mount durable,
+  journaled, and silently unreachable.
 
 The old `itx.slack` / `itx.gmail` builtins are deleted; they were the
 un-nameable single-connection special case this model removes.
@@ -77,12 +82,21 @@ land back on the same journal).
 Slack Web API calls never hold material: the request carries a
 `getSecret({ path })` placeholder for the connection's token and traverses
 project egress, which substitutes it inside the Secret Durable Object and
-records `secret/used` audit events.
+records `secret/used` audit events. There is **no fallback token** — a typo'd
+or disconnected connection name errors loudly instead of silently posting with
+a deployment-wide credential.
 
 Management verbs live on the collection and are connection-scoped:
 `startOAuthFlow({ provider, userId })`,
 `getConnection({ provider, connection })`,
-`disconnect({ provider, connection })`, plus the OAuth `complete*` callbacks.
+`disconnect({ provider, connection })`, and one provider-blind
+`completeConnect({ provider, code, state, userId })` for the OAuth callback.
+Each provider contributes only its exchange half; the storage half (secrets by
+argument into Secret DOs, the connected fact, router arming, the directory
+claim) is the shared imperative `recordConnection(...)` helper — a function,
+deliberately not an event choreography: connect is synchronous (a browser is
+waiting on the callback), and credential material travels by parameter to
+exactly one confined home, never onto journals.
 
 ## Provided integrations (the waitrose case)
 
@@ -135,16 +149,43 @@ The one mechanical accommodation: `integrations` is a **namespace builtin** —
 `rejectBuiltinCollision` allows mounts at depth ≥ 2 under it (mounting at
 `["integrations"]` itself is still a collision).
 
+## GitHub is the worked example of "no builtin needed"
+
+GitHub ships as two example-catalogue entries (`github-mcp-connect`,
+`github-webhooks-project-worker`), zero platform code. API calls: a
+fine-grained PAT in a Secret DO + one durable mount of GitHub's official MCP
+server (`expression: ["mcp", ["connect", { url, headers: { authorization:
+"Bearer getSecret({ path })" } }]]`) — the agent calls
+`itx.integrations.github.main.create_issue({...})` at the same address shape
+as a builtin, and no isolate ever holds the token. Webhooks: per-project
+ingress already exists — the project host routes to the repo-backed
+`worker.js`, whose fetch appends deliveries to the connection's
+`/integrations/github/<connection>` journal (an unguessable URL token stands
+in for HMAC verification, which worker code cannot do without holding the
+signing secret). Builtins earn their place through deployment-owned OAuth
+apps + first-party ingress; PAT-based GitHub needs neither.
+
 ## Deliberately not built
 
 - **A provider-file registry.** An earlier cut of this work modeled built-ins
   as data-like `IntegrationDefinition` files in a registry array. Rejected:
   it's a second, static capability table beside the real one, only editable by
-  deployment. Built-ins are just code (getters); extensions are just
+  deployment. Built-ins are just code (dispatch branches); extensions are just
   capability-table entries (the existing provide system).
+- **A connect event choreography.** A proposed follow-up expressed the shared
+  storage half of connect as a `connect-requested` event + processor reaction.
+  Rejected on the platform's own doctrine: connect is synchronous, `-requested`
+  events are for asynchronous side effects, sealed credentials on journals
+  would be a second un-shreddable durable home, and an interactive OAuth
+  callback must not block on a cold cross-DO wake chain. The invariance lives
+  in `recordConnection(...)`, a plain function.
 - **Implicit/default connections.** `itx.integrations.slack.chat.postMessage`
   is an error that tells you to name a connection, not a guess.
-- **Webhook ingress for provided integrations** — needs per-project ingress
-  transport; the connection journal gives those events a home when it comes.
-- **Derived secrets** (OAuth refresh as a generic secret derivation) — a
-  secrets-domain change; Google refresh stays in `google-tokens.ts` for now.
+- **Webhook signature verification in project workers** — worker code cannot
+  hold the HMAC secret (substitution is egress-header-only); capability-URL
+  tokens are the workaround. The clean platform close, when demanded, is a
+  small `secret.verifyHmac({ payload, signature })` op on the Secret DO.
+- **Derived secrets** (OAuth refresh as a generic secret derivation; hourly
+  GitHub App installation tokens) — a secrets-domain change; Google refresh
+  stays in `google-tokens.ts` for now, reading the journal tail newest-first
+  so per-call cost does not grow with refresh history.

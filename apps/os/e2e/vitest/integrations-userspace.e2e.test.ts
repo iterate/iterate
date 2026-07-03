@@ -100,6 +100,17 @@ describe("provided integrations", () => {
         }),
       ).rejects.toThrow(/already on this ITX target/);
 
+      // …but not under the names the collection's own dispatch claims: a mount
+      // there would be durable, journaled, and silently unreachable, so it is
+      // rejected loudly at provide time.
+      await expect(
+        project.provideCapability({
+          path: ["integrations", "slack", "shadow"],
+          type: "live",
+          capability: {},
+        }),
+      ).rejects.toThrow(/built-in integrations slug/);
+
       // Two connections of one integration, secrets at the same fully
       // qualified paths a built-in would use.
       const secrets = {
@@ -172,7 +183,7 @@ describe("provided integrations", () => {
       expect(await project.integrations.list()).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            connection: "*",
+            connection: null,
             integration: "waitrose",
             path: "/integrations/waitrose",
             source: "provided",

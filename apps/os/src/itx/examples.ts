@@ -638,4 +638,105 @@ return {
 };
 `.trim(),
   },
+  {
+    id: "github-mcp-connect",
+    title: "GitHub as a provided integration (official MCP server)",
+    description:
+      "GitHub needs no builtin: store a fine-grained PAT as a project secret, mount GitHub's official MCP server into the integrations collection with one durable provideCapability, and call it at the same fully qualified connection address a builtin would use. The PAT rides as a getSecret placeholder substituted at project egress — no isolate ever holds it. Needs a real PAT in vars.githubPat, so run it interactively.",
+    context: "project",
+    runtimes: ["browser", "node", "cli"],
+    code: `
+const connection = vars.connection ?? "main";
+const tokenPath = \`/secrets/integrations/github/\${connection}/token\`;
+
+// 1. The PAT lives in a Secret DO with a GitHub-only egress allowlist.
+const secret = itx.secrets.get(tokenPath);
+await secret.update({
+  egress: { urls: ["https://api.githubcopilot.com/", "https://api.github.com/"] },
+  material: vars.githubPat,
+});
+let described = await secret.describe();
+for (let attempt = 0; attempt < 50 && !described.hasMaterial; attempt += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  described = await secret.describe();
+}
+
+// 2. One durable mount makes GitHub part of the integrations collection. The
+// itx-expression is a journaled recipe: replayed per call, revocable,
+// enumerated by itx.integrations.list().
+await itx.provideCapability({
+  path: ["integrations", "github", connection],
+  type: "itx-expression",
+  instructions:
+    "GitHub via the official MCP server: create_issue({ owner, repo, title }), list_pull_requests, get_file_contents, search_code, ...",
+  expression: [
+    "mcp",
+    [
+      "connect",
+      {
+        url: "https://api.githubcopilot.com/mcp/",
+        headers: { authorization: \`Bearer getSecret({ path: "\${tokenPath}" })\` },
+      },
+    ],
+  ],
+});
+
+// 3. Same address shape as a builtin — {slug}.{connection}.{method}.
+const me = await itx.integrations.github[connection].get_me({});
+return { login: me?.login ?? me, listed: await itx.integrations.list() };
+`.trim(),
+  },
+  {
+    id: "github-webhooks-project-worker",
+    title: "GitHub webhooks land on the project's own host",
+    description:
+      "Per-project webhook ingress already exists: every project host routes to the repo-backed worker.js, whose fetch can append inbound deliveries to the connection's /integrations/github/{connection} journal — where a configured worker or agent subscriber picks them up. Point the GitHub repo/app webhook URL at https://<project-slug>.<base>/webhooks/github/<random-token> (the unguessable token in the path is the auth — worker code cannot hold the HMAC signing secret, by design). Reading material: commits worker.js, so run it interactively.",
+    context: "project",
+    runtimes: ["browser", "node", "cli"],
+    code: `
+const connection = vars.connection ?? "main";
+const urlToken = vars.urlToken ?? crypto.randomUUID();
+const journalPath = \`/integrations/github/\${connection}\`;
+
+await itx.repo.commitFiles({
+  message: "Receive GitHub webhooks on the project host",
+  changes: [
+    {
+      path: "worker.js",
+      content: \`
+import { WorkerEntrypoint } from "cloudflare:workers";
+
+export default class ProjectWorker extends WorkerEntrypoint {
+  async fetch(req) {
+    const url = new URL(req.url);
+    if (url.pathname === "/webhooks/github/\${urlToken}" && req.method === "POST") {
+      const project = await this.env.ITX.get();
+      await project.streams.get("\${journalPath}").append({
+        type: "events.iterate.com/github/webhook-received",
+        idempotencyKey: "github:" + (req.headers.get("x-github-delivery") ?? crypto.randomUUID()),
+        payload: {
+          delivery: req.headers.get("x-github-delivery"),
+          event: req.headers.get("x-github-event"),
+          body: await req.json(),
+        },
+      });
+      return Response.json({ ok: true });
+    }
+    return new Response("not found", { status: 404 });
+  }
+
+  processEvent() {}
+}
+\`,
+    },
+  ],
+});
+
+return {
+  webhookPathOnProjectHost: \`/webhooks/github/\${urlToken}\`,
+  journalPath,
+  note: "Set the GitHub webhook URL to the project host + that path; deliveries land on the journal, where itx.integrations.list() enumerates the connection.",
+};
+`.trim(),
+  },
 ];

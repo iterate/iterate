@@ -48,6 +48,8 @@ export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
   "connect-public-mcp",
   "connect-openapi-petstore",
   "secret-postman-echo",
+  "github-mcp-connect",
+  "github-webhooks-project-worker",
 ]);
 
 export const EXAMPLE_CASES: Record<string, ExampleCase> = {
