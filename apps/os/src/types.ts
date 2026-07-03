@@ -114,6 +114,8 @@ export type ProjectListEntry = {
 export interface Itx extends ItxCapabilityHost {
   ai: Ai;
   agents: AgentCollection;
+  /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */
+  debug(): Promise<string>;
   describe(): Promise<ProjectDescription>;
   egress: ProjectEgress;
   /** Read-only catalogue of known-good itx script snippets (`list()`, `get({ id })`). */
