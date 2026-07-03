@@ -1,12 +1,11 @@
 import { mkdtemp, readFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { once } from "node:events";
 import { brotliCompressSync, deflateSync, gzipSync } from "node:zlib";
 import { request } from "undici";
 import { describe, expect, test } from "vitest";
+import { listenOnFetchSafePort } from "../server/fetch-safe-listen.ts";
 import { HarRecorder } from "./har-recorder.ts";
 
 function harHeaderValue(
@@ -17,10 +16,8 @@ function harHeaderValue(
 }
 
 async function listen(server: Server): Promise<string> {
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address() as AddressInfo;
-  return `http://127.0.0.1:${String(address.port)}`;
+  const { baseUrl } = await listenOnFetchSafePort(server);
+  return baseUrl;
 }
 
 async function close(server: Server): Promise<void> {
