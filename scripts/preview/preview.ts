@@ -12,6 +12,8 @@ import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annota
 import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
 import { runCommand } from "../../packages/shared/src/node/run-command.ts";
 
+// Flake-hunt notes for the preview e2e lane live in
+// docs/preview-e2e-flake-hunt.md.
 type PullRequestCommandOptions = {
   /** GitHub token. Defaults to GITHUB_TOKEN. */
   githubToken?: string;
