@@ -362,11 +362,12 @@ describe("itx", () => {
     );
     expect(description.capabilities).toContainEqual(
       expect.objectContaining({
-        instructions: expect.stringContaining("Gmail REST proxy"),
-        path: ["gmail"],
+        path: ["integrations"],
         type: "builtin",
       }),
     );
+    const integrationsDescription = await project.integrations.__describe();
+    expect(integrationsDescription.children.gmail).toContain("Gmail REST proxy");
   });
 
   test("Trusted internal root can access global streams and repos", async () => {
@@ -2133,16 +2134,18 @@ describe("itx", () => {
     // agent's own capability host and mounts on the project root by addressing
     // it through `capabilityHosts.get("/")`.
     const execution = await agent.capabilityHost.runScript(`async (itx) => {
-      const provision = await itx.capabilityHosts.get("/").provideCapability({
+      const rootHost = await itx.capabilityHosts.get("/");
+      const provision = await rootHost.provideCapability({
         type: "live",
         path: ["crossScopeProbe"],
         capability: { ping: () => "pong-from-agent-mount" },
       });
       // Visible on the root host itself, and through the agent scope's own
       // inheritance chain (local miss -> parent -> root).
-      const viaRoot = await itx.capabilityHosts
-        .get("/")
-        .invokeCapability({ path: ["crossScopeProbe", "ping"], args: [] });
+      const viaRoot = await rootHost.invokeCapability({
+        path: ["crossScopeProbe", "ping"],
+        args: [],
+      });
       const viaChain = await itx.crossScopeProbe.ping();
       const describedScopes = (await itx.capabilityHost.__describe()).capabilities
         .filter((capability) => capability.path.join(".") === "crossScopeProbe")
