@@ -15,7 +15,7 @@ import { makeTLSClient, setCryptoImplementation, type X509Certificate } from "@r
 import { pureJsCrypto } from "@reclaimprotocol/tls/purejs-crypto";
 import type { EgressHttpsProxy, EgressHttpsProxyConnection } from "../../types.ts";
 
-export const EGRESS_PROXY_PINNED_CERT_SHA256_HEADER = "x-itx-egress-proxy-cert-sha256";
+const EGRESS_PROXY_PINNED_CERT_SHA256_HEADER = "x-itx-egress-proxy-cert-sha256";
 const EGRESS_PROXY_SKIP_TLS_VERIFY_HEADER = "x-itx-egress-proxy-insecure-skip-tls-verify";
 
 const textEncoder = new TextEncoder();
@@ -248,7 +248,7 @@ async function serializeHttpRequest(request: Request, url: URL): Promise<Uint8Ar
   return concatBytes([textEncoder.encode(head), body]);
 }
 
-export function parseHttpResponse(bytes: Uint8Array): Response {
+function parseHttpResponse(bytes: Uint8Array): Response {
   const headerEnd = indexOfHeaderEnd(bytes);
   if (headerEnd === -1) throw new Error("egress proxy response did not contain HTTP headers");
 
@@ -288,7 +288,7 @@ function decodeChunkedBody(bytes: Uint8Array): Uint8Array {
   return result.body;
 }
 
-export function completedHttpResponseLength(bytes: Uint8Array): number | undefined {
+function completedHttpResponseLength(bytes: Uint8Array): number | undefined {
   const headerEnd = indexOfHeaderEnd(bytes);
   if (headerEnd === -1) return undefined;
   const headerText = textDecoder.decode(bytes.slice(0, headerEnd));

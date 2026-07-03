@@ -8,7 +8,7 @@ import net from "node:net";
 import { RpcTarget } from "capnweb";
 import type { EgressHttpsProxy, EgressHttpsProxyConnection } from "../src/types.ts";
 
-export type DialSummary = {
+type DialSummary = {
   host: string;
   port: number;
   remoteAddress?: string;
