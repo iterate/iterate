@@ -1,11 +1,11 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { WebClient } from "@slack/web-api";
-import type { DynamicWorkerRef, Itx, StreamEvent } from "./sdk.ts";
+import type { DynamicWorkerRef, ProjectRpcTarget, StreamEvent } from "./sdk.ts";
 import { slackConfig } from "./slack.config.ts";
 
 /** Bindings the platform supplies to every project worker. */
 type ProjectWorkerEnv = {
-  ITX: { get(): Promise<Itx> };
+  ITX: { get(): Promise<ProjectRpcTarget> };
 };
 
 // The root project worker is a small ROUTER over the project's apps. Each app
