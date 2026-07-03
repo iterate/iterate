@@ -981,14 +981,21 @@ const defaultPreviewTestRetryDelayMs = 5_000;
 const defaultPreviewDeployConcurrency = 5;
 const ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE = "environment-config-lease";
 const previewEnvironmentSlotNumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
+type SharedAuthPreviewSecret = {
+  appConfigName: string;
+  legacyDevNames: readonly string[];
+};
 const sharedAuthPreviewSecretsCopiedFromDev = [
-  ["APP_CONFIG_GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_ID"],
-  ["APP_CONFIG_GOOGLE_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET"],
-  ["APP_CONFIG_EMAIL_SENDER_DOMAIN", "APP_CONFIG_RESEND_DOMAIN"],
-  ["APP_CONFIG_RESEND_DOMAIN", "RESEND_BOT_DOMAIN"],
-  ["APP_CONFIG_RESEND_API_KEY", "RESEND_BOT_API_KEY"],
-  ["APP_CONFIG_SIGNUP_ALLOWLIST", "SIGNUP_ALLOWLIST"],
-] as const;
+  { appConfigName: "APP_CONFIG_GOOGLE_CLIENT_ID", legacyDevNames: ["GOOGLE_CLIENT_ID"] },
+  { appConfigName: "APP_CONFIG_GOOGLE_CLIENT_SECRET", legacyDevNames: ["GOOGLE_CLIENT_SECRET"] },
+  {
+    appConfigName: "APP_CONFIG_EMAIL_SENDER_DOMAIN",
+    legacyDevNames: ["APP_CONFIG_RESEND_DOMAIN", "RESEND_BOT_DOMAIN"],
+  },
+  { appConfigName: "APP_CONFIG_RESEND_DOMAIN", legacyDevNames: ["RESEND_BOT_DOMAIN"] },
+  { appConfigName: "APP_CONFIG_RESEND_API_KEY", legacyDevNames: ["RESEND_BOT_API_KEY"] },
+  { appConfigName: "APP_CONFIG_SIGNUP_ALLOWLIST", legacyDevNames: ["SIGNUP_ALLOWLIST"] },
+] as const satisfies readonly SharedAuthPreviewSecret[];
 
 export const EnvironmentConfigLease = z.object({
   dopplerConfig: z.string().trim().min(1),
@@ -1940,17 +1947,41 @@ function commandFailureSummary(result: { stderr: string; stdout: string }) {
   return output || "command failed";
 }
 
+type DopplerSecretReader = (project: string, config: string, name: string) => string | null;
+
+function resolveAuthPreviewRootSecret(input: {
+  appConfigName: string;
+  legacyDevNames: readonly string[];
+  readSecret: DopplerSecretReader;
+}) {
+  const previewValue = input.readSecret("auth", "preview", input.appConfigName);
+  if (previewValue) return previewValue;
+
+  const devValue = input.readSecret("auth", "dev", input.appConfigName);
+  if (devValue) return devValue;
+
+  for (const legacyName of input.legacyDevNames) {
+    const legacyValue = input.readSecret("auth", "dev", legacyName);
+    if (legacyValue) return legacyValue;
+  }
+
+  return null;
+}
+
 async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
   const rootValues: Record<string, string> = {
     APP_CONFIG_EMAIL_OTP_ENABLED: "true",
   };
-  for (const [appConfigName, legacyName] of sharedAuthPreviewSecretsCopiedFromDev) {
+  for (const { appConfigName, legacyDevNames } of sharedAuthPreviewSecretsCopiedFromDev) {
     // Prefer an existing preview-root value; otherwise seed it from auth/dev.
-    const value =
-      getDopplerSecret("auth", "preview", appConfigName) ||
-      getDopplerSecret("auth", "dev", appConfigName) ||
-      getDopplerSecret("auth", "dev", legacyName);
-    if (!value) throw new Error(`auth/dev is missing ${appConfigName}`);
+    const value = resolveAuthPreviewRootSecret({
+      appConfigName,
+      legacyDevNames,
+      readSecret: getDopplerSecret,
+    });
+    if (!value) {
+      throw new Error(`auth/dev is missing ${[appConfigName, ...legacyDevNames].join(" or ")}`);
+    }
     rootValues[appConfigName] = value;
   }
   setDopplerSecrets("auth", "preview", rootValues);
@@ -3393,6 +3424,7 @@ export const previewInternals = {
   parseEnvironmentConfigLeaseData,
   reconcileEnvironmentConfigLeaseResources,
   renderCloudflarePreviewPullRequestBody,
+  resolveAuthPreviewRootSecret,
   resolvePreviewCompareBaseSha,
   resolvePreviewReadinessUrls,
   selectPreviewAppsNeedingRetry,
