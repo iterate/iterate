@@ -295,20 +295,14 @@ export class CapabilityHostProcessor extends StreamProcessor<
     }
     // `__describe` on a mounted capability is answered HERE, from the mount's
     // durable metadata (instructions/types recorded at provide time) — the
-    // live target is never dialed. This is what makes discovery work on
+    // live target is never dialed, for ANY mount kind. Flattened mounts
+    // especially: forwarding ["...","__describe"] to a flattenNestedPaths
+    // target would hand a discovery probe to a dispatcher that treats every
+    // path as a method route. This is what makes discovery work on
     // session-bound live mounts whose provider is offline, and it is the first
     // rung of the transitive-description ladder.
     if (path[path.length - 1] === "__describe") {
-      const { record } = hit;
-      const at = path.slice(0, -1);
-      return {
-        instructions:
-          record.instructions ??
-          `A dynamic ${record.type} capability mounted at "${record.path.join(".")}".`,
-        types: record.types ?? "",
-        children: {},
-        parent: `the capability host at scope "${this.#path}" (mounted at "${record.path.join(".")}"${at.length > record.path.length ? `; you asked about the nested path "${at.join(".")}"` : ""})`,
-      };
+      return this.#describeMount(hit.record, path.slice(0, -1));
     }
     if (hit.record.type === "itx-expression") {
       const evaluated = await evaluateItxExpression(this.#itx, hit.record.expression);
@@ -320,6 +314,38 @@ export class CapabilityHostProcessor extends StreamProcessor<
       throw new Error(`capability "${hit.record.path.join(".")}" is offline`);
     }
     return await live.invoke(hit.rest, args);
+  }
+
+  /**
+   * The `Description` for one mount, built entirely from the durable record.
+   * `at` is the path the caller asked about (which may be nested below the
+   * mount point). Besides the provider's own instructions/types, the prose
+   * explains HOW dispatch works for this mount kind — most usefully for
+   * `flattenNestedPaths` targets, which are dispatchers rather than object
+   * graphs: their sub-paths cannot be enumerated, only routed.
+   */
+  #describeMount(record: CapabilityRecord, at: string[]) {
+    const mountPoint = record.path.join(".");
+    const asked = at.join(".");
+    const nestedNote =
+      at.length > record.path.length
+        ? ` You asked about the nested path "${asked}" — nesting below the mount is ${record.flattenNestedPaths === true ? "routed, not enumerable: only the provider knows which sub-paths exist" : "resolved by property traversal on the provider's value"}.`
+        : "";
+    const dispatch =
+      record.flattenNestedPaths === true
+        ? `This is a FLATTENED dispatch target: any dotted call under the mount compiles to one invokeCapability call with the remaining path — \`${mountPoint}.a.b(x)\` reaches the provider as \`invokeCapability({ path: ["a","b"], args: [x] })\`. There is no object graph to walk; \`children\` is empty because sub-paths are routes the provider interprets, not members this host can list.`
+        : record.type === "live"
+          ? `Dotted calls under the mount replay onto the provider's value by property traversal (\`${mountPoint}.a.b(x)\` calls \`a.b(x)\` on it). Live mounts are session-bound: the mount record is durable, but calls travel over the provider's connection and fail with "offline" when it disconnects. \`children\` is empty because the host only stores this record, never the provider's shape.`
+          : `A durable itx-expression: on every call the recorded expression is re-evaluated against this scope's own itx and the remaining path is invoked on the result — no live connection is held. \`children\` is empty because the host only stores the recipe, not the evaluated value's shape.`;
+    return {
+      instructions: [
+        record.instructions ?? `A dynamic ${record.type} capability mounted at "${mountPoint}".`,
+        dispatch + nestedNote,
+      ].join("\n\n"),
+      types: record.types ?? "",
+      children: {},
+      parent: `the capability host at scope "${this.#path}" (mounted at "${mountPoint}", providedAtOffset ${record.providedAtOffset})`,
+    };
   }
 
   // Reports everything reachable at this scope: this scope's own mounts plus every

@@ -484,6 +484,17 @@ class SlackRpcTarget extends RpcTarget implements SlackCapability {
     return withInvokeCapabilityFallback(this);
   }
 
+  __describe() {
+    return describeNode({
+      instructions:
+        'Slack Web API proxy for the project\'s connected workspace — a flattened dispatcher, not an object graph: any dotted method path compiles to one request (`slack.chat.postMessage({ channel, text })` calls the "chat.postMessage" Web API method). `request({ method, body })` is the explicit form. Sub-paths are Slack\'s method catalogue, not enumerable members. Check itx.integrations.getConnection({ provider: "slack" }) first.',
+      children: {
+        request: "Explicit form: request({ method, body }) for any Slack Web API method.",
+      },
+      parent: "itx.integrations (connection-scoped; authorized by the project's stored bot token)",
+    });
+  }
+
   /** itx path-call surface: itx.integrations.slack.<Slack Web API method path>(body). */
   async invokeCapability(call: Parameters<SlackCapability["invokeCapability"]>[0]) {
     const { args = [], path } = call;
@@ -514,6 +525,17 @@ class GmailRpcTarget extends RpcTarget implements GmailCapability {
   constructor(readonly props: { auth: ItxAuth; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  __describe() {
+    return describeNode({
+      instructions:
+        'Gmail REST proxy for the project\'s connected Google account: request({ path, query, method, body }) against paths relative to https://gmail.googleapis.com/gmail/v1 (e.g. { path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }). Check itx.integrations.getConnection({ provider: "google" }) first.',
+      children: {
+        request: "One Gmail REST call; returns { data, status, statusText, headers }.",
+      },
+      parent: "itx.integrations (connection-scoped; authorized by the project's Google tokens)",
+    });
   }
 
   async request(request: Parameters<GmailCapability["request"]>[0]) {
