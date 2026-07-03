@@ -96,11 +96,14 @@ function ProjectsPage() {
     onError: (error) => toast.error(error.message),
   });
 
-  // No/unknown slug but organizations exist: canonicalize onto the first one.
+  // NO slug in the URL (`/projects`) but organizations exist: canonicalize onto
+  // the first one. An UNKNOWN slug (`/projects/typo`) is deliberately NOT
+  // redirected — silently opening a different org would misread as the intended
+  // workspace — it falls through to the "organization not found" state below.
   // Render-time <Navigate> (not a beforeLoad redirect) because the target needs
   // the client-authenticated inventory query — the SSR oRPC link (utils/query)
   // doesn't forward request cookies, so this can only be decided client-side.
-  if (inventoryQuery.isSuccess && !selectedOrganization && organizations[0]) {
+  if (inventoryQuery.isSuccess && !organizationSlug && organizations[0]) {
     return (
       <Navigate
         to="/projects/{-$organizationSlug}"
@@ -109,6 +112,11 @@ function ProjectsPage() {
       />
     );
   }
+
+  // Slug provided but no organization matches it (typo, stale link, or an org
+  // the user just lost access to). Show a not-found state rather than the
+  // "create your first organization" empty state, which would be misleading.
+  const unknownSlug = Boolean(organizationSlug) && !selectedOrganization;
 
   return (
     <main className="min-h-screen bg-background">
@@ -156,6 +164,22 @@ function ProjectsPage() {
               onDeleteProject={setDeleteProject}
             />
           </div>
+        ) : unknownSlug ? (
+          <Empty className="min-h-[460px] border">
+            <EmptyHeader>
+              <EmptyTitle>Organization not found</EmptyTitle>
+              <EmptyDescription>
+                No organization matches “{organizationSlug}”. It may have been renamed, deleted, or
+                you no longer have access.
+              </EmptyDescription>
+            </EmptyHeader>
+            <Button
+              variant="outline"
+              onClick={() => navigate({ to: "/projects/{-$organizationSlug}", params: {} })}
+            >
+              Back to organizations
+            </Button>
+          </Empty>
         ) : (
           <Empty className="min-h-[460px] border">
             <EmptyHeader>
