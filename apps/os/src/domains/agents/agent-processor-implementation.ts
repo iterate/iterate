@@ -108,11 +108,26 @@ export class AgentProcessor extends StreamProcessor<typeof AgentProcessorContrac
             idempotencyKey: `itx/script-execution-requested@${event.offset}`,
             payload: {
               code,
-              executionId: `agent-output:${event.offset}`,
+              executionId: `${AGENT_SCRIPT_EXECUTION_ID_PREFIX}${event.offset}`,
             },
           });
         });
         return;
+      case "events.iterate.com/itx/script-execution-completed": {
+        const content = scriptResultAgentInput(event);
+        if (content === null) return;
+        blockProcessorWhile(() =>
+          append({
+            type: "events.iterate.com/agent/input-added",
+            idempotencyKey: `agent/render-script-result@${event.offset}`,
+            payload: {
+              content,
+              llmRequestPolicy: { behaviour: "after-current-request" },
+            },
+          }),
+        );
+        return;
+      }
       case "events.iterate.com/agent/llm-request-completed":
       case "events.iterate.com/agent/llm-request-cancelled":
         if (state.currentRequest !== null || state.pendingTriggerOffset === null) return;
@@ -334,6 +349,42 @@ function cancelEventForCurrentRequest(request: NonNullable<AgentState["currentRe
       llmRequestId: request.llmRequestId,
     },
   };
+}
+
+const AGENT_SCRIPT_EXECUTION_ID_PREFIX = "agent-output:";
+
+// The "tool result" half of the codemode loop: a finished script execution
+// renders back into model-visible history so the next turn can look at the
+// data. Two deliberate gaps end the loop instead of feeding it:
+// - executions this agent did not request stay invisible (other scripts —
+//   e.g. Slack bang commands — journal on the same stream);
+// - a script that returned undefined and did not throw produces nothing.
+//   Returning no value is how an agent ends its turn.
+function scriptResultAgentInput(
+  event: Extract<AgentConsumedEvent, { type: "events.iterate.com/itx/script-execution-completed" }>,
+): string | null {
+  const payload = event.payload;
+  if (!payload.executionId.startsWith(AGENT_SCRIPT_EXECUTION_ID_PREFIX)) return null;
+  if (payload.error !== undefined) {
+    return `Your script threw:\n\`\`\`\n${truncateScriptResult(payload.error)}\n\`\`\``;
+  }
+  if (payload.result === undefined) return null;
+  return `Your script returned:\n\`\`\`json\n${truncateScriptResult(stringifyScriptResult(payload.result))}\n\`\`\``;
+}
+
+function stringifyScriptResult(result: unknown): string {
+  try {
+    return JSON.stringify(result, null, 2) ?? String(result);
+  } catch {
+    return String(result);
+  }
+}
+
+const SCRIPT_RESULT_HISTORY_LIMIT = 30_000;
+
+function truncateScriptResult(text: string): string {
+  if (text.length <= SCRIPT_RESULT_HISTORY_LIMIT) return text;
+  return `${text.slice(0, SCRIPT_RESULT_HISTORY_LIMIT)}\n… truncated (${text.length} chars total — return less: slice arrays, pick fields)`;
 }
 
 function extractAsyncJsSnippet(content: string): string | null {

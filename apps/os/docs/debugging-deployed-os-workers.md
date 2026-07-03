@@ -24,7 +24,9 @@ doppler run --config dev -- pnpm cli itx --help
 # Production.
 doppler run --config prd -- pnpm cli itx --help
 
-# Active preview slot. Use a healthy leased preview, not a stale slot number.
+# Active preview slot. Use a healthy leased preview, not a stale slot number
+# (`doppler run --project _shared --config prd -- pnpm preview status` shows
+# each slot's holder and expiry).
 doppler run --config preview_3 -- pnpm cli itx --help
 ```
 

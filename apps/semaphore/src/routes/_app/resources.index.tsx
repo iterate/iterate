@@ -114,7 +114,7 @@ function ResourcesIndexPage() {
                       </p>
                       <p className="text-xs text-muted-foreground">
                         {resource.leasedUntil
-                          ? `leased until ${new Date(resource.leasedUntil).toISOString()}`
+                          ? `leased${resource.holder ? ` by ${resource.holder}` : ""} until ${new Date(resource.leasedUntil).toISOString()}`
                           : "available now"}
                       </p>
                     </div>

@@ -5,7 +5,7 @@
  * llm request → output → itx/script-execution-requested/completed → proof
  * event on the target stream → visible web reply.
  */
-import { expect, test } from "vitest";
+import { test } from "vitest";
 import { createTestProject } from "../test-support/create-test-project.ts";
 
 const PROOF_STREAM = "/e2e/agent-tools-proof";
@@ -14,7 +14,7 @@ const PROOF_TYPE = "events.iterate.test/agent-tools-proof";
 test(
   "agent runs an itx script that appends a proof event, then replies",
   { timeout: 300_000 },
-  async () => {
+  async ({ expect }) => {
     await using handle = await createTestProject({ slugPrefix: "agent-tools" });
     using agent = handle.agent("/agents/e2e-tools");
 
@@ -54,7 +54,7 @@ test(
 test(
   "provider toggle: cloudflare-ai answers after llm-provider-selected",
   { timeout: 300_000 },
-  async () => {
+  async ({ expect }) => {
     await using handle = await createTestProject({ slugPrefix: "provider-toggle" });
     using agent = handle.agent("/agents/e2e-provider");
 

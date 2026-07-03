@@ -546,7 +546,17 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
   });
 
   app.get("/callback", async (c) => {
-    const as = await getAuthorizationServer();
+    // Structured per-step timing for cold-deploy diagnosis (see
+    // tasks/os-cold-create-latency.md): one greppable line per remote hop.
+    const timeStep = async <T>(step: string, fn: () => Promise<T>): Promise<T> => {
+      const start = Date.now();
+      try {
+        return await fn();
+      } finally {
+        console.log("[callback-timing]", JSON.stringify({ step, ms: Date.now() - start }));
+      }
+    };
+    const as = await timeStep("discovery", () => getAuthorizationServer());
     const requestURL = new URL(c.req.url);
 
     let oauthState: OAuthState;
@@ -570,21 +580,25 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
 
     let tokenResponse: oauth.TokenEndpointResponse;
     try {
-      const response = await oauth.authorizationCodeGrantRequest(
-        as,
-        oauthClient,
-        clientAuth,
-        validatedParams,
-        config.redirectURI,
-        oauthState.verifier,
-        {
-          ...httpOptions(),
-          additionalParameters: { resource: infra.resource() },
-        },
+      const response = await timeStep("token-exchange", () =>
+        oauth.authorizationCodeGrantRequest(
+          as,
+          oauthClient,
+          clientAuth,
+          validatedParams,
+          config.redirectURI,
+          oauthState.verifier,
+          {
+            ...httpOptions(),
+            additionalParameters: { resource: infra.resource() },
+          },
+        ),
       );
-      tokenResponse = await oauth.processAuthorizationCodeResponse(as, oauthClient, response, {
-        expectedNonce: oauthState.nonce,
-      });
+      tokenResponse = await timeStep("token-exchange-process", () =>
+        oauth.processAuthorizationCodeResponse(as, oauthClient, response, {
+          expectedNonce: oauthState.nonce,
+        }),
+      );
     } catch (error) {
       console.error("OAuth callback error:", error);
       const message = error instanceof Error ? error.message : String(error);

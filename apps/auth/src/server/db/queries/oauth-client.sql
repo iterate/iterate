@@ -68,3 +68,22 @@ FROM oauthClient
 WHERE disabled = 0
   AND userId IS NULL
 ORDER BY createdAt DESC;
+
+/** @name getOAuthAccessTokenForInternalIntrospection */
+SELECT oat.id,
+  oat.clientId,
+  oat.sessionId,
+  oat.userId,
+  oat.referenceId,
+  oat.expiresAt,
+  oat.createdAt,
+  oat.scopes,
+  oc.disabled AS clientDisabled,
+  s.expiresAt AS sessionExpiresAt,
+  u.role AS userRole
+FROM oauthAccessToken oat
+JOIN oauthClient oc ON oc.clientId = oat.clientId
+LEFT JOIN session s ON s.id = oat.sessionId
+LEFT JOIN user u ON u.id = oat.userId
+WHERE oat.token = :token
+LIMIT 1;
