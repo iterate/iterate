@@ -131,6 +131,11 @@ function createServer(input: {
     requireScope(input.auth, requiredToolScope);
     return project;
   };
+  // Resolved once per inbound request (createServer is per-request), so the
+  // no-session fallback maps every tool call in one request to ONE
+  // /agents/mcp/request-* stream instead of minting a stream per call.
+  let sessionAgentPath: Promise<string> | undefined;
+  const resolveSessionAgentPath = () => (sessionAgentPath ??= resolveMcpSessionAgentPath(input));
 
   server.registerTool(
     "exec_js",
@@ -149,7 +154,7 @@ function createServer(input: {
       // dynamic-worker isolate scoped to this MCP session's agent stream, so
       // the session transcript at /agents/mcp/** records every execution.
       try {
-        const agentPath = await resolveMcpSessionAgentPath(input);
+        const agentPath = await resolveSessionAgentPath();
         const session = engineBatchSession(input.context);
         const root = session.authenticate({
           type: "admin-secret",
@@ -187,7 +192,7 @@ function createServer(input: {
     async (rawInput) => {
       const parsedInput = AskAssistantInput.parse(rawInput);
       const project = await resolveProject(parsedInput.project);
-      const agentPath = await resolveMcpSessionAgentPath(input);
+      const agentPath = await resolveSessionAgentPath();
 
       // One pipelined batch: agents.ask appends the message and waits for the
       // agent's next chat reply server-side. Reply matching is by order on the

@@ -10,9 +10,11 @@ export function isMcpAgentPath(agentPath: string) {
  * One agent stream per inbound MCP session, under `/agents/mcp/**`.
  *
  * Identity preference order: the MCP transport session when the client sends
- * one, then the OAuth session behind the bearer token, then a fresh
- * per-request stream — an unsessioned stateless caller gets one stream per
- * request rather than silently sharing a transcript with strangers.
+ * one, then the OAuth session behind the bearer token, then a fresh stream —
+ * an unsessioned stateless caller gets its own transcript rather than
+ * silently sharing one with strangers. The fallback mints a new identity per
+ * RESOLUTION; callers resolve once per inbound request (see createServer in
+ * mcp-handler.ts) so all tool calls in one request share one stream.
  */
 export async function resolveMcpSessionAgentPath(input: {
   auth: { sessionKey?: string };

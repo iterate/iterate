@@ -30,7 +30,7 @@ describe("resolveMcpSessionAgentPath", () => {
     expect(path).toMatch(/^\/agents\/mcp\/session-[a-f0-9]{16}$/);
   });
 
-  it("uses a request-scoped path when no stable session identifier exists", async () => {
+  it("mints a fresh path per resolution when no stable session identifier exists", async () => {
     const first = await resolveMcpSessionAgentPath({
       auth: {},
       request: new Request("https://mcp.test/api/mcp"),
