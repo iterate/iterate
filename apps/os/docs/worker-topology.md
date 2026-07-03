@@ -16,7 +16,7 @@ Everything is declared in one place: [`apps/os/alchemy.run.ts`](../alchemy.run.t
 ## The workers
 
 `<n>` is the stage worker name (`os-prd`, `os-preview-N`, `os-dev-<user>`).
-Ten workers: ingress, app, api, and seven itx Durable Object workers.
+Eleven workers: ingress, app, api, and eight itx Durable Object workers.
 
 | Worker          | Entry                    | Owns                                                                                            |
 | --------------- | ------------------------ | ----------------------------------------------------------------------------------------------- |
@@ -28,6 +28,7 @@ Ten workers: ingress, app, api, and seven itx Durable Object workers.
 | `<n>-project`   | `src/workers/project.ts` | `ProjectDurableObject` + `ProjectEgressEntrypoint`                                              |
 | `<n>-agent`     | `src/workers/agent.ts`   | `AgentDurableObject` (agent + LLM provider processors)                                          |
 | `<n>-repo`      | `src/workers/repo.ts`    | `RepoDurableObject` (git over Cloudflare Artifacts)                                             |
+| `<n>-sandbox`   | `src/workers/sandbox.ts` | `CloudflareSandboxDurableObject` (`@cloudflare/sandbox` containers; Dockerfile.sandbox image)   |
 | `<n>-secret`    | `src/workers/secret.ts`  | `SecretDurableObject`                                                                           |
 | `<n>-worker`    | `src/workers/worker.ts`  | `StatefulWorkerDurableObject` (stateful dynamic workers)                                        |
 
