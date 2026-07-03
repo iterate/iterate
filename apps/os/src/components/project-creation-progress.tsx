@@ -16,9 +16,13 @@ type CreationStep = {
 
 function creationSteps(state: ProjectProcessorState | undefined): CreationStep[] {
   // `undefined` = the first push has not arrived yet: nothing is ticked.
+  // Row order mirrors the saga's actual commit order (see the create-timing
+  // steps in projects.create): slack routing is appended right after the root
+  // saga, the repo seeds next (the slow artifact step), and the onboarding
+  // agent is born immediately before project/created — so ticks appear top to
+  // bottom instead of a later row completing while an earlier one spins.
   return [
     { key: "registered", label: "Registering project", done: state?.createRequest != null },
-    { key: "repo", label: "Seeding repository", done: (state?.repos.length ?? 0) > 0 },
     {
       key: "integrations",
       label: "Wiring integrations",
@@ -26,6 +30,7 @@ function creationSteps(state: ProjectProcessorState | undefined): CreationStep[]
         state !== undefined &&
         (state.streams.some((stream) => stream.path === "/integrations/slack") || state.created),
     },
+    { key: "repo", label: "Seeding repository", done: (state?.repos.length ?? 0) > 0 },
     {
       key: "agent",
       label: "Waking the onboarding agent",

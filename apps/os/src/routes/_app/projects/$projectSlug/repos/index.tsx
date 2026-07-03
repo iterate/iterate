@@ -24,6 +24,7 @@ import {
   TableRow,
 } from "@iterate-com/ui/components/table";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
+import { StreamViewSection } from "~/components/stream-view-section.tsx";
 import { RepoArtifactNameCodec } from "~/domains/repos/utils.ts";
 import { buildArtifactViewerUrl } from "~/lib/artifact-viewer-url.ts";
 import { formatRelativeTime } from "~/lib/format-relative-time.ts";
@@ -286,6 +287,12 @@ function ProjectReposIndexContent() {
           </Table>
         </div>
       )}
+
+      <StreamViewSection
+        projectId={project.id}
+        streamPath="/repos"
+        emptyLabel="No events on the repos catalogue stream yet."
+      />
     </section>
   );
 }

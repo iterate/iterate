@@ -627,13 +627,18 @@ export function useItxSubscription(
 
       const stopWatchdog = watchItxSubscription(
         () => subscription.ping(),
-        (reason) => {
+        () => {
           if (disposed) return;
           setState({ status: "connecting" });
-          // "timed-out" already dropped the sockets — this effect re-runs via
-          // its [itx] dep once the fresh one connects. "dead" means the socket
-          // is fine but the server-side subscription is gone: re-subscribe.
-          if (reason === "dead") setEpoch((current) => current + 1);
+          // Re-subscribe unconditionally. On "dead" the socket is fine and
+          // this is the whole recovery; on "timed-out" the watchdog dropped
+          // the sockets, but a sibling watchdog may have already done that
+          // within the single-flight window — if this consumer's socket was
+          // therefore NOT replaced, the [itx] dep alone would never re-run
+          // this effect and the subscription would stay stuck. The epoch bump
+          // covers both; a doubled re-subscribe is idempotent (the fresh
+          // initial push repaints).
+          setEpoch((current) => current + 1);
         },
       );
 

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ChevronDownIcon, ChevronRightIcon, RefreshCwIcon } from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
@@ -46,6 +46,14 @@ function useLiveStreamState(input: {
 }): { node: NodeState; refresh: () => void } {
   const { enabled, source, streamPath } = input;
   const [tree, setTree] = useState<BrowserCoreStreamTreeState>();
+
+  // The subscription target changed (different stream, fresh socket, node
+  // collapsed): the held tree belongs to the OLD subscription and must not
+  // render as live under the new one. Watchdog-internal re-subscribes to the
+  // same target keep it (their fresh initial push replaces it in place).
+  useEffect(() => {
+    return () => setTree(undefined);
+  }, [enabled, source, streamPath]);
 
   const subscription = useItxSubscription(
     () =>

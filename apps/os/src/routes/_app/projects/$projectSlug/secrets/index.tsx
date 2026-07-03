@@ -16,6 +16,7 @@ import {
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
+import { StreamViewSection } from "~/components/stream-view-section.tsx";
 import { formatRelativeTime } from "~/lib/format-relative-time.ts";
 import { useItx, useItxState } from "~/itx/itx-react.tsx";
 import type { ProjectProcessorState } from "~/types.ts";
@@ -59,6 +60,7 @@ function ProjectSecretsIndexPage() {
 function ProjectSecretsIndexContent() {
   const params = Route.useParams();
   const navigate = useNavigate();
+  const { project } = Route.useLoaderData();
   const itx = useItx();
   const [filter, setFilter] = useState("");
   // The secrets list is a slice of the project processor's reduced state; the
@@ -255,6 +257,12 @@ function ProjectSecretsIndexContent() {
           )}
         </div>
       )}
+
+      <StreamViewSection
+        projectId={project.id}
+        streamPath="/secrets"
+        emptyLabel="No events on the secrets catalogue stream yet."
+      />
     </section>
   );
 }

@@ -1,12 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { z } from "zod";
-import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
-import { Button } from "@iterate-com/ui/components/button";
-import { StreamPath } from "~/lib/stream-links.ts";
 import { ProjectCreationProgress } from "~/components/project-creation-progress.tsx";
 import { ProjectSettingsPanel } from "~/components/project-settings-panel.tsx";
-import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
+import { StreamViewSection } from "~/components/stream-view-section.tsx";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { useItxState } from "~/itx/itx-react.tsx";
 import type { ProjectProcessorState } from "~/types.ts";
@@ -64,7 +61,13 @@ function ProjectHomePage() {
   return (
     <section className="flex min-h-0 flex-1 flex-col overflow-auto p-4">
       <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6">
-        {created && welcome === true ? (
+        {lifecycle.state === undefined && welcome !== true ? (
+          // No push yet on a plain navigation: this is LOADING, not "creating"
+          // — a fully created project must not flash the checklist.
+          <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
+            Loading project…
+          </div>
+        ) : created && welcome === true ? (
           // Handoff in flight (the effect above is navigating): keep showing
           // the finished checklist rather than flashing the settings page.
           <ProjectCreationProgress state={lifecycle.state} />
@@ -87,45 +90,13 @@ function ProjectHomePage() {
           <ProjectCreationProgress state={lifecycle.state} />
         )}
 
-        <ProjectEventStreamSection projectId={project.id} />
+        <StreamViewSection
+          projectId={project.id}
+          streamPath="/"
+          label="project root"
+          emptyLabel="No events in the project root stream yet."
+        />
       </div>
-    </section>
-  );
-}
-
-/**
- * The raw event stream, positioned as the secondary view: collapsed by
- * default, and only mounted (it hosts a browser-side SQLite mirror) once
- * opened.
- */
-function ProjectEventStreamSection({ projectId }: { projectId: string }) {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <section className="flex min-h-0 flex-col rounded-lg border" data-testid="project-event-stream">
-      <Button
-        type="button"
-        variant="ghost"
-        className="justify-start gap-2 px-4 py-3 text-sm font-semibold"
-        onClick={() => setOpen((value) => !value)}
-      >
-        {open ? (
-          <ChevronDownIcon aria-hidden="true" data-icon="icon" />
-        ) : (
-          <ChevronRightIcon aria-hidden="true" data-icon="icon" />
-        )}
-        Event stream
-        <span className="font-normal text-muted-foreground">project root</span>
-      </Button>
-      {open ? (
-        <div className="flex h-[32rem] min-h-0 flex-col border-t">
-          <ProjectStreamView
-            emptyLabel="No events in the project root stream yet."
-            projectId={projectId}
-            streamPath={StreamPath.parse("/")}
-          />
-        </div>
-      ) : null}
     </section>
   );
 }

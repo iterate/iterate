@@ -105,13 +105,15 @@ function ProjectReactivityContent() {
   // pushes visible without owning its own subscription.
   const [pushLog, setPushLog] = useState({ count: 0, lastAt: undefined as number | undefined });
   useEffect(() => {
+    // Mount runs this with offset still undefined — that is not a push.
+    if (live.offset === undefined) return;
     setPushLog((current) => ({ count: current.count + 1, lastAt: Date.now() }));
   }, [live.offset]);
 
   const projectState = live.state;
   // The project processor state has no phase/onboarding machine; `created` is
   // the lifecycle fact, and the create request carries the project identity.
-  const phase = projectState?.created ? "ready" : "pending";
+  const phase = projectState === undefined ? "unknown" : projectState.created ? "ready" : "pending";
   const projectId = projectState?.createRequest?.projectId ?? project.id;
   const actionObserved = isActionObserved(action, testStream.events);
   const actionSyncing = action.status === "done" && !actionObserved;

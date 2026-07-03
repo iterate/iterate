@@ -15,6 +15,7 @@ import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
+import { StreamViewSection } from "~/components/stream-view-section.tsx";
 import type { RepoProcessorState } from "~/types.ts";
 import { useItx, useItxQuery, useItxState } from "~/itx/itx-react.tsx";
 
@@ -211,6 +212,12 @@ function ProjectRepoDetailContent() {
           </form.Subscribe>
         </form>
       </div>
+
+      <StreamViewSection
+        projectId={project.id}
+        streamPath={repoPath}
+        emptyLabel="No events on this repo's stream yet."
+      />
     </section>
   );
 }

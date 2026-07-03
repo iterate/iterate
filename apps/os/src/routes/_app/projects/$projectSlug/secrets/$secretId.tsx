@@ -14,6 +14,7 @@ import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
+import { StreamViewSection } from "~/components/stream-view-section.tsx";
 import type { SecretDescription } from "~/types.ts";
 import { useItx, useItxState } from "~/itx/itx-react.tsx";
 
@@ -41,6 +42,7 @@ function ProjectSecretDetailPage() {
 
 function ProjectSecretDetailContent() {
   const params = Route.useParams();
+  const { project } = Route.useLoaderData();
   const secretPath = `/secrets/${params.secretId}`;
   // Live secret processor state (the public description — material stays
   // write-only server-side): rotations and every egress-gated use push an
@@ -59,10 +61,18 @@ function ProjectSecretDetailContent() {
       </section>
     );
   }
-  return <SecretDetail secret={secret} secretPath={secretPath} />;
+  return <SecretDetail projectId={project.id} secret={secret} secretPath={secretPath} />;
 }
 
-function SecretDetail({ secret, secretPath }: { secret: SecretDescription; secretPath: string }) {
+function SecretDetail({
+  projectId,
+  secret,
+  secretPath,
+}: {
+  projectId: string;
+  secret: SecretDescription;
+  secretPath: string;
+}) {
   const itx = useItx();
 
   const updateSecret = useMutation({
@@ -191,6 +201,12 @@ function SecretDetail({ secret, secretPath }: { secret: SecretDescription; secre
           </form.Subscribe>
         </form>
       </div>
+
+      <StreamViewSection
+        projectId={projectId}
+        streamPath={secretPath}
+        emptyLabel="No events on this secret's stream yet."
+      />
     </section>
   );
 }
