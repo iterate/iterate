@@ -1953,15 +1953,33 @@ function commandFailureSummary(result: { stderr: string; stdout: string }) {
   return output || "command failed";
 }
 
+// Flat secret -> its APP_CONFIG_* name (apps/auth reads these at runtime via
+// parseConfig; see apps/auth/src/config.ts). We write both: the flat names feed
+// the client's build-time VITE vars + the alchemy.run legacy fallback, the
+// APP_CONFIG_* names are what the worker config actually consumes.
+const authAppConfigNameByFlat: Record<string, string> = {
+  VITE_AUTH_APP_ORIGIN: "APP_CONFIG_AUTH_APP_ORIGIN",
+  BETTER_AUTH_SECRET: "APP_CONFIG_BETTER_AUTH_SECRET",
+  SERVICE_AUTH_TOKEN: "APP_CONFIG_SERVICE_AUTH_TOKEN",
+  GOOGLE_CLIENT_ID: "APP_CONFIG_GOOGLE_CLIENT_ID",
+  GOOGLE_CLIENT_SECRET: "APP_CONFIG_GOOGLE_CLIENT_SECRET",
+  RESEND_BOT_DOMAIN: "APP_CONFIG_RESEND_DOMAIN",
+  RESEND_BOT_API_KEY: "APP_CONFIG_RESEND_API_KEY",
+  SIGNUP_ALLOWLIST: "APP_CONFIG_SIGNUP_ALLOWLIST",
+};
+
 async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
   const rootValues: Record<string, string> = {
     VITE_ENABLE_EMAIL_OTP_SIGNIN: "true",
+    APP_CONFIG_EMAIL_OTP_ENABLED: "true",
   };
   for (const name of sharedAuthPreviewSecretsCopiedFromDev) {
-    if (getDopplerSecret("auth", "preview", name)) continue;
-    const value = getDopplerSecret("auth", "dev", name);
+    // Prefer an existing preview-root value; otherwise seed it from auth/dev.
+    const value =
+      getDopplerSecret("auth", "preview", name) || getDopplerSecret("auth", "dev", name);
     if (!value) throw new Error(`auth/dev is missing ${name}`);
     rootValues[name] = value;
+    rootValues[authAppConfigNameByFlat[name]] = value;
   }
   setDopplerSecrets("auth", "preview", rootValues);
   console.log("auth/preview root config ensured");
@@ -2013,6 +2031,10 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
       BETTER_AUTH_SECRET: betterAuthSecret,
       SERVICE_AUTH_TOKEN: serviceToken,
       AUTH_SEED_OAUTH_CLIENTS: seed,
+      // The APP_CONFIG_* names apps/auth's runtime config actually reads.
+      APP_CONFIG_AUTH_APP_ORIGIN: authOrigin,
+      APP_CONFIG_BETTER_AUTH_SECRET: betterAuthSecret,
+      APP_CONFIG_SERVICE_AUTH_TOKEN: serviceToken,
     });
 
     setDopplerSecrets("os", config, {
