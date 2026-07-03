@@ -25,10 +25,10 @@ import { defineProcessorContract } from "../streams/processor-contracts.ts";
 //   compaction-completed event and the fold splices history deterministically.
 // =============================================================================
 
-export const DEFAULT_PI_MODEL = "claude-fable-5";
-export const DEFAULT_PI_CONTEXT_WINDOW = 200_000;
+const DEFAULT_PI_MODEL = "claude-fable-5";
+const DEFAULT_PI_CONTEXT_WINDOW = 200_000;
 
-export const DEFAULT_PI_SYSTEM_PROMPT = [
+const DEFAULT_PI_SYSTEM_PROMPT = [
   "You are a coding agent. Work on the user's task using the tools available to you.",
   "Call tools when you need to read, run, or change anything; reply with plain text when the task is complete or you need input from the user.",
 ].join("\n");
@@ -59,8 +59,8 @@ export type PiAssistantContent = z.infer<typeof PiAssistantContent>;
  * terminal outcomes encoded in the message itself (pi's stream functions never
  * throw), which is what lets one event type carry the whole request lifecycle.
  */
-export const PiStopReason = z.enum(["stop", "length", "toolUse", "error", "aborted"]);
-export type PiStopReason = z.infer<typeof PiStopReason>;
+const PiStopReason = z.enum(["stop", "length", "toolUse", "error", "aborted"]);
+type PiStopReason = z.infer<typeof PiStopReason>;
 
 /**
  * A completed (possibly failed or partial) assistant response. Mirrors pi's
@@ -83,7 +83,7 @@ export const PiAssistantMessage = z.object({
 export type PiAssistantMessage = z.infer<typeof PiAssistantMessage>;
 
 /** A model-visible conversation message: pi's Message union plus the compaction summary pseudo-message. */
-export const PiMessage = z.discriminatedUnion("role", [
+const PiMessage = z.discriminatedUnion("role", [
   z.object({ role: z.literal("user"), content: z.string() }),
   PiAssistantMessage,
   z.object({
@@ -95,7 +95,7 @@ export const PiMessage = z.discriminatedUnion("role", [
   }),
   z.object({ role: z.literal("compactionSummary"), summary: z.string() }),
 ]);
-export type PiMessage = z.infer<typeof PiMessage>;
+type PiMessage = z.infer<typeof PiMessage>;
 
 /**
  * One history entry: a message tagged with the offset of the event that added
@@ -116,7 +116,7 @@ export type PiHistoryEntry = z.infer<typeof PiHistoryEntry>;
  * batch is outstanding. `allResultsTerminate` accumulates pi's rule that a
  * batch ends the turn only when every result set terminate: true.
  */
-export const PiRun = z.discriminatedUnion("phase", [
+const PiRun = z.discriminatedUnion("phase", [
   z.object({ phase: z.literal("idle") }),
   z.object({ phase: z.literal("streaming"), llmRequestId: z.number().int().positive() }),
   z.object({
@@ -126,17 +126,17 @@ export const PiRun = z.discriminatedUnion("phase", [
     pendingToolCallIds: z.array(z.string()),
   }),
 ]);
-export type PiRun = z.infer<typeof PiRun>;
+type PiRun = z.infer<typeof PiRun>;
 
 /** Compaction thresholds, pi's CompactionSettings with pi's defaults. */
-export const PiCompactionSettings = z.object({
+const PiCompactionSettings = z.object({
   enabled: z.boolean().default(true),
   /** Tokens reserved for summary prompt and output; compaction triggers above contextWindow - reserveTokens. */
   reserveTokens: z.number().int().positive().default(16_384),
   /** Approximate recent-context tokens kept verbatim after compaction. */
   keepRecentTokens: z.number().int().positive().default(20_000),
 });
-export type PiCompactionSettings = z.infer<typeof PiCompactionSettings>;
+type PiCompactionSettings = z.infer<typeof PiCompactionSettings>;
 
 /** Why a compaction was requested: proactive threshold crossing, or recovery from a provider context-overflow error. */
 export const PiCompactionReason = z.enum(["threshold", "overflow"]);

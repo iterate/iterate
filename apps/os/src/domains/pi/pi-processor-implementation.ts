@@ -52,7 +52,7 @@ export type PiLlmRequest = {
  * message via stopReason error/aborted (the processor is defensive about
  * violations, but honoring the contract preserves partial output).
  */
-export type PiLlmDep = {
+type PiLlmDep = {
   complete(request: PiLlmRequest, options: { signal: AbortSignal }): Promise<PiAssistantMessage>;
 };
 
@@ -473,8 +473,7 @@ export function reducePiEvents(events: readonly StreamEvent[]): PiState {
   return state;
 }
 
-/** Pure single-event fold, exported so the state machine is unit-testable event by event. */
-export function reducePiEvent(input: { event: PiConsumedEvent; state: PiState }): PiState {
+function reducePiEvent(input: { event: PiConsumedEvent; state: PiState }): PiState {
   const { event, state } = input;
   switch (event.type) {
     case "events.iterate.com/pi/config-updated": {
@@ -853,7 +852,7 @@ export function findCompactionCutIndex(
 }
 
 /** Everything a compaction run needs, decided before the summarize call. */
-export type PiCompactionPlan = {
+type PiCompactionPlan = {
   entriesToSummarize: PiHistoryEntry[];
   /** Index (into history at plan time) of the first entry kept verbatim. */
   firstKeptIndex: number;
@@ -923,7 +922,7 @@ export function lostToolCalls(state: PiState): { toolCallId: string; toolName: s
 }
 
 /** pi's summarization system prompt, verbatim. */
-export const PI_SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
+const PI_SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
 
 Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;
 
