@@ -26,7 +26,7 @@ import type {
   StreamSubscriberDisconnectReason,
   StreamSubscriptionType,
 } from "./core-processor-contract.ts";
-import { disposeIgnoredRpcResult } from "./stream-processor.ts";
+import { disposeIgnoredRpcResult, isThenable } from "./stream-processor.ts";
 
 /** Serializable debug view of one live connection, for `runtimeState()`. */
 export type ConnectionRuntimeState = {
@@ -54,6 +54,8 @@ type Connection = {
   getProcessorRuntimeState?: GetProcessorRuntimeState & Disposable;
   /** Re-arm the delivery pump after events are committed. Idempotent while draining. */
   wake(): void;
+  /** `true` until close() runs — backs the subscription handle's `ping()`. */
+  isLive(): boolean;
   /** Stop the pump, dispose the callback, append the disconnect fact, drop from the table. */
   close(reason: StreamSubscriberDisconnectReason): void;
 };
@@ -229,6 +231,7 @@ export class StreamConnections {
       batchesSent: 0,
       eventsSent: 0,
       wake: () => void pump(),
+      isLive: () => open,
       close: (reason) => {
         if (!open) return;
         open = false;
@@ -449,13 +452,5 @@ function retainGetProcessorRuntimeState(
         dispose?.();
       },
     },
-  );
-}
-
-function isThenable(value: unknown): value is PromiseLike<unknown> {
-  return (
-    value !== null &&
-    (typeof value === "object" || typeof value === "function") &&
-    typeof (value as PromiseLike<unknown>).then === "function"
   );
 }

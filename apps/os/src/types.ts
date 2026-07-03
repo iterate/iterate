@@ -57,7 +57,23 @@ export interface Session {
 /** Catalog of projects reachable from a {@link Session}. */
 export interface ProjectCollection {
   get(projectId: string): Promise<Itx>;
-  create(args: { organizationSlug?: string; projectId?: string; slug: string }): Promise<Itx>;
+  /**
+   * Register and bootstrap a project. By default this resolves once the
+   * bootstrap saga has committed `project/created` — convenient for scripts
+   * and tests that use the project immediately. Pass
+   * `waitUntilCreated: false` to resolve as soon as the project EXISTS
+   * (identity registered, directory primed, bootstrap events appended): the
+   * saga then runs behind the returned handle, and its progress is ordinary
+   * live processor state (`itx.processor.onStateChange` — `state.created`
+   * flips when bootstrap lands). The dashboard uses the fast path to redirect
+   * into the project instantly and play creation progress from pushes.
+   */
+  create(args: {
+    organizationSlug?: string;
+    projectId?: string;
+    slug: string;
+    waitUntilCreated?: boolean;
+  }): Promise<Itx>;
   /**
    * The session's projects, enriched engine-side. Scope is explicit:
    * - "mine" (default for user principals): the caller's own claims (plus
@@ -391,7 +407,7 @@ export interface SecretCollection {
 export interface Secret {
   describe(): Promise<SecretDescription>;
   fetch(req: Request): Promise<Response>;
-  processor: StreamProcessorRpc<SecretProcessorState>;
+  processor: StreamProcessorRpc<SecretDescription>;
   update(input: SecretUpdateInput): Promise<StreamEvent>;
 }
 
@@ -446,29 +462,44 @@ export type RepoProcessorState = {
   remote: string | null;
 };
 
-export type SecretProcessorState = {
-  audit: {
-    lastUsedAt?: string;
-    lastUsedBy?: string;
-    lastUsedUrl?: string;
-    usedCount: number;
-  };
-  egress: { urls: string[] };
-  encryptedMaterial: {
-    algorithm: "AES-GCM-SHA256";
-    ciphertext: string;
-    iv: string;
-  } | null;
-};
+// NOTE: there is deliberately no public secret processor state type: a
+// secret's public live state IS its SecretDescription. The internal fold
+// carries the encrypted material; the DO's processor facade projects it away
+// (write-only material) before anything crosses the RPC boundary.
 
 export type ProcessorSnapshot<State> = {
   offset: number;
   state: State;
 };
 
+/**
+ * Live handle for one `onStateChange` subscription.
+ *
+ * `ping()` is the liveness probe: `true` while the subscription is still
+ * registered on the live processor, `false` once it was dropped (delivery
+ * failure, explicit unsubscribe). The call REJECTS when the hosting Durable
+ * Object incarnation is gone. For a subscriber, `false` and a rejection mean
+ * the same thing: re-subscribe. Pushes stop silently when a DO restarts or a
+ * transport half-opens, so a periodic ping is how a client turns "silently
+ * stale" into "detectably dead".
+ */
+export type ProcessorStateSubscriptionHandle = Disposable & {
+  ping(): boolean | Promise<boolean>;
+  unsubscribe(): void;
+};
+
 export interface StreamProcessorRpc<State = unknown> {
   getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
-  onStateChange(cb: (state: State) => unknown): Promise<(() => void) & Disposable>;
+  /**
+   * Server-push of the processor's reduced state. The callback receives the
+   * durable checkpoint `{ offset, state }` — offset-carrying so clients can
+   * commit pushes and `snapshot()` reads monotonically against each other —
+   * once immediately on subscribe (current state IS the first paint) and then
+   * after every checkpointed batch that changed state.
+   */
+  onStateChange(
+    cb: (snapshot: ProcessorSnapshot<State>) => unknown,
+  ): Promise<ProcessorStateSubscriptionHandle>;
   snapshot(): Promise<ProcessorSnapshot<State>>;
   waitUntilEvent(input: { offset: number; timeoutMs?: number }): Promise<void>;
 }
@@ -677,10 +708,19 @@ export type ProcessorRuntimeState<State = unknown> = {
  */
 export type GetProcessorRuntimeState = () => ProcessorRuntimeState | Promise<ProcessorRuntimeState>;
 
-/** Live subscription handle returned by `Stream.subscribe`. */
+/**
+ * Live subscription handle returned by `Stream.subscribe`.
+ *
+ * `ping()` mirrors {@link ProcessorStateSubscriptionHandle.ping}: `true` while
+ * the connection is still open on the live stream, `false` after it closed
+ * (replaced, delivery failure, unsubscribe); it rejects when the stream's
+ * Durable Object incarnation is gone. Either non-`true` outcome means the
+ * subscriber should re-subscribe.
+ */
 export type StreamSubscriptionHandle = Disposable & {
   subscriptionKey: SubscriptionKey;
   streamMaxOffset: number;
+  ping(): boolean | Promise<boolean>;
   unsubscribe(): void;
 };
 

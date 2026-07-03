@@ -125,6 +125,19 @@ export async function createProjectFixture(
   }
 }
 
+/**
+ * Admin itx handle for specs that drive a fixture project server-side (e.g.
+ * append events and assert the browser repaints from the push). Dispose with
+ * `using` — the handle owns its WebSocket.
+ */
+export async function connectAdminItx(baseUrl: string) {
+  const config = await resolveOsPlaywrightAuthConfig();
+  return connectItx({
+    auth: { type: "admin-secret", secret: config.adminApiSecret },
+    baseUrl,
+  });
+}
+
 export async function createAdminProject(input: { baseUrl: string; slug: string }) {
   const config = await resolveOsPlaywrightAuthConfig();
   // itx-v4 cutover: this used to dial the legacy client (`withItx({baseUrl,

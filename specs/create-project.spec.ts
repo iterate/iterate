@@ -28,9 +28,16 @@ test("a new user can create a project through the UI form", async ({ page }) => 
     await page.getByRole("button", { name: "Create new project" }).click({ timeout: 30_000 });
 
     await page.getByLabel("Slug").fill(slug, { timeout: 15_000 });
-    // Create walks auth + the project durable object bootstrap, then lands in
-    // the new project's onboarding agent chat.
+    // Create resolves as soon as the project EXISTS (identity + bootstrap
+    // events) and redirects straight into the project — the bootstrap saga is
+    // still running at this point.
     await page.getByRole("button", { name: "Create project" }).click({ timeout: 15_000 });
+    await page.waitForURL(`**/projects/${slug}?welcome=true`, { timeout: 30_000 });
+
+    // The home page plays the live creation checklist from processor pushes…
+    await page.getByTestId("project-creation-progress").waitFor({ timeout: 15_000 });
+    // …and hands over to the onboarding agent the moment `project/created`
+    // lands (the welcome param carries the from-creation intent).
     await page.getByPlaceholder("Message this agent").waitFor({ timeout: 60_000 });
   });
   await page.waitForURL(`**/projects/${slug}/agents/streams/agents/onboarding`);
