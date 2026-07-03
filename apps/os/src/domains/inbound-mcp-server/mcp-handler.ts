@@ -225,7 +225,15 @@ function createServer(input: {
 
       const message = reply.payload?.message;
       if (typeof message !== "string" || message.trim() === "") {
-        throw new Error(`Assistant reply event ${reply.offset} did not include a message.`);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Assistant reply event ${reply.offset} did not include a message. The session transcript is the ${agentPath} stream.`,
+            },
+          ],
+          isError: true,
+        };
       }
       return {
         content: [{ type: "text" as const, text: message }],
