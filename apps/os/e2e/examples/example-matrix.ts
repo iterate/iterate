@@ -169,6 +169,22 @@ export default class ItxExampleRunner extends WorkerEntrypoint {
     return new Response("itx example runner");
   }
 
+  // The platform dispatches project.worker calls as flattened
+  // invokeCapability({ path, args }); this userspace walk mirrors the seeded
+  // template worker's dispatcher.
+  async invokeCapability({ args = [], path }) {
+    let receiver = this;
+    for (const segment of path.slice(0, -1)) {
+      receiver = await Reflect.get(Object(receiver), segment);
+    }
+    const method = path.at(-1);
+    const handler = Reflect.get(Object(receiver), method);
+    if (typeof handler !== "function") {
+      throw new Error('"' + path.join(".") + '" is not a method on the example runner');
+    }
+    return await Reflect.apply(handler, receiver, args);
+  }
+
   processEvent(input) {
     // The default project worker receives every committed project event; the
     // example runner has nothing to do with them.

@@ -108,7 +108,7 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
       "apps/hello/worker.ts",
       "apps/counter/worker.ts",
       "package.json",
-      "itx.ts",
+      "sdk.ts",
       "slack.config.ts",
     ]),
   );

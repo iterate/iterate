@@ -14,8 +14,9 @@ through `processEvent({ event })`, and reaches the project's capabilities
 through `await this.env.ITX.get()`. The worker is built by the platform's
 worker build pipeline: multi-file TypeScript works, and npm dependencies
 declared in `package.json` (like `@slack/web-api`) are installed at build time.
-`itx.ts` is a snapshot of the platform's capability types taken when this repo
-was seeded — import types from it, treat it as read-only.
+`sdk.ts` is a snapshot of the platform's capability types (the future
+`@iterate-com/sdk` package) taken when this repo was seeded — import types
+from it, treat it as read-only.
 
 The worker also exposes a Slack Web API surface backed by the real Slack SDK:
 `itx.worker.slack.chat.postMessage({ channel, text })` (any nested Web API

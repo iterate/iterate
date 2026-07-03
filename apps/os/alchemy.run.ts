@@ -256,6 +256,7 @@ const workerNames = {
   agent: `${ctx.workerName}-agent`,
   api: `${ctx.workerName}-api`,
   app: `${ctx.workerName}-app`,
+  builder: `${ctx.workerName}-builder`,
   ingress: ctx.workerName,
   itx: `${ctx.workerName}-itx`,
   project: `${ctx.workerName}-project`,
@@ -378,6 +379,7 @@ const statefulWorker = DurableObjectNamespace<StatefulWorkerDurableObject>("work
 // so it never needs it either.
 const durableObjectWorkerNames = [
   workerNames.agent,
+  workerNames.builder,
   workerNames.itx,
   workerNames.project,
   workerNames.repo,
@@ -483,6 +485,10 @@ const itxBindings = {
   // binding. Bound by name-string (like the cross-script DO namespaces) so the
   // engine workers keep deploying concurrently.
   DYNAMIC_WORKERS: WorkerRef({ service: workerNames.worker }),
+  // Dynamic worker BUILDS are owned by the builder worker — the only script
+  // carrying the bundler toolchain (esbuild-wasm). The worker worker calls it
+  // on artifact-cache misses; everyone else carries the binding unused.
+  BUILDER: WorkerRef({ service: workerNames.builder }),
   PROJECT: project,
   PROJECT_DIRECTORY: projectDirectory,
   REPO: repo,
@@ -524,6 +530,7 @@ const [
   itxWorker,
   projectWorker,
   agentWorker,
+  builderWorker,
   repoWorker,
   sandboxWorker,
   secretWorker,
@@ -534,6 +541,9 @@ const [
   engineWorker("itx", "./src/workers/itx.ts"),
   engineWorker("project", "./src/workers/project.ts"),
   engineWorker("agent", "./src/workers/agent.ts"),
+  // Bundles dynamic worker source (the only script with esbuild-wasm); its
+  // own BUILDER binding is a Self so the shared Env contract holds here too.
+  engineWorker("builder", "./src/workers/builder.ts", { BUILDER: Self }),
   engineWorker("repo", "./src/workers/repo.ts"),
   // The owner binds the container-backed namespace (image + container app +
   // migration); every other itx worker keeps the plain cross-script binding.
@@ -613,6 +623,7 @@ export const workers = {
   agent: agentWorker,
   api: apiWorker,
   app: appWorker,
+  builder: builderWorker,
   ingress: ingressWorker,
   itx: itxWorker,
   project: projectWorker,

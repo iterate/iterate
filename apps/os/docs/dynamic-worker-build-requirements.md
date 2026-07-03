@@ -1,6 +1,18 @@
 # Dynamic Worker Build Requirements
 
-Status: implemented (see tasks/os-dynamic-worker-build-pipeline.md and apps/os/src/domains/workers/).
+Status: implemented (see tasks/os-dynamic-worker-build-pipeline.md and
+apps/os/src/domains/workers/), with one deliberate revision to this document:
+build coordination is a direct RPC to a dedicated **builder worker**, not a
+stream processor. The stream-processor design below was built first and then
+removed — build lifecycle events bought observability nobody planned to
+consume, at the price of a processor subscription on every scope, a
+claim/stale-window dedupe fold, and callers waiting on eventually-consistent
+KV. The builder worker keeps every property that mattered (one bundler
+toolchain in one script, deduped concurrent builds, deterministic
+content-addressed artifacts) with none of the coordination machinery; build
+failures reach callers as plain errors. The journal records what dynamic
+workers DO (script executions, capability mounts), not how their bytes were
+produced.
 
 ## Goal
 

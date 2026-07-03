@@ -732,10 +732,12 @@ class DynamicWorkerCollectionRpcTarget extends RpcTarget implements DynamicWorke
   }
 
   get<T extends object = Record<string, unknown>>(
-    ref: Parameters<DynamicWorkerCollection["get"]>[0],
+    ...[ref, options]: Parameters<DynamicWorkerCollection["get"]>
   ) {
     const parsed = WorkerRefSchema.parse(ref);
     return new DynamicWorkerRpcTarget({
+      buildBudgetMs: options?.buildBudgetMs,
+      flattenNestedPaths: options?.flattenNestedPaths === true,
       projectId: this.props.projectId,
       ref: parsed,
     }) as unknown as DynamicWorkerCapability<T>;
@@ -751,11 +753,20 @@ class DynamicWorkerCollectionRpcTarget extends RpcTarget implements DynamicWorke
  * the flattened capability dispatcher.
  */
 class DynamicWorkerRpcTarget extends RpcTarget {
+  readonly #buildBudgetMs: number | undefined;
+  readonly #flattenNestedPaths: boolean;
   readonly #projectId: string;
   readonly #ref: DynamicWorkerRef;
 
-  constructor(props: { projectId: string; ref: DynamicWorkerRef }) {
+  constructor(props: {
+    buildBudgetMs?: number;
+    flattenNestedPaths?: boolean;
+    projectId: string;
+    ref: DynamicWorkerRef;
+  }) {
     super();
+    this.#buildBudgetMs = props.buildBudgetMs;
+    this.#flattenNestedPaths = props.flattenNestedPaths === true;
     this.#projectId = props.projectId;
     this.#ref = props.ref;
     return withInvokeCapabilityFallback(this);
@@ -763,7 +774,7 @@ class DynamicWorkerRpcTarget extends RpcTarget {
 
   async invokeCapability({
     args = [],
-    flattenNestedPath = false,
+    flattenNestedPath = this.#flattenNestedPaths,
     path,
   }: {
     args?: unknown[];
@@ -780,6 +791,7 @@ class DynamicWorkerRpcTarget extends RpcTarget {
     // stub for the outer caller.
     return await env.DYNAMIC_WORKERS.invokeCapability({
       args,
+      buildBudgetMs: this.#buildBudgetMs,
       flattenNestedPath,
       path,
       projectId: this.#projectId,
@@ -1350,11 +1362,15 @@ export class ItxRpcTarget extends RpcTarget implements Itx {
   get worker() {
     // `project.worker` is only a convenience alias for the default repo-backed
     // stateless worker. The general API is `project.workers.get(ref)`.
-    return this.workers.get<ProjectWorker>(defaultProjectWorkerRef());
+    // Flattened: the seeded worker implements invokeCapability in userspace,
+    // so `itx.worker.slack.chat.postMessage(...)` is one RPC end to end.
+    return this.workers.get<ProjectWorker>(defaultProjectWorkerRef(), {
+      flattenNestedPaths: true,
+    });
   }
 }
 
-function defaultProjectWorkerRef(): StatelessDynamicWorkerRef {
+export function defaultProjectWorkerRef(): StatelessDynamicWorkerRef {
   return {
     path: "/",
     source: {

@@ -27,11 +27,9 @@ export const WORKER_BUNDLER_VERSION = "0.2.1";
  * artifact instead of each paying a bundler run. Pinned-commit refs skip the
  * head cache and have no content identity, hence the optionality.
  *
- * This zod schema is also the `worker-build/requested` event payload shape
- * (worker-build-processor-contract.ts): the resolver constructs this value,
- * hashes it into the key, and appends it verbatim, so type and schema must be
- * one definition. Repo sources carry identity and masks, never expanded file
- * contents; inline sources carry the caller-provided file map by design.
+ * This zod schema is also the builder worker's `build()` input shape
+ * (builder-entrypoint.ts): the resolver constructs this value, hashes it into
+ * the key, and sends it verbatim, so type and schema must be one definition.
  */
 export const ResolvedWorkerFileSource = z.discriminatedUnion("type", [
   z.strictObject({

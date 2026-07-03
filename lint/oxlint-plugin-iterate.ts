@@ -63,6 +63,10 @@ function isAllowedRawDurableObjectBindingAccessFile(filename: string) {
     path.includes("/entrypoints/") ||
     path.endsWith("/durable-object.ts") ||
     path.endsWith("-durable-object.ts") ||
+    // Domain entrypoint files (WorkerEntrypoints with zod-validated inputs:
+    // dynamic-worker-entrypoint, builder-entrypoint) are authority boundaries
+    // of the same standing as domain Durable Objects.
+    path.endsWith("-entrypoint.ts") ||
     path.endsWith("/capability.ts") ||
     path.endsWith("-capability.ts") ||
     // The engine's worker-loading layer legitimately dials REPO (source

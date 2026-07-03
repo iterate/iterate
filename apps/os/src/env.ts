@@ -48,6 +48,13 @@ export interface Env {
    * (domains/workers/artifact-store.ts). Every entry is reproducible from its
    * deterministic build key, so the namespace is safe to wipe. */
   WORKER_BUILD_CACHE: KVNamespace;
+  /**
+   * The builder worker's entrypoint (domains/workers/builder-entrypoint.ts):
+   * bundles dynamic worker source into loader-ready artifacts. The only
+   * script carrying the bundler toolchain (esbuild-wasm); called by the
+   * worker worker on artifact-cache misses.
+   */
+  BUILDER: Service<import("./domains/workers/builder-entrypoint.ts").BuilderEntrypoint>;
 
   AGENT: DurableObjectNamespace<
     import("./domains/agents/agent-durable-object.ts").AgentDurableObject

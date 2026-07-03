@@ -73,12 +73,13 @@ export class DynamicWorkerEntrypoint extends WorkerEntrypoint<Env> {
     ref: DynamicWorkerRef;
     path: string[];
     args?: unknown[];
+    buildBudgetMs?: number;
     flattenNestedPath?: boolean;
   }): Promise<unknown> {
     // `args` passes through untouched (may hold live stubs); everything that
     // grants authority — project, scope, worker ref, capability path — is
     // validated here, at the single boundary where isolates get their env.
-    const { projectId, scopePath, ref, path, flattenNestedPath } =
+    const { projectId, scopePath, ref, path, buildBudgetMs, flattenNestedPath } =
       InvokeCapabilityInput.parse(input);
     const itxScope = itxEntrypointProps({ path: scopePath, projectId });
     const runner = new DynamicWorkerRunner({
@@ -92,6 +93,7 @@ export class DynamicWorkerEntrypoint extends WorkerEntrypoint<Env> {
     });
     return await runner.invokeCapability({
       args: input.args ?? [],
+      buildBudgetMs,
       flattenNestedPath,
       path,
       ref,
@@ -105,5 +107,6 @@ const InvokeCapabilityInput = z.object({
   scopePath: z.string().trim().min(1).transform(normalizePath),
   ref: DynamicWorkerRefSchema,
   path: z.array(z.string().min(1)).min(1),
+  buildBudgetMs: z.number().int().positive().optional(),
   flattenNestedPath: z.boolean().default(false),
 });

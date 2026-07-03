@@ -1,6 +1,6 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { WebClient } from "@slack/web-api";
-import type { DynamicWorkerRef, Itx, StreamEvent } from "./itx.ts";
+import type { DynamicWorkerRef, Itx, StreamEvent } from "./sdk.ts";
 import { slackConfig } from "./slack.config.ts";
 
 /** Bindings the platform supplies to every project worker. */
@@ -19,7 +19,7 @@ const APPS = {
     type: "stateless",
     path: "/",
     source: {
-      files: { type: "repo", repoPath: "/", include: ["apps/hello/**", "itx.ts"] },
+      files: { type: "repo", repoPath: "/", include: ["apps/hello/**", "sdk.ts"] },
       options: { entryPoint: "apps/hello/worker.ts" },
     },
   },
@@ -77,12 +77,34 @@ export default class ProjectWorker extends WorkerEntrypoint<ProjectWorkerEnv> {
   }
 
   /**
-   * Slack Web API surface: `itx.worker.slack.chat.postMessage({...})` (any
-   * nested Web API method family works). This is plain userland code — the
-   * real `@slack/web-api` SDK from package.json, configured by
-   * slack.config.ts, projected into an RPC-safe shape.
+   * The platform dispatches dotted calls on this worker as ONE flattened
+   * `invokeCapability({ path, args })` call, and this userspace method walks
+   * the path over the worker itself. That is what lets the `slack` getter
+   * below hand back the raw SDK client: nothing ever crosses RPC except the
+   * final method's arguments and result, so
+   * `itx.worker.slack.chat.postMessage({...})` — or any nested Web API
+   * family — is a single round trip into plain userland code.
    */
-  get slack(): Record<string, unknown> {
+  async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
+    let receiver: unknown = this;
+    for (const segment of path.slice(0, -1)) {
+      receiver = await Reflect.get(Object(receiver), segment);
+    }
+    const method = path.at(-1)!;
+    const handler = Reflect.get(Object(receiver), method);
+    if (typeof handler !== "function") {
+      throw new Error(`"${path.join(".")}" is not a method on this project worker`);
+    }
+    return await Reflect.apply(handler, receiver, args);
+  }
+
+  /**
+   * Slack Web API surface: the real `@slack/web-api` SDK from package.json,
+   * configured by committing slack.config.ts. Only ever reached through the
+   * userspace `invokeCapability` walk above, so the client needs no RPC-safe
+   * projection.
+   */
+  get slack(): WebClient {
     const client = new WebClient(slackConfig.token ?? undefined, {
       ...(slackConfig.slackApiUrl === null ? {} : { slackApiUrl: slackConfig.slackApiUrl }),
     });
@@ -91,7 +113,7 @@ export default class ProjectWorker extends WorkerEntrypoint<ProjectWorkerEnv> {
     // platform's native fetch (and therefore project egress) instead.
     (client as unknown as { axios: { defaults: { adapter: string } } }).axios.defaults.adapter =
       "fetch";
-    return rpcCapabilityTree(client);
+    return client;
   }
 
   async testFetch(input: { headerValue: string; url: string }): Promise<unknown> {
@@ -100,30 +122,4 @@ export default class ProjectWorker extends WorkerEntrypoint<ProjectWorkerEnv> {
     });
     return await response.json();
   }
-}
-
-/**
- * Projects an SDK client into a shape Workers RPC can return from a getter:
- * plain objects are kept (recursively), functions become RPC stubs, everything
- * else — class instances like the SDK's HTTP client, config strings like the
- * token — is dropped. The Slack SDK builds its method families
- * (`chat.postMessage`, `conversations.history`, ...) as plain nested objects
- * of pre-bound functions, so the whole Web API survives this projection.
- */
-function rpcCapabilityTree(value: object): Record<string, unknown> {
-  const tree: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    if (typeof entry === "function") {
-      tree[key] = entry.bind(value);
-    } else if (isPlainObject(entry)) {
-      tree[key] = rpcCapabilityTree(entry);
-    }
-  }
-  return tree;
-}
-
-function isPlainObject(value: unknown): value is object {
-  if (value === null || typeof value !== "object") return false;
-  const proto = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
 }

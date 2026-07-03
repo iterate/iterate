@@ -18,7 +18,6 @@ import {
   OpenAiWsProcessorContract,
 } from "../agents/openai-ws-processor-contract.ts";
 import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
-import { WorkerBuildProcessorContract } from "../workers/worker-build-processor-contract.ts";
 import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
 import { SlackAgentProcessorContract } from "../integrations/slack-agent-processor-contract.ts";
 import { SlackProcessorContract } from "../integrations/slack-processor-contract.ts";
@@ -27,14 +26,6 @@ import { isMcpAgentPath } from "../inbound-mcp-server/mcp-session-agent-path.ts"
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 
 const ONBOARDING_AGENT_PATH = "/agents/onboarding";
-
-/**
- * Every ITX scope gets ALL of these subscriptions or none: a scope that can
- * run dynamic workers (scripts, worker-backed tools, project workers) must
- * also own their build lifecycle, or every cold build on that scope hangs
- * for the full build-wait timeout with nobody listening.
- */
-const ITX_SCOPE_PROCESSOR_SLUGS = [ItxProcessorContract.slug, WorkerBuildProcessorContract.slug];
 
 /**
  * Agents under `/agents/slack/**` are Slack-thread agents: the slack webhook
@@ -151,16 +142,14 @@ export class ProjectProcessor extends StreamProcessor<
           await Promise.all([
             timedStep("create-timing", timing, "root-saga-append", () =>
               append(
-                ...ITX_SCOPE_PROCESSOR_SLUGS.map((processorSlug) =>
-                  buildDurableObjectProcessorSubscriptionConfiguredEvent({
-                    durableObjectName: DurableObjectNameCodec.stringify({
-                      projectId: this.deps.itx.projectId,
-                      path: "/",
-                    }),
-                    processorSlug,
-                    subscriberType: "itx" as const,
+                buildDurableObjectProcessorSubscriptionConfiguredEvent({
+                  durableObjectName: DurableObjectNameCodec.stringify({
+                    projectId: this.deps.itx.projectId,
+                    path: "/",
                   }),
-                ),
+                  processorSlug: ItxProcessorContract.slug,
+                  subscriberType: "itx",
+                }),
                 {
                   type: "events.iterate.com/repo/create-requested",
                   idempotencyKey: `repo-create-requested:${this.deps.itx.projectId}:${PROJECT_REPO_PATH}`,
@@ -320,7 +309,7 @@ function agentBirthCertificateEvents(input: {
     // selected llmProvider answers llm-request-requested events.
     subscription(CloudflareAiProcessorContract.slug, "agent"),
     subscription(OpenAiWsProcessorContract.slug, "agent"),
-    ...ITX_SCOPE_PROCESSOR_SLUGS.map((slug) => subscription(slug, "itx")),
+    subscription(ItxProcessorContract.slug, "itx"),
     ...(input.slack ? [subscription(SlackAgentProcessorContract.slug, "agent")] : []),
     {
       type: "events.iterate.com/agent/config-updated" as const,

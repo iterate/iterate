@@ -7,6 +7,12 @@ tags: [os, itx, workers, dynamic-workers, codegen]
 
 # Bring back multi-file TypeScript dynamic worker builds
 
+> Done in PR #1612 — with one revision to the design below: builds coordinate
+> via a direct RPC to a dedicated builder worker (the only script carrying the
+> bundler toolchain), not via a worker-build stream processor; build lifecycle
+> events were built, then deliberately removed. See
+> apps/os/docs/dynamic-worker-build-requirements.md for the rationale.
+
 `apps/os` currently treats dynamic worker source as either inline loader-ready
 modules or a repo-backed single JavaScript file projection. Bring back the useful
 parts of the old multi-file TypeScript source-build machinery in the refactored

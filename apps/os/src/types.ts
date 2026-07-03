@@ -473,10 +473,27 @@ export interface StreamProcessorRpc<State = unknown> {
   waitUntilEvent(input: { offset: number; timeoutMs?: number }): Promise<void>;
 }
 
+/**
+ * Per-stub dispatch options for `DynamicWorkerCollection.get`.
+ *
+ * `flattenNestedPaths` mirrors `provideCapability`: dotted calls on the stub
+ * become ONE `invokeCapability({ path, args })` call that the worker's own
+ * `invokeCapability` method dispatches in userspace (one RPC per call),
+ * instead of the default member-by-member replay on the entrypoint.
+ * `buildBudgetMs` bounds how long a call waits on a cold source build; past
+ * it the call fails with a `WorkerBuildInProgressError` while the build
+ * finishes into the artifact cache.
+ */
+export type DynamicWorkerDispatchOptions = {
+  buildBudgetMs?: number;
+  flattenNestedPaths?: boolean;
+};
+
 /** Capability-tree entry point for ad-hoc project-scoped worker refs. */
 export interface DynamicWorkerCollection {
   get<T extends object = Record<string, unknown>>(
     ref: DynamicWorkerRef,
+    options?: DynamicWorkerDispatchOptions,
   ): DynamicWorkerCapability<T>;
 }
 
@@ -950,6 +967,14 @@ export type StatefulDynamicWorkerRef = DynamicWorkerRefBase & {
   type: "stateful";
   className: string;
   durableWorkerKey: string;
+  /**
+   * What a call does when the worker's source changed since the running
+   * version. `"block"` (default) waits for the rebuild — commit-then-call
+   * sees the new code. `"stale-while-rebuild"` keeps answering with the
+   * running version and swaps to the new build in the background: better
+   * availability, but the next few calls after a commit may see old code.
+   */
+  updatePolicy?: "block" | "stale-while-rebuild";
 };
 
 /** Worker recipe accepted by `workers.get` and worker-backed capabilities. */
@@ -978,10 +1003,14 @@ export interface ProjectWorkerSlack {
  * Default seeded project worker contract.
  *
  * This documents the reference repo's `worker.ts` only. Arbitrary dynamic
- * workers should be typed by callers through `workers.get<T>(ref)`.
+ * workers should be typed by callers through `workers.get<T>(ref)`. The
+ * platform dispatches to it with flattened paths, so the worker implements
+ * `invokeCapability` in userspace and every dotted call — including any
+ * nested `slack.*` Web API family — is one RPC.
  */
 export interface ProjectWorker {
   fetch(req: Request): Promise<Response>;
+  invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
   processEvent(input: { event: StreamEvent }): Promise<void>;
   slack: ProjectWorkerSlack;
   testFetch(input: { headerValue: string; url: string }): Promise<unknown>;

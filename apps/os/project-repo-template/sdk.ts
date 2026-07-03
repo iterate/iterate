@@ -1,6 +1,7 @@
-// The full itx capability surface, exactly as the platform publishes it.
-// This file is kept in sync with the platform by lint codegen — edit the
-// platform types, not this copy.
+// The platform's public types surface (the future `@iterate-com/sdk`
+// package), snapshotted into this repo when it was seeded. Import types from
+// it; treat it as read-only — the platform's own copy is the design of
+// record, kept in sync there by lint codegen.
 // codegen:start {preset: copy, source: ../src/types.ts}
 /**
  * Public ITX capability contract.

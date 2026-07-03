@@ -98,6 +98,7 @@ const StatefulDynamicWorkerRef = z.strictObject({
   className: z.string(),
   durableWorkerKey: z.string().regex(DURABLE_WORKER_KEY),
   type: z.literal("stateful"),
+  updatePolicy: z.enum(["block", "stale-while-rebuild"]).optional(),
 }) satisfies z.ZodType<StatefulWorkerRefType, unknown>;
 
 export const DynamicWorkerRef = z.discriminatedUnion("type", [

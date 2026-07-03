@@ -9,11 +9,15 @@ const WORKER_COMPATIBILITY_DATE = "2026-05-01";
 const WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];
 
 /**
- * How long a cold caller blocks on `worker-build/completed` before failing the
- * load. Generous on purpose: a first build can install npm dependencies from
- * the registry inside the bundler.
+ * The build is real and in flight, but the caller's build budget ran out
+ * before it finished. Workers RPC preserves `error.name`, so ingress-side
+ * classifiers can turn this into a "building your worker" page instead of a
+ * 500 — the build keeps running in the builder worker and the retry hits the
+ * artifact cache.
  */
-const BUILD_WAIT_TIMEOUT_MS = 120_000;
+export class WorkerBuildInProgressError extends Error {
+  override readonly name = "WorkerBuildInProgressError";
+}
 
 /**
  * Fully materialized Worker Loader input plus a cache key for the built bytes.
@@ -39,12 +43,13 @@ const RESOLVED_ARTIFACT_MEMO_LIMIT = 64;
 const inFlightResolutions = new Map<string, Promise<ResolvedWorkerSource>>();
 
 export async function resolveWorkerSource({
-  path,
+  buildBudgetMs,
   projectId,
   source,
 }: {
-  /** ITX scope path of the worker ref — the stream that owns build lifecycle. */
-  path: string;
+  /** Give up waiting for a cold build after this long (the build itself keeps
+   * running in the builder worker). Omitted = wait for the build. */
+  buildBudgetMs?: number;
   projectId: string;
   source: DynamicWorkerSource;
 }): Promise<ResolvedWorkerSource> {
@@ -70,22 +75,45 @@ export async function resolveWorkerSource({
   if (memoized !== undefined) return memoized;
 
   const inFlight = inFlightResolutions.get(buildKey);
-  if (inFlight !== undefined) return await inFlight;
-  const resolution = resolveThroughBuildPipeline({
-    buildKey,
-    options,
-    path,
-    projectId,
-    source: resolved,
-  }).finally(() => inFlightResolutions.delete(buildKey));
-  inFlightResolutions.set(buildKey, resolution);
-  return await resolution;
+  const resolution =
+    inFlight ??
+    resolveThroughBuilder({
+      buildKey,
+      options,
+      projectId,
+      source: resolved,
+    }).finally(() => inFlightResolutions.delete(buildKey));
+  if (inFlight === undefined) inFlightResolutions.set(buildKey, resolution);
+  return await withBuildBudget(resolution, buildBudgetMs);
 }
 
-async function resolveThroughBuildPipeline(input: {
+/** Race a resolution against the caller's budget without cancelling it: the
+ * shared in-flight promise may have other callers, and the builder finishes
+ * into the artifact cache regardless. */
+async function withBuildBudget(
+  resolution: Promise<ResolvedWorkerSource>,
+  budgetMs: number | undefined,
+): Promise<ResolvedWorkerSource> {
+  if (budgetMs === undefined) return await resolution;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      resolution,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new WorkerBuildInProgressError("This worker is still building.")),
+          budgetMs,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function resolveThroughBuilder(input: {
   buildKey: string;
   options: WorkerBuildOptions;
-  path: string;
   projectId: string;
   source: ResolvedWorkerFileSource;
 }): Promise<ResolvedWorkerSource> {
@@ -94,61 +122,34 @@ async function resolveThroughBuildPipeline(input: {
   const cached = await store.get(input.buildKey);
   if (cached !== null) return memoizeArtifact(cached);
 
-  // Cache miss: ask the worker-build processor on this ref's scope stream to
-  // build, then block on the terminal fact. Blocking during resolution keeps
-  // errors attributable to the call that needed the worker and keeps the
-  // loader path below dumb.
-  const stream = env.STREAM.getByName(
-    DurableObjectNameCodec.stringify({ path: input.path, projectId: input.projectId }),
-  );
-  const [requested] = await stream.append({
-    type: "events.iterate.com/worker-build/requested",
-    payload: {
-      buildKey: input.buildKey,
-      options: input.options,
-      source: input.source,
-    },
+  // Cache miss: one RPC to the builder worker — the only script carrying the
+  // bundler toolchain. It returns the artifact by value (so this never waits
+  // on KV write propagation) and build failures propagate here as plain
+  // errors, attributed to the call that needed the worker.
+  const artifact = await env.BUILDER.build({
+    buildKey: input.buildKey,
+    options: input.options,
+    projectId: input.projectId,
+    source: input.source,
   });
-
-  // Latency shortcut for the "completed between cache check and append"
-  // window: the processor re-announces completion for cache hits, so the
-  // forward wait below would resolve anyway — this just skips it.
-  const raced = await store.get(input.buildKey);
-  if (raced !== null) return memoizeArtifact(raced);
-
-  const terminal = await stream.waitForEvent({
-    afterOffset: requested.offset,
-    eventTypes: [
-      "events.iterate.com/worker-build/completed",
-      "events.iterate.com/worker-build/failed",
-    ],
-    predicate: (event) => event.payload?.buildKey === input.buildKey,
-    timeoutMs: BUILD_WAIT_TIMEOUT_MS,
-  });
-
-  if (terminal.type === "events.iterate.com/worker-build/failed") {
-    throw new Error(
-      `Worker build failed (${String(terminal.payload?.phase)}): ${String(terminal.payload?.message)}`,
-    );
-  }
-
-  // The completed event proves the write happened, but KV is only eventually
-  // consistent across locations: the processor wrote from its Durable
-  // Object's location and this read may run anywhere (propagation is bounded
-  // at ~60s). Local KV is the fast path; on a visibility miss, fetch the
-  // artifact from the ITX Durable Object that built it — its location has
-  // read-your-write KV semantics.
-  const artifact =
-    (await store.get(input.buildKey)) ??
-    (await env.ITX.getByName(
-      DurableObjectNameCodec.stringify({ path: input.path, projectId: input.projectId }),
-    ).getWorkerBuildArtifact({ buildKey: input.buildKey }));
-  if (artifact === null) {
-    throw new Error(
-      `Worker build ${input.buildKey} reported completion but the artifact store has no artifact.`,
-    );
-  }
   return memoizeArtifact(artifact);
+}
+
+/**
+ * A previously built artifact by exact cache key — memo then KV, never a
+ * build. This is the stale-while-rebuild read: the stateful worker host keeps
+ * serving the version it already ran while the fresh resolve happens in the
+ * background. Null when the artifact expired (or the key was a loader-ready
+ * fast-path hash, which never enters the store) — callers fall back to a
+ * blocking resolve.
+ */
+export async function resolveCachedArtifact(
+  cacheKey: string,
+): Promise<ResolvedWorkerSource | null> {
+  const memoized = resolvedArtifactMemo.get(cacheKey);
+  if (memoized !== undefined) return memoized;
+  const artifact = await new KvWorkerBuildArtifactStore(env.WORKER_BUILD_CACHE).get(cacheKey);
+  return artifact === null ? null : memoizeArtifact(artifact);
 }
 
 function memoizeArtifact(artifact: WorkerBuildArtifact): ResolvedWorkerSource {
