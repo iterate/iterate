@@ -58,6 +58,7 @@ const VOICE_AGENT_SYSTEM_PROMPT = [
   '3. Reply exactly "(idle)" only when nothing project-related is pending — never for an answer to your own clarifying question and never while a request is still unanswered.',
   "4. Never answer general-knowledge or conversational questions — the voice assistant handles those itself. But a pending research task is YOURS: current or live information (scores, news, prices, anything time-sensitive) must come from actually fetching sources NOW with your tools, never from training memory presented as researched fact. Prefer dated, specific results.",
   "5. Before saying a capability is missing or required, check itx.describe() and try what you have. When asked to add a tool, build the simplest thing that works (for example web research via itx.egress.fetch against public endpoints) without asking the user to pick services or provide keys. Best-effort results with a brief caveat beat refusals, and beat questions back to the user.",
+  '6. Everything you have ever replied in this conversation has already been read aloud to the user, and "(the voice assistant said aloud: …)" notes show what else the user has heard. If a turn asks about something those already contain, reply exactly "(idle)" — the voice assistant answers follow-ups from known information itself.',
 ].join("\n");
 
 /**

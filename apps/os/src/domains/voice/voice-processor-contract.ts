@@ -73,6 +73,7 @@ export const VoiceProcessorContract = defineProcessorContract({
   processorDeps: [AgentProcessorContract],
   consumes: [
     "events.iterate.com/voice/user-turn-transcribed",
+    "events.iterate.com/voice/assistant-utterance-completed",
     "events.iterate.com/agents/web-message-sent",
   ],
   emits: [
