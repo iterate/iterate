@@ -5,11 +5,6 @@
 import { z } from "zod";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
 
-const NullableOptionalString = z.preprocess(
-  (value) => (value === null ? undefined : value),
-  z.string().optional(),
-);
-
 /**
  * Processor mounted on `/integrations/slack/{connection}`.
  *
@@ -30,17 +25,9 @@ const NullableOptionalString = z.preprocess(
  */
 export const SlackProcessorContract = defineProcessorContract({
   slug: "slack",
-  version: "0.2.0",
+  version: "0.3.0",
   description: "Routes raw Slack webhooks into Slack-backed agent streams.",
   stateSchema: z.object({
-    connection: z
-      .object({
-        status: z.enum(["connected", "disconnected"]).default("disconnected"),
-        externalId: z.string().optional(),
-        teamId: z.string().optional(),
-        teamName: z.string().optional(),
-      })
-      .default({ status: "disconnected" }),
     /**
      * Durable Slack-thread-to-stream routing table.
      *
@@ -50,35 +37,9 @@ export const SlackProcessorContract = defineProcessorContract({
     routes: z.record(z.string(), z.string()).default({}),
   }),
   events: {
-    "events.iterate.com/slack/connected": {
-      description: "Slack OAuth connection was established for this project.",
-      payloadSchema: z
-        .object({
-          connection: NullableOptionalString,
-          externalId: z.string(),
-          projectId: z.string(),
-          scopes: z.array(z.string()).optional(),
-          teamDomain: NullableOptionalString,
-          teamId: NullableOptionalString,
-          teamName: NullableOptionalString,
-        })
-        .loose(),
-    },
-    "events.iterate.com/slack/disconnected": {
-      description: "Slack OAuth connection was removed for this project.",
-      payloadSchema: z
-        .object({
-          connection: NullableOptionalString,
-          externalId: z.string().optional(),
-          projectId: z.string(),
-          teamId: NullableOptionalString,
-          teamName: NullableOptionalString,
-        })
-        .loose(),
-    },
     "events.iterate.com/slack/webhook-received": {
       description:
-        "Raw Slack Events API callback body, appended by the webhook route to `/integrations/slack` and forwarded unchanged to routed thread streams.",
+        "Raw Slack Events API callback body, appended by the webhook route to `/integrations/slack/{connection}` and forwarded unchanged to routed thread streams.",
       payloadSchema: z.object({ body: z.record(z.string(), z.unknown()) }).loose(),
     },
     "events.iterate.com/slack/thread-route-configured": {
@@ -92,8 +53,6 @@ export const SlackProcessorContract = defineProcessorContract({
     },
   },
   consumes: [
-    "events.iterate.com/slack/connected",
-    "events.iterate.com/slack/disconnected",
     "events.iterate.com/slack/thread-route-configured",
     "events.iterate.com/slack/webhook-received",
   ],

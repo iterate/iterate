@@ -22,9 +22,12 @@ type SlackProcessorDeps = {
   /**
    * The named connection this router serves — a projection of the host DO's
    * own name (`/integrations/slack/{connection}`), not folded state, so it is
-   * total from the first webhook and independent of event ordering.
+   * total from the first webhook and independent of event ordering. Null when
+   * the host is not a connection stream — reachable only if a slack
+   * subscription is mis-armed on some other stream, which processEvent treats
+   * as a loud error rather than a silent drop.
    */
-  connection: string;
+  connection: string | null;
 };
 
 export class SlackProcessor extends StreamProcessor<
@@ -38,26 +41,6 @@ export class SlackProcessor extends StreamProcessor<
     state,
   }: Parameters<StreamProcessor<typeof SlackProcessorContract>["reduce"]>[0]): SlackProcessorState {
     switch (event.type) {
-      case "events.iterate.com/slack/connected":
-        return {
-          ...state,
-          connection: {
-            status: "connected" as const,
-            externalId: event.payload.externalId,
-            ...(event.payload.teamId == null ? {} : { teamId: event.payload.teamId }),
-            ...(event.payload.teamName == null ? {} : { teamName: event.payload.teamName }),
-          },
-        };
-      case "events.iterate.com/slack/disconnected":
-        return {
-          ...state,
-          connection: {
-            status: "disconnected" as const,
-            ...(event.payload.externalId == null ? {} : { externalId: event.payload.externalId }),
-            ...(event.payload.teamId == null ? {} : { teamId: event.payload.teamId }),
-            ...(event.payload.teamName == null ? {} : { teamName: event.payload.teamName }),
-          },
-        };
       case "events.iterate.com/slack/thread-route-configured":
         return {
           ...state,
@@ -81,6 +64,16 @@ export class SlackProcessor extends StreamProcessor<
     state,
   }: Parameters<StreamProcessor<typeof SlackProcessorContract>["processEvent"]>[0]): undefined {
     if (event.type !== "events.iterate.com/slack/webhook-received") return;
+
+    if (this.deps.connection === null) {
+      // A slack subscription armed on a non-connection stream is a
+      // misconfiguration, not a routable state: throwing holds the checkpoint
+      // and keeps the webhook replayable instead of silently dropping the
+      // only copy of the message (the 2026-06-15 lesson).
+      throw new Error(
+        "slack router woke on a stream whose path carries no connection; expected /integrations/slack/{connection}",
+      );
+    }
 
     /**
      * The router deliberately does not decide whether a Slack webhook is

@@ -53,19 +53,19 @@ export class ProjectDurableObject extends DurableObject<Env> {
   // instances addressed at `/integrations/slack/{connection}` (the host stream
   // is this DO's own path stream), where the OAuth connect flow configured
   // its subscription; registering it on every instance is harmless.
-  readonly #slackProcessor = this.#processorHost.add((deps) => {
+  // Registration is the point: the host wakes the router by slug; nothing
+  // dials the facet handle directly anymore (status is a journal fold).
+  protected readonly slackRouterRegistration = this.#processorHost.add((deps) => {
+    // This DO instance hosts one connection's router stream
+    // (/integrations/slack/{connection}): the name IS the connection, for both
+    // routing and the bot-token secret path. Null (a non-connection path) is
+    // passed through — the processor errors loudly if a mis-armed subscription
+    // ever wakes it there.
+    const connection = connectionFromIntegrationStreamPath(this.#name.path);
     return new SlackProcessor({
       ...deps,
-      // This DO instance hosts one connection's router stream
-      // (/integrations/slack/{connection}); the name IS the connection. A
-      // non-connection path (e.g. the project root hosting no router) never
-      // wakes this processor, so the fallback string is unreachable in
-      // practice and only satisfies totality.
-      connection: connectionFromIntegrationStreamPath(this.#name.path) ?? "",
+      connection,
       acknowledgeRoutedWebhook: async ({ payload }) => {
-        // This DO instance hosts one connection's router stream
-        // (/integrations/slack/{connection}); the path names the bot token.
-        const connection = connectionFromIntegrationStreamPath(this.#name.path);
         if (connection === null) return;
         const ack = eyesReactionTargetFromWebhookPayload(payload);
         if (ack == null) return;
@@ -92,10 +92,6 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
     return this.#processorHost.wakeStreamSubscriber(args);
-  }
-
-  get slackProcessor() {
-    return new StreamProcessorRpcTarget(this.#slackProcessor);
   }
 
   describe() {

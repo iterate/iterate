@@ -143,7 +143,21 @@ export function withOwnedRpcSession<T extends object>(stub: T, ...owned: Disposa
  * silently unreachable. Reject it loudly at provide time instead.
  */
 const NAMESPACE_BUILTIN_ROOTS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  ["integrations", BUILTIN_INTEGRATION_SLUGS],
+  [
+    "integrations",
+    // Built-in slugs AND the collection's own verbs: dotted resolution checks
+    // the RpcTarget's real members before the capability table, so a mount
+    // under any of these would be durable, journaled, and unreachable.
+    new Set([
+      ...BUILTIN_INTEGRATION_SLUGS,
+      "list",
+      "getConnection",
+      "startOAuthFlow",
+      "completeConnect",
+      "disconnect",
+      "invokeCapability",
+    ]),
+  ],
 ]);
 
 /**
@@ -165,7 +179,7 @@ export function rejectBuiltinCollision(target: object, path: string[]): void {
       const child = path[1]!;
       if (reservedChildren.has(child)) {
         throw new Error(
-          `cannot provide capability "${root}.${child}": "${child}" is a built-in ${root} slug and would shadow deployment code`,
+          `cannot provide capability "${root}.${child}": "${child}" is a built-in ${root} member and would shadow deployment code`,
         );
       }
       return;

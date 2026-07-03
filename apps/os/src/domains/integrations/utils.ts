@@ -1,6 +1,6 @@
-// Shared constants + tiny readers for the integrations domain (Phase 12
-// resurrection of the pre-migration slack/google plumbing). Cruft acceptable
-// here by design — behavior mirrors the pre-migration reference (git history).
+// Shared constants + path/name primitives for the integrations domain. The
+// path helpers ARE the address model: /integrations/{slug}/{connection} and
+// its projections (thread paths, secret paths, connection-from-path).
 
 /**
  * Deployment-wide (projectId: null) stream mapping Slack team ids to the
@@ -80,11 +80,6 @@ export function slackThreadStreamPath(input: {
   return `/agents/slack/${input.connection}/${sanitizeConnectionName(input.channel)}/ts-${sanitizeConnectionName(input.threadTs)}`;
 }
 
-export function isSlackAgentPath(agentPath: string): boolean {
-  const normalized = agentPath.toLowerCase();
-  return normalized === "/agents/slack" || normalized.startsWith("/agents/slack/");
-}
-
 /**
  * Connection segment of a routed Slack agent path
  * (`/agents/slack/{connection}/{channel}/ts-{ts}`), or null when the path is
@@ -93,18 +88,26 @@ export function isSlackAgentPath(agentPath: string): boolean {
 export function slackConnectionFromAgentPath(agentPath: string): string | null {
   const segments = agentPath.split("/");
   if (segments.length >= 6 && segments[1] === "agents" && segments[2] === "slack") {
-    return segments[3] ?? null;
+    return segments[3] || null;
   }
   return null;
 }
 
 /**
- * Connection segment of an integration connection stream path
- * (`/integrations/{slug}/{connection}`), or null for any other path — notably
- * the three-segment team directory stream and the project root.
+ * The `{ slug, connection }` coordinates of an integration connection stream
+ * path (`/integrations/{slug}/{connection}`), or null for any other path —
+ * notably the three-segment team directory stream and the project root.
  */
-export function connectionFromIntegrationStreamPath(path: string): string | null {
+export function integrationCoordinatesFromStreamPath(
+  path: string,
+): { connection: string; slug: string } | null {
   const segments = path.split("/");
   if (segments.length !== 4 || segments[0] !== "" || segments[1] !== "integrations") return null;
-  return segments[3] || null;
+  if (!segments[2] || !segments[3]) return null;
+  return { connection: segments[3], slug: segments[2] };
+}
+
+/** Connection segment of an integration connection stream path, or null. */
+export function connectionFromIntegrationStreamPath(path: string): string | null {
+  return integrationCoordinatesFromStreamPath(path)?.connection ?? null;
 }

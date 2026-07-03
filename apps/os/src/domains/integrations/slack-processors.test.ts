@@ -278,25 +278,38 @@ describe("SlackProcessor (webhook router)", () => {
     ).toHaveLength(0);
   });
 
-  it("reduces connected/disconnected facts into connection state", async () => {
+  it("ignores connected/disconnected lifecycle facts (status is a journal fold, not router state)", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/slack/nustom");
     const processor = new SlackProcessor({ stream, connection: CONNECTION });
     const cursors = new Map<object, number>();
 
-    await stream.append(connectedEvent());
-    await deliverNewEvents({ cursors, processor, stream });
-    expect(processor.state.connection).toMatchObject({
-      status: "connected",
-      teamId: TEAM_ID,
-    });
-
-    await stream.append({
+    await stream.append(connectedEvent(), {
       type: "events.iterate.com/slack/disconnected",
       payload: { projectId: "prj_1", teamId: TEAM_ID },
     });
     await deliverNewEvents({ cursors, processor, stream });
-    expect(processor.state.connection.status).toBe("disconnected");
+    // The router's whole state is its routing table; connection status is read
+    // straight off the journal by getConnectionStatus, so lifecycle facts
+    // reduce to nothing here.
+    expect(processor.state).toEqual({ routes: {} });
+  });
+
+  it("errors loudly instead of routing when the host stream carries no connection", async () => {
+    const network = new MemoryStreamNetwork();
+    // A mis-armed subscription: slack router woken on a non-connection path.
+    const stream = network.get("/integrations/slack");
+    const processor = new SlackProcessor({ stream, connection: null });
+    const cursors = new Map<object, number>();
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+    // Throwing (not dropping) holds the checkpoint so the webhook stays
+    // replayable — a silent drop here is the 2026-06-15 outage shape.
+    await expect(deliverNewEvents({ cursors, processor, stream })).rejects.toThrow(/no connection/);
+    expect(network.streams.size).toBe(1);
   });
 
   it("acknowledges webhooks forwarded through existing routes", async () => {
