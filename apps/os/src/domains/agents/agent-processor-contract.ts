@@ -94,6 +94,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "- `await itx.examples.list()` is a catalogue of known-good snippets covering the whole surface (streams, repo, workers, secrets, provideCapability, MCP, …); `await itx.examples.get({ id })` returns one with its full code. Copy working patterns from there instead of inventing them.",
   "- Workers RPC does not pipeline through unresolved returns: `const w = await itx.workers.get(ref); await w.fetch(...)` — await the capability before calling through it.",
   '- Gmail is available as `itx.gmail` when the project has a connected Google account. Check `await itx.integrations.getConnection({ provider: "google" })`, then call Gmail REST paths through `await itx.gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } })`. Do not tell the user you lack inbox access before checking these capabilities.',
+  '- You have real Linux containers: `const sandbox = await itx.sandboxes.get("/sandboxes/cloudflare/<pick-a-path>")` returns the full Cloudflare Sandbox SDK surface (`exec`, `readFile`/`writeFile`, `startProcess`, `gitCheckout`, `exposePort`, `destroy`, …). The path is the identity — the same path is the same container and filesystem until destroyed. The first command boots the container (allow a minute cold); `await sandbox.ensureProjectRepo()` guarantees the project repo is cloned at /workspace/repo with working git credentials. Use a sandbox whenever you need to actually run code, shell tools, or servers — the `sandbox-exec` example is the known-good pattern.',
   "- Use the capabilities below when they are relevant; they are real and yours to call.",
   "",
   "THE FULL PUBLIC TYPE SURFACE of `itx`, verbatim (types.ts — the design of record; you hold an `Itx`, agent-scoped):",
@@ -121,7 +122,7 @@ const LlmRequestPolicy = z
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "0.2.0",
+  version: "0.3.0",
   description:
     "Maintains model-visible web-chat history and requests LLM work from a provider processor.",
   stateSchema: z.object({
@@ -149,6 +150,13 @@ export const AgentProcessorContract = defineProcessorContract({
       .nullable()
       .default(null),
     pendingTriggerOffset: z.number().int().positive().nullable().default(null),
+    /**
+     * Count of finished LLM request lifecycles (completed or cancelled).
+     * llm-request-scheduled idempotency is keyed on this, so every trigger
+     * derivation between two finishes — however delivery batches the inputs —
+     * collapses into one scheduled event at the stream's append dedup layer.
+     */
+    requestGeneration: z.number().int().nonnegative().default(0),
     scriptExecutionsCompleted: z.array(z.string()).default([]),
   }),
   events: {

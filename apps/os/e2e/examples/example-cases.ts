@@ -18,6 +18,15 @@
 //   exa-web-search  calls Exa's public MCP server (external service, rate
 //                   limited); interactive reading material, same rationale as
 //                   ai-models.
+//   connect-public-mcp
+//                   explicitly connects to Exa's public MCP server; external
+//                   service and rate limited, so keep it interactive.
+//   connect-openapi-petstore
+//                   calls Swagger's public Petstore OpenAPI deployment;
+//                   external service, so keep it interactive.
+//   secret-postman-echo
+//                   calls Postman Echo to prove egress secret substitution;
+//                   external service, so keep it interactive.
 
 export type ExampleRunContext = {
   /** Unique per example × runtime, for stream/event payload assertions. */
@@ -36,6 +45,9 @@ export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
   "list-projects",
   "ai-models",
   "exa-web-search",
+  "connect-public-mcp",
+  "connect-openapi-petstore",
+  "secret-postman-echo",
 ]);
 
 export const EXAMPLE_CASES: Record<string, ExampleCase> = {
@@ -103,6 +115,18 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     vars: ({ marker }) => ({ counterKey: `counter-${marker}` }),
     assert: (result, _ctx, expect) => {
       expect(result).toEqual({ current: 2 });
+    },
+  },
+  "sandbox-exec": {
+    // One shared sandbox path for the whole matrix: the first runtime pays
+    // the container cold boot, the rest reuse the warm container (repeat
+    // ensureProjectRepo calls are idempotent). No marker on purpose.
+    vars: () => ({ sandboxPath: "/sandboxes/cloudflare/example-matrix" }),
+    assert: (result, _ctx, expect) => {
+      expect(result).toMatchObject({ exitCode: 0, os: "Linux" });
+      expect((result as { repoFiles: string[] }).repoFiles).toEqual(
+        expect.arrayContaining(["README.md", "worker.js"]),
+      );
     },
   },
   "repo-commit-files": {

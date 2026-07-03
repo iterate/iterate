@@ -13,9 +13,12 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
   const workflowName = meta.url.split("/").pop()?.replace(/\.ts$/, "");
   if (!workflowName) throw new Error("Unable to resolve workflow name");
   const deployCommandArgs = app.deployCommandArgs ?? ["pnpm", "tsx", "./alchemy.run.ts"];
+  // Re-trigger the deploy when the workflow's own definition changes. These
+  // cloudflare-app workflows are all Depot-routed (DEPOT_WORKFLOW_NAMES), so the
+  // generated yaml lives in .depot/workflows/, not .github/workflows/.
   const workflowDefinitionPaths = [
     `.github/ts-workflows/workflows/${workflowName}.ts`,
-    `.github/workflows/${workflowName}.yml`,
+    `.depot/workflows/${workflowName}.yml`,
   ];
 
   return workflow({
@@ -46,7 +49,7 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
     },
     jobs: {
       variables: {
-        ...utils.runsOnDepotUbuntu,
+        ...utils.runsOnDepotImage,
         outputs: {
           run_url: "${{ steps.vars.outputs.run_url }}",
           short_sha: "${{ steps.vars.outputs.short_sha }}",
@@ -68,15 +71,15 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
       deploy: {
         needs: ["variables"],
         if: "github.event_name == 'push' || github.event_name == 'workflow_dispatch'",
-        ...utils.runsOnDepotUbuntu,
+        ...utils.runsOnDepotImage,
         outputs: {
           public_url: "${{ steps.metadata.outputs.public_url }}",
         },
         steps: [
-          ...utils.getSetupRepo({
+          ...utils.setupFromImage({
             ref: "${{ inputs.ref || github.sha }}",
           }),
-          ...utils.setupDoppler({
+          ...utils.setupDopplerBaked({
             config: "prd",
             project: app.dopplerProject,
           }),
@@ -107,9 +110,11 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
       "slack-success": {
         needs: ["variables", "deploy"],
         if: "github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.deploy.result == 'success'",
-        ...utils.runsOnDepotUbuntu,
+        ...utils.runsOnDepotImage,
+        // DOPPLER_TOKEN lets slack.ts resolve SLACK_CI_BOT_TOKEN from Doppler.
+        env: { DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}" },
         steps: [
-          ...utils.setupRepo,
+          ...utils.setupFromImage(),
           await utils.githubScript(
             meta,
             {
@@ -123,7 +128,7 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
             },
             async function notify_slack_on_success() {
               const { getSlackClient, slackChannelIds } = await import("../utils/slack.ts");
-              const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+              const slack = getSlackClient();
               const message = [
                 `✅ ${appDisplayName} prd deploy succeeded (${shortSha})`,
                 publicUrl ? `<${publicUrl}|Open app>` : null,
@@ -145,9 +150,11 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
       "slack-failure": {
         needs: ["variables", "deploy"],
         if: "always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.deploy.result == 'failure'",
-        ...utils.runsOnDepotUbuntu,
+        ...utils.runsOnDepotImage,
+        // DOPPLER_TOKEN lets slack.ts resolve SLACK_CI_BOT_TOKEN from Doppler.
+        env: { DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}" },
         steps: [
-          ...utils.setupRepo,
+          ...utils.setupFromImage(),
           await utils.githubScript(
             meta,
             {
@@ -160,7 +167,7 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
             },
             async function notify_slack_on_failure() {
               const { getSlackClient, slackChannelIds } = await import("../utils/slack.ts");
-              const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+              const slack = getSlackClient();
               const message = [
                 `🚨 ${appDisplayName} prd deploy failed (${shortSha}).`,
                 `<${runUrl}|View workflow run>`,
