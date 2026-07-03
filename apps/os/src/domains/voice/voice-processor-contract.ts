@@ -34,6 +34,8 @@ export const VoiceProcessorContract = defineProcessorContract({
     turnCount: z.number().optional(),
     /** Say-requests projected so far. */
     sayRequestCount: z.number().optional(),
+    /** Rolling window of recent turn transcripts, for the context reminder. */
+    recentTurns: z.array(z.string()).optional(),
   }),
   events: {
     "events.iterate.com/voice/user-turn-transcribed": {
@@ -75,6 +77,7 @@ export const VoiceProcessorContract = defineProcessorContract({
   ],
   emits: [
     "events.iterate.com/agents/user-message-received",
+    "events.iterate.com/agent/input-added",
     "events.iterate.com/voice/say-requested",
   ],
 });
