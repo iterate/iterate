@@ -360,15 +360,18 @@ describe("itx", () => {
     expect(description.capabilities).toContainEqual(
       expect.objectContaining({ path: ["ai"], type: "builtin" }),
     );
+    // The inventory row carries the connections one-liner; the collection
+    // node itself self-describes with the full per-connection call shapes.
     expect(description.capabilities).toContainEqual(
       expect.objectContaining({
-        instructions: expect.stringContaining(
-          "fully qualified path /integrations/<slug>/<connection>",
-        ),
+        instructions: expect.stringContaining("/integrations/<slug>/<connection>"),
         path: ["integrations"],
         type: "builtin",
       }),
     );
+    const integrations = await project.integrations.__describe();
+    expect(integrations.instructions).toContain("gmail.request");
+    expect(integrations.instructions).toContain("itx.integrations.list()");
   });
 
   test("Trusted internal root can access global streams and repos", async () => {
@@ -2135,16 +2138,19 @@ describe("itx", () => {
     // agent's own capability host and mounts on the project root by addressing
     // it through `capabilityHosts.get("/")`.
     const execution = await agent.capabilityHost.runScript(`async (itx) => {
-      const provision = await itx.capabilityHosts.get("/").provideCapability({
+      // Workers RPC: await the capability before calling through it.
+      const host = await itx.capabilityHosts.get("/");
+      const provision = await host.provideCapability({
         type: "live",
         path: ["crossScopeProbe"],
         capability: { ping: () => "pong-from-agent-mount" },
       });
       // Visible on the root host itself, and through the agent scope's own
       // inheritance chain (local miss -> parent -> root).
-      const viaRoot = await itx.capabilityHosts
-        .get("/")
-        .invokeCapability({ path: ["crossScopeProbe", "ping"], args: [] });
+      const viaRoot = await host.invokeCapability({
+        path: ["crossScopeProbe", "ping"],
+        args: [],
+      });
       const viaChain = await itx.crossScopeProbe.ping();
       const describedScopes = (await itx.capabilityHost.__describe()).capabilities
         .filter((capability) => capability.path.join(".") === "crossScopeProbe")
