@@ -448,6 +448,10 @@ function toolResultIdempotencyKey(input: { assistantOffset: number; toolCallId: 
   return `pi/tool-result@${input.assistantOffset}:${input.toolCallId}`;
 }
 
+// =============================================================================
+// The fold — the entire loop state machine as a pure function of the journal.
+// =============================================================================
+
 /**
  * Fold a raw event log into pi processor state. Events outside the contract's
  * consumed vocabulary are skipped (the processor shares its stream with other
