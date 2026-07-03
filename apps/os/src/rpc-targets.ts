@@ -55,6 +55,7 @@ import {
   type OpenApiOperation,
 } from "./domains/itx/openapi-types.ts";
 import { callMcpToolPath } from "./domains/itx/mcp-client.ts";
+import { mintVoiceRealtimeConnection } from "./domains/voice/mint-realtime-connection.ts";
 import type {
   ProcessorState,
   StreamProcessor,
@@ -92,6 +93,7 @@ import type {
   StreamProcessorRpc,
   StreamSubscriptionHandle,
   UnauthenticatedItx,
+  VoiceCapability,
   DynamicWorkerCapability,
   DynamicWorkerCollection,
   DynamicWorkerRef,
@@ -415,6 +417,17 @@ class AiRpcTarget extends RpcTarget implements Ai {
     const options: AiRunOptions | undefined =
       this.props.gateway === undefined ? undefined : { gateway: this.props.gateway };
     return env.AI.run(model, body as Record<string, unknown>, options);
+  }
+}
+
+/**
+ * The `itx.voice` built-in: realtime voice session support. Minting here (over
+ * the already-authenticated itx socket) is what lets non-browser clients — the
+ * iOS app, the CLI — start voice sessions without a cookie or a raw API key.
+ */
+class VoiceRpcTarget extends RpcTarget implements VoiceCapability {
+  mintRealtimeConnection() {
+    return mintVoiceRealtimeConnection(parseConfig(env));
   }
 }
 
@@ -1031,6 +1044,7 @@ const PROJECT_BUILTIN_CAPABILITY_PATHS = [
   "secrets",
   "slack",
   "streams",
+  "voice",
   "worker",
   "workers",
 ] as const;
@@ -1090,6 +1104,10 @@ export class ItxRpcTarget extends RpcTarget implements Itx {
 
   get ai() {
     return new AiRpcTarget();
+  }
+
+  get voice() {
+    return new VoiceRpcTarget();
   }
 
   // `agent` and `chat` exist only when this itx is scoped under `/agents/` — i.e.

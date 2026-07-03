@@ -358,6 +358,29 @@ describe("itx", () => {
     expect(description.capabilities).toContainEqual({ path: ["ai"], type: "builtin" });
   });
 
+  test("Voice builtin mints an ephemeral realtime connection over itx", async () => {
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "admin-secret",
+      secret: adminSecret(),
+    });
+
+    using project = itx.projects.create({ slug: "voice-builtin" });
+    const description = await project.describe();
+    expect(description.capabilities).toContainEqual({ path: ["voice"], type: "builtin" });
+
+    // Really mints against the provider (every deployment config carries
+    // openAiApiKey): ephemeral client secrets are free and short-lived, and a
+    // fake here would only prove the fake.
+    const connection = await project.voice.mintRealtimeConnection();
+    expect(connection).toMatchObject({
+      provider: "openai",
+      model: expect.stringContaining("realtime"),
+      clientSecret: expect.stringMatching(/^ek_/),
+    });
+    expect(connection.expiresAt * 1000).toBeGreaterThan(Date.now());
+  });
+
   test("Trusted internal root can access global streams and repos", async () => {
     using session = withItxSession();
     using itx = session.authenticate({

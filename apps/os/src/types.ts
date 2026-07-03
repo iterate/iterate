@@ -129,6 +129,8 @@ export interface Itx extends ItxCapabilityHost {
   /** Slack Web API proxy for the project's connected workspace (itx.slack.chat.postMessage(...)). */
   slack: SlackCapability;
   streams: ProjectStreamCollection;
+  /** Realtime voice session support (see domains/voice): ephemeral credential minting. */
+  voice: VoiceCapability;
   worker: ProjectWorker;
   workers: DynamicWorkerCollection;
   // Present only on an agent-scoped itx (path under `/agents/`). `agent` is this
@@ -137,6 +139,27 @@ export interface Itx extends ItxCapabilityHost {
   agent?: Agent;
   chat?: AgentChat;
 }
+
+/**
+ * Realtime voice support for a project. Clients (dashboard, iOS app) mint an
+ * ephemeral provider credential here over the already-authenticated itx
+ * socket; the raw provider API key never leaves the server.
+ */
+export interface VoiceCapability {
+  mintRealtimeConnection(): Promise<VoiceRealtimeConnection>;
+}
+
+/**
+ * Ephemeral credentials for a realtime voice session. The short-lived client
+ * secret (`ek_…`) is passed to the provider directly by the client — as a
+ * WebSocket subprotocol or a WebRTC SDP-exchange bearer token.
+ */
+export type VoiceRealtimeConnection = {
+  provider: "openai";
+  model: string;
+  clientSecret: string;
+  expiresAt: number;
+};
 
 /** Agent-local web chat response tool exposed inside agent script execution. */
 export interface AgentChat {
