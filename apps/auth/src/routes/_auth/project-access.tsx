@@ -72,7 +72,11 @@ const ProjectSlugInput = z
   .trim()
   .min(1, "Project slug is required")
   .max(50)
-  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Use lowercase letters, numbers, and dashes");
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Use lowercase letters, numbers, and dashes")
+  // The server normalizes slugs with slugify, which rewrites reserved and
+  // letter-less values to "unnamed" — reject anything it would alter so the
+  // stored slug always matches the homepage preview.
+  .refine((slug) => slugify(slug) === slug, "Include a letter, and avoid reserved words");
 
 const CreateOrganizationWithProjectInput = z.object({
   name: z.string().trim().min(1, "Organization name is required").max(100),
@@ -337,7 +341,14 @@ function RouteComponent() {
     isCreating: createProjectMutation.isPending,
     isValid: parsedProject.success,
     error: !parsedProject.success && projectSlug.length > 0 ? parsedProject.error.issues : null,
-    mutationError: createProjectMutation.isError ? createProjectMutation.error.message : null,
+    // The combined first-run mutation can leave an error behind when the
+    // organization was created but the project was not (the UI then falls to
+    // this project-only form) — keep that failure visible for the retry.
+    mutationError: createProjectMutation.isError
+      ? createProjectMutation.error.message
+      : createOrganizationWithProjectMutation.isError
+        ? createOrganizationWithProjectMutation.error.message
+        : null,
     onProjectSlugChange: setProjectSlug,
     onOrganizationSlugChange: setSelectedOrganizationSlug,
     onSubmit: () => {
