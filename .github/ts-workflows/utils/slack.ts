@@ -7,7 +7,9 @@ export const getSlackBotToken = () => {
   }
   const DOPPLER_TOKEN = process.env.DOPPLER_TOKEN;
   if (DOPPLER_TOKEN) {
-    return execSync("doppler secrets --config prd get --plain SLACK_CI_BOT_TOKEN")
+    // Explicit --project so any job with only DOPPLER_TOKEN in env resolves the
+    // token (no prior `doppler setup` needed). Lives in _shared/prd.
+    return execSync("doppler secrets --project _shared --config prd get --plain SLACK_CI_BOT_TOKEN")
       .toString()
       .trim();
   }
