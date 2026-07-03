@@ -981,10 +981,6 @@ const defaultPreviewTestRetryDelayMs = 5_000;
 const defaultPreviewDeployConcurrency = 5;
 const ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE = "environment-config-lease";
 const previewEnvironmentSlotNumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
-type SharedAuthPreviewSecret = {
-  appConfigName: string;
-  legacyDevNames: readonly string[];
-};
 const sharedAuthPreviewSecretsCopiedFromDev = [
   { appConfigName: "APP_CONFIG_GOOGLE_CLIENT_ID", legacyDevNames: ["GOOGLE_CLIENT_ID"] },
   { appConfigName: "APP_CONFIG_GOOGLE_CLIENT_SECRET", legacyDevNames: ["GOOGLE_CLIENT_SECRET"] },
@@ -995,7 +991,10 @@ const sharedAuthPreviewSecretsCopiedFromDev = [
   { appConfigName: "APP_CONFIG_RESEND_DOMAIN", legacyDevNames: ["RESEND_BOT_DOMAIN"] },
   { appConfigName: "APP_CONFIG_RESEND_API_KEY", legacyDevNames: ["RESEND_BOT_API_KEY"] },
   { appConfigName: "APP_CONFIG_SIGNUP_ALLOWLIST", legacyDevNames: ["SIGNUP_ALLOWLIST"] },
-] as const satisfies readonly SharedAuthPreviewSecret[];
+] as const satisfies readonly {
+  appConfigName: string;
+  legacyDevNames: readonly string[];
+}[];
 
 export const EnvironmentConfigLease = z.object({
   dopplerConfig: z.string().trim().min(1),
@@ -1947,12 +1946,10 @@ function commandFailureSummary(result: { stderr: string; stdout: string }) {
   return output || "command failed";
 }
 
-type DopplerSecretReader = (project: string, config: string, name: string) => string | null;
-
 function resolveAuthPreviewRootSecret(input: {
   appConfigName: string;
   legacyDevNames: readonly string[];
-  readSecret: DopplerSecretReader;
+  readSecret: (project: string, config: string, name: string) => string | null;
 }) {
   const previewValue = input.readSecret("auth", "preview", input.appConfigName);
   if (previewValue) return previewValue;
