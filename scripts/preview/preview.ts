@@ -887,6 +887,14 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // -L: /api/iterate-auth/login redirects to the slot's auth worker,
         // warming it for the login-flow specs.
         'for path in /api/health / /api/itx /sign-in /api/iterate-auth/login; do curl -sL -o /dev/null --max-time 20 "$OS_BASE_URL$path" || true; done',
+        // Warm the OAuth handshake path — the signup/create-project specs park
+        // 30-90s on a cold callback (token exchange + first-org onboarding).
+        // Boot both sides' isolates: the OS callback handler, and the auth
+        // worker (origin derived from the /login redirect) incl. its OTP and
+        // onboarding routes. Best-effort — see
+        // tasks/fix-cold-auth-oauth-callback-latency.md for the real fix.
+        'curl -sL -o /dev/null --max-time 20 "$OS_BASE_URL/api/iterate-auth/callback" || true',
+        'AUTH_BASE=$(curl -s -o /dev/null -w "%{redirect_url}" --max-time 20 "$OS_BASE_URL/api/iterate-auth/login?login_hint=email" | sed -E "s#(https?://[^/]+).*#\\1#") || true; if [ -n "$AUTH_BASE" ]; then for p in / /api/auth/ok /sign-in /onboarding; do curl -sL -o /dev/null --max-time 20 "$AUTH_BASE$p" || true; done; fi',
         // Subshell so the bare `wait` reaps only these curls, not the
         // background chromium install / create-smoke started above.
         '( for i in 1 2 3 4 5 6 7 8; do (curl -s -o /dev/null --max-time 20 "$OS_BASE_URL/api/health" && curl -s -o /dev/null --max-time 20 "$OS_BASE_URL/") & done; wait )',
