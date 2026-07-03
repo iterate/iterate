@@ -6,7 +6,7 @@
  * takes url + method + headers and answers with the lane — and, for the
  * project lane, the exact url + headers to fetch onward with. Header
  * stripping at the trust boundary is a separate layer
- * (`stripInternalHeaders` in workers/ingress.ts).
+ * (`stripInternalHeaders` in src/worker.ts).
  *
  * Lanes:
  *

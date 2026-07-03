@@ -3,7 +3,6 @@
  * probes SSR, `/api/health`, and itx admin auth. Skipped by default and in
  * CI — run `pnpm test:smoke` (`RUNTIME_SMOKE_FULL=1`) locally.
  */
-import { spawn } from "node:child_process";
 import { dirname } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -37,49 +36,6 @@ function stripInheritedAppConfig(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     }
   }
   return next;
-}
-
-function runWithDrainedOutput(
-  command: string,
-  args: readonly string[],
-  options: { cwd: string; env: NodeJS.ProcessEnv },
-): Promise<{ code: number | null; output: string }> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    const child = spawn(command, args, {
-      cwd: options.cwd,
-      env: options.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    child.stdout?.on("data", (data: Buffer) => {
-      chunks.push(Buffer.from(data));
-      process.stdout.write(data);
-    });
-
-    child.stderr?.on("data", (data: Buffer) => {
-      chunks.push(Buffer.from(data));
-      process.stderr.write(data);
-    });
-
-    child.on("error", reject);
-    child.on("close", (code) => {
-      resolve({ code, output: Buffer.concat(chunks).toString("utf8") });
-    });
-  });
-}
-
-function parseAlchemyDeployUrl(output: string): string | undefined {
-  const fromLog =
-    output.match(/url:\s*'(https:\/\/[^']+)'/)?.[1] ??
-    output.match(/url:\s*"(https:\/\/[^"]+)"/)?.[1];
-
-  if (fromLog) {
-    return fromLog.replace(/\/$/, "");
-  }
-
-  const workers = output.match(/(https:\/\/[a-z0-9][-a-z0-9.]*\.workers\.dev)\/?/i);
-  return workers?.[1]?.replace(/\/$/, "");
 }
 
 async function assertSsrHtml(httpBaseUrl: string) {
@@ -224,39 +180,13 @@ describeRuntimeSmoke("runtime smoke", () => {
     const base = `http://127.0.0.1:${CF_DEV_PORT}`;
     await withServer(
       "pnpm",
-      ["exec", "tsx", "./scripts/dev.ts", "--skip-doppler"],
+      ["exec", "tsx", "./scripts/dev.ts", "start", "--skip-doppler"],
       {
         ...smokeEnv,
-        ALCHEMY_LOCAL: "true",
-        ALCHEMY_STAGE: "runtime-smoke",
         PORT: String(CF_DEV_PORT),
       },
       base,
       () => assertFullStack(base),
     );
   });
-
-  test.skipIf(!runFullSmoke)(
-    "pnpm run deploy",
-    async () => {
-      const { code, output } = await runWithDrainedOutput("pnpm", ["run", "deploy"], {
-        cwd: appRoot,
-        env: { ...stripInheritedAppConfig(process.env), ...smokeEnv },
-      });
-
-      if (code !== 0) {
-        throw new Error(`pnpm run deploy exited with code ${code}`);
-      }
-
-      const deployUrl = parseAlchemyDeployUrl(output);
-      if (!deployUrl) {
-        throw new Error(
-          `Could not find deployed workers.dev URL in pnpm run deploy output:\n${output}`,
-        );
-      }
-
-      await assertFullStack(deployUrl);
-    },
-    600_000,
-  );
 });

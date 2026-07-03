@@ -69,7 +69,7 @@ if (args.help) {
       "  --projects <json>    project claims: [{id,slug,organizationId}]",
       "  --claims <json>      extra access-token claims to merge",
       "  --base-url <url>     OS base URL (default: env APP_CONFIG_BASE_URL,",
-      "                       else apps/os/.alchemy/dev-server.json)",
+      "                       else apps/os/.dev-server/dev-server.json)",
       "  --browser-url        print only the one-shot browser sign-in URL",
       "  --return-to <path>   where the browser URL redirects after sign-in",
     ].join("\n"),
@@ -102,7 +102,7 @@ function resolveBaseUrl(): string {
   const fromEnv = process.env.APP_CONFIG_BASE_URL?.trim();
   if (fromEnv) return fromEnv.replace(/\/+$/, "");
   const repoRoot = findRepoRoot(process.cwd());
-  const discovery = join(repoRoot, "apps/os/.alchemy/dev-server.json");
+  const discovery = join(repoRoot, "apps/os/.dev-server/dev-server.json");
   if (existsSync(discovery)) {
     const info = JSON.parse(readFileSync(discovery, "utf8")) as { baseUrl?: string; pid?: number };
     // Ignore a stale discovery file: after a crash or `kill -9` the recorded
@@ -114,7 +114,7 @@ function resolveBaseUrl(): string {
   }
   throw new Error(
     "Could not resolve the OS base URL: pass --base-url, set APP_CONFIG_BASE_URL, " +
-      "or start the local dev server (apps/os/.alchemy/dev-server.json).",
+      "or start the local dev server (apps/os/.dev-server/dev-server.json).",
   );
 }
 
