@@ -6,7 +6,7 @@ import type {
   DynamicWorkerRef,
 } from "../../types.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { invokeFlattenedPath, replayPath } from "../itx/live-capability.ts";
+import { invokeFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
 import {
   loadResolvedWorker,
   resolveWorkerSource,

@@ -408,7 +408,7 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
     const serviceAuthToken = config.serviceAuthToken.exposeSecret().trim();
     if (!serviceAuthToken) {
       throw new ORPCError("INTERNAL_SERVER_ERROR", {
-        message: "SERVICE_AUTH_TOKEN is required for bootstrap OAuth client provisioning",
+        message: "config.serviceAuthToken is required for bootstrap OAuth client provisioning",
       });
     }
 
@@ -495,7 +495,7 @@ const setOAuthClient = os.internal.oauth.setClient
       const serviceAuthToken = config.serviceAuthToken.exposeSecret().trim();
       if (!serviceAuthToken) {
         throw new ORPCError("INTERNAL_SERVER_ERROR", {
-          message: "SERVICE_AUTH_TOKEN is required for OAuth client provisioning",
+          message: "config.serviceAuthToken is required for OAuth client provisioning",
         });
       }
       const headers = await getBootstrapAdminAuthHeaders({ serviceAuthToken });

@@ -5,8 +5,12 @@ import { env } from "cloudflare:workers";
 import { authenticateCapnwebAdmin } from "~/auth/admin-auth-cookie.ts";
 import { getUserPrincipal } from "~/auth/principal.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
+import {
+  chooseRootProjectRedirect,
+  type RootProjectRedirectDecision,
+} from "~/lib/project-root-redirect.ts";
 import { readProjectBySlug } from "~/project-directory.ts";
-import type { ProjectDeploymentStatus, UnauthenticatedItx } from "~/types.ts";
+import type { ProjectDeploymentStatus, UnauthenticatedOs } from "~/types.ts";
 import type { RequestContext } from "~/request-context.ts";
 
 /**
@@ -18,8 +22,10 @@ import type { RequestContext } from "~/request-context.ts";
  * ~/itx/itx-react.tsx consumers). What remains here is only what MUST run
  * server-side:
  * - `getProjectBySlugServerFn` — the project layout's `beforeLoad` (SSR).
- * - `listReadyProjectsServerFn` — the root `/` redirect decision (SSR); a thin
- *   proxy over the engine's `session.projects.list()`.
+ * - `getRootProjectRedirectServerFn` — the root `/` redirect decision (SSR);
+ *   a thin proxy over the engine's `session.projects.list()`, plus the
+ *   signup handoff for the one auth-created project that still needs its OS
+ *   bootstrap.
  *
  * Project deletion is deliberately absent rather than half-implemented:
  * the archival verb (auth-worker archive + engine teardown + UI) has not
@@ -45,16 +51,27 @@ export type Project = {
 type ProjectWithIngressUrl = Project & { ingressUrl: string };
 
 /**
- * The session's projects that actually exist in THIS deployment — the root
- * `/` redirect's input. It runs during SSR (itx is client-only), so it proxies
- * the engine's `session.projects.list()` through one pipelined capnweb HTTP
- * batch that forwards the caller's cookie. Failures degrade to an empty list:
- * the redirect then lands on `/projects`, which renders the real list.
+ * The root `/` redirect decision. It runs during SSR (itx is client-only), so
+ * it proxies the engine's `session.projects.list()` through one pipelined
+ * capnweb HTTP batch that forwards the caller's cookie.
+ *
+ * A brand-new auth signup creates the user/org/project records in auth before
+ * OS has a project stream. When that single auth-known project is the whole
+ * project set, this starts the OS bootstrap with `waitUntilCreated: false`,
+ * then redirects into the same `welcome=true` project home path used by the
+ * create form. The project home keeps showing creation progress and hands off
+ * to `/agents/onboarding` when `project/created` lands.
+ *
+ * Failures degrade to `/projects`, where the client-side recovery button and
+ * auto-recovery still render the real list.
  */
-export const listReadyProjectsServerFn: (input?: {
-  data?: undefined;
-}) => Promise<{ id: string; slug: string }[]> = createServerFn({ method: "GET" }).handler(
-  async ({ context }) => {
+export const getRootProjectRedirectServerFn: (input?: {
+  data?: { preferredProjectSlug: string | null };
+}) => Promise<RootProjectRedirectDecision> = createServerFn({ method: "GET" })
+  .validator((input?: { preferredProjectSlug: string | null }) => ({
+    preferredProjectSlug: input?.preferredProjectSlug ?? null,
+  }))
+  .handler(async ({ context, data }) => {
     try {
       const session = engineBatchSession(context);
       const root = session.authenticate({ type: "from-server-cookie" });
@@ -62,14 +79,29 @@ export const listReadyProjectsServerFn: (input?: {
       // root redirect must follow the signed-in user's claims, never the
       // deployment listing.
       const projects = await root.projects.list({ scope: "mine" });
-      return projects
-        .filter((project) => project.deploymentStatus === "ready")
-        .map((project) => ({ id: project.id, slug: project.slug }));
+      const decision = chooseRootProjectRedirect({
+        preferredProjectSlug: data.preferredProjectSlug,
+        projects,
+      });
+
+      if (decision.kind === "project" && decision.welcome) {
+        try {
+          await root.projects.create({
+            projectId: decision.project.id,
+            slug: decision.project.slug,
+            waitUntilCreated: false,
+            ...organizationSlugForProject(context, decision.project),
+          });
+        } catch {
+          return { kind: "projects" };
+        }
+      }
+
+      return decision;
     } catch {
-      return [];
+      return { kind: "projects" };
     }
-  },
-);
+  });
 
 /** A single project the session principal can read, by slug. */
 export const getProjectBySlugServerFn: (input: {
@@ -154,10 +186,22 @@ function engineBatchSession(context: RequestContext) {
   const cookie = context.rawRequest?.headers.get("cookie");
   if (!cookie) throw new Error("Sign in to reach the project engine.");
   // oxlint-disable-next-line iterate/no-capnweb-http-batch -- one-shot pipelined batch per request; no socket lifecycle to manage in a server function.
-  return newHttpBatchRpcSession<UnauthenticatedItx>(
-    new Request(`${baseUrl}/api/itx`, {
+  return newHttpBatchRpcSession<UnauthenticatedOs>(
+    new Request(`${baseUrl}/api`, {
       method: "POST",
       headers: { cookie },
     }),
   );
+}
+
+function organizationSlugForProject(
+  context: RequestContext,
+  project: { organizationId: string | null },
+) {
+  if (!project.organizationId) return {};
+
+  const organization = getUserPrincipal(context.principal)?.organizations.find(
+    (candidate) => candidate.id === project.organizationId,
+  );
+  return organization ? { organizationSlug: organization.slug } : {};
 }

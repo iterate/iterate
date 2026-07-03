@@ -22,9 +22,9 @@ import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
 import { StreamPath } from "~/lib/stream-links.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
-import type { Itx } from "~/types.ts";
+import type { ProjectRpcTarget } from "~/types.ts";
 
-type Connection = Awaited<ReturnType<Itx["integrations"]["getConnection"]>>;
+type Connection = Awaited<ReturnType<ProjectRpcTarget["integrations"]["getConnection"]>>;
 
 const Search = StreamViewSearch.extend({
   error: z.string().optional(),

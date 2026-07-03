@@ -53,12 +53,12 @@ export function CreateProjectForm() {
         waitUntilCreated: false,
         ...(input.organizationSlug ? { organizationSlug: input.organizationSlug } : {}),
       });
-      // ONE pipelined round trip, then navigate: describe() rides the create
+      // ONE pipelined round trip, then navigate: __describe() rides the create
       // pipeline, so the only wait is create itself (auth registration +
       // bootstrap appends). Deliberately NOT awaited here: projects.list() —
       // it probes engine existence for every project the caller owns, which
       // costs whole seconds and is exactly the "weird delay" this path had.
-      const description = await project.describe();
+      const description = await project.__describe();
       // The form validates strict kebab-case, so the auth worker's slug
       // normalization is an identity for UI creates; the background task
       // below still reconciles against the canonical record.

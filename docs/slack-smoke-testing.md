@@ -35,8 +35,7 @@ latency.
 The OS Slack bot must not wake itself. A message sent with the environment's
 Slack fallback token is useful for creating a real Slack thread, but it should
 not be treated as the inbound trigger. Current configs keep that fallback at
-`APP_CONFIG_INTEGRATIONS__SLACK.botToken`; `APP_CONFIG_SLACK_BOT_TOKEN` is only
-the legacy top-level fallback during migration.
+`APP_CONFIG_INTEGRATIONS__SLACK.botToken`.
 
 To test bot-originated wakeups, use either:
 
@@ -52,8 +51,7 @@ Run commands from `apps/os`.
 
 - `doppler` access to the target OS config.
 - `APP_CONFIG_ADMIN_API_SECRET` in that config.
-- `APP_CONFIG_INTEGRATIONS__SLACK.botToken` in that config, or the legacy
-  `APP_CONFIG_SLACK_BOT_TOKEN` during migration.
+- `APP_CONFIG_INTEGRATIONS__SLACK.botToken` in that config.
 - The OS Slack bot is a member of `#slack-agent-e2e-test`.
 - The target app is deployed and reachable through `APP_CONFIG_BASE_URL`.
 

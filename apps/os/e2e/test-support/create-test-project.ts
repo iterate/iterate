@@ -1,6 +1,6 @@
 import type { RpcStub } from "capnweb";
 import { createAdminOsItx, requireBaseUrl, uniqueSuffix } from "./os-client.ts";
-import type { Agent, Itx } from "~/types.ts";
+import type { Agent, ProjectRpcTarget } from "~/types.ts";
 import { connectItx } from "~/itx-client.ts";
 
 /**
@@ -21,13 +21,13 @@ export async function createTestProject(opts: { slugPrefix: string }) {
 
   using session = createAdminOsItx({ baseUrl });
   using created = session.projects.create({ slug });
-  const description = await created.describe();
+  const description = await created.__describe();
   const project = { id: description.projectId, slug };
 
   return {
     baseUrl,
     /** A fresh admin itx handle narrowed to this project (or an agent in it). */
-    itx(): RpcStub<Itx> {
+    itx(): RpcStub<ProjectRpcTarget> {
       return createAdminOsItx({ baseUrl, context: project.id });
     },
     agent(agentPath: string): RpcStub<Agent> {

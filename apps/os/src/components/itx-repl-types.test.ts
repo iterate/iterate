@@ -37,18 +37,18 @@ describe("itx REPL TypeScript declarations", () => {
       context: { explicit: true, pos: "itx.".length },
     });
 
-    // The handle is Session & Itx (see the prelude): the Session catalog and
+    // The handle is Session & ProjectRpcTarget (see the prelude): the Session catalog and
     // every project built-in must complete.
     const labels = new Set(result?.options.map((option) => option.label));
     for (const member of [
-      "describe",
+      "__describe",
+      "capabilityHost",
+      "capabilityHosts",
       "projects",
       "provideCapability",
       "repo",
-      "runScript",
       "secrets",
       "streams",
-      "whoami",
       "workers",
     ]) {
       expect(labels, `expected completion "${member}"`).toContain(member);
@@ -61,7 +61,7 @@ describe("itx REPL TypeScript declarations", () => {
     const code = [
       'const projectScoped: string = projectId ?? "global";',
       "const target: object = new RpcTarget();",
-      "const read: (handle: Itx) => Promise<StreamEvent[]> = (handle) =>",
+      "const read: (handle: ProjectRpcTarget) => Promise<StreamEvent[]> = (handle) =>",
       '  handle.streams.get("/chat").getEvents();',
       "const recipe: ProvideCapabilityInput = {",
       '  expression: ["streams", ["get", "/x"]],',
@@ -81,7 +81,8 @@ describe("itx REPL TypeScript declarations", () => {
 
   test("core itx calls type-check against the raw types file", () => {
     const code = [
-      "const description = await itx.describe();",
+      // itx is Session & ProjectRpcTarget; pin the project overload of __describe.
+      "const description = await (itx as ProjectRpcTarget).__describe();",
       'const events = await itx.streams.get("/x").append({ type: "demo", payload: { a: 1 } });',
       "const commit = await itx.repo.commitFiles({",
       '  changes: [{ content: "hi", path: "notes/hi.md" }],',

@@ -112,7 +112,7 @@ test("configured durable object subscribers must target the stream project", asy
     secret: adminSecret(),
   });
   using project = itx.projects.create({ slug: `configured-cross-project-${marker}` });
-  const { projectId } = await project.describe();
+  const { projectId } = await project.__describe();
   using stream = project.streams.get(`/configured-cross-project-${marker}`);
 
   await expect(
@@ -302,7 +302,7 @@ test("closing a Cap'n Web session without unsubscribe removes its stream subscri
     secret: adminSecret(),
   });
   using project = observerItx.projects.create({ slug: `lifecycle-session-close-${marker}` });
-  const { projectId } = await project.describe();
+  const { projectId } = await project.__describe();
   using observerStream = project.streams.get(streamPath);
 
   const delivered: StreamEvent[] = [];
@@ -364,7 +364,7 @@ test.skip("dropping a WebSocket waitForEvent caller cleans up the internal waitF
     secret: adminSecret(),
   });
   using project = observerItx.projects.create({ slug: `lifecycle-wait-${marker}` });
-  const { projectId } = await project.describe();
+  const { projectId } = await project.__describe();
   using observerStream = project.streams.get(streamPath);
 
   const waiterSession = withItxSession();

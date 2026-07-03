@@ -6,7 +6,7 @@
 import { fileURLToPath } from "node:url";
 import type { RpcStub } from "capnweb";
 import { connectItx } from "../../src/itx-client.ts";
-import type { Itx, Session } from "../../src/types.ts";
+import type { ProjectRpcTarget, Session } from "../../src/types.ts";
 import { resolveBaseUrl } from "../test-support/dev-server.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
@@ -36,7 +36,7 @@ export function connectGlobal(): RpcStub<Session> {
 }
 
 /** A project-scoped itx on the deployment under test, via admin auth. */
-export function connectProject(projectId: string): RpcStub<Itx> {
+export function connectProject(projectId: string): RpcStub<ProjectRpcTarget> {
   return connectItx({
     auth: { secret: adminApiSecret(), type: "admin-secret" },
     baseUrl: baseUrl(),
