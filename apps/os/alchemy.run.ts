@@ -18,8 +18,10 @@ import {
   ITERATE_WORKER_OBSERVABILITY,
   IterateAppWorker,
   IterateRoutes,
+  parkWorkerRoutes,
 } from "@iterate-com/shared/alchemy/iterate-app";
 import { prepareLocalDevServer } from "@iterate-com/shared/alchemy/local-dev-server";
+import { slugify } from "@iterate-com/shared/slugify";
 import { ensureLocalDevOAuthClient } from "./src/auth/dev-oauth-client-bootstrap.ts";
 import { AppConfig } from "./src/config.ts";
 import type { AgentDurableObject } from "./src/domains/agents/agent-durable-object.ts";
@@ -29,6 +31,42 @@ import type { RepoDurableObject } from "./src/domains/repos/repo-durable-object.
 import type { SecretDurableObject } from "./src/domains/secrets/secret-durable-object.ts";
 import type { StreamDurableObject } from "./src/domains/streams/stream-durable-object.ts";
 import type { StatefulWorkerDurableObject } from "./src/domains/workers/stateful-worker-durable-object.ts";
+
+// `--park` re-parks the slot edge after `--destroy` deleted every worker:
+// upload a placeholder ingress script and re-ensure + verify routes/DNS
+// against it, so the next tenant's deploy finds live routes instead of
+// paying the route-creation propagation lottery (see parkWorkerRoutes).
+// Alchemy exits the process inside the destroy phase, so this cannot run in
+// the same invocation — package.json "destroy" chains it. Hostnames are read
+// straight from the flat APP_CONFIG_* env vars (with the APP_CONFIG blob as
+// fallback, same precedence as scripts/preview readPreviewAppConfig) instead
+// of the full AppConfig parse, which would drag deploy-time JWKS fetching —
+// against the auth worker this very teardown just deleted — into the park.
+if (process.argv.includes("--park")) {
+  if (/^(1|true|yes)$/i.test(process.env.ALCHEMY_LOCAL ?? "")) process.exit(0);
+  const stage = process.env.ALCHEMY_STAGE?.trim();
+  if (!stage) throw new Error("ALCHEMY_STAGE is required to park a slot.");
+  const appConfigBlob = process.env.APP_CONFIG?.trim()
+    ? (JSON.parse(process.env.APP_CONFIG) as {
+        baseUrl?: string;
+        mcp?: { baseUrl?: string };
+        projectHostnameBases?: string[];
+      })
+    : {};
+  await parkWorkerRoutes({
+    hostnames: osRouteHostnames({
+      baseUrl: process.env.APP_CONFIG_BASE_URL || appConfigBlob.baseUrl,
+      mcp: { baseUrl: process.env.APP_CONFIG_MCP__BASE_URL || appConfigBlob.mcp?.baseUrl },
+      projectHostnameBases: process.env.APP_CONFIG_PROJECT_HOSTNAME_BASES?.trim()
+        ? (JSON.parse(process.env.APP_CONFIG_PROJECT_HOSTNAME_BASES) as string[])
+        : appConfigBlob.projectHostnameBases,
+    }),
+    slug: "os",
+    stage,
+    workerName: slugify(`os-${stage}`),
+  });
+  process.exit(0);
+}
 
 const resolvedAuthIssuer =
   process.env.APP_CONFIG_ITERATE_AUTH__ISSUER ?? process.env.ITERATE_OAUTH_ISSUER;
@@ -227,9 +265,8 @@ const workerNames = {
 // (local dev), and <slug>.iterate-preview-N.app (preview).
 // The preview app shell deliberately lives on the sibling
 // iterate-preview-N.com zone (`os.iterate-preview-N.com`) so project/MCP hosts
-// can own the iterate-preview-N.app zone cleanly.
-const projectHostnameBases = ctx.runtimeConfig.projectHostnameBases ?? [];
-const mcpRouteHostname = routeHostnameForUrl(ctx.runtimeConfig.mcp?.baseUrl);
+// can own the iterate-preview-N.app zone cleanly. Hostname derivation:
+// osRouteHostnames below.
 const artifactsAccountId = requireEnv("CLOUDFLARE_ACCOUNT_ID");
 const artifactsNamespace = `${ctx.workerName}-repos`;
 
@@ -498,22 +535,6 @@ const ingressWorker = await osWorker("ingress", {
   },
 });
 
-const baseUrlHostname = ctx.runtimeConfig.baseUrl
-  ? new URL(ctx.runtimeConfig.baseUrl).hostname
-  : undefined;
-await IterateRoutes(ctx, {
-  worker: ingressWorker,
-  hostnames: [
-    ...new Set(
-      [
-        ...(baseUrlHostname ? [baseUrlHostname] : []),
-        ...(mcpRouteHostname ? [mcpRouteHostname] : []),
-        ...projectHostnameBases.flatMap(projectRouteHostnamesForBase),
-      ].filter((hostname) => !hostname.endsWith(".workers.dev")),
-    ),
-  ],
-});
-
 /** Per-worker Env types for src/lib/worker-env.d.ts. */
 export const workers = {
   agent: agentWorker,
@@ -530,7 +551,40 @@ export const workers = {
 
 await ctx.app.finalize();
 
+// Routes + DNS are ensured AFTER finalize: they are not alchemy resources
+// (deploys and destroys never delete them — see iterate-app.ts), and running
+// the ensure earlier would let finalize's orphan cleanup delete a route the
+// ensure just verified.
+await IterateRoutes(ctx, {
+  worker: ingressWorker,
+  hostnames: osRouteHostnames(ctx.runtimeConfig),
+});
+
 if (!ctx.app.local) process.exit(0);
+
+/**
+ * Every hostname routed to the os ingress worker for a given config: the app
+ * base URL, the MCP host, and the project-host patterns. Shared between the
+ * deploy path (ctx.runtimeConfig) and `--park` (config parsed straight from
+ * env, no alchemy app).
+ */
+function osRouteHostnames(config: {
+  baseUrl?: string;
+  mcp?: { baseUrl?: string };
+  projectHostnameBases?: string[];
+}) {
+  const baseUrlHostname = config.baseUrl ? new URL(config.baseUrl).hostname : undefined;
+  const configMcpHostname = routeHostnameForUrl(config.mcp?.baseUrl);
+  return [
+    ...new Set(
+      [
+        ...(baseUrlHostname ? [baseUrlHostname] : []),
+        ...(configMcpHostname ? [configMcpHostname] : []),
+        ...(config.projectHostnameBases ?? []).flatMap(projectRouteHostnamesForBase),
+      ].filter((hostname) => !hostname.endsWith(".workers.dev")),
+    ),
+  ];
+}
 
 /**
  * Convert OS project-host bases into Cloudflare route host patterns.

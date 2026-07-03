@@ -397,7 +397,9 @@ doppler run --project _shared --config prd -- pnpm preview acquire --slot 9    #
 # "Acting as users" above; bare --admin lands on the auth login page):
 doppler run --project os --config preview_9 -- pnpm auth:mint --admin --browser-url
 
-# Tear down and release when done:
+# Tear down and release when done (destroy chains --park: the slot's routes
+# and DNS stay live against a placeholder script, so the next deploy never
+# creates routes on its critical path — see iterate-app.ts):
 (cd apps/os   && doppler run --project os   --config preview_9 -- pnpm run destroy)
 (cd apps/auth && doppler run --project auth --config preview_9 -- pnpm alchemy:down)
 doppler run --project _shared --config prd -- pnpm preview release --slot 9 --lease-id <leaseId>
