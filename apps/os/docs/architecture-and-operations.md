@@ -136,7 +136,7 @@ script shape: a body that runs with `itx` (and `vars`) in scope and ends with
 an explicit `return` (see `src/itx/examples.ts`, the catalogue that doubles
 as the REPL Examples panel and the cross-runtime e2e matrix).
 
-Capabilities are visible through `itx.describe()`. The built-ins
+Capabilities are visible through `itx.__describe()`. The built-ins
 (`itx.streams`, `itx.repos`, `itx.secrets`, `itx.agents`, `itx.workers`,
 `itx.worker`, `itx.egress`, `itx.mcp`, `itx.openapi`, `itx.ai`; `itx.agent` /
 `itx.chat` on agent scopes) plus mounted capabilities are catalogued in

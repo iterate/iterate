@@ -151,7 +151,7 @@ export async function createAdminProject(input: { baseUrl: string; slug: string 
     baseUrl: input.baseUrl,
   });
   using created = session.projects.create({ slug: input.slug });
-  const description = await created.describe();
+  const description = await created.__describe();
   const project = { id: description.projectId, slug: input.slug };
 
   return {

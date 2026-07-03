@@ -115,7 +115,7 @@ doppler run --config preview_3 -- pnpm cli itx run \
 ```bash
 # Confirm the project resolves and list its capabilities.
 doppler run --config prd -- pnpm cli itx run \
-  --eval 'const project = await itx.projects.get("<prj_id>"); return await project.describe()'
+  --eval 'const project = await itx.projects.get("<prj_id>"); return await project.__describe()'
 
 # List the project's streams.
 doppler run --config prd -- pnpm cli itx run \

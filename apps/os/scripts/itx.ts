@@ -83,7 +83,7 @@ export async function startRepl(options: ReplOptions) {
     [
       `Connected to ${connection.baseUrl}`,
       options.context
-        ? `Context: project ${options.context} — try: await itx.describe()`
+        ? `Context: project ${options.context} — try: await itx.__describe()`
         : "Context: session — try: await itx.projects.list()",
       "",
     ].join("\n"),

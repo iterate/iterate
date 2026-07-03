@@ -103,10 +103,8 @@ async function waitForAuthDeployment(baseUrl: string, timeoutMs = 120_000) {
 export async function seedOAuthClients(
   env: Record<string, string | undefined>,
   // The reachable URL to seed *through* (API calls + readiness probe). Defaults
-  // to the custom-domain origin, but a fresh deploy passes the worker's
-  // workers.dev URL — it's live instantly, whereas a brand-new custom hostname
-  // can take minutes to issue an edge cert (which previously timed out the
-  // preview deploy). The seeded data (redirect URIs) is unaffected.
+  // to the configured auth app origin. The seeded data (redirect URIs) is
+  // unaffected by which deployed origin handles the admin request.
   opts: { baseUrl?: string } = {},
 ) {
   const parsed = SeedOAuthClientsEnv.safeParse(env);
