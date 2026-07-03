@@ -7,6 +7,7 @@ export type ResourcesRow = {
   data: string;
   lease_state: string;
   leased_until: number | null;
+  holder: string | null;
   last_acquired_at: number | null;
   last_released_at: number | null;
   created_at: string;

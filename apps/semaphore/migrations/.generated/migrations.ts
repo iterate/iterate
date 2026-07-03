@@ -14,6 +14,8 @@ import {
 export const migrations = {
   "migrations/0001_init.sql":
     "CREATE TABLE IF NOT EXISTS resources (\n  type TEXT NOT NULL,\n  slug TEXT NOT NULL,\n  data TEXT NOT NULL,\n  -- Durable Objects remain authoritative for lease coordination. These columns mirror the\n  -- current lease view into D1 so operators can inspect inventory and likely timeout data\n  -- with a single SQL query without turning D1 into a second source of truth.\n  lease_state TEXT NOT NULL DEFAULT 'available',\n  leased_until INTEGER,\n  last_acquired_at INTEGER,\n  last_released_at INTEGER,\n  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  PRIMARY KEY (type, slug)\n);\n\nCREATE INDEX IF NOT EXISTS idx_resources_type_created_at\nON resources(type, created_at, slug);\n",
+  "migrations/0002_add_holder.sql":
+    "-- Mirror the lease holder (e.g. `pr-1592`, `manual-jonas`) into D1 so\n-- operators and the preview CLI can see who holds each resource.\nALTER TABLE resources ADD COLUMN holder TEXT;\n",
 };
 
 export function migrate(client: SyncClient): void;
