@@ -25,6 +25,7 @@ import {
 } from "@iterate-com/ui/components/dialog";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { Navigate, createFileRoute } from "@tanstack/react-router";
+import { createServerFn } from "@tanstack/react-start";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { slugify } from "@iterate-com/shared/slug";
@@ -47,6 +48,14 @@ import {
 } from "../../utils/auth-query-options.ts";
 import { getInitials } from "../../utils/initials.ts";
 import { orpcClient } from "../../utils/query.tsx";
+import { parseConfig } from "../../config.ts";
+
+// Runs on the server for both SSR and client navigations. The hostname base
+// is this environment's deployed project domain (e.g. "iterate.app",
+// "iterate-preview-3.app") — onboarding previews "<slug>.<base>" under it.
+const getProjectAccessConfig = createServerFn({ method: "GET" }).handler(({ context }) => ({
+  projectHostnameBase: parseConfig(context.cloudflare.env).projectHostnameBase,
+}));
 
 export const Route = createFileRoute("/_auth/project-access")({
   component: RouteComponent,
@@ -55,12 +64,8 @@ export const Route = createFileRoute("/_auth/project-access")({
     scope: z.string().optional(),
     redirect: z.string().optional(),
   }),
+  loader: () => getProjectAccessConfig(),
 });
-
-// Deployed project hostname base for this environment, baked in at build time
-// (e.g. "iterate.app", "iterate-preview-3.app"); see VITE_PROJECT_HOSTNAME_BASE
-// in alchemy.run.ts.
-const PROJECT_HOSTNAME_BASE: string = import.meta.env.VITE_PROJECT_HOSTNAME_BASE || "iterate.app";
 
 const ProjectSlugInput = z
   .string()
@@ -81,6 +86,7 @@ const CreateProjectInput = z.object({
 
 function RouteComponent() {
   const { client_id, scope, redirect } = Route.useSearch();
+  const { projectHostnameBase } = Route.useLoaderData();
   const navigate = Route.useNavigate();
   const queryClient = useQueryClient();
   const session = useSession();
@@ -325,6 +331,7 @@ function RouteComponent() {
   const createProjectFormProps = {
     organizations,
     projectSlug,
+    projectHostnameBase,
     selectedOrganizationSlug: effectiveOrganizationSlug,
     isSubmitting,
     isCreating: createProjectMutation.isPending,
@@ -409,7 +416,7 @@ function RouteComponent() {
                   <FieldDescription>
                     Your project homepage will be under{" "}
                     <span className="font-medium text-foreground">
-                      {firstProjectSlug || "your-project"}.{PROJECT_HOSTNAME_BASE}
+                      {firstProjectSlug || "your-project"}.{projectHostnameBase}
                     </span>
                   </FieldDescription>
                   {firstProjectSlugIssues.length > 0 ? (
@@ -725,6 +732,7 @@ function CreateProjectForm(props: {
   className?: string;
   organizations: { id: string; name: string; slug: string }[];
   projectSlug: string;
+  projectHostnameBase: string;
   selectedOrganizationSlug: string;
   isSubmitting: boolean;
   isCreating: boolean;
@@ -776,7 +784,7 @@ function CreateProjectForm(props: {
           <FieldDescription>
             Your project homepage will be under{" "}
             <span className="font-medium text-foreground">
-              {props.projectSlug || "your-project"}.{PROJECT_HOSTNAME_BASE}
+              {props.projectSlug || "your-project"}.{props.projectHostnameBase}
             </span>
           </FieldDescription>
           {props.error ? <FieldError errors={props.error} /> : null}
