@@ -4,12 +4,14 @@ Monorepo for Iterate's Cloudflare Workers platform. **`apps/os`** is the main ap
 
 ## Environments
 
-- Commands run in the context of a Doppler config; that config chooses secrets,
-  app config, Cloudflare account, and Alchemy stage.
-- Local dev, previews, and production use the same `alchemy.run.ts` primitive
-  with different configs: shared `dev`, personal `dev_<you>`, `preview_N`, or
-  `prd`.
-- Details: [DevOps: Cloudflare, Doppler, And Alchemy](docs/devops-cloudflare-doppler-alchemy-setup.md).
+- The root `envs.ts` is the typed map of every deployed environment
+  (hostnames, worker names, accounts, resource IDs); Doppler supplies only
+  secrets, one config per env (`prd`, `preview_N`; `dev`/`dev_<you>` are
+  fully local and never deploy).
+- Each app deploys with its own small scripts: `pnpm run deploy --env <name>`
+  (build → wrangler deploy with atomic secrets → smoke), `ensure-resources`,
+  `erase-data`. Workers are never deleted.
+- Details: [DevOps: Cloudflare And Doppler](docs/devops-cloudflare-doppler.md).
 
 ## Talking to OS
 
@@ -101,14 +103,14 @@ local dev (fully local, random port, `localhost` plus project
 `<slug>.localhost` hosts), be any user or an admin (minting), point a browser
 (headless golden path) at local dev or a preview, create a preview environment
 from your machine, and when you need a public callback URL. Doppler/Cloudflare/deploy details:
-`docs/devops-cloudflare-doppler-alchemy-setup.md`.
+`docs/devops-cloudflare-doppler.md`.
 
 ## Documentation
 
 ### Platform & architecture
 
 - [Architecture](docs/architecture.md)
-- [DevOps: Cloudflare, Doppler, And Alchemy](docs/devops-cloudflare-doppler-alchemy-setup.md)
+- [DevOps: Cloudflare And Doppler](docs/devops-cloudflare-doppler.md)
 - [Brand & tone](docs/brand-and-tone-of-voice.md)
 
 ### Development

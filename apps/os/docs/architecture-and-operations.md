@@ -188,7 +188,7 @@ It requires `SERVICE_AUTH_TOKEN` (run through Doppler for the auth project).
 
 ## Deployment
 
-`alchemy.run.ts` defines the deployment: the full worker topology
+The generated `wrangler.jsonc` (from the root `envs.ts`) defines the deployment: a single worker
 ([worker-topology.md](./worker-topology.md)), the Durable Object namespaces
 (each owned by its worker, bound cross-script everywhere else), the
 `PROJECT_DIRECTORY` KV namespace, a `WorkerLoader`, the Workers AI binding,

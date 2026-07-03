@@ -8,7 +8,7 @@ Assume we are debugging:
 
 Use `preview_N` or `prd` configs for deployed workers. For local dev, use
 `dev` or `dev_<user>` with `pnpm dev`; scripts discover the running server from
-`.alchemy/dev-server.json`. Run CLI commands from `apps/os`; plain
+`.dev-server/dev-server.json`. Run CLI commands from `apps/os`; plain
 `pnpm cli ...` uses local Doppler setup, and
 `doppler run --config <config> -- pnpm cli ...` targets a specific deployment.
 
@@ -141,7 +141,7 @@ Use the Cloudflare API MCP server for Workers traces, routes, bindings,
 Durable Objects, and other Cloudflare state. Docs:
 [Cloudflare MCP servers](https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/).
 
-The deployed worker name is derived in `packages/shared/src/alchemy/init.ts` as
+The deployed worker name comes from the env's entry in the root `envs.ts` as
 `${manifest.slug}-${app.stage}` and then used by `apps/os/alchemy.run.ts` as
 `ctx.workerName`. For production OS, `os-prd` is the ingress router; the app
 worker is `os-prd-app`, the itx api worker is `os-prd-api`, and each Durable

@@ -86,7 +86,7 @@ Typed runtime configuration serialized into the deployed app and readable by run
 _Avoid_: runtime config, deployment config
 
 **Deployment Config**:
-Typed deployment-time configuration read by Alchemy while declaring cloud resources and not serialized into the running app.
+Typed deployment-time configuration read by the deploy scripts (envs.ts, Cloudflare credentials) and not serialized into the running app.
 _Avoid_: app config, runtime config
 
 ## Relationships
@@ -128,7 +128,7 @@ _Avoid_: app config, runtime config
 - The OS `packages/streams` migration uses only the new **Processor Subscription** event schema; legacy callable subscription events are not translated.
 - **SecretsCapability** and **Workspace** lifecycle are out of scope for the first OS `packages/streams` migration slice.
 - **App Config** is available inside deployed app code.
-- **Deployment Config** is available to Alchemy deployment code only.
+- **Deployment Config** is available to deploy scripts only.
 - Cloudflare API credentials and cross-script binding script names belong in **Deployment Config**, not **App Config**.
 
 ## Example dialogue
@@ -146,7 +146,7 @@ _Avoid_: app config, runtime config
 > **Domain expert:** "No — use **ProjectId** for durable identity. **ProjectSlug** is routing language."
 
 > **Dev:** "Should a Worker script name used for a cross-script Durable Object binding live in App Config?"
-> **Domain expert:** "No — that is **Deployment Config**, because only Alchemy needs it to create the binding."
+> **Domain expert:** "No — that is **Deployment Config**, because only the deploy scripts need it to create the binding."
 
 ## Flagged ambiguities
 
@@ -164,7 +164,7 @@ _Avoid_: app config, runtime config
 - Stream append policy could be tightened during the cutover — resolved for the POC: leave broad append authority in place and focus on getting the new runtime working.
 - Legacy callable subscription events could be translated during migration — resolved for the hardcore cutover: emit and consume only the new `packages/streams` **Processor Subscription** schema.
 - Secrets and workspaces were listed as possible stream-owned domain objects — resolved for the first slice: keep them as existing capabilities/stateful surfaces.
-- "app config" mixed runtime-readable values with deployment-only values — resolved: use **App Config** for app-readable runtime configuration and **Deployment Config** for Alchemy-only deployment inputs.
+- "app config" mixed runtime-readable values with deployment-only values — resolved: use **App Config** for app-readable runtime configuration and **Deployment Config** for deploy-script-only inputs.
 - "stream API" and "streams API" were both used for OS's project stream surface — resolved: use **OS Streams API** and **StreamsCapability** because callers can operate over a project-scoped set of streams, not only one stream.
 - "getSecret" was used both as a raw credential read and as a placeholder for later egress substitution — resolved for the current OS secrets/codemode slice: `getSecret` is a raw **Secret Material** read through **SecretsCapability**.
 - "Slack OAuth client" could mean the OAuth app config, a workspace connection, or a token — resolved: provider OAuth app settings are **OAuth Client Configuration** in **App Config**.

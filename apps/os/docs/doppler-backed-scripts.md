@@ -77,7 +77,7 @@ then redirects back to OS:
 ```bash
 doppler run --project os --config dev -- node -e '
 const http = require("node:http");
-const { baseUrl } = require("./.alchemy/dev-server.json");
+const { baseUrl } = require("./.dev-server/dev-server.json");
 const target = baseUrl;
 const port = 5199;
 const server = http.createServer(async (_req, res) => {

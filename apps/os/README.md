@@ -86,7 +86,7 @@ example matrix in `e2e/examples/**`, and a `browser` project running the
 matrix in a real browser). Start the worker in one terminal, then run tests
 from another
 through the matching Doppler config. For local dev configs, test helpers read
-`.alchemy/dev-server.json` to find the selected port; deployed configs get
+`.dev-server/dev-server.json` to find the selected port; deployed configs get
 `APP_CONFIG_BASE_URL` from Doppler. All lanes, targets, and the canonical env
 vars: [docs/testing.md](../../docs/testing.md).
 
@@ -107,8 +107,8 @@ verify against a deployed preview before treating one as a regression.
 
 `pnpm dev` is the shorthand for the local Doppler/Alchemy dev flow. It uses
 the local Doppler setup for `apps/os` and starts Alchemy with that env. The
-dev wrapper writes output to `.alchemy/dev-server.log`, so a second terminal
-can follow it with `tail -f .alchemy/dev-server.log`. Lifecycle controls:
+dev wrapper writes output to `.dev-server/dev-server.log`, so a second terminal
+can follow it with `tail -f .dev-server/dev-server.log`. Lifecycle controls:
 
 ```bash
 pnpm dev status
@@ -144,7 +144,7 @@ Smoke local MCP with the Inspector:
 
 ```bash
 doppler run --project os --config dev -- sh -lc '
-  BASE=$(node -p "require(\"./.alchemy/dev-server.json\").baseUrl")
+  BASE=$(node -p "require(\"./.dev-server/dev-server.json\").baseUrl")
   npx -y @modelcontextprotocol/inspector --cli "$BASE/api/mcp" \
     --transport http \
     --method tools/list \
@@ -156,7 +156,7 @@ Then call `exec_js` with a real project slug:
 
 ```bash
 doppler run --project os --config dev -- sh -lc '
-  BASE=$(node -p "require(\"./.alchemy/dev-server.json\").baseUrl")
+  BASE=$(node -p "require(\"./.dev-server/dev-server.json\").baseUrl")
   npx -y @modelcontextprotocol/inspector --cli "$BASE/api/mcp" \
     --transport http \
     --method tools/call \
@@ -184,7 +184,9 @@ The script pattern is documented in
 - `src/config.ts` — the `AppConfig` runtime config schema.
 - `src/routes/_app` — authenticated app routes; `src/start.ts` installs the
   auth-worker request middleware.
-- `alchemy.run.ts` — the deployment: all ten workers, DO namespaces, routes.
+- `wrangler.jsonc` — the deployment config, generated from the root
+  `envs.ts` by `scripts/generate-wrangler-config.ts` (one worker, all DO
+  classes; see docs/worker-topology.md). Deploys: `pnpm run deploy --env <name>`.
   back. Do not import from them.
 
 ## History
