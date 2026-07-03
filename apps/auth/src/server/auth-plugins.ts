@@ -61,7 +61,16 @@ function userIdOf(user: Record<string, unknown> | null | undefined): string | nu
   return typeof user?.id === "string" ? user.id : null;
 }
 
-export function getAuthPlugins(env: Record<string, unknown>) {
+/** Only the config the plugin list actually needs. Kept plain (not the whole
+ * `AppConfig`) so the sqlfu schema-generation entry (auth.schema-only.ts) can
+ * build the same plugin set without real secrets. */
+export type AuthPluginOptions = {
+  emailOtpEnabled: boolean;
+  resendApiKey: string;
+  resendDomain: string;
+};
+
+export function getAuthPlugins(options: AuthPluginOptions) {
   const osResourceBases = getOsResourceBases();
   const validAudiences = [...osResourceBases, ...getOsMcpResourceBases()];
 
@@ -83,7 +92,7 @@ export function getAuthPlugins(env: Record<string, unknown>) {
       storeToken: "plain",
       disableSetSessionCookie: true,
     }),
-    ...(env.VITE_ENABLE_EMAIL_OTP_SIGNIN === "true"
+    ...(options.emailOtpEnabled
       ? [
           emailOTP({
             otpLength: 6,
@@ -102,11 +111,11 @@ export function getAuthPlugins(env: Record<string, unknown>) {
               const response = await fetch("https://api.resend.com/emails", {
                 method: "POST",
                 headers: {
-                  authorization: `Bearer ${env.RESEND_BOT_API_KEY}`,
+                  authorization: `Bearer ${options.resendApiKey}`,
                   "content-type": "application/json",
                 },
                 body: JSON.stringify({
-                  from: `Iterate <noreply+auth@${env.RESEND_BOT_DOMAIN}>`,
+                  from: `Iterate <noreply+auth@${options.resendDomain}>`,
                   to: email,
                   subject: `Your verification code: ${otp}`,
                   text: `Your verification code is: ${otp}\n\nThis code expires in 5 minutes.`,
@@ -133,13 +142,19 @@ export function getAuthPlugins(env: Record<string, unknown>) {
             }
           }
 
-          // Always collect a fresh selection: better-auth consults
-          // shouldRedirect only on a flow's initial /oauth2/authorize (the
-          // continue/consent re-entries skip it via the postLogin flag), so
-          // this shows /project-access exactly once per authorization — and
-          // guarantees the selection consentReferenceId consumes is the one
-          // THIS flow just collected, never a leftover from another client
-          // in the same browser session.
+          // Always collect a fresh selection: better-auth evaluates
+          // shouldRedirect once per authorizeEndpoint pass, but only when the
+          // caller does NOT set the `postLogin` settings flag. The `continue`
+          // (project-access submit) handler sets it; the `consent` handler
+          // upstream does NOT — it writes a dead `ctx.context.postLogin` that
+          // authorizeEndpoint never reads — so accepting consent re-enters
+          // authorize and shows /project-access a SECOND time. Our patch
+          // (patches/@better-auth__oauth-provider@1.6.9.patch) makes the
+          // consent re-entry pass `{ postLogin: true }` like continue does, so
+          // this now shows /project-access exactly once per authorization —
+          // and guarantees the selection consentReferenceId consumes is the one
+          // THIS flow just collected, never a leftover from another client in
+          // the same browser session.
           return scopes.includes(ITERATE_PROJECT_SELECTION_SCOPE);
         },
         consentReferenceId: async ({ session }) => {

@@ -5,16 +5,27 @@
  * WebSocket to `/api[/<projectSlug>]`. This file is everything a component
  * needs to talk to the backend — the socket lifecycle AND the React primitives.
  *
- * FOUR primitives — two for GETTING the connection (in render vs imperatively),
- * one for a READ, one for a LIVE subscription:
+ * FIVE primitives — two for GETTING the connection (in render vs imperatively),
+ * one for a READ, one for a LIVE subscription, one for LIVE PROCESSOR STATE:
  *
  *   1. GET THE HANDLE   → useItx()                          (in render; suspends until connected)
  *   2. …IMPERATIVELY    → await connectItxBrowser()                (in handlers/closures; a Promise — the
  *                                                            non-render sibling of useItx)
  *   3. READ ONCE        → useItxQuery({ key, query })       (suspends until resolved)
- *   4. SUBSCRIBE / LIVE → useItxEffect((itx) => cleanup, deps)
- *                                                           (set up on mount, dispose on unmount,
- *                                                            re-run on reconnect — see its docstring)
+ *   4. SUBSCRIBE / LIVE → useItxSubscription((itx) => handle, deps)
+ *                                                           (owns the WHOLE recovery story for a live
+ *                                                            server-push subscription: reconnect,
+ *                                                            liveness watchdog, re-subscribe, retry —
+ *                                                            see its docstring)
+ *   5. LIVE STATE       → useItxState((itx) => itx.processor)
+ *                                                           (the React spelling of
+ *                                                            itx.processor.onStateChange(setState):
+ *                                                            the initial push is the first paint, every
+ *                                                            state change repaints — see its docstring)
+ *
+ *   (useItxEffect — the reconnect-aware raw effect — is the internal foundation
+ *   under the live hooks; it stops being module-private the day a consumer
+ *   needs mount-scoped itx work that isn't a subscription.)
  *
  *   ACTIONS (mutations) → imperative on the handle, no extra primitive:
  *                           const itx = useItx();
@@ -55,10 +66,10 @@
  *    with an override (its own socket).
  *
  *  • READS suspend and ride TanStack Query, NOT a hand-rolled cache (React 19's
- *    `use()` needs a cached promise and the QueryClient already exists). EFFECTS
- *    are ONE hook whose cleanup is just `return () => sub[Symbol.dispose]()` —
- *    capnweb's `Symbol.dispose` IS the teardown; there is no bespoke
- *    `unsubscribe()`. See the two hooks' docstrings.
+ *    `use()` needs a cached promise and the QueryClient already exists). LIVE
+ *    subscriptions are ONE hook (useItxSubscription) owning the entire recovery
+ *    story — reconnect, liveness watchdog, re-subscribe, retry — so no consumer
+ *    hand-rolls epochs or watchdogs. See the hooks' docstrings.
  */
 
 // oxlint-disable react/only-export-components -- the itx hooks are colocated with ItxProvider by design (see module header); this file is the whole itx React surface, not a Fast Refresh component module.
@@ -67,12 +78,18 @@ import {
   use,
   useEffect,
   useMemo,
+  useState,
   useSyncExternalStore,
   type ReactNode,
 } from "react";
 import { useSuspenseQuery, type QueryKey } from "@tanstack/react-query";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
-import type { ProjectRpcTarget as ProjectItx, Session, UnauthenticatedOs } from "../types.ts";
+import type {
+  ProcessorSnapshot,
+  ProjectRpcTarget as ProjectItx,
+  Session,
+  UnauthenticatedOs,
+} from "../types.ts";
 
 /**
  * The handle type is context-dependent: a project connection holds the project
@@ -183,6 +200,27 @@ export function reconnectItx(address?: ItxAddress): void {
   sockets.delete(context);
   wake();
   void promise.then((itx) => (itx as Partial<Disposable>)[Symbol.dispose]?.()).catch(() => {});
+}
+
+/**
+ * Drop and re-dial EVERY live socket. The recovery for a half-open transport
+ * (laptop sleep, network switch): when one socket's ping stops answering, the
+ * others were on the same TCP conditions — and a half-open socket never fires
+ * `close`, so nothing else would ever recover them.
+ */
+let lastReconnectAllAt = 0;
+
+function reconnectAllItx(): void {
+  // Single-flight across watchdogs: a half-open transport times out EVERY
+  // mounted subscription's ping within one timeout window, and a second pass
+  // here would drop the fresh sockets the first pass just started re-dialing.
+  // One storm → one reconnect.
+  const now = Date.now();
+  if (now - lastReconnectAllAt < LIVENESS_PING_TIMEOUT_MS) return;
+  lastReconnectAllAt = now;
+  for (const context of [...sockets.keys()]) {
+    reconnectItx({ projectId: context });
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -373,7 +411,7 @@ export function useItxQuery<T>({
  * typically disposing a capnweb stub via `Symbol.dispose`. `itx` defaults to the
  * provider; `[itx]` is added to the deps internally.
  */
-export function useItxEffect(
+function useItxEffect(
   setup: (itx: ItxHandle) => void | (() => void) | Promise<void | (() => void)>,
   deps: unknown[],
   opts?: { itx?: ItxHandle },
@@ -408,4 +446,275 @@ export function useItxEffect(
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- [itx] + caller's deps; setup read fresh per run
   }, [itx, ...deps]);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4. Live processor state: useItxProcessorState() — snapshot + push + watchdog
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** How often a mounted subscription verifies it is still alive server-side. */
+const LIVENESS_INTERVAL_MS = 45_000;
+/** A ping slower than this means the socket is half-open (sleep/network change): re-dial. */
+const LIVENESS_PING_TIMEOUT_MS = 10_000;
+/** How long useItxSubscription waits before retrying a failed subscribe. */
+const SUBSCRIBE_RETRY_MS = 10_000;
+const PING_TIMED_OUT = Symbol("itx-ping-timed-out");
+
+/**
+ * Poll a subscription handle's `ping()` until it stops answering `true`, then
+ * recover. This exists because server pushes fail SILENTLY: a dead Durable
+ * Object or a half-open TCP connection stops delivering without any
+ * client-visible signal, so a page can show "live" forever while being stale.
+ * The watchdog checks on an interval and — because those are exactly the
+ * moments sockets die — when the tab becomes visible or the browser comes
+ * back online.
+ *
+ * The two failure shapes and their recoveries:
+ *
+ *   `dead`      → ping answered `false` or REJECTED. The socket works but the
+ *                 server-side subscription is gone (the hosting DO restarted,
+ *                 or the callback was dropped after a failed delivery). The
+ *                 caller's recovery is a re-subscribe on the same socket.
+ *   `timed-out` → ping never answered: the WebSocket is half-open (laptop
+ *                 sleep, network switch — the browser never gets a `close`
+ *                 event). The watchdog itself drops every live socket
+ *                 ({@link reconnectAllItx} — they all shared the dead network)
+ *                 BEFORE reporting; consumers keyed on the itx handle re-run
+ *                 once the fresh socket connects, so the report is only for
+ *                 status UI.
+ *
+ * Returns a stop function. `onDead` fires at most once; the caller is expected
+ * to tear down and re-subscribe (which creates a fresh watchdog).
+ */
+function watchItxSubscription(
+  ping: () => boolean | Promise<boolean>,
+  onDead: (reason: "dead" | "timed-out") => void,
+): () => void {
+  let stopped = false;
+  let checking = false;
+
+  const report = (reason: "dead" | "timed-out") => {
+    if (stopped) return;
+    stop();
+    if (reason === "timed-out") reconnectAllItx();
+    onDead(reason);
+  };
+
+  const check = async () => {
+    if (stopped || checking) return;
+    checking = true;
+    try {
+      const timeout = new Promise<typeof PING_TIMED_OUT>((resolve) =>
+        setTimeout(() => resolve(PING_TIMED_OUT), LIVENESS_PING_TIMEOUT_MS),
+      );
+      let alive: boolean | typeof PING_TIMED_OUT;
+      try {
+        alive = await Promise.race([Promise.resolve(ping()), timeout]);
+      } catch {
+        report("dead");
+        return;
+      }
+      if (alive === PING_TIMED_OUT) report("timed-out");
+      else if (alive !== true) report("dead");
+    } finally {
+      checking = false;
+    }
+  };
+
+  const onWake = () => {
+    if (document.visibilityState === "visible") void check();
+  };
+  const interval = setInterval(() => void check(), LIVENESS_INTERVAL_MS);
+  document.addEventListener("visibilitychange", onWake);
+  window.addEventListener("online", onWake);
+
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    clearInterval(interval);
+    document.removeEventListener("visibilitychange", onWake);
+    window.removeEventListener("online", onWake);
+  };
+  return stop;
+}
+
+/**
+ * The live handle shape every itx subscription API returns — `Stream.subscribe`
+ * and `StreamProcessorRpc.onStateChange` both hand back `ping()` + `unsubscribe()`.
+ */
+export type ItxLiveSubscriptionHandle = {
+  ping(): boolean | Promise<boolean>;
+  unsubscribe(): unknown;
+};
+
+export type ItxSubscriptionStatus = "connecting" | "live" | "error";
+
+/**
+ * Hold ONE live server-push subscription for as long as the component is
+ * mounted, owning the whole recovery story so consumers never hand-roll it:
+ *
+ *   - socket death with a `close` event → re-subscribes on the fresh socket
+ *     (via {@link useItxEffect}'s reconnect-aware [itx] dep);
+ *   - SILENT death — hosting DO restart, dropped callback, half-open TCP —
+ *     → the {@link watchItxSubscription} watchdog detects it and either
+ *     re-subscribes (dead) or drops the sockets so everything re-dials
+ *     (timed-out);
+ *   - a failed subscribe attempt → status "error", retried on a
+ *     watchdog-shaped delay.
+ *
+ * `subscribe` opens the subscription and returns its handle; server pushes go
+ * wherever the caller's callbacks put them (component state, the query cache).
+ * A re-subscription's first push is the recovery, so push consumers must be
+ * replay-tolerant — merge by offset, or let last-write-wins state absorb it.
+ *
+ *   const [events, setEvents] = useState<StreamEvent[]>([]);
+ *   const { status } = useItxSubscription(
+ *     (itx) => itx.streams.get("/logs").subscribe({
+ *       replayAfterOffset: 0,
+ *       processEventBatch: (batch) => setEvents((prev) => mergeByOffset(prev, batch.events)),
+ *     }),
+ *     [],
+ *   );
+ *
+ * `status` is the honesty bit for UI: "live" only while a subscription is
+ * actually established. `refresh()` force re-subscribes (the impatient-human
+ * button). `enabled: false` renders the hook inert (for lazily-loaded tree
+ * nodes). `deps` re-subscribe when they change, like useItxEffect's.
+ */
+export function useItxSubscription(
+  subscribe: (itx: ItxHandle) => Promise<ItxLiveSubscriptionHandle>,
+  deps: unknown[],
+  opts?: { enabled?: boolean },
+): { status: ItxSubscriptionStatus; error?: string; refresh: () => void } {
+  const enabled = opts?.enabled ?? true;
+  const [epoch, setEpoch] = useState(0);
+  const [state, setState] = useState<{ status: ItxSubscriptionStatus; error?: string }>({
+    status: "connecting",
+  });
+
+  useItxEffect(
+    async (effectItx) => {
+      // Status resets BEFORE the enabled gate: a subscription disabled after a
+      // live period must not keep reporting "live" over its torn-down handle
+      // (consumers render stale data as fresh otherwise).
+      setState({ status: "connecting" });
+      if (!enabled) return;
+      let disposed = false;
+
+      let subscription: ItxLiveSubscriptionHandle;
+      try {
+        subscription = await subscribe(effectItx);
+      } catch (error) {
+        if (disposed) return;
+        setState({
+          status: "error",
+          error: error instanceof Error ? error.message : String(error),
+        });
+        const retry = setTimeout(() => setEpoch((current) => current + 1), SUBSCRIBE_RETRY_MS);
+        return () => clearTimeout(retry);
+      }
+      const dispose = () =>
+        void Promise.resolve()
+          .then(() => subscription.unsubscribe())
+          .catch(() => {
+            // The server side of a dead subscription is already gone.
+          });
+      if (disposed) {
+        dispose();
+        return;
+      }
+      setState({ status: "live" });
+
+      const stopWatchdog = watchItxSubscription(
+        () => subscription.ping(),
+        () => {
+          if (disposed) return;
+          setState({ status: "connecting" });
+          // Re-subscribe unconditionally. On "dead" the socket is fine and
+          // this is the whole recovery; on "timed-out" the watchdog dropped
+          // the sockets, but a sibling watchdog may have already done that
+          // within the single-flight window — if this consumer's socket was
+          // therefore NOT replaced, the [itx] dep alone would never re-run
+          // this effect and the subscription would stay stuck. The epoch bump
+          // covers both; a doubled re-subscribe is idempotent (the fresh
+          // initial push repaints).
+          setEpoch((current) => current + 1);
+        },
+      );
+
+      return () => {
+        disposed = true;
+        stopWatchdog();
+        dispose();
+      };
+    },
+    [enabled, epoch, ...deps],
+  );
+
+  return {
+    ...state,
+    refresh: () => {
+      setState({ status: "connecting" });
+      setEpoch((current) => current + 1);
+    },
+  };
+}
+
+/**
+ * THE page-data primitive: live reduced state from a stream processor. The
+ * callsite spells the whole subscription — nothing is called on your behalf:
+ *
+ *   const { state } = useItxState((itx, setState) => itx.processor.onStateChange(setState), []);
+ *   // state.secrets / state.repos / state.agents re-render as events land
+ *
+ * The hook only owns what a callsite can't: the state cell (`setState` is a
+ * plain setter EXCEPT it commits offset-monotonically, so a straggler push
+ * from a dying subscription can never roll state backwards) and
+ * {@link useItxSubscription}'s recovery. No cache keys, no query client, no
+ * separate initial fetch: `onStateChange` delivers the current checkpoint
+ * immediately (the server's initial push IS the first paint) and every state
+ * change after; mutations need no invalidation.
+ *
+ * `state` is `undefined` between mount and the initial push (one round trip
+ * on a warm socket); render a loading row for that window. Anything the
+ * subscribe closure captures that points the hook at a DIFFERENT processor
+ * (a secret path, a repo path) goes in `deps` — a deps change re-subscribes
+ * AND drops the held snapshot, so offsets from unrelated processors are
+ * never compared.
+ */
+export function useItxState<State>(
+  subscribe: (
+    itx: ItxHandle,
+    setState: (snapshot: ProcessorSnapshot<State>) => void,
+  ) => Promise<ItxLiveSubscriptionHandle>,
+  deps: unknown[] = [],
+): {
+  state: State | undefined;
+  offset: number | undefined;
+  status: ItxSubscriptionStatus;
+  error?: string;
+  refresh: () => void;
+} {
+  const [snapshot, setSnapshot] = useState<ProcessorSnapshot<State>>();
+
+  // deps change = this hook now points at a different processor: the old
+  // snapshot must not survive (its offsets are meaningless against the new
+  // processor's). Recovery re-subscribes (same processor) keep the snapshot —
+  // they come from useItxSubscription's internal epoch, not from deps.
+  useEffect(() => {
+    return () => setSnapshot(undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- caller's deps by design
+  }, deps);
+
+  const subscription = useItxSubscription(
+    (itx) =>
+      subscribe(itx, (pushed) => {
+        setSnapshot((previous) =>
+          previous !== undefined && previous.offset >= pushed.offset ? previous : pushed,
+        );
+      }),
+    deps,
+  );
+
+  return { state: snapshot?.state, offset: snapshot?.offset, ...subscription };
 }

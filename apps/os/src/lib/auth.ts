@@ -13,10 +13,11 @@ export function requireOrganizationMemberForSession(
   location: RouteLocation,
   issuer: string | undefined,
   authError: SignInAuthError | undefined,
+  appOrigin: string | undefined,
 ) {
   const principal = requireUserPrincipalFromSession(session, location, authError);
   if (principal.organizations.length === 0) {
-    throw redirectToProjectAccess(issuer);
+    throw redirectToProjectAccess(issuer, appOrigin);
   }
 
   return null;
@@ -28,11 +29,12 @@ export function requireAuthenticatedRootRedirectTargetFromSession(
   issuer: string | undefined,
   currentProjectHostSlug: string | null | undefined,
   authError: SignInAuthError | undefined,
+  appOrigin: string | undefined,
 ) {
   const principal = requireUserPrincipalFromSession(session, location, authError);
 
   if (principal.organizations.length === 0) {
-    throw redirectToProjectAccess(issuer);
+    throw redirectToProjectAccess(issuer, appOrigin);
   }
 
   return {
@@ -79,8 +81,12 @@ function redirectToSignIn(location: RouteLocation, authError: SignInAuthError | 
   });
 }
 
-function redirectToProjectAccess(issuer: string | undefined): never {
-  throw redirect({ href: new URL("/project-access", `${authWorkerOrigin(issuer)}/`).toString() });
+function redirectToProjectAccess(issuer: string | undefined, appOrigin: string | undefined): never {
+  const url = new URL("/project-access", `${authWorkerOrigin(issuer)}/`);
+  // After onboarding creates the organization and first project, the auth
+  // worker sends the user back here instead of stranding them on its own UI.
+  if (appOrigin) url.searchParams.set("redirect", appOrigin);
+  throw redirect({ href: url.toString() });
 }
 
 function authWorkerOrigin(issuer: string | undefined) {

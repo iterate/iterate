@@ -452,6 +452,19 @@ describe("itx", () => {
       await waitForCondition(async () => (await secret.describe()).audit.usedCount === 2, {
         description: "secret usage audit to fold",
       });
+      // Child-stream birth certificates propagate to the project root stream
+      // asynchronously (child DO → parent chain → project processor), so wait
+      // for the fold before asserting its content — same treatment the secret
+      // fold gets above. Cold deployments take several seconds here.
+      await waitForCondition(
+        async () => {
+          const streams = (await project.processor.snapshot()).state.streams;
+          return [agentPath, repoPath, secretPath].every((path) =>
+            streams.some((item) => item.path === path),
+          );
+        },
+        { description: "project processor to fold the created child streams", timeoutMs: 30_000 },
+      );
       expect(await project.streams.list()).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ path: "/" }),

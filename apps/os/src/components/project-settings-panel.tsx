@@ -16,7 +16,7 @@ export function ProjectSettingsPanel({
   const defaultHostname = base ? `${project.slug}.${base}` : project.slug;
 
   return (
-    <section className="flex flex-col gap-6">
+    <section className="flex flex-col gap-6" data-testid="project-settings-panel">
       <SettingsSection title="Project">
         <SettingsField label="Slug">
           <p className="font-medium">{project.slug}</p>

@@ -53,7 +53,6 @@ function ProjectAgentDetailPage() {
 }
 
 function ProjectAgentDetailContent() {
-  const params = Route.useParams();
   const { project, streamPath } = Route.useLoaderData();
   // The stream view subscribes live, so a send needs no cache invalidation —
   // the new events arrive over the socket. Agent setup is owned by project and
@@ -86,7 +85,6 @@ function ProjectAgentDetailContent() {
         onSubmit: submitAgentMessage,
         placeholder: "Message this agent",
       }}
-      projectSlug={params.projectSlug}
       projectId={project.id}
       showCommandPaletteTrigger
       streamPath={streamPath}

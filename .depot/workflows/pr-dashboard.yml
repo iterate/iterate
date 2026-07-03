@@ -17,21 +17,18 @@ concurrency:
   cancel-in-progress: false
 jobs:
   update_dashboard:
-    runs-on: depot-ubuntu-24.04
+    runs-on:
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    env:
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          clean: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
       - name: update_pr_dashboard
         id: update_pr_dashboard
         uses: actions/github-script@v7
@@ -53,11 +50,9 @@ jobs:
               const channel = isTest ? slackChannelIds["#misha-test"] : slackChannelIds["#ci"];
               const stateVariableName = isTest ? "SLACK_PR_DASHBOARD_STATE_TEST" : "SLACK_PR_DASHBOARD_STATE";
 
-              const slackToken = "${{ secrets.SLACK_CI_BOT_TOKEN }}";
-              // when run locally via `node cli.ts github-script`, the secret above is an unexpanded
-              // literal (careful not to write the expression-opener character sequence anywhere else
-              // in this script - github rejects the whole workflow file as malformed if we do)
-              const dryRun = slackToken.includes("secrets.SLACK_CI_BOT_TOKEN");
+              // Slack posts only in CI; a local `node cli.ts github-script` run has no CI env,
+              // so it dry-runs instead of posting. The token comes from Doppler via getSlackClient().
+              const dryRun = !process.env.CI;
 
               const now = new Date();
               const today = now.toISOString().slice(0, 10);
@@ -192,7 +187,7 @@ jobs:
               // `text` becomes the notification fallback when blocks are present
               const detailsPayload = { channel, text: heading.replaceAll("*", ""), blocks };
 
-              const slack = getSlackClient(slackToken);
+              const slack = getSlackClient();
 
               const state = await github.rest.actions
                 .getRepoVariable({ ...context.repo, name: stateVariableName })

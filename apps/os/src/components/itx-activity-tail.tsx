@@ -11,7 +11,7 @@ import { useState } from "react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import type { StreamEvent } from "~/types.ts";
-import { useItxEffect } from "~/itx/itx-react.tsx";
+import { useItxSubscription } from "~/itx/itx-react.tsx";
 
 const MAX_BUFFERED_EVENTS = 500;
 
@@ -33,18 +33,14 @@ const FRIENDLY_RENDERERS: Record<string, (payload: Record<string, unknown>) => s
 
 export function ItxActivityTail(_props: { projectId: string }) {
   // The project layout route wraps this in <ItxProvider projectId={slug}>, so
-  // useItxEffect's injected handle is THIS project's shared socket — the projectId
-  // prop is no longer needed to address the connection.
+  // the subscription's injected handle is THIS project's shared socket — the
+  // projectId prop is no longer needed to address the connection.
   const [raw, setRaw] = useState(false);
   const [events, setEvents] = useState<readonly StreamEvent[]>([]);
-  const [status, setStatus] = useState<"connecting" | "live" | "error">("connecting");
-  const [error, setError] = useState<string>();
 
-  useItxEffect(async (itx) => {
-    setStatus("connecting");
-    setError(undefined);
-    try {
-      const subscription = await itx.streams.get(PROJECT_CONTEXT_PATH).subscribe({
+  const { error, status } = useItxSubscription(
+    (itx) =>
+      itx.streams.get(PROJECT_CONTEXT_PATH).subscribe({
         replayAfterOffset: 0,
         processEventBatch: (batch) => {
           setEvents((previous) => {
@@ -58,14 +54,9 @@ export function ItxActivityTail(_props: { projectId: string }) {
               : [...previous, ...fresh].slice(-MAX_BUFFERED_EVENTS);
           });
         },
-      });
-      setStatus("live");
-      return () => subscription.unsubscribe();
-    } catch (subscribeError: unknown) {
-      setStatus("error");
-      setError(subscribeError instanceof Error ? subscribeError.message : String(subscribeError));
-    }
-  }, []);
+      }),
+    [],
+  );
 
   const rows = raw
     ? events.map((event) => ({ event, text: null }))

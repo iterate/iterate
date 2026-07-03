@@ -135,6 +135,18 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       expect(result).toEqual({ current: 2 });
     },
   },
+  "sandbox-exec": {
+    // One shared sandbox path for the whole matrix: the first runtime pays
+    // the container cold boot, the rest reuse the warm container (repeat
+    // ensureProjectRepo calls are idempotent). No marker on purpose.
+    vars: () => ({ sandboxPath: "/sandboxes/cloudflare/example-matrix" }),
+    assert: (result, _ctx, expect) => {
+      expect(result).toMatchObject({ exitCode: 0, os: "Linux" });
+      expect((result as { repoFiles: string[] }).repoFiles).toEqual(
+        expect.arrayContaining(["README.md", "worker.js"]),
+      );
+    },
+  },
   "repo-commit-files": {
     // Unique content per run so the commit is never a no-op on the shared
     // matrix project.

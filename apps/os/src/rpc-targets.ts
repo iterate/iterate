@@ -64,6 +64,7 @@ import type { ProcessorState } from "./domains/streams/processor-contracts.ts";
 import type {
   StreamProcessor,
   StreamProcessorContract,
+  StreamProcessorStateSubscriptionHandle,
 } from "./domains/streams/stream-processor.ts";
 import type {
   Agent,
@@ -98,9 +99,15 @@ import type {
   SandboxCollection,
   Secret,
   SecretCollection,
+  SecretDescription,
   StatelessDynamicWorkerRef,
   Stream,
   StreamCollection,
+  AgentProcessorState,
+  ProcessorSnapshot,
+  ProcessorStateSubscriptionHandle,
+  ProjectProcessorState,
+  RepoProcessorState,
   StreamProcessorRpc,
   StreamSubscriptionHandle,
   UnauthenticatedOs,
@@ -342,7 +349,7 @@ class RepoRpcTarget extends RpcTarget implements Repo {
   }
 
   get processor() {
-    return this.#durableObjectStub.processor;
+    return new ProcessorRelayRpcTarget<RepoProcessorState>(() => this.#durableObjectStub.processor);
   }
 }
 
@@ -530,7 +537,7 @@ class SecretRpcTarget extends RpcTarget implements Secret {
   }
 
   get processor() {
-    return this.durableObjectStub.processor;
+    return new ProcessorRelayRpcTarget<SecretDescription>(() => this.durableObjectStub.processor);
   }
 }
 
@@ -809,7 +816,7 @@ class AgentRpcTarget extends RpcTarget implements Agent {
   }
 
   get processor() {
-    return this.durableObjectStub.processor;
+    return new ProcessorRelayRpcTarget<AgentProcessorState>(() => this.durableObjectStub.processor);
   }
 
   get stream() {
@@ -1112,17 +1119,22 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
       "root-append",
       appendRootEvents,
     );
-    await timedStep("create-timing", timing, "wait-project-created", () =>
-      stream.waitForEvent({
-        afterOffset: createRequested.offset - 1,
-        eventTypes: ["events.iterate.com/project/created"],
-        predicate: (event) => event.payload?.projectId === args.projectId,
-        // Tight on purpose: the saga should complete in seconds (see
-        // tasks/os-cold-create-latency.md for the cold-slot outliers that must
-        // be fixed, not waited out). Preview CI warms slots before the suites.
-        timeoutMs: 60_000,
-      }),
-    );
+    // The project now EXISTS (identity, directory, bootstrap events); whether
+    // to also wait for the saga to finish is the caller's choice — the
+    // dashboard skips it and watches `state.created` via processor pushes.
+    if (args.waitUntilCreated !== false) {
+      await timedStep("create-timing", timing, "wait-project-created", () =>
+        stream.waitForEvent({
+          afterOffset: createRequested.offset - 1,
+          eventTypes: ["events.iterate.com/project/created"],
+          predicate: (event) => event.payload?.projectId === args.projectId,
+          // Tight on purpose: the saga should complete in seconds (see
+          // tasks/os-cold-create-latency.md for the cold-slot outliers that must
+          // be fixed, not waited out). Preview CI warms slots before the suites.
+          timeoutMs: 60_000,
+        }),
+      );
+    }
 
     return itxForScope({
       auth: this.props.auth,
@@ -1554,7 +1566,9 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
   }
 
   get processor() {
-    return this.durableObjectStub.processor;
+    return new ProcessorRelayRpcTarget<ProjectProcessorState>(
+      () => this.durableObjectStub.processor,
+    );
   }
 
   get ai() {
@@ -1918,13 +1932,20 @@ class CapabilityProvisionRpcTarget extends RpcTarget implements CapabilityProvis
  */
 export class StreamSubscriptionRpcTarget extends RpcTarget implements StreamSubscriptionHandle {
   readonly #close: () => void;
+  readonly #isLive: () => boolean;
   readonly #streamMaxOffset: number;
   readonly #subscriptionKey: string;
   #closed = false;
 
-  constructor(args: { close: () => void; streamMaxOffset: number; subscriptionKey: string }) {
+  constructor(args: {
+    close: () => void;
+    isLive: () => boolean;
+    streamMaxOffset: number;
+    subscriptionKey: string;
+  }) {
     super();
     this.#close = args.close;
+    this.#isLive = args.isLive;
     this.#streamMaxOffset = args.streamMaxOffset;
     this.#subscriptionKey = args.subscriptionKey;
   }
@@ -1935,6 +1956,15 @@ export class StreamSubscriptionRpcTarget extends RpcTarget implements StreamSubs
 
   get streamMaxOffset() {
     return this.#streamMaxOffset;
+  }
+
+  /**
+   * Liveness probe (see `StreamSubscriptionHandle.ping` in types.ts). Captures
+   * the connection's own open flag, not a lookup by key, so a replacement
+   * subscription under the same key reports `false` here.
+   */
+  ping() {
+    return !this.#closed && this.#isLive();
   }
 
   unsubscribe() {
@@ -2034,12 +2064,16 @@ export class ProjectEgressInterceptRpcTarget extends RpcTarget implements Projec
  * four inspection methods of the public `StreamProcessorRpc` contract, so the
  * dangerous surface never crosses the RPC boundary.
  */
-export class StreamProcessorRpcTarget<Contract extends StreamProcessorContract>
+export class StreamProcessorRpcTarget<
+  Contract extends StreamProcessorContract,
+  PublicState = ProcessorState<Contract>,
+>
   extends RpcTarget
-  implements StreamProcessorRpc<ProcessorState<Contract>>
+  implements StreamProcessorRpc<PublicState>
 {
   readonly #processor: StreamProcessor<Contract, object>;
   readonly #catchUpBeforeSnapshot: (() => Promise<void>) | undefined;
+  readonly #publicState: ((state: ProcessorState<Contract>) => PublicState) | undefined;
 
   constructor(
     processor: StreamProcessor<Contract, object>,
@@ -2050,24 +2084,57 @@ export class StreamProcessorRpcTarget<Contract extends StreamProcessorContract>
        * brought yet, giving remote readers read-your-writes.
        */
       catchUpBeforeSnapshot?: () => Promise<void>;
+      /**
+       * Projection applied to EVERY state that leaves this facade — snapshots,
+       * runtime state, and `onStateChange` pushes. This is where a domain
+       * redacts internals from its public live state (secrets project away the
+       * ciphertext, exposing `hasMaterial` instead). Omitted = identity.
+       */
+      publicState?: (state: ProcessorState<Contract>) => PublicState;
     } = {},
   ) {
     super();
     this.#processor = processor;
     this.#catchUpBeforeSnapshot = options.catchUpBeforeSnapshot;
+    this.#publicState = options.publicState;
   }
 
-  async snapshot() {
+  #project(state: ProcessorState<Contract>): PublicState {
+    return this.#publicState === undefined
+      ? (state as unknown as PublicState)
+      : this.#publicState(state);
+  }
+
+  async snapshot(): Promise<ProcessorSnapshot<PublicState>> {
     await this.#catchUpBeforeSnapshot?.();
-    return this.#processor.snapshot();
+    const { offset, state } = await this.#processor.snapshot();
+    return { offset, state: this.#project(state) };
   }
 
-  getRuntimeState() {
-    return this.#processor.getRuntimeState();
+  async getRuntimeState() {
+    const runtimeState = await this.#processor.getRuntimeState();
+    return {
+      ...runtimeState,
+      snapshot: {
+        offset: runtimeState.snapshot.offset,
+        state: this.#project(runtimeState.snapshot.state),
+      },
+    };
   }
 
-  onStateChange(cb: (state: ProcessorState<Contract>) => unknown) {
-    return this.#processor.onStateChange(cb);
+  async onStateChange(cb: (snapshot: ProcessorSnapshot<PublicState>) => unknown) {
+    // Without a projection the remote callback goes straight to the processor,
+    // keeping full stub retention. With one, deliveries pass through a
+    // projecting wrapper that forwards the WHOLE retention surface — dup (so
+    // the processor's retain duplicates the underlying remote stub, not the
+    // wrapper), disposal, and onRpcBroken — so a projected subscription lives
+    // exactly as long as an unprojected one.
+    const publicState = this.#publicState;
+    const target =
+      publicState === undefined
+        ? (cb as (snapshot: ProcessorSnapshot<ProcessorState<Contract>>) => unknown)
+        : projectStateChangeCallback(cb, publicState);
+    return new ProcessorStateSubscriptionRpcTarget(await this.#processor.onStateChange(target));
   }
 
   waitUntilEvent(input: { offset: number; timeoutMs?: number }) {
@@ -2112,6 +2179,119 @@ function exampleSummary(example: ItxExample): ItxExampleSummary {
     id: example.id,
     title: example.title,
   };
+}
+
+/**
+ * Isolate-side relay for a Durable-Object-hosted processor facade.
+ *
+ * A DO stub's `.processor` is a Workers RPC PROPERTY read, and method calls
+ * cannot be pipelined through property reads across the DO boundary: a capnweb
+ * client evaluating `itx.processor.snapshot()` descends into the property's
+ * thenable and fabricates exactly that pipeline, which workerd rejects with
+ * `The RPC receiver does not implement the method "snapshot"`. (Awaiting the
+ * property first, then calling, works — that's what this relay does.)
+ *
+ * So the isolate-side `processor` getters must not hand the raw stub property
+ * across capnweb. This relay is a real RpcTarget at the property position:
+ * each method awaits the resolved processor stub, then makes a plain method
+ * call on it.
+ */
+class ProcessorRelayRpcTarget<State> extends RpcTarget implements StreamProcessorRpc<State> {
+  readonly #resolveProcessor: () => PromiseLike<unknown>;
+
+  constructor(resolveProcessor: () => PromiseLike<unknown>) {
+    super();
+    this.#resolveProcessor = resolveProcessor;
+  }
+
+  async #processor(): Promise<StreamProcessorRpc<State>> {
+    return (await this.#resolveProcessor()) as StreamProcessorRpc<State>;
+  }
+
+  async snapshot() {
+    return await (await this.#processor()).snapshot();
+  }
+
+  async getRuntimeState() {
+    return await (await this.#processor()).getRuntimeState();
+  }
+
+  async onStateChange(cb: (snapshot: ProcessorSnapshot<State>) => unknown) {
+    return await (await this.#processor()).onStateChange(cb);
+  }
+
+  async waitUntilEvent(input: { offset: number; timeoutMs?: number }) {
+    return await (await this.#processor()).waitUntilEvent(input);
+  }
+}
+
+/**
+ * Wrap a state-change callback so every delivery is projected through
+ * `publicState`, WITHOUT losing the callback's RPC retention surface: `dup()`
+ * duplicates the underlying remote stub (re-wrapped, so the duplicate projects
+ * too), disposal releases it, and `onRpcBroken` forwards. This is what lets
+ * `StreamProcessor.onStateChange`'s retain machinery treat a projected remote
+ * callback exactly like a bare one.
+ */
+function projectStateChangeCallback<InternalState, PublicState>(
+  cb: (snapshot: ProcessorSnapshot<PublicState>) => unknown,
+  publicState: (state: InternalState) => PublicState,
+): (snapshot: ProcessorSnapshot<InternalState>) => unknown {
+  const retainable = cb as typeof cb &
+    Partial<Disposable> & {
+      dup?(): typeof cb;
+      onRpcBroken?(handler: (error: unknown) => void): void;
+    };
+  return Object.assign(
+    (snapshot: ProcessorSnapshot<InternalState>) =>
+      cb({ offset: snapshot.offset, state: publicState(snapshot.state) }),
+    {
+      ...(typeof retainable.dup === "function"
+        ? { dup: () => projectStateChangeCallback(retainable.dup!.call(retainable), publicState) }
+        : {}),
+      ...(typeof retainable.onRpcBroken === "function"
+        ? {
+            onRpcBroken: (handler: (error: unknown) => void) =>
+              retainable.onRpcBroken!.call(retainable, handler),
+          }
+        : {}),
+      [Symbol.dispose]: () => {
+        retainable[Symbol.dispose]?.();
+      },
+    },
+  );
+}
+
+/**
+ * RPC ownership handle for one `onStateChange` subscription — the processor
+ * counterpart of {@link StreamSubscriptionRpcTarget}. `unsubscribe()` is the
+ * explicit domain operation, disposal is the scoped cleanup path, and `ping()`
+ * reports whether the subscription is still registered on the live processor
+ * (a dead Durable Object incarnation makes the call itself reject — both
+ * signals tell the client to re-subscribe).
+ */
+class ProcessorStateSubscriptionRpcTarget
+  extends RpcTarget
+  implements ProcessorStateSubscriptionHandle
+{
+  readonly #handle: StreamProcessorStateSubscriptionHandle;
+
+  constructor(handle: StreamProcessorStateSubscriptionHandle) {
+    super();
+    this.#handle = handle;
+  }
+
+  ping() {
+    return this.#handle.isLive();
+  }
+
+  unsubscribe() {
+    this.#handle.unsubscribe();
+  }
+
+  [Symbol.dispose](): void {
+    this.#handle.unsubscribe();
+  }
 }
 
 type McpClientDeps = { egress: Fetcher };

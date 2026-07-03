@@ -12,6 +12,12 @@ type RootAuthSnapshot = {
   authError: SignInAuthError | undefined;
   iterateAuthIssuer: string | undefined;
   currentProjectHostSlug: string | null;
+  /**
+   * This deployment's dashboard origin (config baseUrl, falling back to the
+   * request origin). Handed to the auth worker's onboarding page as the
+   * `?redirect=` return address.
+   */
+  appOrigin: string | undefined;
 };
 
 /**
@@ -38,8 +44,22 @@ export const fetchRootAuthSnapshot: () => Promise<RootAuthSnapshot> = createServ
       projectHostnameBases: context.config.projectHostnameBases ?? [],
       requestUrl: context.rawRequest?.url,
     }),
+    appOrigin: resolveAppOrigin({
+      baseUrl: context.config.baseUrl,
+      requestUrl: context.rawRequest?.url,
+    }),
   };
 });
+
+function resolveAppOrigin(input: { baseUrl: string | undefined; requestUrl: string | undefined }) {
+  const url = input.baseUrl ?? input.requestUrl;
+  if (!url) return undefined;
+  try {
+    return new URL(url).origin;
+  } catch {
+    return undefined;
+  }
+}
 
 function toPublicSession(session: AuthenticatedSession | null | undefined): PublicSessionResponse {
   if (!session) return { authenticated: false };

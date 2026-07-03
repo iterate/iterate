@@ -15,6 +15,7 @@ export const Route = createFileRoute("/_app")({
       location,
       context.iterateAuthIssuer,
       context.authError,
+      context.appOrigin,
     ),
   // The project list is NOT pre-warmed here: it comes from the itx session
   // (browser-only), so the sidebar populates it after hydration.

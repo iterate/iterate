@@ -1,17 +1,21 @@
-import alchemy, { type Scope } from "alchemy";
+import alchemy from "alchemy";
 import { D1Database, TanStackStart } from "alchemy/cloudflare";
 import { Exec } from "alchemy/os";
-import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { slugify } from "@iterate-com/shared/slugify";
+import { initAlchemy } from "@iterate-com/shared/alchemy/init";
 import { IterateRoutes, parkWorkerRoutes } from "@iterate-com/shared/alchemy/iterate-app";
 import { z } from "zod/v4";
+import { AppConfig } from "./src/config.ts";
 import { seedOAuthClients } from "./scripts/seed-oauth-clients.ts";
 
 const APP_NAME = "auth";
 const ADMIN_SEED_SQL_PATH = "./.alchemy/generated/auth-admin-seed.sql";
 
+// Deploy infra env only (initAlchemy re-parses these too, but the `--park`
+// path below and the stage-derived defaults need them here). Runtime config
+// (secrets, origins, allowlists) is parsed separately from `APP_CONFIG_*` via
+// src/config.ts — see `configEnv` below.
 const AlchemyEnv = z.object({
-  ALCHEMY_PASSWORD: z.string().trim().min(1, "ALCHEMY_PASSWORD is required"),
   ALCHEMY_LOCAL: z.stringbool("ALCHEMY_LOCAL must be a boolean string").optional(),
   ALCHEMY_STAGE: z
     .string()
@@ -41,18 +45,6 @@ const AlchemyEnv = z.object({
           ),
       ),
     ),
-  // ================================
-  VITE_AUTH_APP_ORIGIN: z.url(),
-  VITE_PUBLIC_URL: z.url().optional(),
-  BETTER_AUTH_SECRET: z.string(),
-  SERVICE_AUTH_TOKEN: z.string(),
-  RESEND_BOT_DOMAIN: z.string(),
-  RESEND_BOT_API_KEY: z.string(),
-  SIGNUP_ALLOWLIST: z.string(),
-  ADMIN_ALLOWLIST: z.string().default("*@nustom.com"),
-  VITE_ENABLE_EMAIL_OTP_SIGNIN: z.string().optional(),
-  GOOGLE_CLIENT_ID: z.string(),
-  GOOGLE_CLIENT_SECRET: z.string(),
 });
 
 // `--park` re-parks the slot edge after `--destroy`: placeholder script plus
@@ -80,37 +72,63 @@ if (process.argv.includes("--park")) {
 }
 
 const alchemyEnv = AlchemyEnv.parse(process.env);
-const publicUrl = alchemyEnv.VITE_PUBLIC_URL ?? alchemyEnv.VITE_AUTH_APP_ORIGIN;
+
+// auth-plugins.ts derives isProduction from import.meta.env.VITE_APP_STAGE at
+// build time; default it from the alchemy stage so prd builds report production.
+// An explicit Doppler value still wins. (Set before initAlchemy resolves the
+// stage so it's available to the `vite build` the worker runs.)
+process.env.VITE_APP_STAGE ||= alchemyEnv.ALCHEMY_STAGE;
+
+// Email OTP is on for dev stages by default; an explicit Doppler value wins.
+const emailOtpEnabled =
+  process.env.APP_CONFIG_EMAIL_OTP_ENABLED ??
+  process.env.VITE_ENABLE_EMAIL_OTP_SIGNIN?.trim() ??
+  (alchemyEnv.ALCHEMY_STAGE.startsWith("dev") ? "true" : "false");
+
+// Map the auth config into `APP_CONFIG_*` env vars for initAlchemy. New Doppler
+// configs set these directly; the `?? <legacy>` fallbacks let existing configs
+// (and the client's build-time `VITE_AUTH_APP_ORIGIN`) keep working through the
+// transition — the same pattern apps/os uses. See src/config.ts for the schema.
+const configEnv: Record<string, string | undefined> = {
+  ...process.env,
+  // initAlchemy requires ALCHEMY_LOCAL; the old auth schema defaulted it to
+  // non-local when unset (only `alchemy dev` sets it true).
+  ALCHEMY_LOCAL: process.env.ALCHEMY_LOCAL ?? "false",
+  APP_CONFIG_AUTH_APP_ORIGIN:
+    process.env.APP_CONFIG_AUTH_APP_ORIGIN ?? process.env.VITE_AUTH_APP_ORIGIN,
+  APP_CONFIG_PUBLIC_URL:
+    process.env.APP_CONFIG_PUBLIC_URL ??
+    process.env.VITE_PUBLIC_URL ??
+    process.env.VITE_AUTH_APP_ORIGIN,
+  APP_CONFIG_BETTER_AUTH_SECRET:
+    process.env.APP_CONFIG_BETTER_AUTH_SECRET ?? process.env.BETTER_AUTH_SECRET,
+  APP_CONFIG_SERVICE_AUTH_TOKEN:
+    process.env.APP_CONFIG_SERVICE_AUTH_TOKEN ?? process.env.SERVICE_AUTH_TOKEN,
+  APP_CONFIG_GOOGLE_CLIENT_ID:
+    process.env.APP_CONFIG_GOOGLE_CLIENT_ID ?? process.env.GOOGLE_CLIENT_ID,
+  APP_CONFIG_GOOGLE_CLIENT_SECRET:
+    process.env.APP_CONFIG_GOOGLE_CLIENT_SECRET ?? process.env.GOOGLE_CLIENT_SECRET,
+  APP_CONFIG_RESEND_DOMAIN: process.env.APP_CONFIG_RESEND_DOMAIN ?? process.env.RESEND_BOT_DOMAIN,
+  APP_CONFIG_RESEND_API_KEY:
+    process.env.APP_CONFIG_RESEND_API_KEY ?? process.env.RESEND_BOT_API_KEY,
+  APP_CONFIG_SIGNUP_ALLOWLIST:
+    process.env.APP_CONFIG_SIGNUP_ALLOWLIST ?? process.env.SIGNUP_ALLOWLIST,
+  APP_CONFIG_ADMIN_ALLOWLIST: process.env.APP_CONFIG_ADMIN_ALLOWLIST ?? process.env.ADMIN_ALLOWLIST,
+  APP_CONFIG_EMAIL_OTP_ENABLED: emailOtpEnabled,
+};
+
+const ctx = await initAlchemy(APP_NAME, AppConfig, configEnv);
+const { app, workerName, runtimeConfig } = ctx;
 
 const primaryUrl = alchemyEnv.WORKER_ROUTES[0]
   ? `https://${alchemyEnv.WORKER_ROUTES[0]}`
   : undefined;
 
-const app = await alchemy(APP_NAME, {
-  password: alchemyEnv.ALCHEMY_PASSWORD,
-  stage: alchemyEnv.ALCHEMY_STAGE,
-  ...(alchemyEnv.ALCHEMY_LOCAL ? { local: true } : {}),
-  adopt: true,
-  stateStore: (scope: Scope) =>
-    scope.local
-      ? new SQLiteStateStore(scope, { engine: "libsql" })
-      : new CloudflareStateStore(scope),
-});
-
-const workerName = slugify(`${APP_NAME}-${app.stage}`);
-const emailOtpEnabled =
-  alchemyEnv.VITE_ENABLE_EMAIL_OTP_SIGNIN?.trim() || (app.stage.startsWith("dev") ? "true" : "");
-
-// auth-plugins.ts derives isProduction from import.meta.env.VITE_APP_STAGE at
-// build time; default it from the alchemy stage so prd builds actually report
-// production. An explicit Doppler value still wins.
-process.env.VITE_APP_STAGE ||= app.stage;
-
 await Exec("render-admin-seed", {
   command: `tsx ./scripts/render-admin-seed.ts ${ADMIN_SEED_SQL_PATH}`,
   env: {
-    SERVICE_AUTH_TOKEN: alchemy.secret(alchemyEnv.SERVICE_AUTH_TOKEN),
-    ADMIN_ALLOWLIST: alchemyEnv.ADMIN_ALLOWLIST,
+    SERVICE_AUTH_TOKEN: alchemy.secret(runtimeConfig.serviceAuthToken.exposeSecret()),
+    ADMIN_ALLOWLIST: runtimeConfig.adminAllowlist,
   },
   cwd: import.meta.dirname,
 });
@@ -125,17 +143,12 @@ const worker = await TanStackStart(APP_NAME, {
   name: workerName,
   bindings: {
     DB,
-    VITE_AUTH_APP_ORIGIN: alchemy.secret(alchemyEnv.VITE_AUTH_APP_ORIGIN),
-    VITE_PUBLIC_URL: alchemy.secret(publicUrl),
-    BETTER_AUTH_SECRET: alchemy.secret(alchemyEnv.BETTER_AUTH_SECRET),
-    SERVICE_AUTH_TOKEN: alchemy.secret(alchemyEnv.SERVICE_AUTH_TOKEN),
-    RESEND_BOT_DOMAIN: alchemy.secret(alchemyEnv.RESEND_BOT_DOMAIN),
-    RESEND_BOT_API_KEY: alchemy.secret(alchemyEnv.RESEND_BOT_API_KEY),
-    SIGNUP_ALLOWLIST: alchemy.secret(alchemyEnv.SIGNUP_ALLOWLIST),
-    ADMIN_ALLOWLIST: alchemy.secret(alchemyEnv.ADMIN_ALLOWLIST),
-    VITE_ENABLE_EMAIL_OTP_SIGNIN: alchemy.secret(emailOtpEnabled),
-    GOOGLE_CLIENT_ID: alchemy.secret(alchemyEnv.GOOGLE_CLIENT_ID),
-    GOOGLE_CLIENT_SECRET: alchemy.secret(alchemyEnv.GOOGLE_CLIENT_SECRET),
+    // Single typed config blob, parsed at runtime by src/config.ts's
+    // parseConfig(env). Local dev keeps it plain-JSON for readability; deploys
+    // wrap it in alchemy.secret() so Cloudflare never logs it.
+    APP_CONFIG: app.local
+      ? JSON.stringify(ctx.rawRuntimeConfig, null, 2)
+      : alchemy.secret(JSON.stringify(ctx.rawRuntimeConfig, null, 2)),
   },
   adopt: true,
   // Without this flag, same-zone subrequests (e.g. SSR calling our own

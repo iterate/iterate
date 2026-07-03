@@ -47,7 +47,6 @@ function ProjectStreamDetailPage() {
 }
 
 function ProjectStreamDetailContent() {
-  const params = Route.useParams();
   const { project, streamPath } = Route.useLoaderData();
   const itx = useItx();
 
@@ -68,7 +67,6 @@ function ProjectStreamDetailContent() {
           onSubmit: submitMessage,
           placeholder: "Message this stream",
         },
-        projectSlug: params.projectSlug,
         projectId: project.id,
       }}
     />

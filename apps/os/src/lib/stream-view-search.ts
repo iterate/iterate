@@ -15,14 +15,14 @@ import { z } from "zod";
  * boundary — a bad value just reverts to the default.
  */
 export const StreamViewSearch = z.object({
-  /** Active tab; omitted when on the stream's default tab. */
-  tab: z.enum(["agent", "feed", "raw", "state"]).optional().catch(undefined),
+  /** Active tab; omitted on the default (Feed). */
+  tab: z.enum(["feed", "state"]).optional().catch(undefined),
+  /** Feed preset id; omitted on the stream's default preset. */
+  preset: z.string().optional().catch(undefined),
   /** Agent-feed search query. */
   q: z.string().optional().catch(undefined),
   /** Whether the search/filter row is open. */
   filter: z.boolean().optional().catch(undefined),
-  /** Raw-view event-type filter (the event type; absent = all types). */
-  type: z.string().optional().catch(undefined),
   /** Whether the processors sidebar is open. */
   panel: z.boolean().optional().catch(undefined),
   /** Subscription key of the processor focused in the sidebar. */
