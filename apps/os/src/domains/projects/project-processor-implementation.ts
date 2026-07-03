@@ -26,6 +26,7 @@ import { VoiceAgentProcessorContract } from "../agents/voice-agent-processor-con
 import {
   isVoiceAgentPath,
   VOICE_AGENT_CODE_AGENT_SYSTEM_PROMPT,
+  VOICE_AGENT_PATH_PREFIX,
 } from "../agents/voice-agent-code-agent.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 
@@ -172,6 +173,9 @@ export class ProjectProcessor extends StreamProcessor<
       case "events.iterate.com/stream/child-stream-created": {
         const childPath = event.payload.childPath;
         if (!childPath.startsWith("/agents/") && !childPath.startsWith("/secrets/")) return;
+        // The bare /agents/voice container is a listing root (the voice-agents
+        // page's stream explorer creates it by subscribing), not an agent.
+        if (childPath === VOICE_AGENT_PATH_PREFIX) return;
         blockProcessorWhile(async () => {
           const durableObjectName = DurableObjectNameCodec.stringify({
             projectId: this.deps.itx.projectId,
