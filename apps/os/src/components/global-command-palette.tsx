@@ -46,6 +46,16 @@ export function GlobalCommandPalette() {
     [routeStream, pickedProject],
   );
 
+  // Close on any navigation that swaps the stream context out from under an
+  // open dialog (back button, links outside the dialog): the tree being shown
+  // belongs to the page it was opened on. The palette's own navigations
+  // already close it before routing.
+  const routeStreamKey = routeStream ? `${routeStream.projectId}:${routeStream.streamPath}` : null;
+  useEffect(() => {
+    setOpen(false);
+    setPickedProject(null);
+  }, [routeStreamKey]);
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.defaultPrevented) return;
