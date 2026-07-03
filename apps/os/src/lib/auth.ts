@@ -1,5 +1,6 @@
 import { redirect } from "@tanstack/react-router";
 import type { PublicSessionResponse } from "@iterate-com/auth/client";
+import type { SignInAuthError } from "~/auth/errors.ts";
 import { createUserPrincipal, type UserPrincipal } from "~/auth/principal.ts";
 
 type RouteLocation = {
@@ -11,8 +12,9 @@ export function requireOrganizationMemberForSession(
   session: PublicSessionResponse | null | undefined,
   location: RouteLocation,
   issuer: string | undefined,
+  authError: SignInAuthError | undefined,
 ) {
-  const principal = requireUserPrincipalFromSession(session, location);
+  const principal = requireUserPrincipalFromSession(session, location, authError);
   if (principal.organizations.length === 0) {
     throw redirectToProjectAccess(issuer);
   }
@@ -25,8 +27,9 @@ export function requireAuthenticatedRootRedirectTargetFromSession(
   location: RouteLocation,
   issuer: string | undefined,
   currentProjectHostSlug: string | null | undefined,
+  authError: SignInAuthError | undefined,
 ) {
-  const principal = requireUserPrincipalFromSession(session, location);
+  const principal = requireUserPrincipalFromSession(session, location, authError);
 
   if (principal.organizations.length === 0) {
     throw redirectToProjectAccess(issuer);
@@ -54,15 +57,16 @@ function getUserPrincipalFromSession(
 function requireUserPrincipalFromSession(
   session: PublicSessionResponse | null | undefined,
   location: RouteLocation,
+  authError: SignInAuthError | undefined,
 ): UserPrincipal {
   const principal = getUserPrincipalFromSession(session);
   if (!principal) {
-    throw redirectToSignIn(location);
+    throw redirectToSignIn(location, authError);
   }
   return principal;
 }
 
-function redirectToSignIn(location: RouteLocation): never {
+function redirectToSignIn(location: RouteLocation, authError: SignInAuthError | undefined): never {
   throw redirect({
     to: "/sign-in/$",
     params: { _splat: "" },
@@ -70,6 +74,7 @@ function redirectToSignIn(location: RouteLocation): never {
       // The sign-in page only accepts same-origin relative paths, so pass
       // pathname + search rather than a full href.
       redirect_url: `${location.pathname}${location.searchStr ?? ""}`,
+      auth_error: authError,
     },
   });
 }

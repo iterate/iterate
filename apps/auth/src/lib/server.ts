@@ -346,6 +346,18 @@ export type AuthenticateResult = {
   responseHeaders: Headers;
 };
 
+export type AuthenticateErrorReason =
+  | "session_cookie_parse_failed"
+  | "session_refresh_failed"
+  | "access_token_verify_failed"
+  | "id_token_verify_failed"
+  | "session_claims_parse_failed";
+
+export type AuthenticateErrorEvent = {
+  reason: AuthenticateErrorReason;
+  error: unknown;
+};
+
 export type AuthenticateOptions = {
   /**
    * Fetch fresh userinfo claims from the issuer while authenticating a cookie
@@ -353,6 +365,8 @@ export type AuthenticateOptions = {
    * validation stays local to the worker isolate.
    */
   includeUserInfo?: boolean;
+  /** Reports why a present session cookie could not become an authenticated session. */
+  onError?: (event: AuthenticateErrorEvent) => void;
 };
 
 export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfra) {
@@ -372,6 +386,7 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
     async authenticate({
       headers,
       includeUserInfo = true,
+      onError,
     }: { headers: Headers } & AuthenticateOptions): Promise<AuthenticateResult> {
       const cookieJar = parse(headers.get("Cookie") ?? "");
       if (!cookieJar) return { session: null, responseHeaders: new Headers() };
@@ -379,7 +394,8 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
       let tokenSet: TokenSet;
       try {
         tokenSet = TokenSet.parse(JSON.parse(cookieJar[SESSION_COOKIE]));
-      } catch {
+      } catch (error) {
+        onError?.({ reason: "session_cookie_parse_failed", error });
         return { session: null, responseHeaders: new Headers() };
       }
 
@@ -404,7 +420,8 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
           } else if (accessTokenExpired) {
             return { session: null, responseHeaders: new Headers() };
           }
-        } catch {
+        } catch (error) {
+          onError?.({ reason: "session_refresh_failed", error });
           // A failed refresh while the current access token is still valid is
           // not fatal: serve this request with the existing token and let a
           // later request retry the refresh.
@@ -416,16 +433,31 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
         return { session: null, responseHeaders: new Headers() };
       }
 
+      let rawAccessToken: unknown;
       try {
-        const { payload: rawAccessToken } = await jwtVerify(tokenSet.accessToken, jwks, {
+        const { payload } = await jwtVerify(tokenSet.accessToken, jwks, {
           issuer,
           audience: audiences(),
         });
-        const { payload: rawIdToken } = await jwtVerify(tokenSet.idToken, jwks, {
+        rawAccessToken = payload;
+      } catch (error) {
+        onError?.({ reason: "access_token_verify_failed", error });
+        return { session: null, responseHeaders: new Headers() };
+      }
+
+      let rawIdToken: unknown;
+      try {
+        const { payload } = await jwtVerify(tokenSet.idToken, jwks, {
           issuer,
           audience: config.clientId,
         });
+        rawIdToken = payload;
+      } catch (error) {
+        onError?.({ reason: "id_token_verify_failed", error });
+        return { session: null, responseHeaders: new Headers() };
+      }
 
+      try {
         const accessToken = AccessTokenClaims.parse(rawAccessToken);
         const idToken = IdTokenClaims.parse(rawIdToken);
         const userInfo = includeUserInfo ? await getUserInfo(tokenSet.accessToken) : null;
@@ -439,7 +471,8 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
           session: buildAuthenticatedSession(accessToken, idToken, userInfo),
           responseHeaders,
         };
-      } catch {
+      } catch (error) {
+        onError?.({ reason: "session_claims_parse_failed", error });
         return { session: null, responseHeaders: new Headers() };
       }
     },
