@@ -1,38 +1,29 @@
 import { fileURLToPath } from "node:url";
 import alchemy from "alchemy";
-import { Route, TanStackStart, createCloudflareApi } from "alchemy/cloudflare";
+import { TanStackStart, createCloudflareApi } from "alchemy/cloudflare";
 import type { Bindings, WorkerProps } from "alchemy/cloudflare";
-import type { BaseAppConfig } from "../config.ts";
-import { slugify } from "../slugify.ts";
 import type { initAlchemy } from "./init.ts";
 
 /**
- * Create a standard Iterate app worker with automatic route derivation, DNS,
- * and observability.
+ * Iterate's Cloudflare worker + edge-routing conventions.
  *
- * This is the standard way to deploy an Iterate app to Cloudflare Workers. It
- * wraps alchemy's TanStackStart (https://alchemy.run/providers/cloudflare/tanstack-start/)
- * and adds our conventions on top:
+ * Two layers with deliberately different lifecycles:
  *
- * **Route + DNS derivation from `baseUrl`:**
- * Each environment (dev, preview, prod) sets `APP_CONFIG_BASE_URL` in Doppler.
- * This function extracts the hostname and creates both a Cloudflare worker route
- * and a proxied CNAME DNS record pointing to the worker. Worker routes alone are
- * not enough — Cloudflare requires a DNS record on the zone for the proxied
- * hostname to resolve. See https://developers.cloudflare.com/workers/configuration/routing/routes/
+ * **Workers** ({@link IterateAppWorker}) are alchemy resources: created,
+ * updated, and destroyed with the app's stage.
  *
- * **Observability:**
- * All Iterate workers use the same observability config: full sampling with
- * persistent logs and traces. See https://developers.cloudflare.com/workers/observability/
- *
- * ```ts
- * const ctx = await initAlchemy("my-app", AppConfig, process.env);
- * const db = await D1Database("db", { name: `${ctx.workerName}-db` });
- * const worker = await IterateApp(ctx, {
- *   bindings: { DB: db },
- * });
- * await ctx.app.finalize();
- * ```
+ * **Routes + DNS** ({@link IterateRoutes}) are NOT alchemy resources. They are
+ * idempotently ENSURED against the Cloudflare API and never deleted by any
+ * deploy or destroy. Rationale: creating a zone route is the only edge
+ * operation we have that can silently fail — the route is visible in the API
+ * but never fires at the edge ("zombie route"), so every request falls through
+ * to the originless placeholder DNS record and dies with a 522 after ~20s
+ * (tasks/os-cold-create-latency.md). Script uploads, by contrast, are the
+ * battle-tested steady-state path. So route creation is pushed to the rarest
+ * possible moment (a genuinely fresh hostname, or re-parking after a slot
+ * teardown — see {@link parkWorkerRoutes}), always ordered after DNS, and
+ * always verified with a live edge probe that heals zombies by recreation.
+ * Steady-state deploys mutate no route or DNS state at all.
  */
 /**
  * The observability config every Iterate worker uses: full sampling with
@@ -46,7 +37,15 @@ export const ITERATE_WORKER_OBSERVABILITY = {
   traces: { enabled: true, persist: true, headSamplingRate: 1 },
 } as const;
 
-type IterateCtx = Awaited<ReturnType<typeof initAlchemy>>;
+/**
+ * The subset of an initAlchemy context the route helpers need. Structural on
+ * purpose: apps that hand-roll their alchemy app (apps/auth) can construct it
+ * directly.
+ */
+export type IterateRoutesCtx = {
+  app: { local?: boolean; stage: string };
+  slug: string;
+};
 
 export type IterateAppProps<B extends Bindings> = {
   /** App-specific worker bindings (D1, DOs, etc). APP_CONFIG is added automatically. */
@@ -60,13 +59,6 @@ export type IterateAppProps<B extends Bindings> = {
   compatibilityFlags?: string[];
   /** Worker compatibility date. Defaults to Alchemy's current Workers runtime date. */
   compatibilityDate?: string;
-  /**
-   * Additional hostnames to route to this worker beyond `baseUrl`.
-   * Each hostname gets a worker route and (for non-local deploys) a DNS CNAME.
-   * For example, os passes `["iterate.app", "*.iterate.app"]` for project
-   * subdomain routing.
-   */
-  extraRouteHostnames?: string[];
   /** Worker entry module (default: `./src/entry.workerd.ts`). */
   main?: string;
   /**
@@ -97,35 +89,30 @@ export type IterateAppProps<B extends Bindings> = {
   url?: boolean;
 };
 
-export async function IterateApp<B extends Bindings>(ctx: IterateCtx, props: IterateAppProps<B>) {
-  const runtimeConfig = ctx.runtimeConfig as BaseAppConfig;
-  const routeHosts = deriveWorkerRouteHosts(runtimeConfig.baseUrl, props.extraRouteHostnames);
-
-  const worker = await IterateAppWorker(ctx, props);
-  await IterateRoutes(ctx, { hostnames: routeHosts, worker });
-
-  console.dir(
-    {
-      config: runtimeConfig,
-      url: runtimeConfig.baseUrl ?? worker.url,
-      workersDevUrl: worker.url,
-    },
-    { depth: null },
-  );
-
-  return worker;
-}
+/** The context initAlchemy returns — the full ctx IterateAppWorker consumes. */
+type IterateCtx = Awaited<ReturnType<typeof initAlchemy>>;
 
 /**
  * The app worker with Iterate conventions — TanStack Start build via Vite,
  * APP_CONFIG injection, standard observability, asset preupload + server
- * bundle pruning — but no routes or DNS. Apps that put a router
- * worker in front (apps/os) call this directly and give the routes to the
- * router via {@link IterateRoutes}.
+ * bundle pruning — but no routes or DNS. Callers ensure routes with
+ * {@link IterateRoutes} AFTER `ctx.app.finalize()`: the ensure is not an
+ * alchemy resource, so running it before finalize would let a stale Route
+ * resource in state orphan-delete the very route it just verified.
+ *
+ * ```ts
+ * const ctx = await initAlchemy("my-app", AppConfig, process.env);
+ * const worker = await IterateAppWorker(ctx, { bindings: { DB: db } });
+ * await ctx.app.finalize();
+ * await IterateRoutes(ctx, {
+ *   worker,
+ *   hostnames: deriveWorkerRouteHosts(ctx.runtimeConfig.baseUrl),
+ * });
+ * ```
  */
 export async function IterateAppWorker<B extends Bindings>(
   ctx: IterateCtx,
-  props: Omit<IterateAppProps<B>, "extraRouteHostnames">,
+  props: IterateAppProps<B>,
 ) {
   const { app, rawRuntimeConfig, slug } = ctx;
   const workerName = props.name ?? ctx.workerName;
@@ -171,109 +158,235 @@ export async function IterateAppWorker<B extends Bindings>(
 }
 
 /**
- * Routes + DNS for a deployed worker.
+ * Ensure routes + DNS for a deployed worker. Idempotent and create-only:
+ * routes are never deleted here or anywhere else (see the module docstring
+ * for why), so on a slot that has been deployed before this is a read + probe
+ * pass with zero mutations. Call AFTER `app.finalize()`. No-op in local mode.
  *
  * Worker routes tell Cloudflare "send requests matching this pattern to this
- * worker", but the hostname still needs a proxied DNS record. We create
- * routes only after the worker script is uploaded and visible; Cloudflare
- * rejects route creation for scripts that do not exist yet. We then create
- * originless dummy A records so Cloudflare can terminate DNS/TLS and invoke
- * the route without trying to resolve the worker's workers.dev hostname as
- * an origin. No-op in local mode.
+ * worker", but the hostname still needs a proxied DNS record — originless
+ * dummy A/AAAA records so Cloudflare terminates DNS/TLS and invokes the route
+ * without trying to reach an origin. Routes are created only after the script
+ * is visible to the API (Cloudflare rejects routes for unknown scripts), and
+ * every hostname — including `*.` wildcards, via a synthetic probe host — is
+ * verified to actually fire at the edge, healing zombies by recreation.
  * https://developers.cloudflare.com/workers/configuration/routing/routes/#subdomains-must-have-a-dns-record
- * https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/get-started/hostname-routing/
  */
 export async function IterateRoutes(
-  ctx: IterateCtx,
+  ctx: IterateRoutesCtx,
   props: {
     hostnames: string[];
-    /** The worker the routes point at (an alchemy Worker resource). */
-    worker: { name: string; url?: string };
+    /** The worker the routes point at — only the deployed script name is used. */
+    worker: { name: string };
   },
 ) {
-  const { app, slug } = ctx;
-  const { worker } = props;
-  const routeHosts = props.hostnames;
+  if (ctx.app.local || props.hostnames.length === 0) return;
+  await ensureWorkerRoutesAndDns({
+    comment: `Managed by ${ctx.slug} alchemy (${ctx.app.stage}).`,
+    hostnames: props.hostnames,
+    scriptName: props.worker.name,
+  });
+}
 
-  if (!app.local && routeHosts.length > 0) {
-    const cloudflareApi = await createCloudflareApi({});
-    const zones = await listCloudflareZones(cloudflareApi);
-
-    await waitForCloudflareWorkerScript({
-      cloudflareApi,
-      workerName: worker.name,
-    });
-
-    const routeZoneIds = new Map<string, string>();
-    for (const hostname of routeHosts) {
-      const { zoneId } = findActiveZoneForHostname({
-        accountId: cloudflareApi.accountId,
-        hostname,
-        zones,
-      });
-      routeZoneIds.set(hostname, zoneId);
+/**
+ * Re-park a slot's edge after its stage was destroyed: upload a placeholder
+ * script under the routed worker's name (only when no script exists — a live
+ * deployment is never clobbered) and re-ensure DNS + routes against it.
+ *
+ * This exists because routes cannot outlive their script: force-deleting a
+ * worker CASCADES and deletes its zone routes, and re-uploading a same-named
+ * script does not bring them back (verified empirically against
+ * iterate-preview-9.com, 2026-07-03 — the hostname 522s indefinitely). So a
+ * teardown that stopped at `alchemy --destroy` would push route re-creation
+ * onto the next tenant's deploy, which is exactly the edge-propagation
+ * lottery behind the post-deploy 522s. Parking instead recreates and VERIFIES
+ * the routes at teardown time, when nobody is waiting; the next PR's deploy
+ * then finds live routes and only re-uploads script code.
+ *
+ * Wired as `alchemy.run.ts --park`, chained after `--destroy` (alchemy exits
+ * the process inside the destroy phase, so this must be a separate run).
+ */
+export async function parkWorkerRoutes(input: {
+  hostnames: string[];
+  /** App slug + stage, for DNS/route comments and the placeholder body. */
+  slug: string;
+  stage: string;
+  workerName: string;
+}) {
+  const cloudflareApi = await createCloudflareApi({});
+  const settingsResponse = await cloudflareApi.get(
+    `/accounts/${cloudflareApi.accountId}/workers/scripts/${encodeURIComponent(input.workerName)}/settings`,
+  );
+  if (settingsResponse.status === 404) {
+    const metadata = new Blob(
+      [JSON.stringify({ main_module: "index.mjs", compatibility_date: "2025-05-01" })],
+      { type: "application/json" },
+    );
+    const script = new Blob(
+      [
+        `export default { fetch() { return new Response(` +
+          `${JSON.stringify(`${input.slug} (${input.stage}) is parked between deployments.\n`)}, ` +
+          `{ status: 503, headers: { "content-type": "text/plain" } }); } };`,
+      ],
+      { type: "application/javascript+module" },
+    );
+    const form = new FormData();
+    form.append("metadata", metadata);
+    form.append("index.mjs", script, "index.mjs");
+    const uploadResponse = await cloudflareApi.put(
+      `/accounts/${cloudflareApi.accountId}/workers/scripts/${encodeURIComponent(input.workerName)}`,
+      form,
+    );
+    if (!uploadResponse.ok) {
+      throw new Error(
+        `Failed to upload parked placeholder for ${input.workerName}: ${uploadResponse.status} ${await uploadResponse.text()}`,
+      );
     }
-
-    // DNS records BEFORE routes. A Worker route only fires for hostnames with
-    // a proxied DNS record on the zone. Creating the route while the record
-    // does not exist yet has produced zombie routes on fresh preview slots:
-    // the route is visible in the API but never fires at the edge, so every
-    // request falls through to the (originless) placeholder record and dies
-    // with a 522 after ~20s — the "fresh slot" 522/parked-browser failure
-    // family (tasks/os-cold-create-latency.md). Deleting and recreating the
-    // identical route heals it instantly, which is what the verification pass
-    // below automates for any zombie that slips through regardless of order.
-    const dnsRouteHosts = routeHosts.filter(shouldCreateDnsRecordForRouteHostname);
-    await Promise.all(
-      dnsRouteHosts.flatMap((hostname) =>
-        placeholderDnsRecordsForHostname({
-          comment: `Managed by ${slug} alchemy (${app.stage}).`,
-          hostname,
-        }).map(async (record) => {
-          const zoneId =
-            routeZoneIds.get(record.name) ??
-            findActiveZoneForHostname({
-              accountId: cloudflareApi.accountId,
-              hostname: record.name,
-              zones,
-            }).zoneId;
-          await ensureCloudflareDnsRecord({
-            cloudflareApi,
-            record,
-            zoneId,
-          });
-        }),
-      ),
+    console.log(`[iterate-routes] parked ${input.workerName} with a placeholder script`);
+  } else if (!settingsResponse.ok) {
+    throw new Error(
+      `Failed to check worker script ${input.workerName} before parking: ${settingsResponse.status} ${await settingsResponse.text()}`,
     );
-
-    await Promise.all(
-      routeHosts.map((hostname) =>
-        retryCloudflareWorkerRouteCreation(() =>
-          Route(routeResourceIdForHostname(hostname), {
-            pattern: `${hostname}/*`,
-            script: worker.name,
-            adopt: true,
-            zoneId: routeZoneIds.get(hostname)!,
-          }),
-        ),
-      ),
-    );
-
-    // Verify each exact hostname actually fires at the edge and heal zombies.
-    // Wildcard patterns are skipped: they have no single probeable hostname.
-    await Promise.all(
-      routeHosts
-        .filter((hostname) => !hostname.startsWith("*"))
-        .map((hostname) =>
-          verifyWorkerRouteFires({
-            cloudflareApi,
-            hostname,
-            script: worker.name,
-            zoneId: routeZoneIds.get(hostname)!,
-          }),
-        ),
+  } else {
+    console.log(
+      `[iterate-routes] ${input.workerName} still has a deployed script — keeping it, only ensuring routes`,
     );
   }
+
+  await ensureWorkerRoutesAndDns({
+    comment: `Managed by ${input.slug} alchemy (${input.stage}).`,
+    hostnames: input.hostnames,
+    scriptName: input.workerName,
+  });
+}
+
+async function ensureWorkerRoutesAndDns(input: {
+  comment: string;
+  hostnames: string[];
+  scriptName: string;
+}) {
+  const cloudflareApi = await createCloudflareApi({});
+  const zones = await listCloudflareZones(cloudflareApi);
+
+  const routeZoneIds = new Map<string, string>();
+  for (const hostname of input.hostnames) {
+    const { zoneId } = findActiveZoneForHostname({
+      accountId: cloudflareApi.accountId,
+      hostname,
+      zones,
+    });
+    routeZoneIds.set(hostname, zoneId);
+  }
+
+  // DNS records BEFORE routes. A Worker route only fires for hostnames with
+  // a proxied DNS record on the zone. Creating the route while the record
+  // does not exist yet has produced zombie routes on fresh preview slots:
+  // the route is visible in the API but never fires at the edge, so every
+  // request falls through to the (originless) placeholder record and dies
+  // with a 522 after ~20s (tasks/os-cold-create-latency.md). The verification
+  // pass below heals any zombie that slips through regardless of order.
+  const dnsRouteHosts = input.hostnames.filter(shouldCreateDnsRecordForRouteHostname);
+  await Promise.all(
+    dnsRouteHosts.flatMap((hostname) =>
+      placeholderDnsRecordsForHostname({
+        comment: input.comment,
+        hostname,
+      }).map(async (record) => {
+        const zoneId =
+          routeZoneIds.get(record.name) ??
+          findActiveZoneForHostname({
+            accountId: cloudflareApi.accountId,
+            hostname: record.name,
+            zones,
+          }).zoneId;
+        await ensureCloudflareDnsRecord({
+          cloudflareApi,
+          record,
+          zoneId,
+        });
+      }),
+    ),
+  );
+
+  const routesByZone = new Map<string, ExistingCloudflareWorkerRoute[]>();
+  for (const zoneId of new Set(routeZoneIds.values())) {
+    routesByZone.set(zoneId, await listCloudflareWorkerRoutes({ cloudflareApi, zoneId }));
+  }
+
+  // Create-if-missing / repoint-if-wrong-script. The script-visibility wait
+  // and the 10019 retry only run when a route is actually being created —
+  // the ordinary deploy finds every route already present and skips both.
+  let waitedForScript = false;
+  for (const hostname of input.hostnames) {
+    const zoneId = routeZoneIds.get(hostname)!;
+    const pattern = `${hostname}/*`;
+    const existing = routesByZone.get(zoneId)!.find((route) => route.pattern === pattern);
+    if (existing?.script === input.scriptName) continue;
+
+    if (existing) {
+      console.warn(
+        `[iterate-routes] ${pattern} pointed at ${existing.script ?? "<none>"} — repointing to ${input.scriptName}`,
+      );
+      const response = await cloudflareApi.put(`/zones/${zoneId}/workers/routes/${existing.id}`, {
+        pattern,
+        script: input.scriptName,
+      });
+      if (!response.ok) {
+        throw new Error(
+          `Failed to repoint route ${pattern}: ${response.status} ${await response.text()}`,
+        );
+      }
+      continue;
+    }
+
+    if (!waitedForScript) {
+      await waitForCloudflareWorkerScript({
+        cloudflareApi,
+        workerName: input.scriptName,
+      });
+      waitedForScript = true;
+    }
+    console.log(`[iterate-routes] creating route ${pattern} -> ${input.scriptName}`);
+    await createWorkerRouteWithRetry({
+      cloudflareApi,
+      pattern,
+      script: input.scriptName,
+      zoneId,
+    });
+  }
+
+  // Verify every hostname actually fires at the edge and heal zombies.
+  // Wildcards are probed through a synthetic child host resolved by the
+  // wildcard DNS record ensured above — previously the biggest verification
+  // gap: a zombie `*.<base>` project-host route sailed through deploys and
+  // 522'd the first real project request.
+  await Promise.all(
+    input.hostnames.map((hostname) => {
+      const probeHostname = probeHostnameForRoutePattern(hostname);
+      if (!probeHostname) return undefined;
+      return verifyWorkerRouteFires({
+        cloudflareApi,
+        probeHostname,
+        routeHostname: hostname,
+        script: input.scriptName,
+        zoneId: routeZoneIds.get(hostname)!,
+      });
+    }),
+  );
+}
+
+/**
+ * The hostname to probe to prove a route pattern fires at the edge.
+ *
+ * Exact hostnames probe themselves. `*.base` wildcards probe a synthetic
+ * child host (resolvable via the wildcard DNS record the ensure pass
+ * creates). `*base` catch-alls have no probeable hostname of their own — the
+ * exact `base` route ensured alongside them covers the apex.
+ */
+function probeHostnameForRoutePattern(hostname: string): string | null {
+  if (hostname.startsWith("*.")) return `iterate-route-probe.${hostname.slice(2)}`;
+  if (hostname.startsWith("*")) return null;
+  return hostname;
 }
 
 /**
@@ -288,19 +401,21 @@ const ORIGIN_FALLTHROUGH_STATUSES = new Set([521, 522, 523, 530]);
  * Probe a route hostname and, when the edge answers with an origin-error
  * status (route not firing — the zombie-route failure mode), heal it by
  * deleting and recreating the identical route via the raw API. Recreation has
- * been observed to activate a zombie route instantly; `Route(adopt: true)`
- * re-adopts the pattern on the next deploy, so the id drift is harmless.
+ * been observed to activate a zombie route instantly.
  */
 async function verifyWorkerRouteFires(input: {
   cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>;
-  hostname: string;
+  /** The hostname to fetch — differs from routeHostname for wildcards. */
+  probeHostname: string;
+  /** The hostname of the route pattern, used when healing. */
+  routeHostname: string;
   script: string;
   zoneId: string;
 }) {
   const maxAttempts = 3;
   let healed = false;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    let status = await probeEdgeStatus(input.hostname);
+    let status = await probeEdgeStatus(input.probeHostname);
     // Any worker/app response (including app-level 4xx/5xx) proves the route
     // fires. A network-level probe failure is inconclusive (local DNS lag,
     // egress hiccup) — do not fail the deploy over it.
@@ -310,23 +425,23 @@ async function verifyWorkerRouteFires(input: {
       // can race it. Require a second good probe so the deploy only reports
       // success once the hostname is consistently served.
       await sleep(5_000);
-      status = await probeEdgeStatus(input.hostname);
+      status = await probeEdgeStatus(input.probeHostname);
       if (status === null || !ORIGIN_FALLTHROUGH_STATUSES.has(status)) return;
       // Fell back to origin again — keep healing.
     }
 
     console.warn(
-      `[iterate-routes] ${input.hostname} answered ${status} — route exists but is not firing at the edge; recreating it (attempt ${attempt}/${maxAttempts})`,
+      `[iterate-routes] ${input.probeHostname} answered ${status} — route ${input.routeHostname}/* exists but is not firing at the edge; recreating it (attempt ${attempt}/${maxAttempts})`,
     );
     await recreateWorkerRoute(input);
     healed = true;
     await sleep(2_000);
   }
 
-  const status = await probeEdgeStatus(input.hostname);
+  const status = await probeEdgeStatus(input.probeHostname);
   if (status !== null && ORIGIN_FALLTHROUGH_STATUSES.has(status)) {
     throw new Error(
-      `Worker route for ${input.hostname} never became active: the edge keeps answering ${status} (origin fallthrough) after ${maxAttempts} recreations.`,
+      `Worker route for ${input.routeHostname} never became active: the edge keeps answering ${status} (origin fallthrough) after ${maxAttempts} recreations.`,
     );
   }
 }
@@ -349,21 +464,16 @@ async function probeEdgeStatus(hostname: string): Promise<number | null> {
 
 async function recreateWorkerRoute(input: {
   cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>;
-  hostname: string;
+  routeHostname: string;
   script: string;
   zoneId: string;
 }) {
-  const pattern = `${input.hostname}/*`;
-  const listResponse = await input.cloudflareApi.get(`/zones/${input.zoneId}/workers/routes`);
-  if (!listResponse.ok) {
-    throw new Error(
-      `Failed to list worker routes while healing ${pattern}: ${listResponse.status} ${await listResponse.text()}`,
-    );
-  }
-  const listResult = (await listResponse.json()) as {
-    result?: Array<{ id: string; pattern?: string }>;
-  };
-  const existing = (listResult.result ?? []).find((route) => route.pattern === pattern);
+  const pattern = `${input.routeHostname}/*`;
+  const existingRoutes = await listCloudflareWorkerRoutes({
+    cloudflareApi: input.cloudflareApi,
+    zoneId: input.zoneId,
+  });
+  const existing = existingRoutes.find((route) => route.pattern === pattern);
   if (existing) {
     const deleteResponse = await input.cloudflareApi.delete(
       `/zones/${input.zoneId}/workers/routes/${existing.id}`,
@@ -383,6 +493,27 @@ async function recreateWorkerRoute(input: {
       `Failed to recreate route ${pattern}: ${createResponse.status} ${await createResponse.text()}`,
     );
   }
+}
+
+/** A zone worker route as the Cloudflare API returns it. */
+type ExistingCloudflareWorkerRoute = {
+  id: string;
+  pattern?: string;
+  script?: string;
+};
+
+async function listCloudflareWorkerRoutes(input: {
+  cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>;
+  zoneId: string;
+}): Promise<ExistingCloudflareWorkerRoute[]> {
+  const response = await input.cloudflareApi.get(`/zones/${input.zoneId}/workers/routes`);
+  if (!response.ok) {
+    throw new Error(
+      `Failed to list worker routes for zone ${input.zoneId}: ${response.status} ${await response.text()}`,
+    );
+  }
+  const result = (await response.json()) as { result?: ExistingCloudflareWorkerRoute[] };
+  return result.result ?? [];
 }
 
 function placeholderDnsRecordsForHostname(input: {
@@ -410,12 +541,10 @@ function placeholderDnsRecordsForHostname(input: {
 }
 
 /**
- * Ensure proxied originless DNS records exist for worker-route hostnames.
- *
- * Worker routes only fire when the hostname has a proxied DNS record on the
- * zone. IterateApp does this automatically from `baseUrl`; apps that declare
- * routes directly (apps/auth via WORKER_ROUTES) call this after deploy so new
- * hostnames like auth.iterate-preview-N.com resolve without manual DNS work.
+ * Ensure proxied originless DNS records exist for hostnames served by
+ * something other than an app worker route (apps/tunnels points wildcard
+ * tunnel hosts at its own worker routes declared inline). Apps deployed via
+ * {@link IterateRoutes} get this automatically.
  */
 export async function ensureProxiedDnsForHostnames(input: {
   hostnames: readonly string[];
@@ -440,12 +569,6 @@ export async function ensureProxiedDnsForHostnames(input: {
       }),
     ),
   );
-}
-
-function routeResourceIdForHostname(hostname: string) {
-  if (hostname.startsWith("*.")) return `route-wildcard-${slugify(hostname.slice(2))}`;
-  if (hostname.startsWith("*")) return `route-catchall-${slugify(hostname.slice(1))}`;
-  return `route-${slugify(hostname)}`;
 }
 
 function shouldCreateDnsRecordForRouteHostname(hostname: string) {
@@ -681,9 +804,11 @@ function withSequentialCloudflareAssetPreupload(input: { command: string; worker
 
 /**
  * Wait until Cloudflare's Workers Scripts API can read the just-uploaded
- * script before creating zone routes for it.
+ * script before creating zone routes for it. Only runs when a route is
+ * actually about to be created — on the first deploy of a fresh hostname or
+ * when re-parking a torn-down slot.
  *
- * Alchemy's `TanStackStart` returns after the upload step, but in CI we have
+ * Alchemy's worker resources return after the upload step, but in CI we have
  * seen the immediately-following Routes API call fail with Cloudflare error
  * 10019 ("Worker does not exist"). Polling the first-party script-read endpoint
  * catches the ordinary upload lag. Requiring a second successful read after a
@@ -734,31 +859,29 @@ async function waitForCloudflareWorkerScript(params: {
   );
 }
 
-async function retryCloudflareWorkerRouteCreation(createRoute: () => Promise<unknown>) {
+async function createWorkerRouteWithRetry(input: {
+  cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>;
+  pattern: string;
+  script: string;
+  zoneId: string;
+}) {
   const maxAttempts = 12;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    try {
-      await createRoute();
-      return;
-    } catch (error) {
-      if (attempt === maxAttempts || !isCloudflareWorkerRouteMissingError(error)) {
-        throw error;
-      }
-
-      await sleep(2_000);
+    const response = await input.cloudflareApi.post(`/zones/${input.zoneId}/workers/routes`, {
+      pattern: input.pattern,
+      script: input.script,
+    });
+    if (response.ok) return;
+    const body = await response.text();
+    // 10019 "Worker which does not exist": the Routes API can lag the Scripts
+    // API by a few seconds right after an upload — retry, everything else is
+    // a real error.
+    const scriptNotVisibleYet = body.includes("10019") && attempt < maxAttempts;
+    if (!scriptNotVisibleYet) {
+      throw new Error(`Failed to create route ${input.pattern}: ${response.status} ${body}`);
     }
+    await sleep(2_000);
   }
-}
-
-function isCloudflareWorkerRouteMissingError(error: unknown) {
-  const maybeError = error as {
-    errorData?: unknown;
-    message?: unknown;
-    status?: unknown;
-  };
-  const details = `${String(maybeError.message ?? "")}\n${JSON.stringify(maybeError.errorData ?? "")}`;
-
-  return details.includes("10019") && details.includes("Worker which does not exist");
 }
 
 async function sleep(ms: number) {
@@ -787,7 +910,10 @@ async function sleep(ms: number) {
  * @see https://developers.cloudflare.com/workers/configuration/routing/routes/
  * @see https://developers.cloudflare.com/workers/configuration/routing/workers-dev/
  */
-function deriveWorkerRouteHosts(baseUrl: string | undefined, extraRouteHostnames: string[] = []) {
+export function deriveWorkerRouteHosts(
+  baseUrl: string | undefined,
+  extraRouteHostnames: string[] = [],
+) {
   const baseUrlHostname = baseUrl ? new URL(baseUrl).hostname : undefined;
   return [
     ...new Set([...(baseUrlHostname ? [baseUrlHostname] : []), ...extraRouteHostnames]),
