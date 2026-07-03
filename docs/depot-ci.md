@@ -221,3 +221,12 @@ cancel each other. When validating previews, use one path at a time.
 `depot ci logs` accepts a run id, job id, or attempt id. When a run has multiple
 jobs, pass `--job <job-key>` or use `depot ci status <run-id> --output json` to
 find the exact job/attempt id.
+
+When the autofix job fails with `pull request parse error: cannot find workflow
+run named "autofix.ci"`, the real signal is that autofix found a diff to apply
+(the apply step only contacts GitHub when there is one) and could not correlate
+the Depot run with a GitHub Actions run. Look at the `git diff` output in the
+job logs, apply the same fix locally (usually `pnpm format`), and push. A common
+cause is committing a locally regenerated file (for example
+`apps/iterate-com/backend/generated/skills-registry.ts`) whose generator output
+is not format-stable.
