@@ -1,0 +1,5 @@
+FROM docker.io/cloudflare/sandbox:0.12.3
+
+# The sandbox control plane listens on 3000 (the SDK's reserved port);
+# miniflare reads EXPOSE to know which port to health-check in local dev.
+EXPOSE 3000

@@ -26,13 +26,49 @@ type WorkflowEntry = {
   workflow: Workflow;
 };
 
+// Workflows that run on Depot CI (generated into .depot/workflows/) instead of
+// GitHub Actions (.github/workflows/) — Depot CI assigns a runner in ~7s vs
+// GitHub's 20s-3m39s, and on the baked image they skip installs. Everything
+// Depot-compatible moves here as it's validated; the permanent exceptions:
+//   - claude-assistant: issue_comment/issues/pull_request_review_comment
+//     triggers, which Depot CI does not support.
+//   - generate-workflows: the self-referential generator guardian.
+// See docs/depot-ci.md.
+const DEPOT_WORKFLOW_NAMES = new Set([
+  "lint-typecheck",
+  "test",
+  "deploy-auth",
+  "deploy-tunnels",
+  "release",
+  "autofix",
+  "pullfrog",
+  // NOT here, and why:
+  //   - ci: posts to Slack (needs SLACK_CI_BOT_TOKEN, not yet on Depot) AND
+  //     calls deploy.yml as a local reusable workflow.
+  //   - deploy: workflow_call-only, invoked by ci.yml via
+  //     ./.github/workflows/deploy.yml — a GitHub workflow can't call a
+  //     reusable workflow living in .depot/, so it stays wherever ci is.
+  //   - nag, pr-dashboard: post to Slack.
+  //   - deploy-os / deploy-semaphore / deploy-streams-example-app
+  //     (cloudflare-app-workflow): slack-success / slack-failure jobs.
+  // All become movable once SLACK_CI_BOT_TOKEN is reachable from Doppler
+  // (_shared/prd) — then rewire the getSlackClient() call sites to the Doppler
+  // fallback and add the names here. See docs/depot-ci.md.
+]);
+
 async function loadWorkflowsContext(input: z.infer<typeof WorkflowsInput>) {
   const tsWorkflowsDir = path.join(import.meta.dirname, "workflows");
-  const yamlWorkflowsDir = path.join(import.meta.dirname, "../workflows");
+  const githubYamlDir = path.join(import.meta.dirname, "../workflows");
+  const depotYamlDir = path.join(import.meta.dirname, "../../.depot/workflows");
+  // A generated workflow's yaml lives in .depot/workflows/ when it runs on
+  // Depot CI, else .github/workflows/. This loop is keyed by ts sources, so
+  // hand-authored .depot yaml with no ts source (cloudflare-previews,
+  // build-preview-ci-image) is ignored.
+  const yamlDirFor = (name: string) =>
+    DEPOT_WORKFLOW_NAMES.has(name) ? depotYamlDir : githubYamlDir;
   const tsWorkflowFileNames = (await fs.readdir(tsWorkflowsDir, { withFileTypes: true }))
     .filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
     .map((entry) => entry.name);
-  const yamlWorkflowFileNames = await fs.readdir(yamlWorkflowsDir);
 
   const tsWorkflowsList = await Promise.all(
     tsWorkflowFileNames.map(async (filename) => {
@@ -49,10 +85,12 @@ async function loadWorkflowsContext(input: z.infer<typeof WorkflowsInput>) {
     }),
   );
   const yamlWorkflowsList = await Promise.all(
-    yamlWorkflowFileNames.map(async (filename) => {
-      const yaml = await fs.readFile(path.join(yamlWorkflowsDir, filename), "utf8");
-      const workflow = YAML.parse(yaml) as Workflow;
-      return { filename, name: path.parse(filename).name, yaml, workflow };
+    tsWorkflowsList.map(async ({ name }) => {
+      const yaml = await fs
+        .readFile(path.join(yamlDirFor(name), `${name}.yml`), "utf8")
+        .catch(() => "");
+      const workflow = (yaml ? YAML.parse(yaml) : {}) as Workflow;
+      return { filename: `${name}.yml`, name, yaml, workflow };
     }),
   );
   const tsWorkflows: Record<string, WorkflowEntry> = Object.fromEntries(
@@ -97,10 +135,11 @@ async function loadWorkflowsContext(input: z.infer<typeof WorkflowsInput>) {
     : null;
 
   return {
-    yamlWorkflowsDir,
+    githubYamlDir,
+    depotYamlDir,
+    yamlDirFor,
     tsWorkflowsDir,
     tsWorkflowFileNames,
-    yamlWorkflowFileNames,
     tsWorkflows,
     yamlWorkflows,
     updatesNeeded,
@@ -115,13 +154,20 @@ const router = {
     .handler(async ({ input }) => {
       const ctx = await loadWorkflowsContext(input);
       for (const { name, ts: tsWorkflow } of ctx.updatesNeeded) {
-        const yamlPath = path.join(ctx.yamlWorkflowsDir, `${name}.yml`);
+        const yamlPath = path.join(ctx.yamlDirFor(name), `${name}.yml`);
         if (!tsWorkflow) {
           console.error(`${yamlPath} missing ts. run "from-yaml" or delete manually`);
           continue;
         }
 
-        if (!input.dryRun) await fs.writeFile(yamlPath, tsWorkflow.yaml);
+        if (!input.dryRun) {
+          await fs.writeFile(yamlPath, tsWorkflow.yaml);
+          // If this workflow just moved to Depot CI, drop the stale GitHub
+          // Actions copy so it doesn't run in both places.
+          if (ctx.yamlDirFor(name) === ctx.depotYamlDir) {
+            await fs.rm(path.join(ctx.githubYamlDir, `${name}.yml`), { force: true });
+          }
+        }
       }
       if (ctx.updateMessage && process.env.CI) throw new Error(ctx.updateMessage);
       return ctx.updateMessage;

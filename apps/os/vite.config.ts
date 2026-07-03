@@ -27,6 +27,15 @@ function readAuxiliaryWorkers(command: string) {
 const host = process.env.HOST ?? "127.0.0.1";
 const port = process.env.PORT ? Number(process.env.PORT) : 5173;
 
+// Container-backed Durable Objects (the sandbox worker) pair every container
+// with a `proxy-everything` egress sidecar. Upstream pins that image to an
+// amd64-only digest; on Apple Silicon the sidecar must run natively (under
+// Rosetta its transparent-proxy setsockopt fails — see
+// docs/sandboxes.md), so default to the digest-free multi-arch tag and let
+// the (patched, host-platform) pull resolve the right architecture. Both the
+// vite plugin's pull and miniflare's workerd config read this variable.
+process.env.MINIFLARE_CONTAINER_EGRESS_IMAGE ??= "cloudflare/proxy-everything:3cb1195";
+
 // Public local URL for the dev server, driven by Doppler. CAPTUN_TUNNEL_NAME
 // pins the stable URL name; CAPTUN_GATEWAY + CAPTUN_TOKEN target a self-hosted
 // gateway. HTTP and WebSockets both route through Captun, including Vite HMR.

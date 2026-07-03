@@ -30,12 +30,12 @@ export default workflow({
   },
   jobs: {
     deploy: {
-      ...utils.runsOnDepotUbuntu,
+      ...utils.runsOnDepotImage,
       steps: [
-        ...utils.getSetupRepo({
+        ...utils.setupFromImage({
           ref: "${{ inputs.ref || github.sha }}",
         }),
-        ...utils.setupDoppler({
+        ...utils.setupDopplerBaked({
           config: "prd",
           project: "auth",
         }),
@@ -54,12 +54,12 @@ export default workflow({
     // its OAuth clients (AUTH_SEED_OAUTH_CLIENTS) on every deploy — see
     // apps/auth/scripts/seed-oauth-clients.ts.
     "deploy-dev-global": {
-      ...utils.runsOnDepotUbuntu,
+      ...utils.runsOnDepotImage,
       steps: [
-        ...utils.getSetupRepo({
+        ...utils.setupFromImage({
           ref: "${{ inputs.ref || github.sha }}",
         }),
-        ...utils.setupDoppler({
+        ...utils.setupDopplerBaked({
           config: "dev_global",
           project: "auth",
         }),
