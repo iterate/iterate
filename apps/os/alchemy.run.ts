@@ -108,6 +108,13 @@ async function fetchJwksWithRetry(url: string): Promise<{ keys: unknown[] }> {
 async function resolveStaticAuthJwks(issuer: string | undefined) {
   if (!issuer) return undefined;
 
+  // A destroy has no worker to bake a JWKS into, and the slot's auth worker
+  // is usually already torn down (parked routes serve 503) by the time the OS
+  // teardown runs — preview cleanup destroys all apps in parallel. Polling the
+  // parked route for 120s and then aborting on the forge check failed every
+  // cleanup where auth's teardown won the race (Depot runs on 2026-07-03).
+  if (process.argv.includes("--destroy")) return undefined;
+
   let issuerUrl: URL;
   try {
     issuerUrl = new URL(issuer);
