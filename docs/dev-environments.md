@@ -100,7 +100,7 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
       --method tools/call \
       --tool-name exec_js \
       --tool-arg project=<project-slug> \
-      --tool-arg "code=async (itx) => { return await itx.describe(); }" \
+      --tool-arg "code=async (itx) => { return await itx.__describe(); }" \
       --header "Authorization: Bearer $APP_CONFIG_ADMIN_API_SECRET"
   '
   ```
@@ -173,7 +173,7 @@ The working recipe to browse OS as a minted identity:
 # 1. create a project via the operator path (admin API secret)
 (cd apps/os && doppler run --project os --config dev -- pnpm cli itx run \
   --base-url http://localhost:<port> \
-  --eval 'const p = await itx.projects.create({ slug: "my-proj" }); return await p.describe()' # note the returned projectId
+  --eval 'const p = await itx.projects.create({ slug: "my-proj" }); return await p.__describe()' # note the returned projectId
 )
 
 # 2. mint with BOTH org and project claims (the org can be any made-up id —

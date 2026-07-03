@@ -651,7 +651,7 @@ _Avoid_: Project MCP route, inbound MCP
 - Individual itx capability calls do not create durable function-call-requested/completed events. The dotted path is captured by the path proxy and dispatched once through the itx supervisor.
 - A provided capability may be a live object/function, a Worker RPC address, or a path-call target implementing `call({ path, args })`.
 - A returned live handle, such as a Repo handle from `itx.repos.get({ path })`, exposes its own Workers RPC methods after the original path call returns.
-- `itx.describe()` is the capability discovery surface. Providers attach instructions and optional types to each capability entry.
+- `itx.__describe()` is the capability discovery surface. Providers attach instructions and optional types to each capability entry.
 - Dynamic MCP and OpenAPI tools should be exposed as itx capabilities whose exact external tool names or operation IDs remain path segments; use bracket syntax when a segment contains dots.
 - Project default capabilities include `fetch`, `streams`, `secrets`, `integrations`, `repos`, `agents`, `workspace`, `worker`, and `ai` as defined by `PLATFORM_PROJECT_CAPABILITIES`.
 - Agent hosts add channel and agent-local capabilities such as `itx.slack` or `itx.chat`, `itx.debug`, `itx.gmail`, `itx.agents`, and an agent-private `itx.workspace`.
@@ -659,7 +659,7 @@ _Avoid_: Project MCP route, inbound MCP
 ## Target itx Blocks
 
 ```ts
-await itx.describe();
+await itx.__describe();
 ```
 
 `describe()` is the runtime truth for a handle: it returns the context ref,
@@ -742,7 +742,7 @@ context while the provider remains connected.
 > **Domain expert:** "The `repos.get` path call returns a repo handle; `getInfo` is a Workers RPC method on that returned handle."
 
 > **Dev:** "How does a script learn what is available?"
-> **Domain expert:** "Call `itx.describe()`. Providers attach instructions and optional types to each capability."
+> **Domain expert:** "Call `itx.__describe()`. Providers attach instructions and optional types to each capability."
 
 > **Dev:** "Should `docs.search` from an MCP server become `itx.docs.search(...)`?"
 > **Domain expert:** "No. External tool names and OpenAPI operation IDs are exact path segments, so use bracket syntax such as `itx.mcp.cloudflareDocs["docs.search"](...)` when needed."

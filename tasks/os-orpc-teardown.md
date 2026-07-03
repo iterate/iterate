@@ -74,7 +74,7 @@ rollback plan.
       / `ItxStream.subscribe`; migrate the e2e files
 - [ ] CLI: `pnpm cli itx run <file|--eval>` wrapping `POST /api/itx/run`
       (identical from curl), `pnpm cli itx call <path...>` sugar; discovery =
-      `itx.describe()`
+      `itx.__describe()`
 - [ ] MCP: `run_itx_code` tool on the project MCP server (depends on the itx
       processor task)
 
