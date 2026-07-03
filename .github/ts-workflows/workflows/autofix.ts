@@ -11,27 +11,19 @@ export default workflow({
   },
   jobs: {
     autofix: {
-      ...utils.runsOnDepotUbuntu,
+      ...utils.runsOnDepotImage,
       steps: [
         {
           name: "Checkout code",
           uses: "actions/checkout@v4",
+          // Keep the baked node_modules so the install below is near-instant.
+          with: { clean: false },
         },
         {
-          name: "Setup Pnpm",
-          uses: "pnpm/action-setup@v4",
-        },
-        {
-          name: "Setup Node",
-          uses: "actions/setup-node@v4",
-          with: {
-            "node-version": 24,
-            cache: "pnpm",
-          },
-        },
-        {
+          // Deliberately NOT --frozen: autofix's job is to update the lockfile.
+          // --prefer-offline reuses the baked pnpm store.
           name: "install and update lockfile",
-          run: "pnpm install --no-frozen-lockfile",
+          run: "pnpm install --no-frozen-lockfile --prefer-offline",
         },
         {
           name: "fix lint issues",
@@ -42,8 +34,8 @@ export default workflow({
           run: "pnpm run format",
         },
         {
-          name: "revert changes to workflows", // autofix.ci can't update this folder
-          run: "git checkout .github/workflows",
+          name: "revert changes to workflows", // autofix.ci can't update .github/workflows; generated yaml is owned by the generator
+          run: "git checkout .github/workflows .depot/workflows",
           if: "always()",
         },
         {
