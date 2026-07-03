@@ -464,6 +464,89 @@ return { pages, search };
 `.trim(),
   },
   {
+    id: "connect-public-mcp",
+    title: "Connect a public MCP server, then mount it",
+    description:
+      "itx.mcp.connect({ url }) opens any reachable MCP server as an ad-hoc capability target. Tool names become flat method calls on the returned client. Mount the same connection recipe as an itx-expression when you want agents and future sessions to discover it through describe() and call it as itx.publicMcp.<tool>(). External service, so run it interactively.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const mcpUrl = vars.mcpUrl ?? "https://mcp.exa.ai/mcp";
+
+// Ad-hoc client: no mount, no project event. You can call MCP tools directly
+// by their tool name on the returned client.
+const mcp = await itx.mcp.connect({ url: mcpUrl });
+const search = await mcp.web_search_exa({
+  query: vars.query ?? "Cloudflare Workers RPC capabilities",
+  numResults: 2,
+});
+
+// Durable mount: this records a capability recipe on the project scope so
+// describe() can teach agents that itx.publicMcp.web_search_exa(...) exists.
+await itx.provideCapability({
+  expression: ["mcp", ["connect", { url: mcpUrl }]],
+  instructions:
+    "Public MCP search client. Call itx.publicMcp.web_search_exa({ query, numResults }) or itx.publicMcp.web_fetch_exa({ urls, maxCharacters }).",
+  path: ["publicMcp"],
+  type: "itx-expression",
+});
+
+const mountedSearch = await itx.publicMcp.web_search_exa({
+  query: vars.query ?? "OpenAPI operationId example",
+  numResults: 1,
+});
+const mount = (await itx.describe()).capabilities.find(
+  (capability) => capability.path.join(".") === "publicMcp",
+);
+
+return {
+  adHocCalled: Boolean(search),
+  mountType: mount?.type,
+  mountedCalled: Boolean(mountedSearch),
+};
+`.trim(),
+  },
+  {
+    id: "connect-openapi-petstore",
+    title: "Connect OpenAPI Petstore, then mount it",
+    description:
+      "itx.openapi.connect({ specUrl }) fetches an OpenAPI document through project egress and returns a client whose methods are the spec's flat operationIds. This calls Swagger Petstore's findPetsByStatus operation, then registers the same OpenAPI connection as a durable capability at itx.petstore. External service, so run it interactively.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const petstoreSpecUrl =
+  vars.specUrl ?? "https://petstore3.swagger.io/api/v3/openapi.json";
+
+// Await the OpenAPI client, then call operationIds as methods. This is the
+// same operation as:
+//   await (await itx.openapi.connect({ specUrl: petstoreSpecUrl }))
+//     .findPetsByStatus({ status: "available" })
+const petstore = await itx.openapi.connect({ specUrl: petstoreSpecUrl });
+const availablePets = await petstore.findPetsByStatus({ status: "available" });
+
+// Mount the recipe when the client should become a named project capability.
+await itx.provideCapability({
+  expression: ["openapi", ["connect", { specUrl: petstoreSpecUrl }]],
+  instructions:
+    "Swagger Petstore OpenAPI client. Call itx.petstore.findPetsByStatus({ status: 'available' }) or any other operationId from the spec.",
+  path: ["petstore"],
+  type: "itx-expression",
+});
+
+const soldPets = await itx.petstore.findPetsByStatus({ status: "sold" });
+const mount = (await itx.describe()).capabilities.find(
+  (capability) => capability.path.join(".") === "petstore",
+);
+
+return {
+  availableCount: Array.isArray(availablePets) ? availablePets.length : null,
+  firstAvailableName: Array.isArray(availablePets) ? availablePets[0]?.name : undefined,
+  mountType: mount?.type,
+  soldCount: Array.isArray(soldPets) ? soldPets.length : null,
+};
+`.trim(),
+  },
+  {
     id: "ai-models",
     title: "Workers AI is a built-in capability",
     description:

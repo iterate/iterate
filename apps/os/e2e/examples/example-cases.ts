@@ -18,6 +18,12 @@
 //   exa-web-search  calls Exa's public MCP server (external service, rate
 //                   limited); interactive reading material, same rationale as
 //                   ai-models.
+//   connect-public-mcp
+//                   explicitly connects to Exa's public MCP server; external
+//                   service and rate limited, so keep it interactive.
+//   connect-openapi-petstore
+//                   calls Swagger's public Petstore OpenAPI deployment;
+//                   external service, so keep it interactive.
 
 export type ExampleRunContext = {
   /** Unique per example × runtime, for stream/event payload assertions. */
@@ -36,6 +42,8 @@ export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
   "list-projects",
   "ai-models",
   "exa-web-search",
+  "connect-public-mcp",
+  "connect-openapi-petstore",
 ]);
 
 export const EXAMPLE_CASES: Record<string, ExampleCase> = {
