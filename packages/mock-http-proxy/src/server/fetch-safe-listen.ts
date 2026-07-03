@@ -15,16 +15,17 @@ export type FetchSafeListenResult = {
   port: number;
 };
 
+export function isFetchBlockedPort(port: number): boolean {
+  return FETCH_BLOCKED_PORTS.has(port);
+}
+
+/** Options for {@link listenOnFetchSafePort}. */
 type FetchSafeListenOptions = {
   host?: string;
   port?: number;
   maxAttempts?: number;
   isFetchBlockedPort?: (port: number) => boolean;
 };
-
-export function isFetchBlockedPort(port: number): boolean {
-  return FETCH_BLOCKED_PORTS.has(port);
-}
 
 export async function listenOnFetchSafePort(
   server: Server,
@@ -45,7 +46,8 @@ export async function listenOnFetchSafePort(
 
     if (!isBlocked(address.port)) {
       return {
-        baseUrl: `http://${formatUrlHost(host)}:${String(address.port)}`,
+        // IPv6 hosts need brackets in a URL authority.
+        baseUrl: `http://${host.includes(":") ? `[${host}]` : host}:${String(address.port)}`,
         host,
         port: address.port,
       };
@@ -97,8 +99,4 @@ async function closeServer(server: Server): Promise<void> {
 
 function isAddressInfo(address: ReturnType<Server["address"]>): address is AddressInfo {
   return typeof address === "object" && address !== null && "port" in address;
-}
-
-function formatUrlHost(host: string): string {
-  return host.includes(":") ? `[${host}]` : host;
 }
