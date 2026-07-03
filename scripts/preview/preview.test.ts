@@ -1157,6 +1157,41 @@ describe("assignEnvironmentConfigLease", () => {
     );
   });
 
+  it("reports broken ownership when re-acquiring the same slug after losing it", async () => {
+    // renew and non-force acquireSpecific fail (someone else held it in the
+    // interim); --force re-takes the SAME slug. Outcome must not be "kept".
+    const acquireSpecific = vi.fn(async (input: { force?: boolean }) =>
+      input.force ? fakeLease({ leaseId: "1197a5b3-a705-4380-9958-6a0dbead16b7" }) : null,
+    );
+    const semaphore = fakeSemaphore({
+      acquireSpecific,
+      list: vi.fn(async () => [
+        {
+          data: { dopplerConfig: "preview_2" },
+          holder: "pr-1601",
+          lastAcquiredAt: null,
+          lastReleasedAt: null,
+          leaseState: "leased" as const,
+          leasedUntil: Date.now() + 60_000,
+          slug: "preview-2",
+        },
+      ]),
+    });
+
+    const result = await assignEnvironmentConfigLease({
+      force: true,
+      holder: "pr-1600",
+      leaseMs: 1000,
+      recordedLease: previousLease,
+      semaphore,
+      wantedSlug: "preview-2",
+    });
+
+    expect(result.outcome).toBe("assigned");
+    expect(result.lease.slug).toBe("preview-2");
+    expect(result.changedFromSlug).toBeNull();
+  });
+
   it("explains who holds a requested slot instead of taking it without --force", async () => {
     const semaphore = fakeSemaphore({
       list: vi.fn(async () => [

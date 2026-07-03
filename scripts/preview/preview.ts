@@ -448,20 +448,27 @@ export async function assign(options: AssignOptions = {}) {
     wantedSlug,
   });
 
+  // Anything but a kept/renewed lease breaks continuous ownership: even a
+  // re-acquisition of the SAME slug means someone else may have deployed over
+  // this PR's apps in the interim, so recorded deployments cannot be trusted.
+  const needsRedeploy = result.outcome !== "kept";
+  const redeployMessage = result.changedFromSlug
+    ? `Slot reassigned from ${result.changedFromSlug} to ${result.lease.slug}; run preview deploy to redeploy here.`
+    : `Slot ${result.lease.slug} was re-acquired after this PR's lease lapsed — previous deployments there may have been replaced. Run preview deploy to redeploy.`;
   const update = await updatePreviewState(context, (state) => ({
     ...state,
     environmentConfigLease: result.lease,
-    notice: result.changedFromSlug
-      ? `This PR was reassigned from ${result.changedFromSlug} to ${result.lease.slug} by preview assign at ${new Date().toISOString()}; run preview deploy to redeploy here.`
+    notice: needsRedeploy
+      ? `${redeployMessage} (preview assign at ${new Date().toISOString()})`
       : null,
-    apps: result.changedFromSlug
+    apps: needsRedeploy
       ? Object.fromEntries(
           Object.entries(state.apps).map(([appSlug, entry]) => [
             appSlug,
             {
               ...entry,
               status: "claim-failed" as const,
-              message: `Slot reassigned from ${result.changedFromSlug} to ${result.lease.slug}; run preview deploy to redeploy here.`,
+              message: redeployMessage,
               updatedAt: new Date().toISOString(),
             },
           ]),
@@ -481,7 +488,7 @@ export async function assign(options: AssignOptions = {}) {
     outcome: result.outcome,
     previousSlot: result.changedFromSlug,
     previousLeaseReleased: result.previousLeaseReleased,
-    appsMarkedForRedeploy: result.changedFromSlug ? Object.keys(update.state.apps) : [],
+    appsMarkedForRedeploy: needsRedeploy ? Object.keys(update.state.apps) : [],
     nextStep: `doppler run --project _shared --config prd -- pnpm preview deploy --pull-request-number ${context.pullRequestNumber}`,
   };
 }
