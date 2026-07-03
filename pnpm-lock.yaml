@@ -44,7 +44,7 @@ overrides:
 
 patchedDependencies:
   '@better-auth/oauth-provider@1.6.9':
-    hash: 4f7aa4c17b3fb54c9267438a45532785482d1faef950d7bac29b608cde75ab80
+    hash: 1ac6793438edc41cf1c0bab10332b2503a027f7b8f81b758d2f4a8f5b74ff010
     path: patches/@better-auth__oauth-provider@1.6.9.patch
   '@cloudflare/workers-types@4.20260621.1':
     hash: ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2
@@ -210,7 +210,7 @@ importers:
     dependencies:
       '@better-auth/oauth-provider':
         specifier: ^1.6.9
-        version: 1.6.9(patch_hash=4f7aa4c17b3fb54c9267438a45532785482d1faef950d7bac29b608cde75ab80)(40738cae8aa0dc625f2005a47245bfb2)
+        version: 1.6.9(patch_hash=1ac6793438edc41cf1c0bab10332b2503a027f7b8f81b758d2f4a8f5b74ff010)(40738cae8aa0dc625f2005a47245bfb2)
       '@iterate-com/auth-contract':
         specifier: workspace:*
         version: link:../auth-contract
@@ -14536,7 +14536,7 @@ snapshots:
       '@better-auth/core': 1.6.9(@better-auth/utils@0.4.0)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(better-call@1.3.5(zod@4.3.6))(jose@6.2.2)(kysely@0.28.16)(nanostores@1.1.1)
       '@better-auth/utils': 0.4.0
 
-  '@better-auth/oauth-provider@1.6.9(patch_hash=4f7aa4c17b3fb54c9267438a45532785482d1faef950d7bac29b608cde75ab80)(40738cae8aa0dc625f2005a47245bfb2)':
+  '@better-auth/oauth-provider@1.6.9(patch_hash=1ac6793438edc41cf1c0bab10332b2503a027f7b8f81b758d2f4a8f5b74ff010)(40738cae8aa0dc625f2005a47245bfb2)':
     dependencies:
       '@better-auth/core': 1.6.9(@better-auth/utils@0.4.0)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(better-call@1.3.5(zod@4.3.6))(jose@6.2.2)(kysely@0.28.16)(nanostores@1.1.1)
       '@better-auth/utils': 0.4.0
