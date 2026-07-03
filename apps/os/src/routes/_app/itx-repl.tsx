@@ -108,8 +108,10 @@ function ItxReplPage({
   const [entries, setEntries] = useState<BrowserReplEntry[]>([]);
   const [examplesOpen, setExamplesOpen] = useState(false);
   // Scope is fixed for this instance: ConnectedItxRepl keys by context, so a
-  // project switch remounts (fresh scope), not a re-sync on render.
-  const scopeRef = useRef<Record<string, unknown>>(createBrowserReplScope(scope));
+  // project switch remounts (fresh scope), not a re-sync on render. Lazily
+  // initialized so the scope isn't rebuilt (and discarded) on every render.
+  const scopeRef = useRef<Record<string, unknown> | null>(null);
+  const replScope = (scopeRef.current ??= createBrowserReplScope(scope));
 
   // Expose the live handle on globalThis for console poking. This only
   // binds/clears a reference — it never disposes `itx` or closes the socket
@@ -130,7 +132,7 @@ function ItxReplPage({
     const entry = await runBrowserReplEntry({
       code: trimmedCode,
       itx,
-      scope: scopeRef.current,
+      scope: replScope,
     });
     setEntries((current) => [...current, entry]);
     setStatus("Ready");

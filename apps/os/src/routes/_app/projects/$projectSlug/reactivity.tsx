@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { ActivityIcon, PlusIcon, RefreshCwIcon, RadioIcon } from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
@@ -210,7 +210,8 @@ function ProjectReactivityContent() {
   const live = useLiveProjectProcessorSnapshot();
   const testStream = useReactivityTestStream();
   const [manualRefreshPending, setManualRefreshPending] = useState(false);
-  const [nextActionId, setNextActionId] = useState(1);
+  // Only ever read inside the append handlers — a ref avoids a render per click.
+  const nextActionIdRef = useRef(1);
   const [action, setAction] = useState<ReactivityActionState>({ status: "idle" });
 
   const projectState = live.state ?? live.snapshot?.state;
@@ -245,9 +246,9 @@ function ProjectReactivityContent() {
   }
 
   async function appendTestEvent() {
-    const actionId = nextActionId;
+    const actionId = nextActionIdRef.current;
+    nextActionIdRef.current += 1;
     const marker = `reactivity-event-${actionId}`;
-    setNextActionId(actionId + 1);
     setAction({ kind: "single", marker, status: "running" });
     try {
       await itx.streams.get(REACTIVITY_TEST_STREAM_PATH).append({
@@ -261,10 +262,10 @@ function ProjectReactivityContent() {
   }
 
   async function appendTestBatch() {
-    const actionId = nextActionId;
+    const actionId = nextActionIdRef.current;
+    nextActionIdRef.current += 1;
     const markers = [1, 2, 3].map((index) => `reactivity-batch-${actionId}-${index}`);
     const marker = markers.at(-1)!;
-    setNextActionId(actionId + 1);
     setAction({ kind: "batch", marker, status: "running" });
     try {
       await itx.streams.get(REACTIVITY_TEST_STREAM_PATH).append(

@@ -7,6 +7,7 @@ create table resources (
   -- with a single SQL query without turning D1 into a second source of truth.
   lease_state text not null default 'available',
   leased_until integer,
+  holder text,
   last_acquired_at integer,
   last_released_at integer,
   created_at text not null default current_timestamp,

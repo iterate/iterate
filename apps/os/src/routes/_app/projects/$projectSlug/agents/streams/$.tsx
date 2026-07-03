@@ -13,7 +13,6 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams
     hideAppHeader: true,
     commandPalette: { stream: { mode: "agent", rootPath: AGENTS_ROOT } },
   },
-  validateSearch: StreamViewSearch,
   params: {
     parse: (raw) => ({
       _splat: streamPathFromSplat(raw._splat),
@@ -22,6 +21,7 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams
       _splat: streamPathToSplat(parsed._splat),
     }),
   },
+  validateSearch: StreamViewSearch,
   ssr: false,
   loader: ({ context, params }) => {
     const agentPath = params._splat;

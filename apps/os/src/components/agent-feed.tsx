@@ -1,4 +1,12 @@
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  memo,
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { BanIcon, ChevronRightIcon, CodeIcon } from "lucide-react";
 import type {
@@ -23,7 +31,8 @@ import { cn } from "@iterate-com/ui/lib/utils";
 import { AGENT_UI_FEED_TABLE } from "~/domains/streams/client-libraries/processors/agent-ui-processor.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import { useVirtualizedTailScroll } from "~/lib/use-virtualized-tail-scroll.ts";
+/** How many rows past the virtualizer's window the tail query prefetches. */
+const TAIL_PREFETCH_ROWS = 32;
 
 /**
  * The clean agent chat feed: user message → activity ("Ran code 2× · 3
@@ -32,8 +41,13 @@ import { useVirtualizedTailScroll } from "~/lib/use-virtualized-tail-scroll.ts";
  * Settled items are `agent_feed_items` rows written by the agent-ui
  * processor; the TanStack virtual list windows over them with reactive
  * SQLite queries. The in-flight activity — with live-streaming thinking and
- * response text — renders as one element below the list, straight from the
- * processor's reduced state.
+ * response text — is the list's trailing virtual item, rendered straight from
+ * the processor's reduced state, so the virtualizer's end anchoring tracks its
+ * growth natively.
+ *
+ * Callers must remount this component when pointing it at a different
+ * database (key it by the database identity): the virtualizer's measurement
+ * and scroll state are only valid for one stream's history.
  */
 export function AgentFeedView({
   database,
@@ -66,8 +80,18 @@ export function AgentFeedView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(new Set());
 
+  // The live in-flight activity and the queued-messages panel are the list's
+  // trailing items, so TanStack Virtual owns ALL tail behavior natively:
+  // `followOnAppend` chases appends while the reader is pinned to the end, and
+  // end-anchored resize adjustments keep the pin as the live item grows with
+  // every streamed chunk. Rendering them outside the list would hide their
+  // height from the virtualizer and require hand-rolled scroll chasing.
+  const liveCount = live == null ? 0 : 1;
+  const queuedCount = queuedUserMessages.length === 0 ? 0 : 1;
+  const totalCount = itemCount + liveCount + queuedCount;
+
   const virtualizer = useVirtualizer({
-    count: itemCount,
+    count: totalCount,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 56,
     // Agent feed rows are append-only and addressed by dense local_index, so
@@ -80,9 +104,25 @@ export function AgentFeedView({
     directDomUpdates: true,
   });
 
+  // Open at the newest content. anchorTo/followOnAppend only act on option
+  // UPDATES — when the deduped query registry already knows the count on the
+  // first render (e.g. re-keyed remount for a previously-opened stream), there
+  // is no 0→N transition for followOnAppend to chase, so set the initial
+  // position explicitly. scrollToEnd's reconcile loop absorbs estimated→
+  // measured size drift.
+  useLayoutEffect(() => {
+    virtualizer.scrollToEnd();
+    // useVirtualizer returns one stable instance for the component's lifetime,
+    // so this runs once on mount; later appends are followOnAppend's job.
+  }, [virtualizer]);
+
   const virtualItems = virtualizer.getVirtualItems();
   const first = virtualItems[0]?.index ?? 0;
   const last = virtualItems.at(-1)?.index ?? -1;
+  // The window extends TAIL_PREFETCH_ROWS past the virtualizer's range so rows
+  // appended while pinned to the tail are already in this snapshot when the
+  // count query grows: the live→settled handoff commits in one frame instead
+  // of flashing a skeleton where the new message lands.
   const rowsResult = useStreamQuery(
     database,
     query === ""
@@ -93,21 +133,19 @@ export function AgentFeedView({
          WHERE json(data) LIKE ?
          ORDER BY local_index ASC
          LIMIT ? OFFSET ?`,
-    query === "" ? [first, last + 1] : [`%${query}%`, Math.max(0, last + 1 - first), first],
+    query === ""
+      ? [first, last + 1 + TAIL_PREFETCH_ROWS]
+      : [`%${query}%`, Math.max(0, last + 1 + TAIL_PREFETCH_ROWS - first), first],
   );
   // Retain the last committed rows across range re-queries so already-visible
   // rows don't flash to skeletons while the shifted window's SQL runs. The
   // retained rows are only valid for the search they were fetched under —
   // reusing them across a filter change would briefly show unfiltered rows.
-  const lastRowsRef = useRef<{ query: string; rows: Map<number, AgentUiItem> }>({
-    query: "",
-    rows: new Map(),
-  });
+  const lastRowsRef = useRef<{ query: string; rows: Map<number, AgentUiItem> } | null>(null);
   const itemsByIndex = useMemo(() => {
     if (rowsResult.status !== "ok") {
-      return lastRowsRef.current.query === query
-        ? lastRowsRef.current.rows
-        : new Map<number, AgentUiItem>();
+      const retained = lastRowsRef.current;
+      return retained?.query === query ? retained.rows : new Map<number, AgentUiItem>();
     }
     const rows = new Map<number, AgentUiItem>();
     rowsResult.data.forEach((row, position) => {
@@ -122,41 +160,21 @@ export function AgentFeedView({
     return rows;
   }, [rowsResult.data, rowsResult.status, query, first]);
 
-  // Follow new content down while the reader is pinned to the bottom — both
-  // when settled rows land and on every live streaming tick.
-  const liveSignature =
-    live == null
-      ? queuedUserMessages.map((message) => `${message.id}:${message.text.length}`).join("|")
-      : live.steps
-          .map((step) =>
-            step.kind === "llm"
-              ? `${step.id}:${step.thinkingText.length}:${step.responseText.length}:${step.status}`
-              : `${step.id}:${step.code.length}:${step.status}`,
-          )
-          .join("|") +
-        "|" +
-        queuedUserMessages.map((message) => `${message.id}:${message.text.length}`).join("|");
-  useVirtualizedTailScroll({
-    contentSignature: liveSignature,
-    count: itemCount + (live == null ? 0 : 1) + queuedUserMessages.length,
-    resetKey: database,
-    scrollElementRef: scrollRef,
-    virtualizer,
-  });
-
-  function toggleExpanded(id: string) {
+  // Stable identity so the memoized settled rows skip the per-chunk re-renders
+  // driven by the live streaming state.
+  const toggleExpanded = useCallback((id: string) => {
     setExpandedIds((previous) => {
       const next = new Set(previous);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
-  }
+  }, []);
 
   return (
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto w-full max-w-3xl px-4 pb-6 pt-5 md:px-6">
-        {itemCount === 0 && live == null && queuedUserMessages.length === 0 ? (
+        {totalCount === 0 ? (
           <Empty className="min-h-48">
             <EmptyHeader>
               {isPending ? <Spinner className="size-4" /> : null}
@@ -167,16 +185,31 @@ export function AgentFeedView({
         ) : null}
         <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
           {virtualItems.map((virtualItem) => {
-            const item = itemsByIndex.get(virtualItem.index);
+            const index = virtualItem.index;
+            const isLiveItem = live != null && index === itemCount;
+            const isQueuedItem = index === itemCount + liveCount && queuedCount > 0;
+            const item = index < itemCount ? itemsByIndex.get(index) : undefined;
             return (
               <div
                 key={virtualItem.key}
-                data-index={virtualItem.index}
+                data-index={index}
                 ref={virtualizer.measureElement}
                 className="absolute left-0 top-0 w-full"
                 style={{ transform: `translateY(${virtualItem.start}px)` }}
               >
-                {item == null ? (
+                {isLiveItem ? (
+                  <AgentLiveActivity
+                    live={live}
+                    expandedIds={expandedIds}
+                    onToggle={toggleExpanded}
+                  />
+                ) : isQueuedItem ? (
+                  <QueuedMessagesPanel
+                    messages={queuedUserMessages}
+                    isInterrupting={isInterruptingQueuedMessages}
+                    onInterrupt={onInterruptQueuedMessages}
+                  />
+                ) : item == null ? (
                   <div className="my-2 h-10 rounded-xl bg-muted/40" />
                 ) : (
                   <AgentFeedItemRow
@@ -189,22 +222,16 @@ export function AgentFeedView({
             );
           })}
         </div>
-        {live == null ? null : (
-          <AgentLiveActivity live={live} expandedIds={expandedIds} onToggle={toggleExpanded} />
-        )}
-        {queuedUserMessages.length === 0 ? null : (
-          <QueuedMessagesPanel
-            messages={queuedUserMessages}
-            isInterrupting={isInterruptingQueuedMessages}
-            onInterrupt={onInterruptQueuedMessages}
-          />
-        )}
       </div>
     </div>
   );
 }
 
-function AgentFeedItemRow({
+// Memoized: the feed re-renders on every 16ms live-streaming tick, and settled
+// rows (markdown, highlighted code) must not re-render along with it. Item
+// objects keep their identity between ticks — the row map is only rebuilt when
+// the underlying SQLite snapshot actually changes.
+const AgentFeedItemRow = memo(function AgentFeedItemRow({
   item,
   expandedIds,
   onToggle,
@@ -252,7 +279,7 @@ function AgentFeedItemRow({
       onToggle={onToggle}
     />
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // Settled activity: the quiet "Ran code 2× · 3 requests · 7.4 s" row
@@ -612,8 +639,9 @@ function liveActivityLabel(live: AgentUiActivity, liveStep: AgentUiStep | undefi
 }
 
 /** Code-mode agents stream itx code as their response; chat agents stream prose. */
+const CODE_START_PATTERN = /^\s*(async|await|function|const|let|import)\b/;
 function looksLikeCode(text: string): boolean {
-  return text.includes("```") || /^\s*(async|await|function|const|let|import)\b/.test(text);
+  return text.includes("```") || CODE_START_PATTERN.test(text);
 }
 
 function LiveStepStream({ step }: { step: AgentUiStep }) {

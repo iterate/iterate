@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { promises as dns } from "node:dns";
+import { userInfo } from "node:os";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { resolve } from "node:path";
@@ -28,34 +29,109 @@ export async function deploy(options: PullRequestCommandOptions = {}) {
     githubToken: resolveGithubToken(options, runtime.commandEnvironment),
     pullRequestNumber: resolvePullRequestNumber(options, runtime.commandEnvironment),
   });
+  logPreview(
+    `deploy for PR #${context.pullRequestNumber} (head ${context.pullRequestHeadSha.slice(0, 7)}) — holder ${pullRequestHolder(context.pullRequestNumber)}, semaphore ${defaultSemaphoreBaseUrl}`,
+  );
 
   const current = await readCloudflarePreviewState(context);
+  logPreview(
+    current.state.environmentConfigLease
+      ? `PR body records lease ${current.state.environmentConfigLease.slug} (doppler config ${current.state.environmentConfigLease.dopplerConfig}, recorded until ${formatUntil(current.state.environmentConfigLease.leasedUntil)})`
+      : "PR body records no lease — this PR has no slot yet",
+  );
   const selectedApps = await selectPreviewAppsForPullRequest({
     ...context,
     previousState: current.state,
   });
 
   if (selectedApps.length === 0) {
+    logPreview(
+      "nothing to deploy: no preview apps are affected by this diff and no failed apps need a retry — leaving lease and PR body untouched",
+    );
     return {
       ok: true,
       skipped: true,
       state: current.state,
     };
   }
+  logPreview(
+    `deploy plan: ${orderPreviewDeployBatches(selectedApps)
+      .map((batch) => `[${batch.map((app) => app.slug).join(", ")}]`)
+      .join(" then ")}`,
+  );
 
-  const environmentConfigLease = await claimEnvironmentConfigLease({
-    createPreviewSemaphoreResourceClient: runtime.createPreviewSemaphoreResourceClient,
-    leaseMs: defaultPreviewLeaseMs,
-    previousEnvironmentConfigLease: current.state.environmentConfigLease,
-  });
+  let environmentConfigLease: EnvironmentConfigLease;
+  try {
+    environmentConfigLease = await claimEnvironmentConfigLease({
+      createPreviewSemaphoreResourceClient: runtime.createPreviewSemaphoreResourceClient,
+      fetchPullRequestState: makePullRequestStateFetcher(
+        context.githubToken,
+        context.repositoryFullName,
+      ),
+      holder: pullRequestHolder(context.pullRequestNumber),
+      leaseMs: defaultPreviewLeaseMs,
+      // Surface the wait in the PR body the moment every slot is busy, not
+      // only in workflow logs nobody has open.
+      onFirstWait: async (holderTable) => {
+        await updatePreviewState(context, (state) => ({
+          ...state,
+          notice: [
+            `All preview slots are leased — this PR is waiting in line for one (since ${new Date().toISOString()}).`,
+            holderTable,
+          ].join("\n"),
+        }));
+      },
+      previousEnvironmentConfigLease: current.state.environmentConfigLease,
+      waitTotalMs: resolveSlotWaitTotalMs(runtime.commandEnvironment),
+    });
+  } catch (error) {
+    await updatePreviewState(context, (state) => ({
+      ...state,
+      notice: `No preview slot could be claimed at ${new Date().toISOString()}. ${formatPreviewErrorMessage(error)}`,
+    }));
+    throw error;
+  }
+  // A slot move invalidates every previously recorded deployment, not just
+  // the diff-selected apps: anything left undeployed would keep old-slot URLs
+  // and e2e would run against another slot's deployment.
+  const previousSlug = current.state.environmentConfigLease?.slug ?? null;
+  const appsToDeploy =
+    previousSlug && previousSlug !== environmentConfigLease.slug
+      ? expandPreviewDependencies([
+          ...new Set([
+            ...selectedApps.map((app) => app.slug),
+            ...Object.keys(current.state.apps).filter(
+              (appSlug): appSlug is CloudflarePreviewAppSlugType =>
+                cloudflarePreviewApps[appSlug as CloudflarePreviewAppSlugType] != null,
+            ),
+          ]),
+        ]).map((appSlug) => cloudflarePreviewApps[appSlug])
+      : selectedApps;
+  if (appsToDeploy.length > selectedApps.length) {
+    logPreview(
+      `slot changed from ${previousSlug} to ${environmentConfigLease.slug}: redeploying every previously recorded app (${appsToDeploy.map((app) => app.slug).join(", ")}) so nothing keeps pointing at the old slot`,
+    );
+  }
+  // A successful claim clears exhaustion/takeover banners; a slot move
+  // leaves its own so the change is impossible to miss.
+  const claimNotice =
+    previousSlug && previousSlug !== environmentConfigLease.slug
+      ? `This PR's slot changed from ${previousSlug} to ${environmentConfigLease.slug} at ${new Date().toISOString()} (the old lease lapsed and someone else took the slot). Everything below refers to the new slot.`
+      : null;
   const leaseUpdate = await updatePreviewState(context, (state) => ({
     ...state,
     environmentConfigLease,
+    notice: claimNotice,
   }));
 
   let ok = true;
   let latestState = leaseUpdate.state;
-  for (const batch of orderPreviewDeployBatches(selectedApps)) {
+  // Pin the lease, notice, and every batch's entries in each write: the
+  // GitHub read inside updatePreviewState can be stale (read-after-write
+  // lag), and a stale read would otherwise drop earlier batch results or
+  // resurrect a pre-claim "waiting for a slot" banner.
+  const accumulatedEntries: Record<string, CloudflarePreviewAppEntry> = {};
+  for (const batch of orderPreviewDeployBatches(appsToDeploy)) {
     const entries = await mapWithConcurrency(
       batch,
       defaultPreviewDeployConcurrency,
@@ -75,24 +151,42 @@ export async function deploy(options: PullRequestCommandOptions = {}) {
       ok = false;
     }
 
+    for (const entry of entries) {
+      accumulatedEntries[entry.appSlug] = entry;
+    }
     const update = await updatePreviewState(context, (state) => ({
       ...state,
       environmentConfigLease,
+      notice: claimNotice,
       apps: {
         ...state.apps,
-        ...Object.fromEntries(entries.map((entry) => [entry.appSlug, entry])),
+        ...accumulatedEntries,
       },
     }));
     latestState = update.state;
   }
 
+  const deployedEntries = Object.values(latestState.apps).filter(
+    (entry) => entry.headSha === context.pullRequestHeadSha,
+  );
+  logPreview(
+    [
+      `deploy finished: ${deployedEntries.filter((entry) => entry.status === "awaiting-tests").length} ok, ${deployedEntries.filter((entry) => entry.status === "deploy-failed").length} failed (details in the PR body's preview section)`,
+      ...deployedEntries.map(
+        (entry) =>
+          `  ${entry.appSlug}: ${entry.status}${entry.publicUrl ? ` ${entry.publicUrl}` : ""}`,
+      ),
+    ].join("\n"),
+  );
   const result = {
     ok,
     state: latestState,
   };
 
   if (!result.ok) {
-    throw new Error("Failed to deploy Cloudflare preview apps.");
+    throw new Error(
+      "Failed to deploy Cloudflare preview apps — see per-app output above and the failure details in the PR body.",
+    );
   }
 
   return result;
@@ -109,15 +203,22 @@ export async function test(options: PullRequestCommandOptions = {}) {
     pullRequestNumber: resolvePullRequestNumber(options, runtime.commandEnvironment),
   });
 
+  logPreview(
+    `test for PR #${context.pullRequestNumber} (head ${context.pullRequestHeadSha.slice(0, 7)}) — holder ${pullRequestHolder(context.pullRequestNumber)}, semaphore ${defaultSemaphoreBaseUrl}`,
+  );
   const current = await readCloudflarePreviewState(context);
-  const environmentConfigLease = current.state.environmentConfigLease;
-  if (environmentConfigLease == null) {
+  const recordedLease = current.state.environmentConfigLease;
+  if (recordedLease == null) {
+    logPreview("PR body records no lease — nothing is deployed for this PR, skipping tests");
     return {
       ok: true,
       skipped: true,
       state: current.state,
     };
   }
+  logPreview(
+    `PR body records lease ${recordedLease.slug} (doppler config ${recordedLease.dopplerConfig}, recorded until ${formatUntil(recordedLease.leasedUntil)})`,
+  );
 
   const testableApps = Object.values(current.state.apps)
     .filter((entry) => canRunPreviewTests(entry))
@@ -126,11 +227,67 @@ export async function test(options: PullRequestCommandOptions = {}) {
     .filter((app): app is PreviewAppRuntime => app != null);
 
   if (testableApps.length === 0) {
+    logPreview(
+      [
+        "no apps are testable for this head sha — skipping tests. Recorded app states:",
+        ...Object.values(current.state.apps).map(
+          (entry) =>
+            `  ${entry.appSlug}: ${entry.status}, head ${entry.shortSha ?? "?"}${entry.headSha !== context.pullRequestHeadSha ? " (stale — deploy has not run for the current head yet)" : ""}`,
+        ),
+      ].join("\n"),
+    );
     return {
       ok: true,
       skipped: true,
       state: current.state,
     };
+  }
+  logPreview(`testable apps: ${testableApps.map((app) => app.slug).join(", ")}`);
+
+  // Re-assert the slot before hammering it with e2e: if the lease expired and
+  // another PR took the slot, the deployment under test is no longer ours.
+  const holder = pullRequestHolder(context.pullRequestNumber);
+  const reasserted = await reassertEnvironmentConfigLease({
+    holder,
+    lease: recordedLease,
+    leaseMs: defaultPreviewLeaseMs,
+    semaphore: runtime.createPreviewSemaphoreResourceClient(),
+  });
+  if (!reasserted.ok) {
+    await updatePreviewState(context, (state) => ({
+      ...state,
+      environmentConfigLease: null,
+      notice: `${reasserted.message} E2e was NOT run. Re-run preview deploy to claim a slot and redeploy.`,
+      apps: Object.fromEntries(
+        Object.entries(state.apps).map(([appSlug, entry]) => [
+          appSlug,
+          // Older-head entries are already superseded; only current-head
+          // entries are marked so deploy's retry selection picks them up.
+          entry.headSha === context.pullRequestHeadSha
+            ? {
+                ...entry,
+                status: "claim-failed" as const,
+                message: reasserted.message,
+                updatedAt: new Date().toISOString(),
+              }
+            : entry,
+        ]),
+      ),
+    }));
+    throw new Error(
+      `Refusing to run preview tests: ${reasserted.message} Re-run "pnpm preview deploy" to claim a slot and redeploy.`,
+    );
+  }
+
+  const environmentConfigLease = reasserted.lease;
+  if (
+    environmentConfigLease.leaseId !== recordedLease.leaseId ||
+    environmentConfigLease.leasedUntil !== recordedLease.leasedUntil
+  ) {
+    await updatePreviewState(context, (state) => ({
+      ...state,
+      environmentConfigLease,
+    }));
   }
 
   // Preview e2e commands are full app-level suites. They run concurrently:
@@ -143,7 +300,9 @@ export async function test(options: PullRequestCommandOptions = {}) {
     }
 
     const startedAt = Date.now();
-    console.error(`[preview] test start: ${app.slug}`);
+    logPreview(
+      `test start: ${app.slug} against ${existingEntry.publicUrl} (doppler config ${environmentConfigLease.dopplerConfig})`,
+    );
     const testResult = await runCommandWithRetries({
       args: [
         "run",
@@ -188,6 +347,12 @@ export async function test(options: PullRequestCommandOptions = {}) {
   const entries = maybeEntries.filter((entry): entry is CloudflarePreviewAppEntry => entry != null);
 
   const ok = !entries.some((entry) => entry.status === "tests-failed");
+  logPreview(
+    [
+      `tests finished: ${entries.filter((entry) => entry.status === "deployed").length} passed, ${entries.filter((entry) => entry.status === "tests-failed").length} failed`,
+      ...entries.map((entry) => `  ${entry.appSlug}: ${entry.status}`),
+    ].join("\n"),
+  );
   if (entries.length > 0) {
     const update = await updatePreviewState(context, (state) => ({
       ...state,
@@ -202,7 +367,9 @@ export async function test(options: PullRequestCommandOptions = {}) {
     };
 
     if (!result.ok) {
-      throw new Error("Failed to run Cloudflare preview tests.");
+      throw new Error(
+        "Preview tests failed — see per-app output above and the failure details in the PR body.",
+      );
     }
 
     return result;
@@ -214,7 +381,9 @@ export async function test(options: PullRequestCommandOptions = {}) {
   };
 
   if (!result.ok) {
-    throw new Error("Failed to run Cloudflare preview tests.");
+    throw new Error(
+      "Preview tests failed — see per-app output above and the failure details in the PR body.",
+    );
   }
 
   return result;
@@ -242,6 +411,89 @@ export async function cleanup(options: PullRequestCommandOptions = {}) {
 }
 
 /**
+ * Assign a preview slot to a PR — a specific slot or whatever is free — and record it in the PR body's managed preview section.
+ */
+type AssignOptions = PullRequestCommandOptions & {
+  /** Preview slot: a number (3) or slug (preview-3 / preview_3). Omit to take any free slot. */
+  slot?: string;
+  /** Evict the slot's current holder first. Their deployment on the slot will be clobbered. */
+  force?: boolean;
+};
+
+export async function assign(options: AssignOptions = {}) {
+  const runtime = createPreviewRuntime();
+  const context = await resolvePullRequestPreviewContext({
+    commandEnvironment: runtime.commandEnvironment,
+    githubToken: resolveGithubToken(options, runtime.commandEnvironment),
+    pullRequestNumber: resolvePullRequestNumber(options, runtime.commandEnvironment),
+  });
+  const semaphore = runtime.createPreviewSemaphoreResourceClient();
+  const holder = pullRequestHolder(context.pullRequestNumber);
+  const wantedSlug = options.slot ? normalizePreviewSlotSlug(options.slot) : null;
+  logPreview(
+    `assign for PR #${context.pullRequestNumber} — ${wantedSlug ? `wants ${wantedSlug}` : "wants any free slot"}, holder ${holder}`,
+  );
+
+  const current = await readCloudflarePreviewState(context);
+  const result = await assignEnvironmentConfigLease({
+    fetchPullRequestState: makePullRequestStateFetcher(
+      context.githubToken,
+      context.repositoryFullName,
+    ),
+    force: options.force,
+    holder,
+    leaseMs: defaultPreviewLeaseMs,
+    recordedLease: current.state.environmentConfigLease,
+    semaphore,
+    wantedSlug,
+  });
+
+  // Anything but a kept/renewed lease breaks continuous ownership: even a
+  // re-acquisition of the SAME slug means someone else may have deployed over
+  // this PR's apps in the interim, so recorded deployments cannot be trusted.
+  const needsRedeploy = result.outcome !== "kept";
+  const redeployMessage = result.changedFromSlug
+    ? `Slot reassigned from ${result.changedFromSlug} to ${result.lease.slug}; run preview deploy to redeploy here.`
+    : `Slot ${result.lease.slug} was re-acquired after this PR's lease lapsed — previous deployments there may have been replaced. Run preview deploy to redeploy.`;
+  const update = await updatePreviewState(context, (state) => ({
+    ...state,
+    environmentConfigLease: result.lease,
+    notice: needsRedeploy
+      ? `${redeployMessage} (preview assign at ${new Date().toISOString()})`
+      : null,
+    apps: needsRedeploy
+      ? Object.fromEntries(
+          Object.entries(state.apps).map(([appSlug, entry]) => [
+            appSlug,
+            {
+              ...entry,
+              status: "claim-failed" as const,
+              message: redeployMessage,
+              updatedAt: new Date().toISOString(),
+            },
+          ]),
+        )
+      : state.apps,
+  }));
+  logPreview(
+    `PR body updated: PR #${context.pullRequestNumber} now records ${result.lease.slug} (doppler config ${result.lease.dopplerConfig})`,
+  );
+
+  return {
+    pullRequestNumber: context.pullRequestNumber,
+    slot: result.lease.slug,
+    dopplerConfig: result.lease.dopplerConfig,
+    holder,
+    leasedUntil: new Date(result.lease.leasedUntil).toISOString(),
+    outcome: result.outcome,
+    previousSlot: result.changedFromSlug,
+    previousLeaseReleased: result.previousLeaseReleased,
+    appsMarkedForRedeploy: needsRedeploy ? Object.keys(update.state.apps) : [],
+    nextStep: `doppler run --project _shared --config prd -- pnpm preview deploy --pull-request-number ${context.pullRequestNumber}`,
+  };
+}
+
+/**
  * Show environment config lease inventory and active leases for PR previews.
  */
 export async function status() {
@@ -264,6 +516,8 @@ export async function status() {
     .map((resource) => ({
       data: resource.data,
       slug: resource.slug,
+      holder: resource.holder ?? null,
+      pullRequestUrl: holderPullRequestUrl(resource.holder),
       leasedUntil:
         resource.leasedUntil === null ? null : new Date(resource.leasedUntil).toISOString(),
       expiresInMs: resource.leasedUntil === null ? null : resource.leasedUntil - now,
@@ -290,59 +544,199 @@ export async function status() {
 }
 
 /**
- * Lease a specific preview slot for manual deploys so PR cleanup cannot destroy it.
+ * Lease a specific preview slot for manual deploys so PR previews cannot deploy over it and PR cleanup cannot destroy it.
  */
 type AcquireOptions = {
   /** Preview slot: a number (9) or slug (preview-9 / preview_9). */
   slot: string;
   /** Manual lease length in hours. */
   hours?: number;
+  /** Holder recorded on the lease. Defaults to manual-<username>. */
+  as?: string;
+  /** Evict the current holder. Their deployment on the slot will be clobbered by whatever you deploy. */
+  force?: boolean;
 };
 
 export async function acquire(options: AcquireOptions) {
   const runtime = createPreviewRuntime();
   const semaphore = runtime.createPreviewSemaphoreResourceClient();
   const slug = normalizePreviewSlotSlug(options.slot);
+  const holder = options.as?.trim() || `manual-${userInfo().username}`;
+
+  if (options.force) {
+    const currentHolder = await findEnvironmentConfigLeaseHolder(semaphore, slug);
+    if (currentHolder) {
+      logPreview(
+        `--force: evicting ${currentHolder} from ${slug}. Their deployment on the slot is now fair game.`,
+      );
+    }
+  }
+
   const lease = await semaphore.acquireSpecific({
     leaseMs: (options.hours || 3) * 3_600_000,
     slug,
     type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+    holder,
+    force: options.force,
   });
   if (!lease) {
-    throw new Error(`Could not lease ${slug}: it is already leased or unknown.`);
+    const currentHolder = await findEnvironmentConfigLeaseHolder(semaphore, slug);
+    if (currentHolder) {
+      const prUrl = holderPullRequestUrl(currentHolder);
+      throw new Error(
+        [
+          `${slug} is leased by ${currentHolder}${prUrl ? ` (${prUrl})` : ""}.`,
+          `Re-run with --force to evict them (their deployment will be clobbered), or pick a free slot:`,
+          await describeEnvironmentConfigLeases(semaphore),
+        ].join("\n"),
+      );
+    }
+
+    throw new Error(
+      [
+        `${slug} is not a known preview slot. Known slots:`,
+        await describeEnvironmentConfigLeases(semaphore),
+      ].join("\n"),
+    );
   }
 
   return {
     ...lease,
+    holder,
     expiresAt: new Date(lease.expiresAt).toISOString(),
     releaseCommand: `pnpm preview release --slot ${slug} --lease-id ${lease.leaseId}`,
   };
 }
 
 /**
- * Release a preview slot lease acquired with `preview acquire`.
+ * Release a preview slot lease. Pass the lease id from `preview acquire`, or --force to release someone else's (stale) lease.
  */
 type ReleaseOptions = {
   /** Preview slot: a number (9) or slug (preview-9 / preview_9). */
   slot: string;
-  /** Lease id returned by `pnpm preview acquire`. */
-  leaseId: string;
+  /** Lease id returned by `pnpm preview acquire`. Not needed with --force. */
+  leaseId?: string;
+  /** Release whatever lease is on the slot, without its lease id. Only for freeing stale/abandoned holds. */
+  force?: boolean;
 };
 
 export async function release(options: ReleaseOptions) {
   const runtime = createPreviewRuntime();
   const semaphore = runtime.createPreviewSemaphoreResourceClient();
   const slug = normalizePreviewSlotSlug(options.slot);
+  if (!options.leaseId && !options.force) {
+    throw new Error(
+      "Pass --lease-id <id> (from `preview acquire`), or --force to release a lease you don't hold.",
+    );
+  }
+
+  const currentHolder = await findEnvironmentConfigLeaseHolder(semaphore, slug);
+  if (options.force && currentHolder) {
+    logPreview(`--force: releasing ${slug} out from under ${currentHolder}.`);
+  }
+
   const result = await semaphore.release({
     leaseId: options.leaseId,
     slug,
     type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+    force: options.force,
   });
   if (!result.released) {
-    throw new Error(`Semaphore did not release ${slug}: wrong or expired leaseId.`);
+    if (!currentHolder) {
+      return { released: false, slug, message: `${slug} was not leased — nothing to release.` };
+    }
+
+    const prUrl = holderPullRequestUrl(currentHolder);
+    throw new Error(
+      `Semaphore did not release ${slug}: it is leased by ${currentHolder}${prUrl ? ` (${prUrl})` : ""} and your leaseId doesn't match. Use --force only if that hold is stale.`,
+    );
   }
 
-  return { released: true, slug };
+  return { released: true, slug, evictedHolder: currentHolder };
+}
+
+/**
+ * Resolve slot contention: report which leased slots are active/idle/orphaned, and take a non-active one back with --slot.
+ */
+type ReclaimOptions = {
+  /** Preview slot to reclaim (number or slug). Omit for a report of every slot's verdict. */
+  slot?: string;
+  /** Hours without a deploy/test renewal before a hold counts as idle. */
+  minIdleHours?: number;
+  /** Also reclaim a slot whose holder is still active. Avoid: this clobbers live work. */
+  force?: boolean;
+  /** GitHub token used to check whether pr-N holders are closed. Defaults to GITHUB_TOKEN. */
+  githubToken?: string;
+};
+
+export async function reclaim(options: ReclaimOptions = {}) {
+  const runtime = createPreviewRuntime();
+  const semaphore = runtime.createPreviewSemaphoreResourceClient();
+  const githubToken =
+    options.githubToken?.trim() || runtime.commandEnvironment.GITHUB_TOKEN?.trim();
+  const fetchPullRequestState = githubToken
+    ? makePullRequestStateFetcher(
+        githubToken,
+        runtime.commandEnvironment.GITHUB_REPOSITORY?.trim() || defaultRepositoryFullName,
+      )
+    : null;
+  if (!fetchPullRequestState) {
+    logPreview(
+      "no GITHUB_TOKEN available — cannot check whether pr-* holders are closed, so verdicts are idle-time only (orphaned PRs show as idle/active)",
+    );
+  }
+
+  const minIdleMs = (options.minIdleHours ?? defaultReclaimMinIdleHours) * 3_600_000;
+  const report = await classifyEnvironmentConfigLeases({
+    fetchPullRequestState,
+    minIdleMs,
+    semaphore,
+  });
+
+  if (!options.slot) {
+    return {
+      checkedAt: new Date().toISOString(),
+      minIdleHours: options.minIdleHours ?? defaultReclaimMinIdleHours,
+      slots: report,
+      reclaimable: report
+        .filter((slot) => slot.verdict === "orphaned" || slot.verdict === "idle")
+        .map((slot) => `pnpm preview reclaim --slot ${slot.slug}`),
+      note: "orphaned = holder PR is closed, so its cleanup failed; idle = holder hasn't deployed/tested for a while; taking an active slot needs --force and clobbers live work",
+    };
+  }
+
+  const slug = normalizePreviewSlotSlug(options.slot);
+  const slot = report.find((candidate) => candidate.slug === slug);
+  if (!slot) {
+    throw new Error(`${slug} is not a known preview slot.`);
+  }
+  if (slot.verdict === "available") {
+    return { released: false, slug, message: `${slug} is already available.` };
+  }
+  if (slot.verdict === "active" && !options.force) {
+    throw new Error(
+      [
+        `${slug} is actively held by ${slot.holder ?? "unknown holder"}${slot.pullRequestUrl ? ` (${slot.pullRequestUrl})` : ""}:`,
+        `  last used ${slot.lastUsedAgo ?? "recently"}, lease expires ${slot.leasedUntil ?? "soon"}.`,
+        "Taking it would clobber live work. Re-run with --force only after checking with the holder.",
+      ].join("\n"),
+    );
+  }
+
+  logPreview(
+    `reclaiming ${slug} from ${slot.holder ?? "unknown holder"} (${slot.verdict}${slot.lastUsedAgo ? `, last used ${slot.lastUsedAgo}` : ""})`,
+  );
+  const result = await semaphore.release({
+    slug,
+    type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+    force: true,
+  });
+  return {
+    released: result.released,
+    slug,
+    reclaimedFrom: slot.holder,
+    verdict: slot.verdict,
+  };
 }
 
 /**
@@ -493,6 +887,14 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // -L: /api/iterate-auth/login redirects to the slot's auth worker,
         // warming it for the login-flow specs.
         'for path in /api/health / /api/itx /sign-in /api/iterate-auth/login; do curl -sL -o /dev/null --max-time 20 "$OS_BASE_URL$path" || true; done',
+        // Warm the OAuth handshake path — the signup/create-project specs park
+        // 30-90s on a cold callback (token exchange + first-org onboarding).
+        // Boot both sides' isolates: the OS callback handler, and the auth
+        // worker (origin derived from the /login redirect) incl. its OTP and
+        // onboarding routes. Best-effort — see
+        // tasks/fix-cold-auth-oauth-callback-latency.md for the real fix.
+        'curl -sL -o /dev/null --max-time 20 "$OS_BASE_URL/api/iterate-auth/callback" || true',
+        'AUTH_BASE=$(curl -s -o /dev/null -w "%{redirect_url}" --max-time 20 "$OS_BASE_URL/api/iterate-auth/login?login_hint=email" | sed -E "s#(https?://[^/]+).*#\\1#") || true; if [ -n "$AUTH_BASE" ]; then for p in / /api/auth/ok /sign-in /onboarding; do curl -sL -o /dev/null --max-time 20 "$AUTH_BASE$p" || true; done; fi',
         // Subshell so the bare `wait` reaps only these curls, not the
         // background chromium install / create-smoke started above.
         '( for i in 1 2 3 4 5 6 7 8; do (curl -s -o /dev/null --max-time 20 "$OS_BASE_URL/api/health" && curl -s -o /dev/null --max-time 20 "$OS_BASE_URL/") & done; wait )',
@@ -572,7 +974,12 @@ const cloudflarePreviewSectionLabel = "CLOUDFLARE_PREVIEW";
 const cloudflarePreviewStateLabel = "CLOUDFLARE_PREVIEW_STATE";
 const defaultSemaphoreBaseUrl = "https://semaphore.iterate.com";
 const defaultRepositoryFullName = "iterate/iterate";
-const defaultPreviewLeaseMs = 60 * 60 * 1000;
+// A preview slot belongs to its PR for the PR's whole life: every `preview
+// deploy` and `preview test` run renews the lease for this long, and closing
+// the PR releases it. Expiry is only the safety valve for abandoned PRs — a
+// PR that pushes nothing for this long may lose its slot to another PR.
+// While a lease is live, nothing takes the slot without a human --force.
+const defaultPreviewLeaseMs = 24 * 60 * 60 * 1000;
 // Routed previews can be healthy before Cloudflare has finished issuing edge
 // certificates for newly-created hostnames. Some apps record a separate
 // project-subdomain URL; wait on that URL only when it is expected to be
@@ -634,6 +1041,12 @@ export type CloudflarePreviewAppEntry = z.infer<typeof CloudflarePreviewAppEntry
 const CloudflarePreviewState = z.object({
   apps: z.record(z.string().trim().min(1), CloudflarePreviewAppEntry).default({}),
   environmentConfigLease: EnvironmentConfigLease.nullable().default(null),
+  /**
+   * Prominent banner rendered at the top of the managed PR-body section —
+   * slot exhaustion, slot takeovers, and moves land here so they are
+   * impossible to miss. Cleared by the next successful deploy claim.
+   */
+  notice: z.string().trim().min(1).nullable().default(null),
 });
 
 const CloudflareZonesResponse = z
@@ -690,34 +1103,42 @@ export const environmentConfigLeaseInventory = previewEnvironmentSlotNumbers.map
   };
 }) satisfies EnvironmentConfigLeaseInventoryItem[];
 
+type PreviewSemaphoreLease = {
+  data: Record<string, unknown>;
+  expiresAt: number;
+  holder?: string | null;
+  leaseId: string;
+  slug: string;
+  type: string;
+};
+
 export type PreviewSemaphoreResourceClient = {
-  acquire: (input: { leaseMs: number; type: string; waitMs?: number }) => Promise<{
-    data: Record<string, unknown>;
-    expiresAt: number;
-    leaseId: string;
+  acquire: (input: {
+    holder?: string;
+    leaseMs: number;
+    type: string;
+    waitMs?: number;
+  }) => Promise<PreviewSemaphoreLease>;
+  acquireSpecific: (input: {
+    force?: boolean;
+    holder?: string;
+    leaseMs: number;
     slug: string;
     type: string;
-  }>;
-  acquireSpecific: (input: { leaseMs: number; slug: string; type: string }) => Promise<{
-    data: Record<string, unknown>;
-    expiresAt: number;
+  }) => Promise<PreviewSemaphoreLease | null>;
+  renew: (input: {
     leaseId: string;
+    leaseMs: number;
     slug: string;
     type: string;
-  } | null>;
-  renew: (input: { leaseId: string; leaseMs: number; slug: string; type: string }) => Promise<{
-    data: Record<string, unknown>;
-    expiresAt: number;
-    leaseId: string;
-    slug: string;
-    type: string;
-  } | null>;
-  release: (input: { leaseId: string; slug: string; type: string }) => Promise<{
+  }) => Promise<PreviewSemaphoreLease | null>;
+  release: (input: { force?: boolean; leaseId?: string; slug: string; type: string }) => Promise<{
     released: boolean;
   }>;
   list: (input: { type: string }) => Promise<
     Array<{
       data: Record<string, unknown>;
+      holder?: string | null;
       lastAcquiredAt: number | null;
       lastReleasedAt: number | null;
       leaseState: "available" | "leased";
@@ -799,12 +1220,14 @@ function createPreviewSemaphoreResourceClient(
   });
 
   return {
-    acquire: ({ leaseMs, type, waitMs }) => semaphore.resources.acquire({ leaseMs, type, waitMs }),
-    acquireSpecific: ({ leaseMs, slug, type }) =>
-      semaphore.resources.acquireSpecific({ leaseMs, slug, type }),
+    acquire: ({ holder, leaseMs, type, waitMs }) =>
+      semaphore.resources.acquire({ holder, leaseMs, type, waitMs }),
+    acquireSpecific: ({ force, holder, leaseMs, slug, type }) =>
+      semaphore.resources.acquireSpecific({ force, holder, leaseMs, slug, type }),
     renew: ({ leaseId, leaseMs, slug, type }) =>
       semaphore.resources.renew({ leaseId, leaseMs, slug, type }),
-    release: ({ leaseId, slug, type }) => semaphore.resources.release({ leaseId, slug, type }),
+    release: ({ force, leaseId, slug, type }) =>
+      semaphore.resources.release({ force, leaseId, slug, type }),
     list: ({ type }) => semaphore.resources.list({ type }),
   };
 }
@@ -943,8 +1366,13 @@ function renderCloudflarePreviewSection(state: CloudflarePreviewState) {
   const table = entries.length > 0 ? renderPreviewAppTable(entries) : null;
   const failureDetails = entries.map(renderPreviewAppFailureDetails).filter(Boolean).join("\n\n");
 
+  const notice = state.notice
+    ? ["> [!CAUTION]", ...state.notice.split("\n").map((line) => `> ${line}`)].join("\n")
+    : null;
+
   return [
     "## Environment Config Lease",
+    notice,
     markdownAnnotator("", cloudflarePreviewStateLabel).update(wrapHiddenStateBlock(state)),
     renderPreviewAppTableDetails({
       summary: state.environmentConfigLease
@@ -1686,8 +2114,24 @@ async function getWorkersDevSubdomain(project: string, config: string) {
   return parsed.result.subdomain.trim();
 }
 
+function tryReadGhAuthToken() {
+  try {
+    return (
+      execFileSync("gh", ["auth", "token"], {
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "pipe"],
+      }).trim() || undefined
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 function resolveGithubToken(options: PullRequestCommandOptions, env: NodeJS.ProcessEnv): string {
-  return requireValue(options.githubToken || env.GITHUB_TOKEN?.trim(), "GITHUB_TOKEN is required.");
+  return requireValue(
+    options.githubToken || env.GITHUB_TOKEN?.trim() || tryReadGhAuthToken(),
+    "GITHUB_TOKEN is required (or authenticate the gh CLI).",
+  );
 }
 
 function resolvePullRequestNumber(
@@ -1721,33 +2165,81 @@ function splitRepositoryFullName(repositoryFullName: string) {
 async function cleanupPreviewForPullRequest(
   params: PreviewRuntime & { context: PullRequestPreviewContext },
 ) {
+  logPreview(
+    `cleanup for PR #${params.context.pullRequestNumber} — holder ${pullRequestHolder(params.context.pullRequestNumber)}, semaphore ${defaultSemaphoreBaseUrl}`,
+  );
   const current = await readCloudflarePreviewState({
     githubToken: params.context.githubToken,
     repositoryFullName: params.context.repositoryFullName,
     pullRequestNumber: params.context.pullRequestNumber,
   });
-  const environmentConfigLease = current.state.environmentConfigLease;
-  if (environmentConfigLease == null) {
+  const recordedLease = current.state.environmentConfigLease;
+  if (recordedLease == null) {
+    logPreview("PR body records no lease — nothing to tear down or release");
     return {
       ok: true,
       released: false,
       state: current.state,
     };
   }
+  logPreview(
+    `PR body records lease ${recordedLease.slug} (doppler config ${recordedLease.dopplerConfig}, recorded until ${formatUntil(recordedLease.leasedUntil)}) — verifying this PR still holds it before destroying anything`,
+  );
 
+  // Never destroy a slot this PR no longer holds: after a lease expires,
+  // the slot (and the deployments on it) may belong to another PR now.
+  const holder = pullRequestHolder(params.context.pullRequestNumber);
+  const semaphore = params.createPreviewSemaphoreResourceClient();
+  const reasserted = await reassertEnvironmentConfigLease({
+    holder,
+    lease: recordedLease,
+    leaseMs: defaultPreviewLeaseMs,
+    semaphore,
+  });
+  if (!reasserted.ok) {
+    logPreview(`cleanup skipped: ${reasserted.message}`);
+    const update = await updatePreviewState(params.context, (state) => ({
+      ...state,
+      environmentConfigLease: null,
+      notice: `Teardown skipped: ${reasserted.message}`,
+      apps: Object.fromEntries(
+        Object.entries(state.apps).map(([appSlug, entry]) => [
+          appSlug,
+          {
+            ...entry,
+            status: "released" as const,
+            message: `Teardown skipped: ${reasserted.message}`,
+            updatedAt: new Date().toISOString(),
+          },
+        ]),
+      ),
+    }));
+    return {
+      ok: true,
+      released: false,
+      skippedTeardown: true,
+      state: update.state,
+    };
+  }
+
+  const environmentConfigLease = reasserted.lease;
   let ok = true;
   let latestState = current.state;
   const appsToCleanUp = (Object.keys(current.state.apps) as CloudflarePreviewAppSlugType[])
     .map((appSlug) => cloudflarePreviewApps[appSlug])
     .filter((app): app is PreviewAppRuntime => app != null);
   const cleanupBatches = [...orderPreviewDeployBatches(appsToCleanUp)].reverse();
+  // Same stale-read guard as deploy: keep every batch's entries in each write.
+  const accumulatedEntries: Record<string, CloudflarePreviewAppEntry> = {};
   for (const batch of cleanupBatches) {
     const entries = await mapWithConcurrency(
       batch,
       defaultPreviewDeployConcurrency,
       async (app) => {
         const startedAt = Date.now();
-        console.error(`[preview] cleanup start: ${app.slug}`);
+        logPreview(
+          `cleanup start: destroying ${app.slug} on ${environmentConfigLease.slug} (doppler config ${environmentConfigLease.dopplerConfig})`,
+        );
         const destroyResult = await runPreviewAlchemyCommand({
           app,
           commandEnvironment: params.commandEnvironment,
@@ -1779,11 +2271,14 @@ async function cleanupPreviewForPullRequest(
       ok = false;
     }
 
+    for (const entry of entries) {
+      accumulatedEntries[entry.appSlug] = entry;
+    }
     const update = await updatePreviewState(params.context, (state) => ({
       ...state,
       apps: {
         ...state.apps,
-        ...Object.fromEntries(entries.map((entry) => [entry.appSlug, entry])),
+        ...accumulatedEntries,
       },
     }));
     latestState = update.state;
@@ -1797,12 +2292,16 @@ async function cleanupPreviewForPullRequest(
     };
   }
 
-  const semaphore = params.createPreviewSemaphoreResourceClient();
   const released = await semaphore.release({
     type: environmentConfigLease.type,
     slug: environmentConfigLease.slug,
     leaseId: environmentConfigLease.leaseId,
   });
+  logPreview(
+    released.released
+      ? `lease released: ${environmentConfigLease.slug} is free again`
+      : `lease was already gone for ${environmentConfigLease.slug}`,
+  );
   const update = await updatePreviewState(params.context, (state) => ({
     ...state,
     environmentConfigLease: null,
@@ -1825,12 +2324,14 @@ async function deployPreviewAppWithStatus(input: {
   signal?: AbortSignal;
 }) {
   const startedAt = Date.now();
-  console.error(`[preview] deploy start: ${input.app.slug}`);
+  logPreview(
+    `deploy start: ${input.app.slug} (${input.app.appPath} with doppler config ${input.dopplerConfig})`,
+  );
   try {
     const entry = await deployPreviewApp(input);
     const deployDurationMs = Date.now() - startedAt;
-    console.error(
-      `[preview] deploy ${entry.status === "awaiting-tests" ? "passed" : "failed"}: ${input.app.slug} (${formatDurationMs(deployDurationMs)})`,
+    logPreview(
+      `deploy ${entry.status === "awaiting-tests" ? "passed" : "failed"}: ${input.app.slug} (${formatDurationMs(deployDurationMs)})${entry.publicUrl ? ` — ${entry.publicUrl}` : ""}`,
     );
     if (entry.status === "awaiting-tests") {
       warnIfOverBudget("deploy", input.app.slug, deployDurationMs, input.app.previewDeployBudgetMs);
@@ -1841,8 +2342,8 @@ async function deployPreviewAppWithStatus(input: {
     });
   } catch (error) {
     const deployDurationMs = Date.now() - startedAt;
-    console.error(
-      `[preview] deploy failed: ${input.app.slug} (${formatDurationMs(deployDurationMs)})`,
+    logPreview(
+      `deploy failed: ${input.app.slug} (${formatDurationMs(deployDurationMs)}) — ${formatPreviewErrorMessage(error)}`,
     );
     return CloudflarePreviewAppEntry.parse({
       appDisplayName: input.app.displayName,
@@ -2006,39 +2507,497 @@ async function runPreviewAlchemyCommand(input: {
   });
 }
 
+function logPreview(message: string) {
+  console.error(`[preview] ${message}`);
+}
+
+/** `pr-1234` — the lease holder id the PR flow records in semaphore. */
+function pullRequestHolder(pullRequestNumber: number) {
+  return `pr-${pullRequestNumber}`;
+}
+
+function holderPullRequestUrl(holder: string | null | undefined) {
+  const match = /^pr-(\d+)$/.exec(holder ?? "");
+  const repositoryFullName = process.env.GITHUB_REPOSITORY?.trim() || defaultRepositoryFullName;
+  return match ? `https://github.com/${repositoryFullName}/pull/${match[1]}` : null;
+}
+
+function formatUntil(epochMs: number) {
+  const remainingMs = epochMs - Date.now();
+  const remaining =
+    remainingMs <= 0
+      ? "expired"
+      : remainingMs < 60_000
+        ? `${Math.round(remainingMs / 1000)}s left`
+        : `${Math.floor(remainingMs / 3_600_000)}h${Math.round((remainingMs % 3_600_000) / 60_000)}m left`;
+  return `${new Date(epochMs).toISOString()} (${remaining})`;
+}
+
+/** One line per slot — `preview-2  leased by pr-1601 until ... | https://github.com/...` — for error messages and logs. */
+async function describeEnvironmentConfigLeases(semaphore: PreviewSemaphoreResourceClient) {
+  const resources = await semaphore.list({ type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE });
+  return resources
+    .map((resource) => {
+      if (resource.leaseState !== "leased" || resource.leasedUntil === null) {
+        return `  ${resource.slug}  available`;
+      }
+
+      const holder = resource.holder ?? "unknown holder";
+      const prUrl = holderPullRequestUrl(resource.holder);
+      return `  ${resource.slug}  leased by ${holder} until ${formatUntil(resource.leasedUntil)}${prUrl ? ` | ${prUrl}` : ""}`;
+    })
+    .join("\n");
+}
+
+function isNoSlotAvailableError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const code = (error as { code?: unknown }).code;
+  const status = (error as { status?: unknown }).status;
+  return code === "CONFLICT" || status === 409;
+}
+
+// How long `preview deploy` queues for a slot when every slot is leased.
+// Contention is expected with many PRs in flight: instead of failing (or
+// worse, stealing a slot), the deploy waits its turn and logs who holds what
+// while it waits. Override with PREVIEW_SLOT_WAIT_MS=0 to fail fast.
+const defaultSlotWaitTotalMs = 20 * 60 * 1000;
+// Semaphore caps a single acquire long-poll at 5 minutes; loop to go longer.
+const slotWaitPerAttemptMs = 5 * 60 * 1000;
+
+function resolveSlotWaitTotalMs(env: NodeJS.ProcessEnv) {
+  const raw = env.PREVIEW_SLOT_WAIT_MS?.trim();
+  if (!raw) {
+    return defaultSlotWaitTotalMs;
+  }
+
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`PREVIEW_SLOT_WAIT_MS must be a non-negative number, got ${raw}.`);
+  }
+
+  return parsed;
+}
+
+// A hold with no deploy/test renewal for this long counts as idle in
+// `preview reclaim` verdicts. Renewals happen on every deploy/test run, so
+// idle means "that PR/person hasn't touched the slot in this window".
+const defaultReclaimMinIdleHours = 6;
+
+/** `unknown` = the check itself failed; distinct from "not checked" (null downstream). */
+type PullRequestStateFetcher = (
+  pullRequestNumber: number,
+) => Promise<"open" | "closed" | "unknown">;
+
+function makePullRequestStateFetcher(
+  githubToken: string,
+  repositoryFullName: string,
+): PullRequestStateFetcher {
+  const octokit = new Octokit({ auth: githubToken });
+  const [owner, repo] = splitRepositoryFullName(repositoryFullName);
+  return async (pullRequestNumber) => {
+    try {
+      const pullRequest = await octokit.rest.pulls.get({
+        owner,
+        repo,
+        pull_number: pullRequestNumber,
+      });
+      return pullRequest.data.state === "open" ? "open" : "closed";
+    } catch (error) {
+      // Unknown beats wrong: a failed check must never trigger a force
+      // reclaim, so the slot is treated as active — but say so, since it
+      // also suppresses orphan detection.
+      logPreview(
+        `could not check the state of PR #${pullRequestNumber} (${formatPreviewErrorMessage(error)}) — treating its lease as active`,
+      );
+      return "unknown";
+    }
+  };
+}
+
+/** Pure verdict for one slot; `orphaned` beats `idle` beats `active`. */
+function classifyLeaseForReclaim(input: {
+  holderPullRequestState: "open" | "closed" | "unknown" | null;
+  lastAcquiredAt: number | null;
+  leaseState: "available" | "leased";
+  minIdleMs: number;
+  now: number;
+}): "available" | "active" | "idle" | "orphaned" {
+  if (input.leaseState !== "leased") {
+    return "available";
+  }
+  if (input.holderPullRequestState === "closed") {
+    // The holder PR is closed, so its cleanup should have released the slot;
+    // the lease only survives when that cleanup failed.
+    return "orphaned";
+  }
+  if (input.holderPullRequestState === "unknown") {
+    // The GitHub check failed, so we cannot rule out an open PR — never let a
+    // transient API error downgrade a hold to reclaimable-without---force.
+    return "active";
+  }
+  if (input.lastAcquiredAt !== null && input.now - input.lastAcquiredAt >= input.minIdleMs) {
+    return "idle";
+  }
+
+  return "active";
+}
+
+async function classifyEnvironmentConfigLeases(input: {
+  fetchPullRequestState: PullRequestStateFetcher | null;
+  minIdleMs: number;
+  semaphore: PreviewSemaphoreResourceClient;
+}) {
+  const now = Date.now();
+  const resources = await input.semaphore.list({ type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE });
+  return await Promise.all(
+    resources.map(async (resource) => {
+      const holder = resource.holder ?? null;
+      const holderPullRequestNumber = parsePullRequestHolder(holder);
+      const holderPullRequestState =
+        resource.leaseState === "leased" && holderPullRequestNumber && input.fetchPullRequestState
+          ? await input.fetchPullRequestState(holderPullRequestNumber)
+          : null;
+      const verdict = classifyLeaseForReclaim({
+        holderPullRequestState,
+        lastAcquiredAt: resource.lastAcquiredAt,
+        leaseState: resource.leaseState,
+        minIdleMs: input.minIdleMs,
+        now,
+      });
+
+      return {
+        slug: resource.slug,
+        verdict,
+        holder,
+        pullRequestUrl: holderPullRequestUrl(holder),
+        pullRequestState: holderPullRequestState,
+        leasedUntil:
+          resource.leasedUntil === null ? null : new Date(resource.leasedUntil).toISOString(),
+        lastUsedAt:
+          resource.lastAcquiredAt === null ? null : new Date(resource.lastAcquiredAt).toISOString(),
+        lastUsedAgo:
+          resource.lastAcquiredAt === null
+            ? null
+            : `${formatDurationMs(now - resource.lastAcquiredAt)} ago`,
+      };
+    }),
+  );
+}
+
+function parsePullRequestHolder(holder: string | null | undefined) {
+  const match = /^pr-(\d+)$/.exec(holder ?? "");
+  return match ? Number.parseInt(match[1] as string, 10) : null;
+}
+
+/**
+ * Garbage-collect one orphaned lease: a slot held by a pr-N holder whose PR
+ * is closed (its cleanup failed, or the lease would be gone). This is the one
+ * case automation may take a live lease — the holder can never come back for
+ * it, and GitHub confirms that before we touch anything.
+ */
+async function tryReclaimOrphanedEnvironmentConfigLease(input: {
+  fetchPullRequestState: PullRequestStateFetcher | null;
+  holder: string;
+  leaseMs: number;
+  semaphore: PreviewSemaphoreResourceClient;
+}) {
+  if (!input.fetchPullRequestState) {
+    return null;
+  }
+
+  const report = await classifyEnvironmentConfigLeases({
+    fetchPullRequestState: input.fetchPullRequestState,
+    minIdleMs: Number.POSITIVE_INFINITY,
+    semaphore: input.semaphore,
+  });
+  const orphans = report
+    .filter((slot) => slot.verdict === "orphaned")
+    .sort((left, right) => (left.lastUsedAt ?? "").localeCompare(right.lastUsedAt ?? ""));
+  for (const orphan of orphans) {
+    const lease = await input.semaphore.acquireSpecific({
+      type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+      slug: orphan.slug,
+      leaseMs: input.leaseMs,
+      holder: input.holder,
+      force: true,
+    });
+    if (lease) {
+      logPreview(
+        `reclaimed orphaned slot ${orphan.slug}: it was leased by ${orphan.holder ?? "unknown holder"} whose PR is closed (${orphan.pullRequestUrl ?? "no PR url"}) — their cleanup must have failed`,
+      );
+      return lease;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Acquire any free slot, queueing (via semaphore long-poll) while all slots
+ * are leased. Orphaned leases (holder PR closed but cleanup failed) are
+ * garbage-collected before waiting. Fails with the full holder table and
+ * remediation steps once `waitTotalMs` elapses.
+ */
+async function acquireAnyEnvironmentConfigLease(input: {
+  semaphore: PreviewSemaphoreResourceClient;
+  fetchPullRequestState?: PullRequestStateFetcher | null;
+  holder: string;
+  leaseMs: number;
+  onFirstWait?: (holderTable: string) => Promise<void>;
+  waitTotalMs: number;
+}) {
+  const deadline = Date.now() + input.waitTotalMs;
+  let attempt = 0;
+
+  for (;;) {
+    attempt += 1;
+    const remainingMs = deadline - Date.now();
+    // The first attempt returns immediately so orphan garbage collection runs
+    // before any long-poll; later attempts queue on the semaphore in 5-minute
+    // polls, re-checking for freshly orphaned slots between polls.
+    const waitMs = attempt === 1 ? 0 : Math.max(0, Math.min(slotWaitPerAttemptMs, remainingMs));
+    try {
+      return await input.semaphore.acquire({
+        type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+        leaseMs: input.leaseMs,
+        waitMs,
+        holder: input.holder,
+      });
+    } catch (error) {
+      if (!isNoSlotAvailableError(error)) {
+        throw error;
+      }
+
+      const reclaimed = await tryReclaimOrphanedEnvironmentConfigLease({
+        fetchPullRequestState: input.fetchPullRequestState ?? null,
+        holder: input.holder,
+        leaseMs: input.leaseMs,
+        semaphore: input.semaphore,
+      });
+      if (reclaimed) {
+        return reclaimed;
+      }
+      if (attempt === 1 && input.fetchPullRequestState) {
+        logPreview(
+          "all slots leased and none are orphaned (every holder's PR is still open or the hold is manual)",
+        );
+      }
+
+      const holderTable = await describeEnvironmentConfigLeases(input.semaphore);
+      if (attempt === 1 && input.onFirstWait) {
+        try {
+          await input.onFirstWait(holderTable);
+        } catch (noticeError) {
+          logPreview(`could not surface the wait: ${formatPreviewErrorMessage(noticeError)}`);
+        }
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(
+          [
+            `No preview slot became available for ${input.holder} after waiting ${formatDurationMs(input.waitTotalMs)}.`,
+            "Current slots:",
+            holderTable,
+            "Every slot is leased by an open PR or a manual hold. Options:",
+            "  - re-run once a slot frees up (leases release when their PR closes)",
+            "  - see which holds are idle or orphaned: doppler run --project _shared --config prd -- pnpm preview reclaim",
+            "  - take an idle/orphaned slot back: doppler run --project _shared --config prd -- pnpm preview reclaim --slot N",
+            "  - close or merge stale PRs holding slots",
+          ].join("\n"),
+        );
+      }
+
+      logPreview(
+        `all slots leased; waiting for one to free up (attempt ${attempt}, ${formatDurationMs(Math.max(0, deadline - Date.now()))} left)\n${holderTable}`,
+      );
+    }
+  }
+}
+
+/**
+ * Claim a slot for a PR. Prefers the slot recorded in the PR body: renew it
+ * if this PR still holds it, re-take it if the lease expired but nobody else
+ * claimed it, and only otherwise fall back to acquiring a different slot.
+ * Every transition is logged.
+ */
 async function claimEnvironmentConfigLease(input: {
   createPreviewSemaphoreResourceClient: () => PreviewSemaphoreResourceClient;
+  fetchPullRequestState?: PullRequestStateFetcher | null;
+  holder: string;
   leaseMs: number;
+  onFirstWait?: (holderTable: string) => Promise<void>;
   previousEnvironmentConfigLease: EnvironmentConfigLease | null;
+  waitTotalMs: number;
 }) {
   const semaphore = input.createPreviewSemaphoreResourceClient();
   const previousLease = input.previousEnvironmentConfigLease;
 
-  const lease =
-    (previousLease
-      ? await ignoreEnvironmentConfigLeaseReuseError(() =>
-          semaphore.renew({
-            type: previousLease.type,
-            slug: previousLease.slug,
-            leaseId: previousLease.leaseId,
-            leaseMs: input.leaseMs,
-          }),
-        )
-      : null) ??
-    (previousLease
-      ? await ignoreEnvironmentConfigLeaseReuseError(() =>
-          semaphore.acquireSpecific({
-            type: previousLease.type,
-            slug: previousLease.slug,
-            leaseMs: input.leaseMs,
-          }),
-        )
-      : null) ??
-    (await semaphore.acquire({
-      type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+  if (previousLease) {
+    const reasserted = await reassertEnvironmentConfigLease({
+      holder: input.holder,
+      lease: previousLease,
       leaseMs: input.leaseMs,
-    }));
+      semaphore,
+    });
+    if (reasserted.ok) {
+      return reasserted.lease;
+    }
 
+    logPreview(`slot lost: ${reasserted.message} Acquiring a different slot.`);
+  }
+
+  const lease = await acquireAnyEnvironmentConfigLease({
+    semaphore,
+    fetchPullRequestState: input.fetchPullRequestState,
+    holder: input.holder,
+    leaseMs: input.leaseMs,
+    onFirstWait: input.onFirstWait,
+    waitTotalMs: input.waitTotalMs,
+  });
+  logPreview(
+    `lease acquired: ${lease.slug} held by ${input.holder} until ${formatUntil(lease.expiresAt)}`,
+  );
+  return toEnvironmentConfigLease(lease);
+}
+
+/**
+ * Core of `preview assign`: keep/renew the recorded slot when it satisfies
+ * the request, otherwise take the wanted slot (or any free one) and release
+ * the previously-held lease so it doesn't stay claimed against a slot the PR
+ * no longer records.
+ */
+async function assignEnvironmentConfigLease(input: {
+  fetchPullRequestState?: PullRequestStateFetcher | null;
+  force?: boolean;
+  holder: string;
+  leaseMs: number;
+  recordedLease: EnvironmentConfigLease | null;
+  semaphore: PreviewSemaphoreResourceClient;
+  wantedSlug: string | null;
+}): Promise<{
+  lease: EnvironmentConfigLease;
+  outcome: "kept" | "assigned" | "moved";
+  changedFromSlug: string | null;
+  previousLeaseReleased: boolean;
+}> {
+  let heldLease: EnvironmentConfigLease | null = null;
+  if (input.recordedLease) {
+    const reasserted = await reassertEnvironmentConfigLease({
+      holder: input.holder,
+      lease: input.recordedLease,
+      leaseMs: input.leaseMs,
+      semaphore: input.semaphore,
+    });
+    if (reasserted.ok) {
+      heldLease = reasserted.lease;
+      if (!input.wantedSlug || input.wantedSlug === reasserted.lease.slug) {
+        return {
+          lease: reasserted.lease,
+          outcome: "kept",
+          changedFromSlug: null,
+          previousLeaseReleased: false,
+        };
+      }
+    } else {
+      logPreview(`recorded slot is gone: ${reasserted.message}`);
+    }
+  }
+
+  let lease: EnvironmentConfigLease;
+  if (input.wantedSlug) {
+    if (input.force) {
+      const currentHolder = await findEnvironmentConfigLeaseHolder(
+        input.semaphore,
+        input.wantedSlug,
+      );
+      if (currentHolder && currentHolder !== input.holder) {
+        logPreview(
+          `--force: evicting ${currentHolder} from ${input.wantedSlug}. Their deployment on the slot is now fair game.`,
+        );
+      }
+    }
+
+    const acquired = await input.semaphore.acquireSpecific({
+      leaseMs: input.leaseMs,
+      slug: input.wantedSlug,
+      type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+      holder: input.holder,
+      force: input.force,
+    });
+    if (!acquired) {
+      const currentHolder = await findEnvironmentConfigLeaseHolder(
+        input.semaphore,
+        input.wantedSlug,
+      );
+      if (currentHolder) {
+        const prUrl = holderPullRequestUrl(currentHolder);
+        throw new Error(
+          [
+            `${input.wantedSlug} is leased by ${currentHolder}${prUrl ? ` (${prUrl})` : ""}.`,
+            "Re-run with --force to evict them (their deployment will be clobbered), or pick a free slot:",
+            await describeEnvironmentConfigLeases(input.semaphore),
+          ].join("\n"),
+        );
+      }
+
+      throw new Error(
+        [
+          `${input.wantedSlug} is not a known preview slot. Known slots:`,
+          await describeEnvironmentConfigLeases(input.semaphore),
+        ].join("\n"),
+      );
+    }
+    lease = toEnvironmentConfigLease(acquired);
+  } else {
+    // A human is asking right now — fail fast with the holder table instead
+    // of queueing like CI does.
+    lease = toEnvironmentConfigLease(
+      await acquireAnyEnvironmentConfigLease({
+        semaphore: input.semaphore,
+        fetchPullRequestState: input.fetchPullRequestState,
+        holder: input.holder,
+        leaseMs: input.leaseMs,
+        waitTotalMs: 0,
+      }),
+    );
+  }
+  logPreview(
+    `lease assigned: ${lease.slug} held by ${input.holder} until ${formatUntil(lease.leasedUntil)}`,
+  );
+
+  let previousLeaseReleased = false;
+  if (heldLease && heldLease.slug !== lease.slug) {
+    const released = await input.semaphore.release({
+      type: heldLease.type,
+      slug: heldLease.slug,
+      leaseId: heldLease.leaseId,
+    });
+    previousLeaseReleased = released.released;
+    logPreview(
+      released.released
+        ? `previous slot ${heldLease.slug} released — any deployment still there is now unprotected`
+        : `previous slot ${heldLease.slug} was already gone`,
+    );
+  }
+
+  const previousSlug = input.recordedLease?.slug ?? null;
+  return {
+    lease,
+    outcome: heldLease ? "moved" : "assigned",
+    changedFromSlug: previousSlug && previousSlug !== lease.slug ? previousSlug : null,
+    previousLeaseReleased,
+  };
+}
+
+function toEnvironmentConfigLease(lease: {
+  data: Record<string, unknown>;
+  expiresAt: number;
+  leaseId: string;
+  slug: string;
+  type: string;
+}) {
   const data = parseEnvironmentConfigLeaseData(lease.data);
   return {
     dopplerConfig: data.dopplerConfig,
@@ -2049,12 +3008,85 @@ async function claimEnvironmentConfigLease(input: {
   } satisfies EnvironmentConfigLease;
 }
 
-async function ignoreEnvironmentConfigLeaseReuseError<T>(claim: () => Promise<T | null>) {
-  try {
-    return await claim();
-  } catch {
-    return null;
+async function findEnvironmentConfigLeaseHolder(
+  semaphore: PreviewSemaphoreResourceClient,
+  slug: string,
+) {
+  const resources = await semaphore.list({ type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE });
+  const resource = resources.find((candidate) => candidate.slug === slug);
+  return resource?.leaseState === "leased" ? (resource.holder ?? null) : null;
+}
+
+/**
+ * Confirm this PR still holds its recorded lease before acting on the slot
+ * (running e2e against it, or destroying its deployments). Renews when held;
+ * re-takes an expired-but-free slot; refuses when the slot now belongs to
+ * someone else.
+ */
+async function reassertEnvironmentConfigLease(input: {
+  holder: string;
+  lease: EnvironmentConfigLease;
+  leaseMs: number;
+  semaphore: PreviewSemaphoreResourceClient;
+}): Promise<
+  | { ok: true; lease: EnvironmentConfigLease }
+  | { ok: false; currentHolder: string | null; message: string }
+> {
+  const renewed = await input.semaphore.renew({
+    type: input.lease.type,
+    slug: input.lease.slug,
+    leaseId: input.lease.leaseId,
+    leaseMs: input.leaseMs,
+  });
+  if (renewed) {
+    logPreview(
+      `lease renewed: ${renewed.slug} held by ${input.holder} until ${formatUntil(renewed.expiresAt)}`,
+    );
+    return { ok: true, lease: toEnvironmentConfigLease(renewed) };
   }
+
+  const retaken = await input.semaphore.acquireSpecific({
+    type: input.lease.type,
+    slug: input.lease.slug,
+    leaseMs: input.leaseMs,
+    holder: input.holder,
+  });
+  if (retaken) {
+    logPreview(
+      `lease re-acquired: ${retaken.slug} had expired but was still free; ${input.holder} holds it again until ${formatUntil(retaken.expiresAt)}`,
+    );
+    return { ok: true, lease: toEnvironmentConfigLease(retaken) };
+  }
+
+  const currentHolder = await findEnvironmentConfigLeaseHolder(input.semaphore, input.lease.slug);
+  if (currentHolder === input.holder) {
+    // The slot is still ours — only the recorded leaseId is stale (a renewal's
+    // leaseId never made it into the PR body). Re-issuing our own lease is not
+    // stealing, so force is safe here.
+    const repaired = await input.semaphore.acquireSpecific({
+      type: input.lease.type,
+      slug: input.lease.slug,
+      leaseMs: input.leaseMs,
+      holder: input.holder,
+      force: true,
+    });
+    if (repaired) {
+      logPreview(
+        `lease repaired: ${repaired.slug} was already held by ${input.holder} under a different leaseId (stale PR body state); re-issued until ${formatUntil(repaired.expiresAt)}`,
+      );
+      return { ok: true, lease: toEnvironmentConfigLease(repaired) };
+    }
+  }
+
+  const prUrl = holderPullRequestUrl(currentHolder);
+  return {
+    ok: false,
+    currentHolder,
+    message: [
+      `Slot ${input.lease.slug} no longer belongs to ${input.holder}: it is now leased by ${currentHolder ?? "someone else"}${prUrl ? ` (${prUrl})` : ""}.`,
+      `Their deployment has replaced this PR's apps on ${input.lease.dopplerConfig}.`,
+    ].join(" "),
+  };
 }
 
 async function selectPreviewAppsForPullRequest(input: {
@@ -2070,10 +3102,16 @@ async function selectPreviewAppsForPullRequest(input: {
     return [];
   }
   if (compareBaseSha === input.pullRequestHeadSha) {
-    return selectPreviewAppsNeedingRetry({
+    const retryApps = selectPreviewAppsNeedingRetry({
       previousState: input.previousState,
       pullRequestHeadSha: input.pullRequestHeadSha,
     });
+    logPreview(
+      retryApps.length > 0
+        ? `head sha unchanged since the last run — retrying apps that didn't reach a green state: ${retryApps.map((app) => app.slug).join(", ")}`
+        : "head sha unchanged since the last run and every app finished — nothing to retry",
+    );
+    return retryApps;
   }
 
   const octokit = new Octokit({ auth: input.githubToken });
@@ -2087,19 +3125,37 @@ async function selectPreviewAppsForPullRequest(input: {
   );
   const changedFiles =
     comparison.data.files?.flatMap((file) => (file.filename ? [file.filename] : [])) ?? [];
+  logPreview(
+    `selecting apps by diff ${compareBaseSha.slice(0, 7)}...${input.pullRequestHeadSha.slice(0, 7)} (${changedFiles.length} changed files)`,
+  );
 
-  if (changedFiles.some((filename) => matchesPreviewPath(filename, cloudflarePreviewSharedPaths))) {
+  const sharedPathHit = changedFiles.find((filename) =>
+    matchesPreviewPath(filename, cloudflarePreviewSharedPaths),
+  );
+  if (sharedPathHit) {
+    logPreview(
+      `shared preview infrastructure changed (${sharedPathHit}) — deploying ALL preview apps`,
+    );
     return Object.values(cloudflarePreviewApps);
   }
 
   const selectedSlugs = new Set<CloudflarePreviewAppSlugType>();
   for (const app of Object.values(cloudflarePreviewApps)) {
-    if (changedFiles.some((filename) => matchesPreviewPath(filename, app.paths))) {
+    const hit = changedFiles.find((filename) => matchesPreviewPath(filename, app.paths));
+    if (hit) {
+      logPreview(`app ${app.slug} selected: ${hit} changed`);
       selectedSlugs.add(app.slug);
     }
   }
 
-  return expandPreviewDependencies([...selectedSlugs]).map((slug) => cloudflarePreviewApps[slug]);
+  const expanded = expandPreviewDependencies([...selectedSlugs]);
+  for (const slug of expanded) {
+    if (!selectedSlugs.has(slug)) {
+      logPreview(`app ${slug} added as a dependency of the selected apps`);
+    }
+  }
+
+  return expanded.map((slug) => cloudflarePreviewApps[slug]);
 }
 
 function selectPreviewAppsNeedingRetry(params: {
@@ -2108,7 +3164,9 @@ function selectPreviewAppsNeedingRetry(params: {
 }) {
   const retrySlugs = Object.values(params.previousState.apps)
     .filter((entry) => entry.headSha === params.pullRequestHeadSha)
-    .filter((entry) => ["awaiting-tests", "deploy-failed", "tests-failed"].includes(entry.status))
+    .filter((entry) =>
+      ["awaiting-tests", "claim-failed", "deploy-failed", "tests-failed"].includes(entry.status),
+    )
     .map((entry) => CloudflarePreviewAppSlug.parse(entry.appSlug));
 
   return expandPreviewDependencies(retrySlugs).map((slug) => cloudflarePreviewApps[slug]);
@@ -2328,7 +3386,17 @@ function resolvePreviewCompareBaseSha(params: {
 
 export const previewInternals = {
   ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+  acquireAnyEnvironmentConfigLease,
+  assignEnvironmentConfigLease,
+  claimEnvironmentConfigLease,
+  classifyEnvironmentConfigLeases,
+  classifyLeaseForReclaim,
+  describeEnvironmentConfigLeases,
   evaluateCloudflareZoneCheck,
+  holderPullRequestUrl,
+  pullRequestHolder,
+  reassertEnvironmentConfigLease,
+  resolveSlotWaitTotalMs,
   expandPreviewDependencies,
   orderPreviewDeployBatches,
   parseCloudflarePreviewState,

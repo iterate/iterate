@@ -58,8 +58,8 @@ import {
 } from "./domains/itx/openapi-types.ts";
 import { callMcpToolPath } from "./domains/itx/mcp-client.ts";
 import { ITX_EXAMPLES, type ItxExample } from "./itx/examples.ts";
+import type { ProcessorState } from "./domains/streams/processor-contracts.ts";
 import type {
-  ProcessorState,
   StreamProcessor,
   StreamProcessorContract,
 } from "./domains/streams/stream-processor.ts";
@@ -67,6 +67,7 @@ import type {
   Agent,
   AgentChat,
   CapabilityProvision,
+  CapabilityDescription,
   AgentCollection,
   Ai,
   CfExecutionContext,
@@ -163,16 +164,13 @@ export class StreamRpcTarget extends RpcTarget implements Stream {
   }
 
   subscribe(args: Parameters<Stream["subscribe"]>[0]) {
-    return this.durableObjectStub.subscribe(args);
-  }
-
-  subscribeConfigured(
-    args: Parameters<Stream["subscribe"]>[0] & { subscriptionKey: string },
-  ): Promise<StreamSubscriptionHandle> {
-    if (this.props.auth.principal !== "trusted-internal") {
-      throw new Error("subscribeConfigured requires trusted internal auth");
+    // `configured: true` opens the durable configured subscription for the
+    // given key (the wake-handshake response) — only the platform's own
+    // Durable Objects may do that; everyone else gets ephemeral subscriptions.
+    if (args.configured === true && this.props.auth.principal !== "trusted-internal") {
+      throw new Error("configured subscriptions require trusted internal auth");
     }
-    return this.durableObjectStub.subscribeConfigured(args);
+    return this.durableObjectStub.subscribe(args);
   }
 }
 
@@ -675,11 +673,14 @@ class AgentRpcTarget extends RpcTarget implements Agent {
   }
 
   async ask(input: Parameters<Agent["ask"]>[0]) {
-    const sent = await this.sendMessage(input.message);
+    const [sent] = await this.stream.append({
+      type: "events.iterate.com/agents/user-message-received",
+      payload: { content: input.message, origin: input.origin ?? "web" },
+    });
     return await this.stream.waitForEvent({
       afterOffset: sent.offset,
       eventTypes: ["events.iterate.com/agents/web-message-sent"],
-      timeoutMs: 45_000,
+      timeoutMs: input.timeoutMs ?? 45_000,
     });
   }
 
@@ -1100,6 +1101,47 @@ const PROJECT_BUILTIN_CAPABILITY_PATHS = [
   "workers",
 ] as const;
 
+const PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS: readonly CapabilityDescription[] =
+  PROJECT_BUILTIN_CAPABILITY_PATHS.map((path) => {
+    if (path === "gmail") {
+      return {
+        instructions:
+          'Gmail REST proxy for the project Google account. Available to Slack agents as itx.gmail when Google is connected; check itx.integrations.getConnection({ provider: "google" }), then call itx.gmail.request({ path: "/users/me/messages", query: { maxResults, q: "in:inbox" } }). Paths are relative to https://gmail.googleapis.com/gmail/v1.',
+        path: [path],
+        type: "builtin" as const,
+        types: [
+          "type GmailRequestInput = {",
+          "  body?: unknown;",
+          "  headers?: Record<string, string>;",
+          "  method?: string;",
+          "  path: string;",
+          "  query?: Record<string, boolean | number | string | null | undefined>;",
+          "};",
+          "interface GmailCapability {",
+          "  request(input: GmailRequestInput): Promise<{ data: unknown; headers: Record<string, string>; status: number; statusText: string }>;",
+          "}",
+        ].join("\n"),
+      };
+    }
+    if (path === "integrations") {
+      return {
+        instructions:
+          'Project integration management. Use itx.integrations.getConnection({ provider: "google" }) before Gmail work and { provider: "slack" } before Slack API work.',
+        path: [path],
+        type: "builtin" as const,
+      };
+    }
+    if (path === "slack") {
+      return {
+        instructions:
+          "Slack Web API proxy for the connected project workspace. Slack thread agents reply with itx.slack.chat.postMessage({ channel, thread_ts, text }).",
+        path: [path],
+        type: "builtin" as const,
+      };
+    }
+    return { path: [path], type: "builtin" as const };
+  });
+
 /**
  * The server-side **itx** — the object an `async (itx) => { … }` script holds and
  * what `env.ITX.get()` returns. One class serves the project root and every nested
@@ -1139,13 +1181,7 @@ export class ItxRpcTarget extends RpcTarget implements Itx {
     ]);
     return {
       ...project,
-      capabilities: [
-        ...PROJECT_BUILTIN_CAPABILITY_PATHS.map((path) => ({
-          path: [path],
-          type: "builtin" as const,
-        })),
-        ...mountedCapabilities,
-      ],
+      capabilities: [...PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS, ...mountedCapabilities],
     };
   }
 
@@ -1589,13 +1625,26 @@ export class StreamProcessorRpcTarget<Contract extends StreamProcessorContract>
   implements StreamProcessorRpc<ProcessorState<Contract>>
 {
   readonly #processor: StreamProcessor<Contract, object>;
+  readonly #catchUpBeforeSnapshot: (() => Promise<void>) | undefined;
 
-  constructor(processor: StreamProcessor<Contract, object>) {
+  constructor(
+    processor: StreamProcessor<Contract, object>,
+    options: {
+      /**
+       * Host-provided pull-through (`StreamProcessorHost.catchUp`): snapshots
+       * served over this target reflect events the push delivery has not
+       * brought yet, giving remote readers read-your-writes.
+       */
+      catchUpBeforeSnapshot?: () => Promise<void>;
+    } = {},
+  ) {
     super();
     this.#processor = processor;
+    this.#catchUpBeforeSnapshot = options.catchUpBeforeSnapshot;
   }
 
-  snapshot() {
+  async snapshot() {
+    await this.#catchUpBeforeSnapshot?.();
     return this.#processor.snapshot();
   }
 

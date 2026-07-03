@@ -3,7 +3,7 @@ import {
   CoreProcessorContract,
   type ConfiguredStreamSubscriber,
 } from "./core-processor-contract.ts";
-import { buildEvent } from "./stream-processor.ts";
+import { buildEvent } from "./processor-contracts.ts";
 
 /**
  * Stream capabilities expose `.at(relativePath)` to code that should stay
