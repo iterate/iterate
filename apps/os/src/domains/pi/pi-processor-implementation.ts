@@ -7,12 +7,16 @@ import {
   PiProcessorContract,
   type PiAssistantContent,
   type PiAssistantMessage,
+  type PiCompactionReason,
   type PiHistoryEntry,
   type PiToolCall,
 } from "./pi-processor-contract.ts";
 
+/** The pi processor's folded state (see the contract's stateSchema for field semantics). */
 type PiState = z.infer<typeof PiProcessorContract.stateSchema>;
+/** A parsed event from the pi contract's consumed vocabulary. */
 type PiConsumedEvent = ReturnType<typeof PiProcessorContract.parseEvent>;
+/** The contract-validated append helper handed to the process hooks. */
 type PiAppend = Parameters<
   StreamProcessor<typeof PiProcessorContract>["processEventBatch"]
 >[0]["append"];
@@ -95,7 +99,7 @@ export class PiProcessor extends StreamProcessor<
         // Only act when the fold accepted the request as current (a replayed
         // or superseded request event reduces to a no-op).
         if (state.run.phase !== "streaming" || state.run.llmRequestId !== event.offset) return;
-        this.#startLlmRequest({ append, llmRequestId: event.offset, runInBackground, state });
+        this.#startLlmRequest({ append, llmRequestId: event.offset, runInBackground });
         return;
       }
       case "events.iterate.com/pi/assistant-message-added": {
@@ -124,7 +128,7 @@ export class PiProcessor extends StreamProcessor<
       }
       case "events.iterate.com/pi/compaction-requested": {
         if (state.compaction?.requestedOffset !== event.offset) return;
-        this.#startCompaction({ append, requestedOffset: event.offset, runInBackground, state });
+        this.#startCompaction({ append, requestedOffset: event.offset, runInBackground });
         return;
       }
       default:
@@ -140,10 +144,12 @@ export class PiProcessor extends StreamProcessor<
   }
 
   /**
-   * The loop's driving decisions, derived from reduced state once per batch
-   * (never per event, where same-batch appends are invisible): issue the next
-   * LLM request, request compaction, and recover work a restart lost. All
-   * appends are idempotency-keyed, so re-derivation on replay is inert.
+   * The loop's driving decisions, derived from reduced state once per batch —
+   * never per event, where same-batch appends are invisible: keep in-flight
+   * work alive across restarts, then (idle only) request compaction or the
+   * next LLM call. All appends are idempotency-keyed, so re-derivation on
+   * replay is inert. The non-trivial predicates (compactionToRequest,
+   * lostToolCalls) are pure and unit-tested; this method is just their wiring.
    */
   async #settle({
     append,
@@ -153,77 +159,60 @@ export class PiProcessor extends StreamProcessor<
     StreamProcessor<typeof PiProcessorContract>["processEventBatch"]
   >[0]): Promise<void> {
     if (state.compaction !== null) {
-      // Restart recovery: the summarize call died with the old instance.
-      // (#startCompaction no-ops when it is still in flight here.)
+      // Already in flight when processEvent started it in this batch; after a
+      // restart this revives the summarize call.
       this.#startCompaction({
         append,
         requestedOffset: state.compaction.requestedOffset,
         runInBackground,
-        state,
       });
       return;
     }
 
     if (state.run.phase === "streaming") {
-      // Restart recovery: re-issue a request the old instance died holding.
-      // The assistant-message append is keyed on the llmRequestId, so a lost
-      // race with a still-live twin instance dedups to one recorded message.
-      this.#startLlmRequest({
-        append,
-        llmRequestId: state.run.llmRequestId,
-        runInBackground,
-        state,
-      });
+      // Already in flight on the live path; after a restart this re-issues the
+      // request. The assistant-message append is keyed on the llmRequestId, so
+      // a lost race with a still-live twin instance dedups to one message.
+      this.#startLlmRequest({ append, llmRequestId: state.run.llmRequestId, runInBackground });
       return;
     }
 
     if (state.run.phase === "executing-tools") {
-      if (!this.#inFlightToolBatches.has(state.run.assistantOffset)) {
-        // Restart recovery: tool executions are not safely re-runnable (pi
-        // never re-runs them either), so the lost calls become error results —
-        // pi's orphaned-call semantics — and the loop continues.
-        const { assistantOffset, pendingToolCallIds } = state.run;
-        const assistantEntry = state.history.find((entry) => entry.offset === assistantOffset);
-        const toolCalls =
-          assistantEntry?.message.role === "assistant"
-            ? assistantEntry.message.content.filter(
-                (block): block is PiToolCall => block.type === "toolCall",
-              )
-            : [];
-        await append(
-          ...pendingToolCallIds.map((toolCallId) => ({
-            type: "events.iterate.com/pi/tool-result-added" as const,
-            idempotencyKey: toolResultIdempotencyKey({ assistantOffset, toolCallId }),
-            payload: {
-              assistantOffset,
-              content: "Tool execution was lost in a restart before it completed.",
-              isError: true,
-              toolCallId,
-              toolName: toolCalls.find((call) => call.id === toolCallId)?.name ?? "unknown",
-            },
-          })),
-        );
-      }
+      if (this.#inFlightToolBatches.has(state.run.assistantOffset)) return;
+      // Restart recovery: this instance is not executing the batch, and tools
+      // must not be blindly re-run, so the lost calls become error results —
+      // pi's orphaned-call semantics — and the loop continues. (When the
+      // assistant-message event itself is redelivered, processEvent instead
+      // re-executes exactly the calls with no recorded result; this branch
+      // covers the checkpoint-already-advanced case.)
+      const { assistantOffset } = state.run;
+      await append(
+        ...lostToolCalls(state).map((call) => ({
+          type: "events.iterate.com/pi/tool-result-added" as const,
+          idempotencyKey: toolResultIdempotencyKey({
+            assistantOffset,
+            toolCallId: call.toolCallId,
+          }),
+          payload: {
+            assistantOffset,
+            content: "Tool execution was lost in a restart before it completed.",
+            isError: true,
+            toolCallId: call.toolCallId,
+            toolName: call.toolName,
+          },
+        })),
+      );
       return;
     }
 
     // Idle: compaction has priority over the next LLM request, so an
     // over-threshold context is summarized before it is sent anywhere.
-    const tailOffset = state.history.at(-1)?.offset ?? 0;
-    const overflow = needsOverflowRecovery(state);
-    const threshold =
-      state.compactionSettings.enabled &&
-      estimatePiContextTokens(state.history) >
-        state.contextWindow - state.compactionSettings.reserveTokens;
-    if (
-      (overflow || threshold) &&
-      state.compactionFailedForTailOffset !== tailOffset &&
-      planCompaction(state) !== null
-    ) {
+    const compaction = compactionToRequest(state);
+    if (compaction !== null) {
       await append({
         type: "events.iterate.com/pi/compaction-requested",
-        idempotencyKey: `pi/compaction-requested@tail:${tailOffset}`,
-        payload: { reason: overflow ? "overflow" : "threshold", tailOffset },
+        idempotencyKey: `pi/compaction-requested@epoch:${state.compactionEpoch}:tail:${compaction.tailOffset}`,
+        payload: compaction,
       });
       return;
     }
@@ -242,17 +231,14 @@ export class PiProcessor extends StreamProcessor<
     append: PiAppend;
     llmRequestId: number;
     runInBackground: (work: () => Promise<unknown>) => void;
-    state: PiState;
   }): void {
     if (this.#inFlightLlmRequests.has(input.llmRequestId)) return;
     const controller = new AbortController();
     this.#inFlightLlmRequests.set(input.llmRequestId, controller);
-    const request = this.#requestWithTools(buildPiLlmRequest(input.state));
     input.runInBackground(() =>
       this.#executeLlmRequest({
         append: input.append,
         llmRequestId: input.llmRequestId,
-        request,
         signal: controller.signal,
       }),
     );
@@ -263,17 +249,23 @@ export class PiProcessor extends StreamProcessor<
     append: PiAppend;
     requestedOffset: number;
     runInBackground: (work: () => Promise<unknown>) => void;
-    state: PiState;
   }): void {
     if (this.#inFlightCompactions.has(input.requestedOffset)) return;
     this.#inFlightCompactions.add(input.requestedOffset);
     input.runInBackground(() =>
-      this.#executeCompaction({
-        append: input.append,
-        requestedOffset: input.requestedOffset,
-        state: input.state,
-      }),
+      this.#executeCompaction({ append: input.append, requestedOffset: input.requestedOffset }),
     );
+  }
+
+  /**
+   * The fold of every consumed event up to and including `offset` — the
+   * deterministic context for a side effect anchored at that event. Re-reading
+   * the journal (instead of capturing hook state) keeps the live path, the
+   * restart path, and any twin instance building bit-identical requests.
+   */
+  async #stateAtOffset(offset: number): Promise<PiState> {
+    const events = await this.stream.getEvents();
+    return reducePiEvents(events.filter((event) => event.offset <= offset));
   }
 
   #requestWithTools(request: Omit<PiLlmRequest, "tools">): PiLlmRequest {
@@ -290,7 +282,6 @@ export class PiProcessor extends StreamProcessor<
   async #executeLlmRequest(input: {
     append: PiAppend;
     llmRequestId: number;
-    request: PiLlmRequest;
     signal: AbortSignal;
   }): Promise<void> {
     const idempotencyKey = `pi/assistant-message@${input.llmRequestId}`;
@@ -298,9 +289,12 @@ export class PiProcessor extends StreamProcessor<
       // Replay guard: if a previous incarnation already recorded the answer,
       // do not bill a second model call for it.
       if ((await this.stream.getEvent({ idempotencyKey })) !== undefined) return;
+      const request = this.#requestWithTools(
+        buildPiLlmRequest(await this.#stateAtOffset(input.llmRequestId)),
+      );
       let message: PiAssistantMessage;
       try {
-        message = await this.deps.llm.complete(input.request, { signal: input.signal });
+        message = await this.deps.llm.complete(request, { signal: input.signal });
       } catch (error) {
         message = {
           role: "assistant",
@@ -335,9 +329,10 @@ export class PiProcessor extends StreamProcessor<
   }): Promise<void> {
     const { append, assistantOffset, signal, toolCalls } = input;
     try {
-      const resultInput = async (call: PiToolCall) => {
+      // Execute one call and build its result event; undefined when a
+      // previous incarnation already recorded the result (never re-execute).
+      const executeToResultEvent = async (call: PiToolCall) => {
         const idempotencyKey = toolResultIdempotencyKey({ assistantOffset, toolCallId: call.id });
-        // Replay guard: never re-execute a tool whose result is already recorded.
         if ((await this.stream.getEvent({ idempotencyKey })) !== undefined) return undefined;
         const outcome = await this.#executeToolCall(call, signal);
         return {
@@ -359,12 +354,12 @@ export class PiProcessor extends StreamProcessor<
       );
       if (sequential) {
         for (const call of toolCalls) {
-          const result = await resultInput(call);
+          const result = await executeToResultEvent(call);
           if (result !== undefined) await append(result);
           if (signal.aborted) break;
         }
       } else {
-        const results = await Promise.all(toolCalls.map(resultInput));
+        const results = await Promise.all(toolCalls.map(executeToResultEvent));
         const defined = results.filter((result) => result !== undefined);
         if (defined.length > 0) await append(...defined);
       }
@@ -399,18 +394,17 @@ export class PiProcessor extends StreamProcessor<
     }
   }
 
-  async #executeCompaction(input: {
-    append: PiAppend;
-    requestedOffset: number;
-    state: PiState;
-  }): Promise<void> {
-    const { append, requestedOffset, state } = input;
+  async #executeCompaction(input: { append: PiAppend; requestedOffset: number }): Promise<void> {
+    const { append, requestedOffset } = input;
     const idempotencyKey = `pi/compaction-completed@${requestedOffset}`;
     try {
       if ((await this.stream.getEvent({ idempotencyKey })) !== undefined) return;
+      // The plan folds the journal at the requested offset, so live and
+      // restarted incarnations choose the same cut deterministically.
+      const state = await this.#stateAtOffset(requestedOffset);
       const plan = planCompaction(state);
       let result:
-        | { status: "success"; firstKeptOffset: number; summary: string; tokensBefore: number }
+        | { status: "success"; firstKeptIndex: number; summary: string; tokensBefore: number }
         | { status: "failure"; error: { message: string } };
       if (plan === null) {
         result = { status: "failure", error: { message: "No valid compaction cut point." } };
@@ -422,12 +416,12 @@ export class PiProcessor extends StreamProcessor<
           );
           const summary = message.content
             .map((block) => (block.type === "text" ? block.text : ""))
-            .join("");
+            .join("\n");
           result =
             message.stopReason === "stop" || message.stopReason === "length"
               ? {
                   status: "success",
-                  firstKeptOffset: plan.firstKeptOffset,
+                  firstKeptIndex: plan.firstKeptIndex,
                   summary,
                   tokensBefore: plan.tokensBefore,
                 }
@@ -454,7 +448,12 @@ function toolResultIdempotencyKey(input: { assistantOffset: number; toolCallId: 
   return `pi/tool-result@${input.assistantOffset}:${input.toolCallId}`;
 }
 
-/** Fold a raw event log into pi processor state; the request-body builder for any offset prefix. */
+/**
+ * Fold a raw event log into pi processor state. Events outside the contract's
+ * consumed vocabulary are skipped (the processor shares its stream with other
+ * processors' events), which is why this fold is lenient where the live
+ * delivery path — already filtered to consumed types — validates strictly.
+ */
 export function reducePiEvents(events: readonly StreamEvent[]): PiState {
   let state = PiProcessorContract.stateSchema.parse({});
   for (const event of events) {
@@ -470,7 +469,8 @@ export function reducePiEvents(events: readonly StreamEvent[]): PiState {
   return state;
 }
 
-function reducePiEvent(input: { event: PiConsumedEvent; state: PiState }): PiState {
+/** Pure single-event fold, exported so the state machine is unit-testable event by event. */
+export function reducePiEvent(input: { event: PiConsumedEvent; state: PiState }): PiState {
   const { event, state } = input;
   switch (event.type) {
     case "events.iterate.com/pi/config-updated": {
@@ -516,13 +516,17 @@ function reducePiEvent(input: { event: PiConsumedEvent; state: PiState }): PiSta
       };
     }
     case "events.iterate.com/pi/llm-request-requested": {
-      // Stale requests (superseded by an abort before delivery) reduce to a no-op.
+      // Stale requests (superseded by an abort, or raced by a competing
+      // writer's compaction-requested) do not start a run — but they must
+      // still advance the generation: the event consumed its
+      // `pi/llm-request@generation:N` idempotency key, and re-deriving the
+      // trigger under a spent key would dedup into this dead event forever.
       if (
         state.run.phase !== "idle" ||
         state.compaction !== null ||
         event.payload.generation !== state.generation
       ) {
-        return state;
+        return { ...state, generation: state.generation + 1 };
       }
       return {
         ...state,
@@ -541,21 +545,19 @@ function reducePiEvent(input: { event: PiConsumedEvent; state: PiState }): PiSta
         // already ended. Record it; the request builder skips it.
         return withHistory;
       }
-      const completed = {
-        ...withHistory,
-        generation: state.generation + 1,
-        ...(message.stopReason === "error" || message.stopReason === "aborted"
-          ? {}
-          : { overflowRecoveryAttempted: false }),
-      };
+      const completed = { ...withHistory, generation: state.generation + 1 };
+      if (message.stopReason === "error" || message.stopReason === "aborted") {
+        // pi ends the run dead on error/aborted — no steering injection, no
+        // follow-up drain, no fresh request. Queued messages stay queued; the
+        // next run (user prompt, or an overflow-recovery retrigger) drains
+        // them at its own turn boundaries.
+        return { ...completed, run: { phase: "idle" } };
+      }
       const toolCalls = message.content.filter((block) => block.type === "toolCall");
-      if (
-        message.stopReason !== "error" &&
-        message.stopReason !== "aborted" &&
-        toolCalls.length > 0
-      ) {
+      if (toolCalls.length > 0) {
         return {
           ...completed,
+          overflowRecoveryAttempted: false,
           run: {
             phase: "executing-tools",
             allResultsTerminate: true,
@@ -565,7 +567,7 @@ function reducePiEvent(input: { event: PiConsumedEvent; state: PiState }): PiSta
         };
       }
       return drainQueuesAtRunEnd(
-        { ...completed, run: { phase: "idle" } },
+        { ...completed, overflowRecoveryAttempted: false, run: { phase: "idle" } },
         { atOffset: event.offset, continueLoop: false },
       );
     }
@@ -611,37 +613,44 @@ function reducePiEvent(input: { event: PiConsumedEvent; state: PiState }): PiSta
       );
     }
     case "events.iterate.com/pi/compaction-requested": {
-      if (state.compaction !== null) return state;
+      // Compaction only starts from a settled idle state; an event that raced
+      // a run start (competing writer) reduces to a no-op.
+      if (state.compaction !== null || state.run.phase !== "idle") return state;
       return {
         ...state,
         compaction: {
           reason: event.payload.reason,
           requestedOffset: event.offset,
           tailOffset: event.payload.tailOffset,
+          generation: state.generation,
         },
         ...(event.payload.reason === "overflow" ? { overflowRecoveryAttempted: true } : {}),
       };
     }
     case "events.iterate.com/pi/compaction-completed": {
       if (state.compaction?.requestedOffset !== event.payload.requestedOffset) return state;
+      const base = { ...state, compaction: null, compactionEpoch: state.compactionEpoch + 1 };
       if (event.payload.result.status === "failure") {
-        return {
-          ...state,
-          compaction: null,
-          compactionFailedForTailOffset: state.compaction.tailOffset,
-        };
+        return { ...base, compactionFailedForTailOffset: state.compaction.tailOffset };
       }
-      const { firstKeptOffset, summary } = event.payload.result;
+      const { firstKeptIndex, summary } = event.payload.result;
       return {
-        ...state,
-        compaction: null,
+        ...base,
         compactionFailedForTailOffset: null,
+        // Index-addressed splice: while a compaction is in flight the fold
+        // only ever appends to history, so the planned index still points at
+        // the first kept entry. The summary's offset records provenance (this
+        // event), not position.
         history: [
           { message: { role: "compactionSummary", summary }, offset: event.offset },
-          ...state.history.filter((entry) => entry.offset >= firstKeptOffset),
+          ...state.history.slice(firstKeptIndex),
         ],
-        // An overflow recovery retries the request that hit the wall.
-        ...(state.compaction.reason === "overflow" ? { pendingTrigger: true } : {}),
+        // An overflow recovery retries the request that hit the wall — unless
+        // the user aborted (or anything else moved the generation) meanwhile.
+        ...(state.compaction.reason === "overflow" &&
+        state.compaction.generation === state.generation
+          ? { pendingTrigger: true }
+          : {}),
       };
     }
     default:
@@ -762,17 +771,24 @@ export function buildPiLlmRequest(state: PiState): Omit<PiLlmRequest, "tools"> {
 
 /**
  * pi's estimateContextTokens: trust the most recent valid assistant usage
- * block, estimate everything after it at ~4 chars/token.
+ * block, estimate everything after it at ~4 chars/token. A usage block is
+ * only valid when it postdates the last compaction (entry offset beyond the
+ * summary's provenance offset): a kept pre-compaction assistant message
+ * reports the token count of the context that FORCED the compaction, and
+ * anchoring on it would demand compaction forever.
  */
 export function estimatePiContextTokens(history: readonly PiHistoryEntry[]): number {
+  const summary = history.find((entry) => entry.message.role === "compactionSummary");
   for (let i = history.length - 1; i >= 0; i--) {
-    const message = history[i]!.message;
+    const entry = history[i]!;
+    const message = entry.message;
     if (
       message.role === "assistant" &&
       message.stopReason !== "error" &&
       message.stopReason !== "aborted" &&
       message.usage !== undefined &&
-      message.usage.totalTokens > 0
+      message.usage.totalTokens > 0 &&
+      (summary === undefined || entry.offset > summary.offset)
     ) {
       let trailing = 0;
       for (let j = i + 1; j < history.length; j++)
@@ -835,7 +851,8 @@ export function findCompactionCutIndex(
 /** Everything a compaction run needs, decided before the summarize call. */
 export type PiCompactionPlan = {
   entriesToSummarize: PiHistoryEntry[];
-  firstKeptOffset: number;
+  /** Index (into history at plan time) of the first entry kept verbatim. */
+  firstKeptIndex: number;
   previousSummary: string | undefined;
   tokensBefore: number;
 };
@@ -852,10 +869,53 @@ export function planCompaction(state: PiState): PiCompactionPlan | null {
   if (entriesToSummarize.length === 0) return null;
   return {
     entriesToSummarize,
-    firstKeptOffset: state.history[cutIndex]!.offset,
+    firstKeptIndex: cutIndex,
     previousSummary,
     tokensBefore: estimatePiContextTokens(state.history),
   };
+}
+
+/**
+ * The compaction-request decision for a settled idle state: an unrecovered
+ * overflow error compacts unconditionally (once), a context estimate past
+ * `contextWindow - reserveTokens` compacts proactively — provided a previous
+ * attempt has not already failed for this same history tail and a useful cut
+ * exists. Pure so the whole policy is unit-testable.
+ */
+export function compactionToRequest(
+  state: PiState,
+): { reason: PiCompactionReason; tailOffset: number } | null {
+  const tailOffset = state.history.at(-1)?.offset ?? 0;
+  if (state.compactionFailedForTailOffset === tailOffset) return null;
+  const overflow = needsOverflowRecovery(state);
+  const threshold =
+    state.compactionSettings.enabled &&
+    estimatePiContextTokens(state.history) >
+      state.contextWindow - state.compactionSettings.reserveTokens;
+  if (!overflow && !threshold) return null;
+  if (planCompaction(state) === null) return null;
+  return { reason: overflow ? "overflow" : "threshold", tailOffset };
+}
+
+/**
+ * The tool calls of the current executing-tools run that still have no
+ * recorded result, with their names resolved from the assistant message that
+ * issued them. What a restarted instance must answer synthetically.
+ */
+export function lostToolCalls(state: PiState): { toolCallId: string; toolName: string }[] {
+  if (state.run.phase !== "executing-tools") return [];
+  const { assistantOffset, pendingToolCallIds } = state.run;
+  const assistantEntry = state.history.find((entry) => entry.offset === assistantOffset);
+  const toolCalls =
+    assistantEntry?.message.role === "assistant"
+      ? assistantEntry.message.content.filter(
+          (block): block is PiToolCall => block.type === "toolCall",
+        )
+      : [];
+  return pendingToolCallIds.map((toolCallId) => ({
+    toolCallId,
+    toolName: toolCalls.find((call) => call.id === toolCallId)?.name ?? "unknown",
+  }));
 }
 
 /** pi's summarization system prompt, verbatim. */

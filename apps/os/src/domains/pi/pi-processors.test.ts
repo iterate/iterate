@@ -9,6 +9,13 @@ import {
 import {
   PiProcessor,
   buildPiLlmRequest,
+  buildSummarizationRequest,
+  compactionToRequest,
+  estimatePiContextTokens,
+  findCompactionCutIndex,
+  isOverflowErrorMessage,
+  lostToolCalls,
+  planCompaction,
   reducePiEvents,
   type PiLlmRequest,
   type PiToolDep,
@@ -379,7 +386,9 @@ describe("pi processor: interruption", () => {
       { type: "events.iterate.com/pi/abort-requested", payload: {} },
       { type: LLM_REQUESTED, payload: { generation: 0 } },
     );
-    await run(() => processor.state.generation === 1);
+    // The abort bumps the generation to 1; the stale request event retires its
+    // spent idempotency key by bumping it again.
+    await run(() => processor.state.generation === 2);
     await new Promise((resolve) => setTimeout(resolve, 30));
     await run(() => true);
 
@@ -515,6 +524,95 @@ describe("pi processor: compaction", () => {
       content: "second question, quite long too",
     });
   });
+
+  it("parks a failed compaction until history grows, then retries with a fresh key", async () => {
+    const { stream, llm, processor, run, eventsOfType } = setup();
+    await stream.append({
+      type: "events.iterate.com/pi/config-updated",
+      payload: {
+        contextWindow: 300,
+        compactionSettings: { reserveTokens: 100, keepRecentTokens: 150 },
+      },
+    });
+    const longText = (seed: string) => seed.repeat(Math.ceil(400 / seed.length)).slice(0, 400);
+    llm.enqueue(() => assistantStop(longText("alpha ")));
+    await stream.append({ type: USER_MESSAGE, payload: { text: longText("question one ") } });
+    await run(() => llm.requests.length === 1 && processor.state.run.phase === "idle");
+
+    // Over the threshold now. The summarizer fails; the failure parks on the
+    // current history tail and the pending turn still runs. The turn's answer
+    // moves the tail, so compaction retries — with a fresh epoch key — and
+    // succeeds on the second attempt.
+    llm.enqueue(() => ({
+      role: "assistant",
+      content: [],
+      errorMessage: "summarizer down",
+      stopReason: "error",
+    }));
+    llm.enqueue(() => assistantStop("turn two answer"));
+    llm.enqueue(() => assistantStop("## Goal\nfinally summarized"));
+    await stream.append({ type: USER_MESSAGE, payload: { text: longText("question two ") } });
+    await run(
+      () =>
+        processor.state.history[0]?.message.role === "compactionSummary" &&
+        processor.state.run.phase === "idle",
+    );
+
+    const statuses = eventsOfType(COMPACTION_COMPLETED).map(
+      (event) => (event.payload as { result: { status: string } }).result.status,
+    );
+    expect(statuses).toEqual(["failure", "success"]);
+    expect(processor.state.compactionFailedForTailOffset).toBeNull();
+    expect(processor.state.history[0]?.message.role).toBe("compactionSummary");
+    expect(processor.state.history.at(-1)?.message).toMatchObject({ role: "assistant" });
+  });
+
+  it("folds the previous summary through a second compaction (no summary pile-up)", async () => {
+    const { stream, llm, processor, run, eventsOfType } = setup();
+    await stream.append({
+      type: "events.iterate.com/pi/config-updated",
+      payload: {
+        contextWindow: 300,
+        compactionSettings: { reserveTokens: 100, keepRecentTokens: 150 },
+      },
+    });
+    const longText = (seed: string) => seed.repeat(Math.ceil(400 / seed.length)).slice(0, 400);
+    const turn = async (question: string, ...handlers: LlmHandler[]) => {
+      for (const handler of handlers) llm.enqueue(handler);
+      const before = llm.requests.length;
+      await stream.append({ type: USER_MESSAGE, payload: { text: question } });
+      await run(
+        () =>
+          llm.requests.length === before + handlers.length && processor.state.run.phase === "idle",
+      );
+    };
+
+    await turn(longText("question one "), () => assistantStop(longText("alpha ")));
+    // Turn two crosses the threshold: summarize, then answer.
+    await turn(
+      longText("question two "),
+      () => assistantStop("## Goal\nfirst summary"),
+      () => assistantStop(longText("beta ")),
+    );
+    // Turn three crosses it again: the second summarize sees the first summary.
+    await turn(
+      longText("question three "),
+      () => assistantStop("## Goal\nmerged summary"),
+      () => assistantStop("final answer"),
+    );
+
+    expect(eventsOfType(COMPACTION_COMPLETED)).toHaveLength(2);
+    const secondSummarize = llm.requests.find((request) =>
+      request.messages[0]?.content.toString().includes("<previous-summary>"),
+    );
+    expect(secondSummarize?.messages[0]?.content).toContain("first summary");
+    // Exactly one summary survives in history — the merged one.
+    const summaries = processor.state.history.filter(
+      (entry) => entry.message.role === "compactionSummary",
+    );
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]?.message).toMatchObject({ summary: expect.stringContaining("merged") });
+  });
 });
 
 describe("pi processor: restarts and replay", () => {
@@ -603,6 +701,370 @@ describe("pi processor: restarts and replay", () => {
     expect(stream.events.length).toBe(eventCountBefore);
     expect(llm.requests.length).toBe(llmCallsBefore);
     expect(replayed.state).toEqual(processor.state);
+  });
+});
+
+/**
+ * Build a hand-rolled event journal for pure fold tests: no processor, no
+ * stream, no async — the state machine exercised event by event.
+ */
+function journal() {
+  const events: StreamEvent[] = [];
+  const push = (type: string, payload: Record<string, unknown>): number => {
+    events.push({
+      type,
+      payload,
+      createdAt: new Date(events.length + 1).toISOString(),
+      offset: events.length + 1,
+    });
+    return events.length;
+  };
+  return { events, push, state: () => reducePiEvents(events) };
+}
+
+describe("pi fold (pure unit tests)", () => {
+  it("walks a full turn through the state machine", () => {
+    const j = journal();
+    j.push(USER_MESSAGE, { text: "hi" });
+    expect(j.state()).toMatchObject({ pendingTrigger: true, run: { phase: "idle" } });
+
+    const requestOffset = j.push(LLM_REQUESTED, { generation: 0 });
+    expect(j.state()).toMatchObject({
+      pendingTrigger: false,
+      run: { phase: "streaming", llmRequestId: requestOffset },
+    });
+
+    j.push(ASSISTANT_ADDED, { llmRequestId: requestOffset, message: assistantStop("hello") });
+    expect(j.state()).toMatchObject({
+      generation: 1,
+      pendingTrigger: false,
+      run: { phase: "idle" },
+    });
+    expect(j.state().history.map((entry) => entry.message.role)).toEqual(["user", "assistant"]);
+  });
+
+  it("drives the tool loop: executing-tools, mixed terminate votes keep looping", () => {
+    const j = journal();
+    j.push(USER_MESSAGE, { text: "go" });
+    const requestOffset = j.push(LLM_REQUESTED, { generation: 0 });
+    const assistantOffset = j.push(ASSISTANT_ADDED, {
+      llmRequestId: requestOffset,
+      message: assistantToolUse([
+        { id: "t1", name: "a", arguments: {} },
+        { id: "t2", name: "b", arguments: {} },
+      ]),
+    });
+    expect(j.state().run).toMatchObject({
+      phase: "executing-tools",
+      pendingToolCallIds: ["t1", "t2"],
+    });
+
+    j.push(TOOL_RESULT, {
+      assistantOffset,
+      content: "done",
+      isError: false,
+      terminate: true,
+      toolCallId: "t1",
+      toolName: "a",
+    });
+    expect(j.state().run).toMatchObject({ phase: "executing-tools", pendingToolCallIds: ["t2"] });
+
+    // One terminate vote is not enough — pi ends the turn only when EVERY
+    // result terminates, so a mixed batch continues the loop.
+    j.push(TOOL_RESULT, {
+      assistantOffset,
+      content: "done",
+      isError: false,
+      toolCallId: "t2",
+      toolName: "b",
+    });
+    expect(j.state()).toMatchObject({ pendingTrigger: true, run: { phase: "idle" } });
+  });
+
+  it("queues while running: steering drains at the turn boundary, follow-ups only when stopping", () => {
+    const j = journal();
+    j.push(USER_MESSAGE, { text: "start" });
+    const r1 = j.push(LLM_REQUESTED, { generation: 0 });
+    j.push(USER_MESSAGE, { text: "steer", whileRunning: "steer" });
+    j.push(USER_MESSAGE, { text: "later", whileRunning: "follow-up" });
+    expect(j.state()).toMatchObject({ steeringQueue: ["steer"], followUpQueue: ["later"] });
+
+    j.push(ASSISTANT_ADDED, { llmRequestId: r1, message: assistantStop("first") });
+    // Steering entered history and re-triggered; the follow-up stays queued.
+    const drained = j.state();
+    expect(drained.steeringQueue).toEqual([]);
+    expect(drained.followUpQueue).toEqual(["later"]);
+    expect(drained.pendingTrigger).toBe(true);
+    expect(drained.history.at(-1)?.message).toEqual({ role: "user", content: "steer" });
+
+    const r2 = j.push(LLM_REQUESTED, { generation: 1 });
+    j.push(ASSISTANT_ADDED, { llmRequestId: r2, message: assistantStop("second") });
+    // Nothing left to do: now the follow-up drains and re-triggers.
+    expect(j.state()).toMatchObject({ followUpQueue: [], pendingTrigger: true });
+  });
+
+  it("an error response ends the run dead: queues stay queued, nothing re-triggers (pi semantics)", () => {
+    const j = journal();
+    j.push(USER_MESSAGE, { text: "start" });
+    const r1 = j.push(LLM_REQUESTED, { generation: 0 });
+    j.push(USER_MESSAGE, { text: "steer", whileRunning: "steer" });
+    j.push(ASSISTANT_ADDED, {
+      llmRequestId: r1,
+      message: {
+        role: "assistant",
+        content: [],
+        errorMessage: "provider exploded",
+        stopReason: "error",
+      },
+    });
+    expect(j.state()).toMatchObject({
+      pendingTrigger: false,
+      run: { phase: "idle" },
+      steeringQueue: ["steer"],
+    });
+  });
+
+  it("a stale request event retires its spent generation key", () => {
+    const j = journal();
+    j.push(USER_MESSAGE, { text: "hi" });
+    j.push("events.iterate.com/pi/abort-requested", {});
+    j.push(LLM_REQUESTED, { generation: 0 });
+    // abort: 0→1; stale request: 1→2 — the next derivation uses a fresh key.
+    expect(j.state()).toMatchObject({
+      generation: 2,
+      pendingTrigger: false,
+      run: { phase: "idle" },
+    });
+  });
+
+  it("compaction-requested is a no-op unless the run is settled idle", () => {
+    const j = journal();
+    j.push(USER_MESSAGE, { text: "hi" });
+    j.push(LLM_REQUESTED, { generation: 0 });
+    j.push("events.iterate.com/pi/compaction-requested", { reason: "threshold", tailOffset: 1 });
+    expect(j.state().compaction).toBeNull();
+  });
+
+  it("compaction splices by index, bumps the epoch, and fences the overflow retrigger on the generation", () => {
+    const makeJournal = (abortBeforeCompletion: boolean) => {
+      const j = journal();
+      j.push(USER_MESSAGE, { text: "one" });
+      const r1 = j.push(LLM_REQUESTED, { generation: 0 });
+      j.push(ASSISTANT_ADDED, { llmRequestId: r1, message: assistantStop("answer one") });
+      j.push(USER_MESSAGE, { text: "two" });
+      const requested = j.push("events.iterate.com/pi/compaction-requested", {
+        reason: "overflow",
+        tailOffset: 4,
+      });
+      if (abortBeforeCompletion) j.push("events.iterate.com/pi/abort-requested", {});
+      j.push("events.iterate.com/pi/compaction-completed", {
+        requestedOffset: requested,
+        result: {
+          status: "success",
+          firstKeptIndex: 2, // keep from "two" onward
+          summary: "## Goal\nsummarized",
+          tokensBefore: 123,
+        },
+      });
+      return j.state();
+    };
+
+    const completed = makeJournal(false);
+    expect(completed.history.map((entry) => entry.message.role)).toEqual([
+      "compactionSummary",
+      "user",
+    ]);
+    expect(completed.compactionEpoch).toBe(1);
+    expect(completed.pendingTrigger).toBe(true); // overflow recovery retries
+
+    // An abort between request and completion moves the generation, so the
+    // retry is suppressed — the user said stop.
+    const aborted = makeJournal(true);
+    expect(aborted.pendingTrigger).toBe(false);
+    expect(aborted.history.map((entry) => entry.message.role)).toEqual([
+      "compactionSummary",
+      "user",
+    ]);
+  });
+
+  it("a failed compaction parks on the history tail", () => {
+    const j = journal();
+    j.push(USER_MESSAGE, { text: "one" });
+    const requested = j.push("events.iterate.com/pi/compaction-requested", {
+      reason: "threshold",
+      tailOffset: 1,
+    });
+    j.push("events.iterate.com/pi/compaction-completed", {
+      requestedOffset: requested,
+      result: { status: "failure", error: { message: "summarizer down" } },
+    });
+    expect(j.state()).toMatchObject({
+      compaction: null,
+      compactionEpoch: 1,
+      compactionFailedForTailOffset: 1,
+    });
+  });
+});
+
+describe("pi settle policy (pure unit tests)", () => {
+  const baseState = (history: unknown[], overrides?: Record<string, unknown>) =>
+    PiProcessorContract.stateSchema.parse({
+      contextWindow: 300,
+      compactionSettings: { reserveTokens: 100, keepRecentTokens: 150 },
+      history,
+      ...overrides,
+    });
+  const userEntry = (offset: number, chars: number) => ({
+    offset,
+    message: { role: "user", content: "x".repeat(chars) },
+  });
+  const assistantEntry = (offset: number, chars: number) => ({
+    offset,
+    message: assistantStop("y".repeat(chars)),
+  });
+
+  it("requests threshold compaction only past contextWindow - reserveTokens, with a useful cut", () => {
+    expect(compactionToRequest(baseState([userEntry(1, 400), assistantEntry(2, 300)]))).toBeNull();
+    const over = baseState([
+      userEntry(1, 400),
+      assistantEntry(2, 400),
+      userEntry(3, 400),
+      assistantEntry(4, 400),
+    ]);
+    expect(compactionToRequest(over)).toEqual({ reason: "threshold", tailOffset: 4 });
+  });
+
+  it("requests overflow compaction for an unrecovered overflow error even under the threshold", () => {
+    // ~110 estimated tokens — well under the 200-token threshold — but the
+    // provider said overflow, so compaction happens anyway (small keep budget
+    // so a valid cut exists).
+    const history = [
+      userEntry(1, 200),
+      assistantEntry(2, 200),
+      userEntry(3, 40),
+      {
+        offset: 4,
+        message: {
+          role: "assistant",
+          content: [],
+          errorMessage: "prompt is too long: 210000 tokens",
+          stopReason: "error",
+        },
+      },
+    ];
+    const smallKeep = { compactionSettings: { reserveTokens: 100, keepRecentTokens: 20 } };
+    expect(compactionToRequest(baseState(history, smallKeep))).toEqual({
+      reason: "overflow",
+      tailOffset: 4,
+    });
+    expect(
+      compactionToRequest(baseState(history, { ...smallKeep, overflowRecoveryAttempted: true })),
+    ).toBeNull();
+  });
+
+  it("stays parked while the history tail has not moved past a failed compaction", () => {
+    const history = [
+      userEntry(1, 400),
+      assistantEntry(2, 400),
+      userEntry(3, 400),
+      assistantEntry(4, 400),
+    ];
+    expect(
+      compactionToRequest(baseState(history, { compactionFailedForTailOffset: 4 })),
+    ).toBeNull();
+    expect(compactionToRequest(baseState(history, { compactionFailedForTailOffset: 2 }))).toEqual({
+      reason: "threshold",
+      tailOffset: 4,
+    });
+  });
+
+  it("ignores usage anchors that predate the last compaction", () => {
+    // The kept assistant message reports the token count of the context that
+    // FORCED the compaction; trusting it would demand compaction forever.
+    const staleUsage = {
+      offset: 5,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "kept" }],
+        stopReason: "stop",
+        usage: { input: 250, output: 10, totalTokens: 260 },
+      },
+    };
+    const history = [
+      { offset: 9, message: { role: "compactionSummary", summary: "## Goal\nshort" } },
+      staleUsage,
+      userEntry(10, 40),
+    ];
+    expect(estimatePiContextTokens(baseState(history).history)).toBeLessThan(50);
+    expect(compactionToRequest(baseState(history))).toBeNull();
+  });
+
+  it("resolves lost tool calls from the assistant message that issued them", () => {
+    const state = baseState(
+      [
+        userEntry(1, 10),
+        {
+          offset: 3,
+          message: assistantToolUse([
+            { id: "t1", name: "read", arguments: {} },
+            { id: "t2", name: "bash", arguments: {} },
+          ]),
+        },
+      ],
+      {
+        run: {
+          phase: "executing-tools",
+          allResultsTerminate: true,
+          assistantOffset: 3,
+          pendingToolCallIds: ["t2"],
+        },
+      },
+    );
+    expect(lostToolCalls(state)).toEqual([{ toolCallId: "t2", toolName: "bash" }]);
+  });
+});
+
+describe("pi compaction helpers (pure unit tests)", () => {
+  it("cuts at a user message after the keep-recent walk, never inside a turn", () => {
+    const history = PiProcessorContract.stateSchema.parse({
+      history: [
+        { offset: 1, message: { role: "user", content: "a".repeat(400) } },
+        { offset: 2, message: assistantStop("b".repeat(400)) },
+        { offset: 3, message: { role: "user", content: "c".repeat(400) } },
+        { offset: 4, message: assistantStop("d".repeat(400)) },
+      ],
+    }).history;
+    // keep ~150 tokens: the walk stops inside turn 2, snaps forward to user@2.
+    expect(findCompactionCutIndex(history, 150)).toBe(2);
+    // Everything fits in the keep budget: nothing to compact.
+    expect(findCompactionCutIndex(history, 10_000)).toBeNull();
+  });
+
+  it("folds the previous summary into the next one instead of re-summarizing it", () => {
+    const state = PiProcessorContract.stateSchema.parse({
+      compactionSettings: { keepRecentTokens: 150 },
+      history: [
+        { offset: 5, message: { role: "compactionSummary", summary: "## Goal\nold summary" } },
+        { offset: 1, message: { role: "user", content: "a".repeat(400) } },
+        { offset: 2, message: assistantStop("b".repeat(400)) },
+        { offset: 3, message: { role: "user", content: "c".repeat(400) } },
+        { offset: 4, message: assistantStop("d".repeat(400)) },
+      ],
+    });
+    const plan = planCompaction(state);
+    expect(plan).toMatchObject({ firstKeptIndex: 3, previousSummary: "## Goal\nold summary" });
+    expect(plan?.entriesToSummarize.map((entry) => entry.offset)).toEqual([1, 2]);
+
+    const request = buildSummarizationRequest({ plan: plan!, state });
+    expect(request.messages[0]?.content).toContain("<previous-summary>");
+    expect(request.messages[0]?.content).toContain("old summary");
+  });
+
+  it("classifies overflow error messages", () => {
+    expect(isOverflowErrorMessage("prompt is too long: 210000 tokens > 200000")).toBe(true);
+    expect(isOverflowErrorMessage("input exceeds the available context size")).toBe(true);
+    expect(isOverflowErrorMessage("rate limit exceeded, too many tokens per minute")).toBe(false);
+    expect(isOverflowErrorMessage("internal server error")).toBe(false);
   });
 });
 

@@ -99,8 +99,9 @@ export type PiMessage = z.infer<typeof PiMessage>;
 
 /**
  * One history entry: a message tagged with the offset of the event that added
- * it. Offsets are the replay-stable message identity — compaction records its
- * cut point as a firstKeptOffset instead of an array index.
+ * it. The offset is provenance, not identity — a queue drain records several
+ * entries at one offset, and the compaction splice therefore addresses history
+ * by array index (the fold's order is the identity), never by offset.
  */
 export const PiHistoryEntry = z.object({
   message: PiMessage,
@@ -160,10 +161,12 @@ export const PiProcessorContract = defineProcessorContract({
     /** An LLM request should be issued once the run is idle and no compaction is in flight. */
     pendingTrigger: z.boolean().default(false),
     /**
-     * Count of finished LLM request lifecycles (completed or aborted).
-     * llm-request-requested idempotency is keyed on this, so every trigger
-     * derivation between two finishes collapses into one stream event at the
-     * append dedup layer.
+     * The staleness fence for LLM requests. It advances whenever a request
+     * lifecycle finishes AND whenever a request event is invalidated (an abort,
+     * or a request event that reduced to a stale no-op), so an
+     * llm-request-requested idempotency key — `pi/llm-request@generation:N` —
+     * is spent at most once and every re-derivation of the same trigger
+     * collapses into one stream event at the append dedup layer.
      */
     generation: z.number().int().nonnegative().default(0),
     /** The in-flight compaction, if any; LLM requests wait for it. */
@@ -171,12 +174,16 @@ export const PiProcessorContract = defineProcessorContract({
       .object({
         reason: PiCompactionReason,
         requestedOffset: z.number().int().positive(),
-        /** History tail offset the request was keyed on; failures park on it so a failed compaction is not retried until history grows. */
+        /** History tail offset at request time; failures park on it (see compactionFailedForTailOffset). */
         tailOffset: z.number().int().nonnegative(),
+        /** The generation when compaction was requested. An overflow-recovery completion only retriggers the LLM when this still matches — an abort in between wins. */
+        generation: z.number().int().nonnegative(),
       })
       .nullable()
       .default(null),
-    /** Set when a compaction failed for this history tail; cleared when history grows or a compaction succeeds. */
+    /** Count of finished compactions; part of the compaction-requested idempotency key so each attempt gets a fresh key. */
+    compactionEpoch: z.number().int().nonnegative().default(0),
+    /** Set when a compaction failed for this history tail; a new compaction is only attempted once the tail moves past it. */
     compactionFailedForTailOffset: z.number().int().nullable().default(null),
     /** pi's one-shot guard: an overflow error triggers compact-and-retry at most once until a request succeeds. */
     overflowRecoveryAttempted: z.boolean().default(false),
@@ -242,13 +249,13 @@ export const PiProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/pi/compaction-completed": {
       description:
-        "Compaction finished. On success the fold replaces everything before firstKeptOffset with a compactionSummary entry; an overflow-recovery success re-triggers the failed request.",
+        "Compaction finished. On success the fold replaces history before firstKeptIndex with a compactionSummary entry (index-addressed: history only ever appends at the tail while a compaction is in flight, so the index is stable); an overflow-recovery success re-triggers the failed request.",
       payloadSchema: z.object({
         requestedOffset: z.number().int().positive(),
         result: z.discriminatedUnion("status", [
           z.object({
             status: z.literal("success"),
-            firstKeptOffset: z.number().int().positive(),
+            firstKeptIndex: z.number().int().nonnegative(),
             summary: z.string(),
             tokensBefore: z.number().int().nonnegative(),
           }),
