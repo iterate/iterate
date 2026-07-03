@@ -54,18 +54,18 @@ export class AgentDurableObject extends DurableObject<Env> {
       new SlackAgentProcessor({
         ...deps,
         callSlackApi: async (method, body) => {
-          // The agent path carries the named connection
-          // (/agents/slack/{connection}/{channel}/ts-{ts}); without it there is
-          // no bot token to call with.
+          // Only best-effort UX side effects (reactions, thread status) ride
+          // this dep — the agent's actual REPLY goes through
+          // itx.integrations.slack in its script, which fails loudly on its
+          // own. The agent path carries the named connection
+          // (/agents/slack/{connection}/{channel}/ts-{ts}); without it there
+          // is no bot token, so skip rather than wedge the checkpoint.
           const connection = slackConnectionFromAgentPath(this.#name.path);
           if (connection === null) {
-            console.error(
-              "[slack-agent] no connection segment in agent path; skipping Slack call",
-              {
-                method,
-                path: this.#name.path,
-              },
-            );
+            console.error("[slack-agent] agent path carries no connection; skipping Slack call", {
+              method,
+              path: this.#name.path,
+            });
             return;
           }
           try {

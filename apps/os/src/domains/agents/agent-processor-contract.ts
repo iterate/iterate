@@ -28,7 +28,7 @@ const AGENT_SNIPPET_GUIDE = [
   "```js",
   "async (itx) => {",
   "  const connections = await itx.integrations.list().catch((e) => ({ error: String(e) }));",
-  '  if (!status.connected) { await itx.chat.sendMessage({ message: "..." }); return { status }; }',
+  '  if (!connections.length) { await itx.chat.sendMessage({ message: "..." }); return { connections }; }',
   '  const resp = await itx.integrations.google["jonas"].gmail.request({ /* ... */ }).catch((e) => ({ error: String(e) }));',
   "  if (resp.error) { /* ...forty more lines of shape-guessing, per-item catch blocks, and prose built from fields it has never seen... */ }",
   "}",

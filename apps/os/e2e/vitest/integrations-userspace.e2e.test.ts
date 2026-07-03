@@ -102,14 +102,22 @@ describe("provided integrations", () => {
 
       // …but not under the names the collection's own dispatch claims: a mount
       // there would be durable, journaled, and silently unreachable, so it is
-      // rejected loudly at provide time.
+      // rejected loudly at provide time. Both builtin slugs and the
+      // collection's own verbs are reserved.
       await expect(
         project.provideCapability({
           path: ["integrations", "slack", "shadow"],
           type: "live",
           capability: {},
         }),
-      ).rejects.toThrow(/built-in integrations slug/);
+      ).rejects.toThrow(/built-in integrations member/);
+      await expect(
+        project.provideCapability({
+          path: ["integrations", "list"],
+          type: "live",
+          capability: {},
+        }),
+      ).rejects.toThrow(/built-in integrations member/);
 
       // Two connections of one integration, secrets at the same fully
       // qualified paths a built-in would use.
@@ -193,7 +201,7 @@ describe("provided integrations", () => {
 
       // Built-ins stay strict: no implicit connection, unknown names stay loud.
       await expect(integrations.slack.chat.postMessage({ text: "hi" })).rejects.toThrow(
-        /expected a connection name/,
+        /use itx.integrations.list\(\) to see connections/,
       );
       await expect(integrations.ocado.family.searchProducts("milk")).rejects.toThrow(
         /no capability/,

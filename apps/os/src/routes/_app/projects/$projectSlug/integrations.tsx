@@ -65,9 +65,7 @@ function ProjectIntegrationsContent() {
         entries.map(async (entry) => ({
           ...entry,
           status:
-            entry.source === "builtin" &&
-            entry.connection !== null &&
-            (entry.integration === "slack" || entry.integration === "google")
+            entry.source === "builtin"
               ? await itx.integrations.getConnection({
                   connection: entry.connection,
                   provider: entry.integration,
@@ -77,8 +75,14 @@ function ProjectIntegrationsContent() {
       );
     },
   });
-  const slackConnections = (connections ?? []).filter((entry) => entry.integration === "slack");
-  const googleConnections = (connections ?? []).filter((entry) => entry.integration === "google");
+  // Narrow on `source` so the union guarantees a concrete connection name for
+  // every row the built-in cards render.
+  const builtinConnections = (connections ?? []).filter(
+    (entry): entry is ConnectionEntry & { connection: string; source: "builtin" } =>
+      entry.source === "builtin",
+  );
+  const slackConnections = builtinConnections.filter((entry) => entry.integration === "slack");
+  const googleConnections = builtinConnections.filter((entry) => entry.integration === "google");
   const providedConnections = (connections ?? []).filter((entry) => entry.source === "provided");
   const oauthErrorLabel = search.error ? search.error.replaceAll("_", " ") : null;
 
@@ -146,8 +150,8 @@ function ProjectIntegrationsContent() {
           <ItemContent className="min-w-0">
             <ItemTitle>Slack</ItemTitle>
             <ItemDescription>
-              {slackConnections.length > 0
-                ? `${slackConnections.length} connected workspace${slackConnections.length === 1 ? "" : "s"}`
+              {connectedCount(slackConnections) > 0
+                ? `${connectedCount(slackConnections)} connected workspace${connectedCount(slackConnections) === 1 ? "" : "s"}`
                 : "Connect a Slack workspace to receive project webhooks and use Slack API tools."}
             </ItemDescription>
             {slackConnections.map((entry) => (
@@ -156,7 +160,7 @@ function ProjectIntegrationsContent() {
                 entry={entry}
                 provider="slack"
                 disconnecting={disconnectSlack.isPending}
-                onDisconnect={() => entry.connection && disconnectSlack.mutate(entry.connection)}
+                onDisconnect={() => disconnectSlack.mutate(entry.connection)}
               />
             ))}
           </ItemContent>
@@ -175,8 +179,8 @@ function ProjectIntegrationsContent() {
           <ItemContent className="min-w-0">
             <ItemTitle>Google</ItemTitle>
             <ItemDescription>
-              {googleConnections.length > 0
-                ? `${googleConnections.length} connected account${googleConnections.length === 1 ? "" : "s"}`
+              {connectedCount(googleConnections) > 0
+                ? `${connectedCount(googleConnections)} connected account${connectedCount(googleConnections) === 1 ? "" : "s"}`
                 : "Connect Google for Gmail API tools."}
             </ItemDescription>
             {googleConnections.map((entry) => (
@@ -185,7 +189,7 @@ function ProjectIntegrationsContent() {
                 entry={entry}
                 provider="google"
                 disconnecting={disconnectGoogle.isPending}
-                onDisconnect={() => entry.connection && disconnectGoogle.mutate(entry.connection)}
+                onDisconnect={() => disconnectGoogle.mutate(entry.connection)}
               />
             ))}
           </ItemContent>
@@ -224,6 +228,11 @@ function ProjectIntegrationsContent() {
   );
 }
 
+/** Journals persist after disconnect; only status-connected entries count. */
+function connectedCount(entries: ConnectionEntry[]): number {
+  return entries.filter((entry) => entry.status?.connected).length;
+}
+
 function ConnectionRow({
   disconnecting,
   entry,
@@ -242,10 +251,12 @@ function ConnectionRow({
         <div className="truncate text-xs text-muted-foreground">{entry.path}</div>
         <IntegrationMetadata connection={entry.status ?? undefined} provider={provider} />
       </div>
-      <Button size="sm" variant="outline" disabled={disconnecting} onClick={onDisconnect}>
-        {disconnecting ? <Spinner /> : null}
-        Disconnect
-      </Button>
+      {entry.status?.connected ? (
+        <Button size="sm" variant="outline" disabled={disconnecting} onClick={onDisconnect}>
+          {disconnecting ? <Spinner /> : null}
+          Disconnect
+        </Button>
+      ) : null}
     </div>
   );
 }

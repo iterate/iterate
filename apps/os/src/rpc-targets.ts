@@ -106,6 +106,7 @@ import type {
   DynamicWorkerCollection,
   DynamicWorkerRef,
   GmailRequestInput,
+  IntegrationConnectionListEntry,
   ProjectIntegrations,
   SessionIntegrations,
 } from "./types.ts";
@@ -500,7 +501,7 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
       // skipped the connection — the pre-connections address shape.
       if (!connection || method.length < 2) {
         throw new Error(
-          'itx.integrations.slack expected a connection name (e.g. itx.integrations.slack["main-slack"].chat.postMessage(...)); use itx.integrations.list() to see connections.',
+          'itx.integrations.slack expected `<connection>.<two-segment Web API method>` (e.g. itx.integrations.slack["main-slack"].chat.postMessage({...})); use itx.integrations.list() to see connections.',
         );
       }
       const methodName = method.join(".");
@@ -520,7 +521,7 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
       // caller skipped the connection (the pre-connections itx.gmail shape).
       if (!connection || method.length < 2) {
         throw new Error(
-          'itx.integrations.google expected a connection name (e.g. itx.integrations.google["jonas"].gmail.request(...)); use itx.integrations.list() to see connections.',
+          'itx.integrations.google expected `<connection>.gmail.request({...})` (e.g. itx.integrations.google["jonas"].gmail.request({ path: "/users/me/messages" })); use itx.integrations.list() to see connections.',
         );
       }
       if (method[0] !== "gmail" || method[1] !== "request" || method.length !== 2) {
@@ -536,6 +537,11 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
       return await callGmailApi({ request: args[0] as GmailRequestInput, token });
     }
 
+    if (BUILTIN_INTEGRATION_SLUGS.has(slug)) {
+      throw new Error(
+        `builtin integration "${slug}" has no dispatch branch — add one in IntegrationsRpcTarget.invokeCapability`,
+      );
+    }
     return await this.#itx.invokeCapability({ args, path: ["integrations", ...path] });
   }
 
@@ -544,13 +550,13 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
       listIntegrationConnections(this.props.projectId),
       this.#itx.describeCapabilities(),
     ]);
-    const entries = [
-      ...journalConnections.map((entry) => ({
-        ...entry,
-        source: BUILTIN_INTEGRATION_SLUGS.has(entry.integration)
-          ? ("builtin" as const)
-          : ("provided" as const),
-      })),
+    const entries: IntegrationConnectionListEntry[] = [
+      ...journalConnections.map((entry): IntegrationConnectionListEntry => {
+        const { integration } = entry;
+        return integration === "slack" || integration === "google"
+          ? { ...entry, integration, source: "builtin" }
+          : { ...entry, source: "provided" };
+      }),
       ...mounted
         .filter((capability) => capability.path[0] === "integrations" && capability.path[1])
         .map((capability) => ({
@@ -1141,9 +1147,9 @@ const PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS: readonly CapabilityDescription[] 
         instructions: [
           "The project's integration connections, each at a fully qualified path /integrations/<slug>/<connection>.",
           "await itx.integrations.list() enumerates every connection (built-in and provided).",
-          'Slack: await itx.integrations.slack["<connection>"].chat.postMessage({ channel, thread_ts, text }) — any Slack Web API method as a dotted path.',
+          'Slack: await itx.integrations.slack["<connection>"].chat.postMessage({ channel, thread_ts, text }) — any Slack Web API method as a dotted path, always one body object.',
           'Gmail: await itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults, q: "in:inbox" } }) — paths relative to https://gmail.googleapis.com/gmail/v1.',
-          'Other names resolve through the project capability table: provideCapability({ path: ["integrations", "<slug>", "<connection>"], ... }) adds a project-owned integration with the same address shape.',
+          'Other names resolve through the project capability table: provideCapability({ path: ["integrations", "<slug>", "<connection>"], ... }) adds a project-owned integration with the same address shape — copy the known-good recipe from itx.examples.get({ id: "github-mcp-connect" }).',
         ].join("\n"),
         path: [path],
         type: "builtin" as const,
@@ -1155,11 +1161,15 @@ const PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS: readonly CapabilityDescription[] 
           "  path: string;",
           "  query?: Record<string, boolean | number | string | null | undefined>;",
           "};",
+          '// itx.integrations.google["<connection>"] exposes:',
           "interface GoogleConnection {",
           "  gmail: { request(input: GmailRequestInput): Promise<{ data: unknown; headers: Record<string, string>; status: number; statusText: string }> };",
           "}",
+          '// itx.integrations.slack["<connection>"] takes any Slack Web API method as a',
+          "// dotted path with ONE body argument; there is no request() wrapper:",
           "interface SlackConnection {",
-          "  request(input: { body?: Record<string, unknown>; method: string }): Promise<Record<string, unknown>>;",
+          "  chat: { postMessage(body: Record<string, unknown>): Promise<Record<string, unknown>> };",
+          "  // ...every other Web API method, same dotted shape",
           "}",
         ].join("\n"),
       };

@@ -690,7 +690,7 @@ return { login: me?.login ?? me, listed: await itx.integrations.list() };
     id: "github-webhooks-project-worker",
     title: "GitHub webhooks land on the project's own host",
     description:
-      "Per-project webhook ingress already exists: every project host routes to the repo-backed worker.js, whose fetch can append inbound deliveries to the connection's /integrations/github/{connection} journal — where a configured worker or agent subscriber picks them up. Point the GitHub repo/app webhook URL at https://<project-slug>.<base>/webhooks/github/<random-token> (the unguessable token in the path is the auth — worker code cannot hold the HMAC signing secret, by design). Reading material: commits worker.js, so run it interactively.",
+      "Per-project webhook ingress already exists: every project host routes to the repo-backed worker.js, whose fetch can append inbound deliveries to the connection's /integrations/github/{connection} journal — where a configured worker or agent subscriber picks them up. Point the GitHub repo/app webhook URL at https://<project-slug>.<base>/webhooks/github/<random-token> (the unguessable token in the path is the auth — worker code cannot hold the HMAC signing secret, by design). MUTATING: this REPLACES the seeded worker.js (homepage + app router) wholesale — merge the route into your existing fetch instead if you have one. Run it interactively.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `

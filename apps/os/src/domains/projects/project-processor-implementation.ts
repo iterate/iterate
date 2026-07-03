@@ -20,7 +20,7 @@ import {
 import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
 import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
 import { SlackAgentProcessorContract } from "../integrations/slack-agent-processor-contract.ts";
-import { isSlackAgentPath, slackConnectionFromAgentPath } from "../integrations/utils.ts";
+import { slackConnectionFromAgentPath } from "../integrations/utils.ts";
 import { isMcpAgentPath } from "../inbound-mcp-server/mcp-session-agent-path.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 
@@ -176,7 +176,9 @@ export class ProjectProcessor extends StreamProcessor<
             // The agent path picks the prompt (agentSystemPromptForPath);
             // Slack agents additionally get the slack-agent processor
             // subscription.
-            const isSlack = isSlackAgentPath(childPath);
+            // Slack-agent wiring requires the full thread shape — the
+            // connection segment is what replies authenticate with.
+            const isSlack = slackConnectionFromAgentPath(childPath) !== null;
             await this.deps.itx.streams.get(childPath).append(
               // Identical idempotency keys to the create-time onboarding birth
               // certificate, so whichever lane runs second dedupes cleanly.
@@ -259,8 +261,9 @@ export class ProjectProcessor extends StreamProcessor<
  * agents reply via their connection's Slack Web API, inbound MCP session agents via their blocked
  * ask_assistant call, everything else via web chat. */
 function agentSystemPromptForPath(agentPath: string) {
-  if (isSlackAgentPath(agentPath)) {
-    return slackAgentSystemPrompt(slackConnectionFromAgentPath(agentPath) ?? "default");
+  const slackConnection = slackConnectionFromAgentPath(agentPath);
+  if (slackConnection !== null) {
+    return slackAgentSystemPrompt(slackConnection);
   }
   if (isMcpAgentPath(agentPath)) return MCP_AGENT_SYSTEM_PROMPT;
   return DEFAULT_AGENT_SYSTEM_PROMPT;

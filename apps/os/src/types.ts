@@ -120,9 +120,10 @@ export interface Itx extends ItxCapabilityHost {
   egress: ProjectEgress;
   /** Read-only catalogue of known-good itx script snippets (`list()`, `get({ id })`). */
   examples: ItxExampleCatalog;
-  /** The integrations collection: built-in integrations as named members
-   * (`itx.integrations.slack["main-slack"].chat.postMessage(...)`), provided
-   * integrations through the capability table, management verbs, `list()`. */
+  /** The integrations collection: built-in integrations as dispatch branches
+   * on the dotted-call surface (`itx.integrations.slack["main-slack"].chat
+   * .postMessage(...)`), provided integrations through the capability table,
+   * management verbs, `list()`. */
   integrations: ProjectIntegrations;
   mcp: McpClientCollection;
   openapi: OpenApiCollection;
@@ -163,8 +164,13 @@ export interface Ai {
 // data, not deployment.
 // -----------------------------------------------------------------------------
 
-export type IntegrationProvider = "google" | "slack";
+/** The integration slugs whose call surfaces ship with the OS deployment
+ * (mirrored by BUILTIN_INTEGRATION_SLUGS in domains/integrations/utils.ts). */
+export type BuiltinIntegrationSlug = "google" | "slack";
 
+/** Input to `itx.integrations.google["<connection>"].gmail.request(...)` — a
+ * Gmail REST call relative to https://gmail.googleapis.com/gmail/v1; the
+ * response is `{ data, headers, status, statusText }`. */
 export type GmailRequestInput = {
   body?: unknown;
   headers?: Record<string, string>;
@@ -173,17 +179,6 @@ export type GmailRequestInput = {
   query?: Record<string, boolean | number | string | null | undefined>;
 };
 
-/** Gmail REST proxy for one Google connection
- * (`itx.integrations.google["jonas"].gmail.request({ path: "/users/me/messages" })`). */
-export interface GmailCapability {
-  request(input: GmailRequestInput): Promise<{
-    data: unknown;
-    headers: Record<string, string>;
-    status: number;
-    statusText: string;
-  }>;
-}
-
 export type IntegrationConnectionStatus = {
   connected: boolean;
   displayName: string | null;
@@ -191,18 +186,27 @@ export type IntegrationConnectionStatus = {
   metadata: Record<string, unknown>;
 };
 
-/** One entry of {@link ProjectIntegrations.list}. */
-export type IntegrationConnectionListEntry = {
-  /** The connection name; `null` for an integration-level provided mount (one
-   * recipe serving every connection name beneath it). */
-  connection: string | null;
-  integration: string;
-  /** The fully qualified connection path, e.g. `/integrations/slack/main-slack`. */
-  path: string;
-  /** Where the integration's code lives: shipped with the deployment, or
-   * mounted/implemented by the project. */
-  source: "builtin" | "provided";
-};
+/**
+ * One entry of {@link ProjectIntegrations.list}. Discriminated on `source`:
+ * built-in entries always name a concrete connection (they come from
+ * `/integrations/<slug>/<connection>` journals); provided entries may be
+ * integration-level mounts (`connection: null` — one recipe serving every
+ * connection name beneath it, path `/integrations/<slug>`).
+ */
+export type IntegrationConnectionListEntry =
+  | {
+      connection: string;
+      integration: BuiltinIntegrationSlug;
+      /** The fully qualified connection path, e.g. `/integrations/slack/main-slack`. */
+      path: string;
+      source: "builtin";
+    }
+  | {
+      connection: string | null;
+      integration: string;
+      path: string;
+      source: "provided";
+    };
 
 export type CompleteConnectResult =
   | { callbackUrl: string | null; ok: true }
@@ -224,28 +228,31 @@ export type CompleteConnectResult =
  */
 export interface ProjectIntegrations {
   /** Every connection the project holds: `/integrations/<slug>/<connection>`
-   * journals plus provided mounts from the capability table. */
+   * journals plus provided mounts from the capability table (deduped by path;
+   * a mount over its own webhook journal is one entry). */
   list(): Promise<IntegrationConnectionListEntry[]>;
+  /** The dotted-call surface. Slack methods are unary — one body object:
+   * `itx.integrations.slack["<connection>"].chat.postMessage({ ... })`. */
   invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
   /** Called by the app worker's OAuth callback route; authority is the
    * HMAC-signed OAuth state minted by startOAuthFlow. */
   completeConnect(input: {
     code: string;
-    provider: IntegrationProvider;
+    provider: BuiltinIntegrationSlug;
     state: string;
     userId: string | null;
   }): Promise<CompleteConnectResult>;
   disconnect(input: {
     connection: string;
-    provider: IntegrationProvider;
+    provider: BuiltinIntegrationSlug;
   }): Promise<{ success: true }>;
   getConnection(input: {
     connection: string;
-    provider: IntegrationProvider;
+    provider: BuiltinIntegrationSlug;
   }): Promise<IntegrationConnectionStatus>;
   startOAuthFlow(input: {
     callbackUrl?: string;
-    provider: IntegrationProvider;
+    provider: BuiltinIntegrationSlug;
     /** The user to bind the OAuth state to. Browser-supplied, not authority;
      * the callback's check against the signed state is the backstop. */
     userId: string;

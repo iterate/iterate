@@ -86,11 +86,27 @@ records `secret/used` audit events. There is **no fallback token** — a typo'd
 or disconnected connection name errors loudly instead of silently posting with
 a deployment-wide credential.
 
-Management verbs live on the collection and are connection-scoped:
-`startOAuthFlow({ provider, userId })`,
-`getConnection({ provider, connection })`,
-`disconnect({ provider, connection })`, and one provider-blind
-`completeConnect({ provider, code, state, userId })` for the OAuth callback.
+**Status is a journal tail-fold for both providers** — one machine, no
+per-provider mechanism: `getConnection` pages backwards from the journal head
+(`streamEventsNewestFirst`) and stops at the first lifecycle fact
+(connected/disconnected). Google's token state is the same fold with refresh
+events layering onto the connected fact across page boundaries. Nothing
+snapshots a processor: the slack router's whole state is its
+`channel:thread_ts → streamPath` routing table.
+
+**`list()` = journals ∪ mounts, deduped by path.** Every
+`/integrations/<slug>/<connection>` stream in the project's catalogue is one
+entry (`source: "builtin"` for slack/google, `"provided"` otherwise — the path
+shape is the truth, deliberately not filtered), plus every capability-table
+mount under `integrations` (`connection: null` for an integration-level
+mount). A provided integration whose webhooks journal at the same path as its
+mount is one entry. Journals persist after disconnect, so entries carry a
+status, not existence: the dashboard counts `status.connected`.
+
+Management verbs live on the collection: `getConnection` and `disconnect`
+are connection-scoped; `startOAuthFlow({ provider, userId })` and the
+provider-blind `completeConnect({ provider, code, state, userId })` are not —
+the connection name is _derived_ at completion, per above.
 Each provider contributes only its exchange half; the storage half (secrets by
 argument into Secret DOs, the connected fact, router arming, the directory
 claim) is the shared imperative `recordConnection(...)` helper — a function,
