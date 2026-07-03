@@ -1,4 +1,5 @@
 import type { Server } from "node:http";
+import { randomInt } from "node:crypto";
 import type { AddressInfo } from "node:net";
 
 const fetchForbiddenPorts = new Set([
@@ -9,16 +10,25 @@ const fetchForbiddenPorts = new Set([
   6697, 10080,
 ]);
 
-async function closeServer(server: Server): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
-    });
-  });
+const privateEphemeralPortMin = 49152;
+const privateEphemeralPortMax = 65535;
+
+function chooseFetchSafeEphemeralPort(): number {
+  for (let attempt = 1; attempt <= 100; attempt++) {
+    const port = randomInt(privateEphemeralPortMin, privateEphemeralPortMax + 1);
+    if (!fetchForbiddenPorts.has(port)) return port;
+  }
+
+  throw new Error("Could not choose a Fetch-safe ephemeral port");
+}
+
+function isAddressInUse(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "EADDRINUSE"
+  );
 }
 
 async function listenForTcpServer(
@@ -60,7 +70,13 @@ export async function listenOnFetchSafePort(
   }
 
   for (let attempt = 1; attempt <= 50; attempt++) {
-    await listenForTcpServer(server, { host, port });
+    const candidatePort = port === 0 ? chooseFetchSafeEphemeralPort() : port;
+    try {
+      await listenForTcpServer(server, { host, port: candidatePort });
+    } catch (error) {
+      if (port === 0 && isAddressInUse(error)) continue;
+      throw error;
+    }
 
     const address = server.address() as AddressInfo | string | null;
     if (!address || typeof address === "string") {
@@ -75,7 +91,7 @@ export async function listenOnFetchSafePort(
       };
     }
 
-    await closeServer(server);
+    throw new Error(`Selected Fetch-forbidden port ${String(address.port)}`);
   }
 
   throw new Error("Could not bind a Fetch-safe port after 50 attempts");
