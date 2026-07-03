@@ -150,6 +150,9 @@ export async function runVoiceBridge(options: BridgeOptions) {
   // The realtime API rejects a `response.create` while another response is
   // active, so worker reports queue until the current response finishes.
   let responseActive = false;
+  // Whether the in-flight response produced any audible output — a
+  // function-call-only response is silent, and silence needs handling.
+  let responseHadSpeech = false;
   const injectionQueue: (() => void)[] = [];
   const whenResponseIdle = (inject: () => void) => {
     if (responseActive) injectionQueue.push(inject);
@@ -244,6 +247,7 @@ export async function runVoiceBridge(options: BridgeOptions) {
         return;
       case "response.created":
         responseActive = true;
+        responseHadSpeech = false;
         // The VAD starting a response means the user's turn ended — forward
         // whatever transcript we have even if `.completed` never arrives.
         for (const itemId of turnTranscripts.keys()) forwardTurnFromItem(itemId);
@@ -302,6 +306,8 @@ export async function runVoiceBridge(options: BridgeOptions) {
             output: JSON.stringify({ status: "forwarded to worker; report will follow" }),
           },
         });
+        // A function-call-only response is silent; force an ack exactly then.
+        if (!responseHadSpeech) whenResponseIdle(() => sendResponseCreate());
         // In auto mode the turn was already forwarded verbatim — the tool call
         // is just the voice model agreeing with us. Only forward in tool mode.
         if (options.forward === "tool" && args.request) forwardTurn(args.request, "tool-call");
@@ -309,11 +315,13 @@ export async function runVoiceBridge(options: BridgeOptions) {
       }
       case "response.output_audio.delta":
       case "response.audio.delta":
+        responseHadSpeech = true;
         if (!options.text) speaker.play(String(event.delta));
         return;
       case "response.output_audio_transcript.delta":
       case "response.audio_transcript.delta":
       case "response.output_text.delta":
+        responseHadSpeech = true;
         printDelta(String(event.delta));
         return;
       case "input_audio_buffer.speech_started":
