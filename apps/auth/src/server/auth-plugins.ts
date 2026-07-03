@@ -1,5 +1,12 @@
 import { admin } from "better-auth/plugins/admin";
-import { bearer, deviceAuthorization, emailOTP, jwt, oneTimeToken } from "better-auth/plugins";
+import {
+  bearer,
+  deviceAuthorization,
+  emailOTP,
+  jwt,
+  multiSession,
+  oneTimeToken,
+} from "better-auth/plugins";
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { organization } from "better-auth/plugins/organization";
 import {
@@ -79,6 +86,7 @@ export function getAuthPlugins(options: AuthPluginOptions) {
     bearer(),
     admin(),
     organization(),
+    multiSession({ maximumSessions: 10 }),
     deviceAuthorization({
       verificationUri: "/device",
       expiresIn: "15m",
