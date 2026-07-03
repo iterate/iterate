@@ -22,6 +22,8 @@ jobs:
         run: pnpm exec oxlint . --fix --threads 1
       - name: fix format issues
         run: pnpm run format
+      - name: keep workflow definitions unchanged
+        run: git restore -- .github/workflows .depot/workflows
       - run: git diff
         if: always()
       - name: apply fixes

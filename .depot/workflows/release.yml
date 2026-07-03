@@ -31,6 +31,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          clean: false
           fetch-depth: 0
       - name: Set trigger context
         id: context
@@ -98,6 +99,9 @@ jobs:
 
           echo "echoing changes for debugging:"
           cat changelog.md
+      - name: Reconcile dependencies (baked)
+        if: steps.check_changes.outputs.commits != '0'
+        run: pnpm install --frozen-lockfile --prefer-offline
       - name: Create release
         if: steps.check_changes.outputs.commits != '0'
         env:
