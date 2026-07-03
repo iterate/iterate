@@ -32,12 +32,12 @@ export default workflow({
   },
   jobs: {
     deploy: {
-      ...utils.runsOnDepotUbuntu,
+      ...utils.runsOnDepotImage,
       steps: [
-        ...utils.getSetupRepo({
+        ...utils.setupFromImage({
           ref: "${{ inputs.ref || github.sha }}",
         }),
-        ...utils.setupDoppler({
+        ...utils.setupDopplerBaked({
           config: "prd",
           project: "tunnels",
         }),

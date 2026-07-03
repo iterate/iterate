@@ -84,7 +84,7 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   async commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult> {
     const parsed = parseCommitFilesInput(input);
-    const repo = await this.repoGitAccess();
+    const repo = await this.gitAccess();
     const result = await commitFilesToArtifactRepo({
       author: parsed.author,
       branch: parsed.branch ?? repo.defaultBranch,
@@ -108,7 +108,7 @@ export class RepoDurableObject extends DurableObject<Env> {
   /** Committed file contents at HEAD, or null when the path does not exist. */
   async readFile(input: { path: string }): Promise<RepoFileRead | null> {
     const path = normalizeRepoFilePath(input.path);
-    const repo = await this.repoGitAccess();
+    const repo = await this.gitAccess();
     const snapshot = await cloneRepoSnapshot({
       branch: repo.defaultBranch,
       remote: repo.remote,
@@ -125,7 +125,7 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   /** All committed file paths at HEAD. */
   async listFiles(): Promise<{ commitOid: string; paths: string[] }> {
-    const repo = await this.repoGitAccess();
+    const repo = await this.gitAccess();
     const snapshot = await cloneRepoSnapshot({
       branch: repo.defaultBranch,
       remote: repo.remote,
@@ -176,7 +176,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     // projection exists. We still keep it here as a lazy repair path for old
     // projects and freshly-created repos, so project creation does not need a new
     // repo/source-updated event just to seed the cache.
-    const repo = await this.repoGitAccess();
+    const repo = await this.gitAccess();
     const source = await readRepoWorkerSource({
       branch: input.branch,
       path: input.sourcePath,
@@ -261,7 +261,14 @@ export class RepoDurableObject extends DurableObject<Env> {
     };
   }
 
-  private async repoGitAccess() {
+  /**
+   * Clone coordinates for this repo: remote URL, a write token, and the
+   * default branch. Internal (DO-to-DO) surface — the sandbox domain uses it
+   * to clone the project repo into a container. It is deliberately NOT on the
+   * public `Repo` capability: itx callers get file-level methods, not raw
+   * artifact credentials.
+   */
+  async gitAccess(): Promise<{ defaultBranch: string; remote: string; token: string }> {
     const artifactName = this.artifactName();
     const artifacts = this.requireArtifacts();
     return {

@@ -6,21 +6,19 @@ on:
     branches:
       - main
   pull_request: {}
+  workflow_dispatch: {}
 jobs:
   lint-typecheck:
-    runs-on: depot-ubuntu-24.04
+    runs-on:
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
         with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
+          clean: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
       - name: Run Lint
         run: pnpm exec oxlint . --threads 1 --deny-warnings
       - name: Run Typecheck

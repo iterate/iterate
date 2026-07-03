@@ -10,6 +10,47 @@ export const runsOnDepotUbuntu = {
   "runs-on": "depot-ubuntu-24.04",
 };
 
+/**
+ * The baked Depot CI image (built by .depot/workflows/build-preview-ci-image.yml):
+ * node 24 + pnpm + the workspace `node_modules`/pnpm store + the Doppler CLI +
+ * the preview chromium, all pre-installed. Running a Depot CI job on it means
+ * the job skips `pnpm install` and the Doppler/chromium installs (fast), and
+ * Doppler is present so DOPPLER_TOKEN is the only secret the job needs (clean).
+ */
+export const DEPOT_CI_IMAGE =
+  "0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree";
+
+/**
+ * Run a Depot CI job on the baked {@link DEPOT_CI_IMAGE}. Depot extends
+ * `runs-on` with an object form (`{ image, size? }`) that the GitHub Actions
+ * types don't model, so the value is cast — the generator serializes the
+ * object into YAML unchanged.
+ */
+export const runsOnDepotImage = {
+  "runs-on": { image: DEPOT_CI_IMAGE } as unknown as string,
+};
+
+/**
+ * Lean setup for jobs on {@link DEPOT_CI_IMAGE}: checkout WITHOUT clean (so the
+ * baked `node_modules` survives), then a fast `pnpm install` that reconciles
+ * the PR's lockfile against the baked pnpm store — near-instant when deps are
+ * unchanged. No pnpm/node/Doppler install: they're in the image.
+ */
+export const setupFromImage = ({ ref }: { ref?: string } = {}) =>
+  [
+    {
+      name: "Checkout code",
+      ...uses("actions/checkout@v4", {
+        clean: false,
+        ref: ref ?? "${{ github.event.pull_request.head.sha || github.sha }}",
+      }),
+    },
+    {
+      name: "Reconcile dependencies (baked)",
+      run: "pnpm install --frozen-lockfile --prefer-offline",
+    },
+  ] as const satisfies Step[];
+
 /** checkout, setup pnpm, setup node, install dependencies. Accepts an optional ref override (e.g. for workflow_dispatch inputs). */
 export const getSetupRepo = ({ ref }: { ref?: string } = {}) =>
   [
@@ -62,6 +103,28 @@ export const setupDoppler = ({ config, project }: { config: DopplerConfigName; p
     installDopplerCli,
     {
       name: "Setup Doppler",
+      run: `doppler setup --config ${config} --project ${project}`,
+      env: {
+        DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+      },
+    },
+  ] as const satisfies Step[];
+
+/**
+ * Like {@link setupDoppler} but WITHOUT installing the CLI — for jobs on
+ * {@link DEPOT_CI_IMAGE}, which already has Doppler baked. Still runs
+ * `doppler setup` so a non-config-scoped DOPPLER_TOKEN knows which config to use.
+ */
+export const setupDopplerBaked = ({
+  config,
+  project,
+}: {
+  config: DopplerConfigName;
+  project: string;
+}) =>
+  [
+    {
+      name: "Setup Doppler (baked CLI)",
       run: `doppler setup --config ${config} --project ${project}`,
       env: {
         DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
