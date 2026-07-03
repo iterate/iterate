@@ -772,6 +772,84 @@ test("no-pointless-casts keeps casts that suppress excess property diagnostics",
   );
 });
 
+test("no-pointless-casts keeps casts that pin any-typed values", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/no-pointless-casts": "error",
+    },
+  });
+
+  const pinned = [
+    'const config = JSON.parse("{}") as { source: string };',
+    "console.log(config.source);",
+    'const configs = [JSON.parse("{}")] as { source: string }[];',
+    "console.log(configs.length);",
+    "export {};",
+    "",
+  ].join("\n");
+  fixture.write("pinned.ts", pinned);
+
+  fixture.runOxlint(["pinned.ts", "--fix"]);
+
+  // removing these casts would type-check (JSON.parse returns any), but the casts are what
+  // give the values a real type
+  assert.equal(fixture.read("pinned.ts"), pinned);
+});
+
+test("no-pointless-casts keeps casts that only matter to downstream files", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/no-pointless-casts": "error",
+    },
+  });
+
+  fixture.write(
+    "config.ts",
+    ["const config = {} as { name?: string };", "export { config };", ""].join("\n"),
+  );
+  fixture.write(
+    "consumer.ts",
+    ['import { config } from "./config.ts";', "", "export const name = config.name;", ""].join(
+      "\n",
+    ),
+  );
+
+  fixture.runOxlint(["config.ts", "--fix"]);
+
+  // removing the cast would leave `config` inferred as `{}`, breaking `config.name` in
+  // consumer.ts even though config.ts itself still type-checks
+  assert.equal(
+    fixture.read("config.ts"),
+    ["const config = {} as { name?: string };", "export { config };", ""].join("\n"),
+  );
+});
+
+test("no-pointless-casts removes exported casts that downstream files do not depend on", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/no-pointless-casts": "error",
+    },
+  });
+
+  fixture.write(
+    "config.ts",
+    ['export const config = { name: "iterate" } as { name: string };', ""].join("\n"),
+  );
+  fixture.write(
+    "consumer.ts",
+    ['import { config } from "./config.ts";', "", "export const name = config.name;", ""].join(
+      "\n",
+    ),
+  );
+
+  fixture.runOxlint(["config.ts", "--fix"]);
+
+  assert.equal(
+    fixture.read("config.ts"),
+    ['export const config = { name: "iterate" };', ""].join("\n"),
+  );
+});
+
 function getCallablePropertyNames(
   service: TypeAwareLintService,
   fileName: string,
@@ -827,6 +905,7 @@ function createOxlintFixture(input: { rules: Record<string, unknown> }) {
     JSON.stringify(
       {
         compilerOptions: {
+          allowImportingTsExtensions: true,
           lib: ["ES2022"],
           module: "ESNext",
           moduleResolution: "Bundler",

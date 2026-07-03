@@ -12,12 +12,7 @@ import {
   type Type,
 } from "@typescript/native-preview/unstable/sync";
 import type { CallExpression, Expression, Node } from "estree";
-import {
-  SyntaxKind,
-  type Expression as TsExpression,
-  type Node as TsNode,
-  type TypeNode,
-} from "@typescript/native-preview/unstable/ast";
+import type { Node as TsNode } from "@typescript/native-preview/unstable/ast";
 
 const IGNORED_DIRS = new Set([
   ".alchemy",
@@ -48,7 +43,6 @@ export class TypeAwareLintService {
   openFiles = new Set<string>();
   tsconfigFiles: string[] | undefined;
   projectByFile = new Map<string, Project | undefined>();
-  projectDiagnosticsByConfig = new Map<string, readonly Diagnostic[]>();
   mtimesByFile = new Map<string, number>();
   textByFile = new Map<string, string>();
   textChangedFiles = new Set<string>();
@@ -73,7 +67,6 @@ export class TypeAwareLintService {
     this.api = undefined;
     this.openFiles.clear();
     this.projectByFile.clear();
-    this.projectDiagnosticsByConfig.clear();
     this.mtimesByFile.clear();
     this.textByFile.clear();
     this.textChangedFiles.clear();
@@ -106,109 +99,39 @@ export class TypeAwareLintService {
     });
   }
 
-  getProjectDiagnosticsForFile(fileName: string) {
-    const absoluteFileName = resolve(fileName);
-    const fileService = this.getFileService(absoluteFileName);
-    if (!fileService) return [];
-
-    const cacheKey = getProjectDiagnosticsCacheKey(fileService.project);
-    if (this.textByFile.size === 0 && cacheKey) {
-      const cached = this.projectDiagnosticsByConfig.get(cacheKey);
-      if (cached) return cached;
-      const diagnostics = fileService.getProjectDiagnostics();
-      this.projectDiagnosticsByConfig.set(cacheKey, diagnostics);
-      return diagnostics;
+  getDiagnosticsForFiles(fileNames: readonly string[], options: { allProjects?: boolean } = {}) {
+    if (!options.allProjects) {
+      return fileNames.flatMap((fileName) => this.getFileService(fileName)?.getDiagnostics() || []);
     }
 
-    return fileService.getProjectDiagnostics();
-  }
-
-  getDiagnosticsForFiles(fileNames: readonly string[]) {
-    return fileNames.flatMap((fileName) => this.getFileService(fileName)?.getDiagnostics() || []);
-  }
-
-  getDiagnosticsForFileText(fileName: string, text: string) {
-    const absoluteFileName = resolve(fileName);
-    const hadPreviousText = this.textByFile.has(absoluteFileName);
-    const previousText = this.textByFile.get(absoluteFileName);
-
-    this.setFileText(absoluteFileName, text);
-    const diagnostics = this.getFileService(absoluteFileName)?.getDiagnostics() || [];
-
-    if (hadPreviousText) {
-      this.setFileText(absoluteFileName, previousText || "");
-    } else {
-      this.deleteFileText(absoluteFileName);
-    }
-
-    return diagnostics;
-  }
-
-  withFileTextDiagnostics<T>(
-    fileName: string,
-    callback: (getDiagnostics: (text: string) => readonly Diagnostic[]) => T,
-  ) {
-    const absoluteFileName = resolve(fileName);
-    const hadPreviousText = this.textByFile.has(absoluteFileName);
-    const previousText = this.textByFile.get(absoluteFileName);
-
-    try {
-      return callback((text) => {
-        this.setFileText(absoluteFileName, text);
-        return this.getFileService(absoluteFileName)?.getDiagnostics() || [];
+    // A file can be part of several programs with different compiler options and ambient types
+    // (e.g. apps/streams-example-app compiles apps/os sources via `~/*` path aliases), and can
+    // type-check in one but not another. Ask every project; non-members throw and are skipped.
+    const absoluteFileNames = fileNames.map((fileName) => resolve(fileName));
+    this.refreshSnapshotForChangedFiles(absoluteFileNames);
+    const projects = this.getSnapshot()
+      .getProjects()
+      .filter((project) => !isInferredProject(project));
+    return absoluteFileNames.flatMap((fileName) => {
+      let memberProjects = 0;
+      const diagnostics = projects.flatMap((project) => {
+        try {
+          const projectDiagnostics = [
+            ...project.program.getSyntacticDiagnostics(fileName),
+            ...project.program.getBindDiagnostics(fileName),
+            ...project.program.getSemanticDiagnostics(fileName),
+          ];
+          memberProjects++;
+          return projectDiagnostics;
+        } catch {
+          return []; // file is not part of this project
+        }
       });
-    } finally {
-      if (hadPreviousText) {
-        this.setFileText(absoluteFileName, previousText || "");
-      } else {
-        this.deleteFileText(absoluteFileName);
-      }
-    }
-  }
-
-  getProjectDiagnosticsForFileText(fileName: string, text: string) {
-    const absoluteFileName = resolve(fileName);
-    const hadPreviousText = this.textByFile.has(absoluteFileName);
-    const previousText = this.textByFile.get(absoluteFileName);
-
-    this.setFileText(absoluteFileName, text);
-    const diagnostics = this.getProjectDiagnosticsForFile(absoluteFileName);
-
-    if (hadPreviousText) {
-      this.setFileText(absoluteFileName, previousText || "");
-    } else {
-      this.deleteFileText(absoluteFileName);
-    }
-
-    return diagnostics;
-  }
-
-  withProjectDiagnosticsForFileText<T>(
-    fileName: string,
-    callback: (
-      getDiagnostics: (
-        text: string,
-        diagnosticFileNames?: readonly string[],
-      ) => readonly Diagnostic[],
-    ) => T,
-  ) {
-    const absoluteFileName = resolve(fileName);
-    const hadPreviousText = this.textByFile.has(absoluteFileName);
-    const previousText = this.textByFile.get(absoluteFileName);
-
-    try {
-      return callback((text, diagnosticFileNames) => {
-        this.setFileText(absoluteFileName, text);
-        if (diagnosticFileNames) return this.getDiagnosticsForFiles(diagnosticFileNames);
-        return this.getProjectDiagnosticsForFile(absoluteFileName);
-      });
-    } finally {
-      if (hadPreviousText) {
-        this.setFileText(absoluteFileName, previousText || "");
-      } else {
-        this.deleteFileText(absoluteFileName);
-      }
-    }
+      if (memberProjects > 0) return diagnostics;
+      // not in any tsconfig project: fall back to the default (possibly inferred) project so
+      // callers never mistake "no project checked this" for "no errors"
+      return this.getFileService(fileName)?.getDiagnostics() || [];
+    });
   }
 
   getSnapshot(): Snapshot {
@@ -226,7 +149,6 @@ export class TypeAwareLintService {
     if (this.openFiles.has(fileName)) return;
     this.openFiles.add(fileName);
     this.projectByFile.clear();
-    this.projectDiagnosticsByConfig.clear();
     this.updateSnapshot({
       openFiles: [...this.openFiles],
       openProjects: this.getTsconfigFiles(),
@@ -310,13 +232,18 @@ export class TypeAwareLintService {
   }
 
   refreshSnapshotForChangedFiles(fileNames: readonly string[]) {
+    // Flush ALL pending text overlays, not just the requested files': a stale overlay on file A
+    // would otherwise keep affecting types observed through any other file until A is next
+    // queried directly. Batching every pending change into one snapshot update also means
+    // set-text/restore-text pairs from overlay-based rules cost a single update.
     const changedFiles = [
       ...new Set([
-        ...this.drainTextChangedFiles(fileNames),
+        ...this.textChangedFiles,
         ...fileNames.filter((fileName) => this.hasFileChanged(fileName)),
       ]),
     ];
     if (changedFiles.length === 0) return;
+    this.textChangedFiles.clear();
 
     this.projectByFile.clear();
     this.updateSnapshot({
@@ -341,7 +268,6 @@ export class TypeAwareLintService {
       return false;
     }
     if (current === previous) return false;
-    this.projectDiagnosticsByConfig.clear();
     if (current === undefined) {
       this.mtimesByFile.delete(fileName);
     } else {
@@ -370,23 +296,6 @@ export class TypeAwareLintService {
     this.textChangedFiles.add(absoluteFileName);
     this.mtimesByFile.set(absoluteFileName, getFileMtime(absoluteFileName) ?? -1);
   }
-
-  deleteFileText(fileName: string) {
-    const absoluteFileName = resolve(fileName);
-    if (!this.textByFile.has(absoluteFileName)) return;
-    this.textByFile.delete(absoluteFileName);
-    this.textChangedFiles.add(absoluteFileName);
-    this.mtimesByFile.set(absoluteFileName, getFileMtime(absoluteFileName) ?? -1);
-  }
-
-  drainTextChangedFiles(fileNames: readonly string[]) {
-    const candidates = fileNames.map((fileName) => resolve(fileName));
-    const changedFiles = candidates.filter((fileName) => this.textChangedFiles.has(fileName));
-    for (const fileName of changedFiles) {
-      this.textChangedFiles.delete(fileName);
-    }
-    return changedFiles;
-  }
 }
 
 export class TypeAwareLintFileService {
@@ -394,7 +303,6 @@ export class TypeAwareLintFileService {
   _project: Project;
   service: TypeAwareLintService | undefined;
   snapshotVersion: number;
-  externalReferenceByRange = new Map<string, boolean>();
   externalReferenceFilesByRange = new Map<string, readonly string[] | undefined>();
 
   constructor(input: { fileName: string; project: Project; service?: TypeAwareLintService }) {
@@ -425,32 +333,6 @@ export class TypeAwareLintFileService {
     return this.getProject().checker.getTypeAtPosition(this.fileName, position);
   }
 
-  getTypeFromTypeNodeAtRange(range: readonly [number, number]) {
-    const node = this.findNativeNodeAtRange(range);
-    if (!node || !isTypeNode(node)) return undefined;
-    return this.getProject().checker.getTypeFromTypeNode(node as TypeNode);
-  }
-
-  getTypeFromSimpleTypeText(typeText: string, position: number) {
-    const checker = this.getProject().checker;
-    const trimmed = typeText.trim();
-
-    if (trimmed === "any") return checker.getAnyType();
-    if (trimmed === "unknown") return checker.getUnknownType();
-    if (trimmed === "string") return checker.getStringType();
-    if (trimmed === "number") return checker.getNumberType();
-    if (trimmed === "boolean") return checker.getBooleanType();
-    if (trimmed === "bigint") return checker.getBigIntType();
-    if (trimmed === "symbol") return checker.getESSymbolType();
-    if (trimmed === "void") return checker.getVoidType();
-    if (trimmed === "undefined") return checker.getUndefinedType();
-    if (trimmed === "null") return checker.getNullType();
-    if (trimmed === "never") return checker.getNeverType();
-    if (!trimmed.match(/^[A-Za-z_$][\w$]*$/)) return undefined;
-
-    return this.resolveTypeByName(trimmed, position)?.type;
-  }
-
   getDiagnostics(): readonly Diagnostic[] {
     const project = this.getProject();
     return [
@@ -460,57 +342,10 @@ export class TypeAwareLintFileService {
     ];
   }
 
-  getProjectDiagnostics(): readonly Diagnostic[] {
-    const project = this.getProject();
-    return [
-      ...project.program.getSyntacticDiagnostics(),
-      ...project.program.getBindDiagnostics(),
-      ...project.program.getSemanticDiagnostics(),
-      ...project.program.getGlobalDiagnostics(),
-      ...project.program.getProgramDiagnostics(),
-    ];
-  }
-
   getTypeAtNodeStart(node: Node) {
     const position = node.range?.[0];
     if (typeof position !== "number") return undefined;
     return this.getTypeAtPosition(position);
-  }
-
-  getTypeAtNodeLocation(node: Node) {
-    if (!node.range) return undefined;
-    const nativeNode = this.findNativeNodeAtRange(node.range);
-    if (!nativeNode) return undefined;
-    return this.getProject().checker.getTypeAtLocation(nativeNode);
-  }
-
-  getContextualTypeAtNodeLocation(node: Node) {
-    if (!node.range) return undefined;
-    const nativeNode = this.findNativeNodeAtRange(node.range);
-    if (!nativeNode) return undefined;
-    return this.getProject().checker.getContextualType(nativeNode as unknown as TsExpression);
-  }
-
-  getTypeAtNodeEnd(node: Node) {
-    const position = node.range?.[1];
-    if (typeof position !== "number") return undefined;
-    return this.getTypeAtPosition(Math.max(position - 1, 0));
-  }
-
-  areTypesEquivalent(left: Type, right: Type) {
-    if (isAnyOrUnknown(left) || isAnyOrUnknown(right)) {
-      return left.flags === right.flags;
-    }
-    const checker = this.getProject().checker;
-    return checker.isTypeAssignableTo(left, right) && checker.isTypeAssignableTo(right, left);
-  }
-
-  isTypeAssignableTo(source: Type, target: Type) {
-    return this.getProject().checker.isTypeAssignableTo(source, target);
-  }
-
-  isAnyType(type: Type) {
-    return Boolean(type.flags & TypeFlags.Any);
   }
 
   findNativeNodeAtRange(range: readonly [number, number]) {
@@ -519,15 +354,16 @@ export class TypeAwareLintFileService {
     return findSmallestContainingNode(sourceFile, range);
   }
 
-  hasExternalReferencesAtRange(range: readonly [number, number]) {
-    const cacheKey = rangeKey(range);
-    const cached = this.externalReferenceByRange.get(cacheKey);
-    if (cached !== undefined) return cached;
-
-    const referenceFiles = this.getExternalReferenceFilesAtRange(range);
-    const hasExternalReference = referenceFiles === undefined || referenceFiles.length > 0;
-    this.externalReferenceByRange.set(cacheKey, hasExternalReference);
-    return hasExternalReference;
+  // True when the node at the range is `any`, or a type with `any` somewhere inside it
+  // (`any[]`, `Promise<any>`, `Record<string, any>`), judged by its printed form.
+  isAnyLikeTypeAtRange(range: readonly [number, number]) {
+    const node = this.findNativeNodeAtRange(range);
+    if (!node) return false;
+    const checker = this.getProject().checker;
+    const type = checker.getTypeAtLocation(node);
+    if (!type) return false;
+    if (type.flags & TypeFlags.Any) return true;
+    return /\bany\b/.test(checker.typeToString(type));
   }
 
   getExternalReferenceFilesAtRange(range: readonly [number, number]) {
@@ -536,23 +372,33 @@ export class TypeAwareLintFileService {
       return this.externalReferenceFilesByRange.get(cacheKey);
     }
 
+    // find-references panics tsgo for files in inferred projects (files no tsconfig includes);
+    // undefined tells callers the references are unknowable
+    if (isInferredProject(this.getProject())) {
+      this.externalReferenceFilesByRange.set(cacheKey, undefined);
+      return undefined;
+    }
+
     const node = this.findNativeNodeAtRange(range);
     if (!node) return undefined;
 
     const entries = this.getProject().checker.getReferencedSymbolsForNode(node, range[0]);
     if (entries.length === 0) return undefined;
 
-    const referenceFiles = new Set<string>();
+    // An import of the symbol shows up as its own entry whose definition is the import
+    // specifier in the referencing file, so every definition and reference path counts.
+    // tsgo reports canonicalized (possibly lowercased) paths, so compare case-insensitively.
+    const selfKey = resolve(this.fileName).toLowerCase();
+    const referenceFiles = new Map<string, string>();
     for (const entry of entries) {
-      const definitionFileName = resolve(entry.definition.path);
-      if (definitionFileName !== this.fileName) continue;
-      for (const reference of entry.references) {
-        const referenceFileName = resolve(reference.path);
-        if (referenceFileName !== this.fileName) referenceFiles.add(referenceFileName);
+      for (const path of [entry.definition.path, ...entry.references.map((ref) => ref.path)]) {
+        const referenceFileName = resolve(path);
+        const key = referenceFileName.toLowerCase();
+        if (key !== selfKey) referenceFiles.set(key, referenceFileName);
       }
     }
 
-    const result = [...referenceFiles].sort();
+    const result = [...referenceFiles.values()].sort();
     this.externalReferenceFilesByRange.set(cacheKey, result);
     return result;
   }
@@ -577,12 +423,6 @@ export class TypeAwareLintFileService {
     const signature = this.getCallSignature(node);
     if (!signature) return undefined;
     return this.getProject().checker.getReturnTypeOfSignature(signature);
-  }
-
-  getCallParameterType(node: CallExpression, index: number) {
-    const signature = this.getCallSignature(node);
-    if (!signature) return undefined;
-    return this.getProject().checker.getParameterType(signature, index);
   }
 
   getCallSignature(node: CallExpression) {
@@ -626,10 +466,6 @@ function rangeKey(range: readonly [number, number]) {
   return `${range[0]}:${range[1]}`;
 }
 
-function isAnyOrUnknown(type: Type) {
-  return Boolean(type.flags & (TypeFlags.Any | TypeFlags.Unknown));
-}
-
 function findSmallestContainingNode(
   node: TsNode,
   range: readonly [number, number],
@@ -644,44 +480,8 @@ function findSmallestContainingNode(
   return match || node;
 }
 
-function isTypeNode(node: TsNode) {
-  return (
-    node.kind === SyntaxKind.AnyKeyword ||
-    node.kind === SyntaxKind.UnknownKeyword ||
-    node.kind === SyntaxKind.StringKeyword ||
-    node.kind === SyntaxKind.NumberKeyword ||
-    node.kind === SyntaxKind.BooleanKeyword ||
-    node.kind === SyntaxKind.BigIntKeyword ||
-    node.kind === SyntaxKind.SymbolKeyword ||
-    node.kind === SyntaxKind.ObjectKeyword ||
-    node.kind === SyntaxKind.VoidKeyword ||
-    node.kind === SyntaxKind.UndefinedKeyword ||
-    node.kind === SyntaxKind.NeverKeyword ||
-    node.kind === SyntaxKind.TypeReference ||
-    node.kind === SyntaxKind.UnionType ||
-    node.kind === SyntaxKind.IntersectionType ||
-    node.kind === SyntaxKind.TypeLiteral ||
-    node.kind === SyntaxKind.ArrayType ||
-    node.kind === SyntaxKind.TupleType ||
-    node.kind === SyntaxKind.LiteralType ||
-    node.kind === SyntaxKind.IndexedAccessType ||
-    node.kind === SyntaxKind.TypeOperator ||
-    node.kind === SyntaxKind.ParenthesizedType ||
-    node.kind === SyntaxKind.FunctionType ||
-    node.kind === SyntaxKind.ConstructorType ||
-    node.kind === SyntaxKind.ConditionalType ||
-    node.kind === SyntaxKind.MappedType ||
-    node.kind === SyntaxKind.TemplateLiteralType
-  );
-}
-
 function isInferredProject(project: Project | undefined) {
   return !project || project.configFileName === "/dev/null/inferred";
-}
-
-function getProjectDiagnosticsCacheKey(project: Project) {
-  if (isInferredProject(project)) return undefined;
-  return project.configFileName;
 }
 
 function findTsconfigFiles(root: string) {

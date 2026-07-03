@@ -1,1 +1,3 @@
 When creating new rules for this repo, usually they should be committed and pushed to a branch _before_ fixing newfound violations on pre-existing code. This is because we want to use CI going red as a way for humans to evaluate whether the rule is useful or not.
+
+`iterate/no-pointless-casts` is deliberately `"off"` in `.oxlintrc.json`: it verifies every removal by re-type-checking, which adds ~40s to a full-repo lint. The scheduled `Housekeeping` workflow (`.github/ts-workflows/workflows/housekeeping.ts`) runs it weekly via `scripts/remove-pointless-casts.ts` and maintains a PR with the verified removals (alongside any other slow cleanups that get added there). Run that script locally to apply it on demand.

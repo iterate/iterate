@@ -124,7 +124,7 @@
     "iterate/no-single-use-types": "error",
     "iterate/typed-no-floating-promises": "error",
     "iterate/mechanical-class-impl": "off",
-    "iterate/no-pointless-casts": "error",
+    "iterate/no-pointless-casts": "off",
     "prefer-const": "off",
     "iterate/prefer-const": "error",
     "iterate/isolated-codemode": [

@@ -1024,7 +1024,7 @@ const plugin: StrictPlugin = {
           },
           "ImportDeclaration[specifiers.length=0]": (node: any) => {
             const parentBody = (node.parent as Program).body;
-            const parentBodyIndex = parentBody.indexOf(node as any);
+            const parentBodyIndex = parentBody.indexOf(node);
             const nonSideEffectImportBefore = parentBody
               .slice(0, parentBodyIndex)
               .find((n) => n.type === "ImportDeclaration" && n.specifiers.length);
