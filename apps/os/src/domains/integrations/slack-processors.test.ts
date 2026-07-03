@@ -860,8 +860,8 @@ describe("compileBangCommand", () => {
       compileBangCommand({ channel: "C1", message: "!whoami", threadTs: "1.2" })?.code,
     ).toContain("await itx.whoami()");
     expect(
-      compileBangCommand({ channel: "C1", message: "<@U1> !describe", threadTs: "1.2" })?.code,
-    ).toContain("await itx.describe()");
+      compileBangCommand({ channel: "C1", message: "<@U1> !__describe", threadTs: "1.2" })?.code,
+    ).toContain("await itx.__describe()");
   });
 
   it("returns null for ordinary messages", () => {

@@ -83,43 +83,28 @@ export const SeedOAuthClientsEnv = z
     };
   });
 
-/**
- * Poll the candidate origins' OIDC discovery endpoints until one responds,
- * and return that origin. Candidates are tried in order each round, so the
- * preferred (fastest-to-provision) origin wins when both work, and a wedged
- * one only costs a single probe per round instead of the whole deploy.
- */
-async function waitForAuthDeployment(candidateBaseUrls: string[], timeoutMs = 120_000) {
+async function waitForAuthDeployment(baseUrl: string, timeoutMs = 120_000) {
+  const discoveryUrl = `${baseUrl.replace(/\/+$/, "")}/api/auth/.well-known/openid-configuration`;
   const deadline = Date.now() + timeoutMs;
   let lastError = "";
   while (Date.now() < deadline) {
-    for (const baseUrl of candidateBaseUrls) {
-      const discoveryUrl = `${baseUrl.replace(/\/+$/, "")}/api/auth/.well-known/openid-configuration`;
-      try {
-        const response = await fetch(discoveryUrl, { signal: AbortSignal.timeout(10_000) });
-        if (response.ok) return baseUrl;
-        lastError = `${discoveryUrl}: HTTP ${response.status}`;
-      } catch (error) {
-        lastError = `${discoveryUrl}: ${error instanceof Error ? error.message : String(error)}`;
-      }
+    try {
+      const response = await fetch(discoveryUrl, { signal: AbortSignal.timeout(10_000) });
+      if (response.ok) return;
+      lastError = `HTTP ${response.status}`;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
     }
     await new Promise((resolve) => setTimeout(resolve, 3_000));
   }
-  throw new Error(
-    `Auth deployment not reachable via ${candidateBaseUrls.join(", ")} — last error: ${lastError}`,
-  );
+  throw new Error(`Auth deployment at ${discoveryUrl} not reachable: ${lastError}`);
 }
 
 export async function seedOAuthClients(
   env: Record<string, string | undefined>,
-  // The PREFERRED URL to seed *through* (API calls + readiness probe). A fresh
-  // deploy passes the worker's workers.dev URL — it's live instantly, whereas
-  // a brand-new custom hostname can take minutes to issue an edge cert (which
-  // previously timed out the preview deploy). The custom-domain origin is
-  // always kept as a fallback candidate: workers.dev subdomains drift dead at
-  // the edge on some preview slots (same disease as the zombie zone routes),
-  // and the seed must not hard-depend on either origin being healthy. The
-  // seeded data (redirect URIs) is unaffected by which origin serves it.
+  // The reachable URL to seed *through* (API calls + readiness probe). Defaults
+  // to the configured auth app origin. The seeded data (redirect URIs) is
+  // unaffected by which deployed origin handles the admin request.
   opts: { baseUrl?: string } = {},
 ) {
   const parsed = SeedOAuthClientsEnv.safeParse(env);
@@ -127,15 +112,9 @@ export async function seedOAuthClients(
     throw new Error(`seed-oauth-clients env invalid: ${z.prettifyError(parsed.error)}`);
   }
   const { authAppOrigin, clients, serviceAuthToken } = parsed.data;
-  const preferred = opts.baseUrl?.trim();
-  const candidates = [...new Set([preferred, authAppOrigin].filter((url): url is string => !!url))];
+  const seedThroughUrl = opts.baseUrl?.trim() || authAppOrigin;
 
-  const seedThroughUrl = await waitForAuthDeployment(candidates);
-  if (preferred != null && seedThroughUrl !== preferred) {
-    console.warn(
-      `[seed-oauth-clients] preferred origin ${preferred} unreachable; seeding through ${seedThroughUrl}`,
-    );
-  }
+  await waitForAuthDeployment(seedThroughUrl);
 
   const authClient = createAuthContractClient({
     baseUrl: seedThroughUrl,

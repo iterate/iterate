@@ -186,12 +186,22 @@ await IterateRoutes({ app, slug: APP_NAME }, { worker, hostnames: alchemyEnv.WOR
 // Local dev (`alchemy dev`) skips this: the server isn't up until later — run
 // `pnpm seed-oauth-clients` against it manually if needed.
 if (!app.local && process.env.AUTH_SEED_OAUTH_CLIENTS) {
-  // Prefer the workers.dev URL, which is live immediately — a fresh custom
-  // hostname (auth.iterate-preview-N.com on its first deploy) can take
-  // minutes to get an edge cert, which would time out the readiness probe.
-  // The custom-domain origin stays as a fallback inside seedOAuthClients:
-  // some slots' workers.dev subdomains are dead at the edge (CF 1042s).
-  await seedOAuthClients(process.env, { baseUrl: worker.url });
+  const seedBaseUrls = Array.from(
+    new Set([primaryUrl, worker.url].filter((url): url is string => url != null && url !== "")),
+  );
+
+  for (const [index, baseUrl] of seedBaseUrls.entries()) {
+    try {
+      await seedOAuthClients(process.env, { baseUrl });
+      break;
+    } catch (error) {
+      if (index === seedBaseUrls.length - 1) throw error;
+      console.warn(
+        `OAuth client seed through ${baseUrl} failed; trying ${seedBaseUrls[index + 1]}`,
+        error,
+      );
+    }
+  }
 }
 
 export { worker };
