@@ -130,10 +130,10 @@ offline_access` + project-selection scope; RFC 8707 `resource` = the OS
 ## First-run notes for Misha
 
 1. `cd apps/mobile && npx expo run:ios --device` (needs Xcode; see README).
-2. Preview slots were all leased when CI ran — re-run the Preview workflow on
-   PR #1605, then point the app's server field at the assigned
-   `os.iterate-preview-N.com` (the preset says preview-5; correct it if the
-   slot differs).
+2. This PR's preview landed on `os.iterate-preview-8.com` (the app's default
+   preset) and its e2e suite — including the itx voice mint — passed there.
+   If the lease has expired by the time you try it, re-run the Preview
+   workflow and correct the server field to the newly assigned slot.
 3. Simulator + `pnpm dev` local server also works end-to-end (sign-in goes
    through the hosted dev auth worker).
 
