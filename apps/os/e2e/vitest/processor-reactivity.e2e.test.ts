@@ -20,7 +20,7 @@ test("project processor pushes offset-carrying snapshots and the handle pings wh
     secret: adminSecret(),
   });
   using project = itx.projects.create({ slug: `processor-reactivity-${RUN_SUFFIX}-${marker}` });
-  await project.describe();
+  await project.__describe();
 
   const pushes: ProcessorSnapshot<ProjectProcessorState>[] = [];
   using subscription = await project.processor.onStateChange(
@@ -77,7 +77,7 @@ test("a replaced stream subscription's old handle stops pinging true", async () 
   using project = itx.projects.create({
     slug: `stream-ping-${RUN_SUFFIX}-${marker}`,
   });
-  await project.describe();
+  await project.__describe();
 
   using stream = project.streams.get(`/e2e/stream-ping/${marker}`);
   const subscriptionKey = `e2e-ping-${marker}`;

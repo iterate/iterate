@@ -52,8 +52,8 @@ message through `pnpm cli itx agent-smoke` or
 
 - `events.iterate.com/openai-ws/llm-request-started`
 - `events.iterate.com/openai-ws/llm-request-completed`
-- `events.iterate.com/itx/script-execution-requested`
-- `events.iterate.com/itx/script-execution-completed`
+- `events.iterate.com/capability-host/script-execution-requested`
+- `events.iterate.com/capability-host/script-execution-completed`
 - `events.iterate.com/agents/web-message-sent`
 
 If raw provider transcript events dominate the stream before script execution

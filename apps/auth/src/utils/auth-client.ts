@@ -6,6 +6,7 @@ import {
   multiSessionClient,
 } from "better-auth/client/plugins";
 import { useRouteContext } from "@tanstack/react-router";
+import { getAuthAppOrigin } from "./auth-app-origin.ts";
 
 // Only the client plugins the UI actually calls: oauth2.* (consent flows),
 // device.* (CLI authorization), emailOtp.* (sign-in), and multiSession.* (the
@@ -13,7 +14,7 @@ import { useRouteContext } from "@tanstack/react-router";
 // typed oRPC client (utils/query.tsx), not better-auth's organization client
 // plugin.
 export const authClient = createAuthClient({
-  baseURL: import.meta.env.VITE_AUTH_APP_ORIGIN,
+  baseURL: getAuthAppOrigin(),
   plugins: [
     oauthProviderClient(),
     deviceAuthorizationClient(),

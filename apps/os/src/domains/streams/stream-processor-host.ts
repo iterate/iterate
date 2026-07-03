@@ -16,7 +16,7 @@
 //
 // This is the subscriber half of the configured-subscription handshake, which
 // is a live-capability provide — the same shape itx capabilities use (see
-// `domains/itx/live-capability.ts`): the Stream DO wakes this host with
+// `domains/capability-host/live-capability.ts`): the Stream DO wakes this host with
 // serializable coordinates only, and the host answers with the one public
 // `subscribe` verb (`configured: true` + its durable subscriptionKey), handing
 // the stream a live `processEventBatch` callback capability that the stream

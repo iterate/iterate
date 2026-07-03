@@ -34,19 +34,6 @@ describe("AppConfig", () => {
     ).toEqual("admin-api-secret-example");
   });
 
-  it("accepts the legacy top-level Slack bot token during migration", () => {
-    expect(
-      parseAppConfigFromEnv({
-        configSchema: AppConfig,
-        prefix: "APP_CONFIG_",
-        env: {
-          APP_CONFIG: JSON.stringify(baseConfig),
-          APP_CONFIG_SLACK_BOT_TOKEN: "xoxb-example",
-        },
-      }).slackBotToken?.exposeSecret(),
-    ).toEqual("xoxb-example");
-  });
-
   it("accepts structured Slack and Google integration runtime config", () => {
     const parsed = parseAppConfigFromEnv({
       configSchema: AppConfig,

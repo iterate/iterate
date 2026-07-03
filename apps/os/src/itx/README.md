@@ -22,7 +22,7 @@ chain, addresses — are an appendix, because you don't need them to act.
 
 ```ts
 // What am I holding? What can I call?
-await itx.describe();
+await itx.__describe();
 // → { context: "prj_…:/", access: ["prj_…"],
 //     capabilities: [{ name: "slack", kind: "rpc", instructions: "Use
 //       itx.slack.<Slack Web API method path>(args), e.g.
@@ -243,7 +243,7 @@ bare `fetch()` climbs the INVOKING context's chain — origin dial-back: shadow
 `fetch` on your extension and an inherited capability's outbound traffic
 lands in your shadow, while siblings and the parent are untouched.
 
-Context nodes are addressed the same way: the REF is the ItxDurableObject's
+Context nodes are addressed the same way: the REF is the CapabilityHostDurableObject's
 name, so `contextAddress(ref)` (`coordinates.ts`) is a pure projection;
 `dialContext` is the kernel restore, deliberately not allowlist-gated
 because only kernel code writes context refs.
@@ -269,7 +269,7 @@ coordinate** — `{ projectId, path }`, written as the REF `<projectId>:<path>`
   creation is get-or-create (exactly-once as a property of the fold, not of
   delivery — the standing doctrine,
   `docs/domain-objects-and-stream-processors.md`).
-- `provideCapability` APPENDS `events.iterate.com/itx/capability-provided`
+- `provideCapability` APPENDS `events.iterate.com/capability-host/capability-provided`
   (path-keyed payload: path, kind, full address, meta — which carries
   `instructions`/`types` — and owner) and then SELF-INGESTS through the one
   consumption door — read from the checkpoint, fold forward.
@@ -292,9 +292,9 @@ coordinate** — `{ projectId, path }`, written as the REF `<projectId>:<path>`
   appends the completed event — at-least-once reruns stay detectable via the
   requested/completed pair, and already-completed pairs are inert.
 
-## ⑥ The host: ItxDurableObject, and nothing else
+## ⑥ The host: CapabilityHostDurableObject, and nothing else
 
-**One host.** `ItxDurableObject` (`itx-durable-object.ts`) hosts EVERY
+**One host.** `CapabilityHostDurableObject` (`itx-durable-object.ts`) hosts EVERY
 context — project, agent, extension. It holds NO configuration:
 its DO **name IS the ref**, so identity, stream, and self-address are
 projections of the name; parentage folds from the birth certificate;
@@ -395,7 +395,7 @@ caps are public; then one core dispatch with `[...capabilityPath, "fetch"]`.
 | `coordinates.ts`        | the coordinate system | refs (`<namespace>:<path>`), context addresses, `dialContext`, `createContext` (subscription + birth certificate)                                                                                                          |
 | `dial.ts`               | reach                 | `makeDial` (allowlists, loader/facet wiring, prop injection), `durableObjectFacetsHook`, `resolveDialableTargets`                                                                                                          |
 | `platform-context.ts`   | the chain root        | `PlatformContext` (read-only code context), `PLATFORM_PROJECT_CAPABILITIES`, `getPlatformContext`                                                                                                                          |
-| `itx-durable-object.ts` | THE host              | `ItxDurableObject`: name = ref, the `itx` processor + subscription, descriptor from state, `itx()`                                                                                                                         |
+| `itx-durable-object.ts` | THE host              | `CapabilityHostDurableObject`: name = ref, the `itx` processor + subscription, descriptor from state, `itx()`                                                                                                              |
 | `handle.ts`             | the handle            | `ItxHandle` + built-ins, `CapabilityProvision`, the bare-function probe/wrap, `ItxProjects`                                                                                                                                |
 | `entrypoint.ts`         | restorer + egress     | `resolveItx`, `ItxEntrypoint` (env.ITERATE), `ProjectEgress` (globalOutbound), `EgressPipe`, `BindingCapability`                                                                                                           |
 | `isolate.ts`            | isolate wiring        | `wireIsolateEnv` — the one trust posture for every platform-loaded isolate                                                                                                                                                 |

@@ -148,8 +148,8 @@ const OPENAI_WS_REQUEST_STARTED = "events.iterate.com/openai-ws/llm-request-star
 const OPENAI_WS_RESPONSE_CHUNK = "events.iterate.com/openai-ws/llm-response-chunk";
 const CLOUDFLARE_AI_REQUEST_STARTED = "events.iterate.com/cloudflare-ai/llm-request-started";
 const CLOUDFLARE_AI_RESPONSE_CHUNK = "events.iterate.com/cloudflare-ai/llm-response-chunk";
-const ITX_SCRIPT_EXECUTION_REQUESTED = "events.iterate.com/itx/script-execution-requested";
-const ITX_SCRIPT_EXECUTION_COMPLETED = "events.iterate.com/itx/script-execution-completed";
+const SCRIPT_EXECUTION_REQUESTED = "events.iterate.com/capability-host/script-execution-requested";
+const SCRIPT_EXECUTION_COMPLETED = "events.iterate.com/capability-host/script-execution-completed";
 const CODEMODE_SCRIPT_EXECUTION_REQUESTED =
   "events.iterate.com/codemode/script-execution-requested";
 const CODEMODE_SCRIPT_EXECUTION_COMPLETED =
@@ -336,7 +336,7 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       }));
     }
 
-    case ITX_SCRIPT_EXECUTION_REQUESTED:
+    case SCRIPT_EXECUTION_REQUESTED:
     case CODEMODE_SCRIPT_EXECUTION_REQUESTED: {
       const payload = readPayloadRecord(event);
       const executionId =
@@ -353,7 +353,7 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       return { ...state, live: { ...live, steps: [...live.steps, step] } };
     }
 
-    case ITX_SCRIPT_EXECUTION_COMPLETED:
+    case SCRIPT_EXECUTION_COMPLETED:
     case CODEMODE_SCRIPT_EXECUTION_COMPLETED: {
       const payload = readPayloadRecord(event);
       if (payload == null || state.live == null) return state;

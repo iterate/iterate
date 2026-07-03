@@ -2,7 +2,7 @@
  * itx-react — the entire React surface for itx, in one file.
  *
  * `itx` is the project's capability handle: a capnweb `RpcStub` reached over ONE
- * WebSocket to `/api/itx[/<projectSlug>]`. This file is everything a component
+ * WebSocket to `/api[/<projectSlug>]`. This file is everything a component
  * needs to talk to the backend — the socket lifecycle AND the React primitives.
  *
  * FIVE primitives — two for GETTING the connection (in render vs imperatively),
@@ -85,10 +85,10 @@ import {
 import { useSuspenseQuery, type QueryKey } from "@tanstack/react-query";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import type {
-  Itx as ProjectItx,
   ProcessorSnapshot,
+  ProjectRpcTarget as ProjectItx,
   Session,
-  UnauthenticatedItx,
+  UnauthenticatedOs,
 } from "../types.ts";
 
 /**
@@ -97,8 +97,8 @@ import type {
  * intersection keeps the four primitives monomorphic — a wrong call for the
  * context fails at runtime exactly like a missing capability would.
  */
-type Itx = RpcStub<Session & ProjectItx>;
-export type { Itx as ItxReactHandle };
+type ItxHandle = RpcStub<Session & ProjectItx>;
+export type { ItxHandle as ItxReactHandle };
 
 /**
  * How you address an itx connection — a plain, comparable value (that's what lets
@@ -114,7 +114,7 @@ type ItxAddress = { projectId?: string; path?: string; baseUrl?: string };
 const DIAL_TIMEOUT_MS = 15_000;
 
 /** The connecting promise per context (a project slug, or `undefined` = global). */
-const sockets = new Map<string | undefined, Promise<Itx>>();
+const sockets = new Map<string | undefined, Promise<ItxHandle>>();
 /** Woken on any socket death so mounted readers (useSyncExternalStore) re-dial. */
 const listeners = new Set<() => void>();
 const wake = () => {
@@ -130,10 +130,10 @@ const subscribeSockets = (onChange: () => void) => {
  * until the socket dies — that's what `use()` and useSyncExternalStore need.
  * Browser-only: throws on the server rather than suspending forever.
  */
-function socketFor(context: string | undefined): Promise<Itx> {
+function socketFor(context: string | undefined): Promise<ItxHandle> {
   if (typeof window === "undefined") {
     throw new Error(
-      "itx is browser-only: it dials a WebSocket to /api/itx and never SSRs. " +
+      "itx is browser-only: it dials a WebSocket to /api and never SSRs. " +
         "Render itx consumers under an `ssr: false` route or inside <ClientOnly>.",
     );
   }
@@ -142,10 +142,10 @@ function socketFor(context: string | undefined): Promise<Itx> {
 
   // Context resolution is client-side: one endpoint, authenticate(), then
   // projects.get(<project id>) — the context key is a project ID, not a slug.
-  const url = new URL("/api/itx", window.location.href);
+  const url = new URL("/api", window.location.href);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(url);
-  const { promise, resolve, reject } = Promise.withResolvers<Itx>();
+  const { promise, resolve, reject } = Promise.withResolvers<ItxHandle>();
   // Keep an internal handler so a dial that rejects with no live awaiter (the
   // reader unmounted, or only the hook ever held it) never surfaces as an
   // unhandledrejection — real `connectItxBrowser()` awaiters still observe it.
@@ -159,9 +159,9 @@ function socketFor(context: string | undefined): Promise<Itx> {
     // on the WebSocket handshake, projects.get narrows to the project context.
     // The session/root stubs live as long as the socket; they are never
     // disposed individually.
-    const unauthenticated = newWebSocketRpcSession<UnauthenticatedItx>(ws);
+    const unauthenticated = newWebSocketRpcSession<UnauthenticatedOs>(ws);
     const root = unauthenticated.authenticate({ type: "from-server-cookie" });
-    resolve((context ? root.projects.get(context) : root) as unknown as Itx);
+    resolve((context ? root.projects.get(context) : root) as unknown as ItxHandle);
   });
   // `close` fires for a failed dial AND for a later death — either way the socket
   // is gone: drop the entry and wake readers so the next render re-dials.
@@ -231,7 +231,7 @@ function reconnectAllItx(): void {
 const ItxAddressContext = createContext<ItxAddress>({});
 
 /** Subscribe to the socket map, suspend until this context's socket connects. */
-function useSocket(context: string | undefined): Itx {
+function useSocket(context: string | undefined): ItxHandle {
   const promise = useSyncExternalStore(
     subscribeSockets,
     () => socketFor(context),
@@ -281,7 +281,7 @@ export function ItxProvider({
  *   const itx = useItx();
  *   const onSend = () => itx.chat.sendMessage({ text });
  */
-export function useItx(override?: ItxAddress): Itx {
+export function useItx(override?: ItxAddress): ItxHandle {
   const contextAddress = use(ItxAddressContext);
   return useSocket((override ?? contextAddress).projectId);
 }
@@ -321,7 +321,7 @@ export function useItx(override?: ItxAddress): Itx {
  * to land on that socket. Running outside render there is no provider context to
  * read: pass the address explicitly (defaults to global).
  */
-export function connectItxBrowser(address?: ItxAddress): Promise<Itx> {
+export function connectItxBrowser(address?: ItxAddress): Promise<ItxHandle> {
   return socketFor(address?.projectId);
 }
 
@@ -355,8 +355,8 @@ export function useItxQuery<T>({
   itx,
 }: {
   key: QueryKey;
-  query: (itx: Itx) => Promise<T>;
-  itx?: Itx;
+  query: (itx: ItxHandle) => Promise<T>;
+  itx?: ItxHandle;
 }): T {
   const fallback = useItx();
   const handle = itx ?? fallback; // an explicit { itx } override wins
@@ -412,9 +412,9 @@ export function useItxQuery<T>({
  * provider; `[itx]` is added to the deps internally.
  */
 function useItxEffect(
-  setup: (itx: Itx) => void | (() => void) | Promise<void | (() => void)>,
+  setup: (itx: ItxHandle) => void | (() => void) | Promise<void | (() => void)>,
   deps: unknown[],
-  opts?: { itx?: Itx },
+  opts?: { itx?: ItxHandle },
 ): void {
   const fallback = useItx();
   const itx = opts?.itx ?? fallback; // an explicit { itx } override wins
@@ -582,7 +582,7 @@ export type ItxSubscriptionStatus = "connecting" | "live" | "error";
  * nodes). `deps` re-subscribe when they change, like useItxEffect's.
  */
 export function useItxSubscription(
-  subscribe: (itx: Itx) => Promise<ItxLiveSubscriptionHandle>,
+  subscribe: (itx: ItxHandle) => Promise<ItxLiveSubscriptionHandle>,
   deps: unknown[],
   opts?: { enabled?: boolean },
 ): { status: ItxSubscriptionStatus; error?: string; refresh: () => void } {
@@ -684,7 +684,7 @@ export function useItxSubscription(
  */
 export function useItxState<State>(
   subscribe: (
-    itx: Itx,
+    itx: ItxHandle,
     setState: (snapshot: ProcessorSnapshot<State>) => void,
   ) => Promise<ItxLiveSubscriptionHandle>,
   deps: unknown[] = [],

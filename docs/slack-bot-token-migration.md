@@ -1,4 +1,4 @@
-# Slack bot token migration
+# Slack bot token config
 
 Use this when collecting or rotating the per-app Slack Bot User OAuth Token for
 OS Slack smoke testing.
@@ -19,8 +19,7 @@ Each Slack app should own its complete runtime config in
 
 OS Slack Web API calls use the connected project workspace bot token first. If
 a project has no connected Slack token, OS falls back to this environment's
-`APP_CONFIG_INTEGRATIONS__SLACK.botToken`. The old top-level
-`APP_CONFIG_SLACK_BOT_TOKEN` is a temporary legacy fallback only.
+`APP_CONFIG_INTEGRATIONS__SLACK.botToken`.
 
 `Niterate (CI bot)` is not the production Slack app. The production Slack app
 is `iterate`; `Niterate (CI bot)` is the visible identity associated with the

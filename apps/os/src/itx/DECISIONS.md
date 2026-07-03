@@ -405,7 +405,7 @@ One PR (deliberately breaking; prd gets redeployed), five moves:
   signed with the ADMIN API SECRET, with no consumer outside tests. Cap-host
   HTTP is now one switch: `meta.http.expose` (404 unless exposed; exposed
   answers anyone). `meta.http.public` died with the gate.
-- **A context IS a stream coordinate; ItxDurableObject is the ONLY host.**
+- **A context IS a stream coordinate; CapabilityHostDurableObject is the ONLY host.**
   Context ids (`itx_…`), the `itx_contexts` D1 directory, the reserved `itx`
   stream segment, and the embedded cores in the Project and Agent DOs are
   all deleted. Identity is the REF `<projectId>:<path>` — also the node's

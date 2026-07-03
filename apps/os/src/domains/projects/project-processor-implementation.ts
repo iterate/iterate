@@ -4,7 +4,7 @@ import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../strea
 import { PROJECT_REPO_PATH } from "../repos/utils.ts";
 import { PROJECT_REPO_ONBOARDING_MD } from "../repos/project-repo-template.ts";
 import type { StreamEvent, StreamListItem } from "../../types.ts";
-import type { ItxRpcTarget } from "../../rpc-targets.ts";
+import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   AgentProcessorContract,
@@ -17,7 +17,7 @@ import {
   DEFAULT_OPENAI_WS_MODEL,
   OpenAiWsProcessorContract,
 } from "../agents/openai-ws-processor-contract.ts";
-import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
+import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
 import { SlackAgentProcessorContract } from "../integrations/slack-agent-processor-contract.ts";
 import { SlackProcessorContract } from "../integrations/slack-processor-contract.ts";
@@ -30,7 +30,7 @@ const ONBOARDING_AGENT_PATH = "/agents/onboarding";
 /**
  * Agents under `/agents/slack/**` are Slack-thread agents: the slack webhook
  * router forwards raw thread webhooks to their stream, the `slack-agent`
- * processor transcribes them, and replies go out through the itx.slack Web
+ * processor transcribes them, and replies go out through the itx.integrations.slack Web
  * API capability instead of web chat.
  */
 export const SLACK_AGENT_SYSTEM_PROMPT = [
@@ -38,12 +38,12 @@ export const SLACK_AGENT_SYSTEM_PROMPT = [
   "Respond with exactly one fenced JavaScript code block and no surrounding prose.",
   "The code block must contain a single async arrow function: async (itx) => { ... }.",
   "Incoming Slack webhook events arrive as your inputs. Reply only when mentioned, directly asked, or clearly needed.",
-  "To reply in the thread, use await itx.slack.chat.postMessage({ channel, thread_ts, text }) with the channel and thread_ts from the incoming webhook payloads. Never use itx.chat.sendMessage for Slack replies.",
-  'If asked about email, Gmail, or an inbox, use the project Google integration: first check await itx.integrations.getConnection({ provider: "google" }), then call await itx.gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }). A connected Google account gives this Slack agent Gmail access through itx.gmail; do not claim you lack inbox access before checking it.',
+  "To reply in the thread, use await itx.integrations.slack.chat.postMessage({ channel, thread_ts, text }) with the channel and thread_ts from the incoming webhook payloads. Never use itx.chat.sendMessage for Slack replies.",
+  'If asked about email, Gmail, or an inbox, use the project Google integration: first check await itx.integrations.getConnection({ provider: "google" }), then call await itx.integrations.gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }). A connected Google account gives this Slack agent Gmail access through itx.integrations.gmail; do not claim you lack inbox access before checking it.',
   "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply — do not pattern-match response shapes blind or wrap calls in defensive try/catch (a raw thrown error is more useful to you). Use Promise.all to fan out independent calls concurrently.",
-  'Keep the thread in the loop on every working turn: when a script does real work, post a short progress note in the same Promise.all as the work itself — Promise.all([itx.slack.chat.postMessage({ channel, thread_ts, text: "Checking your email now..." }), itx.gmail.request(...)]) — so the thread is never silent while you fetch.',
+  'Keep the thread in the loop on every working turn: when a script does real work, post a short progress note in the same Promise.all as the work itself — Promise.all([itx.integrations.slack.chat.postMessage({ channel, thread_ts, text: "Checking your email now..." }), itx.integrations.gmail.request(...)]) — so the thread is never silent while you fetch.',
   "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
-  "Use project capabilities on itx when they are relevant: await itx.describe() lists them, and await itx.examples.list() / itx.examples.get({ id }) is a catalogue of known-good snippets.",
+  "Use project capabilities on itx when they are relevant: await itx.__describe() lists them (`children` is the member map, `capabilities` the inventory) — the same __describe() works on any node, including provided capabilities. await itx.examples.list() / itx.examples.get({ id }) is a catalogue of known-good snippets.",
 ].join("\n");
 
 /**
@@ -80,7 +80,7 @@ export class ProjectProcessor extends StreamProcessor<
   {
     /** Provider new agents are born with ("openai-ws" when the deployment has an OpenAI key). */
     defaultLlmProvider: AgentLlmProvider;
-    itx: ItxRpcTarget;
+    itx: ProjectRpcTarget;
   }
 > {
   readonly contract = ProjectProcessorContract;
@@ -147,8 +147,8 @@ export class ProjectProcessor extends StreamProcessor<
                     projectId: this.deps.itx.projectId,
                     path: "/",
                   }),
-                  processorSlug: ItxProcessorContract.slug,
-                  subscriberType: "itx",
+                  processorSlug: CapabilityHostProcessorContract.slug,
+                  subscriberType: "capability-host",
                 }),
                 {
                   type: "events.iterate.com/repo/create-requested",
@@ -272,7 +272,7 @@ export class ProjectProcessor extends StreamProcessor<
 }
 
 /** THE place the "agent path decides the reply door" rule lives: Slack thread
- * agents reply via itx.slack, inbound MCP session agents via their blocked
+ * agents reply via itx.integrations.slack, inbound MCP session agents via their blocked
  * ask_assistant call, everything else via web chat. */
 function agentSystemPromptForPath(agentPath: string) {
   if (isSlackAgentPath(agentPath)) return SLACK_AGENT_SYSTEM_PROMPT;
@@ -296,7 +296,7 @@ function agentBirthCertificateEvents(input: {
     projectId: input.projectId,
     path: input.childPath,
   });
-  const subscription = (processorSlug: string, subscriberType: "agent" | "itx") =>
+  const subscription = (processorSlug: string, subscriberType: "agent" | "capability-host") =>
     buildDurableObjectProcessorSubscriptionConfiguredEvent({
       durableObjectName,
       idempotencyKey: `stream/subscription-configured:${durableObjectName}#${processorSlug}`,
@@ -309,7 +309,7 @@ function agentBirthCertificateEvents(input: {
     // selected llmProvider answers llm-request-requested events.
     subscription(CloudflareAiProcessorContract.slug, "agent"),
     subscription(OpenAiWsProcessorContract.slug, "agent"),
-    subscription(ItxProcessorContract.slug, "itx"),
+    subscription(CapabilityHostProcessorContract.slug, "capability-host"),
     ...(input.slack ? [subscription(SlackAgentProcessorContract.slug, "agent")] : []),
     {
       type: "events.iterate.com/agent/config-updated" as const,
@@ -340,8 +340,8 @@ function agentBirthCertificateEvents(input: {
           "- Read the repo with itx.repo.readFile({ path }) and itx.repo.listFiles(); change it with itx.repo.commitFiles({ message, changes: [{ path, content }] }).",
           "- Other agents live at /agents/<name> (itx.agents.list() / itx.agents.get(path)); Slack thread agents appear under /agents/slack/<channel>/ts-<ts>; secrets under /secrets/**.",
           '- Streams are path-addressed: itx.streams.get(path).append(event) / getEvents() / waitFor(); path "/" is the project root stream.',
-          "- itx.describe() lists the capabilities currently available in your scope.",
-          '- If Google is connected, Gmail is available at itx.gmail. Check itx.integrations.getConnection({ provider: "google" }) and use itx.gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }) for inbox requests.',
+          "- itx.__describe() lists the capabilities currently available in your scope; __describe() works on every node (itx.integrations, itx.capabilityHost, any provided capability) when you need detail.",
+          '- If Google is connected, Gmail is available at itx.integrations.gmail. Check itx.integrations.getConnection({ provider: "google" }) and use itx.integrations.gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }) for inbox requests.',
         ].join("\n"),
         llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
       },
@@ -375,7 +375,7 @@ function addStreamListItem(items: StreamListItem[], item: StreamListItem): Strea
   return [...items, item].sort((a, b) => a.path.localeCompare(b.path));
 }
 
-async function waitForDefaultProjectWorker(itx: ItxRpcTarget): Promise<void> {
+async function waitForDefaultProjectWorker(itx: ProjectRpcTarget): Promise<void> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= PROJECT_WORKER_READY_ATTEMPTS; attempt += 1) {
     try {

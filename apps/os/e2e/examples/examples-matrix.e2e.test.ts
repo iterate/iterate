@@ -2,7 +2,7 @@
 // same entries the Examples panel shows) against a REAL deployed worker
 // (local dev server, preview, or production — whatever APP_CONFIG_BASE_URL
 // points at), through every server-side runtime of the itx
-// (/api/itx). The browser runtime runs the same catalogue in
+// (/api). The browser runtime runs the same catalogue in
 // examples-browser.test.ts; itx behavior itself is proven by
 // apps/os/e2e/itx/*.
 //
@@ -64,7 +64,7 @@ function ensureMatrixProject(): Promise<{ projectId: string }> {
   matrixSetupPromise ??= (async () => {
     using itx = connectGlobal();
     using project = itx.projects.create({ slug: PROJECT_SLUG });
-    const { projectId } = await project.describe();
+    const { projectId } = await project.__describe();
     await bakeProjectWorkerRunner({
       examples: MATRIX_EXAMPLES.filter((example) => example.runtimes.includes("project-worker")),
       projectId,

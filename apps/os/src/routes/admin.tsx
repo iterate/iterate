@@ -1,8 +1,8 @@
 // /admin — the platform admin area. Everything under this layout talks to the
 // platform through a ROOT itx handle: a Cap'n Web session on the global
-// context (/api/itx), not oRPC. The handle only has global authority (access
+// context (/api), not oRPC. The handle only has global authority (access
 // "all") when the request carries admin credentials — the admin-cookie bridge
-// (POST /api/itx/admin-cookie with the admin API secret) sets those for the
+// (POST /api/admin-cookie with the admin API secret) sets those for the
 // browser, since WebSockets cannot send Authorization headers. Until then the
 // layout shows an unlock form instead of its children.
 
@@ -99,7 +99,7 @@ type AdminAuthority =
 
 function AdminGate() {
   // The admin handle is the global itx socket — the SAME connection the rest of
-  // the tab uses (one browser itx primitive, one /api/itx route; see
+  // the tab uses (one browser itx primitive, one /api route; see
   // ~/itx/itx-react.tsx). Its global authority comes from the admin cookie on the
   // WebSocket handshake, so unlock re-dials the socket
   // (reconnectItx) and useItx re-suspends here, re-running the probe — no
@@ -155,7 +155,7 @@ function AdminUnlockForm({ reason, onUnlocked }: { reason: string; onUnlocked: (
     setSubmitting(true);
     setError(null);
     try {
-      const response = await fetch("/api/itx/admin-cookie", {
+      const response = await fetch("/api/admin-cookie", {
         body: secret.trim(),
         credentials: "same-origin",
         headers: { "content-type": "text/plain" },
