@@ -5,7 +5,7 @@ import { PROJECT_REPO_PATH } from "../../repos/utils.ts";
 import { normalizeCloudflareSandboxPath } from "./utils.ts";
 
 /** Where the project repo is cloned inside every sandbox container. */
-export const SANDBOX_PROJECT_REPO_DIR = "/workspace/repo";
+const SANDBOX_PROJECT_REPO_DIR = "/workspace/repo";
 
 /**
  * A project-scoped Cloudflare Sandbox: the `@cloudflare/sandbox` container

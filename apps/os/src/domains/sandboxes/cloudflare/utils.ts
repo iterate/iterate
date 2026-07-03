@@ -6,7 +6,7 @@ import { normalizePath } from "../../durable-object-names.ts";
  * takes the full path (`/sandboxes/cloudflare/whatever`), so a future provider
  * (`/sandboxes/<other>/...`) is a new prefix, not a new API.
  */
-export const CLOUDFLARE_SANDBOX_PATH_PREFIX = "/sandboxes/cloudflare/";
+const CLOUDFLARE_SANDBOX_PATH_PREFIX = "/sandboxes/cloudflare/";
 
 /**
  * The sandbox path is durable identity (it becomes the Durable Object name),
