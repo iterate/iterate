@@ -640,11 +640,14 @@ class AgentRpcTarget extends RpcTarget implements Agent {
   }
 
   async ask(input: Parameters<Agent["ask"]>[0]) {
-    const sent = await this.sendMessage(input.message);
+    const [sent] = await this.stream.append({
+      type: "events.iterate.com/agents/user-message-received",
+      payload: { content: input.message, origin: input.origin ?? "web" },
+    });
     return await this.stream.waitForEvent({
       afterOffset: sent.offset,
       eventTypes: ["events.iterate.com/agents/web-message-sent"],
-      timeoutMs: 45_000,
+      timeoutMs: input.timeoutMs ?? 45_000,
     });
   }
 

@@ -624,7 +624,8 @@ const PROJECT_STREAM_NAV_ITEMS: readonly ProjectStreamNavItemConfig[] = [
     streamPath: StreamPath.parse("/streams"),
     to: "/projects/$projectSlug/streams",
   },
-  // TODO: the /mcp page returns when the inbound MCP surface does.
+  // Inbound MCP sessions are agents at /agents/mcp/**, so they show up in the
+  // /agents tree above — no separate /mcp nav item.
 ];
 
 function ProjectStreamNavItem({
