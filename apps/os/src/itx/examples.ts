@@ -384,6 +384,55 @@ return described;
 `.trim(),
   },
   {
+    id: "secret-postman-echo",
+    title: "Use a stored secret in a Postman Echo request",
+    description:
+      "Stores a secret with Postman Echo on its egress allowlist, sends a request through itx.egress.fetch with a getSecret({ path }) header placeholder, and verifies that Postman Echo saw the substituted value while describe() still never exposes the material. External service, so run it interactively.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const secretPath = vars.secretPath ?? "/secrets/postman-echo";
+const material = "demo-" + (vars.note ?? "postman-echo-secret");
+const secret = itx.secrets.get(secretPath);
+
+await secret.update({
+  // Egress checks origins, so this allows any path on postman-echo.com.
+  egress: { urls: ["https://postman-echo.com/"] },
+  material,
+});
+
+// update() is durable immediately, but the secret processor folds the stream
+// asynchronously. Wait until the request path can see the new material.
+let before = await secret.describe();
+for (let attempt = 0; attempt < 50 && !before.hasMaterial; attempt += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  before = await secret.describe();
+}
+
+const response = await itx.egress.fetch(
+  new Request("https://postman-echo.com/get?source=itx-secret-example", {
+    headers: {
+      "x-itx-secret": \`Bearer getSecret({ path: "\${secretPath}" })\`,
+    },
+  }),
+);
+if (!response.ok) {
+  throw new Error(\`Postman Echo returned \${response.status}: \${await response.text()}\`);
+}
+
+const body = await response.json();
+const after = await secret.describe();
+const echoedSecret = body?.headers?.["x-itx-secret"];
+
+return {
+  echoedSecretMatches: echoedSecret === \`Bearer \${material}\`,
+  hasMaterial: after.hasMaterial,
+  materialLeakedInDescription: JSON.stringify(after).includes(material),
+  usedCount: after.audit.usedCount,
+};
+`.trim(),
+  },
+  {
     id: "journal-is-the-record",
     title: "The stream IS the record: provide, revoke, read it back",
     description:
@@ -461,6 +510,89 @@ const [search, pages] = await Promise.all([
 ]);
 
 return { pages, search };
+`.trim(),
+  },
+  {
+    id: "connect-public-mcp",
+    title: "Connect a public MCP server, then mount it",
+    description:
+      "itx.mcp.connect({ url }) opens any reachable MCP server as an ad-hoc capability target. Tool names become flat method calls on the returned client. Mount the same connection recipe as an itx-expression when you want agents and future sessions to discover it through describe() and call it as itx.publicMcp.<tool>(). External service, so run it interactively.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const mcpUrl = vars.mcpUrl ?? "https://mcp.exa.ai/mcp";
+
+// Ad-hoc client: no mount, no project event. You can call MCP tools directly
+// by their tool name on the returned client.
+const mcp = await itx.mcp.connect({ url: mcpUrl });
+const search = await mcp.web_search_exa({
+  query: vars.query ?? "Cloudflare Workers RPC capabilities",
+  numResults: 2,
+});
+
+// Durable mount: this records a capability recipe on the project scope so
+// describe() can teach agents that itx.publicMcp.web_search_exa(...) exists.
+await itx.provideCapability({
+  expression: ["mcp", ["connect", { url: mcpUrl }]],
+  instructions:
+    "Public MCP search client. Call itx.publicMcp.web_search_exa({ query, numResults }) or itx.publicMcp.web_fetch_exa({ urls, maxCharacters }).",
+  path: ["publicMcp"],
+  type: "itx-expression",
+});
+
+const mountedSearch = await itx.publicMcp.web_search_exa({
+  query: vars.query ?? "OpenAPI operationId example",
+  numResults: 1,
+});
+const mount = (await itx.describe()).capabilities.find(
+  (capability) => capability.path.join(".") === "publicMcp",
+);
+
+return {
+  adHocCalled: Boolean(search),
+  mountType: mount?.type,
+  mountedCalled: Boolean(mountedSearch),
+};
+`.trim(),
+  },
+  {
+    id: "connect-openapi-petstore",
+    title: "Connect OpenAPI Petstore, then mount it",
+    description:
+      "itx.openapi.connect({ specUrl }) fetches an OpenAPI document through project egress and returns a client whose methods are the spec's flat operationIds. This calls Swagger Petstore's findPetsByStatus operation, then registers the same OpenAPI connection as a durable capability at itx.petstore. External service, so run it interactively.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const petstoreSpecUrl =
+  vars.specUrl ?? "https://petstore3.swagger.io/api/v3/openapi.json";
+
+// Await the OpenAPI client, then call operationIds as methods. This is the
+// same operation as:
+//   await (await itx.openapi.connect({ specUrl: petstoreSpecUrl }))
+//     .findPetsByStatus({ status: "available" })
+const petstore = await itx.openapi.connect({ specUrl: petstoreSpecUrl });
+const availablePets = await petstore.findPetsByStatus({ status: "available" });
+
+// Mount the recipe when the client should become a named project capability.
+await itx.provideCapability({
+  expression: ["openapi", ["connect", { specUrl: petstoreSpecUrl }]],
+  instructions:
+    "Swagger Petstore OpenAPI client. Call itx.petstore.findPetsByStatus({ status: 'available' }) or any other operationId from the spec.",
+  path: ["petstore"],
+  type: "itx-expression",
+});
+
+const soldPets = await itx.petstore.findPetsByStatus({ status: "sold" });
+const mount = (await itx.describe()).capabilities.find(
+  (capability) => capability.path.join(".") === "petstore",
+);
+
+return {
+  availableCount: Array.isArray(availablePets) ? availablePets.length : null,
+  firstAvailableName: Array.isArray(availablePets) ? availablePets[0]?.name : undefined,
+  mountType: mount?.type,
+  soldCount: Array.isArray(soldPets) ? soldPets.length : null,
+};
 `.trim(),
   },
   {
