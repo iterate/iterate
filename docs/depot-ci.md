@@ -73,6 +73,49 @@ depot ci secrets remove NAME --org 0p91s0lz49
   (e.g. a cold-slot signup flake) does not block merge if the required checks
   (lint-typecheck, test, generate) are green.
 
+## Migrating a workflow to Depot CI
+
+Generated workflows live in `.github/ts-workflows/workflows/*.ts` and emit to
+`.github/workflows/` (GitHub Actions) or `.depot/workflows/` (Depot CI). The
+generator (`.github/ts-workflows/cli.ts`) routes a workflow to Depot when its
+name is in `DEPOT_WORKFLOW_NAMES`; it writes the yaml to `.depot/workflows/` and
+deletes the stale `.github/workflows/` copy on `pnpm workflows`.
+
+To move a workflow:
+
+1. Add its name to `DEPOT_WORKFLOW_NAMES` in `.github/ts-workflows/cli.ts`.
+2. Point the job at the **baked image** and drop the per-run installs — replace
+   `...utils.runsOnDepotUbuntu` + the checkout/pnpm/node/install steps with
+   `...utils.runsOnDepotImage` + `...utils.setupFromImage()`. The image
+   (`build-preview-ci-image.yml`) has node/pnpm/`node_modules`/Doppler/chromium
+   baked, so the job skips `pnpm install` and the Doppler install — that's the
+   speed — and `DOPPLER_TOKEN` becomes the only secret it needs — that's the
+   one-secret model (source Slack/bot tokens from Doppler, see `utils/slack.ts`).
+3. `pnpm workflows && pnpm --dir .github/ts-workflows build`.
+
+### The validation constraint (read before merging)
+
+**Depot registers a workflow's triggers only from the default branch.** A moved
+workflow therefore cannot be run on Depot from a branch — not via `pull_request`
+(unregistered), not via `depot ci dispatch` ("does not have workflow_dispatch
+trigger" until it's on `main`), and `depot ci run` can't apply the
+`.github`→`.depot` rename patch. So a migrated workflow is **only observable
+after it merges to `main`** and the next push/PR runs it.
+
+That makes this a **staged, watched rollout**, not a blind bulk move:
+
+1. Merge one workflow at a time (start with a non-required, low-risk one).
+2. Watch the first `main` push / PR run it on Depot; fix forward if the baked
+   image or `setupFromImage` reconcile misbehaves.
+3. Only then add the next workflow to `DEPOT_WORKFLOW_NAMES`.
+4. **Prod deploys (`deploy-*`, `release`) go last** and each gets validated in
+   isolation — a broken deploy on Depot has real blast radius.
+
+What _is_ verifiable up front: the image is consumable (`node`, `pnpm`,
+`doppler`, and a 2.6G `node_modules` are all present in a
+`runs-on: { image }` job — probed 2026-07-03), and the generated yaml + routing
+are correct.
+
 ## Docs
 
 - [Depot CI overview](https://depot.dev/docs/ci) ·
