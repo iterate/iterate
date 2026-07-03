@@ -53,12 +53,16 @@ export function CreateProjectForm() {
         waitUntilCreated: false,
         ...(input.organizationSlug ? { organizationSlug: input.organizationSlug } : {}),
       });
-      // ONE pipelined round trip, then navigate. The canonical slug (the auth
-      // worker may normalize the requested one) comes back on the same-socket
-      // list, which already sees the just-widened project.
-      const [description, entries] = await Promise.all([project.describe(), itx.projects.list()]);
-      const entry = entries.find((candidate) => candidate.id === description.projectId);
-      return { id: description.projectId, slug: entry?.slug ?? input.slug };
+      // ONE pipelined round trip, then navigate: describe() rides the create
+      // pipeline, so the only wait is create itself (auth registration +
+      // bootstrap appends). Deliberately NOT awaited here: projects.list() —
+      // it probes engine existence for every project the caller owns, which
+      // costs whole seconds and is exactly the "weird delay" this path had.
+      const description = await project.describe();
+      // The form validates strict kebab-case, so the auth worker's slug
+      // normalization is an identity for UI creates; the background task
+      // below still reconciles against the canonical record.
+      return { id: description.projectId, slug: input.slug };
     },
     onSuccess: (project) => {
       // Into the project IMMEDIATELY — the home page plays the creation
@@ -80,6 +84,19 @@ export function CreateProjectForm() {
         reconnectItx();
         await queryClient.invalidateQueries({ queryKey: projectsListQueryKey });
         await router.invalidate();
+        // Belt and braces: if the auth worker normalized the slug after all,
+        // hop to the canonical URL (the checklist state is server-side, so
+        // nothing is lost).
+        const itx = await connectItxBrowser();
+        const entry = (await itx.projects.list()).find((candidate) => candidate.id === project.id);
+        if (entry != null && entry.slug !== project.slug) {
+          void router.navigate({
+            to: "/projects/$projectSlug",
+            params: { projectSlug: entry.slug },
+            search: { welcome: true },
+            replace: true,
+          });
+        }
       })().catch(() => {
         // Claims catch up on the next token refresh regardless; the directory
         // fallback keeps the project usable in the meantime.
