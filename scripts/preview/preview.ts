@@ -2013,12 +2013,43 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
       APP_CONFIG_BASE_URL: streamsExampleOrigin,
     });
 
+    if (input.rotate) {
+      clearAuthPreviewJwks({ config, slot });
+    }
+
     console.log(
       `slot ${slot}: auth/${config} + os/${config} + streams-example-app/${config} ensured (client ${clientId})`,
     );
   }
 
   console.log("done");
+}
+
+function authPreviewJwksResetCommand(input: { config: string; slot: number }) {
+  return [
+    "run",
+    "--project",
+    "auth",
+    "--config",
+    input.config,
+    "--",
+    "pnpm",
+    "--dir",
+    "apps/auth",
+    "exec",
+    "wrangler",
+    "d1",
+    "execute",
+    `auth-preview-${input.slot}-auth-db`,
+    "--remote",
+    "--command",
+    "delete from jwks;",
+  ];
+}
+
+function clearAuthPreviewJwks(input: { config: string; slot: number }) {
+  runDoppler(authPreviewJwksResetCommand(input));
+  console.log(`slot ${input.slot}: cleared auth JWKS rows after Better Auth secret rotation`);
 }
 
 function runDoppler(args: string[], input?: string) {
@@ -3375,6 +3406,7 @@ export const previewInternals = {
   ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
   acquireAnyEnvironmentConfigLease,
   assignEnvironmentConfigLease,
+  authPreviewJwksResetCommand,
   claimEnvironmentConfigLease,
   classifyEnvironmentConfigLeases,
   classifyLeaseForReclaim,
