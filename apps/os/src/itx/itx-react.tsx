@@ -88,7 +88,6 @@ import type {
   Itx as ProjectItx,
   ProcessorSnapshot,
   Session,
-  StreamProcessorRpc,
   UnauthenticatedItx,
 } from "../types.ts";
 
@@ -657,26 +656,32 @@ export function useItxSubscription(
 }
 
 /**
- * THE page-data primitive: live reduced state from a stream processor — the
- * React spelling of `itx.processor.onStateChange(setState)`:
+ * THE page-data primitive: live reduced state from a stream processor. The
+ * callsite spells the whole subscription — nothing is called on your behalf:
  *
- *   const { state } = useItxState((itx) => itx.processor);
+ *   const { state } = useItxState((itx, setState) => itx.processor.onStateChange(setState), []);
  *   // state.secrets / state.repos / state.agents re-render as events land
  *
- * No cache keys, no query client, no separate initial fetch: subscribing to
- * `onStateChange` delivers the current checkpoint immediately (the server's
- * initial push IS the first paint) and every subsequent state change after.
- * Mutations need no invalidation — a mutation appends events, the processor
- * folds them, the push repaints the page.
+ * The hook only owns what a callsite can't: the state cell (`setState` is a
+ * plain setter EXCEPT it commits offset-monotonically, so a straggler push
+ * from a dying subscription can never roll state backwards) and
+ * {@link useItxSubscription}'s recovery. No cache keys, no query client, no
+ * separate initial fetch: `onStateChange` delivers the current checkpoint
+ * immediately (the server's initial push IS the first paint) and every state
+ * change after; mutations need no invalidation.
  *
- * `state` is `undefined` only between mount and the initial push (one round
- * trip on a warm socket); render a loading row for that window. Anything the
- * `select` closure captures that should re-subscribe (a secret path, a repo
- * path) goes in `deps`. Recovery is {@link useItxSubscription}'s;
- * `status`/`error`/`refresh` are its fields, passed through for status UI.
+ * `state` is `undefined` between mount and the initial push (one round trip
+ * on a warm socket); render a loading row for that window. Anything the
+ * subscribe closure captures that points the hook at a DIFFERENT processor
+ * (a secret path, a repo path) goes in `deps` — a deps change re-subscribes
+ * AND drops the held snapshot, so offsets from unrelated processors are
+ * never compared.
  */
 export function useItxState<State>(
-  select: (itx: Itx) => StreamProcessorRpc<State>,
+  subscribe: (
+    itx: Itx,
+    setState: (snapshot: ProcessorSnapshot<State>) => void,
+  ) => Promise<ItxLiveSubscriptionHandle>,
   deps: unknown[] = [],
 ): {
   state: State | undefined;
@@ -687,12 +692,18 @@ export function useItxState<State>(
 } {
   const [snapshot, setSnapshot] = useState<ProcessorSnapshot<State>>();
 
+  // deps change = this hook now points at a different processor: the old
+  // snapshot must not survive (its offsets are meaningless against the new
+  // processor's). Recovery re-subscribes (same processor) keep the snapshot —
+  // they come from useItxSubscription's internal epoch, not from deps.
+  useEffect(() => {
+    return () => setSnapshot(undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- caller's deps by design
+  }, deps);
+
   const subscription = useItxSubscription(
     (itx) =>
-      select(itx).onStateChange((pushed) => {
-        // Offset-monotonic commit: a straggler push from a dying subscription
-        // (or the initial push of a re-subscribe racing a live one) can never
-        // roll state backwards.
+      subscribe(itx, (pushed) => {
         setSnapshot((previous) =>
           previous !== undefined && previous.offset >= pushed.offset ? previous : pushed,
         );

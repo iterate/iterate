@@ -29,6 +29,7 @@ import { buildArtifactViewerUrl } from "~/lib/artifact-viewer-url.ts";
 import { formatRelativeTime } from "~/lib/format-relative-time.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { useItx, useItxState } from "~/itx/itx-react.tsx";
+import type { ProjectProcessorState } from "~/types.ts";
 
 const CreateRepoForm = z.object({
   path: z
@@ -80,7 +81,10 @@ function ProjectReposIndexContent() {
   });
   // The repos list is a slice of the project processor's reduced state; new
   // repos land here via the processor's state push, no invalidation needed.
-  const projectState = useItxState((itx) => itx.processor).state;
+  const projectState = useItxState<ProjectProcessorState>(
+    (itx, setState) => itx.processor.onStateChange(setState),
+    [],
+  ).state;
   const reposList = projectState?.repos;
   const createRepo = useMutation({
     mutationFn: async (input: { path: string }) => {

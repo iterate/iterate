@@ -8,6 +8,7 @@ import { ProjectSettingsPanel } from "~/components/project-settings-panel.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { useItxState } from "~/itx/itx-react.tsx";
+import type { ProjectProcessorState } from "~/types.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/")({
   ssr: false,
@@ -32,7 +33,10 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/")({
 function ProjectHomePage() {
   const params = Route.useParams();
   const { project, routeConfig } = Route.useLoaderData();
-  const lifecycle = useItxState((itx) => itx.processor);
+  const lifecycle = useItxState<ProjectProcessorState>(
+    (itx, setState) => itx.processor.onStateChange(setState),
+    [],
+  );
   const created = lifecycle.state?.created ?? false;
 
   return (

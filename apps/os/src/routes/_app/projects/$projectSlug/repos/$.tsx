@@ -15,6 +15,7 @@ import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
+import type { RepoProcessorState } from "~/types.ts";
 import { useItx, useItxQuery, useItxState } from "~/itx/itx-react.tsx";
 
 const CommitFileForm = z.object({
@@ -56,7 +57,10 @@ function ProjectRepoDetailContent() {
   // shows the repo processor's reduced state (live — commits and bootstrap
   // progress push in) plus whoami, and offers a minimal "commit file" form
   // via `repo.commitFiles`.
-  const repoProcessor = useItxState((itx) => itx.repos.get(repoPath).processor, [repoPath]);
+  const repoProcessor = useItxState<RepoProcessorState>(
+    (itx, setState) => itx.repos.get(repoPath).processor.onStateChange(setState),
+    [repoPath],
+  );
   const whoami = useItxQuery({
     key: ["repo-whoami", project.slug, repoPath],
     query: (itx) => itx.repos.get(repoPath).whoami(),

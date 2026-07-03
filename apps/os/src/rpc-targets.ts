@@ -1742,23 +1742,16 @@ export class StreamProcessorRpcTarget<
 
   async onStateChange(cb: (snapshot: ProcessorSnapshot<PublicState>) => unknown) {
     // Without a projection the remote callback goes straight to the processor,
-    // keeping full stub retention (dup/onRpcBroken). With one, deliveries pass
-    // through a projecting wrapper that forwards disposal; transport-brokenness
-    // cleanup then rides the delivery-rejection path alone, which is the
-    // guaranteed one (see StreamProcessor.onStateChange).
+    // keeping full stub retention. With one, deliveries pass through a
+    // projecting wrapper that forwards the WHOLE retention surface — dup (so
+    // the processor's retain duplicates the underlying remote stub, not the
+    // wrapper), disposal, and onRpcBroken — so a projected subscription lives
+    // exactly as long as an unprojected one.
     const publicState = this.#publicState;
     const target =
       publicState === undefined
         ? (cb as (snapshot: ProcessorSnapshot<ProcessorState<Contract>>) => unknown)
-        : Object.assign(
-            (snapshot: ProcessorSnapshot<ProcessorState<Contract>>) =>
-              cb({ offset: snapshot.offset, state: publicState(snapshot.state) }),
-            {
-              [Symbol.dispose]: () => {
-                (cb as Partial<Disposable>)[Symbol.dispose]?.();
-              },
-            },
-          );
+        : projectStateChangeCallback(cb, publicState);
     return new ProcessorStateSubscriptionRpcTarget(await this.#processor.onStateChange(target));
   }
 
@@ -1839,6 +1832,43 @@ class ProcessorRelayRpcTarget<State> extends RpcTarget implements StreamProcesso
   async waitUntilEvent(input: { offset: number; timeoutMs?: number }) {
     return await (await this.#processor()).waitUntilEvent(input);
   }
+}
+
+/**
+ * Wrap a state-change callback so every delivery is projected through
+ * `publicState`, WITHOUT losing the callback's RPC retention surface: `dup()`
+ * duplicates the underlying remote stub (re-wrapped, so the duplicate projects
+ * too), disposal releases it, and `onRpcBroken` forwards. This is what lets
+ * `StreamProcessor.onStateChange`'s retain machinery treat a projected remote
+ * callback exactly like a bare one.
+ */
+function projectStateChangeCallback<InternalState, PublicState>(
+  cb: (snapshot: ProcessorSnapshot<PublicState>) => unknown,
+  publicState: (state: InternalState) => PublicState,
+): (snapshot: ProcessorSnapshot<InternalState>) => unknown {
+  const retainable = cb as typeof cb &
+    Partial<Disposable> & {
+      dup?(): typeof cb;
+      onRpcBroken?(handler: (error: unknown) => void): void;
+    };
+  return Object.assign(
+    (snapshot: ProcessorSnapshot<InternalState>) =>
+      cb({ offset: snapshot.offset, state: publicState(snapshot.state) }),
+    {
+      ...(typeof retainable.dup === "function"
+        ? { dup: () => projectStateChangeCallback(retainable.dup!.call(retainable), publicState) }
+        : {}),
+      ...(typeof retainable.onRpcBroken === "function"
+        ? {
+            onRpcBroken: (handler: (error: unknown) => void) =>
+              retainable.onRpcBroken!.call(retainable, handler),
+          }
+        : {}),
+      [Symbol.dispose]: () => {
+        retainable[Symbol.dispose]?.();
+      },
+    },
+  );
 }
 
 /**

@@ -4,7 +4,7 @@ import { ActivityIcon, PlusIcon, RefreshCwIcon, RadioIcon } from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import type { StreamEvent } from "~/types.ts";
+import type { ProjectProcessorState, StreamEvent } from "~/types.ts";
 import {
   useItx,
   useItxState,
@@ -92,7 +92,10 @@ function ProjectReactivityPage() {
 function ProjectReactivityContent() {
   const { project } = Route.useLoaderData();
   const itx = useItx();
-  const live = useItxState((itx) => itx.processor);
+  const live = useItxState<ProjectProcessorState>(
+    (itx, setState) => itx.processor.onStateChange(setState),
+    [],
+  );
   const testStream = useReactivityTestStream();
   // Only ever read inside the append handlers — a ref avoids a render per click.
   const nextActionIdRef = useRef(1);

@@ -45,8 +45,8 @@ function ProjectSecretDetailContent() {
   // Live secret processor state (the public description — material stays
   // write-only server-side): rotations and every egress-gated use push an
   // updated audit trail into this page while it's open.
-  const { state: secret } = useItxState(
-    (itx) => itx.secrets.get(secretPath).processor,
+  const { state: secret } = useItxState<SecretDescription>(
+    (itx, setState) => itx.secrets.get(secretPath).processor.onStateChange(setState),
     [secretPath],
   );
 
