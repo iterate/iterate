@@ -114,7 +114,7 @@ export function ItxRepl({
             </div>
             {entries.map((entry, index) => (
               <div
-                key={index}
+                key={entry.id}
                 data-testid="itx-repl-entry"
                 data-status={entry.status}
                 data-entry-index={index}

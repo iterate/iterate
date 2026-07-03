@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineProcessorContract } from "../streams/stream-processor.ts";
+import { defineProcessorContract } from "../streams/processor-contracts.ts";
 import { ResolvedWorkerFileSource } from "./build-key.ts";
 import { WorkerBuildOptions } from "./schemas.ts";
 
