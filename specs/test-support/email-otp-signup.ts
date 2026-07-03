@@ -9,7 +9,7 @@ import { spinnerWaiter } from "middlewright";
  * (organization + first project in one form) → back to OS signed in.
  *
  * The lane only exists where the auth deployment enables it
- * (VITE_ENABLE_EMAIL_OTP_SIGNIN, default on for dev stages; OS mirrors it as
+ * (APP_CONFIG_EMAIL_OTP_ENABLED, default on for dev stages; OS mirrors it as
  * APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED) — check with
  * {@link startEmailOtpSignIn} and skip otherwise.
  *

@@ -31,7 +31,7 @@ test("creates a project and uses project streams through v4 ITX", async () => {
     secret: adminSecret(),
   });
   using project = itx.projects.create({ slug: `os-stream-smoke-${RUN_SUFFIX}-${marker}` });
-  const projectDescription = await project.describe();
+  const projectDescription = await project.__describe();
   using stream = project.streams.get(streamPath);
 
   const seen: StreamEvent[] = [];
@@ -92,7 +92,7 @@ test("stream subscribe replays history, tails live appends, and unsubscribes", a
     secret: adminSecret(),
   });
   using project = itx.projects.create({ slug: `os-stream-subscribe-${RUN_SUFFIX}-${marker}` });
-  const projectDescription = await project.describe();
+  const projectDescription = await project.__describe();
   using stream = project.streams.get(streamPath);
 
   const before = `before-${marker}`;
@@ -150,7 +150,7 @@ test("state-only stream subscribe pushes initial state immediately, then state a
     secret: adminSecret(),
   });
   using project = itx.projects.create({ slug: `os-stream-state-${RUN_SUFFIX}-${marker}` });
-  const projectDescription = await project.describe();
+  const projectDescription = await project.__describe();
   using stream = project.streams.get(streamPath);
 
   await stream.append({ type: STREAM_EVENT_TYPE, payload: { marker: `seed-${marker}` } });
@@ -195,7 +195,7 @@ test("stream rules cross-post matching events with source provenance", async () 
     secret: adminSecret(),
   });
   using project = itx.projects.create({ slug: `os-stream-cross-post-${RUN_SUFFIX}-${marker}` });
-  const projectDescription = await project.describe();
+  const projectDescription = await project.__describe();
   using source = project.streams.get(sourcePath);
   using target = project.streams.get(targetPath);
 

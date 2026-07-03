@@ -10,7 +10,7 @@ OS is an authenticated app where users manage organization-owned projects and ru
 > Objects, `ProjectIngressEntrypoint`, Fetch Callables — refer to DELETED
 > code. The engine (`apps/os/src/`) addresses Durable Objects via
 > `DurableObjectNameCodec` (`{projectId: string | null, path}`), serves one
-> capnweb surface at `/api/itx` (context selection happens via
+> capnweb surface at `/api` (context selection happens via
 > `projects.get(id)` after `authenticate()`), and routes project hosts through
 > `src/ingress.ts` + the api worker. See `apps/os/src/README.md`
 > for current language.
@@ -645,7 +645,7 @@ _Avoid_: Project MCP route, inbound MCP
 - A remote OAuth MCP client calls OS with an **OAuth Access Token**.
 - First-party or e2e MCP clients should use either an **OAuth Access Token** or the OS admin API secret.
 - A **Script** receives an **itx Handle**.
-- A **Script Execution** is identified by `executionId` on `events.iterate.com/itx/script-execution-requested` and `events.iterate.com/itx/script-execution-completed`.
+- A **Script Execution** is identified by `executionId` on `events.iterate.com/capability-host/script-execution-requested` and `events.iterate.com/capability-host/script-execution-completed`.
 - The runner accepts one script shape: `async (itx) => ...`. Endpoint-specific vars are baked into the source before it reaches the runner.
 - `/api/itx/run` records requested/completed script events around a synchronous run; an enqueued requested event asks the context processor to run it later.
 - Individual itx capability calls do not create durable function-call-requested/completed events. The dotted path is captured by the path proxy and dispatched once through the itx supervisor.

@@ -12,10 +12,8 @@ import { z } from "zod/v4";
  * be unwrapped with `.exposeSecret()` and never serialize their value. Plain
  * fields (allowlists) are server-only but not secret.
  *
- * Note: the browser bundle's own origin still comes from the build-time
- * `import.meta.env.VITE_AUTH_APP_ORIGIN` (utils/auth-client.ts, utils/query.tsx)
- * — that is a Vite-inlined client concern, separate from this runtime config,
- * the same way apps/os keeps `VITE_APP_STAGE` as a build var.
+ * Note: the browser bundle's own origin is inlined from
+ * `APP_CONFIG_AUTH_APP_ORIGIN` by vite.config.ts.
  */
 export const AppConfig = z.object({
   /** Public origin the auth worker is served from — better-auth `baseURL`, CORS

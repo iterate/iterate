@@ -6,10 +6,10 @@ declare namespace Cloudflare {
 	}
 	interface Env {
 		ASSETS: Fetcher;
-		ITERATE_OAUTH_ISSUER: string;
-		ITERATE_OAUTH_CLIENT_ID: string;
-		ITERATE_OAUTH_CLIENT_SECRET: string;
-		ITERATE_OAUTH_REDIRECT_URI: string;
+		APP_CONFIG_ITERATE_AUTH__ISSUER: string;
+		APP_CONFIG_ITERATE_AUTH__CLIENT_ID: string;
+		APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET: string;
+		APP_CONFIG_ITERATE_AUTH__REDIRECT_URI: string;
 	}
 }
 interface Env extends Cloudflare.Env {}

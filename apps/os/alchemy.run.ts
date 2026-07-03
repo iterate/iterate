@@ -26,7 +26,7 @@ import { slugify } from "@iterate-com/shared/slugify";
 import { ensureLocalDevOAuthClient } from "./src/auth/dev-oauth-client-bootstrap.ts";
 import { AppConfig } from "./src/config.ts";
 import type { AgentDurableObject } from "./src/domains/agents/agent-durable-object.ts";
-import type { ItxDurableObject } from "./src/domains/itx/itx-durable-object.ts";
+import type { CapabilityHostDurableObject } from "./src/domains/capability-host/capability-host-durable-object.ts";
 import type { ProjectDurableObject } from "./src/domains/projects/project-durable-object.ts";
 import type { RepoDurableObject } from "./src/domains/repos/repo-durable-object.ts";
 import type { CloudflareSandboxDurableObject } from "./src/domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts";
@@ -70,8 +70,7 @@ if (process.argv.includes("--park")) {
   process.exit(0);
 }
 
-const resolvedAuthIssuer =
-  process.env.APP_CONFIG_ITERATE_AUTH__ISSUER ?? process.env.ITERATE_OAUTH_ISSUER;
+const resolvedAuthIssuer = process.env.APP_CONFIG_ITERATE_AUTH__ISSUER;
 
 // A static JWKS lets the worker verify auth JWTs without any runtime
 // roundtrip to the auth worker, including on cold isolate starts. Fetch it
@@ -117,7 +116,7 @@ async function resolveStaticAuthJwks(issuer: string | undefined) {
   }
   const issuerIsLoopback = ["localhost", "127.0.0.1", "::1"].includes(issuerUrl.hostname);
 
-  const explicit = process.env.APP_CONFIG_ITERATE_AUTH__JWKS ?? process.env.ITERATE_AUTH_JWKS;
+  const explicit = process.env.APP_CONFIG_ITERATE_AUTH__JWKS;
   if (explicit && !issuerIsLoopback) return withForgePublicKey(explicit);
 
   try {
@@ -203,17 +202,13 @@ function withForgePublicKey(jwksJson: string) {
 const env: Record<string, string | undefined> = {
   ...process.env,
   APP_CONFIG_ITERATE_AUTH__ISSUER: resolvedAuthIssuer,
-  APP_CONFIG_ITERATE_AUTH__CLIENT_ID:
-    process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID ?? process.env.ITERATE_OAUTH_CLIENT_ID,
-  APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET:
-    process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET ?? process.env.ITERATE_OAUTH_CLIENT_SECRET,
+  APP_CONFIG_ITERATE_AUTH__CLIENT_ID: process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID,
+  APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET: process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET,
   APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED:
     process.env.APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED ??
-    process.env.VITE_ENABLE_EMAIL_OTP_SIGNIN ??
     (process.env.ALCHEMY_STAGE?.startsWith("dev") ? "true" : undefined),
   APP_CONFIG_ITERATE_AUTH__JWKS: await resolveStaticAuthJwks(resolvedAuthIssuer),
-  APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN:
-    process.env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN ?? process.env.ITERATE_AUTH_SERVICE_TOKEN,
+  APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN: process.env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN,
 };
 
 // Fully-local dev: no Cloudflare resources. Picks a free port and writes
@@ -244,7 +239,7 @@ const ctx = await initAlchemy("os", AppConfig, env);
 // Durable Object isolate loads only the code it runs (apps/os/docs/
 // worker-topology.md). `${ctx.workerName}` (os-prd, os-preview-N,
 // os-dev-<user>) is the tiny ingress router that owns all routes; the
-// dashboard app, itx API worker, and each Durable Object class get
+// dashboard app, API worker, and each Durable Object class get
 // their own worker. Durable Object classes exported from one worker are
 // bound as cross-script namespaces (`scriptName`) in every worker that
 // dials them.
@@ -254,8 +249,8 @@ const workerNames = {
   agent: `${ctx.workerName}-agent`,
   api: `${ctx.workerName}-api`,
   app: `${ctx.workerName}-app`,
+  capabilityHost: `${ctx.workerName}-capability-host`,
   ingress: ctx.workerName,
-  itx: `${ctx.workerName}-itx`,
   project: `${ctx.workerName}-project`,
   repo: `${ctx.workerName}-repo`,
   sandbox: `${ctx.workerName}-sandbox`,
@@ -293,9 +288,9 @@ const stream = DurableObjectNamespace<StreamDurableObject>("stream", {
   scriptName: workerNames.stream,
   sqlite: true,
 });
-const itx = DurableObjectNamespace<ItxDurableObject>("itx", {
-  className: "ItxDurableObject",
-  scriptName: workerNames.itx,
+const capabilityHost = DurableObjectNamespace<CapabilityHostDurableObject>("capability-host", {
+  className: "CapabilityHostDurableObject",
+  scriptName: workerNames.capabilityHost,
   sqlite: true,
 });
 const project = DurableObjectNamespace<ProjectDurableObject>("project", {
@@ -368,7 +363,7 @@ const statefulWorker = DurableObjectNamespace<StatefulWorkerDurableObject>("work
 // so it never needs it either.
 const durableObjectWorkerNames = [
   workerNames.agent,
-  workerNames.itx,
+  workerNames.capabilityHost,
   workerNames.project,
   workerNames.repo,
   workerNames.sandbox,
@@ -406,7 +401,7 @@ function withoutBindingsToMissingScripts<B extends Bindings>(owner: string, bind
 // vite.config.ts, and the Worker resources skip alchemy's own miniflare via
 // `dev.url`. One workerd means cross-script DO bindings resolve in-process —
 // the wrangler dev-registry proxy dials remote objects by hex id, which
-// loses `ctx.id.name`, and Stream/itx DOs derive their identity from it.
+// loses `ctx.id.name`, and Stream/capability-host DOs derive their identity from it.
 const LOCAL_AUX_WORKERS_MANIFEST = ".alchemy/local/aux-workers.json";
 const localAuxWorkerConfigPaths: string[] = [];
 
@@ -463,7 +458,7 @@ const itxBindings = {
   ARTIFACTS: Artifacts({ namespace: artifactsNamespace }),
   ARTIFACTS_ACCOUNT_ID: artifactsAccountId,
   ARTIFACTS_NAMESPACE: artifactsNamespace,
-  ITX: itx,
+  CAPABILITY_HOST: capabilityHost,
   LOADER: WorkerLoader(),
   PROJECT: project,
   PROJECT_DIRECTORY: projectDirectory,
@@ -481,16 +476,12 @@ const itxBindings = {
 // global_fetch_strictly_public: same-zone subrequests (auth worker on previews,
 // worker-hosted e2e fixtures through project egress) must traverse Worker
 // routes instead of going to origin — same reason as the app worker.
-const engineCompatibilityFlags = ["nodejs_compat", "global_fetch_strictly_public"];
+const itxCompatibilityFlags = ["nodejs_compat", "global_fetch_strictly_public"];
 
-function engineWorker(
-  id: keyof typeof workerNames,
-  entrypoint: string,
-  bindingOverrides?: Bindings,
-) {
+function itxWorker(id: keyof typeof workerNames, entrypoint: string, bindingOverrides?: Bindings) {
   return osWorker(id, {
     entrypoint,
-    compatibilityFlags: engineCompatibilityFlags,
+    compatibilityFlags: itxCompatibilityFlags,
     bindings: { ...itxBindings, ...bindingOverrides },
   });
 }
@@ -502,7 +493,7 @@ function engineWorker(
 // order after them.
 const [
   streamWorker,
-  itxWorker,
+  capabilityHostWorker,
   projectWorker,
   agentWorker,
   repoWorker,
@@ -511,17 +502,17 @@ const [
   workerWorker,
   apiWorker,
 ] = await Promise.all([
-  engineWorker("stream", "./src/workers/stream.ts"),
-  engineWorker("itx", "./src/workers/itx.ts"),
-  engineWorker("project", "./src/workers/project.ts"),
-  engineWorker("agent", "./src/workers/agent.ts"),
-  engineWorker("repo", "./src/workers/repo.ts"),
+  itxWorker("stream", "./src/workers/stream.ts"),
+  itxWorker("capabilityHost", "./src/workers/capability-host.ts"),
+  itxWorker("project", "./src/workers/project.ts"),
+  itxWorker("agent", "./src/workers/agent.ts"),
+  itxWorker("repo", "./src/workers/repo.ts"),
   // The owner binds the container-backed namespace (image + container app +
   // migration); every other itx worker keeps the plain cross-script binding.
-  engineWorker("sandbox", "./src/workers/sandbox.ts", { SANDBOX: sandboxContainer }),
-  engineWorker("secret", "./src/workers/secret.ts"),
-  engineWorker("worker", "./src/workers/worker.ts"),
-  engineWorker("api", "./src/workers/api.ts"),
+  itxWorker("sandbox", "./src/workers/sandbox.ts", { SANDBOX: sandboxContainer }),
+  itxWorker("secret", "./src/workers/secret.ts"),
+  itxWorker("worker", "./src/workers/worker.ts"),
+  itxWorker("api", "./src/workers/api.ts"),
 ]);
 
 // Second bootstrap pass (fresh stages only): the cross-script Durable Object
@@ -554,7 +545,7 @@ const appWorker = await IterateAppWorker(ctx, {
   name: workerNames.app,
   main: "./src/workers/app.ts",
   bindings: {
-    ITX_API: apiWorker,
+    API: apiWorker,
     // Server-side project reads share the ingress directory cache.
     PROJECT_DIRECTORY: projectDirectory,
   },
@@ -577,7 +568,7 @@ const ingressWorker = await osWorker("ingress", {
   entrypoint: "./src/workers/ingress.ts",
   bindings: {
     APP: appWorker,
-    ITX_API: apiWorker,
+    API: apiWorker,
   },
 });
 
@@ -586,8 +577,8 @@ export const workers = {
   agent: agentWorker,
   api: apiWorker,
   app: appWorker,
+  capabilityHost: capabilityHostWorker,
   ingress: ingressWorker,
-  itx: itxWorker,
   project: projectWorker,
   repo: repoWorker,
   sandbox: sandboxWorker,

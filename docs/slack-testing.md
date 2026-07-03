@@ -37,10 +37,7 @@ The Doppler secrets are split by purpose:
   deployment's `/integrations/slack-team-directory` stream.
 - Slack Web API calls use the project workspace token first. If the project has
   no connected Slack token, OS falls back to
-  `APP_CONFIG_INTEGRATIONS__SLACK.botToken`, then temporarily to the legacy
-  top-level `APP_CONFIG_SLACK_BOT_TOKEN` while the migration is being finished.
-- `APP_CONFIG_SLACK_BOT_TOKEN` is legacy. When diagnosing duplicate replies,
-  check whether it exists in the environment without printing the token.
+  `APP_CONFIG_INTEGRATIONS__SLACK.botToken`.
 
 ## Trigger actor for smoke tests
 
@@ -101,9 +98,9 @@ otherwise:
 - The app scope `chat:write.public` lets a Slack app post into public channels,
   so a bot user not appearing as a channel member does not rule out its app
   posting a reply.
-- If production has either `APP_CONFIG_INTEGRATIONS__SLACK.botToken` or the
-  legacy `APP_CONFIG_SLACK_BOT_TOKEN`, it can use that fallback token for
-  outbound Slack Web API calls when no project token is available.
+- If production has `APP_CONFIG_INTEGRATIONS__SLACK.botToken`, it can use that
+  fallback token for outbound Slack Web API calls when no project token is
+  available.
 
 For a precise diagnosis, inspect the Slack event wrapper and traces:
 

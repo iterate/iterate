@@ -68,7 +68,7 @@ configured deployment URL.
 The `/admin` UI uses a root itx WebSocket. Browsers cannot add an
 `Authorization` header to WebSocket handshakes, so admin-token access must
 first be converted into the HttpOnly `iterate-admin-auth` cookie by posting the
-admin token to `/api/itx/admin-cookie`.
+admin token to `/api/admin-cookie`.
 
 For local dev, keep the token inside Doppler and use a one-shot localhost
 bridge. The bridge forwards only the `Set-Cookie` header to your browser and
@@ -81,7 +81,7 @@ const { baseUrl } = require("./.alchemy/dev-server.json");
 const target = baseUrl;
 const port = 5199;
 const server = http.createServer(async (_req, res) => {
-  const response = await fetch(`${target}/api/itx/admin-cookie`, {
+  const response = await fetch(`${target}/api/admin-cookie`, {
     method: "POST",
     headers: { "content-type": "text/plain" },
     body: process.env.APP_CONFIG_ADMIN_API_SECRET,
