@@ -186,10 +186,7 @@ await IterateRoutes({ app, slug: APP_NAME }, { worker, hostnames: alchemyEnv.WOR
 // Local dev (`alchemy dev`) skips this: the server isn't up until later — run
 // `pnpm seed-oauth-clients` against it manually if needed.
 if (!app.local && process.env.AUTH_SEED_OAUTH_CLIENTS) {
-  // Seed through the workers.dev URL, which is live immediately — a fresh
-  // custom hostname (auth.iterate-preview-N.com on its first deploy) can take
-  // minutes to get an edge cert, which would time out the readiness probe.
-  await seedOAuthClients(process.env, { baseUrl: worker.url });
+  await seedOAuthClients(process.env, { baseUrl: primaryUrl ?? worker.url });
 }
 
 export { worker };
