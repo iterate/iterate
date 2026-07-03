@@ -494,7 +494,9 @@ function ProjectSidebarGroup({
             <ProjectSidebarMenuItem
               icon={SquarePen}
               label="New Chat"
-              render={<Link to="/projects/$projectSlug/agents/new" params={{ projectSlug }} />}
+              render={
+                <Link to="/projects/$projectSlug/agents/new" params={{ projectSlug }} search={{}} />
+              }
               isActive={isNewChatActive}
             />
             <ProjectSidebarMenuItem
@@ -512,7 +514,9 @@ function ProjectSidebarGroup({
             <ProjectSidebarMenuItem
               icon={SquareTerminal}
               label="Repl"
-              render={<Link to="/projects/$projectSlug/repl" params={{ projectSlug }} />}
+              render={
+                <Link to="/projects/$projectSlug/repl" params={{ projectSlug }} search={{}} />
+              }
               isActive={Boolean(
                 matchRoute({
                   to: "/projects/$projectSlug/repl",
