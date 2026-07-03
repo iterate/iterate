@@ -5,7 +5,7 @@ import { getSlackClient, resolveSlackChannel, slackChannelIds } from "./slack.ts
 type DeployOptions = {
   app: string;
   status: "success" | "failure";
-  shortSha: string;
+  commitSha: string;
   runUrl: string;
   publicUrl?: string;
   channel?: string;
@@ -14,12 +14,13 @@ type DeployOptions = {
 export async function notifyDeploy({
   app,
   status,
-  shortSha,
+  commitSha,
   runUrl,
   publicUrl,
   channel = "#ci",
 }: DeployOptions) {
   const slack = getSlackClient();
+  const shortSha = commitSha.slice(0, 7);
   const message =
     status === "success"
       ? [
@@ -30,7 +31,7 @@ export async function notifyDeploy({
           .filter(Boolean)
           .join(" · ")
       : [
-          `${failureIcon()} ${app} prd deploy failed (${shortSha}).`,
+          `🚨 ${app} prd deploy failed (${shortSha}).`,
           `<${runUrl}|View workflow run>`,
           "@iterate please investigate",
         ].join(" ");
@@ -49,7 +50,7 @@ export async function notifyWorkflowFailure() {
 
   const refName = process.env.GITHUB_REF_NAME || process.env.GITHUB_REF || "unknown ref";
   const message = [
-    `${failureIcon()} ${failedJobs.join(", ")} failed on ${refName}.`,
+    `🚨 ${failedJobs.join(", ")} failed on ${refName}.`,
     `<${getRunUrl()}|View Workflow Run>`,
     "\n@iterate please investigate",
   ].join(" ");
@@ -58,10 +59,6 @@ export async function notifyWorkflowFailure() {
     channel: slackChannelIds["#error-pulse"],
     text: message,
   });
-}
-
-function failureIcon() {
-  return "🚨";
 }
 
 function readOption(name: string, fallback?: string) {
@@ -76,7 +73,7 @@ async function main() {
     await notifyDeploy({
       app: readOption("APP_DISPLAY_NAME"),
       status: command === "deploy-success" ? "success" : "failure",
-      shortSha: readOption("SHORT_SHA"),
+      commitSha: readOption("COMMIT_SHA", process.env.GITHUB_SHA),
       runUrl: readOption("RUN_URL", getRunUrl()),
       publicUrl: process.env.PUBLIC_URL,
       channel: process.env.SLACK_CHANNEL_NAME || "#ci",

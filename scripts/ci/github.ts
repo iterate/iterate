@@ -48,7 +48,7 @@ export function getRunUrl() {
   return `${serverUrl}/${repository}/actions/runs/${runId}`;
 }
 
-export function prState<State>(body: string, label: string, { parser = JSON } = {}) {
+export function prState<State>(body: string, label: string) {
   let currentBody = body;
   return {
     read: () => {
@@ -60,10 +60,10 @@ export function prState<State>(body: string, label: string, { parser = JSON } = 
         );
       }
       const value = currentContents.slice("<!-- ".length, -1 * " -->".length).trim();
-      return parser.parse(value) as Partial<State>;
+      return JSON.parse(value) as Partial<State>;
     },
     write: (state: State) => {
-      const newContents = `<!-- ${parser.stringify(state, null, 2)} -->`;
+      const newContents = `<!-- ${JSON.stringify(state, null, 2)} -->`;
       return (currentBody = markdownAnnotator(currentBody, label).update(newContents));
     },
   };
