@@ -377,7 +377,11 @@ const statefulWorker = DurableObjectNamespace<StatefulWorkerDurableObject>("work
 // wire them up. Steady-state deploys (all scripts exist) never take this
 // path. Local dev resolves bindings lazily through miniflare's dev registry,
 // so it never needs it either.
-const durableObjectWorkerNames = [
+// Engine worker scripts that other scripts bind BY NAME — cross-script DO
+// namespaces and name-string WorkerRef service bindings alike; both fail on a
+// fresh stage when the target script does not exist yet (the builder hosts no
+// DOs but is service-bound by name from every engine worker).
+const engineWorkerNames = [
   workerNames.agent,
   workerNames.builder,
   workerNames.itx,
@@ -390,7 +394,7 @@ const durableObjectWorkerNames = [
 ];
 const missingScripts = ctx.app.local
   ? new Set<string>()
-  : await findMissingWorkerScripts(durableObjectWorkerNames);
+  : await findMissingWorkerScripts(engineWorkerNames);
 if (missingScripts.size > 0) {
   console.warn(
     `[alchemy.run] Bootstrap: ${[...missingScripts].join(", ")} not deployed yet — ` +

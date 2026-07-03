@@ -32,16 +32,10 @@ type WorkerBuildArtifactManifest = {
   createdAt: string;
   mainModule: string;
   moduleNames: string[];
+  /** Diagnostics only — never read back. */
   moduleSizes: Record<string, number>;
   schemaVersion: typeof WORKER_BUILD_ARTIFACT_SCHEMA_VERSION;
 };
-
-export interface WorkerBuildArtifactStore {
-  /** Null on any incomplete artifact (no manifest, or a listed module missing):
-   * both are cache misses that a rebuild from the deterministic input repairs. */
-  get(buildKey: string): Promise<WorkerBuildArtifact | null>;
-  put(artifact: WorkerBuildArtifact): Promise<void>;
-}
 
 function manifestKey(buildKey: string) {
   return `${KV_PREFIX}/${buildKey}/manifest.json`;
@@ -51,21 +45,21 @@ function moduleKey(buildKey: string, moduleName: string) {
   return `${KV_PREFIX}/${buildKey}/modules/${encodeURIComponent(moduleName)}`;
 }
 
-export class KvWorkerBuildArtifactStore implements WorkerBuildArtifactStore {
+/** `get` returns null on any incomplete artifact (no manifest, or a listed
+ * module missing): both are cache misses that a rebuild from the
+ * deterministic input repairs. */
+export class KvWorkerBuildArtifactStore {
   constructor(
     readonly kv: KVNamespace,
     readonly options: { expirationTtlSeconds?: number } = {},
   ) {}
 
   async get(buildKey: string): Promise<WorkerBuildArtifact | null> {
+    // The schema version already namespaces the KV key prefix and is hashed
+    // into every build key, so a manifest read at this exact key needs no
+    // further identity checks.
     const manifest = await this.kv.get<WorkerBuildArtifactManifest>(manifestKey(buildKey), "json");
-    if (
-      manifest === null ||
-      manifest.schemaVersion !== WORKER_BUILD_ARTIFACT_SCHEMA_VERSION ||
-      manifest.buildKey !== buildKey
-    ) {
-      return null;
-    }
+    if (manifest === null) return null;
 
     const moduleEntries = await Promise.all(
       manifest.moduleNames.map(

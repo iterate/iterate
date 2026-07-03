@@ -89,7 +89,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     // actually calls the capability. That laziness is what keeps
     // `provideCapability()` a pure stream append instead of a half-commit that
     // might also create/abort facet state.
-    const { klass, resolved } = await this.#workerRunner.loadStatefulClass(ref, { buildBudgetMs });
+    const { klass, resolved } = await this.#workerRunner.loadStatefulClass(ref, buildBudgetMs);
     const version = statefulWorkerVersion(ref, resolved.cacheKey);
 
     // SQLite-backed Durable Objects expose sync KV as `storage.kv`. Avoiding
@@ -121,6 +121,14 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
       parsed.sourceCacheKey,
     );
     if (cached === null) return null;
+
+    // The KV read above is an interleave point: a background refresh may have
+    // completed meanwhile — new version written, facet aborted. Re-creating
+    // the facet with OUR (now old) class would wedge the DO on stale code
+    // forever (storage says new, facet runs old, nothing ever aborts again).
+    // The sync re-read plus facets.get below run in one DO turn, so this
+    // check cannot itself be interleaved.
+    if (this.ctx.storage.kv.get<string>(VERSION_STORAGE_KEY) !== previous) return null;
 
     this.#refreshFacetInBackground(ref, previous);
     return this.ctx.facets.get(FACET_NAME, () => ({ class: cached.klass }));

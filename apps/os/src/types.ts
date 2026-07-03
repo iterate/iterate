@@ -1013,6 +1013,9 @@ export type StatefulDynamicWorkerRef = DynamicWorkerRefBase & {
    * sees the new code. `"stale-while-rebuild"` keeps answering with the
    * running version and swaps to the new build in the background: better
    * availability, but the next few calls after a commit may see old code.
+   * The policy rides the REF, not the durable identity — callers sharing one
+   * `durableWorkerKey` should agree on it (and on `source`), or each call
+   * flips the facet to its own version.
    */
   updatePolicy?: "block" | "stale-while-rebuild";
 };

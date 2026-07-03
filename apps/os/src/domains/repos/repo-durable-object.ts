@@ -15,17 +15,12 @@ import { stableSha256 } from "../workers/utils.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { CommitRepoFilesInput, CommitRepoFilesResult, RepoFileChange } from "../../types.ts";
 import { RepoArtifactNameCodec } from "./utils.ts";
-import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.ts";
+import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.generated.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 
 const REPO_DEFAULT_BRANCH = "main";
 const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 const REPO_DIR = "/repo";
-
-export type RepoFilesSnapshot = {
-  commitOid: string;
-  files: Record<string, string>;
-};
 
 type RepoHead = {
   branch: string;
@@ -112,7 +107,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       exclude?: string[];
       include?: string[];
     } = {},
-  ): Promise<RepoFilesSnapshot> {
+  ): Promise<{ commitOid: string; files: Record<string, string> }> {
     const repo = await this.gitAccess();
     const filesystem = new InMemoryFs();
     const git = createGit(filesystem, REPO_DIR);
@@ -140,15 +135,18 @@ export class RepoDurableObject extends DurableObject<Env> {
       throw new Error(`Repo checkout of ${input.commitOid} landed on ${head.oid}.`);
     }
 
-    const checkout = await readCheckoutFiles(filesystem);
-    const selected = filterWorkerSnapshotPaths(Object.keys(checkout).sort(), {
+    // Mask paths BEFORE reading contents: an excluded tree (a committed
+    // node_modules/, build output) should cost a directory walk, not reads.
+    const paths = await walkCheckoutPaths(filesystem);
+    const selected = filterWorkerSnapshotPaths(paths.sort(), {
       exclude: input.exclude,
       include: input.include,
     });
-    return {
-      commitOid: head.oid,
-      files: Object.fromEntries(selected.map((path) => [path, checkout[path]])),
-    };
+    const files: Record<string, string> = {};
+    for (const path of selected) {
+      files[path] = await filesystem.readFile(`${REPO_DIR}/${path}`);
+    }
+    return { commitOid: head.oid, files };
   }
 
   whoami(): string {
@@ -438,20 +436,31 @@ function isRepoHeadRecord(value: unknown): value is { commitOid: string; content
   );
 }
 
-/** All committed files of a checkout as one path -> content map (skips .git). */
+/** All committed files of a checkout as one path -> content map (skips
+ * .git). Content-hash sites (commit/seed) need every byte; the masked
+ * snapshot path deliberately walks paths first instead. */
 async function readCheckoutFiles(filesystem: InMemoryFs): Promise<Record<string, string>> {
   const files: Record<string, string> = {};
+  for (const path of await walkCheckoutPaths(filesystem)) {
+    files[path] = await filesystem.readFile(`${REPO_DIR}/${path}`);
+  }
+  return files;
+}
+
+/** All committed file paths of a checkout (skips .git). */
+async function walkCheckoutPaths(filesystem: InMemoryFs): Promise<string[]> {
+  const paths: string[] = [];
   const walk = async (dir: string) => {
     for (const entry of await filesystem.readdir(dir)) {
       if (dir === REPO_DIR && entry === ".git") continue;
       const absolute = `${dir}/${entry}`;
       const stat = await filesystem.stat(absolute);
       if (stat.type === "directory") await walk(absolute);
-      else files[absolute.slice(REPO_DIR.length + 1)] = await filesystem.readFile(absolute);
+      else paths.push(absolute.slice(REPO_DIR.length + 1));
     }
   };
   await walk(REPO_DIR);
-  return files;
+  return paths;
 }
 
 /**

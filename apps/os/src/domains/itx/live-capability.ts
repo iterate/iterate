@@ -129,11 +129,16 @@ export async function invokePreferringFlattenedPath({
 
 // Workers RPC reports a call to a method the receiver does not have as a
 // TypeError naming the method; local replay reports it as our own "did not
-// resolve to a function". Both mean "this worker has no dispatcher".
+// resolve to a function". Both mean "this worker has no dispatcher". Message
+// drift in a workerd upgrade fails loudly: the itx e2e "…dynamic worker refs
+// compose" test commits a plain entrypoint worker whose calls only succeed
+// through this fallback.
 function isMissingInvokeCapabilityError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
+  if (error instanceof TypeError) {
+    return error.message.includes('does not implement the method "invokeCapability"');
+  }
   return (
-    error.message.includes('does not implement the method "invokeCapability"') ||
+    error instanceof Error &&
     error.message.includes('capability path "invokeCapability" did not resolve to a function')
   );
 }

@@ -15,6 +15,10 @@ import {
   type WorkerBindings,
 } from "./worker-loader.ts";
 
+// Structural shadow of StatefulWorkerDurableObject.invokeCapability instead
+// of the DO's own type: the DO imports this module (cycle), and a typed
+// DurableObjectStub of it deep-instantiates the stub's self-referential type
+// (TS2589) — same workaround as ParentItxScope in itx-durable-object.ts.
 type StatefulWorkerRpc = {
   invokeCapability(input: {
     args?: unknown[];
@@ -57,15 +61,15 @@ export class DynamicWorkerRunner {
 
   /**
    * Stateless refs resolve to WorkerEntrypoint instances and can be invoked in
-   * this isolate. Keeping this separate from stateful class loading makes each
-   * caller state whether it wants an invokable entrypoint or a Durable Object
-   * class hosted behind StatefulWorkerDurableObject.
+   * this isolate. Kept separate from stateful class loading so each path
+   * states whether it wants an invokable entrypoint or a Durable Object class
+   * hosted behind StatefulWorkerDurableObject.
    */
-  async getStatelessEntrypoint<T = unknown>(
+  async #getStatelessEntrypoint<T = unknown>(
     ref: StatelessDynamicWorkerRef,
-    options: { buildBudgetMs?: number } = {},
+    buildBudgetMs?: number,
   ): Promise<T> {
-    const { worker } = await this.#load(ref, options.buildBudgetMs);
+    const { worker } = await this.#load(ref, buildBudgetMs);
     return worker.getEntrypoint(ref.entrypoint, { props: ref.props ?? {} }) as T;
   }
 
@@ -76,9 +80,9 @@ export class DynamicWorkerRunner {
    */
   async loadStatefulClass<T extends DurableObjectClass = DurableObjectClass>(
     ref: StatefulDynamicWorkerRef,
-    options: { buildBudgetMs?: number } = {},
+    buildBudgetMs?: number,
   ): Promise<{ klass: T; resolved: ResolvedWorkerSource }> {
-    const { resolved, worker } = await this.#load(ref, options.buildBudgetMs);
+    const { resolved, worker } = await this.#load(ref, buildBudgetMs);
     return { klass: this.#durableObjectClass<T>(ref, worker), resolved };
   }
 
@@ -140,7 +144,7 @@ export class DynamicWorkerRunner {
       });
     }
 
-    const target = await this.getStatelessEntrypoint(ref, { buildBudgetMs });
+    const target = await this.#getStatelessEntrypoint(ref, buildBudgetMs);
     return flattenNestedPath
       ? await invokePreferringFlattenedPath({ args, path, target })
       : await replayPath({ args, path, target });

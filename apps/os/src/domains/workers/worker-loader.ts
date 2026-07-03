@@ -19,6 +19,12 @@ export class WorkerBuildInProgressError extends Error {
   override readonly name = "WorkerBuildInProgressError";
 }
 
+/** Name-based, because the error crosses Workers RPC (which preserves
+ * `error.name` but not class identity). */
+export function isWorkerBuildInProgressError(error: unknown): boolean {
+  return (error as { name?: string } | null)?.name === "WorkerBuildInProgressError";
+}
+
 /**
  * Fully materialized Worker Loader input plus a cache key for the built bytes.
  * The cache key is build identity only; runtime scope and exported symbol are
@@ -38,16 +44,12 @@ export type WorkerBindings = Record<string, unknown>;
 const resolvedArtifactMemo = new Map<string, ResolvedWorkerSource>();
 const RESOLVED_ARTIFACT_MEMO_LIMIT = 64;
 
-// Concurrent cold loads of the same build key share ONE request/wait cycle
-// instead of stampeding the stream with duplicate build requests.
-const inFlightResolutions = new Map<string, Promise<ResolvedWorkerSource>>();
-
 export async function resolveWorkerSource({
   buildBudgetMs,
   projectId,
   source,
 }: {
-  /** Give up waiting for a cold build after this long (the build itself keeps
+  /** Give up on a cold resolve after this long (the build itself keeps
    * running in the builder worker). Omitted = wait for the build. */
   buildBudgetMs?: number;
   projectId: string;
@@ -57,39 +59,24 @@ export async function resolveWorkerSource({
 
   // Loader-ready degenerate case: inline JavaScript with bundling explicitly
   // off is exactly what the Worker Loader consumes, so materialization is the
-  // identity function. Taking it without stream events keeps run-script (which
-  // executes on every agent turn) at direct-load latency instead of paying a
-  // build round trip per script.
+  // identity function. Skipping the pipeline keeps run-script (which executes
+  // on every agent turn) at direct-load latency instead of paying a build
+  // round trip per script.
   const loaderReady = await loaderReadyInlineSource(source, options);
   if (loaderReady !== null) return loaderReady;
 
-  const resolved = await resolveFileSource({ projectId, source });
-  const buildKey = await workerBuildKey({
-    compatibilityDate: WORKER_COMPATIBILITY_DATE,
-    compatibilityFlags: WORKER_COMPATIBILITY_FLAGS,
-    options,
-    source: resolved,
-  });
-
-  const memoized = resolvedArtifactMemo.get(buildKey);
-  if (memoized !== undefined) return memoized;
-
-  const inFlight = inFlightResolutions.get(buildKey);
-  const resolution =
-    inFlight ??
-    resolveThroughBuilder({
-      buildKey,
-      options,
-      projectId,
-      source: resolved,
-    }).finally(() => inFlightResolutions.delete(buildKey));
-  if (inFlight === undefined) inFlightResolutions.set(buildKey, resolution);
-  return await withBuildBudget(resolution, buildBudgetMs);
+  // The budget covers the WHOLE cold path — head resolution (a Repo DO call)
+  // included — so a browser-facing caller's bound is a real bound, not just a
+  // bound on the bundler.
+  return await withBuildBudget(
+    resolveThroughBuilder({ options, projectId, source }),
+    buildBudgetMs,
+  );
 }
 
 /** Race a resolution against the caller's budget without cancelling it: the
- * shared in-flight promise may have other callers, and the builder finishes
- * into the artifact cache regardless. */
+ * builder finishes into the artifact cache regardless, so the caller's retry
+ * is a hit. */
 async function withBuildBudget(
   resolution: Promise<ResolvedWorkerSource>,
   budgetMs: number | undefined,
@@ -111,15 +98,28 @@ async function withBuildBudget(
   }
 }
 
+// Concurrent cold resolutions of one build key deliberately do NOT share a
+// promise: awaiting another request's in-flight RPC is workerd's
+// "cannot perform I/O on behalf of a different request" trap. Duplicates are
+// harmless — content-addressed, idempotent artifact writes — just redundant.
 async function resolveThroughBuilder(input: {
-  buildKey: string;
   options: WorkerBuildOptions;
   projectId: string;
-  source: ResolvedWorkerFileSource;
+  source: DynamicWorkerSource;
 }): Promise<ResolvedWorkerSource> {
-  const store = new KvWorkerBuildArtifactStore(env.WORKER_BUILD_CACHE);
+  const resolved = await resolveFileSource({ projectId: input.projectId, source: input.source });
+  const buildKey = await workerBuildKey({
+    compatibilityDate: WORKER_COMPATIBILITY_DATE,
+    compatibilityFlags: WORKER_COMPATIBILITY_FLAGS,
+    options: input.options,
+    source: resolved,
+  });
 
-  const cached = await store.get(input.buildKey);
+  const memoized = resolvedArtifactMemo.get(buildKey);
+  if (memoized !== undefined) return memoized;
+
+  const store = new KvWorkerBuildArtifactStore(env.WORKER_BUILD_CACHE);
+  const cached = await store.get(buildKey);
   if (cached !== null) return memoizeArtifact(cached);
 
   // Cache miss: one RPC to the builder worker — the only script carrying the
@@ -127,10 +127,10 @@ async function resolveThroughBuilder(input: {
   // on KV write propagation) and build failures propagate here as plain
   // errors, attributed to the call that needed the worker.
   const artifact = await env.BUILDER.build({
-    buildKey: input.buildKey,
+    buildKey,
     options: input.options,
     projectId: input.projectId,
-    source: input.source,
+    source: resolved,
   });
   return memoizeArtifact(artifact);
 }

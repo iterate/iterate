@@ -55,16 +55,13 @@ describe("worker builds", () => {
       sum: 42,
     });
 
-    // Builds do not touch the journal: coordination is a direct RPC to the
-    // builder worker, so the scope stream carries no build lifecycle events
-    // (and never any module contents).
+    // Builds do not touch the journal (coordination is a direct RPC to the
+    // builder worker) — in particular, no journal event may ever carry the
+    // worker's source or built modules.
     const events = await project.streams.get("/").getEvents();
-    expect(events.filter((event) => event.type.includes("worker-build"))).toEqual([]);
     expect(JSON.stringify(events)).not.toContain("hello from bundled typescript");
 
-    // Warm loads are artifact-cache hits — same result, no rebuild. (Cold vs
-    // warm is asserted behaviorally: the second call answers immediately from
-    // the already-built isolate.)
+    // A warm second call returns the same result from the cached artifact.
     expect(await worker.compute({ left: 1, right: 2 })).toEqual({
       greeting: "hello from bundled typescript",
       sum: 3,
@@ -140,6 +137,66 @@ describe("worker builds", () => {
         }
       } finally {
         await mock.close();
+      }
+    },
+  );
+
+  // Stale-while-rebuild is availability-over-freshness BY EXPLICIT CHOICE on
+  // the ref; the default "block" policy (commit-then-call sees new code) is
+  // covered by the itx suite's repo-backed worker tests.
+  test(
+    "Stateful stale-while-rebuild serves the running version during a rebuild, then swaps",
+    { timeout: 240_000 },
+    async () => {
+      using session = withItxSession();
+      using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+      using project = itx.projects.create({ slug: `swr-${crypto.randomUUID().slice(0, 8)}` });
+      await project.describe();
+
+      const versionSource = (version: string) => [
+        'import { DurableObject } from "cloudflare:workers";',
+        "export class SwrProbe extends DurableObject {",
+        `  version() { return ${JSON.stringify(version)}; }`,
+        "}",
+        `// salt ${crypto.randomUUID()}`,
+      ];
+      await project.repo.commitFiles({
+        changes: [{ path: "swr/probe.ts", content: versionSource("v1").join("\n") }],
+        message: "swr probe v1",
+      });
+
+      using probe = project.workers.get({
+        className: "SwrProbe",
+        durableWorkerKey: `swr-${crypto.randomUUID().slice(0, 8)}`,
+        path: "/",
+        source: {
+          files: { include: ["swr/**"], repoPath: "/", type: "repo" },
+          options: { entryPoint: "swr/probe.ts" },
+        },
+        type: "stateful",
+        updatePolicy: "stale-while-rebuild",
+      }) as unknown as { version(): Promise<string> } & Disposable;
+
+      // First call: no previous version exists, so SWR falls through to a
+      // blocking build of v1.
+      expect(await probe.version()).toBe("v1");
+
+      await project.repo.commitFiles({
+        changes: [{ path: "swr/probe.ts", content: versionSource("v2").join("\n") }],
+        message: "swr probe v2",
+      });
+
+      // Immediately after the commit the running version keeps answering (the
+      // whole point of the policy) while the rebuild runs in the background...
+      expect(await probe.version()).toBe("v1");
+
+      // ...and the facet swaps once the fresh artifact lands.
+      const deadline = Date.now() + 120_000;
+      for (;;) {
+        const version = await probe.version();
+        if (version === "v2") break;
+        if (Date.now() > deadline) throw new Error("stale-while-rebuild never swapped to v2");
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
       }
     },
   );

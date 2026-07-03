@@ -14,7 +14,6 @@ import type {
   StatelessDynamicWorkerRef,
   StreamEvent,
 } from "../../types.ts";
-import { sha256Hex } from "../workers/utils.ts";
 import type { Env } from "../../env.ts";
 import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
 import { ItxProcessorContract } from "./itx-processor-contract.ts";
@@ -378,7 +377,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
       const result = await this.#dynamicWorkers.invokeCapability({
         path: ["run"],
         projectId: this.#projectId,
-        ref: await this.#scriptWorkerRef(input.code),
+        ref: this.#scriptWorkerRef(input.code),
         scopePath: this.#path,
       });
       await complete({ result });
@@ -387,7 +386,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
     }
   }
 
-  async #scriptWorkerRef(code: string): Promise<StatelessDynamicWorkerRef> {
+  #scriptWorkerRef(code: string): StatelessDynamicWorkerRef {
     const source = `
       import { WorkerEntrypoint } from "cloudflare:workers";
       const fn = ${code};
@@ -414,7 +413,6 @@ export class ItxProcessor extends StreamProcessor<typeof ItxProcessorContract> {
         options: { bundle: false, entryPoint: "main.js" },
       },
       entrypoint: "ScriptEntrypoint",
-      props: { scriptHash: await sha256Hex(code) },
       type: "stateless",
     };
   }

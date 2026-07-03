@@ -29,7 +29,7 @@ exports.projectRepoTemplateFiles = ({ meta }) => {
   return [
     "export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }> = [",
     ...entries.map((entry) => {
-      // Template files may themselves contain codegen markers (itx.ts is
+      // Template files may themselves contain codegen markers (sdk.ts is
       // synced by one). Left verbatim inside this file's generated block they
       // would read as the block's own delimiters, so the marker word is
       // emitted as a unicode escape — same string value, different source

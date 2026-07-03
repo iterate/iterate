@@ -24,11 +24,11 @@ export class BuilderEntrypoint extends WorkerEntrypoint<Env> {
     return Response.json({ worker: "os-builder" }, { status: 404 });
   }
 
-  // Concurrent cold callers of one build key converge on one bundler run.
-  // Per-isolate is enough: duplicate builds across isolates are harmless
-  // (content-addressed, idempotent KV writes), just wasted work.
-  #inFlight = new Map<string, Promise<WorkerBuildArtifact>>();
-
+  // Concurrent cold builds of one key are NOT deduped in-process: each RPC
+  // gets a fresh entrypoint instance (no instance state survives), and
+  // sharing promises across request contexts is workerd's cross-request-I/O
+  // trap. Duplicates converge on one content-addressed, idempotent KV write —
+  // redundant bundler work, never wrong output.
   async build(input: {
     buildKey: string;
     projectId: string;
@@ -37,12 +37,11 @@ export class BuilderEntrypoint extends WorkerEntrypoint<Env> {
   }): Promise<WorkerBuildArtifact> {
     const { buildKey, options, projectId, source } = BuildInput.parse(input);
 
+    // The caller checked its own KV, but this is a different isolate and a
+    // concurrent build may have landed since; a hit here skips the bundler.
     const store = new KvWorkerBuildArtifactStore(this.env.WORKER_BUILD_CACHE);
     const cached = await store.get(buildKey);
     if (cached !== null) return cached;
-
-    const inFlight = this.#inFlight.get(buildKey);
-    if (inFlight !== undefined) return await inFlight;
 
     const build = (async () => {
       const files =
@@ -60,6 +59,9 @@ export class BuilderEntrypoint extends WorkerEntrypoint<Env> {
             ).files;
 
       const built = await materializeWorkerBuild({ files, options });
+      for (const warning of built.warnings) {
+        console.warn(`[builder] ${buildKey.slice(0, 12)}: ${warning}`);
+      }
       const artifact: WorkerBuildArtifact = {
         buildKey,
         mainModule: built.mainModule,
@@ -72,13 +74,7 @@ export class BuilderEntrypoint extends WorkerEntrypoint<Env> {
     // build-in-progress page) cancels its RPC, but the build should still
     // finish into the cache so the caller's retry is a hit.
     this.ctx.waitUntil(build.catch(() => {}));
-
-    this.#inFlight.set(buildKey, build);
-    try {
-      return await build;
-    } finally {
-      this.#inFlight.delete(buildKey);
-    }
+    return await build;
   }
 }
 

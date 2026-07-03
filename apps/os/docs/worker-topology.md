@@ -16,7 +16,8 @@ Everything is declared in one place: [`apps/os/alchemy.run.ts`](../alchemy.run.t
 ## The workers
 
 `<n>` is the stage worker name (`os-prd`, `os-preview-N`, `os-dev-<user>`).
-Eleven workers: ingress, app, api, and eight itx Durable Object workers.
+Twelve workers: ingress, app, api, the builder, and eight itx Durable Object
+workers.
 
 | Worker          | Entry                    | Owns                                                                                            |
 | --------------- | ------------------------ | ----------------------------------------------------------------------------------------------- |
@@ -31,8 +32,9 @@ Eleven workers: ingress, app, api, and eight itx Durable Object workers.
 | `<n>-sandbox`   | `src/workers/sandbox.ts` | `CloudflareSandboxDurableObject` (`@cloudflare/sandbox` containers; Dockerfile.sandbox image)   |
 | `<n>-secret`    | `src/workers/secret.ts`  | `SecretDurableObject`                                                                           |
 | `<n>-worker`    | `src/workers/worker.ts`  | **All dynamic workers**: `DynamicWorkerEntrypoint` (stateless) + `StatefulWorkerDurableObject`  |
+| `<n>-builder`   | `src/workers/builder.ts` | **All dynamic worker builds**: `BuilderEntrypoint` — the only script carrying esbuild-wasm      |
 
-All itx workers (api + the seven DO workers) deploy with the **same
+All itx workers (api, the builder, and the seven DO workers) deploy with the **same
 binding set** (`itxBindings` in `alchemy.run.ts`; the matching type is
 `src/env.ts`): every DO namespace, `AI`, `DYNAMIC_WORKERS` (a service binding
 to the worker worker's `DynamicWorkerEntrypoint`), `ARTIFACTS`,

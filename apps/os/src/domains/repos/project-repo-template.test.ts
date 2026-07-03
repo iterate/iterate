@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { expect, test } from "vitest";
-import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.ts";
+import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.generated.ts";
 
 test("template @slack/web-api range matches the apps/os devDependency", () => {
   // The host copy exists only so the template folder typechecks under

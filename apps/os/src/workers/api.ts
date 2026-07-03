@@ -12,6 +12,7 @@ import { e2eFixtureResponse } from "../e2e-fixtures.ts";
 import type { Env } from "../env.ts";
 import { decideIngressRoute, type IngressResolvers } from "../ingress.ts";
 import { readProjectByHostname, resolveProjectIdBySlug } from "../project-directory.ts";
+import { isWorkerBuildInProgressError } from "../domains/workers/worker-loader.ts";
 import {
   defaultProjectWorkerRef,
   ProjectCollectionRpcTarget,
@@ -92,7 +93,7 @@ export default {
       try {
         return await worker.fetch(new Request(route.fetch.url, init));
       } catch (error) {
-        if ((error as { name?: string } | null)?.name !== "WorkerBuildInProgressError") throw error;
+        if (!isWorkerBuildInProgressError(error)) throw error;
         return workerBuildingResponse();
       }
     }

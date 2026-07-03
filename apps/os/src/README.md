@@ -83,7 +83,7 @@ using agent = connectItx({ agentPath: "/agents/demo", auth, baseUrl, projectId }
 then appends the create-request onto the project's root stream. The project
 processor seeds the default repo at `/` from the template folder at
 `apps/os/project-repo-template` (TypeScript `worker.ts` + apps, `package.json`,
-`itx.ts`, `AGENTS.md`, `ONBOARDING.md`; codegen keeps the seeded file map in
+`sdk.ts`, `slack.config.ts`, `AGENTS.md`, `ONBOARDING.md`; codegen keeps the seeded file map in
 `domains/repos/project-repo-template.generated.ts` in sync), builds and loads
 the seeded project worker through the worker build pipeline, boots the
 onboarding agent,

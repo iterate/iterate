@@ -1,4 +1,5 @@
 import http from "node:http";
+import { mockSlackResponseBody } from "../../src/e2e-fixtures.ts";
 
 const E2E_FIXTURE_PREFIX = "/__itx_e2e";
 
@@ -92,32 +93,7 @@ export async function startMockSlackApi(): Promise<FixtureServer & { calls: stri
         ? (JSON.parse(body || "{}") as Record<string, unknown>)
         : Object.fromEntries(new URLSearchParams(body));
       res.setHeader("content-type", "application/json");
-      if (method === "chat.postMessage") {
-        res.end(
-          JSON.stringify({
-            ok: true,
-            channel: payload.channel,
-            ts: "1718000000.000100",
-            message: { text: payload.text, type: "message" },
-            via: "mock-slack-api",
-          }),
-        );
-        return;
-      }
-      if (method === "users.list") {
-        res.end(
-          JSON.stringify({
-            ok: true,
-            members: [
-              { id: "U1", name: "ada" },
-              { id: "U2", name: "grace" },
-            ],
-            via: "mock-slack-api",
-          }),
-        );
-        return;
-      }
-      res.end(JSON.stringify({ ok: true, via: "mock-slack-api" }));
+      res.end(JSON.stringify(mockSlackResponseBody(method, payload)));
     });
   }, "/");
   return { ...server, calls };

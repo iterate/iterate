@@ -169,8 +169,9 @@ export default class ItxExampleRunner extends WorkerEntrypoint {
     return new Response("itx example runner");
   }
 
-  // The platform dispatches project.worker calls as flattened
-  // invokeCapability({ path, args }); this userspace walk mirrors the seeded
+  // Optional: project.worker dispatch PREFERS flattened invokeCapability and
+  // falls back to member replay for workers without one, so this walk only
+  // saves the guaranteed-failing probe RPC per call. It mirrors the seeded
   // template worker's dispatcher.
   async invokeCapability({ args = [], path }) {
     let receiver = this;
