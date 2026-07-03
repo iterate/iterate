@@ -26,4 +26,22 @@ describe("normalizeCloudflareSandboxPath", () => {
       /sandbox path must be/,
     );
   });
+
+  it("rejects segments URL parsing would rewrite", () => {
+    expect(() => normalizeCloudflareSandboxPath("/sandboxes/cloudflare/x/../y")).toThrow(
+      /sandbox path must be/,
+    );
+    expect(() => normalizeCloudflareSandboxPath("/sandboxes/cloudflare/./x")).toThrow(
+      /sandbox path must be/,
+    );
+    expect(() => normalizeCloudflareSandboxPath("/sandboxes/cloudflare//x")).toThrow(
+      /sandbox path must be/,
+    );
+    expect(() => normalizeCloudflareSandboxPath("/sandboxes/cloudflare/x?y")).toThrow(
+      /sandbox path must be/,
+    );
+    expect(() => normalizeCloudflareSandboxPath("/sandboxes/cloudflare/x y")).toThrow(
+      /sandbox path must be/,
+    );
+  });
 });

@@ -264,7 +264,11 @@ class RepoRpcTarget extends RpcTarget implements Repo {
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  get durableObjectStub() {
+  // Private on purpose (unlike StreamRpcTarget's public stub getter): the
+  // Repo Durable Object carries `gitAccess()`, whose write tokens must not be
+  // reachable through the public capnweb surface — itx callers get file-level
+  // methods only.
+  get #durableObjectStub() {
     return env.REPO.getByName(
       DurableObjectNameCodec.stringify(
         {
@@ -285,23 +289,23 @@ class RepoRpcTarget extends RpcTarget implements Repo {
   }
 
   whoami() {
-    return this.durableObjectStub.whoami();
+    return this.#durableObjectStub.whoami();
   }
 
   commitFiles(input: Parameters<Repo["commitFiles"]>[0]) {
-    return this.durableObjectStub.commitFiles(input);
+    return this.#durableObjectStub.commitFiles(input);
   }
 
   listFiles() {
-    return this.durableObjectStub.listFiles();
+    return this.#durableObjectStub.listFiles();
   }
 
   readFile(input: Parameters<Repo["readFile"]>[0]) {
-    return this.durableObjectStub.readFile(input);
+    return this.#durableObjectStub.readFile(input);
   }
 
   get processor() {
-    return this.durableObjectStub.processor;
+    return this.#durableObjectStub.processor;
   }
 }
 

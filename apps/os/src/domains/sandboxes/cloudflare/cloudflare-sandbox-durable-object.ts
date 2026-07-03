@@ -33,8 +33,12 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
   // Safe to call SDK methods here: the container is already marked healthy
   // when `onStart` fires, so nothing re-enters startup.
   async #cloneProjectRepo(): Promise<void> {
-    const existing = await this.exists(SANDBOX_PROJECT_REPO_DIR);
+    // Probe a marker only a completed clone has — a bare directory check
+    // would treat the debris of an interrupted checkout as done and leave
+    // the sandbox without the repo until the container is replaced.
+    const existing = await this.exists(`${SANDBOX_PROJECT_REPO_DIR}/.git/HEAD`);
     if (existing.exists) return;
+    await this.exec(`rm -rf ${SANDBOX_PROJECT_REPO_DIR}`);
 
     const repo = this.env.REPO.getByName(
       DurableObjectNameCodec.stringify({
