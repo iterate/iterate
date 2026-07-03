@@ -15,17 +15,27 @@ test("a new user can create a project through the UI form", async ({ page }) => 
     !(await startEmailOtpSignIn(page)),
     "Email OTP sign-in is disabled for this deployment (VITE_ENABLE_EMAIL_OTP_SIGNIN on auth / APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED on OS).",
   );
-  await signUpWithEmailOtp(page, { email: uniqueSignupEmail("create-project") });
+  const firstSlug = uniqueSlug("first-project");
+  await signUpWithEmailOtp(page, {
+    email: uniqueSignupEmail("create-project"),
+    projectSlug: firstSlug,
+  });
 
   const slug = uniqueSlug("create-project");
   // spinner-waiter is disabled through here: the /projects pending state and
   // the agent page's loading state both render two spinner-matching elements
   // at once, tripping its strict-mode isVisible.
   await spinnerWaiter.settings.run({ disabled: true }, async () => {
-    // The cold-slot 30-90s OAuth-callback parks traced back to zombie worker
+    // Back on OS after onboarding: wait for the first project's auto set-up
+    // to finish (its row name becomes a link) so the landing is settled. The
+    // cold-slot 30-90s OAuth-callback parks traced back to zombie worker
     // routes (deploy now verifies + heals them; tasks/os-cold-create-latency.md).
-    // On a healthy slot this renders in ~1s.
-    await page.getByRole("button", { name: "Create new project" }).click({ timeout: 30_000 });
+    await page.getByRole("link", { name: firstSlug }).waitFor({ timeout: 60_000 });
+
+    // /projects is the home of SUBSEQUENT projects: the header's "New project"
+    // and the sidebar's icon both link here, but share an accessible name, so
+    // navigate directly instead of picking one with a strict-mode locator.
+    await page.goto("/new-project");
 
     await page.getByLabel("Slug").fill(slug, { timeout: 15_000 });
     // Create resolves as soon as the project EXISTS (identity + bootstrap
