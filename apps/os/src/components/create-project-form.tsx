@@ -53,30 +53,36 @@ export function CreateProjectForm() {
         waitUntilCreated: false,
         ...(input.organizationSlug ? { organizationSlug: input.organizationSlug } : {}),
       });
-      const description = await project.describe();
-      // The auth worker may normalize (slugify) the requested slug; the
-      // same-socket list carries the canonical record for the just-widened
-      // project, so read it back rather than echoing the submitted slug.
-      const entries = await itx.projects.list();
+      // ONE pipelined round trip, then navigate. The canonical slug (the auth
+      // worker may normalize the requested one) comes back on the same-socket
+      // list, which already sees the just-widened project.
+      const [description, entries] = await Promise.all([project.describe(), itx.projects.list()]);
       const entry = entries.find((candidate) => candidate.id === description.projectId);
       return { id: description.projectId, slug: entry?.slug ?? input.slug };
     },
-    onSuccess: async (project) => {
-      // Refresh the browser auth session so it carries the new project's
-      // claim BEFORE navigating to the project-scoped route (#1516); without
-      // this the project route loads before the session knows the project.
-      await refresh({ force: true });
-      // Drop the global itx socket so it re-dials with the refreshed claims —
-      // otherwise itx.projects.list (connect-time principal) omits this project.
-      reconnectItx();
-      await queryClient.invalidateQueries({ queryKey: projectsListQueryKey });
-      await router.invalidate({ sync: true });
-      // Straight into the project: the home page shows the live creation
-      // checklist until the bootstrap saga commits `project/created`, then
-      // hands over to the settings view.
-      await router.navigate({
+    onSuccess: (project) => {
+      // Into the project IMMEDIATELY — the home page plays the creation
+      // checklist live and `welcome` hands over to the onboarding agent when
+      // the saga lands. The project route resolves without the refreshed
+      // session: create primes the server-side project directory, which is
+      // the auth fallback for exactly this claims-lag window.
+      void router.navigate({
         to: "/projects/$projectSlug",
         params: { projectSlug: project.slug },
+        search: { welcome: true },
+      });
+      // Session catch-up runs BEHIND the navigation: refresh the browser auth
+      // session so its claims carry the new project, drop the global itx
+      // socket so it re-dials with them (project sockets are untouched — the
+      // checklist's subscription keeps running), and refresh the project list.
+      void (async () => {
+        await refresh({ force: true });
+        reconnectItx();
+        await queryClient.invalidateQueries({ queryKey: projectsListQueryKey });
+        await router.invalidate();
+      })().catch(() => {
+        // Claims catch up on the next token refresh regardless; the directory
+        // fallback keeps the project usable in the meantime.
       });
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),

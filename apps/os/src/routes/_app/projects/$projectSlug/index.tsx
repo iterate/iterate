@@ -1,5 +1,6 @@
-import { useState } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { z } from "zod";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { StreamPath } from "~/lib/stream-links.ts";
@@ -10,7 +11,14 @@ import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { useItxState } from "~/itx/itx-react.tsx";
 import type { ProjectProcessorState } from "~/types.ts";
 
+const HomeSearch = z.object({
+  /** Set by the create form: play the creation checklist, then hand over to
+   * the onboarding agent the moment the bootstrap saga lands. */
+  welcome: z.boolean().optional().catch(undefined),
+});
+
 export const Route = createFileRoute("/_app/projects/$projectSlug/")({
+  validateSearch: HomeSearch,
   ssr: false,
   loader: async ({ context }) => {
     return {
@@ -32,16 +40,35 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/")({
  */
 function ProjectHomePage() {
   const { project, routeConfig } = Route.useLoaderData();
+  const { welcome } = Route.useSearch();
+  const params = Route.useParams();
+  const navigate = useNavigate();
   const lifecycle = useItxState<ProjectProcessorState>(
     (itx, setState) => itx.processor.onStateChange(setState),
     [],
   );
   const created = lifecycle.state?.created ?? false;
 
+  // The welcome handoff: arrived here from the create form, so once the saga
+  // commits `project/created` (a push flips `created` live — possibly before
+  // first paint on a fast deployment), continue into the onboarding agent.
+  useEffect(() => {
+    if (welcome !== true || !created) return;
+    void navigate({
+      to: "/projects/$projectSlug/agents/streams/$",
+      params: { projectSlug: params.projectSlug, _splat: "/agents/onboarding" },
+      replace: true,
+    });
+  }, [welcome, created, navigate, params.projectSlug]);
+
   return (
     <section className="flex min-h-0 flex-1 flex-col overflow-auto p-4">
       <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6">
-        {created ? (
+        {created && welcome === true ? (
+          // Handoff in flight (the effect above is navigating): keep showing
+          // the finished checklist rather than flashing the settings page.
+          <ProjectCreationProgress state={lifecycle.state} />
+        ) : created ? (
           <>
             <ProjectSettingsPanel project={project} routeConfig={routeConfig} />
             <details className="rounded-lg border">

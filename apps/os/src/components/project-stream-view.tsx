@@ -1,12 +1,16 @@
 import {
+  memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
+  type RefObject,
 } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronDownIcon, FilterIcon, SearchIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
@@ -715,8 +719,8 @@ function useAgentUiReducedState(database: StreamBrowserDatabase): AgentUiState |
 // Feed view: the grouped feed_items collection, filtered by the active preset
 // ---------------------------------------------------------------------------
 
-/** Newest rows the feed view loads; older history stays in SQLite. */
-const MAX_FEED_ITEMS = 500;
+/** How many rows past the virtualizer's window the tail query prefetches. */
+const TAIL_PREFETCH_ROWS = 32;
 
 /**
  * Renders the browser-event-feed processor's `feed_items` collection: one row
@@ -724,7 +728,14 @@ const MAX_FEED_ITEMS = 500;
  * A preset's `eventTypePrefix` filters on each row's primary event type — a
  * group row's `data.eventType`, a singleton's first event type — entirely in
  * SQL over the local mirror.
+ *
+ * Same virtualization scheme as the agent feed (agent-feed.tsx): TanStack
+ * Virtual owns the tail (anchorTo end + followOnAppend), the row window is a
+ * live SQL range query over dense positions, and the count query gates the
+ * list so the virtualizer never sees a 0→N transition on mount.
  */
+const FEED_TYPE_FILTER_SQL = `COALESCE(json_extract(data, '$.eventType'), json_extract(data, '$.events[0].type')) LIKE ?`;
+
 function FeedItemsView({
   database,
   emptyLabel,
@@ -734,69 +745,150 @@ function FeedItemsView({
   emptyLabel: string;
   eventTypePrefix: string | null;
 }) {
+  const filterParams = eventTypePrefix == null ? [] : [`${eventTypePrefix}%`];
+  const countResult = useStreamQuery(
+    database,
+    eventTypePrefix == null
+      ? `SELECT COUNT(*) AS count FROM feed_items`
+      : `SELECT COUNT(*) AS count FROM feed_items WHERE ${FEED_TYPE_FILTER_SQL}`,
+    filterParams,
+  );
+  const itemCount = Number(countResult.data[0]?.count ?? 0);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  return (
+    <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
+      <div className="mx-auto w-full max-w-3xl px-4 pb-6 pt-5 md:px-6">
+        {countResult.status !== "ok" ? (
+          <Centered>
+            {countResult.status === "error"
+              ? (countResult.error?.message ?? "SQLite query failed")
+              : "Opening local SQLite mirror"}
+          </Centered>
+        ) : itemCount === 0 ? (
+          <Centered>
+            {eventTypePrefix == null ? emptyLabel : "No feed items match this preset."}
+          </Centered>
+        ) : (
+          <VirtualFeedItems
+            // Fresh virtualizer (measurements, end anchor) per mirror and per
+            // preset — stale state from another list would misplace the scroll.
+            key={`${database.databasePath}:${eventTypePrefix ?? ""}`}
+            database={database}
+            eventTypePrefix={eventTypePrefix}
+            itemCount={itemCount}
+            scrollElementRef={scrollRef}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function VirtualFeedItems({
+  database,
+  eventTypePrefix,
+  itemCount,
+  scrollElementRef,
+}: {
+  database: StreamBrowserDatabase;
+  eventTypePrefix: string | null;
+  itemCount: number;
+  scrollElementRef: RefObject<HTMLDivElement | null>;
+}) {
+  const [expanded, setExpanded] = useState<ReadonlySet<number>>(new Set());
+  const virtualizer = useVirtualizer({
+    count: itemCount,
+    getScrollElement: () => scrollElementRef.current,
+    estimateSize: () => 44,
+    getItemKey: (index) => index,
+    anchorTo: "end",
+    followOnAppend: true,
+    scrollEndThreshold: 80,
+    overscan: 16,
+    directDomUpdates: true,
+  });
+
+  // Open at the newest items; later appends are followOnAppend's job (this
+  // component mounts gated behind the count query, see agent-feed.tsx).
+  useLayoutEffect(() => {
+    virtualizer.scrollToEnd();
+  }, [virtualizer]);
+
+  const virtualItems = virtualizer.getVirtualItems();
+  const first = virtualItems[0]?.index ?? 0;
+  const last = virtualItems.at(-1)?.index ?? -1;
+  const windowSize = Math.max(0, last + 1 + TAIL_PREFETCH_ROWS - first);
   const rowsResult = useStreamQuery(
     database,
     eventTypePrefix == null
       ? `SELECT local_index, component, first_offset, last_offset, event_count, json(data) AS data
-         FROM feed_items ORDER BY local_index DESC LIMIT ${MAX_FEED_ITEMS}`
+         FROM feed_items WHERE local_index >= ? AND local_index < ?
+         ORDER BY local_index ASC`
       : `SELECT local_index, component, first_offset, last_offset, event_count, json(data) AS data
-         FROM feed_items
-         WHERE COALESCE(json_extract(data, '$.eventType'), json_extract(data, '$.events[0].type')) LIKE ?
-         ORDER BY local_index DESC LIMIT ${MAX_FEED_ITEMS}`,
-    eventTypePrefix == null ? [] : [`${eventTypePrefix}%`],
+         FROM feed_items WHERE ${FEED_TYPE_FILTER_SQL}
+         ORDER BY local_index ASC LIMIT ? OFFSET ?`,
+    eventTypePrefix == null
+      ? [first, first + windowSize]
+      : [`${eventTypePrefix}%`, windowSize, first],
   );
-  const [expanded, setExpanded] = useState<ReadonlySet<number>>(new Set());
-  const rows = useMemo(() => [...rowsResult.data].reverse(), [rowsResult.data]);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  // Open pinned to the newest items, like every other feed in the app.
-  useEffect(() => {
-    const element = scrollRef.current;
-    if (element) element.scrollTop = element.scrollHeight;
-  }, [rows.length]);
-
-  if (rowsResult.status === "error") {
-    return <Centered>{rowsResult.error?.message ?? "SQLite query failed"}</Centered>;
-  }
-  if (rowsResult.status === "pending" && rows.length === 0) {
-    return <Centered>Opening local SQLite mirror</Centered>;
-  }
-  if (rows.length === 0) {
-    return (
-      <Centered>
-        {eventTypePrefix == null ? emptyLabel : "No feed items match this preset."}
-      </Centered>
-    );
-  }
+  // Retain the last committed rows across range re-queries so a shifting
+  // window doesn't blank already-visible rows to skeletons (see agent-feed).
+  const lastRowsRef = useRef<Map<number, Record<string, unknown>> | null>(null);
+  const rowsByIndex = useMemo(() => {
+    if (rowsResult.status !== "ok") {
+      return lastRowsRef.current ?? new Map<number, Record<string, unknown>>();
+    }
+    const rows = new Map<number, Record<string, unknown>>();
+    rowsResult.data.forEach((row, position) => {
+      const index = eventTypePrefix == null ? Number(row.local_index) : first + position;
+      if (Number.isFinite(index)) rows.set(index, row);
+    });
+    lastRowsRef.current = rows;
+    return rows;
+  }, [rowsResult.data, rowsResult.status, eventTypePrefix, first]);
 
   return (
     <div
-      ref={scrollRef}
-      className="min-h-0 flex-1 overflow-y-auto px-4"
+      className="relative w-full"
+      style={{ height: virtualizer.getTotalSize() }}
       data-testid="stream-feed-items"
     >
-      {rows.map((row) => {
-        const localIndex = Number(row.local_index);
+      {virtualItems.map((item) => {
+        const row = rowsByIndex.get(item.index);
+        const localIndex = row == null ? item.index : Number(row.local_index);
         return (
-          <FeedItemRow
-            key={localIndex}
-            row={row}
-            expanded={expanded.has(localIndex)}
-            onToggle={() =>
-              setExpanded((previous) => {
-                const next = new Set(previous);
-                if (next.has(localIndex)) next.delete(localIndex);
-                else next.add(localIndex);
-                return next;
-              })
-            }
-          />
+          <div
+            className="absolute left-0 top-0 w-full"
+            data-index={item.index}
+            key={item.key}
+            ref={virtualizer.measureElement}
+            style={{ transform: `translateY(${item.start}px)` }}
+          >
+            {row == null ? (
+              <div className="my-1 h-9 rounded-xl bg-muted/40" />
+            ) : (
+              <FeedItemRow
+                row={row}
+                expanded={expanded.has(localIndex)}
+                onToggle={() =>
+                  setExpanded((previous) => {
+                    const next = new Set(previous);
+                    if (next.has(localIndex)) next.delete(localIndex);
+                    else next.add(localIndex);
+                    return next;
+                  })
+                }
+              />
+            )}
+          </div>
         );
       })}
     </div>
   );
 }
 
-function FeedItemRow({
+const FeedItemRow = memo(function FeedItemRow({
   expanded,
   onToggle,
   row,
@@ -811,26 +903,47 @@ function FeedItemRow({
   const eventCount = Number(row.event_count);
   const firstOffset = Number(row.first_offset);
   const lastOffset = Number(row.last_offset);
+  const createdAt = data?.events[0]?.createdAt;
 
   return (
-    <article className="border-b py-1.5 font-mono text-xs">
+    <div className="py-0.5">
       <button
         aria-expanded={expanded}
-        className="grid w-full cursor-pointer grid-cols-[88px_minmax(0,1fr)_auto] items-baseline gap-3 text-left text-muted-foreground hover:text-foreground"
         onClick={onToggle}
         type="button"
+        className={cn(
+          "flex w-full cursor-pointer items-baseline gap-2.5 rounded-xl bg-muted/40 px-3.5 py-2 text-left",
+          "font-mono text-xs text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground",
+          expanded && "rounded-b-none bg-muted/70 text-foreground",
+        )}
       >
-        <span>
+        <span className="shrink-0 tabular-nums">
           {firstOffset === lastOffset ? `#${firstOffset}` : `#${firstOffset}–${lastOffset}`}
         </span>
-        <span className="truncate">{eventType}</span>
-        <span>{eventCount === 1 ? "1 event" : `${eventCount.toLocaleString()} events`}</span>
+        <span className="min-w-0 truncate text-foreground/80">{shortEventType(eventType)}</span>
+        {eventCount > 1 ? (
+          <span className="shrink-0 rounded-full bg-background px-1.5 py-px text-[10px]">
+            ×{eventCount.toLocaleString()}
+          </span>
+        ) : null}
+        {typeof createdAt === "string" ? (
+          <time className="ml-auto shrink-0 text-[10px]">
+            {new Date(createdAt).toLocaleTimeString()}
+          </time>
+        ) : null}
       </button>
       {expanded ? (
-        <SerializedObjectCodeBlock className="my-2" data={data?.events ?? row.data} />
+        <div className="rounded-b-xl bg-muted/40 px-3.5 pb-3 pt-1">
+          <SerializedObjectCodeBlock data={data?.events ?? row.data} />
+        </div>
       ) : null}
-    </article>
+    </div>
   );
+});
+
+/** `events.iterate.com/agent/input-added` → `agent/input-added` — the domain part carries the signal. */
+function shortEventType(type: string): string {
+  return type.startsWith("events.iterate.com/") ? type.slice("events.iterate.com/".length) : type;
 }
 
 function parseFeedItemData(raw: string): FeedItemData | null {
