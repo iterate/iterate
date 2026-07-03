@@ -94,6 +94,36 @@ _These are assumptions made while fleshing out an underspecified task._
 - [ ] (stretch) try real Grok voice with a real mic — needs `XAI_API_KEY` in
       doppler and a human with a mouth; leaving for Misha
 
+## Coherence eval (the "world cup scores" goal)
+
+Misha's live session exposed voice/worker incoherence: the voice model
+editorialized about capabilities ("it's best to connect a dedicated live
+sports data source") right before the worker just used its existing tool and
+delivered results. Built an informal eval
+(`apps/os/scripts/voice/eval.ignoreme.mjs`, gitignored): drives the real
+bridge in text mode through roughly that conversation (ask about tools → ask
+for a web research tool → ask for world cup results → clarify/push back),
+then judges the transcript with gpt-5.5 against a coherence rubric
+(contradictions, architecture leaks, speculative capability claims,
+double-acks, ignored reports, dead ends). Iterated prompts + mechanics until
+**3 consecutive passes** with real live results delivered each time.
+
+What it took, in order of discovery:
+
+1. Voice: example-driven instructions beat prose prohibitions for the
+   realtime model — situation → response templates ("Let me check.", "Let me
+   double-check.") with few-shot examples. Bans on capability speculation,
+   "we/us", addressing anyone but the user, defending doubted answers.
+2. Worker: numbered "conversation protocol" (oldest-unanswered-request-first,
+   never ask answered questions, (idle) rules, live-data-must-be-fetched-now,
+   check-capabilities-before-claiming-gaps, build-simple-tools-decisively).
+3. Mechanics: the worker model still lost cross-turn goals ("give me a
+   topic" right after being given one), so the voice processor now renders a
+   non-triggering `agent/input-added` context reminder (rolling window of
+   recent turns, folded in processor state) before each forwarded turn.
+   Salience jamming — coherence no longer hinges on the model re-reading a
+   long journal.
+
 ## Open questions for Misha
 
 - Should the worker agent's _conversation memory_ be the voice transcript
