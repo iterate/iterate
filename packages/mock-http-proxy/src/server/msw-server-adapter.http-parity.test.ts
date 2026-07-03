@@ -1,8 +1,7 @@
-import { once } from "node:events";
 import { createServer, request as httpRequest, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { HttpResponse, http, passthrough } from "msw";
+import { listenOnFetchSafePort } from "./fetch-safe-listen.ts";
 import { createNativeMswServer, type NativeMswServer } from "./msw-server-adapter.ts";
 
 const activeServers = new Set<NativeMswServer>();
@@ -20,13 +19,11 @@ type LifecycleEventName = (typeof lifecycleEventNames)[number];
 type LifecycleEventCall = [LifecycleEventName, { request: Request; requestId: string }];
 
 async function listen(server: NativeMswServer): Promise<{ baseUrl: string; port: number }> {
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
+  const { baseUrl, port } = await listenOnFetchSafePort(server);
   activeServers.add(server);
-  const address = server.address() as AddressInfo;
   return {
-    baseUrl: `http://127.0.0.1:${String(address.port)}`,
-    port: address.port,
+    baseUrl,
+    port,
   };
 }
 
@@ -44,13 +41,11 @@ async function close(server: NativeMswServer): Promise<void> {
 }
 
 async function listenUpstream(server: Server): Promise<{ baseUrl: string; port: number }> {
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
+  const { baseUrl, port } = await listenOnFetchSafePort(server);
   activeUpstreamServers.add(server);
-  const address = server.address() as AddressInfo;
   return {
-    baseUrl: `http://127.0.0.1:${String(address.port)}`,
-    port: address.port,
+    baseUrl,
+    port,
   };
 }
 

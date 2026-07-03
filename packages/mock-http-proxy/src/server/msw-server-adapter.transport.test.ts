@@ -1,11 +1,11 @@
 import { once } from "node:events";
 import { Agent, createServer, request as httpRequest, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, test } from "vitest";
 import { HttpResponse, http, ws } from "msw";
 import { WebSocket, WebSocketServer } from "ws";
 import type { RawData } from "ws";
 import { ws as exportedWs } from "../index.ts";
+import { listenOnFetchSafePort } from "./fetch-safe-listen.ts";
 import { createNativeMswServer, type NativeMswServer } from "./msw-server-adapter.ts";
 
 const activeServers = new Set<NativeMswServer>();
@@ -13,14 +13,12 @@ const activeWebSocketServers = new Set<WebSocketServer>();
 const activeUpstreamHttpServers = new Set<Server>();
 
 async function listen(server: NativeMswServer): Promise<{ baseUrl: string; port: number }> {
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
+  const { baseUrl, port } = await listenOnFetchSafePort(server);
   activeServers.add(server);
-  const address = server.address() as AddressInfo;
 
   return {
-    baseUrl: `http://127.0.0.1:${String(address.port)}`,
-    port: address.port,
+    baseUrl,
+    port,
   };
 }
 
@@ -51,11 +49,9 @@ async function closeWebSocketServer(server: WebSocketServer): Promise<void> {
 }
 
 async function listenUpstreamHttpServer(server: Server): Promise<{ port: number }> {
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
+  const { port } = await listenOnFetchSafePort(server);
   activeUpstreamHttpServers.add(server);
-  const address = server.address() as AddressInfo;
-  return { port: address.port };
+  return { port };
 }
 
 async function closeUpstreamHttpServer(server: Server): Promise<void> {
