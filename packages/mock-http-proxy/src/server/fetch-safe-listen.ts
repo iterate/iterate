@@ -19,7 +19,6 @@ export function isFetchBlockedPort(port: number): boolean {
   return FETCH_BLOCKED_PORTS.has(port);
 }
 
-/** Options for {@link listenOnFetchSafePort}. */
 type FetchSafeListenOptions = {
   host?: string;
   port?: number;
@@ -45,9 +44,10 @@ export async function listenOnFetchSafePort(
     }
 
     if (!isBlocked(address.port)) {
+      // IPv6 hosts need brackets in URLs.
+      const urlHost = host.includes(":") ? `[${host}]` : host;
       return {
-        // IPv6 hosts need brackets in a URL authority.
-        baseUrl: `http://${host.includes(":") ? `[${host}]` : host}:${String(address.port)}`,
+        baseUrl: `http://${urlHost}:${String(address.port)}`,
         host,
         port: address.port,
       };

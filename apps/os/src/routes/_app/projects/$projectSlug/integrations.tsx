@@ -17,7 +17,9 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { AlertCircle, Circle, Github, Mail, MessageSquare } from "lucide-react";
 import { z } from "zod";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { StreamViewSection } from "~/components/stream-view-section.tsx";
+import { StreamPage } from "~/components/stream-page.tsx";
+import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
+import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
 import type { ProjectRpcTarget } from "~/types.ts";
 
@@ -29,17 +31,18 @@ type ConnectionEntry = Awaited<ReturnType<ProjectRpcTarget["integrations"]["list
   status: Connection | null;
 };
 
-const Search = z.object({
+const Search = StreamViewSearch.extend({
   error: z.string().optional(),
 });
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/integrations")({
   validateSearch: Search,
   ssr: false,
-  loader: ({ context }) => ({
-    breadcrumb: "/integrations",
-    project: context.project,
-  }),
+  loader: ({ context }) =>
+    breadcrumbLoaderData({
+      project: context.project,
+      streamBreadcrumb: streamBreadcrumb(context.project, "/integrations"),
+    }),
   component: ProjectIntegrationsPage,
 });
 
@@ -158,8 +161,8 @@ function ProjectIntegrationsContent() {
     onError: (error) => toast.error(`Failed to disconnect Google: ${error.message}`),
   });
 
-  return (
-    <section className="max-w-md space-y-4 p-4">
+  const panel = (
+    <>
       {oauthErrorLabel ? (
         <Alert variant="destructive">
           <AlertCircle className="size-4" />
@@ -278,13 +281,16 @@ function ProjectIntegrationsContent() {
           </Item>
         ) : null}
       </ItemGroup>
+    </>
+  );
 
-      <StreamViewSection
-        projectId={project.id}
-        streamPath="/integrations"
-        emptyLabel="No events on the integrations stream yet."
-      />
-    </section>
+  return (
+    <StreamPage
+      panel={panel}
+      projectId={project.id}
+      streamPath="/integrations"
+      emptyLabel="No events on the integrations stream yet."
+    />
   );
 }
 
