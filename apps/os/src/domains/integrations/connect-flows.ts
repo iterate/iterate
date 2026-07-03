@@ -22,7 +22,7 @@
 import type {
   CompleteConnectResult,
   IntegrationConnectionStatus,
-  IntegrationProvider,
+  BuiltinIntegrationSlug,
   RouteSlackWebhookResult,
 } from "../../types.ts";
 import { itxEnv } from "../../env.ts";
@@ -35,7 +35,11 @@ import {
   sha256Base64Url,
   verifyOAuthState,
 } from "./oauth-state.ts";
-import { integrationStreamStub, lookupSlackTeamClaim } from "./integration-streams.ts";
+import {
+  integrationStreamStub,
+  lookupSlackTeamClaim,
+  streamEventsNewestFirst,
+} from "./integration-streams.ts";
 import { readGoogleTokenState } from "./google-tokens.ts";
 import { callProjectSlackWebApi } from "./slack-api.ts";
 import { SlackProcessorContract } from "./slack-processor-contract.ts";
@@ -48,7 +52,9 @@ import {
   SLACK_TEAM_DIRECTORY_STREAM_PATH,
   SLACK_TEAM_UNCLAIMED_EVENT_TYPE,
   SLACK_WEBHOOK_RECEIVED_EVENT_TYPE,
-  connectionFromIntegrationStreamPath,
+  integrationCoordinatesFromStreamPath,
+  readRecord,
+  readString,
   integrationConnectionStreamPath,
   sanitizeConnectionName,
   slackBotTokenSecretPath,
@@ -67,7 +73,7 @@ function requireGoogleConfig(config: AppConfig) {
   return google;
 }
 
-function oauthRedirectUri(input: { baseUrl: string; provider: IntegrationProvider }) {
+function oauthRedirectUri(input: { baseUrl: string; provider: BuiltinIntegrationSlug }) {
   return `${input.baseUrl.replace(/\/$/, "")}/api/integrations/${input.provider}/callback`;
 }
 
@@ -84,7 +90,7 @@ export async function startOAuthFlow(input: {
   callbackUrl?: string;
   config: AppConfig;
   projectId: string;
-  provider: IntegrationProvider;
+  provider: BuiltinIntegrationSlug;
   /** The user to bind the OAuth state to. Browser-supplied, not authority; the
    * callback's user check against the signed state is the backstop. */
   userId: string;
@@ -154,7 +160,7 @@ export async function completeConnect(input: {
   code: string;
   config: AppConfig;
   projectId: string;
-  provider: IntegrationProvider;
+  provider: BuiltinIntegrationSlug;
   state: string;
   userId: string | null;
 }): Promise<CompleteConnectResult> {
@@ -314,9 +320,13 @@ async function recordSlackConnection(input: {
         path: slackBotTokenSecretPath(input.connection),
       },
     ],
+    // Deliberately NO idempotency keys on the connected/claim facts: a
+    // disconnect->reconnect cycle must append fresh facts, and a key of
+    // (team, project) would dedupe the reconnect into silence (connected
+    // never re-folds, the team never re-claims). The OAuth code exchange is
+    // single-use, so the callback cannot double-fire these appends.
     connectedEvent: {
       type: SLACK_CONNECTED_EVENT_TYPE,
-      idempotencyKey: `slack:connected:${input.teamId}:${input.projectId}`,
       payload: {
         connection: input.connection,
         externalId: input.teamId,
@@ -335,7 +345,6 @@ async function recordSlackConnection(input: {
       streamPath: SLACK_TEAM_DIRECTORY_STREAM_PATH,
       event: {
         type: SLACK_TEAM_CLAIMED_EVENT_TYPE,
-        idempotencyKey: `slack-team-claimed:${input.teamId}:${input.projectId}`,
         payload: {
           connection: input.connection,
           projectId: input.projectId,
@@ -457,7 +466,7 @@ async function completeGoogleConnect(input: {
 export async function getConnectionStatus(input: {
   connection: string;
   projectId: string;
-  provider: IntegrationProvider;
+  provider: BuiltinIntegrationSlug;
 }): Promise<IntegrationConnectionStatus> {
   if (input.provider === "google") {
     const state = await readGoogleTokenState(input.projectId, input.connection);
@@ -476,31 +485,34 @@ export async function getConnectionStatus(input: {
     };
   }
 
-  // The slack router processor's reduced state is the connection projection.
-  const project = itxEnv.PROJECT.getByName(
-    DurableObjectNameCodec.stringify({
-      projectId: input.projectId,
-      path: integrationConnectionStreamPath("slack", input.connection),
-    }),
-  );
-  const snapshot = await (await project.slackProcessor).snapshot();
-  const connection = snapshot.state.connection;
-  return {
-    connected: connection.status === "connected",
-    displayName: connection.teamName ?? null,
-    externalId: connection.externalId ?? null,
-    metadata: {
-      teamId: connection.teamId,
-      teamName: connection.teamName,
-    },
-  };
+  // Slack status is the same machine as google's: a newest-first fold over
+  // the connection journal that stops at the first lifecycle fact. Reading
+  // the journal directly (not a processor snapshot) gives read-your-writes
+  // right after connect and skips the project-DO cold-start chain.
+  const path = integrationConnectionStreamPath("slack", input.connection);
+  for await (const event of streamEventsNewestFirst(input.projectId, path)) {
+    if (event.type !== SLACK_CONNECTED_EVENT_TYPE && event.type !== SLACK_DISCONNECTED_EVENT_TYPE) {
+      continue;
+    }
+    const payload = readRecord(event.payload) ?? {};
+    return {
+      connected: event.type === SLACK_CONNECTED_EVENT_TYPE,
+      displayName: readString(payload.teamName) ?? null,
+      externalId: readString(payload.externalId) ?? null,
+      metadata: {
+        teamId: readString(payload.teamId),
+        teamName: readString(payload.teamName),
+      },
+    };
+  }
+  return { connected: false, displayName: null, externalId: null, metadata: {} };
 }
 
 export async function disconnectProvider(input: {
   config: AppConfig;
   connection: string;
   projectId: string;
-  provider: IntegrationProvider;
+  provider: BuiltinIntegrationSlug;
 }): Promise<{ success: true }> {
   if (input.provider === "slack") {
     const status = await getConnectionStatus(input);
@@ -537,9 +549,12 @@ export async function disconnectProvider(input: {
     });
     const teamId = status.metadata.teamId as string | undefined;
     if (teamId) {
+      // The unclaim names the connection: the fold only clears a claim when
+      // BOTH match, so disconnecting a stale connection of a team that has
+      // since been re-claimed under a new name cannot tear down the live one.
       await integrationStreamStub(null, SLACK_TEAM_DIRECTORY_STREAM_PATH).append({
         type: SLACK_TEAM_UNCLAIMED_EVENT_TYPE,
-        payload: { projectId: input.projectId, teamId },
+        payload: { connection: input.connection, projectId: input.projectId, teamId },
       });
     }
     return { success: true };
@@ -583,12 +598,15 @@ export async function listIntegrationConnections(
     DurableObjectNameCodec.stringify({ projectId, path: "/" }),
   );
   const snapshot = await (await project.processor).snapshot();
-  const streams = (snapshot.state as { streams?: { path: string }[] }).streams ?? [];
   const entries: { connection: string; integration: string; path: string }[] = [];
-  for (const stream of streams) {
-    const connection = connectionFromIntegrationStreamPath(stream.path);
-    if (connection === null) continue;
-    entries.push({ connection, integration: stream.path.split("/")[2]!, path: stream.path });
+  for (const stream of snapshot.state.streams) {
+    const coordinates = integrationCoordinatesFromStreamPath(stream.path);
+    if (coordinates === null) continue;
+    entries.push({
+      connection: coordinates.connection,
+      integration: coordinates.slug,
+      path: stream.path,
+    });
   }
   return entries;
 }

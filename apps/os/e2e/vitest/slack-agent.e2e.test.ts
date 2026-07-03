@@ -122,7 +122,6 @@ test.skipIf(signingSecret === null)(
       }),
       {
         type: "events.iterate.com/slack/connected",
-        idempotencyKey: `slack:connected:${teamId}:${projectId}`,
         payload: {
           connection: CONNECTION,
           externalId: teamId,
@@ -135,7 +134,6 @@ test.skipIf(signingSecret === null)(
     using directory = root.streams.get(SLACK_TEAM_DIRECTORY_STREAM_PATH);
     await directory.append({
       type: "events.iterate.com/slack/team-claimed",
-      idempotencyKey: `slack-team-claimed:${teamId}:${projectId}`,
       payload: { connection: CONNECTION, projectId, teamId, teamName: `e2e-${RUN_SUFFIX}` },
     });
 

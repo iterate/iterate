@@ -33,13 +33,44 @@ async function readAllStreamEvents(projectId: string | null, path: string): Prom
   }
 }
 
+const TAIL_PAGE_SIZE = 200;
+
+/**
+ * A stream's events NEWEST FIRST, paged backwards from the journal head.
+ *
+ * Integration journals grow forever (one token-refreshed event per Gmail-token
+ * expiry, one webhook per Slack message), but lifecycle questions ("is this
+ * connection connected? what is its current token?") are answered by the most
+ * recent few facts. Folding over this generator makes those reads O(tail) and
+ * — because it is ONE iteration, not one fold per page — accumulators in the
+ * consuming fold naturally span page boundaries.
+ */
+export async function* streamEventsNewestFirst(
+  projectId: string | null,
+  path: string,
+): AsyncGenerator<StreamEvent> {
+  const stream = integrationStreamStub(projectId, path);
+  const { coreProcessorState } = await stream.runtimeState();
+  let beforeOffset = coreProcessorState.maxOffset + 1;
+  while (beforeOffset > 1) {
+    // getEvents bounds are exclusive on both ends, so consecutive windows
+    // (afterOffset, beforeOffset) tile the offset space with no gap/overlap.
+    const afterOffset = Math.max(0, beforeOffset - 1 - TAIL_PAGE_SIZE);
+    const page = await stream.getEvents({ afterOffset, beforeOffset });
+    for (let index = page.length - 1; index >= 0; index -= 1) yield page[index]!;
+    beforeOffset = afterOffset + 1;
+  }
+}
+
 /**
  * Folds the deployment-wide Slack team directory: latest claim wins per team,
- * an unclaim from the claiming project clears it. A claim names the project
- * AND the connection that owns the team; claim events without a string
- * `connection` are ignored (clean break — pre-connections claims do not fold).
+ * an unclaim clears it only when BOTH the project and the connection match the
+ * live claim — one project can hold several workspaces, and a stale
+ * connection's disconnect must not tear down the claim a newer connection of
+ * the same team now owns. Claim events without a string `connection` are
+ * ignored (clean break — pre-connections claims do not fold).
  */
-function foldSlackTeamDirectory(
+export function foldSlackTeamDirectory(
   events: readonly StreamEvent[],
 ): Map<string, { connection: string; projectId: string }> {
   const claims = new Map<string, { connection: string; projectId: string }>();
@@ -58,7 +89,8 @@ function foldSlackTeamDirectory(
       });
     } else if (
       event.type === SLACK_TEAM_UNCLAIMED_EVENT_TYPE &&
-      claims.get(payload.teamId)?.projectId === payload.projectId
+      claims.get(payload.teamId)?.projectId === payload.projectId &&
+      claims.get(payload.teamId)?.connection === payload.connection
     ) {
       claims.delete(payload.teamId);
     }

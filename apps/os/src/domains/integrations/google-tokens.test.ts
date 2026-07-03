@@ -194,6 +194,48 @@ describe("getFreshGoogleAccessToken", () => {
   });
 });
 
+test("token state survives page boundaries: newest refresh wins over a connected fact hundreds of events back", async () => {
+  const fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
+
+  await seedConnectedGoogleAccount({
+    accessToken: "ancient-access-token",
+    expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    refreshToken: "ancient-refresh-token",
+  });
+  const stream = streamNetwork.getByName(GOOGLE_STREAM_NAME);
+  // Journals accrete forever (one refreshed event per expiry, plus stream
+  // noise); push the connected fact multiple tail pages back.
+  for (let index = 0; index < 450; index += 1) {
+    await stream.append({ type: "events.iterate.com/stream/woken", payload: {} });
+  }
+  await stream.append({
+    type: GOOGLE_TOKEN_REFRESHED_EVENT_TYPE,
+    payload: {
+      encryptedAccessToken: await encryptSecretMaterial(
+        "newest-access-token",
+        SECRET_ENCRYPTION_KEY,
+      ),
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    },
+  });
+  for (let index = 0; index < 50; index += 1) {
+    await stream.append({ type: "events.iterate.com/stream/woken", payload: {} });
+  }
+
+  await expect(
+    getFreshGoogleAccessToken({
+      config: testConfig(),
+      connection: CONNECTION,
+      projectId: PROJECT_ID,
+    }),
+  ).resolves.toBe("newest-access-token");
+  // Fresh token from the refresh layer — no network refresh round-trip.
+  expect(fetchMock).not.toHaveBeenCalled();
+  vi.unstubAllGlobals();
+  streamNetwork.reset();
+});
+
 function testConfig() {
   return parseConfig({
     APP_CONFIG: JSON.stringify({
