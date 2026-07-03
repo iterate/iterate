@@ -1,0 +1,16 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "allowImportingTsExtensions": true,
+    "paths": {
+      "@/*": ["./src/*"],
+      "@/assets/*": ["./assets/*"],
+      // react-native-webrtc's d.ts imports `event-target-shim/index`, a
+      // subpath that package's `exports` map doesn't expose — invisible under
+      // moduleResolution=bundler without this alias.
+      "event-target-shim/index": ["./node_modules/event-target-shim/index.d.ts"]
+    }
+  },
+  "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"]
+}

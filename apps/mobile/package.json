@@ -1,0 +1,46 @@
+{
+  "name": "@iterate-com/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "ios": "expo run:ios",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.90.0",
+    "capnweb": "^0.8.0",
+    "expo": "~57.0.1",
+    "expo-auth-session": "~57.0.1",
+    "expo-constants": "~57.0.2",
+    "expo-crypto": "~57.0.0",
+    "expo-dev-client": "~57.0.4",
+    "expo-haptics": "~57.0.0",
+    "expo-keep-awake": "~57.0.0",
+    "expo-linking": "~57.0.1",
+    "expo-router": "~57.0.2",
+    "expo-secure-store": "~57.0.0",
+    "expo-splash-screen": "~57.0.1",
+    "expo-status-bar": "~57.0.0",
+    "expo-system-ui": "~57.0.0",
+    "expo-web-browser": "~57.0.0",
+    "react": "19.2.3",
+    "react-native": "0.86.0",
+    "react-native-gesture-handler": "~2.32.0",
+    "react-native-incall-manager": "^4.2.1",
+    "react-native-reanimated": "4.5.0",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "4.25.2",
+    "react-native-url-polyfill": "^3.0.0",
+    "react-native-webrtc": "^124.0.7",
+    "react-native-worklets": "0.10.0"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "typescript": "~6.0.3",
+    "vitest": "^4.1.7",
+    "event-target-shim": "^6.0.2"
+  }
+}
