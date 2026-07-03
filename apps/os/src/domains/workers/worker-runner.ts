@@ -1,4 +1,4 @@
-import { engineEnv as env } from "../../env.ts";
+import { itxEnv as env } from "../../env.ts";
 import type { Env } from "../../env.ts";
 import type {
   StatefulDynamicWorkerRef,

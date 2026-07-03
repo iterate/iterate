@@ -33,6 +33,10 @@ class MemoryStreamNetwork {
 class MemoryStream implements Stream {
   events: StreamEvent[] = [];
 
+  async __describe() {
+    return { instructions: "in-memory test stream", types: "", children: {} };
+  }
+
   constructor(
     readonly network: MemoryStreamNetwork,
     readonly path: string,

@@ -1,6 +1,6 @@
 // The Slack webhook HTTP lanes (/api/integrations/slack/webhook and
 // .../interactivity-webhook), served by the API WORKER — not the app worker.
-// The api worker carries the full engine binding set, so a validly-signed
+// The api worker carries the full itx binding set, so a validly-signed
 // event routes straight into the claiming project's stream via
 // routeSlackWebhook() — no capnweb round trip through the deployment's own
 // /api surface (which is how this code worked when it lived app-side).

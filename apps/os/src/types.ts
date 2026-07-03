@@ -61,6 +61,16 @@ export type Description = {
 };
 
 /**
+ * Every node in the capability tree answers `__describe()` — see
+ * {@link Description}. Interfaces below extend this instead of redeclaring;
+ * nodes with structured extras (Session, Agent, CapabilityHost, the project
+ * itx) declare their own narrowed signature.
+ */
+export interface Describable {
+  __describe(): Promise<Description>;
+}
+
+/**
  * Entry point exposed before any principal or project authority is known.
  *
  * `/api` hands every caller one of these; the only thing it can do is
@@ -68,8 +78,7 @@ export type Description = {
  * canonical Cap'n Web pattern: authority cannot be forged, only handed back by a
  * method that already checked you.
  */
-export interface UnauthenticatedOs {
-  __describe(): Promise<Description>;
+export interface UnauthenticatedOs extends Describable {
   authenticate(input: ItxAuthCredentials): Promise<Session>;
 }
 
@@ -90,7 +99,7 @@ export interface Session {
 }
 
 /** Catalog of projects reachable from a {@link Session}. */
-export interface ProjectCollection {
+export interface ProjectCollection extends Describable {
   get(projectId: string): Promise<ProjectRpcTarget>;
   create(args: {
     organizationSlug?: string;
@@ -201,12 +210,12 @@ export interface ProjectRpcTarget {
 }
 
 /** Agent-local web chat response tool exposed inside agent script execution. */
-export interface AgentChat {
+export interface AgentChat extends Describable {
   sendMessage(input: { message: string }): Promise<StreamEvent>;
 }
 
 /** Workers AI binding exposed through ITX as a project/agent capability. */
-export interface Ai {
+export interface Ai extends Describable {
   models(): Promise<unknown>;
   run(model: string, body: unknown): Promise<unknown>;
 }
@@ -222,8 +231,7 @@ export type IntegrationProvider = "google" | "slack";
  * paths (`itx.integrations.slack.chat.postMessage({...})`) resolve through the dynamic
  * path-call fallback onto `invokeCapability`.
  */
-export interface SlackCapability {
-  __describe(): Promise<Description>;
+export interface SlackCapability extends Describable {
   invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
   request(input: {
     body?: Record<string, unknown>;
@@ -240,8 +248,7 @@ export type GmailRequestInput = {
 };
 
 /** Gmail REST proxy (`itx.integrations.gmail.request({ path: "/users/me/messages" })`). */
-export interface GmailCapability {
-  __describe(): Promise<Description>;
+export interface GmailCapability extends Describable {
   request(input: GmailRequestInput): Promise<{
     data: unknown;
     headers: Record<string, string>;
@@ -267,8 +274,7 @@ export type CompleteConnectResult =
  * `integrations.slack` live here because they only work through the project's
  * connected accounts.
  */
-export interface ProjectIntegrations {
-  __describe(): Promise<Description>;
+export interface ProjectIntegrations extends Describable {
   /** Gmail REST proxy for the project's connected Google account. */
   gmail: GmailCapability;
   /** Slack Web API proxy for the connected workspace (`integrations.slack.chat.postMessage(...)`). */
@@ -299,7 +305,7 @@ export type RouteSlackWebhookResult =
   | { ignored: "team-not-claimed"; ok: true };
 
 /** Agent catalog within one project. */
-export interface AgentCollection {
+export interface AgentCollection extends Describable {
   get(path: string): Agent;
   list(): Promise<StreamListItem[]>;
 }
@@ -334,7 +340,7 @@ export interface Agent {
 }
 
 /** Stream catalog for either a project or the deployment-wide global scope. */
-export interface StreamCollection {
+export interface StreamCollection extends Describable {
   get(path: string): Stream;
 }
 
@@ -350,7 +356,7 @@ export interface ProjectStreamCollection extends StreamCollection {
  * behind domain methods. Domain helpers can construct common event shapes, but
  * callers and processors still work with explicit events.
  */
-export interface Stream {
+export interface Stream extends Describable {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   at(path: string): Stream;
   getEvent(
@@ -394,7 +400,7 @@ export interface Stream {
 }
 
 /** Repo catalog for either a project or the deployment-wide global scope. */
-export interface RepoCollection {
+export interface RepoCollection extends Describable {
   create(input: { path: string }): Promise<Repo>;
   get(path: string): Repo;
 }
@@ -405,7 +411,7 @@ export interface ProjectRepoCollection extends RepoCollection {
 }
 
 /** Git-backed repo capability used by project workers and dynamic worker refs. */
-export interface Repo {
+export interface Repo extends Describable {
   commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult>;
   create(): Promise<Repo>;
   /** All committed file paths at HEAD. */
@@ -430,7 +436,7 @@ export interface Repo {
  * a new API. Getting a sandbox is cheap and does not start a container; the
  * first command does.
  */
-export interface SandboxCollection {
+export interface SandboxCollection extends Describable {
   get(path: string): Promise<CloudflareSandbox>;
 }
 
@@ -448,13 +454,13 @@ export interface SandboxCollection {
 export type CloudflareSandbox = object;
 
 /** Secret catalog within one project. */
-export interface SecretCollection {
+export interface SecretCollection extends Describable {
   get(path: string): Secret;
   list(): Promise<StreamListItem[]>;
 }
 
 /** Path-addressed secret capability. Secret material has no public read API. */
-export interface Secret {
+export interface Secret extends Describable {
   describe(): Promise<SecretDescription>;
   fetch(req: Request): Promise<Response>;
   processor: StreamProcessorRpc<SecretProcessorState>;
@@ -540,7 +546,7 @@ export interface StreamProcessorRpc<State = unknown> {
 }
 
 /** Capability-tree entry point for ad-hoc project-scoped worker refs. */
-export interface DynamicWorkerCollection {
+export interface DynamicWorkerCollection extends Describable {
   get<T extends object = Record<string, unknown>>(
     ref: DynamicWorkerRef,
   ): DynamicWorkerCapability<T>;
@@ -564,7 +570,7 @@ export interface ProjectEgressIntercept extends Disposable {
  * Object. Last writer wins; disposing or releasing the handle clears only the
  * interceptor it installed if it is still current.
  */
-export interface ProjectEgress {
+export interface ProjectEgress extends Describable {
   fetch(req: Request): Promise<Response>;
   intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;
 }
@@ -591,7 +597,7 @@ export type CapabilityDescription = {
   types?: string;
 };
 
-export interface OpenApiCollection {
+export interface OpenApiCollection extends Describable {
   connect(input: OpenApiConnectInput): Promise<OpenApiRpc>;
 }
 
@@ -603,7 +609,7 @@ export type OpenApiConnectInput = {
 
 export type OpenApiRpc = object;
 
-export interface McpClientCollection {
+export interface McpClientCollection extends Describable {
   connect(input: McpClientConnectInput): Promise<McpClientRpc>;
   /**
    * The public Exa MCP server (https://mcp.exa.ai/mcp), pre-connected for every
@@ -631,7 +637,7 @@ export type McpClientRpc = object;
  * against the OS Session `authenticate()` returns, which an itx holder does
  * not have.
  */
-export interface ItxExampleCatalog {
+export interface ItxExampleCatalog extends Describable {
   get(input: { id: string }): Promise<ItxExampleWithCode>;
   list(): Promise<ItxExampleSummary[]>;
 }
@@ -668,7 +674,7 @@ export interface CapabilityHost {
 }
 
 /** Capability hosts by scope path within one project (`itx.capabilityHosts`). */
-export interface CapabilityHostCollection {
+export interface CapabilityHostCollection extends Describable {
   get(path: string): CapabilityHost;
 }
 
@@ -679,7 +685,7 @@ export interface CapabilityHostCollection {
  * disposal or explicit revoke remove this mount without racing a newer mount at
  * the same path.
  */
-export interface CapabilityProvision extends Disposable {
+export interface CapabilityProvision extends Describable, Disposable {
   readonly path: string[];
   readonly providedAtOffset: number;
   revoke(): Promise<void>;

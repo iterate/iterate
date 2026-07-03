@@ -1,12 +1,12 @@
 import { env as workerEnv } from "cloudflare:workers";
 
 /**
- * The binding contract every engine worker is deployed with (alchemy.run.ts
+ * The binding contract every itx worker is deployed with (alchemy.run.ts
  * binds these names identically in each of them).
  *
  * The repo-wide ambient `Env` (src/lib/worker-env.d.ts) covers the two
- * dashboard-side workers (app + ingress); the engine workers deliberately do not
- * participate in that union — they import this `Env` and the `engineEnv`
+ * dashboard-side workers (app + ingress); the itx workers deliberately do not
+ * participate in that union — they import this `Env` and the `itxEnv`
  * accessor explicitly, so neither side's types leak into the other.
  */
 export interface Env {
@@ -14,7 +14,7 @@ export interface Env {
   /**
    * This worker's own deployed name (e.g. "os-prd-api"). Exists so
    * worker-loader cache keys are unique per hosting worker: local dev runs
-   * every engine worker inside ONE workerd whose loader cache is shared across
+   * every itx worker inside ONE workerd whose loader cache is shared across
    * them, and a dynamic worker isolate created by one parent carries that
    * parent's loopback binding stubs — invoking it from another parent fails
    * with a redacted internal error. In production each worker has its own
@@ -54,4 +54,4 @@ export interface Env {
   >;
 }
 
-export const engineEnv = workerEnv as unknown as Env;
+export const itxEnv = workerEnv as unknown as Env;

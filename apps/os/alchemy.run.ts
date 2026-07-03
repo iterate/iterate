@@ -359,7 +359,7 @@ const statefulWorker = DurableObjectNamespace<StatefulWorkerDurableObject>("work
 
 // ---- Fresh-stage bootstrap --------------------------------------------------
 // Cloudflare rejects a cross-script DO binding whose target script does not
-// exist yet (error 10061), and the engine workers reference each other — a
+// exist yet (error 10061), and the itx workers reference each other — a
 // legitimate cycle once everything is deployed, but unsatisfiable on the
 // FIRST deploy of a fresh stage. So: bindings whose target script is missing
 // are omitted this pass, and the run re-executes itself once at the end to
@@ -436,7 +436,7 @@ async function osWorker<B extends Bindings>(
         ? JSON.stringify(ctx.rawRuntimeConfig, null, 2)
         : alchemy.secret(JSON.stringify(ctx.rawRuntimeConfig, null, 2)),
       // The worker's own name, for worker-loader cache keys (src/env.ts
-      // WORKER_SELF): local dev runs every engine worker inside one workerd whose
+      // WORKER_SELF): local dev runs every itx worker inside one workerd whose
       // loader cache is shared, so keys must be parent-worker-unique.
       WORKER_SELF: name,
     },
@@ -454,10 +454,10 @@ async function osWorker<B extends Bindings>(
   return worker;
 }
 
-// Bindings every engine worker carries — src/env.ts is the matching
-// contract. All engine workers get the full set so any of them can host any
+// Bindings every itx worker carries — src/env.ts is the matching
+// contract. All itx workers get the full set so any of them can host any
 // capability, exactly like the single-worker original itx came from.
-const engineBindings = {
+const itxBindings = {
   AI: Ai(),
   AGENT: agent,
   ARTIFACTS: Artifacts({ namespace: artifactsNamespace }),
@@ -481,17 +481,13 @@ const engineBindings = {
 // global_fetch_strictly_public: same-zone subrequests (auth worker on previews,
 // worker-hosted e2e fixtures through project egress) must traverse Worker
 // routes instead of going to origin — same reason as the app worker.
-const engineCompatibilityFlags = ["nodejs_compat", "global_fetch_strictly_public"];
+const itxCompatibilityFlags = ["nodejs_compat", "global_fetch_strictly_public"];
 
-function engineWorker(
-  id: keyof typeof workerNames,
-  entrypoint: string,
-  bindingOverrides?: Bindings,
-) {
+function itxWorker(id: keyof typeof workerNames, entrypoint: string, bindingOverrides?: Bindings) {
   return osWorker(id, {
     entrypoint,
-    compatibilityFlags: engineCompatibilityFlags,
-    bindings: { ...engineBindings, ...bindingOverrides },
+    compatibilityFlags: itxCompatibilityFlags,
+    bindings: { ...itxBindings, ...bindingOverrides },
   });
 }
 
@@ -511,17 +507,17 @@ const [
   workerWorker,
   apiWorker,
 ] = await Promise.all([
-  engineWorker("stream", "./src/workers/stream.ts"),
-  engineWorker("capabilityHost", "./src/workers/capability-host.ts"),
-  engineWorker("project", "./src/workers/project.ts"),
-  engineWorker("agent", "./src/workers/agent.ts"),
-  engineWorker("repo", "./src/workers/repo.ts"),
+  itxWorker("stream", "./src/workers/stream.ts"),
+  itxWorker("capabilityHost", "./src/workers/capability-host.ts"),
+  itxWorker("project", "./src/workers/project.ts"),
+  itxWorker("agent", "./src/workers/agent.ts"),
+  itxWorker("repo", "./src/workers/repo.ts"),
   // The owner binds the container-backed namespace (image + container app +
   // migration); every other itx worker keeps the plain cross-script binding.
-  engineWorker("sandbox", "./src/workers/sandbox.ts", { SANDBOX: sandboxContainer }),
-  engineWorker("secret", "./src/workers/secret.ts"),
-  engineWorker("worker", "./src/workers/worker.ts"),
-  engineWorker("api", "./src/workers/api.ts"),
+  itxWorker("sandbox", "./src/workers/sandbox.ts", { SANDBOX: sandboxContainer }),
+  itxWorker("secret", "./src/workers/secret.ts"),
+  itxWorker("worker", "./src/workers/worker.ts"),
+  itxWorker("api", "./src/workers/api.ts"),
 ]);
 
 // Second bootstrap pass (fresh stages only): the cross-script Durable Object

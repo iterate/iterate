@@ -16,7 +16,7 @@ Everything is declared in one place: [`apps/os/alchemy.run.ts`](../alchemy.run.t
 ## The workers
 
 `<n>` is the stage worker name (`os-prd`, `os-preview-N`, `os-dev-<user>`).
-Eleven workers: ingress, app, api, and eight engine Durable Object workers.
+Eleven workers: ingress, app, api, and eight itx Durable Object workers.
 
 | Worker                | Entry                            | Owns                                                                                          |
 | --------------------- | -------------------------------- | --------------------------------------------------------------------------------------------- |
@@ -32,11 +32,11 @@ Eleven workers: ingress, app, api, and eight engine Durable Object workers.
 | `<n>-secret`          | `src/workers/secret.ts`          | `SecretDurableObject`                                                                         |
 | `<n>-worker`          | `src/workers/worker.ts`          | `StatefulWorkerDurableObject` (stateful dynamic workers)                                      |
 
-All engine workers (api + the eight DO workers) deploy with the **same
-binding set** (`engineBindings` in `alchemy.run.ts`; the matching type is
+All itx workers (api + the eight DO workers) deploy with the **same
+binding set** (`itxBindings` in `alchemy.run.ts`; the matching type is
 `src/env.ts`): every DO namespace, `AI`, `LOADER` (Worker Loader),
 `ARTIFACTS`, `PROJECT_DIRECTORY` (the slug→id KV cache), and the secret
-encryption key. Any engine worker can host any capability — exactly like the
+encryption key. Any itx worker can host any capability — exactly like the
 single-worker implementation they came from — and each re-exports the shared loopback
 entrypoints (`ItxEntrypoint`, `ProjectEgressEntrypoint`) so `ctx.exports`
 resolves identically in all of them. They all carry `nodejs_compat` (repo git

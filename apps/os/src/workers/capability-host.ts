@@ -1,6 +1,6 @@
 /**
  * The capability-host worker: hosts CapabilityHostDurableObject (per-DO worker
- * topology — see docs/worker-topology.md). Every engine worker re-exports the
+ * topology — see docs/worker-topology.md). Every itx worker re-exports the
  * shared loopback entrypoints so `ctx.exports` resolves identically in all
  * of them.
  */

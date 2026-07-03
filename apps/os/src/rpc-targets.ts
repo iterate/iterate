@@ -8,7 +8,7 @@ import {
   userPrincipalOf,
   widenProjectAccess,
 } from "./auth.ts";
-import { engineEnv as env } from "./env.ts";
+import { itxEnv as env } from "./env.ts";
 import {
   listProjectDirectory,
   primeProjectDirectory,
@@ -113,6 +113,21 @@ import type {
 } from "./types.ts";
 
 export class StreamRpcTarget extends RpcTarget implements Stream {
+  async __describe() {
+    return describeNode({
+      instructions: `A durable event stream at path "${this.props.path}": append(events), getEvents(), waitForEvent(), subscribe(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events.`,
+      children: {
+        append: "Commit events; returns them with offsets.",
+        at: "The stream at a sub-path.",
+        getEvent: "One event by offset or idempotencyKey.",
+        getEvents: "Read a range of events.",
+        subscribe: "Live event delivery; returns an unsubscribe handle.",
+        waitForEvent: "Block until a matching event lands.",
+      },
+      parent: "streams.get(path)",
+    });
+  }
+
   constructor(readonly props: { auth: ItxAuth; projectId: string | null; path: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -178,6 +193,13 @@ export class StreamRpcTarget extends RpcTarget implements Stream {
 }
 
 class StreamCollectionRpcTarget extends RpcTarget implements StreamCollection {
+  async __describe() {
+    return describeNode({
+      instructions: "Stream catalog: get(path) returns the durable event stream at that path.",
+      children: { get: "The stream at a path." },
+    });
+  }
+
   constructor(readonly props: { auth: ItxAuth; projectId: string | null }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -260,6 +282,20 @@ async function requestRepoCreate(input: {
 }
 
 class RepoRpcTarget extends RpcTarget implements Repo {
+  async __describe() {
+    return describeNode({
+      instructions: `A git repo (over Cloudflare Artifacts) at path "${this.props.path}": readFile/listFiles/commitFiles, plus create() for first use.`,
+      children: {
+        commitFiles: "Commit a batch of file changes ({ message, changes }).",
+        create: "Create the repo if it does not exist yet.",
+        listFiles: "List file paths.",
+        readFile: "Read one file ({ path }).",
+        whoami: "Repo identity string (debug).",
+      },
+      parent: "repos.get(path); the project repo is itx.repo",
+    });
+  }
+
   constructor(readonly props: { auth: ItxAuth; path: string; projectId: string | null }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -311,6 +347,13 @@ class RepoRpcTarget extends RpcTarget implements Repo {
 }
 
 class RepoCollectionRpcTarget extends RpcTarget implements RepoCollection {
+  async __describe() {
+    return describeNode({
+      instructions: "Repo catalog: get(path) / create({ path }).",
+      children: { create: "Create a repo at a path.", get: "The repo at a path." },
+    });
+  }
+
   constructor(readonly props: { auth: ItxAuth; projectId: string | null }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -347,6 +390,15 @@ class ProjectRepoCollectionRpcTarget
 }
 
 class AgentCollectionRpcTarget extends RpcTarget implements AgentCollection {
+  async __describe() {
+    return describeNode({
+      instructions:
+        'Agent catalog: get("/agents/<name>") returns the agent control surface; list() the known agent streams.',
+      children: { get: "One agent by path.", list: "Known agents (from project state)." },
+      parent: "a project itx (itx.agents)",
+    });
+  }
+
   constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -380,6 +432,15 @@ class AgentCollectionRpcTarget extends RpcTarget implements AgentCollection {
  * path, after the same project-access assert every collection performs.
  */
 class SandboxCollectionRpcTarget extends RpcTarget implements SandboxCollection {
+  async __describe() {
+    return describeNode({
+      instructions:
+        'Path-addressed Cloudflare sandboxes: get("/sandboxes/cloudflare/<name>") returns a container-backed sandbox stub (exec, git, files).',
+      children: { get: "The sandbox at a path (boots the container on first use)." },
+      parent: "a project itx (itx.sandboxes)",
+    });
+  }
+
   constructor(readonly props: { auth: ItxAuth; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -402,6 +463,15 @@ class SandboxCollectionRpcTarget extends RpcTarget implements SandboxCollection 
 }
 
 class SecretCollectionRpcTarget extends RpcTarget implements SecretCollection {
+  async __describe() {
+    return describeNode({
+      instructions:
+        "Secret catalog: get(path) / list(). Secret VALUES never transit this surface — they substitute into egress requests server-side.",
+      children: { get: "The secret at a path.", list: "Known secrets (from project state)." },
+      parent: "a project itx (itx.secrets)",
+    });
+  }
+
   constructor(readonly props: { auth: ItxAuth; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -421,6 +491,18 @@ class SecretCollectionRpcTarget extends RpcTarget implements SecretCollection {
 }
 
 class SecretRpcTarget extends RpcTarget implements Secret {
+  async __describe() {
+    return describeNode({
+      instructions: `The secret at "${this.props.path}": describe() for metadata, update() to set, fetch() to use it in an egress request via placeholder substitution. The raw value is never returned.`,
+      children: {
+        describe: "Metadata (exists, updatedAt) — never the value.",
+        fetch: "Egress fetch with secret placeholders substituted server-side.",
+        update: "Set the value.",
+      },
+      parent: "itx.secrets.get(path)",
+    });
+  }
+
   constructor(readonly props: { auth: ItxAuth; path: string; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -455,6 +537,14 @@ class SecretRpcTarget extends RpcTarget implements Secret {
 type AiRunOptions = NonNullable<Parameters<Env["AI"]["run"]>[2]>;
 
 class AiRpcTarget extends RpcTarget implements Ai {
+  async __describe() {
+    return describeNode({
+      instructions: "Workers AI: run(model, body) executes a model, models() lists the catalog.",
+      children: { models: "List available models.", run: "Run one model invocation." },
+      parent: "a project itx (itx.ai)",
+    });
+  }
+
   constructor(readonly props: { gateway?: AiRunOptions["gateway"] } = {}) {
     super();
   }
@@ -637,6 +727,15 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
 }
 
 class AgentChatRpcTarget extends RpcTarget implements AgentChat {
+  async __describe() {
+    return describeNode({
+      instructions:
+        "An agent's web-chat door: sendMessage({ message }) appends the agent's reply to its stream (what the user sees).",
+      children: { sendMessage: "Say something to the user." },
+      parent: "agent.chat / itx.chat (agent scopes only)",
+    });
+  }
+
   constructor(readonly props: { auth: ItxAuth; path: string; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -661,44 +760,49 @@ class AgentChatRpcTarget extends RpcTarget implements AgentChat {
   }
 }
 
+type AgentRpcTargetProps = {
+  auth: ItxAuth;
+  // The agent scope's own capability host; its (already-normalized) path IS
+  // the agent path. Exposed as `agent.capabilityHost` and used as the
+  // fallback for dynamic dotted-path calls (`agent.someTool(...)`).
+  capabilityHost: CapabilityHostRpcTarget;
+  ctx: CfExecutionContext;
+  projectId: string;
+};
+
 class AgentRpcTarget extends RpcTarget implements Agent {
-  constructor(
-    readonly props: {
-      auth: ItxAuth;
-      // The agent scope's own capability host; its (already-normalized) path IS
-      // the agent path. Exposed as `agent.capabilityHost` and used as the
-      // fallback for dynamic dotted-path calls (`agent.someTool(...)`).
-      capabilityHost: CapabilityHostRpcTarget;
-      ctx: CfExecutionContext;
-      projectId: string;
-    },
-  ) {
+  // Private for the same reason as the other capability surfaces: public
+  // member names are capability namespace (see ITX_SURFACE_MEMBER_NAMES).
+  readonly #props: AgentRpcTargetProps;
+
+  constructor(props: AgentRpcTargetProps) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
     normalizeAgentPath(props.capabilityHost.path);
+    this.#props = props;
     return withInvokeCapabilityFallback(this, { invoker: props.capabilityHost });
   }
 
   get #path() {
-    return this.props.capabilityHost.path;
+    return this.#props.capabilityHost.path;
   }
 
   get capabilityHost(): CapabilityHost {
-    return this.props.capabilityHost;
+    return this.#props.capabilityHost;
   }
 
   provideCapability(input: Parameters<Agent["provideCapability"]>[0]) {
-    return this.props.capabilityHost.provideCapability(input);
+    return this.#props.capabilityHost.provideCapability(input);
   }
 
   revokeCapability(input: Parameters<Agent["revokeCapability"]>[0]) {
-    return this.props.capabilityHost.revokeCapability(input);
+    return this.#props.capabilityHost.revokeCapability(input);
   }
 
   get durableObjectStub() {
     return env.AGENT.getByName(
       DurableObjectNameCodec.stringify({
-        projectId: this.props.projectId,
+        projectId: this.#props.projectId,
         path: this.#path,
       }),
     );
@@ -710,17 +814,17 @@ class AgentRpcTarget extends RpcTarget implements Agent {
 
   get stream() {
     return new StreamRpcTarget({
-      auth: this.props.auth,
-      projectId: this.props.projectId,
+      auth: this.#props.auth,
+      projectId: this.#props.projectId,
       path: this.#path,
     });
   }
 
   get chat() {
     return new AgentChatRpcTarget({
-      auth: this.props.auth,
+      auth: this.#props.auth,
       path: this.#path,
-      projectId: this.props.projectId,
+      projectId: this.#props.projectId,
     });
   }
 
@@ -758,10 +862,10 @@ class AgentRpcTarget extends RpcTarget implements Agent {
         sendMessage: "Append a user message to the agent stream.",
         stream: "The agent's own event stream.",
       },
-      parent: `project ${this.props.projectId}, via agents.get("${this.#path}")`,
+      parent: `project ${this.#props.projectId}, via agents.get("${this.#path}")`,
       agentPath: this.#path,
-      projectId: this.props.projectId,
-      whoami: `agent ${this.props.projectId}:${this.#path}`,
+      projectId: this.#props.projectId,
+      whoami: `agent ${this.#props.projectId}:${this.#path}`,
     });
   }
 }
@@ -773,6 +877,15 @@ class AgentRpcTarget extends RpcTarget implements Agent {
  * `itx.projects.get("prj").workers.get(ref).someRpcMethod()`.
  */
 class DynamicWorkerCollectionRpcTarget extends RpcTarget implements DynamicWorkerCollection {
+  async __describe() {
+    return describeNode({
+      instructions:
+        "Dynamic worker refs: get(ref) turns a declarative worker ref (inline modules or repo source; stateless or stateful) into a live dispatch target.",
+      children: { get: "The worker for a ref ({ type, path, source, ... })." },
+      parent: "a project itx (itx.workers); itx.worker is the default project worker",
+    });
+  }
+
   constructor(
     readonly props: {
       auth: ItxAuth;
@@ -902,6 +1015,19 @@ class DynamicWorkerRpcTarget extends RpcTarget {
 }
 
 export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectCollection {
+  async __describe() {
+    return describeNode({
+      instructions:
+        'Project catalog: get("prj_...") and create({ slug }) vend a project itx; list() enriches with deployment status.',
+      children: {
+        create: "Create a project; returns its itx.",
+        get: "The itx for a project id.",
+        list: "The session's projects with deployment status.",
+      },
+      parent: "session.projects",
+    });
+  }
+
   constructor(readonly props: { auth: ItxAuth; config?: AppConfig; ctx: CfExecutionContext }) {
     super();
   }
@@ -1182,22 +1308,31 @@ type CapabilityHostRpcTargetProps = {
  * that is how an agent provides a capability to the whole project.
  */
 export class CapabilityHostRpcTarget extends RpcTarget implements CapabilityHost {
-  constructor(readonly props: CapabilityHostRpcTargetProps) {
+  // Private on purpose: on the capability surfaces, every PUBLIC member name is
+  // claimed capability namespace (the fallback proxy checks `key in target`,
+  // and ITX_SURFACE_MEMBER_NAMES bans mounts from shadowing members). A public
+  // `props` field would burn that name for internals.
+  readonly #props: CapabilityHostRpcTargetProps;
+
+  constructor(props: CapabilityHostRpcTargetProps) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
-    props.path = normalizePath(props.path);
+    this.#props = { ...props, path: normalizePath(props.path) };
     // The host itself gets the dotted-path fallback too: host.foo.bar(x) is
     // host.invokeCapability({ path: ["foo", "bar"], args: [x] }).
     return withInvokeCapabilityFallback(this);
   }
 
   get path() {
-    return this.props.path;
+    return this.#props.path;
   }
 
   get #durableObject() {
     return env.CAPABILITY_HOST.getByName(
-      DurableObjectNameCodec.stringify({ path: this.props.path, projectId: this.props.projectId }),
+      DurableObjectNameCodec.stringify({
+        path: this.#props.path,
+        projectId: this.#props.projectId,
+      }),
     );
   }
 
@@ -1208,7 +1343,7 @@ export class CapabilityHostRpcTarget extends RpcTarget implements CapabilityHost
     // surface returns an ownership handle that can revoke that exact mount on
     // explicit revoke or disposal.
     return new CapabilityProvisionRpcTarget({
-      ctx: this.props.ctx,
+      ctx: this.#props.ctx,
       path: input.path,
       providedAtOffset: provision.providedAtOffset,
       revoke: (revokeInput) => this.#durableObject.revokeCapability(revokeInput),
@@ -1229,7 +1364,7 @@ export class CapabilityHostRpcTarget extends RpcTarget implements CapabilityHost
     // (DO method name: describeCapabilities — it returns the raw array; the
     // Description envelope is assembled here, where the scope context lives.)
     return describeNode({
-      instructions: `The capability host at scope "${this.props.path}": the durable dynamic-capability table and script journal for this scope. Mounting is local; reads chain up through enclosing scopes, so \`capabilities\` includes inherited mounts tagged with their declaring scope.`,
+      instructions: `The capability host at scope "${this.#props.path}": the durable dynamic-capability table and script journal for this scope. Mounting is local; reads chain up through enclosing scopes, so \`capabilities\` includes inherited mounts tagged with their declaring scope.`,
       children: {
         invokeCapability:
           "Explicit dynamic dispatch ({ path, args }); dotted calls compile to this.",
@@ -1237,9 +1372,9 @@ export class CapabilityHostRpcTarget extends RpcTarget implements CapabilityHost
         revokeCapability: "Remove a mount from THIS scope.",
         runScript: "Run an async (itx) => {...} script in this scope.",
       },
-      parent: `project ${this.props.projectId}; sibling scopes via capabilityHosts.get(path)`,
+      parent: `project ${this.#props.projectId}; sibling scopes via capabilityHosts.get(path)`,
       capabilities,
-      path: this.props.path,
+      path: this.#props.path,
     });
   }
 
@@ -1250,6 +1385,15 @@ export class CapabilityHostRpcTarget extends RpcTarget implements CapabilityHost
 
 /** Catalog of capability scopes within one project (`itx.capabilityHosts`). */
 class CapabilityHostCollectionRpcTarget extends RpcTarget implements CapabilityHostCollection {
+  async __describe() {
+    return describeNode({
+      instructions:
+        'Capability hosts of ANY scope, by path: get("/") is the project root (mount there to make a capability visible project-wide), get("/agents/<name>") an agent scope.',
+      children: { get: "The capability host at a scope path." },
+      parent: "a project itx (itx.capabilityHosts)",
+    });
+  }
+
   constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
@@ -1336,27 +1480,32 @@ type ProjectRpcTargetProps = {
  * round trip; today we don't.
  */
 export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContract {
-  constructor(readonly props: ProjectRpcTargetProps) {
+  // Private for the same reason as the other capability surfaces: public
+  // member names are capability namespace (see ITX_SURFACE_MEMBER_NAMES).
+  readonly #props: ProjectRpcTargetProps;
+
+  constructor(props: ProjectRpcTargetProps) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
+    this.#props = props;
     return withInvokeCapabilityFallback(this, { invoker: props.capabilityHost });
   }
 
   get projectId() {
-    return this.props.projectId;
+    return this.#props.projectId;
   }
 
   get durableObjectStub() {
     return env.PROJECT.getByName(
-      DurableObjectNameCodec.stringify({ path: "/", projectId: this.props.projectId }),
+      DurableObjectNameCodec.stringify({ path: "/", projectId: this.#props.projectId }),
     );
   }
 
   async __describe() {
-    const scopePath = this.props.capabilityHost.path;
+    const scopePath = this.#props.capabilityHost.path;
     const [project, hostDescription] = await Promise.all([
       this.durableObjectStub.describe(),
-      this.props.capabilityHost.__describe(),
+      this.#props.capabilityHost.__describe(),
     ]);
     const mountedCapabilities = hostDescription.capabilities;
     return describeNode({
@@ -1384,10 +1533,10 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
 
   async debug() {
     const [project, config] = await Promise.all([
-      readProjectById(env.PROJECT_DIRECTORY, this.props.projectId).catch(() => null),
+      readProjectById(env.PROJECT_DIRECTORY, this.#props.projectId).catch(() => null),
       Promise.resolve(parseConfig(env)),
     ]);
-    const streamPath = this.props.capabilityHost.path;
+    const streamPath = this.#props.capabilityHost.path;
     const streamUrl =
       project?.slug == null
         ? (config.baseUrl ?? "https://os.iterate.com")
@@ -1400,7 +1549,7 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
     return [
       `*Debug:* <${streamUrl}|open stream>`,
       `Path: \`${streamPath}\``,
-      `Project: \`${project?.slug ?? this.props.projectId}\``,
+      `Project: \`${project?.slug ?? this.#props.projectId}\``,
     ].join("\n");
   }
 
@@ -1419,7 +1568,7 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
   // no bootstrap step, and means `env.ITX.get()` can return this one class at any
   // path with no per-scope branching. On a project-root itx both are undefined.
   get agent(): Agent | undefined {
-    const path = this.props.capabilityHost.path;
+    const path = this.#props.capabilityHost.path;
     return path.startsWith("/agents/") ? this.agents.get(path) : undefined;
   }
 
@@ -1434,42 +1583,42 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
   // `provideCapability`/`revokeCapability` below are shortcuts onto the own
   // host, because own-scope mounting is the overwhelmingly common case.
   get capabilityHost(): CapabilityHost {
-    return this.props.capabilityHost;
+    return this.#props.capabilityHost;
   }
 
   get capabilityHosts(): CapabilityHostCollection {
     return new CapabilityHostCollectionRpcTarget({
-      auth: this.props.auth,
-      ctx: this.props.ctx,
-      projectId: this.props.projectId,
+      auth: this.#props.auth,
+      ctx: this.#props.ctx,
+      projectId: this.#props.projectId,
     });
   }
 
   provideCapability(input: Parameters<ProjectRpcTargetContract["provideCapability"]>[0]) {
-    return this.props.capabilityHost.provideCapability(input);
+    return this.#props.capabilityHost.provideCapability(input);
   }
 
   revokeCapability(input: Parameters<ProjectRpcTargetContract["revokeCapability"]>[0]) {
-    return this.props.capabilityHost.revokeCapability(input);
+    return this.#props.capabilityHost.revokeCapability(input);
   }
 
   get streams() {
     return new ProjectStreamCollectionRpcTarget({
-      auth: this.props.auth,
-      projectId: this.props.projectId,
+      auth: this.#props.auth,
+      projectId: this.#props.projectId,
     });
   }
 
   get agents() {
     return new AgentCollectionRpcTarget({
-      auth: this.props.auth,
-      ctx: this.props.ctx,
-      projectId: this.props.projectId,
+      auth: this.#props.auth,
+      ctx: this.#props.ctx,
+      projectId: this.#props.projectId,
     });
   }
 
   get egress() {
-    return new ProjectEgressRpcTarget({ projectId: this.props.projectId });
+    return new ProjectEgressRpcTarget({ projectId: this.#props.projectId });
   }
 
   get examples(): ItxExampleCatalog {
@@ -1478,58 +1627,58 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
 
   get integrations(): ProjectIntegrations {
     return new IntegrationsRpcTarget({
-      auth: this.props.auth,
-      projectId: this.props.projectId,
+      auth: this.#props.auth,
+      projectId: this.#props.projectId,
     });
   }
 
   get mcp(): McpClientCollection {
     return new McpClientCollectionRpcTarget({
-      egress: projectEgressFetcher(this.props.ctx.exports, this.props.projectId),
+      egress: projectEgressFetcher(this.#props.ctx.exports, this.#props.projectId),
     });
   }
 
   get openapi(): OpenApiCollection {
     return new OpenApiCollectionRpcTarget({
-      egress: projectEgressFetcher(this.props.ctx.exports, this.props.projectId),
+      egress: projectEgressFetcher(this.#props.ctx.exports, this.#props.projectId),
     });
   }
 
   get repos() {
     return new ProjectRepoCollectionRpcTarget({
-      auth: this.props.auth,
-      projectId: this.props.projectId,
+      auth: this.#props.auth,
+      projectId: this.#props.projectId,
     });
   }
 
   get sandboxes() {
     return new SandboxCollectionRpcTarget({
-      auth: this.props.auth,
-      projectId: this.props.projectId,
+      auth: this.#props.auth,
+      projectId: this.#props.projectId,
     });
   }
 
   get secrets() {
     return new SecretCollectionRpcTarget({
-      auth: this.props.auth,
-      projectId: this.props.projectId,
+      auth: this.#props.auth,
+      projectId: this.#props.projectId,
     });
   }
 
   get repo() {
     return new RepoRpcTarget({
-      auth: this.props.auth,
+      auth: this.#props.auth,
       path: PROJECT_REPO_PATH,
-      projectId: this.props.projectId,
+      projectId: this.#props.projectId,
     });
   }
 
   get workers() {
     return new DynamicWorkerCollectionRpcTarget({
-      auth: this.props.auth,
-      ctx: this.props.ctx,
+      auth: this.#props.auth,
+      ctx: this.#props.ctx,
       loader: env.LOADER,
-      projectId: this.props.projectId,
+      projectId: this.#props.projectId,
     });
   }
 
@@ -1543,17 +1692,15 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
 // Provide-time collision guard: a dynamic capability's root segment may not
 // shadow any member of the itx-facing surfaces — built-ins always win
 // isolate-side resolution (see the ProjectRpcTarget design note), so a mount
-// behind one would be silently unreachable. Computed from the prototypes;
-// "props" is added by hand because instance fields live on instances, not
-// prototypes.
-const ITX_SURFACE_MEMBER_NAMES: ReadonlySet<string> = new Set([
-  "props",
-  ...[
-    ProjectRpcTarget.prototype,
-    AgentRpcTarget.prototype,
-    CapabilityHostRpcTarget.prototype,
-  ].flatMap((prototype) => Object.getOwnPropertyNames(prototype)),
-]);
+// behind one would be silently unreachable. Prototypes are the whole story
+// because these classes keep their state in #private fields (invisible to
+// `in` and to Object.getOwnPropertyNames), so no instance-field entries are
+// needed here.
+const ITX_SURFACE_MEMBER_NAMES: ReadonlySet<string> = new Set(
+  [ProjectRpcTarget.prototype, AgentRpcTarget.prototype, CapabilityHostRpcTarget.prototype].flatMap(
+    (prototype) => Object.getOwnPropertyNames(prototype),
+  ),
+);
 
 /**
  * THE one recipe for constructing an itx: a ProjectRpcTarget wired to the
@@ -1694,6 +1841,14 @@ type RevokeCapability = (input: RevokeCapabilityInput) => Promise<void>;
  * provision after a replacement cannot revoke the newer mount at the same path.
  */
 class CapabilityProvisionRpcTarget extends RpcTarget implements CapabilityProvision {
+  async __describe() {
+    return describeNode({
+      instructions: `The ownership handle for the mount at "${this.path.join(".")}" (providedAtOffset ${this.providedAtOffset}): revoke() removes exactly this mount; disposal (\`using\`) revokes too.`,
+      children: { revoke: "Remove this mount." },
+      parent: "returned by provideCapability",
+    });
+  }
+
   readonly #ctx: Pick<CfExecutionContext, "waitUntil"> | undefined;
   readonly #path: string[];
   readonly #providedAtOffset: number;
@@ -1805,6 +1960,18 @@ export class StreamSubscriptionRpcTarget extends RpcTarget implements StreamSubs
  * terminal secret-substitution fetch path.
  */
 class ProjectEgressRpcTarget extends RpcTarget implements ProjectEgress {
+  async __describe() {
+    return describeNode({
+      instructions:
+        "Project-attributed outbound fetch: fetch(request) egresses with the project's identity and secret substitution; intercept(handler) installs a live egress interceptor (last writer wins).",
+      children: {
+        fetch: "Outbound fetch through project egress.",
+        intercept: "Install an egress interceptor; returns a release handle.",
+      },
+      parent: "a project itx (itx.egress)",
+    });
+  }
+
   constructor(readonly props: { projectId: string }) {
     super();
   }
@@ -1917,6 +2084,15 @@ export class StreamProcessorRpcTarget<Contract extends StreamProcessorContract>
 const PROJECT_CONTEXT_EXAMPLES = ITX_EXAMPLES.filter((example) => example.context === "project");
 
 class ItxExampleCatalogRpcTarget extends RpcTarget implements ItxExampleCatalog {
+  async __describe() {
+    return describeNode({
+      instructions:
+        "Read-only catalogue of known-good itx script snippets: list() summaries, get({ id }) one example with full code. Copy working patterns instead of inventing them.",
+      children: { get: "One example with code.", list: "All example summaries." },
+      parent: "a project itx (itx.examples)",
+    });
+  }
+
   async list() {
     return PROJECT_CONTEXT_EXAMPLES.map(exampleSummary);
   }
@@ -1945,6 +2121,18 @@ type McpClientDeps = { egress: Fetcher };
 const EXA_MCP_URL = "https://mcp.exa.ai/mcp";
 
 class McpClientCollectionRpcTarget extends RpcTarget implements McpClientCollection {
+  async __describe() {
+    return describeNode({
+      instructions:
+        "Ad-hoc MCP clients: connect({ url }) returns a client whose dotted calls are tool invocations; exa is the built-in Exa web-search server.",
+      children: {
+        connect: "Connect to an MCP server by URL.",
+        exa: "The public Exa MCP server (web_search_exa, web_fetch_exa).",
+      },
+      parent: "a project itx (itx.mcp)",
+    });
+  }
+
   constructor(readonly props: McpClientDeps) {
     super();
   }
@@ -1997,6 +2185,15 @@ class McpClientRpcTarget extends RpcTarget {
 type OpenApiDeps = { egress: Fetcher };
 
 class OpenApiCollectionRpcTarget extends RpcTarget implements OpenApiCollection {
+  async __describe() {
+    return describeNode({
+      instructions:
+        "Ad-hoc OpenAPI clients: connect(spec) fetches/parses a spec and returns a client whose dotted calls are operationIds.",
+      children: { connect: "Connect to an OpenAPI deployment." },
+      parent: "a project itx (itx.openapi)",
+    });
+  }
+
   constructor(readonly props: OpenApiDeps) {
     super();
   }
