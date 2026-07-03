@@ -335,6 +335,33 @@ return { current: await counter.current() }; // 2, and it persists under the key
 `.trim(),
   },
   {
+    id: "sandbox-exec",
+    title: "Run shell commands in a sandbox (project repo included)",
+    description:
+      "A sandbox is a real Linux container addressed by path — always the full path, starting /sandboxes/ (today: /sandboxes/cloudflare/<anything>, nested paths fine). get() returns the bare Cloudflare Sandbox SDK surface: exec, readFile/writeFile, startProcess, gitCheckout, exposePort, destroy, … The first command boots the container (can take a minute cold). Every start also clones the project repo to /workspace/repo with working git credentials; await ensureProjectRepo() before depending on it.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+// The path IS the identity: same path, same sandbox (and its filesystem)
+// until you destroy() it. Different paths are different containers.
+const sandbox = await itx.sandboxes.get(vars.sandboxPath ?? "/sandboxes/cloudflare/example");
+
+// exec runs a shell command; the first one boots the container.
+const uname = await sandbox.exec("uname -s");
+
+// The project repo is cloned to /workspace/repo on every container start —
+// ensureProjectRepo() is the awaitable guarantee that it's in place.
+await sandbox.ensureProjectRepo();
+const repo = await sandbox.exec("ls /workspace/repo");
+
+return {
+  os: uname.stdout.trim(), // "Linux"
+  repoFiles: repo.stdout.trim().split("\\n"),
+  exitCode: repo.exitCode,
+};
+`.trim(),
+  },
+  {
     id: "repo-commit-files",
     title: "Commit files into the project repo",
     description:

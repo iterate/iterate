@@ -28,22 +28,62 @@ export const SeedOAuthClientSpec = z.object({
 });
 export type SeedOAuthClientSpec = z.infer<typeof SeedOAuthClientSpec>;
 
-export const SeedOAuthClientsEnv = z.object({
-  AUTH_SEED_OAUTH_CLIENTS: z
-    .string()
-    .transform((value, ctx) => {
-      try {
-        return JSON.parse(value) as unknown;
-      } catch (error) {
-        ctx.addIssue({ code: "custom", message: `not valid JSON: ${error}` });
-        return z.NEVER;
-      }
-    })
-    .pipe(z.array(SeedOAuthClientSpec)),
-  SERVICE_AUTH_TOKEN: z.string().min(1),
-  // The deployed auth origin to seed, e.g. https://auth.iterate-dev.com.
-  VITE_AUTH_APP_ORIGIN: z.url(),
-});
+const OptionalNonEmptyString = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+  z.string().trim().min(1).optional(),
+);
+
+const OptionalUrl = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+  z.url().optional(),
+);
+
+export const SeedOAuthClientsEnv = z
+  .object({
+    AUTH_SEED_OAUTH_CLIENTS: z
+      .string()
+      .transform((value, ctx) => {
+        try {
+          return JSON.parse(value) as unknown;
+        } catch (error) {
+          ctx.addIssue({ code: "custom", message: `not valid JSON: ${error}` });
+          return z.NEVER;
+        }
+      })
+      .pipe(z.array(SeedOAuthClientSpec)),
+    APP_CONFIG_SERVICE_AUTH_TOKEN: OptionalNonEmptyString,
+    SERVICE_AUTH_TOKEN: OptionalNonEmptyString,
+    // The deployed auth origin to seed, e.g. https://auth.iterate-dev.com.
+    APP_CONFIG_AUTH_APP_ORIGIN: OptionalUrl,
+    VITE_AUTH_APP_ORIGIN: OptionalUrl,
+  })
+  .transform((env, ctx) => {
+    const serviceAuthToken = env.APP_CONFIG_SERVICE_AUTH_TOKEN ?? env.SERVICE_AUTH_TOKEN;
+    if (!serviceAuthToken) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["APP_CONFIG_SERVICE_AUTH_TOKEN"],
+        message: "APP_CONFIG_SERVICE_AUTH_TOKEN or SERVICE_AUTH_TOKEN is required",
+      });
+      return z.NEVER;
+    }
+
+    const authAppOrigin = env.APP_CONFIG_AUTH_APP_ORIGIN ?? env.VITE_AUTH_APP_ORIGIN;
+    if (!authAppOrigin) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["APP_CONFIG_AUTH_APP_ORIGIN"],
+        message: "APP_CONFIG_AUTH_APP_ORIGIN or VITE_AUTH_APP_ORIGIN is required",
+      });
+      return z.NEVER;
+    }
+
+    return {
+      AUTH_SEED_OAUTH_CLIENTS: env.AUTH_SEED_OAUTH_CLIENTS,
+      SERVICE_AUTH_TOKEN: serviceAuthToken,
+      VITE_AUTH_APP_ORIGIN: authAppOrigin,
+    };
+  });
 
 async function waitForAuthDeployment(baseUrl: string, timeoutMs = 120_000) {
   const discoveryUrl = `${baseUrl.replace(/\/+$/, "")}/api/auth/.well-known/openid-configuration`;

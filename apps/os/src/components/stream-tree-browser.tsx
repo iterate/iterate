@@ -9,6 +9,7 @@ import {
   parseBrowserCoreStreamTreeState,
   type BrowserCoreStreamTreeState,
 } from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
+import { useItxSubscription, type ItxLiveSubscriptionHandle } from "~/itx/itx-react.tsx";
 
 /**
  * Where tree nodes get their state: path → stream handle. Project pages pass
@@ -19,20 +20,12 @@ import {
  * component state. The batch's `state` is the server core reduced state, typed
  * `unknown` on the wire and parsed here.
  */
-type StreamSubscription = { unsubscribe(): unknown };
-
 export type StreamTreeSource = (streamPath: string) => {
   subscribe(args: {
     events?: boolean;
     processEventBatch(batch: { state: unknown }): unknown;
-  }): Promise<StreamSubscription>;
+  }): Promise<ItxLiveSubscriptionHandle>;
 };
-
-/** Tear down one live stream subscription (best-effort unsubscribe + dispose). */
-function disposeStreamSubscription(subscription: StreamSubscription): void {
-  void Promise.resolve(subscription.unsubscribe()).catch(() => {});
-  (subscription as Partial<Disposable>)[Symbol.dispose]?.();
-}
 
 type NodeState =
   | { status: "loading" }
@@ -41,8 +34,10 @@ type NodeState =
 
 /**
  * Live state of one stream path. The subscription's initial push paints the
- * node; refresh() tears down and re-subscribes (a fresh initial push) — the
- * manual recovery path if a Stream DO was evicted under a silent stream.
+ * node; recovery (reconnect, silent-death watchdog, re-subscribe, retry) is
+ * useItxSubscription's, and refresh() remains as the impatient-human shortcut
+ * for the same re-subscribe. The node paints "loading" — never a stale tree —
+ * whenever the subscription isn't live.
  */
 function useLiveStreamState(input: {
   enabled: boolean;
@@ -50,46 +45,42 @@ function useLiveStreamState(input: {
   streamPath: string;
 }): { node: NodeState; refresh: () => void } {
   const { enabled, source, streamPath } = input;
-  const [node, setNode] = useState<NodeState>({ status: "loading" });
-  const [epoch, setEpoch] = useState(0);
+  const [tree, setTree] = useState<BrowserCoreStreamTreeState>();
 
+  // The subscription target changed (different stream, fresh socket, node
+  // collapsed): the held tree belongs to the OLD subscription and must not
+  // render as live under the new one. Watchdog-internal re-subscribes to the
+  // same target keep it (their fresh initial push replaces it in place).
   useEffect(() => {
-    // Back to "loading" on every (re)subscribe — refresh() exists to recover
-    // from a silently stalled subscription, so it must not keep painting the
-    // stale live state while the new subscription connects.
-    setNode({ status: "loading" });
-    if (!enabled) return;
-    let disposed = false;
-    let release: (() => void) | null = null;
-    source(streamPath)
-      .subscribe({
+    return () => setTree(undefined);
+  }, [enabled, source, streamPath]);
+
+  const subscription = useItxSubscription(
+    () =>
+      source(streamPath).subscribe({
         events: false,
         processEventBatch: (batch) => {
-          if (disposed) return;
-          setNode({
-            status: "live",
-            state: parseBrowserCoreStreamTreeState(batch.state),
-          });
+          setTree(parseBrowserCoreStreamTreeState(batch.state));
         },
-      })
-      .then((subscription) => {
-        if (disposed) disposeStreamSubscription(subscription);
-        else release = () => disposeStreamSubscription(subscription);
-      })
-      .catch((error: unknown) => {
-        if (disposed) return;
-        setNode({
-          status: "error",
-          message: error instanceof Error ? error.message : String(error),
-        });
-      });
-    return () => {
-      disposed = true;
-      release?.();
-    };
-  }, [enabled, source, streamPath, epoch]);
+      }),
+    [source, streamPath],
+    { enabled },
+  );
 
-  return { node, refresh: () => setEpoch((current) => current + 1) };
+  const node: NodeState =
+    subscription.status === "error"
+      ? { status: "error", message: subscription.error ?? "stream subscription failed" }
+      : subscription.status !== "live" || tree === undefined
+        ? { status: "loading" }
+        : { status: "live", state: tree };
+
+  return {
+    node,
+    refresh: () => {
+      setTree(undefined);
+      subscription.refresh();
+    },
+  };
 }
 
 export function StreamTreeBrowser({

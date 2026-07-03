@@ -10,6 +10,7 @@ export const Route = createFileRoute("/")({
       context.iterateAuthIssuer,
       context.currentProjectHostSlug,
       context.authError,
+      context.appOrigin,
     );
 
     // `session.projects.list()` includes projects the auth worker knows about

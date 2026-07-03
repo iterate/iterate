@@ -80,9 +80,15 @@ mutual cross-script bindings as long as both scripts exist.
 ## Request routing
 
 The ingress worker is the only worker with routes (the app base URL, the MCP
-hostname, and each project hostname base + wildcards). It is the trust
-boundary: it strips the internal forwarding headers from inbound requests,
-then forwards whole requests over service bindings:
+hostname, and each project hostname base + wildcards). Routes and DNS are not
+alchemy resources: deploys idempotently ensure and edge-verify them after
+`finalize()`, destroys chain `--park` to keep them live against a placeholder
+script, and nothing ever deletes them — see
+`packages/shared/src/alchemy/iterate-app.ts` for the lifecycle rationale.
+
+The ingress worker is also the trust boundary: it strips the internal
+forwarding headers from inbound requests, then forwards whole requests over
+service bindings:
 
 ```
                     ┌────────────► <n>-app  (MCP hostname → /api/mcp)

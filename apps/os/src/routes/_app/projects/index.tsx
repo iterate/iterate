@@ -4,6 +4,7 @@ import {
   useQueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { FolderPlus } from "lucide-react";
 import { useAuthClient } from "@iterate-com/auth/client";
@@ -92,6 +93,22 @@ function ProjectsIndexPage() {
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });
+
+  // Auth onboarding creates the project container on auth only, so a
+  // brand-new user's first project always arrives here as "missing" — run
+  // the set-up for them instead of asking them to press the button. Once per
+  // project per mount, so a failing bootstrap surfaces its toast instead of
+  // looping.
+  const autoSetUpProjectIds = useRef(new Set<string>());
+  const recoverProjectMutate = recoverProject.mutate;
+  useEffect(() => {
+    for (const project of data ?? []) {
+      if (project.deploymentStatus !== "missing") continue;
+      if (autoSetUpProjectIds.current.has(project.id)) continue;
+      autoSetUpProjectIds.current.add(project.id);
+      recoverProjectMutate(project);
+    }
+  }, [data, recoverProjectMutate]);
 
   return (
     <section className="space-y-5 p-4">

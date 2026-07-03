@@ -2,9 +2,10 @@ import type { Workflow } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
 /**
- * Production rollout strategy (main branch):
- * 1) Deploy iterate.com with current env vars.
- * 2) OS deploys via deploy-os.yml when apps/os changes.
+ * Production rollout on push to main:
+ * 1) Deploy apps/iterate-com.
+ * 2) OS/semaphore/etc deploy via their own deploy-*.yml when their paths change.
+ * Slack-notifies #error-pulse if the deploy fails.
  */
 export default {
   name: "CI",
@@ -19,36 +20,32 @@ export default {
     workflow_dispatch: {},
   },
   jobs: {
-    variables: {
-      ...utils.runsOnDepotUbuntu,
+    "deploy-iterate-com": {
+      ...utils.runsOnDepotImage,
       steps: [
+        ...utils.setupFromImage(),
+        ...utils.setupDopplerBaked({ config: "prd", project: "iterate-com" }),
         {
-          name: "Document rollout strategy",
-          run: [
-            "cat <<'EOF' >> \"$GITHUB_STEP_SUMMARY\"",
-            "## Rollout Strategy",
-            "1. Deploy iterate.com with current environment variables.",
-            "2. OS deploys separately via deploy-os.yml when apps/os changes.",
-            "EOF",
-          ].join("\n"),
+          name: "Deploy apps/iterate-com",
+          env: {
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+          },
+          run: "pnpm run deploy",
+          "working-directory": "apps/iterate-com",
         },
       ],
     },
-    deploy: {
-      uses: "./.github/workflows/deploy.yml",
-      needs: ["variables"],
-      secrets: "inherit",
-    },
     slack_failure: {
-      needs: ["variables", "deploy"],
+      needs: ["deploy-iterate-com"],
       if: `always() && contains(needs.*.result, 'failure')`,
-      ...utils.runsOnDepotUbuntu,
-      env: { NEEDS: "${{ toJson(needs) }}" },
+      ...utils.runsOnDepotImage,
+      // DOPPLER_TOKEN lets slack.ts resolve SLACK_CI_BOT_TOKEN from Doppler.
+      env: { NEEDS: "${{ toJson(needs) }}", DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}" },
       steps: [
-        ...utils.setupRepo,
+        ...utils.setupFromImage(),
         await utils.githubScript(import.meta, async function notify_slack_on_failure() {
           const { getSlackClient, slackChannelIds } = await import("../utils/slack.ts");
-          const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+          const slack = getSlackClient();
           const needs = JSON.parse(process.env.NEEDS!);
           const failedJobs = Object.entries(needs)
             .filter(([_, { result }]: [string, any]) => result === "failure")

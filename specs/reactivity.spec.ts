@@ -1,4 +1,5 @@
-import type { Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
+import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
 test("reactivity page repaints from a stream subscription after a page action", async ({
@@ -79,6 +80,37 @@ test("reactivity page delivers an appended event to another open tab", async ({
   } finally {
     await otherPage.close();
   }
+});
+
+test("reactivity page processor panel goes live and repaints from a server push", async ({
+  baseURL,
+  helpers,
+  page,
+}) => {
+  await using projectFixture = await helpers.createFixture("reactivity-processor");
+
+  await page.goto(`/projects/${projectFixture.project.slug}/reactivity`);
+  // The processor panel must actually be LIVE (an onStateChange push
+  // subscription), not silently erroring behind a loader fallback.
+  await page.getByTestId("reactivity-status").getByText("live").waitFor();
+  await page.getByTestId("reactivity-phase").getByText("ready").waitFor();
+
+  const offsetBefore = await metricNumber(page, "reactivity-processor-offset");
+
+  // Birth a brand-new child stream SERVER-SIDE (no page interaction at all):
+  // that changes project processor state (streams[]), and the server must
+  // push the new checkpoint into the open page.
+  using adminSession = await connectAdminItx(baseURL!);
+  using adminProject = adminSession.projects.get(projectFixture.project.id);
+  using stream = adminProject.streams.get(`/spec-processor-push/${Date.now().toString(36)}`);
+  await stream.append({
+    type: "events.iterate.test/spec/processor-push",
+    payload: {},
+  });
+
+  await expect
+    .poll(() => metricNumber(page, "reactivity-processor-offset"))
+    .toBeGreaterThan(offsetBefore);
 });
 
 async function metricNumber(page: Page, testId: string) {

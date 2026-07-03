@@ -28,8 +28,11 @@ type WorkflowEntry = {
 
 // Workflows that run on Depot CI (generated into .depot/workflows/) instead of
 // GitHub Actions (.github/workflows/) — Depot CI assigns a runner in ~7s vs
-// GitHub's 20s-3m39s, and on the baked image they skip installs. Everything
-// Depot-compatible moves here as it's validated; the permanent exceptions:
+// GitHub's 20s-3m39s, and on the baked image they skip installs. Slack-posting
+// jobs resolve SLACK_CI_BOT_TOKEN from Doppler (_shared/prd) via getSlackClient()
+// + a DOPPLER_TOKEN job env, so Depot still needs only DOPPLER_TOKEN (+ the
+// github-script jobs' ITERATE_BOT_GITHUB_TOKEN). The only GitHub-Actions holdouts
+// are the permanent ones:
 //   - claude-assistant: issue_comment/issues/pull_request_review_comment
 //     triggers, which Depot CI does not support.
 //   - generate-workflows: the self-referential generator guardian.
@@ -42,18 +45,12 @@ const DEPOT_WORKFLOW_NAMES = new Set([
   "release",
   "autofix",
   "pullfrog",
-  // NOT here, and why:
-  //   - ci: posts to Slack (needs SLACK_CI_BOT_TOKEN, not yet on Depot) AND
-  //     calls deploy.yml as a local reusable workflow.
-  //   - deploy: workflow_call-only, invoked by ci.yml via
-  //     ./.github/workflows/deploy.yml — a GitHub workflow can't call a
-  //     reusable workflow living in .depot/, so it stays wherever ci is.
-  //   - nag, pr-dashboard: post to Slack.
-  //   - deploy-os / deploy-semaphore / deploy-streams-example-app
-  //     (cloudflare-app-workflow): slack-success / slack-failure jobs.
-  // All become movable once SLACK_CI_BOT_TOKEN is reachable from Doppler
-  // (_shared/prd) — then rewire the getSlackClient() call sites to the Doppler
-  // fallback and add the names here. See docs/depot-ci.md.
+  "ci",
+  "nag",
+  "pr-dashboard",
+  "deploy-os",
+  "deploy-semaphore",
+  "deploy-streams-example-app",
 ]);
 
 async function loadWorkflowsContext(input: z.infer<typeof WorkflowsInput>) {

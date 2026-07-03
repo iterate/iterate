@@ -47,7 +47,7 @@ packageExtensionsChecksum: sha256-N5V8LT5a9y6jX4wQ8xKv5GrV6WtlFoB0HfQg8g4L82o=
 
 patchedDependencies:
   '@better-auth/oauth-provider@1.6.9':
-    hash: 4f7aa4c17b3fb54c9267438a45532785482d1faef950d7bac29b608cde75ab80
+    hash: 1ac6793438edc41cf1c0bab10332b2503a027f7b8f81b758d2f4a8f5b74ff010
     path: patches/@better-auth__oauth-provider@1.6.9.patch
   '@cloudflare/vite-plugin@1.33.2':
     hash: 43635afa4f403cacfe7be9f1b95a461906dd9b7d03fbc2209688605b17bb54af
@@ -219,7 +219,7 @@ importers:
     dependencies:
       '@better-auth/oauth-provider':
         specifier: ^1.6.9
-        version: 1.6.9(patch_hash=4f7aa4c17b3fb54c9267438a45532785482d1faef950d7bac29b608cde75ab80)(40738cae8aa0dc625f2005a47245bfb2)
+        version: 1.6.9(patch_hash=1ac6793438edc41cf1c0bab10332b2503a027f7b8f81b758d2f4a8f5b74ff010)(40738cae8aa0dc625f2005a47245bfb2)
       '@iterate-com/auth-contract':
         specifier: workspace:*
         version: link:../auth-contract
@@ -239,13 +239,13 @@ importers:
         specifier: 5.91.0
         version: 5.91.0(react@19.2.4)
       '@tanstack/react-router':
-        specifier: ^1.167.0
+        specifier: 1.168.3
         version: 1.168.3(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@tanstack/react-router-ssr-query':
-        specifier: ^1.166.2
+        specifier: 1.166.2
         version: 1.166.2(@tanstack/query-core@5.91.0)(@tanstack/react-query@5.91.0(react@19.2.4))(@tanstack/react-router@1.168.3(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(@tanstack/router-core@1.171.13)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@tanstack/react-start':
-        specifier: ^1.166.11
+        specifier: 1.167.5
         version: 1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       alchemy:
         specifier: ^0.83.3
@@ -271,9 +271,6 @@ importers:
       react-dom:
         specifier: ^19.2.4
         version: 19.2.4(react@19.2.4)
-      sonner:
-        specifier: ^2.0.7
-        version: 2.0.7(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       sqlfu:
         specifier: 0.0.3-14
         version: 0.0.3-14(5fc583c731387347234d0b7c5e8b4ff0)
@@ -293,6 +290,9 @@ importers:
       '@tailwindcss/vite':
         specifier: ^4.2.1
         version: 4.2.1(vite@8.0.9(@types/node@25.6.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
+      '@tanstack/router-generator':
+        specifier: 1.166.17
+        version: 1.166.17
       '@types/react':
         specifier: ^19.2.14
         version: 19.2.14
@@ -11941,21 +11941,11 @@ packages:
     resolution: {integrity: sha512-1gnZf7DFcoIcajTjTwjwuDjzuz4PPcY2StKPlsGAQ1+YH20IRVrBaXSWmdjowTJ6u8Rc01PoYOGHXfP1mYcZNQ==}
     engines: {node: '>= 18'}
 
-  seroval-plugins@1.5.2:
-    resolution: {integrity: sha512-qpY0Cl+fKYFn4GOf3cMiq6l72CpuVaawb6ILjubOQ+diJ54LfOWaSSPsaswN8DRPIPW4Yq+tE1k5aKd7ILyaFg==}
-    engines: {node: '>=10'}
-    peerDependencies:
-      seroval: ^1.0
-
   seroval-plugins@1.5.4:
     resolution: {integrity: sha512-S0xQPhUTefAhNvNWFg0c1J8qJArHt5KdtJ/cFAofo06KD1MVSeFWyl4iiu+ApDIuw0WhjpOfCdgConOfAnLgkw==}
     engines: {node: '>=10'}
     peerDependencies:
       seroval: ^1.0
-
-  seroval@1.5.2:
-    resolution: {integrity: sha512-xcRN39BdsnO9Tf+VzsE7b3JyTJASItIV1FVFewJKCFcW4s4haIKS3e6vj8PGB9qBwC7tnuOywQMdv5N4qkzi7Q==}
-    engines: {node: '>=10'}
 
   seroval@1.5.4:
     resolution: {integrity: sha512-46uFvgrXTVxZcUorgSSRZ4y+ieqLLQRMlG4bnCZKW3qI6BZm7Rg4ntMW4p1mILEEBZWrFlcpp0AyIIlM6jD9iw==}
@@ -14589,7 +14579,7 @@ snapshots:
       '@better-auth/core': 1.6.9(@better-auth/utils@0.4.0)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(better-call@1.3.5(zod@4.3.6))(jose@6.2.2)(kysely@0.28.16)(nanostores@1.1.1)
       '@better-auth/utils': 0.4.0
 
-  '@better-auth/oauth-provider@1.6.9(patch_hash=4f7aa4c17b3fb54c9267438a45532785482d1faef950d7bac29b608cde75ab80)(40738cae8aa0dc625f2005a47245bfb2)':
+  '@better-auth/oauth-provider@1.6.9(patch_hash=1ac6793438edc41cf1c0bab10332b2503a027f7b8f81b758d2f4a8f5b74ff010)(40738cae8aa0dc625f2005a47245bfb2)':
     dependencies:
       '@better-auth/core': 1.6.9(@better-auth/utils@0.4.0)(@better-fetch/fetch@1.1.21)(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(better-call@1.3.5(zod@4.3.6))(jose@6.2.2)(kysely@0.28.16)(nanostores@1.1.1)
       '@better-auth/utils': 0.4.0
@@ -19172,7 +19162,7 @@ snapshots:
   '@tanstack/react-router@1.168.3(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     dependencies:
       '@tanstack/history': 1.161.6
-      '@tanstack/react-store': 0.9.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      '@tanstack/react-store': 0.9.3(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@tanstack/router-core': 1.168.3
       isbot: 5.1.31
       react: 19.2.4
@@ -19272,7 +19262,7 @@ snapshots:
       '@tanstack/react-router': 1.168.3(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@tanstack/react-start-client': 1.166.18(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@tanstack/react-start-server': 1.166.18(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      '@tanstack/router-utils': 1.161.6
+      '@tanstack/router-utils': 1.162.2
       '@tanstack/start-client-core': 1.167.3
       '@tanstack/start-plugin-core': 1.167.8(@tanstack/react-router@1.168.3(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(crossws@0.4.4(srvx@0.11.12))(vite@8.0.0(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       '@tanstack/start-server-core': 1.167.3(crossws@0.4.4(srvx@0.11.12))
@@ -19292,7 +19282,7 @@ snapshots:
       '@tanstack/react-router': 1.168.3(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@tanstack/react-start-client': 1.166.18(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@tanstack/react-start-server': 1.166.18(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      '@tanstack/router-utils': 1.161.6
+      '@tanstack/router-utils': 1.162.2
       '@tanstack/start-client-core': 1.167.3
       '@tanstack/start-plugin-core': 1.167.8(@tanstack/react-router@1.168.3(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(crossws@0.4.4(srvx@0.11.12))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
       '@tanstack/start-server-core': 1.167.3(crossws@0.4.4(srvx@0.11.12))
@@ -19377,8 +19367,8 @@ snapshots:
     dependencies:
       '@tanstack/history': 1.161.6
       cookie-es: 2.0.0
-      seroval: 1.5.2
-      seroval-plugins: 1.5.2(seroval@1.5.2)
+      seroval: 1.5.4
+      seroval-plugins: 1.5.4(seroval@1.5.4)
 
   '@tanstack/router-core@1.171.13':
     dependencies:
@@ -19521,7 +19511,7 @@ snapshots:
       '@babel/generator': 7.29.1
       '@babel/parser': 7.29.0
       '@babel/types': 7.29.0
-      ansis: 4.2.0
+      ansis: 4.3.1
       babel-dead-code-elimination: 1.0.12
       diff: 8.0.3
       pathe: 2.0.3
@@ -19547,7 +19537,7 @@ snapshots:
       '@tanstack/router-core': 1.168.3
       '@tanstack/start-fn-stubs': 1.161.6
       '@tanstack/start-storage-context': 1.166.17
-      seroval: 1.5.2
+      seroval: 1.5.4
 
   '@tanstack/start-client-core@1.170.12':
     dependencies:
@@ -19693,7 +19683,7 @@ snapshots:
       '@tanstack/start-client-core': 1.167.3
       '@tanstack/start-storage-context': 1.166.17
       h3-v2: h3@2.0.1-rc.16(crossws@0.4.4(srvx@0.11.12))
-      seroval: 1.5.2
+      seroval: 1.5.4
     transitivePeerDependencies:
       - crossws
 
@@ -26825,15 +26815,9 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  seroval-plugins@1.5.2(seroval@1.5.2):
-    dependencies:
-      seroval: 1.5.2
-
   seroval-plugins@1.5.4(seroval@1.5.4):
     dependencies:
       seroval: 1.5.4
-
-  seroval@1.5.2: {}
 
   seroval@1.5.4: {}
 

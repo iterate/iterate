@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@iterate-com/ui/compon
 import { Input } from "@iterate-com/ui/components/input";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { Label } from "@iterate-com/ui/components/label";
-import { toast } from "sonner";
+import { toast } from "@iterate-com/ui/components/sonner";
 import type { OAuthClientRecord } from "@iterate-com/auth-contract";
 import { orpc } from "../../../utils/query.tsx";
 import { InfoRow } from "../../../utils/info-row.tsx";

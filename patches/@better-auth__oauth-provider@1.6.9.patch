@@ -1,8 +1,22 @@
 diff --git a/dist/index.mjs b/dist/index.mjs
-index 4bf5e0b9ef270f1a3ad50cd10d417c05575be3c7..9c700442ba99171f16b06acbf24a4efb58645402 100644
+index 4bf5e0b9ef270f1a3ad50cd10d417c05575be3c7..4b1e31f6dc736c83c5deef265eef910499068b6c 100644
 --- a/dist/index.mjs
 +++ b/dist/index.mjs
-@@ -3761,7 +3761,7 @@ async function authorizeEndpoint(ctx, opts, settings) {
+@@ -91,8 +91,11 @@ async function consentEndpoint(ctx, opts) {
+ 	if (requestedScopes) query.set("scope", consent.scopes.join(" "));
+ 	ctx?.headers?.set("accept", "application/json");
+ 	ctx.query = deleteFromPrompt(query, "consent");
+-	ctx.context.postLogin = true;
+-	const { url } = await authorizeEndpoint(ctx, opts);
++	// iterate patch: consent re-enters authorize AFTER post-login project selection;
++	// pass the postLogin flag so shouldRedirect (the /project-access gate) is not
++	// evaluated a second time. Upstream sets ctx.context.postLogin here, but
++	// authorizeEndpoint only reads the settings argument (see the continue handler).
++	const { url } = await authorizeEndpoint(ctx, opts, { postLogin: true });
+ 	return {
+ 		redirect: true,
+ 		url
+@@ -3761,7 +3764,7 @@ async function authorizeEndpoint(ctx, opts, settings) {
  		try {
  			const registered = new URL(url);
  			const requested = new URL(query.redirect_uri);
