@@ -14,7 +14,7 @@ import type { GetProcessorRuntimeState } from "../../types.ts";
 import type { DurableObjectAddress as DurableObjectAddressType } from "../durable-object-names.ts";
 import { normalizePath } from "../durable-object-names.ts";
 import { DynamicWorkerRef } from "../workers/schemas.ts";
-import { defineProcessorContract } from "./stream-processor.ts";
+import { defineProcessorContract } from "./processor-contracts.ts";
 
 // Version of the persisted core reduced state ("state" in KV). Bump this when
 // the core reducer starts deriving NEW state from already-reduced events
@@ -82,15 +82,35 @@ export type ConfiguredStreamSubscriber = z.infer<typeof ConfiguredStreamSubscrib
 export const StreamSubscriptionType = z.enum(["configured", "ephemeral"]);
 export type StreamSubscriptionType = z.infer<typeof StreamSubscriptionType>;
 
-const StreamSubscriptionConfiguredEvent = z.object({
-  offset: z.number().int().min(0),
-  type: z.literal("events.iterate.com/stream/subscription-configured"),
-  payload: z.object({
-    subscriptionKey: z.string().trim().min(1),
-    subscriber: ConfiguredStreamSubscriber,
-  }),
-  createdAt: z.string(),
+// Payloads shared between the event catalog below and the reduced-state
+// records that store the latest committed configuration event, so the two can
+// never drift apart.
+const SubscriptionConfiguredPayload = z.object({
+  subscriptionKey: z.string().trim().min(1),
+  subscriber: ConfiguredStreamSubscriber,
 });
+
+const RuleConfiguredPayload = z.object({
+  ruleId: z.string().trim().min(1),
+  type: z.literal("cross-post"),
+  projectId: z.string().trim().min(1).nullable().optional(),
+  path: z.string().trim().min(1),
+  eventTypes: z.array(z.string().trim().min(1)).min(1),
+});
+
+/** Durable desired-state record: the latest committed configuration event for one key. */
+const latestConfiguredEvent = <const Type extends string, Payload extends z.ZodType>(
+  type: Type,
+  payload: Payload,
+) =>
+  z.object({
+    latestConfiguredEvent: z.object({
+      offset: z.number().int().min(0),
+      type: z.literal(type),
+      payload,
+      createdAt: z.string(),
+    }),
+  });
 
 /**
  * A processor contract announcement carried on the connect event when the
@@ -199,25 +219,18 @@ export const CoreProcessorContract = defineProcessorContract({
       )
       .default({}),
     configuredSubscribersByKey: z
-      .record(z.string(), z.object({ latestConfiguredEvent: StreamSubscriptionConfiguredEvent }))
+      .record(
+        z.string(),
+        latestConfiguredEvent(
+          "events.iterate.com/stream/subscription-configured",
+          SubscriptionConfiguredPayload,
+        ),
+      )
       .default({}),
     rulesById: z
       .record(
         z.string(),
-        z.object({
-          latestConfiguredEvent: z.object({
-            offset: z.number().int().min(0),
-            type: z.literal("events.iterate.com/stream/rule-configured"),
-            payload: z.object({
-              ruleId: z.string().trim().min(1),
-              type: z.literal("cross-post"),
-              projectId: z.string().trim().min(1).nullable().optional(),
-              path: z.string().trim().min(1),
-              eventTypes: z.array(z.string().trim().min(1)).min(1),
-            }),
-            createdAt: z.string(),
-          }),
-        }),
+        latestConfiguredEvent("events.iterate.com/stream/rule-configured", RuleConfiguredPayload),
       )
       .default({}),
     /**
@@ -266,10 +279,7 @@ export const CoreProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/stream/subscription-configured": {
       description: "Configures or replaces a wakeable subscriber for this stream.",
-      payloadSchema: z.object({
-        subscriptionKey: z.string().trim().min(1),
-        subscriber: ConfiguredStreamSubscriber,
-      }),
+      payloadSchema: SubscriptionConfiguredPayload,
     },
     "events.iterate.com/stream/subscription-removed": {
       description: "Removes a previously configured wakeable subscriber for this stream.",
@@ -279,13 +289,7 @@ export const CoreProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/stream/rule-configured": {
       description: "Configures or replaces a local stream rule.",
-      payloadSchema: z.object({
-        ruleId: z.string().trim().min(1),
-        type: z.literal("cross-post"),
-        projectId: z.string().trim().min(1).nullable().optional(),
-        path: z.string().trim().min(1),
-        eventTypes: z.array(z.string().trim().min(1)).min(1),
-      }),
+      payloadSchema: RuleConfiguredPayload,
     },
     "events.iterate.com/stream/subscriber-connected": {
       description:

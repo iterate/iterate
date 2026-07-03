@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ITX_TYPES_SOURCE } from "../../types-source.generated.ts";
-import { defineProcessorContract } from "../streams/stream-processor.ts";
+import { defineProcessorContract } from "../streams/processor-contracts.ts";
 import { ItxProcessorContract } from "../itx/itx-processor-contract.ts";
 
 export const DEFAULT_AGENT_MODEL = "@cf/moonshotai/kimi-k2.7-code";

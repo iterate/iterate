@@ -1,7 +1,7 @@
 // Defines the "browser-event-feed" processor contract.
 
 import { z } from "zod";
-import { defineProcessorContract } from "../../../stream-processor.ts";
+import { defineProcessorContract } from "../../../processor-contracts.ts";
 import { INITIAL_FEED_STATE, type FeedState } from "./grouping.ts";
 
 export const BrowserEventFeedContract = defineProcessorContract({

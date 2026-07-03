@@ -57,8 +57,8 @@ import {
 } from "./domains/itx/openapi-types.ts";
 import { callMcpToolPath } from "./domains/itx/mcp-client.ts";
 import { ITX_EXAMPLES, type ItxExample } from "./itx/examples.ts";
+import type { ProcessorState } from "./domains/streams/processor-contracts.ts";
 import type {
-  ProcessorState,
   StreamProcessor,
   StreamProcessorContract,
 } from "./domains/streams/stream-processor.ts";
@@ -162,16 +162,13 @@ export class StreamRpcTarget extends RpcTarget implements Stream {
   }
 
   subscribe(args: Parameters<Stream["subscribe"]>[0]) {
-    return this.durableObjectStub.subscribe(args);
-  }
-
-  subscribeConfigured(
-    args: Parameters<Stream["subscribe"]>[0] & { subscriptionKey: string },
-  ): Promise<StreamSubscriptionHandle> {
-    if (this.props.auth.principal !== "trusted-internal") {
-      throw new Error("subscribeConfigured requires trusted internal auth");
+    // `configured: true` opens the durable configured subscription for the
+    // given key (the wake-handshake response) — only the platform's own
+    // Durable Objects may do that; everyone else gets ephemeral subscriptions.
+    if (args.configured === true && this.props.auth.principal !== "trusted-internal") {
+      throw new Error("configured subscriptions require trusted internal auth");
     }
-    return this.durableObjectStub.subscribeConfigured(args);
+    return this.durableObjectStub.subscribe(args);
   }
 }
 
