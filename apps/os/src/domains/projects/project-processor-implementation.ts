@@ -54,7 +54,7 @@ const MCP_AGENT_SYSTEM_PROMPT = [
   DEFAULT_AGENT_SYSTEM_PROMPT,
   "",
   "You are serving this project's MCP server. Your messages come from an AI agent (an MCP client) acting on behalf of the project owner, through the ask_assistant MCP tool. That tool call blocks until your next itx.chat.sendMessage reply and returns it verbatim to the asking agent.",
-  "Reply exactly once per request with await itx.chat.sendMessage({ message }) — that message IS the MCP tool result. Do the requested work directly with your capabilities; only ask a clarifying question when the request is genuinely ambiguous.",
+  "This overrides the multi-message chat guidance above: send NO acknowledgements or progress updates — the first sendMessage ends the caller's wait, so it must BE the complete answer. Reply exactly once per request with await itx.chat.sendMessage({ message }). Do the requested work directly with your capabilities; only ask a clarifying question when the request is genuinely ambiguous.",
 ].join("\n");
 
 /**
@@ -187,11 +187,9 @@ export class ProjectProcessor extends StreamProcessor<
             path: childPath,
           });
           if (childPath.startsWith("/agents/")) {
-            // Agents under /agents/slack/** additionally get the slack-agent
-            // processor subscription and the Slack reply prompt — this is THE
-            // place the "slack thread streams are slack agents" rule lives.
-            // Likewise "/agents/mcp/** streams are inbound MCP session agents":
-            // same processors, MCP reply prompt.
+            // The agent path picks the prompt (agentSystemPromptForPath);
+            // Slack agents additionally get the slack-agent processor
+            // subscription.
             const isSlack = isSlackAgentPath(childPath);
             await this.deps.itx.streams.get(childPath).append(
               // Identical idempotency keys to the create-time onboarding birth
@@ -201,11 +199,7 @@ export class ProjectProcessor extends StreamProcessor<
                 llmProvider: this.deps.defaultLlmProvider,
                 projectId: this.deps.itx.projectId,
                 slack: isSlack,
-                systemPrompt: isSlack
-                  ? SLACK_AGENT_SYSTEM_PROMPT
-                  : isMcpAgentPath(childPath)
-                    ? MCP_AGENT_SYSTEM_PROMPT
-                    : DEFAULT_AGENT_SYSTEM_PROMPT,
+                systemPrompt: agentSystemPromptForPath(childPath),
               }),
             );
             return;
@@ -273,6 +267,15 @@ export class ProjectProcessor extends StreamProcessor<
         return;
     }
   }
+}
+
+/** THE place the "agent path decides the reply door" rule lives: Slack thread
+ * agents reply via itx.slack, inbound MCP session agents via their blocked
+ * ask_assistant call, everything else via web chat. */
+function agentSystemPromptForPath(agentPath: string) {
+  if (isSlackAgentPath(agentPath)) return SLACK_AGENT_SYSTEM_PROMPT;
+  if (isMcpAgentPath(agentPath)) return MCP_AGENT_SYSTEM_PROMPT;
+  return DEFAULT_AGENT_SYSTEM_PROMPT;
 }
 
 const DEFAULT_MODEL_BY_LLM_PROVIDER = {

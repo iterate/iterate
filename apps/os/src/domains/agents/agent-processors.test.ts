@@ -326,7 +326,6 @@ describe("minimal web-chat agent processors", () => {
     await stream.append({
       type: "events.iterate.com/agents/user-message-received",
       payload: { origin: "mcp", content: "how many agents does this project have?" },
-      metadata: { mcpTool: "ask_assistant" },
     });
     await deliver(agent);
     await deliver(agent);

@@ -38,7 +38,6 @@ type McpAuth = {
 };
 
 const requiredToolScope = "profile";
-const WEB_MESSAGE_SENT_EVENT_TYPE = "events.iterate.com/agents/web-message-sent";
 const ASK_ASSISTANT_TIMEOUT_MS = 120_000;
 const ExecJsInput = z.object({
   code: z
@@ -182,46 +181,30 @@ function createServer(input: {
     {
       title: "Ask assistant",
       description:
-        "Ask this project's assistant agent in plain language. Blocks until the assistant replies (up to two minutes) and returns its reply. Conversation history lives on this MCP session's agent stream.",
+        "Ask this project's assistant agent in plain language. Blocks until the assistant replies (up to two minutes) and returns its reply. Conversation history lives on this MCP session's agent stream; asks are a plain chat conversation, so send them one at a time — concurrent asks on one session interleave like two people typing into the same chat.",
       inputSchema: AskAssistantInput,
     },
     async (rawInput) => {
       const parsedInput = AskAssistantInput.parse(rawInput);
       const project = await resolveProject(parsedInput.project);
       const agentPath = await resolveMcpSessionAgentPath(input);
-      const secret = requireAdminSecret(input.context);
 
-      // Two one-shot batches instead of one: waitForEvent's afterOffset needs
-      // the committed offset of the append, which an HTTP batch can't feed back
-      // into a later call in the same batch.
-      const [sent] = await engineBatchSession(input.context)
-        .authenticate({ type: "admin-secret", secret })
-        .projects.get(project.id)
-        .streams.get(agentPath)
-        .append({
-          type: "events.iterate.com/agents/user-message-received",
-          payload: { content: parsedInput.message, origin: "mcp" },
-          metadata: { mcpTool: "ask_assistant" },
-        });
-
+      // One pipelined batch: agents.ask appends the message and waits for the
+      // agent's next chat reply server-side. Reply matching is by order on the
+      // session stream, not per-request correlation — the session belongs to
+      // this one MCP client, so interleaved replies are the client's own doing
+      // (same trust model as one person running exec_js mid-conversation).
+      let reply;
       try {
-        const reply = await engineBatchSession(input.context)
-          .authenticate({ type: "admin-secret", secret })
+        reply = await engineBatchSession(input.context)
+          .authenticate({ type: "admin-secret", secret: requireAdminSecret(input.context) })
           .projects.get(project.id)
-          .streams.get(agentPath)
-          .waitForEvent({
-            afterOffset: sent!.offset,
-            eventTypes: [WEB_MESSAGE_SENT_EVENT_TYPE],
+          .agents.get(agentPath)
+          .ask({
+            message: parsedInput.message,
+            origin: "mcp",
             timeoutMs: ASK_ASSISTANT_TIMEOUT_MS,
           });
-        const message = (reply.payload as { message?: unknown } | undefined)?.message;
-        if (typeof message !== "string" || message.trim() === "") {
-          throw new Error(`Assistant reply event ${reply.offset} did not include a message.`);
-        }
-        return {
-          content: [{ type: "text" as const, text: message }],
-          isError: false,
-        };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return {
@@ -234,6 +217,15 @@ function createServer(input: {
           isError: true,
         };
       }
+
+      const message = reply.payload?.message;
+      if (typeof message !== "string" || message.trim() === "") {
+        throw new Error(`Assistant reply event ${reply.offset} did not include a message.`);
+      }
+      return {
+        content: [{ type: "text" as const, text: message }],
+        isError: false,
+      };
     },
   );
 

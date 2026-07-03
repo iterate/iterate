@@ -247,7 +247,19 @@ export interface Agent extends ItxCapabilityHost {
   processor: StreamProcessorRpc<AgentProcessorState>;
   stream: Stream;
   sendMessage(message: string): Promise<StreamEvent>;
-  ask(input: { message: string }): Promise<StreamEvent>;
+  /**
+   * Send-and-wait convenience: appends a user message and resolves with the
+   * agent's next chat reply on this stream. Replies are matched by order, not
+   * correlated per request — concurrent asks on one agent stream interleave
+   * exactly like two people typing into the same chat.
+   */
+  ask(input: {
+    message: string;
+    /** Where the message came from. Defaults to "web". */
+    origin?: "web" | "mcp";
+    /** How long to wait for the reply. Defaults to 45s. */
+    timeoutMs?: number;
+  }): Promise<StreamEvent>;
   whoami(): string;
 }
 
