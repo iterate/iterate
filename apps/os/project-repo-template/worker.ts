@@ -42,9 +42,23 @@ export default class ProjectWorker extends WorkerEntrypoint<ProjectWorkerEnv> {
       const ref = Object.hasOwn(APPS, appSlug) ? APPS[appSlug as keyof typeof APPS] : undefined;
       if (!ref) return new Response(`unknown app: ${appSlug}`, { status: 404 });
       const project = await this.env.ITX.get();
-      // Workers RPC: await the capability before calling through it.
-      const app = await project.workers.get<{ fetch(req: Request): Promise<Response> }>(ref);
-      return await app.fetch(req);
+      try {
+        // Workers RPC: await the capability before calling through it.
+        const app = await project.workers.get<{ fetch(req: Request): Promise<Response> }>(ref, {
+          buildBudgetMs: 15_000,
+        });
+        return await app.fetch(req);
+      } catch (error) {
+        // Each app is its own build (distinct include mask), so its first use
+        // after a commit can be a cold build. Past the budget the platform
+        // throws this named error (name survives Workers RPC) while the build
+        // finishes into the cache; refreshes then hit it.
+        if ((error as { name?: string } | null)?.name !== "WorkerBuildInProgressError") throw error;
+        return new Response(
+          `<!doctype html><html><body><main><p>Building ${appSlug}… this page refreshes automatically.</p></main></body></html>`,
+          { headers: { "content-type": "text/html; charset=utf-8", refresh: "3" }, status: 503 },
+        );
+      }
     }
 
     // The seeded homepage is a static page linking to the apps. Apps live

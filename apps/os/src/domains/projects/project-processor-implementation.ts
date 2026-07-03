@@ -77,6 +77,10 @@ const ONBOARDING_AGENT_SYSTEM_PROMPT = [
   PROJECT_REPO_ONBOARDING_MD,
 ].join("\n");
 
+// Not a bound on build time: the probe fetch carries no buildBudgetMs, so
+// each attempt BLOCKS until the seeded worker's cold build (npm install
+// included) resolves or fails. The retry window only papers over transient
+// dispatch errors around that first build.
 const PROJECT_WORKER_READY_ATTEMPTS = 20;
 const PROJECT_WORKER_READY_RETRY_MS = 100;
 const PROJECT_WORKER_READY_URL = "https://iterate-project.localhost/__itx_project_ready";
