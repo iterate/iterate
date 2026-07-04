@@ -291,9 +291,10 @@ function parseFeedItemData(raw: string): FeedItemData | null {
 }
 
 /**
- * Any-of event-type filter for the feed-items presets: a checkbox list of the
- * distinct primary event types currently in the local mirror (scoped to the
- * active preset's prefix so the offered types can actually match), with
+ * Any-of event-type filter for the feed-items presets: a roomy two-column grid
+ * of checkboxes, one per distinct primary event type currently in the local
+ * mirror (scoped to the active preset's prefix so the offered types can
+ * actually match), sorted alphabetically by display name and annotated with
  * per-type event counts.
  */
 export function FeedEventTypesFilter({
@@ -328,9 +329,13 @@ export function FeedEventTypesFilter({
   );
   const selected = value ?? [];
   // Stale URL values (hand-edited, or events not mirrored yet) must still
-  // render as selections so they can be unchecked.
+  // render as selections so they can be unchecked. Sort the merged set by the
+  // displayed short name so the two-column grid reads alphabetically (the SQL's
+  // ORDER BY is on the full type; the stale entries are appended out of band).
   const staleSelections = selected.filter((type) => !types.some((entry) => entry.type === type));
-  const options = [...staleSelections.map((type) => ({ count: 0, type })), ...types];
+  const options = [...staleSelections.map((type) => ({ count: 0, type })), ...types].sort((a, b) =>
+    shortEventType(a.type).localeCompare(shortEventType(b.type)),
+  );
 
   function toggle(type: string, checked: boolean) {
     const next = checked ? [...selected, type] : selected.filter((entry) => entry !== type);
@@ -358,18 +363,31 @@ export function FeedEventTypesFilter({
         </span>
         <ChevronDownIcon className="size-3 text-muted-foreground" />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="max-h-80 overflow-y-auto">
-        {options.map((entry) => (
-          <DropdownMenuCheckboxItem
-            key={entry.type}
-            checked={selected.includes(entry.type)}
-            closeOnClick={false}
-            onCheckedChange={(checked) => toggle(entry.type, checked)}
-            className="font-mono text-xs"
-          >
-            {shortEventType(entry.type)} · {entry.count.toLocaleString()}
-          </DropdownMenuCheckboxItem>
-        ))}
+      <DropdownMenuContent align="start" className="w-[min(90vw,34rem)] max-w-[calc(100vw-2rem)]">
+        <div className="grid max-h-96 grid-cols-2 gap-x-1 overflow-y-auto">
+          {options.length === 0 ? (
+            <p className="col-span-2 px-2 py-1.5 text-xs text-muted-foreground">
+              No event types in the mirror yet.
+            </p>
+          ) : (
+            options.map((entry) => (
+              <DropdownMenuCheckboxItem
+                key={entry.type}
+                checked={selected.includes(entry.type)}
+                closeOnClick={false}
+                onCheckedChange={(checked) => toggle(entry.type, checked)}
+                className="min-w-0 font-mono text-xs"
+              >
+                <span className="min-w-0 flex-1 truncate" title={shortEventType(entry.type)}>
+                  {shortEventType(entry.type)}
+                </span>
+                <span className="shrink-0 text-muted-foreground">
+                  {entry.count.toLocaleString()}
+                </span>
+              </DropdownMenuCheckboxItem>
+            ))
+          )}
+        </div>
         {selected.length > 0 ? (
           <>
             <DropdownMenuSeparator />
