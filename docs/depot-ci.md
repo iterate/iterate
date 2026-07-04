@@ -1,142 +1,232 @@
 # Depot CI
 
-We run CI on [Depot CI](https://depot.dev/docs/ci) — Depot's own CI control
-plane — not just GitHub Actions. Depot CI assigns a runner in ~7s where GitHub
-Actions runner assignment measured 20s–3m39s (and once ~40min during a webhook
-incident), so the latency-sensitive checks live there.
+CI workflows live in `.depot/workflows/*.yml` and run on
+[Depot CI](https://depot.dev/docs/ci/overview). The files use GitHub Actions
+YAML syntax, but Depot owns the run lifecycle, check reporting, logs, metrics,
+secrets, and local dispatch.
 
-This doc is the practical guide: how it works, how to interact with it, and the
-commands you'll actually use. For the preview pipeline specifically, see
-[Preview CI performance](ci-preview-performance.md); for the GitHub-Actions side
-and the workflow generator, see [CI workflows](ci-workflows.md).
+The old TypeScript workflow generator is gone. Edit the YAML directly, and put
+runtime logic in normal scripts under `scripts/ci` instead of embedding large
+`actions/github-script` blocks.
 
-## How it works
+## Quick Links
 
-- **Workflows live in `.depot/workflows/*.yml`** and use GitHub Actions YAML
-  syntax (Depot runs it largely unmodified). Depot's GitHub App reports each
-  job back to the PR as a normal check (the "Cloudflare Previews (Depot CI) /
-  …" checks you see on a PR come from Depot).
-- **Triggers register on the default branch.** When a workflow file lands on
-  `main`, Depot registers its `on:` triggers. Branch-only changes to the `on:`
-  block don't take effect until merged — test a branch with `depot ci dispatch`
-  (below).
-- **Supported triggers:** `push`, `pull_request`, `pull_request_target`,
-  `pull_request_review`, `schedule`, `workflow_call`, `workflow_dispatch`,
-  `workflow_run`, `merge_group`. **Not supported:** `issue_comment`, `issues`,
-  `pull_request_review_comment` (this is why `claude-assistant` stays on GitHub
-  Actions).
-- **Secrets** come from `depot ci secrets` (org-scoped), not GitHub secrets.
-- **Org / dashboard:** org id `0p91s0lz49`,
-  [dashboard](https://depot.dev/orgs/0p91s0lz49/workflows).
+- [Depot CI dashboard](https://depot.dev/orgs/0p91s0lz49/workflows)
+- [Depot CI docs](https://depot.dev/docs/ci/overview)
+- [Depot CI compatibility](https://depot.dev/docs/ci/compatibility)
+- [Depot CI CLI reference](https://depot.dev/docs/cli/reference/depot-ci)
+- [Manage workflow runs](https://depot.dev/docs/ci/how-to-guides/manage-workflow-runs)
+- [Custom images](https://depot.dev/docs/ci/how-to-guides/custom-images)
+- [Parallel steps](https://depot.dev/docs/ci/how-to-guides/parallel-steps)
 
-## Commands you'll use
+## Repo Defaults
+
+- Depot org: `0p91s0lz49`
+- GitHub repo: `iterate/iterate`
+- Workflow files: `.depot/workflows/*.yml`
+- CI scripts: `scripts/ci/*.ts`
+- Custom image:
+  `0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree`
+- Secrets and variables are managed with `depot ci secrets` and `depot ci vars`,
+  not GitHub Actions secrets.
+
+The only GitHub Actions workflow left is `.github/workflows/claude-assistant.yml`.
+It is not CI; it exists because Depot CI does not support issue/comment events
+such as `issues`, `issue_comment`, or PR review comment triggers.
+
+## Commands
+
+Start with the built-in help when unsure:
 
 ```bash
-# --- watch runs ---
-depot ci run list      --org 0p91s0lz49 --repo iterate/iterate          # queued/active runs
-depot ci workflow list --org 0p91s0lz49 --repo iterate/iterate          # per-workflow rows incl. sha + run id
-depot ci status <run-id>     --org 0p91s0lz49 [--output json]           # run/job/attempt tree
-depot ci logs   <attempt-id> --org 0p91s0lz49 [--timestamps] [--output-file f.log]
+depot ci --help
+depot ci run --help
+depot ci dispatch --help
+depot ci status --help
+```
 
-# --- run something ---
-# Trigger a workflow on a branch WITHOUT merging (uses the branch's version of the file):
-depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
-  --workflow cloudflare-previews.yml --ref <branch> --input pull-request-number=<pr>
+List active or recent runs:
 
-# Run a workflow from your local checkout (uploads uncommitted changes as a patch):
-depot ci run --workflow .depot/workflows/<file>.yml --org 0p91s0lz49 --job <job>
+```bash
+depot ci run list --org 0p91s0lz49 --repo iterate/iterate
+depot ci run list --org 0p91s0lz49 --repo iterate/iterate --pr <pr-number>
+depot ci run list --org 0p91s0lz49 --repo iterate/iterate --sha <sha-prefix>
+depot ci run list --org 0p91s0lz49 --repo iterate/iterate --status failed
+depot ci run list --org 0p91s0lz49 --repo iterate/iterate --output json
+```
 
-# --- diagnostics ---
-depot ci metrics --run <run-id> --org 0p91s0lz49 --output json          # CPU/mem utilization (runner sizing)
-depot ci diagnose <run-id> --org 0p91s0lz49                             # failure triage
-depot ci rerun    <run-id> --org 0p91s0lz49                             # re-run a workflow
-depot ci cancel   <run-id> --org 0p91s0lz49
+Inspect a run:
 
-# --- secrets ---
+```bash
+depot ci status <run-id> --org 0p91s0lz49
+depot ci status <run-id> --org 0p91s0lz49 --output json
+depot ci run show <run-id> --org 0p91s0lz49
+```
+
+Fetch logs and diagnostics:
+
+```bash
+depot ci logs <attempt-id> --org 0p91s0lz49
+depot ci logs <job-id> --org 0p91s0lz49 --follow
+depot ci metrics <run-id> --org 0p91s0lz49
+depot ci diagnose <run-id> --org 0p91s0lz49
+depot ci summary <attempt-id> --org 0p91s0lz49
+```
+
+Control runs:
+
+```bash
+depot ci rerun <run-id> --org 0p91s0lz49
+depot ci retry <run-id> --org 0p91s0lz49
+depot ci cancel <run-id> --org 0p91s0lz49
+```
+
+Manage secrets:
+
+```bash
 depot ci secrets list --org 0p91s0lz49
 printf '%s' "$VALUE" | depot ci secrets add NAME --org 0p91s0lz49
 depot ci secrets remove NAME --org 0p91s0lz49
 ```
 
-## Gotchas
+## Wait For CI
 
-- **`workflow_dispatch` and `pull_request` runs share a concurrency group** (the
-  preview workflow's `cloudflare-previews-<pr>` with `cancel-in-progress: true`),
-  so a manual `dispatch` and the automatic PR run **cancel each other**. When
-  validating, either rely on the PR run or the dispatch — not both at once.
-- **`depot ci logs --output-file` lags a live run** — the export can trail the
-  actual progress by a chunk; re-fetch until the line you expect appears.
-- **Run id vs workflow id vs attempt id** — `depot ci run list` shows _run_
-  ids; `depot ci workflow list` shows _workflow_ ids (with the run id in the
-  last column); `logs` wants the _attempt_ id (from `status … --output json`).
-- **The preview e2e check is not a required check** — a red preview
-  (e.g. a cold-slot signup flake) does not block merge if the required checks
-  (lint-typecheck, test, generate) are green.
+Depot CLI does not currently have a blocking `wait` subcommand. The monitoring
+command we use is a `watch` loop around `depot ci run list` or
+`depot ci status`.
 
-## Migrating a workflow to Depot CI
+For a PR:
 
-Generated workflows live in `.github/ts-workflows/workflows/*.ts` and emit to
-`.github/workflows/` (GitHub Actions) or `.depot/workflows/` (Depot CI). The
-generator (`.github/ts-workflows/cli.ts`) routes a workflow to Depot when its
-name is in `DEPOT_WORKFLOW_NAMES`; it writes the yaml to `.depot/workflows/` and
-deletes the stale `.github/workflows/` copy on `pnpm workflows`.
+```bash
+watch -n 15 \
+  'depot ci run list --org 0p91s0lz49 --repo iterate/iterate --pr <pr-number> -n 20'
+```
 
-To move a workflow:
+For a known run:
 
-1. Add its name to `DEPOT_WORKFLOW_NAMES` in `.github/ts-workflows/cli.ts`.
-2. Point the job at the **baked image** and drop the per-run installs — replace
-   `...utils.runsOnDepotUbuntu` + the checkout/pnpm/node/install steps with
-   `...utils.runsOnDepotImage` + `...utils.setupFromImage()`. The image
-   (`build-preview-ci-image.yml`) has node/pnpm/`node_modules`/Doppler/chromium
-   baked, so the job skips `pnpm install` and the Doppler install — that's the
-   speed — and `DOPPLER_TOKEN` becomes the only secret it needs — that's the
-   one-secret model (source Slack/bot tokens from Doppler, see `utils/slack.ts`).
-3. `pnpm workflows && pnpm --dir .github/ts-workflows build`.
+```bash
+watch -n 15 'depot ci status <run-id> --org 0p91s0lz49'
+```
 
-### What runs where
+Use `status` to find the failed job/attempt id, then fetch logs:
 
-**On Depot** (`DEPOT_WORKFLOW_NAMES`): everything Depot-compatible —
-`lint-typecheck`, `test`, `deploy-auth`, `deploy-tunnels`, `release`, `autofix`,
-`pullfrog`, `ci`, `nag`, `pr-dashboard`, `deploy-os`, `deploy-semaphore`,
-`deploy-streams-example-app`. Depot needs only **`DOPPLER_TOKEN`** (+
-`ITERATE_BOT_GITHUB_TOKEN` for the github-script jobs).
+```bash
+depot ci status <run-id> --org 0p91s0lz49
+depot ci logs <attempt-id> --org 0p91s0lz49
+```
 
-Slack-posting jobs (ci's failure notify, nag, pr-dashboard, the cloudflare-app
-`slack-success`/`slack-failure` jobs) resolve `SLACK_CI_BOT_TOKEN` from Doppler:
-`getSlackClient()` (no arg) → `getSlackBotToken()` runs
-`doppler secrets --project _shared --config prd get --plain SLACK_CI_BOT_TOKEN`,
-so each such job just needs `DOPPLER_TOKEN` in its `env`. **This means
-`SLACK_CI_BOT_TOKEN` must live in Doppler `_shared/prd`** (not a GitHub/Depot
-secret).
+For scriptable polling, ask Depot for JSON:
 
-The old `deploy` reusable workflow is gone — its single job (deploy
-`apps/iterate-com`) is inlined into `ci.yml`.
+```bash
+depot ci run list --org 0p91s0lz49 --repo iterate/iterate --pr <pr-number> --output json
+depot ci status <run-id> --org 0p91s0lz49 --output json
+```
 
-**Permanent GitHub-Actions holdouts:** `claude-assistant` (issue_comment/issues
-triggers Depot doesn't support) and `generate-workflows` (the self-referential
-guardian).
+## Run A Workflow From Your Checkout
 
-### The validation constraint (read before merging)
+`depot ci run` runs a workflow through Depot using your local checkout. If you
+have local changes, Depot uploads them as a patch and applies them in the CI
+sandbox.
 
-**Depot registers a workflow's triggers only from the default branch.** A moved
-workflow therefore cannot be run on Depot from a branch — not via `pull_request`
-(unregistered), not via `depot ci dispatch` ("does not have workflow_dispatch
-trigger" until it's on `main`), and `depot ci run` can't apply the
-`.github`→`.depot` rename patch. So a migrated workflow is **only observable
-after it merges to `main`** and the next push/PR runs it. There are no required
-status checks on `main` (verified via the "Protect Main" ruleset 2026-07-03), so
-a moved check can't block merges — but it also means **babysit `main` after
-merge**: watch the next push/PR exercise each moved workflow on Depot and fix
-forward if the baked image or `setupFromImage` reconcile misbehaves.
+```bash
+depot ci run --org 0p91s0lz49 --workflow .depot/workflows/lint-typecheck.yml
+depot ci run --org 0p91s0lz49 --workflow .depot/workflows/test.yml --job test
+```
 
-What _is_ verifiable up front: the image is consumable (`node`, `pnpm`,
-`doppler`, and a 2.6G `node_modules` are all present in a
-`runs-on: { image }` job — probed 2026-07-03), the generator is drift-clean, and
-the generated yaml + routing are correct.
+Use SSH for interactive debugging of a single job:
 
-## Docs
+```bash
+depot ci run --org 0p91s0lz49 \
+  --workflow .depot/workflows/test.yml \
+  --job test \
+  --ssh
+```
 
-- [Depot CI overview](https://depot.dev/docs/ci) ·
-  [quickstart](https://depot.dev/docs/ci/quickstart) ·
-  [GitHub Actions compatibility](https://depot.dev/docs/ci/compatibility) ·
-  [CLI reference](https://depot.dev/docs/cli/reference/depot-ci)
+## Dispatch A Checked-In Workflow
+
+Use `dispatch` for workflows with `workflow_dispatch`. The `--workflow` value is
+the file basename, not the full path.
+
+```bash
+depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
+  --workflow cloudflare-previews.yml \
+  --ref <branch> \
+  --input pull-request-number=<pr-number>
+```
+
+Deploy a branch manually:
+
+```bash
+depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
+  --workflow deploy-os.yml \
+  --ref <branch> \
+  --input ref=<branch>
+```
+
+## Editing Workflows
+
+1. Edit `.depot/workflows/<name>.yml`.
+2. If a step needs real logic, add or update a script under `scripts/ci`.
+3. Validate the workflow locally with `depot ci run`.
+4. Watch the PR checks in GitHub or with the `watch` commands above.
+
+Prefer small YAML wrappers around scripts. For example:
+
+```yaml
+- name: Notify Slack on failure
+  run: pnpm tsx scripts/ci/notify.ts workflow-failure
+```
+
+Use Depot-specific features where they make the workflow clearer:
+
+- custom-image jobs declare both `runs-on.size` and `runs-on.image`;
+- `actions/checkout` uses `clean: false` when consuming the baked image;
+- independent checks can use Depot `parallel:` blocks with `fail-fast: false`;
+- workflow runtime logic belongs in `scripts/ci`, not in long YAML strings.
+
+## Custom Image
+
+The baked image is built by `.depot/workflows/build-preview-ci-image.yml` using
+`scripts/depot-ci/bake-preview-ci-image.sh`.
+
+It contains Node, pnpm, workspace dependencies, Doppler CLI, and the preview
+browser. Jobs that consume it must keep:
+
+```yaml
+runs-on:
+  size: 8x32
+  image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+steps:
+  - uses: actions/checkout@v4
+    with:
+      clean: false
+```
+
+`clean: false` matters because the image contains a preinstalled workspace. A
+clean checkout would delete the baked `node_modules` before `pnpm install` can
+reuse it.
+
+## Trigger Gotchas
+
+Depot registers automatic triggers from the default branch. If you change an
+`on:` block on a feature branch, automatic `push` or `pull_request` behavior may
+not be visible until the workflow file lands on `main`. Use `depot ci run` for
+local workflow validation and `depot ci dispatch` for `workflow_dispatch`
+coverage.
+
+`workflow_dispatch` and automatic PR runs can share concurrency groups. For the
+preview workflow, a manual dispatch and an automatic PR run for the same PR can
+cancel each other. When validating previews, use one path at a time.
+
+`depot ci logs` accepts a run id, job id, or attempt id. When a run has multiple
+jobs, pass `--job <job-key>` or use `depot ci status <run-id> --output json` to
+find the exact job/attempt id.
+
+When the autofix job fails with `pull request parse error: cannot find workflow
+run named "autofix.ci"`, the real signal is that autofix found a diff to apply
+(the apply step only contacts GitHub when there is one) and could not correlate
+the Depot run with a GitHub Actions run. Look at the `git diff` output in the
+job logs, apply the same fix locally (usually `pnpm format`), and push. A common
+cause is committing a locally regenerated file (for example
+`apps/iterate-com/backend/generated/skills-registry.ts`) whose generator output
+is not format-stable.

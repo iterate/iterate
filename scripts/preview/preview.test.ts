@@ -120,6 +120,7 @@ describe("preview compare base", () => {
         previousState: {
           apps: {},
           environmentConfigLease: null,
+          notice: null,
         },
         pullRequestBaseSha: "base-sha",
       }),
@@ -140,6 +141,7 @@ describe("preview compare base", () => {
             },
           },
           environmentConfigLease: null,
+          notice: null,
         },
         pullRequestBaseSha: "base-sha",
       }),
@@ -162,6 +164,7 @@ describe("preview retry selection", () => {
             },
           },
           environmentConfigLease: null,
+          notice: null,
         },
         pullRequestHeadSha: "current-head",
       }).map((app) => app.slug),
@@ -182,6 +185,7 @@ describe("preview retry selection", () => {
             },
           },
           environmentConfigLease: null,
+          notice: null,
         },
         pullRequestHeadSha: "current-head",
       }).map((app) => app.slug),
@@ -202,6 +206,7 @@ describe("preview retry selection", () => {
             },
           },
           environmentConfigLease: null,
+          notice: null,
         },
         pullRequestHeadSha: "current-head",
       }),
@@ -286,6 +291,7 @@ describe("cloudflare preview state helpers", () => {
         }),
       },
       environmentConfigLease: null,
+      notice: null,
     });
 
     expect(body).toContain("# User content");

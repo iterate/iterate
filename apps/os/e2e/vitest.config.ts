@@ -55,14 +55,16 @@ export default defineConfig({
     // latency (~3-5s per saga). Before #1601 the slow cold creates piled up
     // and overloaded the slot ("Durable Object storage operation exceeded
     // timeout") at peak 8-24; with fast creates the slot tolerates the
-    // fan-out. peak ≈ maxWorkers × maxConcurrency, so 4×4 = ~16 concurrent
-    // creates against the slot. 4 (peak ~16) still overloaded on a very cold
-    // slot (161s deploy) — 4 DO-storage-timeout fails that survived retry — so
-    // 3 (peak ~12) is the current ceiling. The robust fix for going higher is
+    // fan-out. peak ≈ maxWorkers × maxConcurrency: 4×4 = ~16 overloaded a
+    // very cold slot (4 DO-storage-timeout fails that survived retry), and
+    // 3 (peak ~12) still produced rotating stream-delivery timeouts under
+    // load ("saw 0 events" — e.g. the cross-post test on #1638's runs), so
+    // 2 (peak ~8) is the current setting. The robust fix for going higher is
     // splitting the itx monolith into files (file parallelism at safe
-    // per-file concurrency) — see tasks/raise-e2e-maxconcurrency.md.
+    // per-file concurrency) — see tasks/raise-e2e-maxconcurrency.md and
+    // tasks/streams-event-delivery-flake-under-concurrent-load.md.
     sequence: { concurrent: ci },
-    maxConcurrency: 3,
+    maxConcurrency: 2,
     passWithNoTests: true,
     projects: [
       {

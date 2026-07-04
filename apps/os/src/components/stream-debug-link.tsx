@@ -20,6 +20,7 @@ export function StreamDebugLink({
       className={cn(buttonVariants({ variant: "outline", size: "sm" }), className)}
       to="/projects/$projectSlug/streams/$"
       params={{ projectSlug, _splat: streamPath }}
+      search={{}}
       target="_blank"
       rel="noreferrer"
     >

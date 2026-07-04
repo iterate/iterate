@@ -1,40 +1,30 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { devtools } from "@tanstack/devtools-vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import tailwindcss from "@tailwindcss/vite";
 import viteReact from "@vitejs/plugin-react";
-import alchemy from "alchemy/cloudflare/tanstack-start";
+import { cloudflare } from "@cloudflare/vite-plugin";
 import captunVite from "captun/vite";
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
+import { writeWranglerConfig } from "./scripts/generate-wrangler-config.ts";
 
-// Local dev runs the whole worker topology (docs/worker-topology.md) inside
-// vite's single workerd: alchemy.run.ts writes one wrangler config per
-// worker plus this manifest before spawning vite. One workerd keeps
-// cross-script Durable Object names intact (the cross-process dev registry
-// proxy loses ctx.id.name). Absent manifest (plain `vite build`, CI) → no
-// auxiliary workers.
-const auxWorkersManifest = new URL("./.alchemy/local/aux-workers.json", import.meta.url);
-function readAuxiliaryWorkers(command: string) {
-  // Dev server only: a production `vite build` must not pick up the dev
-  // manifest a previous `pnpm dev` left in this worktree — deployed workers
-  // are built by alchemy from their entrypoints, not by vite.
-  if (command !== "serve" || !existsSync(auxWorkersManifest)) return [];
-  return (JSON.parse(readFileSync(auxWorkersManifest, "utf8")) as string[]).map((configPath) => ({
-    configPath,
-  }));
-}
+// wrangler.jsonc is generated (gitignored) — refresh it from envs.ts before
+// the cloudflare plugin reads it, so dev and build can never see stale config.
+writeWranglerConfig();
 
 const host = process.env.HOST ?? "127.0.0.1";
 const port = process.env.PORT ? Number(process.env.PORT) : 5173;
 
-// Container-backed Durable Objects (the sandbox worker) pair every container
-// with a `proxy-everything` egress sidecar. Upstream pins that image to an
-// amd64-only digest; on Apple Silicon the sidecar must run natively (under
-// Rosetta its transparent-proxy setsockopt fails — see
-// docs/sandboxes.md), so default to the digest-free multi-arch tag and let
-// the (patched, host-platform) pull resolve the right architecture. Both the
-// vite plugin's pull and miniflare's workerd config read this variable.
+// Container-backed Durable Objects (the sandbox class) pair every container
+// with a `proxy-everything` egress sidecar. Upstream defaults to linux/amd64;
+// under Rosetta on Apple Silicon its transparent-proxy setsockopt fails, so
+// pull the host architecture (the image is multi-arch). Only relevant when
+// containers are enabled for local dev (wrangler.jsonc dev.enable_containers).
 process.env.MINIFLARE_CONTAINER_EGRESS_IMAGE ??= "cloudflare/proxy-everything:3cb1195";
+if (process.arch === "arm64") {
+  process.env.MINIFLARE_CONTAINER_EGRESS_IMAGE_PLATFORM ??= "linux/arm64";
+}
 
 // Public local URL for the dev server, driven by Doppler. CAPTUN_TUNNEL_NAME
 // pins the stable URL name; CAPTUN_GATEWAY + CAPTUN_TOKEN target a self-hosted
@@ -43,7 +33,7 @@ process.env.MINIFLARE_CONTAINER_EGRESS_IMAGE ??= "cloudflare/proxy-everything:3c
 const captunGateway = process.env.CAPTUN_GATEWAY?.trim() || "https://tunnels.iterate.com";
 const captunName = process.env.CAPTUN_TUNNEL_NAME?.trim();
 
-export default defineConfig(({ command }) => ({
+export default defineConfig({
   // wa-sqlite ships an Emscripten `.mjs` + `.wasm` pair that must stay together.
   // The stream DB worker imports the wasm as a Vite asset URL; pre-bundling the
   // package can break that pairing and surface as sqlite3_open_v2 failures.
@@ -76,12 +66,15 @@ export default defineConfig(({ command }) => ({
   },
   plugins: [
     devtools(), // must be first
-    // Temporarily disabled: PostHog source map upload fails in this worktree
-    // layout because the CLI cannot determine the current git branch.
-    alchemy({ auxiliaryWorkers: readAuxiliaryWorkers(command) }),
+    // The worker (src/worker.ts) runs in workerd during dev; wrangler.jsonc
+    // (generated from the root envs.ts) declares its bindings, and the keys
+    // in its `secrets.required` load straight from process.env — which is
+    // why `doppler run -- vite dev` needs no .dev.vars file.
+    cloudflare({ viteEnvironment: { name: "ssr" } }),
     tanstackStart(),
     viteReact(),
     tailwindcss(),
+    devServerDiscoveryFile(),
     ...(captunName
       ? [
           captunVite({
@@ -92,7 +85,45 @@ export default defineConfig(({ command }) => ({
         ]
       : []),
   ],
-}));
+});
+
+/**
+ * Publishes this worktree's dev server (pid, port, url) to
+ * `.dev-server/dev-server.json` so out-of-process tooling (`pnpm auth:mint`,
+ * agent browsers, scripts/dev.ts status) can find it no matter how the
+ * server was started — a bare `vite dev` works the same as `pnpm dev`.
+ */
+function devServerDiscoveryFile(): Plugin {
+  const dir = fileURLToPath(new URL("./.dev-server", import.meta.url));
+  const file = `${dir}/dev-server.json`;
+  return {
+    name: "iterate:dev-server-discovery-file",
+    apply: "serve",
+    configureServer(server) {
+      server.httpServer?.once("listening", () => {
+        const address = server.httpServer?.address();
+        const actualPort = typeof address === "object" && address ? address.port : port;
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(
+          file,
+          JSON.stringify(
+            {
+              pid: process.pid,
+              port: actualPort,
+              baseUrl: `http://localhost:${actualPort}`,
+              startedAt: new Date().toISOString(),
+            },
+            null,
+            2,
+          ),
+        );
+      });
+      server.httpServer?.once("close", () => {
+        if (existsSync(file)) rmSync(file);
+      });
+    },
+  };
+}
 
 function safeRollupChunkFileName(chunkInfo: { name: string }) {
   const sanitizedName = chunkInfo.name.replace(/^\.+/, "").replaceAll(/[^A-Za-z0-9_-]+/g, "-");

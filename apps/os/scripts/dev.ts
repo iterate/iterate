@@ -1,31 +1,32 @@
+/**
+ * Lifecycle wrapper around the OS dev server (`vite dev` in this worktree).
+ *
+ * The server itself is just `doppler run -- vite dev`; this wrapper exists
+ * for parallel-worktree workflows: detached starts with log capture,
+ * `status`/`attach`/`kill` against the discovery file the vite plugin
+ * publishes (see vite.config.ts), and free-port picking so several
+ * worktrees can run servers side by side.
+ *
+ *   pnpm dev                  # attached (Ctrl-C stops it)
+ *   pnpm dev start --detach   # background; returns once the server is up
+ *   pnpm dev status|attach|restart|kill
+ */
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:net";
-import {
-  closeSync,
-  createReadStream,
-  createWriteStream,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  statSync,
-  writeSync,
-} from "node:fs";
-import { resolve } from "node:path";
+import { createReadStream, existsSync, mkdirSync, openSync, statSync } from "node:fs";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { setTimeout as sleep } from "node:timers/promises";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
-
 import {
-  localDevServerLogPath,
-  readLocalDevServerInfo,
-  releaseLocalDevServerInfo,
+  devServerDir,
+  devServerLogPath,
+  isPidAlive,
+  readDevServerInfo,
   type DevServerInfo,
-} from "@iterate-com/shared/alchemy/local-dev-server";
+} from "./lib/dev-server-info.ts";
 
 export type StartOptions = {
-  /** Keep this process attached to the dev server output. */
-  attach?: boolean;
   /** Doppler config to load before starting the dev server. */
   config?: string;
   /** Start in the background and return once the discovery file is published. */
@@ -41,96 +42,108 @@ export type StartOptions = {
 };
 
 const APP_ROOT = fileURLToPath(new URL("..", import.meta.url));
-const ALCHEMY_DIR = resolve(APP_ROOT, ".alchemy");
-const LOG_PATH = localDevServerLogPath(APP_ROOT);
-const DEFAULT_START_TIMEOUT_MS = 30_000;
-const DEFAULT_KILL_TIMEOUT_MS = 10_000;
-const DEFAULT_HEAD_LINES = 80;
-const DEFAULT_TAIL_LINES = 80;
+const LOG_PATH = devServerLogPath(APP_ROOT);
+const DEFAULT_START_TIMEOUT_MS = 60_000;
 
-/** Start the OS local dev server, or attach if it is already running. */
+/** Start the OS dev server (the default command: bare `pnpm dev` runs this). */
 export default async function start(options: StartOptions = {}) {
-  const attach = options.attach === undefined ? !options.detach : options.attach;
-  const detach = !attach;
-  const keepAlive = Boolean(options.keepAlive);
-  const port = options.port === undefined ? undefined : validateExplicitPort(options.port);
-  const timeoutMs = options.timeoutMs || DEFAULT_START_TIMEOUT_MS;
-  if (keepAlive && !detach) {
-    throw new Error("keepAlive requires detach.");
-  }
-
-  const env = loadDevServerEnv(options);
-  const result = await startDevServer({ attach, detach, env, port, timeoutMs });
-  if (keepAlive) await keepProcessAlive();
-  return result;
-}
-
-/** Restart the OS local dev server. */
-export async function restart(options: StartOptions = {}) {
-  const attach = options.attach === undefined ? !options.detach : options.attach;
-  const detach = !attach;
-  const keepAlive = Boolean(options.keepAlive);
-  const port = options.port === undefined ? undefined : validateExplicitPort(options.port);
-  const timeoutMs = options.timeoutMs || DEFAULT_START_TIMEOUT_MS;
-  if (keepAlive && !detach) {
-    throw new Error("keepAlive requires detach.");
-  }
-
-  const env = loadDevServerEnv(options);
-  assertLocalAlchemyDev(env);
-  await kill();
-  const result = await startDevServer({ attach, detach, env, port, timeoutMs });
-  if (keepAlive) await keepProcessAlive();
-  return result;
-}
-
-/** Stop the recorded OS local dev server. */
-export async function kill() {
-  const info = readLocalDevServerInfo(APP_ROOT, { requireLive: true });
-  if (!info) {
-    return { killed: false, message: "No live OS dev server recorded for this worktree." };
-  }
-
-  try {
-    process.kill(info.pid, "SIGTERM");
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ESRCH") {
-      releaseLocalDevServerInfo(APP_ROOT, info.pid);
-      return {
-        killed: false,
-        message: `Recorded OS dev server pid ${info.pid} is no longer running.`,
-      };
+  const requestedPort = options.port ?? (process.env.PORT ? Number(process.env.PORT) : undefined);
+  const live = readDevServerInfo(APP_ROOT, { requireLive: true });
+  if (live) {
+    if (requestedPort !== undefined && live.port !== requestedPort) {
+      throw new Error(
+        `A dev server is already running on port ${live.port} (pid ${live.pid}) but port ` +
+          `${requestedPort} was requested — kill it or use restart.`,
+      );
     }
-    throw error;
-  }
-  const stopped = await waitUntil(() => !isPidAlive(info.pid), DEFAULT_KILL_TIMEOUT_MS, 100);
-  if (!stopped) {
-    throw new Error(
-      `OS dev server pid ${info.pid} did not exit after SIGTERM. Stop it manually if needed.`,
-    );
+    return { ...formatStatus(live), note: "already running — use restart to replace it" };
   }
 
-  releaseLocalDevServerInfo(APP_ROOT, info.pid);
-  console.info(`Stopped OS dev server: ${info.baseUrl} (pid ${info.pid})`);
-  return { killed: true, pid: info.pid, baseUrl: info.baseUrl };
+  const port = requestedPort ?? (await pickFreePort(recordedPort()));
+  const viteArgs = ["exec", "vite", "dev", "--port", String(port), "--strictPort"];
+  const [command, args] = options.skipDoppler
+    ? ["pnpm", viteArgs]
+    : [
+        "doppler",
+        ["run", ...(options.config ? ["--config", options.config] : []), "--", "pnpm", ...viteArgs],
+      ];
+
+  if (options.detach) {
+    mkdirSync(devServerDir(APP_ROOT), { recursive: true });
+    const log = openSync(LOG_PATH, "w");
+    const child = spawn(command, args, {
+      cwd: APP_ROOT,
+      detached: true,
+      stdio: ["ignore", log, log],
+    });
+    child.unref();
+    const info = await waitForDiscovery(options.timeoutMs ?? DEFAULT_START_TIMEOUT_MS, child.pid);
+    if (options.keepAlive) {
+      await new Promise(() => {}); // hold until our supervisor (e.g. Playwright) kills us
+    }
+    return formatStatus(info);
+  }
+
+  const child = spawn(command, args, { cwd: APP_ROOT, stdio: "inherit" });
+  const code = await new Promise<number>((res) => child.on("exit", (c) => res(c ?? 0)));
+  process.exit(code);
 }
 
-/** Show the recorded OS local dev server status. */
+/** Kill this worktree's dev server, then start a fresh one. */
+export async function restart(options: StartOptions = {}) {
+  await kill();
+  return await start(options);
+}
+
+/** Stop this worktree's dev server. */
+export async function kill() {
+  const info = readDevServerInfo(APP_ROOT);
+  if (!info || !isPidAlive(info.pid)) return { status: "not running" };
+  // The recorded pid is vite's (the discovery plugin writes its own pid);
+  // its doppler/pnpm parents exit on their own once vite dies.
+  process.kill(info.pid, "SIGTERM");
+  for (let i = 0; i < 50 && isPidAlive(info.pid); i++) await sleep(100);
+  if (isPidAlive(info.pid)) process.kill(info.pid, "SIGKILL");
+  return { status: "stopped", pid: info.pid };
+}
+
+/** Show this worktree's dev server state. */
 export function status() {
-  return formatStatus(readLocalDevServerInfo(APP_ROOT));
+  return formatStatus(readDevServerInfo(APP_ROOT));
 }
 
 /** Attach to the recorded OS local dev server log. */
 export async function attach() {
-  const info = readLocalDevServerInfo(APP_ROOT, { requireLive: true });
-  if (!info) {
-    throw new Error("No live OS dev server recorded for this worktree.");
+  const info = readDevServerInfo(APP_ROOT, { requireLive: true });
+  if (!info) throw new Error("No live OS dev server recorded for this worktree.");
+  if (!existsSync(LOG_PATH)) {
+    throw new Error(
+      `No log file at ${LOG_PATH} — the server was started attached (its logs are in ` +
+        `that terminal). Only detached starts (pnpm dev start --detach) write the log file.`,
+    );
   }
-  return await attachToDevServer(info);
+  console.log(
+    `Attached to pid ${info.pid} at ${info.baseUrl} (Ctrl-C detaches; server keeps running)`,
+  );
+  let offset = 0;
+  for (;;) {
+    const size = existsSync(LOG_PATH) ? statSync(LOG_PATH).size : offset;
+    if (size > offset) {
+      await new Promise<void>((res, rej) => {
+        const stream = createReadStream(LOG_PATH, { start: offset, end: size - 1 });
+        stream.pipe(process.stdout, { end: false });
+        stream.on("end", res);
+        stream.on("error", rej);
+      });
+      offset = size;
+    }
+    if (!isPidAlive(info.pid)) return { status: "server exited" };
+    await sleep(300);
+  }
 }
 
 export const localOsDevServer = {
-  readLive: readLiveLocalOsDevServer,
+  readLive: () => readDevServerInfo(APP_ROOT, { requireLive: true }),
   resolveTarget: resolveLocalOsDevServerTarget,
 };
 
@@ -145,313 +158,57 @@ async function resolveLocalOsDevServerTarget(
   | { baseUrl: string; kind: "live"; port: number; info: DevServerInfo }
   | { baseUrl: string; kind: "start"; port: number }
 > {
-  const live = readLiveLocalOsDevServer();
+  const live = readDevServerInfo(APP_ROOT, { requireLive: true });
   if (live) {
-    return {
-      baseUrl: normalizeBaseUrl(live.baseUrl),
-      info: live,
-      kind: "live",
-      port: live.port,
-    };
+    return { baseUrl: live.baseUrl.replace(/\/+$/, ""), info: live, kind: "live", port: live.port };
   }
-
-  const recorded = readLocalDevServerInfo(APP_ROOT);
   const envPort = env.PORT ? Number(env.PORT) : undefined;
-  const preferredPort = envPort || (recorded && recorded.port) || undefined;
-  const port = await pickFreePort(preferredPort);
-  return {
-    baseUrl: `http://localhost:${port}`,
-    kind: "start",
-    port,
-  };
+  const port = await pickFreePort(envPort || recordedPort());
+  return { baseUrl: `http://localhost:${port}`, kind: "start", port };
 }
 
-/** Read the live OS local dev server record for this worktree. */
-function readLiveLocalOsDevServer() {
-  return readLocalDevServerInfo(APP_ROOT, { requireLive: true });
+/** This worktree's last-used port, so restarts keep stable URLs. */
+function recordedPort() {
+  return readDevServerInfo(APP_ROOT)?.port;
 }
 
-async function startDevServer(input: {
-  attach: boolean;
-  detach: boolean;
-  env: NodeJS.ProcessEnv;
-  port: number | undefined;
-  timeoutMs: number;
-}) {
-  assertLocalAlchemyDev(input.env);
-  const shouldStream = !input.detach && input.attach;
-  const existing = readLocalDevServerInfo(APP_ROOT, { requireLive: true });
-  if (existing) {
-    assertDevServerPort(existing, input.port);
-    console.info(`OS dev server already running: ${existing.baseUrl} (pid ${existing.pid})`);
-    if (shouldStream) await attachToDevServer(existing);
-    return formatStatus(existing);
-  }
-
-  if (shouldStream) {
-    return startAttachedDevServer(input.env, input.port);
-  }
-
-  return startDetachedDevServer(input.env, input.timeoutMs, input.port);
-}
-
-async function startAttachedDevServer(env: NodeJS.ProcessEnv, port: number | undefined) {
-  mkdirSync(ALCHEMY_DIR, { recursive: true });
-  const command = "tsx";
-  const commandArgs = ["./alchemy.run.ts"];
-  const log = createWriteStream(LOG_PATH, { flags: "w" });
-
-  log.write(logHeader(command, commandArgs));
-
-  const child = spawn(command, commandArgs, {
-    cwd: APP_ROOT,
-    env: {
-      ...env,
-      DEV_SERVER_LOG_PATH: LOG_PATH,
-      ...(port ? { PORT: String(port) } : {}),
-    },
-    stdio: ["inherit", "pipe", "pipe"],
-  });
-
-  child.stdout?.on("data", (chunk: Buffer) => teeOutput(chunk, process.stdout, log));
-  child.stderr?.on("data", (chunk: Buffer) => teeOutput(chunk, process.stderr, log));
-
-  child.on("error", (error) => {
-    console.error(error);
-    log.write(`${error.stack || error.message}\n`);
-    log.end(() => process.exit(1));
-  });
-
-  for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.once(signal, () => child.kill(signal));
-  }
-
-  return new Promise<{ exitCode: number }>((resolve) => {
-    child.on("exit", (code, signal) => {
-      log.end(() => {
-        const exitCode = code || exitCodeForSignal(signal) || 1;
-        process.exitCode = exitCode;
-        resolve({ exitCode });
+async function pickFreePort(preferred?: number): Promise<number> {
+  const tryPort = (port?: number) =>
+    new Promise<number | null>((res) => {
+      const server = createServer();
+      server.once("error", () => res(null));
+      server.listen(port ?? 0, "127.0.0.1", () => {
+        const address = server.address();
+        const got = typeof address === "object" && address ? address.port : null;
+        server.close(() => res(got));
       });
     });
-  });
-}
-
-async function startDetachedDevServer(
-  env: NodeJS.ProcessEnv,
-  timeoutMs: number,
-  port: number | undefined,
-) {
-  mkdirSync(ALCHEMY_DIR, { recursive: true });
-  const command = "tsx";
-  const commandArgs = ["./alchemy.run.ts"];
-  const logFd = openSync(LOG_PATH, "w");
-  writeSync(logFd, logHeader(command, commandArgs));
-
-  const child = spawn(command, commandArgs, {
-    cwd: APP_ROOT,
-    detached: true,
-    env: {
-      ...env,
-      DEV_SERVER_LOG_PATH: LOG_PATH,
-      ...(port ? { PORT: String(port) } : {}),
-    },
-    stdio: ["ignore", logFd, logFd],
-  });
-  child.unref();
-  closeSync(logFd);
-
-  const info = await waitUntil(
-    () => readLocalDevServerInfo(APP_ROOT, { requireLive: true }),
-    timeoutMs,
-    250,
-  );
-  if (!info) {
-    throw new Error(
-      `OS dev server did not publish .alchemy/dev-server.json within ${timeoutMs}ms. ` +
-        `Check ${LOG_PATH}. Spawned pid: ${child.pid || "unknown"}.`,
-    );
+  if (preferred) {
+    const got = await tryPort(preferred);
+    if (got) return got;
   }
-
-  assertDevServerPort(info, port);
-  console.info(`Started OS dev server: ${info.baseUrl} (pid ${info.pid})`);
-  return formatStatus(info);
+  const got = await tryPort();
+  if (!got) throw new Error("Could not find a free port for the dev server.");
+  return got;
 }
 
-async function attachToDevServer(info: DevServerInfo) {
-  const logPath = info.logPath?.trim() || LOG_PATH;
-  writeAttachPreamble(info, logPath);
-  if (!existsSync(logPath)) {
-    console.info("Waiting for log file...");
-  }
-
-  let offset = existsSync(logPath) ? writeLogExcerpt(logPath) : 0;
-
-  await new Promise<void>((resolvePromise) => {
-    let done = false;
-
-    const finish = () => {
-      if (done) return;
-      done = true;
-      clearInterval(interval);
-      process.off("SIGINT", onSigint);
-      resolvePromise();
-    };
-
-    const onSigint = () => finish();
-    process.once("SIGINT", onSigint);
-
-    const interval = setInterval(() => {
-      if (existsSync(logPath)) {
-        const size = statSync(logPath).size;
-        if (size < offset) offset = 0;
-        if (size > offset) {
-          createReadStream(logPath, { start: offset, end: size - 1 }).pipe(process.stdout, {
-            end: false,
-          });
-          offset = size;
-        }
-      }
-      if (!isPidAlive(info.pid)) finish();
-    }, 500);
-  });
-
-  return formatStatus(info);
-}
-
-async function pickFreePort(preferredPort: number | undefined) {
-  if (preferredPort && preferredPort > 0 && (await isPortFree(preferredPort))) {
-    return preferredPort;
-  }
-  return await portFromTemporaryServer(0);
-}
-
-async function isPortFree(port: number) {
-  try {
-    await portFromTemporaryServer(port);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function portFromTemporaryServer(port: number) {
-  return new Promise<number>((resolvePromise, reject) => {
-    const server = createServer();
-    server.unref();
-    server.once("error", reject);
-    server.listen({ host: "127.0.0.1", port }, () => {
-      const address = server.address();
-      if (address === null || typeof address === "string") {
-        server.close(() => reject(new Error("Could not determine free port")));
-        return;
-      }
-      server.close(() => resolvePromise(address.port));
-    });
-  });
-}
-
-async function keepProcessAlive() {
-  const live = readLiveLocalOsDevServer();
-  if (!live) {
-    throw new Error("OS dev server started but did not publish apps/os/.alchemy/dev-server.json.");
-  }
-
-  const baseUrl = normalizeBaseUrl(live.baseUrl);
-  console.info(`OS specs using local dev server ${baseUrl} (pid ${live.pid})`);
-
-  await new Promise<void>((resolvePromise) => {
-    const interval = setInterval(() => undefined, 60_000);
-    const finish = () => {
-      clearInterval(interval);
-      process.off("SIGINT", finish);
-      process.off("SIGTERM", finish);
-      resolvePromise();
-    };
-
-    process.once("SIGINT", finish);
-    process.once("SIGTERM", finish);
-  });
-}
-
-function validateExplicitPort(port: number) {
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-    throw new Error(`Port must be an integer from 1 to 65535. Received: ${port}`);
-  }
-  return port;
-}
-
-function assertDevServerPort(info: DevServerInfo, expectedPort: number | undefined) {
-  if (expectedPort === undefined || info.port === expectedPort) return;
-  throw new Error(
-    `OS dev server is running on port ${info.port}, but port ${expectedPort} was requested.`,
-  );
-}
-
-function teeOutput(chunk: Buffer, stream: NodeJS.WriteStream, log: NodeJS.WritableStream) {
-  stream.write(chunk);
-  log.write(chunk);
-}
-
-async function waitUntil<T>(
-  read: () => T | false | null | undefined,
-  timeoutMs: number,
-  intervalMs: number,
-) {
+async function waitForDiscovery(timeoutMs: number, childPid?: number): Promise<DevServerInfo> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const value = read();
-    if (value) return value;
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, intervalMs));
+    const info = readDevServerInfo(APP_ROOT, { requireLive: true });
+    if (info) return info;
+    if (childPid && !isPidAlive(childPid)) {
+      throw new Error(`Dev server exited during startup — see ${LOG_PATH}`);
+    }
+    await sleep(250);
   }
-  return read() || null;
+  throw new Error(
+    `Dev server did not publish ${devServerDir(APP_ROOT)}/dev-server.json within ${timeoutMs}ms — see ${LOG_PATH}`,
+  );
 }
 
-function formatStatus(info: DevServerInfo | null) {
-  if (!info) {
-    return { live: false, recorded: false, logPath: LOG_PATH };
-  }
-
-  return {
-    live: !info.stoppedAt && isPidAlive(info.pid),
-    recorded: true,
-    pid: info.pid,
-    port: info.port,
-    baseUrl: info.baseUrl,
-    logPath: info.logPath || LOG_PATH,
-    startedAt: info.startedAt,
-    stoppedAt: info.stoppedAt,
-  };
-}
-
-function isPidAlive(pid: number) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function loadDevServerEnv(options: Pick<StartOptions, "config" | "skipDoppler">) {
-  if (options.skipDoppler || process.env.DOPPLER_CONFIG) return process.env;
-
-  const dopplerEnv = doppler.loadOsSecrets({ config: options.config });
-  if (!dopplerEnv.ok) {
-    throw new Error(["Could not load OS dev secrets from Doppler.", dopplerEnv.error].join("\n"));
-  }
-
-  return { ...process.env, ...dopplerEnv.secrets };
-}
-
-type LoadOsDopplerSecretsOptions = {
-  /** Doppler config to load. Defaults to the local apps/os Doppler setup. */
-  config?: string;
-  /** Environment used for the Doppler CLI process. Defaults to process.env. */
-  env?: NodeJS.ProcessEnv;
-};
-
-function loadOsSecrets(options: LoadOsDopplerSecretsOptions = {}) {
+/** Download this app's Doppler secrets as a plain object (config from doppler.yaml scoping unless overridden). */
+function loadOsSecrets(options: { config?: string; env?: NodeJS.ProcessEnv } = {}) {
   try {
     const result = spawnSync(
       "doppler",
@@ -471,7 +228,6 @@ function loadOsSecrets(options: LoadOsDopplerSecretsOptions = {}) {
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
-
     if (result.error) throw result.error;
     if (result.status !== 0) {
       return {
@@ -479,98 +235,34 @@ function loadOsSecrets(options: LoadOsDopplerSecretsOptions = {}) {
         error: result.stderr.trim() || `doppler exited with status ${result.status}`,
       };
     }
-
     return { ok: true as const, secrets: JSON.parse(result.stdout) as Record<string, string> };
   } catch (error) {
     return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
   }
 }
 
-function assertLocalAlchemyDev(env: NodeJS.ProcessEnv) {
-  const isLocal = /^(1|true|yes)$/i.test(env.ALCHEMY_LOCAL?.trim() || "");
-  if (!isLocal) {
-    throw new Error(
-      "Refusing to run the OS dev server because ALCHEMY_LOCAL is not true. " +
-        `Doppler config ${env.DOPPLER_CONFIG || "(unset)"} would run ` +
-        `stage ${env.ALCHEMY_STAGE || "(unset)"} as a deploy. ` +
-        "Use doppler run --project os --config <config> -- pnpm deploy for intentional deployments.",
-    );
-  }
+function formatStatus(info: DevServerInfo | null) {
+  if (!info) return { status: "not running" as const };
+  const live = isPidAlive(info.pid);
+  return {
+    status: live ? ("running" as const) : ("stale" as const),
+    pid: info.pid,
+    port: info.port,
+    baseUrl: info.baseUrl,
+    startedAt: info.startedAt,
+    log: LOG_PATH,
+  };
 }
 
-function writeAttachPreamble(info: DevServerInfo, logPath: string) {
-  const baseUrl = new URL(info.baseUrl);
-  const parentPid = spawnSync("ps", ["-o", "ppid=", "-p", String(info.pid)], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  }).stdout?.trim();
-  const serverStatus = !info.stoppedAt && isPidAlive(info.pid) ? "live" : "not live";
-  const lines = [
-    "Attaching to OS dev server",
-    `Status: ${serverStatus}`,
-    `Base URL: ${info.baseUrl}`,
-    `Host: ${baseUrl.hostname}`,
-    `Port: ${info.port}`,
-    `PID: ${info.pid}`,
-    ...(parentPid && /^\d+$/.test(parentPid) ? [`Parent PID: ${parentPid}`] : []),
-    `Started: ${info.startedAt}`,
-    ...(info.stoppedAt ? [`Stopped: ${info.stoppedAt}`] : []),
-    `Log: ${logPath}`,
-    "",
-  ];
-
-  process.stdout.write(`${lines.join("\n")}\n`);
+// Run the CLI only when invoked directly (playwright.config.ts imports this
+// module for localOsDevServer without wanting a CLI).
+if (process.argv[1]?.endsWith("dev.ts")) {
+  void createCli({
+    ...import.meta,
+    name: "dev",
+    jsonInput: "auto",
+  }).run({
+    logger: yamlTableConsoleLogger,
+    prompts: isAgent() ? undefined : createBuiltInPrompts(),
+  });
 }
-
-function writeLogExcerpt(path: string) {
-  const log = readFileSync(path);
-  const content = log.toString("utf8");
-  if (content.trim().length === 0) return log.byteLength;
-
-  const lines = content.split(/\r?\n/);
-  if (lines.length <= DEFAULT_HEAD_LINES + DEFAULT_TAIL_LINES) {
-    process.stdout.write(content.endsWith("\n") ? content : `${content}\n`);
-    return log.byteLength;
-  }
-
-  const head = lines.slice(0, DEFAULT_HEAD_LINES).join("\n");
-  const tail = lines.slice(-DEFAULT_TAIL_LINES).join("\n");
-  const omitted = lines.length - DEFAULT_HEAD_LINES - DEFAULT_TAIL_LINES;
-
-  process.stdout.write(`----- log start: first ${DEFAULT_HEAD_LINES} lines -----\n`);
-  process.stdout.write(head.endsWith("\n") ? head : `${head}\n`);
-  process.stdout.write(`----- omitted ${omitted} log lines -----\n`);
-  process.stdout.write(`----- log tail: last ${DEFAULT_TAIL_LINES} lines -----\n`);
-  process.stdout.write(tail.endsWith("\n") ? tail : `${tail}\n`);
-  return log.byteLength;
-}
-
-function logHeader(command: string, commandArgs: string[]) {
-  return [
-    "# OS dev server log",
-    `# Started: ${new Date().toISOString()}`,
-    `# Command: ${[command, ...commandArgs].join(" ")}`,
-    "",
-    "",
-  ].join("\n");
-}
-
-function exitCodeForSignal(signal: NodeJS.Signals | null) {
-  if (signal === "SIGINT") return 130;
-  if (signal === "SIGTERM") return 143;
-  return undefined;
-}
-
-function normalizeBaseUrl(baseUrl: string) {
-  // rm trailing /
-  return baseUrl.replace(/\/+$/, "");
-}
-
-void createCli({
-  ...import.meta,
-  name: "dev",
-  jsonInput: "auto",
-}).run({
-  logger: yamlTableConsoleLogger,
-  prompts: isAgent() ? undefined : createBuiltInPrompts(),
-});
