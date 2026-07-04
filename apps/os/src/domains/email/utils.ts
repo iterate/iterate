@@ -29,6 +29,11 @@ type EmailParty = {
   name?: string;
 };
 
+/** The project's own sending identity: `<slug>@<sender domain>`. */
+export function emailAddressForProject(input: { slug: string; domain: string }): string {
+  return `${input.slug}@${input.domain}`;
+}
+
 /** What `itx.email.send` accepts — see EmailCapability in types.ts for the contract docs. */
 type SendProjectEmailRequest = {
   to: string | string[];
@@ -37,11 +42,6 @@ type SendProjectEmailRequest = {
   html?: string;
   from?: string;
 };
-
-/** The project's own sending identity: `<slug>@<sender domain>`. */
-export function emailAddressForProject(input: { slug: string; domain: string }): string {
-  return `${input.slug}@${input.domain}`;
-}
 
 /**
  * Builds the Email Service message for a project send, enforcing the sender
