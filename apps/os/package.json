@@ -30,6 +30,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@cloudflare/containers": "0.3.7",
     "@cloudflare/sandbox": "0.12.3",
     "@cloudflare/shell": "^0.3.4",
     "@cloudflare/worker-bundler": "0.2.1",
