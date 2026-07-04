@@ -10,13 +10,15 @@ import type { RequestContext } from "~/request-context.ts";
 import type { Env } from "~/env.ts";
 import { ResourceCoordinator } from "~/durable-objects/resource-coordinator.ts";
 
-const config = parseConfig(workerEnv);
-
 export async function handleSemaphoreRequest(
   request: Request,
   env: Env,
   executionCtx: ExecutionContext,
 ) {
+  // Parsed per request (not at module scope) so the secrets-less bootstrap
+  // deploy of a brand-new worker passes startup validation — same posture as
+  // apps/os (see deploy-helpers.ts deployWithSecrets).
+  const config = parseConfig(workerEnv);
   return withEvlog(
     { request, app: { name: "@iterate-com/semaphore", slug: "semaphore" }, config, executionCtx },
     async ({ log }) => {
