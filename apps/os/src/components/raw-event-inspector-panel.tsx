@@ -111,7 +111,7 @@ export function RawEventInspectorPanel({
 
   return (
     <aside
-      className="absolute inset-y-0 right-0 z-30 flex w-full max-w-lg flex-col rounded-tl-2xl bg-background shadow-2xl"
+      className="absolute inset-y-0 right-0 z-30 flex w-full flex-col rounded-tl-2xl bg-background shadow-2xl md:w-1/2"
       data-testid="raw-event-inspector"
     >
       <div className="flex shrink-0 items-start gap-2 px-5 pb-2 pt-4">
