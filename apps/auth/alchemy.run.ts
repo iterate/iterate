@@ -131,6 +131,10 @@ const DB = await D1Database("auth-db", {
   name: `${workerName}-auth-db`,
   migrationsDir: "./src/server/db/migrations",
   importFiles: [ADMIN_SEED_SQL_PATH],
+  // Preview slots drift: a PR-close cleanup can lose alchemy's record of the
+  // database while the database itself survives, and the next tenant's deploy
+  // then dies on "already exists". Adopt it like the worker below does.
+  adopt: true,
 });
 
 const worker = await TanStackStart(APP_NAME, {

@@ -17,7 +17,7 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { AlertCircle, Circle, Github, Mail, MessageSquare } from "lucide-react";
 import { z } from "zod";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { StreamPage } from "~/components/stream-page.tsx";
+import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
@@ -285,7 +285,7 @@ function ProjectIntegrationsContent() {
   );
 
   return (
-    <StreamPage
+    <ProjectStreamView
       panel={panel}
       projectId={project.id}
       streamPath="/integrations"

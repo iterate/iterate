@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { StreamPage } from "~/components/stream-page.tsx";
+import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { connectItxBrowser } from "~/itx/itx-react.tsx";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
@@ -62,7 +62,7 @@ function ProjectAgentDetailContent() {
   }
 
   return (
-    <StreamPage
+    <ProjectStreamView
       autoFocusMessageComposer
       emptyLabel="No events on this agent stream yet."
       messageComposer={{

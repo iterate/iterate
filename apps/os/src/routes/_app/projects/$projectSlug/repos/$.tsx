@@ -15,7 +15,7 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { InfoRow } from "~/components/info-row.tsx";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { StreamPage } from "~/components/stream-page.tsx";
+import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import type { RepoProcessorState } from "~/types.ts";
@@ -105,7 +105,7 @@ function ProjectRepoDetailContent() {
   // the PANEL — the stream view mounts immediately and warms in parallel.
   if (repoProcessor.state === undefined) {
     return (
-      <StreamPage
+      <ProjectStreamView
         panel={
           <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
             Loading repo…
@@ -226,7 +226,7 @@ function ProjectRepoDetailContent() {
   );
 
   return (
-    <StreamPage
+    <ProjectStreamView
       panel={panel}
       projectId={project.id}
       streamPath={repoPath}

@@ -7,9 +7,10 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { FilterIcon, SearchIcon } from "lucide-react";
+import { ChevronDownIcon, FilterIcon, SearchIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
+import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import type {
   AgentUiLlmStep,
@@ -53,6 +54,7 @@ import { AgentFeedView } from "~/components/agent-feed.tsx";
 import { AgentPillComposer, type AgentComposerMode } from "~/components/agent-pill-composer.tsx";
 import { ExampleEventsPanel } from "~/components/example-events-panel.tsx";
 import { FeedEventTypeSelect, FeedItemsView } from "~/components/feed-items-view.tsx";
+import { openGlobalCommandPalette } from "~/components/global-command-palette-events.ts";
 import { PresenceAvatar, StreamProcessorsPanel } from "~/components/stream-processors-panel.tsx";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { useItx } from "~/itx/itx-react.tsx";
@@ -156,7 +158,9 @@ export function ProjectStreamView({
   defaultComposerMode,
   emptyLabel = "No events in this stream yet.",
   messageComposer,
+  panel,
   projectId,
+  showCommandPaletteTrigger = true,
   streamSource,
   streamPath,
 }: {
@@ -164,7 +168,17 @@ export function ProjectStreamView({
   defaultComposerMode?: "message" | "raw";
   emptyLabel?: string;
   messageComposer?: ProjectStreamMessageComposer;
+  /**
+   * The domain's reduced-state render (creation saga, settings forms, stream
+   * tree, …), shown beside the stream under the shared header — every domain
+   * object IS a stream, and its page is that stream's view. Left on large
+   * screens, stacked on top on small ones. Omit for pure stream pages (agent
+   * chat, raw stream browser).
+   */
+  panel?: ReactNode;
   projectId: string | null;
+  /** Admin pages don't mount the global ⌘K palette; they render an inert pill. */
+  showCommandPaletteTrigger?: boolean;
   streamSource?: ItxStreamSource;
   streamPath: string;
 }) {
@@ -424,23 +438,32 @@ export function ProjectStreamView({
 
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-background">
+      {/* THE page header — the app renders no other. Pill path breadcrumb
+          (⌘K trigger) top-left; presence, metrics, Feed/State, filter right. */}
       <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pb-1 pt-2.5">
-        <Tabs
-          value={activeTab}
-          onValueChange={(value) => {
-            const tab = value as ProjectStreamViewTab;
-            setSearch({ tab: tab === "feed" ? undefined : tab });
-          }}
+        <SidebarTrigger className="-ml-1 md:hidden" />
+        <button
+          type="button"
+          aria-haspopup="dialog"
+          title={
+            showCommandPaletteTrigger ? `${streamPath} — click or ⌘K to switch streams` : streamPath
+          }
+          onClick={() => showCommandPaletteTrigger && openGlobalCommandPalette()}
+          className={cn(
+            "flex h-9 min-w-0 items-center gap-2 rounded-full bg-muted px-3.5",
+            showCommandPaletteTrigger && "cursor-pointer hover:bg-muted/70",
+          )}
         >
-          <TabsList className="h-8">
-            <TabsTrigger value="feed" className="px-3 text-xs">
-              Feed
-            </TabsTrigger>
-            <TabsTrigger value="state" className="px-3 text-xs">
-              State
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
+          <span className="truncate font-mono text-sm">{streamPath}</span>
+          {showCommandPaletteTrigger ? (
+            <>
+              <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground" />
+              <kbd className="hidden shrink-0 rounded bg-background px-1.5 py-px text-[10px] text-muted-foreground sm:inline">
+                ⌘K
+              </kbd>
+            </>
+          ) : null}
+        </button>
 
         <div className="ml-auto flex items-center gap-3">
           {presence.length === 0 ? null : (
@@ -501,6 +524,22 @@ export function ProjectStreamView({
             </svg>
             {metrics.rttNow}ms
           </Button>
+          <Tabs
+            value={activeTab}
+            onValueChange={(value) => {
+              const tab = value as ProjectStreamViewTab;
+              setSearch({ tab: tab === "feed" ? undefined : tab });
+            }}
+          >
+            <TabsList className="h-8">
+              <TabsTrigger value="feed" className="px-3 text-xs">
+                Feed
+              </TabsTrigger>
+              <TabsTrigger value="state" className="px-3 text-xs">
+                State
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
           <Button
             variant="ghost"
             size="icon"
@@ -585,88 +624,97 @@ export function ProjectStreamView({
         </div>
       ) : null}
 
-      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-        {activeTab === "state" ? (
-          <ProjectStreamStateView store={store} />
-        ) : activePreset.kind === "agent-chat" ? (
-          <AgentFeedView
-            {...(runningLlmRequestId != null &&
-            (agentUiState?.queuedUserMessages ?? []).length > 0 &&
-            messageComposer?.onInterrupt != null
-              ? { onInterruptQueuedMessages: interruptMessage }
-              : {})}
-            // Fresh virtualizer state per stream mirror (see AgentFeedView docs).
-            key={store.streamDatabase.databasePath}
-            database={store.streamDatabase}
-            liveState={agentUiState}
-            search={feedSearch}
-            emptyLabel={connectionLabel}
-            isInterruptingQueuedMessages={isInterrupting}
-            // The reduced-state row only exists once the processor has
-            // checkpointed; an already-subscribed empty stream is "nothing
-            // here yet", not "connecting".
-            isPending={agentUiState == null && agentSnapshot.connectionStatus !== "subscribed"}
-          />
-        ) : (
-          <FeedItemsView
-            // Fresh virtualizer state per stream mirror (see FeedItemsView
-            // docs); filter changes are handled inside without remounting.
-            key={feedStore.streamDatabase.databasePath}
-            database={feedStore.streamDatabase}
-            emptyLabel={connectionLabel}
-            eventType={search.type ?? null}
-            eventTypePrefix={activePreset.eventTypePrefix ?? null}
-            searchQuery={feedSearch === "" ? null : feedSearch}
-          />
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
+        {panel == null ? null : (
+          <aside className="max-h-[45svh] min-h-0 shrink-0 overflow-y-auto border-b lg:max-h-none lg:w-[26rem] lg:border-b-0 lg:border-r">
+            <div className="flex flex-col gap-4 p-4">{panel}</div>
+          </aside>
         )}
-        {procPanelOpen ? (
-          <StreamProcessorsPanel
-            presence={presence}
-            metrics={metrics}
-            eventCount={eventCount}
-            busy={agentBusy}
-            focusedKey={focusedProcessorKey}
-            onFocus={focusProcessor}
-            onBack={openProcessorsOverview}
-            onClose={() => setSearch({ panel: undefined, processor: undefined })}
-            onClearClientDatabase={clearClientDatabases}
-            getProcessorRuntimeState={getProcessorRuntimeState}
-          />
-        ) : null}
-      </div>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+            {activeTab === "state" ? (
+              <ProjectStreamStateView store={store} />
+            ) : activePreset.kind === "agent-chat" ? (
+              <AgentFeedView
+                {...(runningLlmRequestId != null &&
+                (agentUiState?.queuedUserMessages ?? []).length > 0 &&
+                messageComposer?.onInterrupt != null
+                  ? { onInterruptQueuedMessages: interruptMessage }
+                  : {})}
+                // Fresh virtualizer state per stream mirror (see AgentFeedView docs).
+                key={store.streamDatabase.databasePath}
+                database={store.streamDatabase}
+                liveState={agentUiState}
+                search={feedSearch}
+                emptyLabel={connectionLabel}
+                isInterruptingQueuedMessages={isInterrupting}
+                // The reduced-state row only exists once the processor has
+                // checkpointed; an already-subscribed empty stream is "nothing
+                // here yet", not "connecting".
+                isPending={agentUiState == null && agentSnapshot.connectionStatus !== "subscribed"}
+              />
+            ) : (
+              <FeedItemsView
+                // Fresh virtualizer state per stream mirror (see FeedItemsView
+                // docs); filter changes are handled inside without remounting.
+                key={feedStore.streamDatabase.databasePath}
+                database={feedStore.streamDatabase}
+                emptyLabel={connectionLabel}
+                eventType={search.type ?? null}
+                eventTypePrefix={activePreset.eventTypePrefix ?? null}
+                searchQuery={feedSearch === "" ? null : feedSearch}
+              />
+            )}
+            {procPanelOpen ? (
+              <StreamProcessorsPanel
+                presence={presence}
+                metrics={metrics}
+                eventCount={eventCount}
+                busy={agentBusy}
+                focusedKey={focusedProcessorKey}
+                onFocus={focusProcessor}
+                onBack={openProcessorsOverview}
+                onClose={() => setSearch({ panel: undefined, processor: undefined })}
+                onClearClientDatabase={clearClientDatabases}
+                getProcessorRuntimeState={getProcessorRuntimeState}
+              />
+            ) : null}
+          </div>
 
-      {activeTab === "state" ? null : (
-        <div className="shrink-0 px-4 pb-4 pt-2.5">
-          <AgentPillComposer
-            mode={composerMode}
-            onModeChange={setComposerMode}
-            autoFocusMessage={autoFocusMessageComposer}
-            examples={<ExampleEventsPanel presence={presence} onLoadExample={loadRawExample} />}
-            {...(messageComposer == null
-              ? {}
-              : {
-                  message: {
-                    value: messageText,
-                    onValueChange: setMessageText,
-                    onSubmit: submitMessage,
-                    ...(messageComposer.placeholder == null
-                      ? {}
-                      : { placeholder: messageComposer.placeholder }),
-                  },
-                  ...(runningLlmRequestId != null && messageComposer.onInterrupt != null
-                    ? { onInterrupt: interruptMessage, isInterrupting }
-                    : {}),
-                })}
-            raw={{
-              value: rawText,
-              onValueChange: setRawText,
-              onSubmit: submitRawEvents,
-            }}
-            isSubmitting={isSubmitting}
-            {...(submitError == null ? {} : { error: submitError })}
-          />
+          {activeTab === "state" ? null : (
+            <div className="shrink-0 px-4 pb-4 pt-2.5">
+              <AgentPillComposer
+                mode={composerMode}
+                onModeChange={setComposerMode}
+                autoFocusMessage={autoFocusMessageComposer}
+                examples={<ExampleEventsPanel presence={presence} onLoadExample={loadRawExample} />}
+                {...(messageComposer == null
+                  ? {}
+                  : {
+                      message: {
+                        value: messageText,
+                        onValueChange: setMessageText,
+                        onSubmit: submitMessage,
+                        ...(messageComposer.placeholder == null
+                          ? {}
+                          : { placeholder: messageComposer.placeholder }),
+                      },
+                      ...(runningLlmRequestId != null && messageComposer.onInterrupt != null
+                        ? { onInterrupt: interruptMessage, isInterrupting }
+                        : {}),
+                    })}
+                raw={{
+                  value: rawText,
+                  onValueChange: setRawText,
+                  onSubmit: submitRawEvents,
+                }}
+                isSubmitting={isSubmitting}
+                {...(submitError == null ? {} : { error: submitError })}
+              />
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </section>
   );
 }
