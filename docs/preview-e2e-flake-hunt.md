@@ -284,7 +284,41 @@ preview shared path, any change under it (envs.ts and scripts/lib/\*\* too) forc
 preflight both guarantees a unified fleet and repairs a split one. Set
 `SKIP_PREFLIGHT_DEPLOY=1` when resuming a marathon whose fleet is already unified.
 
+### 17. A second browser tab has no spinner-waiter, so it dies on the 750ms actionTimeout
+
+Round-2 (r2e) run 3: `reactivity.spec.ts › delivers an appended event to another
+open tab` failed on the initial attempt **and** retry #1 —
+`TimeoutError: locator.waitFor: Timeout 750ms exceeded` waiting for the second
+tab's `reactivity-stream-status` to read `live`. The first tab (line 73) went
+live fine; only the second tab (line 74) timed out.
+
+`playwright.config.ts` sets a deliberately tight `actionTimeout: 750` (non-video)
+so bare `waitFor()`s fail fast; the safety net is middlewright's spinner-waiter,
+which **extends** a wait up to ~28s while a `data-spinner="true"` element is
+visible. The reactivity page shows exactly one such element (the "connecting…"
+badge) while a subscription connects, so the primary page reliably reaches
+`live`. But the second tab is created with `context.newPage()`, which returns a
+raw page **without** our middlewright plugins — so its `waitFor()` gets only the
+raw 750ms, too short to open a second concurrent stream subscription (a second
+WebSocket to the same Stream DO). Runs 1–2 passed because the second tab
+happened to connect in <750ms; run 3 it didn't, twice.
+
+Fix (`specs/test-support/test.ts`, not the spec — specs stay verbatim): the
+`page` fixture now patches `context.newPage` to wrap every subsequently-opened
+page with the same plugins as the primary. `basePage` already exists when the
+fixture runs (Playwright's built-in `page` fixture created it via
+`context.newPage()` first), so the primary page is never double-wrapped; only
+extra tabs the spec opens later get wrapped. Any multi-tab spec now benefits.
+
 ### Observed, not yet fixed
+
+- `repl-examples.spec.ts › secrets-lifecycle` fast-failed once on run 3
+  (`Timeout 1ms exceeded` waiting for the "Run" button after `/repl`
+  navigation — the spinner-waiter's no-spinner fast-fail) but **passed on
+  retry #1**, so it did not fail the run. Same class as flake 10/11 but on the
+  initial page-load "Run visible" wait, which is outside the example's
+  `completionTimeoutMs` budget. Watching whether it ever double-flakes across
+  the marathon before fixing — a retry-absorbed blip is within the CI contract.
 
 - `packages/mock-http-proxy` unit test `msw-server-adapter.http-parity ›
 does not mark non-matching one-time handlers as used` failed once in the
