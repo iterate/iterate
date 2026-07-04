@@ -1,8 +1,7 @@
-import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useLayoutEffect, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ChevronDownIcon, PanelRightOpenIcon } from "lucide-react";
+import { ChevronDownIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
-import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -16,7 +15,6 @@ import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks
 import { Centered } from "~/components/centered.tsx";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import type { FeedItemData } from "~/domains/streams/client-libraries/processors/browser-event-feed/grouping.ts";
-import type { StreamEvent } from "~/types.ts";
 import {
   buildFeedItemsFilter,
   FEED_TYPE_EXPRESSION,
@@ -65,7 +63,6 @@ export function FeedItemsView({
   );
   const itemCount = Number(countResult.data[0]?.count ?? 0);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [expanded, setExpanded] = useState<ReadonlySet<number>>(new Set());
 
   const virtualizer = useVirtualizer({
     count: itemCount,
@@ -141,7 +138,6 @@ export function FeedItemsView({
         >
           {virtualItems.map((item) => {
             const row = rowsByIndex.get(item.index);
-            const localIndex = row == null ? item.index : Number(row.local_index);
             return (
               <div
                 className="absolute left-0 top-0 w-full"
@@ -151,20 +147,14 @@ export function FeedItemsView({
                 style={{ transform: `translateY(${item.start}px)` }}
               >
                 {row == null ? (
-                  <div className="my-1 h-9 rounded-xl bg-muted/40" />
+                  <div className="h-8 bg-muted/30" />
                 ) : (
                   <FeedItemRow
                     row={row}
-                    expanded={expanded.has(localIndex)}
+                    // The gap is measured from the previous row's LAST event, so
+                    // a group's delta is the idle time between groups, not within.
+                    previousCreatedAt={feedItemLastCreatedAt(rowsByIndex.get(item.index - 1))}
                     onInspectEvent={onInspectEvent}
-                    onToggle={() =>
-                      setExpanded((previous) => {
-                        const next = new Set(previous);
-                        if (next.has(localIndex)) next.delete(localIndex);
-                        else next.add(localIndex);
-                        return next;
-                      })
-                    }
                   />
                 )}
               </div>
@@ -177,14 +167,13 @@ export function FeedItemsView({
 }
 
 const FeedItemRow = memo(function FeedItemRow({
-  expanded,
   onInspectEvent,
-  onToggle,
+  previousCreatedAt,
   row,
 }: {
-  expanded: boolean;
   onInspectEvent: (offset: number) => void;
-  onToggle: () => void;
+  /** The previous row's last event time — the anchor for this row's gap. */
+  previousCreatedAt: string | undefined;
   row: Record<string, unknown>;
 }) {
   const data = parseFeedItemData(String(row.data));
@@ -194,92 +183,82 @@ const FeedItemRow = memo(function FeedItemRow({
   const firstOffset = Number(row.first_offset);
   const lastOffset = Number(row.last_offset);
   const createdAt = data?.events[0]?.createdAt;
-  const events = data?.events ?? [];
+  const deltaMs = elapsedMs(previousCreatedAt, createdAt);
 
+  // The whole row is the inspect trigger now (no inline expansion): a click
+  // opens the raw-event panel at this row's first offset.
   return (
-    <div className="py-0.5">
-      <div
-        className={cn(
-          "flex w-full items-center gap-1 rounded-xl bg-muted/40 pr-1.5 transition-colors",
-          "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
-          expanded && "rounded-b-none bg-muted/70 text-foreground",
-        )}
-      >
-        <button
-          aria-expanded={expanded}
-          onClick={onToggle}
-          type="button"
-          className="flex min-w-0 flex-1 cursor-pointer items-baseline gap-2.5 py-2 pl-3.5 text-left font-mono text-xs"
-        >
-          <span className="shrink-0 tabular-nums">
-            {firstOffset === lastOffset ? `#${firstOffset}` : `#${firstOffset}–${lastOffset}`}
-          </span>
-          <span className="min-w-0 truncate text-foreground/80">{shortEventType(eventType)}</span>
-          {eventCount > 1 ? (
-            <span className="shrink-0 rounded-full bg-background px-1.5 py-px text-[10px]">
-              ×{eventCount.toLocaleString()}
-            </span>
-          ) : null}
-          {typeof createdAt === "string" ? (
-            <time className="ml-auto shrink-0 text-[10px]">
-              {new Date(createdAt).toLocaleTimeString()}
-            </time>
-          ) : null}
-        </button>
-        <button
-          type="button"
-          title="Inspect raw event"
-          onClick={() => onInspectEvent(firstOffset)}
-          className="shrink-0 cursor-pointer rounded-lg p-1.5 text-muted-foreground/70 hover:bg-background hover:text-foreground"
-          data-testid="stream-feed-inspect"
-        >
-          <PanelRightOpenIcon className="size-3.5" />
-        </button>
-      </div>
-      {expanded ? (
-        <div className="rounded-b-xl bg-muted/40 px-3.5 pb-3 pt-1">
-          {events.length > 1 ? (
-            <GroupEventList events={events} onInspectEvent={onInspectEvent} />
-          ) : (
-            <SerializedObjectCodeBlock data={events.length === 1 ? events : row.data} />
-          )}
-        </div>
+    <button
+      type="button"
+      title="Inspect raw event"
+      onClick={() => onInspectEvent(firstOffset)}
+      data-testid="stream-feed-inspect"
+      className={cn(
+        "flex w-full cursor-pointer items-baseline gap-2.5 border-b border-border/40 px-3.5 py-1.5",
+        "text-left font-mono text-xs text-muted-foreground transition-colors",
+        "hover:bg-muted/60 hover:text-foreground",
+      )}
+    >
+      <span className="shrink-0 tabular-nums text-muted-foreground/70">
+        {firstOffset === lastOffset ? `#${firstOffset}` : `#${firstOffset}–${lastOffset}`}
+      </span>
+      <span className="min-w-0 truncate text-foreground/80">{shortEventType(eventType)}</span>
+      {eventCount > 1 ? (
+        <span className="shrink-0 tabular-nums text-muted-foreground/60">
+          ×{eventCount.toLocaleString()}
+        </span>
       ) : null}
-    </div>
+      <span className="ml-auto flex shrink-0 items-baseline gap-2.5 tabular-nums">
+        {deltaMs != null ? (
+          <span
+            className={cn("text-[10px]", deltaColorClass(deltaMs))}
+            title="Time since previous event"
+          >
+            +{formatTimeDelta(deltaMs)}
+          </span>
+        ) : null}
+        {typeof createdAt === "string" ? (
+          <time className="text-[10px] text-muted-foreground/50">
+            {new Date(createdAt).toLocaleTimeString()}
+          </time>
+        ) : null}
+      </span>
+    </button>
   );
 });
 
-/**
- * The events inside an expanded group row, one line each — clicking a line
- * opens that event in the raw-event inspector (a collapsed run can hold up to
- * 200 events; a single JSON dump of all of them is unreadable).
- */
-function GroupEventList({
-  events,
-  onInspectEvent,
-}: {
-  events: readonly StreamEvent[];
-  onInspectEvent: (offset: number) => void;
-}) {
-  return (
-    <ul>
-      {events.map((event) => (
-        <li key={event.offset}>
-          <button
-            type="button"
-            onClick={() => onInspectEvent(event.offset)}
-            className="flex w-full cursor-pointer items-baseline gap-2.5 rounded-md px-2 py-1 text-left font-mono text-xs text-muted-foreground hover:bg-background hover:text-foreground"
-          >
-            <span className="shrink-0 tabular-nums">#{event.offset}</span>
-            <span className="min-w-0 truncate">{shortEventType(event.type)}</span>
-            <time className="ml-auto shrink-0 text-[10px]">
-              {new Date(event.createdAt).toLocaleTimeString()}
-            </time>
-          </button>
-        </li>
-      ))}
-    </ul>
-  );
+/** The last event's timestamp in a feed-items row, used as the next row's gap anchor. */
+function feedItemLastCreatedAt(row: Record<string, unknown> | undefined): string | undefined {
+  if (row == null) return undefined;
+  return parseFeedItemData(String(row.data))?.events.at(-1)?.createdAt;
+}
+
+/** Milliseconds between two ISO timestamps, clamped at 0; null if either is missing/unparseable. */
+function elapsedMs(from: string | undefined, to: string | undefined): number | null {
+  if (from == null || to == null) return null;
+  const fromMs = Date.parse(from);
+  const toMs = Date.parse(to);
+  if (Number.isNaN(fromMs) || Number.isNaN(toMs)) return null;
+  return Math.max(0, toMs - fromMs);
+}
+
+/** `950ms`, `3.2s`, `1m40s`, `2h5m` — compact, human-readable gap. */
+function formatTimeDelta(ms: number): string {
+  if (ms < 1_000) return `${ms}ms`;
+  if (ms < 60_000) return `${(Math.floor(ms / 100) / 10).toFixed(1).replace(/\.0$/, "")}s`;
+  const totalSeconds = Math.floor(ms / 1_000);
+  if (totalSeconds < 3_600) return `${Math.floor(totalSeconds / 60)}m${totalSeconds % 60}s`;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  return `${Math.floor(totalMinutes / 60)}h${totalMinutes % 60}m`;
+}
+
+/** Colour by gap magnitude: near-instant is muted, a long pause runs hot. */
+function deltaColorClass(ms: number): string {
+  if (ms < 1_000) return "text-muted-foreground/40";
+  if (ms < 10_000) return "text-emerald-600 dark:text-emerald-500";
+  if (ms < 60_000) return "text-amber-600 dark:text-amber-500";
+  if (ms < 600_000) return "text-orange-600 dark:text-orange-500";
+  return "text-red-600 dark:text-red-500";
 }
 
 function parseFeedItemData(raw: string): FeedItemData | null {
