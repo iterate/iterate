@@ -4,6 +4,10 @@ Goal: run the full preview e2e lane against a real preview environment 50
 times in a row without a single flake, fixing and documenting every failure
 encountered along the way.
 
+Round 1 (PR #1644) found and fixed nine root causes (below) and merged them
+to main. Round 2 continues the consecutive-green-run count on this PR against
+the post-de-alchemization (#1636) deploy model.
+
 Method: deploy this PR's preview slot, then loop
 `doppler run --project _shared --config prd -- pnpm preview test --pull-request-number <N>`
 from a workstation. Every failure gets a root-cause diagnosis and the smallest
