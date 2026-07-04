@@ -5,7 +5,7 @@
 # $LOG_DIR/run-<n>.log so a failure can be diagnosed after the fact.
 set -uo pipefail
 
-PR_NUMBER="${PR_NUMBER:-1644}"
+PR_NUMBER="${PR_NUMBER:-1653}"
 RUNS="${RUNS:-5}"
 LOG_DIR="${LOG_DIR:-/tmp/flake-hunt}"
 START_AT="${START_AT:-1}"
