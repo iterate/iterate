@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { buttonVariants } from "@iterate-com/ui/components/button";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { StreamPage } from "~/components/stream-page.tsx";
+import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { StreamTreeBrowser } from "~/components/stream-tree-browser.tsx";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
@@ -64,7 +64,7 @@ function ProjectAgentsIndexContent() {
   );
 
   return (
-    <StreamPage
+    <ProjectStreamView
       panel={panel}
       projectId={project.id}
       streamPath={AGENTS_ROOT}

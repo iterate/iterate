@@ -4,7 +4,6 @@ import { ActivityIcon, PlusIcon, RefreshCwIcon, RadioIcon } from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import type { ProjectProcessorState, StreamEvent } from "~/types.ts";
 import {
   useItx,
@@ -15,14 +14,10 @@ import {
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/reactivity")({
   ssr: false,
-  // Not a stream page, but still inside the project: publish the root stream
-  // context so ⌘K opens this project's tree instead of the project picker.
-  loader: ({ context }) =>
-    breadcrumbLoaderData({
-      breadcrumb: "Reactivity",
-      project: context.project,
-      streamBreadcrumb: streamBreadcrumb(context.project, "/"),
-    }),
+  loader: ({ context }) => ({
+    breadcrumb: "Reactivity",
+    project: context.project,
+  }),
   component: ProjectReactivityPage,
 });
 

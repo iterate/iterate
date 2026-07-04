@@ -5,7 +5,7 @@ import { buttonVariants } from "@iterate-com/ui/components/button";
 import { z } from "zod";
 import { ProjectCreationProgress } from "~/components/project-creation-progress.tsx";
 import { ProjectSettingsPanel } from "~/components/project-settings-panel.tsx";
-import { StreamPage } from "~/components/stream-page.tsx";
+import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
@@ -99,7 +99,7 @@ function ProjectHomePage() {
     );
 
   return (
-    <StreamPage
+    <ProjectStreamView
       panel={panel}
       projectId={project.id}
       streamPath="/"

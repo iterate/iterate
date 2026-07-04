@@ -15,7 +15,7 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { InfoRow } from "~/components/info-row.tsx";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { StreamPage } from "~/components/stream-page.tsx";
+import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import type { SecretDescription } from "~/types.ts";
@@ -61,7 +61,7 @@ function ProjectSecretDetailContent() {
   // the PANEL — the stream view mounts immediately and warms in parallel.
   if (secret === undefined) {
     return (
-      <StreamPage
+      <ProjectStreamView
         panel={
           <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
             Loading secret…
@@ -216,7 +216,7 @@ function SecretDetail({
   );
 
   return (
-    <StreamPage
+    <ProjectStreamView
       panel={panel}
       projectId={projectId}
       streamPath={secretPath}
