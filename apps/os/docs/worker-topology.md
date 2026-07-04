@@ -79,9 +79,10 @@ run rarely, if ever, since orphaned storage costs pennies.
 
 ## Notes
 
-- **streams-example-app** (`apps/streams-example-app`) binds the Stream DO
-  cross-script; its `script_name` is `os-prd` in the single-worker world
-  (update it when that app is next deployed).
+- **streams-example-app** (`apps/streams-example-app`) re-exports OS's
+  `StreamDurableObject` class from its own worker entry and binds it
+  same-script (`class_name` only, no `script_name`). It shares stream code with
+  OS, not OS's Durable Object namespace.
 - The `ARTIFACTS` binding type exists only on deployed workers; local dev
   has no Cloudflare Artifacts emulation and repo code feature-checks
   `env.ARTIFACTS`.
