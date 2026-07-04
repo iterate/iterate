@@ -90,7 +90,9 @@ export function presetsForStream(streamPath: string): StreamFeedPreset[] {
  * signal even while the row itself is closed. Judges what the feed actually
  * RENDERS, not the raw URL: a stale/unknown preset id falls back to the
  * default (same resolution as the view), and an empty `types` array applies
- * no constraint — neither may light the dot.
+ * no constraint — neither may light the dot. Event-type and offset filters
+ * only narrow the feed-items collection, so on an agent-chat preset (which
+ * ignores them) they don't count either.
  */
 export function feedFiltersActive(search: StreamViewSearch, streamPath: string): boolean {
   const presets = presetsForStream(streamPath);
@@ -98,9 +100,8 @@ export function feedFiltersActive(search: StreamViewSearch, streamPath: string):
   return (
     activePreset.id !== presets[0]!.id ||
     (search.q ?? "") !== "" ||
-    (search.types?.length ?? 0) > 0 ||
-    search.from != null ||
-    search.to != null
+    (activePreset.kind === "feed-items" &&
+      ((search.types?.length ?? 0) > 0 || search.from != null || search.to != null))
   );
 }
 

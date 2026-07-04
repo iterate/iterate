@@ -74,6 +74,7 @@ describe("buildFeedItemsFilter", () => {
 
 describe("feedFiltersActive", () => {
   const agentPath = "/agents/slack/general";
+  const secretPath = "/secrets/OPENAI_API_KEY";
 
   it("is inactive on the stream's defaults", () => {
     expect(feedFiltersActive({}, agentPath)).toBe(false);
@@ -83,9 +84,9 @@ describe("feedFiltersActive", () => {
   it("signals any deviation, including while the row is closed", () => {
     expect(feedFiltersActive({ preset: "everything" }, agentPath)).toBe(true);
     expect(feedFiltersActive({ q: "boom" }, agentPath)).toBe(true);
-    expect(feedFiltersActive({ types: ["a"] }, agentPath)).toBe(true);
-    expect(feedFiltersActive({ from: 1 }, agentPath)).toBe(true);
-    expect(feedFiltersActive({ to: 9 }, agentPath)).toBe(true);
+    expect(feedFiltersActive({ types: ["a"] }, secretPath)).toBe(true);
+    expect(feedFiltersActive({ from: 1 }, secretPath)).toBe(true);
+    expect(feedFiltersActive({ to: 9 }, secretPath)).toBe(true);
   });
 
   it("judges what the feed renders, not the raw URL", () => {
@@ -94,7 +95,11 @@ describe("feedFiltersActive", () => {
     // Another stream's preset id also resolves to this stream's default.
     expect(feedFiltersActive({ preset: "secret-events" }, agentPath)).toBe(false);
     // An empty types array applies no constraint in buildFeedItemsFilter.
-    expect(feedFiltersActive({ types: [] }, agentPath)).toBe(false);
+    expect(feedFiltersActive({ types: [] }, secretPath)).toBe(false);
+    // The agent-chat view honors only text search — feed-items-only filters
+    // left in the URL don't light the dot while chat ignores them.
+    expect(feedFiltersActive({ types: ["a"], from: 1, to: 9 }, agentPath)).toBe(false);
+    expect(feedFiltersActive({ preset: "agent-events", types: ["a"] }, agentPath)).toBe(true);
   });
 });
 

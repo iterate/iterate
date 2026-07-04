@@ -54,9 +54,13 @@ export function StreamFeedFilterRow({
               onClick={() =>
                 setSearch({
                   preset: preset.id === defaultPresetId ? undefined : preset.id,
-                  // The event-type list is scoped to a preset's event family;
-                  // types from the old preset would silently empty the new one.
+                  // The event-type list is scoped to a preset's event family
+                  // (stale types would silently empty the new one), and offset
+                  // bounds would survive invisibly through an agent-chat
+                  // detour — a preset switch resets both, keeping only `q`.
                   types: undefined,
+                  from: undefined,
+                  to: undefined,
                 })
               }
               className={cn(
