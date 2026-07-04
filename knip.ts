@@ -12,11 +12,7 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "src/test/cloudflare-workers-shim.ts",
     ],
     entry: [
-      ...(base.entry ?? []).filter(
-        (entry) => entry !== "scripts/router.ts" && entry !== "src/worker.ts!",
-      ),
-      // One entry module per deployed worker (docs/worker-topology.md).
-      "src/workers/*.ts!",
+      ...(base.entry ?? []).filter((entry) => entry !== "scripts/router.ts"),
       "e2e/vitest.config.ts",
       "e2e/tui-test/tui-test.config.ts",
       "e2e/tui-test/run.ts",
@@ -59,14 +55,14 @@ function makeSemaphoreCloudflareAppWorkspace(workerEnvShim: string): WorkspaceCo
 function makeStreamsExampleAppWorkspace(): WorkspaceConfig {
   return {
     entry: [
-      "alchemy.run.ts",
       "vite.config.ts",
       "playwright.config.ts",
       "vitest.config.ts",
+      "scripts/**/*.ts",
       "src/worker.ts!",
       "e2e/**/*.ts",
     ],
-    project: ["src/**/*.{ts,tsx}!", "e2e/**/*.ts", "!dist/**!", "!.alchemy/**!"],
+    project: ["src/**/*.{ts,tsx}!", "e2e/**/*.ts", "!dist/**!"],
     ignore: [
       // TanStack Start client entry, referenced by framework convention.
       "src/client.ts",
@@ -91,7 +87,7 @@ function makeStreamsExampleAppWorkspace(): WorkspaceConfig {
 
 function makeCloudflareTanStackAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   return {
-    entry: ["alchemy.run.ts", "vite.config.ts", "scripts/router.ts", "src/worker.ts!"],
+    entry: ["vite.config.ts", "scripts/router.ts", "scripts/**/*.ts", "src/worker.ts!"],
     project: [
       "*.test.ts",
       "e2e/**/*.ts",
@@ -100,7 +96,6 @@ function makeCloudflareTanStackAppWorkspace(workerEnvShim: string): WorkspaceCon
       "!drizzle/**!",
       "!.output/**!",
       "!dist/**!",
-      "!.alchemy/**!",
     ],
     vite: false,
     paths: {
@@ -145,7 +140,7 @@ function makeSharedWorkspace(): WorkspaceConfig {
     // use the declared export map as the public entry surface.
     entry: ["src/**/*.test.ts"],
     project: ["src/**/*.ts"],
-    ignoreDependencies: ["alchemy", "cloudflare", "wrangler"],
+    ignoreDependencies: ["cloudflare", "wrangler"],
   };
 }
 

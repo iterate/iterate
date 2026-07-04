@@ -1,12 +1,16 @@
 import { createRequire } from "node:module";
-import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import tailwindcss from "@tailwindcss/vite";
 import viteReact from "@vitejs/plugin-react";
-import alchemy from "alchemy/cloudflare/tanstack-start";
+import { cloudflare } from "@cloudflare/vite-plugin";
 import { defineConfig } from "vite";
+import { writeWranglerConfig } from "./scripts/generate-wrangler-config.ts";
+
+// wrangler.jsonc is generated (gitignored) — refresh it from envs.ts before
+// the cloudflare plugin reads it, so dev and build can never see stale config.
+writeWranglerConfig();
 
 // Miniflare / Vite sometimes fetch JSON endpoints that return gzip without
 // Content-Encoding; undici's response.json() then kills the dev process.
@@ -20,11 +24,6 @@ Response.prototype.json = async function (...args) {
   }
   return responseJson.apply(this, args);
 };
-
-const alchemyWranglerConfig = fileURLToPath(
-  new URL("./.alchemy/local/wrangler.jsonc", import.meta.url),
-);
-const alchemyPlugins = existsSync(alchemyWranglerConfig) ? [alchemy()] : [];
 
 export default defineConfig({
   // wa-sqlite ships an Emscripten `.mjs` + `.wasm` pair that must NOT go through esbuild's
@@ -42,5 +41,12 @@ export default defineConfig({
       "~": fileURLToPath(new URL("../os/src", import.meta.url)),
     },
   },
-  plugins: [tailwindcss(), ...alchemyPlugins, tanstackStart(), viteReact()],
+  plugins: [
+    tailwindcss(),
+    // The worker (src/worker.ts) runs in workerd during dev; wrangler.jsonc
+    // (generated from the root envs.ts) declares its STREAM binding.
+    cloudflare({ viteEnvironment: { name: "ssr" } }),
+    tanstackStart(),
+    viteReact(),
+  ],
 });

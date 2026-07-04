@@ -1,5 +1,5 @@
 {
-  "include": ["**/*.ts", "alchemy.run.ts"],
+  "include": ["**/*.ts"],
   "compilerOptions": {
     "target": "ES2024",
     "module": "ESNext",

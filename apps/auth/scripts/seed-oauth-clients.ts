@@ -11,7 +11,7 @@ import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 // with the same Doppler values is a no-op, and nothing ever rotates a seeded
 // client — so the credentials in Doppler can never drift from the database.
 //
-// Runs automatically from apps/auth/alchemy.run.ts after a (non-local) deploy,
+// Runs automatically from apps/auth/scripts/deploy.ts after a deploy,
 // and standalone against any environment:
 //
 //   doppler run --project auth --config dev_global -- pnpm seed-oauth-clients
