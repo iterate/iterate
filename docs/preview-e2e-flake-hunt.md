@@ -96,6 +96,17 @@ Mitigation: `createIterateAuth` now falls back to the issuer's live `/jwks`
 when the baked set has no matching kid (`ERR_JWKS_NO_MATCHING_KEY`), keeping
 the baked set's zero-roundtrip fast path and the forge key intact.
 
+### Lab note: a sleeping laptop perfectly impersonates a broken slot
+
+Two full marathon runs "degraded" for 45–56 minutes with rotating 90 s
+timeouts, 14–16 minute per-spec hangs, capnweb `WebSocket connection failed`,
+and stream waits that saw events stop mid-flow — while every interactive probe
+between runs was healthy. `pmset -g log` showed the Mac cycling through
+13–17 minute Deep Idle sleeps exactly matching the hang durations: the loop
+was running on a sleeping machine. The loop script now re-execs itself under
+`caffeinate -is` on Darwin. Lesson for anyone chasing "slot degradation" from
+a laptop: check `pmset -g log` before blaming the server.
+
 ### 5. Sandbox repo clone dies on a transient Artifacts 503
 
 `repl-examples.spec.ts › sandbox-exec` failed with `Failed to clone repository

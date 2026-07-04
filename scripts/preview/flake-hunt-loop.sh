@@ -10,6 +10,15 @@ RUNS="${RUNS:-5}"
 LOG_DIR="${LOG_DIR:-/tmp/flake-hunt}"
 START_AT="${START_AT:-1}"
 
+# macOS idle-sleeps ~15 minutes into an unattended loop; a sleeping laptop
+# freezes tests mid-flight (14-16 minute "hangs", dropped WebSockets) that
+# look exactly like server-side flakes. Re-exec under caffeinate so the
+# machine stays awake for the duration of the loop.
+if [ "$(uname)" = "Darwin" ] && [ -z "${FLAKE_HUNT_CAFFEINATED:-}" ]; then
+  export FLAKE_HUNT_CAFFEINATED=1
+  exec caffeinate -is "$0" "$@"
+fi
+
 mkdir -p "$LOG_DIR"
 for i in $(seq "$START_AT" $((START_AT + RUNS - 1))); do
   log="$LOG_DIR/run-$(printf '%03d' "$i").log"
