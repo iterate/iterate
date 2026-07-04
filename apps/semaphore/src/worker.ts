@@ -21,12 +21,17 @@ export async function handleSemaphoreRequest(
   env: Env,
   executionCtx: ExecutionContext,
 ) {
-  config ??= parseConfig(workerEnv);
+  const resolvedConfig = (config ??= parseConfig(workerEnv));
   return withEvlog(
-    { request, app: { name: "@iterate-com/semaphore", slug: "semaphore" }, config, executionCtx },
+    {
+      request,
+      app: { name: "@iterate-com/semaphore", slug: "semaphore" },
+      config: resolvedConfig,
+      executionCtx,
+    },
     async ({ log }) => {
       const context: RequestContext = {
-        config,
+        config: resolvedConfig,
         rawRequest: request,
         db: env.DB,
         log,
