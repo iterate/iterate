@@ -16,6 +16,7 @@
 import { authEnvs } from "../../../envs.ts";
 import { ensureD1, ensureProxiedDnsRecord } from "../../../scripts/lib/deploy-helpers.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
+import { reconcileResources } from "../../../scripts/lib/wrangler-config.ts";
 
 const ctx = await resolveEnvContext({ envs: authEnvs, dopplerProject: "auth" });
 const { env, cfV4 } = ctx;
@@ -38,12 +39,4 @@ await ensureProxiedDnsRecord(
 );
 
 // ---- Reconcile against envs.ts -------------------------------------------------
-if (env.resources.authDbId !== db.uuid) {
-  console.log(
-    `\nenvs.ts is out of date for ${ctx.name} — set in its resources entry:\n\n` +
-      `  authDbId: "${db.uuid}",\n`,
-  );
-  console.log("then commit and regenerate: pnpm gen:wrangler");
-  process.exit(1);
-}
-console.log(`✅ ${ctx.name} resources all present and match envs.ts`);
+reconcileResources(ctx.name, env.resources, { authDbId: db.uuid });

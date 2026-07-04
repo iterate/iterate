@@ -16,6 +16,7 @@
 import { envs } from "../../../envs.ts";
 import { ensureD1, ensureProxiedDnsRecord } from "../../../scripts/lib/deploy-helpers.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
+import { reconcileResources } from "../../../scripts/lib/wrangler-config.ts";
 
 const ctx = await resolveEnvContext({ envs, dopplerProject: "os" });
 const { env, cf, cfV4 } = ctx;
@@ -64,15 +65,4 @@ for (const host of hostRecords) {
 }
 
 // ---- Reconcile against envs.ts -----------------------------------------------
-const expected = env.resources;
-const actual = { projectDirectoryKvId: kv.id, authDbId: db.uuid };
-if (
-  expected.projectDirectoryKvId !== actual.projectDirectoryKvId ||
-  expected.authDbId !== actual.authDbId
-) {
-  console.log(`\nenvs.ts is out of date for ${ctx.name} — update its resources entry to:\n`);
-  console.log(`  resources: ${JSON.stringify(actual, null, 2).replaceAll("\n", "\n  ")},\n`);
-  console.log("then commit and regenerate: pnpm gen:wrangler");
-  process.exit(1);
-}
-console.log(`✅ ${ctx.name} resources all present and match envs.ts`);
+reconcileResources(ctx.name, env.resources, { projectDirectoryKvId: kv.id, authDbId: db.uuid });
