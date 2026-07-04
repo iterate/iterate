@@ -37,6 +37,12 @@ export type ExampleRunContext = {
 export type ExampleCase = {
   vars?: (ctx: ExampleRunContext) => Record<string, unknown>;
   assert: (result: unknown, ctx: ExampleRunContext, expect: typeof import("vitest").expect) => void;
+  /**
+   * Completion budget (ms) for runners whose default is tighter. Cold-path
+   * examples (a fresh sandbox container per fixture project) legitimately take
+   * tens of seconds; that is expected latency, not a hang.
+   */
+  completionTimeoutMs?: number;
 };
 
 /** Example ids that intentionally have no matrix case (see header). */
@@ -139,6 +145,10 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     // One shared sandbox path for the whole matrix: the first runtime pays
     // the container cold boot, the rest reuse the warm container (repeat
     // ensureProjectRepo calls are idempotent). No marker on purpose.
+    // The Playwright REPL spec provisions a FRESH project (fresh container)
+    // per run; cold container boot + repo clone has a long tail (observed
+    // >70s on preview), so give the completion wait a real budget.
+    completionTimeoutMs: 120_000,
     vars: () => ({ sandboxPath: "/sandboxes/cloudflare/example-matrix" }),
     assert: (result, _ctx, expect) => {
       expect(result).toMatchObject({ exitCode: 0, os: "Linux" });

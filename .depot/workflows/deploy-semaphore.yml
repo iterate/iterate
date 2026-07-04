@@ -11,6 +11,8 @@ on:
       - main
     paths:
       - .depot/workflows/deploy-semaphore.yml
+      - envs.ts
+      - scripts/lib/**
       - apps/semaphore/**
       - packages/shared/**
       - packages/ui/**
@@ -55,7 +57,7 @@ jobs:
         working-directory: apps/semaphore
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm tsx ./alchemy.run.ts
+        run: doppler run -- pnpm run-script deploy
   notify:
     needs:
       - deploy

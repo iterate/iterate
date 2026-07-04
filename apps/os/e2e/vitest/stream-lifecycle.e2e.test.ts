@@ -234,7 +234,11 @@ test("stream idle teardown severs configured processor subscriptions", async () 
     },
     {
       description: `configured processor connections to be severed by idle teardown (${keys.join(", ")})`,
-      timeoutMs: 1_500,
+      // Severance is asynchronous fan-out across three cross-script RPC
+      // connections; 1.5s flaked under the CI-parallel lane profile (4 files x
+      // concurrency 3 on one slot). The assertion is about eventual severance,
+      // not a latency SLA.
+      timeoutMs: 10_000,
     },
   );
 
@@ -276,7 +280,8 @@ test("append after idle teardown re-wakes configured subscriber from its checkpo
     },
     {
       description: `configured processor connections to be absent before re-wake (${keys.join(", ")})`,
-      timeoutMs: 1_500,
+      // Same asynchronous fan-out as above — 1.5s flaked under CI-parallel load.
+      timeoutMs: 10_000,
     },
   );
 

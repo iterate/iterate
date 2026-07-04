@@ -382,7 +382,7 @@ export function useItxQuery<T>({
  * socket — its subscription's first push is the recovery. A hand-rolled
  * `useEffect` that reaches itx through a closure silently omits that dep and does
  * NOT recover on reconnect (the codebase has exactly that bug, papered over with
- * a manual "Refresh" button in stream-tree-browser). A dedicated subscription
+ * a manual "Refresh" button in some panels). A dedicated subscription
  * hook is also the universal shape — Apollo/urql/tRPC/Relay/Convex all ship one
  * rather than asking callers to wire raw effects.
  *

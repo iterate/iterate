@@ -1,4 +1,5 @@
 import { expect } from "@playwright/test";
+import { spinnerWaiter } from "middlewright";
 import JSON5 from "json5";
 import { EXAMPLE_CASES } from "../apps/os/e2e/examples/example-cases.ts";
 import { ITX_EXAMPLES } from "../apps/os/src/itx/examples.ts";
@@ -16,6 +17,12 @@ const REPL_EXAMPLES = Object.entries(EXAMPLE_CASES).map(([id, exampleCase]) => {
 test.describe("itx REPL catalogue examples", () => {
   for (const { example, exampleCase } of REPL_EXAMPLES) {
     test(`runs "${example.id}" through the project REPL`, async ({ helpers, page }) => {
+      // Cold-path examples declare their own completion budget (see
+      // ExampleCase.completionTimeoutMs); the playwright test timeout must
+      // not undercut it.
+      if (exampleCase.completionTimeoutMs) {
+        test.setTimeout(exampleCase.completionTimeoutMs + 60_000);
+      }
       await using fixture = await helpers.createFixture(`repl-${example.id}`);
       await page.goto(`/projects/${fixture.project.slug}/repl`);
       // exact: the project slug can contain "run", which substring-matches sidebar buttons
@@ -43,7 +50,16 @@ test.describe("itx REPL catalogue examples", () => {
       await page.getByRole("button", { name: "Run", exact: true }).click();
 
       const entry = page.locator(`[data-entry-index="${entryIndex}"][data-status="success"]`);
-      await entry.waitFor();
+      if (exampleCase.completionTimeoutMs) {
+        // spinner-waiter caps "spinner still visible" waits at 30s, which is
+        // exactly the state a long-running example is in — bypass it and wait
+        // for the entry directly with the example's own budget.
+        await spinnerWaiter.settings.run({ disabled: true }, () =>
+          entry.waitFor({ timeout: exampleCase.completionTimeoutMs }),
+        );
+      } else {
+        await entry.waitFor();
+      }
 
       const resultJson = await entry.getByTestId("itx-repl-result-json").textContent();
       const result = JSON.parse(resultJson!);

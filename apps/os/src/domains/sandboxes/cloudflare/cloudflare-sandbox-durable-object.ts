@@ -76,11 +76,23 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
    * internet path: a sandbox reaches the outside world only through project
    * egress policy. Runs in the ContainerProxy WorkerEntrypoint (no sandbox
    * `this`), so the project is recovered from the container id.
+   *
+   * Registered in a static BLOCK, not as `static outbound = …`. `outbound` is
+   * a static accessor on the base `Container` class whose setter registers the
+   * handler in the container-proxy's outbound registry. Under
+   * `useDefineForClassFields` (our ES2024 target) a `static` field would
+   * DEFINE an own data property that shadows that accessor — the setter never
+   * runs, nothing registers, and every request silently falls through to a
+   * direct `fetch` (TLS still MITM'd, but egress bypasses project policy). An
+   * assignment invokes the inherited setter, so the registry is populated.
    */
-  static override outbound: OutboundHandler<Env> = async (request, env, ctx) => {
-    const projectId = await resolveEgressProjectId(env, ctx.containerId);
-    return projectStub(env.PROJECT, projectId).fetch(request);
-  };
+  static {
+    const outbound: OutboundHandler<Env> = async (request, env, ctx) => {
+      const projectId = await resolveEgressProjectId(env, ctx.containerId);
+      return projectStub(env.PROJECT, projectId).fetch(request);
+    };
+    this.outbound = outbound;
+  }
 
   /**
    * This sandbox's project, for the egress handler above. A plain read of the
@@ -90,6 +102,17 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
   async egressProjectId(): Promise<string> {
     return this.#identity().projectId;
   }
+
+  /**
+   * Idle containers hold an instance slot until this expires, and the app's
+   * container namespace caps concurrent instances (maxInstances in
+   * alchemy.run.ts). With the SDK default of 10m, e2e churn (a fresh project +
+   * sandbox per test) exhausted the cap in minutes and every later sandbox
+   * start wedged until an old container timed out. 3m keeps interactive
+   * sessions warm across a pause while reclaiming capacity ~3x faster; a
+   * restart after idle costs one container cold boot + repo clone.
+   */
+  override sleepAfter = "3m";
 
   /**
    * Record who this sandbox is before any other traffic reaches it.
@@ -200,7 +223,6 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     // the sandbox without the repo until the container is replaced.
     const existing = await this.exists(`${SANDBOX_PROJECT_REPO_DIR}/.git/HEAD`);
     if (existing.exists) return;
-    await this.exec(`rm -rf ${SANDBOX_PROJECT_REPO_DIR}`);
 
     const repo = this.env.REPO.getByName(
       DurableObjectNameCodec.stringify({
@@ -216,14 +238,30 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     remote.username = "x";
     remote.password = access.token;
 
-    const result = await this.gitCheckout(remote.toString(), {
-      branch: access.defaultBranch,
-      targetDir: SANDBOX_PROJECT_REPO_DIR,
-    });
-    if (!result.success) {
-      throw new Error(
-        `cloning the project repo into ${SANDBOX_PROJECT_REPO_DIR} failed (exit ${result.exitCode})`,
-      );
+    // The Artifacts git endpoint intermittently returns 503 on a cold repo
+    // (observed in preview e2e: "Failed to clone repository ... error: 503").
+    // A clone into a fresh directory is idempotent, so retry with a short
+    // backoff instead of failing the sandbox start on one bad response.
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await this.exec(`rm -rf ${SANDBOX_PROJECT_REPO_DIR}`);
+      try {
+        const result = await this.gitCheckout(remote.toString(), {
+          branch: access.defaultBranch,
+          targetDir: SANDBOX_PROJECT_REPO_DIR,
+        });
+        if (result.success) return;
+        lastError = new Error(
+          `cloning the project repo into ${SANDBOX_PROJECT_REPO_DIR} failed (exit ${result.exitCode})`,
+        );
+      } catch (error) {
+        lastError = error;
+      }
+      if (attempt < 3) {
+        console.warn(`sandbox project repo clone attempt ${attempt} failed, retrying:`, lastError);
+        await new Promise((resolve) => setTimeout(resolve, 2_000 * attempt));
+      }
     }
+    throw lastError;
   }
 }

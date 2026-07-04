@@ -8,7 +8,7 @@ Assume we are debugging:
 
 Use `preview_N` or `prd` configs for deployed workers. For local dev, use
 `dev` or `dev_<user>` with `pnpm dev`; scripts discover the running server from
-`.alchemy/dev-server.json`. Run CLI commands from `apps/os`; plain
+`.dev-server/dev-server.json`. Run CLI commands from `apps/os`; plain
 `pnpm cli ...` uses local Doppler setup, and
 `doppler run --config <config> -- pnpm cli ...` targets a specific deployment.
 
@@ -141,17 +141,13 @@ Use the Cloudflare API MCP server for Workers traces, routes, bindings,
 Durable Objects, and other Cloudflare state. Docs:
 [Cloudflare MCP servers](https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/).
 
-The deployed worker name is derived in `packages/shared/src/alchemy/init.ts` as
-`${manifest.slug}-${app.stage}` and then used by `apps/os/alchemy.run.ts` as
-`ctx.workerName`. For production OS, `os-prd` is the ingress router; the app
-worker is `os-prd-app`, the itx api worker is `os-prd-api`, and each Durable
-Object class has its own worker (`os-prd-stream`, `os-prd-capability-host`,
-`os-prd-project`, `os-prd-agent`, `os-prd-repo`, `os-prd-secret`,
-`os-prd-worker`). See [worker-topology.md](./worker-topology.md). Pick the
-worker that owns the code you are debugging.
+OS is ONE worker per environment; the name is the env's `osWorkerName` in
+the root `envs.ts` (`os-prd`, `os-preview-N`). Dashboard, api, and every
+Durable Object class all live in that one script — there is no per-DO
+worker to pick. See [worker-topology.md](./worker-topology.md).
 
-OS workers have persistent Workers Logs and traces enabled in
-`packages/shared/src/alchemy/iterate-app.ts`.
+Persistent Workers Logs and traces are declared in
+`apps/os/scripts/generate-wrangler-config.ts` (the `observability` block).
 
 Ray IDs are especially useful. If you have a Ray ID, first find the matching
 log event, then use its `traceId` to fetch the trace and all span events.
@@ -161,9 +157,8 @@ shapes, then `execute` with a Workers Observability telemetry query.
 
 For production OS request traces, use the `otel` dataset. The `workers`
 dataset may expose metadata keys but can return no request rows for the app
-traffic you are trying to inspect. The useful production service names are
-`os-prd` for ingress and `os-prd-app` for the app worker; do not filter on
-`$metadata.service == "os"`.
+traffic you are trying to inspect. The production service name is `os-prd`;
+do not filter on `$metadata.service == "os"`.
 
 Start with recent `events`, then use the returned `traceId` to inspect the
 whole trace. Keep the response compact by mapping the Cloudflare result before

@@ -11,6 +11,8 @@ on:
       - main
     paths:
       - .depot/workflows/deploy-streams-example-app.yml
+      - envs.ts
+      - scripts/lib/**
       - apps/streams-example-app/**
       - apps/os/src/domains/streams/**
       - packages/shared/**
@@ -56,7 +58,7 @@ jobs:
         working-directory: apps/streams-example-app
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm tsx ./alchemy.run.ts
+        run: doppler run -- pnpm run-script deploy
   notify:
     needs:
       - deploy

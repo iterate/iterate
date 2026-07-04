@@ -6,7 +6,7 @@ import type { Principal } from "~/auth/principal.ts";
 
 /**
  * Per-request server context, passed to TanStack Start's server handler in
- * `workers/app.ts` and from there into server routes and server functions
+ * `src/worker.ts` and from there into server routes and server functions
  * (https://tanstack.com/start/latest/docs/framework/react/guide/server-routes).
  *
  * This holds request-scoped state only. Worker bindings (durable object

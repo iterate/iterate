@@ -1,18 +1,12 @@
-import { useMemo } from "react";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { StreamTreeBrowser } from "~/components/stream-tree-browser.tsx";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
-import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useItx } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/streams/")({
-  // The project-wide stream explorer: the live stream tree in the side panel,
-  // the root stream in the main space. useItx never SSRs (it throws on the
-  // server — see ~/itx/itx-react.tsx); the tree paints from its own live
-  // subscriptions once the socket connects.
+  // The project root stream, full width. Stream NAVIGATION is ⌘K's job — the
+  // pill in the header opens the one stream explorer; no tree panel here.
   validateSearch: StreamViewSearch,
   ssr: false,
   loader: ({ context }) =>
@@ -32,22 +26,10 @@ function ProjectStreamsIndexPage() {
 }
 
 function ProjectStreamsIndexContent() {
-  const params = Route.useParams();
-  const navigate = useNavigate();
   const { project } = Route.useLoaderData();
-  const itx = useItx();
-  const source = useMemo(() => (streamPath: string) => itx.streams.get(streamPath), [itx]);
 
   return (
     <ProjectStreamView
-      panel={
-        <StreamTreeBrowser
-          source={source}
-          onOpenPath={(streamPath) =>
-            void navigate(linkOptionsForStreamPath(params.projectSlug, streamPath))
-          }
-        />
-      }
       projectId={project.id}
       streamPath="/"
       emptyLabel="No events in the project root stream yet."

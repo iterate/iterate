@@ -12,6 +12,8 @@ import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annota
 import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
 import { runCommand } from "../../packages/shared/src/node/run-command.ts";
 
+// Flake-hunt notes for the preview e2e lane live in
+// docs/preview-e2e-flake-hunt.md.
 type PullRequestCommandOptions = {
   /** GitHub token. Defaults to GITHUB_TOKEN. */
   githubToken?: string;
@@ -782,8 +784,13 @@ export type CloudflarePreviewApp = {
   slug: CloudflarePreviewAppSlug;
   displayName: string;
   appPath: `apps/${string}`;
-  deployCommandArgs?: readonly [string, ...string[]];
-  destroyCommandArgs?: readonly [string, ...string[]];
+  /**
+   * Run under `doppler run --project <p> --config preview_N --` in appPath;
+   * every app exposes `deploy` (full deploy to the slot) and `destroy`
+   * (release the slot's data — workers/routes/DNS always stay).
+   */
+  deployCommandArgs: readonly [string, ...string[]];
+  destroyCommandArgs: readonly [string, ...string[]];
   dopplerProject: string;
   paths: string[];
   previewDependencies?: CloudflarePreviewAppSlug[];
@@ -879,8 +886,8 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // and fails loudly if the slot is broken before the suites start.
         // The curl-round HTTP warmups that used to run alongside it were
         // treating symptoms of zombie routes (routes dead at the edge →
-        // 522s), which deploys now verify and heal directly — see
-        // ensureWorkerRoutesAndDns in packages/shared/src/alchemy/iterate-app.ts.
+        // 522s) — structurally gone now that deploys never delete workers
+        // (routes are declared in wrangler config; DNS is create-only).
         "pnpm exec tsx e2e/vitest/onboarding-smoke.ts > /tmp/os-preview-smoke.log 2>&1 & SMOKE_PID=$!",
         'wait "$SMOKE_PID" || { cat /tmp/os-preview-smoke.log; exit 1; }',
         // The e2e vitest lane and the Playwright specs hit the same slot but
@@ -903,6 +910,10 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     slug: "semaphore",
     displayName: "Semaphore",
     appPath: "apps/semaphore",
+    deployCommandArgs: ["pnpm", "run-script", "deploy"],
+    // Semaphore's preview e2e generates per-run-unique resource types and
+    // self-cleans; there is nothing slot-scoped to erase on release.
+    destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "semaphore",
     paths: ["apps/semaphore/**"],
     previewTestBaseUrlEnvVar: "SEMAPHORE_BASE_URL",
@@ -917,10 +928,8 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     slug: "auth",
     displayName: "Auth",
     appPath: "apps/auth",
-    // alchemy:down chains `--park` so the slot's routes stay live (and
-    // verified) across teardown instead of being recreated on the next
-    // tenant's critical path (see parkWorkerRoutes in iterate-app.ts).
-    destroyCommandArgs: ["pnpm", "run-script", "alchemy:down"],
+    deployCommandArgs: ["pnpm", "run-script", "deploy"],
+    destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "auth",
     paths: ["apps/auth/**", "apps/auth-contract/**"],
     // better-auth's liveness endpoint; auth has no /api/__internal/health.
@@ -936,6 +945,8 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     slug: "streams-example-app",
     displayName: "Streams Example App",
     appPath: "apps/streams-example-app",
+    deployCommandArgs: ["pnpm", "run-script", "deploy"],
+    destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "streams-example-app",
     paths: ["apps/streams-example-app/**", "apps/os/src/domains/streams/**"],
     previewTestBaseUrlEnvVar: "WORKER_URL",
@@ -1993,9 +2004,9 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
     ]);
 
     setDopplerSecrets("auth", config, {
-      // readPreviewAppConfig reads APP_CONFIG_BASE_URL to learn the app's public URL.
+      // readPreviewAppConfig reads APP_CONFIG_BASE_URL to learn the app's public
+      // URL. Origins/routes themselves are generated from the root envs.ts.
       APP_CONFIG_BASE_URL: authOrigin,
-      WORKER_ROUTES: `auth.iterate-preview-${slot}.com`,
       AUTH_SEED_OAUTH_CLIENTS: seed,
       APP_CONFIG_AUTH_APP_ORIGIN: authOrigin,
       APP_CONFIG_BETTER_AUTH_SECRET: betterAuthSecret,
@@ -2243,7 +2254,7 @@ async function cleanupPreviewForPullRequest(
         logPreview(
           `cleanup start: destroying ${app.slug} on ${environmentConfigLease.slug} (doppler config ${environmentConfigLease.dopplerConfig})`,
         );
-        const destroyResult = await runPreviewAlchemyCommand({
+        const destroyResult = await runPreviewDeployCommand({
           app,
           commandEnvironment: params.commandEnvironment,
           dopplerConfig: environmentConfigLease.dopplerConfig,
@@ -2388,7 +2399,7 @@ async function deployPreviewApp(input: {
     updatedAt: new Date().toISOString(),
   } as const;
 
-  const deployResult = await runPreviewAlchemyCommand({
+  const deployResult = await runPreviewDeployCommand({
     app: input.app,
     commandEnvironment: input.commandEnvironment,
     dopplerConfig: input.dopplerConfig,
@@ -2480,7 +2491,7 @@ async function readPreviewAppConfig(input: {
   return parsed;
 }
 
-async function runPreviewAlchemyCommand(input: {
+async function runPreviewDeployCommand(input: {
   app: PreviewAppRuntime;
   commandEnvironment: NodeJS.ProcessEnv;
   dopplerConfig: string;
@@ -2488,10 +2499,14 @@ async function runPreviewAlchemyCommand(input: {
   repositoryRoot: string;
   signal?: AbortSignal;
 }) {
+  // Destroys are erase-data-backed and require an explicit --env (trpc-cli
+  // enforces the required flag; no DOPPLER_CONFIG fallback — a destructive
+  // script must never pick its target from ambient shell state). Deploys
+  // resolve the env from the DOPPLER_CONFIG the `doppler run` wrapper sets.
   const commandArgs =
     input.operation === "down"
-      ? (input.app.destroyCommandArgs ?? ["pnpm", "tsx", "./alchemy.run.ts", "--destroy"])
-      : (input.app.deployCommandArgs ?? ["pnpm", "tsx", "./alchemy.run.ts"]);
+      ? [...input.app.destroyCommandArgs, "--env", input.dopplerConfig]
+      : input.app.deployCommandArgs;
 
   return await runCommand({
     args: [
@@ -2851,6 +2866,22 @@ async function claimEnvironmentConfigLease(input: {
     logPreview(`slot lost: ${reasserted.message} Acquiring a different slot.`);
   }
 
+  // A run can acquire a slot and get cancelled (cancel-in-progress on a rapid
+  // push) before the lease lands in the PR body. The next run then sees "no
+  // lease recorded" and would acquire a SECOND slot — the semaphore happily
+  // leases one holder several slots, and the unrecorded one stays leased until
+  // expiry, shrinking the fleet (observed 2026-07-04: pr-1634 and pr-1636 each
+  // held two slots and every deploy queued for 20 minutes). Adopt any lease the
+  // semaphore already attributes to this holder before acquiring a fresh one.
+  const adopted = await adoptExistingHolderLease({
+    holder: input.holder,
+    leaseMs: input.leaseMs,
+    semaphore,
+  });
+  if (adopted) {
+    return adopted;
+  }
+
   const lease = await acquireAnyEnvironmentConfigLease({
     semaphore,
     fetchPullRequestState: input.fetchPullRequestState,
@@ -3009,6 +3040,43 @@ function toEnvironmentConfigLease(lease: {
     slug: lease.slug,
     type: lease.type,
   } satisfies EnvironmentConfigLease;
+}
+
+/**
+ * Find a lease the semaphore already attributes to this holder and re-issue it
+ * under a fresh leaseId (safe force: the slot is already ours). Heals the
+ * acquire-then-cancelled gap where a lease exists server-side but was never
+ * recorded in the PR body, so a holder never accumulates a second slot. The
+ * recorded-but-unrenewable slug is deliberately NOT excluded: if the list
+ * still attributes it to this holder, re-issuing our own lease is idempotent
+ * and adopting beats leasing a second slot.
+ */
+async function adoptExistingHolderLease(input: {
+  holder: string;
+  leaseMs: number;
+  semaphore: PreviewSemaphoreResourceClient;
+}): Promise<EnvironmentConfigLease | null> {
+  const resources = await input.semaphore.list({ type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE });
+  const held = resources.filter(
+    (resource) => resource.leaseState === "leased" && resource.holder === input.holder,
+  );
+  for (const resource of held) {
+    const repaired = await input.semaphore.acquireSpecific({
+      type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+      slug: resource.slug,
+      leaseMs: input.leaseMs,
+      holder: input.holder,
+      force: true,
+    });
+    if (repaired) {
+      logPreview(
+        `lease adopted: the semaphore already had ${repaired.slug} leased to ${input.holder} ` +
+          `(a previous run was cancelled before recording it); re-issued until ${formatUntil(repaired.expiresAt)}`,
+      );
+      return toEnvironmentConfigLease(repaired);
+    }
+  }
+  return null;
 }
 
 async function findEnvironmentConfigLeaseHolder(
@@ -3201,7 +3269,7 @@ function expandPreviewDependencies(appSlugs: readonly CloudflarePreviewAppSlugTy
 function orderPreviewDeployBatches(apps: readonly PreviewAppRuntime[]) {
   // One parallel batch. OS bakes auth JWKS during deployment, but its
   // deploy-time JWKS fetch polls the slot's auth worker until it responds
-  // (apps/os/alchemy.run.ts fetchJwksWithRetry), so it no longer needs the
+  // (apps/os/scripts/deploy.ts fetchJwksWithRetry), so it no longer needs the
   // auth deploy sequenced before it.
   return apps.length > 0 ? [[...apps]] : [];
 }
