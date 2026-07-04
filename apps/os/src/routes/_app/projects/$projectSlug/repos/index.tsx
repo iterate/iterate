@@ -26,7 +26,7 @@ import {
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { RepoArtifactNameCodec } from "~/domains/repos/utils.ts";
-import { buildArtifactViewerUrl } from "~/lib/artifact-viewer-url.ts";
+import { buildCloudflareArtifactDashboardUrl } from "~/lib/artifact-viewer-url.ts";
 import { formatRelativeTime } from "~/lib/format-relative-time.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
@@ -243,12 +243,14 @@ function ProjectReposIndexContent() {
                 </TableRow>
               ) : (
                 visibleRepos.map((repo) => {
-                  const artifactViewerUrl = buildArtifactViewerUrl({
-                    appBaseUrl: routeConfig.baseUrl,
-                    artifactName: RepoArtifactNameCodec.stringify({
-                      projectId: project.id,
-                      path: repo.path,
-                    }),
+                  const artifactName = RepoArtifactNameCodec.stringify({
+                    projectId: project.id,
+                    path: repo.path,
+                  });
+                  const artifactDashboardUrl = buildCloudflareArtifactDashboardUrl({
+                    accountId: routeConfig.cloudflareAccountId,
+                    artifactName,
+                    namespace: routeConfig.cloudflareArtifactsNamespace,
                   });
                   const repoSplat = repoPathToSplat(repo.path);
 
@@ -271,15 +273,25 @@ function ProjectReposIndexContent() {
                         {formatRelativeTime(repo.createdAt)}
                       </TableCell>
                       <TableCell className="w-32">
-                        <a
-                          className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
-                          href={artifactViewerUrl ?? "#"}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          <ExternalLink className="size-4" />
-                          Artifact
-                        </a>
+                        {artifactDashboardUrl ? (
+                          <a
+                            className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+                            href={artifactDashboardUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            <ExternalLink className="size-4" />
+                            Artifact
+                          </a>
+                        ) : (
+                          <span
+                            className="inline-flex items-center gap-1 text-sm text-muted-foreground"
+                            title="Cloudflare account ID is not configured."
+                          >
+                            <ExternalLink className="size-4" />
+                            Artifact
+                          </span>
+                        )}
                       </TableCell>
                     </TableRow>
                   );

@@ -1,4 +1,5 @@
 const artifactNamePattern = /^[a-z0-9][a-z0-9._-]*$/i;
+const cloudflareAccountIdPattern = /^[a-f0-9]{32}$/i;
 
 export function buildArtifactViewerUrl(input: { appBaseUrl?: string; artifactName: string }) {
   if (!artifactNamePattern.test(input.artifactName)) return null;
@@ -19,6 +20,30 @@ export function buildArtifactViewerUrl(input: { appBaseUrl?: string; artifactNam
   url.search = "";
   url.hash = "";
   return url.toString();
+}
+
+export function buildCloudflareArtifactDashboardUrl(input: {
+  accountId?: string;
+  artifactName: string;
+  namespace?: string;
+}) {
+  const accountId = input.accountId?.trim();
+  const namespace = input.namespace ?? "default";
+
+  if (!accountId || !cloudflareAccountIdPattern.test(accountId)) return null;
+  if (!artifactNamePattern.test(input.artifactName)) return null;
+  if (!artifactNamePattern.test(namespace)) return null;
+
+  return [
+    "https://dash.cloudflare.com",
+    encodeURIComponent(accountId),
+    "workers",
+    "artifacts",
+    "namespaces",
+    encodeURIComponent(namespace),
+    "repos",
+    encodeURIComponent(input.artifactName),
+  ].join("/");
 }
 
 function artifactViewerHostname(appHostname: string) {

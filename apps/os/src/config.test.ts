@@ -1,7 +1,7 @@
 import { inspect } from "node:util";
 import { describe, expect, it } from "vitest";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/config";
-import { AppConfig } from "./config.ts";
+import { AppConfig, parseConfig } from "./config.ts";
 
 const baseConfig = {
   openAiApiKey: "openai-api-key",
@@ -32,6 +32,17 @@ describe("AppConfig", () => {
         },
       }).adminApiSecret?.exposeSecret(),
     ).toEqual("admin-api-secret-example");
+  });
+
+  it("exposes the bound Cloudflare Artifacts config as public config", () => {
+    const config = parseConfig({
+      APP_CONFIG: JSON.stringify(baseConfig),
+      ARTIFACTS_ACCOUNT_ID: "04b3b57291ef2626c6a8daa9d47065a7",
+      ARTIFACTS_NAMESPACE: "os-prd-repos",
+    });
+
+    expect(config.cloudflare.accountId).toEqual("04b3b57291ef2626c6a8daa9d47065a7");
+    expect(config.cloudflare.artifactsNamespace).toEqual("os-prd-repos");
   });
 
   it("accepts structured Slack and Google integration runtime config", () => {
