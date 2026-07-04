@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { countOccurrences, replaceLiteralOccurrences } from "./edit-utils.ts";
+import {
+  countOccurrences,
+  isConcurrentPushRejection,
+  replaceLiteralOccurrences,
+} from "./edit-utils.ts";
 import { RepoArtifactNameCodec } from "./utils.ts";
 
 describe("RepoArtifactNameCodec", () => {
@@ -49,5 +53,50 @@ describe("repo edit helpers", () => {
         newString: "$& $1 $$",
       }),
     ).toBe("const value = $& $1 $$;");
+  });
+});
+
+describe("isConcurrentPushRejection", () => {
+  test("recognizes the Artifacts server's stale-ref GitPushError", () => {
+    // Shape observed in preview e2e when concurrent example-matrix writers race
+    // on refs/heads/main (run-044 of the flake hunt).
+    const error = Object.assign(new Error("\n  - refs/heads/main: stale ref"), {
+      code: "GitPushError",
+      name: "GitPushError",
+      data: {
+        ok: true,
+        refs: { "refs/heads/main": { ok: false, error: "stale ref" } },
+      },
+    });
+    expect(isConcurrentPushRejection(error)).toBe(true);
+  });
+
+  test("recognizes a not-fast-forward PushRejectedError by code", () => {
+    const error = Object.assign(new Error("push rejected"), {
+      code: "PushRejectedError",
+      name: "PushRejectedError",
+    });
+    expect(isConcurrentPushRejection(error)).toBe(true);
+  });
+
+  test("recognizes a not-fast-forward rejection surfaced only in the message", () => {
+    expect(
+      isConcurrentPushRejection(
+        new Error("Push rejected because it was not a simple fast-forward"),
+      ),
+    ).toBe(true);
+  });
+
+  test("does not retry unrelated errors", () => {
+    expect(isConcurrentPushRejection(new Error("Repo file does not exist: notes/x.md."))).toBe(
+      false,
+    );
+    expect(
+      isConcurrentPushRejection(
+        Object.assign(new Error("boom"), { code: "SomeOtherError", data: { refs: {} } }),
+      ),
+    ).toBe(false);
+    expect(isConcurrentPushRejection("stale ref")).toBe(false);
+    expect(isConcurrentPushRejection(null)).toBe(false);
   });
 });

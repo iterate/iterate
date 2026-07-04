@@ -126,9 +126,10 @@ read-your-write boundary").
 Fix: the Repo DO records each pushed commit oid per branch
 (`repo-pushed-head:<branch>` in DO storage); read clones and the
 worker-source materialization retry briefly until the snapshot observes at
-least that head. A concurrent force-push can legitimately advance HEAD past
-the recorded oid, so after the bounded retries the latest snapshot is served
-regardless.
+least that head. A concurrent writer can legitimately advance HEAD past the
+recorded oid (its commit stacks on top of ours — see flake 15), so after the
+bounded retries the latest snapshot is served regardless; because writes are
+now fast-forward-only, that later snapshot always still contains our commit.
 
 ### 7. Local harness must match the CI contract (vitest retry)
 
@@ -224,6 +225,43 @@ plausibly a wedge in vitest's startup/fork-pool against this Node version).
 Mitigation: the loop now runs each attempt under a watchdog
 (`RUN_TIMEOUT_SECS`, default 30 min) that kills the run tree and counts it as
 a failure instead of silently freezing the marathon.
+
+### 15. Concurrent repo writers lose the compare-and-swap race on `refs/heads/main`
+
+Round-2 run 44 (43 consecutive greens, then this): `examples-matrix ›
+repo-edit-file` failed two different ways across its retry — first a
+`git.push` **`GitPushError: refs/heads/main: stale ref`**, then (on the retry)
+the final `readFile` returning `status: draft` after the edit had reported
+success. Both are the same root cause.
+
+The itx examples matrix runs many repo-mutating examples
+(`repo-commit-files`, `repo-edit-file`, …) **concurrently against ONE shared
+project repo**, all pushing to `refs/heads/main`. Each mutation clones HEAD,
+commits on top, and pushes. The Artifacts git server enforces optimistic
+concurrency (compare-and-swap on the ref): when a second writer's push carries
+a parent that is no longer the server's current HEAD — because the first
+writer landed in between — the server rejects it with `stale ref` /
+not-fast-forward, and isomorphic-git surfaces that as a thrown `GitPushError`.
+
+`force: true` (which every mutation used) does **not** help and actively hurt:
+
+- It only skips isomorphic-git's _client-side_ fast-forward check, not the
+  _server's_ compare-and-swap — so the `stale ref` rejection still happens.
+- A force-push that _did_ land would clobber the concurrent writer's commit by
+  resetting HEAD to a parent that predates it. That is exactly how the second
+  failure arose: our `edit` committed and pushed, then a racing writer's
+  force-push reset `main` to a commit that predated our edit, and the
+  read-your-write clone (flake 6) faithfully returned the reverted content.
+
+Fix (`repo-durable-object.ts` `mutateArtifactRepo`): stop force-pushing, and
+wrap the whole clone→mutate→commit→push cycle in a compare-and-swap retry loop
+(8 attempts, jittered backoff). On a concurrent-push rejection
+(`isConcurrentPushRejection`, unit-tested in `utils.test.ts`) it re-clones the
+latest HEAD and re-applies the mutation, so concurrent writers **stack** their
+commits and serialize cleanly instead of clobbering each other. Fast-forward-only
+pushes also mean flake 6's read guard can never observe a HEAD that dropped our
+commit. `seedArtifactRepo` keeps its force-push: it runs once at repo creation,
+never concurrently.
 
 ### Observed, not yet fixed
 

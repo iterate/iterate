@@ -20,7 +20,11 @@ import type {
   EditRepoFileResult,
   RepoFileChange,
 } from "../../types.ts";
-import { countOccurrences, replaceLiteralOccurrences } from "./edit-utils.ts";
+import {
+  countOccurrences,
+  isConcurrentPushRejection,
+  replaceLiteralOccurrences,
+} from "./edit-utils.ts";
 import { PROJECT_WORKER_SOURCE_PATH, RepoArtifactNameCodec } from "./utils.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
@@ -529,7 +533,55 @@ async function editArtifactRepoFile(input: {
   });
 }
 
+/**
+ * Concurrent writers to one repo branch race on the remote HEAD. The Artifacts
+ * git server enforces optimistic concurrency (compare-and-swap on the ref): a
+ * push whose parent is no longer the server's current HEAD — because another
+ * writer landed first — is rejected with "stale ref" / not-fast-forward. This
+ * is real in preview e2e: the itx examples matrix runs many repo-mutating
+ * examples (repo-commit-files, repo-edit-file, …) concurrently against ONE
+ * shared project repo, all pushing to refs/heads/main.
+ *
+ * `force` does NOT fix this: it only skips isomorphic-git's CLIENT-side
+ * fast-forward check, not the SERVER's compare-and-swap — and a force-push that
+ * did land would silently clobber the concurrent writer's commit (observed as
+ * read-your-write reads going stale: an edit reverted under us when a racing
+ * force-push reset HEAD to a parent that predated it). So we do NOT force;
+ * we retry the whole clone→mutate→commit→push cycle, re-cloning the latest HEAD
+ * each attempt so our commit stacks on top of the concurrent writer's instead
+ * of overwriting it. Under fast-forward-only pushes, commits from concurrent
+ * writers serialize cleanly and no update is ever lost.
+ */
 async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: {
+  author?: { email: string; name: string };
+  branch: string;
+  message: string;
+  mutate: (repo: { filesystem: InMemoryFs; git: ReturnType<typeof createGit> }) => Promise<Extra>;
+  remote: string;
+  token: string;
+}): Promise<CommitRepoFilesResult & Extra> {
+  const MAX_ATTEMPTS = 8;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      return await mutateArtifactRepoOnce(input);
+    } catch (error) {
+      if (!isConcurrentPushRejection(error) || attempt === MAX_ATTEMPTS) throw error;
+      lastError = error;
+      console.warn(
+        `repo push to ${input.branch} lost the compare-and-swap race with a concurrent writer ` +
+          `(attempt ${attempt}/${MAX_ATTEMPTS}); re-cloning latest HEAD and retrying: ${String(error)}`,
+      );
+      // Backoff with jitter so a herd of concurrent writers does not re-collide
+      // in lockstep on every retry.
+      const delayMs = 100 * attempt + Math.floor(Math.random() * 120);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  throw lastError;
+}
+
+async function mutateArtifactRepoOnce<Extra extends Record<string, unknown>>(input: {
   author?: { email: string; name: string };
   branch: string;
   message: string;
@@ -566,8 +618,10 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
     author: input.author ?? { email: "support@iterate.com", name: "Iterate" },
     message: input.message,
   });
+  // Fast-forward-only (no force): isomorphic-git throws GitPushError when the
+  // server rejects the ref update ("stale ref"), which mutateArtifactRepo
+  // catches and retries with a fresh clone. See isConcurrentPushRejection.
   const pushed = await git.push({
-    force: true,
     ref: input.branch,
     remote: "origin",
     ...credentials,
