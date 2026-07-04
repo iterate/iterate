@@ -1,8 +1,7 @@
-import { realpathSync } from "node:fs";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
 
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 
 import { seedEnvironmentConfigLeases as seedEnvironmentConfigLeasesImpl } from "./seed-environment-config-leases.ts";
 
@@ -18,7 +17,7 @@ export async function seedEnvironmentConfigLeases(
   return await seedEnvironmentConfigLeasesImpl(options);
 }
 
-if (isMainModule()) {
+if (isMainModule(import.meta.url)) {
   const args = process.argv.slice(2);
 
   void createCli({
@@ -30,10 +29,4 @@ if (isMainModule()) {
     logger: yamlTableConsoleLogger,
     prompts: isAgent() ? undefined : createBuiltInPrompts(),
   });
-}
-
-function isMainModule() {
-  const entry = process.argv[1];
-  if (!entry) return false;
-  return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
 }

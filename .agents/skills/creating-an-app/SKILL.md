@@ -18,28 +18,19 @@ The package scripts should own only the app action. Doppler selection belongs ou
 
 ## CI Workflows
 
-Cloudflare deploy workflows are generated from `.github/ts-workflows/`.
+CI and deploy workflows are hand-written Depot CI YAML in `.depot/workflows/`
+(see `docs/depot-ci.md`).
 
 The current pattern is:
 
-1. Add a new-style app to `packages/shared/src/apps/new-style-cloudflare-apps.ts`.
-2. If it participates in PR previews, add preview test metadata in `scripts/preview/apps.ts`.
-3. Add a thin workflow entry in `.github/ts-workflows/workflows/deploy-<app>.ts`.
-4. Regenerate YAML with `pnpm -C .github/ts-workflows generate`.
-
-The shared app manifest is the source of truth for:
-
-- app slug
-- display name
-- repo path
-- Doppler project
-- path filters
-- temporary deploy dependencies
-
-The preview registry adds:
-
-- preview test base URL env var
-- preview test command
+1. Copy an existing deploy workflow (for example
+   `.depot/workflows/deploy-semaphore.yml`) to
+   `.depot/workflows/deploy-<app>.yml` and edit the app name, Doppler project,
+   deploy command, and `paths` filters directly.
+2. If the app participates in PR previews, wire it into the repo preview
+   router in `scripts/preview/preview.ts`.
+3. Depot registers triggers from the default branch, so a new workflow file
+   only starts running after it lands on `main`.
 
 Preview deploys do not live in app-local routers anymore. They run through the repo preview router:
 
@@ -53,9 +44,7 @@ Workflow rules:
 - PR pushes deploy a leased `preview_N`
 - pushes to `main` deploy `prd`
 - PR deploys update the managed preview section in the PR body
-- `main` deploy successes post to Slack
-- `main` deploy failures post to Slack
-- new-style workflow `paths` include the app folder, contract folder, and shared new-style deploy paths from `packages/shared/src/apps/new-style-cloudflare-apps.ts`
+- `main` deploy successes and failures post to Slack via `scripts/ci/notify.ts`
 
 Do not add preview logic back into `apps/<app>/scripts/router.ts` just to satisfy CI.
 

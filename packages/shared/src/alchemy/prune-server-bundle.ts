@@ -1,6 +1,7 @@
 import { readFile, readdir, rm } from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+
+import { isMainModule } from "../dev/is-main-module.ts";
 
 // Deployed worker size is a latency problem, not just a storage one: every
 // cold Durable Object instantiation loads the full script into a fresh
@@ -95,10 +96,7 @@ function normalize(relativePath: string): string {
   return path.posix.normalize(relativePath.split(path.sep).join("/"));
 }
 
-const isCliInvocation =
-  process.argv[1] != null && import.meta.url === pathToFileURL(process.argv[1]).href;
-
-if (isCliInvocation) {
+if (isMainModule(import.meta.url)) {
   const args = process.argv.slice(2);
   const readArg = (flag: string) => {
     const index = args.indexOf(flag);
