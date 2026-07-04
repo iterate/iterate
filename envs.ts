@@ -142,8 +142,8 @@ export const envs = {
     authDbId: "5e2b9db1-d617-47f6-bc57-3b9c150e39ce",
   }),
   preview_8: previewSlot(8, {
-    projectDirectoryKvId: "d06139a93f2846cb9f46c38810796c06",
-    authDbId: "87dbf699-824a-4f08-994c-7debce8c18e5",
+    projectDirectoryKvId: "b36864421f924ac2b6d382c17a20cddc",
+    authDbId: "d59dd035-41f9-47be-bc31-260ef1784ed0",
   }),
   preview_9: previewSlot(9, {
     projectDirectoryKvId: "9fac543a7e994b7f972328c6a07152ac",
@@ -221,7 +221,7 @@ export const semaphoreEnvs = {
   preview_5: semaphorePreviewSlot(5, "eea19312-34e2-4e5c-be19-fe6929636544"),
   preview_6: semaphorePreviewSlot(6, "1b27c077-5dec-4a13-848c-249a321601b4"),
   preview_7: semaphorePreviewSlot(7, "619f7832-6a56-46ed-b760-476ba10bdfd4"),
-  preview_8: semaphorePreviewSlot(8, "53858fae-e556-445d-b2ce-0b68fe56582f"),
+  preview_8: semaphorePreviewSlot(8, "77af433e-c870-43a6-be8e-1d2452feb23d"),
   preview_9: semaphorePreviewSlot(9, "53522759-5f82-4055-b0c2-248d66988b7d"),
 } satisfies Record<string, SemaphoreEnv>;
 

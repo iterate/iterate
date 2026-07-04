@@ -172,11 +172,12 @@ export function ProjectStreamView({
   });
 
   async function clearClientDatabases() {
-    await Promise.all([
-      feedStore.clearLocalDatabase(),
-      agentStore.clearLocalDatabase(),
-      store.clearLocalDatabase(),
-    ]);
+    // Sequential on purpose: the three runtimes share one per-path SQLite
+    // mirror, and each clear deletes its tables and VACUUMs — interleaving
+    // them would race writes and compactions on the same file.
+    await feedStore.clearLocalDatabase();
+    await agentStore.clearLocalDatabase();
+    await store.clearLocalDatabase();
     window.location.reload();
   }
 
@@ -336,6 +337,15 @@ function useAgentInterrupt(args: {
   const [isInterrupting, setIsInterrupting] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const { onInterrupt, runningLlmRequestId, onNudgeDeliveries } = args;
+
+  // An interrupt error belongs to the turn it failed against; without this a
+  // stale error would resurface on the NEXT turn (the hook returns null in
+  // between, hiding it). State-adjust-during-render per react.dev — no effect.
+  const [errorRequestId, setErrorRequestId] = useState(runningLlmRequestId);
+  if (errorRequestId !== runningLlmRequestId) {
+    setErrorRequestId(runningLlmRequestId);
+    setError(undefined);
+  }
 
   if (onInterrupt == null || runningLlmRequestId == null) return null;
 
