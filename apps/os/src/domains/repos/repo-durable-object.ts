@@ -178,7 +178,25 @@ export class RepoDurableObject extends DurableObject<Env> {
     return `repo ${this.#name.projectId}:${this.#name.path}`;
   }
 
-  async commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult> {
+  // Writes serialize on this chain: the clone/commit/push inside a write
+  // yields the DO input gate at every network await, so two interleaved
+  // writes would otherwise clone the same head and the second (non-fast-
+  // forward) push would clobber the first commit — while both callers got a
+  // success result. All writes funnel through this one DO by design, which
+  // is exactly what makes a local chain a sufficient lock.
+  #writeChain: Promise<unknown> = Promise.resolve();
+
+  #serializeWrite<T>(write: () => Promise<T>): Promise<T> {
+    const result = this.#writeChain.then(write, write);
+    this.#writeChain = result.catch(() => {});
+    return result;
+  }
+
+  commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult> {
+    return this.#serializeWrite(() => this.#commitFiles(input));
+  }
+
+  async #commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult> {
     const parsed = parseCommitFilesInput(input);
     const repo = await this.gitAccess();
     const result = await commitFilesToArtifactRepo({
@@ -207,7 +225,11 @@ export class RepoDurableObject extends DurableObject<Env> {
     };
   }
 
-  async edit(input: EditRepoFileInput): Promise<EditRepoFileResult> {
+  edit(input: EditRepoFileInput): Promise<EditRepoFileResult> {
+    return this.#serializeWrite(() => this.#edit(input));
+  }
+
+  async #edit(input: EditRepoFileInput): Promise<EditRepoFileResult> {
     const parsed = parseEditRepoFileInput(input);
     const repo = await this.gitAccess();
     const result = await editArtifactRepoFile({
@@ -311,13 +333,24 @@ export class RepoDurableObject extends DurableObject<Env> {
    * public `Repo` capability: itx callers get file-level methods, not raw
    * artifact credentials.
    */
+  // One token per isolate lifetime, not per operation: every read path
+  // (getFilesSnapshot on each cold build resolve, readFile, listFiles) goes
+  // through gitAccess, and minting a fresh 365-day write token per call
+  // proliferates credentials for no benefit.
+  #artifactTokenPromise: Promise<string> | undefined;
+
   async gitAccess(): Promise<{ defaultBranch: string; remote: string; token: string }> {
     const artifactName = this.artifactName();
-    const artifacts = this.requireArtifacts();
+    this.#artifactTokenPromise ??= artifactToken(this.requireArtifacts(), artifactName).catch(
+      (error: unknown) => {
+        this.#artifactTokenPromise = undefined;
+        throw error;
+      },
+    );
     return {
       defaultBranch: REPO_DEFAULT_BRANCH,
       remote: this.artifactRemote(artifactName),
-      token: await artifactToken(artifacts, artifactName),
+      token: await this.#artifactTokenPromise,
     };
   }
 
@@ -537,8 +570,10 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
     author: input.author ?? { email: "support@iterate.com", name: "Iterate" },
     message: input.message,
   });
+  // No force: writes are serialized by the DO's #writeChain, so a fresh
+  // clone + one commit is always a fast-forward — a non-fast-forward push
+  // here means an out-of-band writer and should fail loudly, not clobber.
   const pushed = await git.push({
-    force: true,
     ref: input.branch,
     remote: "origin",
     ...credentials,

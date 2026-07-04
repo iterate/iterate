@@ -103,7 +103,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
   readonly contract = CapabilityHostProcessorContract;
   #itx: ProjectRpcTarget;
   #path: string;
-  #dynamicWorkers: (scopePath: string) => DynamicWorkerRunner;
+  #dynamicWorkers: DynamicWorkerRunner;
   #parent: ParentCapabilityHost | undefined;
   #liveCapabilities = new Map<string, LiveCapability>();
 
@@ -111,8 +111,8 @@ export class CapabilityHostProcessor extends StreamProcessor<
     args: StreamProcessorConstructorArgs<typeof CapabilityHostProcessorContract, object> & {
       itx: ProjectRpcTarget;
       path: string;
-      /** Runner factory (runs run-script workers in this scope). */
-      dynamicWorkers: (scopePath: string) => DynamicWorkerRunner;
+      /** Runs run-script workers in this scope. */
+      dynamicWorkers: DynamicWorkerRunner;
       // The enclosing scope, or undefined at the project root ("/"). Present for
       // every nested scope (agents, sub-agents, agent namespaces) so capability
       // lookups that miss locally can fall through to the surrounding scope.
@@ -422,7 +422,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
     try {
       // Scripts execute inside THIS scope: the loaded worker's env.ITX resolves
       // to the same path this processor owns, not the script ref's path.
-      const result = await this.#dynamicWorkers(this.#path).invokeCapability({
+      const result = await this.#dynamicWorkers.invokeCapability({
         path: ["run"],
         ref: this.#scriptWorkerRef(input.code),
       });
@@ -444,7 +444,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
       }
     `;
     // runScript is deliberately expressed as a stateless inline DynamicWorkerRef. That
-    // keeps script execution on the same worker-worker dispatch path as project
+    // keeps script execution on the same DynamicWorkerRunner dispatch path as project
     // workers and provided stateless capabilities; ITX adds only the journal events.
     // `bundle: false` over plain JavaScript is the loader-ready fast path in
     // resolveWorkerSource: scripts run on every agent turn and must not pay a

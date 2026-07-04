@@ -9,12 +9,10 @@ import { WorkerBuildOptions } from "./schemas.ts";
  * builder is deliberately the MINIMUM possible deployable unit around the
  * bundler toolchain (esbuild-wasm, ~14MB) — a pure function worker (files in,
  * artifact out) with no DO namespaces, no service bindings, no repo access,
- * and nothing that orders its deploy relative to any other script. That keeps
- * it ready to survive unchanged as the single sidecar in a "1 + 1" topology
- * (one product worker + this builder) if the apps/os worker split ever
- * collapses into a monolith (see PR #1636): the wasm never has to ride in the
- * product script, and the deploy DAG stays trivial (builder first, no
- * cross-script cycles, no bootstrap passes).
+ * and nothing that orders its deploy relative to the os worker beyond
+ * "builder first". It IS the "+1" in the single-worker topology (see
+ * docs/worker-topology.md): the wasm never rides in the product script, and
+ * the deploy DAG stays trivial.
  */
 type BuilderEnv = {
   WORKER_BUILD_CACHE: KVNamespace;
@@ -23,9 +21,9 @@ type BuilderEnv = {
 /**
  * The builder worker's entrypoint: the one place dynamic worker source is
  * bundled, and the only worker script that carries the bundler toolchain.
- * Everything that RUNS dynamic workers (the worker worker) stays lean and
- * calls `env.BUILDER.build(...)` on an artifact-cache miss; a bundler upgrade
- * or shim change redeploys one worker.
+ * The os worker (which runs all dynamic workers) stays lean and calls
+ * `env.BUILDER.build(...)` on an artifact-cache miss; a bundler upgrade or
+ * shim change redeploys one worker.
  *
  * `build` takes source files BY VALUE (the caller resolves repo snapshots —
  * it owns the REPO binding; a file map carries no authority so the builder
@@ -59,6 +57,9 @@ export class BuilderEntrypoint extends WorkerEntrypoint<BuilderEnv> {
     if (cached !== null) return cached;
 
     const build = (async () => {
+      // Best-effort duplicate suppression for budgeted callers (see
+      // isBuildInFlight); the artifact write below always supersedes it.
+      await store.markBuildInFlight(buildKey).catch(() => {});
       const built = await materializeWorkerBuild({ files, options });
       for (const warning of built.warnings) {
         console.warn(`[builder] ${buildKey.slice(0, 12)}: ${warning}`);

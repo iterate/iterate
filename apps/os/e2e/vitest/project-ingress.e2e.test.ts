@@ -51,18 +51,10 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
       return fetch(base, { ...init, headers });
     }
     // The deployment's project hosts live on APP_CONFIG_PROJECT_HOSTNAME_BASES
-    // (e.g. iterate.app for prd, iterate-preview-N.app for previews) — fall
+    // (a JSON array — config.ts z.array; e.g. ["iterate.app"] for prd) — fall
     // back to the preview-derivation only when the env var is absent.
-    const configuredBase = (() => {
-      const raw = process.env.APP_CONFIG_PROJECT_HOSTNAME_BASES?.trim();
-      if (!raw) return undefined;
-      try {
-        const parsed: unknown = JSON.parse(raw);
-        return Array.isArray(parsed) ? String(parsed[0]) : String(parsed);
-      } catch {
-        return raw.split(",")[0]?.trim();
-      }
-    })();
+    const raw = process.env.APP_CONFIG_PROJECT_HOSTNAME_BASES?.trim();
+    const configuredBase = raw ? String((JSON.parse(raw) as string[])[0]) : undefined;
     const previewMatch = /^os\.(iterate-preview-\d+)\.com$/.exec(base.hostname);
     const projectBase = configuredBase || (previewMatch ? `${previewMatch[1]}.app` : base.hostname);
     return fetch(`${base.protocol}//${appHostPrefix}.${projectBase}${path}`, init);

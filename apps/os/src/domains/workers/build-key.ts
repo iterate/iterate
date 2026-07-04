@@ -1,4 +1,3 @@
-import { z } from "zod";
 import type { WorkerBuildOptions } from "../../types.ts";
 import { stableSha256 } from "./utils.ts";
 import { WORKER_BUILD_ARTIFACT_SCHEMA_VERSION } from "./artifact-store.ts";
@@ -27,31 +26,29 @@ export const WORKER_BUNDLER_VERSION = "0.2.1";
  * artifact instead of each paying a bundler run. Pinned-commit refs skip the
  * head cache and have no content identity, hence the optionality.
  *
- * This zod schema is also the builder worker's `build()` input shape
- * (builder-entrypoint.ts): the resolver constructs this value, hashes it into
- * the key, and sends it verbatim, so type and schema must be one definition.
+ * A plain type, not a schema: only the trusted resolver constructs this
+ * value (worker-loader.ts resolveFileSource), hashes it into the key, and
+ * expands it to a file map before anything crosses a boundary — the builder
+ * RPC receives files by value and validates its own input.
  */
-export const ResolvedWorkerFileSource = z.discriminatedUnion("type", [
-  z.strictObject({
-    files: z.record(z.string(), z.string()),
-    type: z.literal("inline"),
-  }),
-  z.strictObject({
-    // The branch the pinned commit was resolved from. Snapshot resolution
-    // needs it (clones are single-branch, so an off-default commit is only
-    // reachable through its branch's history); the build key deliberately
-    // ignores it — content identity is the commit/content hash.
-    branch: z.string().optional(),
-    commitOid: z.string().regex(/^[0-9a-f]{40}$/),
-    contentHash: z.string().optional(),
-    exclude: z.array(z.string()).optional(),
-    include: z.array(z.string()).optional(),
-    repoPath: z.string(),
-    type: z.literal("repo"),
-  }),
-]);
-
-export type ResolvedWorkerFileSource = z.infer<typeof ResolvedWorkerFileSource>;
+export type ResolvedWorkerFileSource =
+  | {
+      files: Record<string, string>;
+      type: "inline";
+    }
+  | {
+      /** The branch the pinned commit was resolved from. Snapshot resolution
+       * needs it (clones are single-branch, so an off-default commit is only
+       * reachable through its branch's history); the build key deliberately
+       * ignores it — content identity is the commit/content hash. */
+      branch?: string;
+      commitOid: string;
+      contentHash?: string;
+      exclude?: string[];
+      include?: string[];
+      repoPath: string;
+      type: "repo";
+    };
 
 export type WorkerBuildInput = {
   compatibilityDate: string;

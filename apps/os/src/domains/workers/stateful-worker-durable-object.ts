@@ -2,13 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import type { StatefulDynamicWorkerRef } from "../../types.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import {
-  itxEntrypointBinding,
-  itxEntrypointProps,
-  itxEntrypointScopeCacheKey,
-} from "../itx/utils.ts";
 import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
-import { projectEgressFetcher } from "../projects/utils.ts";
 import { DynamicWorkerRunner } from "./worker-runner.ts";
 
 const FACET_NAME = "target";
@@ -30,22 +24,14 @@ function statefulWorkerVersion(ref: StatefulDynamicWorkerRef, sourceCacheKey: st
  */
 export class StatefulWorkerDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
-  readonly #itxScope = itxEntrypointProps({
-    path: this.#name.path,
-    projectId: this.#name.projectId,
-  });
+  // The hosted Durable Object class sees the same scoped ITX binding as a
+  // stateless worker at this path. That is what lets a provided durable
+  // capability call sibling capabilities through `this.env.ITX.get()`.
   readonly #workerRunner = new DynamicWorkerRunner({
-    bindings: {
-      // The hosted Durable Object class sees the same scoped ITX binding as a
-      // stateless worker at this path. That is what lets a provided durable
-      // capability call sibling capabilities through `this.env.ITX.get()`.
-      ITX: itxEntrypointBinding(this.ctx.exports, this.#itxScope),
-    },
-    globalOutbound: projectEgressFetcher(this.ctx.exports, this.#name.projectId),
-    loader: this.env.LOADER,
+    exports: this.ctx.exports,
     projectId: this.#name.projectId,
+    scopePath: this.#name.path,
     waitUntil: (promise) => this.ctx.waitUntil(promise),
-    workerScopeKey: itxEntrypointScopeCacheKey(this.#itxScope),
   });
 
   async invokeCapability({
@@ -114,7 +100,15 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
   async #staleFacet(ref: StatefulDynamicWorkerRef): Promise<unknown | null> {
     const previous = this.ctx.storage.kv.get<string>(VERSION_STORAGE_KEY);
     if (previous === undefined) return null;
-    const parsed = JSON.parse(previous) as { className: string; sourceCacheKey: string };
+    // Self-healing on a malformed marker (legacy format, future schema
+    // change): fall through to the blocking load, which rewrites it —
+    // throwing here would wedge every stale-while-rebuild call forever.
+    let parsed: { className: string; sourceCacheKey: string };
+    try {
+      parsed = JSON.parse(previous) as { className: string; sourceCacheKey: string };
+    } catch {
+      return null;
+    }
     if (parsed.className !== ref.className) return null;
 
     const cached = await this.#workerRunner.loadStatefulClassFromCacheKey(

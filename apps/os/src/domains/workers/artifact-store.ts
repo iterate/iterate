@@ -10,8 +10,9 @@
 
 export const WORKER_BUILD_ARTIFACT_SCHEMA_VERSION = 1;
 
-/** Cache lifetime for build artifacts. Every artifact is reproducible from its
- * deterministic build key, so expiry only costs a rebuild on next use. */
+/** Cache lifetime for build artifacts. Expiry only costs a rebuild on next
+ * use. ("Reproducible" is approximate: npm ranges re-resolve at build time,
+ * so a rebuild of the same key can pick newer dependency versions.) */
 const WORKER_BUILD_ARTIFACT_TTL_SECONDS = 30 * 24 * 60 * 60;
 
 const KV_PREFIX = `worker-build/v${WORKER_BUILD_ARTIFACT_SCHEMA_VERSION}`;
@@ -45,6 +46,16 @@ function moduleKey(buildKey: string, moduleName: string) {
   return `${KV_PREFIX}/${buildKey}/modules/${encodeURIComponent(moduleName)}`;
 }
 
+/** How long an in-flight marker suppresses duplicate budgeted builds. Long
+ * enough to cover a cold npm-install build; short enough that a crashed
+ * builder only delays budgeted callers, never blocks them forever (the
+ * artifact write always wins over the marker). */
+const BUILD_IN_FLIGHT_TTL_SECONDS = 180;
+
+function inFlightKey(buildKey: string) {
+  return `${KV_PREFIX}/${buildKey}/building`;
+}
+
 /** `get` returns null on any incomplete artifact (no manifest, or a listed
  * module missing): both are cache misses that a rebuild from the
  * deterministic input repairs. */
@@ -53,6 +64,26 @@ export class KvWorkerBuildArtifactStore {
     readonly kv: KVNamespace,
     readonly options: { expirationTtlSeconds?: number } = {},
   ) {}
+
+  /**
+   * Best-effort duplicate-build suppression for BUDGETED callers only: the
+   * building-page refresh loop would otherwise dispatch a fresh full build
+   * every ~18s per open tab while a slow cold build runs. Budgeted callers
+   * can answer "still building" from the marker without work; blocking
+   * callers ignore it (they need a result and idempotent duplicate builds
+   * are their fallback). Best-effort because KV propagation is eventually
+   * consistent — a missed marker just means today's duplicate-build
+   * behavior.
+   */
+  async isBuildInFlight(buildKey: string): Promise<boolean> {
+    return (await this.kv.get(inFlightKey(buildKey), "text")) !== null;
+  }
+
+  async markBuildInFlight(buildKey: string): Promise<void> {
+    await this.kv.put(inFlightKey(buildKey), new Date().toISOString(), {
+      expirationTtl: BUILD_IN_FLIGHT_TTL_SECONDS,
+    });
+  }
 
   async get(buildKey: string): Promise<WorkerBuildArtifact | null> {
     // The schema version already namespaces the KV key prefix and is hashed

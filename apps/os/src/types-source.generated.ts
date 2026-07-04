@@ -590,8 +590,11 @@ export interface StreamProcessorRpc<State = unknown> {
  * \`invokeCapability\` method dispatches in userspace (one RPC per call),
  * instead of the default member-by-member replay on the entrypoint.
  * \`buildBudgetMs\` bounds how long a call waits on a cold source build; past
- * it the call fails with a \`WorkerBuildInProgressError\` while the build
- * finishes into the artifact cache.
+ * it the call fails with an error whose \`name\` is
+ * \`"WorkerBuildInProgressError"\` — the NAME is the contract (it survives
+ * Workers RPC; class identity does not), so userspace matches
+ * \`error.name === "WorkerBuildInProgressError"\` to render its own building
+ * page (the seeded template's router does exactly this).
  */
 export type DynamicWorkerDispatchOptions = {
   buildBudgetMs?: number;
@@ -1164,7 +1167,6 @@ export interface ProjectWorker {
   invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
   processEvent(input: { event: StreamEvent }): Promise<void>;
   slack: ProjectWorkerSlack;
-  testFetch(input: { headerValue: string; url: string }): Promise<unknown>;
 }
 
 /** JSON subset accepted by WorkerEntrypoint props and script results. */
@@ -1185,6 +1187,10 @@ export type JsonValue =
  */
 export type CfExecutionContext = {
   exports: ExecutionContext["exports"];
-  waitUntil?: ExecutionContext["waitUntil"];
+  /** Required, not optional: budget-expired dynamic worker builds are handed
+   * to it (worker-loader.ts withBuildBudget) — a silent no-op here would
+   * strand every cold build the caller gave up on. Hosts without a real
+   * runtime hook must still supply an explicit function. */
+  waitUntil: ExecutionContext["waitUntil"];
 };
 `;

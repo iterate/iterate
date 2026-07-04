@@ -71,12 +71,14 @@ function listen(
  * preview cannot reach the test runner's 127.0.0.1. `calls` is only populated
  * in local mode — deployed assertions must go by response bodies.
  */
-export async function startMockSlackApi(): Promise<FixtureServer & { calls: string[] }> {
+export async function startMockSlackApi(): Promise<
+  FixtureServer & { calls: string[]; local: boolean }
+> {
   const deployedBaseUrl = deployedFixtureBaseUrl();
   if (deployedBaseUrl !== null) {
     const url = new URL(deployedBaseUrl);
     url.pathname = `${E2E_FIXTURE_PREFIX}/slack/`;
-    return { calls: [], close: async () => {}, url: url.toString() };
+    return { calls: [], close: async () => {}, local: false, url: url.toString() };
   }
 
   const calls: string[] = [];
@@ -96,7 +98,7 @@ export async function startMockSlackApi(): Promise<FixtureServer & { calls: stri
       res.end(JSON.stringify(mockSlackResponseBody(method, payload)));
     });
   }, "/");
-  return { ...server, calls };
+  return { ...server, calls, local: true };
 }
 
 export async function startEgressEcho(): Promise<FixtureServer> {

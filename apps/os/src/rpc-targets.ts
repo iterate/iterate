@@ -118,10 +118,7 @@ import type {
   ProjectIntegrations,
   SlackCapability,
 } from "./types.ts";
-import {
-  DynamicWorkerRunner,
-  dynamicWorkerRunnerForScope,
-} from "./domains/workers/worker-runner.ts";
+import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
 
 export class StreamRpcTarget extends RpcTarget implements Stream {
   async __describe() {
@@ -938,8 +935,9 @@ class DynamicWorkerCollectionRpcTarget extends RpcTarget implements DynamicWorke
 class DynamicWorkerRpcTarget extends RpcTarget {
   readonly #buildBudgetMs: number | undefined;
   readonly #flattenNestedPaths: boolean;
+  readonly #props: { ctx: CfExecutionContext; projectId: string };
   readonly #ref: DynamicWorkerRef;
-  readonly #runner: DynamicWorkerRunner;
+  #lazyRunner: DynamicWorkerRunner | undefined;
 
   constructor(props: {
     buildBudgetMs?: number;
@@ -951,19 +949,23 @@ class DynamicWorkerRpcTarget extends RpcTarget {
     super();
     this.#buildBudgetMs = props.buildBudgetMs;
     this.#flattenNestedPaths = props.flattenNestedPaths === true;
+    this.#props = { ctx: props.ctx, projectId: props.projectId };
     this.#ref = props.ref;
-    // A worker reached through the public collection runs in the itx scope of
-    // its own path. The ITX binding and egress fetcher come from the HOSTING
-    // context, not the ref.
-    this.#runner = dynamicWorkerRunnerForScope({
-      exports: props.ctx.exports,
-      projectId: props.projectId,
-      scopePath: props.ref.path,
-      // CfExecutionContext.waitUntil is optional (capnweb sessions); without
-      // it a budget-expired build just floats unprotected.
-      waitUntil: (promise) => props.ctx.waitUntil?.(promise),
-    });
     return withInvokeCapabilityFallback(this);
+  }
+
+  // Lazy: __describe answers from the ref alone and must not mint loopback
+  // stubs; only an actual invocation needs a runner. A worker reached through
+  // the public collection runs in the itx scope of its own path — the ITX
+  // binding and egress fetcher come from the HOSTING context, not the ref.
+  get #runner(): DynamicWorkerRunner {
+    this.#lazyRunner ??= new DynamicWorkerRunner({
+      exports: this.#props.ctx.exports,
+      projectId: this.#props.projectId,
+      scopePath: this.#ref.path,
+      waitUntil: (promise) => this.#props.ctx.waitUntil(promise),
+    });
+    return this.#lazyRunner;
   }
 
   // Answered from the REF alone — describing a worker must not boot it (no

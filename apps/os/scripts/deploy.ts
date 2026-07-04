@@ -142,6 +142,12 @@ export default async function deploy(
       // binding is by name, and a binding to a not-yet-existing script fails
       // the deploy. The builder has no secrets and no vite build — wrangler
       // bundles src/builder.ts (esbuild-wasm rides as a wasm module).
+      // Skew window: between this deploy and the os deploy (or if the os
+      // deploy fails), a bundler/schema-version bump means the os worker
+      // hashes the OLD key prefix while the builder writes the new one — the
+      // cache runs cold (correct output via by-value returns, every request
+      // rebuilds) until the os deploy lands. If "cache never hits" appears
+      // mid-rollout, finish the deploy.
       writeWranglerConfig();
       run(
         "pnpm",

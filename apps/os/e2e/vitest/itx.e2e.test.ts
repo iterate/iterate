@@ -183,6 +183,34 @@ function inlineJsSource(entryPoint: string, files: Record<string, string>) {
   };
 }
 
+/**
+ * A throwaway inline dynamic worker whose bare `fetch()` proves the egress
+ * path (dynamic workers' global fetch rides project egress, secret
+ * substitution included) — the probe is the TEST's worker, not a method on
+ * the seeded template.
+ */
+function egressProbeWorker(project: { workers: { get(ref: DynamicWorkerRef): unknown } }) {
+  return project.workers.get({
+    path: "/",
+    source: inlineJsSource("probe.js", {
+      "probe.js": `
+        import { WorkerEntrypoint } from "cloudflare:workers";
+        export default class extends WorkerEntrypoint {
+          async probeFetch(input) {
+            const response = await fetch(input.url, {
+              headers: { "x-itx-egress-proof": input.headerValue },
+            });
+            return await response.json();
+          }
+        }
+      `,
+    }),
+    type: "stateless",
+  }) as unknown as {
+    probeFetch(input: { headerValue: string; url: string }): Promise<unknown>;
+  } & Disposable;
+}
+
 function fencedAgentScript(code: string): string {
   return ["The faux LLM produced this codemode block.", "```js", code.trim(), "```"].join("\n");
 }
@@ -459,7 +487,8 @@ describe("itx", () => {
       expect(explicitResponse.status).toBe(200);
       expect(echoedEgressProofHeader(await explicitResponse.json())).toBe(expected);
 
-      const workerBody = await project.worker.testFetch({
+      using probe = egressProbeWorker(project);
+      const workerBody = await probe.probeFetch({
         headerValue: secretReference,
         url: echo.url,
       });
@@ -597,7 +626,8 @@ describe("itx", () => {
         url: echo.url,
       });
 
-      const workerBody = await project.worker.testFetch({
+      using probe = egressProbeWorker(project);
+      const workerBody = await probe.probeFetch({
         headerValue: secretReference,
         url: echo.url,
       });

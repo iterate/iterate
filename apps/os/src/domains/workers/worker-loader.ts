@@ -73,7 +73,7 @@ export async function resolveWorkerSource({
   // included — so a browser-facing caller's bound is a real bound, not just a
   // bound on the bundler.
   return await withBuildBudget(
-    resolveThroughBuilder({ options, projectId, source }),
+    resolveThroughBuilder({ budgeted: buildBudgetMs !== undefined, options, projectId, source }),
     buildBudgetMs,
     waitUntil,
   );
@@ -114,6 +114,8 @@ async function withBuildBudget(
 // "cannot perform I/O on behalf of a different request" trap. Duplicates are
 // harmless — content-addressed, idempotent artifact writes — just redundant.
 async function resolveThroughBuilder(input: {
+  /** Whether the caller runs under a build budget (see isBuildInFlight). */
+  budgeted: boolean;
   options: WorkerBuildOptions;
   projectId: string;
   source: DynamicWorkerSource;
@@ -132,6 +134,13 @@ async function resolveThroughBuilder(input: {
   const store = new KvWorkerBuildArtifactStore(env.WORKER_BUILD_CACHE);
   const cached = await store.get(buildKey);
   if (cached !== null) return memoizeArtifact(cached);
+
+  // A budgeted caller (the building-page lane) answers "still building" from
+  // the in-flight marker instead of piling a duplicate full build onto a
+  // running one — the refresh loop otherwise multiplies cold builds per tab.
+  if (input.budgeted && (await store.isBuildInFlight(buildKey))) {
+    throw new WorkerBuildInProgressError("This worker is still building.");
+  }
 
   // Cache miss: one RPC to the builder worker — the only script carrying the
   // bundler toolchain. The file snapshot is resolved HERE and passed by value
@@ -269,22 +278,20 @@ async function resolveFileSource({
 export function loadResolvedWorker({
   bindings,
   globalOutbound,
-  loader,
   projectId,
   ref,
   resolved,
-  workerScopeKey,
+  scopePath,
 }: {
   bindings: WorkerBindings;
   globalOutbound: Fetcher;
-  loader: WorkerLoader;
   projectId: string;
   ref: DynamicWorkerRef;
   resolved: ResolvedWorkerSource;
-  workerScopeKey: string;
+  scopePath: string;
 }): WorkerStub {
   // The Worker Loader cache must separate all runtime-relevant dimensions. In
-  // particular `workerScopeKey` prevents a worker loaded for an agent path from
+  // particular `scopePath` prevents a worker loaded for an agent path from
   // reusing a project-root `env.ITX` binding, even if the module bytes match.
   const exportKey =
     ref.type === "stateless"
@@ -293,18 +300,19 @@ export function loadResolvedWorker({
   const cacheKey = [
     "worker-loader",
     // The hosting worker's own name. Loader caches are shared across parent
-    // workers when they run in one workerd (local dev), and a cached isolate
-    // only works for the parent whose loopback stubs it was created with —
-    // a foreign hit fails as an opaque "internal error" (#1614).
+    // workers when they run in one workerd (vitest-pool-workers; a future
+    // second LOADER holder), and a cached isolate only works for the parent
+    // whose loopback stubs it was created with — a foreign hit fails as an
+    // opaque "internal error" (#1614).
     env.WORKER_SELF,
     projectId,
     ref.path,
-    workerScopeKey,
+    scopePath,
     ref.type,
     exportKey,
     resolved.cacheKey,
   ].join(":");
-  return loader.get(cacheKey, () => ({
+  return env.LOADER.get(cacheKey, () => ({
     compatibilityDate: WORKER_COMPATIBILITY_DATE,
     compatibilityFlags: WORKER_COMPATIBILITY_FLAGS,
     env: bindings,

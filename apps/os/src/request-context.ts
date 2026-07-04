@@ -20,7 +20,7 @@ export interface RequestContext {
   log: SharedRequestLogger;
   rawRequest?: Request;
   /** `ExecutionContext.waitUntil`, for work that should outlive the response. */
-  waitUntil?: (promise: Promise<unknown>) => void;
+  waitUntil: (promise: Promise<unknown>) => void;
   // Set by the iterate auth request middleware (src/auth/middleware.ts).
   principal?: Principal | null;
   iterateAuthSession?: AuthenticatedSession | null;

@@ -132,7 +132,11 @@ describe("worker builds", () => {
 
         // Call capture only exists in local mode; deployed runs use the
         // deployment's own slack fixture and assert by response body above.
-        if (mock.calls.length > 0) {
+        // Locally the assertion is unconditional — an empty capture would
+        // mean the worker never reached this mock (e.g. a stale artifact
+        // still pointing at old slack config), the exact regression the
+        // capture exists to catch.
+        if (mock.local) {
           expect(mock.calls).toEqual(expect.arrayContaining(["chat.postMessage", "users.list"]));
         }
       } finally {

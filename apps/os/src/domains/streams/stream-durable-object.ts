@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { Env } from "../../env.ts";
 import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { dynamicWorkerRunnerForScope } from "../workers/worker-runner.ts";
+import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import type {
   ProcessorRuntimeState,
   Stream,
@@ -701,7 +701,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
     // The wake runs in the worker ref's own itx scope, carrying only
     // serializable data.
-    await dynamicWorkerRunnerForScope({
+    await new DynamicWorkerRunner({
       exports: this.ctx.exports,
       projectId: this.name.projectId,
       scopePath: workerRef.path,

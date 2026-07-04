@@ -76,6 +76,21 @@ export function envShapedVars(env: DeployedEnv) {
 
 const ENV_SHAPED_KEYS = Object.keys(envShapedVars(envs.prd));
 
+// One compatibility date for the os worker AND the builder sidecar — a bump
+// that misses one would be silent drift. (Deliberately distinct from
+// WORKER_COMPATIBILITY_DATE in worker-loader.ts: dynamic-worker compat is
+// hashed into build keys and moves on its own schedule.)
+const COMPATIBILITY_DATE = "2026-06-17";
+
+// The os worker (reader) and the builder (writer) must name the same
+// miniflare namespace in local dev or cache reads never see builds.
+const LOCAL_DEV_BUILD_CACHE_ID = "local-dev-worker-build-cache";
+
+/** The builder sidecar's worker name, derived — never spelled out in envs.ts. */
+function builderWorkerName(osWorkerName: string) {
+  return `${osWorkerName}-builder`;
+}
+
 const DO_CLASSES = {
   AGENT: "AgentDurableObject",
   CAPABILITY_HOST: "CapabilityHostDurableObject",
@@ -115,7 +130,7 @@ function workerBindings(input: {
       },
       {
         binding: "WORKER_BUILD_CACHE",
-        id: input.workerBuildCacheKvId ?? "local-dev-worker-build-cache",
+        id: input.workerBuildCacheKvId ?? LOCAL_DEV_BUILD_CACHE_ID,
       },
     ],
     services: [
@@ -190,16 +205,11 @@ function envBlock(env: DeployedEnv) {
   };
 }
 
-/** The builder sidecar's worker name, derived — never spelled out in envs.ts. */
-function builderWorkerName(osWorkerName: string) {
-  return `${osWorkerName}-builder`;
-}
-
 const config = {
   $schema: "node_modules/wrangler/config-schema.json",
   name: "os-dev",
   main: "./src/worker.ts",
-  compatibility_date: "2026-06-17",
+  compatibility_date: COMPATIBILITY_DATE,
   // nodejs_compat: @cloudflare/shell (repo git) and the dynamic worker
   // loader need Node APIs. global_fetch_strictly_public: same-zone
   // subrequests (auth worker, worker-hosted e2e fixtures through project
@@ -242,9 +252,9 @@ const builderConfig = {
   $schema: "node_modules/wrangler/config-schema.json",
   name: "os-dev-builder",
   main: "./src/builder.ts",
-  compatibility_date: "2026-06-17",
+  compatibility_date: COMPATIBILITY_DATE,
   compatibility_flags: ["nodejs_compat"],
-  kv_namespaces: [{ binding: "WORKER_BUILD_CACHE", id: "local-dev-worker-build-cache" }],
+  kv_namespaces: [{ binding: "WORKER_BUILD_CACHE", id: LOCAL_DEV_BUILD_CACHE_ID }],
   observability: OBSERVABILITY,
   env: Object.fromEntries(Object.entries(envs).map(([name, env]) => [name, builderEnvBlock(env)])),
 };

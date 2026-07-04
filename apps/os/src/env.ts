@@ -19,10 +19,10 @@ export interface Env {
   ARTIFACTS: Artifacts;
   ARTIFACTS_ACCOUNT_ID: string;
   ARTIFACTS_NAMESPACE: string;
-  /** Worker Loader: hosts every dynamic worker isolate. Construct runners
-   * through dynamicWorkerRunnerForScope (domains/workers/worker-runner.ts) —
-   * that factory is where a dynamic isolate gets its scoped ITX binding and
-   * egress fetcher. */
+  /** Worker Loader: hosts every dynamic worker isolate. Reach it through
+   * DynamicWorkerRunner (domains/workers/worker-runner.ts) — its constructor
+   * is where a dynamic isolate gets its scoped ITX binding and egress
+   * fetcher. */
   LOADER: WorkerLoader;
   /** Slug -> project id (+ metadata) cache in front of the auth worker's
    * project directory (project-directory.ts). */

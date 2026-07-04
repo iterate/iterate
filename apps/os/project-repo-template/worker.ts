@@ -129,11 +129,4 @@ export default class ProjectWorker extends WorkerEntrypoint<ProjectWorkerEnv> {
       "fetch";
     return client;
   }
-
-  async testFetch(input: { headerValue: string; url: string }): Promise<unknown> {
-    const response = await fetch(input.url, {
-      headers: { "x-itx-egress-proof": input.headerValue },
-    });
-    return await response.json();
-  }
 }
