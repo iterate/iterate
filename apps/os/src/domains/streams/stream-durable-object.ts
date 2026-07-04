@@ -3,12 +3,6 @@ import { z } from "zod";
 import type { Env } from "../../env.ts";
 import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import {
-  itxEntrypointBinding,
-  itxEntrypointProps,
-  itxEntrypointScopeCacheKey,
-} from "../itx/utils.ts";
-import { projectEgressFetcher } from "../projects/utils.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import type {
   ProcessorRuntimeState,
@@ -705,18 +699,13 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (this.name.projectId === null) {
       throw new Error("configured worker subscribers require a project-scoped stream");
     }
-    const itxScope = itxEntrypointProps({
-      path: workerRef.path,
-      projectId: this.name.projectId,
-    });
+    // The wake runs in the worker ref's own itx scope, carrying only
+    // serializable data.
     await new DynamicWorkerRunner({
-      bindings: {
-        ITX: itxEntrypointBinding(this.ctx.exports, itxScope),
-      },
-      globalOutbound: projectEgressFetcher(this.ctx.exports, this.name.projectId),
-      loader: this.env.LOADER,
+      exports: this.ctx.exports,
       projectId: this.name.projectId,
-      workerScopeKey: itxEntrypointScopeCacheKey(itxScope),
+      scopePath: workerRef.path,
+      waitUntil: (promise) => this.ctx.waitUntil(promise),
     }).invokeCapability({
       args: [request],
       path: ["wakeStreamSubscriber"],

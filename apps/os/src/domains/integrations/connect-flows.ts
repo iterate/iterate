@@ -15,8 +15,8 @@
 //   - Google tokens:  AES-GCM ciphertext events on
 //                     `/integrations/google/{connection}` (google-tokens.ts).
 //
-// These functions run in itx workers (they need SECRET_ENCRYPTION_KEY and
-// the DO bindings). The app worker's /api/integrations/* routes reach them
+// These functions run with the itx bindings (they need SECRET_ENCRYPTION_KEY and
+// the DO bindings). The dashboard's /api/integrations/* routes reach them
 // through the itx surface (rpc-targets.ts).
 
 import type {
@@ -178,7 +178,7 @@ export async function startOAuthFlow(input: {
 }
 
 // ---------------------------------------------------------------------------
-// OAuth completion (called from the app worker's callback routes)
+// OAuth completion (called from the dashboard's callback routes)
 // ---------------------------------------------------------------------------
 
 /**

@@ -1,7 +1,9 @@
 ---
-status: todo
+status: done
 size: medium
 ---
+
+> Done — captun opt-in is documented in docs/dev-environments.md (Tunnels and webhooks); the .alchemy/dev-server.json path below is dead (now .dev-server/dev-server.json).
 
 # Local dev public callback tunnels
 

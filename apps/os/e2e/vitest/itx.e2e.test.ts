@@ -171,6 +171,46 @@ class PathFunctionTarget extends RpcTarget {
   }
 }
 
+/**
+ * Inline plain-JavaScript worker source with bundling off — the loader-ready
+ * fast path. Tests that exercise the full build pipeline (TypeScript,
+ * multi-file imports, npm dependencies) construct their sources explicitly.
+ */
+function inlineJsSource(entryPoint: string, files: Record<string, string>) {
+  return {
+    files: { files, type: "inline" as const },
+    options: { bundle: false as const, entryPoint },
+  };
+}
+
+/**
+ * A throwaway inline dynamic worker whose bare `fetch()` proves the egress
+ * path (dynamic workers' global fetch rides project egress, secret
+ * substitution included) — the probe is the TEST's worker, not a method on
+ * the seeded template.
+ */
+function egressProbeWorker(project: { workers: { get(ref: DynamicWorkerRef): unknown } }) {
+  return project.workers.get({
+    path: "/",
+    source: inlineJsSource("probe.js", {
+      "probe.js": `
+        import { WorkerEntrypoint } from "cloudflare:workers";
+        export default class extends WorkerEntrypoint {
+          async probeFetch(input) {
+            const response = await fetch(input.url, {
+              headers: { "x-itx-egress-proof": input.headerValue },
+            });
+            return await response.json();
+          }
+        }
+      `,
+    }),
+    type: "stateless",
+  }) as unknown as {
+    probeFetch(input: { headerValue: string; url: string }): Promise<unknown>;
+  } & Disposable;
+}
+
 function fencedAgentScript(code: string): string {
   return ["The faux LLM produced this codemode block.", "```js", code.trim(), "```"].join("\n");
 }
@@ -448,7 +488,8 @@ describe("itx", () => {
       expect(explicitResponse.status).toBe(200);
       expect(echoedEgressProofHeader(await explicitResponse.json())).toBe(expected);
 
-      const workerBody = await project.worker.testFetch({
+      using probe = egressProbeWorker(project);
+      const workerBody = await probe.probeFetch({
         headerValue: secretReference,
         url: echo.url,
       });
@@ -586,7 +627,8 @@ describe("itx", () => {
         url: echo.url,
       });
 
-      const workerBody = await project.worker.testFetch({
+      using probe = egressProbeWorker(project);
+      const workerBody = await probe.probeFetch({
         headerValue: secretReference,
         url: echo.url,
       });
@@ -878,29 +920,25 @@ describe("itx", () => {
     const workerRef = {
       entrypoint: "Worker",
       path: "/",
-      source: {
-        mainModule: "worker.js",
-        modules: {
-          "worker.js": `
-            import { WorkerEntrypoint } from "cloudflare:workers";
+      source: inlineJsSource("worker.js", {
+        "worker.js": `
+          import { WorkerEntrypoint } from "cloudflare:workers";
 
-            export class Worker extends WorkerEntrypoint {
-              echo(input) {
-                return { input, via: "expression-worker" };
-              }
-
-              addFunction() {
-                return (left, right) => left + right;
-              }
-
-              invokeCapability({ args, path }) {
-                return { args, path, via: "flattened-expression-worker" };
-              }
+          export class Worker extends WorkerEntrypoint {
+            echo(input) {
+              return { input, via: "expression-worker" };
             }
-          `,
-        },
-        type: "inline",
-      },
+
+            addFunction() {
+              return (left, right) => left + right;
+            }
+
+            invokeCapability({ args, path }) {
+              return { args, path, via: "flattened-expression-worker" };
+            }
+          }
+        `,
+      }),
       type: "stateless",
     } satisfies DynamicWorkerRef;
 
@@ -1116,7 +1154,7 @@ describe("itx", () => {
     const commit = await project.repo.commitFiles({
       changes: [
         {
-          path: "worker.js",
+          path: "worker.ts",
           content: `
             import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 
@@ -1161,7 +1199,7 @@ describe("itx", () => {
     });
     expect(commit).toMatchObject({
       branch: "main",
-      changedPaths: ["worker.js"],
+      changedPaths: ["worker.ts"],
       noChanges: false,
     });
     expect(commit.commitOid).toMatch(/^[0-9a-f]{40}$/);
@@ -1174,9 +1212,8 @@ describe("itx", () => {
     using explicitWorker = project.workers.get({
       path: "/",
       source: {
-        repoPath: "/",
-        sourcePath: "worker.js",
-        type: "repo",
+        files: { repoPath: "/", type: "repo" },
+        options: { entryPoint: "worker.ts" },
       },
       type: "stateless",
     }) as unknown as {
@@ -1192,9 +1229,8 @@ describe("itx", () => {
       durableWorkerKey: `direct-db-${crypto.randomUUID()}`,
       path: "/",
       source: {
-        repoPath: "/",
-        sourcePath: "worker.js",
-        type: "repo",
+        files: { repoPath: "/", type: "repo" },
+        options: { entryPoint: "worker.ts" },
       },
       type: "stateful",
     }) as unknown as {
@@ -1211,25 +1247,21 @@ describe("itx", () => {
           {
             entrypoint: "ProbeEntrypoint",
             path: "/",
-            source: {
-              mainModule: "probe.js",
-              modules: {
-                "probe.js": `
-                  import { WorkerEntrypoint } from "cloudflare:workers";
+            source: inlineJsSource("probe.js", {
+              "probe.js": `
+                import { WorkerEntrypoint } from "cloudflare:workers";
 
-                  export class ProbeEntrypoint extends WorkerEntrypoint {
-                    async inspect() {
-                      const project = await this.env.ITX.get();
-                      const repo = await project.repo;
-                      return {
-                        repo: await repo.whoami(),
-                      };
-                    }
+                export class ProbeEntrypoint extends WorkerEntrypoint {
+                  async inspect() {
+                    const project = await this.env.ITX.get();
+                    const repo = await project.repo;
+                    return {
+                      repo: await repo.whoami(),
+                    };
                   }
-                `,
-              },
-              type: "inline",
-            },
+                }
+              `,
+            }),
             type: "stateless",
           },
         ],
@@ -1250,9 +1282,8 @@ describe("itx", () => {
           {
             path: "/",
             source: {
-              repoPath: "/",
-              sourcePath: "worker.js",
-              type: "repo",
+              files: { repoPath: "/", type: "repo" },
+              options: { entryPoint: "worker.ts" },
             },
             type: "stateless",
           },
@@ -1277,9 +1308,8 @@ describe("itx", () => {
             durableWorkerKey: `counter-facet-${crypto.randomUUID()}`,
             path: "/",
             source: {
-              repoPath: "/",
-              sourcePath: "worker.js",
-              type: "repo",
+              files: { repoPath: "/", type: "repo" },
+              options: { entryPoint: "worker.ts" },
             },
             type: "stateful",
           },
@@ -1303,9 +1333,8 @@ describe("itx", () => {
             durableWorkerKey: `mounted-db-${crypto.randomUUID()}`,
             path: "/",
             source: {
-              repoPath: "/",
-              sourcePath: "worker.js",
-              type: "repo",
+              files: { repoPath: "/", type: "repo" },
+              options: { entryPoint: "worker.ts" },
             },
             type: "stateful",
           },
@@ -1322,24 +1351,26 @@ describe("itx", () => {
     expect(await project.db.sql("SELECT value FROM records")).toEqual([{ value: "mounted" }]);
   });
 
-  test("repo worker source projection is cleared when the main worker file is deleted", async () => {
+  test("deleting the main worker file makes the next project worker build fail", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
       type: "admin-secret",
       secret: adminSecret(),
     });
 
-    using project = itx.projects.create({ slug: "deleted-worker-source-projection" });
+    using project = itx.projects.create({ slug: "deleted-worker-source" });
     // The seeded root worker serves a static homepage; this warm-up only needs
-    // proof the seeded worker.js is live before we delete it.
+    // proof the seeded worker.ts is live before we delete it.
     const warmResponse = await project.worker.fetch(new Request("https://example.com/warm"));
     expect(await warmResponse.text()).toContain("Hello from your Iterate project worker");
 
     await project.repo.commitFiles({
-      changes: [{ delete: true, path: "worker.js" }],
+      changes: [{ delete: true, path: "worker.ts" }],
       message: "Delete default project worker",
     });
 
+    // The commit moved the branch head, so the next use resolves a new build
+    // key, and that build has no entry point to bundle.
     await expect(project.worker.fetch(new Request("https://example.com/warm"))).rejects.toThrow();
   });
 
@@ -1353,9 +1384,10 @@ describe("itx", () => {
     using project = itx.projects.create({ slug: `worker-flatten-${marker}` });
 
     const source = {
-      mainModule: "router.js",
-      modules: {
-        "router.js": `
+      files: {
+        type: "inline",
+        files: {
+          "router.js": `
           import { DurableObject, RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 
           class ToolsTarget extends RpcTarget {
@@ -1395,8 +1427,9 @@ describe("itx", () => {
             }
           }
         `,
+        },
       },
-      type: "inline",
+      options: { bundle: false, entryPoint: "router.js" },
     } as const;
 
     using _statelessRouterProvision = await project.provideCapability({
@@ -1474,9 +1507,10 @@ describe("itx", () => {
     };
 
     const source = {
-      mainModule: "returned-rpc-target.js",
-      modules: {
-        "returned-rpc-target.js": `
+      files: {
+        type: "inline",
+        files: {
+          "returned-rpc-target.js": `
           import { DurableObject, RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 
           class ChildTarget extends RpcTarget {
@@ -1525,8 +1559,9 @@ describe("itx", () => {
             }
           }
         `,
+        },
       },
-      type: "inline",
+      options: { bundle: false, entryPoint: "returned-rpc-target.js" },
     } as const;
 
     using statelessWorker = project.workers.get({
@@ -1602,7 +1637,7 @@ describe("itx", () => {
     await project.repo.commitFiles({
       changes: [
         {
-          path: "worker.js",
+          path: "worker.ts",
           content: `
             import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 
@@ -1646,71 +1681,62 @@ describe("itx", () => {
     });
 
     const repoWorkerSource = {
-      repoPath: "/",
-      sourcePath: "worker.js",
-      type: "repo",
+      files: { repoPath: "/", type: "repo" },
+      options: { entryPoint: "worker.ts" },
     } as const;
     const inlineProjectStateless: DynamicWorkerRef = {
       entrypoint: "InlineProjectEntrypoint",
       path: "/",
-      source: {
-        mainModule: "inline-project.js",
-        modules: {
-          "inline-project.js": `
-            import { WorkerEntrypoint } from "cloudflare:workers";
+      source: inlineJsSource("inline-project.js", {
+        "inline-project.js": `
+          import { WorkerEntrypoint } from "cloudflare:workers";
 
-            export class InlineProjectEntrypoint extends WorkerEntrypoint {
-              async describeScope() {
-                const project = await this.env.ITX.get();
-                const description = await project.__describe();
-                return {
-                  projectId: description.projectId,
-                  via: "inline-project-stateless",
-                };
-              }
-
-              async callRepoCounter(label) {
-                const project = await this.env.ITX.get();
-                return await project.repoCounter.increment(label);
-              }
+          export class InlineProjectEntrypoint extends WorkerEntrypoint {
+            async describeScope() {
+              const project = await this.env.ITX.get();
+              const description = await project.__describe();
+              return {
+                projectId: description.projectId,
+                via: "inline-project-stateless",
+              };
             }
-          `,
-        },
-        type: "inline",
-      },
+
+            async callRepoCounter(label) {
+              const project = await this.env.ITX.get();
+              return await project.repoCounter.increment(label);
+            }
+          }
+        `,
+      }),
       type: "stateless",
     };
     const inlineAgentStateful: DynamicWorkerRef = {
       className: "InlineAgentCounterDurableObject",
       durableWorkerKey: `inline-agent-counter-${crypto.randomUUID()}`,
       path: agentPath,
-      source: {
-        mainModule: "inline-agent-counter.js",
-        modules: {
-          "inline-agent-counter.js": `
-            import { DurableObject } from "cloudflare:workers";
+      source: inlineJsSource("inline-agent-counter.js", {
+        "inline-agent-counter.js": `
+          import { DurableObject } from "cloudflare:workers";
 
-            export class InlineAgentCounterDurableObject extends DurableObject {
-              async increment(label) {
-                const count = ((this.ctx.storage.kv.get("count")) ?? 0) + 1;
-                this.ctx.storage.kv.put("count", count);
-                const itx = await this.env.ITX.get();
-                return {
-                  count,
-                  label,
-                  whoami: (await itx.agent.__describe()).whoami,
-                };
-              }
-
-              async callRepoAgent(label) {
-                const itx = await this.env.ITX.get();
-                return await itx.agent.repoAgent.echo(label);
-              }
+          export class InlineAgentCounterDurableObject extends DurableObject {
+            async increment(label) {
+              const count = ((this.ctx.storage.kv.get("count")) ?? 0) + 1;
+              this.ctx.storage.kv.put("count", count);
+              const itx = await this.env.ITX.get();
+              return {
+                count,
+                label,
+                whoami: (await itx.agent.__describe()).whoami,
+              };
             }
-          `,
-        },
-        type: "inline",
-      },
+
+            async callRepoAgent(label) {
+              const itx = await this.env.ITX.get();
+              return await itx.agent.repoAgent.echo(label);
+            }
+          }
+        `,
+      }),
       type: "stateful",
     };
 
@@ -1959,26 +1985,22 @@ describe("itx", () => {
           {
             entrypoint: "AgentProbeEntrypoint",
             path: agentPath,
-            source: {
-              mainModule: "agent-probe.js",
-              modules: {
-                "agent-probe.js": `
-                  import { WorkerEntrypoint } from "cloudflare:workers";
+            source: inlineJsSource("agent-probe.js", {
+              "agent-probe.js": `
+                import { WorkerEntrypoint } from "cloudflare:workers";
 
-                  export class AgentProbeEntrypoint extends WorkerEntrypoint {
-                    async inspect(input) {
-                      const itx = await this.env.ITX.get();
-                      return {
-                        input,
-                        projectId: ${JSON.stringify(projectId)},
-                        whoami: (await itx.agent.__describe()).whoami,
-                      };
-                    }
+                export class AgentProbeEntrypoint extends WorkerEntrypoint {
+                  async inspect(input) {
+                    const itx = await this.env.ITX.get();
+                    return {
+                      input,
+                      projectId: ${JSON.stringify(projectId)},
+                      whoami: (await itx.agent.__describe()).whoami,
+                    };
                   }
-                `,
-              },
-              type: "inline",
-            },
+                }
+              `,
+            }),
             type: "stateless",
           },
         ],
@@ -1998,9 +2020,8 @@ describe("itx", () => {
             durableWorkerKey,
             path: agentPath,
             source: {
-              repoPath: "/",
-              sourcePath: "apps/counter/worker.js",
-              type: "repo",
+              files: { include: ["apps/counter/**"], repoPath: "/", type: "repo" },
+              options: { entryPoint: "apps/counter/worker.ts" },
             },
             type: "stateful",
           },
@@ -2077,28 +2098,24 @@ describe("itx", () => {
     const scopeProbeWorkerRef = (path: string) => ({
       entrypoint: "ScopeProbeEntrypoint",
       path,
-      source: {
-        mainModule: "scope-probe.js",
-        modules: {
-          "scope-probe.js": `
-            import { WorkerEntrypoint } from "cloudflare:workers";
+      source: inlineJsSource("scope-probe.js", {
+        "scope-probe.js": `
+          import { WorkerEntrypoint } from "cloudflare:workers";
 
-            export class ScopeProbeEntrypoint extends WorkerEntrypoint {
-              async projectScope() {
-                const itx = await this.env.ITX.get();
-                const description = await itx.__describe();
-                return { kind: "project", projectId: description.projectId };
-              }
-
-              async agentScope() {
-                const itx = await this.env.ITX.get();
-                return { kind: "agent", whoami: (await itx.agent.__describe()).whoami };
-              }
+          export class ScopeProbeEntrypoint extends WorkerEntrypoint {
+            async projectScope() {
+              const itx = await this.env.ITX.get();
+              const description = await itx.__describe();
+              return { kind: "project", projectId: description.projectId };
             }
-          `,
-        },
-        type: "inline" as const,
-      },
+
+            async agentScope() {
+              const itx = await this.env.ITX.get();
+              return { kind: "agent", whoami: (await itx.agent.__describe()).whoami };
+            }
+          }
+        `,
+      }),
       type: "stateless" as const,
     });
 
@@ -2179,7 +2196,7 @@ describe("itx", () => {
     await project.repo.commitFiles({
       changes: [
         {
-          path: "worker.js",
+          path: "worker.ts",
           content: `
             import { WorkerEntrypoint } from "cloudflare:workers";
 
@@ -2253,7 +2270,7 @@ describe("itx", () => {
     await project.repo.commitFiles({
       changes: [
         {
-          path: "worker.js",
+          path: "worker.ts",
           content: `
             import { WorkerEntrypoint } from "cloudflare:workers";
 
@@ -2853,7 +2870,10 @@ describe("itx", () => {
     });
 
     using _replacement = await project.provideCapability({
-      expression: ["workers", ["get", { source: { type: "inline" }, type: "stateless" }]],
+      expression: [
+        "workers",
+        ["get", { source: { files: { type: "inline" } }, type: "stateless" }],
+      ],
       path: ["replaceProbe"],
       type: "itx-expression",
     });
