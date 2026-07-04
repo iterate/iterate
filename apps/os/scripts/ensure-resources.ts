@@ -35,21 +35,25 @@ export default async function ensureResources(
   const { env, cf, cfV4 } = ctx;
   console.log(`Ensuring resources for ${ctx.name} in account ${env.cloudflareAccountId}`);
 
-  // ---- KV: project directory -----------------------------------------------
-  const kvTitle = `${env.osWorkerName}-project-directory`;
+  // ---- KV: project directory + worker build cache ---------------------------
   const kvNamespaces = await cf<{ id: string; title: string }[]>(
     `/storage/kv/namespaces?per_page=1000`,
   );
-  let kv = kvNamespaces.find((namespace) => namespace.title === kvTitle);
-  if (!kv) {
-    kv = await cf<{ id: string; title: string }>(`/storage/kv/namespaces`, {
-      method: "POST",
-      body: JSON.stringify({ title: kvTitle }),
-    });
-    console.log(`created KV namespace ${kvTitle} (${kv.id})`);
-  } else {
-    console.log(`KV namespace ${kvTitle} exists (${kv.id})`);
-  }
+  const ensureKv = async (title: string) => {
+    let kv = kvNamespaces.find((namespace) => namespace.title === title);
+    if (!kv) {
+      kv = await cf<{ id: string; title: string }>(`/storage/kv/namespaces`, {
+        method: "POST",
+        body: JSON.stringify({ title }),
+      });
+      console.log(`created KV namespace ${title} (${kv.id})`);
+    } else {
+      console.log(`KV namespace ${title} exists (${kv.id})`);
+    }
+    return kv;
+  };
+  const kv = await ensureKv(`${env.osWorkerName}-project-directory`);
+  const buildCacheKv = await ensureKv(`${env.osWorkerName}-worker-build-cache`);
 
   // ---- D1: auth database ------------------------------------------------------
   // apps/auth's ensure-resources also creates this database; both are
@@ -78,7 +82,11 @@ export default async function ensureResources(
   }
 
   // ---- Reconcile against envs.ts -----------------------------------------------
-  reconcileResources(ctx.name, env.resources, { projectDirectoryKvId: kv.id, authDbId: db.uuid });
+  reconcileResources(ctx.name, env.resources, {
+    projectDirectoryKvId: kv.id,
+    workerBuildCacheKvId: buildCacheKv.id,
+    authDbId: db.uuid,
+  });
 }
 
 if (process.argv[1]?.endsWith("ensure-resources.ts")) {

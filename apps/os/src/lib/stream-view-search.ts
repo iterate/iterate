@@ -22,8 +22,14 @@ export const StreamViewSearch = z.object({
   preset: z.string().optional().catch(undefined),
   /** Feed text search query. */
   q: z.string().optional().catch(undefined),
-  /** Exact event-type filter for the feed-items presets. */
-  type: z.string().optional().catch(undefined),
+  /** Exact event-type filters (any-of) for the feed-items presets. */
+  types: z.array(z.string()).optional().catch(undefined),
+  /** Inclusive lower offset bound for the feed-items presets. */
+  from: z.number().optional().catch(undefined),
+  /** Inclusive upper offset bound for the feed-items presets. */
+  to: z.number().optional().catch(undefined),
+  /** Offset of the raw event open in the inspector side panel. */
+  event: z.number().optional().catch(undefined),
   /** Whether the search/filter row is open. */
   filter: z.boolean().optional().catch(undefined),
   /** Whether the processors sidebar is open. */
@@ -33,6 +39,13 @@ export const StreamViewSearch = z.object({
 });
 
 export type StreamViewSearch = z.infer<typeof StreamViewSearch>;
+
+/** The stream view's two tabs; Feed is the URL-omitted default. */
+export type StreamViewTab = NonNullable<StreamViewSearch["tab"]>;
+
+export function streamViewTab(search: StreamViewSearch): StreamViewTab {
+  return search.tab ?? "feed";
+}
 
 /**
  * Read and patch the stream-view search params. The component is only rendered
@@ -62,4 +75,62 @@ export function useStreamViewSearch(): {
     [navigate],
   );
   return { search, setSearch };
+}
+
+/**
+ * URL state for the stream view's right-edge overlays — the raw-event
+ * inspector and the processors sidebar. They share the same screen edge, so
+ * every setter keeps them mutually exclusive; if a hand-edited URL asks for
+ * both, the inspector wins. Callable from any component under a stream-view
+ * route (header, feed rows, the view itself) — the URL is the single owner,
+ * so there is nothing to prop-drill.
+ */
+export function useStreamViewPanels(): {
+  /** Offset open in the raw-event inspector; null = closed. */
+  inspectedOffset: number | null;
+  /** Subscription key of the processor focused in the sidebar; null = overview. */
+  focusedProcessorKey: string | null;
+  processorsPanelOpen: boolean;
+  inspectEvent: (offset: number) => void;
+  closeInspector: () => void;
+  /** Focusing a processor implies the sidebar is open. */
+  focusProcessor: (subscriptionKey: string) => void;
+  openProcessorsOverview: () => void;
+  closeProcessorsPanel: () => void;
+} {
+  const { search, setSearch } = useStreamViewSearch();
+  const inspectedOffset = search.event ?? null;
+  const focusedProcessorKey = search.processor ?? null;
+  const processorsPanelOpen =
+    inspectedOffset == null && (search.panel === true || focusedProcessorKey != null);
+  // Stable identities: these feed effect deps downstream (e.g. the inspector's
+  // arrow-key listener re-subscribes when its navigate callback changes).
+  const inspectEvent = useCallback(
+    (offset: number) => setSearch({ event: offset, panel: undefined, processor: undefined }),
+    [setSearch],
+  );
+  const closeInspector = useCallback(() => setSearch({ event: undefined }), [setSearch]);
+  const focusProcessor = useCallback(
+    (subscriptionKey: string) =>
+      setSearch({ panel: true, processor: subscriptionKey, event: undefined }),
+    [setSearch],
+  );
+  const openProcessorsOverview = useCallback(
+    () => setSearch({ panel: true, processor: undefined, event: undefined }),
+    [setSearch],
+  );
+  const closeProcessorsPanel = useCallback(
+    () => setSearch({ panel: undefined, processor: undefined }),
+    [setSearch],
+  );
+  return {
+    inspectedOffset,
+    focusedProcessorKey,
+    processorsPanelOpen,
+    inspectEvent,
+    closeInspector,
+    focusProcessor,
+    openProcessorsOverview,
+    closeProcessorsPanel,
+  };
 }

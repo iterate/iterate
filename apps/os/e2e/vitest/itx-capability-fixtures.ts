@@ -1,4 +1,5 @@
 import http from "node:http";
+import { mockSlackResponseBody } from "../../src/e2e-fixtures.ts";
 
 const E2E_FIXTURE_PREFIX = "/__itx_e2e";
 
@@ -61,6 +62,43 @@ function listen(
       });
     });
   });
+}
+
+/**
+ * Slack Web API stand-in for the WORKER-side WebClient (the seeded project
+ * worker's `slack` surface): local runs spin a loopback server; deployed runs
+ * use the deployment's own /__itx_e2e/slack fixture, since a worker on a
+ * preview cannot reach the test runner's 127.0.0.1. `calls` is only populated
+ * in local mode — deployed assertions must go by response bodies.
+ */
+export async function startMockSlackApi(): Promise<
+  FixtureServer & { calls: string[]; local: boolean }
+> {
+  const deployedBaseUrl = deployedFixtureBaseUrl();
+  if (deployedBaseUrl !== null) {
+    const url = new URL(deployedBaseUrl);
+    url.pathname = `${E2E_FIXTURE_PREFIX}/slack/`;
+    return { calls: [], close: async () => {}, local: false, url: url.toString() };
+  }
+
+  const calls: string[] = [];
+  const server = await listen((req, res) => {
+    const method = (req.url ?? "").replace(/^\//, "").split("?")[0] ?? "";
+    calls.push(method);
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk;
+    });
+    req.on("end", () => {
+      const contentType = String(req.headers["content-type"] ?? "");
+      const payload: Record<string, unknown> = contentType.includes("application/json")
+        ? (JSON.parse(body || "{}") as Record<string, unknown>)
+        : Object.fromEntries(new URLSearchParams(body));
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(mockSlackResponseBody(method, payload)));
+    });
+  }, "/");
+  return { ...server, calls, local: true };
 }
 
 export async function startEgressEcho(): Promise<FixtureServer> {

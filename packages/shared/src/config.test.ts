@@ -336,6 +336,7 @@ describe("public config helpers", () => {
         enabled: publicValue(z.boolean()),
       }),
     }),
+    maybePublic: publicValue(z.string()).optional(),
     tags: publicValue(z.array(z.string())),
   });
 
@@ -351,6 +352,7 @@ describe("public config helpers", () => {
           enabled: true,
         },
       },
+      maybePublic: "shown",
       tags: ["alpha", "beta"],
     });
 
@@ -366,6 +368,7 @@ describe("public config helpers", () => {
           enabled: true,
         },
       },
+      maybePublic: "shown",
       tags: ["alpha", "beta"],
     });
     expect(getPublicConfig(config, Config)).toEqual({
@@ -377,6 +380,7 @@ describe("public config helpers", () => {
           enabled: true,
         },
       },
+      maybePublic: "shown",
       tags: ["alpha", "beta"],
     });
   });

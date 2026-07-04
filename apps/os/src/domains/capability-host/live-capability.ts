@@ -100,6 +100,49 @@ export async function replayPath({
   return await Reflect.apply(handler, receiver, args);
 }
 
+/**
+ * Flattened dispatch with member-replay fallback: prefer ONE
+ * `invokeCapability({ path, args })` call (a worker that implements the
+ * dispatcher gets whole dotted paths in a single RPC — how the seeded
+ * template serves `slack.chat.postMessage`), but a worker that simply does
+ * not implement it falls back to member-by-member replay, so committing a
+ * plain WorkerEntrypoint never breaks `project.worker.*`. Only the specific
+ * "method does not exist" failure falls back; errors thrown BY a dispatcher
+ * propagate untouched.
+ */
+export async function invokePreferringFlattenedPath({
+  args,
+  path,
+  target,
+}: {
+  args: unknown[];
+  path: string[];
+  target: unknown;
+}) {
+  try {
+    return await invokeFlattenedPath({ args, path, target });
+  } catch (error) {
+    if (!isMissingInvokeCapabilityError(error)) throw error;
+    return await replayPath({ args, path, target });
+  }
+}
+
+// Workers RPC reports a call to a method the receiver does not have as a
+// TypeError naming the method; local replay reports it as our own "did not
+// resolve to a function". Both mean "this worker has no dispatcher". Message
+// drift in a workerd upgrade fails loudly: the itx e2e "…dynamic worker refs
+// compose" test commits a plain entrypoint worker whose calls only succeed
+// through this fallback.
+function isMissingInvokeCapabilityError(error: unknown): boolean {
+  if (error instanceof TypeError) {
+    return error.message.includes('does not implement the method "invokeCapability"');
+  }
+  return (
+    error instanceof Error &&
+    error.message.includes('capability path "invokeCapability" did not resolve to a function')
+  );
+}
+
 export async function invokeFlattenedPath({
   args,
   path,

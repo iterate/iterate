@@ -56,13 +56,39 @@ export async function run(options: RunOptions) {
   using itx = options.context
     ? connectItx({ ...connection, projectId: options.context })
     : connectItx(connection);
-  const result = await script(itx, vars, RpcTarget);
+  const result = await script(itx, vars, RpcTarget).catch((error: unknown) => {
+    process.stderr.write(formatScriptError(error));
+    process.exit(1);
+  });
 
   // Exactly one JSON document on stdout — scripts and the e2e suite parse it.
   process.stdout.write(`${JSON.stringify(result ?? null, null, 2)}\n`);
 
   // The Cap'n Web WebSocket would otherwise keep the process alive.
   process.exit(0);
+}
+
+/**
+ * Message-first rendering for script failures. Most errors here are remote:
+ * they crossed the Cap'n Web transport, which keeps `message` and enumerable
+ * extras (Slack errors carry `code`/`data`) but replaces the stack with local
+ * transport frames — so the default stack-dump rendering buries the one line
+ * that matters under noise. Lead with the message, then the extras, then the
+ * (local) stack for whoever needs it.
+ */
+export function formatScriptError(error: unknown): string {
+  if (!(error instanceof Error)) return `itx script failed: ${JSON.stringify(error)}\n`;
+  const extras = Object.entries(error)
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) => `  ${key}: ${JSON.stringify(value)}\n`);
+  const stack = error.stack?.startsWith(`${error.name}: ${error.message}`)
+    ? error.stack.slice(`${error.name}: ${error.message}`.length).trimStart()
+    : error.stack;
+  return [
+    `itx script failed: ${error.message}\n`,
+    ...extras,
+    ...(stack ? [`${stack.replace(/^/gm, "  ")}\n`] : []),
+  ].join("");
 }
 
 type ReplOptions = {

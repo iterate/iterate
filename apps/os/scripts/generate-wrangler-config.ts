@@ -5,8 +5,9 @@
  * every dev/build, deploys therefore always see a fresh one, and
  * `pnpm gen:wrangler` refreshes it by hand for ad-hoc wrangler commands.
  *
- * The top-level config is local dev (no routes, containers off so `pnpm dev`
- * never needs Docker); each deployed environment gets an env block expanded
+ * The top-level config is local dev (no routes, containers off by default so
+ * `pnpm dev` never needs Docker — opt in with OS_SANDBOX_CONTAINER_LOCAL_DEV);
+ * each deployed environment gets an env block expanded
  * from its envs.ts entry. Wrangler env blocks do not inherit binding keys,
  * so the shared bindings are spelled out per env by this script — that
  * repetition is exactly why the file is generated instead of hand-written.
@@ -76,6 +77,21 @@ export function envShapedVars(env: DeployedEnv) {
 
 const ENV_SHAPED_KEYS = Object.keys(envShapedVars(envs.prd));
 
+// One compatibility date for the os worker AND the builder sidecar — a bump
+// that misses one would be silent drift. (Deliberately distinct from
+// WORKER_COMPATIBILITY_DATE in worker-loader.ts: dynamic-worker compat is
+// hashed into build keys and moves on its own schedule.)
+const COMPATIBILITY_DATE = "2026-06-17";
+
+// The os worker (reader) and the builder (writer) must name the same
+// miniflare namespace in local dev or cache reads never see builds.
+const LOCAL_DEV_BUILD_CACHE_ID = "local-dev-worker-build-cache";
+
+/** The builder sidecar's worker name, derived — never spelled out in envs.ts. */
+function builderWorkerName(osWorkerName: string) {
+  return `${osWorkerName}-builder`;
+}
+
 const DO_CLASSES = {
   AGENT: "AgentDurableObject",
   CAPABILITY_HOST: "CapabilityHostDurableObject",
@@ -92,6 +108,7 @@ function workerBindings(input: {
   workerName: string;
   accountId: string;
   kvId?: string;
+  workerBuildCacheKvId?: string;
   /** Sandbox container instance cap. Preview slots get extra headroom: e2e
    * churn spins sandboxes faster than they idle out, and a saturated cap
    * 503s every sandbox exec (observed live at 10/10 on preview-3). */
@@ -112,6 +129,17 @@ function workerBindings(input: {
         // Local dev has no real namespace; miniflare only needs a stable id.
         id: input.kvId ?? "local-dev-project-directory",
       },
+      {
+        binding: "WORKER_BUILD_CACHE",
+        id: input.workerBuildCacheKvId ?? LOCAL_DEV_BUILD_CACHE_ID,
+      },
+    ],
+    services: [
+      // The builder sidecar (src/builder.ts, wrangler.builder.jsonc): the one
+      // script carrying the dynamic-worker bundler toolchain (esbuild-wasm,
+      // ~14MB) so the product script stays small. Bound by name — deploy.ts
+      // deploys the builder first.
+      { binding: "BUILDER", service: builderWorkerName(input.workerName) },
     ],
     ai: { binding: "AI" },
     worker_loaders: [{ binding: "LOADER" }],
@@ -166,6 +194,7 @@ function envBlock(env: DeployedEnv) {
     workerName: env.osWorkerName,
     accountId: env.cloudflareAccountId,
     kvId: env.resources.projectDirectoryKvId,
+    workerBuildCacheKvId: env.resources.workerBuildCacheKvId,
     maxContainerInstances: env.osWorkerName === "os-prd" ? 10 : 20,
   });
   return {
@@ -177,11 +206,16 @@ function envBlock(env: DeployedEnv) {
   };
 }
 
-const config = {
+export const config = {
   $schema: "node_modules/wrangler/config-schema.json",
-  name: "os-dev",
+  // The top-level name is BOTH the local dev worker name and the service
+  // identity: wrangler tags every `--env` deploy with `cf:service=<top-level
+  // name>` + `cf:environment=<env>`, so it must be the env-less service name
+  // ("os", not "os-dev") or observability queries grouped by service
+  // mis-bucket every environment under a fake "dev" service.
+  name: "os",
   main: "./src/worker.ts",
-  compatibility_date: "2026-06-17",
+  compatibility_date: COMPATIBILITY_DATE,
   // nodejs_compat: @cloudflare/shell (repo git) and the dynamic worker
   // loader need Node APIs. global_fetch_strictly_public: same-zone
   // subrequests (auth worker, worker-hosted e2e fixtures through project
@@ -191,27 +225,65 @@ const config = {
   // config into the OUTPUT wrangler.json (dist/…) that deploys actually use.
   // SSR + API paths reach the worker because no asset file matches them.
   migrations: [{ tag: "v1", new_sqlite_classes: Object.values(DO_CLASSES) }],
-  // Local dev: containers off so `pnpm dev` never requires Docker — sandbox
-  // Durable Objects fail at their constructor until you opt in by flipping
-  // this (deploys ignore the dev section entirely).
-  dev: { enable_containers: false },
-  ...workerBindings({ workerName: "os-dev", accountId: "" }),
+  // Local dev: containers off by default so `pnpm dev` never requires Docker —
+  // sandbox Durable Objects fail at their constructor until you opt in with
+  // `OS_SANDBOX_CONTAINER_LOCAL_DEV=true pnpm dev`, which builds the sandbox
+  // image on Docker/OrbStack and pairs each container with a proxy-everything
+  // egress sidecar (see docs/sandboxes.md). Deploys ignore the dev section.
+  dev: { enable_containers: process.env.OS_SANDBOX_CONTAINER_LOCAL_DEV === "true" },
+  ...workerBindings({ workerName: "os", accountId: "" }),
   // Local dev loads optional secrets and the env-shaping keys from Doppler
   // too (deployed envs get the latter as generated vars — see envShapedVars).
   secrets: { required: [...REQUIRED_SECRETS, ...OPTIONAL_SECRETS, ...ENV_SHAPED_KEYS] },
   env: Object.fromEntries(Object.entries(envs).map(([name, env]) => [name, envBlock(env)])),
 };
 
+/**
+ * The builder sidecar's config. The builder is deliberately the minimum
+ * possible worker around the bundler toolchain: a pure build function
+ * (files in, artifact out) whose only binding is the artifact-cache KV — no
+ * DOs, no routes, no secrets, no service bindings. Wrangler bundles
+ * src/builder.ts directly (no vite); local dev runs it as an auxiliary
+ * worker in the same workerd (vite.config.ts). Slated for deletion when
+ * builds move into the sandbox container (tasks/os-sandbox-worker-builds.md).
+ */
+function builderEnvBlock(env: DeployedEnv) {
+  return {
+    name: builderWorkerName(env.osWorkerName),
+    account_id: env.cloudflareAccountId,
+    kv_namespaces: [{ binding: "WORKER_BUILD_CACHE", id: env.resources.workerBuildCacheKvId }],
+    observability: OBSERVABILITY,
+  };
+}
+
+export const builderConfig = {
+  $schema: "node_modules/wrangler/config-schema.json",
+  // Env-less service name — see the note on `config.name` above.
+  name: "os-builder",
+  main: "./src/builder.ts",
+  compatibility_date: COMPATIBILITY_DATE,
+  compatibility_flags: ["nodejs_compat"],
+  kv_namespaces: [{ binding: "WORKER_BUILD_CACHE", id: LOCAL_DEV_BUILD_CACHE_ID }],
+  observability: OBSERVABILITY,
+  env: Object.fromEntries(Object.entries(envs).map(([name, env]) => [name, builderEnvBlock(env)])),
+};
+
 /** Write wrangler.jsonc (gitignored) if changed — see writeGeneratedWranglerConfig. */
-export const writeWranglerConfig = () =>
+export const writeWranglerConfig = () => {
   writeGeneratedWranglerConfig({
+    configUrl: new URL("../wrangler.builder.jsonc", import.meta.url),
+    appLabel: "apps/os (builder sidecar)",
+    config: builderConfig,
+  });
+  return writeGeneratedWranglerConfig({
     configUrl: new URL("../wrangler.jsonc", import.meta.url),
     appLabel: "apps/os",
     extraDocs: "apps/os/docs/worker-topology.md",
     config,
   });
+};
 
-/** Regenerate apps/os/wrangler.jsonc from the root envs.ts. */
+/** Regenerate apps/os/wrangler{,.builder}.jsonc from the root envs.ts. */
 export default function generateWranglerConfig() {
   console.log(`Wrote ${writeWranglerConfig()}`);
 }

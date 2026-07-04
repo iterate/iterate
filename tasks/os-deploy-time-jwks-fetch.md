@@ -1,8 +1,10 @@
 ---
-state: todo
+state: done
 priority: medium
 size: small
 ---
+
+> Done — bakeStaticAuthJwks in apps/os/scripts/deploy.ts fetches at deploy time with the Doppler pin taking precedence, as specified (the mechanics below reference the deleted alchemy.run.ts).
 
 # Deploy-time JWKS fetch for OS
 

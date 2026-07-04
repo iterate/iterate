@@ -17,7 +17,7 @@ doppler run --project os --config prd -- pnpm cli itx --help
 
 Swap `prd` for `preview_N` as needed. For local dev, start `pnpm dev` first and
 pass `--base-url http://localhost:<port>` using the port in
-`apps/os/.alchemy/dev-server.json`.
+`apps/os/.dev-server/dev-server.json`.
 
 ## Procedure
 
@@ -92,6 +92,6 @@ cheap and simply accumulate. Use an obviously-disposable slug.
 ## What this validates
 
 - Project, Agent, Stream, and itx Durable Objects wake under the deployed code.
-- Cross-script stream subscriptions deliver events.
+- Stream subscriptions deliver events.
 - A real LLM turn starts, completes, runs the generated itx script, and sends a
   visible web-channel response.

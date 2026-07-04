@@ -120,6 +120,9 @@ bought.
 
 ## Bundling without the workspace (owner decision)
 
+> Shipped (PR #1612), with different details than sketched below: KV
+> `WORKER_BUILD_CACHE` (not R2) and a dedicated builder sidecar worker.
+
 The workspace object plays NO role in building. The repos domain already
 exposes `readFiles`/`listFiles` on the repo DO and the bundler runs on an
 in-memory vfs, so the whole path is: repo DO `readFiles(commit)` →

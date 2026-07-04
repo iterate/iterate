@@ -124,12 +124,12 @@ already resolved (the DO comments promise "commitFiles() is our
 read-your-write boundary").
 
 Fix: the Repo DO records each pushed commit oid per branch
-(`repo-pushed-head:<branch>` in DO storage); read clones and the
-worker-source materialization retry briefly until the snapshot observes at
-least that head. A concurrent writer can legitimately advance HEAD past the
-recorded oid (its commit stacks on top of ours — see flake 15), so after the
-bounded retries the latest snapshot is served regardless; because writes are
-now fast-forward-only, that later snapshot always still contains our commit.
+(`repo-pushed-head:<branch>` in DO storage); read clones retry briefly until the
+snapshot observes at least that head. (After the #1612 repo refactor this guard
+lives in `getFilesSnapshot`, the single clone-and-read pathway every read goes
+through; the old per-projection materialization is gone.) See also flake 15 —
+serialized writes mean the recorded head can only move forward, never behind our
+last push.
 
 ### 7. Local harness must match the CI contract (vitest retry)
 
@@ -253,15 +253,18 @@ not-fast-forward, and isomorphic-git surfaces that as a thrown `GitPushError`.
   force-push reset `main` to a commit that predated our edit, and the
   read-your-write clone (flake 6) faithfully returned the reverted content.
 
-Fix (`repo-durable-object.ts` `mutateArtifactRepo`): stop force-pushing, and
-wrap the whole clone→mutate→commit→push cycle in a compare-and-swap retry loop
-(8 attempts, jittered backoff). On a concurrent-push rejection
-(`isConcurrentPushRejection`, unit-tested in `utils.test.ts`) it re-clones the
-latest HEAD and re-applies the mutation, so concurrent writers **stack** their
-commits and serialize cleanly instead of clobbering each other. Fast-forward-only
-pushes also mean flake 6's read guard can never observe a HEAD that dropped our
-commit. `seedArtifactRepo` keeps its force-push: it runs once at repo creation,
-never concurrently.
+Fix: **already solved on main by the #1612 repo refactor**, which this branch
+merges — so the standalone fix this branch first carried (a compare-and-swap
+retry loop in `mutateArtifactRepo`) was dropped in favour of main's cleaner,
+structural one. The Repo DO now serializes every write through a `#writeChain`
+(`commitFiles`/`edit` each run inside `#serializeWrite`), so two mutations to one
+repo can never be in flight at once: each clones the latest HEAD, commits, and
+fast-forward pushes with **no `force`**. With a single writer at a time there is
+no compare-and-swap race to lose and no force-push to clobber a concurrent commit
+— the two failure modes above are structurally impossible. (`seedArtifactRepo`
+keeps its one force-push: it runs once at repo creation, never concurrently.)
+The diagnosis is retained here because it explains _why_ main dropped `force` and
+serialized writes; the marathon re-verifies it end-to-end.
 
 ### 16. Marathon methodology: an incremental deploy splits the fleet head
 
