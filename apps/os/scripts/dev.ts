@@ -27,8 +27,6 @@ import {
 } from "./lib/dev-server-info.ts";
 
 export type StartOptions = {
-  /** Keep this process attached to the dev server output. */
-  attach?: boolean;
   /** Doppler config to load before starting the dev server. */
   config?: string;
   /** Start in the background and return once the discovery file is published. */
@@ -118,7 +116,12 @@ export function status() {
 export async function attach() {
   const info = readDevServerInfo(APP_ROOT, { requireLive: true });
   if (!info) throw new Error("No live OS dev server recorded for this worktree.");
-  if (!existsSync(LOG_PATH)) throw new Error(`No log file at ${LOG_PATH}.`);
+  if (!existsSync(LOG_PATH)) {
+    throw new Error(
+      `No log file at ${LOG_PATH} — the server was started attached (its logs are in ` +
+        `that terminal). Only detached starts (pnpm dev start --detach) write the log file.`,
+    );
+  }
   console.log(
     `Attached to pid ${info.pid} at ${info.baseUrl} (Ctrl-C detaches; server keeps running)`,
   );
