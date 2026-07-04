@@ -25,27 +25,89 @@ await sandbox.readFile("/workspace/repo/README.md");
 await sandbox.startProcess("bun server.js");
 ```
 
-Lifecycle is the SDK's best-practice default, unchanged: getting a sandbox is
-cheap (no container), the first command boots it, and the SDK's durable
-`sleepAfter` idle alarm (default 10m) stops it again. Durable Object storage
-and identity survive sleep; the container filesystem does not — every start
-re-provisions (the repo clone below), which is what makes a sandbox
+Lifecycle is the SDK's best-practice default: getting a sandbox is cheap (no
+container), the first command boots it, and the SDK's durable `sleepAfter`
+idle alarm (3m) stops it again. Durable Object storage and identity survive
+sleep. The container's own disk does **not** — but `/workspace` does, because
+it is a persistent R2 mount (see below), which is what makes a sandbox
 restorable rather than merely long-lived.
 
 `get(path)` returns the **bare `@cloudflare/sandbox` Durable Object stub** —
 no wrapper. Everything the SDK exposes (exec, files, processes, git, ports,
 tunnels, `destroy()`, …) is callable directly; see the
-[Sandbox SDK docs](https://developers.cloudflare.com/sandbox/). Getting a
-sandbox is cheap; the first command starts the container. Every container
-start also kicks off a clone of the project repo to `/workspace/repo`
-(credentials are embedded in the git remote, so `git pull`/`push` work inside
-the sandbox); `await sandbox.ensureProjectRepo()` before work that depends on
-it. The clone cannot run synchronously inside container startup:
-`onStart` executes inside the container framework's `blockConcurrencyWhile`,
-which has a hard ~30s budget, kills the fresh container on cancellation, and
-input-gates timer events — so nothing in there can even bound itself with a
-deadline. Slow cold starts (first boot under Rosetta locally) would brick the
-sandbox instead of merely delaying the clone.
+[Sandbox SDK docs](https://developers.cloudflare.com/sandbox/).
+
+## Persistent `/workspace` (R2 mount)
+
+Cloudflare container disk is **ephemeral** — there is no persistent volume, and
+a sandbox that sleeps loses its filesystem. The Cloudflare-idiomatic fix is the
+Sandbox SDK's [`mountBucket`](https://developers.cloudflare.com/sandbox/api/storage/):
+mount an R2 bucket as a filesystem path and everything written there lives in
+R2. So `onStart` mounts a per-sandbox **prefix** (`/{projectId}{path}`) of the
+env's `SANDBOX_STORAGE` bucket at `/workspace`, and everything under it — the
+repo checkout, build outputs, anything the agent writes — survives sleep,
+restart, and code redeploys.
+
+- **One bucket per env**, named `${osWorkerName}-sandboxes` (addressed by name
+  like the `ARTIFACTS` namespace, so no per-env id in `envs.ts`).
+  `ensure-resources` creates it (create-only). Each sandbox is isolated to its
+  own prefix, so a container only ever sees its own workspace.
+- **Deployed envs** use the credential-less **R2-binding mount**, which the SDK
+  routes over the very same container egress interception described below — no
+  S3 credentials ever enter the container. Local dev uses miniflare's local R2
+  binding (`localBucket`), selected by the `SANDBOX_STORAGE_MODE` var that
+  `generate-wrangler-config.ts` sets per env.
+- The mount is done in `onStart`, which the SDK runs inside
+  `blockConcurrencyWhile` **before** serving any command — so `/workspace` is
+  always backed by R2 before anything writes to it.
+
+## The project repo is always checked out
+
+Every sandbox has the project repo at `/workspace/repo` (credentials are
+embedded in the git remote, so `git pull`/`push` work inside the sandbox);
+`await sandbox.ensureProjectRepo()` before work that depends on it. Because the
+workspace is persistent, the clone runs **once** and then survives sleep: every
+later start re-mounts and finds the checkout already there (a fast marker
+check), so the repo is always present without re-cloning.
+
+The clone itself cannot run synchronously inside container startup: `onStart`
+executes inside the container framework's `blockConcurrencyWhile`, which has a
+hard ~30s budget, kills the fresh container on cancellation, and input-gates
+timer events — so nothing in there can even bound itself with a deadline. Slow
+cold clones (first boot under Rosetta locally) would brick the sandbox instead
+of merely delaying the checkout. So `onStart` mounts synchronously (fast) and
+kicks the checkout off in the background; `ensureProjectRepo()` is the awaitable
+guarantee.
+
+### Other persistence mechanisms Cloudflare documents, and why not them
+
+Cloudflare offers **no native persistent disk / volume** for containers — all
+container disk is
+[ephemeral](https://developers.cloudflare.com/containers/faq/). The remaining
+options, and why the R2 `mountBucket` above won:
+
+- **[Backup & restore](https://developers.cloudflare.com/sandbox/api/backups/)**
+  (`createBackup`/`restoreBackup`) snapshots a directory to R2. It's excellent
+  for _fast boot_ (restore a warmed workspace in ~2s vs a ~30s clone + install),
+  but it is **snapshot-granular, not continuous**: anything written since the
+  last backup is lost on an unexpected sleep, and the caller must store and
+  manage backup handles. We want a durable filesystem, not point-in-time
+  snapshots, so a live mount fits the requirement directly. (A future
+  optimisation could _add_ restore-from-backup on top of the mount to speed cold
+  boots — orthogonal to durability.)
+- **[Raw R2 FUSE mount](https://developers.cloudflare.com/containers/examples/r2-fuse-mount/)**
+  installed by hand in the Dockerfile (s3fs/tigrisfs) is exactly what
+  `mountBucket` does — but the SDK method does it managed, credential-less, and
+  over the egress interception we already run, so no Dockerfile changes and no
+  S3 credentials inside the container.
+- **Durable Object storage** (`ctx.storage`) is key/value, not a filesystem —
+  right for the small identity record this class already keeps, not a repo
+  checkout or build tree.
+
+Trade-off to know: FUSE-mounted object storage has higher per-op latency than
+local disk (Cloudflare: "not native SSD-like performance"). For an agent
+workspace — a one-time clone then edit/build/run — that is an acceptable price
+for durability.
 
 ## Egress: all sandbox traffic goes through project policy
 
@@ -58,10 +120,9 @@ the same allow/deny/secret-substitution policy as the rest of the project.
 
 Wiring (three points):
 
-- `src/workers/sandbox.ts` re-exports `ContainerProxy` from
-  `@cloudflare/containers` — the SDK dials it via `ctx.exports.ContainerProxy`
-  to route intercepted egress; without the export, interception throws at
-  container start.
+- `src/worker.ts` re-exports `ContainerProxy` from `@cloudflare/sandbox` — the
+  SDK dials it via `ctx.exports.ContainerProxy` to route intercepted egress;
+  without the export, interception throws at container start.
 - `CloudflareSandboxDurableObject` sets `static outbound` (the catch-all egress
   handler) and `interceptHttps = true`. The handler runs in the ContainerProxy
   WorkerEntrypoint, so it only has the container's opaque Durable Object id; it

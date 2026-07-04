@@ -6,8 +6,16 @@ import { projectStub } from "../../projects/egress.ts";
 import { PROJECT_REPO_PATH } from "../../repos/utils.ts";
 import { normalizeSandboxPath } from "../utils.ts";
 
-/** Where the project repo is cloned inside every sandbox container. */
-const SANDBOX_PROJECT_REPO_DIR = "/workspace/repo";
+/**
+ * The persistent workspace root inside every sandbox container. This path is
+ * an R2 mount (see {@link CloudflareSandboxDurableObject}), so everything
+ * under it — including the repo checkout below — survives the container
+ * sleeping. Nothing outside it does: container disk is ephemeral.
+ */
+const SANDBOX_WORKSPACE_DIR = "/workspace";
+
+/** Where the project repo is checked out — on the persistent workspace mount. */
+const SANDBOX_PROJECT_REPO_DIR = `${SANDBOX_WORKSPACE_DIR}/repo`;
 
 // The container-outbound handler runs in the ContainerProxy WorkerEntrypoint,
 // not on a sandbox instance, so it only gets the container's opaque Durable
@@ -41,21 +49,48 @@ const IDENTITY_STORAGE_KEY = "iterate-sandbox-identity";
  * IS the SDK's — `itx.sandboxes.get(path)` returns this object's bare RPC stub
  * (exec, files, processes, ports, gitCheckout, …) with nothing wrapped on top.
  *
- * Lifecycle is the SDK's, unchanged: getting the stub is cheap (no container),
- * the first command boots the container, and the SDK's durable `sleepAfter`
- * idle alarm (default 10m) stops it again. Identity and Durable Object storage
- * survive sleep; the container FILESYSTEM does not — restorability comes from
- * `onStart` re-provisioning (the repo clone below).
+ * Lifecycle is the SDK's: getting the stub is cheap (no container), the first
+ * command boots the container, and the SDK's durable `sleepAfter` idle alarm
+ * (3m, see below) stops it again. Identity and Durable Object storage survive
+ * sleep. The container's own disk does NOT — but `/workspace` does, because it
+ * is a persistent R2 mount (see behavior 1).
  *
- * Two behaviors are added over the stock SDK class:
+ * Three behaviors are added over the stock SDK class:
  *
- * 1. Every container start kicks off a clone of the project repo to
- *    {@link SANDBOX_PROJECT_REPO_DIR}, so code in the sandbox finds the
- *    project's source checked out. Container filesystems are ephemeral — a
- *    restart is a fresh disk — which is why the clone re-runs per start rather
- *    than once at creation; `ensureProjectRepo()` is the awaitable guarantee.
+ * 1. `/workspace` is PERSISTENT. Container disk is ephemeral — Cloudflare
+ *    offers no persistent volume — so the Cloudflare-idiomatic answer is the
+ *    Sandbox SDK's `mountBucket`: `onStart` mounts a per-sandbox prefix
+ *    (`/{projectId}{path}`) of the env's {@link Env.SANDBOX_STORAGE} R2 bucket
+ *    at {@link SANDBOX_WORKSPACE_DIR}, so files written there live in R2 and
+ *    survive sleep/restart. The mount happens in `onStart`, which the SDK runs
+ *    inside `blockConcurrencyWhile` before serving any command — so the mount
+ *    is always in place before anything writes to `/workspace`.
+ *    Docs: https://developers.cloudflare.com/sandbox/api/storage/ and the
+ *    ephemeral-disk statement at
+ *    https://developers.cloudflare.com/containers/faq/.
  *
- * 2. ALL container egress is routed through the project's egress decision
+ *    Alternatives Cloudflare documents, and why not here:
+ *    - `createBackup`/`restoreBackup`
+ *      (https://developers.cloudflare.com/sandbox/api/backups/) snapshot a
+ *      directory to R2. Snapshot-granular, not continuous: work since the last
+ *      backup is lost on an unexpected sleep, and the caller must persist and
+ *      manage backup handles. We want a durable filesystem, not point-in-time
+ *      snapshots, so a live mount is the better fit.
+ *    - A raw R2 FUSE mount wired up in the Dockerfile (s3fs/tigrisfs by hand,
+ *      https://developers.cloudflare.com/containers/examples/r2-fuse-mount/) is
+ *      what `mountBucket` does for us — but managed, credential-less, and over
+ *      the egress interception we already run — so no Dockerfile changes and no
+ *      S3 credentials in the container.
+ *    - Durable Object storage (`ctx.storage`) is key/value, not a filesystem —
+ *      right for small identity/metadata (as used above), not a repo checkout.
+ *
+ * 2. The project repo is ALWAYS checked out at {@link SANDBOX_PROJECT_REPO_DIR}.
+ *    Because the workspace is persistent, the clone runs once and then survives
+ *    sleep; every later start re-mounts and finds the checkout already there.
+ *    `onStart` verifies/kicks off the checkout on every start and
+ *    `ensureProjectRepo()` is the awaitable guarantee for repo-dependent work.
+ *
+ * 3. ALL container egress is routed through the project's egress decision
  *    point, exactly like a dynamic worker's `globalOutbound` — see the
  *    `outbound` handler below. `interceptHttps` extends that to HTTPS by
  *    man-in-the-middling TLS with the Cloudflare-provided container CA (the
@@ -174,20 +209,54 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
 
   override async onStart(): Promise<void> {
     await super.onStart();
-    // `onStart` runs inside the container framework's blockConcurrencyWhile:
-    // a hard ~30s budget whose cancellation resets the Durable Object AND
-    // tears the fresh container down — and timer events are input-gated, so
-    // the work cannot even bound itself with a deadline in here. The clone
-    // therefore only STARTS here and completes in the background; a caller
-    // that needs the repo deterministically awaits `ensureProjectRepo()`.
+    // Mount the persistent workspace FIRST. `onStart` runs inside the
+    // container framework's blockConcurrencyWhile, so it completes before any
+    // command RPC is served — mounting here guarantees `/workspace` is backed
+    // by R2 before anything writes to it (otherwise early writes would land on
+    // the ephemeral disk and vanish, or be hidden when the mount overlays the
+    // path). A fresh container starts unmounted, so this runs every start.
+    await this.#mountWorkspace();
+
+    // The repo checkout lives on the now-persistent workspace, so it is cloned
+    // once and survives sleep; a later start re-mounts and finds it already
+    // there (the marker check below returns fast). The clone can still exceed
+    // onStart's hard ~30s budget on a cold repo — and timer events are
+    // input-gated in here, so it cannot bound itself with a deadline — so it
+    // only STARTS here and finishes in the background; `ensureProjectRepo()`
+    // is the awaitable guarantee for callers that need the repo.
     //
-    // Each start is a fresh container filesystem, so a clone promise from a
+    // Each start is a fresh container process, so a clone promise from a
     // previous container must not satisfy this one.
     this.#repoClone = undefined;
     this.ctx.waitUntil(
       this.#ensureRepoClone().catch((error: unknown) =>
         console.error("sandbox project repo clone failed", error),
       ),
+    );
+  }
+
+  /**
+   * Mount this sandbox's slice of the env's persistent R2 store at
+   * {@link SANDBOX_WORKSPACE_DIR}. Each sandbox gets an isolated `prefix`
+   * (`/{projectId}{path}`) of the one shared bucket, so a container only ever
+   * sees its own workspace and cannot read another sandbox's files.
+   *
+   * Deployed envs use the credential-less R2-binding mount, which the SDK
+   * routes over the SAME container egress interception this class already runs
+   * (see the `outbound` handler) — no S3 credentials ever enter the container.
+   * Local dev uses miniflare's local R2 binding (`localBucket`), since the
+   * FUSE/presigned-URL path is unavailable under `wrangler dev`.
+   *
+   * Mount modes and options:
+   * https://developers.cloudflare.com/sandbox/api/storage/
+   */
+  async #mountWorkspace(): Promise<void> {
+    const { projectId, path } = this.#identity();
+    const prefix = `/${projectId}${path}`;
+    await this.mountBucket(
+      "SANDBOX_STORAGE",
+      SANDBOX_WORKSPACE_DIR,
+      this.env.SANDBOX_STORAGE_MODE === "local" ? { localBucket: true, prefix } : { prefix },
     );
   }
 

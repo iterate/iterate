@@ -113,12 +113,18 @@ function workerBindings(input: {
    * churn spins sandboxes faster than they idle out, and a saturated cap
    * 503s every sandbox exec (observed live at 10/10 on preview-3). */
   maxContainerInstances?: number;
+  /** Local dev (the top-level config): sandboxes mount their persistent R2
+   * store through miniflare's local R2 binding rather than the credential-less
+   * egress mount, which needs FUSE/presigned URLs unavailable under
+   * `wrangler dev`. */
+  localDev?: boolean;
 }) {
   return {
     vars: {
       WORKER_SELF: input.workerName,
       ARTIFACTS_ACCOUNT_ID: input.accountId,
       ARTIFACTS_NAMESPACE: `${input.workerName}-repos`,
+      SANDBOX_STORAGE_MODE: input.localDev ? "local" : "r2-egress",
     },
     durable_objects: {
       bindings: Object.entries(DO_CLASSES).map(([name, class_name]) => ({ name, class_name })),
@@ -144,6 +150,11 @@ function workerBindings(input: {
     ai: { binding: "AI" },
     worker_loaders: [{ binding: "LOADER" }],
     artifacts: [{ binding: "ARTIFACTS", namespace: `${input.workerName}-repos` }],
+    // Persistent storage for sandbox workspaces (ensure-resources.ts creates
+    // it; the sandbox DO mounts a per-sandbox prefix at /workspace). Addressed
+    // by name, so — unlike KV/D1 — no per-env id in envs.ts. In local dev
+    // miniflare provides this bucket automatically.
+    r2_buckets: [{ binding: "SANDBOX_STORAGE", bucket_name: `${input.workerName}-sandboxes` }],
     containers: [
       {
         class_name: DO_CLASSES.SANDBOX,
@@ -231,7 +242,7 @@ export const config = {
   // image on Docker/OrbStack and pairs each container with a proxy-everything
   // egress sidecar (see docs/sandboxes.md). Deploys ignore the dev section.
   dev: { enable_containers: process.env.OS_SANDBOX_CONTAINER_LOCAL_DEV === "true" },
-  ...workerBindings({ workerName: "os", accountId: "" }),
+  ...workerBindings({ workerName: "os", accountId: "", localDev: true }),
   // Local dev loads optional secrets and the env-shaping keys from Doppler
   // too (deployed envs get the latter as generated vars — see envShapedVars).
   secrets: { required: [...REQUIRED_SECRETS, ...OPTIONAL_SECRETS, ...ENV_SHAPED_KEYS] },

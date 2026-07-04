@@ -55,6 +55,23 @@ export interface Env {
   SANDBOX: DurableObjectNamespace<
     import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").CloudflareSandboxDurableObject
   >;
+  /**
+   * Persistent storage for sandbox containers. Container disk is ephemeral —
+   * a sandbox that sleeps loses its filesystem — so every sandbox mounts a
+   * prefix of this R2 bucket at `/workspace` (see
+   * CloudflareSandboxDurableObject), making that path durable across
+   * sleep/restart. One bucket per env (`${WORKER_SELF}-sandboxes`); each
+   * sandbox is isolated to its own `/{projectId}{path}` prefix.
+   */
+  SANDBOX_STORAGE: R2Bucket;
+  /**
+   * How sandboxes reach {@link SANDBOX_STORAGE}. Deployed envs use
+   * `"r2-egress"` (a credential-less R2 mount over the container egress
+   * interception we already run); local dev uses `"local"` (miniflare's local
+   * R2 binding, since FUSE/presigned URLs are unavailable under `wrangler
+   * dev`). Set per env by generate-wrangler-config.ts.
+   */
+  SANDBOX_STORAGE_MODE: "r2-egress" | "local";
   SECRET: DurableObjectNamespace<
     import("./domains/secrets/secret-durable-object.ts").SecretDurableObject
   >;
