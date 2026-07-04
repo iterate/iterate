@@ -73,17 +73,28 @@ describe("buildFeedItemsFilter", () => {
 });
 
 describe("feedFiltersActive", () => {
+  const agentPath = "/agents/slack/general";
+
   it("is inactive on the stream's defaults", () => {
-    expect(feedFiltersActive({}, "agent-chat")).toBe(false);
-    expect(feedFiltersActive({ preset: "agent-chat" }, "agent-chat")).toBe(false);
+    expect(feedFiltersActive({}, agentPath)).toBe(false);
+    expect(feedFiltersActive({ preset: "agent-chat" }, agentPath)).toBe(false);
   });
 
   it("signals any deviation, including while the row is closed", () => {
-    expect(feedFiltersActive({ preset: "everything" }, "agent-chat")).toBe(true);
-    expect(feedFiltersActive({ q: "boom" }, "agent-chat")).toBe(true);
-    expect(feedFiltersActive({ types: ["a"] }, "agent-chat")).toBe(true);
-    expect(feedFiltersActive({ from: 1 }, "agent-chat")).toBe(true);
-    expect(feedFiltersActive({ to: 9 }, "agent-chat")).toBe(true);
+    expect(feedFiltersActive({ preset: "everything" }, agentPath)).toBe(true);
+    expect(feedFiltersActive({ q: "boom" }, agentPath)).toBe(true);
+    expect(feedFiltersActive({ types: ["a"] }, agentPath)).toBe(true);
+    expect(feedFiltersActive({ from: 1 }, agentPath)).toBe(true);
+    expect(feedFiltersActive({ to: 9 }, agentPath)).toBe(true);
+  });
+
+  it("judges what the feed renders, not the raw URL", () => {
+    // A stale/unknown preset id falls back to the default preset in the view.
+    expect(feedFiltersActive({ preset: "no-such-preset" }, agentPath)).toBe(false);
+    // Another stream's preset id also resolves to this stream's default.
+    expect(feedFiltersActive({ preset: "secret-events" }, agentPath)).toBe(false);
+    // An empty types array applies no constraint in buildFeedItemsFilter.
+    expect(feedFiltersActive({ types: [] }, agentPath)).toBe(false);
   });
 });
 

@@ -85,8 +85,11 @@ export function RawEventInspectorPanel({
     selectedTimestamp,
     parseTimestamp(nextResult.data[0]?.created_at),
   );
-  const position = asNumber(positionResult.data[0]?.position);
-  const total = asNumber(positionResult.data[0]?.total);
+  // Position is a count of rows at-or-before the offset — meaningless when the
+  // offset itself isn't mirrored (it would claim "event N of N" next to the
+  // not-in-mirror copy below).
+  const position = selected == null ? null : asNumber(positionResult.data[0]?.position);
+  const total = selected == null ? null : asNumber(positionResult.data[0]?.total);
 
   return (
     <aside

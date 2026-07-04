@@ -87,13 +87,18 @@ export function presetsForStream(streamPath: string): StreamFeedPreset[] {
 /**
  * Whether any feed filter deviates from the stream's defaults — drives the
  * "filters are hiding things" dot on the header's filter toggle, which must
- * signal even while the row itself is closed.
+ * signal even while the row itself is closed. Judges what the feed actually
+ * RENDERS, not the raw URL: a stale/unknown preset id falls back to the
+ * default (same resolution as the view), and an empty `types` array applies
+ * no constraint — neither may light the dot.
  */
-export function feedFiltersActive(search: StreamViewSearch, defaultPresetId: string): boolean {
+export function feedFiltersActive(search: StreamViewSearch, streamPath: string): boolean {
+  const presets = presetsForStream(streamPath);
+  const activePreset = presets.find((preset) => preset.id === search.preset) ?? presets[0]!;
   return (
-    (search.preset != null && search.preset !== defaultPresetId) ||
+    activePreset.id !== presets[0]!.id ||
     (search.q ?? "") !== "" ||
-    search.types != null ||
+    (search.types?.length ?? 0) > 0 ||
     search.from != null ||
     search.to != null
   );

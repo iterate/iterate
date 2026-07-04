@@ -26,14 +26,11 @@ const MAX_PRESENCE_AVATARS = 4;
  */
 export function StreamViewHeader({
   agentBusy,
-  defaultPresetId,
   metrics,
   presence,
   streamPath,
 }: {
   agentBusy: boolean;
-  /** The stream's default preset id — filters only "count" as active beyond it. */
-  defaultPresetId: string;
   metrics: RttMetrics;
   presence: readonly AgentUiPresenceEntry[];
   streamPath: string;
@@ -43,7 +40,7 @@ export function StreamViewHeader({
   const toolsOpen = search.filter === true;
   // Signal active filters on the toggle even while the row is closed — a
   // filtered feed with no visible cue reads as missing events.
-  const filtersActive = feedFiltersActive(search, defaultPresetId);
+  const filtersActive = feedFiltersActive(search, streamPath);
 
   return (
     <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pb-1 pt-2.5">
