@@ -655,7 +655,7 @@ class GmailRpcTarget extends RpcTarget implements GmailCapability {
  * and disconnect for slack/google, PLUS the connection-scoped API proxies
  * (`integrations.gmail`, `integrations.slack`) — they live here because they
  * only work through the project's connected accounts. The complete* methods
- * are called by the app worker's OAuth callback routes
+ * are called by the dashboard's OAuth callback routes
  * (/api/integrations/<provider>/callback); their authority is the HMAC-signed
  * OAuth state minted by startOAuthFlow, verified itx-side.
  */

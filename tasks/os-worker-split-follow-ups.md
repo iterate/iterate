@@ -1,9 +1,11 @@
 ---
-state: todo
+state: done
 priority: medium
 size: small
 tags: [os, workers, observability]
 ---
+
+> Obsolete — the per-DO worker split was reversed by PR #1636 (single worker); every follow-up below lost its premise.
 
 # Worker-split follow-ups (small items)
 

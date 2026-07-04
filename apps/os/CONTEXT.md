@@ -4,16 +4,18 @@ OS is an authenticated app where users manage organization-owned projects and ru
 
 ## Language
 
-> **Historical note (itx-v4 cutover, 2026-07):** entries below that describe
-> the legacy stack — the Ingress Route Table machinery, `__null__` Durable
-> Object name encoding, `/api/itx/:projectIdOrSlug` handles, Workspace Durable
-> Objects, `ProjectIngressEntrypoint`, Fetch Callables — refer to DELETED
-> code. The engine (`apps/os/src/`) addresses Durable Objects via
+> **Historical note (itx-v4 cutover 2026-07 + single-worker cutover
+> PR #1636):** entries below that describe the legacy stacks — the Ingress
+> Route Table machinery, `__null__` Durable Object name encoding,
+> `/api/itx/:projectIdOrSlug` handles, Workspace Durable Objects,
+> `ProjectIngressEntrypoint`, Fetch Callables, and the **"OS Ingress
+> Worker" / "OS App Worker" split** (OS now deploys as ONE worker) — refer
+> to DELETED code. The engine (`apps/os/src/`) addresses Durable Objects via
 > `DurableObjectNameCodec` (`{projectId: string | null, path}`), serves one
 > capnweb surface at `/api` (context selection happens via
-> `projects.get(id)` after `authenticate()`), and routes project hosts through
-> `src/ingress.ts` + the api worker. See `apps/os/src/README.md`
-> for current language.
+> `projects.get(id)` after `authenticate()`), and routes everything in
+> `src/worker.ts` via the `src/ingress.ts` decision. See
+> `apps/os/src/README.md` for current language.
 
 ### Product Ownership
 
