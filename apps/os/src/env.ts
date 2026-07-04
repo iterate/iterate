@@ -1,4 +1,5 @@
 import { env as workerEnv } from "cloudflare:workers";
+import type { SendEmailBinding } from "./domains/email/utils.ts";
 
 /**
  * The OS worker's binding contract — the binding names wrangler.jsonc
@@ -28,7 +29,7 @@ export interface Env {
    * wrangler env block including local dev, where miniflare simulates sends
    * (logs + local .eml files) instead of delivering real mail.
    */
-  EMAIL: import("./domains/email/utils.ts").SendEmailBinding;
+  EMAIL: SendEmailBinding;
   SECRET_ENCRYPTION_KEY: string;
 
   AGENT: DurableObjectNamespace<

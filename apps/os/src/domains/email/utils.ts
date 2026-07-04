@@ -24,13 +24,13 @@ export type SendEmailBinding = {
 };
 
 /** One addressable mailbox in the Email Service structured send() shape. */
-export type EmailParty = {
+type EmailParty = {
   email: string;
   name?: string;
 };
 
 /** What `itx.email.send` accepts — see EmailCapability in types.ts for the contract docs. */
-export type SendProjectEmailRequest = {
+type SendProjectEmailRequest = {
   to: string | string[];
   subject: string;
   text?: string;
