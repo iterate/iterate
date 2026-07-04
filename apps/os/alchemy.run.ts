@@ -350,7 +350,13 @@ const sandboxContainer = sandboxContainerEnabled
         dockerfile: "Dockerfile.sandbox",
       },
       instanceType: "lite",
-      maxInstances: 10,
+      // Sized for e2e churn: the preview lanes provision a fresh project (and
+      // sandbox container) per test, and idle containers hold a slot until
+      // sleepAfter (3m, see CloudflareSandboxDurableObject). 10 wedged the
+      // sandbox-exec specs after ~5 back-to-back runs; 40 lite instances give
+      // the lane headroom without meaningful cost (lite instances are billed
+      // on usage, not reservation).
+      maxInstances: 40,
     })
   : sandbox;
 const statefulWorker = DurableObjectNamespace<StatefulWorkerDurableObject>("worker", {

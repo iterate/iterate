@@ -162,6 +162,19 @@ at 30 s — but a cold container boot + repo clone legitimately exceeds that
 spinner cap for examples that declare a budget. Expected latency is not a
 hang.
 
+### 11. Container-instance cap wedges sandbox starts after ~5 runs
+
+With the fixes above, back-to-back full runs complete in ~1 minute — and both
+marathon attempts then failed on exactly run 5, with sandbox-exec consuming
+its entire (now 120 s) budget twice: the container never started. Mechanism:
+every run provisions fresh fixture projects whose sandbox containers idle for
+the SDK-default `sleepAfter = "10m"`, and the sandbox container app is capped
+at `maxInstances: 10` — roughly two sandbox containers per run × 5 runs
+exhausts the cap, and every later start queues until an old container times
+out. Fix: `sleepAfter = "3m"` on the sandbox DO (reclaims capacity ~3× faster;
+idle restart costs one cold boot + clone) and `maxInstances: 40` (lite
+instances bill on usage, not reservation).
+
 ### Observed, not yet fixed
 
 - `packages/mock-http-proxy` unit test `msw-server-adapter.http-parity ›

@@ -31,6 +31,17 @@ const IDENTITY_STORAGE_KEY = "iterate-sandbox-identity";
  */
 export class CloudflareSandboxDurableObject extends Sandbox<Env> {
   /**
+   * Idle containers hold an instance slot until this expires, and the app's
+   * container namespace caps concurrent instances (maxInstances in
+   * alchemy.run.ts). With the SDK default of 10m, e2e churn (a fresh project +
+   * sandbox per test) exhausted the cap in minutes and every later sandbox
+   * start wedged until an old container timed out. 3m keeps interactive
+   * sessions warm across a pause while reclaiming capacity ~3x faster; a
+   * restart after idle costs one container cold boot + repo clone.
+   */
+  override sleepAfter = "3m";
+
+  /**
    * Record who this sandbox is before any other traffic reaches it.
    *
    * Identity normally derives from the Durable Object name, but container
