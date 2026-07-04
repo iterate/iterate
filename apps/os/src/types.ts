@@ -1,15 +1,20 @@
 /**
- * Public ITX capability contract.
+ * Internal ITX capability contract (compile-time only).
  *
- * `/api` — os' one API — gives callers one unauthenticated object.
- * Authentication returns a root catalog, and every object reachable from that
- * catalog is a Cap'n Web / Workers RPC capability. Projects and agents expose
- * stable built-ins (`streams`, `repos`, `workers`, etc.) plus dynamic dotted
- * capabilities mounted on capability hosts (`itx.capabilityHost`,
- * `itx.capabilityHosts.get(path)`). Streams are the durable coordination layer
- * underneath those surfaces: processors, project bootstrap, repo bootstrap,
- * and agent loops all communicate by appending and reducing events.
+ * The PUBLISHED contract is src/itx-api.generated.ts, generated from the
+ * RpcTarget classes in rpc-targets.ts and the zod schemas their signatures
+ * use — docstrings live there now. This module remains the compile-time
+ * interface layer the implementation and its ~60 importers still build
+ * against; as shapes migrate onto zod schemas (see the StreamEvent re-exports
+ * below) and interfaces onto the RpcTargets themselves, it shrinks away.
+ * Do not add docs here that belong on an RpcTarget — they will not reach the
+ * generated file, the REPL, or agents.
  */
+import type {
+  StreamEvent,
+  StreamEventInput,
+  StreamEventSource,
+} from "./domains/streams/schemas.ts";
 
 // -----------------------------------------------------------------------------
 // The four nouns. Keeping them distinct is what makes this system legible:
@@ -723,37 +728,11 @@ export interface CapabilityProvision extends Describable, Disposable {
   revoke(): Promise<void>;
 }
 
-/** Append input before the stream assigns offset and timestamp. */
-export type StreamEventSource = {
-  processor?: {
-    slug: string;
-    version: string;
-  };
-  crossPost?: {
-    ruleId: string;
-    from: {
-      createdAt: string;
-      offset: number;
-      path: string;
-      projectId: string | null;
-      type: string;
-    };
-  };
-};
-
-export type StreamEventInput = {
-  type: string;
-  payload?: Record<string, unknown>;
-  metadata?: Record<string, unknown>;
-  source?: StreamEventSource;
-  idempotencyKey?: string;
-};
-
-/** Durable stream event after commit. */
-export type StreamEvent = StreamEventInput & {
-  createdAt: string;
-  offset: number;
-};
+// The stream event shapes are defined ONCE, as zod schemas, in
+// domains/streams/schemas.ts (imported at the top of this file); these
+// re-exports keep this module's historical import surface working while the
+// rest of it migrates.
+export type { StreamEvent, StreamEventInput, StreamEventSource };
 
 /** Stable identity for one stream subscription connection. */
 export type SubscriptionKey = string;

@@ -17,11 +17,12 @@ export type ItxReplTypeScriptWorker = WorkerShape & {
 export const ITX_TYPES_PATH = "/itx-types.ts";
 
 /**
- * The design-of-record itx surface (`~/types.ts`), verbatim. That file is
- * handwritten and import-free, so its raw source is a valid standalone module
- * for the editor's virtual filesystem — completions and hover docs in the
- * browser REPL come from THE type file, via the same generated embed worker
- * code ships to agents (freshness enforced by types-source.generated.test.ts).
+ * The public itx surface (`~/itx-api.generated.ts`), verbatim. That file is
+ * generated from the RpcTargets and import-free, so its raw source is a valid
+ * standalone module for the editor's virtual filesystem — completions and
+ * hover docs in the browser REPL come from THE type file, via the same
+ * generated embed worker code ships to agents (freshness enforced by
+ * types-source.generated.test.ts).
  */
 export const itxTypesDeclaration: string = ITX_TYPES_SOURCE;
 
@@ -70,7 +71,8 @@ declare global {
   // The design-of-record types, exposed globally so snippets can annotate
   // with them without an import. Shapes live in ./itx-types.ts only.
   type Session = itxTypes.Session;
-  type ProjectRpcTarget = itxTypes.ProjectRpcTarget;
+  type Itx = itxTypes.Itx;
+  type ProjectRpcTarget = itxTypes.Itx;
   type Agent = itxTypes.Agent;
   type AgentChat = itxTypes.AgentChat;
   type Stream = itxTypes.Stream;
@@ -105,7 +107,7 @@ declare global {
    * project itx; the global/admin REPL holds the Session catalog. Awaiting is
    * always allowed: over Cap'n Web every member resolves as a promise.
    */
-  const itx: itxTypes.Session & itxTypes.ProjectRpcTarget;
+  const itx: itxTypes.Session & itxTypes.Itx;
   /**
    * Script parameters — always in scope, so the catalogue examples
    * (src/itx/examples.ts) run unchanged in every runtime. Assign your own

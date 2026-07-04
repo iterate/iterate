@@ -1,14 +1,15 @@
-// Embeds src/types.ts verbatim into a generated module so any bundler target
+// Embeds src/itx-api.generated.ts (the generated public itx surface — see
+// scripts/generate-itx-api.ts) verbatim into a module so any bundler target
 // (worker agent system prompts, the browser REPL's editor types) can ship the
 // itx type surface as a string. Workers bundle with esbuild, which has no
 // raw-import, hence this tiny codegen.
 // Freshness is enforced by src/types-source.generated.test.ts.
 //
-// Regenerate: pnpm generate:itx-types-source
+// Regenerate: pnpm generate:itx-types-source (after pnpm generate:itx-api)
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-const typesPath = fileURLToPath(new URL("../src/types.ts", import.meta.url));
+const typesPath = fileURLToPath(new URL("../src/itx-api.generated.ts", import.meta.url));
 const outPath = fileURLToPath(new URL("../src/types-source.generated.ts", import.meta.url));
 
 const source = readFileSync(typesPath, "utf8");
@@ -20,7 +21,7 @@ writeFileSync(
 // Regenerate with: pnpm generate:itx-types-source
 // Freshness is enforced by types-source.generated.test.ts.
 
-/** src/types.ts, verbatim — the public itx contract as a string. */
+/** src/itx-api.generated.ts, verbatim — the public itx contract as a string. */
 export const ITX_TYPES_SOURCE = \`${escaped}\`;
 `,
 );
