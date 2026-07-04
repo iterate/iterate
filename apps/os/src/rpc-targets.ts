@@ -25,7 +25,7 @@ import {
   rejectBuiltinCollision,
   withInvokeCapabilityFallback,
 } from "./domains/itx/utils.ts";
-import { ITX_TYPES_SOURCE } from "./types-source.generated.ts";
+import ITX_TYPES_SOURCE from "./types.ts?raw";
 import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";

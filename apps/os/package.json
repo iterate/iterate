@@ -18,7 +18,6 @@
     "erase-data": "tsx ./scripts/erase-data.ts",
     "gen:wrangler": "tsx ./scripts/generate-wrangler-config.ts",
     "routes:generate": "tsx ./scripts/generate-route-tree.ts",
-    "generate:itx-types-source": "tsx ./scripts/generate-itx-types-source.ts",
     "routes:check": "tsx ./scripts/generate-route-tree.ts --check",
     "typecheck": "pnpm routes:check && pnpm gen:wrangler && tsc --noEmit",
     "test": "pnpm test:unit",

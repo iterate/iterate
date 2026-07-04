@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ITX_TYPES_SOURCE } from "../../types-source.generated.ts";
+import ITX_TYPES_SOURCE from "../../types.ts?raw";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 
