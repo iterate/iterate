@@ -43,6 +43,10 @@ export function GlobalCommandPalette() {
   // carries `project` in its route context) → the picker dialog's choice
   // (non-project pages).
   const adminStream = useMemo(() => getAdminStreamContext(matches), [matches]);
+  // Under /admin but before a project is chosen (the /admin/streams picker
+  // page), ⌘K must stay in the admin world: picking a project opens that
+  // project's admin explorer instead of dialing the org-scoped app flow.
+  const inAdmin = matches.some((match) => match.routeId.startsWith("/admin"));
   const routeStream = useMemo(() => {
     if (adminStream) return adminStream;
     const streamBreadcrumb = activeStreamBreadcrumb(matches);
@@ -138,7 +142,22 @@ export function GlobalCommandPalette() {
 
   if (activeStream == null || streamNavigator == null) {
     return (
-      <ProjectPickerDialog open={open} onOpenChange={handleOpenChange} onPick={setPickedProject} />
+      <ProjectPickerDialog
+        open={open}
+        onOpenChange={handleOpenChange}
+        onPick={(project) => {
+          if (inAdmin) {
+            handleOpenChange(false);
+            void navigate({
+              to: "/admin/streams/$projectId",
+              params: { projectId: project.id },
+              search: {},
+            });
+            return;
+          }
+          setPickedProject(project);
+        }}
+      />
     );
   }
 
