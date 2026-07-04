@@ -213,6 +213,18 @@ Recreating preview_7's deleted workers surfaced two first-deploy failures:
   if a slot's os worker is ever deleted again, expect this and delete the
   orphaned application before redeploying.
 
+### 14. Vitest wedged at startup for 9+ hours (loop watchdog added)
+
+Round-2 run 14: the Playwright specs passed, then `pnpm e2e --project node`
+printed vitest's header and nothing else for 9h23m. The vitest main process
+sat with an idle event loop (kevent wait), zero CPU, and **no worker
+children** — it hung before running a single test, machine awake the whole
+time (`pmset` clean). Root cause unknown (one occurrence in ~20 runs;
+plausibly a wedge in vitest's startup/fork-pool against this Node version).
+Mitigation: the loop now runs each attempt under a watchdog
+(`RUN_TIMEOUT_SECS`, default 30 min) that kills the run tree and counts it as
+a failure instead of silently freezing the marathon.
+
 ### Observed, not yet fixed
 
 - `packages/mock-http-proxy` unit test `msw-server-adapter.http-parity ›

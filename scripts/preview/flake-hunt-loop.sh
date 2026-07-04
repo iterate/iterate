@@ -27,12 +27,29 @@ fi
 export CI=true
 
 mkdir -p "$LOG_DIR"
+# A healthy full-fleet run takes 1-7 minutes; one marathon run wedged for 9+
+# hours when vitest hung at startup (event loop idle, no workers, nothing to
+# time it out). Kill anything slower than this and count it as a failure.
+RUN_TIMEOUT_SECS="${RUN_TIMEOUT_SECS:-1800}"
+
 for i in $(seq "$START_AT" $((START_AT + RUNS - 1))); do
   log="$LOG_DIR/run-$(printf '%03d' "$i").log"
   started=$(date -u +%H:%M:%S)
   doppler run --project _shared --config prd -- pnpm preview test \
-    --pull-request-number "$PR_NUMBER" >"$log" 2>&1
+    --pull-request-number "$PR_NUMBER" >"$log" 2>&1 &
+  run_pid=$!
+  (
+    sleep "$RUN_TIMEOUT_SECS"
+    echo "run $i: WATCHDOG — killing after ${RUN_TIMEOUT_SECS}s" >>"$log"
+    # The run tree spans doppler -> pnpm -> node children; nuke the group.
+    pkill -TERM -P "$run_pid" 2>/dev/null
+    kill -TERM "$run_pid" 2>/dev/null
+  ) &
+  watchdog_pid=$!
+  wait "$run_pid"
   exit_code=$?
+  kill "$watchdog_pid" 2>/dev/null
+  wait "$watchdog_pid" 2>/dev/null
   finished=$(date -u +%H:%M:%S)
   # `preview test` exits 0 but skips (stale head, no lease) without running
   # anything — a skip must not count as a green run.
