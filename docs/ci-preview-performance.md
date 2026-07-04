@@ -7,7 +7,7 @@ in **~2m30s** end-to-end. This doc explains how, and — more importantly — ho
 to keep it there.
 
 For the mechanics (where the workflows live, how to run them locally, the
-Doppler wiring), see [CI workflows](ci-workflows.md). This doc is about speed
+Doppler wiring), see [Depot CI](depot-ci.md). This doc is about speed
 and cost.
 
 ## Where the time goes
@@ -31,7 +31,7 @@ seconds and run alongside OS.
   directly and picks up in ~7s. The whole preview lifecycle — deploy + e2e and
   the PR-close cleanup — lives in one Depot workflow
   (`.depot/workflows/cloudflare-previews.yml`); there is no GitHub Actions
-  preview workflow (see [CI workflows](ci-workflows.md)).
+  preview workflow (see [Depot CI](depot-ci.md)).
 - **Deploys run in one parallel batch.** OS bakes the auth JWKS at deploy time,
   but instead of waiting for auth to finish first, the OS deploy _polls_ the
   slot's auth worker for JWKS (`apps/os/alchemy.run.ts`, 120s deadline). All

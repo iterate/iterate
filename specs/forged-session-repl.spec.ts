@@ -1,3 +1,4 @@
+import { expect } from "@playwright/test";
 import { test } from "./test-support/test.ts";
 
 test("project REPL accepts a forged session", async ({ helpers, page }) => {
@@ -16,7 +17,17 @@ test("project REPL accepts a forged session", async ({ helpers, page }) => {
 
   const resultJson = await entry.getByTestId("itx-repl-result-json").textContent();
   const result = JSON.parse(resultJson!);
-  if (!Array.isArray(result.capabilities)) {
-    throw new Error("Project REPL result did not include capabilities.");
-  }
+  expect(result).toMatchObject({
+    children: {
+      capabilityHost: expect.any(String),
+      streams: expect.any(String),
+    },
+    projectId: fixture.project.id,
+  });
+  expect(result.capabilities).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ path: ["capabilityHost"], type: "builtin" }),
+      expect.objectContaining({ path: ["streams"], type: "builtin" }),
+    ]),
+  );
 });

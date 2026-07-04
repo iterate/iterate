@@ -117,8 +117,8 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 
 - [Dev environments](docs/dev-environments.md) — local dev, minting identities/admin sessions, browsers for agents, preview-from-local
 - [Coding style](docs/coding-style.md)
-- [Depot CI](docs/depot-ci.md) — how our Depot CI works, how to interact with it, the commands (run/status/logs/dispatch/metrics/secrets), gotchas, and links
-- [CI workflows](docs/ci-workflows.md) — generated GitHub Actions, Depot runners, Depot CI, and the image-bake workflow
+- [Depot CI](docs/depot-ci.md) — workflow editing, Depot CLI commands, monitoring/wait loops, logs, dispatch, metrics, secrets, and gotchas
+- [CLI scripts](docs/cli-scripts.md) — how to write normal TypeScript scripts and expose them as CLIs
 - [Preview CI performance](docs/ci-preview-performance.md) — how the preview deploy+e2e check stays ~2-3 min, the budget guardrail, and how to keep it fast without raising cost
 - [TypeScript conventions](docs/typescript-conventions.md)
 - [Design system & React](docs/design-system.md)

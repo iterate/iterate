@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { ClientOnly, createFileRoute } from "@tanstack/react-router";
 import { ConnectedItxRepl } from "~/routes/_app/itx-repl.tsx";
 import { ItxActivityTail } from "~/components/itx-activity-tail.tsx";
+import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 
 const PROJECT_REPL_INITIAL_CODE = "await itx.__describe()";
 
@@ -9,6 +10,10 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/repl")({
   staticData: {
     breadcrumb: "Repl",
   },
+  // Not a stream page, but still inside the project: publish the root stream
+  // context so ⌘K opens this project's tree instead of the project picker.
+  loader: ({ context }) =>
+    breadcrumbLoaderData({ streamBreadcrumb: streamBreadcrumb(context.project, "/") }),
   component: ProjectItxReplPage,
 });
 

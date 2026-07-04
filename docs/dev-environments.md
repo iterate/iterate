@@ -449,6 +449,13 @@ into its database, so the DB can never drift from Doppler and the two apps
 need no deploy-time coordination. Provisioning/rotation:
 `doppler run --project _shared --config prd -- pnpm preview provision-auth-preview-configs --rotate`.
 
+That rotation command also clears the preview slot's Better Auth `jwks` rows.
+Those rows are encrypted with `APP_CONFIG_BETTER_AUTH_SECRET`; rotating the
+secret without clearing them makes email OTP succeed but OAuth authorize fail
+with `Failed to decrypt private key`. If someone changes a preview auth secret
+manually, clear the matching slot before redeploying:
+`doppler run --project auth --config preview_N -- pnpm --dir apps/auth exec wrangler d1 execute auth-preview-N-auth-db --remote --command 'delete from jwks;'`.
+
 More detail on the semaphore primitive:
 [devops-cloudflare-doppler.md](devops-cloudflare-doppler.md).
 

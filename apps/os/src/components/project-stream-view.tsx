@@ -1,27 +1,15 @@
 import {
-  memo,
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
-  type RefObject,
 } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
-import { ChevronDownIcon, FilterIcon, SearchIcon } from "lucide-react";
+import { FilterIcon, SearchIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@iterate-com/ui/components/select";
-import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import type {
   AgentUiLlmStep,
@@ -59,13 +47,12 @@ import {
   BrowserEventFeedProcessor,
   type BrowserEventFeedState,
 } from "~/domains/streams/client-libraries/processors/browser-event-feed/implementation.ts";
-import type { FeedItemData } from "~/domains/streams/client-libraries/processors/browser-event-feed/grouping.ts";
 import { StreamEventInput } from "~/domains/streams/schemas.ts";
 import type { Stream } from "~/types.ts";
 import { AgentFeedView } from "~/components/agent-feed.tsx";
 import { AgentPillComposer, type AgentComposerMode } from "~/components/agent-pill-composer.tsx";
 import { ExampleEventsPanel } from "~/components/example-events-panel.tsx";
-import { openGlobalCommandPalette } from "~/components/global-command-palette-events.ts";
+import { FeedEventTypeSelect, FeedItemsView } from "~/components/feed-items-view.tsx";
 import { PresenceAvatar, StreamProcessorsPanel } from "~/components/stream-processors-panel.tsx";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { useItx } from "~/itx/itx-react.tsx";
@@ -168,25 +155,20 @@ export function ProjectStreamView({
   autoFocusMessageComposer = false,
   defaultComposerMode,
   emptyLabel = "No events in this stream yet.",
-  headerAccessory,
   messageComposer,
   projectId,
-  showCommandPaletteTrigger = false,
   streamSource,
   streamPath,
 }: {
   autoFocusMessageComposer?: boolean;
   defaultComposerMode?: "message" | "raw";
   emptyLabel?: string;
-  headerAccessory?: ReactNode;
   messageComposer?: ProjectStreamMessageComposer;
   projectId: string | null;
-  showCommandPaletteTrigger?: boolean;
   streamSource?: ItxStreamSource;
   streamPath: string;
 }) {
   const itx = useItx();
-  const streamPathText = streamPath;
   const streamRuntimeProjectKey = projectId ?? NULL_DURABLE_OBJECT_PROJECT_ID;
   const resolvedStreamSource = useMemo<ItxStreamSource>(
     () => streamSource ?? ((path) => itx.streams.get(path)),
@@ -202,7 +184,7 @@ export function ProjectStreamView({
       acquireStreamRuntime({
         createStreamClient: streamClientFactory,
         projectId: streamRuntimeProjectKey,
-        streamPath: streamPathText,
+        streamPath,
         slug: BrowserRawEventsContract.slug,
         schemaVersion: BROWSER_RAW_EVENTS_SCHEMA_VERSION,
         tables: ["events"],
@@ -220,7 +202,7 @@ export function ProjectStreamView({
           });
         },
       }),
-    [streamRuntimeProjectKey, streamClientFactory, streamPathText],
+    [streamRuntimeProjectKey, streamClientFactory, streamPath],
   );
   const snapshot = useSyncExternalStore(
     store.subscribe,
@@ -240,7 +222,7 @@ export function ProjectStreamView({
       acquireStreamRuntime({
         createStreamClient: streamClientFactory,
         projectId: streamRuntimeProjectKey,
-        streamPath: streamPathText,
+        streamPath,
         slug: AgentUiProcessorContract.slug,
         schemaVersion: AGENT_UI_SCHEMA_VERSION,
         resetOnSchemaVersionChange: true,
@@ -259,7 +241,7 @@ export function ProjectStreamView({
           });
         },
       }),
-    [streamRuntimeProjectKey, streamClientFactory, streamPathText],
+    [streamRuntimeProjectKey, streamClientFactory, streamPath],
   );
   const agentSnapshot = useSyncExternalStore(
     agentStore.subscribe,
@@ -273,7 +255,7 @@ export function ProjectStreamView({
       acquireStreamRuntime({
         createStreamClient: streamClientFactory,
         projectId: streamRuntimeProjectKey,
-        streamPath: streamPathText,
+        streamPath,
         slug: BrowserEventFeedContract.slug,
         schemaVersion: BROWSER_EVENT_FEED_SCHEMA_VERSION,
         tables: [BROWSER_EVENT_FEED_TABLE],
@@ -291,7 +273,7 @@ export function ProjectStreamView({
           });
         },
       }),
-    [streamRuntimeProjectKey, streamClientFactory, streamPathText],
+    [streamRuntimeProjectKey, streamClientFactory, streamPath],
   );
   // Subscribing is what STARTS a store's connection (stream-browser-store
   // refcounts listeners); without this the feed processor never folds.
@@ -310,11 +292,15 @@ export function ProjectStreamView({
   // preset's job; the stream path decides which presets exist and which one is
   // the domain default (the first). A stale/hand-edited preset id falls back.
   const activeTab: ProjectStreamViewTab = search.tab ?? "feed";
-  const presets = useMemo(() => presetsForStream(streamPathText), [streamPathText]);
+  const presets = useMemo(() => presetsForStream(streamPath), [streamPath]);
   const defaultPreset = presets[0]!;
   const activePreset = presets.find((preset) => preset.id === search.preset) ?? defaultPreset;
   const toolsOpen = search.filter === true;
   const feedSearch = search.q ?? "";
+  // Signal active filters on the toggle even while the panel is closed — a
+  // filtered feed with no visible cue reads as missing events.
+  const filtersActive =
+    activePreset.id !== defaultPreset.id || feedSearch !== "" || search.type != null;
   const focusedProcessorKey = search.processor ?? null;
   const procPanelOpen = search.panel === true || focusedProcessorKey != null;
   // Focusing a processor implies the sidebar is open; the metrics button opens
@@ -439,31 +425,22 @@ export function ProjectStreamView({
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-background">
       <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pb-1 pt-2.5">
-        <SidebarTrigger className="-ml-1 md:hidden" />
-        <button
-          type="button"
-          aria-haspopup="dialog"
-          title={
-            showCommandPaletteTrigger
-              ? `${streamPathText} — click or ⌘K to switch streams`
-              : streamPathText
-          }
-          onClick={() => showCommandPaletteTrigger && openGlobalCommandPalette()}
-          className={cn(
-            "flex h-9 min-w-0 items-center gap-2 rounded-full bg-muted px-3.5",
-            showCommandPaletteTrigger && "cursor-pointer hover:bg-muted/70",
-          )}
+        <Tabs
+          value={activeTab}
+          onValueChange={(value) => {
+            const tab = value as ProjectStreamViewTab;
+            setSearch({ tab: tab === "feed" ? undefined : tab });
+          }}
         >
-          <span className="truncate font-mono text-sm">{streamPathText}</span>
-          {showCommandPaletteTrigger ? (
-            <>
-              <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground" />
-              <kbd className="hidden shrink-0 rounded bg-background px-1.5 py-px text-[10px] text-muted-foreground sm:inline">
-                ⌘K
-              </kbd>
-            </>
-          ) : null}
-        </button>
+          <TabsList className="h-8">
+            <TabsTrigger value="feed" className="px-3 text-xs">
+              Feed
+            </TabsTrigger>
+            <TabsTrigger value="state" className="px-3 text-xs">
+              State
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
 
         <div className="ml-auto flex items-center gap-3">
           {presence.length === 0 ? null : (
@@ -524,69 +501,65 @@ export function ProjectStreamView({
             </svg>
             {metrics.rttNow}ms
           </Button>
-          {activeTab === "feed" ? (
-            <Select
-              value={activePreset.id}
-              onValueChange={(value) =>
-                setSearch({
-                  preset: value == null || value === defaultPreset.id ? undefined : value,
-                })
-              }
-            >
-              <SelectTrigger
-                size="sm"
-                className="max-w-44 text-xs"
-                data-testid="stream-feed-preset"
-                title="Feed preset"
-              >
-                {/* Radix can only resolve the selected item's text once the
-                    content has mounted; render the label ourselves. */}
-                <SelectValue>{activePreset.label}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {presets.map((preset) => (
-                  <SelectItem key={preset.id} value={preset.id} className="text-xs">
-                    {preset.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : null}
-          <Tabs
-            value={activeTab}
-            onValueChange={(value) => {
-              const tab = value as ProjectStreamViewTab;
-              setSearch({ tab: tab === "feed" ? undefined : tab });
-            }}
-          >
-            <TabsList className="h-8">
-              <TabsTrigger value="feed" className="px-3 text-xs">
-                Feed
-              </TabsTrigger>
-              <TabsTrigger value="state" className="px-3 text-xs">
-                State
-              </TabsTrigger>
-            </TabsList>
-          </Tabs>
           <Button
             variant="ghost"
             size="icon"
             title="Search & filter"
             aria-expanded={toolsOpen}
             onClick={() => setSearch({ filter: toolsOpen ? undefined : true })}
-            className="rounded-full text-muted-foreground"
+            className="relative rounded-full text-muted-foreground"
           >
             <FilterIcon className="size-3.5" />
+            {filtersActive ? (
+              <span
+                aria-hidden="true"
+                className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-primary"
+              />
+            ) : null}
           </Button>
         </div>
       </header>
-      {headerAccessory == null ? null : <div className="shrink-0">{headerAccessory}</div>}
       {toolsOpen ? (
-        <div className="flex shrink-0 items-center gap-3 px-4 pb-1.5 pt-1">
-          {/* Search filters the agent feed's SQL; the other presets don't take
-              a text filter yet, so don't offer a no-op input there. */}
-          {activeTab === "feed" && activePreset.kind === "agent-chat" ? (
-            <div className="flex h-9 min-w-0 max-w-sm flex-1 items-center gap-2 rounded-full bg-muted px-3.5">
+        <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 px-4 pb-1.5 pt-1">
+          {activeTab === "feed" ? (
+            <div
+              className="flex flex-wrap items-center gap-1.5"
+              role="radiogroup"
+              aria-label="Feed preset"
+              data-testid="stream-feed-preset"
+            >
+              {presets.map((preset) => {
+                const active = preset.id === activePreset.id;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    onClick={() =>
+                      setSearch({
+                        preset: preset.id === defaultPreset.id ? undefined : preset.id,
+                        // The event-type list is scoped to a preset's event
+                        // family; a type from the old preset would silently
+                        // empty the new one.
+                        type: undefined,
+                      })
+                    }
+                    className={cn(
+                      "rounded-full border px-2.5 py-1 text-xs transition-colors",
+                      active
+                        ? "border-transparent bg-foreground text-background"
+                        : "border-border text-muted-foreground hover:bg-muted hover:text-foreground",
+                    )}
+                  >
+                    {preset.label}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+          {activeTab === "feed" ? (
+            <div className="flex h-8 min-w-0 max-w-xs flex-1 items-center gap-2 rounded-full bg-muted px-3">
               <SearchIcon className="size-3.5 shrink-0 text-muted-foreground" />
               <input
                 ref={feedSearchInputRef}
@@ -597,6 +570,14 @@ export function ProjectStreamView({
                 className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
               />
             </div>
+          ) : null}
+          {activeTab === "feed" && activePreset.kind === "feed-items" ? (
+            <FeedEventTypeSelect
+              database={feedStore.streamDatabase}
+              eventTypePrefix={activePreset.eventTypePrefix ?? null}
+              value={search.type ?? null}
+              onChange={(type) => setSearch({ type: type ?? undefined })}
+            />
           ) : null}
           <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">
             {eventCount.toLocaleString()} events · {snapshot.connectionStatus}
@@ -628,9 +609,14 @@ export function ProjectStreamView({
           />
         ) : (
           <FeedItemsView
+            // Fresh virtualizer state per stream mirror (see FeedItemsView
+            // docs); filter changes are handled inside without remounting.
+            key={feedStore.streamDatabase.databasePath}
             database={feedStore.streamDatabase}
             emptyLabel={connectionLabel}
+            eventType={search.type ?? null}
             eventTypePrefix={activePreset.eventTypePrefix ?? null}
+            searchQuery={feedSearch === "" ? null : feedSearch}
           />
         )}
         {procPanelOpen ? (
@@ -713,245 +699,6 @@ function useAgentUiReducedState(database: StreamBrowserDatabase): AgentUiState |
       return null;
     }
   }, [result.data]);
-}
-
-// ---------------------------------------------------------------------------
-// Feed view: the grouped feed_items collection, filtered by the active preset
-// ---------------------------------------------------------------------------
-
-/** How many rows past the virtualizer's window the tail query prefetches. */
-const TAIL_PREFETCH_ROWS = 32;
-
-/**
- * Renders the browser-event-feed processor's `feed_items` collection: one row
- * per specific-renderer singleton or per collapsed run of same-type events.
- * A preset's `eventTypePrefix` filters on each row's primary event type — a
- * group row's `data.eventType`, a singleton's first event type — entirely in
- * SQL over the local mirror.
- *
- * Same virtualization scheme as the agent feed (agent-feed.tsx): TanStack
- * Virtual owns the tail (anchorTo end + followOnAppend), the row window is a
- * live SQL range query over dense positions, and the count query gates the
- * list so the virtualizer never sees a 0→N transition on mount.
- */
-const FEED_TYPE_FILTER_SQL = `COALESCE(json_extract(data, '$.eventType'), json_extract(data, '$.events[0].type')) LIKE ?`;
-
-function FeedItemsView({
-  database,
-  emptyLabel,
-  eventTypePrefix,
-}: {
-  database: StreamBrowserDatabase;
-  emptyLabel: string;
-  eventTypePrefix: string | null;
-}) {
-  const filterParams = eventTypePrefix == null ? [] : [`${eventTypePrefix}%`];
-  const countResult = useStreamQuery(
-    database,
-    eventTypePrefix == null
-      ? `SELECT COUNT(*) AS count FROM feed_items`
-      : `SELECT COUNT(*) AS count FROM feed_items WHERE ${FEED_TYPE_FILTER_SQL}`,
-    filterParams,
-  );
-  const itemCount = Number(countResult.data[0]?.count ?? 0);
-  const scrollRef = useRef<HTMLDivElement>(null);
-
-  return (
-    <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto w-full max-w-3xl px-4 pb-6 pt-5 md:px-6">
-        {countResult.status !== "ok" ? (
-          <Centered>
-            {countResult.status === "error"
-              ? (countResult.error?.message ?? "SQLite query failed")
-              : "Opening local SQLite mirror"}
-          </Centered>
-        ) : itemCount === 0 ? (
-          <Centered>
-            {eventTypePrefix == null ? emptyLabel : "No feed items match this preset."}
-          </Centered>
-        ) : (
-          <VirtualFeedItems
-            // Fresh virtualizer (measurements, end anchor) per mirror and per
-            // preset — stale state from another list would misplace the scroll.
-            key={`${database.databasePath}:${eventTypePrefix ?? ""}`}
-            database={database}
-            eventTypePrefix={eventTypePrefix}
-            itemCount={itemCount}
-            scrollElementRef={scrollRef}
-          />
-        )}
-      </div>
-    </div>
-  );
-}
-
-function VirtualFeedItems({
-  database,
-  eventTypePrefix,
-  itemCount,
-  scrollElementRef,
-}: {
-  database: StreamBrowserDatabase;
-  eventTypePrefix: string | null;
-  itemCount: number;
-  scrollElementRef: RefObject<HTMLDivElement | null>;
-}) {
-  const [expanded, setExpanded] = useState<ReadonlySet<number>>(new Set());
-  const virtualizer = useVirtualizer({
-    count: itemCount,
-    getScrollElement: () => scrollElementRef.current,
-    estimateSize: () => 44,
-    getItemKey: (index) => index,
-    anchorTo: "end",
-    followOnAppend: true,
-    scrollEndThreshold: 80,
-    overscan: 16,
-    directDomUpdates: true,
-  });
-
-  // Open at the newest items; later appends are followOnAppend's job (this
-  // component mounts gated behind the count query, see agent-feed.tsx).
-  useLayoutEffect(() => {
-    virtualizer.scrollToEnd();
-  }, [virtualizer]);
-
-  const virtualItems = virtualizer.getVirtualItems();
-  const first = virtualItems[0]?.index ?? 0;
-  const last = virtualItems.at(-1)?.index ?? -1;
-  const windowSize = Math.max(0, last + 1 + TAIL_PREFETCH_ROWS - first);
-  const rowsResult = useStreamQuery(
-    database,
-    eventTypePrefix == null
-      ? `SELECT local_index, component, first_offset, last_offset, event_count, json(data) AS data
-         FROM feed_items WHERE local_index >= ? AND local_index < ?
-         ORDER BY local_index ASC`
-      : `SELECT local_index, component, first_offset, last_offset, event_count, json(data) AS data
-         FROM feed_items WHERE ${FEED_TYPE_FILTER_SQL}
-         ORDER BY local_index ASC LIMIT ? OFFSET ?`,
-    eventTypePrefix == null
-      ? [first, first + windowSize]
-      : [`${eventTypePrefix}%`, windowSize, first],
-  );
-  // Retain the last committed rows across range re-queries so a shifting
-  // window doesn't blank already-visible rows to skeletons (see agent-feed).
-  const lastRowsRef = useRef<Map<number, Record<string, unknown>> | null>(null);
-  const rowsByIndex = useMemo(() => {
-    if (rowsResult.status !== "ok") {
-      return lastRowsRef.current ?? new Map<number, Record<string, unknown>>();
-    }
-    const rows = new Map<number, Record<string, unknown>>();
-    rowsResult.data.forEach((row, position) => {
-      const index = eventTypePrefix == null ? Number(row.local_index) : first + position;
-      if (Number.isFinite(index)) rows.set(index, row);
-    });
-    lastRowsRef.current = rows;
-    return rows;
-  }, [rowsResult.data, rowsResult.status, eventTypePrefix, first]);
-
-  return (
-    <div
-      className="relative w-full"
-      style={{ height: virtualizer.getTotalSize() }}
-      data-testid="stream-feed-items"
-    >
-      {virtualItems.map((item) => {
-        const row = rowsByIndex.get(item.index);
-        const localIndex = row == null ? item.index : Number(row.local_index);
-        return (
-          <div
-            className="absolute left-0 top-0 w-full"
-            data-index={item.index}
-            key={item.key}
-            ref={virtualizer.measureElement}
-            style={{ transform: `translateY(${item.start}px)` }}
-          >
-            {row == null ? (
-              <div className="my-1 h-9 rounded-xl bg-muted/40" />
-            ) : (
-              <FeedItemRow
-                row={row}
-                expanded={expanded.has(localIndex)}
-                onToggle={() =>
-                  setExpanded((previous) => {
-                    const next = new Set(previous);
-                    if (next.has(localIndex)) next.delete(localIndex);
-                    else next.add(localIndex);
-                    return next;
-                  })
-                }
-              />
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-const FeedItemRow = memo(function FeedItemRow({
-  expanded,
-  onToggle,
-  row,
-}: {
-  expanded: boolean;
-  onToggle: () => void;
-  row: Record<string, unknown>;
-}) {
-  const data = parseFeedItemData(String(row.data));
-  const eventType =
-    data && "eventType" in data ? data.eventType : (data?.events[0]?.type ?? String(row.component));
-  const eventCount = Number(row.event_count);
-  const firstOffset = Number(row.first_offset);
-  const lastOffset = Number(row.last_offset);
-  const createdAt = data?.events[0]?.createdAt;
-
-  return (
-    <div className="py-0.5">
-      <button
-        aria-expanded={expanded}
-        onClick={onToggle}
-        type="button"
-        className={cn(
-          "flex w-full cursor-pointer items-baseline gap-2.5 rounded-xl bg-muted/40 px-3.5 py-2 text-left",
-          "font-mono text-xs text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground",
-          expanded && "rounded-b-none bg-muted/70 text-foreground",
-        )}
-      >
-        <span className="shrink-0 tabular-nums">
-          {firstOffset === lastOffset ? `#${firstOffset}` : `#${firstOffset}–${lastOffset}`}
-        </span>
-        <span className="min-w-0 truncate text-foreground/80">{shortEventType(eventType)}</span>
-        {eventCount > 1 ? (
-          <span className="shrink-0 rounded-full bg-background px-1.5 py-px text-[10px]">
-            ×{eventCount.toLocaleString()}
-          </span>
-        ) : null}
-        {typeof createdAt === "string" ? (
-          <time className="ml-auto shrink-0 text-[10px]">
-            {new Date(createdAt).toLocaleTimeString()}
-          </time>
-        ) : null}
-      </button>
-      {expanded ? (
-        <div className="rounded-b-xl bg-muted/40 px-3.5 pb-3 pt-1">
-          <SerializedObjectCodeBlock data={data?.events ?? row.data} />
-        </div>
-      ) : null}
-    </div>
-  );
-});
-
-/** `events.iterate.com/agent/input-added` → `agent/input-added` — the domain part carries the signal. */
-function shortEventType(type: string): string {
-  return type.startsWith("events.iterate.com/") ? type.slice("events.iterate.com/".length) : type;
-}
-
-function parseFeedItemData(raw: string): FeedItemData | null {
-  try {
-    return JSON.parse(raw) as FeedItemData;
-  } catch {
-    return null;
-  }
 }
 
 // ---------------------------------------------------------------------------

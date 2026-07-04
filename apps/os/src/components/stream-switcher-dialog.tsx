@@ -50,14 +50,12 @@ export function StreamSwitcherDialog({
   onOpenChange,
   currentPath,
   navigator,
-  rootPath = normalizePath("/"),
   scope,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   currentPath: string;
   navigator: StreamNavigator;
-  rootPath?: string;
   scope: string;
 }) {
   const [expandedPaths, setExpandedPaths] = useState<ReadonlySet<string>>(new Set(["/"]));
@@ -69,7 +67,9 @@ export function StreamSwitcherDialog({
   // the cursor placed after the trailing slash, ready for the leaf.
   useEffect(() => {
     if (!open) return;
-    setExpandedPaths(new Set([rootPath, ...streamPathAncestors(currentPath)]));
+    // "/" is the tree's root node, not an ancestor of non-root paths — it
+    // must always start expanded or every deeper stream stays hidden.
+    setExpandedPaths(new Set(["/", ...streamPathAncestors(currentPath)]));
     setDestination(destinationPrefill(currentPath));
     requestAnimationFrame(() => {
       const input = inputRef.current;
@@ -77,7 +77,7 @@ export function StreamSwitcherDialog({
       input.focus();
       input.setSelectionRange(input.value.length, input.value.length);
     });
-  }, [open, currentPath, rootPath]);
+  }, [open, currentPath]);
 
   function openStream(path: string) {
     onOpenChange(false);
@@ -97,7 +97,7 @@ export function StreamSwitcherDialog({
         </DialogHeader>
         <div className="max-h-80 overflow-y-auto">
           <StreamTreeItem
-            path={rootPath}
+            path="/"
             depth={0}
             tree={{
               currentPath,
