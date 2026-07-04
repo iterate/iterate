@@ -5,14 +5,7 @@ import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/age
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import { cn } from "@iterate-com/ui/lib/utils";
 import type { ProcessorRuntimeState } from "~/types.ts";
-import {
-  hashString,
-  presenceColorClasses,
-  presenceInitials,
-  presenceLabel,
-  sparklinePoints,
-  type RttMetrics,
-} from "~/lib/stream-presence.ts";
+import { presenceColorClasses, presenceInitials, presenceLabel } from "~/lib/stream-presence.ts";
 
 export function PresenceAvatar({
   entry,
@@ -52,9 +45,9 @@ export function PresenceAvatar({
 // ---------------------------------------------------------------------------
 
 /**
- * One abstraction for presence, metrics, and processor detail — everything is
- * a facet of "the stream's consumers". Overview lists every consumer with
- * (simulated) RTT/lag; clicking one drills into its announced contract.
+ * One abstraction for presence and processor detail — everything is a facet of
+ * "the stream's consumers". Overview lists every consumer; clicking one drills
+ * into its announced contract.
  */
 type ProcessorRuntimeStateResult = {
   runtimeState: ProcessorRuntimeState | null;
@@ -63,7 +56,6 @@ type ProcessorRuntimeStateResult = {
 
 export function StreamProcessorsPanel({
   presence,
-  metrics,
   eventCount,
   busy,
   focusedKey,
@@ -74,7 +66,6 @@ export function StreamProcessorsPanel({
   getProcessorRuntimeState,
 }: {
   presence: readonly AgentUiPresenceEntry[];
-  metrics: RttMetrics;
   eventCount: number;
   busy: boolean;
   /** Subscription key of the focused processor (URL-backed); null = overview. */
@@ -153,7 +144,6 @@ export function StreamProcessorsPanel({
       {focused == null ? (
         <ProcessorsOverview
           presence={presence}
-          metrics={metrics}
           eventCount={eventCount}
           busy={busy}
           focusedKey={focusedKey}
@@ -188,7 +178,6 @@ type ProcessorRuntimeStateLoad =
 
 function ProcessorsOverview({
   presence,
-  metrics,
   eventCount,
   busy,
   focusedKey,
@@ -197,7 +186,6 @@ function ProcessorsOverview({
   onClearClientDatabase,
 }: {
   presence: readonly AgentUiPresenceEntry[];
-  metrics: RttMetrics;
   eventCount: number;
   busy: boolean;
   focusedKey: string | null;
@@ -206,51 +194,28 @@ function ProcessorsOverview({
   onClearClientDatabase: () => Promise<void>;
 }) {
   const [clearState, setClearState] = useState<"idle" | "clearing" | "error">("idle");
-  const points = sparklinePoints(metrics.spark, 368, 44);
-  const area = `2,42 ${points} 366,42`;
 
   return (
     <>
       <div className="flex shrink-0 items-center gap-2 px-5 pb-2 pt-4">
         <div className="min-w-0 flex-1">
           <div className="text-base font-semibold">Processors</div>
-          <div className="text-xs text-muted-foreground">
-            presence · metrics · state, per consumer
-          </div>
+          <div className="text-xs text-muted-foreground">presence · state, per consumer</div>
         </div>
         <PanelCloseButton onClose={onClose} />
       </div>
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 pb-5 pt-2">
         <div className="rounded-2xl bg-muted/40 px-4 py-3.5">
-          <div className="flex items-baseline justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Append round-trip
-            </span>
-            <span className="font-mono text-[10px] text-muted-foreground/70">simulated</span>
-          </div>
-          <div className="mt-2 flex items-end gap-3">
-            <span className="font-mono text-2xl font-semibold leading-none">
-              {metrics.rttNow}
-              <span className="text-xs text-muted-foreground">ms</span>
-            </span>
-            <svg viewBox="0 0 368 44" className="h-11 min-w-0 flex-1" preserveAspectRatio="none">
-              <polygon points={area} className="fill-emerald-500/10" />
-              <polyline
-                points={points}
-                fill="none"
-                className="stroke-emerald-600"
-                strokeWidth="1.5"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </div>
-          <div className="mt-3 flex gap-5">
-            <MetricStat label="p50" value={`${metrics.p50}ms`} />
-            <MetricStat label="p95" value={`${metrics.p95}ms`} />
-            <MetricStat label="events/s" value={(0.4 + (metrics.rttNow % 7) / 10).toFixed(1)} />
-            <MetricStat label="head" value={`#${eventCount}`} />
-          </div>
-          <div className="mt-3 flex justify-end">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Local mirror
+              </div>
+              <div className="mt-1 font-mono text-2xl font-semibold leading-none">
+                #{eventCount}
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground">stream head</div>
+            </div>
             <Button
               variant="outline"
               size="sm"
@@ -272,10 +237,9 @@ function ProcessorsOverview({
           ) : null}
         </div>
         <div>
-          <div className="grid grid-cols-[minmax(0,1fr)_52px_44px] gap-1.5 px-3 pb-2 text-[10px] uppercase tracking-wider text-muted-foreground/70">
+          <div className="grid grid-cols-[minmax(0,1fr)_88px] gap-1.5 px-3 pb-2 text-[10px] uppercase tracking-wider text-muted-foreground/70">
             <span>Consumer</span>
-            <span className="text-right">RTT</span>
-            <span className="text-right">Lag</span>
+            <span className="text-right">Status</span>
           </div>
           <div className="flex flex-col">
             {presence.length === 0 ? (
@@ -289,7 +253,7 @@ function ProcessorsOverview({
                   type="button"
                   onClick={() => onFocus(entry.subscriptionKey)}
                   className={cn(
-                    "grid w-full grid-cols-[minmax(0,1fr)_52px_44px] items-center gap-1.5 rounded-xl px-3 py-2 text-left hover:bg-muted/40",
+                    "grid w-full grid-cols-[minmax(0,1fr)_88px] items-center gap-1.5 rounded-xl px-3 py-2 text-left hover:bg-muted/40",
                     entry.subscriptionKey === focusedKey &&
                       "bg-muted/60 ring-1 ring-inset ring-border",
                   )}
@@ -318,16 +282,21 @@ function ProcessorsOverview({
                       </span>
                     </span>
                   </span>
-                  <span className="text-right font-mono text-xs text-muted-foreground">
-                    {entry.connected ? `${fakeRtt(entry.subscriptionKey, metrics.rttNow)}ms` : "—"}
-                  </span>
                   <span
                     className={cn(
-                      "text-right font-mono text-xs",
-                      fakeLag(entry, busy) === "0" ? "text-muted-foreground" : "text-amber-600",
+                      "text-right text-xs",
+                      entry.connected
+                        ? busy && isLlmish(entry)
+                          ? "text-amber-600"
+                          : "text-emerald-600"
+                        : "text-muted-foreground",
                     )}
                   >
-                    {entry.connected ? fakeLag(entry, busy) : "—"}
+                    {entry.connected
+                      ? busy && isLlmish(entry)
+                        ? "processing"
+                        : "connected"
+                      : "offline"}
                   </span>
                 </button>
               ))
@@ -342,25 +311,6 @@ function ProcessorsOverview({
 function isLlmish(entry: AgentUiPresenceEntry): boolean {
   const slug = entry.processor?.slug ?? "";
   return ["agent", "openai-ws", "cloudflare-ai", "capability-host"].includes(slug);
-}
-
-/** Deterministic fake RTT for preview data; stable per subscription but still visibly live. */
-function fakeRtt(subscriptionKey: string, rttNow: number): number {
-  return 14 + (hashString(subscriptionKey) % 38) + (rttNow % 9);
-}
-
-function fakeLag(entry: AgentUiPresenceEntry, busy: boolean): string {
-  if (busy && isLlmish(entry)) return String(1 + (hashString(entry.subscriptionKey) % 3));
-  return "0";
-}
-
-function MetricStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">{label}</div>
-      <div className="mt-0.5 font-mono text-sm">{value}</div>
-    </div>
-  );
 }
 
 function ProcessorDetail({

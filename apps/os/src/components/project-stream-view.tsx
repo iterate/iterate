@@ -44,7 +44,6 @@ import { StreamViewHeader } from "~/components/stream-view-header.tsx";
 import { presetsForStream } from "~/lib/stream-feed-filters.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { useItx } from "~/itx/itx-react.tsx";
-import { useSimulatedRttMetrics } from "~/lib/stream-presence.ts";
 import {
   streamViewTab,
   useStreamViewPanels,
@@ -141,7 +140,6 @@ export function ProjectStreamView({
   const countResult = useStreamQuery(store.streamDatabase, `SELECT COUNT(*) AS count FROM events`);
   const eventCount = Number(countResult.data[0]?.count ?? 0);
   const agentUiState = useAgentUiReducedState(store.streamDatabase);
-  const metrics = useSimulatedRttMetrics();
 
   const { search } = useStreamViewSearch();
   const panels = useStreamViewPanels();
@@ -209,12 +207,7 @@ export function ProjectStreamView({
 
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-background">
-      <StreamViewHeader
-        agentBusy={agentBusy}
-        metrics={metrics}
-        presence={presence}
-        streamPath={streamPath}
-      />
+      <StreamViewHeader agentBusy={agentBusy} presence={presence} streamPath={streamPath} />
       {search.filter !== true ? null : activeTab === "feed" ? (
         <StreamFeedFilterRow
           activePreset={activePreset}
@@ -287,7 +280,6 @@ export function ProjectStreamView({
             {panels.processorsPanelOpen ? (
               <StreamProcessorsPanel
                 presence={presence}
-                metrics={metrics}
                 eventCount={eventCount}
                 busy={agentBusy}
                 focusedKey={panels.focusedProcessorKey}

@@ -1,4 +1,4 @@
-import { ChevronDownIcon, FilterIcon } from "lucide-react";
+import { ActivityIcon, ChevronDownIcon, FilterIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
@@ -7,7 +7,7 @@ import { cn } from "@iterate-com/ui/lib/utils";
 import { openGlobalCommandPalette } from "~/components/global-command-palette-events.ts";
 import { PresenceAvatar } from "~/components/stream-processors-panel.tsx";
 import { feedFiltersActive } from "~/lib/stream-feed-filters.ts";
-import { presenceLabel, sparklinePoints, type RttMetrics } from "~/lib/stream-presence.ts";
+import { presenceLabel } from "~/lib/stream-presence.ts";
 import {
   streamViewTab,
   useStreamViewPanels,
@@ -19,19 +19,17 @@ const MAX_PRESENCE_AVATARS = 4;
 
 /**
  * THE page header — the app renders no other. Pill path breadcrumb (⌘K
- * trigger) top-left; presence, metrics, Feed/State tabs, and the filter
- * toggle on the right. Tab/filter/panel state is read and written straight
+ * trigger) top-left; presence, Feed/State tabs, and the filter toggle on the
+ * right. Tab/filter/panel state is read and written straight
  * from the URL (stream-view-search.ts), so this component needs no callbacks
  * from the view it heads.
  */
 export function StreamViewHeader({
   agentBusy,
-  metrics,
   presence,
   streamPath,
 }: {
   agentBusy: boolean;
-  metrics: RttMetrics;
   presence: readonly AgentUiPresenceEntry[];
   streamPath: string;
 }) {
@@ -100,20 +98,12 @@ export function StreamViewHeader({
         <Button
           variant="ghost"
           size="sm"
-          title="Stream health & metrics"
+          title="Processors"
           onClick={openProcessorsOverview}
-          className="font-mono text-xs font-normal text-muted-foreground"
+          className="text-xs font-normal text-muted-foreground"
         >
-          <svg width="24" height="11" viewBox="0 0 26 12" className="shrink-0">
-            <polyline
-              points={sparklinePoints(metrics.spark.slice(-12), 26, 12)}
-              fill="none"
-              className="stroke-emerald-600"
-              strokeWidth="1.4"
-              strokeLinejoin="round"
-            />
-          </svg>
-          {metrics.rttNow}ms
+          <ActivityIcon className="size-3.5" />
+          Processors
         </Button>
         <Tabs
           value={streamViewTab(search)}
