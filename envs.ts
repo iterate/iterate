@@ -149,14 +149,14 @@ export const envs = {
     authDbId: "bd78258a-2167-429f-a504-9e1eb1c18ef2",
   }),
   preview_7: previewSlot(7, {
-    projectDirectoryKvId: "7c1ad0f9195d4d98986253a5fb05d97a",
+    projectDirectoryKvId: "619f43ebb6d647229693e41b51ab2a32",
     workerBuildCacheKvId: "fad0de53747645369f8aa3aa99049886",
-    authDbId: "5e2b9db1-d617-47f6-bc57-3b9c150e39ce",
+    authDbId: "d2ff0612-3487-4196-ae21-19681020e7b0",
   }),
   preview_8: previewSlot(8, {
-    projectDirectoryKvId: "d06139a93f2846cb9f46c38810796c06",
+    projectDirectoryKvId: "b36864421f924ac2b6d382c17a20cddc",
     workerBuildCacheKvId: "14554ce1beba4d868de4227c27c6e5fa",
-    authDbId: "87dbf699-824a-4f08-994c-7debce8c18e5",
+    authDbId: "d59dd035-41f9-47be-bc31-260ef1784ed0",
   }),
   preview_9: previewSlot(9, {
     projectDirectoryKvId: "9fac543a7e994b7f972328c6a07152ac",
