@@ -150,20 +150,10 @@ function isApiWorkerLanePath(pathname: string): boolean {
   return false;
 }
 
-/**
- * The externally-visible host for a request: tunnels (captun) and the ingress
- * worker present the original host via forwarding headers; otherwise the
- * request URL is already the truth.
- */
-function requestIngressHost(request: Request): string {
-  return requestIngressHostFrom(request.headers, new URL(request.url));
-}
-
+/** The externally-visible host for a request. */
 function requestIngressHostFrom(headers: Headers, url: URL): string {
   return normalizeIngressHost(
-    headers.get("x-iterate-ingress-hostname") ??
-      headers.get("x-forwarded-host")?.replace(/:\d+$/, "") ??
-      url.hostname,
+    headers.get("x-forwarded-host")?.replace(/:\d+$/, "") ?? url.hostname,
   );
 }
 
@@ -184,28 +174,4 @@ function isOsHost(input: {
     const base = normalizeIngressHost(normalizeProjectHostnameBase(rawBase));
     return input.host === base && (base === "localhost" || base.endsWith(".localhost"));
   });
-}
-
-/**
- * Cheap synchronous pre-filter answering "does this request belong to the
- * api pipeline": anything that is not the OS host (project platform hosts
- * and custom-hostname candidates alike), plus the api path lanes and the
- * /prj_ path lane on the OS host. The api pipeline then runs the full
- * `decideIngressRoute` (with directory resolvers) and owns the 404 for
- * hosts that resolve to nothing. TODO: collapse into one decideIngressRoute
- * pass in worker.ts — vestige of the deleted multi-worker topology.
- */
-export function apiWorkerRequest(input: {
-  config: { baseUrl?: string; projectHostnameBases?: readonly string[] };
-  request: Request;
-}): Request | null {
-  const url = new URL(input.request.url);
-  const host = requestIngressHost(input.request);
-  const bases = input.config.projectHostnameBases ?? [];
-  if (!isOsHost({ baseUrl: input.config.baseUrl, bases, host, requestUrl: url })) {
-    return input.request;
-  }
-  if (isApiWorkerLanePath(url.pathname)) return input.request;
-  if (/^\/prj_[^/]/.test(url.pathname)) return input.request;
-  return null;
 }
