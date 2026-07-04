@@ -8,7 +8,7 @@
 //   node            AsyncFunction("itx", "vars", code) on a Cap'n Web stub
 //   run-script      itx.capabilityHost.runScript(`async (itx) => { const vars = …; <body> }`)
 //                   — the server-side script isolate agents use
-//   project-worker  the body baked into the project repo's worker.js,
+//   project-worker  the body baked into the project repo's worker.ts,
 //                   executed against `await this.env.ITX.get()`
 //
 // Almost every example is written against a PROJECT itx (context: "project"):
@@ -293,23 +293,27 @@ const greeter = await itx.workers.get({
   entrypoint: "Greeter",
   path: "/",
   source: {
-    type: "inline",
-    mainModule: "greeter.js",
-    modules: {
-      "greeter.js": \`
-        import { WorkerEntrypoint } from "cloudflare:workers";
+    files: {
+      type: "inline",
+      files: {
+        "greeter.js": \`
+          import { WorkerEntrypoint } from "cloudflare:workers";
 
-        export class Greeter extends WorkerEntrypoint {
-          hello({ name }) {
-            return "hello, " + name;
-          }
+          export class Greeter extends WorkerEntrypoint {
+            hello({ name }) {
+              return "hello, " + name;
+            }
 
-          add(a, b) {
-            return a + b;
+            add(a, b) {
+              return a + b;
+            }
           }
-        }
-      \`,
+        \`,
+      },
     },
+    // Plain JavaScript with bundling off loads directly; TypeScript or
+    // multi-file sources drop bundle: false and go through the build pipeline.
+    options: { bundle: false, entryPoint: "greeter.js" },
   },
 });
 
@@ -334,25 +338,27 @@ const counter = await itx.workers.get({
   durableWorkerKey: vars.counterKey ?? "repl-counter",
   path: "/",
   source: {
-    type: "inline",
-    mainModule: "counter.js",
-    modules: {
-      "counter.js": \`
-        import { DurableObject } from "cloudflare:workers";
+    files: {
+      type: "inline",
+      files: {
+        "counter.js": \`
+          import { DurableObject } from "cloudflare:workers";
 
-        export class CounterDurableObject extends DurableObject {
-          async increment() {
-            const n = (this.ctx.storage.kv.get("n") ?? 0) + 1;
-            this.ctx.storage.kv.put("n", n);
-            return n;
-          }
+          export class CounterDurableObject extends DurableObject {
+            async increment() {
+              const n = (this.ctx.storage.kv.get("n") ?? 0) + 1;
+              this.ctx.storage.kv.put("n", n);
+              return n;
+            }
 
-          async current() {
-            return this.ctx.storage.kv.get("n") ?? 0;
+            async current() {
+              return this.ctx.storage.kv.get("n") ?? 0;
+            }
           }
-        }
-      \`,
+        \`,
+      },
     },
+    options: { bundle: false, entryPoint: "counter.js" },
   },
 });
 
@@ -392,7 +398,7 @@ return {
     id: "repo-commit-files",
     title: "Commit files into the project repo",
     description:
-      "Every project has a git-backed repo (itx.repo is the one at path '/'). commitFiles writes a batch of changes as one commit — this is how agents keep durable notes, and how the project worker at worker.js gets updated (repo-sourced workers are late-bound: the next call sees the new commit).",
+      "Every project has a git-backed repo (itx.repo is the one at path '/'). commitFiles writes a batch of changes as one commit — this is how agents keep durable notes, and how the project worker at worker.ts gets updated (repo-sourced workers are late-bound: the next call sees the new commit).",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `

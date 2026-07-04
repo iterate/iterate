@@ -29,9 +29,15 @@ import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { envs } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
+import { run } from "../../../scripts/lib/deploy-helpers.ts";
 import type { EnvContext } from "../../../scripts/lib/env-context.ts";
 import { parseConfig } from "../src/config.ts";
-import { envShapedVars, OPTIONAL_SECRETS, REQUIRED_SECRETS } from "./generate-wrangler-config.ts";
+import {
+  envShapedVars,
+  OPTIONAL_SECRETS,
+  REQUIRED_SECRETS,
+  writeWranglerConfig,
+} from "./generate-wrangler-config.ts";
 
 /**
  * A static JWKS lets the worker verify auth JWTs without a runtime fetch,
@@ -124,13 +130,30 @@ export default async function deploy(
     resources: (env) => env.resources,
     requiredSecrets: REQUIRED_SECRETS,
     optionalSecrets: OPTIONAL_SECRETS,
-    prepare: async (ctx, secretValues) => {
+    prepare: async (ctx, secretValues, credentials) => {
       // Baked at deploy time, so it's the one secret not in secrets.required.
       secretValues.APP_CONFIG_ITERATE_AUTH__JWKS = await bakeStaticAuthJwks(ctx);
 
       // Parse the exact env the worker will see (secrets + generated vars) with
       // the worker's own schema — the strongest possible pre-flight.
       parseConfig({ ...secretValues, ...envShapedVars(ctx.env) });
+
+      // The builder sidecar deploys FIRST: the os worker's BUILDER service
+      // binding is by name, and a binding to a not-yet-existing script fails
+      // the deploy. The builder has no secrets and no vite build — wrangler
+      // bundles src/builder.ts (esbuild-wasm rides as a wasm module).
+      // Skew window: between this deploy and the os deploy (or if the os
+      // deploy fails), a bundler/schema-version bump means the os worker
+      // hashes the OLD key prefix while the builder writes the new one — the
+      // cache runs cold (correct output via by-value returns, every request
+      // rebuilds) until the os deploy lands. If "cache never hits" appears
+      // mid-rollout, finish the deploy.
+      writeWranglerConfig();
+      run(
+        "pnpm",
+        ["exec", "wrangler", "deploy", "--config", "wrangler.builder.jsonc", "--env", ctx.name],
+        { cwd: fileURLToPath(new URL("..", import.meta.url)), env: credentials },
+      );
     },
     smokes: (env) => [
       {

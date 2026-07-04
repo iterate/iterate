@@ -496,7 +496,7 @@ function mcpExecutionContext(context: RequestContext): ExecutionContext {
     exports: {} as Cloudflare.Exports,
     passThroughOnException() {},
     props: {},
-    waitUntil: (promise: Promise<unknown>) => context.waitUntil?.(promise),
+    waitUntil: (promise: Promise<unknown>) => context.waitUntil(promise),
   } as ExecutionContext;
 }
 

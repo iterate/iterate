@@ -22,9 +22,6 @@ import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-
 import { normalizeAgentPath } from "./domains/agents/utils.ts";
 import {
   describeNode,
-  itxEntrypointProps,
-  itxEntrypointBinding,
-  itxEntrypointScopeCacheKey,
   rejectBuiltinCollision,
   withInvokeCapabilityFallback,
 } from "./domains/itx/utils.ts";
@@ -33,8 +30,12 @@ import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
-import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "./domains/repos/utils.ts";
-import { normalizeSandboxPath } from "./domains/sandboxes/cloudflare/utils.ts";
+import {
+  PROJECT_REPO_PATH,
+  PROJECT_WORKER_ENTRY_POINT,
+  PROJECT_WORKER_SOURCE_EXCLUDE,
+} from "./domains/repos/utils.ts";
+import { normalizeSandboxPath } from "./domains/sandboxes/utils.ts";
 import { normalizeSecretPath } from "./domains/secrets/utils.ts";
 import {
   completeGoogleConnect,
@@ -51,7 +52,6 @@ import {
   resolveStreamPath,
 } from "./domains/streams/utils.ts";
 import { DynamicWorkerRef as WorkerRefSchema } from "./domains/workers/schemas.ts";
-import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
 import {
   isObjectSchema,
   listOpenApiOperations,
@@ -118,6 +118,7 @@ import type {
   ProjectIntegrations,
   SlackCapability,
 } from "./types.ts";
+import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
 
 export class StreamRpcTarget extends RpcTarget implements Stream {
   async __describe() {
@@ -657,7 +658,7 @@ class GmailRpcTarget extends RpcTarget implements GmailCapability {
  * and disconnect for slack/google, PLUS the connection-scoped API proxies
  * (`integrations.gmail`, `integrations.slack`) — they live here because they
  * only work through the project's connected accounts. The complete* methods
- * are called by the app worker's OAuth callback routes
+ * are called by the dashboard's OAuth callback routes
  * (/api/integrations/<provider>/callback); their authority is the HMAC-signed
  * OAuth state minted by startOAuthFlow, verified itx-side.
  */
@@ -905,7 +906,6 @@ class DynamicWorkerCollectionRpcTarget extends RpcTarget implements DynamicWorke
     readonly props: {
       auth: ItxAuth;
       ctx: CfExecutionContext;
-      loader: Env["LOADER"];
       projectId: string;
     },
   ) {
@@ -914,12 +914,13 @@ class DynamicWorkerCollectionRpcTarget extends RpcTarget implements DynamicWorke
   }
 
   get<T extends object = Record<string, unknown>>(
-    ref: Parameters<DynamicWorkerCollection["get"]>[0],
+    ...[ref, options]: Parameters<DynamicWorkerCollection["get"]>
   ) {
     const parsed = WorkerRefSchema.parse(ref);
     return new DynamicWorkerRpcTarget({
+      buildBudgetMs: options?.buildBudgetMs,
       ctx: this.props.ctx,
-      loader: this.props.loader,
+      flattenNestedPaths: options?.flattenNestedPaths === true,
       projectId: this.props.projectId,
       ref: parsed,
     }) as unknown as DynamicWorkerCapability<T>;
@@ -935,34 +936,39 @@ class DynamicWorkerCollectionRpcTarget extends RpcTarget implements DynamicWorke
  * the flattened capability dispatcher.
  */
 class DynamicWorkerRpcTarget extends RpcTarget {
-  readonly #runner: DynamicWorkerRunner;
+  readonly #buildBudgetMs: number | undefined;
+  readonly #flattenNestedPaths: boolean;
+  readonly #props: { ctx: CfExecutionContext; projectId: string };
   readonly #ref: DynamicWorkerRef;
+  #lazyRunner: DynamicWorkerRunner | undefined;
 
   constructor(props: {
+    buildBudgetMs?: number;
     ctx: CfExecutionContext;
-    loader: Env["LOADER"];
+    flattenNestedPaths?: boolean;
     projectId: string;
     ref: DynamicWorkerRef;
   }) {
     super();
+    this.#buildBudgetMs = props.buildBudgetMs;
+    this.#flattenNestedPaths = props.flattenNestedPaths === true;
+    this.#props = { ctx: props.ctx, projectId: props.projectId };
     this.#ref = props.ref;
-    const itxScope = itxEntrypointProps({
-      path: normalizePath(props.ref.path),
-      projectId: props.projectId,
-    });
-    this.#runner = new DynamicWorkerRunner({
-      bindings: {
-        // The dynamic worker's ITX binding is supplied by the host context, not
-        // by the worker ref. Props remain worker-supplied, but auth/scope stay
-        // under the project/agent/ITX object that is doing the hosting.
-        ITX: itxEntrypointBinding(props.ctx.exports, itxScope),
-      },
-      globalOutbound: projectEgressFetcher(props.ctx.exports, props.projectId),
-      loader: props.loader,
-      projectId: props.projectId,
-      workerScopeKey: itxEntrypointScopeCacheKey(itxScope),
-    });
     return withInvokeCapabilityFallback(this);
+  }
+
+  // Lazy: __describe answers from the ref alone and must not mint loopback
+  // stubs; only an actual invocation needs a runner. A worker reached through
+  // the public collection runs in the itx scope of its own path — the ITX
+  // binding and egress fetcher come from the HOSTING context, not the ref.
+  get #runner(): DynamicWorkerRunner {
+    this.#lazyRunner ??= new DynamicWorkerRunner({
+      exports: this.#props.ctx.exports,
+      projectId: this.#props.projectId,
+      scopePath: this.#ref.path,
+      waitUntil: (promise) => this.#props.ctx.waitUntil(promise),
+    });
+    return this.#lazyRunner;
   }
 
   // Answered from the REF alone — describing a worker must not boot it (no
@@ -972,16 +978,18 @@ class DynamicWorkerRpcTarget extends RpcTarget {
   // `__describe` the user code may export.
   async __describe() {
     const source =
-      this.#ref.source.type === "inline"
+      this.#ref.source.files.type === "inline"
         ? {
-            type: "inline" as const,
-            mainModule: this.#ref.source.mainModule,
-            modules: Object.fromEntries(
-              Object.entries(this.#ref.source.modules).map(([name, text]) => [
-                name,
-                `${text.length} bytes`,
-              ]),
-            ),
+            ...this.#ref.source,
+            files: {
+              type: "inline" as const,
+              files: Object.fromEntries(
+                Object.entries(this.#ref.source.files.files).map(([name, text]) => [
+                  name,
+                  `${text.length} bytes`,
+                ]),
+              ),
+            },
           }
         : this.#ref.source;
     return describeNode({
@@ -1007,21 +1015,24 @@ class DynamicWorkerRpcTarget extends RpcTarget {
 
   async invokeCapability({
     args = [],
-    flattenNestedPath = false,
+    flattenNestedPath = this.#flattenNestedPaths,
     path,
   }: {
     args?: unknown[];
     flattenNestedPath?: boolean;
     path: string[];
   }) {
-    // Keep every dynamic worker invocation behind DynamicWorkerRunner. Stateless
-    // entrypoints, stateful DO facets, provided worker capabilities, and
-    // project.worker all then share the same loader/egress/ITX binding rules.
-    // Return values pass through untouched on purpose: an RpcTarget returned by
-    // the dynamic worker must remain a live object-capability so Cap'n Web can
-    // serialize it as a chained/pipelined stub for the outer caller.
+    // Every dynamic worker invocation goes through DynamicWorkerRunner:
+    // stateless entrypoints, stateful DO facets, provided worker
+    // capabilities, and project.worker all share its loader/egress/ITX
+    // binding rules. Args and return values pass through untouched on
+    // purpose: both directions may carry live RPC stubs, and an RpcTarget
+    // returned by the dynamic worker must remain a live object-capability so
+    // Cap'n Web can serialize it as a chained/pipelined stub for the outer
+    // caller.
     return await this.#runner.invokeCapability({
       args,
+      buildBudgetMs: this.#buildBudgetMs,
       flattenNestedPath,
       path,
       ref: this.#ref,
@@ -1699,7 +1710,6 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
     return new DynamicWorkerCollectionRpcTarget({
       auth: this.#props.auth,
       ctx: this.#props.ctx,
-      loader: env.LOADER,
       projectId: this.#props.projectId,
     });
   }
@@ -1707,7 +1717,11 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
   get worker() {
     // `project.worker` is only a convenience alias for the default repo-backed
     // stateless worker. The general API is `project.workers.get(ref)`.
-    return this.workers.get<ProjectWorker>(defaultProjectWorkerRef());
+    // Flattened: the seeded worker implements invokeCapability in userspace,
+    // so `itx.worker.slack.chat.postMessage(...)` is one RPC end to end.
+    return this.workers.get<ProjectWorker>(defaultProjectWorkerRef(), {
+      flattenNestedPaths: true,
+    });
   }
 }
 
@@ -1745,13 +1759,16 @@ export function itxForScope(props: {
   });
 }
 
-function defaultProjectWorkerRef(): StatelessDynamicWorkerRef {
+export function defaultProjectWorkerRef(): StatelessDynamicWorkerRef {
   return {
     path: "/",
     source: {
-      repoPath: PROJECT_REPO_PATH,
-      sourcePath: PROJECT_WORKER_SOURCE_PATH,
-      type: "repo",
+      files: {
+        exclude: PROJECT_WORKER_SOURCE_EXCLUDE,
+        repoPath: PROJECT_REPO_PATH,
+        type: "repo",
+      },
+      options: { entryPoint: PROJECT_WORKER_ENTRY_POINT },
     },
     type: "stateless",
   };

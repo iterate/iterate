@@ -76,7 +76,7 @@ Wiring (three points):
 ## Deployment
 
 The domain lives in `src/domains/sandboxes/cloudflare/`; the container class
-deploys as its own `os-<stage>-sandbox` worker
+is a same-script Durable Object in the os worker
 ([worker topology](./worker-topology.md)) with the image built from
 `Dockerfile.sandbox` (`docker.io/cloudflare/sandbox:<sdk-version>` — keep the
 tag in lockstep with the `@cloudflare/sandbox` version in package.json; the

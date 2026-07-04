@@ -3,19 +3,13 @@ import type { Env } from "../../env.ts";
 import type { CapabilityDescription } from "../../types.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { DurableObjectNameCodec, parentScopePath } from "../durable-object-names.ts";
+import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import {
   createStreamProcessorHost,
   type StreamSubscriberWakeRequest,
 } from "../streams/stream-processor-host.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
-import { projectEgressFetcher } from "../projects/utils.ts";
 import { itxForScope, StreamRpcTarget } from "../../rpc-targets.ts";
-import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
-import {
-  itxEntrypointBinding,
-  itxEntrypointProps,
-  itxEntrypointScopeCacheKey,
-} from "../itx/utils.ts";
 import {
   CapabilityHostProcessor,
   type ParentCapabilityHost,
@@ -31,13 +25,6 @@ import {
  */
 export class CapabilityHostDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
-  // The host-supplied ITX binding scope and Worker Loader cache scope must be
-  // built from the same normalized value, otherwise a worker can load with one
-  // scope key and resolve `env.ITX.get()` against a different path.
-  readonly #itxScope = itxEntrypointProps({
-    path: this.#name.path,
-    projectId: this.#name.projectId,
-  });
   readonly #processorHost = createStreamProcessorHost(this.ctx, {
     stream: new StreamRpcTarget({
       auth: trustedInternalAuthContext(),
@@ -62,14 +49,12 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
         // chain.
         parent: this.#parentCapabilityHost(),
         path: this.#name.path,
-        workerRunner: new DynamicWorkerRunner({
-          bindings: {
-            ITX: itxEntrypointBinding(this.ctx.exports, this.#itxScope),
-          },
-          globalOutbound: projectEgressFetcher(this.ctx.exports, this.#name.projectId),
-          loader: this.env.LOADER,
+        // Scripts execute in THIS scope — the runner is minted once for it.
+        dynamicWorkers: new DynamicWorkerRunner({
+          exports: this.ctx.exports,
           projectId: this.#name.projectId,
-          workerScopeKey: itxEntrypointScopeCacheKey(this.#itxScope),
+          scopePath: this.#name.path,
+          waitUntil: (promise) => this.ctx.waitUntil(promise),
         }),
       }),
   );

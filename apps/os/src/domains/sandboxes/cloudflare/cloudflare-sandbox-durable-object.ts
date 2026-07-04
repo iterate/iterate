@@ -4,7 +4,7 @@ import type { Env } from "../../../env.ts";
 import { DurableObjectNameCodec } from "../../durable-object-names.ts";
 import { projectStub } from "../../projects/egress.ts";
 import { PROJECT_REPO_PATH } from "../../repos/utils.ts";
-import { normalizeSandboxPath } from "./utils.ts";
+import { normalizeSandboxPath } from "../utils.ts";
 
 /** Where the project repo is cloned inside every sandbox container. */
 const SANDBOX_PROJECT_REPO_DIR = "/workspace/repo";

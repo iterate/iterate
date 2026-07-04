@@ -1,4 +1,4 @@
-import { normalizePath } from "../../durable-object-names.ts";
+import { normalizePath } from "../durable-object-names.ts";
 
 // The path becomes a URL-shaped Durable Object name, and name PARSING runs it
 // through `new URL(...)` — so any segment URL parsing would rewrite ("..",
@@ -17,7 +17,8 @@ const SANDBOX_PATH_SEGMENT = /^[a-zA-Z0-9._-]+$/;
  * Durable Object namespace, so a sandbox path never collides with the stream,
  * agent, or secret at the same path — it NAMES them. `/agents/bla/bla` is that
  * agent's sandbox (`itx.sandbox`); `/sandboxes/cloudflare/whatever` is the
- * conventional home for standalone sandboxes a caller mints directly.
+ * conventional home for standalone sandboxes a caller mints directly (the
+ * platform's worker builder lives at `/sandboxes/cloudflare/builder`).
  */
 export function normalizeSandboxPath(path: string): string {
   const normalized = normalizePath(path);

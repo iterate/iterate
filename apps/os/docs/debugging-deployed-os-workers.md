@@ -62,7 +62,7 @@ doppler run --config prd -- pnpm cli itx run \
 
 ### Project MCP
 
-The OS MCP transport is the app worker's `/api/mcp` Start route. Production
+The OS MCP transport is the `/api/mcp` Start route. Production
 advertises `https://mcp.iterate.com` as the canonical OAuth resource URL, and
 ingress rewrites that hostname to the same route. The app-host
 `https://os.iterate.com/api/mcp` route is also valid. Fully-local dev defaults
@@ -183,7 +183,7 @@ async () => {
             key: "$metadata.service",
             operation: "in",
             type: "string",
-            value: "os-prd,os-prd-app",
+            value: "os-prd",
           },
         ],
         needle: { value: "mcp", matchCase: false },
