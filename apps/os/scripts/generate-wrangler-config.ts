@@ -5,8 +5,9 @@
  * every dev/build, deploys therefore always see a fresh one, and
  * `pnpm gen:wrangler` refreshes it by hand for ad-hoc wrangler commands.
  *
- * The top-level config is local dev (no routes, containers off so `pnpm dev`
- * never needs Docker); each deployed environment gets an env block expanded
+ * The top-level config is local dev (no routes, containers off by default so
+ * `pnpm dev` never needs Docker — opt in with OS_SANDBOX_CONTAINER_LOCAL_DEV);
+ * each deployed environment gets an env block expanded
  * from its envs.ts entry. Wrangler env blocks do not inherit binding keys,
  * so the shared bindings are spelled out per env by this script — that
  * repetition is exactly why the file is generated instead of hand-written.
@@ -224,10 +225,12 @@ export const config = {
   // config into the OUTPUT wrangler.json (dist/…) that deploys actually use.
   // SSR + API paths reach the worker because no asset file matches them.
   migrations: [{ tag: "v1", new_sqlite_classes: Object.values(DO_CLASSES) }],
-  // Local dev: containers off so `pnpm dev` never requires Docker — sandbox
-  // Durable Objects fail at their constructor until you opt in by flipping
-  // this (deploys ignore the dev section entirely).
-  dev: { enable_containers: false },
+  // Local dev: containers off by default so `pnpm dev` never requires Docker —
+  // sandbox Durable Objects fail at their constructor until you opt in with
+  // `OS_SANDBOX_CONTAINER_LOCAL_DEV=true pnpm dev`, which builds the sandbox
+  // image on Docker/OrbStack and pairs each container with a proxy-everything
+  // egress sidecar (see docs/sandboxes.md). Deploys ignore the dev section.
+  dev: { enable_containers: process.env.OS_SANDBOX_CONTAINER_LOCAL_DEV === "true" },
   ...workerBindings({ workerName: "os", accountId: "" }),
   // Local dev loads optional secrets and the env-shaping keys from Doppler
   // too (deployed envs get the latter as generated vars — see envShapedVars).

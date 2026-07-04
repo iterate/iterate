@@ -433,6 +433,9 @@ importers:
 
   apps/os:
     dependencies:
+      '@cloudflare/containers':
+        specifier: 0.3.7
+        version: 0.3.7
       '@cloudflare/sandbox':
         specifier: 0.12.3
         version: 0.12.3
