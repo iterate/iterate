@@ -19,6 +19,16 @@ describe("normalizeSandboxPath", () => {
     // path (its own Durable Object namespace, so no collision).
     expect(normalizeSandboxPath("/agents/demo")).toBe("/agents/demo");
     expect(normalizeSandboxPath("/agents/bla/bla/bla")).toBe("/agents/bla/bla/bla");
+    // Slack thread agents nest a dotted timestamp — must stay in lockstep.
+    expect(normalizeSandboxPath("/agents/slack/C123/ts-1738000000.123456")).toBe(
+      "/agents/slack/C123/ts-1738000000.123456",
+    );
+  });
+
+  test("accepts any path the agent Durable Object can tolerate (codec-safe)", () => {
+    // `@` survives URL parsing, so an agent can live here and its DO works —
+    // the sandbox must not be stricter than the path it mirrors.
+    expect(normalizeSandboxPath("/agents/foo@bar")).toBe("/agents/foo@bar");
   });
 
   test("adds the leading slash", () => {
@@ -27,10 +37,15 @@ describe("normalizeSandboxPath", () => {
     );
   });
 
-  test("rejects the root path and illegal segments", () => {
+  test("rejects the root path", () => {
     expect(() => normalizeSandboxPath("/")).toThrow(/non-root path/);
     expect(() => normalizeSandboxPath("")).toThrow(/non-root path/);
-    expect(() => normalizeSandboxPath("/foo/../bar")).toThrow(/non-root path/);
-    expect(() => normalizeSandboxPath("/foo bar")).toThrow(/non-root path/);
+  });
+
+  test("rejects paths that do not round-trip through the name codec", () => {
+    // A space becomes %20 and `/x/../y` collapses to `/y`: two spellings would
+    // otherwise mint two Durable Objects for one canonical identity.
+    expect(() => normalizeSandboxPath("/foo/../bar")).toThrow(/round-trip|stable Durable Object/);
+    expect(() => normalizeSandboxPath("/foo bar")).toThrow(/round-trip|stable Durable Object/);
   });
 });
