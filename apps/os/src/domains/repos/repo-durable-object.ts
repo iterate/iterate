@@ -100,6 +100,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       remote: repo.remote,
       token: repo.token,
     });
+    this.#recordPushedHead(result);
 
     if (result.branch === repo.defaultBranch) {
       // `commitFiles()` is our read-your-write boundary. Once it returns, callers
@@ -126,6 +127,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       replaceAll: parsed.replaceAll,
       token: repo.token,
     });
+    this.#recordPushedHead(result);
 
     if (result.branch === repo.defaultBranch) {
       await this.refreshWorkerSourceProjectionsAfterMainCommit(result.changedPaths);
@@ -134,15 +136,52 @@ export class RepoDurableObject extends DurableObject<Env> {
     return result;
   }
 
-  /** Committed file contents at HEAD, or null when the path does not exist. */
-  async readFile(input: { path: string }): Promise<RepoFileRead | null> {
-    const path = normalizeRepoFilePath(input.path);
-    const repo = await this.gitAccess();
-    const snapshot = await cloneRepoSnapshot({
+  /**
+   * The Artifacts git endpoint is eventually consistent: a clone issued right
+   * after a successful push can still serve the previous HEAD (observed in
+   * preview e2e — repo.edit() committed, the immediate readFile() returned the
+   * pre-edit content). Every push records its commit oid here, and every read
+   * clone retries briefly until it observes at least that head, giving the DO
+   * read-your-write semantics over the remote. A concurrent writer may advance
+   * HEAD past the recorded oid; the retry loop treats any DIFFERENT head as
+   * possibly-newer only after exhausting its attempts.
+   */
+  #recordPushedHead(result: { branch: string; commitOid: string; noChanges?: boolean }) {
+    if (result.noChanges) return;
+    this.ctx.storage.kv.put(`repo-pushed-head:${result.branch}`, result.commitOid);
+  }
+
+  async #cloneSnapshotReadYourWrite(repo: {
+    defaultBranch: string;
+    remote: string;
+    token: string;
+  }) {
+    const expected = this.ctx.storage.kv.get<string>(`repo-pushed-head:${repo.defaultBranch}`);
+    let snapshot = await cloneRepoSnapshot({
       branch: repo.defaultBranch,
       remote: repo.remote,
       token: repo.token,
     });
+    if (!expected) return snapshot;
+    for (let attempt = 1; snapshot.commitOid !== expected && attempt <= 5; attempt++) {
+      console.warn(
+        `repo clone is behind the last push (saw ${snapshot.commitOid}, pushed ${expected}); retry ${attempt}`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+      snapshot = await cloneRepoSnapshot({
+        branch: repo.defaultBranch,
+        remote: repo.remote,
+        token: repo.token,
+      });
+    }
+    return snapshot;
+  }
+
+  /** Committed file contents at HEAD, or null when the path does not exist. */
+  async readFile(input: { path: string }): Promise<RepoFileRead | null> {
+    const path = normalizeRepoFilePath(input.path);
+    const repo = await this.gitAccess();
+    const snapshot = await this.#cloneSnapshotReadYourWrite(repo);
     const absolutePath = `${REPO_DIR}/${path}`;
     if (!(await snapshot.filesystem.exists(absolutePath))) return null;
     return {
@@ -155,11 +194,7 @@ export class RepoDurableObject extends DurableObject<Env> {
   /** All committed file paths at HEAD. */
   async listFiles(): Promise<{ commitOid: string; paths: string[] }> {
     const repo = await this.gitAccess();
-    const snapshot = await cloneRepoSnapshot({
-      branch: repo.defaultBranch,
-      remote: repo.remote,
-      token: repo.token,
-    });
+    const snapshot = await this.#cloneSnapshotReadYourWrite(repo);
     const paths: string[] = [];
     const walk = async (dir: string) => {
       for (const entry of await snapshot.filesystem.readdir(dir)) {
@@ -206,12 +241,28 @@ export class RepoDurableObject extends DurableObject<Env> {
     // projects and freshly-created repos, so project creation does not need a new
     // repo/source-updated event just to seed the cache.
     const repo = await this.gitAccess();
-    const source = await readRepoWorkerSource({
+    // Same eventual-consistency guard as #cloneSnapshotReadYourWrite: baking a
+    // stale clone here would pin `project.worker` to pre-push code even though
+    // the commit RPC already resolved.
+    const expected = this.ctx.storage.kv.get<string>(`repo-pushed-head:${input.branch}`);
+    let source = await readRepoWorkerSource({
       branch: input.branch,
       path: input.sourcePath,
       remote: repo.remote,
       token: repo.token,
     });
+    for (let attempt = 1; expected && source.commitOid !== expected && attempt <= 5; attempt++) {
+      console.warn(
+        `repo worker-source clone is behind the last push (saw ${source.commitOid}, pushed ${expected}); retry ${attempt}`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+      source = await readRepoWorkerSource({
+        branch: input.branch,
+        path: input.sourcePath,
+        remote: repo.remote,
+        token: repo.token,
+      });
+    }
     const projection = await workerSourceProjection({
       branch: input.branch,
       content: source.content,
