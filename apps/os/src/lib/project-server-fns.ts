@@ -4,6 +4,7 @@ import { newHttpBatchRpcSession } from "capnweb";
 import { env } from "cloudflare:workers";
 import { authenticateCapnwebAdmin } from "~/auth/admin-auth-cookie.ts";
 import { getUserPrincipal } from "~/auth/principal.ts";
+import { isOnboardingActive } from "~/lib/onboarding-agent.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import {
   chooseRootProjectRedirect,
@@ -56,11 +57,10 @@ type ProjectWithIngressUrl = Project & { ingressUrl: string };
  * capnweb HTTP batch that forwards the caller's cookie.
  *
  * A brand-new auth signup creates the user/org/project records in auth before
- * OS has a project stream. When that single auth-known project is the whole
- * project set, this starts the OS bootstrap with `waitUntilCreated: false`,
- * then redirects into the same `welcome=true` project home path used by the
- * create form. The project home keeps showing creation progress and hands off
- * to `/agents/onboarding` when `project/created` lands.
+ * OS has a project stream. When that single auth-known project is still
+ * missing, this starts the OS bootstrap with `waitUntilCreated: false`. Single
+ * project users then route straight to the onboarding agent stream; that page
+ * can render immediately while stream processors catch up.
  *
  * Failures degrade to `/projects`, where the client-side recovery button and
  * auto-recovery still render the real list.
@@ -84,7 +84,31 @@ export const getRootProjectRedirectServerFn: (input?: {
         projects,
       });
 
-      if (decision.kind === "project" && decision.welcome) {
+      if (
+        decision.kind === "project" &&
+        decision.onboarding &&
+        decision.project.deploymentStatus === "ready"
+      ) {
+        try {
+          const project = await root.projects.get(decision.project.id);
+          const { state } = await project.processor.snapshot();
+          // The agent stream route can render before the agent capability is
+          // listed. `onboardingActive` is the phase marker; waiting for the
+          // reduced agent list here can wrongly send fresh signups to home.
+          decision.onboarding = isOnboardingActive(state);
+        } catch {
+          // Do not guess "home" on a transient project snapshot failure. The
+          // /projects client path has the retrying self-heal, while direct home
+          // would strand an in-progress signup away from onboarding.
+          return { kind: "projects" };
+        }
+      }
+
+      if (
+        decision.kind === "project" &&
+        decision.onboarding &&
+        decision.project.deploymentStatus === "missing"
+      ) {
         try {
           await root.projects.create({
             projectId: decision.project.id,

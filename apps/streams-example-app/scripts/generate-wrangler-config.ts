@@ -42,7 +42,10 @@ function envBlock(env: StreamsExampleEnv) {
 
 const config = {
   $schema: "node_modules/wrangler/config-schema.json",
-  name: "streams-example-app-dev",
+  // Env-less service name: wrangler tags every `--env` deploy with
+  // `cf:service=<top-level name>`, so a "-dev" suffix here would mis-bucket
+  // deployed workers under a fake "dev" service in observability queries.
+  name: "streams-example-app",
   main: "./src/worker.ts",
   compatibility_date: "2026-06-17",
   compatibility_flags: ["nodejs_compat", "nodejs_compat_populate_process_env"],

@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import { Outlet, createFileRoute } from "@tanstack/react-router";
+import { Outlet, createFileRoute, useRouterState } from "@tanstack/react-router";
 import { ItxProvider } from "~/itx/itx-react.tsx";
 import { ItxResourceLoading } from "~/components/itx-boundary.tsx";
 import { getProjectBySlugServerFn } from "~/lib/project-server-fns.ts";
@@ -28,14 +28,22 @@ export const Route = createFileRoute("/_app/projects/$projectSlug")({
 
 function ProjectLayout() {
   const { project } = Route.useRouteContext();
+  const isAgentStreamRoute = useRouterState({
+    select: (state) =>
+      state.matches.some(
+        (match) => match.routeId === "/_app/projects/$projectSlug/agents/streams/$",
+      ),
+  });
   // One shared project socket for every route under this layout, keyed by the
   // project ID: context resolution is client-side on itx
   // (authenticate() then projects.get(id)), so the address must be the id the
   // itx knows, not the slug. Routes that need the GLOBAL session instead
   // call `useItx({})` to force it.
+  // Agent stream pages have their own inner connection boundary and can paint
+  // their route shell before the project socket finishes connecting.
   return (
     <Suspense fallback={<ItxResourceLoading label="project" />}>
-      <ItxProvider projectId={project.id}>
+      <ItxProvider projectId={project.id} prewarm={!isAgentStreamRoute}>
         <Outlet />
       </ItxProvider>
     </Suspense>
