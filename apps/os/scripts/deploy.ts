@@ -136,7 +136,13 @@ async function bakeStaticAuthJwks(ctx: EnvContext<(typeof envs)[keyof typeof env
 }
 
 /** Fetch the auth worker's live JWKS, retrying transient failures 3 times. */
+/**
+ * Poll the issuer's JWKS for up to ~4 minutes: the preview CI lane deploys
+ * auth and os IN PARALLEL, so this env's auth worker may legitimately still
+ * be mid-deploy (migrations + build take minutes) when os gets here.
+ */
 async function fetchJwksWithRetry(url: string, envName: string) {
+  const deadline = Date.now() + 4 * 60_000;
   for (let attempt = 1; ; attempt++) {
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
@@ -145,13 +151,16 @@ async function fetchJwksWithRetry(url: string, envName: string) {
       if (!Array.isArray(body.keys) || body.keys.length === 0) throw new Error("JWKS has no keys");
       return body as { keys: Record<string, unknown>[] };
     } catch (error) {
-      if (attempt === 3) {
+      if (Date.now() > deadline) {
         throw new Error(
-          `Deploy-time JWKS fetch from ${url} failed after 3 attempts (${error}). ` +
+          `Deploy-time JWKS fetch from ${url} kept failing for 4 minutes (last: ${error}). ` +
             `Deploy the auth worker for ${envName} first, or pin APP_CONFIG_ITERATE_AUTH__JWKS in Doppler.`,
         );
       }
-      await new Promise((res) => setTimeout(res, 2000 * attempt));
+      console.warn(
+        `JWKS fetch attempt ${attempt} failed (${error}); auth may still be deploying — retrying…`,
+      );
+      await new Promise((res) => setTimeout(res, Math.min(2000 * attempt, 10_000)));
     }
   }
 }

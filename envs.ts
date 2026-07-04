@@ -118,32 +118,32 @@ export const envs = {
     authDbId: "73e5042b-f076-43a3-9ada-c13caaae7a35",
   }),
   preview_2: previewSlot(2, {
-    projectDirectoryKvId: "8eeea44cda5b45928ee8659701224ade",
-    authDbId: "69acb8fa-7d81-49d0-a72a-63af707c00da",
+    projectDirectoryKvId: "237cc9a316a146e98f04f00218b0a69c",
+    authDbId: "c5a24ab5-e10b-4ca5-a2f2-2451803bc146",
   }),
   preview_3: previewSlot(3, {
-    projectDirectoryKvId: "4cbef780af3846bda2cf3869082b807c",
-    authDbId: "aeb45007-36ec-41f1-9e61-bdade6650a84",
+    projectDirectoryKvId: "dd06b3a37bbd4b9f838fadc895e5a6d6",
+    authDbId: "2017a0b9-ebd5-482c-b2b8-894a27733dbc",
   }),
   preview_4: previewSlot(4, {
-    projectDirectoryKvId: "bc1f3ce2cfe44a559b1d744ecce100f8",
-    authDbId: "fd193905-8deb-416d-9fe9-146485efc669",
+    projectDirectoryKvId: "d0b6679c68114add86e024cf7d0a7646",
+    authDbId: "bd115332-9515-4bbf-96d5-f041e628bcf9",
   }),
   preview_5: previewSlot(5, {
     projectDirectoryKvId: "a0f87dc67b39465bb9c00bd05587eadc",
     authDbId: "f8542574-48e3-4374-910f-3186293137f0",
   }),
   preview_6: previewSlot(6, {
-    projectDirectoryKvId: "c32330a310d64ccd8af2c2d760749066",
-    authDbId: "0e9c6755-818a-44bb-9097-a1ac4cb5b27d",
+    projectDirectoryKvId: "e414e68c13e1471a8a3c41f5e50136e4",
+    authDbId: "bd78258a-2167-429f-a504-9e1eb1c18ef2",
   }),
   preview_7: previewSlot(7, {
-    projectDirectoryKvId: "242d18dc7ae9464a85b9cb6107f67236",
-    authDbId: "f9aa6216-bf65-43bd-8947-6a1dc1189a27",
+    projectDirectoryKvId: "7c1ad0f9195d4d98986253a5fb05d97a",
+    authDbId: "5e2b9db1-d617-47f6-bc57-3b9c150e39ce",
   }),
   preview_8: previewSlot(8, {
-    projectDirectoryKvId: "a981052b548843f2a643f4a4bc0d7109",
-    authDbId: "51003bad-73c1-43b4-9905-2806067b4534",
+    projectDirectoryKvId: "d06139a93f2846cb9f46c38810796c06",
+    authDbId: "87dbf699-824a-4f08-994c-7debce8c18e5",
   }),
   preview_9: previewSlot(9, {
     projectDirectoryKvId: "9fac543a7e994b7f972328c6a07152ac",
