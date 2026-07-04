@@ -127,7 +127,13 @@ function workerBindings(input: {
         class_name: DO_CLASSES.SANDBOX,
         image: "./Dockerfile.sandbox",
         instance_type: "lite",
-        max_instances: input.maxContainerInstances ?? 10,
+        // Sized for e2e churn: the preview lanes provision a fresh project
+        // (and sandbox container) per test, and idle containers hold an
+        // instance slot until sleepAfter (3m, see
+        // CloudflareSandboxDurableObject). 10 wedged the sandbox-exec specs
+        // after ~5 back-to-back runs; lite instances bill on usage, not
+        // reservation, so headroom is free.
+        max_instances: input.maxContainerInstances ?? 40,
       },
     ],
     secrets: { required: REQUIRED_SECRETS },

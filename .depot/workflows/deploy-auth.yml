@@ -11,6 +11,8 @@ on:
       - main
     paths:
       - apps/auth/**
+      - envs.ts
+      - scripts/lib/**
       - apps/auth-contract/**
       - packages/shared/**
       - packages/ui/**

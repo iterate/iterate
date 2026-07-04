@@ -807,6 +807,42 @@ describe("claimEnvironmentConfigLease", () => {
     expect(semaphore.acquire).toHaveBeenCalledWith(expect.objectContaining({ holder: "pr-1600" }));
   });
 
+  it("adopts a lease the semaphore already attributes to this holder instead of taking a second slot", async () => {
+    // A cancelled run acquired preview-3 but died before recording it in the
+    // PR body: the next run starts with no recorded lease, and must re-issue
+    // the existing hold rather than lease a second slot.
+    const semaphore = fakeSemaphore({
+      acquireSpecific: vi.fn(async () =>
+        fakeLease({ slug: "preview-3", data: { dopplerConfig: "preview_3" } }),
+      ),
+      list: vi.fn(async () => [
+        {
+          data: { dopplerConfig: "preview_3" },
+          holder: "pr-1600",
+          lastAcquiredAt: null,
+          lastReleasedAt: null,
+          leaseState: "leased" as const,
+          leasedUntil: Date.now() + 60_000,
+          slug: "preview-3",
+        },
+      ]),
+    });
+
+    const lease = await claimEnvironmentConfigLease({
+      createPreviewSemaphoreResourceClient: () => semaphore,
+      holder: "pr-1600",
+      leaseMs: 1000,
+      previousEnvironmentConfigLease: null,
+      waitTotalMs: 0,
+    });
+
+    expect(lease.slug).toBe("preview-3");
+    expect(semaphore.acquireSpecific).toHaveBeenCalledWith(
+      expect.objectContaining({ slug: "preview-3", holder: "pr-1600", force: true }),
+    );
+    expect(semaphore.acquire).not.toHaveBeenCalled();
+  });
+
   it("propagates unexpected semaphore errors instead of silently switching slots", async () => {
     const semaphore = fakeSemaphore({
       renew: vi.fn(async () => {
