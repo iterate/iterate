@@ -31,7 +31,7 @@ export function chooseRootProjectRedirect(input: {
   }
 
   if (readyProjects.length === 1) {
-    return { kind: "project", project: readyProjects[0]!, welcome: false };
+    return { kind: "project", project: readyProjects[0]!, welcome: true };
   }
 
   if (input.projects.length === 1 && input.projects[0]!.deploymentStatus === "missing") {

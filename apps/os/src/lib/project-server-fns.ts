@@ -56,11 +56,12 @@ type ProjectWithIngressUrl = Project & { ingressUrl: string };
  * capnweb HTTP batch that forwards the caller's cookie.
  *
  * A brand-new auth signup creates the user/org/project records in auth before
- * OS has a project stream. When that single auth-known project is the whole
- * project set, this starts the OS bootstrap with `waitUntilCreated: false`,
- * then redirects into the same `welcome=true` project home path used by the
- * create form. The project home keeps showing creation progress and hands off
- * to `/agents/onboarding` when `project/created` lands.
+ * OS has a project stream. When that single auth-known project is still
+ * missing, this starts the OS bootstrap with `waitUntilCreated: false`, then
+ * redirects into the same `welcome=true` project home path used by the create
+ * form. Ready single-project users also get `welcome=true` so project home can
+ * hand off to `/agents/onboarding` when the processor still says onboarding is
+ * active.
  *
  * Failures degrade to `/projects`, where the client-side recovery button and
  * auto-recovery still render the real list.
@@ -84,7 +85,7 @@ export const getRootProjectRedirectServerFn: (input?: {
         projects,
       });
 
-      if (decision.kind === "project" && decision.welcome) {
+      if (decision.kind === "project" && decision.project.deploymentStatus === "missing") {
         try {
           await root.projects.create({
             projectId: decision.project.id,

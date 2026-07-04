@@ -50,16 +50,20 @@ function ProjectHomePage() {
     [],
   );
   const created = lifecycle.state?.created ?? false;
-  // Onboarding phase: the project is created and the onboarding agent is
-  // still the only agent — the user hasn't started working beyond it yet.
+  // Onboarding phase: the project is created, the onboarding agent exists,
+  // and it has not appended its completion event yet.
   const agents = lifecycle.state?.agents ?? [];
-  const inOnboarding = created && agents.length === 1 && agents[0]?.path === ONBOARDING_AGENT_PATH;
+  const inOnboarding =
+    created &&
+    lifecycle.state?.onboardingCompletedAt == null &&
+    agents.some((agent) => agent.path === ONBOARDING_AGENT_PATH);
+  const handOffToOnboarding = welcome === true && inOnboarding;
 
   // The welcome handoff: arrived here from the create form, so once the saga
   // commits `project/created` (a push flips `created` live — possibly before
   // first paint on a fast deployment), continue into the onboarding agent.
   useEffect(() => {
-    if (welcome !== true || !created) return;
+    if (!handOffToOnboarding) return;
     void navigate({
       to: "/projects/$projectSlug/agents/streams/$",
       params: { projectSlug: params.projectSlug, _splat: ONBOARDING_AGENT_PATH },
@@ -68,7 +72,7 @@ function ProjectHomePage() {
       search: {},
       replace: true,
     });
-  }, [welcome, created, navigate, params.projectSlug]);
+  }, [handOffToOnboarding, navigate, params.projectSlug]);
 
   const panel =
     lifecycle.state === undefined && welcome !== true ? (
@@ -77,7 +81,7 @@ function ProjectHomePage() {
       <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
         Loading project…
       </div>
-    ) : created && welcome !== true ? (
+    ) : created && !handOffToOnboarding ? (
       <>
         {inOnboarding ? (
           <Link

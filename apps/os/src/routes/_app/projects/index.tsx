@@ -5,7 +5,7 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
-import { Link, createFileRoute } from "@tanstack/react-router";
+import { Link, createFileRoute, redirect } from "@tanstack/react-router";
 import { FolderPlus } from "lucide-react";
 import { useAuthClient } from "@iterate-com/auth/client";
 import { Badge } from "@iterate-com/ui/components/badge";
@@ -13,6 +13,7 @@ import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
+import { getRootProjectRedirectServerFn } from "~/lib/project-server-fns.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import {
   fetchProjectsList,
@@ -30,9 +31,24 @@ type OrganizationSummary = {
 
 export const Route = createFileRoute("/_app/projects/")({
   ssr: false,
-  loader: async () => ({
-    routeConfig: await getPublicRouteConfig(),
-  }),
+  loader: async () => {
+    const decision = await getRootProjectRedirectServerFn({
+      data: { preferredProjectSlug: null },
+    });
+
+    if (decision.kind === "project") {
+      throw redirect({
+        to: "/projects/$projectSlug",
+        params: { projectSlug: decision.project.slug },
+        search: decision.welcome ? { welcome: true } : {},
+        replace: true,
+      });
+    }
+
+    return {
+      routeConfig: await getPublicRouteConfig(),
+    };
+  },
   pendingComponent: ProjectsIndexPending,
   component: ProjectsIndexPage,
 });

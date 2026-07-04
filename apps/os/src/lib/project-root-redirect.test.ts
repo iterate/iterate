@@ -23,7 +23,7 @@ describe("chooseRootProjectRedirect", () => {
     });
   });
 
-  test("redirects to the only ready project without welcome mode", () => {
+  test("sends the only ready project through welcome mode", () => {
     expect(
       chooseRootProjectRedirect({
         preferredProjectSlug: null,
@@ -32,7 +32,7 @@ describe("chooseRootProjectRedirect", () => {
     ).toMatchObject({
       kind: "project",
       project: { slug: "alpha" },
-      welcome: false,
+      welcome: true,
     });
   });
 
