@@ -323,11 +323,6 @@ extra tabs the spec opens later get wrapped. Any multi-tab spec now benefits.
   `completionTimeoutMs` budget. Watching whether it ever double-flakes across
   the marathon before fixing — a retry-absorbed blip is within the CI contract.
 
-- `packages/mock-http-proxy` unit test `msw-server-adapter.http-parity ›
-does not mark non-matching one-time handlers as used` failed once in the
-  Depot `Test / test` lane with `fetch failed: bad port` — the listen(0)
-  helper appears to have produced port 0 despite waiting for 'listening'.
-  Unit lane, outside preview e2e; needs its own repro.
 - One Depot push (`346bcebdb`) produced a run with **zero scheduled
   workflows** (`depot ci status` shows `"workflows": []`), so no checks were
   created for that head at all; a manual `depot ci dispatch` of

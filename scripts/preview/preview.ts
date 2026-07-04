@@ -814,11 +814,7 @@ export type CloudflarePreviewApp = {
 // durable-object-utils, callable, codemode, config, evlog, ...), so trigger on the
 // whole package rather than chasing individual subdirectories. Deploys are idempotent,
 // so over-triggering is safe; under-triggering means prod silently misses deploys.
-export const cloudflareAppSharedPaths = [
-  "packages/shared/**",
-  "packages/ui/**",
-  "packages/mock-http-proxy/**",
-] as const;
+export const cloudflareAppSharedPaths = ["packages/shared/**", "packages/ui/**"] as const;
 
 export const cloudflarePreviewSharedPaths = [
   // The preview deploy + e2e + cleanup lifecycle is one Depot CI workflow.
