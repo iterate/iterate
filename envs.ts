@@ -241,9 +241,9 @@ export const semaphoreEnvs = {
   preview_3: semaphorePreviewSlot(3, "17493958-1589-4a2c-a280-0a55bc11a92c"),
   preview_4: semaphorePreviewSlot(4, "f61083ef-23b5-4201-8731-8d3d46ebfeaa"),
   preview_5: semaphorePreviewSlot(5, "eea19312-34e2-4e5c-be19-fe6929636544"),
-  preview_6: semaphorePreviewSlot(6, "1b27c077-5dec-4a13-848c-249a321601b4"),
-  preview_7: semaphorePreviewSlot(7, "619f7832-6a56-46ed-b760-476ba10bdfd4"),
-  preview_8: semaphorePreviewSlot(8, "53858fae-e556-445d-b2ce-0b68fe56582f"),
+  preview_6: semaphorePreviewSlot(6, "eff27a10-2f52-4077-9372-05dcf1c77ccd"),
+  preview_7: semaphorePreviewSlot(7, "f4b1b641-71bd-4952-8726-3c2c543383fe"),
+  preview_8: semaphorePreviewSlot(8, "77af433e-c870-43a6-be8e-1d2452feb23d"),
   preview_9: semaphorePreviewSlot(9, "53522759-5f82-4055-b0c2-248d66988b7d"),
 } satisfies Record<string, SemaphoreEnv>;
 
