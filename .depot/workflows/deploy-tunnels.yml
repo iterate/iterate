@@ -11,6 +11,8 @@ on:
       - main
     paths:
       - apps/tunnels/**
+      - envs.ts
+      - scripts/lib/**
       - packages/shared/**
       - packages/ui/**
       - packages/mock-http-proxy/**
