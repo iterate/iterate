@@ -1,6 +1,18 @@
 # Dynamic Worker Build Requirements
 
-Status: draft for design review.
+Status: implemented (see tasks/os-dynamic-worker-build-pipeline.md and
+apps/os/src/domains/workers/), with one deliberate revision to this document:
+build coordination is a direct RPC to a dedicated **builder worker**, not a
+stream processor. The stream-processor design below was built first and then
+removed — build lifecycle events bought observability nobody planned to
+consume, at the price of a processor subscription on every scope, a
+claim/stale-window dedupe fold, and callers waiting on eventually-consistent
+KV. The builder worker keeps every property that mattered (one bundler
+toolchain in one script, deduped concurrent builds, deterministic
+content-addressed artifacts) with none of the coordination machinery; build
+failures reach callers as plain errors. The journal records what dynamic
+workers DO (script executions, capability mounts), not how their bytes were
+produced.
 
 ## Goal
 
@@ -115,35 +127,20 @@ await createWorker({
 });
 ```
 
-## Stream Processor Requirements
+## Build Coordination Requirements
 
-Introduce a worker build stream processor rather than placing build events on the
-repo processor. The processor should run anywhere dynamic ITX work can happen,
-including project and agent paths.
+(REVISED — see the status note above. The original requirement here was a
+worker-build stream processor with `worker-build/requested|completed|failed`
+events on the ref's scope stream; it was implemented, then removed.)
 
-Worker build lifecycle belongs to the same ITX scope path as the dynamic worker.
-This should reuse `DynamicWorkerRef.path`: that path already scopes the worker's
-`env.ITX` binding and stateful worker identity, and it should also be the stream
-where the worker emits build lifecycle events.
-
-The worker build processor should be a dependency of the ITX processor. Any
-stream that gets an ITX processor should also get a worker build processor
-subscription. Do not lazily attach it only after the first dynamic worker build;
-ITX scopes are the runtime contexts where dynamic workers execute, so build
-coordination is part of that standard scope machinery.
-
-The worker build processor owns build lifecycle events such as:
-
-- `events.iterate.com/worker-build/requested`
-- `events.iterate.com/worker-build/completed`
-- `events.iterate.com/worker-build/failed`
-
-These events record build identity and status, not built module contents. Repo
-file source events must not contain expanded repo file contents; the repo file
-source is resolved by the build processor. Inline file source events may contain
-the caller-provided file map by design, especially for worker-backed provided
-capabilities. Inline file size limits are out of scope for this requirements
-pass.
+Builds are coordinated by a direct RPC from the resolver (which runs only in
+the worker worker) to the dedicated builder worker's `build()` entrypoint. The
+builder is the only script carrying the bundler toolchain, deduplicates
+concurrent builds of one key in-process, writes the artifact cache, and
+returns the artifact by value so callers never wait on KV propagation. Build
+failures propagate to the caller as plain errors. Stream events record what
+dynamic workers DO (script executions, capability mounts) — not how their
+bytes were produced.
 
 ## Build Output Requirements
 

@@ -82,13 +82,14 @@ export async function adoptDoMigrationTag(ctx: CfContext, workerName: string) {
     `/workers/scripts?per_page=1000`,
   );
   const script = scripts.find((candidate) => candidate.id === workerName);
-  // Loose != also catches the list endpoint omitting the field (undefined).
-  if (!script || script.migration_tag != null) return;
-  // Adoption is ONLY correct when the classes are already live: tagging a
-  // CLASSLESS worker makes wrangler treat the v1 migrations as already
-  // applied and skip creating the classes — wedging every future deploy on
-  // 10061 (observed live on os-preview-3, 2026-07-04). Classless workers
-  // take deployWithSecrets' bootstrap-deploy path instead.
+  // Loose == also catches the list endpoint omitting the field (undefined).
+  const remoteTag = script?.migration_tag == null ? null : script.migration_tag;
+  if (!script || remoteTag === "v1") return;
+  // Adoption/retag is ONLY correct when the classes are already live:
+  // tagging a CLASSLESS worker makes wrangler treat the v1 migrations as
+  // already applied and skip creating the classes — wedging every future
+  // deploy on 10061 (observed live on os-preview-3, 2026-07-04). Classless
+  // workers take deployWithSecrets' bootstrap-deploy path instead.
   const settings = await ctx
     .cf<{ bindings?: { type: string }[] }>(`/workers/scripts/${workerName}/settings`)
     .catch(() => null);
@@ -96,9 +97,28 @@ export async function adoptDoMigrationTag(ctx: CfContext, workerName: string) {
     console.log(`Worker ${workerName} has no live DO classes — skipping migration-tag adoption.`);
     return;
   }
-  console.log(`Adopting DO migration tag v1 on ${workerName} (was untagged/alchemy-era)`);
+  // Two alchemy-era shapes, one remedy — an empty-steps migration that lands
+  // the worker on tag v1 without touching classes:
+  //   tag null          → plain adoption ({new_tag: "v1"})
+  //   tag "alchemy:vN"  → rename ({old_tag: <remote>, new_tag: "v1"}); without
+  //     it wrangler warns "migration tag not found in your wrangler.json",
+  //     re-applies ALL migrations, and dies on CF 10074 (observed live on
+  //     semaphore-prd/tunnels-prd/streams-example-app-prd, 2026-07-04 — the
+  //     old deploy workflows kept re-tagging alchemy:vN until the cutover).
+  console.log(
+    `Adopting DO migration tag v1 on ${workerName} (was ${remoteTag === null ? "untagged" : `"${remoteTag}"`}/alchemy-era)`,
+  );
   const form = new FormData();
-  form.set("settings", JSON.stringify({ migrations: { new_tag: "v1", steps: [] } }));
+  form.set(
+    "settings",
+    JSON.stringify({
+      migrations: {
+        ...(remoteTag === null ? {} : { old_tag: remoteTag }),
+        new_tag: "v1",
+        steps: [],
+      },
+    }),
+  );
   await ctx.cf(`/workers/scripts/${workerName}/settings`, {
     method: "PATCH",
     body: form,

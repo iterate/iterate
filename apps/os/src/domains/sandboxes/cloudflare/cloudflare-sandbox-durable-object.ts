@@ -2,7 +2,7 @@ import { Sandbox } from "@cloudflare/sandbox";
 import type { Env } from "../../../env.ts";
 import { DurableObjectNameCodec } from "../../durable-object-names.ts";
 import { PROJECT_REPO_PATH } from "../../repos/utils.ts";
-import { normalizeCloudflareSandboxPath } from "./utils.ts";
+import { normalizeSandboxPath } from "../utils.ts";
 
 /** Where the project repo is cloned inside every sandbox container. */
 const SANDBOX_PROJECT_REPO_DIR = "/workspace/repo";
@@ -31,6 +31,17 @@ const IDENTITY_STORAGE_KEY = "iterate-sandbox-identity";
  */
 export class CloudflareSandboxDurableObject extends Sandbox<Env> {
   /**
+   * Idle containers hold an instance slot until this expires, and the app's
+   * container namespace caps concurrent instances (maxInstances in
+   * alchemy.run.ts). With the SDK default of 10m, e2e churn (a fresh project +
+   * sandbox per test) exhausted the cap in minutes and every later sandbox
+   * start wedged until an old container timed out. 3m keeps interactive
+   * sessions warm across a pause while reclaiming capacity ~3x faster; a
+   * restart after idle costs one container cold boot + repo clone.
+   */
+  override sleepAfter = "3m";
+
+  /**
    * Record who this sandbox is before any other traffic reaches it.
    *
    * Identity normally derives from the Durable Object name, but container
@@ -49,7 +60,7 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
    * must match `ctx.id.name` whenever the runtime provides it).
    */
   async ensureIdentity(identity: SandboxIdentity): Promise<void> {
-    const path = normalizeCloudflareSandboxPath(identity.path);
+    const path = normalizeSandboxPath(identity.path);
     const expectedName = DurableObjectNameCodec.stringify({
       projectId: identity.projectId,
       path,
@@ -75,7 +86,7 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     const name = this.ctx.id.name;
     if (name !== undefined) {
       const parsed = DurableObjectNameCodec.parse(name);
-      return { path: normalizeCloudflareSandboxPath(parsed.path), projectId: parsed.projectId };
+      return { path: normalizeSandboxPath(parsed.path), projectId: parsed.projectId };
     }
     const stored = this.ctx.storage.kv.get<SandboxIdentity>(IDENTITY_STORAGE_KEY);
     if (!stored) {
@@ -139,7 +150,6 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     // the sandbox without the repo until the container is replaced.
     const existing = await this.exists(`${SANDBOX_PROJECT_REPO_DIR}/.git/HEAD`);
     if (existing.exists) return;
-    await this.exec(`rm -rf ${SANDBOX_PROJECT_REPO_DIR}`);
 
     const repo = this.env.REPO.getByName(
       DurableObjectNameCodec.stringify({
@@ -155,14 +165,30 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     remote.username = "x";
     remote.password = access.token;
 
-    const result = await this.gitCheckout(remote.toString(), {
-      branch: access.defaultBranch,
-      targetDir: SANDBOX_PROJECT_REPO_DIR,
-    });
-    if (!result.success) {
-      throw new Error(
-        `cloning the project repo into ${SANDBOX_PROJECT_REPO_DIR} failed (exit ${result.exitCode})`,
-      );
+    // The Artifacts git endpoint intermittently returns 503 on a cold repo
+    // (observed in preview e2e: "Failed to clone repository ... error: 503").
+    // A clone into a fresh directory is idempotent, so retry with a short
+    // backoff instead of failing the sandbox start on one bad response.
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await this.exec(`rm -rf ${SANDBOX_PROJECT_REPO_DIR}`);
+      try {
+        const result = await this.gitCheckout(remote.toString(), {
+          branch: access.defaultBranch,
+          targetDir: SANDBOX_PROJECT_REPO_DIR,
+        });
+        if (result.success) return;
+        lastError = new Error(
+          `cloning the project repo into ${SANDBOX_PROJECT_REPO_DIR} failed (exit ${result.exitCode})`,
+        );
+      } catch (error) {
+        lastError = error;
+      }
+      if (attempt < 3) {
+        console.warn(`sandbox project repo clone attempt ${attempt} failed, retrying:`, lastError);
+        await new Promise((resolve) => setTimeout(resolve, 2_000 * attempt));
+      }
     }
+    throw lastError;
   }
 }

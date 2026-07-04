@@ -2,17 +2,17 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import type { StatefulDynamicWorkerRef } from "../../types.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import {
-  itxEntrypointBinding,
-  itxEntrypointProps,
-  itxEntrypointScopeCacheKey,
-} from "../itx/utils.ts";
-import { invokeFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
-import { projectEgressFetcher } from "../projects/utils.ts";
+import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
 import { DynamicWorkerRunner } from "./worker-runner.ts";
 
 const FACET_NAME = "target";
 const VERSION_STORAGE_KEY = "workers:stateful-worker-version";
+
+/** The durable marker for "which build is this facet running": enough to both
+ * detect source changes and re-load the exact artifact for stale serving. */
+function statefulWorkerVersion(ref: StatefulDynamicWorkerRef, sourceCacheKey: string): string {
+  return JSON.stringify({ className: ref.className, sourceCacheKey });
+}
 
 /**
  * Hosts one stateful dynamic worker facet.
@@ -24,30 +24,25 @@ const VERSION_STORAGE_KEY = "workers:stateful-worker-version";
  */
 export class StatefulWorkerDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
-  readonly #itxScope = itxEntrypointProps({
-    path: this.#name.path,
-    projectId: this.#name.projectId,
-  });
+  // The hosted Durable Object class sees the same scoped ITX binding as a
+  // stateless worker at this path. That is what lets a provided durable
+  // capability call sibling capabilities through `this.env.ITX.get()`.
   readonly #workerRunner = new DynamicWorkerRunner({
-    bindings: {
-      // The hosted Durable Object class sees the same scoped ITX binding as a
-      // stateless worker at this path. That is what lets a provided durable
-      // capability call sibling capabilities through `this.env.ITX.get()`.
-      ITX: itxEntrypointBinding(this.ctx.exports, this.#itxScope),
-    },
-    globalOutbound: projectEgressFetcher(this.ctx.exports, this.#name.projectId),
-    loader: this.env.LOADER,
+    exports: this.ctx.exports,
     projectId: this.#name.projectId,
-    workerScopeKey: itxEntrypointScopeCacheKey(this.#itxScope),
+    scopePath: this.#name.path,
+    waitUntil: (promise) => this.ctx.waitUntil(promise),
   });
 
   async invokeCapability({
     args = [],
+    buildBudgetMs,
     flattenNestedPath = false,
     path,
     ref,
   }: {
     args?: unknown[];
+    buildBudgetMs?: number;
     flattenNestedPath?: boolean;
     path: string[];
     ref: StatefulDynamicWorkerRef;
@@ -60,24 +55,29 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     // ownership boundary boring: the outer DO receives a call, resolves the
     // current recipe, restarts the facet if the source changed, and performs the
     // method replay without leaking the inner facet reference.
-    const target = await this.#facet(ref);
+    const target = await this.#facet(ref, buildBudgetMs);
     return flattenNestedPath
-      ? await invokeFlattenedPath({ args, path, target })
+      ? await invokePreferringFlattenedPath({ args, path, target })
       : await replayPath({ args, path, target });
   }
 
-  async #facet(ref: StatefulDynamicWorkerRef): Promise<unknown> {
+  async #facet(ref: StatefulDynamicWorkerRef, buildBudgetMs?: number): Promise<unknown> {
     this.#assertRefMatchesName(ref);
+
+    if (ref.updatePolicy === "stale-while-rebuild") {
+      const stale = await this.#staleFacet(ref);
+      if (stale !== null) return stale;
+      // No runnable previous version (first call, or its artifact expired) —
+      // fall through to the blocking load below.
+    }
+
     // DynamicWorkerRef is a deliberately late-bound recipe. Repo-backed refs should see
     // source changes on next use, and inline refs are loaded only when someone
     // actually calls the capability. That laziness is what keeps
     // `provideCapability()` a pure stream append instead of a half-commit that
     // might also create/abort facet state.
-    const { klass, resolved } = await this.#workerRunner.loadStatefulClass(ref);
-    const version = JSON.stringify({
-      className: ref.className,
-      sourceCacheKey: resolved.cacheKey,
-    });
+    const { klass, resolved } = await this.#workerRunner.loadStatefulClass(ref, buildBudgetMs);
+    const version = statefulWorkerVersion(ref, resolved.cacheKey);
 
     // SQLite-backed Durable Objects expose sync KV as `storage.kv`. Avoiding
     // awaited storage calls here keeps the facet version check/update in one DO
@@ -88,6 +88,71 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     }
     if (previous !== version) this.ctx.storage.kv.put(VERSION_STORAGE_KEY, version);
     return this.ctx.facets.get(FACET_NAME, () => ({ class: klass }));
+  }
+
+  /**
+   * The stale-while-rebuild serve path: answer with the version this DO
+   * already ran (its artifact is content-addressed and immutable, so loading
+   * it never builds), while a background resolve checks for newer source and
+   * swaps the facet when the fresh build lands. The availability trade-off is
+   * the ref's explicit choice — see `updatePolicy` on the public type.
+   */
+  async #staleFacet(ref: StatefulDynamicWorkerRef): Promise<unknown | null> {
+    const previous = this.ctx.storage.kv.get<string>(VERSION_STORAGE_KEY);
+    if (previous === undefined) return null;
+    // Self-healing on a malformed marker (legacy format, future schema
+    // change): fall through to the blocking load, which rewrites it —
+    // throwing here would wedge every stale-while-rebuild call forever.
+    let parsed: { className: string; sourceCacheKey: string };
+    try {
+      parsed = JSON.parse(previous) as { className: string; sourceCacheKey: string };
+    } catch {
+      return null;
+    }
+    if (parsed.className !== ref.className) return null;
+
+    const cached = await this.#workerRunner.loadStatefulClassFromCacheKey(
+      ref,
+      parsed.sourceCacheKey,
+    );
+    if (cached === null) return null;
+
+    // The KV read above is an interleave point: a background refresh may have
+    // completed meanwhile — new version written, facet aborted. Re-creating
+    // the facet with OUR (now old) class would wedge the DO on stale code
+    // forever (storage says new, facet runs old, nothing ever aborts again).
+    // The sync re-read plus facets.get below run in one DO turn, so this
+    // check cannot itself be interleaved.
+    if (this.ctx.storage.kv.get<string>(VERSION_STORAGE_KEY) !== previous) return null;
+
+    this.#refreshFacetInBackground(ref, previous);
+    return this.ctx.facets.get(FACET_NAME, () => ({ class: cached.klass }));
+  }
+
+  #refreshInFlight = false;
+
+  #refreshFacetInBackground(ref: StatefulDynamicWorkerRef, previousVersion: string): void {
+    if (this.#refreshInFlight) return;
+    this.#refreshInFlight = true;
+    this.ctx.waitUntil(
+      (async () => {
+        try {
+          const { resolved } = await this.#workerRunner.loadStatefulClass(ref);
+          const version = statefulWorkerVersion(ref, resolved.cacheKey);
+          if (version === previousVersion) return;
+          this.ctx.storage.kv.put(VERSION_STORAGE_KEY, version);
+          this.ctx.facets.abort(
+            FACET_NAME,
+            `stateful worker source changed (stale-while-rebuild) for ${this.ctx.id.name}`,
+          );
+        } catch (error) {
+          // The stale facet keeps serving; the next call retries the refresh.
+          console.warn(`stale-while-rebuild refresh failed for ${this.ctx.id.name}`, error);
+        } finally {
+          this.#refreshInFlight = false;
+        }
+      })(),
+    );
   }
 
   #assertRefMatchesName(ref: StatefulDynamicWorkerRef) {

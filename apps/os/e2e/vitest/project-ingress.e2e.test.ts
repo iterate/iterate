@@ -23,7 +23,7 @@ test("project ingress serves the static seeded homepage at the root", async () =
   expect(homepage).toContain(`counter--${requestHost}`);
 });
 
-// Multi-app routing: the seeded root worker.js is a router over the project's
+// Multi-app routing: the seeded root worker.ts is a router over the project's
 // apps (repo-backed dynamic workers), selected by ingress from the host —
 // hello--<slug>.<base> (stateless WorkerEntrypoint) and counter.<slug>.<base>
 // (stateful Durable Object whose state survives across requests). Locally
@@ -51,26 +51,30 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
       return fetch(base, { ...init, headers });
     }
     // The deployment's project hosts live on APP_CONFIG_PROJECT_HOSTNAME_BASES
-    // (e.g. iterate.app for prd, iterate-preview-N.app for previews) — fall
+    // (a JSON array — config.ts z.array; e.g. ["iterate.app"] for prd) — fall
     // back to the preview-derivation only when the env var is absent.
-    const configuredBase = (() => {
-      const raw = process.env.APP_CONFIG_PROJECT_HOSTNAME_BASES?.trim();
-      if (!raw) return undefined;
-      try {
-        const parsed: unknown = JSON.parse(raw);
-        return Array.isArray(parsed) ? String(parsed[0]) : String(parsed);
-      } catch {
-        return raw.split(",")[0]?.trim();
-      }
-    })();
+    const raw = process.env.APP_CONFIG_PROJECT_HOSTNAME_BASES?.trim();
+    const configuredBase = raw ? String((JSON.parse(raw) as string[])[0]) : undefined;
     const previewMatch = /^os\.(iterate-preview-\d+)\.com$/.exec(base.hostname);
     const projectBase = configuredBase || (previewMatch ? `${previewMatch[1]}.app` : base.hostname);
     return fetch(`${base.protocol}//${appHostPrefix}.${projectBase}${path}`, init);
   };
 
+  // An app's first use is a cold build; past the router's buildBudgetMs it
+  // serves a refreshing 503 building page instead of blocking, so "the app
+  // responds" means "eventually 200 through the building page".
+  const fetchAppReady = async (appHostPrefix: string, init?: RequestInit & { path?: string }) => {
+    const deadline = Date.now() + 120_000;
+    for (;;) {
+      const response = await fetchApp(appHostPrefix, init);
+      if (response.status !== 503 || Date.now() > deadline) return response;
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
+  };
+
   // Stateless app via the `--` single-label form; a spoofed x-iterate-app
   // must not override the host's selection.
-  const hello = await fetchApp(`hello--${slug}`, {
+  const hello = await fetchAppReady(`hello--${slug}`, {
     headers: { "x-iterate-app": "counter" },
   });
   expect(hello.status).toBe(200);
@@ -82,7 +86,7 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
   // wildcard certs can serve — dotted `<app>.<slug>.<base>` needs a second
   // wildcard level and is exercised in the unit tests + reserved for custom
   // hostnames.)
-  const page = await fetchApp(`counter--${slug}`);
+  const page = await fetchAppReady(`counter--${slug}`);
   expect(page.status).toBe(200);
   expect(await page.text()).toMatch(/count:\s*0/i);
 
@@ -99,11 +103,18 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
   expect(await read.text()).toMatch(/count:\s*2/i);
 
   // The seeded repo is readable through the itx repo capability.
-  const workerSource = await project.repo.readFile({ path: "worker.js" });
+  const workerSource = await project.repo.readFile({ path: "worker.ts" });
   expect(workerSource?.content).toContain("const APPS");
   const tree = await project.repo.listFiles();
   expect(tree.paths).toEqual(
-    expect.arrayContaining(["worker.js", "apps/hello/worker.js", "apps/counter/worker.js"]),
+    expect.arrayContaining([
+      "worker.ts",
+      "apps/hello/worker.ts",
+      "apps/counter/worker.ts",
+      "package.json",
+      "sdk.ts",
+      "slack.config.ts",
+    ]),
   );
   expect(await project.repo.readFile({ path: "nope.md" })).toBeNull();
 
