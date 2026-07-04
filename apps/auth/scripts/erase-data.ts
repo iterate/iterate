@@ -17,6 +17,7 @@
  * needs a clean slate (e.g. dev_global, which os doesn't deploy to).
  */
 import { authEnvs } from "../../../envs.ts";
+import { wipeD1Tables } from "../../../scripts/lib/deploy-helpers.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 
 const ctx = await resolveEnvContext({
@@ -24,7 +25,7 @@ const ctx = await resolveEnvContext({
   dopplerProject: "auth",
   explicitFlagOnly: true,
 });
-const { env, cf } = ctx;
+const { env } = ctx;
 
 if (ctx.name === "prd" && !process.argv.includes("--yes-i-mean-prd")) {
   throw new Error("Refusing to erase PRODUCTION data without --yes-i-mean-prd.");
@@ -32,28 +33,7 @@ if (ctx.name === "prd" && !process.argv.includes("--yes-i-mean-prd")) {
 console.log(`Erasing all data in ${ctx.name} (auth D1 ${env.resources.authDbId})`);
 
 // ---- auth D1: delete every row of every user table -------------------------
-const d1 = (sql: string) =>
-  cf<{ results?: { name: string }[]; meta?: { changes?: number } }[]>(
-    `/d1/database/${env.resources.authDbId}/query`,
-    { method: "POST", body: JSON.stringify({ sql }) },
-  );
-
-const tables = (
-  await d1(
-    `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name != 'd1_migrations'`,
-  )
-)[0].results!;
-
-// One request = one session, so the pragma and every DELETE share a
-// transaction — FK ordering can't bite and the wipe is atomic.
-const wiped = await d1(
-  ["PRAGMA defer_foreign_keys = on", ...tables.map((table) => `DELETE FROM "${table.name}"`)].join(
-    "; ",
-  ),
-);
-tables.forEach((table, index) => {
-  console.log(`auth D1: cleared ${table.name} (${wiped[index + 1]?.meta?.changes ?? "?"} rows)`);
-});
+await wipeD1Tables(ctx, env.resources.authDbId);
 
 console.log(`✅ ${ctx.name} auth data erased. Schema and infra intact.`);
 console.log(

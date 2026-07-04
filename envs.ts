@@ -287,19 +287,3 @@ export const streamsExampleEnvs = {
   preview_8: streamsExamplePreviewSlot(8),
   preview_9: streamsExamplePreviewSlot(9),
 } satisfies Record<string, StreamsExampleEnv>;
-
-/** Look up an env by name in an app's map, with a helpful error listing valid names. */
-export function requireEnvIn<T>(map: Record<string, T>, name: string): T {
-  const env = map[name];
-  if (!env) {
-    throw new Error(
-      `Unknown environment ${JSON.stringify(name)}. Known: ${Object.keys(map).join(", ")}`,
-    );
-  }
-  return env;
-}
-
-/** Look up a deployed OS env by name. */
-export function requireEnv(name: string): DeployedEnv {
-  return requireEnvIn(envs, name);
-}

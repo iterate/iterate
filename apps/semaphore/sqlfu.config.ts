@@ -1,6 +1,7 @@
 import path from "node:path";
 import { Miniflare } from "miniflare";
 import { createD1Client, defineConfig, type DisposableAsyncClient } from "sqlfu";
+import { LOCAL_DEV_RESOURCES_DB_ID } from "./scripts/generate-wrangler-config.ts";
 
 const here = import.meta.dirname;
 
@@ -10,7 +11,6 @@ const here = import.meta.dirname;
 // same id under the same persist root reaches the exact database `pnpm dev`
 // serves.
 const persistRoot = path.join(here, ".wrangler", "state", "v3");
-const LOCAL_DEV_DB_ID = "local-dev-resources-db";
 
 async function openLocalDevD1(): Promise<DisposableAsyncClient> {
   const mf = new Miniflare({
@@ -18,7 +18,7 @@ async function openLocalDevD1(): Promise<DisposableAsyncClient> {
     modules: true,
     defaultPersistRoot: persistRoot,
     d1Persist: true,
-    d1Databases: { DB: LOCAL_DEV_DB_ID },
+    d1Databases: { DB: LOCAL_DEV_RESOURCES_DB_ID },
   });
   await mf.ready;
 

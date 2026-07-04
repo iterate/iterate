@@ -1,15 +1,15 @@
 import path from "node:path";
 import { Miniflare } from "miniflare";
 import { createD1Client, defineConfig, type DisposableAsyncClient } from "sqlfu";
+import { LOCAL_DEV_AUTH_DB_ID } from "./scripts/generate-wrangler-config.ts";
 
 const here = import.meta.dirname;
 
 // Local dev D1 lives where the @cloudflare/vite-plugin persists it
-// (`.wrangler/state/v3` under the app root), keyed by the stable
-// "local-dev-auth-db" database id from the generated wrangler.jsonc — so
-// sqlfu operates on the exact database `pnpm dev` serves.
+// (`.wrangler/state/v3` under the app root), keyed by the stable placeholder
+// database id from the generated wrangler.jsonc — so sqlfu operates on the
+// exact database `pnpm dev` serves.
 const persistRoot = path.join(here, ".wrangler", "state", "v3");
-const LOCAL_DEV_DATABASE_ID = "local-dev-auth-db";
 
 async function openLocalDevD1(): Promise<DisposableAsyncClient> {
   const mf = new Miniflare({
@@ -17,7 +17,7 @@ async function openLocalDevD1(): Promise<DisposableAsyncClient> {
     modules: true,
     defaultPersistRoot: persistRoot,
     d1Persist: true,
-    d1Databases: { DB: LOCAL_DEV_DATABASE_ID },
+    d1Databases: { DB: LOCAL_DEV_AUTH_DB_ID },
   });
   await mf.ready;
 

@@ -22,13 +22,20 @@
  * The worker script is never deleted and routes are ensure-only, so a deploy
  * can never strand the env's hostname (the old zombie-route/522 class).
  */
-import { spawnSync } from "node:child_process";
-import { globSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { authEnvs } from "../../../envs.ts";
+import {
+  collectSecrets,
+  deployWithSecrets,
+  findBuiltWranglerConfig,
+  run,
+  smoke,
+} from "../../../scripts/lib/deploy-helpers.ts";
 import { assertProvisioned, resolveEnvContext } from "../../../scripts/lib/env-context.ts";
+import { DEFAULT_ADMIN_ALLOWLIST } from "../src/config.ts";
 import {
   envShapedVars,
   REQUIRED_SECRETS,
@@ -38,12 +45,10 @@ import { seedOAuthClients } from "./seed-oauth-clients.ts";
 
 const APP_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
-// Keep in sync with the `adminAllowlist` default in src/config.ts — deploys
-// always ship an explicit value so the seed SQL and the runtime agree.
-const DEFAULT_ADMIN_ALLOWLIST = "*@nustom.com";
-
 const ctx = await resolveEnvContext({ envs: authEnvs, dopplerProject: "auth" });
-assertProvisioned(ctx.name, ctx.env.resources);
+// Only auth's own resource: authEnvs spreads the os envs, whose
+// projectDirectoryKvId is not auth's concern.
+assertProvisioned(ctx.name, { authDbId: ctx.env.resources.authDbId });
 console.log(
   `Deploying apps/auth to ${ctx.name} (worker ${ctx.env.authWorkerName}, account ${ctx.env.cloudflareAccountId})`,
 );
@@ -54,19 +59,7 @@ const cloudflareCredentials = {
 };
 
 // ---- 1. Secrets + derived runtime values ---------------------------------------
-const secretValues: Record<string, string> = {};
-const missing: string[] = [];
-for (const key of REQUIRED_SECRETS) {
-  const value = ctx.secrets[key];
-  if (value === undefined || value === "") missing.push(key);
-  else secretValues[key] = value;
-}
-if (missing.length > 0) {
-  throw new Error(
-    `Doppler config ${ctx.env.dopplerConfig} (project auth) is missing required secrets: ${missing.join(", ")}. ` +
-      `Set them (doppler secrets set --project auth --config ${ctx.env.dopplerConfig} ...) and retry.`,
-  );
-}
+const secretValues = collectSecrets(ctx, REQUIRED_SECRETS);
 // Derived: an explicit Doppler value wins; otherwise the platform default.
 // Email OTP defaults on for dev-prefixed envs only (dev_global) — it is the
 // e2e sign-in lane and must never silently enable itself in prd.
@@ -85,11 +78,10 @@ if (projectHostnameBase) secretValues.APP_CONFIG_PROJECT_HOSTNAME_BASE = project
 // build regenerates it again on its own) — write a fresh one now.
 writeWranglerConfig();
 const checkedInConfigArgs = ["--env", ctx.name, "--remote", "--config", "wrangler.jsonc"];
-run(
-  "pnpm",
-  ["exec", "wrangler", "d1", "migrations", "apply", "DB", ...checkedInConfigArgs],
-  cloudflareCredentials,
-);
+run("pnpm", ["exec", "wrangler", "d1", "migrations", "apply", "DB", ...checkedInConfigArgs], {
+  cwd: APP_ROOT,
+  env: cloudflareCredentials,
+});
 
 // The rendered seed contains a password hash for the bootstrap-admin
 // credential account — keep it in a 0700 tmpdir and delete it afterwards.
@@ -97,13 +89,16 @@ const seedDir = mkdtempSync(join(tmpdir(), "auth-deploy-seed-"));
 try {
   const seedFile = join(seedDir, "admin-seed.sql");
   run("pnpm", ["exec", "tsx", "./scripts/render-admin-seed.ts", seedFile], {
-    APP_CONFIG_SERVICE_AUTH_TOKEN: secretValues.APP_CONFIG_SERVICE_AUTH_TOKEN,
-    APP_CONFIG_ADMIN_ALLOWLIST: secretValues.APP_CONFIG_ADMIN_ALLOWLIST,
+    cwd: APP_ROOT,
+    env: {
+      APP_CONFIG_SERVICE_AUTH_TOKEN: secretValues.APP_CONFIG_SERVICE_AUTH_TOKEN,
+      APP_CONFIG_ADMIN_ALLOWLIST: secretValues.APP_CONFIG_ADMIN_ALLOWLIST,
+    },
   });
   run(
     "pnpm",
     ["exec", "wrangler", "d1", "execute", "DB", ...checkedInConfigArgs, "--file", seedFile, "-y"],
-    cloudflareCredentials,
+    { cwd: APP_ROOT, env: cloudflareCredentials },
   );
 } finally {
   rmSync(seedDir, { recursive: true, force: true });
@@ -116,32 +111,24 @@ try {
 // — the runtime bindings alone can't reach it.
 rmSync(join(APP_ROOT, "dist"), { recursive: true, force: true });
 run("pnpm", ["exec", "vite", "build"], {
-  CLOUDFLARE_ENV: ctx.name,
-  VITE_APP_STAGE: ctx.name,
-  ...envShapedVars(ctx.env),
+  cwd: APP_ROOT,
+  env: {
+    CLOUDFLARE_ENV: ctx.name,
+    VITE_APP_STAGE: ctx.name,
+    ...envShapedVars(ctx.env),
+  },
 });
 
-const builtConfigs = globSync("dist/**/wrangler.json", { cwd: APP_ROOT });
-if (builtConfigs.length !== 1) {
-  throw new Error(
-    `Expected exactly one dist/**/wrangler.json from the build, found: ${builtConfigs.join(", ") || "none"}`,
-  );
-}
-const builtConfig = join(APP_ROOT, builtConfigs[0]);
+const builtConfig = findBuiltWranglerConfig(APP_ROOT);
 
 // ---- 4. Deploy (code + secrets in one version) ------------------------------------
-const secretsDir = mkdtempSync(join(tmpdir(), "auth-deploy-secrets-"));
-try {
-  const secretsFile = join(secretsDir, "secrets.json");
-  writeFileSync(secretsFile, JSON.stringify(secretValues), { mode: 0o600 });
-  run(
-    "pnpm",
-    ["exec", "wrangler", "deploy", "--config", builtConfig, "--secrets-file", secretsFile],
-    cloudflareCredentials,
-  );
-} finally {
-  rmSync(secretsDir, { recursive: true, force: true });
-}
+// No ensureClassesFor: auth has no Durable Object classes.
+await deployWithSecrets({
+  cwd: APP_ROOT,
+  builtConfig,
+  secretValues,
+  credentials: cloudflareCredentials,
+});
 
 // ---- 5. Smoke ---------------------------------------------------------------------
 await smoke(`${ctx.env.authBaseUrl}/api/auth/jwks`, (status) => status === 200, "auth jwks");
@@ -152,39 +139,5 @@ if (ctx.secrets.AUTH_SEED_OAUTH_CLIENTS) {
   await seedOAuthClients(
     { ...ctx.secrets, APP_CONFIG_AUTH_APP_ORIGIN: ctx.env.authBaseUrl },
     { baseUrl: ctx.env.authBaseUrl },
-  );
-}
-
-function run(command: string, args: string[], extraEnv: Record<string, string> = {}) {
-  console.log(`$ ${command} ${args.join(" ")}`);
-  const result = spawnSync(command, args, {
-    cwd: APP_ROOT,
-    stdio: "inherit",
-    env: { ...process.env, ...extraEnv },
-  });
-  if (result.status !== 0) {
-    throw new Error(`${command} ${args.join(" ")} exited with ${result.status}`);
-  }
-}
-
-async function smoke(url: string, ok: (status: number) => boolean, label: string) {
-  for (let attempt = 1; attempt <= 5; attempt++) {
-    try {
-      const response = await fetch(url, {
-        redirect: "manual",
-        signal: AbortSignal.timeout(15_000),
-      });
-      if (ok(response.status)) {
-        console.log(`smoke ok: ${label} (${url} → ${response.status})`);
-        return;
-      }
-      console.warn(`smoke attempt ${attempt}: ${label} → ${response.status}`);
-    } catch (error) {
-      console.warn(`smoke attempt ${attempt}: ${label} → ${error}`);
-    }
-    await new Promise((res) => setTimeout(res, 3000));
-  }
-  throw new Error(
-    `Smoke failed: ${label} (${url}) never answered healthily — the deploy is NOT verified.`,
   );
 }

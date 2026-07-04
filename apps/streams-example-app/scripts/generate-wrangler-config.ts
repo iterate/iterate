@@ -1,9 +1,10 @@
 /**
- * Generates apps/streams-example-app/wrangler.jsonc from the root envs.ts.
+ * Generates apps/streams-example-app/wrangler.jsonc (gitignored) from the
+ * root envs.ts.
  *
- *   pnpm gen:wrangler         # rewrite wrangler.jsonc
- *   pnpm gen:wrangler:check   # exit 1 if the checked-in file is stale
- *                             # (chained into `pnpm typecheck`, so CI enforces it)
+ * Nobody edits or commits the output: vite.config.ts regenerates it before
+ * every dev/build, deploys therefore always see a fresh one, and
+ * `pnpm gen:wrangler` refreshes it by hand for ad-hoc wrangler commands.
  *
  * The top-level config is local dev; each deployed environment gets an env
  * block expanded from its streamsExampleEnvs entry. The app is workers.dev

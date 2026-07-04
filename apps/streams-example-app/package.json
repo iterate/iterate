@@ -7,7 +7,7 @@
     "build": "vite build && tsc --noEmit",
     "preview": "vite preview",
     "deploy": "tsx ./scripts/deploy.ts",
-    "destroy": "node -e \"console.log('streams-example-app destroy is a no-op: the playground holds nothing slot-scoped worth erasing, and workers stay')\"",
+    "destroy": "node -e \"console.log('streams-example-app destroy is a no-op: the playground holds nothing slot-scoped worth erasing, and workers stay')\" --",
     "gen:wrangler": "tsx ./scripts/generate-wrangler-config.ts",
     "vitest": "vitest run e2e/vitest",
     "playwright": "playwright test e2e/playwright",

@@ -1,9 +1,9 @@
 /**
- * Generates apps/auth/wrangler.jsonc from the root envs.ts.
+ * Generates apps/auth/wrangler.jsonc (gitignored) from the root envs.ts.
  *
- *   pnpm gen:wrangler         # rewrite wrangler.jsonc
- *   pnpm gen:wrangler:check   # exit 1 if the checked-in file is stale
- *                             # (chained into `pnpm typecheck`, so CI enforces it)
+ * Nobody edits or commits the output: vite.config.ts regenerates it before
+ * every dev/build, deploys therefore always see a fresh one, and
+ * `pnpm gen:wrangler` refreshes it by hand for ad-hoc wrangler commands.
  *
  * The top-level config is local dev (no routes, a miniflare-only D1 id); each
  * deployed environment gets an env block expanded from its authEnvs entry.
@@ -21,6 +21,13 @@ import { fileURLToPath } from "node:url";
 import { authEnvs, type AuthDeployedEnv } from "../../../envs.ts";
 
 const CONFIG_PATH = fileURLToPath(new URL("../wrangler.jsonc", import.meta.url));
+
+/**
+ * Placeholder D1 database id for local dev — miniflare only needs a stable
+ * id. sqlfu.config.ts imports it to open the exact database `pnpm dev`
+ * serves.
+ */
+export const LOCAL_DEV_AUTH_DB_ID = "local-dev-auth-db";
 
 /**
  * Secrets every deployment needs, sourced verbatim from the env's Doppler
@@ -63,6 +70,8 @@ export function envShapedVars(env: AuthDeployedEnv) {
   };
 }
 
+// Deliberately omits APP_CONFIG_PUBLIC_URL: optional in src/config.ts, where
+// it defaults to authAppOrigin at runtime — local dev needn't supply it.
 const ENV_SHAPED_KEYS = ["APP_CONFIG_AUTH_APP_ORIGIN"];
 
 const OBSERVABILITY = {
@@ -124,7 +133,7 @@ const config = {
     run_worker_first: ["/api/*"],
   },
   // Local dev has no real database; miniflare only needs a stable id.
-  d1_databases: d1Bindings({ workerName: "auth-dev", databaseId: "local-dev-auth-db" }),
+  d1_databases: d1Bindings({ workerName: "auth-dev", databaseId: LOCAL_DEV_AUTH_DB_ID }),
   // Local dev loads the env-shaping keys from process.env like any other
   // secret (deployed envs get them as generated vars instead).
   secrets: { required: [...REQUIRED_SECRETS, ...DERIVED_SECRETS, ...ENV_SHAPED_KEYS] },

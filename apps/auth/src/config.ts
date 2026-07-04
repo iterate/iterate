@@ -2,6 +2,13 @@ import { parseAppConfigFromEnv, publicValue, redacted } from "@iterate-com/share
 import { z } from "zod/v4";
 
 /**
+ * Default glob allowlist promoting matching emails to platform admin.
+ * Exported for scripts/deploy.ts, which always ships an explicit value so
+ * the bootstrap-admin seed SQL and the runtime agree.
+ */
+export const DEFAULT_ADMIN_ALLOWLIST = "*@nustom.com";
+
+/**
  * Auth worker runtime config, parsed from the worker's `APP_CONFIG_*` bindings
  * (the env's Doppler secret names shipped via `wrangler deploy --secrets-file`,
  * plus env-shaped vars generated from the root envs.ts — e.g.
@@ -36,7 +43,7 @@ export const AppConfig = z.object({
   /** Glob allowlist gating who may sign up. */
   signupAllowlist: z.string().default(""),
   /** Glob allowlist promoting matching emails to platform admin. */
-  adminAllowlist: z.string().trim().default("*@nustom.com"),
+  adminAllowlist: z.string().trim().default(DEFAULT_ADMIN_ALLOWLIST),
   /** Whether the email one-time-passcode sign-in lane is offered. */
   emailOtpEnabled: publicValue(z.boolean().default(false)),
   /** Deployed base domain project homepages live under (e.g. "iterate.app",

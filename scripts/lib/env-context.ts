@@ -32,8 +32,7 @@ export interface EnvContext<E extends DeployableEnv> {
 /**
  * Resolve `--env <name>` from argv into a full context.
  *
- * Fallbacks (unless `explicitFlagOnly`), in order: ITERATE_ENV, then
- * DOPPLER_CONFIG — the latter so CI's existing
+ * Fallback (unless `explicitFlagOnly`): DOPPLER_CONFIG — so CI's existing
  * `doppler run --config preview_N -- pnpm run deploy` selects the matching
  * env without extra plumbing (env names and Doppler config names coincide;
  * the account-id assertion below still catches any mismatch). Destructive
@@ -44,7 +43,7 @@ export async function resolveEnvContext<E extends DeployableEnv>(options: {
   envs: Record<string, E>;
   /** Doppler project the env's config lives in (e.g. "os", "auth"). */
   dopplerProject: string;
-  /** Require --env on argv; ignore ITERATE_ENV/DOPPLER_CONFIG. */
+  /** Require --env on argv; ignore DOPPLER_CONFIG. */
   explicitFlagOnly?: boolean;
   argv?: string[];
 }): Promise<EnvContext<E>> {
@@ -55,7 +54,7 @@ export async function resolveEnvContext<E extends DeployableEnv>(options: {
       ? argv[flagIndex + 1]
       : options.explicitFlagOnly
         ? undefined
-        : (process.env.ITERATE_ENV ?? process.env.DOPPLER_CONFIG);
+        : process.env.DOPPLER_CONFIG;
   if (!name) {
     throw new Error(
       `Pass --env <name>. Known: ${Object.keys(options.envs).join(", ")} (see envs.ts).`,

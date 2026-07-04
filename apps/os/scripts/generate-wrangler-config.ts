@@ -72,12 +72,7 @@ export function envShapedVars(env: DeployedEnv) {
   };
 }
 
-const ENV_SHAPED_KEYS = [
-  "APP_CONFIG_BASE_URL",
-  "APP_CONFIG_MCP__BASE_URL",
-  "APP_CONFIG_PROJECT_HOSTNAME_BASES",
-  "APP_CONFIG_ITERATE_AUTH__ISSUER",
-];
+const ENV_SHAPED_KEYS = Object.keys(envShapedVars(envs.prd));
 
 const DO_CLASSES = {
   AGENT: "AgentDurableObject",

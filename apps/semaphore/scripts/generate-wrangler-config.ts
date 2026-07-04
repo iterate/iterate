@@ -1,9 +1,9 @@
 /**
- * Generates apps/semaphore/wrangler.jsonc from the root envs.ts.
+ * Generates apps/semaphore/wrangler.jsonc (gitignored) from the root envs.ts.
  *
- *   pnpm gen:wrangler         # rewrite wrangler.jsonc
- *   pnpm gen:wrangler:check   # exit 1 if the checked-in file is stale
- *                             # (chained into `pnpm typecheck`, so CI enforces it)
+ * Nobody edits or commits the output: vite.config.ts regenerates it before
+ * every dev/build, deploys therefore always see a fresh one, and
+ * `pnpm gen:wrangler` refreshes it by hand for ad-hoc wrangler commands.
  *
  * The top-level config is local dev (no routes, a placeholder D1 id for
  * miniflare); each deployed environment gets an env block expanded from its
@@ -21,6 +21,13 @@ import { fileURLToPath } from "node:url";
 import { semaphoreEnvs, type SemaphoreEnv } from "../../../envs.ts";
 
 const CONFIG_PATH = fileURLToPath(new URL("../wrangler.jsonc", import.meta.url));
+
+/**
+ * Placeholder D1 database id for local dev — miniflare only needs a stable
+ * id. sqlfu.config.ts imports it to open the exact database `pnpm dev`
+ * serves.
+ */
+export const LOCAL_DEV_RESOURCES_DB_ID = "local-dev-resources-db";
 
 /**
  * Secrets every deployment needs, sourced from the env's Doppler config.
@@ -91,7 +98,7 @@ const config = {
   migrations: [{ tag: "v1", new_sqlite_classes: ["ResourceCoordinator"] }],
   // Local dev has no real database; miniflare only needs a stable id
   // (sqlfu.config.ts opens the same id for local migrations/queries).
-  ...workerBindings({ resourcesDbId: "local-dev-resources-db" }),
+  ...workerBindings({ resourcesDbId: LOCAL_DEV_RESOURCES_DB_ID }),
   env: Object.fromEntries(
     Object.entries(semaphoreEnvs).map(([name, env]) => [name, envBlock(env)]),
   ),

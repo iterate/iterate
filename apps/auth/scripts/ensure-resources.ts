@@ -14,60 +14,28 @@
  * tells you to run it yourself.
  */
 import { authEnvs } from "../../../envs.ts";
+import { ensureD1, ensureProxiedDnsRecord } from "../../../scripts/lib/deploy-helpers.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 
 const ctx = await resolveEnvContext({ envs: authEnvs, dopplerProject: "auth" });
-const { env, cf, cfV4 } = ctx;
+const { env, cfV4 } = ctx;
 console.log(`Ensuring resources for ${ctx.name} in account ${env.cloudflareAccountId}`);
 
 // ---- D1: auth database --------------------------------------------------------
-const dbName = `${env.authWorkerName}-auth-db`;
-const databases = await cf<{ uuid: string; name: string }[]>(`/d1/database?per_page=1000`);
-let db = databases.find((database) => database.name === dbName);
-if (!db) {
-  db = await cf<{ uuid: string; name: string }>(`/d1/database`, {
-    method: "POST",
-    body: JSON.stringify({ name: dbName }),
-  });
-  console.log(`created D1 database ${dbName} (${db.uuid})`);
-} else {
-  console.log(`D1 database ${dbName} exists (${db.uuid})`);
-}
+const db = await ensureD1(ctx, `${env.authWorkerName}-auth-db`);
 
 // ---- DNS: proxied record for the auth hostname --------------------------------
 // The Worker zone route only fires when a proxied DNS record answers the
 // hostname, so ensure it here (create-only; deploys never touch DNS).
-const authHost = new URL(env.authBaseUrl).hostname;
 const zones = await cfV4<{ id: string; name: string }[]>(
   `/zones?account.id=${env.cloudflareAccountId}&per_page=500`,
 );
-const zone = zones.find(
-  (candidate) => authHost === candidate.name || authHost.endsWith(`.${candidate.name}`),
+await ensureProxiedDnsRecord(
+  ctx,
+  zones,
+  new URL(env.authBaseUrl).hostname,
+  `iterate ${ctx.name} auth worker route host (ensure-resources.ts)`,
 );
-if (!zone) {
-  console.warn(`⚠ no zone for ${authHost} in this account — create the zone first, then re-run`);
-} else {
-  // Any record type counts as "exists" — create-only means we never fight
-  // an operator's hand-made record.
-  const existing = await cfV4<unknown[]>(
-    `/zones/${zone.id}/dns_records?name=${encodeURIComponent(authHost)}&per_page=5`,
-  );
-  if (existing.length > 0) {
-    console.log(`DNS record for ${authHost} exists`);
-  } else {
-    await cfV4(`/zones/${zone.id}/dns_records`, {
-      method: "POST",
-      body: JSON.stringify({
-        type: "AAAA",
-        name: authHost,
-        content: "100::", // originless: traffic terminates at the Worker route
-        proxied: true,
-        comment: `iterate ${ctx.name} auth worker route host (ensure-resources.ts)`,
-      }),
-    });
-    console.log(`created proxied DNS record for ${authHost}`);
-  }
-}
 
 // ---- Reconcile against envs.ts -------------------------------------------------
 if (env.resources.authDbId !== db.uuid) {
