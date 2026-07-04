@@ -174,12 +174,15 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     },
   },
   "repo-edit-file": {
-    vars: ({ marker }) => ({ path: `notes/edit-example-${marker}.md` }),
-    assert: (result, { marker }, expect) => {
+    vars: ({ marker }) => ({
+      path: "notes/edit-example.md",
+      repoPath: `/examples/repo-edit-file-${marker}`,
+    }),
+    assert: (result, _ctx, expect) => {
       expect(result).toEqual({
         before: "# Edit example\n\nstatus: draft\n",
         after: "# Edit example\n\nstatus: reviewed\n",
-        changedPaths: [`notes/edit-example-${marker}.md`],
+        changedPaths: ["notes/edit-example.md"],
         occurrenceCount: 1,
       });
     },

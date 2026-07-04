@@ -68,7 +68,7 @@ ab open "$(node -p 'require("./apps/os/.alchemy/dev-server.json").baseUrl')"
 
 Local/non-prod auth enables email OTP and a deterministic code:
 
-- Any email matching `/\+.*test@/i` skips email send and accepts OTP **`424242`**
+- Any `nustom.com` email whose local part ends in `+test` skips email send and accepts OTP **`424242`**
   (see `apps/auth/src/server/auth-plugins.ts`).
 - Sign-_up_ is gated by `APP_CONFIG_SIGNUP_ALLOWLIST` (auth Doppler). The local list allows
   `*@nustom.com`, `testuser+*@gmail.com`, etc. A brand-new email outside the

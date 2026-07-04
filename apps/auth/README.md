@@ -161,8 +161,9 @@ move to a Workers RPC binding — see the note under "The three surfaces".)
 
 ## Identity model
 
-- **Users** sign in with Google or email OTP (dev/preview always; prod behind
-  `APP_CONFIG_EMAIL_OTP_ENABLED`); password signup is disabled.
+- **Users** sign in with Google or email OTP (enabled by default in every
+  stage; `APP_CONFIG_EMAIL_OTP_ENABLED=false` is the rollback switch);
+  password signup is disabled.
   `APP_CONFIG_SIGNUP_ALLOWLIST` gates who may sign up;
   `APP_CONFIG_ADMIN_ALLOWLIST` (default `*@nustom.com`) promotes matching emails
   to platform admin. The full model is documented in
@@ -221,8 +222,12 @@ fields); `alchemy.run.ts` calls the shared `initAlchemy()` which compiles
 `APP_CONFIG_*` Doppler vars (e.g. `APP_CONFIG_BETTER_AUTH_SECRET`,
 `APP_CONFIG_AUTH_APP_ORIGIN`) into a single `APP_CONFIG` worker binding. Server
 code reads `config.*` (from `server/env.ts`'s `parseConfig(env)`), never raw
-`env.*` — `env` now only carries the `DB` binding. The browser bundle's own
-origin is inlined from `APP_CONFIG_AUTH_APP_ORIGIN` at build time.
+`env.*` — `env` now only carries the `DB` and `EMAIL` bindings. The browser
+bundle's own origin is inlined from `APP_CONFIG_AUTH_APP_ORIGIN` at build time.
+Email OTP sends through the Cloudflare Email Service `EMAIL` binding; the
+sender domain comes from `APP_CONFIG_EMAIL_SENDER_DOMAIN`, which must be
+onboarded/verified in Email Service (deploys fail fast when it is missing
+while OTP is enabled).
 
 ## Deployment
 

@@ -1,5 +1,5 @@
 diff --git a/lib/cloudflare/api.js b/lib/cloudflare/api.js
-index a5efe2bc3d3c348bebe4f41716cc5fad0ebd9f4e..3e246e3dc17adcec4c74b5bce239ab7fe0c2a46f 100644
+index a5efe2b..3e246e3 100644
 --- a/lib/cloudflare/api.js
 +++ b/lib/cloudflare/api.js
 @@ -119,6 +119,10 @@ export class CloudflareApi {
@@ -14,15 +14,15 @@ index a5efe2bc3d3c348bebe4f41716cc5fad0ebd9f4e..3e246e3dc17adcec4c74b5bce239ab7f
              ...(await CloudflareAuth.formatHeadersWithRefresh({
                  profile: this.profile,
 diff --git a/lib/cloudflare/bindings.d.ts b/lib/cloudflare/bindings.d.ts
-index 202181cef7ab4088dbb3067bebdf6fd1f7a82b05..4e779fe056d3bd65aa94a0974009fcfa48faf059 100644
+index 202181c..131a784 100644
 --- a/lib/cloudflare/bindings.d.ts
 +++ b/lib/cloudflare/bindings.d.ts
-@@ -42,10 +42,14 @@ export declare namespace Bindings {
+@@ -42,10 +42,21 @@ export declare namespace Bindings {
  /**
   * L2 Binding Resources.
   */
 -export type Binding = Ai | Assets | Container | CloudflareSecret | CloudflareSecretRef | D1Database | DispatchNamespace | AnalyticsEngineDataset | DurableObjectNamespace<any> | Hyperdrive | HyperdriveRef | Images | KVNamespace | Pipeline | Queue | RateLimit | R2Bucket | {
-+export type Binding = Ai | Artifacts | Assets | Container | CloudflareSecret | CloudflareSecretRef | D1Database | DispatchNamespace | AnalyticsEngineDataset | DurableObjectNamespace<any> | Hyperdrive | HyperdriveRef | Images | KVNamespace | Pipeline | Queue | RateLimit | R2Bucket | {
++export type Binding = Ai | Artifacts | Assets | Container | CloudflareSecret | CloudflareSecretRef | D1Database | DispatchNamespace | AnalyticsEngineDataset | DurableObjectNamespace<any> | Hyperdrive | HyperdriveRef | Images | KVNamespace | Pipeline | Queue | RateLimit | R2Bucket | SendEmail | {
      type: "kv_namespace";
      id: string;
  } | Secret | SecretKey | string | VectorizeIndex | Worker | Worker.DevDomain | Worker.DevUrl | WorkerStub | WorkerRef | WorkerEntrypoint | WorkerLoader | Workflow | BrowserRendering | VersionMetadata | Self | Json;
@@ -30,15 +30,22 @@ index 202181cef7ab4088dbb3067bebdf6fd1f7a82b05..4e779fe056d3bd65aa94a0974009fcfa
 +    type: "artifacts";
 +    namespace: string;
 +};
++export type SendEmail = {
++    type: "send_email";
++    destinationAddress?: string;
++    allowedDestinationAddresses?: string[];
++    allowedSenderAddresses?: string[];
++    remote?: boolean;
++};
  export type Self<RPC extends Rpc.WorkerEntrypointBranded = Rpc.WorkerEntrypointBranded> = {
      type: "cloudflare::Worker::Self";
      __entrypoint__?: string;
-@@ -65,7 +69,15 @@ export declare function Json<const T>(value: T): Json<T>;
+@@ -65,7 +76,22 @@ export declare function Json<const T>(value: T): Json<T>;
  /**
   * Union type for all Worker binding types (API spec)
   */
 -export type WorkerBindingSpec = WorkerBindingAI | WorkerBindingAnalyticsEngine | WorkerBindingAssets | WorkerBindingBrowserRendering | WorkerBindingD1 | WorkerBindingDispatchNamespace | WorkerBindingDurableObjectNamespace | WorkerBindingHyperdrive | WorkerBindingImages | WorkerBindingJson | WorkerBindingKVNamespace | WorkerBindingMTLSCertificate | WorkerBindingPipeline | WorkerBindingPlainText | WorkerBindingQueue | WorkerBindingRateLimit | WorkerBindingR2Bucket | WorkerBindingSecretKey | WorkerBindingSecretText | WorkerBindingSecretsStore | WorkerBindingSecretsStoreSecret | WorkerBindingService | WorkerBindingStaticContent | WorkerBindingTailConsumer | WorkerBindingVectorize | WorkerBindingVersionMetadata | WorkerBindingWasmModule | WorkerBindingWorkerLoader | WorkerBindingWorkflow;
-+export type WorkerBindingSpec = WorkerBindingAI | WorkerBindingAnalyticsEngine | WorkerBindingArtifacts | WorkerBindingAssets | WorkerBindingBrowserRendering | WorkerBindingD1 | WorkerBindingDispatchNamespace | WorkerBindingDurableObjectNamespace | WorkerBindingHyperdrive | WorkerBindingImages | WorkerBindingJson | WorkerBindingKVNamespace | WorkerBindingMTLSCertificate | WorkerBindingPipeline | WorkerBindingPlainText | WorkerBindingQueue | WorkerBindingRateLimit | WorkerBindingR2Bucket | WorkerBindingSecretKey | WorkerBindingSecretText | WorkerBindingSecretsStore | WorkerBindingSecretsStoreSecret | WorkerBindingService | WorkerBindingStaticContent | WorkerBindingTailConsumer | WorkerBindingVectorize | WorkerBindingVersionMetadata | WorkerBindingWasmModule | WorkerBindingWorkerLoader | WorkerBindingWorkflow;
++export type WorkerBindingSpec = WorkerBindingAI | WorkerBindingAnalyticsEngine | WorkerBindingArtifacts | WorkerBindingAssets | WorkerBindingBrowserRendering | WorkerBindingD1 | WorkerBindingDispatchNamespace | WorkerBindingDurableObjectNamespace | WorkerBindingHyperdrive | WorkerBindingImages | WorkerBindingJson | WorkerBindingKVNamespace | WorkerBindingMTLSCertificate | WorkerBindingPipeline | WorkerBindingPlainText | WorkerBindingQueue | WorkerBindingRateLimit | WorkerBindingR2Bucket | WorkerBindingSecretKey | WorkerBindingSecretText | WorkerBindingSecretsStore | WorkerBindingSecretsStoreSecret | WorkerBindingSendEmail | WorkerBindingService | WorkerBindingStaticContent | WorkerBindingTailConsumer | WorkerBindingVectorize | WorkerBindingVersionMetadata | WorkerBindingWasmModule | WorkerBindingWorkerLoader | WorkerBindingWorkflow;
 +export interface WorkerBindingArtifacts {
 +    /** The name of the binding */
 +    name: string;
@@ -47,11 +54,25 @@ index 202181cef7ab4088dbb3067bebdf6fd1f7a82b05..4e779fe056d3bd65aa94a0974009fcfa
 +    /** Cloudflare Artifacts namespace */
 +    namespace: string;
 +}
++export interface WorkerBindingSendEmail {
++    name: string;
++    type: "send_email";
++    destination_address?: string;
++    allowed_destination_addresses?: string[];
++    allowed_sender_addresses?: string[];
++}
  /**
   * AI binding type
   */
+@@ -414,4 +440,4 @@ export interface WorkerBindingWorkerLoader {
+     /** Type identifier for Worker Loader binding */
+     type: "worker_loader";
+ }
+-//# sourceMappingURL=bindings.d.ts.map
+\ No newline at end of file
++//# sourceMappingURL=bindings.d.ts.map
 diff --git a/lib/cloudflare/miniflare/build-worker-options.js b/lib/cloudflare/miniflare/build-worker-options.js
-index be105c388e307286e3675784ba5a4406ae02c7fe..a555191ad5decc2c4513f6f361b7cce6174aae3e 100644
+index be105c3..a555191 100644
 --- a/lib/cloudflare/miniflare/build-worker-options.js
 +++ b/lib/cloudflare/miniflare/build-worker-options.js
 @@ -124,11 +124,16 @@ export const buildWorkerOptions = async (input) => {
@@ -77,7 +98,7 @@ index be105c388e307286e3675784ba5a4406ae02c7fe..a555191ad5decc2c4513f6f361b7cce6
              }
              case "hyperdrive": {
 diff --git a/lib/cloudflare/worker-metadata.js b/lib/cloudflare/worker-metadata.js
-index d521d2027b397c0f1191932f56e103133ab74865..4b9ca968dfbc363d590bdd4107a99933d9015f92 100644
+index d521d20..74b0ff0 100644
 --- a/lib/cloudflare/worker-metadata.js
 +++ b/lib/cloudflare/worker-metadata.js
 @@ -91,6 +91,21 @@ export async function prepareWorkerMetadata(api, props) {
@@ -119,7 +140,7 @@ index d521d2027b397c0f1191932f56e103133ab74865..4b9ca968dfbc363d590bdd4107a99933
          ],
          migrations: {
              old_tag: oldMigrationTag,
-@@ -330,6 +337,13 @@ export async function prepareWorkerMetadata(api, props) {
+@@ -330,6 +337,22 @@ export async function prepareWorkerMetadata(api, props) {
                  name: bindingName,
              });
          }
@@ -130,11 +151,27 @@ index d521d2027b397c0f1191932f56e103133ab74865..4b9ca968dfbc363d590bdd4107a99933
 +                namespace: binding.namespace,
 +            });
 +        }
++        else if (binding.type === "send_email") {
++            meta.bindings.push({
++                type: "send_email",
++                name: bindingName,
++                destination_address: binding.destinationAddress,
++                allowed_destination_addresses: binding.allowedDestinationAddresses,
++                allowed_sender_addresses: binding.allowedSenderAddresses,
++            });
++        }
          else if (binding.type === "version_metadata") {
              meta.bindings.push({
                  type: "version_metadata",
+@@ -469,4 +492,4 @@ export async function getWorkerSettings(api, workerName) {
+         throw error;
+     });
+ }
+-//# sourceMappingURL=worker-metadata.js.map
+\ No newline at end of file
++//# sourceMappingURL=worker-metadata.js.map
 diff --git a/lib/cloudflare/worker.js b/lib/cloudflare/worker.js
-index 7912452941df70a2c9dc30299ca8bdc721403aea..da9bc9f78c0ac1906fb947f52ff5bed9beeab848 100644
+index 7912452..da9bc9f 100644
 --- a/lib/cloudflare/worker.js
 +++ b/lib/cloudflare/worker.js
 @@ -263,15 +263,7 @@ const _Worker = Resource("cloudflare::Worker", {
@@ -155,18 +192,19 @@ index 7912452941df70a2c9dc30299ca8bdc721403aea..da9bc9f78c0ac1906fb947f52ff5bed9
      }
      const assets = options.assets
 diff --git a/lib/cloudflare/wrangler.json.js b/lib/cloudflare/wrangler.json.js
-index 43dfd76f5968da5ee49ac4396c3c4d240de13024..ea4821bf3f5aef50ed93e594b5203e2c5274ae92 100644
+index 43dfd76..c059276 100644
 --- a/lib/cloudflare/wrangler.json.js
 +++ b/lib/cloudflare/wrangler.json.js
-@@ -138,6 +138,7 @@ async function processBindings(spec, bindings, eventSources, workerName, workerC
+@@ -138,6 +138,8 @@ async function processBindings(spec, bindings, eventSources, workerName, workerC
      const ratelimits = [];
      const containers = [];
      const workerLoaders = [];
 +    const artifacts = [];
++    const sendEmail = [];
      for (const eventSource of eventSources ?? []) {
          if (isQueueEventSource(eventSource)) {
              queues.consumers.push({
-@@ -321,6 +322,13 @@ async function processBindings(spec, bindings, eventSources, workerName, workerC
+@@ -321,6 +323,22 @@ async function processBindings(spec, bindings, eventSources, workerName, workerC
                  remote: true,
              };
          }
@@ -177,15 +215,29 @@ index 43dfd76f5968da5ee49ac4396c3c4d240de13024..ea4821bf3f5aef50ed93e594b5203e2c
 +                remote: true,
 +            });
 +        }
++        else if (binding.type === "send_email") {
++            sendEmail.push({
++                name: bindingName,
++                destination_address: binding.destinationAddress,
++                allowed_destination_addresses: binding.allowedDestinationAddresses,
++                allowed_sender_addresses: binding.allowedSenderAddresses,
++                remote: binding.remote ?? true,
++            });
++        }
          else if (binding.type === "analytics_engine") {
              analyticsEngineDatasets.push({
                  binding: bindingName,
-@@ -466,5 +474,8 @@ async function processBindings(spec, bindings, eventSources, workerName, workerC
+@@ -466,5 +484,11 @@ async function processBindings(spec, bindings, eventSources, workerName, workerC
      if (workerLoaders.length > 0) {
          spec.worker_loaders = workerLoaders;
      }
 +    if (artifacts.length > 0) {
 +        spec.artifacts = artifacts;
 +    }
++    if (sendEmail.length > 0) {
++        spec.send_email = sendEmail;
++    }
  }
- //# sourceMappingURL=wrangler.json.js.map
+-//# sourceMappingURL=wrangler.json.js.map
+\ No newline at end of file
++//# sourceMappingURL=wrangler.json.js.map

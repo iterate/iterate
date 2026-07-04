@@ -1,8 +1,11 @@
 import { env as _env } from "cloudflare:workers";
 import { parseConfig } from "../config.ts";
 import type { worker } from "../../alchemy.run.ts";
+import type { CloudflareEmailBinding } from "./email.ts";
 
-export type CloudflareEnv = typeof worker.Env;
+export type CloudflareEnv = typeof worker.Env & {
+  EMAIL?: CloudflareEmailBinding;
+};
 export const env = _env as CloudflareEnv;
 
 /**

@@ -1,5 +1,6 @@
 import alchemy from "alchemy";
 import { D1Database, TanStackStart } from "alchemy/cloudflare";
+import type { Binding } from "alchemy/cloudflare";
 import { Exec } from "alchemy/os";
 import { slugify } from "@iterate-com/shared/slugify";
 import { initAlchemy } from "@iterate-com/shared/alchemy/init";
@@ -79,10 +80,9 @@ const alchemyEnv = AlchemyEnv.parse(process.env);
 // stage so it's available to the `vite build` the worker runs.)
 process.env.VITE_APP_STAGE ||= alchemyEnv.ALCHEMY_STAGE;
 
-// Email OTP is on for dev stages by default; an explicit Doppler value wins.
-const emailOtpEnabled =
-  process.env.APP_CONFIG_EMAIL_OTP_ENABLED ??
-  (alchemyEnv.ALCHEMY_STAGE.startsWith("dev") ? "true" : "false");
+// Email OTP is on by default in every stage, including production; an explicit
+// Doppler value still wins for emergency rollback.
+const emailOtpEnabled = process.env.APP_CONFIG_EMAIL_OTP_ENABLED ?? "true";
 
 const deployEnvWithoutAppConfig = Object.fromEntries(
   Object.entries(process.env).filter(
@@ -103,8 +103,7 @@ const configEnv: Record<string, string | undefined> = {
   APP_CONFIG_SERVICE_AUTH_TOKEN: process.env.APP_CONFIG_SERVICE_AUTH_TOKEN,
   APP_CONFIG_GOOGLE_CLIENT_ID: process.env.APP_CONFIG_GOOGLE_CLIENT_ID,
   APP_CONFIG_GOOGLE_CLIENT_SECRET: process.env.APP_CONFIG_GOOGLE_CLIENT_SECRET,
-  APP_CONFIG_RESEND_DOMAIN: process.env.APP_CONFIG_RESEND_DOMAIN,
-  APP_CONFIG_RESEND_API_KEY: process.env.APP_CONFIG_RESEND_API_KEY,
+  APP_CONFIG_EMAIL_SENDER_DOMAIN: process.env.APP_CONFIG_EMAIL_SENDER_DOMAIN,
   APP_CONFIG_SIGNUP_ALLOWLIST: process.env.APP_CONFIG_SIGNUP_ALLOWLIST,
   APP_CONFIG_ADMIN_ALLOWLIST: process.env.APP_CONFIG_ADMIN_ALLOWLIST,
   APP_CONFIG_EMAIL_OTP_ENABLED: emailOtpEnabled,
@@ -113,6 +112,17 @@ const configEnv: Record<string, string | undefined> = {
 
 const ctx = await initAlchemy(APP_NAME, AppConfig, configEnv);
 const { app, workerName, runtimeConfig } = ctx;
+// Fail at deploy time rather than at the first OTP send: an enabled email-OTP
+// lane with no sender domain can never deliver mail.
+if (runtimeConfig.emailOtpEnabled && !runtimeConfig.emailSenderDomain) {
+  throw new Error("APP_CONFIG_EMAIL_SENDER_DOMAIN is required while email OTP is enabled");
+}
+const emailBinding = {
+  type: "send_email",
+  ...(runtimeConfig.emailSenderDomain
+    ? { allowedSenderAddresses: [`noreply+auth@${runtimeConfig.emailSenderDomain}`] }
+    : {}),
+} satisfies Binding;
 
 const primaryUrl = alchemyEnv.WORKER_ROUTES[0]
   ? `https://${alchemyEnv.WORKER_ROUTES[0]}`
@@ -141,6 +151,7 @@ const worker = await TanStackStart(APP_NAME, {
   name: workerName,
   bindings: {
     DB,
+    EMAIL: emailBinding,
     // Single typed config blob, parsed at runtime by src/config.ts's
     // parseConfig(env). Local dev keeps it plain-JSON for readability; deploys
     // wrap it in alchemy.secret() so Cloudflare never logs it.

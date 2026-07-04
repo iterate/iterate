@@ -451,6 +451,9 @@ const repo = itx.repos.get(vars.repoPath ?? "/");
 const beforeText = "status: draft\\n";
 const afterText = "status: reviewed\\n";
 
+// Path-scoped repos need first-use creation; the default project repo already exists.
+if (vars.repoPath) await repo.create();
+
 // Seed a known starting point. Agents can skip this when editing an existing file.
 await repo.commitFiles({
   message: "Seed edit example",
