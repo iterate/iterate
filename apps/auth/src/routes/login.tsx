@@ -142,9 +142,10 @@ function LoginActions({
       });
       // The auth client's auto-redirect plugin is disabled (see
       // utils/auth-client.ts), so drive the provider redirect explicitly.
-      if (result?.url) {
-        window.location.assign(result.url);
+      if (!result?.url) {
+        throw new Error("Google sign-in did not return a redirect URL");
       }
+      window.location.assign(result.url);
       return result;
     },
   });

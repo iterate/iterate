@@ -2848,7 +2848,6 @@ async function claimEnvironmentConfigLease(input: {
     holder: input.holder,
     leaseMs: input.leaseMs,
     semaphore,
-    skipSlug: previousLease?.slug ?? null,
   });
   if (adopted) {
     return adopted;
@@ -3018,21 +3017,19 @@ function toEnvironmentConfigLease(lease: {
  * Find a lease the semaphore already attributes to this holder and re-issue it
  * under a fresh leaseId (safe force: the slot is already ours). Heals the
  * acquire-then-cancelled gap where a lease exists server-side but was never
- * recorded in the PR body, so a holder never accumulates a second slot.
+ * recorded in the PR body, so a holder never accumulates a second slot. The
+ * recorded-but-unrenewable slug is deliberately NOT excluded: if the list
+ * still attributes it to this holder, re-issuing our own lease is idempotent
+ * and adopting beats leasing a second slot.
  */
 async function adoptExistingHolderLease(input: {
   holder: string;
   leaseMs: number;
   semaphore: PreviewSemaphoreResourceClient;
-  /** Slug already reasserted-and-lost this run — don't try to re-adopt it. */
-  skipSlug: string | null;
 }): Promise<EnvironmentConfigLease | null> {
   const resources = await input.semaphore.list({ type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE });
   const held = resources.filter(
-    (resource) =>
-      resource.leaseState === "leased" &&
-      resource.holder === input.holder &&
-      resource.slug !== input.skipSlug,
+    (resource) => resource.leaseState === "leased" && resource.holder === input.holder,
   );
   for (const resource of held) {
     const repaired = await input.semaphore.acquireSpecific({
