@@ -43,7 +43,7 @@ jobs:
         working-directory: apps/auth
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm alchemy:up
+        run: doppler run -- pnpm run-script deploy
   deploy-dev-global:
     runs-on:
       size: 8x32
@@ -64,4 +64,4 @@ jobs:
         working-directory: apps/auth
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm alchemy:up
+        run: doppler run -- pnpm run-script deploy

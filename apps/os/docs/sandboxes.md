@@ -97,29 +97,27 @@ fixes, documented here in case they resurface:
    returns `"Container failed to start"` →
    `docker ps -a | grep workerd-…-proxy` shows `Exited (1)` →
    `docker logs <that container>` says
-   `Fatal error: setsockoptint: protocol not available`. Fix:
-   `patches/@cloudflare__vite-plugin.patch` makes the pull use the host
-   platform.
+   `Fatal error: setsockoptint: protocol not available`. Fix: vite.config.ts
+   sets `MINIFLARE_CONTAINER_EGRESS_IMAGE_PLATFORM` to the host platform
+   (supported upstream since @cloudflare/vite-plugin 1.43).
 2. **The default sidecar reference pins an amd64-only digest**, so even a
    host-platform pull can't resolve arm64 from it. `apps/os/vite.config.ts`
    defaults `MINIFLARE_CONTAINER_EGRESS_IMAGE` to the digest-free multi-arch
    tag instead.
-3. **`script_name` must not be self-referential.** Alchemy emits the
-   Container binding's `scriptName` into the owner's own wrangler config; a
-   self-referential cross-script binding makes vite's dev registry proxy
-   serve the class, which drops `ctx.id.name`. The Container declaration in
-   `alchemy.run.ts` therefore carries no `scriptName` (only the consumer-side
-   plain namespace does).
+3. **Same-script containers only.** The single-worker topology declares the
+   container in wrangler.jsonc's `containers` alongside a same-script DO
+   binding — there is no cross-script `script_name` to get wrong anymore
+   (the historical alchemy-era failure mode where a self-referential
+   cross-script binding dropped `ctx.id.name`).
 
 Two more facts worth knowing:
 
 - **The sandbox container itself runs amd64 under Rosetta locally** —
   `cloudflare/sandbox` publishes no arm64 image. That's fine for the sandbox
   runtime (a Bun control server + your processes), just slower than native.
-- **`pnpm install` re-wedges local dev** while the miniflare/workerd catalog
-  pins lag alchemy's compat date — symlink workaround and proper fix in
-  the alchemy/miniflare compat notes (PR #1616); unrelated to sandboxes but
-  you'll hit it on the way here.
+- **Keep the cloudflare catalog pins moving together** (vite-plugin,
+  wrangler, miniflare, workerd in pnpm-workspace.yaml) — a compat-date
+  mismatch between them breaks `pnpm dev` with ERR_RUNTIME_FAILURE.
 
 ### Debugging
 

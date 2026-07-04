@@ -3,18 +3,18 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "alchemy:up": "tsx ./alchemy.run.ts",
-    "alchemy:down": "tsx ./alchemy.run.ts --destroy",
-    "dev": "tsx ./alchemy.run.ts",
+    "dev": "vite dev",
     "build": "vite build && tsc --noEmit",
     "preview": "vite preview",
+    "deploy": "tsx ./scripts/deploy.ts",
+    "destroy": "node -e \"console.log('streams-example-app destroy is a no-op: the playground holds nothing slot-scoped worth erasing, and workers stay')\" --",
+    "gen:wrangler": "tsx ./scripts/generate-wrangler-config.ts",
     "vitest": "vitest run e2e/vitest",
     "playwright": "playwright test e2e/playwright",
     "test:e2e": "pnpm vitest && pnpm playwright",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "pnpm gen:wrangler && tsc --noEmit"
   },
   "dependencies": {
-    "@iterate-com/shared": "workspace:*",
     "@journeyapps/wa-sqlite": "^1.7.0",
     "@tanstack/react-router": "^1.170.10",
     "@tanstack/react-start": "^1.168.18",
@@ -24,6 +24,7 @@
     "react-dom": "^19.2.0"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "catalog:cloudflare",
     "@cloudflare/workers-types": "catalog:cloudflare",
     "@playwright/test": "^1.60.0",
     "@tailwindcss/vite": "^4.3.0",
@@ -31,11 +32,12 @@
     "@types/react": "^19.2.15",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
-    "alchemy": "^0.83.3",
     "tailwindcss": "^4.3.0",
+    "trpc-cli": "0.15.1",
     "tsx": "^4.20.6",
     "undici": "^7.16.0",
     "vite": "^8.0.16",
-    "vitest": "^4.1.7"
+    "vitest": "^4.1.7",
+    "wrangler": "catalog:cloudflare"
   }
 }

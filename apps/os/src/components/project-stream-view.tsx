@@ -73,7 +73,6 @@ export function ProjectStreamView({
   messageComposer,
   panel,
   projectId,
-  showCommandPaletteTrigger = true,
   streamSource,
   streamPath,
 }: {
@@ -90,8 +89,6 @@ export function ProjectStreamView({
    */
   panel?: ReactNode;
   projectId: string | null;
-  /** Admin pages don't mount the global ⌘K palette; they render an inert pill. */
-  showCommandPaletteTrigger?: boolean;
   streamSource?: ItxStreamSource;
   streamPath: string;
 }) {
@@ -216,7 +213,6 @@ export function ProjectStreamView({
         defaultPresetId={defaultPreset.id}
         metrics={metrics}
         presence={presence}
-        showCommandPaletteTrigger={showCommandPaletteTrigger}
         streamPath={streamPath}
       />
       {search.filter !== true ? null : activeTab === "feed" ? (

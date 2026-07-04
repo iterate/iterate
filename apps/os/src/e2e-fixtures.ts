@@ -1,7 +1,7 @@
 const E2E_FIXTURE_PREFIX = "/__itx_e2e";
 
 // DELIBERATE: these fixtures are mounted unauthenticated in every deployment
-// (workers/api.ts), production included, so the e2e suites can run against any
+// (src/worker.ts), production included, so the e2e suites can run against any
 // live stage. They hold no state and reveal no environment: every response is
 // either canned data or an echo of the caller's own request. Anything beyond
 // that (secrets, env, bindings) must NOT be added here — see the
