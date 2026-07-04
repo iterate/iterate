@@ -9,9 +9,9 @@
  * machinery.
  */
 import { spawnSync } from "node:child_process";
-import { globSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { globSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { DeployableEnv, EnvContext } from "./env-context.ts";
 
 /** The slice of EnvContext these helpers actually need: the Cloudflare API fetchers. */
@@ -138,7 +138,31 @@ export async function deployWithSecrets(input: {
       console.log(
         "Worker has no Durable Object classes yet — plain deploy first to establish them.",
       );
-      run("pnpm", deployArgs, { cwd: input.cwd, env: input.credentials });
+      // The bootstrap deploy carries no --secrets-file, and a classless
+      // worker has no existing secrets either — wrangler's secrets.required
+      // enforcement would fail it. Deploy from a config copy without the
+      // `secrets` block; the real deploy below re-enforces it.
+      const { secrets: _secrets, ...config } = JSON.parse(readFileSync(input.builtConfig, "utf8"));
+      // Wrangler resolves relative paths (assets, containers) against the
+      // config's directory, so the copy must live next to the original.
+      const bootstrapConfig = join(dirname(input.builtConfig), "wrangler.bootstrap.json");
+      writeFileSync(bootstrapConfig, JSON.stringify(config));
+      try {
+        run(
+          "pnpm",
+          [
+            "exec",
+            "wrangler",
+            "deploy",
+            "--config",
+            bootstrapConfig,
+            ...(input.extraDeployArgs ?? []),
+          ],
+          { cwd: input.cwd, env: input.credentials },
+        );
+      } finally {
+        rmSync(bootstrapConfig, { force: true });
+      }
     }
   }
 
