@@ -160,7 +160,6 @@ export function ProjectStreamView({
   messageComposer,
   panel,
   projectId,
-  showCommandPaletteTrigger = true,
   streamSource,
   streamPath,
 }: {
@@ -177,8 +176,6 @@ export function ProjectStreamView({
    */
   panel?: ReactNode;
   projectId: string | null;
-  /** Admin pages don't mount the global ⌘K palette; they render an inert pill. */
-  showCommandPaletteTrigger?: boolean;
   streamSource?: ItxStreamSource;
   streamPath: string;
 }) {
@@ -445,24 +442,15 @@ export function ProjectStreamView({
         <button
           type="button"
           aria-haspopup="dialog"
-          title={
-            showCommandPaletteTrigger ? `${streamPath} — click or ⌘K to switch streams` : streamPath
-          }
-          onClick={() => showCommandPaletteTrigger && openGlobalCommandPalette()}
-          className={cn(
-            "flex h-9 min-w-0 items-center gap-2 rounded-full bg-muted px-3.5",
-            showCommandPaletteTrigger && "cursor-pointer hover:bg-muted/70",
-          )}
+          title={`${streamPath} — click or ⌘K to switch streams`}
+          onClick={() => openGlobalCommandPalette()}
+          className="flex h-9 min-w-0 cursor-pointer items-center gap-2 rounded-full bg-muted px-3.5 hover:bg-muted/70"
         >
           <span className="truncate font-mono text-sm">{streamPath}</span>
-          {showCommandPaletteTrigger ? (
-            <>
-              <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground" />
-              <kbd className="hidden shrink-0 rounded bg-background px-1.5 py-px text-[10px] text-muted-foreground sm:inline">
-                ⌘K
-              </kbd>
-            </>
-          ) : null}
+          <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground" />
+          <kbd className="hidden shrink-0 rounded bg-background px-1.5 py-px text-[10px] text-muted-foreground sm:inline">
+            ⌘K
+          </kbd>
         </button>
 
         <div className="ml-auto flex items-center gap-3">
