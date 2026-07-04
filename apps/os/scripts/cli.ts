@@ -1,9 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { realpathSync } from "node:fs";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 
 export * as dev from "./dev.ts";
 export * as itx from "./itx.ts";
@@ -53,7 +53,7 @@ export async function claudeMcp(options: ClaudeMcpOptions = {}) {
   );
 }
 
-if (isMainModule()) {
+if (isMainModule(import.meta.url)) {
   const args = process.argv.slice(2);
 
   /**
@@ -95,12 +95,6 @@ function spawnAndExit(command: string, args: string[]): never {
   }
 
   process.exit(result.status ?? 1);
-}
-
-function isMainModule() {
-  const entry = process.argv[1];
-  if (!entry) return false;
-  return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
 }
 
 function defaultMcpUrlFromEnv() {

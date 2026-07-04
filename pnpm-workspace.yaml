@@ -5,7 +5,6 @@ packages:
   - apps/*
   - packages/*
   - lint
-  - .github/ts-workflows
   - scripts
 
 catalogs:
