@@ -4,92 +4,33 @@
  *   pnpm run deploy --env preview_3
  *   pnpm run deploy --env prd
  *
- * Steps, all fail-fast:
+ * Runs the shared pipeline (scripts/lib/deploy-app.ts). Steps, all fail-fast:
  *   1. Verify the env's Doppler config carries every required secret, bake
  *      the static auth JWKS (issuer keys + forge public key), and validate
  *      the exact runtime config with the worker's own zod schema — a config
  *      that would throw on every request fails HERE, not after shipping.
  *   2. `vite build` with CLOUDFLARE_ENV=<env>, so the build output's
  *      wrangler.json is flattened for that env (name, routes, bindings).
+ *      vite.config.ts regenerates wrangler.jsonc from envs.ts before the
+ *      cloudflare plugin reads it — the build always sees a fresh config.
  *   3. `wrangler deploy --config <built config> --secrets-file <doppler>` —
  *      secrets land atomically in the same version as the code (after
- *      adopting the DO migration tag on alchemy-era scripts, and a plain
- *      deploy first when the worker has no DO classes yet — see
- *      deploy-helpers.ts).
+ *      adopting the DO migration tag on alchemy-era scripts — os ships the
+ *      same tagged migrations as the other DO apps and would hit CF 10074
+ *      without it — and a plain deploy first when the worker has no DO
+ *      classes yet — see deploy-helpers.ts).
  *   4. Smoke-probe the deployed base URL; exit nonzero unless the env is
  *      actually serving.
  *
  * The worker script is never deleted and routes are ensure-only, so a deploy
  * can never strand the env's hostnames (the old zombie-route/522 class).
  */
-import { rmSync } from "node:fs";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { envs } from "../../../envs.ts";
-import {
-  adoptDoMigrationTag,
-  collectSecrets,
-  deployWithSecrets,
-  findBuiltWranglerConfig,
-  run,
-  smoke,
-} from "../../../scripts/lib/deploy-helpers.ts";
-import {
-  assertProvisioned,
-  resolveEnvContext,
-  type EnvContext,
-} from "../../../scripts/lib/env-context.ts";
+import { deployApp } from "../../../scripts/lib/deploy-app.ts";
+import type { EnvContext } from "../../../scripts/lib/env-context.ts";
 import { parseConfig } from "../src/config.ts";
 import { envShapedVars, OPTIONAL_SECRETS, REQUIRED_SECRETS } from "./generate-wrangler-config.ts";
-
-const APP_ROOT = fileURLToPath(new URL("..", import.meta.url));
-
-const ctx = await resolveEnvContext({ envs, dopplerProject: "os" });
-assertProvisioned(ctx.name, ctx.env.resources);
-console.log(
-  `Deploying apps/os to ${ctx.name} (worker ${ctx.env.osWorkerName}, account ${ctx.env.cloudflareAccountId})`,
-);
-
-// ---- 1. Secrets + config validation -------------------------------------------
-const secretValues = collectSecrets(ctx, REQUIRED_SECRETS, OPTIONAL_SECRETS);
-// Baked at deploy time, so it's the one secret not in secrets.required.
-secretValues.APP_CONFIG_ITERATE_AUTH__JWKS = await bakeStaticAuthJwks(ctx);
-
-// Parse the exact env the worker will see (secrets + generated vars) with
-// the worker's own schema — the strongest possible pre-flight.
-parseConfig({ ...secretValues, ...envShapedVars(ctx.env) });
-
-// ---- 2. Build ----------------------------------------------------------------
-// vite.config.ts regenerates wrangler.jsonc from envs.ts before the
-// cloudflare plugin reads it — the build below always sees a fresh config.
-rmSync(join(APP_ROOT, "dist"), { recursive: true, force: true });
-run("pnpm", ["exec", "vite", "build"], { cwd: APP_ROOT, env: { CLOUDFLARE_ENV: ctx.name } });
-
-const builtConfig = findBuiltWranglerConfig(APP_ROOT);
-
-// ---- 3. Deploy (code + secrets in one version) --------------------------------
-// os ships the same tagged migrations as the other DO apps — alchemy-era os
-// workers with live classes would hit CF 10074 without the tag adoption.
-await adoptDoMigrationTag(ctx, ctx.env.osWorkerName);
-await deployWithSecrets({
-  cwd: APP_ROOT,
-  builtConfig,
-  secretValues,
-  credentials: {
-    CLOUDFLARE_API_TOKEN: ctx.secrets.CLOUDFLARE_API_TOKEN,
-    CLOUDFLARE_ACCOUNT_ID: ctx.env.cloudflareAccountId,
-  },
-  ensureClassesFor: { ctx, workerName: ctx.env.osWorkerName },
-});
-
-// ---- 4. Smoke ------------------------------------------------------------------
-await smoke(
-  `${ctx.env.baseUrl}/`,
-  (status) => status === 200 || (status >= 300 && status < 400),
-  "dashboard",
-);
-await smoke(`${ctx.env.baseUrl}/api`, (status) => status < 500, "os api");
-console.log(`✅ ${ctx.name} deployed and serving at ${ctx.env.baseUrl}`);
 
 /**
  * A static JWKS lets the worker verify auth JWTs without a runtime fetch,
@@ -163,3 +104,31 @@ async function fetchJwksWithRetry(url: string, envName: string) {
     }
   }
 }
+
+await deployApp({
+  appRoot: fileURLToPath(new URL("..", import.meta.url)),
+  appLabel: "apps/os",
+  envs,
+  dopplerProject: "os",
+  workerName: (env) => env.osWorkerName,
+  servingUrl: (env) => env.baseUrl,
+  resources: (env) => env.resources,
+  requiredSecrets: REQUIRED_SECRETS,
+  optionalSecrets: OPTIONAL_SECRETS,
+  prepare: async (ctx, secretValues) => {
+    // Baked at deploy time, so it's the one secret not in secrets.required.
+    secretValues.APP_CONFIG_ITERATE_AUTH__JWKS = await bakeStaticAuthJwks(ctx);
+
+    // Parse the exact env the worker will see (secrets + generated vars) with
+    // the worker's own schema — the strongest possible pre-flight.
+    parseConfig({ ...secretValues, ...envShapedVars(ctx.env) });
+  },
+  smokes: (env) => [
+    {
+      url: `${env.baseUrl}/`,
+      ok: (status) => status === 200 || (status >= 300 && status < 400),
+      label: "dashboard",
+    },
+    { url: `${env.baseUrl}/api`, ok: (status) => status < 500, label: "os api" },
+  ],
+});

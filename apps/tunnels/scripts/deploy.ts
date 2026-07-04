@@ -3,7 +3,8 @@
  *
  *   pnpm run deploy --env prd
  *
- * No build step: wrangler bundles the TypeScript entry itself. Secrets ride
+ * Runs the shared pipeline (scripts/lib/deploy-app.ts). No build step:
+ * wrangler bundles the TypeScript entry itself. Secrets ride
  * `wrangler deploy --secrets-file`, so code + secrets land in one version
  * (after adopting the DO migration tag on alchemy-era scripts — see
  * deploy-helpers.ts).
@@ -15,37 +16,20 @@
  */
 import { fileURLToPath } from "node:url";
 import { tunnelsEnvs } from "../../../envs.ts";
-import {
-  adoptDoMigrationTag,
-  collectSecrets,
-  deployWithSecrets,
-  smoke,
-} from "../../../scripts/lib/deploy-helpers.ts";
-import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
+import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 
-const APP_ROOT = fileURLToPath(new URL("..", import.meta.url));
-
-const ctx = await resolveEnvContext({ envs: tunnelsEnvs, dopplerProject: "tunnels" });
-console.log(
-  `Deploying apps/tunnels to ${ctx.name} (worker ${ctx.env.workerName}, account ${ctx.env.cloudflareAccountId})`,
-);
-
-const secretValues = collectSecrets(ctx, ["CAPTUN_TOKEN"]);
-
-await adoptDoMigrationTag(ctx, ctx.env.workerName);
-
-// The checked-in wrangler.jsonc carries the env blocks, so deploy selects one
-// with --env instead of a built per-env config.
-await deployWithSecrets({
-  cwd: APP_ROOT,
-  builtConfig: "wrangler.jsonc",
-  extraDeployArgs: ["--env", ctx.name],
-  secretValues,
-  credentials: {
-    CLOUDFLARE_API_TOKEN: ctx.secrets.CLOUDFLARE_API_TOKEN,
-    CLOUDFLARE_ACCOUNT_ID: ctx.env.cloudflareAccountId,
-  },
+await deployApp({
+  appRoot: fileURLToPath(new URL("..", import.meta.url)),
+  appLabel: "apps/tunnels",
+  envs: tunnelsEnvs,
+  dopplerProject: "tunnels",
+  workerName: (env) => env.workerName,
+  servingUrl: (env) => `https://${env.hostname}`,
+  requiredSecrets: ["CAPTUN_TOKEN"],
+  // The checked-in wrangler.jsonc carries the env blocks, so deploy selects
+  // one with --env instead of a built per-env config.
+  build: "checked-in-config",
+  smokes: (env) => [
+    { url: `https://${env.hostname}/`, ok: (status) => status < 500, label: "gateway" },
+  ],
 });
-
-await smoke(`https://${ctx.env.hostname}/`, (status) => status < 500, "gateway");
-console.log(`✅ ${ctx.name} deployed and serving at https://${ctx.env.hostname}`);

@@ -212,8 +212,8 @@ export function findBuiltWranglerConfig(appRoot: string): string {
  */
 export function collectSecrets(
   ctx: { env: DeployableEnv; secrets: Record<string, string> },
-  required: string[],
-  optional: string[] = [],
+  required: readonly string[],
+  optional: readonly string[] = [],
 ): Record<string, string> {
   const secretValues: Record<string, string> = {};
   const missing: string[] = [];
