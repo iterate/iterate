@@ -109,7 +109,7 @@ export const envs = {
     authBaseUrl: "https://auth.iterate.com",
     projectHostnameBases: ["iterate.app"],
     resources: {
-      projectDirectoryKvId: "68a1bca8ba934ee9ba23c44c13a698f5",
+      projectDirectoryKvId: "79d78df2e83b46d2b9083533e9f189c4",
       authDbId: "f33fec8c-d5a3-44cf-b792-6a319ee1f729",
     },
   },
