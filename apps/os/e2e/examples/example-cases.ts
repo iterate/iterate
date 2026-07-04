@@ -27,6 +27,9 @@
 //   secret-postman-echo
 //                   calls Postman Echo to prove egress secret substitution;
 //                   external service, so keep it interactive.
+//   email-send      sends real outbound mail through Cloudflare Email Service;
+//                   needs an onboarded sender domain and a real recipient
+//                   mailbox, so keep it interactive.
 
 export type ExampleRunContext = {
   /** Unique per example × runtime, for stream/event payload assertions. */
@@ -48,6 +51,7 @@ export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
   "connect-public-mcp",
   "connect-openapi-petstore",
   "secret-postman-echo",
+  "email-send",
 ]);
 
 export const EXAMPLE_CASES: Record<string, ExampleCase> = {

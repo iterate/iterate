@@ -28,6 +28,12 @@ export interface Env {
   /** Slug -> project id (+ metadata) cache in front of the auth worker's
    * project directory (project-directory.ts). */
   PROJECT_DIRECTORY: KVNamespace;
+  /**
+   * Cloudflare Email Service send binding backing `itx.email`. Optional
+   * because it is only bound on deployed stages — alchemy.run.ts skips it in
+   * local dev until miniflare send_email simulation is wired up.
+   */
+  EMAIL?: import("./domains/email/utils.ts").SendEmailBinding;
   SECRET_ENCRYPTION_KEY: string;
 
   AGENT: DurableObjectNamespace<

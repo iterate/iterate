@@ -470,6 +470,12 @@ const itxBindings = {
   ),
   STREAM: stream,
   WORKER: statefulWorker,
+  // Cloudflare Email Service send binding for itx.email. Sender authorization
+  // is enforced in OS (a project only sends as <slug>@<hostname base>), not via
+  // allowed_sender_addresses — that list can't hold a dynamic per-project set.
+  // Deploy-only: local dev skips it until miniflare send_email simulation is
+  // wired up (env.EMAIL is optional in src/env.ts).
+  ...(ctx.app.local ? {} : { EMAIL: { type: "send_email" as const } }),
 };
 // @cloudflare/shell (repo git) and the dynamic worker loader need Node APIs —
 // itx originally ran its whole worker with nodejs_compat.

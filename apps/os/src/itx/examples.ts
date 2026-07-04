@@ -735,4 +735,20 @@ return {
 };
 `.trim(),
   },
+  {
+    id: "email-send",
+    title: "Send an email from the project's address",
+    description:
+      "itx.email.send() delivers real mail through Cloudflare Email Service from the project's own address (<slug>@<hostname base>); an explicit `from` must match it. Needs the deployment's sender domain onboarded for Email Sending, and it emails a real recipient — run it interactively with an address you own.",
+    context: "project",
+    runtimes: ["browser", "node", "cli"],
+    code: `
+const receipt = await itx.email.send({
+  to: "you@example.com", // a mailbox you own — this sends real mail
+  subject: "Hello from itx",
+  text: "Sent by an agent through Cloudflare Email Service.",
+});
+return receipt; // { from: "<slug>@<hostname base>", messageId }
+`.trim(),
+  },
 ];
