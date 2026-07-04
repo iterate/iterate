@@ -4,7 +4,7 @@ import {
   useQueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useReducer, useRef } from "react";
 import { Link, createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { FolderPlus } from "lucide-react";
 import { useAuthClient } from "@iterate-com/auth/client";
@@ -148,16 +148,30 @@ function ProjectsIndexPage() {
     }
   }, [data, recoverProjectMutate]);
 
-  const onboardingRedirectProjectIds = useRef(new Set<string>());
+  const onboardingRedirectInFlightProjectIds = useRef(new Set<string>());
+  const [onboardingRedirectRetry, retryOnboardingRedirect] = useReducer((value) => value + 1, 0);
   useEffect(() => {
     const project = data?.length === 1 ? data[0]! : null;
     if (project == null) return;
     if (project.deploymentStatus === "unknown") return;
-    if (onboardingRedirectProjectIds.current.has(project.id)) return;
-    onboardingRedirectProjectIds.current.add(project.id);
+    if (onboardingRedirectInFlightProjectIds.current.has(project.id)) return;
+    onboardingRedirectInFlightProjectIds.current.add(project.id);
 
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const finishRedirectAttempt = () => {
+      onboardingRedirectInFlightProjectIds.current.delete(project.id);
+    };
+    const retryRedirectAttempt = () => {
+      if (cancelled) return;
+      finishRedirectAttempt();
+      retryTimer = setTimeout(() => {
+        if (!cancelled) retryOnboardingRedirect();
+      }, 1_000);
+    };
+
     void (async () => {
+      let shouldRetry = false;
       try {
         const itx = await connectItxBrowser();
         if (project.deploymentStatus === "missing") {
@@ -180,7 +194,10 @@ function ProjectsIndexPage() {
             }
             await new Promise((resolve) => setTimeout(resolve, 500));
           }
-          if (!inOnboarding) return;
+          if (!inOnboarding) {
+            shouldRetry = true;
+            return;
+          }
         }
 
         if (cancelled) return;
@@ -191,14 +208,22 @@ function ProjectsIndexPage() {
           replace: true,
         });
       } catch {
-        // Leave the table visible; recovery/setup buttons still work here.
+        shouldRetry = true;
+      } finally {
+        if (shouldRetry) {
+          retryRedirectAttempt();
+        } else {
+          finishRedirectAttempt();
+        }
       }
     })();
 
     return () => {
       cancelled = true;
+      if (retryTimer != null) clearTimeout(retryTimer);
+      finishRedirectAttempt();
     };
-  }, [data, navigate, organizationSlugFor]);
+  }, [data, navigate, onboardingRedirectRetry, organizationSlugFor]);
 
   return (
     <section className="space-y-5 p-4">
