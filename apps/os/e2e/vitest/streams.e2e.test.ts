@@ -82,6 +82,52 @@ test("creates a project and uses project streams through v4 ITX", async () => {
   await subscription.unsubscribe();
 });
 
+test("stream getEvents defaults to a bounded page and supports event type filters", async () => {
+  const marker = crypto.randomUUID();
+  const streamPath = `/e2e/os-port/get-events/${marker}`;
+  const selectedType = `${STREAM_EVENT_TYPE}/selected`;
+  const otherType = `${STREAM_EVENT_TYPE}/other`;
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = itx.projects.create({ slug: `os-stream-get-events-${RUN_SUFFIX}-${marker}` });
+  using stream = project.streams.get(streamPath);
+
+  const appendedEvents = await stream.append(
+    ...Array.from({ length: 505 }, (_, index) => ({
+      type: index % 2 === 0 ? selectedType : otherType,
+      payload: { index, marker },
+    })),
+  );
+  const firstAppendedOffset = appendedEvents[0]!.offset;
+  const afterOffset = firstAppendedOffset - 1;
+  const beforeOffset = appendedEvents.at(-1)!.offset + 1;
+
+  using pager = stream.readEvents({ afterOffset, beforeOffset });
+  const firstPage = await pager.next();
+  expect(firstPage).toHaveLength(500);
+
+  const secondPage = await pager.next();
+  expect(secondPage).toHaveLength(5);
+  expect([...firstPage, ...secondPage].map((event) => event.offset)).toEqual(
+    appendedEvents.map((event) => event.offset),
+  );
+  expect(await pager.next()).toEqual([]);
+
+  const selectedEvents = await stream.getEvents({
+    afterOffset,
+    beforeOffset,
+    eventTypes: [selectedType],
+    limit: 300,
+  });
+  expect(selectedEvents).toHaveLength(253);
+  expect(selectedEvents.every((event) => event.type === selectedType)).toBe(true);
+  await expect(stream.getEvents({ limit: 501 })).rejects.toThrow("getEvents limit");
+});
+
 test("stream subscribe replays history, tails live appends, and unsubscribes", async () => {
   const marker = crypto.randomUUID();
   const streamPath = `/e2e/os-port/subscribe/${marker}`;

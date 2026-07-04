@@ -406,11 +406,10 @@ export interface Stream extends Describable {
   getEvent(
     input: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined>;
-  getEvents(input?: {
-    afterOffset?: number;
-    beforeOffset?: number | null;
-    limit?: number;
-  }): Promise<StreamEvent[]>;
+  /** Read one bounded page. Defaults to, and caps at, 500 events. */
+  getEvents(input?: StreamEventReadInput): Promise<StreamEvent[]>;
+  /** Create a disposable pager over a fixed read window. */
+  readEvents(input?: StreamEventReadInput): StreamEventPager;
   waitForEvent(input: {
     afterOffset?: number;
     eventTypes?: readonly string[];
@@ -441,6 +440,29 @@ export interface Stream extends Describable {
     events?: boolean;
     subscriber?: unknown;
   }): Promise<StreamSubscriptionHandle>;
+}
+
+/** Window for bounded stream reads. Offsets are exclusive: `afterOffset: 10` starts at 11. */
+export type StreamEventReadInput = {
+  /** Exclusive lower bound. Defaults to 0. */
+  afterOffset?: number;
+  /** Exclusive upper bound. Omit/null to read through the current tail. */
+  beforeOffset?: number | null;
+  /** Event types to include. Omit or include "*" for all; [] matches none. */
+  eventTypes?: readonly string[];
+  /** Page size, 1-500. Defaults to 500. */
+  limit?: number;
+};
+
+/**
+ * Stateful page reader for one stream read window.
+ *
+ * This is not a live subscription; [] means "caught up for now". Dispose it
+ * when finished (`using pager = stream.readEvents(...)`).
+ */
+export interface StreamEventPager extends Disposable {
+  /** Returns [] when no newer matching page is currently available. */
+  next(): Promise<StreamEvent[]>;
 }
 
 /** Repo catalog for either a project or the deployment-wide global scope. */
