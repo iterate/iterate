@@ -64,3 +64,10 @@ export const OpenAiWsProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-completed",
   ],
 });
+
+/**
+ * The contract's type under the same identifier, so type-level helpers read
+ * without `typeof`: `ProcessorState<OpenAiWsProcessorContract>`,
+ * `ConsumedEvent<OpenAiWsProcessorContract>`, `ProcessorEvent<OpenAiWsProcessorContract, T>`.
+ */
+export type OpenAiWsProcessorContract = typeof OpenAiWsProcessorContract;

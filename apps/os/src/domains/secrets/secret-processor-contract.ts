@@ -58,3 +58,10 @@ export const SecretProcessorContract = defineProcessorContract({
   consumes: ["events.iterate.com/secret/updated", "events.iterate.com/secret/used"],
   emits: [],
 });
+
+/**
+ * The contract's type under the same identifier, so type-level helpers read
+ * without `typeof`: `ProcessorState<SecretProcessorContract>`,
+ * `ConsumedEvent<SecretProcessorContract>`, `ProcessorEvent<SecretProcessorContract, T>`.
+ */
+export type SecretProcessorContract = typeof SecretProcessorContract;

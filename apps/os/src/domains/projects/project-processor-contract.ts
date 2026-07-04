@@ -59,9 +59,16 @@ export const ProjectProcessorContract = defineProcessorContract({
 });
 
 /**
+ * The contract's type under the same identifier, so type-level helpers read
+ * without `typeof`: `ProcessorState<ProjectProcessorContract>`,
+ * `ConsumedEvent<ProjectProcessorContract>`, `ProcessorEvent<ProjectProcessorContract, T>`.
+ */
+export type ProjectProcessorContract = typeof ProjectProcessorContract;
+
+/**
  * The project processor's reduced state, inferred from the contract's
  * `stateSchema` — the one definition of the shape. `created` flips when the
  * bootstrap saga lands; the list fields are what the collection `list()`
  * methods read.
  */
-export type ProjectProcessorState = ProcessorState<typeof ProjectProcessorContract>;
+export type ProjectProcessorState = ProcessorState<ProjectProcessorContract>;

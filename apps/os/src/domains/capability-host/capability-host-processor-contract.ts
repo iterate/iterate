@@ -106,3 +106,10 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
     "events.iterate.com/capability-host/script-execution-completed",
   ],
 });
+
+/**
+ * The contract's type under the same identifier, so type-level helpers read
+ * without `typeof`: `ProcessorState<CapabilityHostProcessorContract>`,
+ * `ConsumedEvent<CapabilityHostProcessorContract>`, `ProcessorEvent<CapabilityHostProcessorContract, T>`.
+ */
+export type CapabilityHostProcessorContract = typeof CapabilityHostProcessorContract;

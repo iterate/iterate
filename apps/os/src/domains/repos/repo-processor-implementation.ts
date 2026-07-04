@@ -11,16 +11,13 @@ type RepoProcessorDeps = {
   projectId: string | null;
 };
 
-export class RepoProcessor extends StreamProcessor<
-  typeof RepoProcessorContract,
-  RepoProcessorDeps
-> {
+export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoProcessorDeps> {
   readonly contract = RepoProcessorContract;
 
   protected override reduce({
     event,
     state,
-  }: Parameters<StreamProcessor<typeof RepoProcessorContract>["reduce"]>[0]) {
+  }: Parameters<StreamProcessor<RepoProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
       case "events.iterate.com/repo/created":
         return {
@@ -42,7 +39,7 @@ export class RepoProcessor extends StreamProcessor<
     event,
     state,
     append,
-  }: Parameters<StreamProcessor<typeof RepoProcessorContract>["processEvent"]>[0]): undefined {
+  }: Parameters<StreamProcessor<RepoProcessorContract>["processEvent"]>[0]): undefined {
     if (event.type !== "events.iterate.com/repo/create-requested") return;
     if (event.payload.projectId !== this.deps.projectId || event.payload.path !== this.deps.path) {
       throw new Error(

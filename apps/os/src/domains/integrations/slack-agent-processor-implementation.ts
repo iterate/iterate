@@ -28,7 +28,7 @@ import {
 } from "./slack-agent-processor-contract.ts";
 
 export class SlackAgentProcessor extends StreamProcessor<
-  typeof SlackAgentProcessorContract,
+  SlackAgentProcessorContract,
   { callSlackApi?(method: string, body: Record<string, unknown>): Promise<void> }
 > {
   readonly contract = SlackAgentProcessorContract;
@@ -37,7 +37,7 @@ export class SlackAgentProcessor extends StreamProcessor<
     event,
     state,
   }: Parameters<
-    StreamProcessor<typeof SlackAgentProcessorContract>["reduce"]
+    StreamProcessor<SlackAgentProcessorContract>["reduce"]
   >[0]): SlackAgentProcessorState {
     switch (event.type) {
       case "events.iterate.com/slack/thread-route-configured":
@@ -71,9 +71,7 @@ export class SlackAgentProcessor extends StreamProcessor<
     blockProcessorWhile,
     event,
     state,
-  }: Parameters<
-    StreamProcessor<typeof SlackAgentProcessorContract>["processEvent"]
-  >[0]): undefined {
+  }: Parameters<StreamProcessor<SlackAgentProcessorContract>["processEvent"]>[0]): undefined {
     switch (event.type) {
       case "events.iterate.com/slack/thread-route-configured":
         // Route context (channel/thread_ts/streamPath) is captured in reduce().

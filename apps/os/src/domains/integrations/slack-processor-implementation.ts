@@ -21,16 +21,13 @@ type SlackProcessorDeps = {
   acknowledgeRoutedWebhook?(input: { payload: unknown }): Promise<void> | void;
 };
 
-export class SlackProcessor extends StreamProcessor<
-  typeof SlackProcessorContract,
-  SlackProcessorDeps
-> {
+export class SlackProcessor extends StreamProcessor<SlackProcessorContract, SlackProcessorDeps> {
   readonly contract = SlackProcessorContract;
 
   protected override reduce({
     event,
     state,
-  }: Parameters<StreamProcessor<typeof SlackProcessorContract>["reduce"]>[0]): SlackProcessorState {
+  }: Parameters<StreamProcessor<SlackProcessorContract>["reduce"]>[0]): SlackProcessorState {
     switch (event.type) {
       case "events.iterate.com/slack/connected":
         return {
@@ -73,7 +70,7 @@ export class SlackProcessor extends StreamProcessor<
     event,
     runInBackground,
     state,
-  }: Parameters<StreamProcessor<typeof SlackProcessorContract>["processEvent"]>[0]): undefined {
+  }: Parameters<StreamProcessor<SlackProcessorContract>["processEvent"]>[0]): undefined {
     if (event.type !== "events.iterate.com/slack/webhook-received") return;
 
     /**

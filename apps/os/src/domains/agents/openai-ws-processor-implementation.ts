@@ -52,7 +52,7 @@ const OpenAiWebSocketReadyState = {
 } as const;
 
 export class OpenAiWsProcessor extends StreamProcessor<
-  typeof OpenAiWsProcessorContract,
+  OpenAiWsProcessorContract,
   {
     /** Null when the deployment has no OpenAI key; requests then fail politely. */
     apiKey: string | null;
@@ -80,7 +80,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
   protected override reduce({
     event,
     state,
-  }: Parameters<StreamProcessor<typeof OpenAiWsProcessorContract>["reduce"]>[0]) {
+  }: Parameters<StreamProcessor<OpenAiWsProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
       case "events.iterate.com/openai-ws/llm-request-started":
         return {
@@ -107,7 +107,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
     event,
     runInBackground,
     state,
-  }: Parameters<StreamProcessor<typeof OpenAiWsProcessorContract>["processEvent"]>[0]): undefined {
+  }: Parameters<StreamProcessor<OpenAiWsProcessorContract>["processEvent"]>[0]): undefined {
     if (event.type !== "events.iterate.com/agent/llm-request-requested") return;
     if (event.payload.provider !== OpenAiWsProcessorContract.slug) return;
     const llmRequestId = event.offset;

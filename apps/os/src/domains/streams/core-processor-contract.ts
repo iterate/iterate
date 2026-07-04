@@ -357,4 +357,11 @@ export const CoreProcessorContract = defineProcessorContract({
   ],
 });
 
+/**
+ * The contract's type under the same identifier, so type-level helpers read
+ * without `typeof`: `ProcessorState<CoreProcessorContract>`,
+ * `ConsumedEvent<CoreProcessorContract>`, `ProcessorEvent<CoreProcessorContract, T>`.
+ */
+export type CoreProcessorContract = typeof CoreProcessorContract;
+
 export type CoreProcessorState = z.infer<typeof CoreProcessorContract.stateSchema>;

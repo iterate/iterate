@@ -42,7 +42,14 @@ export const RepoProcessorContract = defineProcessorContract({
 });
 
 /**
+ * The contract's type under the same identifier, so type-level helpers read
+ * without `typeof`: `ProcessorState<RepoProcessorContract>`,
+ * `ConsumedEvent<RepoProcessorContract>`, `ProcessorEvent<RepoProcessorContract, T>`.
+ */
+export type RepoProcessorContract = typeof RepoProcessorContract;
+
+/**
  * The repo processor's reduced state, inferred from the contract's
  * `stateSchema` — the one definition of the shape.
  */
-export type RepoProcessorState = ProcessorState<typeof RepoProcessorContract>;
+export type RepoProcessorState = ProcessorState<RepoProcessorContract>;

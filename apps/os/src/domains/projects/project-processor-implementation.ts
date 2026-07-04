@@ -76,7 +76,7 @@ const PROJECT_WORKER_READY_RETRY_MS = 100;
 const PROJECT_WORKER_READY_URL = "https://iterate-project.localhost/__itx_project_ready";
 
 export class ProjectProcessor extends StreamProcessor<
-  typeof ProjectProcessorContract,
+  ProjectProcessorContract,
   {
     /** Provider new agents are born with ("openai-ws" when the deployment has an OpenAI key). */
     defaultLlmProvider: AgentLlmProvider;
@@ -88,7 +88,7 @@ export class ProjectProcessor extends StreamProcessor<
   protected override reduce({
     event,
     state,
-  }: Parameters<StreamProcessor<typeof ProjectProcessorContract>["reduce"]>[0]) {
+  }: Parameters<StreamProcessor<ProjectProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
       case "events.iterate.com/project/create-requested":
         if (event.payload.projectId !== this.deps.itx.projectId) return state;
@@ -113,7 +113,7 @@ export class ProjectProcessor extends StreamProcessor<
     runInBackground,
     state,
     append,
-  }: Parameters<StreamProcessor<typeof ProjectProcessorContract>["processEvent"]>[0]): undefined {
+  }: Parameters<StreamProcessor<ProjectProcessorContract>["processEvent"]>[0]): undefined {
     if (previousState.created) {
       runInBackground(async () => {
         try {

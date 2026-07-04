@@ -7,7 +7,6 @@ export { BrowserRawEventsContract } from "./contract.ts";
 
 export const BROWSER_RAW_EVENTS_SCHEMA_VERSION = 4;
 
-export type BrowserRawEventsContract = typeof BrowserRawEventsContract;
 export type BrowserRawEventsState = Record<string, never>;
 
 /**

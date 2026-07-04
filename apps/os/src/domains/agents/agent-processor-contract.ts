@@ -291,9 +291,16 @@ export const AgentProcessorContract = defineProcessorContract({
 });
 
 /**
+ * The contract's type under the same identifier, so type-level helpers read
+ * without `typeof`: `ProcessorState<AgentProcessorContract>`,
+ * `ConsumedEvent<AgentProcessorContract>`, `ProcessorEvent<AgentProcessorContract, T>`.
+ */
+export type AgentProcessorContract = typeof AgentProcessorContract;
+
+/**
  * The agent processor's reduced state, inferred from the contract's
  * `stateSchema` — the one definition of the shape (the old hand-written copy
  * in types.ts silently omitted `llmProviderConfigured` and
  * `requestGeneration`).
  */
-export type AgentProcessorState = ProcessorState<typeof AgentProcessorContract>;
+export type AgentProcessorState = ProcessorState<AgentProcessorContract>;

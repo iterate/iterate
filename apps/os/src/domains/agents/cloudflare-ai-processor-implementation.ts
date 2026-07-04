@@ -10,7 +10,7 @@ type LlmRequestRequestedEvent = Extract<
 >;
 
 export class CloudflareAiProcessor extends StreamProcessor<
-  typeof CloudflareAiProcessorContract,
+  CloudflareAiProcessorContract,
   {
     ai: { run(model: string, body: unknown): Promise<unknown> };
     readStreamEvents(): Promise<StreamEvent[]>;
@@ -21,7 +21,7 @@ export class CloudflareAiProcessor extends StreamProcessor<
   protected override reduce({
     event,
     state,
-  }: Parameters<StreamProcessor<typeof CloudflareAiProcessorContract>["reduce"]>[0]) {
+  }: Parameters<StreamProcessor<CloudflareAiProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
       case "events.iterate.com/cloudflare-ai/llm-request-started":
         return {
@@ -48,9 +48,7 @@ export class CloudflareAiProcessor extends StreamProcessor<
     event,
     runInBackground,
     state,
-  }: Parameters<
-    StreamProcessor<typeof CloudflareAiProcessorContract>["processEvent"]
-  >[0]): undefined {
+  }: Parameters<StreamProcessor<CloudflareAiProcessorContract>["processEvent"]>[0]): undefined {
     if (event.type !== "events.iterate.com/agent/llm-request-requested") return;
     if (event.payload.provider !== CloudflareAiProcessorContract.slug) return;
     const llmRequestId = event.offset;

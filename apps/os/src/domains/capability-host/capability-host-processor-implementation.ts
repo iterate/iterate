@@ -98,9 +98,7 @@ export type ParentCapabilityHost = {
   describeCapabilities(): Promise<CapabilityDescription[]>;
 };
 
-export class CapabilityHostProcessor extends StreamProcessor<
-  typeof CapabilityHostProcessorContract
-> {
+export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProcessorContract> {
   readonly contract = CapabilityHostProcessorContract;
   #itx: ProjectRpcTarget;
   #path: string;
@@ -109,7 +107,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
   #liveCapabilities = new Map<string, LiveCapability>();
 
   constructor(
-    args: StreamProcessorConstructorArgs<typeof CapabilityHostProcessorContract, object> & {
+    args: StreamProcessorConstructorArgs<CapabilityHostProcessorContract, object> & {
       itx: ProjectRpcTarget;
       path: string;
       workerRunner: DynamicWorkerRunner;
@@ -129,7 +127,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
   protected override reduce({
     event,
     state,
-  }: Parameters<StreamProcessor<typeof CapabilityHostProcessorContract>["reduce"]>[0]) {
+  }: Parameters<StreamProcessor<CapabilityHostProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
       case "events.iterate.com/capability-host/capability-provided": {
         const row: CapabilityRecord = {
@@ -185,9 +183,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
     event,
     runInBackground,
     state,
-  }: Parameters<
-    StreamProcessor<typeof CapabilityHostProcessorContract>["processEvent"]
-  >[0]): undefined {
+  }: Parameters<StreamProcessor<CapabilityHostProcessorContract>["processEvent"]>[0]): undefined {
     if (event.type !== "events.iterate.com/capability-host/script-execution-requested") return;
     if (state.pendingScriptExecutions[event.payload.executionId] !== true) return;
     runInBackground(() =>

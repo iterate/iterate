@@ -101,4 +101,11 @@ export const SlackProcessorContract = defineProcessorContract({
   ],
 });
 
+/**
+ * The contract's type under the same identifier, so type-level helpers read
+ * without `typeof`: `ProcessorState<SlackProcessorContract>`,
+ * `ConsumedEvent<SlackProcessorContract>`, `ProcessorEvent<SlackProcessorContract, T>`.
+ */
+export type SlackProcessorContract = typeof SlackProcessorContract;
+
 export type SlackProcessorState = z.infer<typeof SlackProcessorContract.stateSchema>;

@@ -193,6 +193,17 @@ export type ProcessorState<Contract> = Contract extends {
   ? z.output<State>
   : never;
 
+/**
+ * One committed-event shape from a contract's consumable union, narrowed by
+ * its durable type string: `ProcessorEvent<RepoProcessorContract,
+ * "events.iterate.com/repo/created">`. Contracts export their type under the
+ * same identifier as the value, so no `typeof` at the call site.
+ */
+export type ProcessorEvent<Contract, Type extends ConsumedEvent<Contract>["type"]> = Extract<
+  ConsumedEvent<Contract>,
+  { type: Type }
+>;
+
 // -----------------------------------------------------------------------------
 // Authoring-time validation types for defineProcessorContract.
 // -----------------------------------------------------------------------------
