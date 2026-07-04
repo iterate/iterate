@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, RefreshCwIcon } from "lucide-react";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { normalizePath } from "~/domains/durable-object-names.ts";
@@ -84,7 +84,7 @@ function StreamTreeNode({
   tree: StreamTreeContext;
 }) {
   const expanded = tree.expandedPaths.has(path);
-  const { data, isPending } = useQuery({
+  const { data, isError, isPending, refetch } = useQuery({
     queryKey: ["stream-tree", tree.scope, path],
     queryFn: async () => {
       const streamState = await readStreamStateOnce(tree.source, normalizePath(path));
@@ -105,7 +105,17 @@ function StreamTreeNode({
         )}
       >
         <span style={{ width: depth * 14 }} className="shrink-0" />
-        {childPaths.length > 0 ? (
+        {isError ? (
+          <button
+            type="button"
+            aria-label={`Retry loading ${path}`}
+            title="Failed to load this stream's state — click to retry"
+            className="-m-1 shrink-0 rounded p-1 text-destructive hover:bg-muted"
+            onClick={() => void refetch()}
+          >
+            <RefreshCwIcon className="size-3.5" />
+          </button>
+        ) : childPaths.length > 0 ? (
           <button
             type="button"
             aria-label={expanded ? `Collapse ${path}` : `Expand ${path}`}
@@ -131,7 +141,9 @@ function StreamTreeNode({
             label={path === "/" ? "/" : (path.split("/").at(-1) ?? path)}
             className="min-w-0"
           />
-          {data == null ? null : (
+          {isError ? (
+            <span className="ml-auto shrink-0 text-[10px] text-destructive">failed to load</span>
+          ) : data == null ? null : (
             <span className="ml-auto shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70">
               {data.eventCount}
             </span>
