@@ -14,7 +14,7 @@ import type {
   StatelessDynamicWorkerRef,
   StreamEvent,
 } from "../../types.ts";
-import type { Env } from "../../env.ts";
+import type { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import {
@@ -103,8 +103,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
   readonly contract = CapabilityHostProcessorContract;
   #itx: ProjectRpcTarget;
   #path: string;
-  #projectId: string;
-  #dynamicWorkers: Env["DYNAMIC_WORKERS"];
+  #dynamicWorkers: (scopePath: string) => DynamicWorkerRunner;
   #parent: ParentCapabilityHost | undefined;
   #liveCapabilities = new Map<string, LiveCapability>();
 
@@ -112,9 +111,8 @@ export class CapabilityHostProcessor extends StreamProcessor<
     args: StreamProcessorConstructorArgs<typeof CapabilityHostProcessorContract, object> & {
       itx: ProjectRpcTarget;
       path: string;
-      projectId: string;
-      /** The worker worker's dynamic-worker service (runs run-script workers in this scope). */
-      dynamicWorkers: Env["DYNAMIC_WORKERS"];
+      /** Runner factory (runs run-script workers in this scope). */
+      dynamicWorkers: (scopePath: string) => DynamicWorkerRunner;
       // The enclosing scope, or undefined at the project root ("/"). Present for
       // every nested scope (agents, sub-agents, agent namespaces) so capability
       // lookups that miss locally can fall through to the surrounding scope.
@@ -124,7 +122,6 @@ export class CapabilityHostProcessor extends StreamProcessor<
     super(args);
     this.#itx = args.itx;
     this.#path = normalizePath(args.path);
-    this.#projectId = args.projectId;
     this.#dynamicWorkers = args.dynamicWorkers;
     this.#parent = args.parent;
   }
@@ -425,11 +422,9 @@ export class CapabilityHostProcessor extends StreamProcessor<
     try {
       // Scripts execute inside THIS scope: the loaded worker's env.ITX resolves
       // to the same path this processor owns, not the script ref's path.
-      const result = await this.#dynamicWorkers.invokeCapability({
+      const result = await this.#dynamicWorkers(this.#path).invokeCapability({
         path: ["run"],
-        projectId: this.#projectId,
         ref: this.#scriptWorkerRef(input.code),
-        scopePath: this.#path,
       });
       await complete({ result });
     } catch (error) {

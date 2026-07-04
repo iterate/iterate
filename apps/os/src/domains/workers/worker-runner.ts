@@ -1,5 +1,11 @@
 import { itxEnv as env } from "../../env.ts";
 import type { Env } from "../../env.ts";
+import {
+  itxEntrypointBinding,
+  itxEntrypointProps,
+  itxEntrypointScopeCacheKey,
+} from "../itx/utils.ts";
+import { projectEgressFetcher } from "../projects/utils.ts";
 import type {
   StatefulDynamicWorkerRef,
   StatelessDynamicWorkerRef,
@@ -32,11 +38,10 @@ type StatefulWorkerRpc = {
 /**
  * Small internal executor for DynamicWorkerRefs.
  *
- * WORKER-WORKER-INTERNAL: only `DynamicWorkerEntrypoint` (stateless dispatch)
- * and `StatefulWorkerDurableObject` (stateful class hosting) may construct
- * this — both live in the worker worker, the sole owner of the LOADER binding.
- * Everything else reaches dynamic workers through the `DYNAMIC_WORKERS`
- * service binding. This is intentionally not an RpcTarget.
+ * Construct through {@link dynamicWorkerRunnerForScope} (the authority
+ * boundary: it mints the scoped ITX loopback + egress fetcher a dynamic
+ * isolate runs with); `StatefulWorkerDurableObject` builds one directly with
+ * its own scope. This is intentionally not an RpcTarget.
  */
 export class DynamicWorkerRunner {
   readonly #bindings: WorkerBindings;
@@ -201,5 +206,33 @@ function statefulWorkerDurableObjectName(projectId: string, ref: StatefulDynamic
     props: {
       durableWorkerKey: ref.durableWorkerKey,
     },
+  });
+}
+
+/**
+ * Mint the runner for dynamic workers executing in one itx scope. This is
+ * THE place a dynamic isolate gets its env: a scoped ITX loopback binding
+ * (capability-tree access as the hosting scope) and the project egress
+ * fetcher as globalOutbound (all network the isolate does flows through it —
+ * secret substitution, egress control). `waitUntil` must be the hosting
+ * request context's, so budget-expired cold builds outlive the request that
+ * gave up on them (see resolveWorkerSource).
+ */
+export function dynamicWorkerRunnerForScope(props: {
+  exports: ExecutionContext["exports"];
+  projectId: string;
+  scopePath: string;
+  waitUntil: (promise: Promise<unknown>) => void;
+}): DynamicWorkerRunner {
+  const itxScope = itxEntrypointProps({ path: props.scopePath, projectId: props.projectId });
+  return new DynamicWorkerRunner({
+    bindings: {
+      ITX: itxEntrypointBinding(props.exports, itxScope),
+    },
+    globalOutbound: projectEgressFetcher(props.exports, props.projectId),
+    loader: env.LOADER,
+    projectId: props.projectId,
+    waitUntil: props.waitUntil,
+    workerScopeKey: itxEntrypointScopeCacheKey(itxScope),
   });
 }

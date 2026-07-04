@@ -270,20 +270,21 @@ the interceptor sees placeholders, never material
 ## Dynamic workers
 
 `itx.workers.get(ref)` runs caller-supplied code in an isolate via the Worker
-Loader. All dynamic workers are owned by the worker worker: its
-`DynamicWorkerEntrypoint` is the only holder of a `LOADER` binding, and every
-other worker dispatches through the `DYNAMIC_WORKERS` service binding
-(`domains/workers/dynamic-worker-entrypoint.ts` explains why). A `DynamicWorkerRef` is `stateless` (a WorkerEntrypoint export, with
+Loader. Runners are minted through `dynamicWorkerRunnerForScope`
+(`domains/workers/worker-runner.ts`) — the one place a dynamic isolate gets
+its scoped ITX binding and egress fetcher. A `DynamicWorkerRef` is
+`stateless` (a WorkerEntrypoint export, with
 optional `props`) or `stateful` (a DurableObject class export hosted by
 `StatefulWorkerDurableObject` under a `durableWorkerKey`). Its source is an
 orthogonal file source plus Cloudflare build options: files come `inline` or
 from a `repo` snapshot (branch late-bound or commit-pinned, masked by
-include/exclude globs), and the builder worker bundles them — multi-file
+include/exclude globs), and the builder sidecar (`src/builder.ts` — the only
+script carrying the bundler toolchain) bundles them — multi-file
 TypeScript and `package.json` npm dependencies included — into a KV-cached,
 loader-ready artifact keyed deterministically (see
-`docs/dynamic-worker-build-requirements.md`). Builds are a direct RPC from the
-worker worker to the builder worker (the only script carrying the bundler
-toolchain); they leave no events in the journal, and build failures reach the
+`docs/dynamic-worker-build-requirements.md`). Builds are a direct RPC
+(`env.BUILDER.build`, files passed by value); they leave no events in the
+journal, and build failures reach the
 caller as plain errors. Inside
 loaded code, `await env.ITX.get()` returns a full itx at the ref's scope path.
 `itx.worker` is the seeded project worker — the same mechanism pointed at the

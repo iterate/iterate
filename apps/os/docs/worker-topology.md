@@ -1,181 +1,101 @@
 # Worker topology
 
-OS deploys as **many small Cloudflare Workers** instead of one big one. Every
-Durable Object class is its own worker, the dashboard app is its own worker,
-itx API is its own worker, and a tiny ingress router owns all the
-routes. The point is cold-start speed: a cold Durable Object isolate loads
-only the code that object actually runs, not the whole product. (Before the
-split, one ~28MB script served everything, every DO cold start paid for it,
-and request paths that chain several DOs paid it several times — see the
-2026-06 Slack-latency incident. Measured on the pre-migration roster, the
-split cut fresh Stream DO instantiation from ~1.05s to ~0.40s median; the
-shape of the win carries over to the current roster.)
+OS deploys as **one Cloudflare Worker per environment** (`os-prd`,
+`os-preview-N`): the TanStack Start dashboard, the capnweb itx API, ingress
+routing, and **all eight Durable Object classes** live in a single script.
 
-Everything is declared in one place: [`apps/os/alchemy.run.ts`](../alchemy.run.ts).
+The entry is [`src/worker.ts`](../src/worker.ts). Its fetch handler makes the
+one hostname/path routing decision (shared logic in `src/ingress.ts`):
 
-## The workers
+| Lane            | What                                                                                           |
+| --------------- | ---------------------------------------------------------------------------------------------- |
+| MCP host        | rewritten onto the app's `/api/mcp` mount                                                      |
+| api lanes       | capnweb `/api` (+ `/api/admin-cookie`), Slack webhooks, `/__itx_e2e` fixtures, project ingress |
+| everything else | dashboard SSR + server functions; client assets served from Workers Assets                     |
 
-`<n>` is the stage worker name (`os-prd`, `os-preview-N`, `os-dev-<user>`).
-Twelve workers: ingress, app, api, the builder, and eight itx Durable Object
-workers.
+Durable Object classes (all same-script bindings — declared by class name in
+wrangler.jsonc, no namespace IDs, no cross-script anything): Agent,
+CapabilityHost, Project, Repo, Secret, Stream, StatefulWorker, and the
+container-backed CloudflareSandbox (Dockerfile.sandbox, built by
+`wrangler deploy`).
 
-| Worker                | Entry                            | Owns                                                                                           |
-| --------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `<n>` (ingress)       | `src/workers/ingress.ts`         | **All routes.** One config parse, then a service-binding forward                               |
-| `<n>-app`             | `src/workers/app.ts`             | Dashboard: TanStack Start SSR + assets + server functions, inbound MCP `/api/mcp`              |
-| `<n>-api`             | `src/workers/api.ts`             | os' one API: capnweb `/api` (+ `/api/admin-cookie`), `/__itx_e2e` fixtures, project ingress    |
-| `<n>-stream`          | `src/workers/stream.ts`          | `StreamDurableObject` (journals, event streams)                                                |
-| `<n>-capability-host` | `src/workers/capability-host.ts` | `CapabilityHostDurableObject` (capability hosts)                                               |
-| `<n>-project`         | `src/workers/project.ts`         | `ProjectDurableObject` + `ProjectEgressEntrypoint`                                             |
-| `<n>-agent`           | `src/workers/agent.ts`           | `AgentDurableObject` (agent + LLM provider processors)                                         |
-| `<n>-repo`            | `src/workers/repo.ts`            | `RepoDurableObject` (git over Cloudflare Artifacts)                                            |
-| `<n>-sandbox`         | `src/workers/sandbox.ts`         | `CloudflareSandboxDurableObject` (`@cloudflare/sandbox` containers; Dockerfile.sandbox image)  |
-| `<n>-secret`          | `src/workers/secret.ts`          | `SecretDurableObject`                                                                          |
-| `<n>-worker`          | `src/workers/worker.ts`          | **All dynamic workers**: `DynamicWorkerEntrypoint` (stateless) + `StatefulWorkerDurableObject` |
-| `<n>-builder`         | `src/workers/builder.ts`         | **All dynamic worker builds**: `BuilderEntrypoint` — the only script carrying esbuild-wasm     |
+## The builder sidecar (the "+1")
 
-The builder is deliberately NOT an itx worker: it is a pure build function
-(files in, artifact out) whose only binding is the artifact-cache KV — no DO
-namespaces, no service bindings, no repo access, nothing that orders its
-deploy relative to any other script. Keeping the esbuild-wasm script minimal
-means it can drop unchanged into a "1 + 1" topology (one product worker plus
-this builder) if the worker split ever collapses into a single worker
-(PR #1636).
+One deliberate exception to "one worker": dynamic worker BUILDS run in a
+separate `os-<env>-builder` worker ([`src/builder.ts`](../src/builder.ts),
+generated config `wrangler.builder.jsonc`) — the only script carrying the
+bundler toolchain (esbuild-wasm, ~14MB), so the product script stays small.
+It is the minimum possible worker: a pure build function (files in, artifact
+out) whose only binding is the `WORKER_BUILD_CACHE` KV — no DOs, no routes,
+no secrets. The os worker calls it via the `BUILDER` service binding on
+artifact-cache misses; deploy.ts deploys it first (a name binding to a
+missing script fails the deploy). Local dev runs it as a vite
+`auxiliaryWorkers` entry in the same workerd. Slated for deletion when
+builds move into the sandbox container
+([tasks/os-sandbox-worker-builds.md](../../../tasks/os-sandbox-worker-builds.md)).
 
-All itx workers (api + the eight DO workers) deploy with the **same
-binding set** (`itxBindings` in `alchemy.run.ts`; the matching type is
-`src/env.ts`): every DO namespace, `AI`, `DYNAMIC_WORKERS` (a service binding
-to the worker worker's `DynamicWorkerEntrypoint`), `ARTIFACTS`,
-`PROJECT_DIRECTORY` (the slug→id KV cache), and the secret encryption key.
-Any itx worker can host any capability — exactly like the single-worker
-implementation they came from — and each re-exports the shared loopback
-entrypoints (`ItxEntrypoint`, `ProjectEgressEntrypoint`) so `ctx.exports`
-resolves identically in all of them. They all carry `nodejs_compat` (repo git
-and dynamic worker loading need Node APIs) and `global_fetch_strictly_public`.
+## Why one worker
 
-One deliberate exception to the uniform set: **only the worker worker binds
-`LOADER` (Worker Loader)**. It is the single owner of dynamic workers — every
-other worker dispatches through `DYNAMIC_WORKERS`, so exactly one worker's
-loopback stubs ever live inside a dynamic worker's env and each source has one
-warm isolate instead of one per calling worker
-(`src/domains/workers/dynamic-worker-entrypoint.ts` has the full rationale).
+The 2026-06 per-DO split (PR #1500) existed to shrink an ~89MB script whose
+bulk was sourcemaps and client assets bundled as worker modules. That problem
+is gone — the vite build ships a ~2.7MB server entry (assets go to Workers
+Assets, sourcemaps aren't uploaded) — and the split's costs were real:
+sequential cross-script cold starts on every request chain, cross-script RPC
+subscriptions pinning DOs awake for hours, a two-pass deploy bootstrap, and
+eleven scripts of duplicated dependencies. Benchmarked (2026-07-03), the
+merged script starts in ~130–160ms — faster than any single per-DO worker
+did — and same-script DO hops reuse the loaded isolate.
 
-Every DO worker has a tiny default fetch returning a
-`{"worker": "os-<id>"}` 404 — useful as a cold-start probe and a "which
-worker am I talking to" check.
+## Configuration
 
-## Cross-script Durable Object bindings
+Everything is declared in two places:
 
-A Durable Object class is implemented in exactly one worker; everyone else
-binds it as a **cross-script namespace**. In `alchemy.run.ts` each namespace
-is declared once with `scriptName` = the owning worker:
+- [`envs.ts`](../../../envs.ts) (repo root) — the typed map of deployed
+  environments: hostnames, worker names, Cloudflare account, resource IDs.
+- `wrangler.jsonc` — generated from envs.ts (gitignored; vite.config.ts
+  regenerates it before every dev/build, `pnpm gen:wrangler` by hand). Top
+  level is local dev; each env gets a flattened block selected at build time
+  via `CLOUDFLARE_ENV`. Its header comments explain the layout.
 
-```ts
-const stream = DurableObjectNamespace<StreamDurableObject>("stream", {
-  className: "StreamDurableObject",
-  scriptName: workerNames.stream,
-  sqlite: true,
-});
-```
+Secrets live in Doppler only. `secrets.required` in the config lists their
+names: local dev (`doppler run -- vite dev`) loads exactly those keys from
+process.env, and `pnpm run deploy --env <name>` ships them atomically with the
+code via `wrangler deploy --secrets-file`.
 
-The same object is passed to the owner (alchemy strips `script_name` and
-runs the class migrations there) and to every consumer (alchemy emits a
-`script_name` binding). Stubs behave identically to same-script stubs —
-`env.STREAM.getByName(...)` works unchanged, RPC and WebSockets included.
+## Lifecycle scripts (apps/os/scripts)
 
-**Cycles are fine.** Every itx worker binds every DO namespace (streams
-dial their subscriber DOs, subscribers dial streams back). Cloudflare accepts
-mutual cross-script bindings as long as both scripts exist.
+| Command                           | What                                                                                                |
+| --------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `pnpm dev`                        | local dev server (vite + workerd); `start --detach`/`status`/`attach`/`kill` for parallel worktrees |
+| `pnpm run deploy --env preview_3` | build → deploy+secrets (one version) → smoke probe                                                  |
+| `pnpm ensure-resources --env X`   | create-only bring-up (KV, auth D1, DNS); reconciles IDs into envs.ts                                |
+| `pnpm erase-data --env X`         | wipe auth D1 rows + project-directory KV; DOs become unreachable orphans                            |
 
-## Request routing
+Workers are never deleted and routes/DNS are ensure-only, so deploys can't
+strand an environment's hostnames (the old zombie-route/522 class is
+structurally gone). There is no Cloudflare API to delete DO instances; the
+only storage-reclaim path is a `deleted_classes`/re-add migration dance —
+run rarely, if ever, since orphaned storage costs pennies.
 
-The ingress worker is the only worker with routes (the app base URL, the MCP
-hostname, and each project hostname base + wildcards). Routes and DNS are not
-alchemy resources: deploys idempotently ensure and edge-verify them after
-`finalize()`, destroys chain `--park` to keep them live against a placeholder
-script, and nothing ever deletes them — see
-`packages/shared/src/alchemy/iterate-app.ts` for the lifecycle rationale.
+## Notes
 
-The ingress worker is also the trust boundary: it strips the internal
-forwarding headers from inbound requests, then forwards whole requests over
-service bindings:
-
-```
-                    ┌────────────► <n>-app  (MCP hostname → /api/mcp)
-browser ──► <n> ────┼────────────► <n>-api  (rpc lanes: /api, /api/admin-cookie,
- (routes)  ingress  │              /__itx_e2e/*, /prj_<id>/*, and project
-                    │              platform hosts <slug>.<base>)
-                    └────────────► <n>-app  (OS host → dashboard)
-```
-
-The routing decision itself lives in `src/ingress.ts` and is shared with
-the app worker: in local dev the browser talks to vite (the app worker)
-directly, so the app worker runs the same decision first and forwards itx
-traffic over the same `API` service binding. One code path, no dev/prod
-fork.
-
-For project platform hosts, the api worker resolves slug → project id through
-the auth worker's project directory (via the `PROJECT_DIRECTORY` KV cache) and
-dispatches the request to the project's seeded worker. The app and api workers
-have **no routes and no workers.dev URL** — they are reachable only through
-the ingress worker's service bindings.
-
-Worker-to-worker forwarding deliberately uses default-entrypoint `fetch()`
-rather than RPC named entrypoints: whole-request forwarding is the documented
-use case for the HTTP interface, and alchemy 0.83's local dev drops
-`__entrypoint__` on named-entrypoint service bindings.
-
-## Local dev: one workerd, all workers
-
-`pnpm dev` runs **all** workers inside vite's single workerd via
-`@cloudflare/vite-plugin`'s `auxiliaryWorkers`:
-
-1. `alchemy.run.ts` (local mode) writes a wrangler config per worker under
-   `.alchemy/local/workers/` plus a manifest (`.alchemy/local/aux-workers.json`),
-   and gives each Worker resource a `dev.url` so alchemy does not also run
-   it in its own miniflare.
-2. `vite.config.ts` reads the manifest and passes the configs as
-   `auxiliaryWorkers`.
-3. The browser talks to vite directly (`http://localhost:<port>`, project
-   hosts as `<slug>.localhost:<port>`); the app worker's embedded routing
-   decision handles itx/project-host lanes over the same service
-   bindings the ingress uses in production. The ingress worker isn't part of
-   the dev loop (it would be a no-op hop in front of vite).
-
-Why one workerd instead of wrangler's cross-process dev registry: the
-registry proxy dials remote Durable Objects **by hex id**, which loses
-`ctx.id.name` — and every itx DO derives its identity from its name
-(`src/domains/durable-object-names.ts`). In one workerd, cross-script
-`getByName` keeps names intact, exactly like production.
-
-## Fresh-stage bootstrap (two-pass deploy)
-
-Cloudflare rejects a cross-script DO binding whose target script doesn't
-exist yet (error 10061). On the **first** deploy of a fresh stage the mutual
-itx-worker bindings are therefore unsatisfiable in one pass.
-`alchemy.run.ts` handles this automatically: it checks which worker scripts
-exist, omits cross-script bindings whose target is missing (with a loud
-warning), and re-executes itself once after finalize to wire them up.
-Steady-state deploys (all scripts exist) never take this path; local dev
-never needs it (one workerd, lazy resolution).
-
-So: `doppler run --project os --config <config> -- pnpm run deploy` against a
-fresh stage just works — it deploys twice under the hood.
-
-## Operational notes
-
-- **Observability**: every worker ships full-sample logs/traces
-  (`ITERATE_WORKER_OBSERVABILITY`). When querying, remember the worker names
-  are per-domain: agent turns live under `os-prd-agent`, stream delivery
-  under `os-prd-stream`, capnweb/API traffic under `os-prd-api`, dashboard
-  SSR under `os-prd-app`.
-  `apps/os/docs/debugging-deployed-os-workers.md` has query patterns.
-- **The `workers` export** in `alchemy.run.ts` feeds the per-worker `Env`
-  types (`src/lib/worker-env.d.ts`). itx does not use the ambient
-  `Env`: the itx workers import `Env`/`nextEnv` from `src/env.ts`
-  explicitly.
 - **streams-example-app** (`apps/streams-example-app`) binds the Stream DO
-  cross-script; its `script_name` is `os-prd-stream`.
+  cross-script; its `script_name` is `os-prd` in the single-worker world
+  (update it when that app is next deployed).
 - The `ARTIFACTS` binding type exists only on deployed workers; local dev
   has no Cloudflare Artifacts emulation and repo code feature-checks
   `env.ARTIFACTS`.
+- Local dev containers are off by default (`dev.enable_containers: false` in
+  wrangler.jsonc) so `pnpm dev` never needs Docker; sandbox DOs fail at
+  their constructor until you enable them.
+
+## Cutover from the 11-worker topology
+
+The first single-worker deploy to an env that previously ran the per-DO
+split creates FRESH Durable Object namespaces on the merged script — every
+existing stream/agent/project DO in that env becomes an unreachable orphan.
+That's a data reset, not a code deploy: pair it with `erase-data` and an
+auth redeploy so the env is coherently empty rather than half-remembered.
+The old `os-<env>` per-DO scripts (`os-<env>-stream`, `-agent`, …) are dead
+afterwards and can be deleted from the Cloudflare dashboard at leisure —
+deleting them cascades nothing the new world uses.

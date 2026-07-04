@@ -2,7 +2,6 @@ import { Suspense } from "react";
 import { ClientOnly, createFileRoute } from "@tanstack/react-router";
 import { ConnectedItxRepl } from "~/routes/_app/itx-repl.tsx";
 import { ItxActivityTail } from "~/components/itx-activity-tail.tsx";
-
 const PROJECT_REPL_INITIAL_CODE = "await itx.__describe()";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/repl")({

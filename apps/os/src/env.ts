@@ -1,44 +1,28 @@
 import { env as workerEnv } from "cloudflare:workers";
 
 /**
- * The binding contract every itx worker is deployed with (alchemy.run.ts
- * binds these names identically in each of them).
- *
- * The repo-wide ambient `Env` (src/lib/worker-env.d.ts) covers the two
- * dashboard-side workers (app + ingress); the itx workers deliberately do not
- * participate in that union — they import this `Env` and the `itxEnv`
- * accessor explicitly, so neither side's types leak into the other.
+ * The OS worker's binding contract — the binding names wrangler.jsonc
+ * (generated from the root envs.ts) declares on the single worker
+ * (src/worker.ts). The repo-wide ambient `Env` (src/lib/worker-env.d.ts) is
+ * this same interface.
  */
 export interface Env {
   AI: Ai;
   /**
-   * This worker's own deployed name (e.g. "os-prd-api"). Exists so
-   * worker-loader cache keys are unique per hosting worker: local dev runs
-   * every itx worker inside ONE workerd whose loader cache is shared across
-   * them, and a dynamic worker isolate created by one parent carries that
-   * parent's loopback binding stubs — invoking it from another parent fails
-   * with a redacted internal error. In production each worker has its own
-   * loader, so this is just a stable constant in the key.
+   * This worker's own deployed name (e.g. "os-prd"). Part of worker-loader
+   * cache keys so dynamic-worker isolates are attributed to the worker that
+   * created them (a dynamic isolate carries its creator's loopback binding
+   * stubs — invoking it from a different parent fails with a redacted
+   * internal error).
    */
   WORKER_SELF: string;
   ARTIFACTS: Artifacts;
   ARTIFACTS_ACCOUNT_ID: string;
   ARTIFACTS_NAMESPACE: string;
-  /**
-   * The worker worker's dynamic-worker service (its default entrypoint,
-   * `DynamicWorkerEntrypoint`). The ONLY way any worker other than the worker
-   * worker runs a dynamic worker — see
-   * domains/workers/dynamic-worker-entrypoint.ts for the ownership rationale.
-   */
-  DYNAMIC_WORKERS: Service<
-    import("./domains/workers/dynamic-worker-entrypoint.ts").DynamicWorkerEntrypoint
-  >;
-  /**
-   * Worker Loader. Bound ONLY in the worker worker (alchemy.run.ts) — every
-   * other worker reaches dynamic workers through DYNAMIC_WORKERS above. The
-   * shared Env keeps the field so worker-worker code typechecks; reading it
-   * anywhere else returns undefined at runtime.
-   */
+  /** Worker Loader: hosts every dynamic worker isolate. Construct runners
+   * through dynamicWorkerRunnerForScope (domains/workers/worker-runner.ts) —
+   * that factory is where a dynamic isolate gets its scoped ITX binding and
+   * egress fetcher. */
   LOADER: WorkerLoader;
   /** Slug -> project id (+ metadata) cache in front of the auth worker's
    * project directory (project-directory.ts). */
@@ -49,13 +33,12 @@ export interface Env {
    * deterministic build key, so the namespace is safe to wipe. */
   WORKER_BUILD_CACHE: KVNamespace;
   /**
-   * The builder worker's entrypoint (domains/workers/builder-entrypoint.ts):
-   * bundles dynamic worker source into loader-ready artifacts. The only
-   * script carrying the bundler toolchain (esbuild-wasm); called by the
-   * worker worker on artifact-cache misses. The builder itself does NOT
-   * carry this Env — it is a pure function worker whose whole binding set is
-   * the artifact cache (see its BuilderEnv), sized to drop into a "1 + 1"
-   * topology if the worker split ever collapses (#1636).
+   * The builder sidecar (src/builder.ts): bundles dynamic worker source into
+   * loader-ready artifacts, called on artifact-cache misses. The only script
+   * carrying the bundler toolchain (esbuild-wasm, ~14MB) — the "+1" in the
+   * one-worker topology, kept out of this script so the product stays small.
+   * The builder does NOT carry this Env; its whole binding set is the
+   * artifact cache (see its BuilderEnv).
    */
   BUILDER: Service<import("./domains/workers/builder-entrypoint.ts").BuilderEntrypoint>;
 

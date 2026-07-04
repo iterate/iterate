@@ -3,6 +3,7 @@ import type { Env } from "../../env.ts";
 import type { CapabilityDescription } from "../../types.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { DurableObjectNameCodec, parentScopePath } from "../durable-object-names.ts";
+import { dynamicWorkerRunnerForScope } from "../workers/worker-runner.ts";
 import {
   createStreamProcessorHost,
   type StreamSubscriberWakeRequest,
@@ -48,8 +49,13 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
         // chain.
         parent: this.#parentCapabilityHost(),
         path: this.#name.path,
-        projectId: this.#name.projectId,
-        dynamicWorkers: this.env.DYNAMIC_WORKERS,
+        dynamicWorkers: (scopePath: string) =>
+          dynamicWorkerRunnerForScope({
+            exports: this.ctx.exports,
+            projectId: this.#name.projectId,
+            scopePath,
+            waitUntil: (promise) => this.ctx.waitUntil(promise),
+          }),
       }),
   );
 

@@ -11,15 +11,7 @@ import {
 } from "@typescript/native-preview/unstable/sync";
 import type { CallExpression, Expression, Node } from "estree";
 
-const IGNORED_DIRS = new Set([
-  ".alchemy",
-  ".cache",
-  ".git",
-  ".turbo",
-  "build",
-  "dist",
-  "node_modules",
-]);
+const IGNORED_DIRS = new Set([".cache", ".git", ".turbo", "build", "dist", "node_modules"]);
 
 const servicesByCwd = new Map<string, TypeAwareLintService>();
 

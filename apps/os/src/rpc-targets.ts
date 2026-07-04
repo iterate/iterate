@@ -118,6 +118,10 @@ import type {
   ProjectIntegrations,
   SlackCapability,
 } from "./types.ts";
+import {
+  DynamicWorkerRunner,
+  dynamicWorkerRunnerForScope,
+} from "./domains/workers/worker-runner.ts";
 
 export class StreamRpcTarget extends RpcTarget implements Stream {
   async __describe() {
@@ -901,6 +905,7 @@ class DynamicWorkerCollectionRpcTarget extends RpcTarget implements DynamicWorke
   constructor(
     readonly props: {
       auth: ItxAuth;
+      ctx: CfExecutionContext;
       projectId: string;
     },
   ) {
@@ -914,6 +919,7 @@ class DynamicWorkerCollectionRpcTarget extends RpcTarget implements DynamicWorke
     const parsed = WorkerRefSchema.parse(ref);
     return new DynamicWorkerRpcTarget({
       buildBudgetMs: options?.buildBudgetMs,
+      ctx: this.props.ctx,
       flattenNestedPaths: options?.flattenNestedPaths === true,
       projectId: this.props.projectId,
       ref: parsed,
@@ -932,11 +938,12 @@ class DynamicWorkerCollectionRpcTarget extends RpcTarget implements DynamicWorke
 class DynamicWorkerRpcTarget extends RpcTarget {
   readonly #buildBudgetMs: number | undefined;
   readonly #flattenNestedPaths: boolean;
-  readonly #projectId: string;
   readonly #ref: DynamicWorkerRef;
+  readonly #runner: DynamicWorkerRunner;
 
   constructor(props: {
     buildBudgetMs?: number;
+    ctx: CfExecutionContext;
     flattenNestedPaths?: boolean;
     projectId: string;
     ref: DynamicWorkerRef;
@@ -944,8 +951,18 @@ class DynamicWorkerRpcTarget extends RpcTarget {
     super();
     this.#buildBudgetMs = props.buildBudgetMs;
     this.#flattenNestedPaths = props.flattenNestedPaths === true;
-    this.#projectId = props.projectId;
     this.#ref = props.ref;
+    // A worker reached through the public collection runs in the itx scope of
+    // its own path. The ITX binding and egress fetcher come from the HOSTING
+    // context, not the ref.
+    this.#runner = dynamicWorkerRunnerForScope({
+      exports: props.ctx.exports,
+      projectId: props.projectId,
+      scopePath: props.ref.path,
+      // CfExecutionContext.waitUntil is optional (capnweb sessions); without
+      // it a budget-expired build just floats unprotected.
+      waitUntil: (promise) => props.ctx.waitUntil?.(promise),
+    });
     return withInvokeCapabilityFallback(this);
   }
 
@@ -1000,24 +1017,20 @@ class DynamicWorkerRpcTarget extends RpcTarget {
     flattenNestedPath?: boolean;
     path: string[];
   }) {
-    // Every dynamic worker invocation goes through the worker worker
-    // (DynamicWorkerEntrypoint): stateless entrypoints, stateful DO facets,
-    // provided worker capabilities, and project.worker all share its
-    // loader/egress/ITX binding rules. Args and return values pass through
-    // untouched on purpose: both directions may carry live RPC stubs, and an
-    // RpcTarget returned by the dynamic worker must remain a live
-    // object-capability so Cap'n Web can serialize it as a chained/pipelined
-    // stub for the outer caller.
-    return await env.DYNAMIC_WORKERS.invokeCapability({
+    // Every dynamic worker invocation goes through DynamicWorkerRunner:
+    // stateless entrypoints, stateful DO facets, provided worker
+    // capabilities, and project.worker all share its loader/egress/ITX
+    // binding rules. Args and return values pass through untouched on
+    // purpose: both directions may carry live RPC stubs, and an RpcTarget
+    // returned by the dynamic worker must remain a live object-capability so
+    // Cap'n Web can serialize it as a chained/pipelined stub for the outer
+    // caller.
+    return await this.#runner.invokeCapability({
       args,
       buildBudgetMs: this.#buildBudgetMs,
       flattenNestedPath,
       path,
-      projectId: this.#projectId,
       ref: this.#ref,
-      // A worker reached through the public collection runs in the itx scope
-      // of its own path.
-      scopePath: this.#ref.path,
     });
   }
 }
@@ -1691,6 +1704,7 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
   get workers() {
     return new DynamicWorkerCollectionRpcTarget({
       auth: this.#props.auth,
+      ctx: this.#props.ctx,
       projectId: this.#props.projectId,
     });
   }

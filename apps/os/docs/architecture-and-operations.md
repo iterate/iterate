@@ -188,19 +188,15 @@ It requires `APP_CONFIG_SERVICE_AUTH_TOKEN` (run through Doppler for the auth pr
 
 ## Deployment
 
-`alchemy.run.ts` defines the deployment: the full worker topology
-([worker-topology.md](./worker-topology.md)), the Durable Object namespaces
-(each owned by its worker, bound cross-script everywhere else), the
-`PROJECT_DIRECTORY` KV namespace, a `WorkerLoader` (worker worker only — it
-owns all dynamic workers; everyone else uses the `DYNAMIC_WORKERS` service
-binding), the Workers AI binding,
-Cloudflare Artifacts for repos, and routes on the ingress worker for the app
-base URL, the MCP base URL, and each project hostname base. Fresh stages
-bootstrap with an automatic two-pass deploy (cross-script bindings to
-not-yet-existing scripts are wired by the second pass). Deploys must name the
-Doppler config explicitly, for example
-`doppler run --project os --config preview_2 -- pnpm run deploy` or
-`doppler run --project os --config prd -- pnpm run deploy`.
+The generated `wrangler.jsonc` (from the root `envs.ts`) defines the
+deployment: a single worker ([worker-topology.md](./worker-topology.md))
+carrying every Durable Object class same-script, the `PROJECT_DIRECTORY` and
+`WORKER_BUILD_CACHE` KV namespaces, the Worker Loader, the Workers AI
+binding, Cloudflare Artifacts for repos, and routes for the app base URL,
+the MCP base URL, and each project hostname base. One sidecar rides along:
+the builder worker (`wrangler.builder.jsonc`, deployed first by deploy.ts),
+the only script carrying the dynamic-worker bundler toolchain. Deploys take
+the env explicitly: `pnpm run deploy --env preview_2` / `--env prd`.
 
 ## Smoke Tests
 

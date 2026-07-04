@@ -8,12 +8,11 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { connectItxBrowser } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/new")({
-  staticData: { hideAppHeader: true },
-  loader: async ({ context }) => {
-    const { project } = context;
-
-    return { project };
-  },
+  // Not a stream view (a centered composer), so no streamBreadcrumb: the
+  // shell's fallback header supplies the label + ⌘K, and the palette derives
+  // project context from the route match.
+  staticData: { breadcrumb: "New agent" },
+  loader: ({ context }) => ({ project: context.project }),
   component: NewAgentPage,
 });
 
@@ -47,6 +46,8 @@ function NewAgentPage() {
           ...params,
           _splat: agentPath,
         },
+        // Fresh view state on the new agent's chat.
+        search: {},
       });
     },
     onError: (mutationError) => {

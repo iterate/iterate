@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { SignJWT, importJWK, type JWK } from "jose";
@@ -8,6 +8,7 @@ import {
   ITERATE_IS_ADMIN_CLAIM,
   ITERATE_ROLE_CLAIM,
 } from "@iterate-com/shared/auth-claims";
+import { readDevServerInfo } from "../../apps/os/scripts/lib/dev-server-info.ts";
 
 // Mint an OS session for any identity — dev, preview, and production.
 //
@@ -17,7 +18,7 @@ import {
 // `os/prd`). This script signs an access+id token pair with that key — fully
 // offline, no auth worker involved — so you can be any user instantly. The
 // forge key is a master key; in prod it is gated behind an explicit opt-in at
-// deploy (AUTH_FORGE_ALLOW_PRODUCTION, see apps/os/alchemy.run.ts). An audited
+// deploy (AUTH_FORGE_ALLOW_PRODUCTION, see apps/os/scripts/deploy.ts). An audited
 // mint endpoint on the auth worker is the planned replacement for prod.
 //
 //   # local dev (uses the running dev server's discovery file for the URL)
@@ -69,7 +70,7 @@ if (args.help) {
       "  --projects <json>    project claims: [{id,slug,organizationId}]",
       "  --claims <json>      extra access-token claims to merge",
       "  --base-url <url>     OS base URL (default: env APP_CONFIG_BASE_URL,",
-      "                       else apps/os/.alchemy/dev-server.json)",
+      "                       else apps/os/.dev-server/dev-server.json)",
       "  --browser-url        print only the one-shot browser sign-in URL",
       "  --return-to <path>   where the browser URL redirects after sign-in",
     ].join("\n"),
@@ -88,33 +89,18 @@ function findRepoRoot(start: string) {
   return start;
 }
 
-function isPidAlive(pid: number) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function resolveBaseUrl(): string {
   if (args["base-url"]) return args["base-url"].replace(/\/+$/, "");
   const fromEnv = process.env.APP_CONFIG_BASE_URL?.trim();
   if (fromEnv) return fromEnv.replace(/\/+$/, "");
   const repoRoot = findRepoRoot(process.cwd());
-  const discovery = join(repoRoot, "apps/os/.alchemy/dev-server.json");
-  if (existsSync(discovery)) {
-    const info = JSON.parse(readFileSync(discovery, "utf8")) as { baseUrl?: string; pid?: number };
-    // Ignore a stale discovery file: after a crash or `kill -9` the recorded
-    // port is dead, and minting against it would hand back a browser URL that
-    // points nowhere. Treat a dead pid as "no dev server".
-    if (info.baseUrl && (typeof info.pid !== "number" || isPidAlive(info.pid))) {
-      return info.baseUrl.replace(/\/+$/, "");
-    }
-  }
+  // requireLive: a stale discovery file (crash, kill -9) would hand back a
+  // browser URL that points nowhere.
+  const info = readDevServerInfo(join(repoRoot, "apps/os"), { requireLive: true });
+  if (info) return info.baseUrl.replace(/\/+$/, "");
   throw new Error(
     "Could not resolve the OS base URL: pass --base-url, set APP_CONFIG_BASE_URL, " +
-      "or start the local dev server (apps/os/.alchemy/dev-server.json).",
+      "or start the local dev server (apps/os/.dev-server/dev-server.json).",
   );
 }
 
@@ -123,7 +109,7 @@ if (!forgePrivateJwkJson) {
   throw new Error(
     "AUTH_FORGE_PRIVATE_JWK is not in the environment. Run under a Doppler config that carries " +
       "the forge key — dev, preview, or prd (e.g. `doppler run --project os --config dev -- pnpm auth:mint ...`). " +
-      "Prod additionally requires AUTH_FORGE_ALLOW_PRODUCTION=true at deploy (apps/os/alchemy.run.ts).",
+      "Prod additionally requires AUTH_FORGE_ALLOW_PRODUCTION=true at deploy (apps/os/scripts/deploy.ts).",
   );
 }
 
