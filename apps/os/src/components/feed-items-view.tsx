@@ -85,7 +85,12 @@ export function FeedItemsView({
   const virtualItems = virtualizer.getVirtualItems();
   const first = virtualItems[0]?.index ?? 0;
   const last = virtualItems.at(-1)?.index ?? -1;
-  const windowSize = Math.max(0, last + 1 + TAIL_PREFETCH_ROWS - first);
+  // Fetch one row before the window (when there is one) so the topmost visible
+  // row has its predecessor available for the colour-coded time delta — the
+  // window's `first` row would otherwise never see index `first - 1`.
+  const prefetchBefore = first > 0 ? 1 : 0;
+  const queryOffset = first - prefetchBefore;
+  const windowSize = Math.max(0, last + 1 + TAIL_PREFETCH_ROWS - first) + prefetchBefore;
   // Dense ascending local_index means OFFSET/LIMIT over the ordered (and
   // possibly filtered) collection IS the virtualizer's row window.
   const rowsResult = useStreamQuery(
@@ -93,7 +98,7 @@ export function FeedItemsView({
     `SELECT local_index, component, first_offset, last_offset, event_count, json(data) AS data
      FROM feed_items ${where}
      ORDER BY local_index ASC LIMIT ? OFFSET ?`,
-    [...params, windowSize, first],
+    [...params, windowSize, queryOffset],
   );
   // Retain the last committed rows across range re-queries so a shifting
   // window doesn't blank already-visible rows to skeletons. The retained rows
@@ -111,11 +116,11 @@ export function FeedItemsView({
     }
     const rows = new Map<number, Record<string, unknown>>();
     rowsResult.data.forEach((row, position) => {
-      rows.set(first + position, row);
+      rows.set(queryOffset + position, row);
     });
     lastRowsRef.current = { where: retainKey, rows };
     return rows;
-  }, [rowsResult.data, rowsResult.status, retainKey, first]);
+  }, [rowsResult.data, rowsResult.status, retainKey, queryOffset]);
 
   return (
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
