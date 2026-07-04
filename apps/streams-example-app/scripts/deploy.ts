@@ -13,21 +13,38 @@
  * fresh config), deploy, then smoke-probe the health endpoint.
  */
 import { fileURLToPath } from "node:url";
+import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { streamsExampleEnvs } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 
-await deployApp({
-  appRoot: fileURLToPath(new URL("..", import.meta.url)),
-  appLabel: "apps/streams-example-app",
-  envs: streamsExampleEnvs,
-  dopplerProject: "streams-example-app",
-  workerName: (env) => env.workerName,
-  servingUrl: (env) => env.baseUrl,
-  smokes: (env) => [
-    {
-      url: `${env.baseUrl}/api/__internal/health`,
-      ok: (status) => status === 200,
-      label: "health",
-    },
-  ],
-});
+/** Deploy apps/streams-example-app to a deployed environment (see scripts/lib/deploy-app.ts for the pipeline). */
+export default async function deploy(
+  options: {
+    /** Target environment name from envs.ts (falls back to DOPPLER_CONFIG in CI). */
+    env?: string;
+  } = {},
+) {
+  await deployApp({
+    appRoot: fileURLToPath(new URL("..", import.meta.url)),
+    appLabel: "apps/streams-example-app",
+    envs: streamsExampleEnvs,
+    dopplerProject: "streams-example-app",
+    env: options.env,
+    workerName: (env) => env.workerName,
+    servingUrl: (env) => env.baseUrl,
+    smokes: (env) => [
+      {
+        url: `${env.baseUrl}/api/__internal/health`,
+        ok: (status) => status === 200,
+        label: "health",
+      },
+    ],
+  });
+}
+
+if (process.argv[1]?.endsWith("deploy.ts")) {
+  void createCli({ ...import.meta, name: "deploy" }).run({
+    logger: yamlTableConsoleLogger,
+    prompts: isAgent() ? undefined : createBuiltInPrompts(),
+  });
+}

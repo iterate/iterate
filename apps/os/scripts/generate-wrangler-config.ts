@@ -16,6 +16,7 @@
  * below is just the list of names — which also makes the vite plugin load
  * exactly those keys from process.env under `doppler run -- vite dev`.
  */
+import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { envs, type DeployedEnv } from "../../../envs.ts";
 import {
   OBSERVABILITY,
@@ -204,8 +205,16 @@ export const writeWranglerConfig = () =>
     config,
   });
 
-// Runs only when invoked directly — deploy.ts and vite.config.ts import
-// from this module without triggering a write.
-if (process.argv[1]?.endsWith("generate-wrangler-config.ts")) {
+/** Regenerate apps/os/wrangler.jsonc from the root envs.ts. */
+export default function generateWranglerConfig() {
   console.log(`Wrote ${writeWranglerConfig()}`);
+}
+
+// The CLI runs only when invoked directly — deploy.ts and vite.config.ts
+// import from this module without triggering a write.
+if (process.argv[1]?.endsWith("generate-wrangler-config.ts")) {
+  void createCli({ ...import.meta, name: "generate-wrangler-config" }).run({
+    logger: yamlTableConsoleLogger,
+    prompts: isAgent() ? undefined : createBuiltInPrompts(),
+  });
 }

@@ -30,31 +30,30 @@ export interface EnvContext<E extends DeployableEnv> {
 }
 
 /**
- * Resolve `--env <name>` from argv into a full context.
+ * Resolve an environment name into a full context. `env` is the explicit
+ * name from the caller's CLI flag — this function never reads argv itself.
  *
- * Fallback (unless `explicitFlagOnly`): DOPPLER_CONFIG — so CI's existing
- * `doppler run --config preview_N -- pnpm run deploy` selects the matching
- * env without extra plumbing (env names and Doppler config names coincide;
- * the account-id assertion below still catches any mismatch). Destructive
- * scripts pass `explicitFlagOnly: true` so a stray exported DOPPLER_CONFIG
- * can never select their target.
+ * `allowDopplerConfigFallback` (default false) permits the CI bridge: when
+ * `env` is absent, fall back to DOPPLER_CONFIG — so CI's existing
+ * `doppler run --config preview_N -- pnpm run-script deploy` (no flags)
+ * selects the matching env without extra plumbing (env names and Doppler
+ * config names coincide; the account-id assertion below still catches any
+ * mismatch). Deploys pass `allowDopplerConfigFallback: true`; erase-data
+ * does NOT (destructive = explicit flag only — trpc-cli enforces the
+ * required `--env` option); ensure-resources passes true (harmless,
+ * create-only).
  */
 export async function resolveEnvContext<E extends DeployableEnv>(options: {
   envs: Record<string, E>;
   /** Doppler project the env's config lives in (e.g. "os", "auth"). */
   dopplerProject: string;
-  /** Require --env on argv; ignore DOPPLER_CONFIG. */
-  explicitFlagOnly?: boolean;
-  argv?: string[];
+  /** Explicit environment name (the caller's --env flag). */
+  env?: string;
+  /** When `env` is absent, allow the CI-bridge DOPPLER_CONFIG fallback. Default false. */
+  allowDopplerConfigFallback?: boolean;
 }): Promise<EnvContext<E>> {
-  const argv = options.argv ?? process.argv;
-  const flagIndex = argv.indexOf("--env");
   const name =
-    flagIndex >= 0
-      ? argv[flagIndex + 1]
-      : options.explicitFlagOnly
-        ? undefined
-        : process.env.DOPPLER_CONFIG;
+    options.env ?? (options.allowDopplerConfigFallback ? process.env.DOPPLER_CONFIG : undefined);
   if (!name) {
     throw new Error(
       `Pass --env <name>. Known: ${Object.keys(options.envs).join(", ")} (see envs.ts).`,

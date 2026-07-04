@@ -26,6 +26,7 @@
  * can never strand the env's hostnames (the old zombie-route/522 class).
  */
 import { fileURLToPath } from "node:url";
+import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { envs } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import type { EnvContext } from "../../../scripts/lib/env-context.ts";
@@ -105,30 +106,46 @@ async function fetchJwksWithRetry(url: string, envName: string) {
   }
 }
 
-await deployApp({
-  appRoot: fileURLToPath(new URL("..", import.meta.url)),
-  appLabel: "apps/os",
-  envs,
-  dopplerProject: "os",
-  workerName: (env) => env.osWorkerName,
-  servingUrl: (env) => env.baseUrl,
-  resources: (env) => env.resources,
-  requiredSecrets: REQUIRED_SECRETS,
-  optionalSecrets: OPTIONAL_SECRETS,
-  prepare: async (ctx, secretValues) => {
-    // Baked at deploy time, so it's the one secret not in secrets.required.
-    secretValues.APP_CONFIG_ITERATE_AUTH__JWKS = await bakeStaticAuthJwks(ctx);
+/** Deploy apps/os to a deployed environment (see scripts/lib/deploy-app.ts for the pipeline). */
+export default async function deploy(
+  options: {
+    /** Target environment name from envs.ts (falls back to DOPPLER_CONFIG in CI). */
+    env?: string;
+  } = {},
+) {
+  await deployApp({
+    appRoot: fileURLToPath(new URL("..", import.meta.url)),
+    appLabel: "apps/os",
+    envs,
+    dopplerProject: "os",
+    env: options.env,
+    workerName: (env) => env.osWorkerName,
+    servingUrl: (env) => env.baseUrl,
+    resources: (env) => env.resources,
+    requiredSecrets: REQUIRED_SECRETS,
+    optionalSecrets: OPTIONAL_SECRETS,
+    prepare: async (ctx, secretValues) => {
+      // Baked at deploy time, so it's the one secret not in secrets.required.
+      secretValues.APP_CONFIG_ITERATE_AUTH__JWKS = await bakeStaticAuthJwks(ctx);
 
-    // Parse the exact env the worker will see (secrets + generated vars) with
-    // the worker's own schema — the strongest possible pre-flight.
-    parseConfig({ ...secretValues, ...envShapedVars(ctx.env) });
-  },
-  smokes: (env) => [
-    {
-      url: `${env.baseUrl}/`,
-      ok: (status) => status === 200 || (status >= 300 && status < 400),
-      label: "dashboard",
+      // Parse the exact env the worker will see (secrets + generated vars) with
+      // the worker's own schema — the strongest possible pre-flight.
+      parseConfig({ ...secretValues, ...envShapedVars(ctx.env) });
     },
-    { url: `${env.baseUrl}/api`, ok: (status) => status < 500, label: "os api" },
-  ],
-});
+    smokes: (env) => [
+      {
+        url: `${env.baseUrl}/`,
+        ok: (status) => status === 200 || (status >= 300 && status < 400),
+        label: "dashboard",
+      },
+      { url: `${env.baseUrl}/api`, ok: (status) => status < 500, label: "os api" },
+    ],
+  });
+}
+
+if (process.argv[1]?.endsWith("deploy.ts")) {
+  void createCli({ ...import.meta, name: "deploy" }).run({
+    logger: yamlTableConsoleLogger,
+    prompts: isAgent() ? undefined : createBuiltInPrompts(),
+  });
+}

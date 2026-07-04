@@ -2497,10 +2497,10 @@ async function runPreviewDeployCommand(input: {
   repositoryRoot: string;
   signal?: AbortSignal;
 }) {
-  // Destroys are erase-data-backed and require an explicit --env (their env
-  // resolution is explicitFlagOnly — a destructive script must never pick its
-  // target from ambient shell state). Deploys resolve the env from the
-  // DOPPLER_CONFIG the `doppler run` wrapper sets.
+  // Destroys are erase-data-backed and require an explicit --env (trpc-cli
+  // enforces the required flag; no DOPPLER_CONFIG fallback — a destructive
+  // script must never pick its target from ambient shell state). Deploys
+  // resolve the env from the DOPPLER_CONFIG the `doppler run` wrapper sets.
   const commandArgs =
     input.operation === "down"
       ? [...input.app.destroyCommandArgs, "--env", input.dopplerConfig]

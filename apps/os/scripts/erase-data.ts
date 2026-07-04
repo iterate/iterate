@@ -26,41 +26,57 @@
  * kept). NOTE: the auth OAuth clients are data too — redeploy auth for the
  * env afterwards (it re-seeds the OS client) before anyone signs in.
  */
+import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { envs } from "../../../envs.ts";
 import { wipeD1Tables } from "../../../scripts/lib/deploy-helpers.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 
-const ctx = await resolveEnvContext({ envs, dopplerProject: "os", explicitFlagOnly: true });
-const { env, cf } = ctx;
+/** Erase ALL user data in a deployed environment; infrastructure stays (see file header). */
+export default async function eraseData(options: {
+  /** Target environment name from envs.ts. Required — destructive scripts never infer their target. */
+  env: string;
+  /** Confirm erasing PRODUCTION data (required when --env prd). */
+  yesIMeanPrd?: boolean;
+}) {
+  const ctx = await resolveEnvContext({ envs, dopplerProject: "os", env: options.env });
+  const { env, cf } = ctx;
 
-if (ctx.name === "prd" && !process.argv.includes("--yes-i-mean-prd")) {
-  throw new Error("Refusing to erase PRODUCTION data without --yes-i-mean-prd.");
-}
-console.log(
-  `Erasing all data in ${ctx.name} (auth D1 ${env.resources.authDbId}, KV ${env.resources.projectDirectoryKvId})`,
-);
-
-// ---- auth D1: delete every row of every user table -------------------------
-await wipeD1Tables(ctx, env.resources.authDbId);
-
-// ---- project-directory KV: delete every key ---------------------------------
-let deleted = 0;
-for (;;) {
-  const keys = await cf<{ name: string }[]>(
-    `/storage/kv/namespaces/${env.resources.projectDirectoryKvId}/keys?limit=1000`,
+  if (ctx.name === "prd" && !options.yesIMeanPrd) {
+    throw new Error("Refusing to erase PRODUCTION data without --yes-i-mean-prd.");
+  }
+  console.log(
+    `Erasing all data in ${ctx.name} (auth D1 ${env.resources.authDbId}, KV ${env.resources.projectDirectoryKvId})`,
   );
-  if (keys.length === 0) break;
-  await cf(`/storage/kv/namespaces/${env.resources.projectDirectoryKvId}/bulk/delete`, {
-    method: "POST",
-    body: JSON.stringify(keys.map((key) => key.name)),
-  });
-  deleted += keys.length;
-}
-console.log(`KV: deleted ${deleted} keys`);
 
-console.log(
-  `✅ ${ctx.name} data erased. Old Durable Objects are unreachable orphans; schema and infra intact.`,
-);
-console.log(
-  `   Note: the auth OAuth clients were data too — redeploy auth for ${ctx.name} (it re-seeds the OS client) before signing in.`,
-);
+  // ---- auth D1: delete every row of every user table -------------------------
+  await wipeD1Tables(ctx, env.resources.authDbId);
+
+  // ---- project-directory KV: delete every key ---------------------------------
+  let deleted = 0;
+  for (;;) {
+    const keys = await cf<{ name: string }[]>(
+      `/storage/kv/namespaces/${env.resources.projectDirectoryKvId}/keys?limit=1000`,
+    );
+    if (keys.length === 0) break;
+    await cf(`/storage/kv/namespaces/${env.resources.projectDirectoryKvId}/bulk/delete`, {
+      method: "POST",
+      body: JSON.stringify(keys.map((key) => key.name)),
+    });
+    deleted += keys.length;
+  }
+  console.log(`KV: deleted ${deleted} keys`);
+
+  console.log(
+    `✅ ${ctx.name} data erased. Old Durable Objects are unreachable orphans; schema and infra intact.`,
+  );
+  console.log(
+    `   Note: the auth OAuth clients were data too — redeploy auth for ${ctx.name} (it re-seeds the OS client) before signing in.`,
+  );
+}
+
+if (process.argv[1]?.endsWith("erase-data.ts")) {
+  void createCli({ ...import.meta, name: "erase-data" }).run({
+    logger: yamlTableConsoleLogger,
+    prompts: isAgent() ? undefined : createBuiltInPrompts(),
+  });
+}

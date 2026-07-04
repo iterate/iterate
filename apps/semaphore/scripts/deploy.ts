@@ -25,6 +25,7 @@
  * worker or erase its Durable Object storage.
  */
 import { fileURLToPath } from "node:url";
+import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { semaphoreEnvs } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import { run } from "../../../scripts/lib/deploy-helpers.ts";
@@ -37,46 +38,62 @@ import {
 
 const APP_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
-await deployApp({
-  appRoot: APP_ROOT,
-  appLabel: "apps/semaphore",
-  envs: semaphoreEnvs,
-  dopplerProject: "semaphore",
-  workerName: (env) => env.workerName,
-  servingUrl: (env) => env.baseUrl,
-  resources: (env) => env.resources,
-  requiredSecrets: REQUIRED_SECRETS,
-  prepare: (ctx, secretValues, credentials) => {
-    // Parse the exact env the worker will see (secrets + generated vars) with
-    // the worker's own schema — the strongest possible pre-flight.
-    parseConfig({ ...secretValues, ...envShapedVars(ctx.env) });
+/** Deploy apps/semaphore to a deployed environment (see scripts/lib/deploy-app.ts for the pipeline). */
+export default async function deploy(
+  options: {
+    /** Target environment name from envs.ts (falls back to DOPPLER_CONFIG in CI). */
+    env?: string;
+  } = {},
+) {
+  await deployApp({
+    appRoot: APP_ROOT,
+    appLabel: "apps/semaphore",
+    envs: semaphoreEnvs,
+    dopplerProject: "semaphore",
+    env: options.env,
+    workerName: (env) => env.workerName,
+    servingUrl: (env) => env.baseUrl,
+    resources: (env) => env.resources,
+    requiredSecrets: REQUIRED_SECRETS,
+    prepare: (ctx, secretValues, credentials) => {
+      // Parse the exact env the worker will see (secrets + generated vars) with
+      // the worker's own schema — the strongest possible pre-flight.
+      parseConfig({ ...secretValues, ...envShapedVars(ctx.env) });
 
-    // The migrations step below reads wrangler.jsonc directly (and the vite
-    // build regenerates it again on its own) — write a fresh one now.
-    writeWranglerConfig();
-    run(
-      "pnpm",
-      [
-        "exec",
-        "wrangler",
-        "d1",
-        "migrations",
-        "apply",
-        "DB",
-        "--env",
-        ctx.name,
-        "--remote",
-        "--config",
-        "wrangler.jsonc",
-      ],
-      { cwd: APP_ROOT, env: credentials },
-    );
-  },
-  smokes: (env) => [
-    {
-      url: `${env.baseUrl}/api/__internal/health`,
-      ok: (status) => status === 200,
-      label: "health",
+      // The migrations step below reads wrangler.jsonc directly (and the vite
+      // build regenerates it again on its own) — write a fresh one now.
+      writeWranglerConfig();
+      run(
+        "pnpm",
+        [
+          "exec",
+          "wrangler",
+          "d1",
+          "migrations",
+          "apply",
+          "DB",
+          "--env",
+          ctx.name,
+          "--remote",
+          "--config",
+          "wrangler.jsonc",
+        ],
+        { cwd: APP_ROOT, env: credentials },
+      );
     },
-  ],
-});
+    smokes: (env) => [
+      {
+        url: `${env.baseUrl}/api/__internal/health`,
+        ok: (status) => status === 200,
+        label: "health",
+      },
+    ],
+  });
+}
+
+if (process.argv[1]?.endsWith("deploy.ts")) {
+  void createCli({ ...import.meta, name: "deploy" }).run({
+    logger: yamlTableConsoleLogger,
+    prompts: isAgent() ? undefined : createBuiltInPrompts(),
+  });
+}

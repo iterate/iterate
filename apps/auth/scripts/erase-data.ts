@@ -16,26 +16,42 @@
  * this same database plus os's own resources; use this one when only auth
  * needs a clean slate (e.g. dev_global, which os doesn't deploy to).
  */
+import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { authEnvs } from "../../../envs.ts";
 import { wipeD1Tables } from "../../../scripts/lib/deploy-helpers.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 
-const ctx = await resolveEnvContext({
-  envs: authEnvs,
-  dopplerProject: "auth",
-  explicitFlagOnly: true,
-});
-const { env } = ctx;
+/** Erase ALL data in a deployed auth environment; infrastructure stays (see file header). */
+export default async function eraseData(options: {
+  /** Target environment name from envs.ts. Required — destructive scripts never infer their target. */
+  env: string;
+  /** Confirm erasing PRODUCTION data (required when --env prd). */
+  yesIMeanPrd?: boolean;
+}) {
+  const ctx = await resolveEnvContext({
+    envs: authEnvs,
+    dopplerProject: "auth",
+    env: options.env,
+  });
+  const { env } = ctx;
 
-if (ctx.name === "prd" && !process.argv.includes("--yes-i-mean-prd")) {
-  throw new Error("Refusing to erase PRODUCTION data without --yes-i-mean-prd.");
+  if (ctx.name === "prd" && !options.yesIMeanPrd) {
+    throw new Error("Refusing to erase PRODUCTION data without --yes-i-mean-prd.");
+  }
+  console.log(`Erasing all data in ${ctx.name} (auth D1 ${env.resources.authDbId})`);
+
+  // ---- auth D1: delete every row of every user table -------------------------
+  await wipeD1Tables(ctx, env.resources.authDbId);
+
+  console.log(`✅ ${ctx.name} auth data erased. Schema and infra intact.`);
+  console.log(
+    `   Redeploy auth for ${ctx.name} (pnpm run deploy --env ${ctx.name}) to re-seed the bootstrap admin and OAuth clients before signing in.`,
+  );
 }
-console.log(`Erasing all data in ${ctx.name} (auth D1 ${env.resources.authDbId})`);
 
-// ---- auth D1: delete every row of every user table -------------------------
-await wipeD1Tables(ctx, env.resources.authDbId);
-
-console.log(`✅ ${ctx.name} auth data erased. Schema and infra intact.`);
-console.log(
-  `   Redeploy auth for ${ctx.name} (pnpm run deploy --env ${ctx.name}) to re-seed the bootstrap admin and OAuth clients before signing in.`,
-);
+if (process.argv[1]?.endsWith("erase-data.ts")) {
+  void createCli({ ...import.meta, name: "erase-data" }).run({
+    logger: yamlTableConsoleLogger,
+    prompts: isAgent() ? undefined : createBuiltInPrompts(),
+  });
+}

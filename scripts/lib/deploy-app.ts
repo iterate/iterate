@@ -45,6 +45,12 @@ export async function deployApp<E extends DeployableEnv>(input: {
   /** The app's env map from the root envs.ts. */
   envs: Record<string, E>;
   dopplerProject: string;
+  /**
+   * Target environment name from envs.ts (the deploy script's --env flag).
+   * When absent, resolveEnvContext falls back to DOPPLER_CONFIG — CI's
+   * `doppler run -- pnpm run-script deploy` carries no flags.
+   */
+  env?: string;
   workerName: (env: E) => string;
   /** Public origin for the final success line. */
   servingUrl: (env: E) => string;
@@ -82,7 +88,12 @@ export async function deployApp<E extends DeployableEnv>(input: {
   afterDeploy?: (ctx: EnvContext<E>, secretValues: Record<string, string>) => Promise<void> | void;
   smokes: (env: E) => SmokeProbe[];
 }) {
-  const ctx = await resolveEnvContext({ envs: input.envs, dopplerProject: input.dopplerProject });
+  const ctx = await resolveEnvContext({
+    envs: input.envs,
+    dopplerProject: input.dopplerProject,
+    env: input.env,
+    allowDopplerConfigFallback: true,
+  });
   if (input.resources) assertProvisioned(ctx.name, input.resources(ctx.env));
   const workerName = input.workerName(ctx.env);
   console.log(
