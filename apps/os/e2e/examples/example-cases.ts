@@ -27,6 +27,9 @@
 //   secret-postman-echo
 //                   calls Postman Echo to prove egress secret substitution;
 //                   external service, so keep it interactive.
+//   email-send      sends real outbound mail through Cloudflare Email Service;
+//                   needs an onboarded sender domain and a real recipient
+//                   mailbox, so keep it interactive.
 
 export type ExampleRunContext = {
   /** Unique per example × runtime, for stream/event payload assertions. */
@@ -54,6 +57,7 @@ export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
   "connect-public-mcp",
   "connect-openapi-petstore",
   "secret-postman-echo",
+  "email-send",
 ]);
 
 export const EXAMPLE_CASES: Record<string, ExampleCase> = {
@@ -180,12 +184,15 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     },
   },
   "repo-edit-file": {
-    vars: ({ marker }) => ({ path: `notes/edit-example-${marker}.md` }),
-    assert: (result, { marker }, expect) => {
+    vars: ({ marker }) => ({
+      path: "notes/edit-example.md",
+      repoPath: `/examples/repo-edit-file-${marker}`,
+    }),
+    assert: (result, _ctx, expect) => {
       expect(result).toEqual({
         before: "# Edit example\n\nstatus: draft\n",
         after: "# Edit example\n\nstatus: reviewed\n",
-        changedPaths: [`notes/edit-example-${marker}.md`],
+        changedPaths: ["notes/edit-example.md"],
         occurrenceCount: 1,
       });
     },
