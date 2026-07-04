@@ -1,14 +1,5 @@
 import { normalizePath } from "../../durable-object-names.ts";
 
-/**
- * Every sandbox lives under `/sandboxes/`, and every Cloudflare-provider
- * sandbox under this prefix. The provider segment is part of the path on
- * purpose: `itx.sandboxes.get(path)` always takes the full path — arbitrarily
- * nested (`/sandboxes/cloudflare/bla/bla`) — so a future provider
- * (`/sandboxes/<other>/...`) is a new prefix, not a new API.
- */
-const CLOUDFLARE_SANDBOX_PATH_PREFIX = "/sandboxes/cloudflare/";
-
 // The path becomes a URL-shaped Durable Object name, and name PARSING runs it
 // through `new URL(...)` — so any segment URL parsing would rewrite ("..",
 // ".", empty, "?", "#", percent-escapes, whitespace) must be rejected here.
@@ -21,22 +12,25 @@ const SANDBOX_PATH_SEGMENT = /^[a-zA-Z0-9._-]+$/;
  * so this guard sits at the edge where callers choose a path — same contract
  * as `normalizeAgentPath` / `normalizeSecretPath`, plus segment
  * canonicalization because sandbox path segments are caller-chosen free text.
+ *
+ * A sandbox can live at ANY non-root project path: sandboxes live in their own
+ * Durable Object namespace, so a sandbox path never collides with the stream,
+ * agent, or secret at the same path — it NAMES them. `/agents/bla/bla` is that
+ * agent's sandbox (`itx.sandbox`); `/sandboxes/cloudflare/whatever` is the
+ * conventional home for standalone sandboxes a caller mints directly.
  */
-export function normalizeCloudflareSandboxPath(path: string): string {
+export function normalizeSandboxPath(path: string): string {
   const normalized = normalizePath(path);
-  const rest = normalized.startsWith(CLOUDFLARE_SANDBOX_PATH_PREFIX)
-    ? normalized.slice(CLOUDFLARE_SANDBOX_PATH_PREFIX.length)
-    : "";
-  const segments = rest.split("/");
+  const segments = normalized.slice(1).split("/");
   const legal =
-    rest !== "" &&
+    normalized !== "/" &&
     segments.every(
       (segment) => SANDBOX_PATH_SEGMENT.test(segment) && segment !== "." && segment !== "..",
     );
   if (!legal) {
     throw new Error(
-      `sandbox path must be "${CLOUDFLARE_SANDBOX_PATH_PREFIX}..." ` +
-        `(segments: letters, digits, ".", "_", "-"), got "${normalized}"`,
+      `sandbox path must be a non-root path of legal segments ` +
+        `(letters, digits, ".", "_", "-"), got "${normalized}"`,
     );
   }
   return normalized;

@@ -34,7 +34,7 @@ import { ProjectProcessorContract } from "./domains/projects/project-processor-c
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
 import { PROJECT_REPO_PATH, PROJECT_WORKER_SOURCE_PATH } from "./domains/repos/utils.ts";
-import { normalizeCloudflareSandboxPath } from "./domains/sandboxes/cloudflare/utils.ts";
+import { normalizeSandboxPath } from "./domains/sandboxes/cloudflare/utils.ts";
 import { normalizeSecretPath } from "./domains/secrets/utils.ts";
 import {
   completeGoogleConnect,
@@ -440,14 +440,17 @@ class AgentCollectionRpcTarget extends RpcTarget implements AgentCollection {
  * Object's own RPC stub — deliberately NO RpcTarget wrapper, so the caller
  * sees exactly what the `@cloudflare/sandbox` SDK exposes and new SDK methods
  * need no forwarding code here. Confinement is by name: the stub is minted
- * from this project's id plus the validated `/sandboxes/cloudflare/...`
- * path, after the same project-access assert every collection performs.
+ * from this project's id plus the validated path, after the same
+ * project-access assert every collection performs. A sandbox can live at any
+ * non-root path — a scope's own path names that scope's sandbox (`itx.sandbox`
+ * on an agent is `sandboxes.get(<the agent's path>)`); standalone sandboxes
+ * conventionally live under `/sandboxes/cloudflare/...`.
  */
 class SandboxCollectionRpcTarget extends RpcTarget implements SandboxCollection {
   async __describe() {
     return describeNode({
       instructions:
-        'Path-addressed Cloudflare sandboxes: get("/sandboxes/cloudflare/<name>") returns a container-backed sandbox stub (exec, git, files).',
+        "Path-addressed Cloudflare sandboxes: get(path) returns a container-backed sandbox stub (exec, git, files). Any non-root path works — an agent's own path is that agent's sandbox (itx.sandbox); pick /sandboxes/cloudflare/<name> for standalone ones.",
       children: { get: "The sandbox at a path (boots the container on first use)." },
       parent: "a project itx (itx.sandboxes)",
     });
@@ -459,7 +462,7 @@ class SandboxCollectionRpcTarget extends RpcTarget implements SandboxCollection 
   }
 
   async get(path: string) {
-    const normalized = normalizeCloudflareSandboxPath(path);
+    const normalized = normalizeSandboxPath(path);
     const stub = env.SANDBOX.getByName(
       DurableObjectNameCodec.stringify({
         projectId: this.props.projectId,

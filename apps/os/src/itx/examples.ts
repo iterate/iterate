@@ -365,7 +365,7 @@ return { current: await counter.current() }; // 2, and it persists under the key
     id: "sandbox-exec",
     title: "Run shell commands in a sandbox (project repo included)",
     description:
-      "A sandbox is a real Linux container addressed by path — always the full path, starting /sandboxes/ (today: /sandboxes/cloudflare/<anything>, nested paths fine). get() returns the bare Cloudflare Sandbox SDK surface: exec, readFile/writeFile, startProcess, gitCheckout, exposePort, destroy, … The first command boots the container (can take a minute cold). Every start also clones the project repo to /workspace/repo with working git credentials; await ensureProjectRepo() before depending on it.",
+      "A sandbox is a real Linux container addressed by path — any non-root path, nested fine. In an agent scope `itx.sandbox` is YOUR sandbox (a capability mounted at birth, backed by the sandbox at your own agent path) — call it dotted: `await itx.sandbox.exec(...)`. itx.sandboxes.get(path) addresses any other (standalone ones conventionally under /sandboxes/cloudflare/<anything>). Either way you get the bare Cloudflare Sandbox SDK surface: exec, readFile/writeFile, startProcess, gitCheckout, exposePort, destroy, … The first command boots the container (can take a minute cold) and it sleeps after idle. Every start also clones the project repo to /workspace/repo with working git credentials; await ensureProjectRepo() before depending on it.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `

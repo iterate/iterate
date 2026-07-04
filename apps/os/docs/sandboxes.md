@@ -1,18 +1,36 @@
 # Sandboxes
 
 Project-scoped Cloudflare Sandbox containers, addressed by path like every
-other domain object. A sandbox path always starts with `/sandboxes/` and may
-nest arbitrarily; the provider is the next segment — today only
-`/sandboxes/cloudflare/...` exists, and a future provider is a new prefix,
-not a new API.
+other domain object. A sandbox path may be ANY non-root project path,
+arbitrarily nested: sandboxes live in their own Durable Object namespace, so
+a sandbox path never collides with the stream or agent at the same path — it
+names them. Two spellings of the same primitive:
+
+- **Every agent owns the sandbox at its own path.** `itx.sandbox` in an agent
+  scope is a PROVIDED CAPABILITY, not a built-in: the birth certificate mounts
+  a durable itx-expression (`["sandboxes", ["get", <agent path>]]`) on the
+  agent's capability host, so every `itx.sandbox.<method>(...)` re-evaluates
+  `itx.sandboxes.get(<the agent's /agents/... path>)` at call time and
+  dispatches inside the capability host. The Durable Object + identity are
+  minted (no container) at birth, and the mount replays with the stream.
+- **Standalone sandboxes** conventionally live under
+  `/sandboxes/cloudflare/<anything>` via `itx.sandboxes.get(path)`.
 
 ```js
+await itx.sandbox.exec("echo mine"); // an agent's own sandbox (dotted capability calls)
 const sandbox = await itx.sandboxes.get("/sandboxes/cloudflare/whatever");
 await sandbox.exec("echo hi"); // first command boots the container
 await sandbox.ensureProjectRepo(); // await the project repo clone
 await sandbox.readFile("/workspace/repo/README.md");
 await sandbox.startProcess("bun server.js");
 ```
+
+Lifecycle is the SDK's best-practice default, unchanged: getting a sandbox is
+cheap (no container), the first command boots it, and the SDK's durable
+`sleepAfter` idle alarm (default 10m) stops it again. Durable Object storage
+and identity survive sleep; the container filesystem does not — every start
+re-provisions (the repo clone below), which is what makes a sandbox
+restorable rather than merely long-lived.
 
 `get(path)` returns the **bare `@cloudflare/sandbox` Durable Object stub** —
 no wrapper. Everything the SDK exposes (exec, files, processes, git, ports,
@@ -29,6 +47,34 @@ input-gates timer events — so nothing in there can even bound itself with a
 deadline. Slow cold starts (first boot under Rosetta locally) would brick the
 sandbox instead of merely delaying the clone.
 
+## Egress: all sandbox traffic goes through project policy
+
+A sandbox container has **no direct internet path**. Every outbound request it
+makes — HTTP and, because `interceptHttps = true`, HTTPS — is intercepted by
+the `@cloudflare/containers` proxy and forwarded to the owning project's
+Durable Object, the same decision point `ProjectEgressEntrypoint` gives dynamic
+workers' `globalOutbound`. So a sandbox reaches the outside world only through
+the same allow/deny/secret-substitution policy as the rest of the project.
+
+Wiring (three points):
+
+- `src/workers/sandbox.ts` re-exports `ContainerProxy` from
+  `@cloudflare/containers` — the SDK dials it via `ctx.exports.ContainerProxy`
+  to route intercepted egress; without the export, interception throws at
+  container start.
+- `CloudflareSandboxDurableObject` sets `static outbound` (the catch-all egress
+  handler) and `interceptHttps = true`. The handler runs in the ContainerProxy
+  WorkerEntrypoint, so it only has the container's opaque Durable Object id; it
+  calls `egressProjectId()` on the instance to recover the project, then
+  forwards to `projectStub(env.PROJECT, projectId).fetch(request)`.
+- HTTPS interception is a TLS man-in-the-middle: the stock `cloudflare/sandbox`
+  image installs the Cloudflare-provided container CA
+  (`/etc/cloudflare/certs/cloudflare-containers-ca.crt`) at container start when
+  `SANDBOX_INTERCEPT_HTTPS` is set, which the SDK sets from the `interceptHttps`
+  flag — so no Dockerfile change is needed for the container to trust it.
+
+## Deployment
+
 The domain lives in `src/domains/sandboxes/cloudflare/`; the container class
 deploys as its own `os-<stage>-sandbox` worker
 ([worker topology](./worker-topology.md)) with the image built from
@@ -39,7 +85,7 @@ SDK logs a version-skew warning otherwise).
 ## Identity: why `get()` is async
 
 Every domain object derives identity from its Durable Object name
-(`{projectId}.iterate/sandboxes/cloudflare/...`). Container-backed Durable
+(`{projectId}.iterate{path}`). Container-backed Durable
 Objects are the exception: the runtime does not reliably surface
 `ctx.id.name` to them (the local dev runtime drops it entirely), which is why
 the upstream SDK's `getSandbox()` helper pushes the name in rather than
