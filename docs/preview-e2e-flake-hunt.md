@@ -152,6 +152,28 @@ after `runIdleTeardownNow()`. Under the CI-parallel lane profile that
 intermittently takes longer; the assertion is about eventual severance, not a
 latency SLA. Both severance waits now allow 10 s.
 
+### 10. sandbox-exec REPL spec undercuts the container cold-boot tail
+
+The Playwright REPL spec provisions a fresh project (fresh sandbox container)
+per run and middlewright's spinner-waiter caps "spinner still visible" waits
+at 30 s — but a cold container boot + repo clone legitimately exceeds that
+(observed >70 s across two attempts on preview). `ExampleCase` now carries
+`completionTimeoutMs`; sandbox-exec declares 120 s and the spec bypasses the
+spinner cap for examples that declare a budget. Expected latency is not a
+hang.
+
+### Observed, not yet fixed
+
+- `packages/mock-http-proxy` unit test `msw-server-adapter.http-parity ›
+does not mark non-matching one-time handlers as used` failed once in the
+  Depot `Test / test` lane with `fetch failed: bad port` — the listen(0)
+  helper appears to have produced port 0 despite waiting for 'listening'.
+  Unit lane, outside preview e2e; needs its own repro.
+- One Depot push (`346bcebdb`) produced a run with **zero scheduled
+  workflows** (`depot ci status` shows `"workflows": []`), so no checks were
+  created for that head at all; a manual `depot ci dispatch` of
+  cloudflare-previews.yml covered the gap. Worth watching for recurrence.
+
 ### 5. Sandbox repo clone dies on a transient Artifacts 503
 
 `repl-examples.spec.ts › sandbox-exec` failed with `Failed to clone repository
