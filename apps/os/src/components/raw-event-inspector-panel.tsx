@@ -2,10 +2,6 @@ import { useEffect } from "react";
 import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
-import {
-  formatElapsedTime,
-  orderEventKeysForYamlDisplay,
-} from "@iterate-com/ui/components/events/event-inspector-sheet";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import { shortEventType } from "~/lib/stream-feed-filters.ts";
@@ -182,9 +178,42 @@ function parseTimestamp(value: unknown): number | null {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
+/** `+950ms`, `+3.2s`, `+1m40s` — inter-event gap between two mirror timestamps. */
 function elapsedBetween(fromMs: number | null, toMs: number | null): string | null {
   if (fromMs == null || toMs == null) return null;
-  return formatElapsedTime(toMs - fromMs);
+  const ms = Math.max(0, Math.floor(toMs - fromMs));
+  if (ms < 1_000) return `+${ms}ms`;
+  if (ms < 60_000) {
+    const seconds = Math.floor(ms / 100) / 10;
+    return `+${seconds.toFixed(1).replace(/\.0$/, "")}s`;
+  }
+  const totalSeconds = Math.floor(ms / 1_000);
+  return `+${Math.floor(totalSeconds / 60)}m${totalSeconds % 60}s`;
+}
+
+const EVENT_YAML_KEY_ORDER = [
+  "type",
+  "payload",
+  "metadata",
+  "idempotencyKey",
+  "offset",
+  "createdAt",
+];
+
+/**
+ * Stable, signal-first key order (`type`, `payload`, …) for showing a raw
+ * event as YAML; `streamPath` is display noise and dropped.
+ */
+function orderEventKeysForYamlDisplay(event: Record<string, unknown>): Record<string, unknown> {
+  const ordered: Record<string, unknown> = {};
+  for (const key of EVENT_YAML_KEY_ORDER) {
+    if (key in event) ordered[key] = event[key];
+  }
+  for (const [key, value] of Object.entries(event)) {
+    if (key === "streamPath" || EVENT_YAML_KEY_ORDER.includes(key)) continue;
+    ordered[key] = value;
+  }
+  return ordered;
 }
 
 function parseRawEventJson(rawJson: string): Record<string, unknown> {
