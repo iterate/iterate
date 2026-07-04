@@ -13,9 +13,9 @@ import process from "node:process";
 import repl from "node:repl";
 
 import { RpcTarget } from "capnweb";
-import { readLocalDevServerInfo } from "@iterate-com/shared/alchemy/local-dev-server";
 
 import { connectItx } from "../src/itx-client.ts";
+import { readDevServerInfo } from "./lib/dev-server-info.ts";
 
 const ASSISTANT_RESPONSE_TYPE = "events.iterate.com/agents/web-message-sent";
 
@@ -165,7 +165,7 @@ function adminConnection(options: { baseUrl?: string }) {
   const baseUrl =
     options.baseUrl ??
     process.env.APP_CONFIG_BASE_URL?.trim() ??
-    readLocalDevServerInfo(new URL("..", import.meta.url).pathname, {
+    readDevServerInfo(new URL("..", import.meta.url).pathname, {
       requireLive: true,
     })?.baseUrl.replace(/\/+$/, "");
   if (!baseUrl) {

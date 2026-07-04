@@ -34,8 +34,8 @@ is the single most important thing to understand about this app.
 The entrypoint that ties them together is `src/server/worker.ts` — a single
 Hono app exported as the worker's default `fetch` handler. Static assets + SSR
 still work: asset routing happens at the edge before `fetch` is invoked, and
-`run_worker_first: ["/api/*"]` (in `alchemy.run.ts`) sends the API paths to the
-worker.
+`run_worker_first: ["/api/*"]` (in the generated `wrangler.jsonc`) sends the API
+paths to the worker.
 
 > **Planned:** OS→auth runtime calls (the `internal.project.*` directory
 > procedures) currently ride surface 3 over the public internet with an
@@ -129,7 +129,7 @@ authorization server.
 
 **(b) JWT verification — a JWKS baked at OS deploy time.** OS verifies
 auth-issued tokens against a JWKS. To avoid a runtime round-trip on every cold
-isolate, `apps/os/alchemy.run.ts` fetches `${issuer}/jwks` at _deploy_ time and
+isolate, `apps/os/scripts/deploy.ts` fetches `${issuer}/jwks` at _deploy_ time and
 bakes it into OS's config (falling back to a runtime remote-JWKS fetch if that
 fails). **Consequence: rotating auth's signing keys requires an OS redeploy.**
 The forge public key (for `pnpm auth:mint`) is merged into this baked JWKS.
@@ -191,8 +191,7 @@ drives the two `internal.oauth.*` procedures in
 - **`ensureClient`** — server generates/rotates the secret; identified by a
   stable `referenceId` (e.g. `os:dev_jonas:web`). If the caller still holds a
   valid secret and nothing changed, it's a no-op; otherwise it rotates. Used by
-  the OS dev-stage bootstrap (`apps/os/src/auth/dev-oauth-client-bootstrap.ts`)
-  and the Doppler sync script (`apps/os/scripts/sync-auth-clients.ts`). Note the
+  the Doppler sync script (`apps/os/scripts/sync-auth-clients.ts`). Note the
   documented dev-referenceId special case — a dev client is only _kept_ when
   matched by the caller's own client id, else it rotates, otherwise a db reset
   would hand back a clientId paired with an unrelated (unverifiable) secret.
@@ -203,7 +202,7 @@ drives the two `internal.oauth.*` procedures in
 ## Development
 
 ```bash
-pnpm dev              # doppler(auth/dev) + alchemy dev, serves on :7101
+pnpm dev              # doppler(auth/dev) + vite dev, serves on :7101
 pnpm routes:generate  # regenerate src/routeTree.gen.ts after adding a route
 pnpm db:generate      # regenerate sqlfu query types after editing db/queries/*.sql
 pnpm typecheck        # routes:check + tsgo
@@ -217,29 +216,30 @@ after any schema/query edit.
 
 Auth uses the same typed-config mechanism as apps/os. `src/config.ts` declares
 an `AppConfig` zod schema (`redacted()` secrets, `publicValue()` browser-safe
-fields); `alchemy.run.ts` calls the shared `initAlchemy()` which compiles
-`APP_CONFIG_*` Doppler vars (e.g. `APP_CONFIG_BETTER_AUTH_SECRET`,
-`APP_CONFIG_AUTH_APP_ORIGIN`) into a single `APP_CONFIG` worker binding. Server
+fields); the worker's `APP_CONFIG_*` bindings are the env's Doppler secret
+names verbatim (e.g. `APP_CONFIG_BETTER_AUTH_SECRET`) plus env-shaped vars
+generated from the root `envs.ts` (e.g. `APP_CONFIG_AUTH_APP_ORIGIN`). Server
 code reads `config.*` (from `server/env.ts`'s `parseConfig(env)`), never raw
-`env.*` — `env` now only carries the `DB` binding. The browser bundle's own
-origin is inlined from `APP_CONFIG_AUTH_APP_ORIGIN` at build time.
+`env.*`. The browser bundle's own origin is inlined from
+`APP_CONFIG_AUTH_APP_ORIGIN` at build time.
 
 ## Deployment
 
-`alchemy.run.ts` runs, in order: D1 migrations + the admin-seed SQL, the worker,
-proxied DNS for every `WORKER_ROUTES` hostname, then the declarative OAuth
-client seed (`scripts/seed-oauth-clients.ts`, driven by
-`AUTH_SEED_OAUTH_CLIENTS`) against the immediately-live workers.dev URL.
+`pnpm run deploy --env <name>` (`scripts/deploy.ts`) runs, in order: D1
+migrations + the admin-seed SQL, `vite build`, `wrangler deploy` with the env's
+Doppler secrets shipped atomically via `--secrets-file`, a JWKS smoke probe,
+then the declarative OAuth client seed (`scripts/seed-oauth-clients.ts`, driven
+by `AUTH_SEED_OAUTH_CLIENTS`).
 
 Each preview slot needs its own auth worker (`auth-preview-N`) — no pipeline
-deploys it; it's a manual `pnpm alchemy:up` with the slot's stage/route/secret
-env. See the repo's preview-slot notes.
+deploys it; it's a manual `pnpm run deploy --env preview_N`. See the repo's
+preview-slot notes.
 
 **Gotchas that have bitten before:**
 
 - The worker needs the `global_fetch_strictly_public` compatibility flag —
   same-zone SSR self-fetches otherwise bypass Worker routes and hang ~20s (see
-  the comment in `alchemy.run.ts`).
+  the comment in `scripts/generate-wrangler-config.ts`).
 - Never return the raw better-auth session from a TanStack server function or
   loader (`session.token` leak — `src/routes/_auth.tsx`).
 - OAuth client secrets are hashed at rest — hence the `ensureClient`/`setClient`

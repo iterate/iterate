@@ -1,26 +1,17 @@
-import type { workers } from "../../alchemy.run.ts";
+import type { Env as OsEnv } from "../env.ts";
 
 /**
- * OS deploys as many small workers (alchemy.run.ts `workers`), each with its
- * own binding set. The ambient global `Env` covers the two dashboard-side
- * workers (app + ingress); the itx workers deliberately do not participate
- * in it — the itx workers import its own binding contract from src/env.ts,
- * so neither side's types leak into the other.
+ * OS deploys as ONE worker (src/worker.ts); `src/env.ts` is its binding
+ * contract, matching the bindings wrangler.jsonc declares (generated from
+ * the root envs.ts by scripts/generate-wrangler-config.ts). The ambient
+ * global `Env` and the `cloudflare:workers` module env are both that
+ * contract.
  */
-type W = typeof workers;
-
-type AppWorkerEnv = W["app"]["Env"];
-type IngressWorkerEnv = W["ingress"]["Env"];
-
-// An interface (not a type alias) so TypeScript resolves the extends clauses
-// lazily: Env feeds worker binding types in alchemy.run.ts, which feed Env —
-// a cycle that a type-alias intersection evaluates eagerly (TS7022) and
-// interface inheritance defers.
-export interface CloudflareEnv extends AppWorkerEnv, IngressWorkerEnv {}
+export interface CloudflareEnv extends OsEnv {}
 
 /**
- * The `ctx.exports` surface every itx worker shares: the loopback
- * entrypoints re-exported by each itx worker entry (src/workers/*).
+ * The `ctx.exports` surface: the loopback entrypoints exported by the worker
+ * entry (src/worker.ts).
  */
 type WorkerMainModule = {
   ItxEntrypoint: (typeof import("../domains/itx/itx-entrypoint.ts"))["ItxEntrypoint"];

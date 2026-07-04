@@ -10,18 +10,17 @@ packages:
 catalogs:
   cloudflare:
     "@cloudflare/unenv-preset": ^2.16.0
-    "@cloudflare/vite-plugin": 1.33.2
+    "@cloudflare/vite-plugin": 1.43.0
     "@cloudflare/vitest-pool-workers": ^0.14.9
     "@cloudflare/worker-bundler": ^0.1.2
     "@cloudflare/workers-types": ^4.20260621.1
-    miniflare: 4.20260617.0
-    workerd: 1.20260617.1
-    wrangler: 4.102.0
+    miniflare: 4.20260701.0
+    workerd: 1.20260701.0
+    wrangler: 4.107.0
 
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
   - drizzle-kit
-  - alchemy
   - miniflare
   - wrangler
   - workerd
@@ -88,24 +87,12 @@ overrides:
   "@babel/parser": "^7.28.0"
   "@tanstack/query-core": "5.91.0"
   "@tanstack/react-query": "5.91.0"
-  "wrangler": "4.102.0"
-  # alchemy computes DEFAULT_COMPATIBILITY_DATE from its own miniflare (4.20260617.0) and stamps
-  # it into generated local worker configs, but @cloudflare/vite-plugin@1.33.2 exact-pins
-  # miniflare 4.20260424.0 (workerd max date 2026-05-01), so a fresh install breaks `pnpm dev`
-  # with ERR_RUNTIME_FAILURE. Force the vite plugin's miniflare forward to match alchemy's until
-  # we bump the whole cloudflare catalog (vite-plugin ≥1.43 / wrangler ≥4.107).
-  "@cloudflare/vite-plugin>miniflare": "4.20260617.0"
+  "wrangler": "4.107.0"
 
 patchedDependencies:
   # The itx engine (apps/os/src/next) needs ctx.exports loopback RPC types and
   # a non-never RPC return fallback for opaque stream event payloads (the
   # patch originated in minimal-itx-v4, now transplanted into apps/os).
   "@cloudflare/workers-types@4.20260621.1": "patches/@cloudflare__workers-types@4.20260621.1.patch"
-  # Local dev containers: the egress interceptor sidecar must be pulled for
-  # the HOST platform — under Rosetta on Apple Silicon it dies with
-  # "setsockopt: protocol not available" and container-backed Durable
-  # Objects (the sandbox worker) never start. See apps/os/docs/sandboxes.md.
-  "@cloudflare/vite-plugin@1.33.2": "patches/@cloudflare__vite-plugin.patch"
-  "alchemy@0.83.3": "patches/alchemy@0.83.3.patch"
   "@better-auth/oauth-provider@1.6.9": "patches/@better-auth__oauth-provider@1.6.9.patch"
   "capnweb@0.8.0": "patches/capnweb@0.8.0.patch"

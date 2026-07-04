@@ -3,7 +3,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { buttonVariants } from "@iterate-com/ui/components/button";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { StreamTreeBrowser } from "~/components/stream-tree-browser.tsx";
+import { StreamTree } from "~/components/stream-tree.tsx";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
@@ -53,9 +53,10 @@ function ProjectAgentsIndexContent() {
       </Link>
       {/* Anything under /agents is an agent and opens the chat view —
           linkOptionsForStreamPath encodes that. */}
-      <StreamTreeBrowser
+      <StreamTree
         source={source}
         rootPath={AGENTS_ROOT}
+        scope={project.id}
         onOpenPath={(streamPath) =>
           void navigate(linkOptionsForStreamPath(params.projectSlug, streamPath))
         }

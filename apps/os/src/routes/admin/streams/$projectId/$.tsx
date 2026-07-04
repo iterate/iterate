@@ -25,7 +25,6 @@ function AdminStreamDetailPage() {
   return (
     <ProjectStreamView
       emptyLabel="No events in this stream yet."
-      showCommandPaletteTrigger={false}
       projectId={streamProjectId}
       streamSource={source}
       streamPath={streamPath}

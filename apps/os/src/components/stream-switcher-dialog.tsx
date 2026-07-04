@@ -1,6 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Dialog,
@@ -11,10 +9,10 @@ import {
 } from "@iterate-com/ui/components/dialog";
 import { Field, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
-import { cn } from "@iterate-com/ui/lib/utils";
 import { normalizePath } from "~/domains/durable-object-names.ts";
-import { readStreamStateOnce, type StreamNavigator } from "~/lib/stream-navigation.ts";
-import { streamPathAncestors, streamPathParent } from "~/lib/stream-links.ts";
+import { StreamTree } from "~/components/stream-tree.tsx";
+import type { StreamNavigator } from "~/lib/stream-navigation.ts";
+import { streamPathParent } from "~/lib/stream-links.ts";
 
 // A full canonical StreamPath of at least one segment: leading slash, lowercase
 // segments separated by single slashes, no trailing slash.
@@ -44,6 +42,9 @@ function normalizeDestination(raw: string): string | null {
  * current path) to click around. Streams are lazily created — navigating IS
  * creating. The path field prefills with the current stream's parent, so the
  * default is a sibling; edit the path to nest deeper or jump elsewhere.
+ *
+ * The dialog takes a FIXED two-thirds of the viewport; the tree scrolls
+ * inside it, so expanding nodes never resizes or re-centers the dialog.
  */
 export function StreamSwitcherDialog({
   open,
@@ -58,18 +59,15 @@ export function StreamSwitcherDialog({
   navigator: StreamNavigator;
   scope: string;
 }) {
-  const [expandedPaths, setExpandedPaths] = useState<ReadonlySet<string>>(new Set(["/"]));
   const [destination, setDestination] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Opening reveals "where you are": every ancestor (and the current stream
-  // itself) starts expanded, and the path field is seeded for a sibling with
-  // the cursor placed after the trailing slash, ready for the leaf.
+  // Opening seeds the path field for a sibling with the cursor placed after
+  // the trailing slash, ready for the leaf. (The tree seeds its own expansion
+  // from currentPath; Radix unmounts the content on close, so each open
+  // starts from a fresh tree.)
   useEffect(() => {
     if (!open) return;
-    // "/" is the tree's root node, not an ancestor of non-root paths — it
-    // must always start expanded or every deeper stream stays hidden.
-    setExpandedPaths(new Set(["/", ...streamPathAncestors(currentPath)]));
     setDestination(destinationPrefill(currentPath));
     requestAnimationFrame(() => {
       const input = inputRef.current;
@@ -89,33 +87,23 @@ export function StreamSwitcherDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
+      <DialogContent className="flex h-[66svh] w-[66vw] flex-col sm:max-w-[66vw]">
+        <DialogHeader className="shrink-0">
           <DialogTitle>Streams</DialogTitle>
           <DialogDescription className="sr-only">Create or open a stream by path</DialogDescription>
           <p className="font-mono text-xs text-muted-foreground">{currentPath}</p>
         </DialogHeader>
-        <div className="max-h-80 overflow-y-auto">
-          <StreamTreeItem
-            path="/"
-            depth={0}
-            tree={{
-              currentPath,
-              expandedPaths,
-              navigator,
-              scope,
-              onOpen: openStream,
-              onToggle: (path) =>
-                setExpandedPaths((previous) => {
-                  const next = new Set(previous);
-                  if (next.has(path)) next.delete(path);
-                  else next.add(path);
-                  return next;
-                }),
-            }}
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <StreamTree
+            // Fresh expansion state (ancestors of the current stream) per open.
+            key={`${scope}:${currentPath}`}
+            currentPath={currentPath}
+            onOpenPath={openStream}
+            scope={scope}
+            source={navigator.source}
           />
         </div>
-        <div className="border-t pt-3">
+        <div className="shrink-0 border-t pt-3">
           <form
             className="flex w-full items-center gap-2"
             onSubmit={(event) => {
@@ -144,87 +132,5 @@ export function StreamSwitcherDialog({
         </div>
       </DialogContent>
     </Dialog>
-  );
-}
-
-type StreamTreeContext = {
-  currentPath: string;
-  expandedPaths: ReadonlySet<string>;
-  navigator: StreamNavigator;
-  scope: string;
-  onOpen: (path: string) => void;
-  onToggle: (path: string) => void;
-};
-
-/**
- * One tree node and (when expanded) its recursive children. Each node loads
- * its own state once — that single read supplies both the event count badge
- * and the child paths to recurse into.
- */
-function StreamTreeItem({
-  path,
-  depth,
-  tree,
-}: {
-  path: string;
-  depth: number;
-  tree: StreamTreeContext;
-}) {
-  const expanded = tree.expandedPaths.has(path);
-  const { data } = useQuery({
-    queryKey: ["stream-switcher-children", tree.scope, path],
-    queryFn: async () => {
-      const streamState = await readStreamStateOnce(tree.navigator.source, normalizePath(path));
-      return { eventCount: streamState.eventCount, childPaths: streamState.childPaths.toSorted() };
-    },
-  });
-  const childPaths = data?.childPaths ?? [];
-
-  return (
-    <>
-      <div
-        className={cn(
-          "flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 hover:bg-accent",
-          path === tree.currentPath && "bg-accent/50",
-        )}
-      >
-        <span style={{ width: depth * 14 }} className="shrink-0" />
-        {childPaths.length > 0 ? (
-          <button
-            type="button"
-            aria-label={expanded ? "Collapse" : "Expand"}
-            className="-m-1 shrink-0 rounded p-1 hover:bg-muted"
-            onClick={() => tree.onToggle(path)}
-          >
-            {expanded ? (
-              <ChevronDownIcon className="size-3.5 text-muted-foreground/60" />
-            ) : (
-              <ChevronRightIcon className="size-3.5 text-muted-foreground/60" />
-            )}
-          </button>
-        ) : (
-          <span className="size-3.5 shrink-0" />
-        )}
-        <button
-          type="button"
-          className="flex min-w-0 flex-1 items-center gap-2 text-left"
-          onClick={() => tree.onOpen(path)}
-        >
-          <span className="truncate font-mono text-xs">
-            {path === "/" ? "/" : (path.split("/").at(-1) ?? path)}
-          </span>
-          {data == null ? null : (
-            <span className="ml-auto font-mono text-[10px] tabular-nums text-muted-foreground/70">
-              {data.eventCount}
-            </span>
-          )}
-        </button>
-      </div>
-      {expanded
-        ? childPaths.map((childPath) => (
-            <StreamTreeItem key={childPath} path={childPath} depth={depth + 1} tree={tree} />
-          ))
-        : null}
-    </>
   );
 }

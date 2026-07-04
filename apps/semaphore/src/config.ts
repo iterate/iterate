@@ -3,18 +3,19 @@ import { AppLogsConfig } from "@iterate-com/shared/evlog/types";
 import { z } from "zod";
 
 /**
- * Semaphore runtime config, parsed from the `APP_CONFIG` JSON blob plus
- * `APP_CONFIG_*` env overrides that Doppler/alchemy bake into the worker.
+ * Semaphore runtime config, parsed from the `APP_CONFIG_*` env vars that
+ * deploys bake into the worker (secrets via `wrangler deploy --secrets-file`,
+ * env-shaped vars generated from the root envs.ts).
  *
  * `publicValue` fields are exposed to the browser via the public-config schema;
  * `redacted` fields parse into `Redacted` wrappers that must be unwrapped with
  * `.exposeSecret()` and never serialize their value.
  */
 export const AppConfig = z.object({
-  // alchemy's IterateApp derives the worker route + proxied DNS record from
-  // baseUrl (deriveWorkerRouteHosts in packages/shared/src/alchemy/iterate-app.ts).
-  // Drop it and the custom hostname (semaphore.<base>) keeps resolving via DNS
-  // but has no route bound to the worker, so Cloudflare answers 522.
+  // Deployed envs get APP_CONFIG_BASE_URL as a generated var from the same
+  // envs.ts entry that produces the worker route (scripts/
+  // generate-wrangler-config.ts), so runtime URL and route can never drift.
+  // Optional because local dev has no deployed base URL.
   baseUrl: publicValue(z.url().optional()),
   logs: AppLogsConfig.default({ stdoutFormat: "pretty", filtering: { rules: [] } }),
   posthog: z.object({

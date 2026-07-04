@@ -2,12 +2,24 @@
 // reads for lazy tree-node loading.
 
 import { useMemo } from "react";
-import type { StreamTreeSource } from "~/components/stream-tree-browser.tsx";
+import type { ItxLiveSubscriptionHandle } from "~/itx/itx-react.tsx";
 import {
   parseBrowserCoreStreamTreeState,
   type BrowserCoreStreamTreeState,
 } from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
 import { useItx } from "~/itx/itx-react.tsx";
+
+/**
+ * Where stream-tree nodes get their state: path → subscribable stream handle.
+ * Project pages pass `(path) => itx.streams.get(path)`, the admin explorer
+ * `(path) => itx.projects.get(projectId).streams.get(path)`.
+ */
+export type StreamTreeSource = (streamPath: string) => {
+  subscribe(args: {
+    events?: boolean;
+    processEventBatch(batch: { state: unknown }): unknown;
+  }): Promise<ItxLiveSubscriptionHandle>;
+};
 
 /**
  * Everything the ⌘K stream switcher needs from its host: a live state source

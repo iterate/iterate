@@ -48,7 +48,7 @@ const DEFAULT_GOOGLE_OAUTH_SCOPES = [
 
 /**
  * OS runtime config, parsed from the `APP_CONFIG` JSON blob plus `APP_CONFIG_*`
- * env overrides that Doppler/alchemy bake into the worker at deploy time
+ * env overrides baked into the worker at deploy time (scripts/deploy.ts)
  * (e.g. `APP_CONFIG_BASE_URL`, `APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET`).
  *
  * `publicValue` fields are exposed to the browser via the public-config schema
