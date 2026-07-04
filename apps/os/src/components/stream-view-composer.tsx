@@ -104,7 +104,10 @@ export function StreamViewComposer({
     setMode("raw");
   }
 
-  const error = submitError ?? interrupt?.error;
+  // Submit and interrupt failures have independent lifecycles (a submit error
+  // clears on the next submit; an interrupt error is scoped to its turn), so
+  // neither may mask the other — show both.
+  const error = [submitError, interrupt?.error].filter(Boolean).join(" · ") || undefined;
 
   return (
     <AgentPillComposer
