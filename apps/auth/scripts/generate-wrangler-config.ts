@@ -105,7 +105,10 @@ function envBlock(env: AuthDeployedEnv) {
 
 const config = {
   $schema: "node_modules/wrangler/config-schema.json",
-  name: "auth-dev",
+  // Env-less service name: wrangler tags every `--env` deploy with
+  // `cf:service=<top-level name>`, so a "-dev" suffix here would mis-bucket
+  // deployed workers under a fake "dev" service in observability queries.
+  name: "auth",
   main: "./src/server/worker.ts",
   compatibility_date: "2026-06-17",
   // nodejs_compat(+populate_process_env): hono's contextStorage needs

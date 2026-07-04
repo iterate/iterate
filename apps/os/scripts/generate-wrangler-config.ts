@@ -206,9 +206,14 @@ function envBlock(env: DeployedEnv) {
   };
 }
 
-const config = {
+export const config = {
   $schema: "node_modules/wrangler/config-schema.json",
-  name: "os-dev",
+  // The top-level name is BOTH the local dev worker name and the service
+  // identity: wrangler tags every `--env` deploy with `cf:service=<top-level
+  // name>` + `cf:environment=<env>`, so it must be the env-less service name
+  // ("os", not "os-dev") or observability queries grouped by service
+  // mis-bucket every environment under a fake "dev" service.
+  name: "os",
   main: "./src/worker.ts",
   compatibility_date: COMPATIBILITY_DATE,
   // nodejs_compat: @cloudflare/shell (repo git) and the dynamic worker
@@ -226,7 +231,7 @@ const config = {
   // image on Docker/OrbStack and pairs each container with a proxy-everything
   // egress sidecar (see docs/sandboxes.md). Deploys ignore the dev section.
   dev: { enable_containers: process.env.OS_SANDBOX_CONTAINER_LOCAL_DEV === "true" },
-  ...workerBindings({ workerName: "os-dev", accountId: "" }),
+  ...workerBindings({ workerName: "os", accountId: "" }),
   // Local dev loads optional secrets and the env-shaping keys from Doppler
   // too (deployed envs get the latter as generated vars — see envShapedVars).
   secrets: { required: [...REQUIRED_SECRETS, ...OPTIONAL_SECRETS, ...ENV_SHAPED_KEYS] },
@@ -251,9 +256,10 @@ function builderEnvBlock(env: DeployedEnv) {
   };
 }
 
-const builderConfig = {
+export const builderConfig = {
   $schema: "node_modules/wrangler/config-schema.json",
-  name: "os-dev-builder",
+  // Env-less service name — see the note on `config.name` above.
+  name: "os-builder",
   main: "./src/builder.ts",
   compatibility_date: COMPATIBILITY_DATE,
   compatibility_flags: ["nodejs_compat"],
