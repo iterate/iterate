@@ -8,8 +8,8 @@
   },
   "scripts": {
     "cli": "tsx ./scripts/cli.ts",
-    "dev": "tsx ./scripts/dev.ts start",
-    "dev:local": "tsx ./scripts/dev.ts start --skip-doppler",
+    "dev": "tsx ./scripts/dev.ts",
+    "dev:local": "tsx ./scripts/dev.ts --skip-doppler",
     "build": "doppler run -- pnpm exec vite build",
     "probe:do-duration": "tsx ./scripts/do-duration-probe.ts",
     "deploy": "tsx ./scripts/deploy.ts",

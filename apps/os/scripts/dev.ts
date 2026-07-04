@@ -47,8 +47,8 @@ const APP_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const LOG_PATH = devServerLogPath(APP_ROOT);
 const DEFAULT_START_TIMEOUT_MS = 60_000;
 
-/** Start the OS dev server (default command). */
-export async function start(options: StartOptions = {}) {
+/** Start the OS dev server (the default command: bare `pnpm dev` runs this). */
+export default async function start(options: StartOptions = {}) {
   const requestedPort = options.port ?? (process.env.PORT ? Number(process.env.PORT) : undefined);
   const live = readDevServerInfo(APP_ROOT, { requireLive: true });
   if (live) {
