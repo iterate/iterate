@@ -81,6 +81,8 @@ export const AppConfig = z.object({
   openAiApiKey: redacted(z.string().trim().min(1)),
   cloudflare: z
     .object({
+      accountId: publicValue(z.string().trim().min(1)).optional(),
+      artifactsNamespace: publicValue(z.string().trim().min(1)).optional(),
       apiToken: redacted(z.string().trim().min(1)).optional(),
     })
     .default({}),
@@ -125,9 +127,46 @@ export type AppConfig = z.output<typeof AppConfig>;
  * carriers). Accepts `unknown` so callers don't need a cast at every site.
  */
 export function parseConfig(env: unknown): AppConfig {
-  return parseAppConfigFromEnv({
+  const config = parseAppConfigFromEnv({
     configSchema: AppConfig,
     prefix: "APP_CONFIG_",
     env: env as Record<string, unknown>,
   });
+  const artifactBindings = {
+    accountId: readStringBinding(env, "ARTIFACTS_ACCOUNT_ID"),
+    namespace: readStringBinding(env, "ARTIFACTS_NAMESPACE"),
+  };
+
+  if (
+    (config.cloudflare.accountId || !artifactBindings.accountId) &&
+    (config.cloudflare.artifactsNamespace || !artifactBindings.namespace)
+  ) {
+    return config;
+  }
+
+  return {
+    ...config,
+    cloudflare: {
+      ...config.cloudflare,
+      ...(config.cloudflare.accountId || !artifactBindings.accountId
+        ? {}
+        : { accountId: artifactBindings.accountId as AppConfig["cloudflare"]["accountId"] }),
+      ...(config.cloudflare.artifactsNamespace || !artifactBindings.namespace
+        ? {}
+        : {
+            artifactsNamespace:
+              artifactBindings.namespace as AppConfig["cloudflare"]["artifactsNamespace"],
+          }),
+    },
+  };
+}
+
+function readStringBinding(env: unknown, key: string) {
+  if (env === null || typeof env !== "object") return null;
+
+  const value = (env as Record<string, unknown>)[key];
+  if (typeof value !== "string") return null;
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
