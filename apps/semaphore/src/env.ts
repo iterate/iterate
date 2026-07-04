@@ -1,5 +1,17 @@
-import { env } from "cloudflare:workers";
-import type { worker } from "../alchemy.run.ts";
+import { env as workerEnv } from "cloudflare:workers";
+import type { ResourceCoordinator } from "~/durable-objects/resource-coordinator.ts";
 
-export type Env = typeof worker.Env;
-export const Env = env as typeof worker.Env;
+/**
+ * The semaphore worker's binding contract — the binding names wrangler.jsonc
+ * (generated from the root envs.ts by scripts/generate-wrangler-config.ts)
+ * declares on the worker (src/worker.ts). The repo-wide ambient `Env`
+ * (src/lib/worker-env.d.ts) is this same interface.
+ */
+export interface Env {
+  /** D1: lease inventory mirror (`<worker>-resources`). */
+  DB: D1Database;
+  /** One coordinator DO per resource type: active leases, waiters, expiry alarms. */
+  RESOURCE_COORDINATOR: DurableObjectNamespace<ResourceCoordinator>;
+}
+
+export const Env = workerEnv as unknown as Env;

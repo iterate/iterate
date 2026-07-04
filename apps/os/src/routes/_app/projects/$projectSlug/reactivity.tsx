@@ -14,12 +14,10 @@ import {
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/reactivity")({
   ssr: false,
-  loader: ({ context }) => {
-    return {
-      breadcrumb: "Reactivity",
-      project: context.project,
-    };
-  },
+  loader: ({ context }) => ({
+    breadcrumb: "Reactivity",
+    project: context.project,
+  }),
   component: ProjectReactivityPage,
 });
 

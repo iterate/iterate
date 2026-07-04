@@ -8,14 +8,17 @@ Cloudflare-only: TanStack Start + oRPC + sqlfu/D1 inventory storage, with a Dura
 - **Frontend:** TanStack Start + Router + Query
 - **DB:** sqlfu-generated D1 query wrappers (`sql/.generated/`)
 - **Coordinator:** one Durable Object per resource `type` handles active leases, waiters, and expiry
-- **Secrets:** Doppler project `semaphore` (see repo `doppler.yaml`). `DOPPLER_CONFIG` is injected by `doppler run`, and `_shared` defines `ALCHEMY_STAGE=${DOPPLER_CONFIG}`. The bearer/operator token is `APP_CONFIG.sharedApiSecret`; callers can expose the same value as `SEMAPHORE_API_TOKEN`.
+- **Secrets:** Doppler project `semaphore` (see repo `doppler.yaml`). The bearer/operator token is `APP_CONFIG_SHARED_API_SECRET`; callers can expose the same value as `SEMAPHORE_API_TOKEN`.
 
 ## Key files
 
-- `alchemy.run.ts` — Alchemy app + D1 + Durable Object + TanStackStart
-- `vite.config.ts` — Alchemy Cloudflare TanStack Start plugin; optional `PORT` for dev
+- `wrangler.jsonc` — GENERATED from the root `envs.ts` by `scripts/generate-wrangler-config.ts`; top level is local dev, env blocks are the deployed environments
+- `scripts/deploy.ts` — deploy an env (`--env prd`/`--env preview_N`): secret verification, D1 migrations, `vite build`, `wrangler deploy --secrets-file`, smoke
+- `scripts/ensure-resources.ts` — create-only D1 + DNS bring-up for a new env
+- `vite.config.ts` — `@cloudflare/vite-plugin` + TanStack Start; optional `PORT` for dev
 - `src/worker.ts` — Worker fetch + `withEvlog`
 - `src/config.ts` — `AppConfig` schema + `parseConfig`
+- `src/env.ts` — the worker's binding contract (`DB`, `RESOURCE_COORDINATOR`)
 - `src/request-context.ts` — per-request `RequestContext` (`config`, `db`, `log`, `rawRequest`)
 - `src/durable-objects/resource-coordinator.ts` — lease orchestration, alarms, and waiter dispatch
 - `src/lib/resource-store.ts` — D1-backed resource reads/writes and lease-state mirroring
@@ -27,12 +30,14 @@ Cloudflare-only: TanStack Start + oRPC + sqlfu/D1 inventory storage, with a Dura
 
 ```bash
 pnpm cli          # doppler + app CLI commands
-pnpm dev          # doppler + Alchemy local (Vite); optional PORT= for fixed port; Ctrl+C to stop
+pnpm dev          # doppler + vite dev in workerd; optional PORT= for fixed port; Ctrl+C to stop
 pnpm build        # production client/server bundle
-pnpm deploy       # deploy prd through Doppler and alchemy.run.ts
+pnpm deploy --env prd   # deploy an environment (see Deploy below)
+pnpm gen:wrangler # regenerate wrangler.jsonc from the root envs.ts
 pnpm seed:environment-config-leases
 pnpm sqlfu:generate
 pnpm sqlfu:check
+pnpm sqlfu:migrate # apply migrations to the local dev D1
 pnpm test         # typecheck only
 pnpm test:e2e     # requires `SEMAPHORE_BASE_URL`
 ```
@@ -64,9 +69,15 @@ The browser UI calls this value the operator token. Do not copy the token into s
 
 ## Deploy
 
-Use the raw lifecycle scripts with Doppler outside the package script:
+Deploys are wrangler-native, driven by the root `envs.ts` (see
+`docs/devops-cloudflare-doppler.md`):
 
-- `doppler run --project semaphore --config preview_2 -- pnpm exec tsx ./alchemy.run.ts`
-- `doppler run --project semaphore --config prd -- pnpm exec tsx ./alchemy.run.ts`
-- `doppler run --project semaphore --config preview_2 -- pnpm exec tsx ./alchemy.run.ts --destroy`
-- `doppler run --project semaphore --config prd -- pnpm exec tsx ./alchemy.run.ts --destroy`
+- `pnpm deploy --env prd`
+- `pnpm deploy --env preview_3`
+- `pnpm ensure-resources --env preview_9` — bring up a new env's D1 + DNS, then paste the printed IDs into the root `envs.ts`
+
+**CAUTION:** `semaphore-prd`'s `ResourceCoordinator` Durable Object holds the
+live preview-slot lease state for the whole fleet. Always deploy over it;
+never delete the worker or erase its storage. `pnpm destroy` is deliberately
+a no-op — semaphore's preview e2e generates per-run-unique resource types and
+self-cleans.

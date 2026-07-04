@@ -3,9 +3,10 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { z } from "zod";
 
 /**
- * URL-backed view state for ProjectStreamView. The same stream view is mounted
- * by two routes (agents/streams/$ and streams/$); both register this schema as
- * their `validateSearch`, so the component reads/writes its tab, filter, and
+ * URL-backed view state for ProjectStreamView. Every route that mounts a
+ * stream view (every domain page plus the stream/agent detail
+ * routes) registers this schema in its `validateSearch` — directly or via
+ * `.extend()` — so the component reads/writes its tab, filter, and
  * processor-sidebar state through the URL and every view is shareable.
  *
  * Every field is optional and omitted from the URL at its default: the active
@@ -19,8 +20,10 @@ export const StreamViewSearch = z.object({
   tab: z.enum(["feed", "state"]).optional().catch(undefined),
   /** Feed preset id; omitted on the stream's default preset. */
   preset: z.string().optional().catch(undefined),
-  /** Agent-feed search query. */
+  /** Feed text search query. */
   q: z.string().optional().catch(undefined),
+  /** Exact event-type filter for the feed-items presets. */
+  type: z.string().optional().catch(undefined),
   /** Whether the search/filter row is open. */
   filter: z.boolean().optional().catch(undefined),
   /** Whether the processors sidebar is open. */
@@ -47,7 +50,8 @@ export function useStreamViewSearch(): {
   const setSearch = useCallback(
     (patch: Partial<StreamViewSearch>) => {
       void navigate({
-        // `useNavigate()` isn't scoped to one route (this hook serves two), so
+        // `useNavigate()` isn't scoped to one route (this hook serves every
+        // stream-view route), so
         // without a `to`/`from` the search reducer's inferred type collapses to
         // `never`. The reducer below is written type-safely against our schema;
         // we only erase its type at this un-narrowable assignment boundary.

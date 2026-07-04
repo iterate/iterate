@@ -1,7 +1,6 @@
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { z } from "zod/v4";
 import { createAuthContractClient } from "@iterate-com/auth-contract";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 
 // Declarative OAuth client seeding: Doppler is the source of truth.
 //
@@ -12,7 +11,7 @@ import { createAuthContractClient } from "@iterate-com/auth-contract";
 // with the same Doppler values is a no-op, and nothing ever rotates a seeded
 // client — so the credentials in Doppler can never drift from the database.
 //
-// Runs automatically from apps/auth/alchemy.run.ts after a (non-local) deploy,
+// Runs automatically from apps/auth/scripts/deploy.ts after a deploy,
 // and standalone against any environment:
 //
 //   doppler run --project auth --config dev_global -- pnpm seed-oauth-clients
@@ -141,8 +140,7 @@ export async function seedOAuthClients(
   );
 }
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
-if (isMain) {
+if (isMainModule(import.meta.url)) {
   if (!process.env.AUTH_SEED_OAUTH_CLIENTS) {
     console.log("[seed-oauth-clients] AUTH_SEED_OAUTH_CLIENTS not set; nothing to seed.");
     process.exit(0);

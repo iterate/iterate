@@ -1,17 +1,14 @@
-import { once } from "node:events";
-import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, test } from "vitest";
 import { HttpResponse, http } from "msw";
+import { listenOnFetchSafePort } from "./fetch-safe-listen.ts";
 import { createNativeMswServer, type NativeMswServer } from "./msw-server-adapter.ts";
 
 const activeServers = new Set<NativeMswServer>();
 
 async function listen(server: NativeMswServer): Promise<string> {
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
+  const { baseUrl } = await listenOnFetchSafePort(server);
   activeServers.add(server);
-  const address = server.address() as AddressInfo;
-  return `http://127.0.0.1:${String(address.port)}`;
+  return baseUrl;
 }
 
 async function close(server: NativeMswServer): Promise<void> {

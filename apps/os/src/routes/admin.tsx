@@ -40,6 +40,7 @@ import {
   SidebarRail,
   SidebarTrigger,
 } from "@iterate-com/ui/components/sidebar";
+import { GlobalCommandPalette } from "~/components/global-command-palette.tsx";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { reconnectItx, useItx } from "~/itx/itx-react.tsx";
 
@@ -143,7 +144,14 @@ function AdminGate() {
   }
   // Children just call useItx() for the same global pooled handle — no admin
   // context to thread, and they only render here, under the authorized gate.
-  return <Outlet />;
+  // The ⌘K stream switcher mounts here too: its admin tier dials the same
+  // global session, which only has authority once this gate has passed.
+  return (
+    <>
+      <Outlet />
+      <GlobalCommandPalette />
+    </>
+  );
 }
 
 function AdminUnlockForm({ reason, onUnlocked }: { reason: string; onUnlocked: () => void }) {
