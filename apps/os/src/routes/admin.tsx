@@ -80,11 +80,6 @@ function AdminLayout() {
           </ClientOnly>
         </main>
       </SidebarInset>
-      {/* Same ⌘K stream switcher as the product UI; the admin tier routes it
-          through the global admin session and the /admin/streams routes. */}
-      <ClientOnly fallback={null}>
-        <GlobalCommandPalette />
-      </ClientOnly>
     </SidebarProvider>
   );
 }
@@ -149,7 +144,14 @@ function AdminGate() {
   }
   // Children just call useItx() for the same global pooled handle — no admin
   // context to thread, and they only render here, under the authorized gate.
-  return <Outlet />;
+  // The ⌘K stream switcher mounts here too: its admin tier dials the same
+  // global session, which only has authority once this gate has passed.
+  return (
+    <>
+      <Outlet />
+      <GlobalCommandPalette />
+    </>
+  );
 }
 
 function AdminUnlockForm({ reason, onUnlocked }: { reason: string; onUnlocked: () => void }) {
