@@ -195,6 +195,24 @@ with three apps deploy-failed on the slot. Two fixes:
   regardless of which head recorded them; only `awaiting-tests` keeps the
   same-head guard.
 
+### 13. Fresh-worker bring-up: module-scope config parse + orphaned container app
+
+Recreating preview_7's deleted workers surfaced two first-deploy failures:
+
+- **semaphore**: `parseConfig(workerEnv)` ran at module scope, so Cloudflare's
+  upload-time script validation threw ZodError on a worker with no secrets
+  yet — rejecting exactly the classless bootstrap deploy a fresh worker needs
+  before its first code+secrets version (deploy-helpers.ts). The parse is now
+  lazy (memoized on first request).
+- **os**: the Cloudflare _Containers application_
+  `os-preview-7-cloudflaresandboxdurableobject-preview_7` survived the old
+  worker's deletion and stayed bound to the dead DO namespace; redeploying
+  created a new namespace and Cloudflare refused the collision ("already an
+  application with the name … associated with a different durable object
+  namespace"). Fixed operationally with `wrangler containers delete <id>`;
+  if a slot's os worker is ever deleted again, expect this and delete the
+  orphaned application before redeploying.
+
 ### Observed, not yet fixed
 
 - `packages/mock-http-proxy` unit test `msw-server-adapter.http-parity ›

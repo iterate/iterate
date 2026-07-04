@@ -10,13 +10,18 @@ import type { RequestContext } from "~/request-context.ts";
 import type { Env } from "~/env.ts";
 import { ResourceCoordinator } from "~/durable-objects/resource-coordinator.ts";
 
-const config = parseConfig(workerEnv);
+// Lazy, memoized: a module-scope parse throws during Cloudflare's upload-time
+// script validation on a worker that has no secrets yet, which rejects the
+// classless bootstrap deploy a fresh worker needs (deploy-helpers.ts) before
+// its first code+secrets version can land.
+let config: ReturnType<typeof parseConfig> | undefined;
 
 export async function handleSemaphoreRequest(
   request: Request,
   env: Env,
   executionCtx: ExecutionContext,
 ) {
+  config ??= parseConfig(workerEnv);
   return withEvlog(
     { request, app: { name: "@iterate-com/semaphore", slug: "semaphore" }, config, executionCtx },
     async ({ log }) => {
