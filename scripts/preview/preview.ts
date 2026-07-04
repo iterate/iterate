@@ -922,7 +922,12 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // does. Deploys run in parallel: the JWKS fetch polls until auth serves.
     previewDependencies: ["auth"],
     previewTestBaseUrlEnvVar: "SEMAPHORE_BASE_URL",
-    previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
+    // `env -u SEMAPHORE_API_TOKEN`: the CI lane runs under an outer
+    // `doppler run --project _shared --config prd` whose SEMAPHORE_API_TOKEN
+    // targets prd and leaks through into this nested env — never the right
+    // credential for a preview slot. Unsetting it makes the e2e forge-mint a
+    // slot-scoped admin token instead (scripts/auth/semaphore-token.ts).
+    previewTestCommandArgs: ["env", "-u", "SEMAPHORE_API_TOKEN", "pnpm", "test:e2e:preview"],
   },
   // Every preview slot runs its own auth deployment (auth.iterate-preview-N.com)
   // so e2e starts from a completely clean, controlled slate. OAuth client
