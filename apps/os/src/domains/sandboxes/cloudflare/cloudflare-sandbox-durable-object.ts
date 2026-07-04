@@ -139,7 +139,6 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     // the sandbox without the repo until the container is replaced.
     const existing = await this.exists(`${SANDBOX_PROJECT_REPO_DIR}/.git/HEAD`);
     if (existing.exists) return;
-    await this.exec(`rm -rf ${SANDBOX_PROJECT_REPO_DIR}`);
 
     const repo = this.env.REPO.getByName(
       DurableObjectNameCodec.stringify({
@@ -155,14 +154,30 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     remote.username = "x";
     remote.password = access.token;
 
-    const result = await this.gitCheckout(remote.toString(), {
-      branch: access.defaultBranch,
-      targetDir: SANDBOX_PROJECT_REPO_DIR,
-    });
-    if (!result.success) {
-      throw new Error(
-        `cloning the project repo into ${SANDBOX_PROJECT_REPO_DIR} failed (exit ${result.exitCode})`,
-      );
+    // The Artifacts git endpoint intermittently returns 503 on a cold repo
+    // (observed in preview e2e: "Failed to clone repository ... error: 503").
+    // A clone into a fresh directory is idempotent, so retry with a short
+    // backoff instead of failing the sandbox start on one bad response.
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await this.exec(`rm -rf ${SANDBOX_PROJECT_REPO_DIR}`);
+      try {
+        const result = await this.gitCheckout(remote.toString(), {
+          branch: access.defaultBranch,
+          targetDir: SANDBOX_PROJECT_REPO_DIR,
+        });
+        if (result.success) return;
+        lastError = new Error(
+          `cloning the project repo into ${SANDBOX_PROJECT_REPO_DIR} failed (exit ${result.exitCode})`,
+        );
+      } catch (error) {
+        lastError = error;
+      }
+      if (attempt < 3) {
+        console.warn(`sandbox project repo clone attempt ${attempt} failed, retrying:`, lastError);
+        await new Promise((resolve) => setTimeout(resolve, 2_000 * attempt));
+      }
     }
+    throw lastError;
   }
 }

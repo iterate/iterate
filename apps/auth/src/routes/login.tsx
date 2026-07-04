@@ -135,11 +135,18 @@ function LoginActions({
   const [isHydrated, setIsHydrated] = useState(false);
   const consumedGoogleHint = useRef(false);
   const { isPending: googleSignInPending, mutate: signInWithGoogle } = useMutation({
-    mutationFn: async () =>
-      authClient.signIn.social({
+    mutationFn: async () => {
+      const result = await authClient.signIn.social({
         provider: "google",
         callbackURL: getPostLoginRedirectUrl(redirectTo),
-      }),
+      });
+      // The auth client's auto-redirect plugin is disabled (see
+      // utils/auth-client.ts), so drive the provider redirect explicitly.
+      if (result?.url) {
+        window.location.assign(result.url);
+      }
+      return result;
+    },
   });
 
   const setEmailMode = (expanded: boolean) =>
