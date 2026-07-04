@@ -227,7 +227,8 @@ function getTimestamp(event: EventsStreamSourceEvent) {
   return Number.isNaN(Date.parse(event.createdAt)) ? Date.now() : Date.parse(event.createdAt);
 }
 
-function formatElapsedTime(durationMs: number) {
+/** `+950ms`, `+3.2s`, `+1m40s` — how raw-event inspectors render inter-event gaps. */
+export function formatElapsedTime(durationMs: number) {
   const normalizedDurationMs = Math.max(0, Math.floor(durationMs));
 
   if (normalizedDurationMs < 1_000) {
@@ -257,8 +258,14 @@ const EVENT_YAML_DISPLAY_KEY_ORDER = [
 
 const EVENT_YAML_DISPLAY_KEY_SET = new Set<string>(EVENT_YAML_DISPLAY_KEY_ORDER);
 
-function orderEventKeysForYamlDisplay(event: EventsStreamSourceEvent): Record<string, unknown> {
-  const eventRecord = event as Record<string, unknown>;
+/**
+ * Stable, signal-first key order (`type`, `payload`, …) for showing a raw
+ * event as YAML; `streamPath` is display noise and dropped.
+ */
+export function orderEventKeysForYamlDisplay(
+  event: Record<string, unknown>,
+): Record<string, unknown> {
+  const eventRecord = event;
   const orderedEvent: Record<string, unknown> = {};
 
   for (const key of EVENT_YAML_DISPLAY_KEY_ORDER) {
