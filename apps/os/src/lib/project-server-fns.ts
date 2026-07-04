@@ -97,7 +97,10 @@ export const getRootProjectRedirectServerFn: (input?: {
           // reduced agent list here can wrongly send fresh signups to home.
           decision.onboarding = isOnboardingActive(state);
         } catch {
-          decision.onboarding = false;
+          // Do not guess "home" on a transient project snapshot failure. The
+          // /projects client path has the retrying self-heal, while direct home
+          // would strand an in-progress signup away from onboarding.
+          return { kind: "projects" };
         }
       }
 
