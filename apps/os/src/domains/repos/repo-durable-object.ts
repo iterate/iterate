@@ -116,30 +116,48 @@ export class RepoDurableObject extends DurableObject<Env> {
     } = {},
   ): Promise<{ commitOid: string; files: Record<string, string> }> {
     const repo = await this.gitAccess();
-    const filesystem = new InMemoryFs();
-    const git = createGit(filesystem, REPO_DIR);
-    const credentials = { password: repo.token, username: "x" };
     const branch = input.branch ?? repo.defaultBranch;
 
-    if (input.commitOid !== undefined) {
-      // Pinned commits need history: a shallow clone only contains the branch
-      // tip. Project repos are small; correctness beats depth tuning here.
-      await git.clone({ branch, url: repo.remote, ...credentials });
-      await git.checkout({ ref: input.commitOid, force: true });
-    } else {
-      await git.clone({
-        branch,
-        depth: 1,
-        singleBranch: true,
-        url: repo.remote,
-        ...credentials,
-      });
-    }
+    const clone = async () => {
+      const filesystem = new InMemoryFs();
+      const git = createGit(filesystem, REPO_DIR);
+      const credentials = { password: repo.token, username: "x" };
+      if (input.commitOid !== undefined) {
+        // Pinned commits need history: a shallow clone only contains the
+        // branch tip. Project repos are small; correctness beats depth tuning.
+        await git.clone({ branch, url: repo.remote, ...credentials });
+        await git.checkout({ ref: input.commitOid, force: true });
+      } else {
+        await git.clone({
+          branch,
+          depth: 1,
+          singleBranch: true,
+          url: repo.remote,
+          ...credentials,
+        });
+      }
+      const [head] = await git.log({ depth: 1 });
+      if (!head) throw new Error("Repo has no commits.");
+      return { filesystem, head };
+    };
 
-    const [head] = await git.log({ depth: 1 });
-    if (!head) throw new Error("Repo has no commits.");
-    if (input.commitOid !== undefined && head.oid !== input.commitOid) {
-      throw new Error(`Repo checkout of ${input.commitOid} landed on ${head.oid}.`);
+    let { filesystem, head } = await clone();
+    if (input.commitOid !== undefined) {
+      if (head.oid !== input.commitOid) {
+        throw new Error(`Repo checkout of ${input.commitOid} landed on ${head.oid}.`);
+      }
+    } else {
+      // Read-your-write over the eventually consistent Artifacts remote: a
+      // clone right after a push can serve the previous HEAD (#recordPushedHead
+      // has the full story). Retry until the clone reaches the recorded push.
+      const expected = this.ctx.storage.kv.get<string>(`repo-pushed-head:${branch}`);
+      for (let attempt = 1; expected && head.oid !== expected && attempt <= 5; attempt++) {
+        console.warn(
+          `repo clone is behind the last push (saw ${head.oid}, pushed ${expected}); retry ${attempt}`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+        ({ filesystem, head } = await clone());
+      }
     }
 
     // Mask paths BEFORE reading contents: an excluded tree (a committed
@@ -171,6 +189,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       remote: repo.remote,
       token: repo.token,
     });
+    this.#recordPushedHead(result);
 
     // `commitFiles()` is our read-your-write boundary: once it returns, the
     // durable head cache names the pushed commit, so the next worker source
@@ -202,6 +221,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       replaceAll: parsed.replaceAll,
       token: repo.token,
     });
+    this.#recordPushedHead(result);
 
     // Same read-your-write boundary as commitFiles(): the durable head cache
     // names the pushed commit before the RPC resolves.
@@ -218,6 +238,22 @@ export class RepoDurableObject extends DurableObject<Env> {
       occurrenceCount: result.occurrenceCount,
       path: result.path,
     };
+  }
+
+  /**
+   * The Artifacts git endpoint is eventually consistent: a clone issued right
+   * after a successful push can still serve the previous HEAD (observed in
+   * preview e2e — repo.edit() committed, the immediate readFile() returned the
+   * pre-edit content). Every push records its commit oid here, and the
+   * branch-head clone in getFilesSnapshot retries briefly until it observes at
+   * least that head, giving the DO read-your-write semantics over the remote.
+   * A concurrent writer may advance HEAD past the recorded oid; the retry loop
+   * treats any DIFFERENT head as possibly-newer only after exhausting its
+   * attempts.
+   */
+  #recordPushedHead(result: { branch: string; commitOid: string; noChanges?: boolean }) {
+    if (result.noChanges) return;
+    this.ctx.storage.kv.put(`repo-pushed-head:${result.branch}`, result.commitOid);
   }
 
   /** Committed file contents at HEAD, or null when the path does not exist. */

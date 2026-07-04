@@ -21,6 +21,15 @@ export const authClient = createAuthClient({
     emailOTPClient(),
     multiSessionClient(),
   ],
+  // Kills better-auth's redirectPlugin, which auto-navigates whenever a
+  // response carries `{redirect: true, url}`. Our mutation handlers navigate
+  // explicitly, so with the plugin active every oauth2.continue/consent ended
+  // in TWO simultaneous navigations to the OS callback — a race to redeem the
+  // single-use authorization code that intermittently lost and rendered
+  // "OAuth callback exchange failed: ... invalid_verification" (the dominant
+  // preview e2e signup flake; see docs/preview-e2e-flake-hunt.md). Every
+  // navigation after an authClient call must therefore be explicit.
+  disableDefaultFetchPlugins: true,
   fetchOptions: { throw: true },
 });
 

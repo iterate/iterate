@@ -65,9 +65,6 @@ export default defineConfig({
     // tasks/streams-event-delivery-flake-under-concurrent-load.md.
     sequence: { concurrent: ci },
     maxConcurrency: 2,
-    // One retry in CI: tests are self-contained (fresh project per test), so a
-    // rare load-induced flake re-runs in seconds instead of failing the suite.
-    retry: ci ? 1 : 0,
     passWithNoTests: true,
     projects: [
       {
@@ -85,6 +82,13 @@ export default defineConfig({
           // without letting a wedged saga eat the whole job.
           hookTimeout: 120_000,
           testTimeout: 120_000,
+          // One retry in CI: tests are self-contained (fresh project per
+          // test), so a rare load-induced or Cloudflare-retryable blip re-runs
+          // in seconds instead of failing the suite. Lives HERE and not at the
+          // root: vitest does not inherit `retry` into project configs — the
+          // root-level retry silently never applied (verified: a CI-profile
+          // run showed a failed test with zero retry attempts).
+          retry: ci ? 1 : 0,
         },
       },
       {
@@ -101,6 +105,8 @@ export default defineConfig({
           provide: sharedProvide,
           testTimeout: 45_000,
           hookTimeout: 45_000,
+          // See the node project: `retry` must live on each project config.
+          retry: ci ? 1 : 0,
           browser: {
             commands: {
               // Browser WebSockets cannot set Authorization headers, so the
