@@ -17,7 +17,7 @@ import {
  * processor's (slug, subscription) row. Having one canonical shape is what
  * lets {@link useStreamProcessorStore} construct any processor class.
  */
-export type BrowserProcessorConstructorArgs<State> = {
+type BrowserProcessorConstructorArgs<State> = {
   stream: Stream;
   sql: SqlClient;
 } & Required<StreamProcessorStateStorage<State>>;

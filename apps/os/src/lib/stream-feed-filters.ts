@@ -124,7 +124,7 @@ export type FeedItemsFilterInput = {
 };
 
 /** Composed WHERE fragment + params for the feed filters; null when unfiltered. */
-export type FeedItemsFilter = { whereSql: string; params: SqlValue[] } | null;
+type FeedItemsFilter = { whereSql: string; params: SqlValue[] } | null;
 
 export function buildFeedItemsFilter(input: FeedItemsFilterInput): FeedItemsFilter {
   const clauses: string[] = [];
