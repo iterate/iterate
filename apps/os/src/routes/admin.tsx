@@ -40,6 +40,7 @@ import {
   SidebarRail,
   SidebarTrigger,
 } from "@iterate-com/ui/components/sidebar";
+import { GlobalCommandPalette } from "~/components/global-command-palette.tsx";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { reconnectItx, useItx } from "~/itx/itx-react.tsx";
 
@@ -79,6 +80,11 @@ function AdminLayout() {
           </ClientOnly>
         </main>
       </SidebarInset>
+      {/* Same ⌘K stream switcher as the product UI; the admin tier routes it
+          through the global admin session and the /admin/streams routes. */}
+      <ClientOnly fallback={null}>
+        <GlobalCommandPalette />
+      </ClientOnly>
     </SidebarProvider>
   );
 }

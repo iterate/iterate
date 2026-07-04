@@ -11,6 +11,7 @@ import {
 import { StreamSwitcherDialog } from "./stream-switcher-dialog.tsx";
 import { connectItxBrowser } from "~/itx/itx-react.tsx";
 import { OPEN_GLOBAL_COMMAND_PALETTE_EVENT } from "~/components/global-command-palette-events.ts";
+import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { activeStreamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { fetchProjectsList, projectsListQueryKey } from "~/lib/projects-query.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
@@ -36,11 +37,14 @@ export function GlobalCommandPalette() {
     setOpen(next);
     if (!next) setPickedProject(null);
   };
-  // Context tiers: the page's own stream (stream pages publish a
-  // streamBreadcrumb) → the active project's root (any project page — the
-  // $projectSlug layout carries `project` in its route context) → the picker
-  // dialog's choice (non-project pages).
+  // Context tiers: the admin explorer's project (params on the /admin/streams
+  // routes) → the page's own stream (stream pages publish a streamBreadcrumb)
+  // → the active project's root (any project page — the $projectSlug layout
+  // carries `project` in its route context) → the picker dialog's choice
+  // (non-project pages).
+  const adminStream = useMemo(() => getAdminStreamContext(matches), [matches]);
   const routeStream = useMemo(() => {
+    if (adminStream) return adminStream;
     const streamBreadcrumb = activeStreamBreadcrumb(matches);
     if (streamBreadcrumb) return streamBreadcrumb;
     const project = matches
@@ -51,7 +55,7 @@ export function GlobalCommandPalette() {
       .filter(Boolean)
       .at(-1);
     return project ? { projectId: project.id, projectSlug: project.slug, streamPath: "/" } : null;
-  }, [matches]);
+  }, [adminStream, matches]);
   const activeStream = useMemo(
     () =>
       routeStream ??
@@ -92,6 +96,30 @@ export function GlobalCommandPalette() {
   }, []);
 
   const streamNavigator = useMemo<StreamNavigator | null>(() => {
+    if (adminStream != null) {
+      // Admin addresses arbitrary projects through the global (admin-cookie)
+      // session and stays within the admin explorer routes.
+      return {
+        source: (path) => ({
+          async subscribe(args) {
+            const itx = await connectItxBrowser();
+            const stream =
+              adminStream.adminProjectId === NULL_DURABLE_OBJECT_PROJECT_ID
+                ? itx.streams.get(path)
+                : itx.projects.get(adminStream.adminProjectId).streams.get(path);
+            return stream.subscribe(args);
+          },
+        }),
+        onOpenPath(path) {
+          setOpen(false);
+          void navigate({
+            to: "/admin/streams/$projectId/$",
+            params: { projectId: adminStream.adminProjectId, _splat: path },
+            search: {},
+          });
+        },
+      };
+    }
     if (activeStream == null) return null;
     return {
       source: (path) => ({
@@ -106,7 +134,7 @@ export function GlobalCommandPalette() {
         void navigate(linkOptionsForStreamPath(activeStream.projectSlug, path));
       },
     };
-  }, [activeStream, navigate]);
+  }, [activeStream, adminStream, navigate]);
 
   if (activeStream == null || streamNavigator == null) {
     return (
@@ -176,4 +204,23 @@ function ProjectPickerDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+/**
+ * The admin stream explorer's ⌘K context: which project (or the `__null__`
+ * deployment namespace) it is browsing and where it stands. Detected from the
+ * /admin/streams/$projectId route params — admin navigates within its own
+ * explorer routes and dials through the global admin session.
+ */
+function getAdminStreamContext(matches: ReturnType<typeof useMatches>) {
+  const adminMatch = matches.find((match) => match.routeId.startsWith("/admin/streams/$projectId"));
+  if (adminMatch == null) return null;
+  const params = adminMatch.params as { projectId: string; _splat?: string };
+  const deepest = matches.at(-1)?.params as { _splat?: string } | undefined;
+  return {
+    adminProjectId: params.projectId,
+    projectId: params.projectId,
+    projectSlug: params.projectId,
+    streamPath: deepest?._splat ?? "/",
+  };
 }
