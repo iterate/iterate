@@ -240,6 +240,11 @@ function useSocket(context: string | undefined): ItxHandle {
   return use(promise);
 }
 
+function ItxPrewarm({ context, children }: { context: string | undefined; children: ReactNode }) {
+  useSocket(context);
+  return <>{children}</>;
+}
+
 /**
  * Sets the default itx address for a subtree (and pre-warms its socket). It hands
  * down an ADDRESS, not a handle — and pre-opens the connection here so children's
@@ -257,15 +262,22 @@ export function ItxProvider({
   projectId,
   path,
   baseUrl,
+  prewarm = true,
   children,
-}: ItxAddress & { children: ReactNode }) {
+}: ItxAddress & { children: ReactNode; prewarm?: boolean }) {
   // Stable value so a fresh object literal each render doesn't thrash consumers.
   const address = useMemo<ItxAddress>(
     () => ({ projectId, path, baseUrl }),
     [projectId, path, baseUrl],
   );
-  useSocket(projectId); // pre-warm: suspend here so children read it synchronously
-  return <ItxAddressContext value={address}>{children}</ItxAddressContext>;
+  // Pre-warm by default: suspend in a child so toggling prewarm mounts/unmounts
+  // that hook tree instead of changing this component's hook order. Routes with
+  // their own inner itx boundary can opt out to paint route chrome first.
+  return (
+    <ItxAddressContext value={address}>
+      {prewarm ? <ItxPrewarm context={projectId}>{children}</ItxPrewarm> : children}
+    </ItxAddressContext>
+  );
 }
 
 /**

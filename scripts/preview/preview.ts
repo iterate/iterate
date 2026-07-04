@@ -828,6 +828,11 @@ export const cloudflarePreviewSharedPaths = [
   ".depot/workflows/cloudflare-previews.yml",
   ...cloudflareAppSharedPaths,
   "scripts/preview/**",
+  // Every app's generated wrangler config (routes, worker names, resource
+  // IDs) derives from the root envs.ts — an envs.ts change (e.g. recreating a
+  // slot's deleted D1) must redeploy the fleet or the fix never ships.
+  "envs.ts",
+  "scripts/lib/**",
 ] as const;
 
 /** Trigger preview workflow runs; apps here are not necessarily redeployed. */
@@ -3262,10 +3267,19 @@ function selectPreviewAppsNeedingRetry(params: {
   previousState: CloudflarePreviewState;
   pullRequestHeadSha: string;
 }) {
+  // Failed state is retried regardless of which head produced it: a slot
+  // whose deploy failed at an OLD head stays wedged if the next push's diff
+  // doesn't select those apps (observed: an envs.ts-only fix push selected
+  // nothing, deploy skipped "nothing to deploy", the test lane then skipped
+  // its stale recorded apps and the whole check went GREEN on a slot with
+  // three deploy-failed apps). awaiting-tests keeps its same-head guard: at
+  // an old head it just means "an older deploy finished and its e2e never
+  // ran", which the current head's normal diff selection supersedes.
   const retrySlugs = Object.values(params.previousState.apps)
-    .filter((entry) => entry.headSha === params.pullRequestHeadSha)
-    .filter((entry) =>
-      ["awaiting-tests", "claim-failed", "deploy-failed", "tests-failed"].includes(entry.status),
+    .filter(
+      (entry) =>
+        ["claim-failed", "deploy-failed", "tests-failed"].includes(entry.status) ||
+        (entry.status === "awaiting-tests" && entry.headSha === params.pullRequestHeadSha),
     )
     .map((entry) => CloudflarePreviewAppSlug.parse(entry.appSlug));
 

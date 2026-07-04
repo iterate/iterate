@@ -42,8 +42,35 @@ export const test = base.extend<{
     });
   },
   page: async ({ page: basePage }, use, testInfo) => {
+    // A spec that opens a second tab does so via `context.newPage()`, which
+    // returns a RAW page without our middlewright plugins — so its `waitFor()`s
+    // fall back to the config's deliberately-tight 750ms actionTimeout, far too
+    // short to establish a second live stream subscription (this is exactly how
+    // reactivity.spec.ts "delivers an appended event to another open tab"
+    // flaked: the first tab reached "live" because the spinner-waiter extends
+    // its waits while the "connecting…" spinner shows, the second tab had no
+    // such safety net). Give every extra page the same plugins as the primary.
+    // `basePage` already exists here (Playwright's built-in `page` fixture
+    // created it via `context.newPage()` before this fixture ran), so patching
+    // `newPage` now only wraps pages the spec opens LATER — the primary page is
+    // never double-wrapped.
+    const context = basePage.context();
+    const rawNewPage = context.newPage.bind(context);
+    const extraPageDisposers: Array<() => Promise<void>> = [];
+    context.newPage = async () => {
+      const extraPage = await addPagePlugins(await rawNewPage(), testInfo);
+      extraPageDisposers.push(() => extraPage[Symbol.asyncDispose]());
+      return extraPage;
+    };
     await using page = await addPagePlugins(basePage, testInfo);
-    await use(page);
+    try {
+      await use(page);
+    } finally {
+      // The spec usually closes its extra pages itself; dispose the plugin
+      // wrappers too (lifecycle cleanup only — a no-op with video off),
+      // tolerating an already-closed page.
+      for (const dispose of extraPageDisposers) await dispose().catch(() => {});
+    }
   },
 });
 

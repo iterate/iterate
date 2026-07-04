@@ -5,7 +5,7 @@
 # $LOG_DIR/run-<n>.log so a failure can be diagnosed after the fact.
 set -uo pipefail
 
-PR_NUMBER="${PR_NUMBER:-1644}"
+PR_NUMBER="${PR_NUMBER:-1653}"
 RUNS="${RUNS:-5}"
 LOG_DIR="${LOG_DIR:-/tmp/flake-hunt}"
 START_AT="${START_AT:-1}"
@@ -27,18 +27,71 @@ fi
 export CI=true
 
 mkdir -p "$LOG_DIR"
+# A healthy full-fleet run takes 1-7 minutes; one marathon run wedged for 9+
+# hours when vitest hung at startup (event loop idle, no workers, nothing to
+# time it out). Kill anything slower than this and count it as a failure.
+RUN_TIMEOUT_SECS="${RUN_TIMEOUT_SECS:-1800}"
+
+# Full-fleet preflight. `preview deploy` selects apps by diffing the PR head
+# against the LAST DEPLOYED head (not the PR base), so a mid-branch commit that
+# touches only one app (e.g. an apps/os-only fix) redeploys just that app and
+# leaves the others at an older head. The test lane only tests apps whose
+# recorded head == the PR head, so the marathon then silently shrinks to the
+# changed apps and every run trips the full-fleet guard (exit 3) — or worse,
+# would count a partial lane as green if that guard were absent. A change under
+# a preview shared path (scripts/preview/** — including THIS file, envs.ts, …)
+# forces `preview deploy` to redeploy the whole fleet, which reunifies the head.
+# So before a fresh marathon (START_AT=1) we run one deploy and assert all four
+# apps come back testable at the current head; set SKIP_PREFLIGHT_DEPLOY=1 to
+# bypass (e.g. resuming a marathon whose fleet is already unified).
+if [ "$START_AT" -eq 1 ] && [ -z "${SKIP_PREFLIGHT_DEPLOY:-}" ]; then
+  preflight="$LOG_DIR/preflight-deploy.log"
+  echo "preflight: deploying full fleet for PR $PR_NUMBER (log: $preflight)"
+  doppler run --project _shared --config prd -- pnpm preview deploy \
+    --pull-request-number "$PR_NUMBER" >"$preflight" 2>&1
+  deploy_exit=$?
+  if [ "$deploy_exit" -ne 0 ]; then
+    echo "preflight: deploy FAILED (exit $deploy_exit) — see $preflight"
+    exit 4
+  fi
+  if grep -qE "deploy-failed|claim-failed" "$preflight"; then
+    echo "preflight: an app failed to deploy — see $preflight"
+    exit 4
+  fi
+  echo "preflight: deploy OK"
+fi
+
 for i in $(seq "$START_AT" $((START_AT + RUNS - 1))); do
   log="$LOG_DIR/run-$(printf '%03d' "$i").log"
   started=$(date -u +%H:%M:%S)
   doppler run --project _shared --config prd -- pnpm preview test \
-    --pull-request-number "$PR_NUMBER" >"$log" 2>&1
+    --pull-request-number "$PR_NUMBER" >"$log" 2>&1 &
+  run_pid=$!
+  (
+    sleep "$RUN_TIMEOUT_SECS"
+    echo "run $i: WATCHDOG — killing after ${RUN_TIMEOUT_SECS}s" >>"$log"
+    # The run tree spans doppler -> pnpm -> node children; nuke the group.
+    pkill -TERM -P "$run_pid" 2>/dev/null
+    kill -TERM "$run_pid" 2>/dev/null
+  ) &
+  watchdog_pid=$!
+  wait "$run_pid"
   exit_code=$?
+  kill "$watchdog_pid" 2>/dev/null
+  wait "$watchdog_pid" 2>/dev/null
   finished=$(date -u +%H:%M:%S)
   # `preview test` exits 0 but skips (stale head, no lease) without running
   # anything — a skip must not count as a green run.
   if grep -q "skipped: true" "$log"; then
     echo "run $i: SKIPPED — not a real run ($started-$finished UTC) $log"
     exit 2
+  fi
+  # A push touching one app leaves the others' recorded states at an older
+  # head, silently shrinking the lane (observed: three 13-second "green" runs
+  # that tested only semaphore). The marathon must exercise the full fleet.
+  if ! grep -q "testable apps: os, semaphore, auth, streams-example-app" "$log"; then
+    echo "run $i: PARTIAL — not all apps testable ($started-$finished UTC) $log"
+    exit 3
   fi
   if [ "$exit_code" -eq 0 ]; then
     echo "run $i: PASS ($started-$finished UTC) $log"
