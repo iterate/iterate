@@ -87,7 +87,15 @@ const DO_CLASSES = {
 } as const;
 
 /** Binding config identical across local dev and every deployed env, apart from names/ids. */
-function workerBindings(input: { workerName: string; accountId: string; kvId?: string }) {
+function workerBindings(input: {
+  workerName: string;
+  accountId: string;
+  kvId?: string;
+  /** Sandbox container instance cap. Preview slots get extra headroom: e2e
+   * churn spins sandboxes faster than they idle out, and a saturated cap
+   * 503s every sandbox exec (observed live at 10/10 on preview-3). */
+  maxContainerInstances?: number;
+}) {
   return {
     vars: {
       WORKER_SELF: input.workerName,
@@ -112,7 +120,7 @@ function workerBindings(input: { workerName: string; accountId: string; kvId?: s
         class_name: DO_CLASSES.SANDBOX,
         image: "./Dockerfile.sandbox",
         instance_type: "lite",
-        max_instances: 10,
+        max_instances: input.maxContainerInstances ?? 10,
       },
     ],
     secrets: { required: REQUIRED_SECRETS },
@@ -151,6 +159,7 @@ function envBlock(env: DeployedEnv) {
     workerName: env.osWorkerName,
     accountId: env.cloudflareAccountId,
     kvId: env.resources.projectDirectoryKvId,
+    maxContainerInstances: env.osWorkerName === "os-prd" ? 10 : 20,
   });
   return {
     name: env.osWorkerName,
