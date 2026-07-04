@@ -24,7 +24,7 @@ import {
   TableRow,
 } from "@iterate-com/ui/components/table";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { StreamPage } from "~/components/stream-page.tsx";
+import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { RepoArtifactNameCodec } from "~/domains/repos/utils.ts";
 import { buildArtifactViewerUrl } from "~/lib/artifact-viewer-url.ts";
 import { formatRelativeTime } from "~/lib/format-relative-time.ts";
@@ -293,7 +293,7 @@ function ProjectReposIndexContent() {
   );
 
   return (
-    <StreamPage
+    <ProjectStreamView
       panel={panel}
       projectId={project.id}
       streamPath="/repos"

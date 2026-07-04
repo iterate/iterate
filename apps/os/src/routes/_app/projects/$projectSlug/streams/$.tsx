@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { StreamPage } from "~/components/stream-page.tsx";
+import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { useItx } from "~/itx/itx-react.tsx";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
@@ -46,7 +46,7 @@ function ProjectStreamDetailContent() {
   }
 
   return (
-    <StreamPage
+    <ProjectStreamView
       defaultComposerMode="raw"
       messageComposer={{
         onSubmit: submitMessage,

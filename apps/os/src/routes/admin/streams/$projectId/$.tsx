@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { StreamPage } from "~/components/stream-page.tsx";
+import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { useAdminStreamSource } from "~/lib/stream-navigation.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
@@ -23,8 +23,9 @@ function AdminStreamDetailPage() {
   const { source, streamProjectId } = useAdminStreamSource(projectId);
 
   return (
-    <StreamPage
+    <ProjectStreamView
       emptyLabel="No events in this stream yet."
+      showCommandPaletteTrigger={false}
       projectId={streamProjectId}
       streamSource={source}
       streamPath={streamPath}

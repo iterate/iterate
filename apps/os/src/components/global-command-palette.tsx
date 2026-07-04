@@ -36,7 +36,22 @@ export function GlobalCommandPalette() {
     setOpen(next);
     if (!next) setPickedProject(null);
   };
-  const routeStream = useMemo(() => activeStreamBreadcrumb(matches), [matches]);
+  // Context tiers: the page's own stream (stream pages publish a
+  // streamBreadcrumb) → the active project's root (any project page — the
+  // $projectSlug layout carries `project` in its route context) → the picker
+  // dialog's choice (non-project pages).
+  const routeStream = useMemo(() => {
+    const streamBreadcrumb = activeStreamBreadcrumb(matches);
+    if (streamBreadcrumb) return streamBreadcrumb;
+    const project = matches
+      .map(
+        (match) =>
+          (match.context as { project?: { id: string; slug: string } } | undefined)?.project,
+      )
+      .filter(Boolean)
+      .at(-1);
+    return project ? { projectId: project.id, projectSlug: project.slug, streamPath: "/" } : null;
+  }, [matches]);
   const activeStream = useMemo(
     () =>
       routeStream ??
