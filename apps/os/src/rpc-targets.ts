@@ -35,7 +35,7 @@ import {
   PROJECT_WORKER_ENTRY_POINT,
   PROJECT_WORKER_SOURCE_EXCLUDE,
 } from "./domains/repos/utils.ts";
-import { normalizeCloudflareSandboxPath } from "./domains/sandboxes/cloudflare/utils.ts";
+import { normalizeSandboxPath } from "./domains/sandboxes/utils.ts";
 import { normalizeSecretPath } from "./domains/secrets/utils.ts";
 import {
   completeGoogleConnect,
@@ -440,8 +440,8 @@ class AgentCollectionRpcTarget extends RpcTarget implements AgentCollection {
  * Object's own RPC stub — deliberately NO RpcTarget wrapper, so the caller
  * sees exactly what the `@cloudflare/sandbox` SDK exposes and new SDK methods
  * need no forwarding code here. Confinement is by name: the stub is minted
- * from this project's id plus the validated `/sandboxes/cloudflare/...`
- * path, after the same project-access assert every collection performs.
+ * from this project's id plus the normalized `/sandboxes/...` path, after
+ * the same project-access assert every collection performs.
  */
 class SandboxCollectionRpcTarget extends RpcTarget implements SandboxCollection {
   async __describe() {
@@ -459,7 +459,7 @@ class SandboxCollectionRpcTarget extends RpcTarget implements SandboxCollection 
   }
 
   async get(path: string) {
-    const normalized = normalizeCloudflareSandboxPath(path);
+    const normalized = normalizeSandboxPath(path);
     const stub = env.SANDBOX.getByName(
       DurableObjectNameCodec.stringify({
         projectId: this.props.projectId,

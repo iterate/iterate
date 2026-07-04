@@ -451,12 +451,12 @@ export interface Repo extends Describable {
 /**
  * Catalog of sandboxes within one project.
  *
- * A sandbox is addressed by its FULL path, which always starts with
- * `/sandboxes/` and may nest arbitrarily (`/sandboxes/cloudflare/bla/bla`).
- * The provider is the segment after the prefix — today only
- * `/sandboxes/cloudflare/...` exists; a future provider is a new prefix, not
- * a new API. Getting a sandbox is cheap and does not start a container; the
- * first command does.
+ * A sandbox is addressed by its FULL path — a stream path like every other
+ * domain object: it starts with `/sandboxes/` and may nest arbitrarily. By
+ * convention everything lives under `/sandboxes/cloudflare/...` (the segment
+ * is convention, not enforcement). Anyone who can see the project can
+ * address any of its sandboxes. Getting a sandbox is cheap and does not
+ * start a container; the first command does.
  */
 export interface SandboxCollection extends Describable {
   get(path: string): Promise<CloudflareSandbox>;

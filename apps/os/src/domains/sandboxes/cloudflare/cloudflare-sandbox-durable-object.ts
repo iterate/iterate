@@ -2,7 +2,7 @@ import { Sandbox } from "@cloudflare/sandbox";
 import type { Env } from "../../../env.ts";
 import { DurableObjectNameCodec } from "../../durable-object-names.ts";
 import { PROJECT_REPO_PATH } from "../../repos/utils.ts";
-import { normalizeCloudflareSandboxPath } from "./utils.ts";
+import { normalizeSandboxPath } from "../utils.ts";
 
 /** Where the project repo is cloned inside every sandbox container. */
 const SANDBOX_PROJECT_REPO_DIR = "/workspace/repo";
@@ -49,7 +49,7 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
    * must match `ctx.id.name` whenever the runtime provides it).
    */
   async ensureIdentity(identity: SandboxIdentity): Promise<void> {
-    const path = normalizeCloudflareSandboxPath(identity.path);
+    const path = normalizeSandboxPath(identity.path);
     const expectedName = DurableObjectNameCodec.stringify({
       projectId: identity.projectId,
       path,
@@ -75,7 +75,7 @@ export class CloudflareSandboxDurableObject extends Sandbox<Env> {
     const name = this.ctx.id.name;
     if (name !== undefined) {
       const parsed = DurableObjectNameCodec.parse(name);
-      return { path: normalizeCloudflareSandboxPath(parsed.path), projectId: parsed.projectId };
+      return { path: normalizeSandboxPath(parsed.path), projectId: parsed.projectId };
     }
     const stored = this.ctx.storage.kv.get<SandboxIdentity>(IDENTITY_STORAGE_KEY);
     if (!stored) {

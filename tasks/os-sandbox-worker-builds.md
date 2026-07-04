@@ -8,11 +8,11 @@ tags: [os, workers, dynamic-workers, sandboxes, build-pipeline]
 # Build dynamic workers in a sandbox container (kill esbuild-wasm)
 
 Replace the in-workerd bundler (`@cloudflare/worker-bundler`, esbuild-wasm)
-with real `npm install` + a real bundler running inside a **platform-reserved
-sandbox container per project, hardcoded at `/sandboxes/worker-builder`**. The
-Worker Loader serving path, the KV artifact store, build keys, budgets, and
-the building-page contract all stay exactly as PR #1612 shipped them — only
-the build backend changes.
+with real `npm install` + a real bundler running inside a **sandbox container
+per project, hardcoded at `/sandboxes/cloudflare/builder`** — an ordinary
+project sandbox, addressed like any other. The Worker Loader serving path,
+the KV artifact store, build keys, budgets, and the building-page contract
+all stay exactly as PR #1612 shipped them — only the build backend changes.
 
 ## Why
 
@@ -46,7 +46,7 @@ Instead of `env.BUILDER.build(...)`, it drives the project's builder sandbox:
 ```
 resolveWorkerSource (worker worker / monolith)
   └─ memo → KV → on miss:
-       sandbox = env.SANDBOX.getByName({projectId, path: "/sandboxes/worker-builder"})
+       sandbox = env.SANDBOX.getByName({projectId, path: "/sandboxes/cloudflare/builder"})
        writeFile source files → exec install+bundle → readFile outputs
        → KV artifact write (same store, schema-version bumped) → artifact
 ```
@@ -56,25 +56,23 @@ binding, the builder entry in `engineWorkerNames`, `materialize.ts`'s bundler
 call + shim list, the worker-bundler dependency and all 4 patches.
 `WORKER_BUNDLER_VERSION` is replaced by `BUILD_TOOLCHAIN_VERSION` (below).
 
-### The reserved sandbox path
+### Trust model
 
-`/sandboxes/worker-builder` is deliberately OUTSIDE the
-`/sandboxes/cloudflare/` prefix that `normalizeCloudflareSandboxPath`
-enforces, so `itx.sandboxes.get()` can never mint or reach it — project code
-cannot exec into its own builder container. That matters because artifacts
-are content-addressed and **shared across projects** (fresh-seed dedup): a
-user who could exec in their builder could poison an artifact another project
-would then load. Reservation closes that; `--ignore-scripts` (below) closes
-the "build inputs execute code" variant.
+The builder is an ordinary project sandbox at a well-known path — no
+reserved-path machinery, no special identity rules. **Whoever can see a
+project is trusted**: project code and project users can exec into
+`/sandboxes/cloudflare/builder` like any other sandbox, and that's fine
+within the project.
 
-Implementation notes:
-
-- `ensureIdentity` / the identity codec need a second allowed prefix (a
-  `RESERVED_SANDBOX_PATHS` list containing exactly this path), writable only
-  by the build orchestrator — never by the sandbox collection.
-- The auto repo clone in `CloudflareSandboxDurableObject.onStart` must SKIP
-  the builder path: files arrive by value, so the builder container never
-  holds the repo write token (or any credential at all).
+The one cross-project consequence: runtime-built artifacts must be keyed
+per project (add `projectId` to the build key for container-built
+artifacts), because a project-trusted principal can influence its own
+builder's output and content-addressed keys would otherwise be shared.
+Fresh-seed dedup — the reason keys are content-addressed today — is
+covered by deploy-time template seeding instead (trusted CI builds the
+one shared artifact; see below), so nothing of value is lost.
+`--ignore-scripts` stays regardless: build INPUTS should not execute code
+during a build the platform runs on the project's behalf.
 
 ### Build recipe (inside the container)
 
