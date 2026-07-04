@@ -105,9 +105,9 @@ Known caveat: a few itx e2e scenarios that load repo-sourced project workers
 fail against LOCAL vite dev only (capnweb/vite-dev RpcTarget identity);
 verify against a deployed preview before treating one as a regression.
 
-`pnpm dev` is the shorthand for the local Doppler/Alchemy dev flow. It uses
-the local Doppler setup for `apps/os` and starts Alchemy with that env. The
-dev wrapper writes output to `.dev-server/dev-server.log`, so a second terminal
+`pnpm dev` runs `doppler run -- vite dev` in this worktree (config from the
+local Doppler setup for `apps/os`). When detached, the dev wrapper writes
+output to `.dev-server/dev-server.log`, so a second terminal
 can follow it with `tail -f .dev-server/dev-server.log`. Lifecycle controls:
 
 ```bash

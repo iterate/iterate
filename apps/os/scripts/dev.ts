@@ -49,12 +49,19 @@ const DEFAULT_START_TIMEOUT_MS = 60_000;
 
 /** Start the OS dev server (default command). */
 export async function start(options: StartOptions = {}) {
+  const requestedPort = options.port ?? (process.env.PORT ? Number(process.env.PORT) : undefined);
   const live = readDevServerInfo(APP_ROOT, { requireLive: true });
   if (live) {
+    if (requestedPort !== undefined && live.port !== requestedPort) {
+      throw new Error(
+        `A dev server is already running on port ${live.port} (pid ${live.pid}) but port ` +
+          `${requestedPort} was requested — kill it or use restart.`,
+      );
+    }
     return { ...formatStatus(live), note: "already running — use restart to replace it" };
   }
 
-  const port = options.port ?? (await pickFreePort(recordedPort()));
+  const port = requestedPort ?? (await pickFreePort(recordedPort()));
   const viteArgs = ["exec", "vite", "dev", "--port", String(port), "--strictPort"];
   const [command, args] = options.skipDoppler
     ? ["pnpm", viteArgs]

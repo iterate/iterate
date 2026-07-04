@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { tunnelsEnvs } from "../../../envs.ts";
 import {
   adoptDoMigrationTag,
+  collectSecrets,
   deployWithSecrets,
   smoke,
 } from "../../../scripts/lib/deploy-helpers.ts";
@@ -29,13 +30,7 @@ console.log(
   `Deploying apps/tunnels to ${ctx.name} (worker ${ctx.env.workerName}, account ${ctx.env.cloudflareAccountId})`,
 );
 
-const captunToken = ctx.secrets.CAPTUN_TOKEN;
-if (!captunToken) {
-  throw new Error(
-    `Doppler config ${ctx.env.dopplerConfig} is missing CAPTUN_TOKEN. ` +
-      `Set it (doppler secrets set --project tunnels --config ${ctx.env.dopplerConfig} ...) and retry.`,
-  );
-}
+const secretValues = collectSecrets(ctx, ["CAPTUN_TOKEN"]);
 
 await adoptDoMigrationTag(ctx, ctx.env.workerName);
 
@@ -45,7 +40,7 @@ await deployWithSecrets({
   cwd: APP_ROOT,
   builtConfig: "wrangler.jsonc",
   extraDeployArgs: ["--env", ctx.name],
-  secretValues: { CAPTUN_TOKEN: captunToken },
+  secretValues,
   credentials: {
     CLOUDFLARE_API_TOKEN: ctx.secrets.CLOUDFLARE_API_TOKEN,
     CLOUDFLARE_ACCOUNT_ID: ctx.env.cloudflareAccountId,

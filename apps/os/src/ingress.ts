@@ -1,8 +1,6 @@
 /**
- * The ONE hostname/path-level routing decision for OS traffic, shared by the
- * ingress worker (deployed), the app worker (local dev, where the browser
- * talks to vite directly), and the api worker (which resolves project
- * targets). Same shape as the pre-migration router: `decideIngressRoute`
+ * The ONE hostname/path-level routing decision for OS traffic, made once per
+ * request by the single OS worker (src/worker.ts). Same shape as the pre-migration router: `decideIngressRoute`
  * takes url + method + headers and answers with the lane — and, for the
  * project lane, the exact url + headers to fetch onward with. Header
  * stripping at the trust boundary is a separate layer
@@ -133,10 +131,9 @@ function projectRoute(input: {
 }
 
 /**
- * Path lanes served by the api worker on the OS host: the capnweb rpc
+ * Path lanes served by the api pipeline on the OS host: the capnweb rpc
  * endpoint at exactly `/api` (plus its admin-cookie bridge), the Slack
- * webhook ingress lanes (the api worker holds the full itx binding set, so events
- * route without an RPC hop), and the e2e fixture lane. Deliberately
+ * webhook ingress lanes, and the e2e fixture lane. Deliberately
  * exact-match: other `/api/*` paths (`/api/mcp`, `/api/health`, the OAuth
  * callback routes under `/api/integrations/...`) are app routes and stay on
  * the "os" lane.
@@ -190,12 +187,13 @@ function isOsHost(input: {
 }
 
 /**
- * Thin forwarding predicate for the ingress and app workers, which hold no
- * directory resolvers: anything that is not the OS host (project platform
- * hosts and custom-hostname candidates alike), plus the itx path lanes and
- * the /prj_ path lane on the OS host, forwards whole to the api worker — it
- * runs the full `decideIngressRoute` and owns the 404 for hosts that resolve
- * to nothing.
+ * Cheap synchronous pre-filter answering "does this request belong to the
+ * api pipeline": anything that is not the OS host (project platform hosts
+ * and custom-hostname candidates alike), plus the api path lanes and the
+ * /prj_ path lane on the OS host. The api pipeline then runs the full
+ * `decideIngressRoute` (with directory resolvers) and owns the 404 for
+ * hosts that resolve to nothing. TODO: collapse into one decideIngressRoute
+ * pass in worker.ts — vestige of the deleted multi-worker topology.
  */
 export function apiWorkerRequest(input: {
   config: { baseUrl?: string; projectHostnameBases?: readonly string[] };

@@ -56,7 +56,7 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   once; the stale keys were cleaned out on 2026-06-12.
 
 - The chosen port is recorded in **`apps/os/.dev-server/dev-server.json`**
-  (`{pid, port, baseUrl, logPath, stoppedAt?}`).
+  (`{pid, port, baseUrl, startedAt}`).
   When no public app URL is configured, local dev also exposes that URL through
   `APP_CONFIG_BASE_URL`; when `APP_CONFIG.baseUrl` is already set to a public
   captun URL, runtime config keeps the public URL and the discovery file remains
