@@ -154,7 +154,10 @@ describe("provided integrations", () => {
               type: "stateless",
               path: "/",
               entrypoint: "WaitroseIntegration",
-              source: { type: "repo", repoPath: "/", sourcePath: "integrations/waitrose.js" },
+              source: {
+                files: { type: "repo", repoPath: "/" },
+                options: { entryPoint: "integrations/waitrose.js" },
+              },
             },
           ],
         ],
