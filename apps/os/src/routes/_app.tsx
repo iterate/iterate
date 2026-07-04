@@ -38,6 +38,10 @@ function AppLayout() {
   // streamBreadcrumb IS a stream page. Only the few non-stream pages
   // (projects list, new-project, session REPL) get this minimal shell header.
   const isStreamPage = activeStreamBreadcrumb(matches) != null;
+  // The projects list is the one app page with no project context, so the
+  // stream ⌘K switcher has nothing to act on — hide its pill and don't mount
+  // the palette here, which also drops its global ⌘K key handler.
+  const isProjectsListPage = matches.at(-1)?.routeId === "/_app/projects/";
   const label = matches
     .map(
       (match) =>
@@ -55,23 +59,25 @@ function AppLayout() {
           <header className="flex shrink-0 items-center gap-3 px-4 pb-1 pt-2.5">
             <SidebarTrigger className="-ml-1 md:hidden" />
             {label ? <span className="truncate text-sm font-medium">{label}</span> : null}
-            <button
-              type="button"
-              aria-haspopup="dialog"
-              title="Switch or create a stream — ⌘K"
-              onClick={openGlobalCommandPalette}
-              className="ml-auto flex h-9 shrink-0 cursor-pointer items-center gap-2 rounded-full bg-muted px-3.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-            >
-              Streams
-              <kbd className="rounded bg-background px-1.5 py-px text-[10px]">⌘K</kbd>
-            </button>
+            {isProjectsListPage ? null : (
+              <button
+                type="button"
+                aria-haspopup="dialog"
+                title="Switch or create a stream — ⌘K"
+                onClick={openGlobalCommandPalette}
+                className="ml-auto flex h-9 shrink-0 cursor-pointer items-center gap-2 rounded-full bg-muted px-3.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Streams
+                <kbd className="rounded bg-background px-1.5 py-px text-[10px]">⌘K</kbd>
+              </button>
+            )}
           </header>
         )}
         <div className="flex min-h-0 flex-1 flex-col overflow-auto">
           <Outlet />
         </div>
       </SidebarInset>
-      <GlobalCommandPalette />
+      {isProjectsListPage ? null : <GlobalCommandPalette />}
     </SidebarProvider>
   );
 }
