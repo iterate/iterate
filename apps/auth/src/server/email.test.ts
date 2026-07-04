@@ -37,12 +37,13 @@ describe("email OTP", () => {
     });
   });
 
-  it("fails clearly when no email sender is configured", async () => {
+  it("fails clearly when the EMAIL binding is missing", async () => {
     await assert.rejects(
       sendEmailOtp({
         email: "alice@nustom.com",
         otp: "123456",
         senderDomain: "nustom.com",
+        emailBinding: undefined,
       }),
       /Cloudflare EMAIL send_email binding/,
     );

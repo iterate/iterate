@@ -74,9 +74,8 @@ function userIdOf(user: Record<string, unknown> | null | undefined): string | nu
  * build the same plugin set without real secrets. */
 export type AuthPluginOptions = {
   emailOtpEnabled: boolean;
-  emailBinding?: CloudflareEmailBinding | null;
+  emailBinding: CloudflareEmailBinding | undefined;
   emailSenderDomain: string;
-  resendApiKey: string;
 };
 
 export function getAuthPlugins(options: AuthPluginOptions) {
@@ -123,7 +122,6 @@ export function getAuthPlugins(options: AuthPluginOptions) {
                 otp,
                 senderDomain: options.emailSenderDomain,
                 emailBinding: options.emailBinding,
-                resendApiKey: options.resendApiKey,
               });
             },
           }),

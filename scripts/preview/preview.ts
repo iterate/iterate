@@ -988,8 +988,6 @@ const sharedAuthPreviewSecretsCopiedFromDev = [
     appConfigName: "APP_CONFIG_EMAIL_SENDER_DOMAIN",
     legacyDevNames: ["APP_CONFIG_RESEND_DOMAIN", "RESEND_BOT_DOMAIN"],
   },
-  { appConfigName: "APP_CONFIG_RESEND_DOMAIN", legacyDevNames: ["RESEND_BOT_DOMAIN"] },
-  { appConfigName: "APP_CONFIG_RESEND_API_KEY", legacyDevNames: ["RESEND_BOT_API_KEY"] },
   { appConfigName: "APP_CONFIG_SIGNUP_ALLOWLIST", legacyDevNames: ["SIGNUP_ALLOWLIST"] },
 ] as const satisfies readonly {
   appConfigName: string;

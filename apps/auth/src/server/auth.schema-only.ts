@@ -7,9 +7,8 @@ export const auth = betterAuth({
   secret: "secret",
   plugins: getAuthPlugins({
     emailOtpEnabled: false,
-    emailBinding: null,
+    emailBinding: undefined,
     emailSenderDomain: "",
-    resendApiKey: "",
   }),
   database: sqlfuBetterAuthAdapter(),
 });

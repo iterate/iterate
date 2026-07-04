@@ -55,8 +55,7 @@ export const auth = betterAuth({
   plugins: getAuthPlugins({
     emailOtpEnabled: config.emailOtpEnabled,
     emailBinding: env.EMAIL,
-    emailSenderDomain: config.emailSenderDomain || config.resendDomain,
-    resendApiKey: config.resendApiKey.exposeSecret(),
+    emailSenderDomain: config.emailSenderDomain,
   }),
   trustedOrigins: (request) =>
     isAllowedBrowserOrigin(request?.headers.get("origin")) ? getAllowedBrowserOrigins() : [],
@@ -85,9 +84,12 @@ export const auth = betterAuth({
             });
           }
 
-          // Email-domain promotion is safe because password signup is disabled:
-          // both remaining sign-in methods (Google, email OTP) prove mailbox
-          // ownership before this hook runs.
+          // Email-domain promotion relies on the two sign-in methods (Google,
+          // email OTP) proving mailbox ownership before this hook runs —
+          // password signup is disabled. Deliberate exception: `*+test@nustom.com`
+          // addresses accept the fixed test OTP in every stage, including
+          // production (see shouldUseTestOtp), so the test code effectively
+          // mints platform-admin accounts. Accepted risk for headless testing.
           const platformAdminAllowlist = parseSignupAllowlist(config.adminAllowlist);
           const isPlatformAdmin = matchesSignupAllowlist(email, platformAdminAllowlist);
 

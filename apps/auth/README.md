@@ -222,11 +222,12 @@ fields); `alchemy.run.ts` calls the shared `initAlchemy()` which compiles
 `APP_CONFIG_*` Doppler vars (e.g. `APP_CONFIG_BETTER_AUTH_SECRET`,
 `APP_CONFIG_AUTH_APP_ORIGIN`) into a single `APP_CONFIG` worker binding. Server
 code reads `config.*` (from `server/env.ts`'s `parseConfig(env)`), never raw
-`env.*` — `env` now only carries the `DB` binding. The browser bundle's own
-origin is inlined from `APP_CONFIG_AUTH_APP_ORIGIN` at build time.
-Email OTP sends through the Cloudflare Email Service `EMAIL` binding when it is
-available, with legacy Resend config kept only as a fallback. The sender domain
-comes from `APP_CONFIG_EMAIL_SENDER_DOMAIN` (or legacy `APP_CONFIG_RESEND_DOMAIN`).
+`env.*` — `env` now only carries the `DB` and `EMAIL` bindings. The browser
+bundle's own origin is inlined from `APP_CONFIG_AUTH_APP_ORIGIN` at build time.
+Email OTP sends through the Cloudflare Email Service `EMAIL` binding; the
+sender domain comes from `APP_CONFIG_EMAIL_SENDER_DOMAIN`, which must be
+onboarded/verified in Email Service (deploys fail fast when it is missing
+while OTP is enabled).
 
 ## Deployment
 

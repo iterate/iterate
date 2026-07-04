@@ -19,8 +19,7 @@ export type SendEmailOtpOptions = {
   email: string;
   otp: string;
   senderDomain: string;
-  emailBinding?: CloudflareEmailBinding | null;
-  resendApiKey?: string;
+  emailBinding: CloudflareEmailBinding | undefined;
 };
 
 export function shouldUseTestOtp(email: string) {
@@ -36,50 +35,20 @@ export function shouldUseTestOtp(email: string) {
 export function getEmailOtpSenderAddress(senderDomain: string) {
   const domain = senderDomain.trim();
   if (!domain) {
-    throw new Error(
-      "Email OTP sending requires APP_CONFIG_EMAIL_SENDER_DOMAIN or legacy APP_CONFIG_RESEND_DOMAIN",
-    );
+    throw new Error("Email OTP sending requires APP_CONFIG_EMAIL_SENDER_DOMAIN");
   }
   return `noreply+auth@${domain}`;
 }
 
 export async function sendEmailOtp(options: SendEmailOtpOptions) {
+  if (!options.emailBinding) {
+    throw new Error("Email OTP sending requires the Cloudflare EMAIL send_email binding");
+  }
   const fromEmail = getEmailOtpSenderAddress(options.senderDomain);
-  const subject = `Your verification code: ${options.otp}`;
-  const text = `Your verification code is: ${options.otp}\n\nThis code expires in 5 minutes.`;
-
-  if (options.emailBinding) {
-    await options.emailBinding.send({
-      from: { email: fromEmail, name: "Iterate" },
-      to: options.email,
-      subject,
-      text,
-    });
-    return;
-  }
-
-  const resendApiKey = options.resendApiKey?.trim();
-  if (!resendApiKey) {
-    throw new Error(
-      "Email OTP sending requires the Cloudflare EMAIL send_email binding or legacy APP_CONFIG_RESEND_API_KEY",
-    );
-  }
-
-  const response = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${resendApiKey}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      from: `Iterate <${fromEmail}>`,
-      to: options.email,
-      subject,
-      text,
-    }),
+  await options.emailBinding.send({
+    from: { email: fromEmail, name: "Iterate" },
+    to: options.email,
+    subject: `Your verification code: ${options.otp}`,
+    text: `Your verification code is: ${options.otp}\n\nThis code expires in 5 minutes.`,
   });
-
-  if (!response.ok) {
-    throw new Error(`Failed to send verification email: ${response.status}`);
-  }
 }

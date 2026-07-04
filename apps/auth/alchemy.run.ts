@@ -104,8 +104,6 @@ const configEnv: Record<string, string | undefined> = {
   APP_CONFIG_GOOGLE_CLIENT_ID: process.env.APP_CONFIG_GOOGLE_CLIENT_ID,
   APP_CONFIG_GOOGLE_CLIENT_SECRET: process.env.APP_CONFIG_GOOGLE_CLIENT_SECRET,
   APP_CONFIG_EMAIL_SENDER_DOMAIN: process.env.APP_CONFIG_EMAIL_SENDER_DOMAIN,
-  APP_CONFIG_RESEND_DOMAIN: process.env.APP_CONFIG_RESEND_DOMAIN,
-  APP_CONFIG_RESEND_API_KEY: process.env.APP_CONFIG_RESEND_API_KEY,
   APP_CONFIG_SIGNUP_ALLOWLIST: process.env.APP_CONFIG_SIGNUP_ALLOWLIST,
   APP_CONFIG_ADMIN_ALLOWLIST: process.env.APP_CONFIG_ADMIN_ALLOWLIST,
   APP_CONFIG_EMAIL_OTP_ENABLED: emailOtpEnabled,
@@ -114,10 +112,16 @@ const configEnv: Record<string, string | undefined> = {
 
 const ctx = await initAlchemy(APP_NAME, AppConfig, configEnv);
 const { app, workerName, runtimeConfig } = ctx;
-const emailSenderDomain = (runtimeConfig.emailSenderDomain || runtimeConfig.resendDomain).trim();
+// Fail at deploy time rather than at the first OTP send: an enabled email-OTP
+// lane with no sender domain can never deliver mail.
+if (runtimeConfig.emailOtpEnabled && !runtimeConfig.emailSenderDomain) {
+  throw new Error("APP_CONFIG_EMAIL_SENDER_DOMAIN is required while email OTP is enabled");
+}
 const emailBinding = {
   type: "send_email",
-  ...(emailSenderDomain ? { allowedSenderAddresses: [`noreply+auth@${emailSenderDomain}`] } : {}),
+  ...(runtimeConfig.emailSenderDomain
+    ? { allowedSenderAddresses: [`noreply+auth@${runtimeConfig.emailSenderDomain}`] }
+    : {}),
 } satisfies Binding;
 
 const primaryUrl = alchemyEnv.WORKER_ROUTES[0]
