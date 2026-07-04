@@ -351,6 +351,35 @@ real fixes remain the tracked delivery race
 (`tasks/streams-event-delivery-flake-under-concurrent-load.md`) and splitting
 the 39-test `itx.e2e.test.ts` monolith — **not** raising concurrency.
 
+### 19. Sandbox container instance-cap wedge (`Container is starting`)
+
+Round-3 (r3b) run 4: `sandbox-egress.e2e.test.ts › is MITM-intercepted and
+routed through project egress` failed **both attempts** (~292s) with
+`Error: Container is starting. Please retry in a moment.` — the SDK's own
+transient-startup 503, which it auto-retries, but the container never became
+ready inside the budget, twice. This is the flake-11 family resurfacing: the
+preview slots capped sandbox containers at `max_instances: 20`, and
+sandbox-heavy e2e churns several fresh containers per run (the REPL
+`sandbox-exec` spec, #1654's new `sandbox-egress` vitest test, the examples
+matrix — each a fresh project + container), so under a marathon the cap is
+reached and a new container wedges in "starting" until a slot frees.
+
+Cleanup was **not** the problem: the `@cloudflare/containers` base sets a
+durable idle alarm from `sleepAfter` (3m) and `CloudflareSandboxDurableObject`
+does not override `alarm()`, so every idle container is reaped and its slot
+freed within ~3m (verified in the SDK: `renewActivityTimeout` → `sleepAfterMs`
+→ `alarm()` stop). The containers were being cleaned; there just weren't enough
+slots for the churn rate.
+
+Fix (`apps/os/scripts/generate-wrangler-config.ts`): raise the cap to **100**
+for previews and **50** for prd (`lite` instances bill on usage, not
+reservation, so a high cap is free headroom). The durable idle reaper keeps
+cleanup reliable at any cap. Also added `WARMUP_RUNS` to
+`scripts/preview/flake-hunt-loop.sh`: a freshly-deployed slot boots cold (os
+worker + DO chain + sandbox containers on first use), so the marathon can run N
+uncounted priming runs before counting, keeping a cold run 1 from resetting the
+streak.
+
 ### Round 3 targets
 
 The round-2 merge commit's own preview e2e (Depot, two attempts) failed on two

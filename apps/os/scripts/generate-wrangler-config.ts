@@ -195,7 +195,17 @@ function envBlock(env: DeployedEnv) {
     accountId: env.cloudflareAccountId,
     kvId: env.resources.projectDirectoryKvId,
     workerBuildCacheKvId: env.resources.workerBuildCacheKvId,
-    maxContainerInstances: env.osWorkerName === "os-prd" ? 10 : 20,
+    // Sandbox containers are `lite` and bill on usage, not reservation, so a
+    // high cap is free headroom — and cleanup is reliable regardless of the
+    // cap: the @cloudflare/containers base sets a durable idle alarm from
+    // `sleepAfter` (3m, CloudflareSandboxDurableObject) and the DO does not
+    // override `alarm()`, so every idle container is reaped and its slot freed
+    // within ~3m. The old previews cap of 20 still wedged sandbox-heavy e2e
+    // (fresh project + container per test; #1654's sandbox-egress + the REPL
+    // sandbox-exec specs churn several per run) faster than the reaper reclaimed
+    // — the containers were cleaned, there just weren't enough slots. Give
+    // previews generous headroom; prd runs real agent sandboxes, so raise it too.
+    maxContainerInstances: env.osWorkerName === "os-prd" ? 50 : 100,
   });
   return {
     name: env.osWorkerName,

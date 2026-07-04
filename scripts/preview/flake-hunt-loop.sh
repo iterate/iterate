@@ -61,6 +61,20 @@ if [ "$START_AT" -eq 1 ] && [ -z "${SKIP_PREFLIGHT_DEPLOY:-}" ]; then
   echo "preflight: deploy OK"
 fi
 
+# Optional slot warmup: a freshly-deployed slot is cold (os worker + DO chain +
+# sandbox containers all boot on first use), and a cold run 1 can flake on
+# timing that a warm slot never would — which would reset the streak at run 1.
+# WARMUP_RUNS uncounted `preview test` invocations warm the slot first; their
+# pass/fail is ignored on purpose (they exist only to prime caches/containers).
+WARMUP_RUNS="${WARMUP_RUNS:-0}"
+for w in $(seq 1 "$WARMUP_RUNS"); do
+  [ "$WARMUP_RUNS" -eq 0 ] && break
+  wlog="$LOG_DIR/warmup-$(printf '%02d' "$w").log"
+  echo "warmup $w/$WARMUP_RUNS: priming the slot (result ignored) -> $wlog"
+  doppler run --project _shared --config prd -- pnpm preview test \
+    --pull-request-number "$PR_NUMBER" >"$wlog" 2>&1 || true
+done
+
 for i in $(seq "$START_AT" $((START_AT + RUNS - 1))); do
   log="$LOG_DIR/run-$(printf '%03d' "$i").log"
   started=$(date -u +%H:%M:%S)
