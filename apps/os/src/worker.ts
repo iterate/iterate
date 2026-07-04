@@ -72,6 +72,14 @@ export { StatefulWorkerDurableObject } from "./domains/workers/stateful-worker-d
 export { StreamDurableObject } from "./domains/streams/stream-durable-object.ts";
 export { ItxEntrypoint } from "./domains/itx/itx-entrypoint.ts";
 export { ProjectEgressEntrypoint } from "./domains/projects/egress.ts";
+// The container-outbound gateway. The container runtime dials it through
+// `ctx.exports.ContainerProxy` to route intercepted sandbox egress; every
+// sandbox container's outbound HTTP(S) reaches it before anything leaves the
+// account (see CloudflareSandboxDurableObject's `outbound` handler). Re-export
+// the `@cloudflare/sandbox` build of it (a subclass of the containers one) so
+// the DO's Container base and this gateway share one outbound-handler registry
+// and its SDK-internal mount routing stays intact.
+export { ContainerProxy } from "@cloudflare/sandbox";
 
 export default {
   async fetch(inbound: Request, env: Env, ctx: ExecutionContext) {

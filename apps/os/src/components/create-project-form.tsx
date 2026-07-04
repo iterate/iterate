@@ -20,6 +20,7 @@ import {
 } from "@iterate-com/ui/components/select";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { z } from "zod";
+import { ONBOARDING_AGENT_PATH } from "~/lib/onboarding-agent.ts";
 import { projectsListQueryKey } from "~/lib/projects-query.ts";
 import { connectItxBrowser, reconnectItx } from "~/itx/itx-react.tsx";
 
@@ -65,15 +66,15 @@ export function CreateProjectForm() {
       return { id: description.projectId, slug: input.slug };
     },
     onSuccess: (project) => {
-      // Into the project IMMEDIATELY — the home page plays the creation
-      // checklist live and `welcome` hands over to the onboarding agent when
-      // the saga lands. The project route resolves without the refreshed
-      // session: create primes the server-side project directory, which is
-      // the auth fallback for exactly this claims-lag window.
+      // Onto the onboarding agent URL immediately. The stream page can render
+      // while the bootstrap saga and onboarding agent birth catch up behind it.
+      // The project route resolves without the refreshed session: create primes
+      // the server-side project directory, which is the auth fallback for
+      // exactly this claims-lag window.
       void router.navigate({
-        to: "/projects/$projectSlug",
-        params: { projectSlug: project.slug },
-        search: { welcome: true },
+        to: "/projects/$projectSlug/agents/streams/$",
+        params: { projectSlug: project.slug, _splat: ONBOARDING_AGENT_PATH },
+        search: {},
       });
       // Session catch-up runs BEHIND the navigation: refresh the browser auth
       // session so its claims carry the new project, drop the global itx
@@ -91,9 +92,9 @@ export function CreateProjectForm() {
         const entry = (await itx.projects.list()).find((candidate) => candidate.id === project.id);
         if (entry != null && entry.slug !== project.slug) {
           void router.navigate({
-            to: "/projects/$projectSlug",
-            params: { projectSlug: entry.slug },
-            search: { welcome: true },
+            to: "/projects/$projectSlug/agents/streams/$",
+            params: { projectSlug: entry.slug, _splat: ONBOARDING_AGENT_PATH },
+            search: {},
             replace: true,
           });
         }

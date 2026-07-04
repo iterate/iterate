@@ -89,7 +89,10 @@ function envBlock(env: SemaphoreEnv) {
 
 const config = {
   $schema: "node_modules/wrangler/config-schema.json",
-  name: "semaphore-dev",
+  // Env-less service name: wrangler tags every `--env` deploy with
+  // `cf:service=<top-level name>`, so a "-dev" suffix here would mis-bucket
+  // deployed workers under a fake "dev" service in observability queries.
+  name: "semaphore",
   main: "./src/worker.ts",
   compatibility_date: "2026-06-17",
   compatibility_flags: ["nodejs_compat", "nodejs_compat_populate_process_env"],

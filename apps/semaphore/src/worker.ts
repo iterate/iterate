@@ -2,7 +2,6 @@
  * Cloudflare Worker entry for semaphore: a TanStack Start app (SSR + oRPC API)
  * fronting the resource-leasing durable object.
  */
-import { env as workerEnv } from "cloudflare:workers";
 import handler from "@tanstack/react-start/server-entry";
 import { withEvlog } from "@iterate-com/shared/evlog";
 import { parseConfig } from "~/config.ts";
@@ -15,10 +14,11 @@ export async function handleSemaphoreRequest(
   env: Env,
   executionCtx: ExecutionContext,
 ) {
-  // Parsed per request (not at module scope) so the secrets-less bootstrap
-  // deploy of a brand-new worker passes startup validation — same posture as
-  // apps/os (see deploy-helpers.ts deployWithSecrets).
-  const config = parseConfig(workerEnv);
+  // Parsed per request, NOT at module scope (matching apps/os): a fresh
+  // DO-class worker's first deploy is a secrets-less bootstrap (see
+  // scripts/lib/deploy-helpers.ts), and a module-scope parse would fail
+  // Cloudflare's startup validation on that version before the secrets land.
+  const config = parseConfig(env);
   return withEvlog(
     { request, app: { name: "@iterate-com/semaphore", slug: "semaphore" }, config, executionCtx },
     async ({ log }) => {

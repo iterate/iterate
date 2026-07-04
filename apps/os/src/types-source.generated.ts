@@ -213,7 +213,7 @@ export interface ProjectRpcTarget {
   processor: StreamProcessorRpc<ProjectProcessorState>;
   repo: Repo;
   repos: ProjectRepoCollection;
-  /** Path-addressed sandboxes (\`itx.sandboxes.get("/sandboxes/cloudflare/whatever")\`). */
+  /** Path-addressed sandboxes (\`itx.sandboxes.get(path)\`) — see {@link SandboxCollection}. */
   sandboxes: SandboxCollection;
   secrets: SecretCollection;
   streams: ProjectStreamCollection;
@@ -224,6 +224,17 @@ export interface ProjectRpcTarget {
   // derived from the scope path, not mounted capabilities — see rpc-targets.ts.
   agent?: Agent;
   chat?: AgentChat;
+  /**
+   * THIS agent's own sandbox — the sandbox at the agent's own \`/agents/...\`
+   * path. NOT a built-in: it is a durable itx-expression capability mounted
+   * on the agent's capability host at birth
+   * (\`expression: ["sandboxes", ["get", <agent path>]]\`), so every
+   * \`itx.sandbox.exec(...)\` re-resolves through \`itx.sandboxes.get\` at call
+   * time and dispatches like any provided capability. Created with the agent;
+   * the container boots on the first command and sleeps after idle. Prefer
+   * dotted calls (\`await itx.sandbox.exec("...")\`) over grabbing the value.
+   */
+  sandbox?: CloudflareSandbox;
 }
 
 /** Agent-local web chat response tool exposed inside agent script execution. */
@@ -451,12 +462,14 @@ export interface Repo extends Describable {
 /**
  * Catalog of sandboxes within one project.
  *
- * A sandbox is addressed by its FULL path — a stream path like every other
- * domain object: it starts with \`/sandboxes/\` and may nest arbitrarily. By
- * convention everything lives under \`/sandboxes/cloudflare/...\` (the segment
- * is convention, not enforcement). Anyone who can see the project can
- * address any of its sandboxes. Getting a sandbox is cheap and does not
- * start a container; the first command does.
+ * A sandbox is addressed by its FULL path, which may be ANY non-root project
+ * path, arbitrarily nested. Sandboxes live in their own namespace, so a
+ * sandbox path never collides with the stream or agent at the same path — it
+ * names them: an agent's sandbox is the sandbox at the agent's own
+ * \`/agents/...\` path (exposed as \`itx.sandbox\` in that agent's scope), and
+ * standalone sandboxes conventionally live under \`/sandboxes/cloudflare/...\`.
+ * Getting a sandbox is cheap and does not start a container; the first
+ * command does, and the sandbox sleeps again after idle.
  */
 export interface SandboxCollection extends Describable {
   get(path: string): Promise<CloudflareSandbox>;
@@ -514,6 +527,8 @@ export type ProjectProcessorState = {
   agents: StreamListItem[];
   createRequest: { projectId: string; slug: string } | null;
   created: boolean;
+  onboardingActive: boolean;
+  onboardingCompletedAt: string | null;
   repos: StreamListItem[];
   secrets: StreamListItem[];
   streams: StreamListItem[];

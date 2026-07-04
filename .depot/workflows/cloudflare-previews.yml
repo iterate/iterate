@@ -38,6 +38,8 @@ on:
       - packages/ui/**
       - packages/mock-http-proxy/**
       - scripts/preview/**
+      - envs.ts
+      - scripts/lib/**
       - apps/iterate-com/**
       - apps/auth-example/**
       - apps/os/**
