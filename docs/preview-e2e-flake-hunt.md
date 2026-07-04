@@ -179,6 +179,22 @@ out. Fix: `sleepAfter = "3m"` on the sandbox DO (reclaims capacity ~3× faster;
 idle restart costs one cold boot + clone) and `maxInstances: 40` (lite
 instances bill on usage, not reservation).
 
+### 12. Green check on a wedged slot: stale failed deploys are never retried
+
+Round 2 opening move. preview_7's D1/KV had been deleted out from under
+`envs.ts`, so the first deploy failed (D1 7404). The fix push touched only
+`envs.ts` — which was in NO preview paths list — so app selection chose
+nothing, the stale `deploy-failed` entries (old head) were excluded by the
+retry selector's same-head guard, deploy skipped ("nothing to deploy"), the
+test lane skipped its stale recorded apps, and the whole check went **green**
+with three apps deploy-failed on the slot. Two fixes:
+
+- `envs.ts` + `scripts/lib/**` joined the preview shared paths (and the Depot
+  workflow's `paths`): every app's wrangler config derives from envs.ts.
+- Failed states (`deploy-failed`, `claim-failed`, `tests-failed`) now retry
+  regardless of which head recorded them; only `awaiting-tests` keeps the
+  same-head guard.
+
 ### Observed, not yet fixed
 
 - `packages/mock-http-proxy` unit test `msw-server-adapter.http-parity ›
