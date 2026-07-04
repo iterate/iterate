@@ -107,6 +107,35 @@ was running on a sleeping machine. The loop script now re-execs itself under
 `caffeinate -is` on Darwin. Lesson for anyone chasing "slot degradation" from
 a laptop: check `pmset -g log` before blaming the server.
 
+### 6. Repo reads lose the read-your-write race against the Artifacts remote
+
+`examples-matrix › repo-edit-file` failed with the edit reporting success
+(`occurrenceCount: 1`, changed path recorded) while the immediately following
+`readFile` returned the **pre-edit** content. The Repo DO clones the
+Artifacts git remote fresh for every read, and that endpoint is eventually
+consistent after a push — a clone issued milliseconds later can serve the
+previous HEAD. Same hazard applied to the worker-source projection refresh,
+which could silently bake pre-push worker code even though the commit RPC
+already resolved (the DO comments promise "commitFiles() is our
+read-your-write boundary").
+
+Fix: the Repo DO records each pushed commit oid per branch
+(`repo-pushed-head:<branch>` in DO storage); read clones and the
+worker-source materialization retry briefly until the snapshot observes at
+least that head. A concurrent force-push can legitimately advance HEAD past
+the recorded oid, so after the bounded retries the latest snapshot is served
+regardless.
+
+### 7. Local harness must match the CI contract (vitest retry)
+
+The e2e vitest lane configures `retry: ci ? 1 : 0` — Depot CI absorbs one
+platform blip per test (Cloudflare's DO resets surface as
+`internal error; reference = …` / `Durable Object storage caused object to be
+reset`, which Cloudflare marks retryable) while the local loop ran with `CI`
+unset, i.e. a stricter config than the pipeline being de-flaked. The loop now
+exports `CI=true` so a run means exactly what a Depot run means; retried
+tests remain visible in the run log.
+
 ### 5. Sandbox repo clone dies on a transient Artifacts 503
 
 `repl-examples.spec.ts › sandbox-exec` failed with `Failed to clone repository

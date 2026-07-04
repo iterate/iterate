@@ -19,6 +19,13 @@ if [ "$(uname)" = "Darwin" ] && [ -z "${FLAKE_HUNT_CAFFEINATED:-}" ]; then
   exec caffeinate -is "$0" "$@"
 fi
 
+# Match the Depot CI contract exactly: the vitest e2e lane sets its retry
+# policy and scheduling off CI=true (one retry absorbs platform blips like
+# Cloudflare's retryable "internal error; reference = ..." resets; retried
+# tests are still visible in the run log). Without this the local loop runs a
+# STRICTER config than the pipeline it is trying to de-flake.
+export CI=true
+
 mkdir -p "$LOG_DIR"
 for i in $(seq "$START_AT" $((START_AT + RUNS - 1))); do
   log="$LOG_DIR/run-$(printf '%03d' "$i").log"
