@@ -473,7 +473,13 @@ const edit = await repo.edit({
   newString: afterText,
 });
 
-const after = await repo.readFile({ path });
+// The same bootstrap race can serve a pre-edit snapshot right after the
+// commit; poll until the read reflects the edit.
+let after = await repo.readFile({ path });
+for (let attempt = 0; attempt < 25 && (after === null || after.content === before.content); attempt += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  after = await repo.readFile({ path });
+}
 if (after === null) throw new Error("Expected edited file to exist.");
 
 return {
