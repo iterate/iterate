@@ -4,15 +4,17 @@ import {
   useQueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
-import { useEffect, useRef } from "react";
-import { Link, createFileRoute } from "@tanstack/react-router";
+import { useCallback, useEffect, useReducer, useRef } from "react";
+import { Link, createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { FolderPlus } from "lucide-react";
 import { useAuthClient } from "@iterate-com/auth/client";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { ONBOARDING_AGENT_PATH, hasActiveOnboardingAgent } from "~/lib/onboarding-agent.ts";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
+import { getRootProjectRedirectServerFn } from "~/lib/project-server-fns.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import {
   fetchProjectsList,
@@ -28,11 +30,40 @@ type OrganizationSummary = {
   slug: string;
 };
 
+const NO_ORGANIZATIONS: OrganizationSummary[] = [];
+
 export const Route = createFileRoute("/_app/projects/")({
   ssr: false,
-  loader: async () => ({
-    routeConfig: await getPublicRouteConfig(),
-  }),
+  loader: async () => {
+    const decision = await getRootProjectRedirectServerFn({
+      data: { preferredProjectSlug: null },
+    });
+
+    if (decision.kind === "project") {
+      if (decision.onboarding) {
+        throw redirect({
+          to: "/projects/$projectSlug/agents/streams/$",
+          params: {
+            projectSlug: decision.project.slug,
+            _splat: ONBOARDING_AGENT_PATH,
+          },
+          search: {},
+          replace: true,
+        });
+      }
+
+      throw redirect({
+        to: "/projects/$projectSlug",
+        params: { projectSlug: decision.project.slug },
+        search: {},
+        replace: true,
+      });
+    }
+
+    return {
+      routeConfig: await getPublicRouteConfig(),
+    };
+  },
   pendingComponent: ProjectsIndexPending,
   component: ProjectsIndexPage,
 });
@@ -53,8 +84,9 @@ function buildProjectHostname(input: { slug: string; projectHostnameBases: reado
 
 function ProjectsIndexPage() {
   const { routeConfig } = Route.useLoaderData();
+  const navigate = useNavigate();
   const { session } = useAuthClient();
-  const organizations = session?.authenticated ? session.session.organizations : [];
+  const organizations = session?.authenticated ? session.session.organizations : NO_ORGANIZATIONS;
   const isAdmin = session?.authenticated ? session.user.isAdmin === true : false;
   const queryClient = useQueryClient();
   // The list comes straight from the itx session (`session.projects.list()`),
@@ -66,6 +98,13 @@ function ProjectsIndexPage() {
   });
   const projects = data ?? [];
   const hasProjects = projects.length > 0;
+  const organizationSlugFor = useCallback(
+    (project: ProjectListEntry) =>
+      project.organizationId
+        ? organizations.find((organization) => organization.id === project.organizationId)?.slug
+        : undefined,
+    [organizations],
+  );
 
   // "Set up" for a project the auth worker knows about but this deployment's
   // engine does not: re-run `projects.create` on the itx session with the
@@ -74,9 +113,7 @@ function ProjectsIndexPage() {
   // bootstrap saga runs.
   const recoverProject = useMutation({
     mutationFn: async (project: ProjectListEntry) => {
-      const organizationSlug = project.organizationId
-        ? organizations.find((organization) => organization.id === project.organizationId)?.slug
-        : undefined;
+      const organizationSlug = organizationSlugFor(project);
       const itx = await connectItxBrowser();
       await itx.projects.create({
         projectId: project.id,
@@ -96,12 +133,13 @@ function ProjectsIndexPage() {
 
   // Auth onboarding creates the project container on auth only, so a
   // brand-new user's first project always arrives here as "missing" — run
-  // the set-up for them instead of asking them to press the button. Once per
-  // project per mount, so a failing bootstrap surfaces its toast instead of
-  // looping.
+  // the set-up for them instead of asking them to press the button. The single
+  // project case is owned by the onboarding redirect below; this fallback keeps
+  // multi-project recovery automatic without hijacking users into one project.
   const autoSetUpProjectIds = useRef(new Set<string>());
   const recoverProjectMutate = recoverProject.mutate;
   useEffect(() => {
+    if ((data ?? []).length === 1) return;
     for (const project of data ?? []) {
       if (project.deploymentStatus !== "missing") continue;
       if (autoSetUpProjectIds.current.has(project.id)) continue;
@@ -109,6 +147,83 @@ function ProjectsIndexPage() {
       recoverProjectMutate(project);
     }
   }, [data, recoverProjectMutate]);
+
+  const onboardingRedirectInFlightProjectIds = useRef(new Set<string>());
+  const [onboardingRedirectRetry, retryOnboardingRedirect] = useReducer((value) => value + 1, 0);
+  useEffect(() => {
+    const project = data?.length === 1 ? data[0]! : null;
+    if (project == null) return;
+    if (project.deploymentStatus === "unknown") return;
+    if (onboardingRedirectInFlightProjectIds.current.has(project.id)) return;
+    onboardingRedirectInFlightProjectIds.current.add(project.id);
+
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const finishRedirectAttempt = () => {
+      onboardingRedirectInFlightProjectIds.current.delete(project.id);
+    };
+    const retryRedirectAttempt = () => {
+      if (cancelled) return;
+      finishRedirectAttempt();
+      retryTimer = setTimeout(() => {
+        if (!cancelled) retryOnboardingRedirect();
+      }, 1_000);
+    };
+
+    void (async () => {
+      let shouldRetry = false;
+      try {
+        const itx = await connectItxBrowser();
+        if (project.deploymentStatus === "missing") {
+          const organizationSlug = organizationSlugFor(project);
+          await itx.projects.create({
+            projectId: project.id,
+            slug: project.slug,
+            waitUntilCreated: false,
+            ...(organizationSlug === undefined ? {} : { organizationSlug }),
+          });
+        } else {
+          const projectItx = await itx.projects.get(project.id);
+          let inOnboarding = false;
+          for (let attempt = 0; attempt < 20 && !cancelled; attempt += 1) {
+            const { state } = await projectItx.processor.snapshot();
+            if (!state.onboardingActive) return;
+            if (hasActiveOnboardingAgent(state)) {
+              inOnboarding = true;
+              break;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 500));
+          }
+          if (!inOnboarding) {
+            shouldRetry = true;
+            return;
+          }
+        }
+
+        if (cancelled) return;
+        await navigate({
+          to: "/projects/$projectSlug/agents/streams/$",
+          params: { projectSlug: project.slug, _splat: ONBOARDING_AGENT_PATH },
+          search: {},
+          replace: true,
+        });
+      } catch {
+        shouldRetry = true;
+      } finally {
+        if (shouldRetry) {
+          retryRedirectAttempt();
+        } else {
+          finishRedirectAttempt();
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer != null) clearTimeout(retryTimer);
+      finishRedirectAttempt();
+    };
+  }, [data, navigate, onboardingRedirectRetry, organizationSlugFor]);
 
   return (
     <section className="space-y-5 p-4">

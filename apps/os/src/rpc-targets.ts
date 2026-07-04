@@ -1129,7 +1129,11 @@ export class ProjectCollectionRpcTarget extends RpcTarget implements ProjectColl
         {
           type: "events.iterate.com/project/create-requested",
           idempotencyKey: `project-create-requested:${registered.projectId}`,
-          payload: { projectId: registered.projectId, slug: registered.slug },
+          payload: {
+            onboardingActive: true,
+            projectId: registered.projectId,
+            slug: registered.slug,
+          },
         },
       );
     const [, , createRequested] = await timedStep(

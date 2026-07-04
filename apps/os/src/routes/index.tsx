@@ -1,5 +1,6 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { requireAuthenticatedRootRedirectTargetFromSession } from "../lib/auth.ts";
+import { ONBOARDING_AGENT_PATH } from "~/lib/onboarding-agent.ts";
 import { getRootProjectRedirectServerFn } from "~/lib/project-server-fns.ts";
 
 export const Route = createFileRoute("/")({
@@ -18,10 +19,22 @@ export const Route = createFileRoute("/")({
     });
 
     if (decision.kind === "project") {
+      if (decision.onboarding) {
+        throw redirect({
+          to: "/projects/$projectSlug/agents/streams/$",
+          params: {
+            projectSlug: decision.project.slug,
+            _splat: ONBOARDING_AGENT_PATH,
+          },
+          search: {},
+          replace: true,
+        });
+      }
+
       throw redirect({
         to: "/projects/$projectSlug",
         params: { projectSlug: decision.project.slug },
-        search: decision.welcome ? { welcome: true } : {},
+        search: {},
         replace: true,
       });
     }
