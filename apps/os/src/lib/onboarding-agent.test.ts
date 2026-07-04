@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { ONBOARDING_AGENT_PATH, hasActiveOnboardingAgent } from "./onboarding-agent.ts";
+import {
+  ONBOARDING_AGENT_PATH,
+  hasActiveOnboardingAgent,
+  isOnboardingActive,
+} from "./onboarding-agent.ts";
 import type { ProjectProcessorState } from "~/types.ts";
 
 const state = (overrides: Partial<ProjectProcessorState>): ProjectProcessorState => ({
@@ -35,5 +39,12 @@ describe("hasActiveOnboardingAgent", () => {
         }),
       ),
     ).toBe(true);
+  });
+
+  test("treats the active marker as enough for early redirect before the agent list catches up", () => {
+    const activeWithoutListedAgent = state({ onboardingActive: true });
+
+    expect(isOnboardingActive(activeWithoutListedAgent)).toBe(true);
+    expect(hasActiveOnboardingAgent(activeWithoutListedAgent)).toBe(false);
   });
 });

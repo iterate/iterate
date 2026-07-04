@@ -4,7 +4,7 @@ import { newHttpBatchRpcSession } from "capnweb";
 import { env } from "cloudflare:workers";
 import { authenticateCapnwebAdmin } from "~/auth/admin-auth-cookie.ts";
 import { getUserPrincipal } from "~/auth/principal.ts";
-import { hasActiveOnboardingAgent } from "~/lib/onboarding-agent.ts";
+import { isOnboardingActive } from "~/lib/onboarding-agent.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import {
   chooseRootProjectRedirect,
@@ -92,7 +92,10 @@ export const getRootProjectRedirectServerFn: (input?: {
         try {
           const project = await root.projects.get(decision.project.id);
           const { state } = await project.processor.snapshot();
-          decision.onboarding = hasActiveOnboardingAgent(state);
+          // The agent stream route can render before the agent capability is
+          // listed. `onboardingActive` is the phase marker; waiting for the
+          // reduced agent list here can wrongly send fresh signups to home.
+          decision.onboarding = isOnboardingActive(state);
         } catch {
           decision.onboarding = false;
         }
