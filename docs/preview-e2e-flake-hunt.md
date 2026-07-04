@@ -263,6 +263,27 @@ pushes also mean flake 6's read guard can never observe a HEAD that dropped our
 commit. `seedArtifactRepo` keeps its force-push: it runs once at repo creation,
 never concurrently.
 
+### 16. Marathon methodology: an incremental deploy splits the fleet head
+
+Not a product flake — a hole in the flake-hunt harness, surfaced while shipping
+the flake-15 fix. `preview deploy` selects apps by diffing the PR head against
+the **last deployed head**, not the PR base. So a mid-branch commit that touches
+only one app (the flake-15 fix was `apps/os`-only) redeploys just that app and
+leaves the others at the previous head. The test lane only tests apps whose
+recorded head equals the PR head, so the very next marathon run tested `os, auth`
+but not `semaphore, streams-example-app` — tripping the full-fleet guard
+(exit 3) at run 1. This is the deploy-side twin of flake 12: a fleet can silently
+shrink to the changed apps, and without the guard a partial lane would count as
+green.
+
+Fix (`scripts/preview/flake-hunt-loop.sh`): a fresh marathon (`START_AT=1`) now
+runs a full-fleet deploy preflight before counting runs and refuses to start on
+a `deploy-failed`/`claim-failed` app (exit 4). Because `scripts/preview/**` is a
+preview shared path, any change under it (envs.ts and scripts/lib/\*\* too) forces
+`preview deploy` to redeploy the whole fleet, reunifying the head — so the
+preflight both guarantees a unified fleet and repairs a split one. Set
+`SKIP_PREFLIGHT_DEPLOY=1` when resuming a marathon whose fleet is already unified.
+
 ### Observed, not yet fixed
 
 - `packages/mock-http-proxy` unit test `msw-server-adapter.http-parity ›

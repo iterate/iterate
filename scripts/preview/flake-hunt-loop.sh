@@ -32,6 +32,35 @@ mkdir -p "$LOG_DIR"
 # time it out). Kill anything slower than this and count it as a failure.
 RUN_TIMEOUT_SECS="${RUN_TIMEOUT_SECS:-1800}"
 
+# Full-fleet preflight. `preview deploy` selects apps by diffing the PR head
+# against the LAST DEPLOYED head (not the PR base), so a mid-branch commit that
+# touches only one app (e.g. an apps/os-only fix) redeploys just that app and
+# leaves the others at an older head. The test lane only tests apps whose
+# recorded head == the PR head, so the marathon then silently shrinks to the
+# changed apps and every run trips the full-fleet guard (exit 3) — or worse,
+# would count a partial lane as green if that guard were absent. A change under
+# a preview shared path (scripts/preview/** — including THIS file, envs.ts, …)
+# forces `preview deploy` to redeploy the whole fleet, which reunifies the head.
+# So before a fresh marathon (START_AT=1) we run one deploy and assert all four
+# apps come back testable at the current head; set SKIP_PREFLIGHT_DEPLOY=1 to
+# bypass (e.g. resuming a marathon whose fleet is already unified).
+if [ "$START_AT" -eq 1 ] && [ -z "${SKIP_PREFLIGHT_DEPLOY:-}" ]; then
+  preflight="$LOG_DIR/preflight-deploy.log"
+  echo "preflight: deploying full fleet for PR $PR_NUMBER (log: $preflight)"
+  doppler run --project _shared --config prd -- pnpm preview deploy \
+    --pull-request-number "$PR_NUMBER" >"$preflight" 2>&1
+  deploy_exit=$?
+  if [ "$deploy_exit" -ne 0 ]; then
+    echo "preflight: deploy FAILED (exit $deploy_exit) — see $preflight"
+    exit 4
+  fi
+  if grep -qE "deploy-failed|claim-failed" "$preflight"; then
+    echo "preflight: an app failed to deploy — see $preflight"
+    exit 4
+  fi
+  echo "preflight: deploy OK"
+fi
+
 for i in $(seq "$START_AT" $((START_AT + RUNS - 1))); do
   log="$LOG_DIR/run-$(printf '%03d' "$i").log"
   started=$(date -u +%H:%M:%S)
