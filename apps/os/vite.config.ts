@@ -73,8 +73,13 @@ export default defineConfig({
     cloudflare({
       viteEnvironment: { name: "ssr" },
       // The builder sidecar runs in the same local workerd so the BUILDER
-      // service binding resolves in dev exactly like deployed.
-      auxiliaryWorkers: [{ configPath: "./wrangler.builder.jsonc" }],
+      // service binding resolves in dev exactly like deployed. Deploy builds
+      // (CLOUDFLARE_ENV set) exclude it: the builder deploys from source via
+      // `wrangler deploy --config wrangler.builder.jsonc` (deploy.ts), and a
+      // second dist wrangler.json would break findBuiltWranglerConfig.
+      auxiliaryWorkers: process.env.CLOUDFLARE_ENV
+        ? undefined
+        : [{ configPath: "./wrangler.builder.jsonc" }],
     }),
     tanstackStart(),
     viteReact(),
