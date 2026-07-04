@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import type { SemaphoreResourceRecord } from "~/contract.ts";
+import { requireAdminPrincipal } from "~/lib/require-admin.ts";
 import { listResourcesFromDb } from "~/lib/resource-store.ts";
 
 type SerializableJsonValue =
@@ -48,6 +49,7 @@ function serializeResource(resource: SemaphoreResourceRecord): SerializableSemap
 }
 
 const loadResources = createServerFn({ method: "GET" }).handler(async ({ context }) => {
+  requireAdminPrincipal(context);
   const resources = await listResourcesFromDb(context.db);
   return resources.map(serializeResource);
 });
@@ -72,8 +74,8 @@ function ResourcesIndexPage() {
   return (
     <section className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Public dashboard view backed by server-side reads. The `/api/resources*` endpoints require
-        the bearer token.
+        Operator dashboard backed by server-side reads. The UI and the `/api/resources*` endpoints
+        both require an iterate admin identity.
       </p>
 
       <div className="space-y-6">

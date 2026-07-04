@@ -35,8 +35,12 @@ describe("preview app dependency expansion", () => {
     expect(expandPreviewDependencies(["os"])).toEqual(["os", "auth"]);
   });
 
+  it("expands semaphore to include its auth dependency", () => {
+    expect(expandPreviewDependencies(["semaphore"])).toEqual(["semaphore", "auth"]);
+  });
+
   it("keeps independent apps as-is", () => {
-    expect(expandPreviewDependencies(["semaphore"])).toEqual(["semaphore"]);
+    expect(expandPreviewDependencies(["streams-example-app"])).toEqual(["streams-example-app"]);
   });
 
   it("deduplicates dependencies", () => {
@@ -189,7 +193,8 @@ describe("preview retry selection", () => {
         },
         pullRequestHeadSha: "current-head",
       }).map((app) => app.slug),
-    ).toEqual(["semaphore"]);
+      // Semaphore's retry pulls in its auth dependency (relying-party JWKS).
+    ).toEqual(["semaphore", "auth"]);
   });
 
   it("does not retry previously failed apps from older commits", () => {

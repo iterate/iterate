@@ -1,3 +1,4 @@
+import { createSemaphoreTokenProvider } from "../../../scripts/auth/semaphore-token.ts";
 import { previewInternals } from "../../../scripts/preview/preview.ts";
 import { createSemaphoreClient } from "../src/contract.ts";
 
@@ -14,16 +15,14 @@ export async function seedEnvironmentConfigLeases(input: SeedEnvironmentConfigLe
     process.env.SEMAPHORE_BASE_URL?.trim() ||
     DEFAULT_SEMAPHORE_BASE_URL;
   new URL(semaphoreBaseUrl);
-  const semaphoreApiToken =
-    process.env.SEMAPHORE_API_TOKEN?.trim() ?? process.env.APP_CONFIG_SHARED_API_SECRET?.trim();
-  if (!semaphoreApiToken) {
-    throw new Error(
-      "SEMAPHORE_API_TOKEN or APP_CONFIG_SHARED_API_SECRET is required to seed environment config leases.",
-    );
-  }
 
   const semaphore = createSemaphoreClient({
-    apiKey: semaphoreApiToken,
+    // SEMAPHORE_API_TOKEN (a pre-minted bearer token), else forge-mint an
+    // admin access token from the config's AUTH_FORGE_PRIVATE_JWK.
+    apiKey: createSemaphoreTokenProvider({
+      baseUrl: semaphoreBaseUrl,
+      email: "semaphore-seed@iterate.com",
+    }),
     baseURL: semaphoreBaseUrl,
   });
 

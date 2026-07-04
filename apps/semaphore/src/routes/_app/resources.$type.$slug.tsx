@@ -1,4 +1,4 @@
-import { useEffect, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { env } from "cloudflare:workers";
@@ -9,9 +9,9 @@ import {
   type SemaphoreLeaseRecord,
   type SemaphoreResourceRecord,
 } from "~/contract.ts";
+import { requireAdminPrincipal } from "~/lib/require-admin.ts";
 import { findResourceByKey } from "~/lib/resource-store.ts";
 
-const operatorTokenStorageKey = "semaphore-operator-token";
 const defaultLeaseMs = 10 * 60 * 1000;
 
 type SerializableJsonValue =
@@ -61,6 +61,7 @@ function serializeResource(resource: SemaphoreResourceRecord): SerializableSemap
 const loadResource = createServerFn({ method: "GET" })
   .inputValidator(FindResourceInput)
   .handler(async ({ context, data }) => {
+    requireAdminPrincipal(context);
     const resource = await findResourceByKey(context.db, data);
     if (!resource) {
       throw new Error(`No resource exists for ${data.type}/${data.slug}.`);
@@ -75,14 +76,11 @@ const mutateResourceLease = createServerFn({ method: "POST" })
       action: z.enum(["acquire", "release"]),
       type: z.string().trim().min(1),
       slug: z.string().trim().min(1),
-      operatorToken: z.string().trim().min(1),
       leaseMs: z.coerce.number().int().positive().optional(),
     }),
   )
   .handler(async ({ context, data }) => {
-    if (data.operatorToken !== context.config.sharedApiSecret.exposeSecret()) {
-      throw new Error("Missing or invalid operator token.");
-    }
+    const operator = requireAdminPrincipal(context);
 
     const coordinator = env.RESOURCE_COORDINATOR.getByName(data.type);
     const currentLease = await coordinator.getLease({
@@ -103,6 +101,7 @@ const mutateResourceLease = createServerFn({ method: "POST" })
         type: data.type,
         slug: data.slug,
         leaseMs: data.leaseMs ?? defaultLeaseMs,
+        holder: `manual-${operator.email ?? operator.userId}`,
       });
       if (!acquiredLease) {
         throw new Error("Resource is not available for acquire.");
@@ -151,22 +150,8 @@ export const Route = createFileRoute("/_app/resources/$type/$slug")({
 function ResourceDetailPage() {
   const router = useRouter();
   const { resource } = Route.useLoaderData();
-  const [operatorToken, setOperatorToken] = useState("");
   const [leaseMs, setLeaseMs] = useState(String(defaultLeaseMs));
   const [isPending, startTransition] = useTransition();
-
-  useEffect(() => {
-    setOperatorToken(window.localStorage.getItem(operatorTokenStorageKey) ?? "");
-  }, []);
-
-  useEffect(() => {
-    if (operatorToken) {
-      window.localStorage.setItem(operatorTokenStorageKey, operatorToken);
-      return;
-    }
-
-    window.localStorage.removeItem(operatorTokenStorageKey);
-  }, [operatorToken]);
 
   function runResourceLeaseAction(action: "acquire" | "release") {
     startTransition(async () => {
@@ -176,7 +161,6 @@ function ResourceDetailPage() {
             action,
             type: resource.type,
             slug: resource.slug,
-            operatorToken,
             leaseMs: Number(leaseMs),
           },
         });
@@ -230,24 +214,11 @@ function ResourceDetailPage() {
         <div className="mb-4 space-y-1">
           <p className="text-xs uppercase tracking-wide text-muted-foreground">Operator Actions</p>
           <p className="text-sm text-muted-foreground">
-            Paste the shared API token to acquire or release resources from the UI.
+            Acquire or release this resource as your signed-in iterate admin identity.
           </p>
         </div>
 
         <div className="space-y-3">
-          <label className="block space-y-1">
-            <span className="text-xs uppercase tracking-wide text-muted-foreground">
-              Operator token
-            </span>
-            <input
-              type="password"
-              value={operatorToken}
-              onChange={(event) => setOperatorToken(event.target.value)}
-              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-              placeholder="Paste APP_CONFIG_SHARED_API_SECRET"
-            />
-          </label>
-
           <label className="block space-y-1">
             <span className="text-xs uppercase tracking-wide text-muted-foreground">
               Lease duration (ms)
@@ -264,7 +235,7 @@ function ResourceDetailPage() {
           <div className="flex gap-3">
             <button
               type="button"
-              disabled={isPending || operatorToken.length === 0}
+              disabled={isPending}
               onClick={() => runResourceLeaseAction("acquire")}
               className="rounded-md border px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -272,7 +243,7 @@ function ResourceDetailPage() {
             </button>
             <button
               type="button"
-              disabled={isPending || operatorToken.length === 0}
+              disabled={isPending}
               onClick={() => runResourceLeaseAction("release")}
               className="rounded-md border px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
             >

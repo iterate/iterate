@@ -38,18 +38,24 @@ export const LOCAL_DEV_RESOURCES_DB_ID = "local-dev-resources-db";
 export const REQUIRED_SECRETS = [
   "APP_CONFIG_LOGS",
   "APP_CONFIG_POSTHOG",
-  "APP_CONFIG_SHARED_API_SECRET",
+  "APP_CONFIG_ITERATE_AUTH__CLIENT_ID",
+  "APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET",
 ];
 
 /**
  * Env-shaping config that is NOT secret and already lives in envs.ts —
- * emitted as per-env `vars` so the worker's runtime base URL can never drift
- * from the route generated off the same entry. Local dev has no base URL
- * (the config schema keeps it optional), so it is deliberately absent from
- * the top-level `secrets.required`.
+ * emitted as per-env `vars` so the worker's runtime base URL and auth issuer
+ * can never drift from the route generated off the same entry. Local dev has
+ * no base URL (the config schema keeps it optional), so these are
+ * deliberately absent from the top-level `secrets.required` — except the
+ * issuer, which local dev loads from Doppler to sign in via the shared dev
+ * auth deployment.
  */
 export function envShapedVars(env: SemaphoreEnv) {
-  return { APP_CONFIG_BASE_URL: env.baseUrl };
+  return {
+    APP_CONFIG_BASE_URL: env.baseUrl,
+    APP_CONFIG_ITERATE_AUTH__ISSUER: `${env.authBaseUrl}/api/auth`,
+  };
 }
 
 /** Binding config identical across local dev and every deployed env, apart from the D1 id. */
@@ -93,6 +99,16 @@ const config = {
   // Local dev has no real database; miniflare only needs a stable id
   // (sqlfu.config.ts opens the same id for local migrations/queries).
   ...workerBindings({ resourcesDbId: LOCAL_DEV_RESOURCES_DB_ID }),
+  // Local dev also loads the iterate-auth env-shaping/baked keys from Doppler
+  // when present (deployed envs get the issuer as a generated var and the
+  // JWKS baked at deploy — see deploy.ts).
+  secrets: {
+    required: [
+      ...REQUIRED_SECRETS,
+      "APP_CONFIG_ITERATE_AUTH__ISSUER",
+      "APP_CONFIG_ITERATE_AUTH__JWKS",
+    ],
+  },
   env: Object.fromEntries(
     Object.entries(semaphoreEnvs).map(([name, env]) => [name, envBlock(env)]),
   ),

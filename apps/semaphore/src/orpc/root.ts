@@ -4,7 +4,6 @@ import { getPublicConfig } from "@iterate-com/shared/config";
 import { z } from "zod";
 import packageJson from "../../package.json" with { type: "json" };
 import { AppConfig } from "~/config.ts";
-import type { RequestContext } from "~/request-context.ts";
 import {
   deleteResourceFromDb,
   findResourceByKey,
@@ -15,24 +14,15 @@ import {
 } from "~/lib/resource-store.ts";
 import { semaphore } from "~/orpc/orpc.ts";
 
-function readBearerToken(headerValue: string | null): string | null {
-  if (!headerValue) return null;
-  const match = /^bearer\s+(.+)$/i.exec(headerValue);
-  if (!match) return null;
-  const token = match[1]?.trim() ?? "";
-  return token.length > 0 ? token : null;
-}
-
-function hasValidBearerToken(context: RequestContext): boolean {
-  const expectedToken = context.config.sharedApiSecret.exposeSecret();
-  const providedToken = readBearerToken(context.rawRequest?.headers.get("authorization") ?? null);
-  return Boolean(providedToken && providedToken === expectedToken);
-}
-
+// Semaphore is behind the same apps/auth relying-party auth as os: the
+// request middleware (src/start.ts) resolves the caller from the iterate
+// session cookie or a bearer access token, and everything here requires an
+// iterate admin identity. Fails closed when iterateAuth is unconfigured.
 const requireAuth = semaphore.middleware(async ({ context, next }) => {
-  if (!hasValidBearerToken(context)) {
+  if (!context.principal?.isAdmin) {
     throw new ORPCError("UNAUTHORIZED", {
-      message: "Missing or invalid Authorization header",
+      message:
+        "Authenticate with an iterate admin identity: sign in through /api/iterate-auth/login, or send an admin access token as `Authorization: Bearer <token>`.",
     });
   }
 

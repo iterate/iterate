@@ -1,11 +1,42 @@
 import { Fragment } from "react";
-import { Link, Outlet, createFileRoute, useMatchRoute, useMatches } from "@tanstack/react-router";
+import {
+  Link,
+  Outlet,
+  createFileRoute,
+  redirect,
+  useMatchRoute,
+  useMatches,
+  type RegisteredRouter,
+} from "@tanstack/react-router";
+import { fetchAuthSnapshot } from "~/lib/auth-snapshot.ts";
 
 export const Route = createFileRoute("/_app")({
+  // The whole dashboard requires a signed-in iterate admin — the same
+  // apps/auth identity the API lanes verify. Unauthenticated visitors go
+  // through the relying-party login handler (served by the request
+  // middleware, outside the route tree — hence redirect by href).
+  beforeLoad: async ({ location }) => {
+    const auth = await fetchAuthSnapshot();
+    if (!auth.authenticated) {
+      // The explicit "./" type parameter keeps `to` optional under this
+      // router's trailingSlash: "always" typing — href alone is the intent.
+      throw redirect<RegisteredRouter, "./">({
+        href: `/api/iterate-auth/login?${new URLSearchParams({ return_to: location.href })}`,
+      });
+    }
+    if (!auth.isAdmin) {
+      throw new Error(
+        `Signed in${auth.email ? ` as ${auth.email}` : ""}, but semaphore is operator tooling and requires an iterate admin. Sign out at /api/iterate-auth/logout.`,
+      );
+    }
+    return { auth };
+  },
   component: AppLayout,
 });
 
 function AppLayout() {
+  const { auth } = Route.useRouteContext();
+
   return (
     <div className="min-h-svh bg-background text-foreground">
       <header className="border-b">
@@ -18,8 +49,21 @@ function AppLayout() {
             <a href="/api/docs" className="hover:text-foreground">
               API
             </a>
+            <a
+              href="/api/iterate-auth/logout"
+              className="hover:text-foreground"
+              title={auth.email ?? undefined}
+            >
+              Sign out
+            </a>
           </nav>
         </div>
+        {!auth.isAdmin ? (
+          <div className="mx-auto max-w-md px-4 pb-3 text-sm text-destructive">
+            You are signed in{auth.email ? ` as ${auth.email}` : ""} but not an iterate admin —
+            operator actions and the API will refuse you.
+          </div>
+        ) : null}
         <div className="mx-auto max-w-md px-4 pb-3 text-sm text-muted-foreground">
           <Breadcrumbs />
         </div>

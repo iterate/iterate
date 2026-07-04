@@ -27,6 +27,7 @@
 import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { semaphoreEnvs } from "../../../envs.ts";
+import { bakeStaticAuthJwks } from "../../../scripts/lib/bake-auth-jwks.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import { run } from "../../../scripts/lib/deploy-helpers.ts";
 import { parseConfig } from "../src/config.ts";
@@ -55,7 +56,17 @@ export default async function deploy(
     servingUrl: (env) => env.baseUrl,
     resources: (env) => env.resources,
     requiredSecrets: REQUIRED_SECRETS,
-    prepare: (ctx, secretValues, credentials) => {
+    prepare: async (ctx, secretValues, credentials) => {
+      // Semaphore verifies iterate sessions and bearer tokens against a
+      // static JWKS baked at deploy time (issuer keys + forge public key) —
+      // the same relying-party model as apps/os.
+      secretValues.APP_CONFIG_ITERATE_AUTH__JWKS = await bakeStaticAuthJwks({
+        authBaseUrl: ctx.env.authBaseUrl,
+        envName: ctx.name,
+        dopplerConfig: ctx.env.dopplerConfig,
+        secrets: ctx.secrets,
+      });
+
       // Parse the exact env the worker will see (secrets + generated vars) with
       // the worker's own schema — the strongest possible pre-flight.
       parseConfig({ ...secretValues, ...envShapedVars(ctx.env) });
