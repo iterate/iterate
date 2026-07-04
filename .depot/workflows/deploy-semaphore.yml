@@ -11,6 +11,8 @@ on:
       - main
     paths:
       - .depot/workflows/deploy-semaphore.yml
+      - envs.ts
+      - scripts/lib/**
       - apps/semaphore/**
       - packages/shared/**
       - packages/ui/**

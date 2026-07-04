@@ -11,6 +11,8 @@ on:
       - main
     paths:
       - .depot/workflows/deploy-os.yml
+      - envs.ts
+      - scripts/lib/**
       - apps/os/**
       - apps/auth/**
       - apps/auth-contract/**
