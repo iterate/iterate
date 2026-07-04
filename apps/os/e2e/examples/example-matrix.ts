@@ -86,6 +86,12 @@ const LOADER_CONTENTION_MESSAGE = "Too many concurrent dynamic workers";
 // isolate), so treat it as the same retryable transient; a persistent itx
 // bug still fails after the backoff budget.
 const MASKED_INTERNAL_ERROR_MESSAGE = "internal error; reference =";
+// The repo examples commit then immediately read; on a COLD repo Durable
+// Object the read can lag the commit (Artifacts read-after-write), so the
+// example's own "seeded file" precondition throws. Warm repos never hit it —
+// retrying with backoff is exactly right. Underlying capability gap:
+// commitFiles resolving before read-your-write holds.
+const REPO_SEED_LAG_MESSAGE = "Expected seeded file to exist";
 const LOADER_CONTENTION_BACKOFF_MS = [2_000, 5_000, 10_000];
 
 async function retryOnWorkerStartupContention<T>(run: () => Promise<T>): Promise<T> {
@@ -96,7 +102,8 @@ async function retryOnWorkerStartupContention<T>(run: () => Promise<T>): Promise
       const message = error instanceof Error ? error.message : String(error);
       const retryable =
         message.includes(LOADER_CONTENTION_MESSAGE) ||
-        message.includes(MASKED_INTERNAL_ERROR_MESSAGE);
+        message.includes(MASKED_INTERNAL_ERROR_MESSAGE) ||
+        message.includes(REPO_SEED_LAG_MESSAGE);
       if (!retryable) throw error;
       await new Promise((resolve) => setTimeout(resolve, backoffMs));
     }
