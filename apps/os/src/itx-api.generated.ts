@@ -88,7 +88,7 @@ export interface RepoCollection {
 export interface ProjectCollection {
   __describe(): Promise<Description>;
   /** The itx at the project root for a `prj_…` id. */
-  get(projectId: string): Promise<Itx>;
+  get(projectId: string): Promise<Project>;
   /**
    * Register and bootstrap a project. By default this resolves once the
    * bootstrap saga has committed `project/created` — convenient for scripts
@@ -105,7 +105,7 @@ export interface ProjectCollection {
     projectId?: string;
     slug: string;
     waitUntilCreated?: boolean;
-  }): Promise<Itx>;
+  }): Promise<Project>;
   /**
    * The session's projects, enriched: identity (id/slug/org) from the auth
    * claims or the project directory, deployment status from a concurrent
@@ -224,7 +224,7 @@ export interface Repo {
  * shadowable built-ins a lot, we'd move resolution behind the DO and pay the
  * round trip; today we don't.
  */
-export interface Itx {
+export interface Project {
   /** The project this itx is scoped into. */
   projectId: string;
   /**
@@ -835,6 +835,10 @@ export type EditRepoFileResult = CommitRepoFilesResult & {
   path: string;
 };
 
+/**
+ * The repo processor's reduced state, inferred from the contract's
+ * `stateSchema` — the one definition of the shape.
+ */
 export type RepoProcessorState = {
   artifactName: string | null;
   created: boolean;
@@ -850,13 +854,19 @@ export type ProjectDescription = Description & {
   projectId: string;
 };
 
+/**
+ * The project processor's reduced state, inferred from the contract's
+ * `stateSchema` — the one definition of the shape. `created` flips when the
+ * bootstrap saga lands; the list fields are what the collection `list()`
+ * methods read.
+ */
 export type ProjectProcessorState = {
-  agents: StreamListItem[];
   createRequest: { projectId: string; slug: string } | null;
   created: boolean;
-  repos: StreamListItem[];
-  secrets: StreamListItem[];
-  streams: StreamListItem[];
+  agents: { createdAt: string; path: string }[];
+  repos: { createdAt: string; path: string }[];
+  secrets: { createdAt: string; path: string }[];
+  streams: { createdAt: string; path: string }[];
 };
 
 /** Capability recipe accepted by `provideCapability`. */
@@ -955,22 +965,25 @@ export type CapabilityDescription = {
   types?: string;
 };
 
-export type StreamListItem = {
-  createdAt: string;
-  path: string;
-};
-
+/**
+ * The agent processor's reduced state, inferred from the contract's
+ * `stateSchema` — the one definition of the shape (the old hand-written copy
+ * in types.ts silently omitted `llmProviderConfigured` and
+ * `requestGeneration`).
+ */
 export type AgentProcessorState = {
+  systemPrompt: string;
+  history: { role: "user" | "assistant"; content: string }[];
+  llmConfig: { model: string };
+  llmProvider: "cloudflare-ai" | "openai-ws";
+  llmProviderConfigured: boolean;
   currentRequest:
     | { phase: "scheduled"; requestId: string; scheduledOffset: number }
     | { phase: "requested"; llmRequestId: number }
     | null;
-  history: Array<{ role: "user" | "assistant"; content: string }>;
-  llmConfig: { model: string };
-  llmProvider: "cloudflare-ai" | "openai-ws";
   pendingTriggerOffset: number | null;
+  requestGeneration: number;
   scriptExecutionsCompleted: string[];
-  systemPrompt: string;
 };
 
 /** Target shape for a live capability that wants to receive flattened paths. */
@@ -979,6 +992,8 @@ export type FlattenedCapabilityTarget = {
 };
 
 export type ItxExpression = ItxExpressionStep[];
+
+export type StreamListItem = { createdAt: string; path: string };
 
 /** Live replacement for project egress. It sees getSecret(...) placeholders, never material. */
 export type ProjectEgressInterceptor = (req: Request) => Promise<Response>;

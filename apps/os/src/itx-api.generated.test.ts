@@ -20,8 +20,8 @@ test("itx-api.generated.ts is fresh (pnpm generate:itx-api)", () => {
 test("itx-api.generated.ts is a standalone module (itx scripts can typecheck against it alone)", () => {
   const source = readFileSync(generatedPath, "utf8");
   const script = `
-    import type { Itx, StreamEvent } from "./itx-api.generated.ts";
-    export async function run(itx: Itx): Promise<StreamEvent> {
+    import type { Project, StreamEvent } from "./itx-api.generated.ts";
+    export async function run(itx: Project): Promise<StreamEvent> {
       const [event] = await itx.streams.get("/demo").append({ type: "demo/ping" });
       await itx.repo.edit({ message: "m", path: "a.ts", oldString: "x", newString: "y" });
       return event;

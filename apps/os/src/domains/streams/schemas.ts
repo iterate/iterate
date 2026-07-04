@@ -43,8 +43,19 @@ export const StreamEvent = StreamEventInput.extend({
   createdAt: z.string(),
 });
 
+/**
+ * One known stream in a project's reduced state — what the project processor
+ * records per agent/repo/secret/stream and what the collection `list()`
+ * methods return.
+ */
+export const StreamListItem = z.object({
+  createdAt: z.string(),
+  path: z.string(),
+});
+
 // The schemas above are the single definition of these shapes; the types are
 // inferred, not hand-maintained (types.ts re-exports them for older importers).
 export type StreamEventSource = z.infer<typeof StreamEventSource>;
 export type StreamEventInput = z.infer<typeof StreamEventInput>;
 export type StreamEvent = z.infer<typeof StreamEvent>;
+export type StreamListItem = z.infer<typeof StreamListItem>;

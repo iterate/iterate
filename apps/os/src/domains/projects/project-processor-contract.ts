@@ -1,13 +1,9 @@
 import { z } from "zod";
-import { defineProcessorContract } from "../streams/processor-contracts.ts";
+import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
-
-const StreamListItem = z.object({
-  createdAt: z.string(),
-  path: z.string(),
-});
+import { StreamListItem } from "../streams/schemas.ts";
 
 export const ProjectProcessorContract = defineProcessorContract({
   slug: "project",
@@ -61,3 +57,11 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/subscription-configured",
   ],
 });
+
+/**
+ * The project processor's reduced state, inferred from the contract's
+ * `stateSchema` — the one definition of the shape. `created` flips when the
+ * bootstrap saga lands; the list fields are what the collection `list()`
+ * methods read.
+ */
+export type ProjectProcessorState = ProcessorState<typeof ProjectProcessorContract>;

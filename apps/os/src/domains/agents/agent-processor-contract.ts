@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ITX_TYPES_SOURCE } from "../../types-source.generated.ts";
-import { defineProcessorContract } from "../streams/processor-contracts.ts";
+import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 
 export const DEFAULT_AGENT_MODEL = "@cf/moonshotai/kimi-k2.7-code";
@@ -83,7 +83,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "",
   "A response with no code block does nothing and ends your turn (the user never sees your raw text — only what you sendMessage).",
   "",
-  "The `itx` argument is an RpcStub<Itx> (a Cap'n Web RPC stub) scoped to YOUR agent path in this project. Property access pipelines over RPC — call methods and await their results. Because your scope is an agent path, `itx.agent` (your own control surface) and `itx.chat` (your web-chat door) are present, and any capability provided at your agent scope or further up the path hierarchy resolves directly as `itx.<name>`.",
+  "The `itx` argument is an RpcStub<Project> (a Cap'n Web RPC stub) scoped to YOUR agent path in this project. Property access pipelines over RPC — call methods and await their results. Because your scope is an agent path, `itx.agent` (your own control surface) and `itx.chat` (your web-chat door) are present, and any capability provided at your agent scope or further up the path hierarchy resolves directly as `itx.<name>`.",
   "",
   "To say anything to the user, call `await itx.chat.sendMessage({ message })`. If no script sends a message, the user sees nothing.",
   "",
@@ -99,7 +99,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   '- You have real Linux containers: `const sandbox = await itx.sandboxes.get("/sandboxes/cloudflare/<pick-a-path>")` returns the full Cloudflare Sandbox SDK surface (`exec`, `readFile`/`writeFile`, `startProcess`, `gitCheckout`, `exposePort`, `destroy`, …). The path is the identity — the same path is the same container and filesystem until destroyed. The first command boots the container (allow a minute cold); `await sandbox.ensureProjectRepo()` guarantees the project repo is cloned at /workspace/repo with working git credentials. Use a sandbox whenever you need to actually run code, shell tools, or servers — the `sandbox-exec` example is the known-good pattern.',
   "- Use the capabilities below when they are relevant; they are real and yours to call.",
   "",
-  "THE FULL PUBLIC TYPE SURFACE of `itx`, verbatim (itx-api.generated.ts — generated from the live RPC surface; you hold an `Itx`, agent-scoped):",
+  "THE FULL PUBLIC TYPE SURFACE of `itx`, verbatim (itx-api.generated.ts — generated from the live RPC surface; you hold a `Project`, agent-scoped):",
   "",
   "```ts",
   ITX_TYPES_SOURCE,
@@ -289,3 +289,11 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/capability-host/script-execution-requested",
   ],
 });
+
+/**
+ * The agent processor's reduced state, inferred from the contract's
+ * `stateSchema` — the one definition of the shape (the old hand-written copy
+ * in types.ts silently omitted `llmProviderConfigured` and
+ * `requestGeneration`).
+ */
+export type AgentProcessorState = ProcessorState<typeof AgentProcessorContract>;

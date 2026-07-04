@@ -33,7 +33,7 @@ const outPath = path.join(projectDir, "src/itx-api.generated.ts");
  * signatures mentioning it are rewritten to the mapped contract name instead.
  */
 const CLASS_NAME_OVERRIDES: Record<string, string> = {
-  ProjectRpcTarget: "Itx",
+  ProjectRpcTarget: "Project",
   SlackRpcTarget: "SlackCapability",
   GmailRpcTarget: "GmailCapability",
   IntegrationsRpcTarget: "ProjectIntegrations",

@@ -14,7 +14,11 @@ import type {
   StreamEvent,
   StreamEventInput,
   StreamEventSource,
+  StreamListItem,
 } from "./domains/streams/schemas.ts";
+import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
+import type { AgentProcessorState } from "./domains/agents/agent-processor-contract.ts";
+import type { RepoProcessorState } from "./domains/repos/repo-processor-contract.ts";
 
 // -----------------------------------------------------------------------------
 // The four nouns. Keeping them distinct is what makes this system legible:
@@ -505,40 +509,11 @@ export type SecretDescription = {
   hasMaterial: boolean;
 };
 
-export type StreamListItem = {
-  createdAt: string;
-  path: string;
-};
-
-export type ProjectProcessorState = {
-  agents: StreamListItem[];
-  createRequest: { projectId: string; slug: string } | null;
-  created: boolean;
-  repos: StreamListItem[];
-  secrets: StreamListItem[];
-  streams: StreamListItem[];
-};
-
-export type AgentProcessorState = {
-  currentRequest:
-    | { phase: "scheduled"; requestId: string; scheduledOffset: number }
-    | { phase: "requested"; llmRequestId: number }
-    | null;
-  history: Array<{ role: "user" | "assistant"; content: string }>;
-  llmConfig: { model: string };
-  llmProvider: "cloudflare-ai" | "openai-ws";
-  pendingTriggerOffset: number | null;
-  scriptExecutionsCompleted: string[];
-  systemPrompt: string;
-};
-
-export type RepoProcessorState = {
-  artifactName: string | null;
-  created: boolean;
-  defaultBranch: string | null;
-  initialized: boolean;
-  remote: string | null;
-};
+// The processor state shapes are defined ONCE, on each processor contract's
+// `stateSchema` (inferred via ProcessorState<typeof Contract>, imported at the
+// top of this file); these re-exports keep this module's historical import
+// surface working. Same pattern as the StreamEvent shapes above.
+export type { StreamListItem, ProjectProcessorState, AgentProcessorState, RepoProcessorState };
 
 // NOTE: there is deliberately no public secret processor state type: a
 // secret's public live state IS its SecretDescription. The internal fold
