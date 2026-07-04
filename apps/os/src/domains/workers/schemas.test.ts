@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { DynamicWorkerRef } from "./schemas.ts";
+import { DynamicWorkerRef, DynamicWorkerSource } from "./schemas.ts";
 
 const inlineSource = {
-  mainModule: "worker.ts",
-  modules: { "worker.ts": "export default {};" },
-  type: "inline",
+  files: {
+    files: { "worker.ts": "export default {};" },
+    type: "inline",
+  },
+  options: { entryPoint: "worker.ts" },
 } as const;
 
 describe("DynamicWorkerRef schema", () => {
@@ -32,6 +34,60 @@ describe("DynamicWorkerRef schema", () => {
         props: { ignored: true },
         source: inlineSource,
         type: "stateful",
+      }),
+    ).toThrow();
+  });
+});
+
+describe("DynamicWorkerSource schema", () => {
+  it("accepts repo sources with branch or commit refs and glob masks", () => {
+    expect(
+      DynamicWorkerSource.parse({
+        files: {
+          exclude: [".git/**"],
+          include: ["src/**", "package.json"],
+          ref: { branch: "main" },
+          repoPath: "/",
+          type: "repo",
+        },
+        options: { entryPoint: "src/worker.ts", minify: true },
+      }),
+    ).toMatchObject({ files: { ref: { branch: "main" }, type: "repo" } });
+
+    expect(
+      DynamicWorkerSource.parse({
+        files: {
+          ref: { commitOid: "a".repeat(40) },
+          repoPath: "/",
+          type: "repo",
+        },
+      }),
+    ).toMatchObject({ files: { ref: { commitOid: "a".repeat(40) } } });
+  });
+
+  it("rejects the pre-build-pipeline source shapes", () => {
+    expect(() =>
+      DynamicWorkerSource.parse({
+        mainModule: "worker.js",
+        modules: { "worker.js": "export default {};" },
+        type: "inline",
+      }),
+    ).toThrow();
+    expect(() =>
+      DynamicWorkerSource.parse({ repoPath: "/", sourcePath: "worker.js", type: "repo" }),
+    ).toThrow();
+  });
+
+  it("rejects malformed commit oids and unknown build options", () => {
+    expect(() =>
+      DynamicWorkerSource.parse({
+        files: { ref: { commitOid: "not-a-sha" }, repoPath: "/", type: "repo" },
+      }),
+    ).toThrow();
+    expect(() =>
+      DynamicWorkerSource.parse({
+        files: { files: {}, type: "inline" },
+        options: { files: {} },
       }),
     ).toThrow();
   });

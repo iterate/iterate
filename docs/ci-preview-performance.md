@@ -34,7 +34,7 @@ seconds and run alongside OS.
   preview workflow (see [Depot CI](depot-ci.md)).
 - **Deploys run in one parallel batch.** OS bakes the auth JWKS at deploy time,
   but instead of waiting for auth to finish first, the OS deploy _polls_ the
-  slot's auth worker for JWKS (`apps/os/alchemy.run.ts`, 120s deadline). All
+  slot's auth worker for JWKS (`bakeStaticAuthJwks` in `apps/os/scripts/deploy.ts`). All
   apps deploy at once.
 - **File-level parallelism.** Every e2e test provisions its own project, so
   files are independent; CI runs them in parallel (`fileParallelism`,

@@ -12,7 +12,6 @@ catalogs:
     "@cloudflare/unenv-preset": ^2.16.0
     "@cloudflare/vite-plugin": 1.43.0
     "@cloudflare/vitest-pool-workers": ^0.14.9
-    "@cloudflare/worker-bundler": ^0.1.2
     "@cloudflare/workers-types": ^4.20260621.1
     miniflare: 4.20260701.0
     workerd: 1.20260701.0
@@ -89,10 +88,33 @@ overrides:
   "@tanstack/react-query": "5.91.0"
   "wrangler": "4.107.0"
 
+packageExtensions:
+  # @valtown/codemirror-ts's .d.ts imports @typescript/vfs without declaring
+  # it, so it resolves through pnpm's private hoist — which flips to the
+  # typescript@6-peered vfs instance now that @cloudflare/worker-bundler pulls
+  # typescript 6 in. Declaring the peers pins it to the workspace's own
+  # typescript/vfs pair.
+  "@valtown/codemirror-ts":
+    peerDependencies:
+      "@typescript/vfs": "*"
+      typescript: "*"
+
 patchedDependencies:
-  # The itx engine (apps/os/src/next) needs ctx.exports loopback RPC types and
+  # The itx engine (apps/os/src) needs ctx.exports loopback RPC types and
   # a non-never RPC return fallback for opaque stream event payloads (the
   # patch originated in minimal-itx-v4, now transplanted into apps/os).
   "@cloudflare/workers-types@4.20260621.1": "patches/@cloudflare__workers-types@4.20260621.1.patch"
+  # Four small resolver fixes for dynamic worker builds (all upstreamable):
+  # 1. extension-probe legacy `main` fields (form-data ships
+  #    `"main": "./lib/form_data"`, which was silently externalized);
+  # 2. let a virtual module's self-named import fall through to normal
+  #    resolution, so a "node:os" virtual module can re-export the real
+  #    external node:os for CommonJS require interop;
+  # 3. pass the `conditions` option through to the bundling plugin's package
+  #    resolver (it always used the built-in ["import", "browser"] default);
+  # 4. resolve require-call imports with the "require" exports condition, so a
+  #    CJS `require("eventemitter3")` gets the CJS build instead of an ESM
+  #    namespace object (p-queue does `class extends require(...)`).
+  "@cloudflare/worker-bundler@0.2.1": "patches/@cloudflare__worker-bundler@0.2.1.patch"
   "@better-auth/oauth-provider@1.6.9": "patches/@better-auth__oauth-provider@1.6.9.patch"
   "capnweb@0.8.0": "patches/capnweb@0.8.0.patch"

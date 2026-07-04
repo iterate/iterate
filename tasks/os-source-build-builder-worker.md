@@ -1,9 +1,11 @@
 ---
-state: todo
+state: done
 priority: medium
 size: medium
 tags: [os, itx, workers, performance]
 ---
+
+> Done — shipped by PR #1612 as the builder sidecar (`apps/os/src/builder.ts`); the next step (container builds) is tracked in os-sandbox-worker-builds.md. Body below predates the single-worker cutover.
 
 # Move itx source builds (esbuild.wasm) into a dedicated builder worker
 

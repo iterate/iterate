@@ -14,7 +14,6 @@ import type {
   StatelessDynamicWorkerRef,
   StreamEvent,
 } from "../../types.ts";
-import { sha256Hex } from "../workers/utils.ts";
 import type { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
@@ -104,7 +103,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
   readonly contract = CapabilityHostProcessorContract;
   #itx: ProjectRpcTarget;
   #path: string;
-  #workerRunner: DynamicWorkerRunner;
+  #dynamicWorkers: DynamicWorkerRunner;
   #parent: ParentCapabilityHost | undefined;
   #liveCapabilities = new Map<string, LiveCapability>();
 
@@ -112,7 +111,8 @@ export class CapabilityHostProcessor extends StreamProcessor<
     args: StreamProcessorConstructorArgs<typeof CapabilityHostProcessorContract, object> & {
       itx: ProjectRpcTarget;
       path: string;
-      workerRunner: DynamicWorkerRunner;
+      /** Runs run-script workers in this scope. */
+      dynamicWorkers: DynamicWorkerRunner;
       // The enclosing scope, or undefined at the project root ("/"). Present for
       // every nested scope (agents, sub-agents, agent namespaces) so capability
       // lookups that miss locally can fall through to the surrounding scope.
@@ -122,7 +122,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
     super(args);
     this.#itx = args.itx;
     this.#path = normalizePath(args.path);
-    this.#workerRunner = args.workerRunner;
+    this.#dynamicWorkers = args.dynamicWorkers;
     this.#parent = args.parent;
   }
 
@@ -420,17 +420,19 @@ export class CapabilityHostProcessor extends StreamProcessor<
     };
 
     try {
-      const worker = await this.#workerRunner.getStatelessEntrypoint<{ run(): Promise<unknown> }>(
-        await this.#scriptWorkerRef(input.code),
-      );
-      const result = await worker.run();
+      // Scripts execute inside THIS scope: the loaded worker's env.ITX resolves
+      // to the same path this processor owns, not the script ref's path.
+      const result = await this.#dynamicWorkers.invokeCapability({
+        path: ["run"],
+        ref: this.#scriptWorkerRef(input.code),
+      });
       await complete({ result });
     } catch (error) {
       await complete({ error: error instanceof Error ? error.message : String(error) });
     }
   }
 
-  async #scriptWorkerRef(code: string): Promise<StatelessDynamicWorkerRef> {
+  #scriptWorkerRef(code: string): StatelessDynamicWorkerRef {
     const source = `
       import { WorkerEntrypoint } from "cloudflare:workers";
       const fn = ${code};
@@ -442,17 +444,21 @@ export class CapabilityHostProcessor extends StreamProcessor<
       }
     `;
     // runScript is deliberately expressed as a stateless inline DynamicWorkerRef. That
-    // keeps script execution on the same DynamicWorkerRunner path as project workers
-    // and provided stateless capabilities; ITX adds only the journal events.
+    // keeps script execution on the same DynamicWorkerRunner dispatch path as project
+    // workers and provided stateless capabilities; ITX adds only the journal events.
+    // `bundle: false` over plain JavaScript is the loader-ready fast path in
+    // resolveWorkerSource: scripts run on every agent turn and must not pay a
+    // build round trip.
     return {
       path: this.#path,
       source: {
-        mainModule: "main.js",
-        modules: { "main.js": source },
-        type: "inline",
+        files: {
+          files: { "main.js": source },
+          type: "inline",
+        },
+        options: { bundle: false, entryPoint: "main.js" },
       },
       entrypoint: "ScriptEntrypoint",
-      props: { scriptHash: await sha256Hex(code) },
       type: "stateless",
     };
   }

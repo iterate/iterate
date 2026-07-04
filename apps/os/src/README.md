@@ -12,18 +12,18 @@ programs against. When this README and `types.ts` disagree, `types.ts` wins.
 
 ## Layout
 
-| Path                   | What                                                                                                                                            |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `types.ts`             | The public ITX contract (the design of record)                                                                                                  |
-| `rpc-targets.ts`       | ALL RpcTarget classes: the session/project/agent surfaces, MCP/OpenAPI clients, capability provision, stream subscriptions, egress              |
-| `auth.ts`              | The auth adapter: credentials → `ItxAuth` (see below)                                                                                           |
-| `itx-client.ts`        | `connectItx()` — the Node/CLI client over a Cap'n Web WebSocket                                                                                 |
-| `ingress.ts`           | The shared routing decision (which requests belong to itx)                                                                                      |
-| `project-directory.ts` | Slug → project id resolution against the auth worker, cached in the `PROJECT_DIRECTORY` KV namespace                                            |
-| `env.ts`               | The binding contract every itx worker deploys with (`nextEnv`)                                                                                  |
-| `workers/`             | One entrypoint per deployed itx worker ([worker topology](../../docs/worker-topology.md))                                                       |
-| `domains/`             | One folder per domain: `streams`, `projects`, `repos`, `agents`, `secrets`, `workers` (dynamic), `capability-host`, `itx`, `inbound-mcp-server` |
-| `e2e-fixtures.ts`      | Worker-hosted fixtures for itx e2e suites (`/__itx_e2e/*`)                                                                                      |
+| Path                       | What                                                                                                                                            |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `types.ts`                 | The public ITX contract (the design of record)                                                                                                  |
+| `rpc-targets.ts`           | ALL RpcTarget classes: the session/project/agent surfaces, MCP/OpenAPI clients, capability provision, stream subscriptions, egress              |
+| `auth.ts`                  | The auth adapter: credentials → `ItxAuth` (see below)                                                                                           |
+| `itx-client.ts`            | `connectItx()` — the Node/CLI client over a Cap'n Web WebSocket                                                                                 |
+| `ingress.ts`               | The shared routing decision (which requests belong to itx)                                                                                      |
+| `project-directory.ts`     | Slug → project id resolution against the auth worker, cached in the `PROJECT_DIRECTORY` KV namespace                                            |
+| `env.ts`                   | The single worker's binding contract ([worker topology](../docs/worker-topology.md))                                                            |
+| `worker.ts` / `builder.ts` | The worker entry and the builder sidecar entry                                                                                                  |
+| `domains/`                 | One folder per domain: `streams`, `projects`, `repos`, `agents`, `secrets`, `workers` (dynamic), `capability-host`, `itx`, `inbound-mcp-server` |
+| `e2e-fixtures.ts`          | Worker-hosted fixtures for itx e2e suites (`/__itx_e2e/*`)                                                                                      |
 
 Each domain owns its Durable Object plus a stream-processor contract
 (`*-processor-contract.ts`, pure: event schemas + reducer) and implementation
@@ -150,7 +150,7 @@ The load-bearing asymmetry: **reads chain up, writes stay local.**
 mount elsewhere, address that scope explicitly via `capabilityHosts.get(path)`.
 
 Slack webhook ingress (`/api/integrations/slack/webhook`) is deliberately NOT
-on this tree: it is an HTTP lane on the api worker
+on this tree: it is an HTTP lane in the worker's api pipeline
 (`domains/integrations/slack-webhook-api.ts`) that routes signed events
 directly into the claiming project's stream. The OAuth callback routes stay
 app-side (they need the browser session).
@@ -193,9 +193,11 @@ using agent = connectItx({ agentPath: "/agents/demo", auth, baseUrl, projectId }
 `session.projects.create({ slug })` registers the project with the auth worker
 (the project directory — OS has no database of its own), primes the KV cache,
 then appends the create-request onto the project's root stream. The project
-processor seeds the default repo at `/` from static template files
-(`domains/repos/project-repo-template.ts`: `worker.js`, `README.md`,
-`AGENTS.md`, `ONBOARDING.md`), loads the seeded project worker, boots the
+processor seeds the default repo at `/` from the template folder at
+`apps/os/project-repo-template` (TypeScript `worker.ts` + apps, `package.json`,
+`sdk.ts`, `slack.config.ts`, `AGENTS.md`, `ONBOARDING.md`; codegen keeps the seeded file map in
+`domains/repos/project-repo-template.generated.ts` in sync), builds and loads
+the seeded project worker through the worker build pipeline, boots the
 onboarding agent,
 and only then emits `events.iterate.com/project/created`. Streams are the
 coordination layer for all of this — bootstrap is events and processors, not a
@@ -268,13 +270,25 @@ the interceptor sees placeholders, never material
 ## Dynamic workers
 
 `itx.workers.get(ref)` runs caller-supplied code in an isolate via the Worker
-Loader. A `DynamicWorkerRef` is `stateless` (a WorkerEntrypoint export, with
+Loader. Runners are `DynamicWorkerRunner`
+(`domains/workers/worker-runner.ts`) — its constructor is the one place a
+dynamic isolate gets its scoped ITX binding and egress fetcher. A `DynamicWorkerRef` is
+`stateless` (a WorkerEntrypoint export, with
 optional `props`) or `stateful` (a DurableObject class export hosted by
-`StatefulWorkerDurableObject` under a `durableWorkerKey`); source is `inline`
-(module text) or `repo` (resolved from a project repo, so commits affect the
-next use). Inside loaded code, `await env.ITX.get()` returns a full itx at the
-ref's scope path. `itx.worker` is the seeded project worker — the same
-mechanism pointed at the default repo's `worker.js`.
+`StatefulWorkerDurableObject` under a `durableWorkerKey`). Its source is an
+orthogonal file source plus Cloudflare build options: files come `inline` or
+from a `repo` snapshot (branch late-bound or commit-pinned, masked by
+include/exclude globs), and the builder sidecar (`src/builder.ts` — the only
+script carrying the bundler toolchain) bundles them — multi-file
+TypeScript and `package.json` npm dependencies included — into a KV-cached,
+loader-ready artifact keyed deterministically (see
+`docs/dynamic-worker-build-requirements.md`). Builds are a direct RPC
+(`env.BUILDER.build`, files passed by value); they leave no events in the
+journal, and build failures reach the
+caller as plain errors. Inside
+loaded code, `await env.ITX.get()` returns a full itx at the ref's scope path.
+`itx.worker` is the seeded project worker — the same mechanism pointed at the
+default repo's `worker.ts`.
 
 Note: in script isolates, Workers RPC does not pipeline through unresolved
 returns — `await itx.workers.get(...)` / `await itx.agents.get(...)` before

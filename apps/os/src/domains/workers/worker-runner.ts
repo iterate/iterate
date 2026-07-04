@@ -1,22 +1,29 @@
 import { itxEnv as env } from "../../env.ts";
-import type { Env } from "../../env.ts";
+import { itxEntrypointBinding, itxEntrypointProps } from "../itx/utils.ts";
+import { projectEgressFetcher } from "../projects/utils.ts";
 import type {
   StatefulDynamicWorkerRef,
   StatelessDynamicWorkerRef,
   DynamicWorkerRef,
 } from "../../types.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { invokeFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
+import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
 import {
   loadResolvedWorker,
+  resolveCachedArtifact,
   resolveWorkerSource,
   type ResolvedWorkerSource,
   type WorkerBindings,
 } from "./worker-loader.ts";
 
+// Structural shadow of StatefulWorkerDurableObject.invokeCapability instead
+// of the DO's own type: the DO imports this module (cycle), and a typed
+// DurableObjectStub of it deep-instantiates the stub's self-referential type
+// (TS2589) — same workaround as ParentItxScope in itx-durable-object.ts.
 type StatefulWorkerRpc = {
   invokeCapability(input: {
     args?: unknown[];
+    buildBudgetMs?: number;
     flattenNestedPath?: boolean;
     path: string[];
     ref: StatefulDynamicWorkerRef;
@@ -24,41 +31,50 @@ type StatefulWorkerRpc = {
 };
 
 /**
- * Small internal executor for DynamicWorkerRefs.
- *
- * This is intentionally not an RpcTarget. Public capability-tree access goes
- * through `WorkerRpcTarget`; ITX processors use this directly so mounted
- * capabilities, project workers, and run-script all share one execution path.
+ * Small internal executor for DynamicWorkerRefs — the authority boundary
+ * where a dynamic isolate gets its env: a scoped ITX loopback binding
+ * (capability-tree access as the hosting scope) and the project egress
+ * fetcher as globalOutbound (all network the isolate does flows through it —
+ * secret substitution, egress control). This is intentionally not an
+ * RpcTarget.
  */
 export class DynamicWorkerRunner {
   readonly #bindings: WorkerBindings;
   readonly #globalOutbound: Fetcher;
-  readonly #loader: Env["LOADER"];
   readonly #projectId: string;
-  readonly #workerScopeKey: string;
+  readonly #scopePath: string;
+  readonly #waitUntil: (promise: Promise<unknown>) => void;
 
   constructor(props: {
-    bindings: WorkerBindings;
-    globalOutbound: Fetcher;
-    loader: Env["LOADER"];
+    /** The hosting context's `ctx.exports` — loopback entrypoints are minted
+     * from it, so the isolate's authority is the host's, never the ref's. */
+    exports: ExecutionContext["exports"];
     projectId: string;
-    workerScopeKey: string;
+    /** The itx scope the loaded code runs in (its `env.ITX` answers here). */
+    scopePath: string;
+    /** The host's `ctx.waitUntil` — keeps budget-expired cold builds alive
+     * past the request that gave up on them (see resolveWorkerSource). */
+    waitUntil: (promise: Promise<unknown>) => void;
   }) {
-    this.#bindings = props.bindings;
-    this.#globalOutbound = props.globalOutbound;
-    this.#loader = props.loader;
+    const itxScope = itxEntrypointProps({ path: props.scopePath, projectId: props.projectId });
+    this.#bindings = { ITX: itxEntrypointBinding(props.exports, itxScope) };
+    this.#globalOutbound = projectEgressFetcher(props.exports, props.projectId);
     this.#projectId = props.projectId;
-    this.#workerScopeKey = props.workerScopeKey;
+    this.#scopePath = props.scopePath;
+    this.#waitUntil = props.waitUntil;
   }
 
   /**
    * Stateless refs resolve to WorkerEntrypoint instances and can be invoked in
-   * this isolate. Keeping this separate from stateful class loading makes each
-   * caller state whether it wants an invokable entrypoint or a Durable Object
-   * class hosted behind StatefulWorkerDurableObject.
+   * this isolate. Kept separate from stateful class loading so each path
+   * states whether it wants an invokable entrypoint or a Durable Object class
+   * hosted behind StatefulWorkerDurableObject.
    */
-  async getStatelessEntrypoint<T = unknown>(ref: StatelessDynamicWorkerRef): Promise<T> {
-    const { worker } = await this.#load(ref);
+  async #getStatelessEntrypoint<T = unknown>(
+    ref: StatelessDynamicWorkerRef,
+    buildBudgetMs?: number,
+  ): Promise<T> {
+    const { worker } = await this.#load(ref, buildBudgetMs);
     return worker.getEntrypoint(ref.entrypoint, { props: ref.props ?? {} }) as T;
   }
 
@@ -69,22 +85,48 @@ export class DynamicWorkerRunner {
    */
   async loadStatefulClass<T extends DurableObjectClass = DurableObjectClass>(
     ref: StatefulDynamicWorkerRef,
+    buildBudgetMs?: number,
   ): Promise<{ klass: T; resolved: ResolvedWorkerSource }> {
-    const { resolved, worker } = await this.#load(ref);
+    const { resolved, worker } = await this.#load(ref, buildBudgetMs);
+    return { klass: this.#durableObjectClass<T>(ref, worker), resolved };
+  }
+
+  /**
+   * A stateful class from a previously built artifact, by exact cache key —
+   * never triggers a build (see resolveCachedArtifact). Null when the
+   * artifact is gone.
+   */
+  async loadStatefulClassFromCacheKey<T extends DurableObjectClass = DurableObjectClass>(
+    ref: StatefulDynamicWorkerRef,
+    cacheKey: string,
+  ): Promise<{ klass: T; resolved: ResolvedWorkerSource } | null> {
+    const resolved = await resolveCachedArtifact(cacheKey);
+    if (resolved === null) return null;
+    const worker = this.#loadResolved(ref, resolved);
+    return { klass: this.#durableObjectClass<T>(ref, worker), resolved };
+  }
+
+  #durableObjectClass<T extends DurableObjectClass>(
+    ref: StatefulDynamicWorkerRef,
+    worker: WorkerStub,
+  ): T {
     const klass = worker.getDurableObjectClass?.(ref.className);
     if (!klass) {
       throw new Error(`Worker source did not export DurableObject ${ref.className}.`);
     }
-    return { klass: klass as T, resolved };
+    return klass as T;
   }
 
   async invokeCapability({
     args = [],
+    buildBudgetMs,
     flattenNestedPath = false,
     path,
     ref,
   }: {
     args?: unknown[];
+    /** Give up on a cold build after this long (see resolveWorkerSource). */
+    buildBudgetMs?: number;
     flattenNestedPath?: boolean;
     path: string[];
     ref: DynamicWorkerRef;
@@ -100,35 +142,41 @@ export class DynamicWorkerRunner {
       // allowed to mutate durable runtime state.
       return await this.#statefulWorker(ref).invokeCapability({
         args,
+        buildBudgetMs,
         flattenNestedPath,
         path,
         ref,
       });
     }
 
-    const target = await this.getStatelessEntrypoint(ref);
+    const target = await this.#getStatelessEntrypoint(ref, buildBudgetMs);
     return flattenNestedPath
-      ? await invokeFlattenedPath({ args, path, target })
+      ? await invokePreferringFlattenedPath({ args, path, target })
       : await replayPath({ args, path, target });
   }
 
   async #load(
     ref: DynamicWorkerRef,
+    buildBudgetMs?: number,
   ): Promise<{ resolved: ResolvedWorkerSource; worker: WorkerStub }> {
     const resolved = await resolveWorkerSource({
+      buildBudgetMs,
       projectId: this.#projectId,
       source: ref.source,
+      waitUntil: this.#waitUntil,
     });
-    const worker = loadResolvedWorker({
+    return { resolved, worker: this.#loadResolved(ref, resolved) };
+  }
+
+  #loadResolved(ref: DynamicWorkerRef, resolved: ResolvedWorkerSource): WorkerStub {
+    return loadResolvedWorker({
       bindings: this.#bindings,
       globalOutbound: this.#globalOutbound,
-      loader: this.#loader,
       projectId: this.#projectId,
       ref,
       resolved,
-      workerScopeKey: this.#workerScopeKey,
+      scopePath: this.#scopePath,
     });
-    return { resolved, worker };
   }
 
   #statefulWorker(ref: StatefulDynamicWorkerRef): StatefulWorkerRpc {

@@ -5,25 +5,24 @@ short README.
 
 ## Runtime Shape
 
-OS deploys as ten small Workers (see [worker-topology.md](./worker-topology.md)):
-a tiny ingress router owns all routes, the dashboard app and the itx api
-are their own workers, and every Durable Object class is its own worker.
+OS deploys as one Worker (see [worker-topology.md](./worker-topology.md)):
+the dashboard, the itx api, and every Durable Object class live in a single
+script (`src/worker.ts`), plus the builder sidecar for dynamic worker builds.
 Traffic is dispatched on hostname and path:
 
 1. Rpc lanes: `/api` (+ `/api/admin-cookie`), `/__itx_e2e/*`, `/prj_<id>/...`, and project
-   platform hosts (`<slug>.iterate.app`, `<slug>.localhost:<port>`) forward to
-   the api worker (`src/workers/api.ts`). Project-host requests route to
-   the project's seeded worker, never the dashboard.
-2. The MCP hostname (`mcp.iterate.com`) rewrites to the app worker's
-   `/api/mcp` route.
-3. Everything else on the OS host lands on the app worker
-   (`src/workers/app.ts`): the TanStack Start dashboard (SSR, server
-   functions, assets) wrapped in one evlog "wide event" per request.
+   platform hosts (`<slug>.iterate.app`, `<slug>.localhost:<port>`) take the
+   api pipeline. Project-host requests route to the project's seeded worker,
+   never the dashboard.
+2. The MCP hostname (`mcp.iterate.com`) rewrites to the app's `/api/mcp`
+   route.
+3. Everything else on the OS host lands on the TanStack Start dashboard
+   (SSR, server functions, assets) wrapped in one evlog "wide event" per
+   request.
 
-The routing decision is one shared function (`src/ingress.ts`), run by
-the ingress worker in production and by the app worker in local dev (where the
-browser talks to vite directly). Runtime config is parsed from `env` per
-request, never at module scope — isolates can outlive binding-only deploys.
+The routing decision is one shared function (`src/ingress.ts`). Runtime
+config is parsed from `env` per request, never at module scope — isolates
+can outlive binding-only deploys.
 
 The TanStack handler receives a `RequestContext` (`src/request-context.ts`)
 with request-scoped state only: `config`, `log`, `rawRequest`, `waitUntil`.
@@ -80,7 +79,7 @@ context, managed by `src/itx/itx-react.tsx` (`useItx`/`useItxQuery`/
 `useItxEffect`). `POST /api` serves one-shot HTTP batch sessions (used by
 the project-create server function and MCP `exec_js`).
 `/api/admin-cookie` is the browser admin-auth bridge (WebSockets cannot
-set headers). The app worker keeps only `/api/mcp` and `/api/health`; the
+set headers). The dashboard's Start routes keep only `/api/mcp` and `/api/health`; the
 catch-all `src/routes/api.$.ts` returns 404 (integration callbacks return
 with the integrations domain).
 
@@ -101,7 +100,7 @@ the same `StreamProcessor` contracts as the server.
 
 OS has two MCP flows:
 
-- Inbound MCP: the app worker's TanStack Start route at `/api/mcp` is the MCP
+- Inbound MCP: the TanStack Start route at `/api/mcp` is the MCP
   server (`src/domains/inbound-mcp-server/`). `APP_CONFIG_MCP__BASE_URL`
   is the canonical OAuth resource URL and can point at a dedicated MCP
   hostname (for example `https://mcp.iterate.com`), which ingress rewrites to
@@ -188,17 +187,15 @@ It requires `APP_CONFIG_SERVICE_AUTH_TOKEN` (run through Doppler for the auth pr
 
 ## Deployment
 
-The generated `wrangler.jsonc` (from the root `envs.ts`) defines the deployment: a single worker
-([worker-topology.md](./worker-topology.md)), the Durable Object namespaces
-(each owned by its worker, bound cross-script everywhere else), the
-`PROJECT_DIRECTORY` KV namespace, a `WorkerLoader`, the Workers AI binding,
-Cloudflare Artifacts for repos, and routes on the ingress worker for the app
-base URL, the MCP base URL, and each project hostname base. Fresh stages
-bootstrap with an automatic two-pass deploy (cross-script bindings to
-not-yet-existing scripts are wired by the second pass). Deploys must name the
-Doppler config explicitly, for example
-`doppler run --project os --config preview_2 -- pnpm run deploy` or
-`doppler run --project os --config prd -- pnpm run deploy`.
+The generated `wrangler.jsonc` (from the root `envs.ts`) defines the
+deployment: a single worker ([worker-topology.md](./worker-topology.md))
+carrying every Durable Object class same-script, the `PROJECT_DIRECTORY` and
+`WORKER_BUILD_CACHE` KV namespaces, the Worker Loader, the Workers AI
+binding, Cloudflare Artifacts for repos, and routes for the app base URL,
+the MCP base URL, and each project hostname base. One sidecar rides along:
+the builder worker (`wrangler.builder.jsonc`, deployed first by deploy.ts),
+the only script carrying the dynamic-worker bundler toolchain. Deploys take
+the env explicitly: `pnpm run deploy --env preview_2` / `--env prd`.
 
 ## Smoke Tests
 

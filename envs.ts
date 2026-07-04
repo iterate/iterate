@@ -75,6 +75,10 @@ export interface DeployedEnv {
   resources: {
     /** KV: slug -> project-id cache in front of the auth project directory. */
     projectDirectoryKvId: string;
+    /** KV: content-addressed dynamic worker build artifact cache. Every
+     * entry is reproducible from its deterministic build key, so the
+     * namespace is safe to wipe. */
+    workerBuildCacheKvId: string;
     /** D1: the auth worker's database (identities, orgs, projects). */
     authDbId: string;
   };
@@ -110,43 +114,53 @@ export const envs = {
     projectHostnameBases: ["iterate.app"],
     resources: {
       projectDirectoryKvId: "79d78df2e83b46d2b9083533e9f189c4",
+      workerBuildCacheKvId: "43306c224d364c7aa804c3ff762c4d08",
       authDbId: "f33fec8c-d5a3-44cf-b792-6a319ee1f729",
     },
   },
   preview_1: previewSlot(1, {
     projectDirectoryKvId: "6d35023e80cc47f5a8d43550fe4679dc",
+    workerBuildCacheKvId: "e02fcfb5dc30454489ce1004cf5f3499",
     authDbId: "73e5042b-f076-43a3-9ada-c13caaae7a35",
   }),
   preview_2: previewSlot(2, {
     projectDirectoryKvId: "237cc9a316a146e98f04f00218b0a69c",
+    workerBuildCacheKvId: "6cbee4966b99490e9b43bd01b957b834",
     authDbId: "c5a24ab5-e10b-4ca5-a2f2-2451803bc146",
   }),
   preview_3: previewSlot(3, {
     projectDirectoryKvId: "dd06b3a37bbd4b9f838fadc895e5a6d6",
+    workerBuildCacheKvId: "3cb31a916afd41cd82ede40718547fdd",
     authDbId: "2017a0b9-ebd5-482c-b2b8-894a27733dbc",
   }),
   preview_4: previewSlot(4, {
     projectDirectoryKvId: "d0b6679c68114add86e024cf7d0a7646",
+    workerBuildCacheKvId: "855531fbd02740f78d27c1465cac3202",
     authDbId: "bd115332-9515-4bbf-96d5-f041e628bcf9",
   }),
   preview_5: previewSlot(5, {
     projectDirectoryKvId: "a0f87dc67b39465bb9c00bd05587eadc",
+    workerBuildCacheKvId: "34f27e888b6243189e42a0ea5a93291f",
     authDbId: "f8542574-48e3-4374-910f-3186293137f0",
   }),
   preview_6: previewSlot(6, {
     projectDirectoryKvId: "e414e68c13e1471a8a3c41f5e50136e4",
+    workerBuildCacheKvId: "2fecfd3043184552af0e833dca7d7a4a",
     authDbId: "bd78258a-2167-429f-a504-9e1eb1c18ef2",
   }),
   preview_7: previewSlot(7, {
     projectDirectoryKvId: "7c1ad0f9195d4d98986253a5fb05d97a",
+    workerBuildCacheKvId: "fad0de53747645369f8aa3aa99049886",
     authDbId: "5e2b9db1-d617-47f6-bc57-3b9c150e39ce",
   }),
   preview_8: previewSlot(8, {
     projectDirectoryKvId: "d06139a93f2846cb9f46c38810796c06",
+    workerBuildCacheKvId: "14554ce1beba4d868de4227c27c6e5fa",
     authDbId: "87dbf699-824a-4f08-994c-7debce8c18e5",
   }),
   preview_9: previewSlot(9, {
     projectDirectoryKvId: "9fac543a7e994b7f972328c6a07152ac",
+    workerBuildCacheKvId: "3599fdcb79db418db0ead561f1ef85f7",
     authDbId: "ebf149cb-d3ed-48c5-a2d0-010166b25033",
   }),
 } satisfies Record<string, DeployedEnv>;
