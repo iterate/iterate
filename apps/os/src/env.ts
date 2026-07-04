@@ -52,7 +52,10 @@ export interface Env {
    * The builder worker's entrypoint (domains/workers/builder-entrypoint.ts):
    * bundles dynamic worker source into loader-ready artifacts. The only
    * script carrying the bundler toolchain (esbuild-wasm); called by the
-   * worker worker on artifact-cache misses.
+   * worker worker on artifact-cache misses. The builder itself does NOT
+   * carry this Env — it is a pure function worker whose whole binding set is
+   * the artifact cache (see its BuilderEnv), sized to drop into a "1 + 1"
+   * topology if the worker split ever collapses (#1636).
    */
   BUILDER: Service<import("./domains/workers/builder-entrypoint.ts").BuilderEntrypoint>;
 

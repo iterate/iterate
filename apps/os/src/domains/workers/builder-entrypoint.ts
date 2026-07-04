@@ -1,24 +1,40 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { z } from "zod";
-import type { Env } from "../../env.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { KvWorkerBuildArtifactStore, type WorkerBuildArtifact } from "./artifact-store.ts";
-import { ResolvedWorkerFileSource } from "./build-key.ts";
 import { materializeWorkerBuild } from "./materialize.ts";
 import { WorkerBuildOptions } from "./schemas.ts";
 
 /**
- * The builder worker's entrypoint: the one place dynamic worker source is
- * bundled, and the only worker script that carries the bundler toolchain
- * (esbuild-wasm, ~11MB). Everything that RUNS dynamic workers (the worker
- * worker) stays lean and calls `env.BUILDER.build(...)` on an artifact-cache
- * miss; a bundler upgrade or shim change redeploys one worker.
- *
- * `build` returns the artifact BY VALUE, so callers never depend on KV's
- * cross-location write propagation (~60s) to see a build they just requested.
- * The KV write is still made — it is the cache every later load hits.
+ * The builder worker's whole env: the artifact cache, nothing else. The
+ * builder is deliberately the MINIMUM possible deployable unit around the
+ * bundler toolchain (esbuild-wasm, ~14MB) — a pure function worker (files in,
+ * artifact out) with no DO namespaces, no service bindings, no repo access,
+ * and nothing that orders its deploy relative to any other script. That keeps
+ * it ready to survive unchanged as the single sidecar in a "1 + 1" topology
+ * (one product worker + this builder) if the apps/os worker split ever
+ * collapses into a monolith (see PR #1636): the wasm never has to ride in the
+ * product script, and the deploy DAG stays trivial (builder first, no
+ * cross-script cycles, no bootstrap passes).
  */
-export class BuilderEntrypoint extends WorkerEntrypoint<Env> {
+type BuilderEnv = {
+  WORKER_BUILD_CACHE: KVNamespace;
+};
+
+/**
+ * The builder worker's entrypoint: the one place dynamic worker source is
+ * bundled, and the only worker script that carries the bundler toolchain.
+ * Everything that RUNS dynamic workers (the worker worker) stays lean and
+ * calls `env.BUILDER.build(...)` on an artifact-cache miss; a bundler upgrade
+ * or shim change redeploys one worker.
+ *
+ * `build` takes source files BY VALUE (the caller resolves repo snapshots —
+ * it owns the REPO binding; a file map carries no authority so the builder
+ * needs none) and returns the artifact BY VALUE, so callers never depend on
+ * KV's cross-location write propagation (~60s) to see a build they just
+ * requested. The KV write is still made — it is the cache every later load
+ * hits.
+ */
+export class BuilderEntrypoint extends WorkerEntrypoint<BuilderEnv> {
   /** The builder serves no HTTP; everything arrives over RPC. */
   override fetch(): Response {
     return Response.json({ worker: "os-builder" }, { status: 404 });
@@ -31,11 +47,10 @@ export class BuilderEntrypoint extends WorkerEntrypoint<Env> {
   // redundant bundler work, never wrong output.
   async build(input: {
     buildKey: string;
-    projectId: string;
-    source: ResolvedWorkerFileSource;
+    files: Record<string, string>;
     options: unknown;
   }): Promise<WorkerBuildArtifact> {
-    const { buildKey, options, projectId, source } = BuildInput.parse(input);
+    const { buildKey, files, options } = BuildInput.parse(input);
 
     // The caller checked its own KV, but this is a different isolate and a
     // concurrent build may have landed since; a hit here skips the bundler.
@@ -44,20 +59,6 @@ export class BuilderEntrypoint extends WorkerEntrypoint<Env> {
     if (cached !== null) return cached;
 
     const build = (async () => {
-      const files =
-        source.type === "inline"
-          ? source.files
-          : (
-              await this.env.REPO.getByName(
-                DurableObjectNameCodec.stringify({ path: source.repoPath, projectId }),
-              ).getFilesSnapshot({
-                branch: source.branch,
-                commitOid: source.commitOid,
-                exclude: source.exclude,
-                include: source.include,
-              })
-            ).files;
-
       const built = await materializeWorkerBuild({ files, options });
       for (const warning of built.warnings) {
         console.warn(`[builder] ${buildKey.slice(0, 12)}: ${warning}`);
@@ -78,11 +79,11 @@ export class BuilderEntrypoint extends WorkerEntrypoint<Env> {
   }
 }
 
-/** Everything that grants authority or reaches the repo is parsed at this
- * boundary; `options` is validated against the public build-options schema. */
+/** The whole input is inert data — `buildKey` names the cache entry, `files`
+ * is the already-resolved source snapshot, `options` is validated against the
+ * public build-options schema. Nothing here grants authority. */
 const BuildInput = z.object({
   buildKey: z.string().min(1),
+  files: z.record(z.string(), z.string()),
   options: WorkerBuildOptions,
-  projectId: z.string().trim().min(1),
-  source: ResolvedWorkerFileSource,
 });

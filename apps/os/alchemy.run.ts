@@ -536,9 +536,17 @@ const [
   itxWorker("capabilityHost", "./src/workers/capability-host.ts"),
   itxWorker("project", "./src/workers/project.ts"),
   itxWorker("agent", "./src/workers/agent.ts"),
-  // Bundles dynamic worker source (the only script with esbuild-wasm); its
-  // own BUILDER binding is a Self so the shared Env contract holds here too.
-  itxWorker("builder", "./src/workers/builder.ts", { BUILDER: Self }),
+  // Bundles dynamic worker source — the only script with esbuild-wasm, and
+  // deliberately NOT an itxWorker: its whole binding set is the artifact
+  // cache. A pure function worker (files in, artifact out) with no bindings
+  // to other scripts is the minimum deployable unit around the wasm, ready to
+  // drop unchanged into a "1 + 1" topology (one product worker + this
+  // builder) if the worker split ever collapses (#1636).
+  osWorker("builder", {
+    entrypoint: "./src/workers/builder.ts",
+    compatibilityFlags: itxCompatibilityFlags,
+    bindings: { WORKER_BUILD_CACHE: workerBuildCache },
+  }),
   itxWorker("repo", "./src/workers/repo.ts"),
   // The owner binds the container-backed namespace (image + container app +
   // migration); every other itx worker keeps the plain cross-script binding.

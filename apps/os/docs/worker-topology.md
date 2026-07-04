@@ -34,6 +34,14 @@ workers.
 | `<n>-worker`          | `src/workers/worker.ts`          | **All dynamic workers**: `DynamicWorkerEntrypoint` (stateless) + `StatefulWorkerDurableObject` |
 | `<n>-builder`         | `src/workers/builder.ts`         | **All dynamic worker builds**: `BuilderEntrypoint` — the only script carrying esbuild-wasm     |
 
+The builder is deliberately NOT an itx worker: it is a pure build function
+(files in, artifact out) whose only binding is the artifact-cache KV — no DO
+namespaces, no service bindings, no repo access, nothing that orders its
+deploy relative to any other script. Keeping the esbuild-wasm script minimal
+means it can drop unchanged into a "1 + 1" topology (one product worker plus
+this builder) if the worker split ever collapses into a single worker
+(PR #1636).
+
 All itx workers (api + the eight DO workers) deploy with the **same
 binding set** (`itxBindings` in `alchemy.run.ts`; the matching type is
 `src/env.ts`): every DO namespace, `AI`, `DYNAMIC_WORKERS` (a service binding

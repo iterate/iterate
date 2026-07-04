@@ -134,16 +134,37 @@ async function resolveThroughBuilder(input: {
   if (cached !== null) return memoizeArtifact(cached);
 
   // Cache miss: one RPC to the builder worker — the only script carrying the
-  // bundler toolchain. It returns the artifact by value (so this never waits
-  // on KV write propagation) and build failures propagate here as plain
-  // errors, attributed to the call that needed the worker.
+  // bundler toolchain. The file snapshot is resolved HERE and passed by value
+  // (this worker owns the REPO binding; the builder is a pure, bindings-free
+  // function worker — see builder-entrypoint.ts), sized by the ref's source
+  // masks. The builder returns the artifact by value (so this never waits on
+  // KV write propagation) and build failures propagate here as plain errors,
+  // attributed to the call that needed the worker.
   const artifact = await env.BUILDER.build({
     buildKey,
+    files: await resolvedSourceFiles(input.projectId, resolved),
     options: input.options,
-    projectId: input.projectId,
-    source: resolved,
   });
   return memoizeArtifact(artifact);
+}
+
+/** The full file map for a resolved source. Only runs on artifact-cache
+ * misses, so warm loads never touch the repo. */
+async function resolvedSourceFiles(
+  projectId: string,
+  resolved: ResolvedWorkerFileSource,
+): Promise<Record<string, string>> {
+  if (resolved.type === "inline") return resolved.files;
+  const repo = env.REPO.getByName(
+    DurableObjectNameCodec.stringify({ path: resolved.repoPath, projectId }),
+  );
+  const snapshot = await repo.getFilesSnapshot({
+    branch: resolved.branch,
+    commitOid: resolved.commitOid,
+    exclude: resolved.exclude,
+    include: resolved.include,
+  });
+  return snapshot.files;
 }
 
 /**
