@@ -1,7 +1,7 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { ArrowLeftIcon, RadioTowerIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
-import { StreamPage } from "~/components/stream-page.tsx";
+import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { StreamTreeBrowser } from "~/components/stream-tree-browser.tsx";
 import {
   NULL_DURABLE_OBJECT_PROJECT_ID,
@@ -74,8 +74,9 @@ function AdminStreamProjectPage() {
   );
 
   return (
-    <StreamPage
+    <ProjectStreamView
       panel={panel}
+      showCommandPaletteTrigger={false}
       projectId={streamProjectId}
       streamSource={source}
       streamPath="/"

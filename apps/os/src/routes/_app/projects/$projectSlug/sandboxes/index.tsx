@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { StreamPage } from "~/components/stream-page.tsx";
+import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { StreamTreeBrowser } from "~/components/stream-tree-browser.tsx";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
@@ -40,7 +40,7 @@ function ProjectSandboxesIndexContent() {
   const source = useMemo(() => (streamPath: string) => itx.streams.get(streamPath), [itx]);
 
   return (
-    <StreamPage
+    <ProjectStreamView
       panel={
         <StreamTreeBrowser
           source={source}

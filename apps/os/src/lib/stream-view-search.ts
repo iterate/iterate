@@ -4,7 +4,7 @@ import { z } from "zod";
 
 /**
  * URL-backed view state for ProjectStreamView. Every route that mounts a
- * stream view (all the StreamPage domain pages plus the stream/agent detail
+ * stream view (every domain page plus the stream/agent detail
  * routes) registers this schema in its `validateSearch` — directly or via
  * `.extend()` — so the component reads/writes its tab, filter, and
  * processor-sidebar state through the URL and every view is shareable.
