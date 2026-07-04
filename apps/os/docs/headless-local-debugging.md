@@ -26,7 +26,7 @@ pnpm dev-all   # monorepo root: starts apps/auth (localhost:7101) AND apps/os (l
 
 `pnpm dev-all` points OS at the local auth issuer through
 `APP_CONFIG_ITERATE_AUTH__ISSUER`. OS writes its chosen base URL to
-`apps/os/.alchemy/dev-server.json`; drive the browser against that localhost
+`apps/os/.dev-server/dev-server.json`; drive the browser against that localhost
 URL.
 
 Gotchas:
@@ -35,7 +35,7 @@ Gotchas:
   `pnpm dev-all` dies with `Could not find requested config 'dev_<you>'`, point it
   at the shared dev config: `doppler configure set config dev --scope apps/auth`.
 - A loopback issuer signs tokens with the **local** auth keys, so a static
-  production JWKS can't verify them. `apps/os/alchemy.run.ts` detects a loopback
+  production JWKS can't verify them. `apps/os/scripts/deploy.ts` detects a loopback
   issuer and skips the static JWKS (falls back to runtime JWKS fetch).
 
 ## Headless browser without touching the user's Chrome
@@ -53,7 +53,7 @@ nohup "$BIN" --headless=new --remote-debugging-port=9444 --user-data-dir=/tmp/ab
 # Use an isolated --session so refs/cookies don't collide with other work.
 export AGENT_BROWSER_AUTO_CONNECT=0
 ab() { agent-browser --session dbg --cdp 9444 "$@"; }
-ab open "$(node -p 'require("./apps/os/.alchemy/dev-server.json").baseUrl')"
+ab open "$(node -p 'require("./apps/os/.dev-server/dev-server.json").baseUrl')"
 ```
 
 - The browser keeps its profile in `--user-data-dir`, so an `iterate_session`
@@ -78,7 +78,7 @@ Local/non-prod auth enables email OTP and a deterministic code:
 Flow (snapshot between steps; refs go stale on every navigation):
 
 ```bash
-ab open "$(node -p 'require("./apps/os/.alchemy/dev-server.json").baseUrl')"
+ab open "$(node -p 'require("./apps/os/.dev-server/dev-server.json").baseUrl')"
 ab find role button click --name "Continue with Iterate"     # OS -> auth /login
 ab find role button click --name "Continue with email"
 ab fill "input[type=email]" "testuser+dbg@gmail.com"
@@ -137,10 +137,10 @@ D1 — OS state is Durable Object SQLite; read it through itx instead:
 `pnpm cli itx run`):
 
 ```bash
-ls .alchemy/miniflare/v3/d1/miniflare-D1DatabaseObject/*.sqlite
+ls .wrangler/state/v3/d1/miniflare-D1DatabaseObject/*.sqlite
 # auth DB has: user, account, organization, member, oauthClient, oauthRefreshToken, verification
 
-DB=.alchemy/miniflare/v3/d1/miniflare-D1DatabaseObject/<hash>.sqlite
+DB=.wrangler/state/v3/d1/miniflare-D1DatabaseObject/<hash>.sqlite
 sqlite3 "$DB" "SELECT identifier, value FROM verification ORDER BY rowid DESC LIMIT 3"   # pending OTPs (value is 'otp:attempts')
 sqlite3 "$DB" "SELECT clientId, substr(token,1,10), revoked, expiresAt FROM oauthRefreshToken ORDER BY createdAt DESC"
 sqlite3 "$DB" "SELECT clientId, substr(clientSecret,1,12) FROM oauthClient"

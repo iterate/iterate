@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { StreamTreeBrowser } from "~/components/stream-tree-browser.tsx";
+import { StreamTree } from "~/components/stream-tree.tsx";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
@@ -42,9 +42,10 @@ function ProjectSandboxesIndexContent() {
   return (
     <ProjectStreamView
       panel={
-        <StreamTreeBrowser
+        <StreamTree
           source={source}
           rootPath={SANDBOXES_ROOT}
+          scope={project.id}
           onOpenPath={(streamPath) =>
             void navigate(linkOptionsForStreamPath(params.projectSlug, streamPath))
           }

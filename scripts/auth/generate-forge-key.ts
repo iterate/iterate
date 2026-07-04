@@ -6,7 +6,7 @@ import { exportJWK, generateKeyPair } from "jose";
 // A forge key is the master key behind offline identity minting
 // (scripts/auth/mint-session.ts): its PRIVATE half lives in a Doppler config
 // and signs minted JWTs; its PUBLIC half is baked into the OS worker's trusted
-// JWKS at deploy (apps/os/alchemy.run.ts) so those JWTs verify like
+// JWKS at deploy (apps/os/scripts/deploy.ts) so those JWTs verify like
 // issuer-signed ones. Whoever holds the private half can mint a session as any
 // user — guard it like a production credential.
 //

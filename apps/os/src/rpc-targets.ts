@@ -683,9 +683,7 @@ class EmailRpcTarget extends RpcTarget implements EmailCapability {
 
   async send(input: Parameters<EmailCapability["send"]>[0]) {
     if (!env.EMAIL) {
-      throw new Error(
-        "email.send is only available on deployed environments (the EMAIL send_email binding is not bound in local dev).",
-      );
+      throw new Error("email.send requires the EMAIL send_email binding (see wrangler config).");
     }
     const senderDomain = parseConfig(env).projectHostnameBases[0];
     if (!senderDomain) {

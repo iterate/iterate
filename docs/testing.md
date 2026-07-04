@@ -37,7 +37,7 @@ doppler run --config prd -- pnpm e2e
 
 Local configs (`dev`, `dev_<you>`) do not set `APP_CONFIG_BASE_URL`; the
 harness falls back to the dev-server discovery file
-(`apps/os/.alchemy/dev-server.json`, written by `pnpm dev`). To point a lane at
+(`apps/os/.dev-server/dev-server.json`, written by `pnpm dev`). To point a lane at
 a custom target (captun, another port), set the base URL explicitly _inside_
 the Doppler environment:
 

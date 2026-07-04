@@ -4,18 +4,20 @@ How local development, preview environments, and identities work.
 
 ## The core model (read this much at minimum)
 
-Every environment is the same primitive: **`alchemy.run.ts` run in the context
-of a Doppler config.** `prd` deploys production, `preview_N` deploys a preview
-slot, `dev` runs a fully-local server. Scripts never branch on environment
-names; the config supplies everything.
+Every deployed environment is an entry in the root **`envs.ts`** (hostnames,
+worker names, accounts, resource IDs) plus a Doppler config of the same name
+carrying its secrets. `pnpm run deploy --env prd` deploys production,
+`--env preview_N` a preview slot; `dev` runs a fully-local server and never
+deploys. Scripts never branch on environment names; envs.ts + the config
+supply everything.
 
 Local dev is **fully local**: D1/DOs run in miniflare inside your worktree's
-`.alchemy/`, the server listens on a random free port at
+`.wrangler/`, the server listens on a random free port at
 `http://localhost:<port>`, and the only external dependency is the shared dev auth at
-`https://auth.iterate-dev.com`. OS's full worker topology (the per-DO
-workers, see `apps/os/docs/worker-topology.md`) runs inside vite's single
-workerd as auxiliary workers — one process, production-shaped cross-script
-bindings. Nothing is contested between worktrees: twenty
+`https://auth.iterate-dev.com`. OS is a single worker (all Durable Object
+classes + app + api in one script, see `apps/os/docs/worker-topology.md`)
+running inside vite's workerd — production-shaped by construction. Nothing
+is contested between worktrees: twenty
 agents on one machine each run their own isolated environment with the same
 shared `dev` config.
 
@@ -43,7 +45,7 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   `DOPPLER_CONFIG` by hand.
 - **Which config?** `dev`, `dev_jonas`, `dev_misha`, and `dev_rahul` all run
   the same fully-local OS server: random localhost port, per-worktree
-  `.alchemy/` state, and human sign-in through `auth.iterate-dev.com`.
+  `.wrangler/` state, and human sign-in through `auth.iterate-dev.com`.
   Personal `dev_<you>` configs may still carry personal integration secrets,
   but they should not carry app/MCP/project-host URL overrides.
 
@@ -53,8 +55,8 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   `/sign-in` with no error. This broke all `dev_<user>` and preview logins
   once; the stale keys were cleaned out on 2026-06-12.
 
-- The chosen port is recorded in **`apps/os/.alchemy/dev-server.json`**
-  (`{pid, port, baseUrl, logPath, stoppedAt?}`).
+- The chosen port is recorded in **`apps/os/.dev-server/dev-server.json`**
+  (`{pid, port, baseUrl, startedAt}`).
   When no public app URL is configured, local dev also exposes that URL through
   `APP_CONFIG_BASE_URL`; when `APP_CONFIG.baseUrl` is already set to a public
   captun URL, runtime config keeps the public URL and the discovery file remains
@@ -68,9 +70,9 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   the port actually accepts connections (Vite is still booting) — poll the
   base URL until it returns a response before driving it.
 - Dev server output is mirrored to the gitignored
-  **`apps/os/.alchemy/dev-server.log`**. Tail it from another terminal with
-  `tail -f apps/os/.alchemy/dev-server.log` from the repo root, or
-  `tail -f .alchemy/dev-server.log` from `apps/os`.
+  **`apps/os/.dev-server/dev-server.log`**. Tail it from another terminal with
+  `tail -f apps/os/.dev-server/dev-server.log` from the repo root, or
+  `tail -f .dev-server/dev-server.log` from `apps/os`.
 - Project hosts work in the browser as `<proj-slug>.localhost:<port>`.
   Browser project ingress uses `*.localhost`; curl/Node on macOS usually do
   not resolve those names, so non-browser clients should use
@@ -82,7 +84,7 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
 
   ```bash
   doppler run --project os --config dev -- sh -lc '
-    BASE=$(node -p "require(\"./.alchemy/dev-server.json\").baseUrl")
+    BASE=$(node -p "require(\"./.dev-server/dev-server.json\").baseUrl")
     npx -y @modelcontextprotocol/inspector --cli "$BASE/api/mcp" \
       --transport http \
       --method tools/list \
@@ -94,7 +96,7 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
 
   ```bash
   doppler run --project os --config dev -- sh -lc '
-    BASE=$(node -p "require(\"./.alchemy/dev-server.json\").baseUrl")
+    BASE=$(node -p "require(\"./.dev-server/dev-server.json\").baseUrl")
     npx -y @modelcontextprotocol/inspector --cli "$BASE/api/mcp" \
       --transport http \
       --method tools/call \
@@ -228,7 +230,7 @@ values are missing; it never infers auth values from redirects.
 `APP_CONFIG_BASE_URL` is the only target override; when it is unset, Playwright
 runs the OS dev script through Node with `start`, `--detach`, `--keep-alive`,
 and `--port <port>`, so it reuses the same per-worktree dev server recorded in
-`apps/os/.alchemy/dev-server.json`, then waits directly on that server's
+`apps/os/.dev-server/dev-server.json`, then waits directly on that server's
 `/api/health`.
 
 ### Minting in production
@@ -389,19 +391,17 @@ doppler run --project _shared --config prd -- pnpm preview acquire --slot 9    #
 # if preview-9 is taken you'll be told who holds it; --force evicts them (their
 # deployment gets clobbered by whatever you deploy next — only for stale holds)
 
-# Deploy (same primitive as everything else; auth first because OS bakes its JWKS):
-(cd apps/auth && doppler run --project auth --config preview_9 -- pnpm alchemy:up)
-(cd apps/os   && doppler run --project os   --config preview_9 -- pnpm run deploy)
+# Deploy (auth first because the OS deploy bakes its JWKS):
+(cd apps/auth && pnpm run deploy --env preview_9)
+(cd apps/os   && pnpm run deploy --env preview_9)
 
 # Point a browser at it (same org-claims requirement as local dev — see
 # "Acting as users" above; bare --admin lands on the auth login page):
 doppler run --project os --config preview_9 -- pnpm auth:mint --admin --browser-url
 
-# Tear down and release when done (destroy chains --park: the slot's routes
-# and DNS stay live against a placeholder script, so the next deploy never
-# creates routes on its critical path — see iterate-app.ts):
-(cd apps/os   && doppler run --project os   --config preview_9 -- pnpm run destroy)
-(cd apps/auth && doppler run --project auth --config preview_9 -- pnpm alchemy:down)
+# Release when done. Workers/routes/DNS stay deployed — releasing a slot is
+# just giving the lease back; erase the data only if you want a clean slate:
+(cd apps/os && pnpm erase-data --env preview_9)  # optional
 doppler run --project _shared --config prd -- pnpm preview release --slot 9 --lease-id <leaseId>
 ```
 
@@ -458,7 +458,7 @@ manually, clear the matching slot before redeploying:
 `doppler run --project auth --config preview_N -- pnpm --dir apps/auth exec wrangler d1 execute auth-preview-N-auth-db --remote --command 'delete from jwks;'`.
 
 More detail on the semaphore primitive:
-[devops-cloudflare-doppler-alchemy-setup.md](devops-cloudflare-doppler-alchemy-setup.md).
+[devops-cloudflare-doppler.md](devops-cloudflare-doppler.md).
 
 ## Tunnels and webhooks
 

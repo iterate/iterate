@@ -1,24 +1,19 @@
 import { env as workerEnv } from "cloudflare:workers";
 
 /**
- * The binding contract every itx worker is deployed with (alchemy.run.ts
- * binds these names identically in each of them).
- *
- * The repo-wide ambient `Env` (src/lib/worker-env.d.ts) covers the two
- * dashboard-side workers (app + ingress); the itx workers deliberately do not
- * participate in that union — they import this `Env` and the `itxEnv`
- * accessor explicitly, so neither side's types leak into the other.
+ * The OS worker's binding contract — the binding names wrangler.jsonc
+ * (generated from the root envs.ts) declares on the single worker
+ * (src/worker.ts). The repo-wide ambient `Env` (src/lib/worker-env.d.ts) is
+ * this same interface.
  */
 export interface Env {
   AI: Ai;
   /**
-   * This worker's own deployed name (e.g. "os-prd-api"). Exists so
-   * worker-loader cache keys are unique per hosting worker: local dev runs
-   * every itx worker inside ONE workerd whose loader cache is shared across
-   * them, and a dynamic worker isolate created by one parent carries that
-   * parent's loopback binding stubs — invoking it from another parent fails
-   * with a redacted internal error. In production each worker has its own
-   * loader, so this is just a stable constant in the key.
+   * This worker's own deployed name (e.g. "os-prd"). Part of worker-loader
+   * cache keys so dynamic-worker isolates are attributed to the worker that
+   * created them (a dynamic isolate carries its creator's loopback binding
+   * stubs — invoking it from a different parent fails with a redacted
+   * internal error).
    */
   WORKER_SELF: string;
   ARTIFACTS: Artifacts;
@@ -29,11 +24,11 @@ export interface Env {
    * project directory (project-directory.ts). */
   PROJECT_DIRECTORY: KVNamespace;
   /**
-   * Cloudflare Email Service send binding backing `itx.email`. Optional
-   * because it is only bound on deployed stages — alchemy.run.ts skips it in
-   * local dev until miniflare send_email simulation is wired up.
+   * Cloudflare Email Service send binding backing `itx.email`. Bound in every
+   * wrangler env block including local dev, where miniflare simulates sends
+   * (logs + local .eml files) instead of delivering real mail.
    */
-  EMAIL?: import("./domains/email/utils.ts").SendEmailBinding;
+  EMAIL: import("./domains/email/utils.ts").SendEmailBinding;
   SECRET_ENCRYPTION_KEY: string;
 
   AGENT: DurableObjectNamespace<
