@@ -136,6 +136,22 @@ unset, i.e. a stricter config than the pipeline being de-flaked. The loop now
 exports `CI=true` so a run means exactly what a Depot run means; retried
 tests remain visible in the run log.
 
+### 8. CI's vitest retry never actually applied (root config not inherited)
+
+The e2e config declared `retry: ci ? 1 : 0` at the ROOT test level, but
+vitest does not inherit `retry` into `projects` configs — a CI-profile run
+showed a failed test with zero retry attempts. Every "one retry absorbs a
+rare blip" assumption in the preview lane has been a no-op since the config
+was split into projects. Fix: `retry` now lives on each project's test block.
+
+### 9. Idle-teardown severance asserted with a 1.5 s deadline
+
+`stream-lifecycle › append after idle teardown re-wakes configured subscriber`
+gave the Stream DO 1.5 s to sever three cross-script processor connections
+after `runIdleTeardownNow()`. Under the CI-parallel lane profile that
+intermittently takes longer; the assertion is about eventual severance, not a
+latency SLA. Both severance waits now allow 10 s.
+
 ### 5. Sandbox repo clone dies on a transient Artifacts 503
 
 `repl-examples.spec.ts › sandbox-exec` failed with `Failed to clone repository
