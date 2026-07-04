@@ -12,6 +12,7 @@ import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { ONBOARDING_AGENT_PATH } from "~/lib/onboarding-agent.ts";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { getRootProjectRedirectServerFn } from "~/lib/project-server-fns.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
@@ -37,10 +38,22 @@ export const Route = createFileRoute("/_app/projects/")({
     });
 
     if (decision.kind === "project") {
+      if (decision.onboarding) {
+        throw redirect({
+          to: "/projects/$projectSlug/agents/streams/$",
+          params: {
+            projectSlug: decision.project.slug,
+            _splat: ONBOARDING_AGENT_PATH,
+          },
+          search: {},
+          replace: true,
+        });
+      }
+
       throw redirect({
         to: "/projects/$projectSlug",
         params: { projectSlug: decision.project.slug },
-        search: decision.welcome ? { welcome: true } : {},
+        search: {},
         replace: true,
       });
     }

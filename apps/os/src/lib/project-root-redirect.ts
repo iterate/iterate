@@ -11,7 +11,7 @@ export type RootProjectRedirectDecision =
   | {
       kind: "project";
       project: RootRedirectProject;
-      welcome: boolean;
+      onboarding: boolean;
     }
   | {
       kind: "projects";
@@ -27,15 +27,15 @@ export function chooseRootProjectRedirect(input: {
   );
 
   if (preferredReadyProject) {
-    return { kind: "project", project: preferredReadyProject, welcome: false };
+    return { kind: "project", project: preferredReadyProject, onboarding: false };
   }
 
   if (readyProjects.length === 1) {
-    return { kind: "project", project: readyProjects[0]!, welcome: true };
+    return { kind: "project", project: readyProjects[0]!, onboarding: true };
   }
 
   if (input.projects.length === 1 && input.projects[0]!.deploymentStatus === "missing") {
-    return { kind: "project", project: input.projects[0]!, welcome: true };
+    return { kind: "project", project: input.projects[0]!, onboarding: true };
   }
 
   return { kind: "projects" };

@@ -3,6 +3,7 @@ import { timedStep } from "../../lib/step-timing.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { PROJECT_REPO_PATH } from "../repos/utils.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/project-repo-template.generated.ts";
+import { ONBOARDING_AGENT_PATH } from "../../lib/onboarding-agent.ts";
 import type { StreamEvent, StreamListItem } from "../../types.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
@@ -24,8 +25,6 @@ import { SlackProcessorContract } from "../integrations/slack-processor-contract
 import { isSlackAgentPath, SLACK_INTEGRATION_STREAM_PATH } from "../integrations/utils.ts";
 import { isMcpAgentPath } from "../inbound-mcp-server/mcp-session-agent-path.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
-
-const ONBOARDING_AGENT_PATH = "/agents/onboarding";
 
 // The onboarding script ships INSIDE the seeded repo (the agent can read the
 // same file the prompt embeds); the prompt below needs its text at build time.
@@ -73,6 +72,7 @@ const ONBOARDING_AGENT_SYSTEM_PROMPT = [
   DEFAULT_AGENT_SYSTEM_PROMPT,
   "",
   "You are this project's onboarding agent. Follow the onboarding script below.",
+  "On a brand-new project, the project repo and worker may still be seeding during your first turn. If a repo or worker capability reports that it is missing or not ready, keep onboarding conversational and retry shortly instead of treating that as a fatal setup failure.",
   "",
   PROJECT_REPO_ONBOARDING_MD,
 ].join("\n");
@@ -188,6 +188,15 @@ export class ProjectProcessor extends StreamProcessor<
                 }),
               ),
             ),
+            // The user can already be sitting on /agents/onboarding while repo
+            // bootstrap and the project worker warm up. Birth the normal agent
+            // stream immediately; the repo-created lane below repeats this with
+            // the same idempotency keys as a belt-and-braces fallback.
+            timedStep("create-timing", timing, "onboarding-agent-birth", () =>
+              this.deps.itx.streams
+                .get(ONBOARDING_AGENT_PATH)
+                .append(...onboardingAgentStartEvents(this.deps)),
+            ),
           ]);
         });
         break;
@@ -250,28 +259,13 @@ export class ProjectProcessor extends StreamProcessor<
               payload: state.createRequest!,
             }),
           );
-          // Seed the onboarding agent: full birth certificate (the generic
-          // child-stream-created lane later double-appends with the same
-          // idempotency keys and dedupes) plus the kickoff input that makes the
-          // agent greet the user without waiting for a first message.
+          // Fallback seed for existing/retried create flows. The create-requested
+          // lane normally did this already; idempotency makes the second append
+          // a no-op while preserving older streams that only reach this point.
           await timedStep("create-timing", timing, "onboarding-agent-birth", () =>
-            this.deps.itx.streams.get(ONBOARDING_AGENT_PATH).append(
-              ...agentBirthCertificateEvents({
-                childPath: ONBOARDING_AGENT_PATH,
-                llmProvider: this.deps.defaultLlmProvider,
-                projectId: this.deps.itx.projectId,
-                systemPrompt: ONBOARDING_AGENT_SYSTEM_PROMPT,
-              }),
-              {
-                type: "events.iterate.com/agent/input-added",
-                idempotencyKey: `project-onboarding-start:${this.deps.itx.projectId}`,
-                payload: {
-                  content:
-                    "Start onboarding now. The project owner just created this project and is looking at the chat.",
-                  llmRequestPolicy: { behaviour: "after-current-request" as const },
-                },
-              },
-            ),
+            this.deps.itx.streams
+              .get(ONBOARDING_AGENT_PATH)
+              .append(...onboardingAgentStartEvents(this.deps)),
           );
         });
         return;
@@ -287,9 +281,33 @@ export class ProjectProcessor extends StreamProcessor<
  * agents reply via itx.integrations.slack, inbound MCP session agents via their blocked
  * ask_assistant call, everything else via web chat. */
 function agentSystemPromptForPath(agentPath: string) {
+  if (agentPath === ONBOARDING_AGENT_PATH) return ONBOARDING_AGENT_SYSTEM_PROMPT;
   if (isSlackAgentPath(agentPath)) return SLACK_AGENT_SYSTEM_PROMPT;
   if (isMcpAgentPath(agentPath)) return MCP_AGENT_SYSTEM_PROMPT;
   return DEFAULT_AGENT_SYSTEM_PROMPT;
+}
+
+function onboardingAgentStartEvents(deps: {
+  defaultLlmProvider: AgentLlmProvider;
+  itx: Pick<ProjectRpcTarget, "projectId">;
+}) {
+  return [
+    ...agentBirthCertificateEvents({
+      childPath: ONBOARDING_AGENT_PATH,
+      llmProvider: deps.defaultLlmProvider,
+      projectId: deps.itx.projectId,
+      systemPrompt: ONBOARDING_AGENT_SYSTEM_PROMPT,
+    }),
+    {
+      type: "events.iterate.com/agent/input-added" as const,
+      idempotencyKey: `project-onboarding-start:${deps.itx.projectId}`,
+      payload: {
+        content:
+          "Start onboarding now. The project owner just created this project and is looking at the chat.",
+        llmRequestPolicy: { behaviour: "after-current-request" as const },
+      },
+    },
+  ];
 }
 
 const DEFAULT_MODEL_BY_LLM_PROVIDER = {
@@ -348,7 +366,7 @@ function agentBirthCertificateEvents(input: {
           "Platform context for this agent:",
           `- Project id: ${input.projectId}`,
           `- Your agent stream path: ${input.childPath} (your itx scope; your transcript lives here)`,
-          '- The project repo is at repo path "/" — seeded with worker.ts (a static homepage + router over the apps below, plus an itx.worker.slack.* Slack SDK surface), apps/hello/worker.ts (stateless), apps/counter/worker.ts (stateful counter page), package.json (npm deps, installed at worker build time), sdk.ts (platform capability types), AGENTS.md, and ONBOARDING.md.',
+          '- The project repo is at repo path "/" — seeded during project bootstrap. On a brand-new project it may still be seeding for your first turn; if repo reads or worker calls say it is missing or not ready, keep onboarding conversational and retry shortly. Once seeded, it contains worker.ts (a static homepage + router over the apps below, plus an itx.worker.slack.* Slack SDK surface), apps/hello/worker.ts (stateless), apps/counter/worker.ts (stateful counter page), package.json (npm deps, installed at worker build time), sdk.ts (platform capability types), AGENTS.md, and ONBOARDING.md.',
           "- Read the repo with itx.repo.readFile({ path }) and itx.repo.listFiles(); change it with itx.repo.commitFiles({ message, changes: [{ path, content }] }).",
           "- Other agents live at /agents/<name> (itx.agents.list() / itx.agents.get(path)); Slack thread agents appear under /agents/slack/<channel>/ts-<ts>; secrets under /secrets/**.",
           '- Streams are path-addressed: itx.streams.get(path).append(event) / getEvents() / waitFor(); path "/" is the project root stream.',

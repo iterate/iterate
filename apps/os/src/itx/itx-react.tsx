@@ -230,14 +230,21 @@ function reconnectAllItx(): void {
 /** Default address = the global context. Lets useItx() work with NO provider. */
 const ItxAddressContext = createContext<ItxAddress>({});
 
-/** Subscribe to the socket map, suspend until this context's socket connects. */
-function useSocket(context: string | undefined): ItxHandle {
+/** Subscribe to the socket map, optionally suspend until this context's socket connects. */
+function useOptionalSocket(context: string | undefined, enabled: boolean): ItxHandle | null {
   const promise = useSyncExternalStore(
     subscribeSockets,
-    () => socketFor(context),
-    () => socketFor(context),
+    () => (enabled ? socketFor(context) : null),
+    () => (enabled ? socketFor(context) : null),
   );
-  return use(promise);
+  return promise == null ? null : use(promise);
+}
+
+/** Subscribe to the socket map, suspend until this context's socket connects. */
+function useSocket(context: string | undefined): ItxHandle {
+  const handle = useOptionalSocket(context, true);
+  if (handle == null) throw new Error("enabled useSocket returned no handle");
+  return handle;
 }
 
 /**
@@ -257,14 +264,17 @@ export function ItxProvider({
   projectId,
   path,
   baseUrl,
+  prewarm = true,
   children,
-}: ItxAddress & { children: ReactNode }) {
+}: ItxAddress & { children: ReactNode; prewarm?: boolean }) {
   // Stable value so a fresh object literal each render doesn't thrash consumers.
   const address = useMemo<ItxAddress>(
     () => ({ projectId, path, baseUrl }),
     [projectId, path, baseUrl],
   );
-  useSocket(projectId); // pre-warm: suspend here so children read it synchronously
+  // Pre-warm by default: suspend here so children read it synchronously. Routes
+  // with their own inner itx boundary can opt out to paint route chrome first.
+  useOptionalSocket(projectId, prewarm);
   return <ItxAddressContext value={address}>{children}</ItxAddressContext>;
 }
 
