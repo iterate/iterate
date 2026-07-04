@@ -135,7 +135,6 @@ async function bakeStaticAuthJwks(ctx: EnvContext<(typeof envs)[keyof typeof env
   return JSON.stringify(jwks);
 }
 
-/** Fetch the auth worker's live JWKS, retrying transient failures 3 times. */
 /**
  * Poll the issuer's JWKS for up to ~4 minutes: the preview CI lane deploys
  * auth and os IN PARALLEL, so this env's auth worker may legitimately still
