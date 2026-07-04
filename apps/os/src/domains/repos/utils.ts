@@ -14,12 +14,19 @@ const GLOBAL_REPO_ARTIFACT_PROJECT_ID = "global";
 export const PROJECT_REPO_PATH = "/";
 
 /**
- * Minimal ITX currently uses one default repo-backed worker source. This shared
- * filename keeps the public `project.worker` alias and the seeded repo template
- * pointed at the same module while the broader repo/workers model is still
- * being proven.
+ * The default project worker's build entry point. This shared filename keeps
+ * the public `project.worker` alias and the seeded repo template pointed at
+ * the same module.
  */
-export const PROJECT_WORKER_SOURCE_PATH = "worker.js";
+export const PROJECT_WORKER_ENTRY_POINT = "worker.ts";
+
+/**
+ * Default masks for the default project worker's repo file source: build from
+ * the whole repo, minus version control and generated/installed output. The
+ * bundler only pulls modules reachable from the entry point, so a broad
+ * include keeps user-added helper files importable without ref changes.
+ */
+export const PROJECT_WORKER_SOURCE_EXCLUDE = [".git/**", "node_modules/**", "dist/**", "build/**"];
 
 function normalizeRepoPath(path: string): string {
   if (path === "") return "/";

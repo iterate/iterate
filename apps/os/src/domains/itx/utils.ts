@@ -84,12 +84,6 @@ export function scopeFromItxEntrypointProps(
  * those scopes must not share Worker Loader instances because `env.ITX` would
  * point at the wrong capability tree.
  */
-export function itxEntrypointScopeCacheKey(scope: ItxEntrypointScope): string {
-  return JSON.stringify({
-    path: normalizePath(scope.path),
-    projectId: scope.projectId,
-  });
-}
 
 /**
  * Narrow structural view of the `ItxEntrypoint` loopback export on

@@ -1,7 +1,9 @@
 ---
-status: ready
+status: done
 size: medium
 ---
+
+> Closed — alchemy.run.ts no longer exists; the deploy scripts (scripts/lib/deploy-\*.ts) zod-validate the assembled runtime env, which is what this task wanted. Rewrite from scratch if more is needed.
 
 # Deploy-time config via the shared config system
 

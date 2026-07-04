@@ -1,10 +1,12 @@
 ---
-state: in-progress
+state: done
 priority: high
 size: large
 dependsOn: []
 tags: [os, itx, orpc, cutover]
 ---
+
+> Done — zero @orpc/\* dependencies remain in apps/os.
 
 # Rip out oRPC from apps/os: itx serves everything
 
