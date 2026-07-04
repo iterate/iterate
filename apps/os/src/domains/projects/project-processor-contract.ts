@@ -22,6 +22,7 @@ export const ProjectProcessorContract = defineProcessorContract({
       .nullable()
       .default(null),
     created: z.boolean().default(false),
+    onboardingActive: z.boolean().default(false),
     onboardingCompletedAt: z.string().nullable().default(null),
     agents: z.array(StreamListItem).default([]),
     repos: z.array(StreamListItem).default([]),
@@ -32,6 +33,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/create-requested": {
       description: "A project creation was requested.",
       payloadSchema: z.object({
+        onboardingActive: z.boolean().optional(),
         projectId: z.string(),
         slug: z.string(),
       }),

@@ -102,12 +102,19 @@ export class ProjectProcessor extends StreamProcessor<
     switch (event.type) {
       case "events.iterate.com/project/create-requested":
         if (event.payload.projectId !== this.deps.itx.projectId) return state;
-        return { ...state, createRequest: event.payload };
+        return {
+          ...state,
+          createRequest: {
+            projectId: event.payload.projectId,
+            slug: event.payload.slug,
+          },
+          onboardingActive: event.payload.onboardingActive === true,
+        };
       case "events.iterate.com/project/created":
         if (event.payload.projectId !== this.deps.itx.projectId) return state;
         return { ...state, created: true };
       case "events.iterate.com/project/onboarding-completed":
-        return { ...state, onboardingCompletedAt: event.createdAt };
+        return { ...state, onboardingActive: false, onboardingCompletedAt: event.createdAt };
       case "events.iterate.com/stream/created":
         if (event.payload.projectId !== this.deps.itx.projectId) return state;
         return recordStream(state, event.payload.path, event.createdAt);

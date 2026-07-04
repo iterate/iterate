@@ -6,7 +6,7 @@ import { z } from "zod";
 import { ProjectCreationProgress } from "~/components/project-creation-progress.tsx";
 import { ProjectSettingsPanel } from "~/components/project-settings-panel.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { ONBOARDING_AGENT_PATH } from "~/lib/onboarding-agent.ts";
+import { ONBOARDING_AGENT_PATH, hasActiveOnboardingAgent } from "~/lib/onboarding-agent.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
@@ -54,8 +54,9 @@ function ProjectHomePage() {
   // agent is born during project/create-requested.
   const agents = lifecycle.state?.agents ?? [];
   const inOnboarding =
-    lifecycle.state?.onboardingCompletedAt == null &&
-    agents.some((agent) => agent.path === ONBOARDING_AGENT_PATH);
+    lifecycle.state === undefined
+      ? false
+      : hasActiveOnboardingAgent({ agents, onboardingActive: lifecycle.state.onboardingActive });
   const handOffToOnboarding = welcome === true && inOnboarding;
 
   // The welcome handoff: arrived here from an older create/root redirect, so as

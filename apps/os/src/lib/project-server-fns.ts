@@ -4,7 +4,7 @@ import { newHttpBatchRpcSession } from "capnweb";
 import { env } from "cloudflare:workers";
 import { authenticateCapnwebAdmin } from "~/auth/admin-auth-cookie.ts";
 import { getUserPrincipal } from "~/auth/principal.ts";
-import { ONBOARDING_AGENT_PATH } from "~/lib/onboarding-agent.ts";
+import { hasActiveOnboardingAgent } from "~/lib/onboarding-agent.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import {
   chooseRootProjectRedirect,
@@ -92,9 +92,7 @@ export const getRootProjectRedirectServerFn: (input?: {
         try {
           const project = await root.projects.get(decision.project.id);
           const { state } = await project.processor.snapshot();
-          decision.onboarding =
-            state.onboardingCompletedAt == null &&
-            state.agents.some((agent) => agent.path === ONBOARDING_AGENT_PATH);
+          decision.onboarding = hasActiveOnboardingAgent(state);
         } catch {
           decision.onboarding = false;
         }

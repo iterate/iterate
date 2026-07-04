@@ -514,6 +514,7 @@ export type ProjectProcessorState = {
   agents: StreamListItem[];
   createRequest: { projectId: string; slug: string } | null;
   created: boolean;
+  onboardingActive: boolean;
   onboardingCompletedAt: string | null;
   repos: StreamListItem[];
   secrets: StreamListItem[];

@@ -12,7 +12,7 @@ import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { ONBOARDING_AGENT_PATH } from "~/lib/onboarding-agent.ts";
+import { ONBOARDING_AGENT_PATH, hasActiveOnboardingAgent } from "~/lib/onboarding-agent.ts";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { getRootProjectRedirectServerFn } from "~/lib/project-server-fns.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
@@ -173,8 +173,8 @@ function ProjectsIndexPage() {
           let inOnboarding = false;
           for (let attempt = 0; attempt < 20 && !cancelled; attempt += 1) {
             const { state } = await projectItx.processor.snapshot();
-            if (state.onboardingCompletedAt != null) return;
-            if (state.agents.some((agent) => agent.path === ONBOARDING_AGENT_PATH)) {
+            if (!state.onboardingActive) return;
+            if (hasActiveOnboardingAgent(state)) {
               inOnboarding = true;
               break;
             }
