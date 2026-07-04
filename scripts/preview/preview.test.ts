@@ -192,7 +192,10 @@ describe("preview retry selection", () => {
     ).toEqual(["semaphore"]);
   });
 
-  it("does not retry previously failed apps from older commits", () => {
+  it("retries failed apps from older commits so a diff-miss push cannot leave the slot wedged", () => {
+    // Regression: deploys failed at an old head, the next push's diff selected
+    // no apps (envs.ts-only fix), and the recorded deploy-failed state was
+    // never retried — deploy skipped, tests skipped, check green, slot broken.
     expect(
       selectPreviewAppsNeedingRetry({
         previousState: {
@@ -202,6 +205,27 @@ describe("preview retry selection", () => {
               appSlug: "os",
               headSha: "old-head",
               status: "deploy-failed",
+              updatedAt: "2026-05-01T00:00:00.000Z",
+            },
+          },
+          environmentConfigLease: null,
+          notice: null,
+        },
+        pullRequestHeadSha: "current-head",
+      }).map((app) => app.slug),
+    ).toEqual(["os", "auth"]);
+  });
+
+  it("does not re-run awaiting-tests apps from older commits", () => {
+    expect(
+      selectPreviewAppsNeedingRetry({
+        previousState: {
+          apps: {
+            os: {
+              appDisplayName: "OS",
+              appSlug: "os",
+              headSha: "old-head",
+              status: "awaiting-tests",
               updatedAt: "2026-05-01T00:00:00.000Z",
             },
           },

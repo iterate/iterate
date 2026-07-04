@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
@@ -57,12 +57,18 @@ export function RawEventInspectorPanel({
   const previousOffset = asNumber(previousResult.data[0]?.offset);
   const nextOffset = asNumber(nextResult.data[0]?.offset);
 
+  // The neighbour offsets change on every page, but the key handler itself must
+  // not: re-subscribing a window listener per keypress is pure churn. Read the
+  // current neighbours from a ref so the effect binds once (onNavigate is stable).
+  const neighboursRef = useRef({ previousOffset, nextOffset });
+  neighboursRef.current = { previousOffset, nextOffset };
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
       // The panel coexists with the composer and filter inputs (it is not a
       // modal, unlike the old sheet) — typing there must not page the log.
       if (isTypingTarget(event.target)) return;
+      const { previousOffset, nextOffset } = neighboursRef.current;
       if (event.key === "ArrowLeft" && previousOffset != null) {
         event.preventDefault();
         onNavigate(previousOffset);
@@ -74,7 +80,19 @@ export function RawEventInspectorPanel({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [previousOffset, nextOffset, onNavigate]);
+  }, [onNavigate]);
+
+  // Parse + reorder only when the underlying row changes, not on every render:
+  // a fresh object identity would rebuild CodeMirror (its editor is keyed on
+  // the doc value) even when an incidental re-render left the event untouched.
+  const selectedRawJson = selected == null ? null : String(selected.raw_json);
+  const orderedEventData = useMemo(
+    () =>
+      selectedRawJson == null
+        ? null
+        : orderEventKeysForYamlDisplay(parseRawEventJson(selectedRawJson)),
+    [selectedRawJson],
+  );
 
   const selectedTimestamp = parseTimestamp(selected?.created_at);
   const sincePrevious = elapsedBetween(
@@ -141,20 +159,23 @@ export function RawEventInspectorPanel({
         </span>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto border-t px-4 py-3">
-        {selectedResult.status === "pending" ? (
-          <p className="text-sm text-muted-foreground">Opening local SQLite mirror…</p>
-        ) : selected == null ? (
-          <p className="text-sm text-muted-foreground">
-            Event #{offset} is not in the local mirror (yet). Use Prev/Next to jump to the nearest
-            mirrored event.
-          </p>
-        ) : (
+        {orderedEventData != null ? (
+          // Paging seeds each new query with the prior row while SQLite catches
+          // up (stale-while-revalidate), so keep painting the last payload
+          // instead of flashing the placeholder — the swap is a clean SQL read.
           <SerializedObjectCodeBlock
-            data={orderEventKeysForYamlDisplay(parseRawEventJson(String(selected.raw_json)))}
+            data={orderedEventData}
             initialFormat="yaml"
             showToggle
             showCopyButton
           />
+        ) : selectedResult.status === "pending" ? (
+          <p className="text-sm text-muted-foreground">Opening local SQLite mirror…</p>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Event #{offset} is not in the local mirror (yet). Use Prev/Next to jump to the nearest
+            mirrored event.
+          </p>
         )}
       </div>
     </aside>

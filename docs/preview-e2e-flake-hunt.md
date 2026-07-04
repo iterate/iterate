@@ -4,6 +4,10 @@ Goal: run the full preview e2e lane against a real preview environment 50
 times in a row without a single flake, fixing and documenting every failure
 encountered along the way.
 
+Round 1 (PR #1644) found and fixed nine root causes (below) and merged them
+to main. Round 2 continues the consecutive-green-run count on this PR against
+the post-de-alchemization (#1636) deploy model.
+
 Method: deploy this PR's preview slot, then loop
 `doppler run --project _shared --config prd -- pnpm preview test --pull-request-number <N>`
 from a workstation. Every failure gets a root-cause diagnosis and the smallest
@@ -120,11 +124,12 @@ already resolved (the DO comments promise "commitFiles() is our
 read-your-write boundary").
 
 Fix: the Repo DO records each pushed commit oid per branch
-(`repo-pushed-head:<branch>` in DO storage); read clones and the
-worker-source materialization retry briefly until the snapshot observes at
-least that head. A concurrent force-push can legitimately advance HEAD past
-the recorded oid, so after the bounded retries the latest snapshot is served
-regardless.
+(`repo-pushed-head:<branch>` in DO storage); read clones retry briefly until the
+snapshot observes at least that head. (After the #1612 repo refactor this guard
+lives in `getFilesSnapshot`, the single clone-and-read pathway every read goes
+through; the old per-projection materialization is gone.) See also flake 15 —
+serialized writes mean the recorded head can only move forward, never behind our
+last push.
 
 ### 7. Local harness must match the CI contract (vitest retry)
 
@@ -175,7 +180,148 @@ out. Fix: `sleepAfter = "3m"` on the sandbox DO (reclaims capacity ~3× faster;
 idle restart costs one cold boot + clone) and `maxInstances: 40` (lite
 instances bill on usage, not reservation).
 
+### 12. Green check on a wedged slot: stale failed deploys are never retried
+
+Round 2 opening move. preview_7's D1/KV had been deleted out from under
+`envs.ts`, so the first deploy failed (D1 7404). The fix push touched only
+`envs.ts` — which was in NO preview paths list — so app selection chose
+nothing, the stale `deploy-failed` entries (old head) were excluded by the
+retry selector's same-head guard, deploy skipped ("nothing to deploy"), the
+test lane skipped its stale recorded apps, and the whole check went **green**
+with three apps deploy-failed on the slot. Two fixes:
+
+- `envs.ts` + `scripts/lib/**` joined the preview shared paths (and the Depot
+  workflow's `paths`): every app's wrangler config derives from envs.ts.
+- Failed states (`deploy-failed`, `claim-failed`, `tests-failed`) now retry
+  regardless of which head recorded them; only `awaiting-tests` keeps the
+  same-head guard.
+
+### 13. Fresh-worker bring-up: module-scope config parse + orphaned container app
+
+Recreating preview_7's deleted workers surfaced two first-deploy failures:
+
+- **semaphore**: `parseConfig(workerEnv)` ran at module scope, so Cloudflare's
+  upload-time script validation threw ZodError on a worker with no secrets
+  yet — rejecting exactly the classless bootstrap deploy a fresh worker needs
+  before its first code+secrets version (deploy-helpers.ts). The parse is now
+  lazy (memoized on first request).
+- **os**: the Cloudflare _Containers application_
+  `os-preview-7-cloudflaresandboxdurableobject-preview_7` survived the old
+  worker's deletion and stayed bound to the dead DO namespace; redeploying
+  created a new namespace and Cloudflare refused the collision ("already an
+  application with the name … associated with a different durable object
+  namespace"). Fixed operationally with `wrangler containers delete <id>`;
+  if a slot's os worker is ever deleted again, expect this and delete the
+  orphaned application before redeploying.
+
+### 14. Vitest wedged at startup for 9+ hours (loop watchdog added)
+
+Round-2 run 14: the Playwright specs passed, then `pnpm e2e --project node`
+printed vitest's header and nothing else for 9h23m. The vitest main process
+sat with an idle event loop (kevent wait), zero CPU, and **no worker
+children** — it hung before running a single test, machine awake the whole
+time (`pmset` clean). Root cause unknown (one occurrence in ~20 runs;
+plausibly a wedge in vitest's startup/fork-pool against this Node version).
+Mitigation: the loop now runs each attempt under a watchdog
+(`RUN_TIMEOUT_SECS`, default 30 min) that kills the run tree and counts it as
+a failure instead of silently freezing the marathon.
+
+### 15. Concurrent repo writers lose the compare-and-swap race on `refs/heads/main`
+
+Round-2 run 44 (43 consecutive greens, then this): `examples-matrix ›
+repo-edit-file` failed two different ways across its retry — first a
+`git.push` **`GitPushError: refs/heads/main: stale ref`**, then (on the retry)
+the final `readFile` returning `status: draft` after the edit had reported
+success. Both are the same root cause.
+
+The itx examples matrix runs many repo-mutating examples
+(`repo-commit-files`, `repo-edit-file`, …) **concurrently against ONE shared
+project repo**, all pushing to `refs/heads/main`. Each mutation clones HEAD,
+commits on top, and pushes. The Artifacts git server enforces optimistic
+concurrency (compare-and-swap on the ref): when a second writer's push carries
+a parent that is no longer the server's current HEAD — because the first
+writer landed in between — the server rejects it with `stale ref` /
+not-fast-forward, and isomorphic-git surfaces that as a thrown `GitPushError`.
+
+`force: true` (which every mutation used) does **not** help and actively hurt:
+
+- It only skips isomorphic-git's _client-side_ fast-forward check, not the
+  _server's_ compare-and-swap — so the `stale ref` rejection still happens.
+- A force-push that _did_ land would clobber the concurrent writer's commit by
+  resetting HEAD to a parent that predates it. That is exactly how the second
+  failure arose: our `edit` committed and pushed, then a racing writer's
+  force-push reset `main` to a commit that predated our edit, and the
+  read-your-write clone (flake 6) faithfully returned the reverted content.
+
+Fix: **already solved on main by the #1612 repo refactor**, which this branch
+merges — so the standalone fix this branch first carried (a compare-and-swap
+retry loop in `mutateArtifactRepo`) was dropped in favour of main's cleaner,
+structural one. The Repo DO now serializes every write through a `#writeChain`
+(`commitFiles`/`edit` each run inside `#serializeWrite`), so two mutations to one
+repo can never be in flight at once: each clones the latest HEAD, commits, and
+fast-forward pushes with **no `force`**. With a single writer at a time there is
+no compare-and-swap race to lose and no force-push to clobber a concurrent commit
+— the two failure modes above are structurally impossible. (`seedArtifactRepo`
+keeps its one force-push: it runs once at repo creation, never concurrently.)
+The diagnosis is retained here because it explains _why_ main dropped `force` and
+serialized writes; the marathon re-verifies it end-to-end.
+
+### 16. Marathon methodology: an incremental deploy splits the fleet head
+
+Not a product flake — a hole in the flake-hunt harness, surfaced while shipping
+the flake-15 fix. `preview deploy` selects apps by diffing the PR head against
+the **last deployed head**, not the PR base. So a mid-branch commit that touches
+only one app (the flake-15 fix was `apps/os`-only) redeploys just that app and
+leaves the others at the previous head. The test lane only tests apps whose
+recorded head equals the PR head, so the very next marathon run tested `os, auth`
+but not `semaphore, streams-example-app` — tripping the full-fleet guard
+(exit 3) at run 1. This is the deploy-side twin of flake 12: a fleet can silently
+shrink to the changed apps, and without the guard a partial lane would count as
+green.
+
+Fix (`scripts/preview/flake-hunt-loop.sh`): a fresh marathon (`START_AT=1`) now
+runs a full-fleet deploy preflight before counting runs and refuses to start on
+a `deploy-failed`/`claim-failed` app (exit 4). Because `scripts/preview/**` is a
+preview shared path, any change under it (envs.ts and scripts/lib/\*\* too) forces
+`preview deploy` to redeploy the whole fleet, reunifying the head — so the
+preflight both guarantees a unified fleet and repairs a split one. Set
+`SKIP_PREFLIGHT_DEPLOY=1` when resuming a marathon whose fleet is already unified.
+
+### 17. A second browser tab has no spinner-waiter, so it dies on the 750ms actionTimeout
+
+Round-2 (r2e) run 3: `reactivity.spec.ts › delivers an appended event to another
+open tab` failed on the initial attempt **and** retry #1 —
+`TimeoutError: locator.waitFor: Timeout 750ms exceeded` waiting for the second
+tab's `reactivity-stream-status` to read `live`. The first tab (line 73) went
+live fine; only the second tab (line 74) timed out.
+
+`playwright.config.ts` sets a deliberately tight `actionTimeout: 750` (non-video)
+so bare `waitFor()`s fail fast; the safety net is middlewright's spinner-waiter,
+which **extends** a wait up to ~28s while a `data-spinner="true"` element is
+visible. The reactivity page shows exactly one such element (the "connecting…"
+badge) while a subscription connects, so the primary page reliably reaches
+`live`. But the second tab is created with `context.newPage()`, which returns a
+raw page **without** our middlewright plugins — so its `waitFor()` gets only the
+raw 750ms, too short to open a second concurrent stream subscription (a second
+WebSocket to the same Stream DO). Runs 1–2 passed because the second tab
+happened to connect in <750ms; run 3 it didn't, twice.
+
+Fix (`specs/test-support/test.ts`, not the spec — specs stay verbatim): the
+`page` fixture now patches `context.newPage` to wrap every subsequently-opened
+page with the same plugins as the primary. `basePage` already exists when the
+fixture runs (Playwright's built-in `page` fixture created it via
+`context.newPage()` first), so the primary page is never double-wrapped; only
+extra tabs the spec opens later get wrapped. Any multi-tab spec now benefits.
+
 ### Observed, not yet fixed
+
+- `repl-examples.spec.ts › secrets-lifecycle` fast-failed once on run 3
+  (`Timeout 1ms exceeded` waiting for the "Run" button after `/repl`
+  navigation — the spinner-waiter's no-spinner fast-fail) but **passed on
+  retry #1**, so it did not fail the run. Same class as flake 10/11 but on the
+  initial page-load "Run visible" wait, which is outside the example's
+  `completionTimeoutMs` budget. Watching whether it ever double-flakes across
+  the marathon before fixing — a retry-absorbed blip is within the CI contract.
 
 - `packages/mock-http-proxy` unit test `msw-server-adapter.http-parity ›
 does not mark non-matching one-time handlers as used` failed once in the
