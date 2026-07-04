@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { decideIngressRoute, apiWorkerRequest, type IngressResolvers } from "./ingress.ts";
+import { decideIngressRoute, type IngressResolvers } from "./ingress.ts";
 
 const PREVIEW_CONFIG = {
   baseUrl: "https://os.iterate-preview-2.com",
@@ -230,16 +230,16 @@ it("honors x-forwarded-host for host classification", async () => {
   });
 });
 
-it("apiWorkerRequest forwards project hosts and itx paths, keeps the app lane", () => {
-  const forward = (url: string, headers?: HeadersInit) =>
-    apiWorkerRequest({ config: DEV_CONFIG, request: new Request(url, { headers }) });
+it("ignores the deleted ingress-hostname handoff header", async () => {
+  const route = await decideIngressRoute({
+    config: DEV_CONFIG,
+    headers: { "x-iterate-ingress-hostname": "demo.localhost:56455" },
+    method: "GET",
+    resolvers: resolversThatShouldNotBeUsed(),
+    url: "http://localhost:56455/projects/demo",
+  });
 
-  expect(forward("http://localhost:56455/projects/demo")).toBeNull();
-  expect(forward("http://localhost:56455/api")).not.toBeNull();
-  expect(forward("http://localhost:56455/prj_123/x")).not.toBeNull();
-  expect(forward("http://demo.localhost:56455/")).not.toBeNull();
-  expect(forward("http://hello--demo.localhost:56455/")).not.toBeNull();
-  expect(forward("https://unknown-host.example.com/")).not.toBeNull();
+  expect(route).toMatchObject({ lane: "os" });
 });
 
 function resolversThatShouldNotBeUsed(): IngressResolvers {
