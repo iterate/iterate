@@ -4,9 +4,12 @@ Goal: run the full preview e2e lane against a real preview environment 50
 times in a row without a single flake, fixing and documenting every failure
 encountered along the way.
 
-Round 1 (PR #1644) found and fixed nine root causes (below) and merged them
-to main. Round 2 continues the consecutive-green-run count on this PR against
-the post-de-alchemization (#1636) deploy model.
+Round 1 (PR #1644) found and fixed nine root causes and merged them to main.
+Round 2 (PR #1653, merged) added flakes 16–17 and the `preview.ts` lease/retry
+hardening, and merged main's worker-build pipeline (#1612) — whose `#writeChain`
+write serialization supersedes round 2's standalone flake-15 fix. Round 3
+(this PR) carries on toward 50 consecutive green runs, targeting the two
+pre-existing flakes still open after the round-2 merge (see "Round 3 targets").
 
 Method: deploy this PR's preview slot, then loop
 `doppler run --project _shared --config prd -- pnpm preview test --pull-request-number <N>`
@@ -313,15 +316,27 @@ fixture runs (Playwright's built-in `page` fixture created it via
 `context.newPage()` first), so the primary page is never double-wrapped; only
 extra tabs the spec opens later get wrapped. Any multi-tab spec now benefits.
 
-### Observed, not yet fixed
+### Round 3 targets
 
-- `repl-examples.spec.ts › secrets-lifecycle` fast-failed once on run 3
-  (`Timeout 1ms exceeded` waiting for the "Run" button after `/repl`
-  navigation — the spinner-waiter's no-spinner fast-fail) but **passed on
-  retry #1**, so it did not fail the run. Same class as flake 10/11 but on the
-  initial page-load "Run visible" wait, which is outside the example's
-  `completionTimeoutMs` budget. Watching whether it ever double-flakes across
-  the marathon before fixing — a retry-absorbed blip is within the CI contract.
+The round-2 merge commit's own preview e2e (Depot, two attempts) failed on two
+pre-existing flakes that round 3 fixes:
+
+- **REPL "Run" button fast-fail.** `forged-session-repl.spec.ts` and several
+  `repl-examples.spec.ts` cases fail with `Timeout 1ms exceeded` waiting for
+  `getByRole("button", { name: "Run" })` after `/repl` navigation — the
+  spinner-waiter's no-spinner fast-fail on a page-load wait (flake 10/11 class,
+  but on the initial "Run visible" wait, outside the example's
+  `completionTimeoutMs` budget). Sometimes recovers on retry, sometimes not.
+- **Stream-event delivery timeout under concurrent load / cold build cache.**
+  `Timed out waiting for stream event after 60–90s (saw 0 events)` across
+  reactivity, repl-examples, and a vitest e2e test. Known/tracked
+  (`tasks/streams-event-delivery-flake-under-concurrent-load.md`,
+  `tasks/raise-e2e-maxconcurrency.md`); the vitest lane already runs at
+  `maxConcurrency: 2`. The round-2 merge added #1612's worker-build pipeline,
+  whose first dynamic-worker build on a **cold `WORKER_BUILD_CACHE` KV** (freshly
+  created per slot) adds latency that widens this window on the first run.
+
+### Observed, not yet fixed
 
 - `packages/mock-http-proxy` unit test `msw-server-adapter.http-parity ›
 does not mark non-matching one-time handlers as used` failed once in the
