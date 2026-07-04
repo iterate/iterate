@@ -84,6 +84,18 @@ export async function adoptDoMigrationTag(ctx: CfContext, workerName: string) {
   const script = scripts.find((candidate) => candidate.id === workerName);
   // Loose != also catches the list endpoint omitting the field (undefined).
   if (!script || script.migration_tag != null) return;
+  // Adoption is ONLY correct when the classes are already live: tagging a
+  // CLASSLESS worker makes wrangler treat the v1 migrations as already
+  // applied and skip creating the classes — wedging every future deploy on
+  // 10061 (observed live on os-preview-3, 2026-07-04). Classless workers
+  // take deployWithSecrets' bootstrap-deploy path instead.
+  const settings = await ctx
+    .cf<{ bindings?: { type: string }[] }>(`/workers/scripts/${workerName}/settings`)
+    .catch(() => null);
+  if (!settings?.bindings?.some((binding) => binding.type === "durable_object_namespace")) {
+    console.log(`Worker ${workerName} has no live DO classes — skipping migration-tag adoption.`);
+    return;
+  }
   console.log(`Adopting DO migration tag v1 on ${workerName} (was untagged/alchemy-era)`);
   const form = new FormData();
   form.set("settings", JSON.stringify({ migrations: { new_tag: "v1", steps: [] } }));
