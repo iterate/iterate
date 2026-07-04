@@ -316,6 +316,41 @@ fixture runs (Playwright's built-in `page` fixture created it via
 `context.newPage()` first), so the primary page is never double-wrapped; only
 extra tabs the spec opens later get wrapped. Any multi-tab spec now benefits.
 
+### 18. A dangling stream-wait rejection crashes the vitest runner, bypassing `retry: 1`
+
+Fleet survey (2026-07-04, across all of today's PRs) found the stream-event
+delivery flake was the dominant preview e2e failure (4 of 5 failing PRs), and
+uncovered a distinct, higher-leverage bug in _how_ it fails. On PRs #1664 and
+#1665 the `Timed out waiting for stream event … saw 0 events` error came back
+over capnweb's read loop (`serialize.ts` → `rpc.ts` `readLoop`) as an
+**unhandled promise rejection** — not inside a test's `await` — and Node's
+default crashed the whole vitest worker (`Node.js v24…`, exit 1, **zero test
+output**). Because the process died before vitest could mark the test failed,
+the CI `retry: 1` safety net never engaged. The same flake on #1666, where it
+surfaced inside an `await`, recovered on retry and went green.
+
+Why it dangles: under `sequence.concurrent` (maxConcurrency 2) several tests'
+`waitForEvent` RPCs are in flight at once. When the slot's stream delivery
+stalls under load, a sibling test's — or a background subscription's — wait
+rejects after its owning test has already moved on, so nothing is awaiting it.
+
+Fix (`apps/os/e2e/vitest/setup.ts`): a scoped `unhandledRejection` handler that
+swallows **only** the known-transient stream-wait signature
+(`Timed out waiting for stream event` / `waitUntilEvent timed out`) so the
+worker survives — the test that actually awaited the wait still fails normally
+and `retry: 1` re-runs it — and re-throws every other rejection (Node escalates
+that to an uncaughtException, preserving crash-on-real-bug). This converts a
+suite-killing crash into an ordinary, usually retry-absorbed, failure.
+
+The survey also **refuted the "unhealthy preview slot" hypothesis**: today's 5
+failures spread evenly across preview-2/-3/-4/-7/-9 with no repeated or
+chronically-bad slot and zero JWKS/503/`workers.dev`-edge-drift; the only
+environmental correlate is cold-slot / cold `WORKER_BUILD_CACHE` on the first
+run after a deploy. And it confirmed `maxConcurrency: 2` still flakes, so the
+real fixes remain the tracked delivery race
+(`tasks/streams-event-delivery-flake-under-concurrent-load.md`) and splitting
+the 39-test `itx.e2e.test.ts` monolith — **not** raising concurrency.
+
 ### Round 3 targets
 
 The round-2 merge commit's own preview e2e (Depot, two attempts) failed on two
