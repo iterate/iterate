@@ -453,14 +453,50 @@ on its own — a fresh sandbox exec returned in seconds once the window passed),
 not something the test should absorb.
 
 Decision: keep **fail-fast** budgets — `sandbox-exec` `completionTimeoutMs`
-120s, the vitest matrix/`sandbox-egress` tests 240s, and the `preview.ts`
-vitest-lane guard 360s (was briefly 600/900). A container stuck provisioning
+180s (120s undercut a genuine ~132s cold boot observed on Depot), the vitest
+matrix/`sandbox-egress` tests 240s, and the `preview.ts` vitest-lane guard 360s
+(was briefly 600/900). A container stuck provisioning
 surfaces in ~2 min and the run fails; we re-run rather than wait. Reaching 50
 consecutive green therefore depends on a healthy provisioning window (or a
 Cloudflare-side fix), not on masking the latency — and CI’s own retry absorbs a
 lone transient. If provisioning proves _frequent_ enough to block 50-in-a-row,
 the right lever is reducing sandbox-container churn or a Cloudflare escalation,
 not a bigger timeout.
+
+### 21. Blank route-pending panel fast-fails the first wait after `goto`
+
+**Signature** (Depot marathon2 run 5; also the round-2 merge's own preview
+e2e — the "REPL Run button fast-fail" below): `repl-examples.spec.ts`
+`repo-read-file` / `repo-edit-file` fail in ~6s with
+`TimeoutError: locator.waitFor: Timeout 1ms exceeded` waiting for the "Run"
+button right after `page.goto(/projects/<slug>/repl)`. The failure screenshot
+shows the app shell (sidebar, breadcrumb) with a **completely empty main
+panel** — no REPL, and critically no spinner.
+
+**Root cause — a product gap, not a slow test.** The project layout
+(`routes/_app/projects/$projectSlug/route.tsx`) is `ssr: false`, so a direct
+hit SSRs only the shell; TanStack renders the client-only match as
+`<ClientOnly fallback={pendingElement}>` and shows `pendingElement` again
+while `beforeLoad` (the `getProjectBySlugServerFn` HTTP roundtrip) runs after
+hydration. The router configured **no `defaultPendingComponent`**, so
+`pendingElement` was `null` → the outlet rendered literally nothing for the
+whole hydrate + project-fetch window. The failing trace shows that server-fn
+taking **1037ms** (a normal cold-read tail); with no spinner visible the
+spec-side spinner-waiter correctly refused to extend the deliberately-tight
+750ms actionTimeout and the wait died with 1ms left. All the route-level
+fallbacks further down (`ItxResourceLoading`, `ItxPending`) never got a chance
+to render — the match itself hadn't mounted.
+
+**Fix (apps/os/src/router.tsx):** wire `defaultPendingComponent` (muted
+"Loading…" with `data-spinner="true"`, same idiom as every route-level pending
+fallback) plus `defaultPendingMs: 300` / `defaultPendingMinMs: 200` (library
+defaults leave a 1s blank window on client-side loads). The spinner now sits in
+the SSR HTML itself for `ssr: false` subtrees, so from first paint to REPL
+mount the app continuously reports progress and the spinner-waiter extends
+exactly as designed — no spec-side timeout was touched. This is the correct
+fail-fast shape: the wait budget grows only while the app visibly claims to be
+working, and a genuinely wedged page still dies at the spinner-waiter's 30s
+cap.
 
 ### Round 3 targets
 
@@ -469,10 +505,9 @@ pre-existing flakes that round 3 fixes:
 
 - **REPL "Run" button fast-fail.** `forged-session-repl.spec.ts` and several
   `repl-examples.spec.ts` cases fail with `Timeout 1ms exceeded` waiting for
-  `getByRole("button", { name: "Run" })` after `/repl` navigation — the
-  spinner-waiter's no-spinner fast-fail on a page-load wait (flake 10/11 class,
-  but on the initial "Run visible" wait, outside the example's
-  `completionTimeoutMs` budget). Sometimes recovers on retry, sometimes not.
+  `getByRole("button", { name: "Run" })` after `/repl` navigation. Root-caused
+  as **flake 21** (blank route-pending panel — no `defaultPendingComponent` on
+  an `ssr: false` subtree), fixed in `router.tsx`.
 - **Stream-event delivery timeout under concurrent load / cold build cache.**
   `Timed out waiting for stream event after 60–90s (saw 0 events)` across
   reactivity, repl-examples, and a vitest e2e test. Known/tracked
