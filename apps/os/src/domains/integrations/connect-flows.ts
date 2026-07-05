@@ -545,11 +545,12 @@ async function completeGoogleConnect(input: {
     return { callbackUrl, error: "google_userinfo_failed", ok: false };
   }
 
-  // The Gmail local part names the connection; opaque Google ids are the
-  // fallback when the email is missing or sanitizes away.
+  // The full email names the connection (domain included), so two accounts
+  // that share a local part — jonas@nustom.com vs jonas@gmail.com — get
+  // distinct connections instead of colliding on one journal; opaque Google
+  // ids are the fallback when the email is missing or sanitizes away.
   const connection =
-    sanitizeConnectionName(userInfo.email?.split("@")[0] ?? "") ||
-    `google-${sanitizeConnectionName(userInfo.id)}`;
+    sanitizeConnectionName(userInfo.email ?? "") || `google-${sanitizeConnectionName(userInfo.id)}`;
   const scopes = tokenData.scope?.split(" ") ?? google.scopes;
   await recordConnection({
     connection,
