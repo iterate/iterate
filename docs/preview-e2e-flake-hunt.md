@@ -429,6 +429,12 @@ freed within ~3m (verified in the SDK: `renewActivityTimeout` → `sleepAfterMs`
 → `alarm()` stop). The containers were being cleaned; there just weren't enough
 slots for the churn rate.
 
+**Correction (flake 23):** the SDK verification above proved the container
+_stops_ — not that its instance slot is _released_. It isn't: a stopped
+instance stays ASSIGNED to its Durable Object and assignments are what count
+against `max_instances`. The cap raise bought headroom but the leak remained;
+see flake 23 for the real fix (destroy on idle).
+
 Fix (`apps/os/scripts/generate-wrangler-config.ts`): raise the cap to **100**
 for previews and **50** for prd (`lite` instances bill on usage, not
 reservation, so a high cap is free headroom). The durable idle reaper keeps
@@ -470,6 +476,37 @@ Cloudflare-side fix), not on masking the latency — and CI’s own retry absorb
 lone transient. If provisioning proves _frequent_ enough to block 50-in-a-row,
 the right lever is reducing sandbox-container churn or a Cloudflare escalation,
 not a bigger timeout.
+
+### 23. Stopped sandbox containers never release their instance slots
+
+**Signature** (Depot marathon3 run 12, and retroactively flakes 19/20): runs
+slow down progressively (sandbox-exec 22.7s → 33.8s → stuck at 180s×2), the
+vitest lane trips its 360s guard, the loop watchdog SIGKILLs the run at 600s.
+The REPL page shows the run submitted but the entry never lands — the
+server-side sandbox exec is silently waiting for a container that never
+starts. No error anywhere.
+
+**Root cause:** `wrangler containers info` on preview-3 fifteen minutes after
+the marathon died: `instances: {active: 0, assigned: 99, healthy: 1}` — at the
+`max_instances: 100` cap — while idle slots hold 7-10 assignments for **days**.
+The SDK's `sleepAfter` idle alarm does run (`active: 0` — the containers
+stopped), but a stopped instance stays **assigned** to its Durable Object, and
+assignments (a) count against `max_instances` and (b) never expire on their
+own — only `destroy()` or an app rollout releases them. Every e2e fixture
+creates a fresh sandbox DO, so each preview e2e run leaks ~7-8 assignments;
+the cap wedges after ~a dozen runs; a fleet deploy resets the count (which is
+why every marathon ran clean for its first ~dozen runs and why flake 20's
+"provisioning windows every 15-20 runs" pattern fit so well — it was this
+leak, not image re-pulls, at least in the continuously-running cases).
+
+**Fix (`cloudflare-sandbox-durable-object.ts`):** override
+`onActivityExpired` to `destroy()` (SIGKILL + full teardown, releases the
+assignment) instead of the SDK's `stop()` (SIGTERM, keeps the assignment).
+For our sandboxes destroy-on-idle costs nothing: the container filesystem is
+ephemeral across sleep anyway, so waking from stop and waking from destroy are
+the same cold boot + repo re-clone. The SDK's keepAlive escape hatch is
+preserved. Verified on preview-3: assigned count returns to baseline ~3-4min
+after a sandbox goes idle (was: grows monotonically until the cap).
 
 ### 21. Blank route-pending panel fast-fails the first wait after `goto`
 
