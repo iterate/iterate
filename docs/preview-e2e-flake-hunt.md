@@ -44,6 +44,10 @@ to be reset; reference = v6frpcasd5hp70rrhv37kmr4`) during an active
   platform weather, nothing app-side to fix; bumped CI retries 1→2
   (vitest + Playwright) so a burst needs three consecutive faults to fail a
   run.
+- **marathon5** `wdq4c1mv2q`: **32 clean** (new record), run 33 wedged at the
+  600s watchdog — sandbox starts degraded as the instance pool saturated at
+  `assigned == 100` even with destroy-on-idle (see the marathon5 addendum
+  under flake 23). Preview cap raised 100 → 500.
 
 ## Flakes found and fixed
 
@@ -534,6 +538,23 @@ one exec): its instance showed `active:1, assigned:0` while running and went
 released, where the old behavior left it `assigned` indefinitely. (The fix's
 deploy also confirmed a rollout flushes the leaked pool: the app dropped from
 100 stuck instances to a handful once the new version finished provisioning.)
+
+**Marathon5 addendum — destroy is necessary but the cap must still exceed
+cumulative churn.** With destroy-on-idle deployed, marathon5 still wedged at
+run 33 with `active:0, assigned:100`: under sustained load the platform
+BACKFILLS released slots into an "assigned" warm pool that rides at
+`max_instances` (the probe above released to 0 only because demand was zero
+at that moment), and sandbox start latency grows as the pool saturates —
+sandbox-exec went ~20-40s (runs 1-10) → 2.1-2.8min (runs 30-32, shaving the
+180s budget) → 3.2m×2 attempts (run 33, dead). Every marathon wedge to date
+happened at exactly `assigned == max_instances` (20, then 100). Response:
+preview cap raised 100 → **500** (`generate-wrangler-config.ts`) so a whole
+50-run marathon's cumulative creations (~3-8 sandboxes/run) never saturate
+the pool; lite instances bill on usage, so the headroom is free. Destroy
+remains correct — it is what lets an idle fleet drain back to zero instead of
+holding slots forever. If sustained-churn claim latency reproduces at 500,
+this becomes a Cloudflare Containers escalation (pool-manager degradation
+under DO-binding churn), not an app-side fix.
 
 ### 21. Blank route-pending panel fast-fails the first wait after `goto`
 

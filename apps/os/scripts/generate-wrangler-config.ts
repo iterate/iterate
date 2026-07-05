@@ -196,16 +196,20 @@ function envBlock(env: DeployedEnv) {
     kvId: env.resources.projectDirectoryKvId,
     workerBuildCacheKvId: env.resources.workerBuildCacheKvId,
     // Sandbox containers are `lite` and bill on usage, not reservation, so a
-    // high cap is free headroom — and cleanup is reliable regardless of the
-    // cap: the @cloudflare/containers base sets a durable idle alarm from
-    // `sleepAfter` (3m, CloudflareSandboxDurableObject) and the DO does not
-    // override `alarm()`, so every idle container is reaped and its slot freed
-    // within ~3m. The old previews cap of 20 still wedged sandbox-heavy e2e
-    // (fresh project + container per test; #1654's sandbox-egress + the REPL
-    // sandbox-exec specs churn several per run) faster than the reaper reclaimed
-    // — the containers were cleaned, there just weren't enough slots. Give
-    // previews generous headroom; prd runs real agent sandboxes, so raise it too.
-    maxContainerInstances: env.osWorkerName === "os-prd" ? 50 : 100,
+    // high cap is free headroom. Idle containers are destroyed (not just
+    // stopped) by CloudflareSandboxDurableObject.onActivityExpired after 3m,
+    // which releases their instance slot — but under sustained churn the
+    // platform backfills released slots into an "assigned" warm pool that
+    // rides at max_instances, and sandbox start latency grows as the pool
+    // saturates: e2e marathons wedged at EXACTLY assigned == cap on every
+    // attempt (20, then 100 — sandbox-exec went 20s → 2.8min → stuck as
+    // `wrangler containers info` reached the cap;
+    // docs/preview-e2e-flake-hunt.md flakes 19/23). The cap must therefore
+    // comfortably exceed a whole marathon's cumulative sandbox creations
+    // (~3-8 per preview e2e run × 50+ runs), not just the concurrent count.
+    // prd churns far less (real agent sandboxes, no fixture storms) and
+    // destroy-on-idle bounds its growth.
+    maxContainerInstances: env.osWorkerName === "os-prd" ? 50 : 500,
   });
   return {
     name: env.osWorkerName,
