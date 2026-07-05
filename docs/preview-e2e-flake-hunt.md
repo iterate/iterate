@@ -26,7 +26,24 @@ bar is measured on Depot.
 
 ## Run log
 
-(populated as runs complete)
+Depot marathons (the counted lane), 2026-07-05:
+
+- **marathon1**: 17 clean, run 18 failed — sandbox cold boot ~132s vs 120s
+  budget (fixed: 180s, flake 20).
+- **marathon2** `0rm2n02tk2`: 4 clean, run 5 failed — flake 21 (blank
+  route-pending panel).
+- **marathon3** `nqchbzzr63`: 11 clean, run 12 wedged at the container
+  instance cap — flake 23 (stopped containers never release their slots).
+- **marathon4** `xw5qzkt05d`: 16 clean at ~65-90s/run (no cap slowdown — the
+  flake-23 fix held; slot recycled at active:3-5 throughout), run 17 failed —
+  `stream-lifecycle` hit a Cloudflare DO-storage fault TWICE (attempt 1 timed
+  out, the retry got `Internal error in Durable Object storage caused object
+to be reset; reference = v6frpcasd5hp70rrhv37kmr4`) during an active
+  Cloudflare "network performance in North America" incident (preview DOs are
+  ENAM). Fresh project per attempt, so two independent draws both faulted —
+  platform weather, nothing app-side to fix; bumped CI retries 1→2
+  (vitest + Playwright) so a burst needs three consecutive faults to fail a
+  run.
 
 ## Flakes found and fixed
 
