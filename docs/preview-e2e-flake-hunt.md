@@ -48,6 +48,14 @@ to be reset; reference = v6frpcasd5hp70rrhv37kmr4`) during an active
   600s watchdog — sandbox starts degraded as the instance pool saturated at
   `assigned == 100` even with destroy-on-idle (see the marathon5 addendum
   under flake 23). Preview cap raised 100 → 500.
+- **marathon6** `gb1g4sg7rs`: 25 clean at a steady ~60-90s/run — cap 500
+  eliminated the saturation slowdown entirely (pool rode at `assigned: 491`
+  with NO latency growth, where cap-100 marathons were at 3-5min/run by run
+  20). Run 26 failed on the lane's one retry-less gate: `onboarding-smoke.ts`
+  — the onboarding agent didn't greet within 90s ("saw 0 events") and the
+  remote timeout crashed the bare tsx process. Fix: the smoke now makes 3
+  attempts, each with a fresh session + project, matching the vitest lane's
+  `retry: 2` policy; a broken slot still fails all three inside ~5min.
 
 ## Flakes found and fixed
 
