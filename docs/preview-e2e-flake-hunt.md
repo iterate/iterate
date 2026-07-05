@@ -411,6 +411,33 @@ worker + DO chain + sandbox containers on first use), so the marathon can run N
 uncounted priming runs before counting, keeping a cold run 1 from resetting the
 streak.
 
+### 20. Sandbox tests must budget for cold container image provisioning
+
+Distinct from flake 19's instance-cap "Container is starting": Cloudflare
+intermittently RE-PROVISIONS the sandbox container image
+(`Container is currently provisioning. This can take several minutes on first
+deployment.`, SDK 503 `phase: provisioning`). It hit r3d run 7 (after an
+overnight idle) **and** r3e run 17 — the latter on a **continuously-running**
+marathon ~40 min / 16 clean runs in, so it is NOT just a post-idle artifact: the
+image gets re-pulled to a node every ~15-20 runs regardless. When it fires it
+hits every sandbox test at once (`sandbox-exec` in both the vitest matrix and
+the Playwright REPL lane, plus `sandbox-egress`), and the SDK's automatic retry
+takes longer than the old 120-240s test budgets, so they time out mid-provision.
+
+This is real production latency (an agent's first sandbox use after image
+eviction waits for provisioning too), so the tests must budget for it rather
+than treat it as a failure:
+
+- `example-cases.ts` `sandbox-exec` `completionTimeoutMs` 120s → **480s** (used
+  by both the Playwright REPL spec, which already honored it, and now the vitest
+  matrix).
+- `examples-matrix.e2e.test.ts` now sets the per-example vitest `timeout` from
+  `completionTimeoutMs` (was a hard-coded 240s that undercut the budget).
+- `sandbox-egress.e2e.test.ts` timeout 240s → **480s**.
+- `preview.ts` vitest-lane `timeout` 600s → **900s** so a slow-but-progressing
+  provisioning run isn't killed by the flake-14 lane guard (it must exceed the
+  longest per-test budget).
+
 ### Round 3 targets
 
 The round-2 merge commit's own preview e2e (Depot, two attempts) failed on two

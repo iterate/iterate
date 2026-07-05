@@ -147,8 +147,13 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     // ensureProjectRepo calls are idempotent). No marker on purpose.
     // The Playwright REPL spec provisions a FRESH project (fresh container)
     // per run; cold container boot + repo clone has a long tail (observed
-    // >70s on preview), so give the completion wait a real budget.
-    completionTimeoutMs: 120_000,
+    // >70s on preview), so give the completion wait a real budget. And beyond
+    // instance cold-boot, Cloudflare intermittently RE-PROVISIONS the container
+    // image ("Container is currently provisioning … several minutes on first
+    // deployment", seen ~every 15-20 marathon runs even continuously) — the
+    // SDK retries it automatically, so the budget must be big enough to ride
+    // that out rather than time out mid-provision. 8 minutes covers it.
+    completionTimeoutMs: 480_000,
     vars: () => ({ sandboxPath: "/sandboxes/cloudflare/example-matrix" }),
     assert: (result, _ctx, expect) => {
       expect(result).toMatchObject({ exitCode: 0, os: "Linux" });
