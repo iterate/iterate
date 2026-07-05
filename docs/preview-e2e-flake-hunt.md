@@ -11,10 +11,18 @@ write serialization supersedes round 2's standalone flake-15 fix. Round 3
 (this PR) carries on toward 50 consecutive green runs, targeting the two
 pre-existing flakes still open after the round-2 merge (see "Round 3 targets").
 
-Method: deploy this PR's preview slot, then loop
-`doppler run --project _shared --config prd -- pnpm preview test --pull-request-number <N>`
-from a workstation. Every failure gets a root-cause diagnosis and the smallest
-reliable fix, recorded below. A failure resets the consecutive-green counter.
+Method: deploy this PR's preview slot, then loop `pnpm preview test
+--pull-request-number <N>`, failing fast on the first failure. Every failure
+gets a root-cause diagnosis and the smallest reliable fix, recorded below; a
+failure resets the consecutive-green counter. `scripts/preview/flake-hunt-loop.sh`
+drives the loop (preflight full-fleet deploy → optional warmup → counted runs).
+
+The trustworthy count runs **in Depot CI, not on a workstation** (a laptop
+sleeping mid-loop produced hours of phantom "degradation" — see the lab note):
+`.depot/workflows/preview-e2e-marathon.yml` runs that same loop on Depot infra,
+launched with `depot ci run --workflow .depot/workflows/preview-e2e-marathon.yml`.
+Local runs are for fast iteration while fixing a flake; the 50-consecutive-green
+bar is measured on Depot.
 
 ## Run log
 
