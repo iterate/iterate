@@ -261,12 +261,23 @@ a failure instead of silently freezing the marathon.
   leaf-first (`kill_tree` in `flake-hunt-loop.sh`).
 - More importantly, the wedge is now **self-healing at the source** instead of
   costing a whole run: the preview test orchestration (`previewTestCommandArgs`
-  in `preview.ts`) wraps the vitest node lane in `timeout 600` and retries it
-  once if it exits 124 or never prints `RUN v<version>` (the startup-wedge
-  signature). A rare fork-pool wedge is a fresh restart, not a dead lane — and
+  in `preview.ts`) wraps the vitest node lane in `timeout` and retries it once
+  on a timeout. A rare fork-pool wedge is a fresh restart, not a dead lane — and
   this fixes it for Depot CI too, where the same wedge would otherwise hang the
   job until its timeout. Root cause (why vitest's pool occasionally hangs
   pre-`RUN`) is still unknown; this makes it a non-event either way.
+
+**Correction (first Depot marathon, run df87f12sz3): the self-heal was firing
+on EVERY run.** The retry condition also fired when the lane "never printed
+`RUN v<version>`" — but that grep is defeated by vitest's ANSI colour codes,
+which sit _between_ `RUN` and the version (`RUN␛[…m␛[…mv4.1.8`), so it matched
+nothing and re-ran the entire vitest node lane a second time on every single
+run (all 18 of them). That silently **doubled test load and sandbox-container
+churn** — very likely a hidden aggravator of flakes 19/20 (cap pressure and
+provisioning latency) throughout round 3. Fix: retry **only** on `rc=124` (the
+timeout — the actual wedge signature); `rc=0` means it ran, and a non-124
+non-zero is a real failure we must not paper over. Also cut the lane `timeout`
+to a fail-fast 360s (was briefly 600/900).
 
 ### 15. Concurrent repo writers lose the compare-and-swap race on `refs/heads/main`
 

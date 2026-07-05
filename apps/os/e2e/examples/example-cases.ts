@@ -146,12 +146,13 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     // the container cold boot, the rest reuse the warm container (repeat
     // ensureProjectRepo calls are idempotent). No marker on purpose.
     // The Playwright REPL spec provisions a FRESH project (fresh container)
-    // per run; cold container boot + repo clone has a long tail (observed
-    // >70s on preview), so give the completion wait a real budget — but a
-    // FAIL-FAST one. A container stuck provisioning ("Container is currently
-    // provisioning", a Cloudflare infra transient) must surface in ~2 min, not
-    // stall the lane for many minutes: we'd rather fail and re-run than mask it.
-    completionTimeoutMs: 120_000,
+    // per run; cold container boot + repo clone has a long tail — observed
+    // ~132s on Depot, so 120s was slightly too tight and flaked. 180s is the
+    // fail-fast budget: it covers a genuine cold boot yet still surfaces a
+    // container stuck provisioning (a Cloudflare infra transient) in ~3 min
+    // rather than stalling for many minutes — we'd rather fail and re-run than
+    // mask it (that's why this is 180s, not the absurd 480s it briefly was).
+    completionTimeoutMs: 180_000,
     vars: () => ({ sandboxPath: "/sandboxes/cloudflare/example-matrix" }),
     assert: (result, _ctx, expect) => {
       expect(result).toMatchObject({ exitCode: 0, os: "Linux" });

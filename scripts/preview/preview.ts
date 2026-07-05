@@ -910,7 +910,13 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // (which runs the itx monolith plus the sandbox tests' own 240s
         // per-test cap, concurrently) so a real wedge is caught in minutes, not
         // left to stall — we'd rather fail fast and re-run than sit for ages.
-        'run_vitest_node() { local rc=0; timeout 360 pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 || rc=$?; if [ "$rc" -eq 124 ] || ! grep -qE "RUN +v" /tmp/os-preview-vitest.log; then echo "[preview] vitest node lane did not start (rc=$rc) — retrying once"; rc=0; timeout 360 pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 || rc=$?; fi; return $rc; }',
+        // Retry ONLY on a timeout (rc=124) — the wedge signature. An earlier
+        // secondary check (`! grep "RUN v"`) was defeated by vitest's ANSI
+        // colour codes between "RUN" and the version, so it matched NOTHING and
+        // silently re-ran the whole lane every single time — doubling test load
+        // and sandbox-container churn. rc=0 means it ran; a non-124 non-zero is
+        // a real failure we must NOT paper over with a retry.
+        'run_vitest_node() { local rc=0; timeout 360 pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 || rc=$?; if [ "$rc" -eq 124 ]; then echo "[preview] vitest node lane timed out (startup wedge) — retrying once"; rc=0; timeout 360 pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 || rc=$?; fi; return $rc; }',
         "run_vitest_node & E2E_PID=$!",
         'wait "$PW_INSTALL_PID" || { cat /tmp/os-preview-pw-install.log; exit 1; }',
         // Capture the specs' exit without aborting (set -e) so the vitest lane
