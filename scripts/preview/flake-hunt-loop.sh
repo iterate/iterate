@@ -44,16 +44,15 @@ RUN_TIMEOUT_SECS="${RUN_TIMEOUT_SECS:-600}"
 # leaves the others at an older head. The test lane only tests apps whose
 # recorded head == the PR head, so the marathon then silently shrinks to the
 # changed apps and every run trips the full-fleet guard (exit 3) — or worse,
-# would count a partial lane as green if that guard were absent. A change under
-# a preview shared path (scripts/preview/** — including THIS file, envs.ts, …)
-# forces `preview deploy` to redeploy the whole fleet, which reunifies the head.
+# would count a partial lane as green if that guard were absent. `--all-apps`
+# forces the full fleet regardless of the diff, which reunifies the head.
 # So before a fresh marathon (START_AT=1) we run one deploy and assert all four
 # apps come back testable at the current head; set SKIP_PREFLIGHT_DEPLOY=1 to
 # bypass (e.g. resuming a marathon whose fleet is already unified).
 if [ "$START_AT" -eq 1 ] && [ -z "${SKIP_PREFLIGHT_DEPLOY:-}" ]; then
   preflight="$LOG_DIR/preflight-deploy.log"
   echo "preflight: deploying full fleet for PR $PR_NUMBER (log: $preflight)"
-  doppler run --project _shared --config prd -- pnpm preview deploy \
+  doppler run --project _shared --config prd -- pnpm preview deploy --all-apps \
     --pull-request-number "$PR_NUMBER" >"$preflight" 2>&1
   deploy_exit=$?
   if [ "$deploy_exit" -ne 0 ]; then

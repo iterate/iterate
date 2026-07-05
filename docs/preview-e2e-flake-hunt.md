@@ -340,6 +340,12 @@ preview shared path, any change under it (envs.ts and scripts/lib/\*\* too) forc
 preflight both guarantees a unified fleet and repairs a split one. Set
 `SKIP_PREFLIGHT_DEPLOY=1` when resuming a marathon whose fleet is already unified.
 
+**Preflight hardening (round 3):** the preflight originally relied on the
+marathon commit happening to touch a fleet-shared path to force a full-fleet
+deploy — an apps/os-only commit would have deployed just os and tripped the
+guard at run 1. `preview deploy --all-apps` now forces the full fleet
+explicitly and the preflight uses it.
+
 **Second sub-cause (round 3):** a commit touching only dependency manifests
 (`patches/**` + `pnpm-lock.yaml` + `pnpm-workspace.yaml`, from the flake-22
 middlewright patch) selected **no apps at all** — "nothing to deploy" left

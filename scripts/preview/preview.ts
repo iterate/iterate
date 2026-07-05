@@ -24,7 +24,20 @@ type PullRequestCommandOptions = {
 /**
  * Deploy affected preview apps for a pull request without running preview e2e.
  */
-export async function deploy(options: PullRequestCommandOptions = {}) {
+export async function deploy(
+  options: PullRequestCommandOptions & {
+    /**
+     * Deploy every preview app regardless of the diff. Diff selection only
+     * redeploys apps affected since their LAST DEPLOYED head, so unaffected
+     * apps keep an older recorded head and the test lane then skips them
+     * ("stale — deploy has not run for the current head yet"). A caller that
+     * needs the whole fleet testable at the current head — the flake-hunt
+     * marathon preflight — uses this to reunify the fleet explicitly instead
+     * of relying on the commit happening to touch a fleet-shared path.
+     */
+    allApps?: boolean;
+  } = {},
+) {
   const runtime = createPreviewRuntime();
   const context = await resolvePullRequestPreviewContext({
     commandEnvironment: runtime.commandEnvironment,
@@ -41,10 +54,13 @@ export async function deploy(options: PullRequestCommandOptions = {}) {
       ? `PR body records lease ${current.state.environmentConfigLease.slug} (doppler config ${current.state.environmentConfigLease.dopplerConfig}, recorded until ${formatUntil(current.state.environmentConfigLease.leasedUntil)})`
       : "PR body records no lease — this PR has no slot yet",
   );
-  const selectedApps = await selectPreviewAppsForPullRequest({
-    ...context,
-    previousState: current.state,
-  });
+  const selectedApps = options.allApps
+    ? (logPreview("--all-apps: deploying the full preview fleet regardless of diff"),
+      Object.values(cloudflarePreviewApps))
+    : await selectPreviewAppsForPullRequest({
+        ...context,
+        previousState: current.state,
+      });
 
   if (selectedApps.length === 0) {
     logPreview(
