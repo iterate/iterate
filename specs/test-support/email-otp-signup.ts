@@ -3,7 +3,7 @@ import { spinnerWaiter } from "middlewright";
 
 /**
  * Real signup through the apps/auth email-OTP lane. Non-production auth
- * accepts the fixed code 424242 for `+…test@` addresses without sending mail
+ * accepts the fixed code 424242 for `+test@nustom.com` addresses without sending mail
  * (apps/auth/src/server/auth-plugins.ts), so this drives the exact flow a
  * human sees: OS login → auth login (email OTP) → first-run onboarding
  * (organization + first project in one form) → back to OS signed in.

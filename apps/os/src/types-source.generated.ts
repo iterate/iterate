@@ -204,6 +204,8 @@ export interface ProjectRpcTarget {
   /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */
   debug(): Promise<string>;
   egress: ProjectEgress;
+  /** First-party outbound email from the project's own address (\`email.send({ to, subject, text })\`). */
+  email: EmailCapability;
   /** Read-only catalogue of known-good itx script snippets (\`list()\`, \`get({ id })\`). */
   examples: ItxExampleCatalog;
   /** The integrations collection: built-in integrations as dispatch branches
@@ -249,6 +251,25 @@ export interface AgentChat extends Describable {
 export interface Ai extends Describable {
   models(): Promise<unknown>;
   run(model: string, body: unknown): Promise<unknown>;
+}
+
+/**
+ * First-party outbound email through Cloudflare Email Service. Mail is sent
+ * from the project's own address — \`<slug>@<project hostname base>\`, e.g.
+ * \`acme@iterate.app\` — and an explicit \`from\` must match it: a project can
+ * never send as another project or an arbitrary address. Requires the
+ * deployment's sender domain to be onboarded for Email Sending in Cloudflare.
+ */
+export interface EmailCapability extends Describable {
+  send(input: {
+    to: string | string[];
+    subject: string;
+    /** Plain-text body; at least one of text/html is required. */
+    text?: string;
+    html?: string;
+    /** Optional explicit sender; must equal the project's own address. */
+    from?: string;
+  }): Promise<{ from: string; messageId: string | null }>;
 }
 
 // -----------------------------------------------------------------------------

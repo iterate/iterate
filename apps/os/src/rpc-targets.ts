@@ -116,12 +116,20 @@ import type {
   DynamicWorkerCapability,
   DynamicWorkerCollection,
   DynamicWorkerRef,
+  EmailCapability,
   GithubRequestInput,
   GmailRequestInput,
   IntegrationConnectionListEntry,
   ProjectIntegrations,
 } from "./types.ts";
 import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
+import { integrationStreamStub } from "./domains/integrations/integration-streams.ts";
+import {
+  buildProjectEmailMessage,
+  emailAddressForProject,
+  EMAIL_INTEGRATION_STREAM_PATH,
+  EMAIL_SENT_EVENT_TYPE,
+} from "./domains/email/utils.ts";
 
 export class StreamRpcTarget extends RpcTarget implements Stream {
   async __describe() {
@@ -790,6 +798,72 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
       projectId: this.props.projectId,
       provider: input.provider,
     });
+  }
+}
+
+/**
+ * The `itx.email` built-in: first-party outbound email through the Cloudflare
+ * Email Service `EMAIL` binding. Sender authorization is enforced here, not in
+ * the binding: mail only leaves from the project's own address
+ * (`<slug>@<first project hostname base>`). Every send appends an
+ * `email/sent` audit event to the project's /integrations/email stream.
+ */
+class EmailRpcTarget extends RpcTarget implements EmailCapability {
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  async __describe() {
+    return describeNode({
+      instructions:
+        "First-party outbound email: send({ to, subject, text, html }) delivers through Cloudflare Email Service from this project's own address (<slug>@<hostname base>). An explicit `from` must match that address — a project can never send as anyone else. Returns { from, messageId }.",
+      children: {
+        send: "Send one email from the project's address; returns { from, messageId }.",
+      },
+      parent: "the project itx root",
+    });
+  }
+
+  async send(input: Parameters<EmailCapability["send"]>[0]) {
+    if (!env.EMAIL) {
+      throw new Error("email.send requires the EMAIL send_email binding (see wrangler config).");
+    }
+    const senderDomain = parseConfig(env).projectHostnameBases[0];
+    if (!senderDomain) {
+      throw new Error(
+        "email.send requires APP_CONFIG_PROJECT_HOSTNAME_BASES to derive the sender domain.",
+      );
+    }
+    const record = await readProjectById(env.PROJECT_DIRECTORY, this.props.projectId);
+    if (!record) {
+      throw new Error(`Project ${this.props.projectId} not found in the project directory.`);
+    }
+    const projectAddress = emailAddressForProject({ slug: record.slug, domain: senderDomain });
+    const message = buildProjectEmailMessage({
+      projectAddress,
+      projectName: record.name || record.slug,
+      request: input,
+    });
+
+    const result = (await env.EMAIL.send(message)) as { messageId?: string } | null | undefined;
+    const messageId = result?.messageId ?? null;
+
+    const from = typeof message.from === "string" ? message.from : message.from.email;
+    await integrationStreamStub(this.props.projectId, EMAIL_INTEGRATION_STREAM_PATH).append({
+      type: EMAIL_SENT_EVENT_TYPE,
+      idempotencyKey: `email-sent:${this.props.projectId}:${messageId ?? crypto.randomUUID()}`,
+      // Recipients + subject for audit; bodies stay out of the stream.
+      payload: {
+        from,
+        messageId,
+        projectId: this.props.projectId,
+        subject: input.subject,
+        to: input.to,
+      },
+    });
+
+    return { from, messageId };
   }
 }
 
@@ -1509,6 +1583,8 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
     'Capability hosts of OTHER scopes, addressed by path: itx.capabilityHosts.get("/") is the project root — providing there makes a capability visible to every scope in the project.',
   debug: "Returns formatted OS debug info for this itx scope, including a dashboard stream link.",
   egress: "Project-attributed outbound fetch (+ intercept).",
+  email:
+    "First-party outbound email: send({ to, subject, text, html }) from the project's own address (<slug>@<hostname base>); explicit `from` must match it.",
   examples: "Catalogue of known-good itx script snippets: list(), get({ id }).",
   integrations:
     'Integration connections, each at /integrations/<slug>/<connection>: list() enumerates them; itx.integrations.slack["<connection>"].chat.postMessage({ channel, text }), itx.integrations.google["<connection>"].gmail.request({ path, query }), itx.integrations.github["<connection>"].api.request({ path }); other slugs resolve through the project capability table.',
@@ -1707,6 +1783,13 @@ export class ProjectRpcTarget extends RpcTarget implements ProjectRpcTargetContr
 
   get egress() {
     return new ProjectEgressRpcTarget({ projectId: this.#props.projectId });
+  }
+
+  get email(): EmailCapability {
+    return new EmailRpcTarget({
+      auth: this.#props.auth,
+      projectId: this.#props.projectId,
+    });
   }
 
   get examples(): ItxExampleCatalog {
