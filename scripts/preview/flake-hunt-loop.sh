@@ -16,7 +16,11 @@ START_AT="${START_AT:-1}"
 # machine stays awake for the duration of the loop.
 if [ "$(uname)" = "Darwin" ] && [ -z "${FLAKE_HUNT_CAFFEINATED:-}" ]; then
   export FLAKE_HUNT_CAFFEINATED=1
-  exec caffeinate -is "$0" "$@"
+  # -d display, -i idle system, -m disk, -s system-on-AC. A bare `-is` still let
+  # the machine sleep overnight once (r3d: a 5.5h gap de-provisioned the sandbox
+  # container image). caffeinate can't beat a battery+lid-closed sleep, so also
+  # keep the marathon continuous; this is best-effort on AC power.
+  exec caffeinate -dims "$0" "$@"
 fi
 
 # Match the Depot CI contract exactly: the vitest e2e lane sets its retry

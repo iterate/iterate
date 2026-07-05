@@ -111,8 +111,23 @@ and stream waits that saw events stop mid-flow — while every interactive probe
 between runs was healthy. `pmset -g log` showed the Mac cycling through
 13–17 minute Deep Idle sleeps exactly matching the hang durations: the loop
 was running on a sleeping machine. The loop script now re-execs itself under
-`caffeinate -is` on Darwin. Lesson for anyone chasing "slot degradation" from
+`caffeinate -dims` on Darwin. Lesson for anyone chasing "slot degradation" from
 a laptop: check `pmset -g log` before blaming the server.
+
+**Recurred round-3 (r3d), new symptom:** an overnight ~5.5h gap between the
+warmup and run 1 (the machine slept despite `caffeinate` — a 43-minute
+assertion had died) left the preview slot idle long enough that Cloudflare
+**de-provisioned the sandbox container image**. When the marathon resumed, a
+later run's `sandbox-exec` hit `Container is currently provisioning. This can
+take several minutes on first deployment.` (SDK 503, `phase: provisioning`) —
+image provisioning exceeded the sandbox test budgets (Playwright
+`completionTimeoutMs` 120s, vitest `testTimeout` 240s), failing both attempts.
+This is distinct from flake 19's instance-cap "Container is starting": that was
+too few slots; this is a cold IMAGE that must be re-pulled after a long idle.
+The continuously-running r3c marathon (22 clean) never hit it — **keep the
+marathon continuous** (machine awake, no multi-hour gaps) so the image stays
+warm. If provisioning latency ever bites a genuinely continuous run, the fix is
+to raise the sandbox-exec budgets to tolerate a cold pull, not more warmups.
 
 ### 6. Repo reads lose the read-your-write race against the Artifacts remote
 
