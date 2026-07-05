@@ -906,12 +906,11 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // testTimeout can't fire), which would hang `wait "$E2E_PID"` until the
         // CI job / marathon watchdog kills everything. A `timeout` + a single
         // fresh retry turns that rare startup wedge into a self-healing restart.
-        // 900s is well above a healthy lane (the itx monolith dominates at a
-        // few minutes) yet leaves room for the sandbox tests' 8-min budget when
-        // Cloudflare hits container image provisioning — it must exceed the
-        // longest per-test timeout so a slow-but-progressing lane isn't killed —
-        // and stays far below any job timeout.
-        'run_vitest_node() { local rc=0; timeout 900 pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 || rc=$?; if [ "$rc" -eq 124 ] || ! grep -qE "RUN +v" /tmp/os-preview-vitest.log; then echo "[preview] vitest node lane did not start (rc=$rc) — retrying once"; rc=0; timeout 900 pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 || rc=$?; fi; return $rc; }',
+        // 360s is the fail-fast backstop: it sits just above a healthy lane
+        // (which runs the itx monolith plus the sandbox tests' own 240s
+        // per-test cap, concurrently) so a real wedge is caught in minutes, not
+        // left to stall — we'd rather fail fast and re-run than sit for ages.
+        'run_vitest_node() { local rc=0; timeout 360 pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 || rc=$?; if [ "$rc" -eq 124 ] || ! grep -qE "RUN +v" /tmp/os-preview-vitest.log; then echo "[preview] vitest node lane did not start (rc=$rc) — retrying once"; rc=0; timeout 360 pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 || rc=$?; fi; return $rc; }',
         "run_vitest_node & E2E_PID=$!",
         'wait "$PW_INSTALL_PID" || { cat /tmp/os-preview-pw-install.log; exit 1; }',
         // Capture the specs' exit without aborting (set -e) so the vitest lane

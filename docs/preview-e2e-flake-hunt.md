@@ -424,19 +424,24 @@ hits every sandbox test at once (`sandbox-exec` in both the vitest matrix and
 the Playwright REPL lane, plus `sandbox-egress`), and the SDK's automatic retry
 takes longer than the old 120-240s test budgets, so they time out mid-provision.
 
-This is real production latency (an agent's first sandbox use after image
-eviction waits for provisioning too), so the tests must budget for it rather
-than treat it as a failure:
+The first instinct was to raise the budgets to ride provisioning out (480s
+tests, 900s lane). **That was wrong and has been reverted.** Sitting for 8-15
+minutes to mask a Cloudflare infra transient is worse than failing: it hides a
+real issue behind a huge wall-clock, and the point of the e2e lane is to
+**fail fast when something is actually wrong**. The provisioning latency is a
+Cloudflare-side transient (a direct `itx run` sandbox probe confirmed it clears
+on its own — a fresh sandbox exec returned in seconds once the window passed),
+not something the test should absorb.
 
-- `example-cases.ts` `sandbox-exec` `completionTimeoutMs` 120s → **480s** (used
-  by both the Playwright REPL spec, which already honored it, and now the vitest
-  matrix).
-- `examples-matrix.e2e.test.ts` now sets the per-example vitest `timeout` from
-  `completionTimeoutMs` (was a hard-coded 240s that undercut the budget).
-- `sandbox-egress.e2e.test.ts` timeout 240s → **480s**.
-- `preview.ts` vitest-lane `timeout` 600s → **900s** so a slow-but-progressing
-  provisioning run isn't killed by the flake-14 lane guard (it must exceed the
-  longest per-test budget).
+Decision: keep **fail-fast** budgets — `sandbox-exec` `completionTimeoutMs`
+120s, the vitest matrix/`sandbox-egress` tests 240s, and the `preview.ts`
+vitest-lane guard 360s (was briefly 600/900). A container stuck provisioning
+surfaces in ~2 min and the run fails; we re-run rather than wait. Reaching 50
+consecutive green therefore depends on a healthy provisioning window (or a
+Cloudflare-side fix), not on masking the latency — and CI’s own retry absorbs a
+lone transient. If provisioning proves _frequent_ enough to block 50-in-a-row,
+the right lever is reducing sandbox-container churn or a Cloudflare escalation,
+not a bigger timeout.
 
 ### Round 3 targets
 

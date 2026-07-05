@@ -31,10 +31,12 @@ fi
 export CI=true
 
 mkdir -p "$LOG_DIR"
-# A healthy full-fleet run takes 1-7 minutes; one marathon run wedged for 9+
-# hours when vitest hung at startup (event loop idle, no workers, nothing to
-# time it out). Kill anything slower than this and count it as a failure.
-RUN_TIMEOUT_SECS="${RUN_TIMEOUT_SECS:-1800}"
+# Fail-fast backstop for the whole run. A healthy full-fleet run is a few
+# minutes; the preview orchestration already bounds its vitest lane (360s) and
+# every test carries its own timeout, so this only catches a wedge that slips
+# both. 10 minutes kills such a wedge quickly instead of letting it sit (an
+# earlier bug let a startup wedge hang 9+ hours).
+RUN_TIMEOUT_SECS="${RUN_TIMEOUT_SECS:-600}"
 
 # Full-fleet preflight. `preview deploy` selects apps by diffing the PR head
 # against the LAST DEPLOYED head (not the PR base), so a mid-branch commit that

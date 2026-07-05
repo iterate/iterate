@@ -80,12 +80,7 @@ for (const example of MATRIX_EXAMPLES) {
   // tests in the suite.
   matrixTest(
     `catalogue example "${example.id}" runs identically across runtimes`,
-    // Most examples fit the 240s default, but a cold sandbox container can hit
-    // Cloudflare image provisioning ("several minutes on first deployment"),
-    // so a cased example carrying a larger completionTimeoutMs (sandbox-exec)
-    // gets it here too — otherwise this vitest lane times out at 240s while the
-    // Playwright lane (which already honors completionTimeoutMs) rides it out.
-    { timeout: exampleCase.completionTimeoutMs ?? 240_000 },
+    { timeout: 240_000 },
     async () => {
       const { projectId } = await ensureMatrixProject();
       const runtimes = MATRIX_RUNTIMES.filter((runtime) => example.runtimes.includes(runtime));

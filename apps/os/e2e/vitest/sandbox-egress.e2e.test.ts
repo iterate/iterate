@@ -46,12 +46,8 @@ const EGRESS_PROOF_HEADER = "x-itx-egress-proof";
 
 describe("sandbox egress", () => {
   test.skipIf(deployedBaseUrl() === null)(
-    // 8 min: booting a sandbox can hit Cloudflare container image provisioning
-    // ("several minutes on first deployment"), which the SDK retries but which
-    // exceeds the old 240s budget — same cold-provision tail as the sandbox-exec
-    // catalogue example (see example-cases.ts).
     "is MITM-intercepted and routed through project egress with secret substitution",
-    { timeout: 480_000 },
+    { timeout: 240_000 },
     async () => {
       const echo = await startEgressEcho();
       const echoUrl = new URL(echo.url);
