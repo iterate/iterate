@@ -64,6 +64,11 @@ to be reset; reference = v6frpcasd5hp70rrhv37kmr4`) during an active
   exists. Fix: fleet-wide retry parity — `retry/retries: CI ? 2 : 0` added to
   `apps/streams-example-app` (vitest + playwright) and `apps/semaphore`
   (vitest), the last lanes without it.
+- **marathon8** `8vl4d0479f`: 🏁 **ALL 50 RUNS GREEN** (14:57–16:31 UTC,
+  ~1h34m, ~60-190s/run, zero failures, zero watchdog kills). The goal —
+  50 consecutive green full-fleet preview e2e runs on Depot CI — is met, on
+  the same afternoon and preview slot where the lane could not string
+  together more than a handful of runs when this hunt began.
 
 ## Flakes found and fixed
 
