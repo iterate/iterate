@@ -511,8 +511,12 @@ assignment) instead of the SDK's `stop()` (SIGTERM, keeps the assignment).
 For our sandboxes destroy-on-idle costs nothing: the container filesystem is
 ephemeral across sleep anyway, so waking from stop and waking from destroy are
 the same cold boot + repo re-clone. The SDK's keepAlive escape hatch is
-preserved. Verified on preview-3: assigned count returns to baseline ~3-4min
-after a sandbox goes idle (was: grows monotonically until the cap).
+preserved. Verified on preview-3 with a probe sandbox (`itx.sandboxes.get` +
+one exec): its instance showed `active:1, assigned:0` while running and went
+`active:0, assigned:0` exactly 3m after the last command — the slot fully
+released, where the old behavior left it `assigned` indefinitely. (The fix's
+deploy also confirmed a rollout flushes the leaked pool: the app dropped from
+100 stuck instances to a handful once the new version finished provisioning.)
 
 ### 21. Blank route-pending panel fast-fails the first wait after `goto`
 
