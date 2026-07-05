@@ -56,6 +56,14 @@ to be reset; reference = v6frpcasd5hp70rrhv37kmr4`) during an active
   remote timeout crashed the bare tsx process. Fix: the smoke now makes 3
   attempts, each with a fresh session + project, matching the vitest lane's
   `retry: 2` policy; a broken slot still fails all three inside ~5min.
+- **marathon7** `pvtfkq146g`: 21 clean, run 22 failed in
+  `streams-example-app`'s vitest lane: `Network connection lost.` on a
+  392ms-old fresh WebSocket (edge blip) — and that suite had NO retry config
+  at all. The os lane's `reactivity.spec.ts` flaked the same run and
+  recovered via its new `retries: 2`, proving the policy works where it
+  exists. Fix: fleet-wide retry parity — `retry/retries: CI ? 2 : 0` added to
+  `apps/streams-example-app` (vitest + playwright) and `apps/semaphore`
+  (vitest), the last lanes without it.
 
 ## Flakes found and fixed
 
