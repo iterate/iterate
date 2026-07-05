@@ -340,6 +340,14 @@ preview shared path, any change under it (envs.ts and scripts/lib/\*\* too) forc
 preflight both guarantees a unified fleet and repairs a split one. Set
 `SKIP_PREFLIGHT_DEPLOY=1` when resuming a marathon whose fleet is already unified.
 
+**Second sub-cause (round 3):** a commit touching only dependency manifests
+(`patches/**` + `pnpm-lock.yaml` + `pnpm-workspace.yaml`, from the flake-22
+middlewright patch) selected **no apps at all** — "nothing to deploy" left
+every recorded head stale behind the PR head and the test lane skipped every
+app. Dependency manifests can change any app's build output, so they are now
+`cloudflareAppSharedPaths` (full-fleet deploy), mirrored in
+`cloudflare-previews.yml`'s paths filter and asserted in `preview.test.ts`.
+
 ### 17. A second browser tab has no spinner-waiter, so it dies on the 750ms actionTimeout
 
 Round-2 (r2e) run 3: `reactivity.spec.ts › delivers an appended event to another

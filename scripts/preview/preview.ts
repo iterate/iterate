@@ -818,6 +818,15 @@ export const cloudflareAppSharedPaths = [
   "packages/shared/**",
   "packages/ui/**",
   "packages/mock-http-proxy/**",
+  // Dependency manifests: a lockfile bump, a catalog/patchedDependencies entry
+  // (pnpm-workspace.yaml), or a pnpm patch can change every app's build
+  // output. Selecting "no apps affected" for such a diff leaves the fleet's
+  // recorded heads stale at the previous commit, so the test lane then skips
+  // every app ("no apps are testable for this head sha") — observed when a
+  // patches/-only commit no-op'd the deploy and stranded the PR head.
+  "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+  "patches/**",
 ] as const;
 
 export const cloudflarePreviewSharedPaths = [
