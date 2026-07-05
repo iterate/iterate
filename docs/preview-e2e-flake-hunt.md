@@ -498,6 +498,29 @@ fail-fast shape: the wait budget grows only while the app visibly claims to be
 working, and a genuinely wedged page still dies at the spinner-waiter's 30s
 cap.
 
+### 22. spinner-waiter dies on TWO visible spinners (strict-mode violation)
+
+**Signature** (the push-triggered preview run for the flake-21 fix):
+`dashboard.spec.ts` fails with `locator.isVisible: Error: strict mode
+violation: locator('[aria-label="Loading"],[data-spinner=…]…') resolved to 2
+elements`.
+
+**Root cause:** middlewright's spinner-waiter checks "is a spinner visible?"
+with `spinnerLocator.isVisible()` on the UNION selector — and Playwright's
+`isVisible()` throws when a locator resolves to more than one element. Two
+loading indicators visible at once is a perfectly legitimate app state (e.g.
+the REPL panel's "Connecting to itx…" next to the activity tail's "Connecting
+itx activity…"). The flake-21 fix UNMASKED this: before it, the blank pending
+panel meant those sibling fallbacks never got to render together during the
+window the spinner check runs in.
+
+**Fix:** `patches/middlewright@0.1.1.patch` — both spinner checks
+(`spinnerVisible` and the bail-early check in `waitForReadyWhileSpinning`) go
+through a multi-element-safe `anySpinnerVisible()` using
+`filter({ visible: true }).count() > 0`, which needs no strictness. "Any
+visible spinner counts as progress" is the plugin's intended semantic. Worth
+upstreaming to the middlewright package.
+
 ### Round 3 targets
 
 The round-2 merge commit's own preview e2e (Depot, two attempts) failed on two
@@ -519,6 +542,16 @@ pre-existing flakes that round 3 fixes:
 
 ### Observed, not yet fixed
 
+- **Push-lane deploy→test race: `Durable Object reset because its code was
+updated`.** The push-triggered cloudflare-previews lane starts tests seconds
+  after `wrangler deploy` returns; Cloudflare propagates the new code
+  asynchronously, and a DO that booted on the old version mid-test gets reset
+  when its node picks up the new one (`itx.e2e.test.ts › Project egress
+intercept…` failed BOTH vitest attempts 11s apart inside the window, commit
+  204d4ed8d). The marathon lane is immune by construction (preflight deploy →
+  uncounted warmup → counted runs). A real fix for the push lane would gate
+  the test phase on observing the new deployment version at the edge rather
+  than a sleep; vitest's `retry: 1` usually absorbs it today.
 - `packages/mock-http-proxy` unit test `msw-server-adapter.http-parity ›
 does not mark non-matching one-time handlers as used` failed once in the
   Depot `Test / test` lane with `fetch failed: bad port` — the listen(0)
