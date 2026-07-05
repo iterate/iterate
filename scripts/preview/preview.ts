@@ -899,7 +899,17 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // provision independent projects, so they run concurrently: the vitest
         // lane in the background, the specs in the foreground. The vitest log
         // is replayed once the specs finish.
-        "pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 & E2E_PID=$!",
+        //
+        // Bound the vitest lane and retry it once if it fails to START: vitest
+        // occasionally prints its banner then hangs before "RUN v<version>"
+        // (idle fork pool, no workers — no test has run, so vitest's own
+        // testTimeout can't fire), which would hang `wait "$E2E_PID"` until the
+        // CI job / marathon watchdog kills everything. A `timeout` + a single
+        // fresh retry turns that rare startup wedge into a self-healing restart.
+        // 600s is well above a healthy lane (the itx monolith dominates at a
+        // few minutes) and far below any job timeout.
+        'run_vitest_node() { local rc=0; timeout 600 pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 || rc=$?; if [ "$rc" -eq 124 ] || ! grep -qE "RUN +v" /tmp/os-preview-vitest.log; then echo "[preview] vitest node lane did not start (rc=$rc) — retrying once"; rc=0; timeout 600 pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 || rc=$?; fi; return $rc; }',
+        "run_vitest_node & E2E_PID=$!",
         'wait "$PW_INSTALL_PID" || { cat /tmp/os-preview-pw-install.log; exit 1; }',
         // Capture the specs' exit without aborting (set -e) so the vitest lane
         // always finishes and its log is replayed — a Playwright flake must not

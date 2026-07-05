@@ -229,6 +229,22 @@ Mitigation: the loop now runs each attempt under a watchdog
 (`RUN_TIMEOUT_SECS`, default 30 min) that kills the run tree and counts it as
 a failure instead of silently freezing the marathon.
 
+**Recurred round-3 (r3c run 23), and exposed two gaps — both now fixed:**
+
+- The watchdog fired at 30 min but its `SIGTERM` did **not** propagate down the
+  deep `doppler → pnpm → trpc-cli → inner doppler → bash → vitest` tree, so the
+  wedged run hung ~58 min past the timeout, still holding the loop's `wait`.
+  Fix: the watchdog now walks the whole descendant tree and `SIGKILL`s it
+  leaf-first (`kill_tree` in `flake-hunt-loop.sh`).
+- More importantly, the wedge is now **self-healing at the source** instead of
+  costing a whole run: the preview test orchestration (`previewTestCommandArgs`
+  in `preview.ts`) wraps the vitest node lane in `timeout 600` and retries it
+  once if it exits 124 or never prints `RUN v<version>` (the startup-wedge
+  signature). A rare fork-pool wedge is a fresh restart, not a dead lane — and
+  this fixes it for Depot CI too, where the same wedge would otherwise hang the
+  job until its timeout. Root cause (why vitest's pool occasionally hangs
+  pre-`RUN`) is still unknown; this makes it a non-event either way.
+
 ### 15. Concurrent repo writers lose the compare-and-swap race on `refs/heads/main`
 
 Round-2 run 44 (43 consecutive greens, then this): `examples-matrix ›

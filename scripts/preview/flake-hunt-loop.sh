@@ -84,9 +84,17 @@ for i in $(seq "$START_AT" $((START_AT + RUNS - 1))); do
   (
     sleep "$RUN_TIMEOUT_SECS"
     echo "run $i: WATCHDOG — killing after ${RUN_TIMEOUT_SECS}s" >>"$log"
-    # The run tree spans doppler -> pnpm -> node children; nuke the group.
-    pkill -TERM -P "$run_pid" 2>/dev/null
-    kill -TERM "$run_pid" 2>/dev/null
+    # The run tree is deep (doppler -> pnpm -> trpc-cli -> inner doppler -> bash
+    # -> vitest/playwright) and SIGTERM to the top does NOT propagate down — a
+    # vitest-startup wedge survived a TERM and hung 58 min past this timeout
+    # once. Walk the whole descendant tree and SIGKILL it leaf-first so nothing
+    # is left holding the loop's `wait`.
+    kill_tree() {
+      local p=$1 c
+      for c in $(pgrep -P "$p" 2>/dev/null); do kill_tree "$c"; done
+      kill -KILL "$p" 2>/dev/null
+    }
+    kill_tree "$run_pid"
   ) &
   watchdog_pid=$!
   wait "$run_pid"
