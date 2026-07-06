@@ -1,6 +1,6 @@
 import { normalizeRequestHostname } from "~/lib/project-host-routing.ts";
 
-export const PRODUCTION_EVENT_DOCS_HOSTNAME = "events.iterate.com";
+const PRODUCTION_EVENT_DOCS_HOSTNAME = "events.iterate.com";
 
 export function eventDocsHostnameForAppBaseUrl(baseUrl: string | undefined) {
   if (!baseUrl) return null;
