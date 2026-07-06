@@ -1194,6 +1194,10 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "bash",
       "-c",
       [
+        // Deployed playgrounds are admin-only: the node vitest lane rides a
+        // forge-minted admin bearer (e2e/auth.ts); Playwright signs itself in
+        // via its global setup.
+        'export STREAMS_PLAYGROUND_TOKEN="$(pnpm exec tsx e2e/auth.ts)"',
         "pnpm exec playwright install chromium & install_pid=$!",
         "STREAM_STAGING_E2E=true pnpm vitest -t @preview & vitest_pid=$!",
         "install_status=0",
@@ -2228,16 +2232,19 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
   setDopplerSecrets("auth", "preview", rootValues);
   console.log("auth/preview root config ensured");
 
-  // Semaphore is a relying party of each slot's auth deployment: its deploys
-  // bake the forge public key into the JWKS, and its e2e mints admin bearer
-  // tokens with the private half. Seed the key once at the preview root so
-  // every preview_N branch config inherits it.
+  // Semaphore and the streams playground are relying parties of each slot's
+  // auth deployment: their deploys bake the forge public key into the JWKS,
+  // and their e2e mints admin bearer tokens with the private half. Seed the
+  // key once at each preview root so every preview_N branch config inherits
+  // it.
   const forgePrivateJwk =
     getDopplerSecret("semaphore", "preview", "AUTH_FORGE_PRIVATE_JWK") ||
     getDopplerSecret("os", "preview", "AUTH_FORGE_PRIVATE_JWK");
   if (!forgePrivateJwk) throw new Error("os/preview is missing AUTH_FORGE_PRIVATE_JWK");
   setDopplerSecrets("semaphore", "preview", { AUTH_FORGE_PRIVATE_JWK: forgePrivateJwk });
   console.log("semaphore/preview root config ensured");
+  setDopplerSecrets("streams-example-app", "preview", { AUTH_FORGE_PRIVATE_JWK: forgePrivateJwk });
+  console.log("streams-example-app/preview root config ensured");
 
   const workersSubdomain = await getWorkersDevSubdomain("streams-example-app", "preview");
   for (const slot of previewEnvironmentSlotNumbers) {
@@ -2248,6 +2255,7 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
     const streamsExampleOrigin = `https://streams-example-app-preview-${slot}.${workersSubdomain}.workers.dev`;
     const clientId = `os-preview-${slot}`;
     const semaphoreClientId = `semaphore-preview-${slot}`;
+    const streamsExampleClientId = `streams-example-app-preview-${slot}`;
 
     ensureDopplerConfig("auth", config);
     ensureDopplerConfig("semaphore", config);
@@ -2263,6 +2271,9 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
       parsedSeed.find((client) => client.clientId === clientId)?.clientSecret || freshSecret();
     const semaphoreClientSecret =
       parsedSeed.find((client) => client.clientId === semaphoreClientId)?.clientSecret ||
+      freshSecret();
+    const streamsExampleClientSecret =
+      parsedSeed.find((client) => client.clientId === streamsExampleClientId)?.clientSecret ||
       freshSecret();
 
     const existingServiceToken = input.rotate
@@ -2291,6 +2302,14 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
         referenceId: `semaphore:${config}:web`,
         skipConsent: true,
       },
+      {
+        clientId: streamsExampleClientId,
+        clientSecret: streamsExampleClientSecret,
+        clientName: `Streams playground preview ${slot} web`,
+        redirectURIs: [`${streamsExampleOrigin}/api/iterate-auth/callback`],
+        referenceId: `streams-example-app:${config}:web`,
+        skipConsent: true,
+      },
     ]);
 
     setDopplerSecrets("auth", config, {
@@ -2317,6 +2336,8 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
 
     setDopplerSecrets("streams-example-app", config, {
       APP_CONFIG_BASE_URL: streamsExampleOrigin,
+      APP_CONFIG_ITERATE_AUTH__CLIENT_ID: streamsExampleClientId,
+      APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET: streamsExampleClientSecret,
     });
 
     if (input.rotate) {
@@ -2324,7 +2345,7 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
     }
 
     console.log(
-      `slot ${slot}: auth/${config} + os/${config} + semaphore/${config} + streams-example-app/${config} ensured (clients ${clientId}, ${semaphoreClientId})`,
+      `slot ${slot}: auth/${config} + os/${config} + semaphore/${config} + streams-example-app/${config} ensured (clients ${clientId}, ${semaphoreClientId}, ${streamsExampleClientId})`,
     );
   }
 

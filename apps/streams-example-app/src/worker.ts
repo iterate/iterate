@@ -1,6 +1,9 @@
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
+import { env as workerEnv } from "cloudflare:workers";
 import { newWorkersRpcResponse } from "capnweb";
 import { parseStreamRpcRequest } from "./lib/stream-rpc.ts";
+import { parseConfig } from "./config.ts";
+import { createStreamsIterateAuth, resolveRequestAdmin } from "./iterate-auth.ts";
 import { trustedInternalAuthContext } from "~/auth.ts";
 import { StreamRpcTarget } from "~/rpc-targets.ts";
 import { resolveStreamPath } from "~/domains/streams/utils.ts";
@@ -12,9 +15,12 @@ export { StreamDurableObject } from "~/domains/streams/stream-durable-object.ts"
  * The capnweb surface this playground serves at `/api/streams`.
  *
  * It wraps the itx `StreamRpcTarget` with `trustedInternalAuthContext()`:
- * the example app is an AUTH-LESS playground, so every caller gets the
- * trusted-internal (admin) authority instead of walking through the real
- * deployment's `UnauthenticatedOs.authenticate()` door.
+ * every caller who gets past the door below runs with the trusted-internal
+ * (admin) authority instead of walking through the real deployment's
+ * `UnauthenticatedOs.authenticate()` door. That door is iterate-auth: on
+ * deployed envs, only iterate admins (session cookie or bearer access token)
+ * reach the RPC surface or the UI. Local dev (no iterateAuth config) stays
+ * the historical auth-less playground.
  *
  * `kill()`/`reset()` are playground-only operator verbs on top of the public
  * `Stream` capability — the sidebar's restart/reset experiments need them, and
@@ -40,6 +46,20 @@ class PlaygroundStreamRpcTarget extends StreamRpcTarget {
   }
 }
 
+function notAnAdminResponse(email: string | undefined): Response {
+  const who = email ? ` as ${email}` : "";
+  return new Response(
+    `<!doctype html><html><body style="font-family:system-ui;display:grid;place-items:center;min-height:100svh;margin:0">
+      <div style="max-width:24rem;text-align:center">
+        <h1 style="font-size:1.1rem">Operator access required</h1>
+        <p style="color:#666;font-size:0.9rem">You are signed in${who}, but the streams playground requires an iterate admin identity.</p>
+        <p><a href="/api/iterate-auth/logout">Sign out</a></p>
+      </div>
+    </body></html>`,
+    { status: 403, headers: { "content-type": "text/html; charset=utf-8" } },
+  );
+}
+
 export default createServerEntry({
   async fetch(request) {
     const url = new URL(request.url);
@@ -48,7 +68,42 @@ export default createServerEntry({
       return new Response("ok", { headers: { "content-type": "text/plain" } });
     }
 
+    // Parsed per request, NOT at module scope (matching apps/os): a fresh
+    // DO-class worker's first deploy is a secrets-less bootstrap (see
+    // scripts/lib/deploy-helpers.ts), and a module-scope parse would fail
+    // Cloudflare's startup validation on that version before secrets land.
+    const config = parseConfig(workerEnv);
+    const auth = createStreamsIterateAuth(config, request.url);
+
+    // The relying-party handler (login/callback/logout/session/…).
+    const authResponse = auth?.handleRequest(request) ?? null;
+    if (authResponse) {
+      return authResponse;
+    }
+
+    // Browser WebSockets cannot set headers, so /api/streams also accepts the
+    // bearer as an `access_token` query param (RFC 6750 §2.3) — the lane the
+    // node e2e uses for the browser-client tests. Real browsers ride the
+    // session cookie on the upgrade instead.
+    const queryToken =
+      url.pathname === "/api/streams" ? url.searchParams.get("access_token") : null;
+    const headers = new Headers(request.headers);
+    if (queryToken && !headers.has("authorization")) {
+      headers.set("authorization", `Bearer ${queryToken}`);
+    }
+    const admin = auth ? await resolveRequestAdmin({ auth, headers }) : null;
+
     if (url.pathname === "/api/streams") {
+      if (auth && !admin?.isAdmin) {
+        return Response.json(
+          {
+            error: "unauthorized",
+            message:
+              "Authenticate with an iterate admin identity: sign in through /api/iterate-auth/login, or send an admin access token as `Authorization: Bearer <token>`.",
+          },
+          { status: 401 },
+        );
+      }
       const { projectId, path } = parseStreamRpcRequest({ url });
       return newWorkersRpcResponse(
         request,
@@ -58,6 +113,20 @@ export default createServerEntry({
           path,
         }),
       );
+    }
+
+    // Page routes: send signed-out visitors through login and back; show
+    // signed-in non-admins a sign-out page. Static assets never reach the
+    // worker, and they carry nothing sensitive (client code only).
+    if (auth && !admin?.isAdmin) {
+      if (!admin?.authenticated) {
+        const returnTo = `${url.pathname}${url.search}`;
+        return Response.redirect(
+          `${url.origin}/api/iterate-auth/login?${new URLSearchParams({ return_to: returnTo })}`,
+          302,
+        );
+      }
+      return notAnAdminResponse(admin.email);
     }
 
     // No COOP/COEP on purpose: the browser SQLite mirror uses wa-sqlite's OPFSCoopSyncVFS,

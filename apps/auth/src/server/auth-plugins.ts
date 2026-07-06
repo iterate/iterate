@@ -35,6 +35,7 @@ import {
   getOsMcpResourceBases,
   getOsResourceBases,
   getSemaphoreResourceBases,
+  getStreamsExampleResourceBases,
 } from "./oauth-resources.ts";
 import { isPlatformAdminUser } from "./platform-admin.ts";
 import {
@@ -87,6 +88,7 @@ export function getAuthPlugins(options: AuthPluginOptions) {
   const validAudiences = [
     ...osResourceBases,
     ...getSemaphoreResourceBases(),
+    ...getStreamsExampleResourceBases(),
     ...getOsMcpResourceBases(),
   ];
 

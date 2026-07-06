@@ -759,6 +759,12 @@ importers:
 
   apps/streams-example-app:
     dependencies:
+      '@iterate-com/auth':
+        specifier: workspace:*
+        version: link:../auth
+      '@iterate-com/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@journeyapps/wa-sqlite':
         specifier: ^1.7.0
         version: 1.7.0
@@ -787,9 +793,6 @@ importers:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2)
-      '@iterate-com/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
       '@playwright/test':
         specifier: ^1.60.0
         version: 1.60.0

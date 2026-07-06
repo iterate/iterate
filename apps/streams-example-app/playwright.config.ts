@@ -6,6 +6,9 @@ const localUrl = "http://127.0.0.1:5173";
 
 export default defineConfig({
   testDir: "e2e/playwright",
+  // Deployed playgrounds are admin-only: the global setup forge-mints a
+  // session and saves its storage state; local dev is auth-less and skips it.
+  globalSetup: "./e2e/playwright-global-setup.ts",
   timeout: 60_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,
@@ -23,6 +26,7 @@ export default defineConfig({
       : undefined,
   use: {
     baseURL: workerUrl ?? localUrl,
+    storageState: workerUrl === undefined ? undefined : "test-results/.auth/storage-state.json",
     trace: "retain-on-failure",
   },
   projects: [
