@@ -50,19 +50,27 @@ describe("SandboxProcessor", () => {
     });
   });
 
-  it("folds configured env keys (union across configs)", async () => {
+  it("folds the configured env map (later configs merge over earlier)", async () => {
     const processor = sandboxProcessor();
     await processor.ingest({
       events: [
-        event("events.iterate.com/sandbox/configured", { env: ["ANTHROPIC_API_KEY"] }),
         event("events.iterate.com/sandbox/configured", {
-          env: ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"],
+          env: { ANTHROPIC_API_KEY: 'getSecret({ path: "/secrets/anthropic" })', FOO: "bar" },
+        }),
+        event("events.iterate.com/sandbox/configured", {
+          env: { OPENAI_API_KEY: 'getSecret({ path: "/secrets/openai" })', FOO: "baz" },
         }),
       ],
       streamMaxOffset: nextOffset,
     });
-    const snap = (await processor.snapshot()) as { state: { envKeys: string[] } };
-    expect([...snap.state.envKeys].sort()).toEqual(["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]);
+    const snap = (await processor.snapshot()) as {
+      state: { env: Record<string, string> };
+    };
+    expect(snap.state.env).toEqual({
+      ANTHROPIC_API_KEY: 'getSecret({ path: "/secrets/anthropic" })',
+      OPENAI_API_KEY: 'getSecret({ path: "/secrets/openai" })',
+      FOO: "baz",
+    });
   });
 
   it("ignores events outside its catalog", async () => {

@@ -25,8 +25,8 @@ export class SandboxProcessor extends StreamProcessor<typeof SandboxProcessorCon
       case "events.iterate.com/sandbox/backup-created":
         return { ...state, lastBackupId: event.payload.backupId };
       case "events.iterate.com/sandbox/configured":
-        // Union the newly-configured env keys into the known set (config merges).
-        return { ...state, envKeys: [...new Set([...state.envKeys, ...event.payload.env])] };
+        // Merge the newly-configured env map over the known one (config merges).
+        return { ...state, env: { ...state.env, ...event.payload.env } };
       default:
         return state;
     }

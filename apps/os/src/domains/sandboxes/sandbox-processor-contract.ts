@@ -44,8 +44,8 @@ const SANDBOX_EVENTS = {
   },
   "events.iterate.com/sandbox/configured": {
     description:
-      "The sandbox's configuration changed. `env` is the environment-variable KEYS set in this change — the values (getSecret placeholders / non-secret literals) live in Durable Object storage, never on the stream. Extend this event's payload for future config surfaces.",
-    payloadSchema: z.object({ env: z.array(z.string()) }),
+      "The sandbox's configuration changed. `env` is the environment-variable map set in this change (key → value); values are conventionally `getSecret({ path })` placeholders substituted only at egress, or non-secret literals. NEVER put raw secret material in a value — it lands on this durable stream. Extend this event's payload for future config surfaces.",
+    payloadSchema: z.object({ env: z.record(z.string(), z.string()) }),
   },
 } as const;
 
@@ -72,8 +72,9 @@ export const SandboxProcessorContract = defineProcessorContract({
     running: z.boolean().default(false),
     /** The newest workspace snapshot — what the next container start restores. */
     lastBackupId: z.string().nullable().default(null),
-    /** The env-var keys configured on the sandbox (values live in DO storage). */
-    envKeys: z.array(z.string()).default([]),
+    /** The sandbox's configured env-var map (key → getSecret placeholder /
+     * literal), merged across all `configured` events. */
+    env: z.record(z.string(), z.string()).default({}),
   }),
   events: SANDBOX_EVENTS,
   consumes: [
