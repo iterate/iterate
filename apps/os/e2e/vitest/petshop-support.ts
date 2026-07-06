@@ -5,6 +5,8 @@
 //     as an OAuth provider/API and through its /__backdoor test console.
 // The OS secret worker fetches petshop directly; nothing here proxies for it.
 
+import { oauthRefreshWorkerRef } from "../../src/domains/integrations/workers/oauth-refresh.ts";
+
 /** The seeded petshop OAuth client every deployment starts with (state.ts). */
 export const PETSHOP_DEFAULT_CLIENT = {
   clientId: "petshop-default",
@@ -125,78 +127,15 @@ export async function petshopExchangeCode(input: {
 }
 
 /**
- * The petshop secret worker source — the ~20 lines the whole "OAuth refresh
- * machinery" cooks down to (design §3). It reads its own material (tokens),
- * substitutes the access token into consumer requests through the pinned
- * outbound, and on a 401 refreshes: it POSTs the refresh_token to petshop's
- * token endpoint with the app credential as a `Basic getSecret(...)` HEADER
- * placeholder — so the worker never holds the client secret; the Secret DO
- * substitutes it (from the userspace app secret, or a platform secret in the
- * first-party lane — same file, only `appSecretPath` differs). Loader-ready
- * inline JS (bundle:false): no build step.
+ * The petshop connection's refresh worker is literally the shared OAuth refresh
+ * worker (src/domains/integrations/workers/oauth-refresh) — the SAME file the
+ * first-party Google integration installs, differing only in props (tokenUrl +
+ * appSecretPath). That's the design's "same file, only the app path differs"
+ * (§3) made real: read own tokens, substitute the access token on the pinned
+ * outbound, and on 401 refresh with the app credential as a `Basic getSecret(...)`
+ * header placeholder. Re-exported here so the proof reads self-contained.
  */
-function petshopWorkerSource(input: { appSecretPath: string; tokenUrl: string }): string {
-  return `
-    import { WorkerEntrypoint } from "cloudflare:workers";
-
-    const TOKEN_URL = ${JSON.stringify(input.tokenUrl)};
-    const APP_SECRET_PATH = ${JSON.stringify(input.appSecretPath)};
-
-    export default class PetshopSecretWorker extends WorkerEntrypoint {
-      async fetch(request) {
-        // env.SECRET.fetch is the default substituting egress (also our
-        // globalOutbound): it swaps the accessToken placeholder and pins the
-        // host. On 401, refresh once and retry — this is the entire refresh
-        // policy, private to the worker (no refresh() convention).
-        let response = await this.env.SECRET.fetch(request);
-        if (response.status !== 401) return response;
-        await this.#refresh();
-        return await this.env.SECRET.fetch(request);
-      }
-
-      async #refresh() {
-        const material = await this.env.SECRET.read();
-        const response = await fetch(TOKEN_URL, {
-          method: "POST",
-          headers: {
-            "content-type": "application/x-www-form-urlencoded",
-            // App-tier credential as a header placeholder: substituted en route
-            // under the app secret's own pin, never held here.
-            authorization: 'Basic getSecret("' + APP_SECRET_PATH + '", "basicAuth")',
-          },
-          body: new URLSearchParams({
-            grant_type: "refresh_token",
-            refresh_token: material.refreshToken,
-          }).toString(),
-        });
-        if (!response.ok) throw new Error("petshop refresh failed: " + response.status);
-        const tokens = await response.json();
-        await this.env.SECRET.update({
-          material: {
-            ...material,
-            accessToken: tokens.access_token,
-            refreshToken: tokens.refresh_token ?? material.refreshToken,
-          },
-        });
-      }
-    }
-  `;
-}
-
-/** A worker ref installing the source above as the connection secret's worker. */
-export function petshopWorkerRef(input: { appSecretPath: string; tokenUrl: string }) {
-  return {
-    type: "stateless" as const,
-    path: "/",
-    source: {
-      files: {
-        type: "inline" as const,
-        files: { "worker.js": petshopWorkerSource(input) },
-      },
-      options: { bundle: false, entryPoint: "worker.js" },
-    },
-  };
-}
+export const petshopWorkerRef = oauthRefreshWorkerRef;
 
 /** The three WebSocket credential shapes petshop and the OS side prove (design
  * §9 D6). Selected per request via the `x-relay-shape` header. */

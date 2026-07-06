@@ -24,11 +24,11 @@ import type {
   IntegrationConnectionStatus,
   BuiltinIntegrationSlug,
   RouteSlackWebhookResult,
+  StatelessDynamicWorkerRef,
 } from "../../types.ts";
 import { itxEnv } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
-import { decryptSecretMaterial, encryptSecretMaterial } from "../secrets/crypto.ts";
 import {
   createOAuthState,
   randomBase64Url,
@@ -41,17 +41,21 @@ import {
   lookupConnectionClaim,
   streamEventsNewestFirst,
 } from "./integration-streams.ts";
-import { readGoogleTokenState } from "./google-tokens.ts";
+import { readGoogleConnectionState } from "./google-connection.ts";
+import { oauthRefreshWorkerRef } from "./workers/oauth-refresh.ts";
 import { callProjectSlackWebApi } from "./slack-api.ts";
 import { SlackProcessorContract } from "./slack-processor-contract.ts";
 import {
   GITHUB_CONNECTED_EVENT_TYPE,
   GITHUB_DISCONNECTED_EVENT_TYPE,
   GOOGLE_CONNECTED_EVENT_TYPE,
+  GOOGLE_CONNECTION_EGRESS_URLS,
   GOOGLE_DISCONNECTED_EVENT_TYPE,
+  GOOGLE_OAUTH_TOKEN_URL,
   SLACK_CONNECTED_EVENT_TYPE,
   SLACK_DISCONNECTED_EVENT_TYPE,
   SLACK_WEBHOOK_RECEIVED_EVENT_TYPE,
+  googleConnectionSecretPath,
   integrationCoordinatesFromStreamPath,
   readRecord,
   readString,
@@ -212,9 +216,16 @@ async function recordConnection(input: {
   projectId: string;
   slug: string;
   /** Credential material, each written to its own Secret DO with an egress
-   * allowlist. Empty for providers whose tokens live on the journal
-   * (google's refresh flow needs raw material back — see google-tokens.ts). */
-  secrets: readonly { egressUrls: readonly string[]; material: string; path: string }[];
+   * allowlist. `material` is any serializable value (a bare token string for
+   * Slack; `{ accessToken, refreshToken }` for Google). An optional `worker`
+   * installs a secret worker on that secret (Google's refresh worker) — the
+   * v6 model, so no provider stores tokens on the journal (design §2.2/§3). */
+  secrets: readonly {
+    egressUrls: readonly string[];
+    material: unknown;
+    path: string;
+    worker?: StatelessDynamicWorkerRef;
+  }[];
   /** The connected fact, appended to /integrations/{slug}/{connection}. */
   connectedEvent: { idempotencyKey?: string; payload: Record<string, unknown>; type: string };
   /** Arm a webhook-router processor on the connection stream (providers that
@@ -233,6 +244,7 @@ async function recordConnection(input: {
     ).update({
       egress: { urls: [...secret.egressUrls] },
       material: secret.material,
+      ...(secret.worker ? { worker: secret.worker } : {}),
     });
   }
   await integrationStreamStub(input.projectId, streamPath).append(
@@ -541,31 +553,32 @@ async function completeGoogleConnect(input: {
   const connection =
     sanitizeConnectionName(userInfo.email ?? "") || `google-${sanitizeConnectionName(userInfo.id)}`;
   const scopes = tokenData.scope?.split(" ") ?? google.scopes;
+  // v6: tokens live in a connection secret (write-only), refreshed by the shared
+  // OAuth refresh worker against the platform Google client (§3, §4). No tokens
+  // on the journal — the connected fact carries only display metadata.
   await recordConnection({
     connection,
     projectId: input.projectId,
     slug: "google",
-    secrets: [],
+    secrets: [
+      {
+        egressUrls: GOOGLE_CONNECTION_EGRESS_URLS,
+        material: {
+          accessToken: tokenData.access_token,
+          ...(tokenData.refresh_token ? { refreshToken: tokenData.refresh_token } : {}),
+        },
+        path: googleConnectionSecretPath(connection),
+        worker: oauthRefreshWorkerRef({
+          appSecretPath: "/secrets/platform/integrations/google",
+          tokenUrl: GOOGLE_OAUTH_TOKEN_URL,
+        }),
+      },
+    ],
     connectedEvent: {
       type: GOOGLE_CONNECTED_EVENT_TYPE,
       payload: {
         connection,
         email: userInfo.email,
-        encryptedAccessToken: await encryptSecretMaterial(
-          tokenData.access_token,
-          itxEnv.SECRET_ENCRYPTION_KEY,
-        ),
-        ...(tokenData.refresh_token
-          ? {
-              encryptedRefreshToken: await encryptSecretMaterial(
-                tokenData.refresh_token,
-                itxEnv.SECRET_ENCRYPTION_KEY,
-              ),
-            }
-          : {}),
-        expiresAt: tokenData.expires_in
-          ? new Date(Date.now() + tokenData.expires_in * 1000).toISOString()
-          : undefined,
         googleUserId: userInfo.id,
         name: userInfo.name,
         picture: userInfo.picture,
@@ -588,17 +601,15 @@ export async function getConnectionStatus(input: {
   provider: BuiltinIntegrationSlug;
 }): Promise<IntegrationConnectionStatus> {
   if (input.provider === "google") {
-    const state = await readGoogleTokenState(input.projectId, input.connection);
+    const state = await readGoogleConnectionState(input.projectId, input.connection);
     return {
       connected: state.connected,
       displayName: state.email ?? state.name ?? null,
       externalId: state.googleUserId ?? null,
       metadata: {
         email: state.email,
-        expiresAt: state.expiresAt,
         name: state.name,
         picture: state.picture,
-        refreshTokenStored: state.encryptedRefreshToken !== undefined,
         scopes: state.scopes,
       },
     };
@@ -728,19 +739,17 @@ export async function disconnectProvider(input: {
     return { success: true };
   }
 
-  const state = await readGoogleTokenState(input.projectId, input.connection);
-  if (state.connected && state.encryptedAccessToken !== undefined) {
-    const token = await decryptSecretMaterial(
-      state.encryptedAccessToken,
-      itxEnv.SECRET_ENCRYPTION_KEY,
-    ).catch(() => null);
-    if (token !== null) {
-      await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(token)}`, {
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        method: "POST",
-      }).catch(() => null);
-    }
-  }
+  // v6: no provider-side revocation — it would need the raw token back, and
+  // tokens live write-only in the connection secret (jail-only). Emptying the
+  // egress allowlist makes the stored tokens unusable (same as GitHub/Slack).
+  await itxEnv.SECRET.getByName(
+    DurableObjectNameCodec.stringify({
+      projectId: input.projectId,
+      path: googleConnectionSecretPath(input.connection),
+    }),
+  )
+    .update({ egress: { urls: [] } })
+    .catch(() => null);
   await integrationStreamStub(
     input.projectId,
     integrationConnectionStreamPath("google", input.connection),

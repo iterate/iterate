@@ -1,23 +1,35 @@
-// Gmail REST proxy, ported from the pre-migration google entrypoints'
-// gmail-capability.ts. The access token comes from google-tokens.ts (fresh,
-// refreshed itx-side).
+// Gmail REST proxy (v6): the request goes through the connection secret's
+// fetch (the jailed refresh worker) carrying a `getSecret(...)` Authorization
+// placeholder — the secret substitutes the fresh access token and refreshes on
+// 401. No token bytes ever reach this code (design §3).
 
 import type { GmailRequestInput } from "../../types.ts";
 
-export async function callGmailApi(input: { request: GmailRequestInput; token: string }) {
+export async function callGmailApi(input: {
+  /** The Gmail REST call. */
+  request: GmailRequestInput;
+  /** The Authorization header VALUE — a `Bearer getSecret(...)` placeholder the
+   * connection secret substitutes; never a raw token. */
+  authorization: string;
+  /** Sends the composed request through the connection secret's fetch (the DO
+   * stub), which runs the refresh worker (substitute + 401→refresh→retry). */
+  send: (request: Request) => Promise<Response>;
+}) {
   const method = (input.request.method ?? "GET").trim().toUpperCase();
   const url = gmailUrl(input.request);
-  const response = await fetch(url, {
-    method,
-    headers: {
-      ...(input.request.body === undefined ? {} : { "content-type": "application/json" }),
-      ...(input.request.headers ?? {}),
-      authorization: `Bearer ${input.token}`,
-    },
-    ...(input.request.body === undefined || method === "GET" || method === "HEAD"
-      ? {}
-      : { body: JSON.stringify(input.request.body) }),
-  });
+  const response = await input.send(
+    new Request(url, {
+      method,
+      headers: {
+        ...(input.request.body === undefined ? {} : { "content-type": "application/json" }),
+        ...(input.request.headers ?? {}),
+        authorization: input.authorization,
+      },
+      ...(input.request.body === undefined || method === "GET" || method === "HEAD"
+        ? {}
+        : { body: JSON.stringify(input.request.body) }),
+    }),
+  );
 
   const contentType = response.headers.get("content-type") ?? "";
   const data = contentType.includes("application/json")

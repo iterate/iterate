@@ -44,10 +44,12 @@ import {
   listIntegrationConnections,
   startOAuthFlow,
 } from "./domains/integrations/connect-flows.ts";
-import { BUILTIN_INTEGRATION_SLUGS } from "./domains/integrations/utils.ts";
+import {
+  BUILTIN_INTEGRATION_SLUGS,
+  googleConnectionSecretPath,
+} from "./domains/integrations/utils.ts";
 import { callGithubApi } from "./domains/integrations/github-api.ts";
 import { callGmailApi } from "./domains/integrations/gmail-api.ts";
-import { getFreshGoogleAccessToken } from "./domains/integrations/google-tokens.ts";
 import { callProjectSlackWebApi } from "./domains/integrations/slack-api.ts";
 import {
   buildDurableObjectProcessorSubscriptionConfiguredEvent,
@@ -713,12 +715,21 @@ class IntegrationsRpcTarget extends RpcTarget implements ProjectIntegrations {
           `itx.integrations.google["${connection}"] exposes gmail.request(...); got "${method.join(".")}".`,
         );
       }
-      const token = await getFreshGoogleAccessToken({
-        config: parseConfig(env),
-        connection,
-        projectId: this.props.projectId,
+      // v6: no in-process token fetch — send the Gmail call through the
+      // connection secret's fetch with a placeholder Authorization header; the
+      // jailed refresh worker substitutes the access token and refreshes on 401.
+      const connectionPath = googleConnectionSecretPath(connection);
+      return await callGmailApi({
+        authorization: `Bearer getSecret("${connectionPath}", "accessToken")`,
+        request: args[0] as GmailRequestInput,
+        send: (request) =>
+          env.SECRET.getByName(
+            DurableObjectNameCodec.stringify({
+              path: connectionPath,
+              projectId: this.props.projectId,
+            }),
+          ).fetch(request),
       });
-      return await callGmailApi({ request: args[0] as GmailRequestInput, token });
     }
 
     if (slug === "github") {

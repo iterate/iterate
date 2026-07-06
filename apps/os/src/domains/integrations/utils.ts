@@ -35,7 +35,6 @@ export const SLACK_WEBHOOK_RECEIVED_EVENT_TYPE = "events.iterate.com/slack/webho
 
 export const GOOGLE_CONNECTED_EVENT_TYPE = "events.iterate.com/google/connected";
 export const GOOGLE_DISCONNECTED_EVENT_TYPE = "events.iterate.com/google/disconnected";
-export const GOOGLE_TOKEN_REFRESHED_EVENT_TYPE = "events.iterate.com/google/token-refreshed";
 
 export const GITHUB_CONNECTED_EVENT_TYPE = "events.iterate.com/github/connected";
 export const GITHUB_DISCONNECTED_EVENT_TYPE = "events.iterate.com/github/disconnected";
@@ -76,6 +75,23 @@ export function integrationConnectionStreamPath(slug: string, connection: string
 export function slackBotTokenSecretPath(connection: string): string {
   return `/secrets/integrations/slack/${connection}/bot-token`;
 }
+
+/** Google's OAuth token endpoint (code exchange + refresh). */
+export const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
+
+/** The v6 Google connection secret: holds `{ accessToken, refreshToken }` and
+ * hosts the refresh worker (google-worker.ts). Egress-pinned to the token +
+ * Gmail hosts; the worker refreshes the access token on a 401. */
+export function googleConnectionSecretPath(connection: string): string {
+  return `/secrets/integrations/google/${connection}`;
+}
+
+/** Hosts a Google connection secret's egress is pinned to: the token endpoint
+ * (refresh) and the Gmail API (consumer calls). */
+export const GOOGLE_CONNECTION_EGRESS_URLS = [
+  "https://oauth2.googleapis.com",
+  "https://gmail.googleapis.com",
+];
 
 /** Itx secret Durable Object path holding one GitHub connection's user token.
  * Consumed two ways: `getSecret` placeholder substitution for API calls
