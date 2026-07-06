@@ -9,7 +9,7 @@ const StreamListItem = z.object({
   path: z.string(),
 });
 
-export const ProjectCustomDomainStatus = z.enum([
+const ProjectCustomDomainStatus = z.enum([
   "requested",
   "provisioning",
   "pending_validation",
@@ -18,7 +18,7 @@ export const ProjectCustomDomainStatus = z.enum([
   "removing",
 ]);
 
-export const ProjectCustomDomainValidationRecord = z.object({
+const ProjectCustomDomainValidationRecord = z.object({
   name: z.string(),
   status: z.string().nullable().default(null),
   value: z.string(),
@@ -42,12 +42,11 @@ export const ProjectCustomDomainCloudflareSnapshot = z.object({
   wildcard: z.boolean().default(true),
 });
 
-export const ProjectCustomDomain = ProjectCustomDomainCloudflareSnapshot.extend({
+const ProjectCustomDomain = ProjectCustomDomainCloudflareSnapshot.extend({
   createdAt: z.string(),
   updatedAt: z.string(),
 });
 
-export type ProjectCustomDomain = z.output<typeof ProjectCustomDomain>;
 export type ProjectCustomDomainCloudflareSnapshot = z.output<
   typeof ProjectCustomDomainCloudflareSnapshot
 >;
