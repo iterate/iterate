@@ -15,6 +15,8 @@ export type RouterContext = {
   queryClient: QueryClient;
   authSession?: PublicSessionResponse;
   authError?: SignInAuthError;
+  appOrigin?: string;
   currentProjectHostSlug?: string | null;
+  isEventDocsHost?: boolean;
   iterateAuthIssuer?: string;
 };

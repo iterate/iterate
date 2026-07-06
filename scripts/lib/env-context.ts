@@ -96,7 +96,15 @@ export async function resolveEnvContext<E extends DeployableEnv>(options: {
     }
     // Fail loudly instead of silently acting on a truncated listing.
     const info = body?.result_info;
-    if (info?.total_count && Array.isArray(body.result) && body.result.length < info.total_count) {
+    const explicitPage = new URL(`https://api.cloudflare.com/client/v4${path}`).searchParams.has(
+      "page",
+    );
+    if (
+      !explicitPage &&
+      info?.total_count &&
+      Array.isArray(body.result) &&
+      body.result.length < info.total_count
+    ) {
       throw new Error(
         `Cloudflare API ${path} returned page 1 of ${info.total_count} results — raise per_page or paginate.`,
       );

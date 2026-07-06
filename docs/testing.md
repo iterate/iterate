@@ -47,6 +47,36 @@ the Doppler environment:
 doppler run --config dev -- env APP_CONFIG_BASE_URL=http://localhost:1234 pnpm e2e
 ```
 
+## Using Tunnels In Tests
+
+Use [Iterate tunnels](tunnels.md) when a test target cannot reach the test
+runner directly. The common case is a deployed preview Worker calling an e2e
+fixture: `127.0.0.1` belongs to the Worker runtime, not the CI runner, so the
+fixture must be published at a public HTTPS URL.
+
+Tunnel-backed tests should run inside Doppler so `CAPTUN_TOKEN` is available:
+
+```bash
+doppler run --project os --config dev -- pnpm e2e
+```
+
+OS e2e fixtures should use `withTunnel()` from
+`apps/os/e2e/test-support/tunnel.ts`. It returns a loopback URL for local dev
+targets and a captun URL when `APP_CONFIG_BASE_URL` points at a deployed
+worker. Lower-level scripts can use
+`createCaptunTunnel({ fetch, token, gateway })` from `captun`.
+
+Omit `name` for isolated test fixtures; pass `name` only when a stable
+callback URL is required:
+
+```text
+https://<name>.tunnels.iterate.com
+```
+
+The gateway forwards HTTP and WebSockets. That makes it suitable for webhook
+receivers, OAuth callbacks, local dev server access, and e2e fixtures that need
+streaming or WebSocket behavior.
+
 ## Environment variables
 
 The rule: **one name per control, and no variable without a real setter**.

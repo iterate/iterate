@@ -10,7 +10,7 @@
  *
  *   "os"       — the dashboard/app pipeline (OS host, non-itx paths)
  *   "api"      — rpc path lanes on the OS host: /api, /api/admin-cookie, and
- *                /__itx_e2e/...
+ *                Slack webhooks
  *   "project"  — a project worker target, resolved from:
  *                  /prj_<id>/...                      (URL rewritten)
  *                  prj_<id>.<base>, <slug>.<base>     (URL untouched)
@@ -28,6 +28,7 @@
  */
 import { normalizeIngressHost } from "~/ingress/host-headers.ts";
 import { parseProjectPlatformHosts } from "~/ingress/project-platform-host-routing.ts";
+import { isEventDocsHostname } from "~/lib/event-docs-host.ts";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 
 export type IngressResolvers = {
@@ -38,7 +39,7 @@ export type IngressResolvers = {
 };
 
 type IngressRoute =
-  | { lane: "os" }
+  | { lane: "os"; hostKind: "dashboard" | "eventDocs" }
   | { lane: "api" }
   | {
       lane: "project";
@@ -59,7 +60,10 @@ export async function decideIngressRoute(input: {
   const host = requestIngressHostFrom(headers, url);
   const bases = input.config.projectHostnameBases ?? [];
 
-  if (isOsHost({ baseUrl: input.config.baseUrl, bases, host, requestUrl: url })) {
+  const osHostKind = osHostKindFor({ baseUrl: input.config.baseUrl, bases, host, requestUrl: url });
+  if (osHostKind) {
+    if (osHostKind === "eventDocs") return { lane: "os", hostKind: osHostKind };
+
     const [head, ...pathSegments] = url.pathname.split("/").filter(Boolean);
     if (head !== undefined && head.startsWith("prj_")) {
       // The /prj_<id>/... path lane: the project worker sees the sub-path,
@@ -78,7 +82,7 @@ export async function decideIngressRoute(input: {
       });
     }
     if (isApiWorkerLanePath(url.pathname)) return { lane: "api" };
-    return { lane: "os" };
+    return { lane: "os", hostKind: osHostKind };
   }
 
   for (const candidate of parseProjectPlatformHosts({ bases, host })) {
@@ -133,8 +137,8 @@ function projectRoute(input: {
 /**
  * Path lanes served by the api pipeline on the OS host: the capnweb rpc
  * endpoint at exactly `/api` (plus its admin-cookie bridge), the Slack
- * webhook ingress lanes, and the e2e fixture lane. Deliberately
- * exact-match: other `/api/*` paths (`/api/mcp`, `/api/health`, the OAuth
+ * webhook ingress lanes. Deliberately exact-match: other `/api/*` paths
+ * (`/api/mcp`, `/api/health`, the OAuth
  * callback routes under `/api/integrations/...`) are app routes and stay on
  * the "os" lane.
  */
@@ -146,7 +150,6 @@ function isApiWorkerLanePath(pathname: string): boolean {
   ) {
     return true;
   }
-  if (pathname.startsWith("/__itx_e2e/")) return true;
   return false;
 }
 
@@ -157,21 +160,33 @@ function requestIngressHostFrom(headers: Headers, url: URL): string {
   );
 }
 
-function isOsHost(input: {
+function osHostKindFor(input: {
   baseUrl: string | undefined;
   bases: readonly string[];
   host: string;
   requestUrl: URL;
-}): boolean {
+}): "dashboard" | "eventDocs" | null {
   // No configured baseUrl (workers.dev previews): the request's own origin is
   // the app — same fallback the pre-migration router used.
   const appHostname = normalizeIngressHost(
     new URL(input.baseUrl ?? input.requestUrl.toString()).hostname,
   );
-  if (input.host === appHostname) return true;
+  if (input.host === appHostname) return "dashboard";
+  if (
+    isEventDocsHostname({
+      appBaseUrl: input.baseUrl,
+      requestHostname: input.host,
+    })
+  ) {
+    return "eventDocs";
+  }
   // Local dev serves the app on the bare loopback base itself.
-  return input.bases.some((rawBase) => {
+  const isLocalAppHost = input.bases.some((rawBase) => {
     const base = normalizeIngressHost(normalizeProjectHostnameBase(rawBase));
-    return input.host === base && (base === "localhost" || base.endsWith(".localhost"));
+    if (input.host !== base || (base !== "localhost" && !base.endsWith(".localhost"))) {
+      return false;
+    }
+    return true;
   });
+  return isLocalAppHost ? "dashboard" : null;
 }
