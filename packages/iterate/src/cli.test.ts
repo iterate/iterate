@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 import { oauthResourceForOsBaseUrl, resolveChatProject, verifyOsSession } from "./cli.ts";
 
 const createFakeSession = (input: {
+  listError?: unknown;
   onConnect?: (connectInput: { auth: unknown; baseUrl: string }) => void;
   onAgentReadyWait?: (args: unknown) => void;
   description?: { principal: string };
@@ -44,7 +45,10 @@ const createFakeSession = (input: {
             [Symbol.dispose]: disposeProject,
           };
         },
-        list: async () => input.projects ?? [],
+        list: async () => {
+          if (input.listError) throw input.listError;
+          return input.projects ?? [];
+        },
       },
       [Symbol.dispose]: disposeAuthenticated,
     };
@@ -231,6 +235,66 @@ describe("resolveChatProject", () => {
       slug: "org-project",
       waitUntilCreated: false,
     });
+  });
+
+  test("rejects a configured project slug that is not accessible", async () => {
+    const fake = createFakeSession({
+      projects: [
+        {
+          deploymentStatus: "ready",
+          id: "prj_other",
+          organizationId: null,
+          organizationName: null,
+          organizationSlug: null,
+          slug: "other",
+        },
+      ],
+    });
+
+    await expect(
+      resolveChatProject({
+        auth: { credentials: { type: "bearer", token: "token_123" } },
+        baseUrl: "https://os.iterate.com",
+        configName: "prd",
+        configPath: "/tmp/config.json",
+        configuredDefaultProject: "missing-slug",
+        createSession: fake.createSession,
+      }),
+    ).rejects.toThrow(
+      /Project "missing-slug" was not found among accessible projects.*other \(prj_other, ready\)/,
+    );
+  });
+
+  test("passes through a configured project id that is not in the project list", async () => {
+    const fake = createFakeSession({ projects: [] });
+
+    await expect(
+      resolveChatProject({
+        auth: { credentials: { type: "bearer", token: "token_123" } },
+        baseUrl: "https://os.iterate.com",
+        configName: "prd",
+        configPath: "/tmp/config.json",
+        configuredDefaultProject: "prj_manual",
+        createSession: fake.createSession,
+      }),
+    ).resolves.toBe("prj_manual");
+  });
+
+  test("does not bypass project resolution when listing accessible projects fails", async () => {
+    const fake = createFakeSession({ listError: new Error("list exploded") });
+
+    await expect(
+      resolveChatProject({
+        auth: { credentials: { type: "bearer", token: "token_123" } },
+        baseUrl: "https://os.iterate.com",
+        configName: "prd",
+        configPath: "/tmp/config.json",
+        configuredDefaultProject: "default",
+        createSession: fake.createSession,
+      }),
+    ).rejects.toThrow(
+      /could not list accessible projects.*cannot resolve slugs or recover auth-known projects.*list exploded/,
+    );
   });
 
   test("keeps asking for an explicit project when multiple projects are accessible", async () => {

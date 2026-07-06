@@ -330,6 +330,13 @@ const setupMissingProjectForChat = async (session: RpcStub<Session>, project: Pr
   return project.id;
 };
 
+const accessibleProjectsMessage = (projects: ProjectListEntry[]) =>
+  projects.length === 0
+    ? "No accessible projects found."
+    : `Accessible projects: ${projects
+        .map((project) => `${project.slug} (${project.id}, ${project.deploymentStatus})`)
+        .join(", ")}.`;
+
 export const resolveChatProject = async (input: {
   auth: OsAuth;
   baseUrl: string;
@@ -350,7 +357,11 @@ export const resolveChatProject = async (input: {
       try {
         projects = await session.projects.list();
       } catch (error) {
-        if (configured) return configured;
+        if (configured) {
+          throw new Error(
+            `Failed to resolve project "${configured}" for config "${input.configName}" in ${input.configPath}. The CLI could not list accessible projects, so it cannot resolve slugs or recover auth-known projects that are missing in OS: ${errorMessage(error)}`,
+          );
+        }
         throw new Error(
           `No project specified. Pass --project or set "defaultProject" on config "${input.configName}" in ${input.configPath}. Failed to list accessible projects: ${errorMessage(error)}`,
         );
@@ -360,7 +371,12 @@ export const resolveChatProject = async (input: {
         const project = projects.find(
           (candidate) => candidate.id === configured || candidate.slug === configured,
         );
-        if (!project) return configured;
+        if (!project) {
+          if (configured.startsWith("prj_")) return configured;
+          throw new Error(
+            `Project "${configured}" was not found among accessible projects for config "${input.configName}" in ${input.configPath}. ${accessibleProjectsMessage(projects)}`,
+          );
+        }
         if (project.deploymentStatus === "missing") {
           return await setupMissingProjectForChat(session, project);
         }
@@ -377,14 +393,8 @@ export const resolveChatProject = async (input: {
         return project.id;
       }
 
-      const accessible =
-        projects.length === 0
-          ? "No accessible projects found."
-          : `Accessible projects: ${projects
-              .map((project) => `${project.slug} (${project.id}, ${project.deploymentStatus})`)
-              .join(", ")}.`;
       throw new Error(
-        `No project specified. Pass --project or set "defaultProject" on config "${input.configName}" in ${input.configPath}. ${accessible}`,
+        `No project specified. Pass --project or set "defaultProject" on config "${input.configName}" in ${input.configPath}. ${accessibleProjectsMessage(projects)}`,
       );
     },
   });
