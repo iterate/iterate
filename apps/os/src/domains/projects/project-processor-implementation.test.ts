@@ -226,5 +226,9 @@ describe("ProjectProcessor custom domains", () => {
         hostname: "garple.com",
       },
     });
+
+    await deliverNewEvents({ cursor, processor, stream });
+
+    expect(processor.state.customDomains).toEqual([]);
   });
 });

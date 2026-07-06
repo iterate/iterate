@@ -147,6 +147,9 @@ export class ProjectProcessor extends StreamProcessor<
           updatedAt: event.createdAt,
         });
       case "events.iterate.com/project/custom-domain-provision-failed":
+        if (!state.customDomains.some((domain) => domain.hostname === event.payload.hostname)) {
+          return state;
+        }
         return upsertCustomDomain(state, {
           cloudflareHostnameId:
             state.customDomains.find((domain) => domain.hostname === event.payload.hostname)
